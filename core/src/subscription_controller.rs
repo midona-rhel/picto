@@ -46,12 +46,8 @@ fn resolve_query_name(query_id: i64, query_text: &str, display_name: Option<&str
 
 fn effective_query_file_limit(global_batch_size: u32, subscription_limit: u32) -> Option<u32> {
     if global_batch_size == 0 {
-        // "Unlimited" global cap means "do not clamp globally", not
-        // "force every query to run unbounded in one subprocess".
-        if subscription_limit == 0 {
-            return None;
-        }
-        return Some(subscription_limit.max(1));
+        // Global unlimited setting must disable batch caps entirely.
+        return None;
     }
     let local = if subscription_limit == 0 {
         global_batch_size
@@ -1035,5 +1031,24 @@ impl SubscriptionController {
         });
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::effective_query_file_limit;
+
+    #[test]
+    fn effective_query_file_limit_global_unlimited_is_unbounded() {
+        assert_eq!(effective_query_file_limit(0, 0), None);
+        assert_eq!(effective_query_file_limit(0, 100), None);
+        assert_eq!(effective_query_file_limit(0, 5_000), None);
+    }
+
+    #[test]
+    fn effective_query_file_limit_clamps_to_global_cap_when_enabled() {
+        assert_eq!(effective_query_file_limit(100, 0), Some(100));
+        assert_eq!(effective_query_file_limit(100, 50), Some(50));
+        assert_eq!(effective_query_file_limit(100, 500), Some(100));
     }
 }

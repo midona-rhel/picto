@@ -45,6 +45,23 @@ function isRule34Category(siteCategory: string): boolean {
   return normalized === 'rule34' || normalized === 'rule34xxx' || normalized === 'rule34.xxx';
 }
 
+function canonicalSiteForVerification(siteId: string): string {
+  const normalized = siteId.trim().toLowerCase();
+  if (normalized === 'rule34xxx' || normalized === 'rule34.xxx') return 'rule34';
+  if (normalized === 'e621.net') return 'e621';
+  return normalized;
+}
+
+function isConfirmedWorkingSite(siteId: string): boolean {
+  const canonical = canonicalSiteForVerification(siteId);
+  return (
+    canonical === 'danbooru'
+    || canonical === 'e621'
+    || canonical === 'rule34'
+    || canonical === 'safebooru'
+  );
+}
+
 function parseRule34Credential(raw: string): { userId: string; apiKey: string } | null {
   const input = raw.trim();
   if (!input) return null;
@@ -277,6 +294,7 @@ export function SubscriptionsWindow() {
               const cred = credentialMap.get(site.id);
               const health = healthMap.get(site.id);
               const missingAuth = site.auth_supported && site.auth_required_for_full_access && !cred;
+              const verified = isConfirmedWorkingSite(site.id);
               const healthStatus = site.auth_supported
                 ? (missingAuth ? 'missing' : (health?.health_status ?? 'unknown'))
                 : 'unknown';
@@ -299,6 +317,10 @@ export function SubscriptionsWindow() {
                     <span className={site.auth_supported ? styles.capabilityOn : styles.capabilityOff}>
                       {site.auth_supported ? <IconCheck size={11} /> : <IconX size={11} />}
                       Auth
+                    </span>
+                    <span className={verified ? styles.capabilityOn : styles.capabilityOff}>
+                      {verified ? <IconCheck size={11} /> : <IconX size={11} />}
+                      Verified
                     </span>
                   </div>
                   <Text size="xs" c={cred ? 'green' : 'dimmed'}>
