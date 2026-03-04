@@ -14,10 +14,10 @@ VENDORED BINARIES
 
 FFmpeg / FFprobe
 ----------------
-Version: 8.0.1 (macOS) / 7.1 (Linux, Windows)
+Version: 8.0.1
 Sources:
-  macOS:         https://ffmpeg.martin-riedl.de (signed & notarized)
-  Linux/Windows: https://github.com/BtbN/FFmpeg-Builds
+  macOS/Linux:   https://ffmpeg.martin-riedl.de (signed, notarized macOS builds)
+  Windows:       https://github.com/GyanD/codexffmpeg/releases/tag/8.0.1
 License: GPL-2.0-or-later (built with --enable-gpl, NO --enable-nonfree)
 
 FFmpeg is free software licensed under the GNU General Public License

@@ -46,6 +46,8 @@
       "native/**/*",
       "!native/**/target",
       "!native/**/node_modules",
+      "LICENSE",
+      "THIRD_PARTY_LICENSES",
       "package.json"
     ],
     "asarUnpack": [
