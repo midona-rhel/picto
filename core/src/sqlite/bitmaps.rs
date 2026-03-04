@@ -151,6 +151,52 @@ impl BitmapStore {
         Ok(file_name)
     }
 
+    /// Remove stale bitmap artifact files from disk.
+    ///
+    /// Keeps only explicitly-listed files (e.g. current + previous manifest file).
+    /// Cleanup is best-effort: unreadable entries are skipped and individual delete
+    /// failures are returned as an error to the caller.
+    pub fn prune_artifacts(&self, keep_files: &[String]) -> io::Result<usize> {
+        let keep: std::collections::HashSet<&str> =
+            keep_files.iter().map(String::as_str).collect();
+        let mut deleted = 0usize;
+        let mut first_error: Option<io::Error> = None;
+
+        let entries = match fs::read_dir(&self.dir) {
+            Ok(entries) => entries,
+            Err(e) => return Err(e),
+        };
+
+        for entry in entries {
+            let entry = match entry {
+                Ok(v) => v,
+                Err(_) => continue,
+            };
+            let file_name = entry.file_name();
+            let Some(name) = file_name.to_str() else {
+                continue;
+            };
+            if !is_bitmap_artifact_file(name) || keep.contains(name) {
+                continue;
+            }
+            let path = entry.path();
+            if path.is_file() {
+                if let Err(e) = fs::remove_file(&path) {
+                    if first_error.is_none() {
+                        first_error = Some(e);
+                    }
+                } else {
+                    deleted += 1;
+                }
+            }
+        }
+
+        if let Some(err) = first_error {
+            return Err(err);
+        }
+        Ok(deleted)
+    }
+
     fn save_to_file(&self) -> io::Result<()> {
         let map = crate::poison::read_or_recover(&self.bitmaps, "bitmaps::save");
         let path: PathBuf = crate::poison::read_or_recover(&self.path, "bitmaps::path").clone();
@@ -237,6 +283,10 @@ impl BitmapStore {
 
         Ok(map)
     }
+}
+
+fn is_bitmap_artifact_file(name: &str) -> bool {
+    name == "bitmaps.bin" || (name.starts_with("bitmaps.v") && name.ends_with(".bin"))
 }
 
 // Key serialization: tag byte + i64 payload (where applicable)
@@ -362,5 +412,26 @@ mod tests {
             assert!(store.contains(&BitmapKey::Tag(42), 100));
             assert_eq!(store.len(&BitmapKey::Status(0)), 1);
         }
+    }
+
+    #[test]
+    fn prune_artifacts_keeps_only_requested_files() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("bitmaps.bin"), b"legacy").unwrap();
+        fs::write(dir.path().join("bitmaps.v1.bin"), b"v1").unwrap();
+        fs::write(dir.path().join("bitmaps.v2.bin"), b"v2").unwrap();
+        fs::write(dir.path().join("bitmaps.v3.bin"), b"v3").unwrap();
+        fs::write(dir.path().join("not-bitmaps.txt"), b"keep").unwrap();
+
+        let store = BitmapStore::open(dir.path());
+        let deleted = store
+            .prune_artifacts(&["bitmaps.v3.bin".to_string(), "bitmaps.v2.bin".to_string()])
+            .unwrap();
+        assert_eq!(deleted, 2);
+        assert!(dir.path().join("bitmaps.v3.bin").exists());
+        assert!(dir.path().join("bitmaps.v2.bin").exists());
+        assert!(!dir.path().join("bitmaps.v1.bin").exists());
+        assert!(!dir.path().join("bitmaps.bin").exists());
+        assert!(dir.path().join("not-bitmaps.txt").exists());
     }
 }
