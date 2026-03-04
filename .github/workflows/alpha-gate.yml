@@ -13,6 +13,9 @@ concurrency:
   group: alpha-gate-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: write
+
 env:
   CARGO_INCREMENTAL: 0
 
@@ -164,3 +167,28 @@ jobs:
           name: alpha-smoke-${{ matrix.platform }}
           path: artifacts/alpha-smoke/${{ matrix.platform }}.json
           if-no-files-found: warn
+
+  alpha-release-assets:
+    name: Attach Release Assets
+    needs: alpha-package
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Download package artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+          pattern: picto-*
+          merge-multiple: true
+
+      - name: Attach assets to GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          prerelease: true
+          files: |
+            release-artifacts/*.dmg
+            release-artifacts/*.zip
+            release-artifacts/*.AppImage
+            release-artifacts/*.deb
+            release-artifacts/*.exe
