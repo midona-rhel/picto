@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Download pre-built GPL ffmpeg + ffprobe binaries for the current platform.
 #
-# Sources (clean GPL, no --enable-nonfree):
-#   macOS:         https://ffmpeg.martin-riedl.de (GPL, signed & notarized)
-#   Linux/Windows: https://github.com/BtbN/FFmpeg-Builds (GPL)
+# Sources (pinned, no floating "latest" release URL path):
+#   macOS/Linux: https://ffmpeg.martin-riedl.de (release 8.0.1)
+#   Windows:     https://github.com/GyanD/codexffmpeg (release 8.0.1)
 #
 # Usage:
 #   bash scripts/download-ffmpeg.sh              # auto-detect platform
@@ -13,12 +13,17 @@ set -euo pipefail
 
 DEST_DIR="vendor/ffmpeg"
 
-# BtbN release branch for Linux/Windows
-BTBN_BRANCH="n7.1"
-BTBN_BASE="https://github.com/BtbN/FFmpeg-Builds/releases/download/latest"
+FFMPEG_VERSION="8.0.1"
+GYAN_VERSION="8.0.1"
+GYAN_WIN64_ZIP_URL="https://github.com/GyanD/codexffmpeg/releases/download/${GYAN_VERSION}/ffmpeg-${GYAN_VERSION}-full_build.zip"
 
-# martin-riedl redirect API for macOS (resolves to latest release build)
-RIEDL_BASE="https://ffmpeg.martin-riedl.de/redirect/latest/macos"
+# Pinned Martin-Riedl release URLs (8.0.1)
+MAC_AMD64_FFMPEG_URL="https://ffmpeg.martin-riedl.de/download/macos/amd64/1766437297_8.0.1/ffmpeg.zip"
+MAC_AMD64_FFPROBE_URL="https://ffmpeg.martin-riedl.de/download/macos/amd64/1766437297_8.0.1/ffprobe.zip"
+MAC_ARM64_FFMPEG_URL="https://ffmpeg.martin-riedl.de/download/macos/arm64/1766430132_8.0.1/ffmpeg.zip"
+MAC_ARM64_FFPROBE_URL="https://ffmpeg.martin-riedl.de/download/macos/arm64/1766430132_8.0.1/ffprobe.zip"
+LINUX_AMD64_FFMPEG_URL="https://ffmpeg.martin-riedl.de/download/linux/amd64/1766430728_8.0.1/ffmpeg.zip"
+LINUX_AMD64_FFPROBE_URL="https://ffmpeg.martin-riedl.de/download/linux/amd64/1766430728_8.0.1/ffprobe.zip"
 
 # ── Detect platform ──────────────────────────────────────────────────────
 detect_platform() {
@@ -68,68 +73,77 @@ download() {
 
 case "$PLATFORM" in
   darwin-arm64|darwin-x64)
-    # martin-riedl.de: macOS builds (GPL, signed, notarized)
-    # Files come as .zip containing the bare binary.
+    # martin-riedl.de: macOS builds (GPL, signed, notarized), pinned to 8.0.1
     if [ "$PLATFORM" = "darwin-arm64" ]; then
-      RIEDL_ARCH="arm64"
+      FFMPEG_URL="$MAC_ARM64_FFMPEG_URL"
+      FFPROBE_URL="$MAC_ARM64_FFPROBE_URL"
     else
-      RIEDL_ARCH="amd64"
+      FFMPEG_URL="$MAC_AMD64_FFMPEG_URL"
+      FFPROBE_URL="$MAC_AMD64_FFPROBE_URL"
     fi
 
-    for bin in ffmpeg ffprobe; do
-      if [ -f "${DEST_DIR}/${bin}" ]; then
-        echo "  Already exists: ${DEST_DIR}/${bin} (delete to re-download)"
-        continue
-      fi
-      echo "Downloading ${bin} (macOS ${RIEDL_ARCH})..."
-      TMP_ZIP="${DEST_DIR}/${bin}.zip"
-      curl -fSL --progress-bar -o "$TMP_ZIP" "${RIEDL_BASE}/${RIEDL_ARCH}/release/${bin}.zip"
+    if [ ! -f "${DEST_DIR}/ffmpeg" ]; then
+      TMP_ZIP="${DEST_DIR}/ffmpeg.zip"
+      echo "Downloading ffmpeg (macOS, release ${FFMPEG_VERSION})..."
+      download "$FFMPEG_URL" "$TMP_ZIP"
       unzip -qo "$TMP_ZIP" -d "$DEST_DIR"
       rm -f "$TMP_ZIP"
-      chmod +x "${DEST_DIR}/${bin}"
-    done
+      chmod +x "${DEST_DIR}/ffmpeg"
+    else
+      echo "  Already exists: ${DEST_DIR}/ffmpeg (delete to re-download)"
+    fi
+
+    if [ ! -f "${DEST_DIR}/ffprobe" ]; then
+      TMP_ZIP="${DEST_DIR}/ffprobe.zip"
+      echo "Downloading ffprobe (macOS, release ${FFMPEG_VERSION})..."
+      download "$FFPROBE_URL" "$TMP_ZIP"
+      unzip -qo "$TMP_ZIP" -d "$DEST_DIR"
+      rm -f "$TMP_ZIP"
+      chmod +x "${DEST_DIR}/ffprobe"
+    else
+      echo "  Already exists: ${DEST_DIR}/ffprobe (delete to re-download)"
+    fi
     ;;
 
   linux-x64)
-    # BtbN: Linux x64 GPL build (.tar.xz archive with bin/ directory)
-    ARCHIVE_NAME="ffmpeg-${BTBN_BRANCH}-latest-linux64-gpl-${BTBN_BRANCH#n}.tar.xz"
-    ARCHIVE_PATH="${DEST_DIR}/${ARCHIVE_NAME}"
-
+    # martin-riedl.de: Linux x64 release build (pinned to 8.0.1)
     if [ -f "${DEST_DIR}/ffmpeg" ] && [ -f "${DEST_DIR}/ffprobe" ]; then
-      echo "  Already exists: ${DEST_DIR}/ffmpeg (delete to re-download)"
+      echo "  Already exists: ${DEST_DIR}/ffmpeg + ffprobe (delete to re-download)"
     else
-      echo "Downloading BtbN FFmpeg (linux64-gpl)..."
-      download "${BTBN_BASE}/${ARCHIVE_NAME}" "$ARCHIVE_PATH"
-
-      echo "  Extracting ffmpeg + ffprobe..."
-      # Extract only bin/ffmpeg and bin/ffprobe from the archive
-      STRIP_DIR="ffmpeg-${BTBN_BRANCH}-latest-linux64-gpl-${BTBN_BRANCH#n}"
-      tar xf "$ARCHIVE_PATH" -C "$DEST_DIR" --strip-components=2 \
-        "${STRIP_DIR}/bin/ffmpeg" "${STRIP_DIR}/bin/ffprobe"
-      rm -f "$ARCHIVE_PATH"
+      TMP_FFMPEG="${DEST_DIR}/ffmpeg.zip"
+      TMP_FFPROBE="${DEST_DIR}/ffprobe.zip"
+      echo "Downloading ffmpeg + ffprobe (linux, release ${FFMPEG_VERSION})..."
+      download "$LINUX_AMD64_FFMPEG_URL" "$TMP_FFMPEG"
+      download "$LINUX_AMD64_FFPROBE_URL" "$TMP_FFPROBE"
+      unzip -qo "$TMP_FFMPEG" -d "$DEST_DIR"
+      unzip -qo "$TMP_FFPROBE" -d "$DEST_DIR"
+      rm -f "$TMP_FFMPEG" "$TMP_FFPROBE"
       chmod +x "${DEST_DIR}/ffmpeg" "${DEST_DIR}/ffprobe"
     fi
     ;;
 
   win32-x64)
-    # BtbN: Windows x64 GPL build (.zip archive with bin/ directory)
-    ARCHIVE_NAME="ffmpeg-${BTBN_BRANCH}-latest-win64-gpl-${BTBN_BRANCH#n}.zip"
+    # Gyan mirror: Windows x64 release build (pinned to 8.0.1)
+    ARCHIVE_NAME="ffmpeg-${GYAN_VERSION}-full_build.zip"
     ARCHIVE_PATH="${DEST_DIR}/${ARCHIVE_NAME}"
 
     if [ -f "${DEST_DIR}/ffmpeg.exe" ] && [ -f "${DEST_DIR}/ffprobe.exe" ]; then
       echo "  Already exists: ${DEST_DIR}/ffmpeg.exe (delete to re-download)"
     else
-      echo "Downloading BtbN FFmpeg (win64-gpl)..."
-      download "${BTBN_BASE}/${ARCHIVE_NAME}" "$ARCHIVE_PATH"
-
+      echo "Downloading Gyan FFmpeg (win64, release ${GYAN_VERSION})..."
+      download "$GYAN_WIN64_ZIP_URL" "$ARCHIVE_PATH"
       echo "  Extracting ffmpeg.exe + ffprobe.exe..."
-      STRIP_DIR="ffmpeg-${BTBN_BRANCH}-latest-win64-gpl-${BTBN_BRANCH#n}"
-      # unzip doesn't have --strip-components, extract then move
       TMP_EXTRACT="${DEST_DIR}/_extract"
       mkdir -p "$TMP_EXTRACT"
-      unzip -qo "$ARCHIVE_PATH" "${STRIP_DIR}/bin/ffmpeg.exe" "${STRIP_DIR}/bin/ffprobe.exe" -d "$TMP_EXTRACT"
-      mv "$TMP_EXTRACT/${STRIP_DIR}/bin/ffmpeg.exe" "${DEST_DIR}/ffmpeg.exe"
-      mv "$TMP_EXTRACT/${STRIP_DIR}/bin/ffprobe.exe" "${DEST_DIR}/ffprobe.exe"
+      unzip -qo "$ARCHIVE_PATH" -d "$TMP_EXTRACT"
+      FFMPEG_EXE_PATH="$(find "$TMP_EXTRACT" -type f -name 'ffmpeg.exe' | head -n 1)"
+      FFPROBE_EXE_PATH="$(find "$TMP_EXTRACT" -type f -name 'ffprobe.exe' | head -n 1)"
+      if [ -z "$FFMPEG_EXE_PATH" ] || [ -z "$FFPROBE_EXE_PATH" ]; then
+        echo "Failed to locate ffmpeg.exe/ffprobe.exe in ${ARCHIVE_NAME}" >&2
+        exit 1
+      fi
+      mv "$FFMPEG_EXE_PATH" "${DEST_DIR}/ffmpeg.exe"
+      mv "$FFPROBE_EXE_PATH" "${DEST_DIR}/ffprobe.exe"
       rm -rf "$TMP_EXTRACT" "$ARCHIVE_PATH"
     fi
     ;;
