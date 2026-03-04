@@ -1,0 +1,58 @@
+.infoSection {
+  width: 100%;
+  border-top: 1px solid var(--color-border-secondary);
+  padding-top: 10px;
+  margin-top: 10px;
+  font-size: 12px;
+}
+
+.sectionHeader {
+  display: flex;
+  height: 26px;
+  align-items: center;
+  cursor: pointer;
+  user-select: none;
+  color: var(--color-text-tertiary);
+}
+
+.sectionHeader:hover {
+  color: var(--color-text-primary);
+}
+
+.sectionTitle {
+  font-weight: var(--font-weight-bold);
+  font-size: 12px;
+}
+
+.sectionCount {
+  font-family: "SF Mono", "Cascadia Code", "Fira Code", ui-monospace, monospace;
+  margin-left: 2px;
+}
+
+.sectionChevron {
+  margin-left: auto;
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0.3;
+  transform: rotate(0deg);
+}
+
+.sectionChevronExpanded {
+  opacity: 0;
+  transform: rotate(90deg);
+}
+
+.infoSection:hover .sectionChevron {
+  opacity: 0.5;
+}
+
+.sectionHeader:hover .sectionChevron {
+  opacity: 1 !important;
+}
+
+.sectionContent {
+  margin-top: 4px;
+}

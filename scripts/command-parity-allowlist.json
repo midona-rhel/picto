@@ -1,0 +1,18 @@
+{
+  "_comment": "Intentional asymmetries between Rust dispatch and TypeScript API commands",
+  "rust_only": [
+    "approve",
+    "reject",
+    "get_all_detected_duplicates",
+    "get_file_notes",
+    "ptr_cancel_bootstrap",
+    "repair_projections",
+    "resolve_duplicate_pair",
+    "save_file_data",
+    "scan_for_collections"
+  ],
+  "ts_only": [
+    "open_settings_window",
+    "open_subscriptions_window"
+  ]
+}

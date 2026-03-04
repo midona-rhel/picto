@@ -1,0 +1,28 @@
+.propRow {
+  display: flex;
+  align-items: center;
+  height: 20px;
+  line-height: 20px;
+  white-space: nowrap;
+}
+
+.propLabel {
+  color: var(--color-text-secondary);
+  font-size: 11px;
+  min-width: 64px;
+  overflow: hidden;
+}
+
+.propValue {
+  flex: 1;
+  color: var(--color-text-primary);
+  font-size: 11px;
+  text-align: right;
+  opacity: 0.8;
+}
+
+.propValueMono {
+  composes: propValue;
+  font-family: "SF Mono", "Cascadia Code", "Fira Code", ui-monospace, monospace;
+  font-variant-numeric: tabular-nums slashed-zero;
+}

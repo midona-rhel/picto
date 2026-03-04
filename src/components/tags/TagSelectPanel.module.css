@@ -1,0 +1,292 @@
+/* Composed from shared primitives */
+.panel {
+  composes: panelGlass from '../../styles/pickerPanel.module.css';
+  position: fixed;
+  z-index: var(--z-context-menu);
+  width: 540px;
+  height: 480px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  user-select: none;
+  -webkit-user-select: none;
+  font-size: 13px;
+  color: var(--color-text-primary);
+  transition: width 200ms var(--timing-function-super);
+}
+
+.panelCollapsed {
+  width: 340px;
+}
+
+.panelDragging {
+  composes: panelDragging from '../../styles/pickerPanel.module.css';
+}
+
+.header {
+  composes: panelHeader from '../../styles/pickerPanel.module.css';
+}
+
+.headerDragging {
+  composes: panelHeaderDragging from '../../styles/pickerPanel.module.css';
+}
+
+.pinBtn {
+  composes: pinBtn from '../../styles/pickerPanel.module.css';
+}
+
+.searchWrap {
+  composes: searchWrap from '../../styles/pickerPanel.module.css';
+}
+
+.searchInput {
+  composes: searchInput from '../../styles/pickerPanel.module.css';
+}
+
+.ruleLabel {
+  composes: ruleLabel from '../../styles/pickerPanel.module.css';
+}
+
+.logicTabs {
+  composes: logicTabs from '../../styles/pickerPanel.module.css';
+}
+
+.logicTab {
+  composes: logicTab from '../../styles/pickerPanel.module.css';
+}
+
+.logicTabActive {
+  composes: logicTabActive from '../../styles/pickerPanel.module.css';
+}
+
+.checkItem {
+  composes: checkItem from '../../styles/pickerPanel.module.css';
+}
+
+.checkItemFocused {
+  composes: checkItemFocused from '../../styles/pickerPanel.module.css';
+}
+
+.checkItemChecked {
+  composes: checkItemChecked from '../../styles/pickerPanel.module.css';
+}
+
+.checkItemExcluded {
+  composes: checkItemExcluded from '../../styles/pickerPanel.module.css';
+}
+
+.checkIcon {
+  composes: checkIcon from '../../styles/checkIcon.module.css';
+}
+
+.checkIconChecked {
+  composes: checkIconChecked from '../../styles/checkIcon.module.css';
+}
+
+.checkIconExcluded {
+  composes: checkIconExcluded from '../../styles/checkIcon.module.css';
+}
+
+.checkMark {
+  composes: checkMark from '../../styles/checkIcon.module.css';
+}
+
+.itemName {
+  composes: itemName from '../../styles/pickerPanel.module.css';
+}
+
+.itemBadge {
+  composes: itemBadge from '../../styles/pickerPanel.module.css';
+}
+
+.matchHighlight {
+  composes: matchHighlight from '../../styles/pickerPanel.module.css';
+}
+
+.footer {
+  composes: panelFooter from '../../styles/pickerPanel.module.css';
+}
+
+.footerLeft {
+  composes: footerLeft from '../../styles/pickerPanel.module.css';
+}
+
+.footerRight {
+  composes: footerRight from '../../styles/pickerPanel.module.css';
+}
+
+.shortcutTip {
+  composes: shortcutTip from '../../styles/pickerPanel.module.css';
+}
+
+.kbd {
+  composes: kbd from '../../styles/pickerPanel.module.css';
+}
+
+.emptyState {
+  composes: emptyState from '../../styles/pickerPanel.module.css';
+}
+
+/* TagSelectPanel-specific */
+.body {
+  flex: 1;
+  position: relative;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.sidebar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  width: 200px;
+  cursor: pointer;
+  overflow-y: auto;
+  padding: 4px;
+}
+
+.sidebarItem {
+  position: relative;
+  height: 28px;
+  padding: 0 10px;
+  font-size: 13px;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  transition: background-color 60ms ease;
+}
+
+.sidebarItem:hover {
+  background-color: var(--color-white-10);
+}
+
+.sidebarItemActive {
+  color: var(--color-primary) !important;
+  background-color: var(--color-primary-10) !important;
+}
+
+.sidebarItemActive .sidebarBadge {
+  opacity: 1;
+}
+
+.sidebarDot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  opacity: 0.6;
+  transition: opacity 120ms ease;
+}
+
+.sidebarItem:hover .sidebarDot {
+  opacity: 1;
+}
+
+.sidebarItemActive .sidebarDot {
+  opacity: 1;
+}
+
+.sidebarName {
+  max-width: 130px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+  opacity: 0.85;
+  transition: opacity 120ms ease;
+}
+
+.sidebarItem:hover .sidebarName {
+  opacity: 1;
+}
+
+.sidebarItemActive .sidebarName {
+  opacity: 1;
+}
+
+.sidebarBadge {
+  margin-left: auto;
+  opacity: 0.5;
+  font-size: 12px;
+  font-family: var(--font-family-mono);
+  flex-shrink: 0;
+  transition: opacity 120ms ease;
+}
+
+.sidebarItem:hover .sidebarBadge {
+  opacity: 1;
+}
+
+.sidebarSeparator {
+  height: 1px;
+  margin: 4px 10px;
+  background-color: var(--color-white-10);
+}
+
+.contentArea {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 340px;
+  border-left: 1px solid var(--color-border-secondary);
+  display: flex;
+  flex-direction: column;
+}
+
+.contentAreaFull {
+  position: relative;
+  width: 100%;
+  border-left: none;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.tagsContainer {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 4px 0;
+}
+
+.tagIcon {
+  flex-shrink: 0;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  opacity: 0.6;
+  transition: opacity 120ms ease;
+}
+
+.checkItem:hover .tagIcon {
+  opacity: 1;
+}
+
+.selectAllFooter {
+  border-top: 1px solid var(--color-border-secondary);
+  padding: 6px 0 2px;
+}
+
+.selectAllFooter .checkItem:hover {
+  background: none !important;
+}
+
+.createHint {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 10px;
+  font-size: 13px;
+  color: var(--color-primary);
+  cursor: pointer;
+  border-top: 1px solid var(--color-border-secondary);
+}
+
+.createHint:hover {
+  background: var(--color-primary-10);
+}

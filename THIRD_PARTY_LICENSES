@@ -1,0 +1,274 @@
+Picto Third-Party Licenses
+================================
+
+Picto is licensed under the MIT License (see LICENSE).
+
+This file documents the licenses of all third-party software bundled with
+or used by Picto. Vendored binaries (FFmpeg, gallery-dl) are invoked
+as separate subprocesses and are not linked into the Picto binary.
+
+
+================================================================================
+VENDORED BINARIES
+================================================================================
+
+FFmpeg / FFprobe
+----------------
+Version: 8.0.1 (macOS) / 7.1 (Linux, Windows)
+Sources:
+  macOS:         https://ffmpeg.martin-riedl.de (signed & notarized)
+  Linux/Windows: https://github.com/BtbN/FFmpeg-Builds
+License: GPL-2.0-or-later (built with --enable-gpl, NO --enable-nonfree)
+
+FFmpeg is free software licensed under the GNU General Public License
+version 2 or later. Source code is available at https://ffmpeg.org.
+
+This build includes the following libraries:
+  libx264     — GPL-2.0-or-later
+  libx265     — GPL-2.0-or-later
+  libvpx      — BSD-3-Clause
+  libopus     — BSD-3-Clause
+  libmp3lame  — LGPL-2.0-or-later
+  libaom      — BSD-2-Clause
+  libsvtav1   — BSD-2-Clause-Patent
+  libdav1d    — BSD-2-Clause
+  librav1e    — BSD-2-Clause
+  libvorbis   — BSD-3-Clause
+  libtheora   — BSD-3-Clause
+  libwebp     — BSD-3-Clause
+  libfreetype — FTL OR GPL-2.0-or-later
+  libharfbuzz — MIT
+  libass      — ISC
+  fontconfig  — MIT
+  libopenjpeg — BSD-2-Clause
+  libsnappy   — BSD-3-Clause
+  libzimg     — WTFPL
+  libvmaf     — BSD-2-Clause-Patent
+  libopenh264 — BSD-2-Clause
+  libsrt      — MPL-2.0
+
+FFmpeg is invoked as a subprocess. Its source code is available at:
+  https://github.com/FFmpeg/FFmpeg/tree/release/8.0
+
+
+gallery-dl
+----------
+Version: 1.31.7
+Source:  https://github.com/mikf/gallery-dl
+License: GPL-2.0-only
+
+gallery-dl is free software licensed under the GNU General Public License
+version 2. Source code is available at https://github.com/mikf/gallery-dl.
+
+On macOS, gallery-dl is distributed as a Python wheel and invoked via a
+wrapper script that calls `python3 -m gallery_dl`. On Windows and Linux,
+the standalone executable from the official releases is used.
+
+gallery-dl is invoked as a subprocess.
+
+
+================================================================================
+RUST DEPENDENCIES
+================================================================================
+
+The following lists all Rust crate dependencies compiled into the Picto
+native module, grouped by license.
+
+MIT OR Apache-2.0
+-----------------
+This is the most common license combination in the Rust ecosystem.
+The following crates are dual-licensed under MIT or Apache-2.0:
+
+  aes, ahash, allocator-api2, anyhow, approx, arrayvec, autocfg,
+  base64, bitflags, bitstream-io, block-buffer, blurhash, bumpalo,
+  bytemuck, bytes, bzip2, cc, cfg-if, chrono, cipher, convert_case,
+  cookie, cookie_store, cpufeatures, crc, crc-catalog, crc32fast,
+  crossbeam-deque, crossbeam-epoch, crossbeam-utils, crypto-common,
+  ctor, data-url, deflate64, deranged, derive_arbitrary, digest,
+  displaydoc, document-features, either, equator, equivalent, errno,
+  euclid, fast_image_resize, fastrand, fdeflate, flate2, form_urlencoded,
+  futures-channel, futures-core, futures-sink, futures-task, futures-util,
+  generic-array, getrandom, gif, glob, half, hashbrown, hashlink, heck,
+  hermit-abi, hex, hmac, http, httparse, iana-time-zone, idna,
+  idna_adapter, image, image-webp, img_hash, indexmap, inout,
+  interpolate_name, ipnet, iri-string, itertools, itoa, jobserver,
+  js-sys, kmeans_colors, kurbo, lazy_static, leb128fmt, libc, litrs,
+  lock_api, log, lzma-rs, memmap2, mime, miniz_oxide, mio, nom,
+  num_cpus, num-bigint, num-conv, num-derive, num-integer, num-iter,
+  num-rational, num-traits, once_cell, openssl-probe, palette,
+  palette_derive, parking_lot, parking_lot_core, paste, pastey,
+  pbkdf2, percent-encoding, pin-project-lite, pin-utils, pkg-config,
+  png, powerfmt, ppv-lite86, proc-macro2, profiling, profiling-procmacros,
+  qoi, quote, rand, rand_chacha, rand_core, rayon, rayon-core,
+  redox_syscall, regex, regex-automata, regex-syntax, reqwest, roaring,
+  roxmltree, rustdct, rustfft, rustls-pki-types, rustversion, ryu,
+  schannel, scopeguard, security-framework, security-framework-sys,
+  semver, serde, serde_core, serde_derive, serde_json, serde_urlencoded,
+  sha1, sha2, shlex, signal-hook-registry, simplecss, smallvec, socket2,
+  stable_deref_trait, strength_reduce, svgtypes, syn, tempfile, thiserror,
+  thiserror-impl, thread_local, tiff, time, time-core, time-macros,
+  tokio-rustls, transpose, typenum, unicode-bidi, unicode-ident,
+  unicode-script, unicode-segmentation, unicode-xid, url,
+  wasm-bindgen, wasm-bindgen-futures, wasm-bindgen-macro,
+  wasm-bindgen-macro-support, wasm-bindgen-shared, web-sys, webp,
+  weezl, windows-core, windows-implement, windows-link, windows-registry,
+  windows-result, windows-strings, windows-sys, windows-targets,
+  windows_aarch64_gnullvm, windows_aarch64_msvc, windows_i686_gnu,
+  windows_i686_gnullvm, windows_i686_msvc, windows_x86_64_gnu,
+  windows_x86_64_gnullvm, windows_x86_64_msvc, zeroize, zeroize_derive,
+  zip, zstd-safe, zstd-sys, zune-core, zune-inflate, zune-jpeg
+
+MIT
+---
+  aligned-vec, as-slice, core-foundation, core-foundation-sys,
+  float-cmp, fnv, fontconfig-parser, fontdb, foreign-types,
+  foreign-types-macros, foreign-types-shared, h2, http-body,
+  http-body-util, hyper, hyper-tls, hyper-util, is-docker, is-wsl,
+  lcms2, lcms2-sys, libm, libsqlite3-sys, lru, matchers, maybe-rayon,
+  napi, napi-build, napi-derive, napi-derive-backend, napi-sys,
+  new_debug_unreachable, noop_proc_macro, nu-ansi-term, open,
+  openssl-macros, openssl-sys, pico-args, rgb, rusqlite, rustybuzz,
+  sharded-slab, simd_helpers, slab, strict-num, tokio, tokio-macros,
+  tokio-native-tls, tokio-stream, tokio-test, tokio-util,
+  tower, tower-http, tower-layer, tower-service, tracing,
+  tracing-attributes, tracing-core, tracing-log, tracing-subscriber,
+  try-lock, ttf-parser, valuable, want, xmlwriter, y4m, zmij, zstd
+
+Apache-2.0
+----------
+  openssl
+
+MPL-2.0 (Mozilla Public License 2.0)
+-------------------------------------
+  resvg (0.44.0) — SVG rendering engine
+  usvg (0.44.0)  — SVG micro-library
+
+  File-level copyleft. Modifications to these files must be shared under
+  MPL-2.0. Linking is permitted without affecting the overall license.
+
+BSD-3-Clause
+-------------
+  avif-serialize, encoding_rs, exr, lebe, moxcms, pxfm, ravif,
+  subtle, tiny-skia, tiny-skia-path
+
+BSD-2-Clause
+-------------
+  arrayref, av1-grain, rav1e, v_frame, zerocopy
+
+ISC
+---
+  libloading, ring (also Apache-2.0), rustls-webpki, untrusted
+
+  ring is dual-licensed: portions are ISC, portions are Apache-2.0.
+  See https://github.com/briansmith/ring/blob/main/LICENSE
+
+Apache-2.0 OR ISC OR MIT
+--------------------------
+  rustls, hyper-rustls
+
+Unicode-3.0
+-----------
+  icu_collections, icu_locale_core, icu_normalizer, icu_normalizer_data,
+  icu_properties, icu_properties_data, icu_provider, litemap,
+  potential_utf, tinystr, writeable, yoke, yoke-derive, zerofrom,
+  zerofrom-derive, zerotrie, zerovec, zerovec-derive
+
+0BSD OR MIT OR Apache-2.0
+--------------------------
+  adler2
+
+Unlicense OR MIT
+-----------------
+  aho-corasick, byteorder, byteorder-lite, memchr
+
+CC0-1.0 OR MIT-0 OR Apache-2.0
+--------------------------------
+  constant_time_eq, dunce
+
+Zlib
+----
+  foldhash, slotmap, tinyvec, tinyvec_macros
+
+Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT
+-----------------------------------------------------
+  linux-raw-sys, rustix, wasi, wasip2, wasip3,
+  wasm-encoder, wasm-metadata, wasmparser,
+  wit-bindgen, wit-bindgen-core, wit-bindgen-rust,
+  wit-bindgen-rust-macro, wit-component, wit-parser
+
+Zlib OR Apache-2.0 OR MIT
+---------------------------
+  bytemuck
+
+
+================================================================================
+NPM DEPENDENCIES
+================================================================================
+
+All NPM runtime dependencies are MIT-licensed unless noted otherwise.
+
+Runtime
+-------
+  @dagrejs/dagre        — MIT
+  @dnd-kit/core         — MIT
+  @dnd-kit/sortable     — MIT
+  @dnd-kit/utilities    — MIT
+  @egjs/react-infinitegrid — MIT
+  @mantine/core         — MIT
+  @mantine/dates        — MIT
+  @mantine/hooks        — MIT
+  @mantine/notifications — MIT
+  @tabler/icons-react   — MIT
+  @tanstack/react-virtual — MIT
+  blurhash              — MIT
+  dayjs                 — MIT
+  masonic               — MIT
+  react                 — MIT
+  react-dom             — MIT
+  zustand               — MIT
+
+Dev
+---
+  electron              — MIT
+  electron-builder      — MIT
+  typescript            — Apache-2.0
+  vite                  — MIT
+  vitest                — MIT
+  (all others: MIT)
+
+
+================================================================================
+SYSTEM DEPENDENCIES
+================================================================================
+
+lcms2 (Little CMS 2)
+  License: MIT
+  Source:  https://www.littlecms.com/
+
+OpenSSL (Linux builds)
+  License: Apache-2.0
+  Source:  https://www.openssl.org/
+
+LLVM/Clang (build dependency)
+  License: Apache-2.0 WITH LLVM-exception
+  Source:  https://llvm.org/
+
+
+================================================================================
+FULL LICENSE TEXTS
+================================================================================
+
+The full text of each license referenced above can be found at:
+
+  MIT:          https://opensource.org/licenses/MIT
+  Apache-2.0:   https://www.apache.org/licenses/LICENSE-2.0
+  GPL-2.0:      https://www.gnu.org/licenses/old-licenses/gpl-2.0.html
+  LGPL-2.1:     https://www.gnu.org/licenses/old-licenses/lgpl-2.1.html
+  MPL-2.0:      https://www.mozilla.org/en-US/MPL/2.0/
+  BSD-2-Clause:  https://opensource.org/licenses/BSD-2-Clause
+  BSD-3-Clause:  https://opensource.org/licenses/BSD-3-Clause
+  ISC:          https://opensource.org/licenses/ISC
+  Unicode-3.0:  https://www.unicode.org/license.txt
+  0BSD:         https://opensource.org/licenses/0BSD
+  Zlib:         https://opensource.org/licenses/Zlib
+  CC0-1.0:      https://creativecommons.org/publicdomain/zero/1.0/

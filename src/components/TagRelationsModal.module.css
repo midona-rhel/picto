@@ -1,0 +1,74 @@
+.root {
+  min-height: 60px;
+}
+
+.loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 48px;
+}
+
+.empty {
+  color: var(--color-text-secondary);
+  font-size: 13px;
+  text-align: center;
+  padding: 32px 24px;
+}
+
+/* ── Tabs ─── */
+
+.tabs {
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  margin-bottom: 12px;
+  border-radius: 6px;
+  background: var(--color-black-20);
+}
+
+.tab {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 28px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--color-text-tertiary);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color 120ms, color 120ms;
+  font-family: inherit;
+}
+
+.tab:hover {
+  color: var(--color-text-secondary);
+}
+
+.tabActive {
+  background: var(--color-white-10);
+  color: var(--color-text-primary);
+}
+
+.tabBadge {
+  font-size: 10px;
+  font-family: var(--font-family-mono, "SF Mono", "Cascadia Code", "Fira Code", ui-monospace, monospace);
+  opacity: 0.5;
+}
+
+/* ── Static SVG graph ─── */
+
+.svg {
+  display: block;
+  margin: 0 auto;
+}
+
+.edge {
+  stroke: var(--color-border-secondary);
+  stroke-width: 1.5;
+  fill: none;
+}

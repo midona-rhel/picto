@@ -1,0 +1,41 @@
+.ratingRow {
+  display: flex;
+  align-items: center;
+  height: 20px;
+}
+
+.ratingStars {
+  display: flex;
+  gap: 0;
+  margin-left: auto;
+}
+
+.ratingStar {
+  cursor: pointer;
+  width: 16px;
+  height: 20px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  color: inherit;
+}
+
+.ratingStarActive {
+  color: #FF9F0A; /* guard:allow — Apple system orange (star rating) */
+}
+
+.ratingStarInactive {
+  color: var(--color-text-secondary);
+  opacity: 0.25;
+}
+
+.ratingStarDisabled {
+  cursor: default;
+}
+
+[data-mantine-color-scheme="light"] .ratingStarActive {
+  color: #FF9500; /* guard:allow — Apple system orange light (star rating) */
+}

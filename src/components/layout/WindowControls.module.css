@@ -1,0 +1,43 @@
+.controls {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  -webkit-app-region: no-drag;
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  min-width: 28px;
+  padding: 0;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--color-text-primary);
+  cursor: pointer;
+  box-sizing: border-box;
+  outline: none;
+  -webkit-app-region: no-drag;
+  transition: background 150ms var(--timing-function-super), color 150ms ease;
+}
+
+.btn:hover {
+  background: var(--color-white-10);
+}
+
+.btn:active {
+  background: var(--color-white-20);
+}
+
+.btn.closeBtn:hover {
+  color: var(--color-white-99);
+  background: #e81123; /* guard:allow — Windows platform close-button red */
+}
+
+.btn.closeBtn:active {
+  color: var(--color-white-99);
+  background: #c50f1f; /* guard:allow — Windows platform close-button red (pressed) */
+}

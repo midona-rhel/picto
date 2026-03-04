@@ -1,0 +1,246 @@
+.urlWrap {
+  position: relative;
+  margin-bottom: 8px;
+}
+
+/* --------------------------------------------------------------------------
+   Summary row — icon | separator | domain text
+   -------------------------------------------------------------------------- */
+
+.urlSummaryRow {
+  display: flex;
+  align-items: center;
+  min-height: 32px;
+  background: var(--color-black-20);
+  border: 1px solid var(--color-border-secondary);
+  border-radius: 6px;
+  box-sizing: border-box;
+  width: 100%;
+}
+
+.urlSummaryIcon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  min-width: 32px;
+  align-self: stretch;
+  flex-shrink: 0;
+  background: transparent;
+  border: none;
+  border-radius: 5px 0 0 5px;
+  color: var(--color-text-primary);
+  cursor: pointer;
+  padding: 0;
+  opacity: 0.5;
+  transition: opacity 150ms var(--timing-function-super),
+              background 150ms var(--timing-function-super);
+}
+
+.urlSummaryIcon:hover {
+  opacity: 1;
+  background: var(--color-white-05);
+}
+
+.urlSummarySep {
+  width: 1px;
+  align-self: stretch;
+  background: var(--color-border-secondary);
+  flex-shrink: 0;
+}
+
+.urlSummaryText {
+  flex: 1;
+  min-width: 0;
+  padding: 0 10px;
+  font-family: var(--font-family);
+  font-size: var(--font-size-md);
+  line-height: 30px;
+  color: var(--color-text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+
+.urlSummaryPlaceholder {
+  color: var(--color-text-tertiary);
+}
+
+/* --------------------------------------------------------------------------
+   Hover popover — full URLs preview
+   -------------------------------------------------------------------------- */
+
+.urlPopover {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  z-index: 10;
+  background: var(--box-background-glass);
+  backdrop-filter: blur(var(--box-background-blur));
+  -webkit-backdrop-filter: blur(var(--box-background-blur));
+  border: 1px solid var(--color-border-secondary);
+  border-radius: 6px;
+  box-shadow: var(--box-border-shadow);
+  max-height: 200px;
+  overflow-y: auto;
+  padding: 6px 10px;
+  font-size: var(--font-size-md);
+  color: var(--color-text-primary);
+  margin-top: 2px;
+}
+
+.urlPopoverRow {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: 24px;
+  cursor: pointer;
+  padding: 0 2px;
+  border-radius: 3px;
+}
+
+.urlPopoverRow:hover {
+  background: var(--color-white-05);
+}
+
+/* --------------------------------------------------------------------------
+   Dropdown panel — full URL management
+   -------------------------------------------------------------------------- */
+
+.urlDropdown {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  z-index: 10;
+  background: var(--box-background-glass);
+  backdrop-filter: blur(var(--box-background-blur));
+  -webkit-backdrop-filter: blur(var(--box-background-blur));
+  border: 1px solid var(--color-border-secondary);
+  border-radius: 6px;
+  box-shadow: var(--box-border-shadow);
+  min-width: 100%;
+  max-height: 240px;
+  overflow-y: auto;
+  padding: 4px 0;
+  margin-top: 2px;
+}
+
+/* --------------------------------------------------------------------------
+   URL row inside dropdown
+   -------------------------------------------------------------------------- */
+
+.urlRow {
+  display: flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 0 2px 0 10px;
+  gap: 2px;
+}
+
+.urlRow:hover {
+  background: var(--color-white-05);
+}
+
+.urlText {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  color: var(--color-text-primary);
+  cursor: text;
+  line-height: 28px;
+}
+
+.urlEditInput {
+  flex: 1;
+  min-width: 0;
+  background: none;
+  border: none;
+  outline: none;
+  font-family: var(--font-family);
+  font-size: 13px;
+  color: var(--color-text-primary);
+  line-height: 28px;
+  padding: 0;
+}
+
+.urlEditInput::placeholder {
+  color: var(--color-text-tertiary);
+}
+
+.urlActionBtn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  color: var(--color-text-primary);
+  cursor: pointer;
+  opacity: 0.4;
+  transition: opacity 150ms var(--timing-function-super);
+}
+
+.urlActionBtn:hover {
+  opacity: 1;
+}
+
+.urlRemoveBtn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  color: var(--color-text-primary);
+  cursor: pointer;
+  opacity: 0.4;
+  transition: opacity 150ms var(--timing-function-super);
+}
+
+.urlRemoveBtn:hover {
+  opacity: 1;
+}
+
+.addUrlBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 26px;
+  padding: 0 10px;
+  background: none;
+  border: none;
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+  font-size: 12px;
+  transition: color 150ms var(--timing-function-super);
+}
+
+.addUrlBtn:hover {
+  color: var(--color-text-primary);
+}
+
+/* --------------------------------------------------------------------------
+   Light theme overrides
+   -------------------------------------------------------------------------- */
+
+[data-mantine-color-scheme="light"] .urlSummaryRow {
+  background: var(--color-white-50);
+}
+
+[data-mantine-color-scheme="light"] .urlRow:hover {
+  background: var(--color-black-10);
+}
+
+[data-mantine-color-scheme="light"] .urlSummaryIcon:hover {
+  background: var(--color-black-10);
+}

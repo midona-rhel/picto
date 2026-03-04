@@ -1,0 +1,135 @@
+.root {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--box-background);
+  overflow: hidden;
+  border-radius: 10px;
+}
+
+.toolbar {
+  -webkit-user-select: none;
+  z-index: var(--z-toolbar);
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  display: flex;
+  align-items: center;
+  height: 48px;
+  padding: 0 8px;
+  overflow: hidden;
+  color: var(--color-text-primary);
+  background-color: var(--box-background);
+  border-bottom: 1px solid var(--color-border-secondary);
+  backdrop-filter: var(--box-background-blur);
+  transition: opacity 0.4s ease;
+}
+
+.toolbarHidden {
+  opacity: 0;
+}
+
+.toolbarHidden:hover {
+  opacity: 1;
+}
+
+.toolbarLeft {
+  display: flex;
+  align-items: center;
+  overflow: hidden;
+  flex: 1;
+}
+
+.titleName {
+  text-align: left;
+  cursor: default;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  line-height: 33px;
+  font-size: var(--font-size-md);
+  padding-left: 4px;
+  color: var(--color-text-primary);
+}
+
+.counter {
+  font-size: var(--font-size-2xs);
+  font-family: 'SF Mono', 'Menlo', 'Consolas', monospace;
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+  margin-left: 8px;
+  cursor: default;
+  flex-shrink: 0;
+}
+
+.toolbarRight {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.separator {
+  width: 1px;
+  height: 20px;
+  background: var(--color-border-secondary);
+  margin: 0 6px;
+}
+
+.icBtn {
+  composes: icBtn from '../../styles/iconButton.module.css';
+  width: 28px;
+  height: 28px;
+  color: var(--color-text-primary);
+  transition: all 150ms var(--timing-function-super);
+}
+
+.icBtn:hover {
+  background: var(--ig-bg-hover);
+}
+
+.icBtn:active {
+  background: var(--ig-bg-active);
+}
+
+.icBtn.active {
+  color: var(--color-text-primary);
+}
+
+.zoomRatio {
+  font-size: var(--font-size-2xs);
+  font-family: 'SF Mono', 'Menlo', 'Consolas', monospace;
+  color: var(--color-text-secondary);
+  min-width: 36px;
+  text-align: center;
+  user-select: none;
+  cursor: default;
+  line-height: 28px;
+  padding: 0 4px;
+  border-radius: 5px;
+  transition: all 150ms var(--timing-function-super);
+}
+
+.zoomRatio:hover {
+  background: var(--color-dark-4);
+  color: var(--color-text-primary);
+}
+
+.navigator_toolbar {
+  display: flex;
+  align-items: center;
+  gap: 0;
+}
+
+.container {
+  flex: 1;
+  min-height: 0;
+}
+
+.container video {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}

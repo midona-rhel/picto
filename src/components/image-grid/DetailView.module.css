@@ -1,0 +1,58 @@
+.detailView {
+  position: absolute;
+  inset: 0;
+  z-index: var(--z-detail-view);
+  background: var(--color-theme);
+  display: flex;
+  flex-direction: column;
+}
+
+.imageContainer {
+  flex: 1;
+}
+
+.inboxBar {
+  position: absolute;
+  bottom: 80px;
+  left: 0;
+  right: 0;
+  z-index: 20;
+  display: flex;
+  justify-content: center;
+  gap: 2px;
+  pointer-events: none;
+}
+
+.inboxBtn {
+  width: 44px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  cursor: pointer;
+  pointer-events: auto;
+  color: var(--color-white-80);
+  background: var(--color-black-50);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  transition: background 150ms ease, color 150ms ease;
+}
+
+.inboxBtn:first-child {
+  border-radius: 8px 0 0 8px;
+}
+
+.inboxBtn:last-child {
+  border-radius: 0 8px 8px 0;
+}
+
+.inboxBtnReject:hover {
+  background: rgba(220, 60, 60, 0.7);
+  color: #fff;
+}
+
+.inboxBtnAccept:hover {
+  background: rgba(50, 160, 80, 0.7);
+  color: #fff;
+}

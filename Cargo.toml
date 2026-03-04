@@ -1,0 +1,6 @@
+[workspace]
+members = [
+    "core",
+    "native/picto-node",
+]
+resolver = "2"

@@ -1,0 +1,30 @@
+.icBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--color-text-primary);
+  cursor: pointer;
+  box-sizing: border-box;
+  outline: none;
+  flex-shrink: 0;
+  -webkit-app-region: no-drag;
+  transition: all 150ms var(--timing-function-super);
+}
+
+.icBtn:hover {
+  background: var(--ig-bg-hover);
+}
+
+.icBtn:active {
+  background: var(--ig-bg-active);
+}
+
+.icBtn:disabled {
+  opacity: 0.35;
+  cursor: default;
+  pointer-events: none;
+}

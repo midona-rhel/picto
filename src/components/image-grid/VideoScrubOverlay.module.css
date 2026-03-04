@@ -1,0 +1,59 @@
+/* ==========================================================================
+   VideoScrubOverlay — grid thumbnail video scrub on hover
+   ========================================================================== */
+
+.overlay {
+  position: fixed;
+  z-index: 1500;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.video {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+  pointer-events: none;
+}
+
+/* --------------------------------------------------------------------------
+   Time badge — top right, matches canvas duration badge style
+   -------------------------------------------------------------------------- */
+
+.timeBadge {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  background-color: var(--color-black-50);
+  color: var(--color-white-80);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-bold);
+  font-variant-numeric: tabular-nums;
+  padding: 0 2px;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  border-radius: 4px;
+  pointer-events: none;
+  user-select: none;
+}
+
+/* --------------------------------------------------------------------------
+   Progress bar at bottom
+   -------------------------------------------------------------------------- */
+
+.progressTrack {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 3px;
+  background: rgba(255, 255, 255, 0.25);
+}
+
+.progressFill {
+  height: 100%;
+  background: rgba(255, 255, 255, 0.85);
+  transition: width 50ms linear;
+}

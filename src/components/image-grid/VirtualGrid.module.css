@@ -1,0 +1,212 @@
+/* Tile */
+
+.tile {
+  border-radius: var(--tile-border-radius);
+  overflow: hidden;
+  cursor: pointer;
+  position: relative;
+  background: var(--tile-placeholder-bg);
+}
+
+/* Inner border overlay */
+.tile::after {
+  pointer-events: none;
+  content: "";
+  z-index: 1001;
+  position: absolute;
+  inset: 0;
+  border-radius: var(--tile-border-radius);
+  box-sizing: border-box;
+  border: 1px solid var(--tile-inner-border);
+}
+
+.tileContain {
+  background: transparent;
+}
+.tileContain::after {
+  border-color: transparent;
+}
+
+/* Selected state */
+
+.tileSelected {
+  outline: 4px solid var(--color-primary);
+  outline-offset: -1px;
+}
+
+:global([data-box-selected]) .tile {
+  outline: 4px solid var(--color-primary);
+  outline-offset: -1px;
+}
+
+/* Image layers */
+
+.imgFill {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.blurhashLayer {
+  composes: imgFill;
+  opacity: 1;
+  z-index: 0;
+}
+
+.fadeIn {
+  composes: imgFill;
+  opacity: 0;
+}
+
+.thumbLayer {
+  composes: imgFill;
+  opacity: 0;
+  z-index: 1;
+}
+
+.layerVisible {
+  opacity: 1;
+}
+
+.layerHidden {
+  opacity: 0;
+}
+
+/* Overlay badges */
+
+.overlayBadge {
+  position: absolute;
+  pointer-events: none;
+  user-select: none;
+  color: var(--color-white-80);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-bold);
+  padding: 0 2px;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  border-radius: 4px;
+  background-color: var(--color-black-50);
+  border: 1px solid var(--color-black-20);
+  box-sizing: border-box;
+  white-space: nowrap;
+}
+
+.extensionBadge {
+  composes: overlayBadge;
+  top: 5px;
+  left: 5px;
+  text-transform: uppercase;
+}
+
+.durationBadge {
+  composes: overlayBadge;
+  top: 5px;
+  right: 5px;
+}
+
+/* Hover overlay */
+
+.hoverOverlay {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  transition: opacity var(--transition-fast);
+  pointer-events: none;
+}
+
+.tile:hover .hoverOverlay {
+  opacity: 1;
+}
+
+/* Zoom/peek button */
+
+.zoomBtn {
+  z-index: 11;
+  position: absolute;
+  bottom: 0;
+  right: 0;
+  width: 28px;
+  height: 26px;
+  cursor: zoom-in;
+  opacity: 0;
+  transition: opacity 150ms ease 250ms;
+  background-repeat: no-repeat;
+  background-position: center center;
+  background-size: 28px 26px;
+  pointer-events: auto;
+  /* Inline SVG magnifier icon */
+  background-image: url("data:image/svg+xml,%3Csvg width='28' height='26' viewBox='0 0 28 26' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M8 0C3.58 0 0 3.58 0 8V26H22C25.31 26 28 23.31 28 20V0H8Z' fill='black' fill-opacity='.6'/%3E%3Cg transform='translate(2,1)'%3E%3Cpath fill-rule='evenodd' clip-rule='evenodd' d='M8 12.5a4.5 4.5 0 1 0 9 0 4.5 4.5 0 0 0-9 0Zm9.02 3.12 1.83 1.81a.5.5 0 0 1-.71.71l-1.82-1.82A5.47 5.47 0 0 1 12.5 18 5.5 5.5 0 1 1 18 12.5c0 1.16-.36 2.23-.98 3.12ZM12 10.5a.5.5 0 0 1 1 0V12h1.5a.5.5 0 0 1 0 1H13v1.5a.5.5 0 0 1-1 0V13h-1.5a.5.5 0 0 1 0-1H12v-1.5Z' fill='white' fill-opacity='.7'/%3E%3C/g%3E%3C/svg%3E");
+}
+
+.tile:hover .zoomBtn {
+  opacity: 0.5;
+  transition: opacity 50ms ease 250ms;
+}
+
+.zoomBtn:hover {
+  opacity: 1 !important;
+  transition: none !important;
+}
+
+/* Tile position wrapper — GPU-composited via translate3d */
+.tileWrapper {
+  backface-visibility: hidden;
+}
+
+/* Performance mode — disables transitions while scrolling/marquee */
+
+:global([data-perf-mode='1']) .tile {
+  transition: none !important;
+}
+
+:global([data-perf-mode='1']) .fadeIn,
+:global([data-perf-mode='1']) .thumbLayer,
+:global([data-perf-mode='1']) .blurhashLayer {
+  transition: none !important;
+}
+
+:global([data-perf-mode='1']) .hoverOverlay {
+  transition: none !important;
+  opacity: 0 !important;
+}
+
+:global([data-perf-mode='1']) .zoomBtn {
+  opacity: 0 !important;
+  transition: none !important;
+  pointer-events: none !important;
+}
+
+/* Filename */
+
+.tileName {
+  font-size: var(--font-size-md);
+  line-height: 1;
+  margin-top: 7px;
+  padding: 0 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: center;
+  color: var(--color-text-primary);
+}
+
+/* Info row */
+
+.tileInfo {
+  font-size: var(--font-size-2xs);
+  line-height: 1;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: center;
+  color: var(--color-text-tertiary, var(--color-text-secondary));
+}

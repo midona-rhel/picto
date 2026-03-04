@@ -1,0 +1,148 @@
+/* Composed from shared primitives */
+.backdrop {
+  composes: panelBackdrop from '../styles/pickerPanel.module.css';
+}
+
+.panel {
+  composes: panelGlass from '../styles/pickerPanel.module.css';
+  position: fixed;
+  z-index: var(--z-context-menu);
+  width: 360px;
+  max-height: calc(100vh - 200px);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  user-select: none;
+  -webkit-user-select: none;
+  font-size: 13px;
+  color: var(--color-text-primary);
+}
+
+.panelDragging {
+  composes: panelDragging from '../styles/pickerPanel.module.css';
+}
+
+.header {
+  composes: panelHeader from '../styles/pickerPanel.module.css';
+}
+
+.headerDragging {
+  composes: panelHeaderDragging from '../styles/pickerPanel.module.css';
+}
+
+.pinBtn {
+  composes: pinBtn from '../styles/pickerPanel.module.css';
+}
+
+.searchWrap {
+  composes: searchWrap from '../styles/pickerPanel.module.css';
+}
+
+.searchInput {
+  composes: searchInput from '../styles/pickerPanel.module.css';
+}
+
+.ruleLabel {
+  composes: ruleLabel from '../styles/pickerPanel.module.css';
+}
+
+.logicTabs {
+  composes: logicTabs from '../styles/pickerPanel.module.css';
+}
+
+.logicTab {
+  composes: logicTab from '../styles/pickerPanel.module.css';
+}
+
+.logicTabActive {
+  composes: logicTabActive from '../styles/pickerPanel.module.css';
+}
+
+.checkItem {
+  composes: checkItem from '../styles/pickerPanel.module.css';
+}
+
+.checkItemFocused {
+  composes: checkItemFocused from '../styles/pickerPanel.module.css';
+}
+
+.checkItemChecked {
+  composes: checkItemChecked from '../styles/pickerPanel.module.css';
+}
+
+.checkItemExcluded {
+  composes: checkItemExcluded from '../styles/pickerPanel.module.css';
+}
+
+.checkIcon {
+  composes: checkIcon from '../styles/checkIcon.module.css';
+}
+
+.checkIconChecked {
+  composes: checkIconChecked from '../styles/checkIcon.module.css';
+}
+
+.checkIconExcluded {
+  composes: checkIconExcluded from '../styles/checkIcon.module.css';
+}
+
+.checkMark {
+  composes: checkMark from '../styles/checkIcon.module.css';
+}
+
+.itemName {
+  composes: itemName from '../styles/pickerPanel.module.css';
+}
+
+.itemBadge {
+  composes: itemBadge from '../styles/pickerPanel.module.css';
+}
+
+.matchHighlight {
+  composes: matchHighlight from '../styles/pickerPanel.module.css';
+}
+
+.footer {
+  composes: panelFooter from '../styles/pickerPanel.module.css';
+}
+
+.footerLeft {
+  composes: footerLeft from '../styles/pickerPanel.module.css';
+}
+
+.footerRight {
+  composes: footerRight from '../styles/pickerPanel.module.css';
+}
+
+.shortcutTip {
+  composes: shortcutTip from '../styles/pickerPanel.module.css';
+}
+
+.kbd {
+  composes: kbd from '../styles/pickerPanel.module.css';
+}
+
+/* FolderPicker-specific */
+.content {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 4px 0;
+  margin: 0;
+}
+
+.folderIcon {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  opacity: 0.6;
+  transition: opacity 120ms ease;
+}
+
+.checkItem:hover .folderIcon {
+  opacity: 1;
+}
+
+.empty {
+  composes: emptyState from '../styles/pickerPanel.module.css';
+}

@@ -1,0 +1,389 @@
+/* Sidebar */
+
+.sidebar {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+  font-size: var(--font-size-md);
+}
+
+.scrollArea {
+  composes: scrollFade from '../../styles/scrollbarFade.module.css';
+  flex: 1;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: scroll;
+  padding-left: 8px;
+  padding-right: 8px;
+  padding-bottom: 24px;
+  backface-visibility: hidden;
+}
+
+/* Section label */
+
+.sectionHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 24px;
+  padding: 0 0 0 5px;
+  margin: 4px 0 1px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.sectionTitleRow {
+  display: flex;
+  align-items: center;
+  height: 24px;
+  padding: 0 5px;
+  margin-left: 2px;
+  border-radius: 5px;
+  transition: all 200ms var(--timing-function-super);
+}
+
+.sectionHeader:hover .sectionTitleRow {
+  background: var(--sidebar-item-hover-bg);
+  color: var(--color-text-primary);
+}
+
+.sectionTitle {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-regular);
+  color: var(--color-text-tertiary);
+  white-space: pre;
+  line-height: 24px;
+}
+
+.sectionHeader:hover .sectionTitle {
+  color: var(--color-text-primary);
+}
+
+.sectionArrow {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 4px;
+  opacity: 0;
+  transition: opacity 200ms var(--timing-function-super);
+  color: var(--color-text-tertiary);
+}
+
+.sectionHeader:hover .sectionArrow {
+  opacity: 1;
+}
+
+.sectionArrowExpanded {
+  opacity: 0;
+}
+
+.sectionArrowExpanded svg,
+.sectionArrowExpanded img {
+  transform: rotate(90deg);
+}
+
+.sectionAddBtn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 4px;
+  border: none;
+  background: transparent;
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 200ms var(--timing-function-super);
+}
+
+.sectionHeader:hover .sectionAddBtn {
+  opacity: 0.7;
+}
+
+.sectionAddBtn:hover {
+  opacity: 1 !important;
+  color: var(--color-text-primary);
+}
+
+.sectionBody {
+  overflow: visible;
+}
+
+/* Sidebar item */
+
+.item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  height: 26px;
+  line-height: 26px;
+  padding: 0;
+  cursor: default;
+  user-select: none;
+  color: var(--color-text-primary);
+  font-size: var(--font-size-md);
+  box-sizing: border-box;
+}
+
+/* ::before pseudo-element used for hover/active background */
+.item::before {
+  content: "";
+  position: absolute;
+  z-index: 0;
+  top: 0;
+  left: 7px;
+  right: 0;
+  bottom: 1px;
+  border-radius: 6px;
+  opacity: 0;
+  transition: opacity 50ms var(--timing-function-super);
+  pointer-events: none;
+}
+
+.item:hover::before {
+  background: var(--sidebar-item-hover-bg);
+  opacity: 1;
+}
+
+.itemActive::before {
+  background: var(--sidebar-item-active-bg);
+  opacity: 1;
+}
+
+.itemActive:hover::before {
+  background: var(--sidebar-item-active-bg);
+  opacity: 1;
+}
+
+.itemSelected::before {
+  background: var(--sidebar-item-active-bg);
+  opacity: 1;
+}
+
+.itemSelected:hover::before {
+  background: var(--sidebar-item-active-bg);
+  opacity: 1;
+}
+
+.itemDropTarget::before {
+  background: var(--color-primary-30) !important;
+  border: 1px solid var(--color-primary) !important;
+  opacity: 1;
+}
+
+.itemContextHighlight::before {
+  background: var(--sidebar-item-hover-bg);
+  border: 1px solid var(--color-border-primary);
+  opacity: 1;
+}
+
+/* Item children — z-index: 1 to sit above ::before bg */
+
+.itemIcon {
+  position: relative;
+  z-index: 1;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  line-height: 26px;
+  text-align: left;
+  opacity: 0.7;
+  margin-left: 11px;
+}
+
+.item:hover .itemIcon,
+.itemActive .itemIcon {
+  opacity: 1;
+}
+
+.itemLabel {
+  position: relative;
+  z-index: 1;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-regular);
+  line-height: 26px;
+  color: var(--color-text-primary);
+  cursor: default;
+}
+
+.itemCount {
+  position: relative;
+  z-index: 1;
+  flex-shrink: 0;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+  font-variant-numeric: tabular-nums slashed-zero;
+  font-family: var(--font-family-mono, "SF Mono", "Cascadia Code", "Fira Code", ui-monospace, monospace);
+  padding: 0 5px;
+  text-align: right;
+  line-height: 26px;
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+}
+
+/* Folder tree */
+
+.folderRow {
+  position: relative;
+}
+
+.folderArrow {
+  position: absolute;
+  z-index: 2;
+  left: -13px;
+  top: 0;
+  width: 16px;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  cursor: pointer;
+  opacity: 0.5;
+  transition: opacity 200ms var(--timing-function-super);
+}
+
+.folderArrow:hover {
+  opacity: 1;
+}
+
+.folderArrowEmpty {
+  display: none;
+}
+
+.folderTriangle {
+  display: inline-block;
+  width: 0;
+  height: 0;
+  border-left: 3.5px solid transparent;
+  border-right: 3.5px solid transparent;
+  border-top: 5px solid var(--color-text-tertiary);
+  transition: transform 200ms var(--timing-function-super);
+  margin-right: -2px;
+}
+
+.folderTriangleExpanded {
+  transform: rotate(0deg);
+}
+
+.folderTriangleCollapsed {
+  transform: rotate(-90deg);
+}
+
+/* Tree guidelines */
+
+.treeGuidelines {
+  position: relative;
+  top: 0;
+  left: 0;
+  pointer-events: none;
+}
+
+.treeLine {
+  position: absolute;
+  top: 0;
+  width: 1px;
+}
+
+.treeLineTop {
+  height: 6px;
+  top: 0;
+}
+
+.treeLineMiddle {
+  height: 8px;
+  top: 6px;
+}
+
+.treeLineBottom {
+  height: 13px;
+  top: 14px;
+}
+
+/* Rename input */
+
+.renameInput {
+  composes: renameInput from '../../styles/renameInput.module.css';
+  position: relative;
+  z-index: 10;
+  height: 22px;
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+}
+
+/* Footer */
+
+.footer {
+  flex-shrink: 0;
+  padding: 6px 8px;
+  box-shadow: 0 -1px 0 0 var(--color-border-secondary);
+}
+
+.footerInput {
+  width: 100%;
+  height: 28px;
+  border: 1px solid var(--color-border-secondary);
+  border-radius: 4px;
+  background: var(--ig-bg-input);
+  color: var(--color-text-primary);
+  font-size: var(--font-size-sm);
+  padding: 0 8px;
+  outline: none;
+  transition: border-color var(--transition-fast);
+}
+
+.footerInput::placeholder {
+  color: var(--color-text-tertiary);
+}
+
+.footerInput:focus {
+  border-color: var(--color-primary-50);
+}
+
+/* Drag and drop */
+
+.dropLine {
+  position: absolute;
+  left: 7px;
+  right: 0;
+  height: 2px;
+  background: var(--color-primary);
+  border-radius: 1px;
+  z-index: 20;
+  pointer-events: none;
+}
+
+.dropHighlight {
+  position: relative;
+}
+
+.dropHighlight::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  left: 7px;
+  border-radius: 6px;
+  background: var(--color-primary-20);
+  border: 1px solid var(--color-primary-50);
+  pointer-events: none;
+  z-index: 5;
+}
+
+.dragOverlay {
+  background: var(--box-background);
+  border: 1px solid var(--color-primary-50);
+  border-radius: 6px;
+  box-shadow: 0 4px 12px var(--color-black-30);
+  opacity: 0.9;
+  pointer-events: none;
+  width: 200px;
+}
