@@ -8,6 +8,7 @@ on:
     tags:
       - "v*alpha*"
       - "v*rc*"
+  workflow_dispatch:
 
 concurrency:
   group: alpha-gate-${{ github.ref }}
@@ -65,7 +66,7 @@ jobs:
   alpha-package:
     name: alpha:package + alpha:smoke (${{ matrix.platform }})
     needs: alpha-verify
-    if: github.event_name == 'pull_request' || startsWith(github.ref, 'refs/tags/')
+    if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')
     continue-on-error: ${{ github.event_name == 'pull_request' }}
     strategy:
       fail-fast: false
