@@ -277,11 +277,13 @@ export function DetailView({ images, currentIndex, onNavigate, onClose, onStateC
     return () => { if (stateChangeRafRef.current) cancelAnimationFrame(stateChangeRafRef.current); };
   }, [currentIndex, images.length, activeScale, getFitScale, onStateChange, stripMode, isCollection]);
 
-  // Notify parent when the active image changes (for inspector/selection sync)
+  // Notify parent when the active image changes (for inspector/selection sync).
+  // Important: inbox accept/reject can swap the current image while keeping the
+  // same index, so this must track hash changes, not only index changes.
+  const activeImageHash = images[currentIndex]?.hash ?? null;
   useEffect(() => {
-    const img = images[currentIndex];
-    if (img) onImageChange?.(img.hash);
-  }, [currentIndex]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (activeImageHash) onImageChange?.(activeImageHash);
+  }, [activeImageHash, onImageChange]);
 
   // Load more when navigating near the end of loaded images
   const onLoadMoreRef = useRef(onLoadMore);
