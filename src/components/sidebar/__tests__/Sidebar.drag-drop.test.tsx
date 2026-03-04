@@ -6,15 +6,33 @@ import { useDomainStore } from '../../../stores/domainStore';
 import { useNavigationStore } from '../../../stores/navigationStore';
 import { useCacheStore } from '../../../stores/cacheStore';
 
-const { setStatusSelectionMock, invalidateSummaryMock } = vi.hoisted(() => ({
+const {
+  setStatusSelectionMock,
+  invalidateSummaryMock,
+  sidebarGetTreeMock,
+  tagsNamespaceSummaryMock,
+  gridGetPageSlimMock,
+} = vi.hoisted(() => ({
   setStatusSelectionMock: vi.fn(),
   invalidateSummaryMock: vi.fn(),
+  sidebarGetTreeMock: vi.fn(),
+  tagsNamespaceSummaryMock: vi.fn(),
+  gridGetPageSlimMock: vi.fn(),
 }));
 
 vi.mock('#desktop/api', () => ({
   api: {
     file: {
       setStatusSelection: setStatusSelectionMock,
+    },
+    sidebar: {
+      getTree: sidebarGetTreeMock,
+    },
+    tags: {
+      getNamespaceSummary: tagsNamespaceSummaryMock,
+    },
+    grid: {
+      getPageSlim: gridGetPageSlimMock,
     },
   },
 }));
@@ -55,6 +73,9 @@ describe('Sidebar drag-drop status targets', () => {
   beforeEach(() => {
     setStatusSelectionMock.mockReset();
     invalidateSummaryMock.mockReset();
+    sidebarGetTreeMock.mockReset();
+    tagsNamespaceSummaryMock.mockReset();
+    gridGetPageSlimMock.mockReset();
     useDomainStore.setState({
       allImagesCount: 100,
       inboxCount: 20,
@@ -80,6 +101,9 @@ describe('Sidebar drag-drop status targets', () => {
     });
     useCacheStore.setState({ gridRefreshSeq: 0, metadataCache: new Map() });
     setStatusSelectionMock.mockResolvedValue(0);
+    sidebarGetTreeMock.mockResolvedValue({ nodes: [], tree_epoch: 1, generated_at: new Date(0).toISOString() });
+    tagsNamespaceSummaryMock.mockResolvedValue([]);
+    gridGetPageSlimMock.mockResolvedValue({ items: [], total_count: 0, next_cursor: null });
   });
 
   afterEach(() => {
