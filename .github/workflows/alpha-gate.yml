@@ -143,7 +143,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Run alpha smoke
-        run: npm run alpha:smoke -- --platform "${{ matrix.platform }}" --report "artifacts/alpha-smoke/${{ matrix.platform }}.json"
+        run: npm run alpha:smoke -- --scope package --platform "${{ matrix.platform }}" --report "artifacts/alpha-smoke/${{ matrix.platform }}.json"
 
       - name: Upload package artifacts
         uses: actions/upload-artifact@v4

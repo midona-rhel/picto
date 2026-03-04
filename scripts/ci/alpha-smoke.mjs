@@ -10,16 +10,18 @@ function parseArgs(argv) {
     const token = argv[i];
     if (token === '--platform') out.platform = argv[++i];
     else if (token === '--report') out.report = argv[++i];
+    else if (token === '--scope') out.scope = argv[++i];
   }
   return out;
 }
 
 const args = parseArgs(process.argv.slice(2));
 const platform = args.platform || process.platform;
+const scope = args.scope || 'full';
 const startedAt = new Date().toISOString();
 const reportPath = args.report || path.join('artifacts', 'alpha-smoke', `${platform}.json`);
 
-const scenarios = [
+const baseScenarios = [
   {
     id: 'launch_app',
     label: 'Launch binary sanity',
@@ -46,6 +48,11 @@ const scenarios = [
     command: 'npm run test -- src/components/sidebar/__tests__/Sidebar.drag-drop.test.tsx --run',
   },
 ];
+
+const scenarios =
+  scope === 'package'
+    ? baseScenarios.filter((scenario) => scenario.id !== 'open_library_and_import_path')
+    : baseScenarios;
 
 const results = [];
 let allPassed = true;
