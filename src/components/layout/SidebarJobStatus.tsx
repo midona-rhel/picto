@@ -317,7 +317,9 @@ export function SidebarJobStatus() {
       push(await SubscriptionController.onFinished((event: SubscriptionFinishedEvent) => {
         lastEventRef.current = Date.now();
         const resolvedStatus =
-          event.status === 'succeeded'
+          event.status === 'cancelled' && event.failure_kind === 'inbox_full'
+            ? 'Paused (Inbox full)'
+            : event.status === 'succeeded'
             ? 'Completed'
             : event.status === 'cancelled'
               ? 'Cancelled'
@@ -343,6 +345,12 @@ export function SidebarJobStatus() {
         });
         const existingTimer = subFinishTimersRef.current.get(event.subscription_id);
         if (existingTimer) clearTimeout(existingTimer);
+        const lingerMs =
+          event.failure_kind === 'inbox_full'
+            ? 6000
+            : event.status === 'failed'
+              ? 4500
+              : 2200;
         const removeTimer = setTimeout(() => {
           setSubs((prev) => {
             const next = new Map(prev);
@@ -350,7 +358,7 @@ export function SidebarJobStatus() {
             return next;
           });
           subFinishTimersRef.current.delete(event.subscription_id);
-        }, event.status === 'failed' ? 4500 : 2200);
+        }, lingerMs);
         subFinishTimersRef.current.set(event.subscription_id, removeTimer);
         void syncRunningSubscriptions().then((runningCount) => {
           if (runningCount > 0) SidebarController.requestRefresh();

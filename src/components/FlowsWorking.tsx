@@ -359,11 +359,19 @@ export function FlowsWorking({
       }
       setProgressMap((prev) => {
         const next = new Map(prev);
+        const resolvedStatus =
+          event.status === 'cancelled' && event.failure_kind === 'inbox_full'
+            ? 'Paused (Inbox full)'
+            : event.status === 'succeeded'
+              ? 'Completed'
+              : event.status === 'cancelled'
+                ? 'Cancelled'
+                : 'Failed';
         next.set(event.subscription_id, {
           filesDownloaded: event.files_downloaded,
           filesSkipped: event.files_skipped,
           pagesFetched: next.get(event.subscription_id)?.pagesFetched ?? 0,
-          statusText: event.status === 'succeeded' ? 'Completed' : event.status === 'cancelled' ? 'Cancelled' : 'Failed',
+          statusText: resolvedStatus,
         });
         return next;
       });
@@ -373,7 +381,7 @@ export function FlowsWorking({
           next.delete(event.subscription_id);
           return next;
         });
-      }, event.status === 'failed' ? 4500 : 1800);
+      }, event.failure_kind === 'inbox_full' ? 6000 : event.status === 'failed' ? 4500 : 1800);
       if (event.status === 'failed') {
         notifyError(formatSubscriptionFailureMessage(event), 'Subscription Failed');
       }

@@ -57,6 +57,17 @@ fn effective_query_file_limit(global_batch_size: u32, subscription_limit: u32) -
     Some(local.min(global_batch_size).max(1))
 }
 
+fn resolve_finished_status_text(status: &str, failure_kind: Option<&str>) -> &'static str {
+    if status == "cancelled" && failure_kind == Some("inbox_full") {
+        return "Paused (Inbox full)";
+    }
+    match status {
+        "succeeded" => "Completed",
+        "cancelled" => "Cancelled",
+        _ => "Failed",
+    }
+}
+
 async fn clear_subscription_archive_entries(
     db: &SqliteDatabase,
     archive_prefixes: &[String],
@@ -665,6 +676,8 @@ impl SubscriptionController {
                         .await
                         .insert(sub_id_str.clone(), status.to_string());
                 }
+                let final_status_text =
+                    resolve_finished_status_text(status, last_failure_kind.as_deref());
 
                 events::emit(
                     events::event_names::SUBSCRIPTION_FINISHED,
@@ -679,17 +692,12 @@ impl SubscriptionController {
                         files_skipped: total_skipped,
                         errors_count: total_errors,
                         error: last_error,
-                        failure_kind: last_failure_kind,
+                        failure_kind: last_failure_kind.clone(),
                         metadata_validated: total_metadata_validated,
                         metadata_invalid: total_metadata_invalid,
                         last_metadata_error: last_metadata_error.clone(),
                     },
                 );
-                let final_status_text = match status {
-                    "succeeded" => "Completed",
-                    "cancelled" => "Cancelled",
-                    _ => "Failed",
-                };
                 crate::subscription_sync::update_runtime_progress_snapshot(
                     crate::subscription_sync::SubscriptionProgressEvent {
                         subscription_id: sub_id_for_inner_clear.clone(),
@@ -957,11 +965,8 @@ impl SubscriptionController {
                         last_metadata_error: last_metadata_error.clone(),
                     },
                 );
-                let final_status_text = match status {
-                    "succeeded" => "Completed",
-                    "cancelled" => "Cancelled",
-                    _ => "Failed",
-                };
+                let final_status_text =
+                    resolve_finished_status_text(status, failure_kind.as_deref());
                 crate::subscription_sync::update_runtime_progress_snapshot(
                     crate::subscription_sync::SubscriptionProgressEvent {
                         subscription_id: sub_id_for_inner_clear.clone(),
@@ -1036,7 +1041,7 @@ impl SubscriptionController {
 
 #[cfg(test)]
 mod tests {
-    use super::effective_query_file_limit;
+    use super::{effective_query_file_limit, resolve_finished_status_text};
 
     #[test]
     fn effective_query_file_limit_global_unlimited_is_unbounded() {
@@ -1050,5 +1055,21 @@ mod tests {
         assert_eq!(effective_query_file_limit(100, 0), Some(100));
         assert_eq!(effective_query_file_limit(100, 50), Some(50));
         assert_eq!(effective_query_file_limit(100, 500), Some(100));
+    }
+
+    #[test]
+    fn resolve_finished_status_text_marks_inbox_full_as_paused() {
+        assert_eq!(
+            resolve_finished_status_text("cancelled", Some("inbox_full")),
+            "Paused (Inbox full)"
+        );
+        assert_eq!(
+            resolve_finished_status_text("cancelled", Some("unknown")),
+            "Cancelled"
+        );
+        assert_eq!(
+            resolve_finished_status_text("succeeded", None),
+            "Completed"
+        );
     }
 }
