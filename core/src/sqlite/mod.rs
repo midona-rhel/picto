@@ -32,6 +32,16 @@ use tokio::sync::{mpsc, Mutex};
 
 pub use compilers::CompilerEvent;
 
+fn parse_active_bitmap_file(payload_json: Option<&str>) -> Option<String> {
+    payload_json
+        .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok())
+        .and_then(|v| {
+            v.get("active_file")
+                .and_then(|s| s.as_str())
+                .map(|s| s.to_string())
+        })
+}
+
 struct ManifestState {
     published_epoch: u64,
     published_artifact_versions: HashMap<String, u64>,
@@ -357,16 +367,18 @@ impl SqliteDatabase {
         let manifest =
             Manifest::load_from_db(&conn).map_err(|e| format!("Failed to load manifest: {e}"))?;
 
-        let active_bitmap_file = manifest
-            .published_artifact_payload_json("bitmaps")
-            .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
-            .and_then(|v| {
-                v.get("active_file")
-                    .and_then(|s| s.as_str())
-                    .map(|s| s.to_string())
-            });
+        let active_bitmap_file =
+            parse_active_bitmap_file(manifest.published_artifact_payload_json("bitmaps").as_deref());
 
         let bitmaps = BitmapStore::open_with_active_file(&db_dir, active_bitmap_file.as_deref());
+        let startup_keep = vec![
+            active_bitmap_file
+                .clone()
+                .unwrap_or_else(|| "bitmaps.bin".to_string()),
+        ];
+        if let Err(e) = bitmaps.prune_artifacts(&startup_keep) {
+            tracing::warn!(error = %e, "Bitmap artifact cleanup (startup) failed");
+        }
 
         let pool_size = num_cpus::get().min(8).max(2);
         let mut read_pool = Vec::with_capacity(pool_size);
@@ -614,12 +626,19 @@ impl SqliteDatabase {
     }
 
     pub async fn flush(&self) -> Result<(), String> {
+        let previous_active = parse_active_bitmap_file(
+            self.manifest
+                .published_artifact_payload_json("bitmaps")
+                .as_deref(),
+        );
+        let mut new_active_for_cleanup: Option<String> = None;
         if self.bitmaps.is_dirty() {
             let bitmap_version = self.manifest.bump_working_artifact_version("bitmaps");
             let active_file = self
                 .bitmaps
                 .flush_versioned(bitmap_version)
                 .map_err(|e| format!("Bitmap flush error: {e}"))?;
+            new_active_for_cleanup = Some(active_file.clone());
             self.manifest.set_working_artifact_payload_json(
                 "bitmaps",
                 json!({ "active_file": active_file }).to_string(),
@@ -629,6 +648,23 @@ impl SqliteDatabase {
         let manifest = self.manifest.clone();
         self.with_conn_mut(move |conn| manifest.flush_to_db(conn))
             .await?;
+
+        if let Some(active_file) = new_active_for_cleanup {
+            let mut keep = vec![active_file.clone()];
+            if let Some(prev) = previous_active.filter(|p| p != &active_file) {
+                keep.push(prev);
+            }
+            match self.bitmaps.prune_artifacts(&keep) {
+                Ok(deleted) => {
+                    if deleted > 0 {
+                        tracing::info!(deleted, "Pruned stale bitmap artifact files");
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "Bitmap artifact cleanup (post-flush) failed");
+                }
+            }
+        }
 
         Ok(())
     }
