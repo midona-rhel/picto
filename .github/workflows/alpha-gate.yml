@@ -46,6 +46,9 @@ jobs:
             libclang-dev \
             libfuse2
 
+      - name: Download FFmpeg binaries
+        run: bash scripts/download-ffmpeg.sh
+
       - name: Install root dependencies
         run: npm install
 

@@ -22,7 +22,7 @@ use picto_core::sqlite_ptr::PtrSqliteDatabase;
 struct TestHarness {
     _tmp: TempDir,
     db: Arc<SqliteDatabase>,
-    ptr_db: Arc<PtrSqliteDatabase>,
+    _ptr_db: Arc<PtrSqliteDatabase>,
     events: Arc<Mutex<Vec<(String, String)>>>,
     // The native event callback is a global singleton; keep orchestration tests
     // serialized so callback ownership is deterministic across this test binary.
@@ -64,7 +64,7 @@ impl TestHarness {
         Self {
             _tmp: tmp,
             db,
-            ptr_db,
+            _ptr_db: ptr_db,
             events: collected,
             _event_callback_guard: event_callback_guard,
         }
