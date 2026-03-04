@@ -234,6 +234,7 @@ impl<'a> SubscriptionSyncEngine<'a> {
             .bitmaps
             .len(&crate::sqlite::bitmaps::BitmapKey::Status(0));
         if inbox_count >= inbox_limit as u64 {
+            progress.failure_kind = Some("inbox_full".to_string());
             self.emit_progress(
                 &sub_id_str,
                 &progress,
@@ -423,6 +424,7 @@ impl<'a> SubscriptionSyncEngine<'a> {
                 .bitmaps
                 .len(&crate::sqlite::bitmaps::BitmapKey::Status(0));
             if inbox_count >= inbox_limit as u64 {
+                progress.failure_kind = Some("inbox_full".to_string());
                 self.emit_progress(
                     &sub_id_str,
                     &progress,

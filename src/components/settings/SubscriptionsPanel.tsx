@@ -106,7 +106,11 @@ export function SubscriptionsPanel() {
       if (event.status === 'succeeded') {
         notifySuccess(`Downloaded ${event.files_downloaded}, skipped ${event.files_skipped}`, 'Sync Complete');
       } else if (event.status === 'cancelled') {
-        notifyWarning(`Cancelled — ${event.files_downloaded} downloaded`, 'Sync Stopped');
+        if (event.failure_kind === 'inbox_full') {
+          notifyWarning('Paused — inbox is full (1000). Review inbox items to continue.', 'Sync Paused');
+        } else {
+          notifyWarning(`Cancelled — ${event.files_downloaded} downloaded`, 'Sync Stopped');
+        }
       } else if (event.status === 'failed') {
         notifyError(event.error || `${event.errors_count} error(s)`, 'Sync Failed');
       }
