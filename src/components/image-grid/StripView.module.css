@@ -1,0 +1,35 @@
+.stripView {
+  position: absolute;
+  inset: 0;
+  background: var(--mantine-color-body);
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+}
+
+.scrollContainer {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: auto;
+  display: flex;
+  justify-content: center;
+}
+
+.spacer {
+  position: relative;
+  flex-shrink: 0;
+}
+
+.imageSlot {
+  position: absolute;
+  left: 0;
+  right: 0;
+  margin: 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.imageSlot img {
+  display: block;
+}

@@ -1,0 +1,187 @@
+/* ==========================================================================
+   SidebarJobStatus — polished job cards in sidebar footer
+   ========================================================================== */
+
+.root {
+  border-top: 1px solid var(--color-border-secondary);
+  padding: 8px 12px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* PBI-044: Subscription job list — max 3 cards visible, scroll for overflow */
+.subList {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: calc(3 * (48px + 6px));
+  overflow-y: auto;
+  scrollbar-gutter: stable both-edges;
+}
+
+/* --------------------------------------------------------------------------
+   Job card — icon spans 2 rows via CSS grid
+   ┌──┐  name        domain
+   │↓ │  ███████░░░  3 files
+   └──┘
+   -------------------------------------------------------------------------- */
+
+.jobCard {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  grid-template-rows: auto auto;
+  column-gap: 8px;
+  row-gap: 2px;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: var(--color-bg-secondary);
+  border: 1px solid var(--color-border-secondary);
+}
+
+[data-mantine-color-scheme="light"] .jobCard {
+  background: var(--color-black-10);
+}
+
+.jobIcon {
+  grid-row: 1 / 3;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  background: var(--color-primary-alpha);
+  color: var(--color-primary);
+  flex-shrink: 0;
+  align-self: center;
+}
+
+/* Top-right: name + domain — PBI-045: space-between for right-aligned status */
+.jobNameRow {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 6px;
+  min-width: 0;
+}
+
+.jobName {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-bold);
+  color: var(--color-text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.jobPhase {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.jobPhaseError {
+  composes: jobPhase;
+  color: var(--color-negative);
+}
+
+.jobDomain {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.jobCancel {
+  margin-left: auto;
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+  border-radius: 3px;
+  border: none;
+  background: transparent;
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  opacity: 0.6;
+  transition: opacity 100ms, color 100ms;
+}
+
+.jobCancel:hover {
+  opacity: 1;
+  color: var(--color-text-primary);
+}
+
+/* Bottom-right: progress bar + count */
+.jobProgressRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.jobProgress {
+  flex: 1;
+  height: 3px;
+  border-radius: 2px;
+  background: var(--color-border-secondary);
+  overflow: hidden;
+  min-width: 0;
+}
+
+.progressFill {
+  composes: progressFill from '../../styles/progressBar.module.css';
+}
+
+.progressBar {
+  composes: progressBar from '../../styles/progressBar.module.css';
+}
+
+.progressIndeterminate {
+  composes: progressIndeterminate from '../../styles/progressBar.module.css';
+}
+
+.jobCount {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+/* --------------------------------------------------------------------------
+   Error state — red tint for failed jobs
+   -------------------------------------------------------------------------- */
+
+.jobCardError {
+  border-color: color-mix(in srgb, var(--color-negative) 30%, transparent);
+  background: color-mix(in srgb, var(--color-negative) 6%, transparent);
+}
+
+[data-mantine-color-scheme="light"] .jobCardError {
+  background: color-mix(in srgb, var(--color-negative) 5%, transparent);
+}
+
+.jobIconError {
+  composes: jobIcon;
+  background: color-mix(in srgb, var(--color-negative) 15%, transparent);
+  color: var(--color-negative);
+}
+
+.jobCountError {
+  font-size: var(--font-size-xs);
+  color: var(--color-negative);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}

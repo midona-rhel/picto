@@ -1,0 +1,110 @@
+name: Build & Package
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            platform: mac
+            artifact: macos-arm64
+          - os: ubuntu-22.04
+            platform: linux
+            artifact: linux-x64
+          - os: windows-latest
+            platform: win
+            artifact: windows-x64
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            core -> target
+            native/picto-node -> target
+
+      # ── macOS dependencies ──────────────────────────────────────────
+      - name: Install system deps (macOS)
+        if: runner.os == 'macOS'
+        run: brew install lcms2 pkg-config
+
+      # ── Linux dependencies ──────────────────────────────────────────
+      - name: Install system deps (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            pkg-config \
+            liblcms2-dev \
+            libssl-dev \
+            libclang-dev \
+            libfuse2
+
+      # ── Windows dependencies ────────────────────────────────────────
+      - name: Install LLVM (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          choco install llvm -y
+          echo "LIBCLANG_PATH=C:\Program Files\LLVM\bin" >> $env:GITHUB_ENV
+
+      # ── Download bundled sidecar binaries (all platforms) ───────────
+      - name: Download FFmpeg binaries
+        run: bash scripts/download-ffmpeg.sh
+
+      - name: Download gallery-dl
+        run: bash scripts/download-gallery-dl.sh
+
+      # ── Build ───────────────────────────────────────────────────────
+      - name: Install root dependencies
+        run: npm install
+
+      - name: Install NAPI CLI
+        working-directory: native/picto-node
+        run: npm install
+
+      - name: Build native module
+        working-directory: native/picto-node
+        run: npx napi build --release
+
+      - name: Build frontend
+        run: npm run build:electron
+
+      # ── Package ─────────────────────────────────────────────────────
+      - name: Package with electron-builder
+        run: npx electron-builder --publish=never
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # ── Upload artifacts ────────────────────────────────────────────
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: picto-${{ matrix.artifact }}
+          path: |
+            dist/*.dmg
+            dist/*.zip
+            dist/*.AppImage
+            dist/*.deb
+            dist/*.exe
+          if-no-files-found: warn

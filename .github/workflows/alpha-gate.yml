@@ -1,0 +1,161 @@
+name: Alpha Gate
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*alpha*"
+      - "v*rc*"
+
+concurrency:
+  group: alpha-gate-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  alpha-verify:
+    name: alpha:verify
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            core -> target
+            native/picto-node -> target
+
+      - name: Install Linux deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            pkg-config \
+            liblcms2-dev \
+            libssl-dev \
+            libclang-dev \
+            libfuse2
+
+      - name: Install root dependencies
+        run: npm install
+
+      - name: Install NAPI CLI deps
+        working-directory: native/picto-node
+        run: npm install
+
+      - name: Run alpha verify gate
+        run: npm run gate:alpha
+
+  alpha-package:
+    name: alpha:package + alpha:smoke (${{ matrix.platform }})
+    needs: alpha-verify
+    if: github.event_name == 'pull_request' || startsWith(github.ref, 'refs/tags/')
+    continue-on-error: ${{ github.event_name == 'pull_request' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            platform: macos
+            artifact: macos-arm64
+          - os: ubuntu-22.04
+            platform: linux
+            artifact: linux-x64
+          - os: windows-latest
+            platform: windows
+            artifact: windows-x64
+
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            core -> target
+            native/picto-node -> target
+
+      - name: Install system deps (macOS)
+        if: runner.os == 'macOS'
+        run: brew install lcms2 pkg-config
+
+      - name: Install system deps (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            pkg-config \
+            liblcms2-dev \
+            libssl-dev \
+            libclang-dev \
+            libfuse2
+
+      - name: Install LLVM (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          choco install llvm -y
+          echo "LIBCLANG_PATH=C:\Program Files\LLVM\bin" >> $env:GITHUB_ENV
+
+      - name: Download FFmpeg binaries
+        run: bash scripts/download-ffmpeg.sh
+
+      - name: Download gallery-dl
+        run: bash scripts/download-gallery-dl.sh
+
+      - name: Install root dependencies
+        run: npm install
+
+      - name: Install NAPI CLI deps
+        working-directory: native/picto-node
+        run: npm install
+
+      - name: Build native module
+        working-directory: native/picto-node
+        run: npx napi build --release
+
+      - name: Build frontend
+        run: npm run build:electron
+
+      - name: Package alpha artifacts
+        run: npm run alpha:package
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run alpha smoke
+        run: npm run alpha:smoke -- --platform "${{ matrix.platform }}" --report "artifacts/alpha-smoke/${{ matrix.platform }}.json"
+
+      - name: Upload package artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: picto-${{ matrix.artifact }}
+          path: |
+            dist/*.dmg
+            dist/*.zip
+            dist/*.AppImage
+            dist/*.deb
+            dist/*.exe
+          if-no-files-found: warn
+
+      - name: Upload alpha smoke report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: alpha-smoke-${{ matrix.platform }}
+          path: artifacts/alpha-smoke/${{ matrix.platform }}.json
+          if-no-files-found: warn

@@ -1,0 +1,190 @@
+.root {
+  height: 100vh;
+  background: var(--color-theme);
+  user-select: none;
+  -webkit-user-select: none;
+  display: flex;
+  flex-direction: column;
+  transition: opacity 180ms ease;
+}
+
+.shellHidden {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.shellVisible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* Titlebar */
+.titlebar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 2000;
+  height: var(--titlebar-height);
+  display: grid;
+  align-items: center;
+  background: var(--color-theme);
+  -webkit-app-region: drag;
+}
+
+.titlebarBurgerAnchor {
+  position: absolute;
+  left: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 3;
+  -webkit-app-region: no-drag;
+}
+
+.titlebarLeft {
+  padding-left: 74px; /* macOS traffic lights */
+  padding-right: 8px;
+  align-self: stretch;
+  display: flex;
+  align-items: center;
+  background: var(--sidebar-background-color);
+  border-right: 1px solid var(--color-border-secondary);
+}
+
+.titlebarLeftDesktop {
+  padding-left: 8px;
+  padding-right: 8px;
+  align-self: stretch;
+  display: flex;
+  align-items: center;
+  background: var(--sidebar-background-color);
+  border-right: 1px solid var(--color-border-secondary);
+}
+
+.titlebarLeftMin {
+  padding-left: 74px;
+  align-self: stretch;
+  display: flex;
+  align-items: center;
+  padding-right: 4px;
+}
+
+.titlebarLeftMinDesktop {
+  padding-left: 8px;
+  align-self: stretch;
+  display: flex;
+  align-items: center;
+  padding-right: 4px;
+}
+
+.titlebarLeftActions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.panelToggleBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--color-text-primary);
+  cursor: pointer;
+  width: 28px;
+  height: 28px;
+  min-width: 28px;
+  flex-shrink: 0;
+  -webkit-app-region: no-drag;
+  transition: background 150ms var(--timing-function-super);
+}
+
+.panelToggleBtn:hover {
+  background: var(--ig-bg-hover);
+}
+
+.panelToggleBtn:active {
+  background: var(--ig-bg-active);
+}
+
+.titlebarRight {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  height: 100%;
+  padding-right: 8px;
+  box-shadow: 0 1px 0 0 var(--color-border-secondary);
+}
+
+/* Filter bar provides its own bottom border */
+:global([data-filter-bar-open]) .titlebarRight {
+  box-shadow: none;
+}
+
+.titlebarControls {
+  flex: 1;
+  min-width: 0;
+}
+
+/* Layout */
+.layout {
+  display: flex;
+  height: 100vh;
+  box-sizing: border-box;
+}
+
+.sidebar {
+  flex-shrink: 0;
+  width: var(--sidebar-width);
+  height: 100%;
+  overflow: hidden;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  padding-top: var(--titlebar-height);
+  background: var(--sidebar-background-color);
+  border-right: 1px solid var(--color-border-secondary);
+}
+
+.mainContent {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  padding-top: calc(var(--titlebar-height) + var(--filter-bar-height, 0px));
+}
+
+.frame {
+  position: relative;
+  flex: 1;
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.sidebarResizeHandle {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 5px;
+  height: 100%;
+  cursor: col-resize;
+  z-index: 10;
+  border-right: 1px solid var(--color-border-secondary);
+  transition: border 200ms var(--timing-function-super);
+  transition-delay: 100ms;
+}
+
+.sidebarResizeHandle:hover {
+  border-right-width: 2px;
+  border-color: var(--color-primary-70);
+  transition-delay: 0ms;
+}

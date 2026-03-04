@@ -1,0 +1,188 @@
+.toolbar {
+  position: relative;
+  display: flex;
+  align-items: center;
+  width: 100%;
+  height: 100%;
+  padding: 0 8px;
+  gap: 0;
+}
+
+.icBtn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--color-text-primary);
+  cursor: pointer;
+  box-sizing: border-box;
+  outline: none;
+  flex-shrink: 0;
+  -webkit-app-region: no-drag;
+  transition: background 150ms var(--timing-function-super);
+  width: 28px;
+  height: 28px;
+  min-width: 28px;
+  margin: 0 1px;
+}
+
+.icBtn:hover {
+  background: var(--ig-bg-hover);
+}
+
+.icBtn:active {
+  background: var(--ig-bg-active);
+}
+
+.icBtnDisabled {
+  opacity: 0.25;
+  cursor: default;
+  pointer-events: none;
+}
+
+.icBtnGroup {
+  display: flex;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.separator {
+  width: 1px;
+  height: 16px;
+  margin: 0 6px;
+  background: var(--color-border-primary);
+  flex-shrink: 0;
+}
+
+.title {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+  max-width: 20ch;
+  user-select: none;
+}
+
+.counter {
+  font-family: 'SF Mono', 'Fira Mono', 'Roboto Mono', 'Monaco', 'Consolas', monospace;
+  font-size: var(--font-size-2xs);
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+  user-select: none;
+  flex-shrink: 0;
+}
+
+.zoomRatio {
+  composes: counter;
+  min-width: 36px;
+  text-align: right;
+}
+
+.sliderSection {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  -webkit-app-region: no-drag;
+}
+
+.sliderSection :global(.mantine-Slider-thumb) {
+  border-color: var(--color-text-primary) !important;
+  background-color: var(--color-text-primary) !important;
+}
+
+.sliderSection :global(.mantine-Slider-track) {
+  background-color: var(--color-border-primary) !important;
+}
+
+.sliderSection :global(.mantine-Slider-bar) {
+  background-color: var(--color-text-primary) !important;
+}
+
+.centerGroup {
+  flex: 1;
+  display: flex;
+  justify-content: center;
+  min-width: 0;
+}
+
+.spacer {
+  flex: 1;
+}
+
+.leftSection {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.rightSection {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.filterBadge {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--color-negative);
+  pointer-events: none;
+}
+
+.searchInputWrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+  width: 125px;
+  height: 26px;
+  flex-shrink: 0;
+  -webkit-app-region: no-drag;
+}
+
+.searchInputIcon {
+  position: absolute;
+  left: 7px;
+  color: var(--color-text-tertiary);
+  pointer-events: none;
+  z-index: 1;
+}
+
+.searchInput {
+  width: 100%;
+  height: 100%;
+  padding: 0 8px 0 24px;
+  margin: 0;
+  border: 1px solid var(--ig-border-input);
+  border-radius: 5px;
+  background: var(--ig-bg-input);
+  color: var(--color-text-primary);
+  font-size: var(--font-size-sm);
+  font-family: inherit;
+  outline: none;
+  transition: border-color 200ms var(--timing-function-ease),
+              background-color 200ms var(--timing-function-ease);
+  box-sizing: border-box;
+}
+
+.searchInput::placeholder {
+  color: var(--color-text-tertiary);
+}
+
+.searchInput:focus {
+  border-color: var(--color-primary-60);
+  background: var(--color-black-20);
+}

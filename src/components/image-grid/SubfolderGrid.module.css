@@ -1,0 +1,261 @@
+.container {
+  width: 100%;
+  margin-bottom: 4px;
+  padding: 0 16px;
+  box-sizing: border-box;
+}
+
+/* Section label */
+
+.sectionLabel {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  margin: 4px 0 6px 2px;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+  cursor: pointer;
+  transition: color 200ms;
+  user-select: none;
+}
+
+.sectionLabel:hover {
+  color: var(--color-text-primary);
+}
+
+.chevron {
+  width: 14px;
+  height: 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: transform 200ms;
+  transform: rotate(90deg);
+}
+
+.chevronCollapsed {
+  transform: rotate(0deg);
+}
+
+/* Grid layout — grid-template-columns set inline from JS */
+
+.list {
+  display: grid;
+  gap: 16px;
+  padding: 0;
+  margin-top: 6px;
+  margin-bottom: 30px;
+  position: relative;
+}
+
+.listEmpty {
+  display: block;
+  min-height: 64px;
+}
+
+.emptyHint {
+  color: var(--color-text-tertiary, var(--color-text-secondary));
+  font-size: var(--font-size-2xs);
+  line-height: var(--line-height-normal);
+  padding: 8px 4px 6px;
+  user-select: none;
+}
+
+/* Folder tile */
+
+.tile {
+  position: relative;
+  text-align: center;
+  cursor: pointer;
+  box-sizing: border-box;
+  backface-visibility: hidden;
+}
+
+.tileSelected::after {
+  content: "";
+  position: absolute;
+  left: -3px;
+  right: -3px;
+  top: -3px;
+  /* 75% = 4:3 ratio + 16px for text area below */
+  padding-bottom: calc(75% + 16px);
+  border-radius: 8px;
+  box-shadow: 0 0 0 2px var(--color-primary);
+  z-index: 1;
+  pointer-events: none;
+}
+
+/* Thumbnail area — padding-bottom creates 4:3 ratio + 10px stack offset */
+
+.thumbnail {
+  z-index: 10;
+  position: relative;
+  padding-bottom: calc(75% + 10px);
+  margin-bottom: 12px;
+  border-radius: 3px;
+  box-sizing: border-box;
+}
+
+.thumbnail:hover {
+  cursor: pointer;
+}
+
+/* Stacked cards — three layered divs creating a deck-of-cards effect */
+
+.pic1,
+.pic2,
+.pic3 {
+  z-index: 1;
+  position: absolute;
+  background-size: contain;
+  background-position: center;
+  background-repeat: no-repeat;
+  border-radius: 10px;
+  background: radial-gradient(100% 100% at 50% 0%, var(--color-white-15) 0%, var(--color-white-05) 100%);
+}
+
+:global([data-theme="light"]) .pic1,
+:global([data-theme="light"]) .pic2,
+:global([data-theme="light"]) .pic3,
+:global([data-theme="lightgray"]) .pic1,
+:global([data-theme="lightgray"]) .pic2,
+:global([data-theme="lightgray"]) .pic3 {
+  background: linear-gradient(180deg, var(--color-black-10) 0%, var(--color-black-10) 100%);
+}
+
+/* Front card — contains the cover image */
+.pic1 {
+  z-index: 10;
+  top: 10px;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: 4px;
+  display: flex;
+  align-content: center;
+  justify-content: center;
+  border-top: 1px solid var(--color-white-15);
+  border-right: 1px solid var(--color-white-05);
+  border-left: 1px solid var(--color-white-05);
+}
+
+:global([data-theme="light"]) .pic1,
+:global([data-theme="lightgray"]) .pic1 {
+  border-top: 1px solid var(--color-black-20);
+  border-right: 1px solid var(--color-black-10);
+  border-left: 1px solid var(--color-black-10);
+}
+
+/* Middle card */
+.pic2 {
+  z-index: 9;
+  left: 10px;
+  right: 10px;
+  top: 6px;
+  height: 2px;
+  border-radius: 50% 50% 0 0;
+  background: var(--color-white-15);
+}
+
+:global([data-theme="light"]) .pic2,
+:global([data-theme="lightgray"]) .pic2 {
+  background: var(--color-black-20);
+}
+
+/* Back card */
+.pic3 {
+  z-index: 9;
+  left: 20px;
+  right: 20px;
+  top: 2px;
+  height: 2px;
+  border-radius: 50% 50% 0 0;
+  background: var(--color-white-10);
+}
+
+:global([data-theme="light"]) .pic3,
+:global([data-theme="lightgray"]) .pic3 {
+  background: var(--color-black-10);
+}
+
+/* Cover image */
+
+.coverImage {
+  border-radius: 4px;
+  position: absolute;
+  max-width: calc(100% - 8px);
+  max-height: calc(100% - 8px);
+  top: 50%;
+  transform: translateY(-50%);
+  display: block;
+}
+
+.folderPlaceholder {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.folderPlaceholder svg {
+  opacity: 0.2;
+}
+
+/* Text below thumbnail */
+
+.name {
+  color: var(--color-text-primary);
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-regular);
+  line-height: 15px;
+  min-height: 15px;
+  max-height: 30px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  word-break: break-word;
+  margin-bottom: 4px;
+}
+
+.nameRow {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+}
+
+.nameRow .name {
+  margin-bottom: 0;
+}
+
+.metas {
+  color: var(--color-text-tertiary, var(--color-text-secondary));
+  font-size: var(--font-size-2xs);
+  font-weight: var(--font-weight-medium);
+  line-height: var(--line-height-tight);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+/* Content label */
+
+.contentLabel {
+  display: block;
+  margin: 4px 0 6px 2px;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+}
+
+.dragSelectRect {
+  position: fixed;
+  z-index: 2000;
+  border: 1px solid var(--color-primary);
+  background: var(--color-primary-20);
+  pointer-events: none;
+}

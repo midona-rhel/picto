@@ -1,0 +1,3 @@
+.backdrop {
+  composes: panelBackdrop from '../../styles/pickerPanel.module.css';
+}
