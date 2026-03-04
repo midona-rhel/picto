@@ -4,7 +4,7 @@
   "private": true,
   "version": "0.1.0-alpha.1",
   "description": "Media library manager",
-  "author": "Picto",
+  "author": "Picto <noreply@picto.app>",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -94,6 +94,7 @@
       ]
     },
     "linux": {
+      "maintainer": "Picto <noreply@picto.app>",
       "target": [
         "AppImage",
         "deb",
