@@ -4,3 +4,6 @@ members = [
     "native/picto-node",
 ]
 resolver = "2"
+
+[profile.release]
+strip = "symbols"
