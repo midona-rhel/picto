@@ -18,7 +18,10 @@ import { mediaThumbnailUrl, mediaFileUrl } from '../../lib/mediaUrl';
 import { formatDuration } from '../../lib/formatters';
 import { imageDrag } from '../../lib/imageDrag';
 import type { GridViewMode } from './runtime';
+import { computeLayout, type LayoutItem } from './layoutMath';
 import styles from './VirtualGrid.module.css';
+
+export { computeLayout, type LayoutItem } from './layoutMath';
 
 const THUMB_MAX_SIDE = 900;
 const DRAG_THRESHOLD_SQ = 25; // 5px²
@@ -74,23 +77,6 @@ function getCachedBlurhash(hash: string | null | undefined, aspectRatio: number)
   return url;
 }
 
-export interface LayoutItem {
-  x: number;
-  y: number;
-  w: number;
-  h: number;
-}
-
-export interface LayoutResult {
-  positions: LayoutItem[];
-  totalHeight: number;
-}
-
-function safeAspectRatio(value: number): number {
-  if (!Number.isFinite(value) || value <= 0) return 1.5;
-  return Math.min(8, Math.max(0.125, value));
-}
-
 function lowerBound(
   positions: LayoutItem[],
   target: number,
@@ -104,149 +90,6 @@ function lowerBound(
     else hi = mid;
   }
   return lo;
-}
-
-export function computeLayout(
-  images: MasonryImageItem[],
-  containerWidth: number,
-  targetSize: number,
-  gap: number,
-  viewMode: GridViewMode,
-  textHeight: number,
-  paddingX = 0,
-): LayoutResult {
-  if (images.length === 0 || containerWidth <= 0) {
-    return { positions: [], totalHeight: 0 };
-  }
-
-  const innerWidth = containerWidth - 2 * paddingX;
-  const columnCount = Math.max(1, Math.round((innerWidth + gap) / (targetSize + gap)));
-  const colWidth = Math.floor((innerWidth - (columnCount - 1) * gap) / columnCount);
-
-  let result: LayoutResult;
-  if (viewMode === 'grid') {
-    result = layoutGrid(images, colWidth, columnCount, gap, textHeight);
-  } else if (viewMode === 'justified') {
-    result = layoutJustified(images, innerWidth, targetSize, gap, textHeight);
-  } else {
-    result = layoutWaterfall(images, colWidth, columnCount, gap, textHeight);
-  }
-
-  // Offset positions by padding so outlines/indicators aren't clipped by canvas edges
-  const paddingY = 2;
-  for (const pos of result.positions) {
-    if (paddingX > 0) pos.x += paddingX;
-    pos.y += paddingY;
-  }
-  result.totalHeight += paddingY * 2;
-
-  return result;
-}
-
-function layoutWaterfall(
-  images: MasonryImageItem[],
-  colWidth: number,
-  columnCount: number,
-  gap: number,
-  textHeight: number,
-): LayoutResult {
-  const colHeights = new Float64Array(columnCount);
-  const positions: LayoutItem[] = new Array(images.length);
-
-  for (let i = 0; i < images.length; i++) {
-    // Find shortest column
-    let shortest = 0;
-    for (let c = 1; c < columnCount; c++) {
-      if (colHeights[c] < colHeights[shortest]) shortest = c;
-    }
-
-    const x = shortest * (colWidth + gap);
-    const y = colHeights[shortest];
-    const h = colWidth / safeAspectRatio(images[i].aspectRatio) + textHeight;
-
-    positions[i] = { x, y, w: colWidth, h };
-    colHeights[shortest] = y + h + gap;
-  }
-
-  let maxHeight = 0;
-  for (let c = 0; c < columnCount; c++) {
-    if (colHeights[c] > maxHeight) maxHeight = colHeights[c];
-  }
-
-  return { positions, totalHeight: Math.max(0, maxHeight - gap) };
-}
-
-function layoutGrid(
-  images: MasonryImageItem[],
-  colWidth: number,
-  columnCount: number,
-  gap: number,
-  textHeight: number,
-): LayoutResult {
-  const positions: LayoutItem[] = new Array(images.length);
-  const tileSize = colWidth; // square image portion
-  const cellH = tileSize + textHeight;
-
-  for (let i = 0; i < images.length; i++) {
-    const col = i % columnCount;
-    const row = Math.floor(i / columnCount);
-    positions[i] = {
-      x: col * (tileSize + gap),
-      y: row * (cellH + gap),
-      w: tileSize,
-      h: cellH,
-    };
-  }
-
-  const rows = Math.ceil(images.length / columnCount);
-  const totalHeight = rows > 0 ? rows * cellH + (rows - 1) * gap : 0;
-  return { positions, totalHeight };
-}
-
-function layoutJustified(
-  images: MasonryImageItem[],
-  containerWidth: number,
-  targetRowHeight: number,
-  gap: number,
-  textHeight: number,
-): LayoutResult {
-  const positions: LayoutItem[] = new Array(images.length);
-  let y = 0;
-  let rowStart = 0;
-
-  while (rowStart < images.length) {
-    // Accumulate images until their natural widths at targetRowHeight exceed containerWidth
-    let rowEnd = rowStart;
-    let totalAspect = 0;
-
-    while (rowEnd < images.length) {
-      totalAspect += safeAspectRatio(images[rowEnd].aspectRatio);
-      rowEnd++;
-      // Check if this row is full
-      const rowWidth = totalAspect * targetRowHeight + (rowEnd - rowStart - 1) * gap;
-      if (rowWidth >= containerWidth) break;
-    }
-
-    // Compute actual row height to fit containerWidth exactly
-    const count = rowEnd - rowStart;
-    const gapSpace = (count - 1) * gap;
-    const rowHeight = (containerWidth - gapSpace) / totalAspect;
-    // Clamp: don't let last (incomplete) row be taller than 1.5× target
-    const finalHeight = Math.min(rowHeight, targetRowHeight * 1.5);
-    const cellH = finalHeight + textHeight;
-
-    let x = 0;
-    for (let i = rowStart; i < rowEnd; i++) {
-      const w = finalHeight * safeAspectRatio(images[i].aspectRatio);
-      positions[i] = { x, y, w, h: cellH };
-      x += w + gap;
-    }
-
-    y += cellH + gap;
-    rowStart = rowEnd;
-  }
-
-  return { positions, totalHeight: Math.max(0, y - gap) };
 }
 
 // Ignore width changes smaller than scrollbar width to prevent re-layout jitter
