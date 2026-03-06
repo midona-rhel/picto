@@ -35,12 +35,13 @@ export interface InspectorState extends InspectorData {
 function isSameDetailViewState(a: DetailViewState | null, b: DetailViewState | null): boolean {
   if (a === b) return true;
   if (!a || !b) return false;
+  const EPSILON = 0.0001;
   return (
     a.currentIndex === b.currentIndex &&
     a.total === b.total &&
     a.zoomPercent === b.zoomPercent &&
-    a.zoomScale === b.zoomScale &&
-    a.fitScale === b.fitScale &&
+    Math.abs(a.zoomScale - b.zoomScale) <= EPSILON &&
+    Math.abs(a.fitScale - b.fitScale) <= EPSILON &&
     a.isStripMode === b.isStripMode
   );
 }
