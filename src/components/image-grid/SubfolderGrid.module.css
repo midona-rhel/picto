@@ -232,6 +232,21 @@
   margin-bottom: 0;
 }
 
+.renameInput {
+  min-width: 0;
+  width: min(180px, 100%);
+  height: 20px;
+  padding: 0 6px;
+  border: 1px solid var(--color-primary);
+  border-radius: 4px;
+  background: var(--color-bg-primary, #1e1e1e);
+  color: var(--color-text-primary);
+  font-size: var(--font-size-sm);
+  line-height: 18px;
+  font-family: var(--font-family);
+  outline: none;
+}
+
 .metas {
   color: var(--color-text-tertiary, var(--color-text-secondary));
   font-size: var(--font-size-2xs);

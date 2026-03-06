@@ -10,7 +10,7 @@ import {
   buildFolderMultiMenu,
   buildFolderSingleMenu,
   buildFolderSurfaceMenu,
-} from '../sidebar/contextMenuRegistry';
+} from '../ui/context-actions/folderActions';
 import { DynamicIcon, DEFAULT_FOLDER_ICON } from '../smart-folders/iconRegistry';
 import styles from './SubfolderGrid.module.css';
 
@@ -69,6 +69,10 @@ export function SubfolderGrid({ folderId, targetSize, totalImageCount, onOpenFol
   const coverHashesRef = useRef<Map<number, string | null>>(new Map());
   coverHashesRef.current = coverHashes;
   const contextMenu = useContextMenu();
+  const [renamingFolderId, setRenamingFolderId] = useState<number | null>(null);
+  const [renameValue, setRenameValue] = useState('');
+  const renameInputRef = useRef<HTMLInputElement | null>(null);
+  const pendingRenameFolderIdRef = useRef<number | null>(null);
 
   const childFolders = useMemo(
     () => deriveChildFolders(folderNodes, folderId),
@@ -118,34 +122,78 @@ export function SubfolderGrid({ folderId, targetSize, totalImageCount, onOpenFol
     setSelectedIds(new Set());
     lastClickedIndexRef.current = null;
     setDragRect(null);
+    setRenamingFolderId(null);
+    setRenameValue('');
   }, [folderId]);
+
+  useEffect(() => {
+    if (renamingFolderId == null) return;
+    const timer = setTimeout(() => {
+      if (renameInputRef.current) {
+        renameInputRef.current.focus();
+        renameInputRef.current.select();
+      }
+    }, 0);
+    return () => clearTimeout(timer);
+  }, [renamingFolderId]);
+
+  useEffect(() => {
+    const pendingId = pendingRenameFolderIdRef.current;
+    if (pendingId == null) return;
+    const folder = childFolders.find((f) => f.folderId === pendingId);
+    if (!folder) return;
+    pendingRenameFolderIdRef.current = null;
+    setSelectedIds(new Set([pendingId]));
+    onSelectedSubfolderChange(pendingId);
+    setRenamingFolderId(pendingId);
+    setRenameValue(folder.name);
+    const index = childFolders.findIndex((f) => f.folderId === pendingId);
+    if (index >= 0) lastClickedIndexRef.current = index;
+    const tile = listRef.current?.querySelector<HTMLElement>(`[data-folder-id="${pendingId}"]`);
+    tile?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  }, [childFolders, onSelectedSubfolderChange]);
 
   const refreshSidebar = useCallback(() => {
   }, []);
 
-  const createSubfolder = useCallback(async (parentId: number) => {
+  const createSubfolderInCurrentFolder = useCallback(async () => {
     try {
-      await FolderController.createFolder({ name: 'New Folder', parentId });
+      const created = await FolderController.createFolder({ name: 'New Folder', parentId: folderId });
+      pendingRenameFolderIdRef.current = created.folder_id;
       refreshSidebar();
       notifySuccess('Subfolder created', 'Folders');
     } catch (err) {
       notifyError(err, 'Create Subfolder Failed');
     }
-  }, [refreshSidebar]);
+  }, [folderId, refreshSidebar]);
 
-  const renameFolder = useCallback(async (folder: ChildFolder) => {
-    const next = window.prompt('Rename folder:', folder.name);
-    if (next == null) return;
-    const trimmed = next.trim();
-    if (!trimmed || trimmed === folder.name) return;
+  const startRenameFolder = useCallback((folder: ChildFolder) => {
+    setRenamingFolderId(folder.folderId);
+    setRenameValue(folder.name);
+  }, []);
+
+  const commitRename = useCallback(async () => {
+    if (renamingFolderId == null) return;
+    const folder = childFolders.find((f) => f.folderId === renamingFolderId);
+    const trimmed = renameValue.trim();
+    if (!folder || !trimmed || trimmed === folder.name) {
+      setRenamingFolderId(null);
+      return;
+    }
     try {
-      await FolderController.updateFolder({ folderId: folder.folderId, name: trimmed });
+      await FolderController.updateFolder({ folderId: renamingFolderId, name: trimmed });
       refreshSidebar();
       notifySuccess('Folder renamed', 'Folders');
     } catch (err) {
       notifyError(err, 'Rename Folder Failed');
+    } finally {
+      setRenamingFolderId(null);
     }
-  }, [refreshSidebar]);
+  }, [childFolders, refreshSidebar, renameValue, renamingFolderId]);
+
+  const cancelRename = useCallback(() => {
+    setRenamingFolderId(null);
+  }, []);
 
   const applyColor = useCallback(async (folderIds: number[], color: string | null) => {
     try {
@@ -186,6 +234,7 @@ export function SubfolderGrid({ folderId, targetSize, totalImageCount, onOpenFol
   }, [onSelectedSubfolderChange, refreshSidebar, selectedSubfolderId]);
 
   const handleTileClick = useCallback((e: React.MouseEvent, folder: ChildFolder, index: number) => {
+    if (renamingFolderId === folder.folderId) return;
     e.stopPropagation();
     if (e.metaKey || e.ctrlKey) {
       setSelectedIds((prev) => {
@@ -215,7 +264,7 @@ export function SubfolderGrid({ folderId, targetSize, totalImageCount, onOpenFol
     setSelectedIds(new Set());
     lastClickedIndexRef.current = index;
     onSelectedSubfolderChange(folder.folderId);
-  }, [childFolders, onSelectedSubfolderChange]);
+  }, [childFolders, onSelectedSubfolderChange, renamingFolderId]);
 
   const selectByDragRect = useCallback((x1: number, y1: number, x2: number, y2: number) => {
     const listEl = listRef.current;
@@ -298,7 +347,6 @@ export function SubfolderGrid({ folderId, targetSize, totalImageCount, onOpenFol
     const folderIds = isMultiSelection ? Array.from(selectedIds) : [folder.folderId];
     const items: ContextMenuEntry[] = isMultiSelection
       ? buildFolderMultiMenu({
-        createSubfolder: () => createSubfolder(folderId),
         iconAndColor: {
           onIconChange: (icon) => applyIcon(folderIds, icon),
           onColorChange: (color) => applyColor(folderIds, color),
@@ -309,8 +357,7 @@ export function SubfolderGrid({ folderId, targetSize, totalImageCount, onOpenFol
       })
       : buildFolderSingleMenu({
         openFolder: () => onOpenFolder(folder.folderId, folder.name),
-        createSubfolder: () => createSubfolder(folder.folderId),
-        renameFolder: () => renameFolder(folder),
+        renameFolder: () => startRenameFolder(folder),
         iconAndColor: {
           iconValue: folder.icon,
           colorValue: folder.color,
@@ -322,7 +369,7 @@ export function SubfolderGrid({ folderId, targetSize, totalImageCount, onOpenFol
         deleteLabel: 'Remove Folder',
       });
     contextMenu.open(e, items);
-  }, [applyColor, applyIcon, contextMenu, createSubfolder, deleteFolders, folderId, onOpenFolder, renameFolder, selectedIds]);
+  }, [applyColor, applyIcon, contextMenu, deleteFolders, onOpenFolder, selectedIds, startRenameFolder]);
 
   const handleGridContextMenu = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
     const target = e.target as HTMLElement;
@@ -333,9 +380,9 @@ export function SubfolderGrid({ folderId, targetSize, totalImageCount, onOpenFol
     setSelectedIds(new Set());
     onSelectedSubfolderChange(null);
     contextMenu.open(e, buildFolderSurfaceMenu({
-      createSubfolder: () => createSubfolder(folderId),
+      createSubfolder: createSubfolderInCurrentFolder,
     }));
-  }, [contextMenu, createSubfolder, folderId, onSelectedSubfolderChange]);
+  }, [contextMenu, createSubfolderInCurrentFolder, onSelectedSubfolderChange]);
 
   const gridColumns = `repeat(auto-fill, minmax(${Math.max(80, targetSize)}px, 1fr))`;
 
@@ -372,6 +419,7 @@ export function SubfolderGrid({ folderId, targetSize, totalImageCount, onOpenFol
                 onClick={(e) => handleTileClick(e, folder, index)}
                 onContextMenu={(e) => handleTileContextMenu(e, folder, index)}
                 onDoubleClick={(e) => {
+                  if (renamingFolderId === folder.folderId) return;
                   e.stopPropagation();
                   setSelectedIds(new Set());
                   onOpenFolder(folder.folderId, folder.name);
@@ -404,7 +452,29 @@ export function SubfolderGrid({ folderId, targetSize, totalImageCount, onOpenFol
                     size={14}
                     color={folder.color ?? 'var(--color-text-tertiary)'}
                   />
-                  <div className={styles.name}>{folder.name}</div>
+                  {renamingFolderId === folder.folderId ? (
+                    <input
+                      ref={renameInputRef}
+                      className={styles.renameInput}
+                      value={renameValue}
+                      onChange={(e) => setRenameValue(e.target.value)}
+                      onClick={(e) => e.stopPropagation()}
+                      onDoubleClick={(e) => e.stopPropagation()}
+                      onBlur={() => { void commitRename(); }}
+                      onKeyDown={(e) => {
+                        e.stopPropagation();
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          void commitRename();
+                        } else if (e.key === 'Escape') {
+                          e.preventDefault();
+                          cancelRename();
+                        }
+                      }}
+                    />
+                  ) : (
+                    <div className={styles.name}>{folder.name}</div>
+                  )}
                 </div>
                 <div className={styles.metas}>
                   {folder.count} {folder.count === 1 ? 'item' : 'items'}

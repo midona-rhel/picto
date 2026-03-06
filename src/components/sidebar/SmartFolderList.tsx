@@ -33,7 +33,7 @@ import { useDomainStore } from '../../stores/domainStore';
 import { useNavigationStore } from '../../stores/navigationStore';
 import { SidebarSection } from './SidebarSection';
 import { SidebarItem } from './SidebarItem';
-import { buildSmartFolderItemMenu } from './contextMenuRegistry';
+import { buildSmartFolderItemMenu } from '../ui/context-actions/smartFolderActions';
 import styles from './Sidebar.module.css';
 
 interface SmartFolderListProps {

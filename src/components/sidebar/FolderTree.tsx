@@ -22,7 +22,7 @@ import { ContextMenu, useContextMenu, type ContextMenuEntry } from '../ui/Contex
 import {
   buildFolderMultiMenu,
   buildFolderSingleMenu,
-} from './contextMenuRegistry';
+} from '../ui/context-actions/folderActions';
 import { DynamicIcon } from '../smart-folders/iconRegistry';
 import { imageDrag, useImageDragDropTarget } from '../../lib/imageDrag';
 import type { SidebarNodeDto } from '../../types/sidebar';

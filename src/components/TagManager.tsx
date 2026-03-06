@@ -8,18 +8,12 @@ import {
   IconLayoutGrid,
   IconList,
   IconSearch,
-  IconCursorText,
-  IconTrash,
   IconGitMerge,
-  IconCopy,
   IconBookmark,
   IconFolderQuestion,
-  IconFilter,
   IconArrowsExchange,
   IconArrowUp,
   IconArrowDown,
-  IconPlus,
-  IconHierarchy2,
 } from '@tabler/icons-react';
 import { api } from '#desktop/api';
 import { writeText } from '#desktop/api';
@@ -31,6 +25,7 @@ import { useNavigationStore } from '../stores/navigationStore';
 import { ContextMenu, useContextMenu, type ContextMenuEntry } from './ui/ContextMenu';
 import { TagRelationsModal } from './TagRelationsModal';
 import { registerUndoAction } from '../controllers/undoRedoController';
+import { buildTagContextMenu } from './ui/context-actions/tagActions';
 import classes from './TagManager.module.css';
 
 interface TagRecord {
@@ -310,120 +305,51 @@ export function TagManager() {
 
       const navToTag = (ns: string, st: string) =>
         useNavigationStore.getState().navigateToFilterTags([formatTagDisplay(ns, st)]);
-
-      const siblingChildren: ContextMenuEntry[] = [
-        ...siblings.map((s) => ({
-          type: 'item' as const,
-          label: formatTagDisplay(s.namespace, s.subtag),
-          onClick: () => navToTag(s.namespace, s.subtag),
-        })),
-        ...(!isPtr ? [
-          ...(siblings.length > 0 ? [{ type: 'separator' as const }] : []),
-          { type: 'item' as const, label: 'Add sibling…', icon: <IconPlus size={16} />, onClick: () => setRelationModal({ type: 'sibling', source: tag }) },
-        ] : []),
-      ];
-
-      const parentChildren: ContextMenuEntry[] = [
-        ...parentTags.map((p) => ({
-          type: 'item' as const,
-          label: formatTagDisplay(p.namespace, p.subtag),
-          onClick: () => navToTag(p.namespace, p.subtag),
-        })),
-        ...(!isPtr ? [
-          ...(parentTags.length > 0 ? [{ type: 'separator' as const }] : []),
-          { type: 'item' as const, label: 'Add parent…', icon: <IconPlus size={16} />, onClick: () => setRelationModal({ type: 'parent', source: tag }) },
-        ] : []),
-      ];
-
-      const childrenChildren: ContextMenuEntry[] = [
-        ...childTags.map((c) => ({
-          type: 'item' as const,
-          label: formatTagDisplay(c.namespace, c.subtag),
-          onClick: () => navToTag(c.namespace, c.subtag),
-        })),
-        ...(!isPtr ? [
-          ...(childTags.length > 0 ? [{ type: 'separator' as const }] : []),
-          { type: 'item' as const, label: 'Add child…', icon: <IconPlus size={16} />, onClick: () => setRelationModal({ type: 'child', source: tag }) },
-        ] : []),
-      ];
-
-      const items: ContextMenuEntry[] = [
-        {
-          type: 'item',
-          label: 'Show Images',
-          icon: <IconFilter size={16} />,
-          onClick: () => navToTag(tag.namespace, tag.subtag),
+      const items: ContextMenuEntry[] = buildTagContextMenu({
+        tag,
+        source,
+        siblings,
+        parents: parentTags,
+        children: childTags,
+        formatTagDisplay,
+        onShowImages: () => navToTag(tag.namespace, tag.subtag),
+        onRename: () => rename.startRename(String(tag.tag_id), display),
+        onMerge: () => {
+          setMergeSource(tag);
+          setMergeSearch('');
+          setMergeResults([]);
+          setMergeTarget(null);
         },
-        { type: 'separator' },
-        ...(!isPtr ? [
-          {
-            type: 'item' as const,
-            label: 'Rename',
-            icon: <IconCursorText size={16} />,
-            shortcut: 'F2',
-            onClick: () => rename.startRename(String(tag.tag_id), display),
-          },
-          {
-            type: 'item' as const,
-            label: 'Merge into…',
-            icon: <IconGitMerge size={16} />,
-            onClick: () => {
-              setMergeSource(tag);
-              setMergeSearch('');
-              setMergeResults([]);
-              setMergeTarget(null);
-            },
-          },
-        ] : []),
-        {
-          type: 'item',
-          label: 'Copy',
-          icon: <IconCopy size={16} />,
-          onClick: () => writeText(display),
-        },
-        {
-          type: 'item',
-          label: 'View Relations',
-          icon: <IconHierarchy2 size={16} />,
-          onClick: () => setRelationsTag(tag),
-        },
-        { type: 'separator' },
-        { type: 'submenu', label: 'Siblings', icon: <IconArrowsExchange size={16} />, children: siblingChildren.length > 0 ? siblingChildren : [{ type: 'item' as const, label: 'None', disabled: true, onClick: () => {} }] },
-        { type: 'submenu', label: 'Parents', icon: <IconArrowUp size={16} />, children: parentChildren.length > 0 ? parentChildren : [{ type: 'item' as const, label: 'None', disabled: true, onClick: () => {} }] },
-        { type: 'submenu', label: 'Children', icon: <IconArrowDown size={16} />, children: childrenChildren.length > 0 ? childrenChildren : [{ type: 'item' as const, label: 'None', disabled: true, onClick: () => {} }] },
-        ...(!isPtr ? [
-          { type: 'separator' as const },
-          {
-            type: 'item' as const,
-            label: 'Delete',
-            icon: <IconTrash size={16} />,
-            danger: true,
-            onClick: async () => {
-              try {
-                const snapshotHashes = await fetchAllHashesForTag(display);
-                await api.tags.delete(tag.tag_id);
-                registerUndoAction({
-                  label: `Delete tag "${display}"`,
-                  undo: async () => {
-                    if (snapshotHashes.length > 0) {
-                      await api.tags.addBatch(snapshotHashes, [display]);
-                    }
-                    await refreshAll();
-                  },
-                  redo: async () => {
-                    await deleteTagByDisplay(display);
-                    await refreshAll();
-                  },
-                });
-                notifySuccess(`"${display}" deleted`, 'Tag Deleted');
+        onCopy: () => writeText(display),
+        onViewRelations: () => setRelationsTag(tag),
+        onNavigateTag: navToTag,
+        onAddSibling: () => setRelationModal({ type: 'sibling', source: tag }),
+        onAddParent: () => setRelationModal({ type: 'parent', source: tag }),
+        onAddChild: () => setRelationModal({ type: 'child', source: tag }),
+        onDelete: async () => {
+          try {
+            const snapshotHashes = await fetchAllHashesForTag(display);
+            await api.tags.delete(tag.tag_id);
+            registerUndoAction({
+              label: `Delete tag "${display}"`,
+              undo: async () => {
+                if (snapshotHashes.length > 0) {
+                  await api.tags.addBatch(snapshotHashes, [display]);
+                }
                 await refreshAll();
-              } catch (err) {
-                notifyError(err);
-              }
-            },
-          },
-        ] : []),
-      ];
+              },
+              redo: async () => {
+                await deleteTagByDisplay(display);
+                await refreshAll();
+              },
+            });
+            notifySuccess(`"${display}" deleted`, 'Tag Deleted');
+            await refreshAll();
+          } catch (err) {
+            notifyError(err);
+          }
+        },
+      });
 
       ctxMenu.openAt(pos, items);
     },
