@@ -4,6 +4,7 @@ import { KbdTooltip } from './ui/KbdTooltip';
 import { IconPlus, IconMinus, IconArrowsMinimize, IconArrowsMaximize } from '@tabler/icons-react';
 import { useSettingsStore } from '../stores/settingsStore';
 import { mediaThumbnailUrl } from '../lib/mediaUrl';
+import { useGlobalPointerDrag } from '../hooks/useGlobalPointerDrag';
 
 interface ZoomableImageProps {
   src: string;
@@ -148,26 +149,18 @@ export function ZoomableImage({ src, alt, hash }: ZoomableImageProps) {
     dragRef.current = { sx: e.clientX, sy: e.clientY, stx: tx, sty: ty };
   }, [ready, tx, ty]);
 
-  useEffect(() => {
-    if (!dragging) return;
-    const onMove = (e: MouseEvent) => {
-      const d = dragRef.current;
-      if (!d) return;
-      const [cx, cy] = clamp(d.stx + e.clientX - d.sx, d.sty + e.clientY - d.sy, scale);
-      setTx(cx);
-      setTy(cy);
-    };
-    const onUp = () => {
-      setDragging(false);
-      dragRef.current = null;
-    };
-    window.addEventListener('mousemove', onMove);
-    window.addEventListener('mouseup', onUp);
-    return () => {
-      window.removeEventListener('mousemove', onMove);
-      window.removeEventListener('mouseup', onUp);
-    };
-  }, [dragging, scale, clamp]);
+  const handleDragMove = useCallback((e: MouseEvent) => {
+    const d = dragRef.current;
+    if (!d) return;
+    const [cx, cy] = clamp(d.stx + e.clientX - d.sx, d.sty + e.clientY - d.sy, scale);
+    setTx(cx);
+    setTy(cy);
+  }, [clamp, scale]);
+  const handleDragEnd = useCallback(() => {
+    setDragging(false);
+    dragRef.current = null;
+  }, []);
+  useGlobalPointerDrag({ onMove: handleDragMove, onEnd: handleDragEnd }, dragging);
 
   const handleDblClick = useCallback((e: React.MouseEvent) => {
     if (!ready) return;

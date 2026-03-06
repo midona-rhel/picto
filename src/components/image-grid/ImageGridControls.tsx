@@ -22,6 +22,7 @@ import { ContextMenu, useContextMenu, type ContextMenuEntry } from '../ui/Contex
 import { useFilterStore, useActiveFilterCount } from '../../stores/filterStore';
 import type { DetailViewState, DetailViewControls } from './DetailView';
 import type { GridViewMode } from './runtime';
+import { useGlobalKeydown } from '../../hooks/useGlobalKeydown';
 import st from './ImageGridControls.module.css';
 
 const MIN_SIZE = 100;
@@ -217,36 +218,33 @@ export function ImageGridControls({
   const showSizeRef = useRef(showSizeControls);
   showSizeRef.current = showSizeControls;
 
-  useEffect(() => {
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
-      const ds = detailStateRef.current;
-      const dc = detailControlsRef.current;
-      const inDetail = !!ds && !!dc;
+  const handleGlobalZoomHotkeys = useCallback((e: KeyboardEvent) => {
+    if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+    const ds = detailStateRef.current;
+    const dc = detailControlsRef.current;
+    const inDetail = !!ds && !!dc;
 
-      switch (e.key) {
-        case '`':
-          if (inDetail) { e.preventDefault(); dc!.fitToWindow(); }
-          break;
-        case '0':
-          if (inDetail && (e.metaKey || e.ctrlKey)) { e.preventDefault(); dc!.fitActual(); }
-          break;
-        case '=':
-        case '+':
-          if (inDetail) { e.preventDefault(); dc!.setZoomScale(ds!.zoomScale * 1.25); }
-          else if (showSizeRef.current) { e.preventDefault(); handlePlusRef.current(); }
-          break;
-        case '-':
-          if (!e.metaKey && !e.ctrlKey) {
-            if (inDetail) { e.preventDefault(); dc!.setZoomScale(ds!.zoomScale / 1.25); }
-            else if (showSizeRef.current) { e.preventDefault(); handleMinusRef.current(); }
-          }
-          break;
-      }
-    };
-    window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
+    switch (e.key) {
+      case '`':
+        if (inDetail) { e.preventDefault(); dc!.fitToWindow(); }
+        break;
+      case '0':
+        if (inDetail && (e.metaKey || e.ctrlKey)) { e.preventDefault(); dc!.fitActual(); }
+        break;
+      case '=':
+      case '+':
+        if (inDetail) { e.preventDefault(); dc!.setZoomScale(ds!.zoomScale * 1.25); }
+        else if (showSizeRef.current) { e.preventDefault(); handlePlusRef.current(); }
+        break;
+      case '-':
+        if (!e.metaKey && !e.ctrlKey) {
+          if (inDetail) { e.preventDefault(); dc!.setZoomScale(ds!.zoomScale / 1.25); }
+          else if (showSizeRef.current) { e.preventDefault(); handleMinusRef.current(); }
+        }
+        break;
+    }
   }, []);
+  useGlobalKeydown(handleGlobalZoomHotkeys);
 
   // Measure toolbar width for responsive collapse
   const toolbarRef = useRef<HTMLDivElement>(null);

@@ -9,6 +9,7 @@ import { IconChevronLeft, IconChevronRight, IconX } from '@tabler/icons-react';
 import type { MasonryImageItem } from './shared';
 import { DetailView, type DetailViewState, type DetailViewControls } from './DetailView';
 import { KbdTooltip } from '../ui/KbdTooltip';
+import { useGlobalKeydown } from '../../hooks/useGlobalKeydown';
 import styles from './QuickLook.module.css';
 
 interface QuickLookProps {
@@ -37,38 +38,35 @@ export function QuickLook({ images, currentIndex, onNavigate, onClose, onImageCh
     controlsRef.current = controls;
   }, []);
 
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
-      const ctrl = controlsRef.current;
-      if (!ctrl) return;
-      switch (e.key) {
-        case '=':
-        case '+':
+  const handleQuickLookHotkeys = useCallback((e: KeyboardEvent) => {
+    if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+    const ctrl = controlsRef.current;
+    if (!ctrl) return;
+    switch (e.key) {
+      case '=':
+      case '+':
+        e.preventDefault();
+        ctrl.setZoomScale((viewState?.zoomScale ?? 1) * 1.25);
+        break;
+      case '-':
+        if (!e.metaKey && !e.ctrlKey) {
           e.preventDefault();
-          ctrl.setZoomScale((viewState?.zoomScale ?? 1) * 1.25);
-          break;
-        case '-':
-          if (!e.metaKey && !e.ctrlKey) {
-            e.preventDefault();
-            ctrl.setZoomScale((viewState?.zoomScale ?? 1) / 1.25);
-          }
-          break;
-        case '`':
+          ctrl.setZoomScale((viewState?.zoomScale ?? 1) / 1.25);
+        }
+        break;
+      case '`':
+        e.preventDefault();
+        ctrl.fitToWindow();
+        break;
+      case '0':
+        if (e.metaKey || e.ctrlKey) {
           e.preventDefault();
-          ctrl.fitToWindow();
-          break;
-        case '0':
-          if (e.metaKey || e.ctrlKey) {
-            e.preventDefault();
-            ctrl.fitActual();
-          }
-          break;
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
+          ctrl.fitActual();
+        }
+        break;
+    }
   }, [viewState?.zoomScale]);
+  useGlobalKeydown(handleQuickLookHotkeys);
 
   return (
     <div className={styles.overlay}>

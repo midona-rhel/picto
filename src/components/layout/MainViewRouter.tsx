@@ -2,132 +2,54 @@ import { Collections } from '#features/collections/components';
 import { FlowsWorking, type FlowResultEntry, CreateFlowModal } from '#features/subscriptions/components';
 import { TagManager } from '#features/tags/components';
 import { DuplicateManager } from '#features/duplicates/components';
-import { ImageGrid, type GridViewMode, type DetailViewControls, type DetailViewState } from '#features/grid/components';
-import type { MasonryImageItem, SelectionQuerySpec } from '#features/grid/types';
-import type { SmartFolderPredicate } from '../smart-folders/types';
-import type { AppSettings } from '../../stores/settingsStore';
+import { ImageGrid } from '#features/grid/components';
+import { useMainViewFlowsState, useMainViewGridActions, useMainViewGridState, useMainViewNavigationState, useMainViewSelectionState } from './MainViewModelContext';
 import styles from '../../App.module.css';
 
-type MainViewRouterProps = {
-  currentView: string;
-  activeSmartFolderPredicate?: SmartFolderPredicate;
-  activeSmartFolderSortField?: string;
-  activeSmartFolderSortOrder?: string;
-  activeFolderId: number | null;
-  activeCollectionId: number | null;
-  filterFolderIds: number[] | null;
-  excludedFilterFolderIds: number[] | null;
-  folderMatchMode: 'all' | 'any' | 'exact';
-  activeStatusFilter: string | null;
-  gridViewMode: GridViewMode;
-  gridTargetSize: number;
-  gridSortField: AppSettings['gridSortField'];
-  gridSortOrder: AppSettings['gridSortOrder'];
-  effectiveSearchTags: string[];
-  excludedSearchTags: string[];
-  tagMatchMode: 'all' | 'any' | 'exact';
-  searchText: string;
-  filterSearchText: string;
-  ratingFilter: number | null;
-  mimePrefixes: string[] | null;
-  colorHex: string | null;
-  colorAccuracy: number;
-  filterRefreshTrigger: number;
-  selectedScopeCount: number | null;
-  activeFlowId?: string;
-  flowLastResults: Record<number, FlowResultEntry>;
-  setFlowLastResults: (next: Record<number, FlowResultEntry>) => void;
-  flowRefreshToken?: number;
-  onOpenCreateFlowModal: () => void;
-  onContainerWidthChange: (width: number) => void;
-  onViewModeChange: (mode: GridViewMode) => void;
-  onSortFieldChange: (field: string) => void;
-  onSortOrderChange: (order: string) => void;
-  onSelectedImagesChange: (images: MasonryImageItem[]) => void;
-  onSelectionSummarySpecChange: (spec: SelectionQuerySpec | null) => void;
-  onDetailViewStateChange: (state: DetailViewState | null, controls: DetailViewControls | null) => void;
-  onScopeTransitionMidpoint: () => void;
-};
+export function MainViewRouter() {
+  const navigation = useMainViewNavigationState();
+  const grid = useMainViewGridState();
+  const gridActions = useMainViewGridActions();
+  const selection = useMainViewSelectionState();
+  const flows = useMainViewFlowsState();
 
-export function MainViewRouter(props: MainViewRouterProps) {
-  const {
-    currentView,
-    activeSmartFolderPredicate,
-    activeSmartFolderSortField,
-    activeSmartFolderSortOrder,
-    activeFolderId,
-    activeCollectionId,
-    filterFolderIds,
-    excludedFilterFolderIds,
-    folderMatchMode,
-    activeStatusFilter,
-    gridViewMode,
-    gridTargetSize,
-    gridSortField,
-    gridSortOrder,
-    effectiveSearchTags,
-    excludedSearchTags,
-    tagMatchMode,
-    searchText,
-    filterSearchText,
-    ratingFilter,
-    mimePrefixes,
-    colorHex,
-    colorAccuracy,
-    filterRefreshTrigger,
-    selectedScopeCount,
-    activeFlowId,
-    flowLastResults,
-    setFlowLastResults,
-    flowRefreshToken,
-    onOpenCreateFlowModal,
-    onContainerWidthChange,
-    onViewModeChange,
-    onSortFieldChange,
-    onSortOrderChange,
-    onSelectedImagesChange,
-    onSelectionSummarySpecChange,
-    onDetailViewStateChange,
-    onScopeTransitionMidpoint,
-  } = props;
-
-  switch (currentView) {
+  switch (navigation.currentView) {
     case 'images':
       return (
         <div className={styles.frame}>
           <ImageGrid
-            searchTags={effectiveSearchTags}
-            smartFolderPredicate={activeSmartFolderPredicate}
-            smartFolderSortField={activeSmartFolderSortField}
-            smartFolderSortOrder={activeSmartFolderSortOrder}
-            folderId={activeFolderId}
-            collectionEntityId={activeCollectionId}
-            filterFolderIds={filterFolderIds}
-            excludedFilterFolderIds={excludedFilterFolderIds}
-            folderMatchMode={folderMatchMode}
-            statusFilter={activeStatusFilter}
-            viewMode={gridViewMode}
-            targetSize={gridTargetSize}
-            onViewModeChange={onViewModeChange}
-            sortField={gridSortField}
-            sortOrder={gridSortOrder}
-            onSortFieldChange={onSortFieldChange}
-            onSortOrderChange={onSortOrderChange}
-            onContainerWidthChange={onContainerWidthChange}
-            refreshTrigger={filterRefreshTrigger}
-            onSelectedImagesChange={onSelectedImagesChange}
-            onSelectionSummarySpecChange={onSelectionSummarySpecChange}
-            selectedScopeCount={selectedScopeCount}
-            onDetailViewStateChange={onDetailViewStateChange}
-            ratingMin={ratingFilter}
-            mimePrefixes={mimePrefixes}
-            colorHex={colorHex}
-            colorAccuracy={colorAccuracy}
-            searchText={searchText || filterSearchText}
-            excludedSearchTags={excludedSearchTags}
-            tagMatchMode={tagMatchMode}
+            searchTags={grid.searchTags}
+            smartFolderPredicate={navigation.activeSmartFolderPredicate}
+            smartFolderSortField={navigation.activeSmartFolderSortField}
+            smartFolderSortOrder={navigation.activeSmartFolderSortOrder}
+            folderId={navigation.activeFolderId}
+            collectionEntityId={navigation.activeCollectionId}
+            filterFolderIds={grid.filterFolderIds}
+            excludedFilterFolderIds={grid.excludedFilterFolderIds}
+            folderMatchMode={grid.folderMatchMode}
+            statusFilter={navigation.activeStatusFilter}
+            viewMode={grid.viewMode}
+            targetSize={grid.targetSize}
+            onViewModeChange={gridActions.onViewModeChange}
+            sortField={grid.sortField}
+            sortOrder={grid.sortOrder}
+            onSortFieldChange={gridActions.onSortFieldChange}
+            onSortOrderChange={gridActions.onSortOrderChange}
+            onContainerWidthChange={gridActions.onContainerWidthChange}
+            refreshTrigger={grid.filterRefreshTrigger}
+            onSelectedImagesChange={selection.onSelectedImagesChange}
+            onSelectionSummarySpecChange={selection.onSelectionSummarySpecChange}
+            selectedScopeCount={grid.selectedScopeCount}
+            onDetailViewStateChange={selection.onDetailViewStateChange}
+            ratingMin={grid.ratingFilter}
+            mimePrefixes={grid.mimePrefixes}
+            colorHex={grid.colorHex}
+            colorAccuracy={grid.colorAccuracy}
+            searchText={grid.searchText || grid.filterSearchText}
+            excludedSearchTags={grid.excludedSearchTags}
+            tagMatchMode={grid.tagMatchMode}
             externalFreeze={false}
-            onScopeTransitionMidpoint={onScopeTransitionMidpoint}
+            onScopeTransitionMidpoint={gridActions.onScopeTransitionMidpoint}
           />
         </div>
       );
@@ -137,11 +59,11 @@ export function MainViewRouter(props: MainViewRouterProps) {
       return (
         <div className={styles.frame}>
           <FlowsWorking
-            flowId={activeFlowId}
-            lastResults={flowLastResults}
-            onLastResultsChange={setFlowLastResults}
-            onOpenCreateModal={onOpenCreateFlowModal}
-            refreshToken={flowRefreshToken}
+            flowId={flows.activeFlowId}
+            lastResults={flows.flowLastResults}
+            onLastResultsChange={flows.setFlowLastResults}
+            onOpenCreateModal={flows.onOpenCreateFlowModal}
+            refreshToken={flows.flowRefreshToken}
           />
         </div>
       );

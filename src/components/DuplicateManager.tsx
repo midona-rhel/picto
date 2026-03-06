@@ -18,6 +18,7 @@ import { isImagePreloaded, queueImageDecode } from './image-grid/useImagePreload
 import type { DuplicatePairDto, DuplicatePairsResponse, ResolveDuplicateAction } from '../types/api';
 import { useDomainStore } from '../stores/domainStore';
 import { registerUndoAction } from '../controllers/undoRedoController';
+import { useGlobalKeydown } from '../hooks/useGlobalKeydown';
 import styles from './DuplicateManager.module.css';
 
 const PERIODIC_SCAN_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
@@ -180,47 +181,6 @@ export function DuplicateManager() {
   }, [leftFile?.imageUrl, rightFile?.imageUrl]);
 
   useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      const target = e.target as HTMLElement;
-      if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable) return;
-
-      switch (e.key) {
-        case 'ArrowLeft':
-          e.preventDefault();
-          goToPrev();
-          break;
-        case 'ArrowRight':
-          e.preventDefault();
-          goToNext();
-          break;
-        case 's':
-        case 'S':
-          e.preventDefault();
-          handleAction('smart_merge');
-          break;
-        case 'l':
-        case 'L':
-          e.preventDefault();
-          handleAction('keep_left');
-          break;
-        case 'r':
-        case 'R':
-          e.preventDefault();
-          handleAction('keep_right');
-          break;
-        case 'n':
-        case 'N':
-          e.preventDefault();
-          handleAction('not_duplicate');
-          break;
-      }
-    };
-
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [currentIndex, pairs.length, processing, currentPair]);
-
-  useEffect(() => {
     if (loading || loadingMore || !hasMore) return;
     if (pairs.length === 0 || currentIndex >= pairs.length - 5) {
       void loadMorePairs();
@@ -299,6 +259,43 @@ export function DuplicateManager() {
     },
     [currentPair, processing, currentIndex, loadPairs, refreshDuplicateCount],
   );
+
+  const handleDuplicateHotkeys = useCallback((e: KeyboardEvent) => {
+    const target = e.target as HTMLElement;
+    if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable) return;
+
+    switch (e.key) {
+      case 'ArrowLeft':
+        e.preventDefault();
+        goToPrev();
+        break;
+      case 'ArrowRight':
+        e.preventDefault();
+        goToNext();
+        break;
+      case 's':
+      case 'S':
+        e.preventDefault();
+        handleAction('smart_merge');
+        break;
+      case 'l':
+      case 'L':
+        e.preventDefault();
+        handleAction('keep_left');
+        break;
+      case 'r':
+      case 'R':
+        e.preventDefault();
+        handleAction('keep_right');
+        break;
+      case 'n':
+      case 'N':
+        e.preventDefault();
+        handleAction('not_duplicate');
+        break;
+    }
+  }, [goToPrev, goToNext, handleAction]);
+  useGlobalKeydown(handleDuplicateHotkeys);
 
   const scanForDuplicates = useCallback(async () => {
     try {

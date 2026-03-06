@@ -12,6 +12,7 @@ import { performRedo, performUndo } from '../controllers/undoRedoController';
 import { setupEventBridge, teardownEventBridge } from '../stores/eventBridge';
 import { useTaskRuntimeStore } from '../stores/taskRuntimeStore';
 import { runBestEffort } from '../lib/asyncOps';
+import { useGlobalKeydown } from '../hooks/useGlobalKeydown';
 
 export interface AppBootstrap {
   appWindow: ReturnType<typeof getCurrentWindow>;
@@ -141,7 +142,7 @@ export function useAppBootstrap(): AppBootstrap {
     }],
   ]);
 
-  useEffect(() => {
+  const handleUndoRedoKeydown = useCallback((event: KeyboardEvent) => {
     const isEditableTarget = (target: EventTarget | null): boolean => {
       if (!(target instanceof HTMLElement)) return false;
       if (target.isContentEditable) return true;
@@ -149,30 +150,26 @@ export function useAppBootstrap(): AppBootstrap {
       return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT';
     };
 
-    const isMac = /Mac|iPhone|iPad/.test(navigator.platform);
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (isEditableTarget(event.target)) return;
-      if (event.altKey) return;
+    if (isEditableTarget(event.target)) return;
+    if (event.altKey) return;
 
-      const key = event.key.toLowerCase();
-      const modPressed = isMac ? event.metaKey : event.ctrlKey;
-      if (!modPressed) return;
+    const isMacPlatform = /Mac|iPhone|iPad/.test(navigator.platform);
+    const key = event.key.toLowerCase();
+    const modPressed = isMacPlatform ? event.metaKey : event.ctrlKey;
+    if (!modPressed) return;
 
-      const isUndo = key === 'z' && !event.shiftKey;
-      const isRedo = (key === 'z' && event.shiftKey) || (!isMac && key === 'y');
-      if (!isUndo && !isRedo) return;
+    const isUndo = key === 'z' && !event.shiftKey;
+    const isRedo = (key === 'z' && event.shiftKey) || (!isMacPlatform && key === 'y');
+    if (!isUndo && !isRedo) return;
 
-      event.preventDefault();
-      if (isUndo) {
-        void performUndo();
-      } else {
-        void performRedo();
-      }
-    };
-
-    window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
+    event.preventDefault();
+    if (isUndo) {
+      void performUndo();
+    } else {
+      void performRedo();
+    }
   }, []);
+  useGlobalKeydown(handleUndoRedoKeydown);
 
   return { appWindow, handleTitlebarMouseDown, displayedTitle, handleScopeTransitionMidpoint };
 }
