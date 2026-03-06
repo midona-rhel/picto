@@ -110,6 +110,11 @@ export interface EnsureThumbnailResponse {
   blurhash?: string | null;
 }
 
+export interface ReanalyzeFileColorsResponse {
+  colors_extracted: number;
+  dominant_color_hex: string | null;
+}
+
 export interface ImportResult {
   imported: string[];
   skipped: string[];

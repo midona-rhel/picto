@@ -38,6 +38,7 @@ export interface InspectorData {
   onUpdateNotes: (text: string) => void;
   onAddToFolders: (folderIds: number[]) => Promise<void>;
   onRemoveFromFolder: (folderId: number) => Promise<void>;
+  onReanalyzeColors: () => Promise<void>;
 }
 
 export function useInspectorData(
@@ -671,6 +672,24 @@ export function useInspectorData(
     [selectedImages, selectedCollection],
   );
 
+  const onReanalyzeColors = useCallback(
+    async () => {
+      if (selectionSummarySpec || selectedCollection || selectedImages.length !== 1) return;
+      const hash = selectedImages[0].hash;
+
+      await FileController.reanalyzeColors(hash);
+      invalidateMetadata(hash);
+
+      const metadata = await getMetadata(hash);
+      setFileMetadata(metadata);
+      setFileTags(metadata.tags);
+      setSourceUrls(metadata.file.source_urls ?? []);
+      setNotes(metadata.file.notes?.description ?? '');
+      useCacheStore.getState().invalidateHash(hash);
+    },
+    [selectedImages, selectedCollection, selectionSummarySpec],
+  );
+
   return {
     fileTags,
     fileMetadata,
@@ -686,5 +705,6 @@ export function useInspectorData(
     onUpdateNotes,
     onAddToFolders,
     onRemoveFromFolder,
+    onReanalyzeColors,
   };
 }
