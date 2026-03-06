@@ -6,7 +6,7 @@
  */
 
 import { create } from 'zustand';
-import type { SmartFolder } from '../components/smart-folders/types';
+import type { SmartFolder } from '#features/smart-folders/types';
 
 export type ViewType = 'images' | 'collections' | 'flows' | 'duplicates' | 'tags';
 

@@ -9,10 +9,10 @@ import { api } from '#desktop/api';
 import { useFilterStore, mimeFilterToPrefixes, type FilterLogicMode } from '../stores/filterStore';
 import { FolderController } from '../controllers/folderController';
 import { applyGridMutationEffects } from '../domain/actions/mutationEffects';
-import type { SmartFolder } from '../components/smart-folders/types';
-import type { TagFilterLogicMode } from '../components/tags/tagSelectTypes';
-import type { MasonryImageItem } from '../components/image-grid/shared';
-import type { FlowResultEntry } from '../components/layout/MainViewRouter';
+import type { SmartFolder } from '#features/smart-folders/types';
+import type { TagFilterLogicMode } from '#features/tags/types';
+import type { MasonryImageItem } from '#features/grid/types';
+import type { FlowResultEntry } from '#features/subscriptions/components';
 
 export interface GridFeatureParams {
   currentView: string;

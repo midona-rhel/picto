@@ -4,7 +4,7 @@ import { IconCheck, IconEqual, IconLayersIntersect, IconLayersUnion, IconMinus, 
 import { FolderController, type Folder } from '../controllers/folderController';
 import { useDomainStore } from '../stores/domainStore';
 import type { FilterLogicMode } from '../stores/filterStore';
-import { DynamicIcon } from '../components/smart-folders/iconRegistry';
+import { DynamicIcon } from '#features/folders/components';
 import { registerFolderPickerOpenHandler, type FolderPickerRequest } from './folderPickerService';
 import st from './FolderPicker.module.css';
 

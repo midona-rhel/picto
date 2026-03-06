@@ -1,5 +1,5 @@
 import { useState, useCallback } from 'react';
-import { TagWithType } from '../components/TagChips';
+import type { TagWithType } from '#features/tags/components';
 
 export function useTagEditor(initialTags: TagWithType[] = []) {
   const [editedTags, setEditedTags] = useState<TagWithType[]>(initialTags);

@@ -4,7 +4,7 @@ import { useDomainStore } from './domainStore';
 import { useLibraryStore } from './libraryStore';
 import { SidebarController } from '../controllers/sidebarController';
 import { SelectionController } from '../controllers/selectionController';
-import { invalidateMetadata } from '../components/image-grid/metadataPrefetch';
+import { invalidateMetadata } from '#features/grid/data';
 import type {
   FlowFinishedEvent,
   GridSnapshotInvalidatedEvent,

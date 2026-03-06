@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { ViewPrefsController, type ViewPrefsPatch } from '../controllers/viewPrefsController';
 import type { AppSettings } from '../stores/settingsStore';
-import type { GridViewMode } from '../components/image-grid/ImageGrid';
+import type { GridViewMode } from '#features/grid/types';
 
 export type ThumbnailFitMode = 'contain' | 'cover';
 

@@ -2,7 +2,7 @@ import { api } from '#desktop/api';
 import {
   getOrStartSelectionSummary,
   invalidateSelectionSummary,
-} from '../components/image-grid/metadataPrefetch';
+} from '#features/grid/data';
 import type { SelectionQuerySpec, SelectionSummary } from '../types/api';
 
 /**

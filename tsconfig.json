@@ -15,7 +15,9 @@
     "jsx": "react-jsx",
     "baseUrl": ".",
     "paths": {
-      "#desktop/*": ["src/desktop/*"]
+      "#desktop/*": ["src/desktop/*"],
+      "#features/*": ["src/features/*"],
+      "#ui/*": ["src/components/ui/*"]
     },
 
     /* Linting */

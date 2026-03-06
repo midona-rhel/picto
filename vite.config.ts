@@ -10,6 +10,8 @@ export default defineConfig(async ({ command }) => ({
   resolve: {
     alias: {
       "#desktop": resolve(__dirname, "src/desktop"),
+      "#features": resolve(__dirname, "src/features"),
+      "#ui": resolve(__dirname, "src/components/ui"),
     },
   },
 

@@ -1,4 +1,4 @@
-import type { SmartFolder } from '../components/smart-folders/types';
+import type { SmartFolder } from '#features/smart-folders/types';
 
 export type SidebarNodeKind = 'system' | 'folder' | 'smart_folder';
 export type SidebarFreshness = 'exact' | 'rebuilding' | 'stale';
@@ -41,4 +41,3 @@ export function extractSmartFolderFromSidebarNode(node: SidebarNodeDto): SmartFo
     updated_at: typeof raw.updated_at === 'string' || raw.updated_at === null ? raw.updated_at : null,
   };
 }
-

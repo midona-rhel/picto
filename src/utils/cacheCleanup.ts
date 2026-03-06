@@ -1,4 +1,4 @@
-import { cleanupMediaCache } from '../components/image-grid/enhancedMediaCache';
+import { cleanupMediaCache } from '#features/grid/data';
 
 // Register cleanup handlers for the enhanced media cache
 export function registerCacheCleanup(): void {

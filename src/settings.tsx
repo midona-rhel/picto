@@ -2,7 +2,7 @@ import React, { useEffect } from 'react';
 import ReactDOM from 'react-dom/client';
 import { MantineProvider, createTheme, rem, useMantineColorScheme } from '@mantine/core';
 import { api } from '#desktop/api';
-import { Settings } from './components/Settings';
+import { Settings } from '#features/settings/components';
 import { initSettingsStore, useSettingsStore, themeToColorScheme } from './stores/settingsStore';
 import '@mantine/core/styles.css';
 import './styles/globals.css';

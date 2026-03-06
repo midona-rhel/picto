@@ -3,7 +3,7 @@ import ReactDOM from "react-dom/client";
 import { MantineProvider, createTheme, rem } from "@mantine/core";
 import { Notifications } from "@mantine/notifications";
 import App from "./App";
-import { AppErrorBoundary } from "./components/AppErrorBoundary";
+import { AppErrorBoundary } from '#features/layout/components';
 import "@mantine/core/styles.css";
 import "@mantine/notifications/styles.css";
 import "./styles/globals.css";
