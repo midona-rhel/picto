@@ -223,40 +223,64 @@ export function DetailView({ images, currentIndex, onNavigate, onClose, onStateC
     onClose(hash);
   }, [images, onClose]);
 
-  // Stable controls object (refs ensure no stale closures)
-  const controlsRef = useRef<DetailViewControls>({
-    close: handleClose,
-    navigate,
-    setZoomScale: (s: number) => zoomTo(s),
-    fitToWindow,
-    fitActual,
-  });
-  controlsRef.current = stripMode
-    ? {
-        close: handleClose,
-        navigate,
-        setZoomScale: (s) => setStripZoomScale(Math.max(0.05, Math.min(8, s))),
-        fitToWindow: () => { setStripZoomScale(1); setStripResetKey((k) => k + 1); },
-        fitActual: () => setStripZoomScale(1),
-      }
-    : {
-        close: handleClose,
-        navigate,
-        setZoomScale: (s) => zoomTo(s),
-        fitToWindow,
-        fitActual,
-      };
+  // Stable controls object (refs ensure no stale closures and avoid update loops upstream)
+  const stripModeRef = useRef(stripMode);
+  stripModeRef.current = stripMode;
+  const zoomToRef = useRef(zoomTo);
+  zoomToRef.current = zoomTo;
+  const fitToWindowRef = useRef(fitToWindow);
+  fitToWindowRef.current = fitToWindow;
+  const fitActualRef = useRef(fitActual);
+  fitActualRef.current = fitActual;
+  const handleCloseRef = useRef(handleClose);
+  handleCloseRef.current = handleClose;
+  const navigateRef = useRef(navigate);
+  navigateRef.current = navigate;
+
+  const controlsRef = useRef<DetailViewControls | null>(null);
+  if (!controlsRef.current) {
+    controlsRef.current = {
+      close: () => handleCloseRef.current(),
+      navigate: (direction: number) => navigateRef.current(direction),
+      setZoomScale: (scale: number) => {
+        if (stripModeRef.current) {
+          setStripZoomScale(Math.max(0.05, Math.min(8, scale)));
+          return;
+        }
+        zoomToRef.current(scale);
+      },
+      fitToWindow: () => {
+        if (stripModeRef.current) {
+          setStripZoomScale(1);
+          setStripResetKey((k) => k + 1);
+          return;
+        }
+        fitToWindowRef.current();
+      },
+      fitActual: () => {
+        if (stripModeRef.current) {
+          setStripZoomScale(1);
+          return;
+        }
+        fitActualRef.current();
+      },
+    };
+  }
 
   // Report state to parent for titlebar — rAF-throttled to avoid per-frame re-renders
   const activeScale = stripMode ? stripZoomScale : zoomState.scale;
   const stateChangeRafRef = useRef(0);
+  const onStateChangeRef = useRef(onStateChange);
+  onStateChangeRef.current = onStateChange;
+  const getFitScaleRef = useRef(getFitScale);
+  getFitScaleRef.current = getFitScale;
   useEffect(() => {
-    if (!onStateChange) return;
+    if (!onStateChangeRef.current) return;
     if (stateChangeRafRef.current) cancelAnimationFrame(stateChangeRafRef.current);
     stateChangeRafRef.current = requestAnimationFrame(() => {
       stateChangeRafRef.current = 0;
-      const fitScale = stripMode ? 1 : getFitScale();
-      onStateChange(
+      const fitScale = stripMode ? 1 : getFitScaleRef.current();
+      onStateChangeRef.current?.(
         {
           currentIndex,
           total: totalCount ?? images.length,
@@ -265,11 +289,11 @@ export function DetailView({ images, currentIndex, onNavigate, onClose, onStateC
           fitScale,
           isStripMode: stripMode,
         },
-        controlsRef.current,
+        controlsRef.current!,
       );
     });
     return () => { if (stateChangeRafRef.current) cancelAnimationFrame(stateChangeRafRef.current); };
-  }, [currentIndex, images.length, activeScale, getFitScale, onStateChange, stripMode, isCollection]);
+  }, [currentIndex, images.length, activeScale, stripMode, totalCount]);
 
   // Notify parent when the active image changes (for inspector/selection sync).
   // Important: inbox accept/reject can swap the current image while keeping the
@@ -393,18 +417,18 @@ export function DetailView({ images, currentIndex, onNavigate, onClose, onStateC
       // Close detail view — Escape always works; Enter works for both; Space only for images
       if (matchesShortcut(e, closeKeys)) {
         e.preventDefault();
-        controlsRef.current.close();
+        controlsRef.current!.close();
         return;
       }
       if (e.key === 'Enter' && !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey) {
         e.preventDefault();
-        controlsRef.current.close();
+        controlsRef.current!.close();
         return;
       }
       // Space closes only for images — for video, VideoPlayer handles Space for play/pause
       if (!isViewingVideo && e.key === ' ' && !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey) {
         e.preventDefault();
-        controlsRef.current.close();
+        controlsRef.current!.close();
         return;
       }
 
@@ -477,12 +501,12 @@ export function DetailView({ images, currentIndex, onNavigate, onClose, onStateC
       // Navigate prev / next — arrows and A/D always navigate (both images and video)
       if (matchesShortcutDef(e, prevDef)) {
         e.preventDefault();
-        controlsRef.current.navigate(-1);
+        controlsRef.current!.navigate(-1);
         return;
       }
       if (matchesShortcutDef(e, nextDef)) {
         e.preventDefault();
-        controlsRef.current.navigate(1);
+        controlsRef.current!.navigate(1);
         return;
       }
     };
