@@ -298,10 +298,12 @@ export function DetailView({ images, currentIndex, onNavigate, onClose, onStateC
   // Notify parent when the active image changes (for inspector/selection sync).
   // Important: inbox accept/reject can swap the current image while keeping the
   // same index, so this must track hash changes, not only index changes.
+  const onImageChangeRef = useRef(onImageChange);
+  onImageChangeRef.current = onImageChange;
   const activeImageHash = images[currentIndex]?.hash ?? null;
   useEffect(() => {
-    if (activeImageHash) onImageChange?.(activeImageHash);
-  }, [activeImageHash, onImageChange]);
+    if (activeImageHash) onImageChangeRef.current?.(activeImageHash);
+  }, [activeImageHash]);
 
   // Load more when navigating near the end of loaded images
   const onLoadMoreRef = useRef(onLoadMore);
