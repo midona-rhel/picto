@@ -4,7 +4,11 @@
 P0
 
 ## Audit Status (2026-03-03)
-Status: **Not Implemented**
+Status: **Blocked (Subscription Workstream Deferred)**
+
+Blocked Reason:
+1. Subscription workstream is deferred by product direction for now.
+2. Keep this PBI in backlog but do not execute until unblocked.
 
 ## Problem
 Import and subscription pipelines ingest media as isolated files. Multi-image posts require grouped entity creation to preserve post-level semantics and support collection UI.
