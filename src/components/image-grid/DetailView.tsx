@@ -10,19 +10,13 @@ import { useSettingsStore } from '../../stores/settingsStore';
 import { mediaFileUrl, mediaThumbnailUrl } from '../../lib/mediaUrl';
 import { getCachedMediaUrl } from './enhancedMediaCache';
 import { useImageZoom, type ImageSize, type ZoomState } from './useImageZoom';
-import {
-  useImagePreloader,
-  queueImageDecode,
-  isImagePreloaded,
-} from './useImagePreloader';
-import { useImageLoadState } from './useImageLoadState';
-import { useZoomCache } from './useZoomCache';
 import { useNavigatorDrag } from './useNavigatorDrag';
 import { useNavigatorRenderer } from './useNavigatorRenderer';
 import { useBoundaryNavigation } from '../../hooks/useBoundaryNavigation';
 import { FileController } from '../../controllers/fileController';
 import { getShortcut, matchesShortcut, matchesShortcutDef } from '../../lib/shortcuts';
-import { logBestEffortError, runCriticalAction } from '../../lib/asyncOps';
+import { runCriticalAction } from '../../lib/asyncOps';
+import { useViewerMediaPipeline } from './viewer/useViewerMediaPipeline';
 import styles from './DetailView.module.css';
 import shared from './imageViewer.module.css';
 
@@ -300,77 +294,46 @@ export function DetailView({ images, currentIndex, onNavigate, onClose, onStateC
   const showMinimap = useSettingsStore(s => s.settings.showMinimap);
   useNavigatorRenderer(imgRef, navigatorRef, navViewportRef, imageSizeRef, zoomState, showMinimap ? navigatorRect : null, NAV_SIZE, thumbImgRef);
 
-  // Image load state — tracks decoded URL (empty = not ready)
-  const { decodedSrc, imageLoaded, markImageReady } = useImageLoadState(
-    currentImage?.hash ?? null, imageUrl || null, undefined, zoomCache,
-  );
-  const [fullImageVisible, setFullImageVisible] = useState(false);
-  const [thumbLoaded, setThumbLoaded] = useState(false);
-  const [displayThumbUrl, setDisplayThumbUrl] = useState('');
-  const [allowFullQuality, setAllowFullQuality] = useState(false);
-  // Backdrop: shows previous image to prevent black flash during navigation.
-  // Only updated when a real thumbnail/full-res loads — never from a stale backdrop.
-  const backdropSrcRef = useRef('');
-  const lastLoadedSrcRef = useRef('');
+  // Keep strip visible during collection -> image transition until thumbnail is ready.
   useLayoutEffect(() => {
-    // Detect collection → non-collection: hold the strip visible until thumbnail loads
     if (prevStripRef.current && !stripMode) {
       setHoldingStrip(true);
     }
     prevStripRef.current = stripMode;
-
-    if (lastLoadedSrcRef.current) {
-      backdropSrcRef.current = lastLoadedSrcRef.current;
-    }
-    setFullImageVisible(false);
-    setAllowFullQuality(false);
-    setThumbLoaded(isVideo);
     if (stripMode) {
       setCollectionImages([]);
     }
-    const img = imgRef.current;
-    if (img) {
-      img.style.transition = 'none';
-      img.style.opacity = '0';
-    }
-  }, [currentImage?.hash]); // eslint-disable-line react-hooks/exhaustive-deps
-  // Start the linger timer for full-quality loading (100ms).
-  useEffect(() => {
-    const timer = setTimeout(() => setAllowFullQuality(true), 100);
-    return () => clearTimeout(timer);
-  }, [currentImage?.hash]);
+  }, [currentImage?.hash, stripMode]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Thumb loading: immediately swap to new thumb URL so it renders at correct
-  // dimensions. The old "hold previous" pattern caused the old thumbnail to
-  // stretch to the new image's aspect ratio.
-  useEffect(() => {
-    if (!currentImage) return;
-    const targetThumb = mediaThumbnailUrl(currentImage.hash);
-    let cancelled = false;
-    let cancelDecode: (() => void) | null = null;
-    setDisplayThumbUrl(''); // clear stale thumb — thumbUrl (already correct) shows immediately
-    void (async () => {
-      try {
-        await api.file.ensureThumbnail(currentImage.hash);
-      } catch (error) {
-        logBestEffortError('detail.ensureThumbnail', error);
-      }
-      if (cancelled) return;
-      const ensuredThumb = `${targetThumb}?ready=${Date.now()}`;
-      cancelDecode = queueImageDecode(
-        ensuredThumb,
-        () => {
-          if (cancelled) return;
-          setDisplayThumbUrl(ensuredThumb);
-        },
-        'high',
-      );
-    })();
-    return () => {
-      cancelled = true;
-      if (cancelDecode) cancelDecode();
-    };
-  }, [currentImage?.hash]);
+  const {
+    decodedSrc,
+    thumbLoaded,
+    fullImageVisible,
+    displayThumbUrl,
+    allowFullQuality,
+    backdropSrcRef,
+    lastLoadedSrcRef,
+    setThumbLoaded,
+    handleThumbLoad,
+    handleFullLoad,
+  } = useViewerMediaPipeline({
+    currentImage: currentImage ?? null,
+    images,
+    currentIndex,
+    imageUrl,
+    isVideo,
+    imageSize,
+    zoomState,
+    setZoomState,
+    calcFitScale,
+    containerRef,
+    imgRef,
+    zoomCache,
+    skipFullQualityDecode: stripMode,
+    skipNeighborPrefetch: stripMode,
+    ensureThumbLogContext: 'detail.ensureThumbnail',
+    preloadThumbLogContext: 'detail.preloadNeighborThumbnail',
+  });
 
   // Release strip hold when new thumbnail loads — strip unmounts, image container revealed.
   useEffect(() => {
@@ -379,53 +342,6 @@ export function DetailView({ images, currentIndex, onNavigate, onClose, onStateC
       setCollectionImages([]);
     }
   }, [holdingStrip, thumbLoaded]);
-
-  // Zoom cache: restore on navigate, persist on change
-  useZoomCache(currentImage?.hash ?? null, imageSize, zoomState, setZoomState, calcFitScale, zoomCache, imageLoaded, containerRef);
-
-  // Only allow full-quality decode when image focus lingers for at least 100ms.
-  // Skip when in strip mode — StripView handles its own full-quality pipeline.
-  useImagePreloader(allowFullQuality && !stripMode ? (imageUrl || null) : null, isVideo, markImageReady);
-
-  // Preload neighbors via the shared decode queue.
-  // Skip in strip mode — StripView members handle their own decode pipeline.
-  // Heavy formats (WEBP/AVIF) are limited to nearest neighbors to avoid decode storms.
-  useEffect(() => {
-    if (stripMode) return;
-    const cleanups: Array<() => void> = [];
-    let heavyQueued = 0;
-    for (const offset of [-1, 1, -2, 2, -3, 3, -4, 4]) {
-      const neighbor = images[currentIndex + offset];
-      if (!neighbor) continue;
-      const thumb = mediaThumbnailUrl(neighbor.hash);
-      if (!isImagePreloaded(thumb)) {
-        const priority = Math.abs(offset) <= 1 ? 'high' : 'normal';
-        void api.file.ensureThumbnail(neighbor.hash)
-          .catch((error) => {
-            logBestEffortError('detail.preloadNeighborThumbnail', error);
-          })
-          .finally(() => {
-            queueImageDecode(`${thumb}?ready=${Date.now()}`, () => {}, priority);
-          });
-      }
-    }
-    for (const offset of [-1, 1, -2, 2, -3, 3]) {
-      const neighbor = images[currentIndex + offset];
-      if (neighbor && !isVideoMime(neighbor.mime)) {
-        const url = mediaFileUrl(neighbor.hash, neighbor.mime);
-        if (isImagePreloaded(url)) continue;
-        const heavy = neighbor.mime === 'image/webp' || neighbor.mime === 'image/avif';
-        if (heavy) {
-          if (heavyQueued >= 2) continue;
-          heavyQueued++;
-        }
-        cleanups.push(queueImageDecode(url, () => {}, Math.abs(offset) <= 1 ? 'high' : 'normal'));
-      }
-    }
-    return () => {
-      for (const cleanup of cleanups) cleanup();
-    };
-  }, [currentIndex, images, stripMode]);
 
   // Handle inbox accept/reject: call action, then auto-advance or close
   const handleInboxAction = useCallback((status: 'active' | 'trash') => {
@@ -629,7 +545,7 @@ export function DetailView({ images, currentIndex, onNavigate, onClose, onStateC
                 src={displayThumbUrl || thumbUrl}
                 alt=""
                 draggable={false}
-                onLoad={(e) => { lastLoadedSrcRef.current = e.currentTarget.src; setThumbLoaded(true); }}
+                onLoad={handleThumbLoad}
                 style={{
                   left: '50%',
                   top: '50%',
@@ -643,16 +559,7 @@ export function DetailView({ images, currentIndex, onNavigate, onClose, onStateC
                 src={allowFullQuality ? decodedSrc : ''}
                 alt=""
                 decoding="async"
-                onLoad={(e) => {
-                  const img = e.currentTarget;
-                  lastLoadedSrcRef.current = img.src;
-                  const revealFull = () => setFullImageVisible(true);
-                  if (typeof img.decode === 'function') {
-                    img.decode().then(revealFull).catch(revealFull);
-                  } else {
-                    revealFull();
-                  }
-                }}
+                onLoad={handleFullLoad}
                 style={{
                   left: '50%',
                   top: '50%',
