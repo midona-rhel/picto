@@ -4,7 +4,11 @@
 P0
 
 ## Audit Status (2026-03-03)
-Status: **Not Implemented**
+Status: **Blocked (Subscription Workstream Deferred)**
+
+Blocked Reason:
+1. Subscription workstream is deferred by product direction for now.
+2. Keep this PBI in backlog but do not execute until unblocked.
 
 ## Problem
 Per-site metadata validation is currently distributed and partially implicit. We need one global contract and one validator pipeline that all site PBIs (198-223) plug into, otherwise behavior drifts and release quality is not enforceable.

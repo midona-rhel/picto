@@ -4,7 +4,11 @@
 P0
 
 ## Audit Status (2026-03-03)
-Status: **Not Implemented**
+Status: **Blocked (Subscription Workstream Deferred)**
+
+Blocked Reason:
+1. Subscription workstream is deferred by product direction for now.
+2. Keep this PBI in backlog but do not execute until unblocked.
 
 ## Problem
 Metadata ingestion for `Yande.re` is not currently enforced with a strict, testable validation contract. For release, `Yande.re` must fail fast on invalid/missing metadata and expose deterministic API validation diagnostics before subscription runs.

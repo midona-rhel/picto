@@ -4,7 +4,11 @@
 P2
 
 ## Audit Status (2026-03-06)
-Status: **Not Implemented**
+Status: **Blocked (Subscription Workstream Deferred)**
+
+Blocked Reason:
+1. Subscription workstream is deferred by product direction for now.
+2. Keep this PBI in backlog but do not execute until unblocked.
 
 Evidence:
 1. A user reported: "Might want to have a short note on how to set up subscriptions, idk what a query is on twitter for instance."
