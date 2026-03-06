@@ -31,6 +31,7 @@ import { TextButton } from '../ui/TextButton';
 import { StateBlock } from '../ui/state';
 import { SettingsBlock, SettingsButtonRow, SettingsInputGroup } from './ui';
 import styles from '../Settings.module.css';
+import panelStyles from './SubscriptionsPanel.module.css';
 
 interface SiteInfo {
   id: string;
@@ -425,21 +426,20 @@ export function SubscriptionsPanel() {
                 {i > 0 && <div className={styles.blockSeparator} />}
                 {/* Header row */}
                 <div
-                  className={styles.labelItem}
-                  style={{ cursor: 'pointer', minHeight: 32 }}
+                  className={`${styles.labelItem} ${panelStyles.headerRow}`}
                   onClick={() => toggleExpanded(sub.id)}
                 >
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, flex: 1, minWidth: 0 }}>
+                  <div className={panelStyles.headerMain}>
                     {isExpanded ? <IconChevronDown size={12} /> : <IconChevronRight size={12} />}
-                    <label style={{ cursor: 'pointer', paddingTop: 0 }}>{sub.name}</label>
+                    <label className={panelStyles.headerLabel}>{sub.name}</label>
                     <Text size="xs" c={sub.paused ? 'orange' : 'teal'}>
                       {sub.paused ? 'paused' : 'active'}
                     </Text>
-                    <Text size="xs" c="dimmed" style={{ whiteSpace: 'nowrap' }}>
+                    <Text size="xs" c="dimmed" className={panelStyles.headerMeta}>
                       {getSiteName(sub.siteId)} · {sub.queries.length} quer{sub.queries.length === 1 ? 'y' : 'ies'}
                     </Text>
                   </div>
-                  <div className={styles.right} onClick={(e) => e.stopPropagation()} style={{ gap: 4 }}>
+                  <div className={`${styles.right} ${panelStyles.headerActions}`} onClick={(e) => e.stopPropagation()}>
                     <TextButton compact onClick={() => togglePause(sub)}>
                       {sub.paused ? <IconPlayerPlay size={12} /> : <IconPlayerPause size={12} />}
                     </TextButton>
@@ -460,15 +460,15 @@ export function SubscriptionsPanel() {
 
                 {/* Expanded queries */}
                 <Collapse in={isExpanded}>
-                  <div style={{ paddingLeft: 20, marginTop: 4 }}>
+                  <div className={panelStyles.queriesWrap}>
                     {sub.queries.map((query) => {
                       const qRunning = runningQueries.has(query.id);
                       return (
-                        <div key={query.id} className={styles.labelItem} style={{ minHeight: 28 }}>
-                          <div style={{ flex: 1, minWidth: 0 }}>
+                        <div key={query.id} className={`${styles.labelItem} ${panelStyles.queryRow}`}>
+                          <div className={panelStyles.queryInfo}>
                             <Text size="xs" fw={500}>{query.displayName || query.queryText}</Text>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                              <IconClock size={10} style={{ opacity: 0.5 }} />
+                            <div className={panelStyles.queryMeta}>
+                              <IconClock size={10} className={panelStyles.clockIcon} />
                               <Text size="xs" c="dimmed">{formatTime(query.lastCheckTime)}</Text>
                               {query.filesFound > 0 && (
                                 <Text size="xs" c="dimmed">· {query.filesFound} files</Text>
@@ -478,7 +478,7 @@ export function SubscriptionsPanel() {
                               )}
                             </div>
                           </div>
-                          <div className={styles.right} style={{ gap: 4 }}>
+                          <div className={`${styles.right} ${panelStyles.queryActions}`}>
                             <TextButton compact onClick={() => toggleQueryPause(query)}>
                               {query.paused ? <IconPlayerPlay size={10} /> : <IconPlayerPause size={10} />}
                             </TextButton>
@@ -501,7 +501,7 @@ export function SubscriptionsPanel() {
                           placeholder="e.g., blue_eyes blonde_hair"
                           value={newQueryText}
                           onChange={(e) => setNewQueryText(e.currentTarget.value)}
-                          style={{ flex: 1 }}
+                          className={panelStyles.grow}
                           onKeyDown={(e) => e.key === 'Enter' && handleAddQuery()}
                         />
                         <TextButton compact onClick={handleAddQuery}>
@@ -509,7 +509,7 @@ export function SubscriptionsPanel() {
                         </TextButton>
                       </SettingsInputGroup>
                     ) : (
-                      <div style={{ marginTop: 4, marginBottom: 4 }}>
+                      <div className={panelStyles.queryAddRow}>
                         <TextButton
                           compact
                           onClick={() => { setAddQuerySubId(sub.id); setNewQueryText(''); }}
@@ -529,7 +529,7 @@ export function SubscriptionsPanel() {
 
       {/* Create Subscription Modal */}
       <Modal opened={createModalOpen} onClose={closeCreateModal} title="New Subscription" size="md" styles={glassModalStyles}>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+        <div className={panelStyles.modalBody}>
           <TextInput
             label="Name"
             placeholder="e.g., Artist Name - Tag Collection"
@@ -553,14 +553,14 @@ export function SubscriptionsPanel() {
             {getSelectedSite() && (
               <Text size="xs" c="dimmed" mb="xs">e.g., {getSelectedSite()!.example_query}</Text>
             )}
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <div className={panelStyles.queryList}>
               {newSubscription.queries.map((query, index) => (
                 <SettingsInputGroup key={index}>
                   <TextInput
                     placeholder={getSelectedSite()?.example_query ?? 'e.g., blue_eyes blonde_hair'}
                     value={query}
                     onChange={(e) => updateQuery(index, e.currentTarget.value)}
-                    style={{ flex: 1 }}
+                    className={panelStyles.grow}
                   />
                   {newSubscription.queries.length > 1 && (
                     <TextButton compact danger onClick={() => removeQueryField(index)}>
@@ -576,14 +576,14 @@ export function SubscriptionsPanel() {
             </div>
           </div>
 
-          <div style={{ display: 'flex', gap: 12 }}>
+          <div className={panelStyles.limitRow}>
             <NumberInput
               label="Initial Limit"
               description="Max files on first run"
               value={newSubscription.initial_file_limit}
               onChange={(value) => setNewSubscription(prev => ({ ...prev, initial_file_limit: Number(value) || 0 }))}
               min={0} max={5000}
-              style={{ flex: 1 }}
+              className={panelStyles.grow}
             />
             <NumberInput
               label="Periodic Limit"
@@ -591,7 +591,7 @@ export function SubscriptionsPanel() {
               value={newSubscription.periodic_file_limit}
               onChange={(value) => setNewSubscription(prev => ({ ...prev, periodic_file_limit: Number(value) || 0 }))}
               min={0} max={5000}
-              style={{ flex: 1 }}
+              className={panelStyles.grow}
             />
           </div>
 

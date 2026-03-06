@@ -6,7 +6,7 @@
  * Arrow keys are NOT handled here — they navigate between files in DetailWindow.
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { VideoControls } from './VideoControls';
 import { VolumeHUD } from './VolumeHUD';
 import { useVideoPlayer, type UseVideoPlayerOptions } from './useVideoPlayer';
@@ -221,6 +221,10 @@ export function VideoPlayer({
   useGlobalKeydown(handleVideoHotkeys);
 
   const showControls = controlsVisible || !state.isPlaying || seeking;
+  const videoStyle = useMemo(
+    () => (videoTransform ? { transform: videoTransform } : undefined),
+    [videoTransform],
+  );
 
   return (
     <div
@@ -241,7 +245,7 @@ export function VideoPlayer({
         playsInline
         tabIndex={-1}
         className={styles.video}
-        style={videoTransform ? { transform: videoTransform } : undefined}
+        style={videoStyle}
       />
 
       {/* Controls overlay */}

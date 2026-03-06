@@ -208,6 +208,33 @@
   background-color: var(--color-white-30);
 }
 
+.blockDimmed {
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+.blockContentFlush {
+  padding: 0;
+  overflow: hidden;
+}
+
+.settingsLabelLight {
+  font-weight: var(--font-weight-regular) !important;
+}
+
+.settingsButtonRow {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.settingsInputGroup {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
 .labelItem {
   display: flex;
   align-items: flex-start;
