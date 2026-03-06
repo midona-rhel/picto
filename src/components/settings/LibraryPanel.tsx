@@ -1,9 +1,10 @@
-import { useEffect, useState } from 'react';
-import { Text, TextInput, Loader } from '@mantine/core';
+import { useCallback, useEffect, useState } from 'react';
+import { Text, TextInput } from '@mantine/core';
 import { IconFolderOpen, IconPlus } from '@tabler/icons-react';
 import { useLibraryStore, type LibraryInfo } from '../../stores/libraryStore';
 import { save as showSaveDialog, api } from '#desktop/api';
 import { TextButton } from '../ui/TextButton';
+import { StateBlock } from '../ui/state';
 import styles from '../Settings.module.css';
 
 interface CurrentLibraryInfo {
@@ -16,19 +17,27 @@ export function LibraryPanel() {
   const { libraries, loadConfig, createLibrary, openLibrary, removeLibrary, deleteLibrary, togglePin, renameLibrary, relocateLibrary, getLibraryInfo } = useLibraryStore();
   const [currentInfo, setCurrentInfo] = useState<CurrentLibraryInfo | null>(null);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [newName, setNewName] = useState('');
 
-  useEffect(() => {
-    const load = async () => {
-      setLoading(true);
+  const loadPanelData = useCallback(async () => {
+    setLoading(true);
+    setLoadError(null);
+    try {
       await loadConfig();
       const info = await getLibraryInfo();
-      if (info) setCurrentInfo(info);
+      setCurrentInfo(info ?? null);
+    } catch (err) {
+      setLoadError(err instanceof Error ? err.message : 'Failed to load library information');
+    } finally {
       setLoading(false);
-    };
-    load();
+    }
   }, [loadConfig, getLibraryInfo]);
+
+  useEffect(() => {
+    void loadPanelData();
+  }, [loadPanelData]);
 
   const handleCreate = async () => {
     if (!newName.trim()) return;
@@ -50,10 +59,17 @@ export function LibraryPanel() {
   };
 
   if (loading) {
+    return <StateBlock variant="loading" title="Loading libraries" compact minHeight={80} />;
+  }
+
+  if (loadError) {
     return (
-      <div style={{ display: 'flex', justifyContent: 'center', padding: 40 }}>
-        <Loader size="sm" />
-      </div>
+      <StateBlock
+        variant="error"
+        title="Failed to load libraries"
+        description={loadError}
+        action={<TextButton onClick={() => void loadPanelData()}>Retry</TextButton>}
+      />
     );
   }
 

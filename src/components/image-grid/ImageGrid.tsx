@@ -9,8 +9,8 @@ import {
   type GridViewMode,
   type GridEmptyContext,
 } from './runtime';
-import { Text } from '@mantine/core';
 import { TextButton } from '../ui/TextButton';
+import { StateBlock, StateActions } from '../ui/state';
 import { notifySuccess, notifyError } from '../../lib/notify';
 import { registerUndoAction } from '../../controllers/undoRedoController';
 import { api } from '#desktop/api';
@@ -918,11 +918,16 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
   if (state.error) {
     return (
       <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8 }}>
-          <Text size="xs" c="white">Failed to load images</Text>
-          <Text size="xs" c="red.4">{state.error}</Text>
-          <TextButton onClick={requestReplace}>Retry</TextButton>
-        </div>
+        <StateBlock
+          variant="error"
+          title="Failed to load images"
+          description={state.error}
+          action={(
+            <StateActions>
+              <TextButton onClick={requestReplace}>Retry</TextButton>
+            </StateActions>
+          )}
+        />
       </div>
     );
   }

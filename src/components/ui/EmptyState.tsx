@@ -1,5 +1,5 @@
 import type { ReactNode, ComponentType } from 'react';
-import { Text } from '@mantine/core';
+import { StateBlock } from './state';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type IconComponent = ComponentType<any>;
@@ -18,17 +18,14 @@ interface EmptyStateProps {
 
 export function EmptyState({ icon: Icon, iconNode, title, description, action, compact }: EmptyStateProps) {
   return (
-    <div style={{
-      display: 'flex',
-      flexDirection: 'column',
-      alignItems: 'center',
-      gap: compact ? 8 : 12,
-      padding: compact ? '12px 0' : '24px 0',
-    }}>
-      {Icon ? <Icon size={compact ? 24 : 36} stroke={1.5} color="var(--color-text-tertiary)" /> : iconNode}
-      {title && <Text fw={500}>{title}</Text>}
-      {description && <Text size="sm" c="dimmed" style={{ textAlign: 'center' }}>{description}</Text>}
-      {action}
-    </div>
+    <StateBlock
+      variant="empty"
+      icon={Icon}
+      iconNode={iconNode}
+      title={title}
+      description={description}
+      action={action}
+      compact={compact}
+    />
   );
 }
