@@ -8,8 +8,8 @@ import { useCacheStore } from '../stores/cacheStore';
 import {
   getMetadata,
   invalidateMetadata,
+  type EntityAllMetadata,
   type ResolvedTagInfo,
-  type FileAllMetadata,
   type SelectionQuerySpec,
   type SelectionSummary,
 } from '../components/image-grid/metadataPrefetch';
@@ -24,7 +24,7 @@ export interface FolderMembership {
 
 export interface InspectorData {
   fileTags: ResolvedTagInfo[];
-  fileMetadata: FileAllMetadata | null;
+  fileMetadata: EntityAllMetadata | null;
   collectionSummary: CollectionSummary | null;
   selectionSummary: SelectionSummary | null;
   fileFolders: FolderMembership[];
@@ -46,7 +46,7 @@ export function useInspectorData(
   selectionSummarySpec: SelectionQuerySpec | null,
 ): InspectorData {
   const [fileTags, setFileTags] = useState<ResolvedTagInfo[]>([]);
-  const [fileMetadata, setFileMetadata] = useState<FileAllMetadata | null>(null);
+  const [fileMetadata, setFileMetadata] = useState<EntityAllMetadata | null>(null);
   const [collectionSummary, setCollectionSummary] = useState<CollectionSummary | null>(null);
   const [selectionSummary, setSelectionSummary] = useState<SelectionSummary | null>(null);
   const [fileFolders, setFileFolders] = useState<FolderMembership[]>([]);

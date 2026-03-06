@@ -7,7 +7,7 @@
 
 // ─── Grid & Pagination ──────────────────────────────────────────────────────
 
-export interface ImageItem {
+export interface EntitySlim {
   entity_id?: number;
   is_collection?: boolean;
   collection_item_count?: number | null;
@@ -32,8 +32,13 @@ export interface ImageItem {
   notes?: Record<string, string> | null;
 }
 
+export interface EntityDetails extends EntitySlim {}
+
+// Temporary migration alias while call sites move to entity-first naming.
+export type ImageItem = EntitySlim;
+
 export interface GridPageSlimResponse {
-  items: ImageItem[];
+  items: EntitySlim[];
   next_cursor: string | null;
   has_more: boolean;
   total_count: number | null;
@@ -72,7 +77,7 @@ export interface ResolvedTagInfo {
   read_only: boolean;
 }
 
-export interface FileAllMetadata {
+export interface EntityAllMetadata {
   file: {
     hash: string;
     name: string | null;
@@ -97,11 +102,15 @@ export interface FileAllMetadata {
   parent_tags: { namespace: string; subtag: string; display: string; read_only: boolean }[];
 }
 
-export interface FileMetadataBatchResponse {
-  items: Record<string, FileAllMetadata>;
+export interface EntityMetadataBatchResponse {
+  items: Record<string, EntityAllMetadata>;
   missing: string[];
   generated_at: string;
 }
+
+// Temporary migration aliases while call sites move to entity-first naming.
+export type FileAllMetadata = EntityAllMetadata;
+export type FileMetadataBatchResponse = EntityMetadataBatchResponse;
 
 export interface EnsureThumbnailResponse {
   regenerated_thumbnail: boolean;

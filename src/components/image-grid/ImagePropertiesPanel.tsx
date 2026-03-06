@@ -25,8 +25,8 @@ import { UrlListEditor } from '../ui/UrlListEditor';
 import { ColorPalette } from '../ui/ColorPalette';
 import { EmptyState } from '../ui/EmptyState';
 import type {
+  EntityAllMetadata,
   ResolvedTagInfo,
-  FileAllMetadata,
   SelectionQuerySpec,
   SelectionSummary,
 } from './metadataPrefetch';
@@ -182,7 +182,7 @@ interface ImagePropertiesPanelProps {
 
   // Data props (from useInspectorData hook)
   fileTags: ResolvedTagInfo[];
-  fileMetadata: FileAllMetadata | null;
+  fileMetadata: EntityAllMetadata | null;
   collectionSummary: CollectionSummary | null;
   selectionSummary: SelectionSummary | null;
   fileFolders: FolderMembership[];

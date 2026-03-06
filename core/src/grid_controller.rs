@@ -16,7 +16,7 @@ use crate::sqlite_ptr::PtrSqliteDatabase;
 use crate::tags;
 use crate::types::{
     parse_file_status, status_to_string, tag_display_key, DominantColorDto, FileAllMetadata,
-    FileInfo, FileInfoSlim, FileMetadataBatchResponse, GridPageSlimQuery, GridPageSlimResponse,
+    EntityDetails, EntityMetadataBatchResponse, EntitySlim, GridPageSlimQuery, GridPageSlimResponse,
     ResolvedTagInfo,
 };
 
@@ -308,7 +308,7 @@ impl GridController {
             };
 
             return Ok(GridPageSlimResponse {
-                items: rows.into_iter().map(FileInfoSlim::from).collect(),
+                items: rows.into_iter().map(EntitySlim::from).collect(),
                 next_cursor,
                 has_more,
                 total_count,
@@ -529,7 +529,7 @@ impl GridController {
             };
 
             return Ok(GridPageSlimResponse {
-                items: rows.into_iter().map(FileInfoSlim::from).collect(),
+                items: rows.into_iter().map(EntitySlim::from).collect(),
                 next_cursor,
                 has_more,
                 total_count,
@@ -601,7 +601,7 @@ impl GridController {
             };
 
             return Ok(GridPageSlimResponse {
-                items: rows.into_iter().map(FileInfoSlim::from).collect(),
+                items: rows.into_iter().map(EntitySlim::from).collect(),
                 next_cursor,
                 has_more,
                 total_count,
@@ -703,7 +703,7 @@ impl GridController {
             };
 
             return Ok(GridPageSlimResponse {
-                items: rows.into_iter().map(|(r, _)| FileInfoSlim::from(r)).collect(),
+                items: rows.into_iter().map(|(r, _)| EntitySlim::from(r)).collect(),
                 next_cursor,
                 has_more,
                 total_count,
@@ -756,7 +756,7 @@ impl GridController {
             };
 
             return Ok(GridPageSlimResponse {
-                items: rows.into_iter().map(FileInfoSlim::from).collect(),
+                items: rows.into_iter().map(EntitySlim::from).collect(),
                 next_cursor,
                 has_more,
                 total_count,
@@ -831,7 +831,7 @@ impl GridController {
         };
 
         Ok(GridPageSlimResponse {
-            items: rows.into_iter().map(FileInfoSlim::from).collect(),
+            items: rows.into_iter().map(EntitySlim::from).collect(),
             next_cursor,
             has_more,
             total_count,
@@ -842,7 +842,7 @@ impl GridController {
         db: &SqliteDatabase,
         ptr_db: &PtrSqliteDatabase,
         hashes: Vec<String>,
-    ) -> Result<FileMetadataBatchResponse, String> {
+    ) -> Result<EntityMetadataBatchResponse, String> {
         const MAX_BATCH: usize = 200;
         const SLOW_BATCH_WARN_MS: f64 = 200.0;
         const SLOW_STAGE_WARN_MS: f64 = 50.0;
@@ -977,7 +977,7 @@ impl GridController {
                 items.insert(
                     hash.clone(),
                     FileAllMetadata {
-                        file: FileInfo {
+                        file: EntityDetails {
                             hash: slim.hash,
                             name: slim.name,
                             size: slim.size,
@@ -1041,7 +1041,7 @@ impl GridController {
             missing.len(),
         );
 
-        Ok(FileMetadataBatchResponse {
+        Ok(EntityMetadataBatchResponse {
             items,
             missing,
             generated_at: Utc::now().to_rfc3339(),
