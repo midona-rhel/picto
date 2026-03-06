@@ -14,7 +14,6 @@ import {
   Loader,
   Center,
   Menu,
-  rem,
   Box,
   SegmentedControl,
   Title,
@@ -40,6 +39,7 @@ import {
 import { api } from "#desktop/api";
 import { EmptyState } from './ui/EmptyState';
 import { TextButton } from './ui/TextButton';
+import styles from './Collections.module.css';
 
 interface Collection {
   id: number;
@@ -343,7 +343,7 @@ export function Collections() {
           <Box
             key={collection.id}
             pos="relative"
-            style={{ cursor: 'pointer', borderRadius: 'var(--mantine-radius-sm)', overflow: 'hidden' }}
+            className={styles.card}
             onClick={() => navigateToCollection({ id: collection.id, name: collection.name })}
           >
             {collection.thumbnail_url ? (
@@ -354,7 +354,7 @@ export function Collections() {
                 radius="sm"
               />
             ) : (
-              <Center h={180} bg="var(--box-background)" style={{ borderRadius: 'var(--mantine-radius-sm)' }}>
+              <Center h={180} bg="var(--box-background)" className={styles.placeholder}>
                 <IconPhoto size={32} stroke={1.5} color="gray" />
               </Center>
             )}
@@ -366,7 +366,7 @@ export function Collections() {
               left={0}
               right={0}
               p="xs"
-              style={{ background: 'linear-gradient(transparent, rgba(0,0,0,0.8))' }}
+              className={styles.overlay}
             >
               <Group justify="space-between" align="flex-end">
                 <Stack gap={2}>
@@ -381,7 +381,7 @@ export function Collections() {
                   </Menu.Target>
                   <Menu.Dropdown>
                     <Menu.Item
-                      leftSection={<IconEdit style={{ width: rem(14), height: rem(14) }} />}
+                      leftSection={<IconEdit size={14} />}
                       onClick={(e) => {
                         e.stopPropagation();
                         openEditModalWithCollection(collection);
@@ -391,7 +391,7 @@ export function Collections() {
                     </Menu.Item>
                     <Menu.Item
                       color="red"
-                      leftSection={<IconTrash style={{ width: rem(14), height: rem(14) }} />}
+                      leftSection={<IconTrash size={14} />}
                       onClick={(e) => {
                         e.stopPropagation();
                         handleDeleteCollection(collection);
@@ -447,7 +447,7 @@ export function Collections() {
           <Box
             key={card.value}
             pos="relative"
-            style={{ cursor: 'pointer', borderRadius: 'var(--mantine-radius-sm)', overflow: 'hidden' }}
+            className={styles.card}
             onClick={() => loadFilteredImages(card.value)}
           >
             {card.thumbnail_hash ? (
@@ -457,7 +457,7 @@ export function Collections() {
                 radius="sm"
               />
             ) : (
-              <Center h={120} bg="var(--box-background)" style={{ borderRadius: 'var(--mantine-radius-sm)' }}>
+              <Center h={120} bg="var(--box-background)" className={styles.placeholder}>
                 <IconPhoto size={24} stroke={1.5} color="gray" />
               </Center>
             )}
@@ -467,7 +467,7 @@ export function Collections() {
               left={0}
               right={0}
               p="xs"
-              style={{ background: 'linear-gradient(transparent, rgba(0,0,0,0.8))' }}
+              className={styles.overlay}
             >
               <Text size="xs" fw={500} c="white" lineClamp={1}>{card.value}</Text>
               <Text size="xs" c="dimmed">{card.count}</Text>
@@ -508,8 +508,8 @@ export function Collections() {
 
         <SimpleGrid cols={{ base: 3, sm: 4, md: 5, lg: 8 }}>
           {filteredImageList.map((image) => (
-            <Box key={image.hash} pos="relative" style={{ borderRadius: 'var(--mantine-radius-sm)', overflow: 'hidden' }}>
-              <Center h={120} bg="var(--box-background)" style={{ borderRadius: 'var(--mantine-radius-sm)' }}>
+            <Box key={image.hash} pos="relative" className={styles.card}>
+              <Center h={120} bg="var(--box-background)" className={styles.placeholder}>
                 <IconPhoto size={24} stroke={1.5} color="gray" />
               </Center>
               <Box
@@ -518,7 +518,7 @@ export function Collections() {
                 left={0}
                 right={0}
                 p={4}
-                style={{ background: 'linear-gradient(transparent, rgba(0,0,0,0.7))' }}
+                className={styles.filteredOverlay}
               >
                 <Text size="xs" c="dimmed" lineClamp={1}>
                   {image.hash.substring(0, 8)}
@@ -533,12 +533,12 @@ export function Collections() {
   };
 
   return (
-    <div style={{ maxWidth: 1200, margin: '0 auto', padding: '16px 24px' }}>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
+    <div className={styles.page}>
+      <div className={styles.stack}>
         {/* Header with View Switcher */}
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end' }}>
+        <div className={styles.header}>
           <div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
+            <div className={styles.headerTitleRow}>
               {viewInfo.icon}
               <Text size="xl" fw={500}>{viewInfo.title}</Text>
             </div>
@@ -616,7 +616,7 @@ export function Collections() {
             size="md"
             styles={glassModalStyles}
           >
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+            <div className={styles.modalBody}>
               <TextInput
                 label="Name"
                 placeholder="Enter collection name"
@@ -638,7 +638,7 @@ export function Collections() {
                 onChange={(tags) => setFormData({ ...formData, tags })}
                 data={allTags}
               />
-              <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 6, marginTop: 8 }}>
+              <div className={styles.buttonRow}>
                 <TextButton onClick={() => {
                   if (createModalOpened) closeCreateModal();
                   if (editModalOpened) closeEditModal();

@@ -1,0 +1,56 @@
+.page {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 16px 24px;
+}
+
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  gap: 16px;
+}
+
+.headerTitleRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.card {
+  cursor: pointer;
+  border-radius: var(--mantine-radius-sm);
+  overflow: hidden;
+}
+
+.placeholder {
+  border-radius: var(--mantine-radius-sm);
+}
+
+.overlay {
+  background: linear-gradient(transparent, rgba(0, 0, 0, 0.8));
+}
+
+.filteredOverlay {
+  background: linear-gradient(transparent, rgba(0, 0, 0, 0.7));
+}
+
+.modalBody {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.buttonRow {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-top: 8px;
+}

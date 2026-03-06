@@ -1,4 +1,4 @@
-import type { ReactNode, CSSProperties } from 'react';
+import type { ReactNode } from 'react';
 import { Text } from '@mantine/core';
 import styles from '../Settings.module.css';
 
@@ -17,22 +17,13 @@ interface SettingsBlockProps {
 }
 
 export function SettingsBlock({ title, description, dimmed, children, flush, borderColor }: SettingsBlockProps) {
-  const blockStyle: CSSProperties | undefined = dimmed
-    ? { opacity: 0.5, pointerEvents: 'none' }
-    : undefined;
-
-  const contentStyle: CSSProperties | undefined =
-    flush || borderColor
-      ? {
-          ...(flush ? { padding: 0, overflow: 'hidden' } : undefined),
-          ...(borderColor ? { borderColor } : undefined),
-        }
-      : undefined;
-
   return (
-    <div className={styles.panelBlock} style={blockStyle}>
+    <div className={`${styles.panelBlock} ${dimmed ? styles.blockDimmed : ''}`}>
       {title && <div className={styles.blockTitle}>{title}</div>}
-      <div className={styles.blockContent} style={contentStyle}>
+      <div
+        className={`${styles.blockContent} ${flush ? styles.blockContentFlush : ''}`}
+        style={borderColor ? { borderColor } : undefined}
+      >
         {description && <Text size="xs" c="dimmed" mb={12}>{description}</Text>}
         {children}
       </div>
@@ -57,7 +48,7 @@ export function SettingsRow({ label, children, separator, light }: SettingsRowPr
     <>
       {separator && <div className={styles.blockSeparator} />}
       <div className={styles.labelItem}>
-        <label style={light ? { fontWeight: 'var(--font-weight-regular)' as any } : undefined}>{label}</label>
+        <label className={light ? styles.settingsLabelLight : undefined}>{label}</label>
         <div className={styles.right}>{children}</div>
       </div>
     </>
@@ -73,7 +64,7 @@ interface SettingsButtonRowProps {
 
 export function SettingsButtonRow({ children }: SettingsButtonRowProps) {
   return (
-    <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 6, marginTop: 8 }}>
+    <div className={styles.settingsButtonRow}>
       {children}
     </div>
   );
@@ -89,7 +80,7 @@ interface SettingsInputGroupProps {
 
 export function SettingsInputGroup({ children, mb }: SettingsInputGroupProps) {
   return (
-    <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: mb }}>
+    <div className={styles.settingsInputGroup} style={mb ? { marginBottom: mb } : undefined}>
       {children}
     </div>
   );
