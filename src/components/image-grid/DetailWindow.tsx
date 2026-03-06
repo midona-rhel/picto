@@ -20,6 +20,7 @@ import { mediaFileUrl, mediaThumbnailUrl } from '../../lib/mediaUrl';
 import { useImageZoom, type ImageSize, type ZoomState } from './useImageZoom';
 import { useNavigatorDrag } from './useNavigatorDrag';
 import { useNavigatorRenderer } from './useNavigatorRenderer';
+import { useGlobalKeydown } from '../../hooks/useGlobalKeydown';
 import { useBoundaryNavigation } from '../../hooks/useBoundaryNavigation';
 import { KbdTooltip } from '../ui/KbdTooltip';
 import { logBestEffortError, runBestEffort } from '../../lib/asyncOps';
@@ -356,60 +357,57 @@ export function DetailWindow({ hash }: DetailWindowProps) {
 
   const isVideoRef = useRef(isVideo);
   isVideoRef.current = isVideo;
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+  const handleDetailWindowHotkeys = useCallback((e: KeyboardEvent) => {
+    if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
 
-      switch (e.key) {
-        case 'Escape':
+    switch (e.key) {
+      case 'Escape':
+        e.preventDefault();
+        runBestEffort('detailWindow.closeFromShortcut', getCurrentWindow().close());
+        break;
+      case 'ArrowLeft':
+      case 'a':
+        e.preventDefault();
+        navigate(-1);
+        break;
+      case 'ArrowRight':
+      case 'd':
+        e.preventDefault();
+        navigate(1);
+        break;
+      case '`':
+        if (!isVideoRef.current) { e.preventDefault(); fitToWindow(); }
+        break;
+      case '=':
+      case '+':
+        if (!isVideoRef.current) { e.preventDefault(); zoomTo(zoomState.scale * 1.25); }
+        break;
+      case '-':
+        if (!isVideoRef.current && !e.metaKey && !e.ctrlKey) {
           e.preventDefault();
-          runBestEffort('detailWindow.closeFromShortcut', getCurrentWindow().close());
-          break;
-        case 'ArrowLeft':
-        case 'a':
+          zoomTo(zoomState.scale / 1.25);
+        }
+        break;
+      case '0':
+        if (!isVideoRef.current && (e.metaKey || e.ctrlKey)) {
           e.preventDefault();
-          navigate(-1);
-          break;
-        case 'ArrowRight':
-        case 'd':
+          fitActual();
+        }
+        break;
+      case 't':
+      case 'T':
+        e.preventDefault();
+        toggleAlwaysOnTop();
+        break;
+      case 'c':
+        if ((e.metaKey || e.ctrlKey) && e.altKey) {
           e.preventDefault();
-          navigate(1);
-          break;
-        case '`':
-          if (!isVideoRef.current) { e.preventDefault(); fitToWindow(); }
-          break;
-        case '=':
-        case '+':
-          if (!isVideoRef.current) { e.preventDefault(); zoomTo(zoomState.scale * 1.25); }
-          break;
-        case '-':
-          if (!isVideoRef.current && !e.metaKey && !e.ctrlKey) {
-            e.preventDefault();
-            zoomTo(zoomState.scale / 1.25);
-          }
-          break;
-        case '0':
-          if (!isVideoRef.current && (e.metaKey || e.ctrlKey)) {
-            e.preventDefault();
-            fitActual();
-          }
-          break;
-        case 't':
-        case 'T':
-          e.preventDefault();
-          toggleAlwaysOnTop();
-          break;
-        case 'c':
-          if ((e.metaKey || e.ctrlKey) && e.altKey) {
-            e.preventDefault();
-            handleCopyPath();
-          }
-          break;
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
+          handleCopyPath();
+        }
+        break;
+    }
   }, [navigate, fitToWindow, fitActual, zoomTo, zoomState.scale, toggleAlwaysOnTop, handleCopyPath]);
+  useGlobalKeydown(handleDetailWindowHotkeys);
 
   const handleMinimapMouseDown = useNavigatorDrag(minimapRef, imageSizeRef, panToNormalized);
 

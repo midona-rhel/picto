@@ -25,6 +25,8 @@ import { parseTagString } from '../../lib/tagParsing';
 import { registerTagSelectOpenHandler } from './tagSelectService';
 import type { TagFilterLogicMode, TagSelectPanelProps } from './tagSelectTypes';
 import { KbdTooltip } from '../ui/KbdTooltip';
+import { useGlobalKeydown } from '../../hooks/useGlobalKeydown';
+import { useGlobalPointerDrag } from '../../hooks/useGlobalPointerDrag';
 import st from './TagSelectPanel.module.css';
 
 function nsColor(namespace: string): string {
@@ -133,6 +135,7 @@ function TagSelectPanelInner({
 
   // Drag state
   const [dragging, setDragging] = useState(false);
+  const [dragSessionActive, setDragSessionActive] = useState(false);
 
 
   // Pin state
@@ -236,33 +239,45 @@ function TagSelectPanelInner({
       ? (rect ? rect.left : pos.x)
       : (rect ? window.innerWidth - rect.right : pos.x);
     dragStart.current = { mx: e.clientX, my: e.clientY, anchor, y: pos.y };
+    draggingRef.current = false;
+    setDragSessionActive(true);
   }, [pos.x, pos.y]);
 
   const draggingRef = useRef(false);
-  useEffect(() => {
-    const onMove = (e: MouseEvent) => {
-      const ds = dragStart.current;
-      if (!ds) return;
-      const dx = e.clientX - ds.mx, dy = e.clientY - ds.my;
-      if (!draggingRef.current && Math.abs(dx) + Math.abs(dy) < 5) return;
-      if (!draggingRef.current) { draggingRef.current = true; setDragging(true); }
-      e.preventDefault();
-      const el = panelRef.current;
-      const w = el?.offsetWidth ?? 0, h = el?.offsetHeight ?? 0;
-      let x: number, y: number;
-      if (isFilterModeRef.current) {
-        x = Math.max(8, Math.min(ds.anchor + dx, window.innerWidth - w - 8));
-      } else {
-        x = Math.max(8, Math.min(ds.anchor - dx, window.innerWidth - w - 8));
-      }
-      y = Math.max(8, Math.min(ds.y + dy, window.innerHeight - h - 8));
-      setPos({ x, y });
-    };
-    const onUp = () => { dragStart.current = null; draggingRef.current = false; setDragging(false); };
-    document.addEventListener('mousemove', onMove);
-    document.addEventListener('mouseup', onUp);
-    return () => { document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp); };
+  const handlePanelDragMove = useCallback((e: MouseEvent) => {
+    const ds = dragStart.current;
+    if (!ds) return;
+    const dx = e.clientX - ds.mx;
+    const dy = e.clientY - ds.my;
+    if (!draggingRef.current && Math.abs(dx) + Math.abs(dy) < 5) return;
+    if (!draggingRef.current) {
+      draggingRef.current = true;
+      setDragging(true);
+    }
+    e.preventDefault();
+    const el = panelRef.current;
+    const w = el?.offsetWidth ?? 0;
+    const h = el?.offsetHeight ?? 0;
+    let x: number;
+    if (isFilterModeRef.current) {
+      x = Math.max(8, Math.min(ds.anchor + dx, window.innerWidth - w - 8));
+    } else {
+      x = Math.max(8, Math.min(ds.anchor - dx, window.innerWidth - w - 8));
+    }
+    const y = Math.max(8, Math.min(ds.y + dy, window.innerHeight - h - 8));
+    setPos({ x, y });
   }, []);
+  const handlePanelDragEnd = useCallback(() => {
+    dragStart.current = null;
+    draggingRef.current = false;
+    setDragging(false);
+    setDragSessionActive(false);
+  }, []);
+  useGlobalPointerDrag(
+    { onMove: handlePanelDragMove, onEnd: handlePanelDragEnd },
+    dragSessionActive,
+    { target: 'document' },
+  );
 
   // Reset focus index when search or sidebar changes
   useEffect(() => { setFocusIndex(-1); focusIndexRef.current = -1; }, [search, sidebarMode, selectedNamespace]);
@@ -363,88 +378,79 @@ function TagSelectPanelInner({
   // Sync ref for keyboard handler
   handleLeftClickRef.current = handleLeftClick;
 
-  // Keyboard navigation handler (after handleLeftClick is defined)
+  const selectFocusedOrFirst = useCallback(() => {
+    const tags = displayTagsRef.current;
+    const idx = focusIndexRef.current;
+    if (idx >= 0 && idx < tags.length) {
+      handleLeftClickRef.current(tags[idx].display);
+    } else if (tags.length > 0) {
+      handleLeftClickRef.current(tags[0].display);
+      setFocusIndex(0);
+      focusIndexRef.current = 0;
+    }
+  }, []);
+
   // Uses CAPTURE phase so it fires before Mantine useHotkeys and ImageGrid handlers,
   // preventing Escape from deselecting images instead of closing the panel.
-  useEffect(() => {
-    const selectFocusedOrFirst = () => {
-      const tags = displayTagsRef.current;
-      const idx = focusIndexRef.current;
-      if (idx >= 0 && idx < tags.length) {
-        handleLeftClickRef.current(tags[idx].display);
-      } else if (tags.length > 0) {
-        // Nothing focused yet — select first visible item
-        handleLeftClickRef.current(tags[0].display);
-        setFocusIndex(0);
-        focusIndexRef.current = 0;
-      }
-    };
-
-    const onKeyDown = (e: KeyboardEvent) => {
-      // When typing in search, intercept ArrowDown and Enter
-      if (e.target === searchRef.current) {
-        if (e.key === 'ArrowDown') {
-          e.preventDefault();
-          e.stopPropagation();
-          setFocusIndex(0);
-          focusIndexRef.current = 0;
-          searchRef.current?.blur();
-        } else if (e.key === 'Enter') {
-          const q = searchRef.current?.value.trim() ?? '';
-          const tags = displayTagsRef.current;
-          const hasExactMatch = q && tags.some((t) => t.display.toLowerCase() === q.toLowerCase());
-          // If search is empty or has an exact match, select the item
-          // Otherwise let the React handler create a new tag
-          if (!q || hasExactMatch) {
-            e.preventDefault();
-            e.stopPropagation();
-            selectFocusedOrFirst();
-          }
-        }
-        return;
-      }
-
-      // Navigation keys when focus is not in search
+  const handlePanelNavigationKeydown = useCallback((e: KeyboardEvent) => {
+    if (e.target === searchRef.current) {
       if (e.key === 'ArrowDown') {
         e.preventDefault();
         e.stopPropagation();
-        setFocusIndex((i) => {
-          const next = Math.min(i + 1, displayTagsRef.current.length - 1);
-          focusIndexRef.current = next;
-          return next;
-        });
-      } else if (e.key === 'ArrowUp') {
-        e.preventDefault();
-        e.stopPropagation();
-        setFocusIndex((i) => {
-          const next = i - 1;
-          if (next < 0) { searchRef.current?.focus(); focusIndexRef.current = -1; return -1; }
-          focusIndexRef.current = next;
-          return next;
-        });
+        setFocusIndex(0);
+        focusIndexRef.current = 0;
+        searchRef.current?.blur();
       } else if (e.key === 'Enter') {
-        e.preventDefault();
-        e.stopPropagation();
-        selectFocusedOrFirst();
-      } else if (e.key === 'Tab') {
-        e.preventDefault();
-        e.stopPropagation();
-        const ns = namespaceGroupsRef.current;
-        if (sidebarMode === 'ALL') {
-          if (ns.length > 0) { setSidebarMode('GROUP'); setSelectedNamespace(ns[0][0]); }
-          else { setSidebarMode('SELECTED'); setSelectedNamespace(''); }
-        } else if (sidebarMode === 'GROUP') {
-          const idx = ns.findIndex(([n]) => n === selectedNamespace);
-          if (idx < ns.length - 1) { setSelectedNamespace(ns[idx + 1][0]); }
-          else { setSidebarMode('SELECTED'); setSelectedNamespace(''); }
-        } else {
-          setSidebarMode('ALL'); setSelectedNamespace('');
+        const q = searchRef.current?.value.trim() ?? '';
+        const tags = displayTagsRef.current;
+        const hasExactMatch = q && tags.some((t) => t.display.toLowerCase() === q.toLowerCase());
+        if (!q || hasExactMatch) {
+          e.preventDefault();
+          e.stopPropagation();
+          selectFocusedOrFirst();
         }
       }
-    };
-    document.addEventListener('keydown', onKeyDown, true);
-    return () => document.removeEventListener('keydown', onKeyDown, true);
-  }, [sidebarMode, selectedNamespace]);
+      return;
+    }
+
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      e.stopPropagation();
+      setFocusIndex((i) => {
+        const next = Math.min(i + 1, displayTagsRef.current.length - 1);
+        focusIndexRef.current = next;
+        return next;
+      });
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      e.stopPropagation();
+      setFocusIndex((i) => {
+        const next = i - 1;
+        if (next < 0) { searchRef.current?.focus(); focusIndexRef.current = -1; return -1; }
+        focusIndexRef.current = next;
+        return next;
+      });
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      e.stopPropagation();
+      selectFocusedOrFirst();
+    } else if (e.key === 'Tab') {
+      e.preventDefault();
+      e.stopPropagation();
+      const ns = namespaceGroupsRef.current;
+      if (sidebarMode === 'ALL') {
+        if (ns.length > 0) { setSidebarMode('GROUP'); setSelectedNamespace(ns[0][0]); }
+        else { setSidebarMode('SELECTED'); setSelectedNamespace(''); }
+      } else if (sidebarMode === 'GROUP') {
+        const idx = ns.findIndex(([n]) => n === selectedNamespace);
+        if (idx < ns.length - 1) { setSelectedNamespace(ns[idx + 1][0]); }
+        else { setSidebarMode('SELECTED'); setSelectedNamespace(''); }
+      } else {
+        setSidebarMode('ALL'); setSelectedNamespace('');
+      }
+    }
+  }, [selectFocusedOrFirst, sidebarMode, selectedNamespace]);
+  useGlobalKeydown(handlePanelNavigationKeydown, true, { capture: true });
 
   // Select All (group mode)
   const handleSelectAll = useCallback(() => {

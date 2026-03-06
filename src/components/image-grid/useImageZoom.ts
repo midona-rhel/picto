@@ -1,4 +1,5 @@
 import { useCallback, useRef, useState, useEffect, useLayoutEffect, useMemo } from 'react';
+import { useGlobalPointerDrag } from '../../hooks/useGlobalPointerDrag';
 
 export interface ZoomState {
   scale: number;
@@ -126,27 +127,16 @@ export function useImageZoom(
     dragStartRef.current = { x: e.clientX, y: e.clientY, tx: cur.tx, ty: cur.ty };
   }, []);
 
-  useEffect(() => {
-    if (!isDragging) return;
-
-    const handleMove = (e: MouseEvent) => {
-      const start = dragStartRef.current;
-      if (!start) return;
-      setState(prev => ({ ...prev, tx: start.tx + (e.clientX - start.x), ty: start.ty + (e.clientY - start.y) }));
-    };
-
-    const handleUp = () => {
-      setIsDragging(false);
-      dragStartRef.current = null;
-    };
-
-    window.addEventListener('mousemove', handleMove);
-    window.addEventListener('mouseup', handleUp);
-    return () => {
-      window.removeEventListener('mousemove', handleMove);
-      window.removeEventListener('mouseup', handleUp);
-    };
-  }, [isDragging]);
+  const handleDragMove = useCallback((e: MouseEvent) => {
+    const start = dragStartRef.current;
+    if (!start) return;
+    setState(prev => ({ ...prev, tx: start.tx + (e.clientX - start.x), ty: start.ty + (e.clientY - start.y) }));
+  }, []);
+  const handleDragEnd = useCallback(() => {
+    setIsDragging(false);
+    dragStartRef.current = null;
+  }, []);
+  useGlobalPointerDrag({ onMove: handleDragMove, onEnd: handleDragEnd }, isDragging);
 
   // Navigator rect: pure computation from cached dimensions — no DOM reads
   const navigatorRect: NavigatorRect | null = useMemo(() => {

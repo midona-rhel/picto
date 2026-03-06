@@ -9,14 +9,18 @@ import { useEffect } from 'react';
 export function useGlobalPointerDrag(
   callbacks: { onMove: (e: MouseEvent) => void; onEnd: (e: MouseEvent) => void },
   active: boolean,
+  options?: { target?: 'window' | 'document' },
 ): void {
   useEffect(() => {
     if (!active) return;
-    window.addEventListener('mousemove', callbacks.onMove);
-    window.addEventListener('mouseup', callbacks.onEnd);
+    const target = options?.target === 'document' ? document : window;
+    const onMove = callbacks.onMove as unknown as EventListener;
+    const onEnd = callbacks.onEnd as unknown as EventListener;
+    target.addEventListener('mousemove', onMove);
+    target.addEventListener('mouseup', onEnd);
     return () => {
-      window.removeEventListener('mousemove', callbacks.onMove);
-      window.removeEventListener('mouseup', callbacks.onEnd);
+      target.removeEventListener('mousemove', onMove);
+      target.removeEventListener('mouseup', onEnd);
     };
-  }, [active, callbacks.onMove, callbacks.onEnd]);
+  }, [active, callbacks.onMove, callbacks.onEnd, options?.target]);
 }

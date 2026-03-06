@@ -17,6 +17,7 @@ import {
   VOLUME_STEP,
 } from './videoConstants';
 import { getShortcut, matchesShortcutDef } from '../../lib/shortcuts';
+import { useGlobalKeydown } from '../../hooks/useGlobalKeydown';
 import styles from './VideoPlayer.module.css';
 
 export interface VideoPlayerProps {
@@ -152,77 +153,72 @@ export function VideoPlayer({
 
   // Keyboard shortcuts — only non-arrow-key shortcuts
   // Arrow keys are reserved for file navigation (handled by DetailWindow)
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+  const handleVideoHotkeys = useCallback((e: KeyboardEvent) => {
+    if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
 
-      const container = containerRef.current;
-      if (!container) return;
+    const container = containerRef.current;
+    if (!container) return;
 
-      const togglePlayShortcut = getShortcut('video.togglePlay');
-      const volumeUpShortcut = getShortcut('video.volumeUp');
-      const volumeDownShortcut = getShortcut('video.volumeDown');
-      const toggleMuteShortcut = getShortcut('video.toggleMute');
-      const toggleLoopShortcut = getShortcut('video.toggleLoop');
-      const rateIncreaseShortcut = getShortcut('video.rateIncrease');
-      const rateDecreaseShortcut = getShortcut('video.rateDecrease');
-      const rateResetShortcut = getShortcut('video.rateReset');
+    const togglePlayShortcut = getShortcut('video.togglePlay');
+    const volumeUpShortcut = getShortcut('video.volumeUp');
+    const volumeDownShortcut = getShortcut('video.volumeDown');
+    const toggleMuteShortcut = getShortcut('video.toggleMute');
+    const toggleLoopShortcut = getShortcut('video.toggleLoop');
+    const rateIncreaseShortcut = getShortcut('video.rateIncrease');
+    const rateDecreaseShortcut = getShortcut('video.rateDecrease');
+    const rateResetShortcut = getShortcut('video.rateReset');
 
-      if (togglePlayShortcut && matchesShortcutDef(e, togglePlayShortcut)) {
-        e.preventDefault();
-        actions.togglePlay();
-        resetHideTimer();
-        return;
-      }
-      if (volumeUpShortcut && matchesShortcutDef(e, volumeUpShortcut)) {
-        e.preventDefault();
-        actions.setVolume(state.volume + VOLUME_STEP);
-        setVolumeHudTrigger(Date.now());
-        resetHideTimer();
-        return;
-      }
-      if (volumeDownShortcut && matchesShortcutDef(e, volumeDownShortcut)) {
-        e.preventDefault();
-        actions.setVolume(state.volume - VOLUME_STEP);
-        setVolumeHudTrigger(Date.now());
-        resetHideTimer();
-        return;
-      }
-      if (toggleMuteShortcut && matchesShortcutDef(e, toggleMuteShortcut)) {
-        e.preventDefault();
-        actions.toggleMute();
-        resetHideTimer();
-        return;
-      }
-      if (toggleLoopShortcut && matchesShortcutDef(e, toggleLoopShortcut)) {
-        e.preventDefault();
-        actions.toggleLoop();
-        resetHideTimer();
-        return;
-      }
-      if (rateIncreaseShortcut && matchesShortcutDef(e, rateIncreaseShortcut)) {
-        e.preventDefault();
-        actions.cyclePlaybackRate(1);
-        resetHideTimer();
-        return;
-      }
-      if (rateDecreaseShortcut && matchesShortcutDef(e, rateDecreaseShortcut)) {
-        e.preventDefault();
-        actions.cyclePlaybackRate(-1);
-        resetHideTimer();
-        return;
-      }
-      if (rateResetShortcut && matchesShortcutDef(e, rateResetShortcut)) {
-        e.preventDefault();
-        actions.setPlaybackRate(1);
-        resetHideTimer();
-        return;
-      }
-    };
-
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
+    if (togglePlayShortcut && matchesShortcutDef(e, togglePlayShortcut)) {
+      e.preventDefault();
+      actions.togglePlay();
+      resetHideTimer();
+      return;
+    }
+    if (volumeUpShortcut && matchesShortcutDef(e, volumeUpShortcut)) {
+      e.preventDefault();
+      actions.setVolume(state.volume + VOLUME_STEP);
+      setVolumeHudTrigger(Date.now());
+      resetHideTimer();
+      return;
+    }
+    if (volumeDownShortcut && matchesShortcutDef(e, volumeDownShortcut)) {
+      e.preventDefault();
+      actions.setVolume(state.volume - VOLUME_STEP);
+      setVolumeHudTrigger(Date.now());
+      resetHideTimer();
+      return;
+    }
+    if (toggleMuteShortcut && matchesShortcutDef(e, toggleMuteShortcut)) {
+      e.preventDefault();
+      actions.toggleMute();
+      resetHideTimer();
+      return;
+    }
+    if (toggleLoopShortcut && matchesShortcutDef(e, toggleLoopShortcut)) {
+      e.preventDefault();
+      actions.toggleLoop();
+      resetHideTimer();
+      return;
+    }
+    if (rateIncreaseShortcut && matchesShortcutDef(e, rateIncreaseShortcut)) {
+      e.preventDefault();
+      actions.cyclePlaybackRate(1);
+      resetHideTimer();
+      return;
+    }
+    if (rateDecreaseShortcut && matchesShortcutDef(e, rateDecreaseShortcut)) {
+      e.preventDefault();
+      actions.cyclePlaybackRate(-1);
+      resetHideTimer();
+      return;
+    }
+    if (rateResetShortcut && matchesShortcutDef(e, rateResetShortcut)) {
+      e.preventDefault();
+      actions.setPlaybackRate(1);
+      resetHideTimer();
+    }
   }, [actions, state.volume, resetHideTimer]);
+  useGlobalKeydown(handleVideoHotkeys);
 
   const showControls = controlsVisible || !state.isPlaying || seeking;
 
