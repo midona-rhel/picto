@@ -10,13 +10,9 @@ import {
 import { api, open as openDialog } from '#desktop/api';
 import { TextButton } from '../ui/TextButton';
 import { SettingsBlock, SettingsRow, SettingsInputGroup } from './ui';
-import {
-  PtrSyncController,
-  type PtrBootstrapStatus,
-  type PtrSyncProgress,
-  type PtrSyncResult,
-} from '../../controllers/ptrSyncController';
-import { logBestEffortError, runBestEffort, runCriticalAction } from '../../lib/asyncOps';
+import { PtrSyncController } from '../../controllers/ptrSyncController';
+import { runBestEffort, runCriticalAction } from '../../lib/asyncOps';
+import { useTaskRuntimeStore } from '../../stores/taskRuntimeStore';
 
 interface AppSettings {
   ptrServerUrl: string | null;
@@ -89,161 +85,78 @@ const DEFAULT_PTR_SERVER = 'https://ptr.hydrus.network:45871';
 const DEFAULT_PTR_ACCESS_KEY = '4a285629721ca442541ef2c15ea17d1f7f7578b0c3f4f5f2a05f8f0ab297786f';
 
 export function PtrPanel() {
+  const {
+    ensureInitialized,
+    syncing,
+    syncProgress,
+    ptrLastResult,
+    runtimeBootstrapStatus,
+  } = useTaskRuntimeStore((s) => ({
+    ensureInitialized: s.ensureInitialized,
+    syncing: s.ptrSyncing,
+    syncProgress: s.ptrProgress,
+    ptrLastResult: s.ptrLastResult,
+    runtimeBootstrapStatus: s.ptrBootstrapStatus,
+  }));
+
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [stats, setStats] = useState<PtrStats | null>(null);
-  const [syncing, setSyncing] = useState(false);
-  const [syncProgress, setSyncProgress] = useState<PtrSyncProgress | null>(null);
   const [syncError, setSyncError] = useState<string | null>(null);
   const [syncDone, setSyncDone] = useState(false);
   const [cancelling, setCancelling] = useState(false);
-  const [elapsed, setElapsed] = useState(0);
   const [bootstrapDir, setBootstrapDir] = useState('');
-  const [bootstrapStatus, setBootstrapStatus] = useState<PtrBootstrapStatus | null>(null);
   const [bootstrapError, setBootstrapError] = useState<string | null>(null);
   const [perfBreakdown, setPerfBreakdown] = useState<Record<string, unknown> | null>(null);
-  const syncStartRef = useRef(0);
-  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const doneTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastPtrResultKeyRef = useRef<string | null>(null);
+
+  const elapsed = Math.max(0, Math.floor((syncProgress?.elapsed_ms ?? 0) / 1000));
+  const bootstrapStatus = runtimeBootstrapStatus;
 
   useEffect(() => {
     loadSettings();
     loadStats();
-    runBestEffort('ptr.getBootstrapStatus.initial', PtrSyncController.getBootstrapStatus().then(setBootstrapStatus));
-
-    PtrSyncController.isSyncing().then((running) => {
-      if (running) {
-        setSyncing(true);
-        startTimer();
-      }
-    }).catch((error) => {
-      logBestEffortError('ptr.isSyncing.initial', error);
-    });
-
-    const cleanups: Array<() => void> = [];
-    let disposed = false;
-    const push = (fn: () => void) => { if (disposed) fn(); else cleanups.push(fn); };
-
-    const setup = async () => {
-      push(await PtrSyncController.onStarted(() => {
-        setSyncing(true);
-        setSyncProgress(null);
-        setSyncError(null);
-        setCancelling(false);
-        startTimer();
-      }));
-      push(await PtrSyncController.onProgress((progress) => {
-        setSyncProgress(progress);
-      }));
-      push(await PtrSyncController.onFinished((result: PtrSyncResult) => {
-        setSyncing(false);
-        setSyncProgress(null);
-        setCancelling(false);
-        stopTimer();
-        if (result.success) {
-          setSyncError(null);
-          setSyncDone(true);
-          if (doneTimerRef.current) clearTimeout(doneTimerRef.current);
-          doneTimerRef.current = setTimeout(() => setSyncDone(false), 4000);
-        } else if (result.error === 'Cancelled') {
-          setSyncError(null);
-        } else {
-          setSyncError(result.error || 'Unknown error');
-        }
-        loadStats();
-        loadSettings();
-        runBestEffort(
-          'ptr.getSyncPerfBreakdown.onFinished',
-          PtrSyncController.getSyncPerfBreakdown().then((perf) => setPerfBreakdown(perf as Record<string, unknown>)),
-        );
-      }));
-      push(await PtrSyncController.onBootstrapStarted(() => {
-        runBestEffort('ptr.getBootstrapStatus.onBootstrapStarted', PtrSyncController.getBootstrapStatus().then(setBootstrapStatus));
-      }));
-      push(await PtrSyncController.onBootstrapProgress(() => {
-        runBestEffort('ptr.getBootstrapStatus.onBootstrapProgress', PtrSyncController.getBootstrapStatus().then(setBootstrapStatus));
-      }));
-      push(await PtrSyncController.onBootstrapFinished(() => {
-        runBestEffort('ptr.getBootstrapStatus.onBootstrapFinished', PtrSyncController.getBootstrapStatus().then(setBootstrapStatus));
-      }));
-      push(await PtrSyncController.onBootstrapFailed((payload) => {
-        const p = payload as { error?: string };
-        setBootstrapError(p.error || 'Bootstrap failed');
-        runBestEffort('ptr.getBootstrapStatus.onBootstrapFailed', PtrSyncController.getBootstrapStatus().then(setBootstrapStatus));
-      }));
-    };
-    setup();
+    void ensureInitialized();
 
     return () => {
-      disposed = true;
-      cleanups.forEach((fn) => fn());
-      stopTimer();
       if (doneTimerRef.current) clearTimeout(doneTimerRef.current);
     };
-  }, []);
+  }, [ensureInitialized]);
 
-  // Fallback poll: fetch progress + detect sync end even if events are lost
   useEffect(() => {
-    const interval = setInterval(async () => {
-      try {
-        const [running, progress, bootstrap, compact] = await Promise.all([
-          PtrSyncController.isSyncing(),
-          PtrSyncController.getSyncProgress(),
-          PtrSyncController.getBootstrapStatus(),
-          PtrSyncController.getCompactIndexStatus().catch((error) => {
-            logBestEffortError('ptr.getCompactIndexStatus.poll', error);
-            return null;
-          }),
-        ]);
-        const mergedBootstrap = compact
-          ? {
-              ...bootstrap,
-              stage: compact.running ? 'compact_build' : bootstrap.stage,
-              rows_done_stage: compact.rows_done_stage ?? bootstrap.rows_done_stage,
-              rows_total_stage: compact.rows_total_stage ?? bootstrap.rows_total_stage,
-              rows_per_sec: compact.rows_per_sec ?? bootstrap.rows_per_sec,
-              checkpoint: compact.checkpoint ?? bootstrap.checkpoint,
-            }
-          : bootstrap;
-        setBootstrapStatus(mergedBootstrap);
-        // Only fetch expensive diagnostics when sync or bootstrap is active.
-        if (running || bootstrap.running) {
-          const perf = await PtrSyncController.getSyncPerfBreakdown();
-          setPerfBreakdown(perf as Record<string, unknown>);
-        }
-        if (!running) {
-          if (syncing || cancelling) {
-            setSyncing(false);
-            setCancelling(false);
-            setSyncProgress(null);
-            stopTimer();
-            loadStats();
-            loadSettings();
-          }
-        } else if (progress) {
-          setSyncProgress(progress);
-        }
-      } catch (error) {
-        logBestEffortError('ptr.poll', error);
-      }
-    }, 1500);
-    return () => clearInterval(interval);
-  }, [syncing, cancelling]);
+    if (syncing) setCancelling(false);
+  }, [syncing]);
 
-  const stopTimer = () => {
-    if (timerRef.current) {
-      clearInterval(timerRef.current);
-      timerRef.current = null;
+  useEffect(() => {
+    if (!ptrLastResult) return;
+    const resultKey = `${ptrLastResult.success ? 'ok' : 'err'}:${ptrLastResult.error ?? ''}:${ptrLastResult.updates_processed ?? -1}`;
+    if (lastPtrResultKeyRef.current === resultKey) return;
+    lastPtrResultKeyRef.current = resultKey;
+
+    if (ptrLastResult.success) {
+      setSyncError(null);
+      setSyncDone(true);
+      if (doneTimerRef.current) clearTimeout(doneTimerRef.current);
+      doneTimerRef.current = setTimeout(() => setSyncDone(false), 4000);
+    } else if (ptrLastResult.error === 'Cancelled') {
+      setSyncError(null);
+    } else {
+      setSyncError(ptrLastResult.error || 'Unknown error');
     }
-  };
+    setCancelling(false);
+    loadStats();
+    loadSettings();
+    runBestEffort(
+      'ptr.getSyncPerfBreakdown.onFinished',
+      PtrSyncController.getSyncPerfBreakdown().then((perf) => setPerfBreakdown(perf as Record<string, unknown>)),
+    );
+  }, [ptrLastResult]);
 
-  const startTimer = () => {
-    stopTimer();
-    syncStartRef.current = Date.now();
-    setElapsed(0);
-    timerRef.current = setInterval(() => {
-      setElapsed((Date.now() - syncStartRef.current) / 1000);
-    }, 1000);
-  };
+  useEffect(() => {
+    if (runtimeBootstrapStatus?.last_error) {
+      setBootstrapError(runtimeBootstrapStatus.last_error);
+    }
+  }, [runtimeBootstrapStatus?.last_error]);
 
   const loadSettings = async () => {
     try {
@@ -277,15 +190,9 @@ export function PtrPanel() {
   const handleSync = async () => {
     try {
       setSyncError(null);
-      setSyncing(true);
-      setSyncProgress(null);
-      startTimer();
       await PtrSyncController.sync();
     } catch (err) {
       setSyncError(String(err));
-      stopTimer();
-      setSyncing(false);
-      setSyncProgress(null);
     }
   };
 
@@ -322,8 +229,6 @@ export function PtrPanel() {
         snapshot_dir: bootstrapDir,
         mode: 'dry_run',
       });
-      const status = await PtrSyncController.getBootstrapStatus();
-      setBootstrapStatus(status);
     } catch (err) {
       setBootstrapError(String(err));
     }
@@ -340,8 +245,6 @@ export function PtrPanel() {
         snapshot_dir: bootstrapDir,
         mode: 'import',
       });
-      const status = await PtrSyncController.getBootstrapStatus();
-      setBootstrapStatus(status);
     } catch (err) {
       setBootstrapError(String(err));
     }
@@ -533,7 +436,6 @@ export function PtrPanel() {
                 disabled={cancelling}
                 onClick={() => {
                   setCancelling(true);
-                  setSyncProgress(null);
                   runCriticalAction('Cancel Failed', 'ptr.cancelSync', PtrSyncController.cancelSync());
                 }}
               >

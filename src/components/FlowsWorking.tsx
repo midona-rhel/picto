@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useInlineRename } from '../hooks/useInlineRename';
 import {
   TextInput,
@@ -23,10 +23,9 @@ import {
 } from '@tabler/icons-react';
 import {
   SubscriptionController,
-  type SubscriptionProgressEvent,
   type SubscriptionFinishedEvent,
-  type FlowProgressEvent,
 } from '../controllers/subscriptionController';
+import { useTaskRuntimeStore } from '../stores/taskRuntimeStore';
 import { listen } from '#desktop/api';
 import st from './FlowsWorking.module.css';
 
@@ -245,23 +244,54 @@ export function FlowsWorking({
   headerTitle = 'Subscriptions',
   refreshToken,
 }: FlowsWorkingProps) {
+  const {
+    ensureInitialized,
+    runningIds,
+    runningQueryIds,
+    subscriptionProgressById,
+    runningFlowIds,
+    flowProgress,
+    lastSubscriptionFinished,
+    lastFlowFinished,
+    subscriptionEventSeq,
+    flowEventSeq,
+  } = useTaskRuntimeStore((s) => ({
+    ensureInitialized: s.ensureInitialized,
+    runningIds: s.runningSubscriptionIds,
+    runningQueryIds: s.runningQueryIds,
+    subscriptionProgressById: s.subscriptionProgressById,
+    runningFlowIds: s.runningFlowIds,
+    flowProgress: s.flowProgressById,
+    lastSubscriptionFinished: s.lastSubscriptionFinished,
+    lastFlowFinished: s.lastFlowFinished,
+    subscriptionEventSeq: s.subscriptionEventSeq,
+    flowEventSeq: s.flowEventSeq,
+  }));
+
   const [flows, setFlows] = useState<FlowInfo[]>([]);
   const [sites, setSites] = useState<SitePluginInfo[]>([]);
   const [credentialSites, setCredentialSites] = useState<Set<string>>(new Set());
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
-  const [runningIds, setRunningIds] = useState<Set<string>>(new Set());
-  const [runningQueryIds, setRunningQueryIds] = useState<Set<string>>(new Set());
-  const [progressMap, setProgressMap] = useState<Map<string, SubProgress>>(new Map());
-
-  // PBI-047: Flow-level run state driven by events.
-  const [runningFlowIds, setRunningFlowIds] = useState<Set<string>>(new Set());
-  const [flowProgress, setFlowProgress] = useState<Map<string, FlowProgressEvent>>(new Map());
   const [flowActionMessage, setFlowActionMessage] = useState<Map<string, string>>(new Map());
+  const lastSubFinishKeyRef = useRef<string | null>(null);
+  const lastFlowFinishKeyRef = useRef<string | null>(null);
 
   const [addingTo, setAddingTo] = useState<string | null>(null);
   const [addSite, setAddSite] = useState('');
   const [addQuery, setAddQuery] = useState('');
   const [addLoading, setAddLoading] = useState(false);
+  const progressMap = useMemo(() => {
+    const next = new Map<string, SubProgress>();
+    for (const [subId, progress] of subscriptionProgressById.entries()) {
+      next.set(subId, {
+        filesDownloaded: progress.files_downloaded,
+        filesSkipped: progress.files_skipped,
+        pagesFetched: progress.pages_fetched,
+        statusText: progress.status_text,
+      });
+    }
+    return next;
+  }, [subscriptionProgressById]);
 
   const setFlowMessage = useCallback((flowId: string, message: string) => {
     setFlowActionMessage((prev) => {
@@ -281,32 +311,13 @@ export function FlowsWorking({
 
   const loadData = useCallback(async () => {
     try {
-      const [flowsData, sitesData, running, runtimeProgress, creds] = await Promise.all([
+      const [flowsData, sitesData, creds] = await Promise.all([
         SubscriptionController.getFlows<FlowInfo>(),
         SubscriptionController.getSiteCatalog(),
-        SubscriptionController.getRunningSubscriptions(),
-        SubscriptionController.getRunningSubscriptionProgress().catch(() => []),
         SubscriptionController.listCredentials().catch(() => []),
       ]);
       setFlows(flowsData);
       setSites(sitesData);
-      const activeIds = new Set<string>([
-        ...running,
-        ...runtimeProgress.map((p) => p.subscription_id),
-      ]);
-      setRunningIds(activeIds);
-      setProgressMap(() => {
-        const next = new Map<string, SubProgress>();
-        for (const p of runtimeProgress) {
-          next.set(p.subscription_id, {
-            filesDownloaded: p.files_downloaded,
-            filesSkipped: p.files_skipped,
-            pagesFetched: p.pages_fetched,
-            statusText: p.status_text,
-          });
-        }
-        return next;
-      });
       const siteKeys = new Set<string>();
       for (const row of creds) {
         const raw = (row.site_category ?? '').trim().toLowerCase();
@@ -321,100 +332,15 @@ export function FlowsWorking({
   }, []);
 
   useEffect(() => {
+    void ensureInitialized();
     loadData();
     const unlistenStateChanged = listen<{ domains?: string[] }>('state-changed', (event) => {
       if (event.payload.domains?.includes('subscriptions')) loadData();
     });
-    const unlistenStarted = SubscriptionController.onStarted((event) => {
-      setRunningIds((prev) => new Set(prev).add(event.subscription_id));
-      if (event.query_id) {
-        setRunningQueryIds((prev) => new Set(prev).add(event.query_id!));
-      }
-      setProgressMap((prev) => {
-        const next = new Map(prev);
-        next.set(event.subscription_id, { filesDownloaded: 0, filesSkipped: 0, pagesFetched: 0, statusText: 'Starting...' });
-        return next;
-      });
-    });
-    const unlistenProgress = SubscriptionController.onProgress((p: SubscriptionProgressEvent) => {
-      setProgressMap((prev) => {
-        const next = new Map(prev);
-        next.set(p.subscription_id, {
-          filesDownloaded: p.files_downloaded,
-          filesSkipped: p.files_skipped,
-          pagesFetched: p.pages_fetched,
-          statusText: p.status_text,
-        });
-        return next;
-      });
-    });
-    const unlistenFinished = SubscriptionController.onFinished((event) => {
-      setRunningIds((prev) => { const next = new Set(prev); next.delete(event.subscription_id); return next; });
-      if (event.query_id) {
-        setRunningQueryIds((prev) => {
-          const next = new Set(prev);
-          next.delete(event.query_id!);
-          return next;
-        });
-      }
-      setProgressMap((prev) => {
-        const next = new Map(prev);
-        const resolvedStatus =
-          event.status === 'cancelled' && event.failure_kind === 'inbox_full'
-            ? 'Paused (Inbox full)'
-            : event.status === 'succeeded'
-              ? 'Completed'
-              : event.status === 'cancelled'
-                ? 'Cancelled'
-                : 'Failed';
-        next.set(event.subscription_id, {
-          filesDownloaded: event.files_downloaded,
-          filesSkipped: event.files_skipped,
-          pagesFetched: next.get(event.subscription_id)?.pagesFetched ?? 0,
-          statusText: resolvedStatus,
-        });
-        return next;
-      });
-      setTimeout(() => {
-        setProgressMap((prev) => {
-          const next = new Map(prev);
-          next.delete(event.subscription_id);
-          return next;
-        });
-      }, event.failure_kind === 'inbox_full' ? 6000 : event.status === 'failed' ? 4500 : 1800);
-      if (event.status === 'failed') {
-        notifyError(formatSubscriptionFailureMessage(event), 'Subscription Failed');
-      }
-      loadData();
-    });
-    // PBI-047: Flow lifecycle events.
-    const unlistenFlowStarted = SubscriptionController.onFlowStarted((event) => {
-      setRunningFlowIds((prev) => new Set(prev).add(event.flow_id));
-      setFlowProgress((prev) => { const next = new Map(prev); next.delete(event.flow_id); return next; });
-    });
-    const unlistenFlowProgress = SubscriptionController.onFlowProgress((event) => {
-      setFlowProgress((prev) => { const next = new Map(prev); next.set(event.flow_id, event); return next; });
-    });
-    const unlistenFlowFinished = SubscriptionController.onFlowFinished((event) => {
-      setRunningFlowIds((prev) => { const next = new Set(prev); next.delete(event.flow_id); return next; });
-      setFlowProgress((prev) => { const next = new Map(prev); next.delete(event.flow_id); return next; });
-      if (event.status === 'failed' && event.error) {
-        notifyError(event.error, 'Flow Failed');
-      } else {
-        notifySuccess('Flow completed', 'Flow');
-      }
-      loadData();
-    });
     return () => {
       unlistenStateChanged.then((fn) => fn());
-      unlistenStarted.then((fn) => fn());
-      unlistenProgress.then((fn) => fn());
-      unlistenFinished.then((fn) => fn());
-      unlistenFlowStarted.then((fn) => fn());
-      unlistenFlowProgress.then((fn) => fn());
-      unlistenFlowFinished.then((fn) => fn());
     };
-  }, [loadData]);
+  }, [ensureInitialized, loadData]);
 
   useEffect(() => {
     if (refreshToken == null) return;
@@ -422,53 +348,43 @@ export function FlowsWorking({
   }, [refreshToken, loadData]);
 
   useEffect(() => {
-    const timer = setInterval(() => {
-      Promise.all([
-        SubscriptionController.getRunningSubscriptions(),
-        SubscriptionController.getRunningSubscriptionProgress().catch(() => []),
-      ])
-        .then(([ids, runtimeProgress]) => {
-          const activeIds = new Set<string>([
-            ...ids,
-            ...runtimeProgress.map((p) => p.subscription_id),
-          ]);
-          const runningSet = activeIds;
-          setRunningIds(runningSet);
-          setProgressMap((prev) => {
-            const next = new Map(prev);
-            // prune stale rows
-            for (const id of Array.from(next.keys())) {
-              if (!activeIds.has(id)) {
-                next.delete(id);
-              }
-            }
-            // overlay runtime snapshot as source of truth
-            for (const p of runtimeProgress) {
-              next.set(p.subscription_id, {
-                filesDownloaded: p.files_downloaded,
-                filesSkipped: p.files_skipped,
-                pagesFetched: p.pages_fetched,
-                statusText: p.status_text,
-              });
-            }
-            return next;
-          });
-          setRunningFlowIds((prev) => {
-            if (prev.size === 0) return prev;
-            const next = new Set<string>();
-            for (const flowId of prev) {
-              const flow = flows.find((f) => f.id === flowId);
-              if (flow && flow.subscriptions.some((s) => runningSet.has(s.id))) {
-                next.add(flowId);
-              }
-            }
-            return next;
-          });
-        })
-        .catch(() => {});
-    }, 1000);
-    return () => clearInterval(timer);
-  }, [flows]);
+    if (!subscriptionEventSeq && !flowEventSeq) return;
+    void loadData();
+  }, [subscriptionEventSeq, flowEventSeq, loadData]);
+
+  useEffect(() => {
+    if (!lastSubscriptionFinished) return;
+    const key = [
+      lastSubscriptionFinished.subscription_id,
+      lastSubscriptionFinished.query_id ?? '',
+      lastSubscriptionFinished.status,
+      lastSubscriptionFinished.error ?? '',
+      lastSubscriptionFinished.failure_kind ?? '',
+      lastSubscriptionFinished.files_downloaded,
+      lastSubscriptionFinished.files_skipped,
+    ].join(':');
+    if (lastSubFinishKeyRef.current === key) return;
+    lastSubFinishKeyRef.current = key;
+    if (lastSubscriptionFinished.status === 'failed') {
+      notifyError(formatSubscriptionFailureMessage(lastSubscriptionFinished), 'Subscription Failed');
+    }
+  }, [lastSubscriptionFinished]);
+
+  useEffect(() => {
+    if (!lastFlowFinished) return;
+    const key = [
+      lastFlowFinished.flow_id,
+      lastFlowFinished.status,
+      lastFlowFinished.error ?? '',
+    ].join(':');
+    if (lastFlowFinishKeyRef.current === key) return;
+    lastFlowFinishKeyRef.current = key;
+    if (lastFlowFinished.status === 'failed' && lastFlowFinished.error) {
+      notifyError(lastFlowFinished.error, 'Flow Failed');
+    } else {
+      notifySuccess('Flow completed', 'Flow');
+    }
+  }, [lastFlowFinished]);
 
   const handleRenameCommit = useCallback(async (id: string, newName: string) => {
     try {
@@ -534,17 +450,11 @@ export function FlowsWorking({
       }
 
       setFlowMessage(flow.id, 'Starting…');
-      setRunningFlowIds((prev) => new Set(prev).add(flow.id));
       await SubscriptionController.runFlow({ id: flow.id });
       setFlowMessage(flow.id, 'Run requested');
       notifyInfo(`Started "${flow.name}"`, 'Flow Started');
       await loadData();
     } catch (error) {
-      setRunningFlowIds((prev) => {
-        const next = new Set(prev);
-        next.delete(flow.id);
-        return next;
-      });
       setFlowMessage(flow.id, `Run failed: ${String(error)}`);
       notifyError(`Failed to run: ${error}`);
     }
@@ -552,19 +462,6 @@ export function FlowsWorking({
 
   const handleStop = async (flow: FlowInfo) => {
     try {
-      setProgressMap((prev) => {
-        const next = new Map(prev);
-        for (const sub of flow.subscriptions) {
-          const existing = next.get(sub.id);
-          next.set(sub.id, {
-            filesDownloaded: existing?.filesDownloaded ?? 0,
-            filesSkipped: existing?.filesSkipped ?? 0,
-            pagesFetched: existing?.pagesFetched ?? 0,
-            statusText: 'Cancelling…',
-          });
-        }
-        return next;
-      });
       await SubscriptionController.stopFlow({ id: flow.id });
       notifyInfo(`Stopping "${flow.name}"...`, 'Stopping');
     } catch (error) {
@@ -574,30 +471,9 @@ export function FlowsWorking({
 
   const handleReset = async (flow: FlowInfo) => {
     try {
-      const subIds = flow.subscriptions.map((s) => s.id);
       for (const sub of flow.subscriptions) {
         await SubscriptionController.resetSubscription({ id: sub.id });
       }
-      setProgressMap((prev) => {
-        const next = new Map(prev);
-        for (const subId of subIds) next.delete(subId);
-        return next;
-      });
-      setRunningIds((prev) => {
-        const next = new Set(prev);
-        for (const subId of subIds) next.delete(subId);
-        return next;
-      });
-      setFlowProgress((prev) => {
-        const next = new Map(prev);
-        next.delete(flow.id);
-        return next;
-      });
-      setRunningFlowIds((prev) => {
-        const next = new Set(prev);
-        next.delete(flow.id);
-        return next;
-      });
       notifySuccess(`"${flow.name}" reset. Next run starts fresh.`, 'Reset Complete');
       await loadData();
     } catch (error) {
@@ -635,7 +511,6 @@ export function FlowsWorking({
         'Credentials Missing',
       );
     }
-    setRunningQueryIds((prev) => new Set(prev).add(queryId));
     try {
       await SubscriptionController.runSubscriptionQuery({
         subscriptionId: subId,
@@ -643,11 +518,6 @@ export function FlowsWorking({
       });
       notifyInfo(`Started query "${queryText}"`, 'Query Started');
     } catch (error) {
-      setRunningQueryIds((prev) => {
-        const next = new Set(prev);
-        next.delete(queryId);
-        return next;
-      });
       notifyError(`Failed to run query: ${error}`);
     }
   };

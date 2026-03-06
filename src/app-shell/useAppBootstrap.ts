@@ -10,6 +10,7 @@ import { initSettingsStore, themeToColorScheme, useSettingsStore } from '../stor
 import { SidebarController } from '../controllers/sidebarController';
 import { performRedo, performUndo } from '../controllers/undoRedoController';
 import { setupEventBridge, teardownEventBridge } from '../stores/eventBridge';
+import { useTaskRuntimeStore } from '../stores/taskRuntimeStore';
 import { runBestEffort } from '../lib/asyncOps';
 
 export interface AppBootstrap {
@@ -78,7 +79,11 @@ export function useAppBootstrap(): AppBootstrap {
   useEffect(() => {
     void SidebarController.fetchInitialTree();
     setupEventBridge();
-    return () => { teardownEventBridge(); };
+    void useTaskRuntimeStore.getState().ensureInitialized();
+    return () => {
+      teardownEventBridge();
+      useTaskRuntimeStore.getState().teardown();
+    };
   }, []);
 
   useEffect(() => {
