@@ -144,11 +144,6 @@ pub fn delete_sidebar_node(conn: &Connection, node_id: &str) -> rusqlite::Result
 }
 
 pub fn seed_sidebar_if_empty(conn: &Connection) -> rusqlite::Result<()> {
-    let count: i64 = conn.query_row("SELECT COUNT(*) FROM sidebar_node", [], |row| row.get(0))?;
-    if count > 0 {
-        return Ok(());
-    }
-
     let now = chrono::Utc::now().to_rfc3339();
     let nodes = vec![
         SidebarNode {
@@ -200,13 +195,29 @@ pub fn seed_sidebar_if_empty(conn: &Connection) -> rusqlite::Result<()> {
             updated_at: Some(now.clone()),
         },
         SidebarNode {
+            node_id: "system:uncategorized".into(),
+            kind: "system".into(),
+            parent_id: Some("system:library".into()),
+            name: "Uncategorized".into(),
+            icon: Some("IconFolderQuestion".into()),
+            color: None,
+            sort_order: Some(3),
+            count: Some(0),
+            freshness: "stale".into(),
+            epoch: 0,
+            selectable: true,
+            expanded_by_default: false,
+            meta_json: None,
+            updated_at: Some(now.clone()),
+        },
+        SidebarNode {
             node_id: "system:untagged".into(),
             kind: "system".into(),
             parent_id: Some("system:library".into()),
             name: "Untagged".into(),
             icon: Some("IconTagOff".into()),
             color: None,
-            sort_order: Some(3),
+            sort_order: Some(4),
             count: Some(0),
             freshness: "stale".into(),
             epoch: 0,
@@ -222,7 +233,7 @@ pub fn seed_sidebar_if_empty(conn: &Connection) -> rusqlite::Result<()> {
             name: "Recently Viewed".into(),
             icon: Some("IconEye".into()),
             color: None,
-            sort_order: Some(4),
+            sort_order: Some(5),
             count: Some(0),
             freshness: "stale".into(),
             epoch: 0,
@@ -238,7 +249,7 @@ pub fn seed_sidebar_if_empty(conn: &Connection) -> rusqlite::Result<()> {
             name: "Duplicates".into(),
             icon: Some("IconCopy".into()),
             color: None,
-            sort_order: Some(5),
+            sort_order: Some(6),
             count: Some(0),
             freshness: "stale".into(),
             epoch: 0,
@@ -254,7 +265,7 @@ pub fn seed_sidebar_if_empty(conn: &Connection) -> rusqlite::Result<()> {
             name: "Trash".into(),
             icon: Some("IconTrash".into()),
             color: None,
-            sort_order: Some(6),
+            sort_order: Some(7),
             count: Some(0),
             freshness: "stale".into(),
             epoch: 0,
@@ -298,7 +309,28 @@ pub fn seed_sidebar_if_empty(conn: &Connection) -> rusqlite::Result<()> {
     ];
 
     for node in &nodes {
-        upsert_sidebar_node(conn, node)?;
+        conn.execute(
+            "INSERT OR IGNORE INTO sidebar_node
+             (node_id, kind, parent_id, name, icon, color, sort_order, count,
+              freshness, epoch, selectable, expanded_by_default, meta_json, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+            params![
+                node.node_id,
+                node.kind,
+                node.parent_id,
+                node.name,
+                node.icon,
+                node.color,
+                node.sort_order,
+                node.count,
+                node.freshness,
+                node.epoch,
+                node.selectable as i64,
+                node.expanded_by_default as i64,
+                node.meta_json,
+                node.updated_at,
+            ],
+        )?;
     }
 
     Ok(())

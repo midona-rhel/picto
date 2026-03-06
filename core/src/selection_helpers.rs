@@ -8,6 +8,7 @@ use roaring::RoaringBitmap;
 
 use crate::sqlite::bitmaps::BitmapKey;
 use crate::sqlite::files::batch_get_by_hashes;
+use crate::sqlite::folders::list_uncategorized_entity_ids;
 use crate::sqlite::smart_folders::compile_predicate;
 use crate::sqlite::tags::{find_tag as sql_find_tag, parse_tag_string};
 use crate::sqlite::SqliteDatabase;
@@ -299,6 +300,10 @@ pub async fn selection_bitmap_for_all_results(
                 let all_active = db.bitmaps.get(&BitmapKey::AllActive);
                 let tagged = db.bitmaps.get(&BitmapKey::Tagged);
                 &all_active - &tagged
+            }
+            Some("uncategorized") => {
+                let uncategorized_ids = db.with_read_conn(list_uncategorized_entity_ids).await?;
+                RoaringBitmap::from_iter(uncategorized_ids.into_iter().map(|id| id as u32))
             }
             Some("recently_viewed") => {
                 // Bitmap approximation — AllActive with view_count > 0.

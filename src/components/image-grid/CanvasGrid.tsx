@@ -122,6 +122,7 @@ function mimeToExt(mime: string): string {
 function getEmptyStateTitle(emptyContext: GridEmptyContext, hasSearchTags: boolean): string {
   if (hasSearchTags) return 'No results found';
   if (emptyContext === 'inbox') return 'Inbox is empty';
+  if (emptyContext === 'uncategorized') return 'No uncategorized images';
   if (emptyContext === 'untagged') return 'No untagged images';
   if (emptyContext === 'smart-folder') return 'No matching images';
   if (emptyContext === 'folder') return 'This folder is empty';
@@ -131,6 +132,7 @@ function getEmptyStateTitle(emptyContext: GridEmptyContext, hasSearchTags: boole
 function getEmptyStateDescription(emptyContext: GridEmptyContext, hasSearchTags: boolean): string {
   if (hasSearchTags) return 'Try different search terms or clear filters';
   if (emptyContext === 'inbox') return 'Run subscriptions to add new images to your inbox';
+  if (emptyContext === 'uncategorized') return 'All your images are already assigned to folders';
   if (emptyContext === 'untagged') return 'All your images have been tagged';
   if (emptyContext === 'smart-folder') return 'Try adjusting the rules for this smart folder';
   if (emptyContext === 'folder') return 'Drag and drop files here, or import them below';

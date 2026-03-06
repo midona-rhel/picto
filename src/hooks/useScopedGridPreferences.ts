@@ -84,6 +84,7 @@ export function useScopedGridPreferences({
     if (activeFolderId) return `folder:${activeFolderId}`;
     if (activeSmartFolderId) return `smart:${activeSmartFolderId}`;
     if (activeStatusFilter === 'inbox') return 'system:inbox';
+    if (activeStatusFilter === 'uncategorized') return 'system:uncategorized';
     if (activeStatusFilter === 'trash') return 'system:trash';
     return 'system:all';
   }, [currentView, activeFolderId, activeSmartFolderId, activeStatusFilter]);

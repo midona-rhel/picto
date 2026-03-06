@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { IconDownload, IconLayoutSidebar, IconFolder, IconFolderStar, IconPhoto, IconInbox, IconTag, IconTrash, IconClock, IconCopy } from '@tabler/icons-react';
+import { IconDownload, IconLayoutSidebar, IconFolder, IconFolderQuestion, IconFolderStar, IconPhoto, IconInbox, IconTag, IconTrash, IconClock, IconCopy } from '@tabler/icons-react';
 import { api, getCurrentWindow } from '#desktop/api';
 import { useNavigationStore } from './stores/navigationStore';
 import { useSettingsStore, type AppSettings } from './stores/settingsStore';
@@ -67,7 +67,7 @@ function App() {
   const { settings, updateSetting, loaded: settingsLoaded } = useSettingsStore();
 
   // --- Sidebar data ---
-  const { allImagesCount, inboxCount, trashCount, smartFolderCounts, folderNodes } = useDomainStore();
+  const { allImagesCount, inboxCount, uncategorizedCount, trashCount, smartFolderCounts, folderNodes } = useDomainStore();
 
   // --- Bootstrap (init, theme, events, menu, hotkeys, titlebar drag) ---
   const { handleTitlebarMouseDown, displayedTitle, handleScopeTransitionMidpoint } =
@@ -91,6 +91,7 @@ function App() {
     allImagesCount,
     activeStatusFilter,
     inboxCount,
+    uncategorizedCount,
     trashCount,
     smartFolderCounts,
     folderNodes,
@@ -207,6 +208,7 @@ function App() {
     const navTargets: { id: string; label: string; icon: React.ReactNode; go: () => void }[] = [
       { id: 'go.allImages', label: 'All Images', icon: <IconPhoto size={16} />, go: () => navigateTo('images', null, null, null) },
       { id: 'go.inbox', label: 'Inbox', icon: <IconInbox size={16} />, go: () => navigateTo('images', null, null, 'inbox') },
+      { id: 'go.uncategorized', label: 'Uncategorized', icon: <IconFolderQuestion size={16} />, go: () => navigateTo('images', null, null, 'uncategorized') },
       { id: 'go.untagged', label: 'Untagged', icon: <IconTag size={16} />, go: () => navigateTo('images', null, null, 'untagged') },
       { id: 'go.trash', label: 'Trash', icon: <IconTrash size={16} />, go: () => navigateTo('images', null, null, 'trash') },
       { id: 'go.recentViewed', label: 'Recently Viewed', icon: <IconClock size={16} />, go: () => navigateTo('images', null, null, 'recently_viewed') },

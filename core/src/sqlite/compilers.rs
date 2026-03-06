@@ -11,6 +11,7 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 
 use super::bitmaps::BitmapKey;
+use super::folders::count_uncategorized_entities;
 use super::projections;
 use super::sidebar;
 use super::smart_folders;
@@ -661,9 +662,16 @@ async fn compile_sidebar(db: &Arc<SqliteDatabase>) -> Result<(), String> {
         let all_count = bitmaps.len(&BitmapKey::Status(1));
         let inbox_count = bitmaps.len(&BitmapKey::Status(0));
         let trash_count = bitmaps.len(&BitmapKey::Status(2));
+        let uncategorized_count = count_uncategorized_entities(conn)?;
 
         sidebar::update_sidebar_count(conn, "system:all_files", all_count as i64, epoch as i64)?;
         sidebar::update_sidebar_count(conn, "system:inbox", inbox_count as i64, epoch as i64)?;
+        sidebar::update_sidebar_count(
+            conn,
+            "system:uncategorized",
+            uncategorized_count,
+            epoch as i64,
+        )?;
         sidebar::update_sidebar_count(conn, "system:trash", trash_count as i64, epoch as i64)?;
 
         // Untagged count: AllActive (inbox + active) - Tagged

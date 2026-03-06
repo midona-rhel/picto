@@ -94,6 +94,7 @@ function computeTitle(state: { activeFolder?: ActiveFolder | null; activeSmartFo
   if (collection) return collection.name;
   if (flow) return flow.name;
   if (statusFilter === 'inbox') return 'Inbox';
+  if (statusFilter === 'uncategorized') return 'Uncategorized';
   if (statusFilter === 'trash') return 'Trash';
   if (statusFilter === 'untagged') return 'Untagged';
   if (statusFilter === 'recently_viewed') return 'Recently Viewed';

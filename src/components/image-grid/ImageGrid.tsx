@@ -66,6 +66,7 @@ function resolveGridEmptyContext(
   if (smartFolderPredicate) return 'smart-folder';
   if (folderId) return 'folder';
   if (statusFilter === 'inbox') return 'inbox';
+  if (statusFilter === 'uncategorized') return 'uncategorized';
   if (statusFilter === 'untagged') return 'untagged';
   return 'default';
 }
