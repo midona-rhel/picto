@@ -14,7 +14,7 @@ import {
   type SubscriptionStartedEvent,
   type SubscriptionFinishedEvent,
 } from '../../controllers/subscriptionController';
-import { SidebarController } from '../../controllers/sidebarController';
+import { applyMutationEffects } from '../../domain/actions/mutationEffects';
 import { logBestEffortError } from '../../lib/asyncOps';
 import { notifyError, notifySuccess } from '../../lib/notify';
 import st from './SidebarJobStatus.module.css';
@@ -154,7 +154,7 @@ export function SidebarJobStatus() {
     });
 
     void syncRunningSubscriptions(true).then((runningCount) => {
-      if (runningCount > 0) SidebarController.requestRefresh();
+      if (runningCount > 0) applyMutationEffects({ sidebarTree: true });
     });
 
     const setup = async () => {
@@ -288,7 +288,7 @@ export function SidebarJobStatus() {
           return next;
         });
         void syncRunningSubscriptions(true).then((runningCount) => {
-          if (runningCount > 0) SidebarController.requestRefresh();
+          if (runningCount > 0) applyMutationEffects({ sidebarTree: true });
         });
       }));
       push(await SubscriptionController.onProgress((p: SubscriptionProgressEvent) => {
@@ -361,7 +361,7 @@ export function SidebarJobStatus() {
         }, lingerMs);
         subFinishTimersRef.current.set(event.subscription_id, removeTimer);
         void syncRunningSubscriptions().then((runningCount) => {
-          if (runningCount > 0) SidebarController.requestRefresh();
+          if (runningCount > 0) applyMutationEffects({ sidebarTree: true });
         });
       }));
 
@@ -370,7 +370,7 @@ export function SidebarJobStatus() {
       // Keep sidebar counters fresh even if progress events drop.
       subProgressPollTimer = setInterval(() => {
         void syncRunningSubscriptions().then((runningCount) => {
-          if (runningCount > 0) SidebarController.requestRefresh();
+          if (runningCount > 0) applyMutationEffects({ sidebarTree: true });
         });
       }, 1000);
       pollTimer = setInterval(() => {

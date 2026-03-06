@@ -42,9 +42,11 @@ import { notifyError, notifyInfo, notifySuccess } from '../../../lib/notify';
 import { useSettingsStore } from '../../../stores/settingsStore';
 import { bustThumbnailCache } from '../../../lib/mediaUrl';
 import { useCacheStore } from '../../../stores/cacheStore';
-import { useDomainStore } from '../../../stores/domainStore';
-import { SidebarController } from '../../../controllers/sidebarController';
-import { SelectionController } from '../../../controllers/selectionController';
+import { applyGridMutationEffects } from '../../../domain/actions/mutationEffects';
+import {
+  deleteHashesWithLifecycleEffects,
+  setFileStatusWithLifecycleEffects,
+} from '../../../domain/actions/fileLifecycleActions';
 import { type ContextMenuEntry, useContextMenu } from '../../ui/ContextMenu';
 import type { MasonryImageItem } from '../shared';
 import type { SmartFolderPredicate } from '../../smart-folders/types';
@@ -619,10 +621,7 @@ export function useGridContextMenu({
     // Sort rows
     if (folderId) {
       // Folder view: one-time sort actions that rearrange position_rank
-      const reloadGrid = () => {
-        useCacheStore.getState().invalidateAll();
-        useCacheStore.getState().bumpGridRefresh();
-      };
+      const reloadGrid = () => applyGridMutationEffects(requestGridReload);
       const sortAndReload = (sortBy: string, dir: string) =>
         FolderController.sortFolderItems(folderId, sortBy, dir).then(reloadGrid);
       const reverseAndReload = (hashes?: string[]) =>
@@ -784,14 +783,6 @@ export function useGridContextMenu({
       const count = effectiveSize;
       const virtualCount = effectiveVirtual ? state.virtualAllSelectedCount : null;
       const inTrash = statusFilter === 'trash';
-      const refreshAfterLifecycleMutation = () => {
-        SelectionController.invalidateSummary();
-        void useDomainStore.getState().fetchSidebarTree();
-        SidebarController.requestRefresh();
-        useCacheStore.getState().invalidateAll();
-        useCacheStore.getState().bumpGridRefresh();
-        requestGridReload();
-      };
 
       // When right-click selected a single new image, the handlers have stale
       // state. Capture the hash here so onClick operates on the correct target.
@@ -801,7 +792,7 @@ export function useGridContextMenu({
         if (freshSingleHash) {
           dispatch({ type: 'FILTER_IMAGES', predicate: i => i.hash !== freshSingleHash });
           dispatch({ type: 'CLEAR_SELECTION' });
-          api.file.setStatus(freshSingleHash, 'active')
+          setFileStatusWithLifecycleEffects(freshSingleHash, 'active', { gridReload: requestGridReload })
             .then(() => {
               registerUndoAction({
                 label: 'Restore image',
@@ -814,7 +805,6 @@ export function useGridContextMenu({
                   requestGridReload();
                 },
               });
-              refreshAfterLifecycleMutation();
             })
             .catch(err => notifyError(err, 'Restore Failed'));
         } else {
@@ -827,14 +817,11 @@ export function useGridContextMenu({
           dispatch({ type: 'FILTER_IMAGES', predicate: i => i.hash !== freshSingleHash });
           dispatch({ type: 'CLEAR_SELECTION' });
           if (inTrash) {
-            api.file.delete(freshSingleHash)
-              .then(() => {
-                refreshAfterLifecycleMutation();
-              })
+            deleteHashesWithLifecycleEffects([freshSingleHash], { gridReload: requestGridReload })
               .catch(err => notifyError(err, 'Delete Failed'));
           } else {
             const previousStatus = imagesRef.current.find((img) => img.hash === freshSingleHash)?.status ?? (statusFilter ?? 'active');
-            api.file.setStatus(freshSingleHash, 'trash')
+            setFileStatusWithLifecycleEffects(freshSingleHash, 'trash', { gridReload: requestGridReload })
               .then(() => {
                 registerUndoAction({
                   label: 'Move image to trash',
@@ -847,7 +834,6 @@ export function useGridContextMenu({
                     requestGridReload();
                   },
                 });
-                refreshAfterLifecycleMutation();
               })
               .catch(err => notifyError(err, 'Delete Failed'));
           }

@@ -1,7 +1,5 @@
 import { api } from '#desktop/api';
-import { SidebarController } from './sidebarController';
-import { useCacheStore } from '../stores/cacheStore';
-import { useDomainStore } from '../stores/domainStore';
+import { applyMutationEffects } from '../domain/actions/mutationEffects';
 
 // Re-export Folder types from central api types for backwards compatibility.
 export type { Folder, FolderMembership } from '../types/api';
@@ -12,11 +10,8 @@ import type { Folder, FolderMembership } from '../types/api';
  */
 
 function refreshSidebarAndGrid(): void {
-  void useDomainStore.getState().fetchSidebarTree();
-  SidebarController.requestRefresh();
   // Keep active folder/grid views in sync even if event bridge delivery is delayed.
-  useCacheStore.getState().invalidateAll();
-  useCacheStore.getState().bumpGridRefresh();
+  applyMutationEffects({ sidebarTree: true, gridCaches: true });
 }
 
 async function runFolderMutation<T>(promise: Promise<T>): Promise<T> {

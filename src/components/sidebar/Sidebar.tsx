@@ -13,10 +13,7 @@ import {
 
 import { useDomainStore } from '../../stores/domainStore';
 import { useNavigationStore } from '../../stores/navigationStore';
-import { useCacheStore } from '../../stores/cacheStore';
-import { api } from '#desktop/api';
-import { SelectionController } from '../../controllers/selectionController';
-import { SidebarController } from '../../controllers/sidebarController';
+import { setStatusSelectionWithLifecycleEffects } from '../../domain/actions/fileLifecycleActions';
 import { SidebarJobStatus } from '../layout/SidebarJobStatus';
 import { runCriticalAction } from '../../lib/asyncOps';
 import { FolderTree } from './FolderTree';
@@ -39,13 +36,7 @@ export function Sidebar({ onSmartFolderUpdated }: SidebarProps) {
     runCriticalAction(
       'Move Failed',
       `sidebar status drop (${status})`,
-      api.file.setStatusSelection({ mode: 'explicit_hashes', hashes }, status).then(() => {
-        SelectionController.invalidateSummary();
-        void useDomainStore.getState().fetchSidebarTree();
-        SidebarController.requestRefresh();
-        useCacheStore.getState().invalidateAll();
-        useCacheStore.getState().bumpGridRefresh();
-      }),
+      setStatusSelectionWithLifecycleEffects({ mode: 'explicit_hashes', hashes }, status),
     );
   }, []);
 

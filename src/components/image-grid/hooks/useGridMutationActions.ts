@@ -5,9 +5,12 @@ import { notifyError, notifyInfo } from '../../../lib/notify';
 import { FileController } from '../../../controllers/fileController';
 import { FolderController } from '../../../controllers/folderController';
 import { SelectionController } from '../../../controllers/selectionController';
-import { SidebarController } from '../../../controllers/sidebarController';
-import { useDomainStore } from '../../../stores/domainStore';
-import { useCacheStore } from '../../../stores/cacheStore';
+import {
+  deleteHashesWithLifecycleEffects,
+  deleteSelectionWithLifecycleEffects,
+  setFileStatusWithLifecycleEffects,
+  setStatusSelectionWithLifecycleEffects,
+} from '../../../domain/actions/fileLifecycleActions';
 import type { GridRuntimeAction, GridRuntimeState } from '../runtime';
 import {
   buildExplicitSelectionSpec,
@@ -47,15 +50,6 @@ export function useGridMutationActions({
   broker,
   queryKeyRef,
 }: UseGridMutationActionsArgs): GridMutationActions {
-  const refreshAfterLifecycleMutation = useCallback(() => {
-    SelectionController.invalidateSummary();
-    void useDomainStore.getState().fetchSidebarTree();
-    SidebarController.requestRefresh();
-    useCacheStore.getState().invalidateAll();
-    useCacheStore.getState().bumpGridRefresh();
-    broker.requestReplace(queryKeyRef.current);
-  }, [broker, queryKeyRef]);
-
   const restoreStatusesByHash = useCallback(async (items: StatusSnapshot[]) => {
     const buckets = new Map<string, string[]>();
     for (const item of items) {
@@ -83,8 +77,8 @@ export function useGridMutationActions({
       });
       dispatch({ type: 'CLEAR_SELECTION' });
       const promise = inTrash
-        ? api.file.deleteSelection(spec)
-        : api.file.setStatusSelection(spec, 'trash');
+        ? deleteSelectionWithLifecycleEffects(spec, { gridReload: () => broker.requestReplace(queryKeyRef.current) })
+        : setStatusSelectionWithLifecycleEffects(spec, 'trash', { gridReload: () => broker.requestReplace(queryKeyRef.current) });
       promise
         .then((count) => {
           if (!inTrash) {
@@ -100,7 +94,6 @@ export function useGridMutationActions({
               },
             });
           }
-          refreshAfterLifecycleMutation();
           notifyInfo(
             `${count.toLocaleString()} image${count === 1 ? '' : 's'} ${
               inTrash ? 'permanently deleted' : 'moved to trash'
@@ -126,17 +119,12 @@ export function useGridMutationActions({
     dispatch({ type: 'CLEAR_SELECTION' });
 
     if (inTrash) {
-      api.file
-        .deleteMany(hashes)
-        .then(() => {
-          refreshAfterLifecycleMutation();
-        })
+      deleteHashesWithLifecycleEffects(hashes, { gridReload: () => broker.requestReplace(queryKeyRef.current) })
         .catch((err) => {
           notifyError(err, 'Delete Failed');
         });
     } else {
-      api.file
-        .setStatusSelection(explicitSpec, 'trash')
+      setStatusSelectionWithLifecycleEffects(explicitSpec, 'trash', { gridReload: () => broker.requestReplace(queryKeyRef.current) })
         .then(() => {
           registerUndoAction({
             label: `Move ${hashes.length.toLocaleString()} image${
@@ -151,13 +139,12 @@ export function useGridMutationActions({
               broker.requestReplace(queryKeyRef.current);
             },
           });
-          refreshAfterLifecycleMutation();
         })
         .catch((err) => {
           notifyError(err, 'Delete Failed');
         });
     }
-  }, [stateRef, statusFilter, dispatch, restoreStatusesByHash, broker, queryKeyRef, refreshAfterLifecycleMutation]);
+  }, [stateRef, statusFilter, dispatch, restoreStatusesByHash, broker, queryKeyRef]);
 
   const handleRateSelected = useCallback(
     (rating: number) => {
@@ -189,8 +176,7 @@ export function useGridMutationActions({
         predicate: (i) => virtualAllSelection.excludedHashes.has(i.hash),
       });
       dispatch({ type: 'CLEAR_SELECTION' });
-      api.file
-        .setStatusSelection(spec, 'active')
+      setStatusSelectionWithLifecycleEffects(spec, 'active', { gridReload: () => broker.requestReplace(queryKeyRef.current) })
         .then((count) => {
           registerUndoAction({
             label: `Restore ${count.toLocaleString()} image${count === 1 ? '' : 's'}`,
@@ -203,7 +189,6 @@ export function useGridMutationActions({
               broker.requestReplace(queryKeyRef.current);
             },
           });
-          refreshAfterLifecycleMutation();
           notifyInfo(`${count.toLocaleString()} image${count === 1 ? '' : 's'} restored`, 'Restored');
         })
         .catch((err) => {
@@ -218,8 +203,7 @@ export function useGridMutationActions({
     const hashSet = new Set(hashes);
     dispatch({ type: 'FILTER_IMAGES', predicate: (i) => !hashSet.has(i.hash) });
     dispatch({ type: 'CLEAR_SELECTION' });
-    api.file
-      .setStatusSelection(explicitSpec, 'active')
+    setStatusSelectionWithLifecycleEffects(explicitSpec, 'active', { gridReload: () => broker.requestReplace(queryKeyRef.current) })
       .then((count) => {
         registerUndoAction({
           label: `Restore ${count.toLocaleString()} image${count === 1 ? '' : 's'}`,
@@ -232,18 +216,16 @@ export function useGridMutationActions({
             broker.requestReplace(queryKeyRef.current);
           },
         });
-        refreshAfterLifecycleMutation();
         notifyInfo(`${count.toLocaleString()} image${count === 1 ? '' : 's'} restored`, 'Restored');
       })
       .catch((err) => {
         notifyError(err, 'Restore Failed');
       });
-  }, [stateRef, dispatch, broker, queryKeyRef, refreshAfterLifecycleMutation]);
+  }, [stateRef, dispatch, broker, queryKeyRef]);
 
   const handleInboxAction = useCallback(
     (hash: string, status: 'active' | 'trash') => {
-      api.file
-        .setStatus(hash, status)
+      setFileStatusWithLifecycleEffects(hash, status, { gridReload: () => broker.requestReplace(queryKeyRef.current) })
         .then(() => {
           registerUndoAction({
             label: status === 'active' ? 'Accept inbox image' : 'Reject inbox image',
@@ -256,7 +238,6 @@ export function useGridMutationActions({
               broker.requestReplace(queryKeyRef.current);
             },
           });
-          refreshAfterLifecycleMutation();
         })
         .catch((err) => {
           notifyError(err, status === 'active' ? 'Accept Failed' : 'Reject Failed');
@@ -264,7 +245,7 @@ export function useGridMutationActions({
       dispatch({ type: 'FILTER_IMAGES', predicate: (i) => i.hash !== hash });
       dispatch({ type: 'REMOVE_HASHES', hashes: new Set([hash]) });
     },
-    [dispatch, broker, queryKeyRef, refreshAfterLifecycleMutation],
+    [dispatch, broker, queryKeyRef],
   );
 
   const handleRemoveFromFolder = useCallback(() => {
