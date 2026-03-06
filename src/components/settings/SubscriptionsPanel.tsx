@@ -61,19 +61,11 @@ interface SubscriptionInfo {
 }
 
 export function SubscriptionsPanel() {
-  const {
-    ensureInitialized,
-    runningSubs,
-    runningQueries,
-    lastSubscriptionFinished,
-    subscriptionEventSeq,
-  } = useTaskRuntimeStore((s) => ({
-    ensureInitialized: s.ensureInitialized,
-    runningSubs: s.runningSubscriptionIds,
-    runningQueries: s.runningQueryIds,
-    lastSubscriptionFinished: s.lastSubscriptionFinished,
-    subscriptionEventSeq: s.subscriptionEventSeq,
-  }));
+  const ensureInitialized = useTaskRuntimeStore((s) => s.ensureInitialized);
+  const runningSubs = useTaskRuntimeStore((s) => s.runningSubscriptionIds);
+  const runningQueries = useTaskRuntimeStore((s) => s.runningQueryIds);
+  const lastSubscriptionFinished = useTaskRuntimeStore((s) => s.lastSubscriptionFinished);
+  const subscriptionEventSeq = useTaskRuntimeStore((s) => s.subscriptionEventSeq);
 
   const [subscriptions, setSubscriptions] = useState<SubscriptionInfo[]>([]);
   const [sites, setSites] = useState<SiteInfo[]>([]);
