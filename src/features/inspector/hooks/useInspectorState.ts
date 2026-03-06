@@ -32,6 +32,31 @@ export interface InspectorState extends InspectorData {
   togglePin: () => void;
 }
 
+function isSameDetailViewState(a: DetailViewState | null, b: DetailViewState | null): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  return (
+    a.currentIndex === b.currentIndex &&
+    a.total === b.total &&
+    a.zoomPercent === b.zoomPercent &&
+    a.zoomScale === b.zoomScale &&
+    a.fitScale === b.fitScale &&
+    a.isStripMode === b.isStripMode
+  );
+}
+
+function isSameDetailViewControls(a: DetailViewControls | null, b: DetailViewControls | null): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  return (
+    a.close === b.close &&
+    a.navigate === b.navigate &&
+    a.setZoomScale === b.setZoomScale &&
+    a.fitToWindow === b.fitToWindow &&
+    a.fitActual === b.fitActual
+  );
+}
+
 export function useInspectorState({
   showInspectorSetting,
   currentView,
@@ -134,8 +159,8 @@ export function useInspectorState({
   const [detailViewState, setDetailViewState] = useState<DetailViewState | null>(null);
   const [detailViewControls, setDetailViewControls] = useState<DetailViewControls | null>(null);
   const handleDetailViewStateChange = useCallback((state: DetailViewState | null, controls: DetailViewControls | null) => {
-    setDetailViewState(state);
-    setDetailViewControls(controls);
+    setDetailViewState((prev) => (isSameDetailViewState(prev, state) ? prev : state));
+    setDetailViewControls((prev) => (isSameDetailViewControls(prev, controls) ? prev : controls));
   }, []);
 
   const [inspectorResizeDragging, setInspectorResizeDragging] = useState(false);

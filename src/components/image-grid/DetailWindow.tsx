@@ -1,4 +1,4 @@
-import { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { api } from '#desktop/api';
 import { getCurrentWindow } from '#desktop/api';
 import { PhysicalSize } from '#desktop/api';
@@ -18,15 +18,13 @@ import { VideoPlayer } from '../video/VideoPlayer';
 import { useSettingsStore } from '../../stores/settingsStore';
 import { mediaFileUrl, mediaThumbnailUrl } from '../../lib/mediaUrl';
 import { useImageZoom, type ImageSize, type ZoomState } from './useImageZoom';
-import { useImagePreloader, queueImageDecode, isImagePreloaded } from './useImagePreloader';
-import { useImageLoadState } from './useImageLoadState';
-import { useZoomCache } from './useZoomCache';
 import { useNavigatorDrag } from './useNavigatorDrag';
 import { useNavigatorRenderer } from './useNavigatorRenderer';
 import { useBoundaryNavigation } from '../../hooks/useBoundaryNavigation';
 import { KbdTooltip } from '../ui/KbdTooltip';
 import { logBestEffortError, runBestEffort } from '../../lib/asyncOps';
 import { notifyError } from '../../lib/notify';
+import { useViewerMediaPipeline } from './viewer/useViewerMediaPipeline';
 import styles from './DetailWindow.module.css';
 import shared from './imageViewer.module.css';
 
@@ -208,142 +206,42 @@ export function DetailWindow({ hash }: DetailWindowProps) {
   imageSizeRef.current = imageSize;
   useNavigatorRenderer(imgRef, minimapRef, minimapVpRef, imageSizeRef, zoomState, navigatorRect, NAV_SIZE, thumbImgRef);
 
-  // Fit image to window by reading DOM directly (bypasses stale React state)
-  const retryFitToWindow = useCallback(() => {
-    const container = containerRef.current;
-    const iSize = imageSizeRef.current;
-    if (!container || container.clientWidth === 0 || !iSize) {
-      requestAnimationFrame(retryFitToWindow);
-      return;
-    }
-    const cw = container.clientWidth;
-    const ch = container.clientHeight;
-    const fitScale = Math.min(cw / iSize.width, ch / iSize.height, 1);
-    setZoomState({ scale: fitScale, tx: 0, ty: 0 });
-  }, [setZoomState]);
-
-  // Image load state (loaded flag + markImageReady)
-  const onNavigate = useCallback(() => {
+  const onHashChangeStart = useCallback(() => {
     navigationInProgressRef.current = true;
     if (currentImage?.width && currentImage?.height) {
       currentAspectRef.current = currentImage.width / currentImage.height;
     }
   }, [currentImage]);
 
-  const { decodedSrc, imageLoaded, markImageReady } = useImageLoadState(
-    currentImage?.hash ?? null, imageUrl || null, undefined, zoomCache, onNavigate,
-  );
-  const [fullImageVisible, setFullImageVisible] = useState(false);
-  const [thumbLoaded, setThumbLoaded] = useState(false);
-  const [displayThumbUrl, setDisplayThumbUrl] = useState('');
-  const [allowFullQuality, setAllowFullQuality] = useState(false);
-  // Backdrop: pixel-perfect freeze of previous image until new thumbnail loads.
-  // Only updated when a real thumbnail/full-res loads — never from a stale backdrop.
-  const backdropSrcRef = useRef('');
-  const lastLoadedSrcRef = useRef('');
-  useLayoutEffect(() => {
-    if (lastLoadedSrcRef.current) {
-      backdropSrcRef.current = lastLoadedSrcRef.current;
-    }
-    setFullImageVisible(false);
-    setThumbLoaded(isVideo);
-    setAllowFullQuality(false);
-    const img = imgRef.current;
-    if (img) {
-      img.style.transition = 'none';
-      img.style.opacity = '0';
-    }
-  }, [currentImage?.hash]); // eslint-disable-line react-hooks/exhaustive-deps
-  // Start the linger timer for full-quality loading (100ms).
-  useEffect(() => {
-    const timer = setTimeout(() => setAllowFullQuality(true), 100);
-    return () => clearTimeout(timer);
-  }, [currentImage?.hash]);
-  // Thumb loading: immediately swap to new thumb URL so it renders at correct
-  // dimensions. The old "hold previous" pattern caused the old thumbnail to
-  // stretch to the new image's aspect ratio.
-  useEffect(() => {
-    if (!currentImage) return;
-    const targetThumb = mediaThumbnailUrl(currentImage.hash);
-    let cancelled = false;
-    let cancelDecode: (() => void) | null = null;
-    setDisplayThumbUrl(''); // clear stale thumb — thumbUrl (already correct) shows immediately
-    void (async () => {
-      try {
-        await api.file.ensureThumbnail(currentImage.hash);
-      } catch (error) {
-        logBestEffortError('detailWindow.ensureThumbnail', error);
-      }
-      if (cancelled) return;
-      const ensuredThumb = `${targetThumb}?ready=${Date.now()}`;
-      cancelDecode = queueImageDecode(
-        ensuredThumb,
-        () => {
-          if (cancelled) return;
-          setDisplayThumbUrl(ensuredThumb);
-        },
-        'high',
-      );
-    })();
-    return () => {
-      cancelled = true;
-      if (cancelDecode) cancelDecode();
-    };
-  }, [currentImage?.hash]);
-
-  // Clear navigation guard when image becomes ready
-  useEffect(() => {
-    if (imageLoaded) {
+  const {
+    decodedSrc,
+    thumbLoaded,
+    fullImageVisible,
+    displayThumbUrl,
+    allowFullQuality,
+    backdropSrcRef,
+    handleThumbLoad,
+    handleFullLoad,
+  } = useViewerMediaPipeline({
+    currentImage: currentImage ?? null,
+    images,
+    currentIndex,
+    imageUrl,
+    isVideo,
+    imageSize,
+    zoomState,
+    setZoomState,
+    calcFitScale,
+    containerRef,
+    imgRef,
+    zoomCache,
+    onHashChangeStart,
+    onImageReady: () => {
       navigationInProgressRef.current = false;
-    }
-  }, [imageLoaded, decodedSrc]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Zoom cache: restore on navigate, persist on change
-  useZoomCache(currentImage?.hash ?? null, imageSize, zoomState, setZoomState, calcFitScale, zoomCache, imageLoaded, containerRef);
-
-  // Only allow full-quality decode when image focus lingers for at least 100ms.
-  useImagePreloader(allowFullQuality ? (imageUrl || null) : null, isVideo, markImageReady);
-
-  // Preload nearby thumbnails and full images so arrow navigation lands on
-  // an already-cached thumb and quickly decodable full image.
-  useEffect(() => {
-    if (images.length === 0) return;
-    const cleanups: Array<() => void> = [];
-    let heavyQueued = 0;
-
-    for (const offset of [-1, 1, -2, 2, -3, 3, -4, 4]) {
-      const neighbor = images[currentIndex + offset];
-      if (!neighbor) continue;
-      const thumbUrl = mediaThumbnailUrl(neighbor.hash);
-      if (!isImagePreloaded(thumbUrl)) {
-        const priority = Math.abs(offset) <= 1 ? 'high' : 'normal';
-        void api.file.ensureThumbnail(neighbor.hash)
-          .catch((error) => {
-            logBestEffortError('detailWindow.preloadNeighborThumbnail', error);
-          })
-          .finally(() => {
-            queueImageDecode(`${thumbUrl}?ready=${Date.now()}`, () => {}, priority);
-          });
-      }
-    }
-
-    for (const offset of [-1, 1, -2, 2, -3, 3]) {
-      const neighbor = images[currentIndex + offset];
-      if (!neighbor || isVideoMime(neighbor.mime)) continue;
-      const fullUrl = mediaFileUrl(neighbor.hash, neighbor.mime);
-      if (isImagePreloaded(fullUrl)) continue;
-      const heavy = neighbor.mime === 'image/webp' || neighbor.mime === 'image/avif';
-      if (heavy) {
-        if (heavyQueued >= 2) continue;
-        heavyQueued++;
-      }
-      cleanups.push(queueImageDecode(fullUrl, () => {}, Math.abs(offset) <= 1 ? 'high' : 'normal'));
-    }
-
-    return () => {
-      for (const cleanup of cleanups) cleanup();
-    };
-  }, [currentIndex, images]);
+    },
+    ensureThumbLogContext: 'detailWindow.ensureThumbnail',
+    preloadThumbLogContext: 'detailWindow.preloadNeighborThumbnail',
+  });
 
   // Snap to the image's aspect ratio on resize; skip during navigation
   useEffect(() => {
@@ -647,7 +545,7 @@ export function DetailWindow({ hash }: DetailWindowProps) {
                     src={displayThumbUrl || thumbUrl}
                     alt=""
                     draggable={false}
-                    onLoad={(e) => { lastLoadedSrcRef.current = e.currentTarget.src; setThumbLoaded(true); }}
+                    onLoad={handleThumbLoad}
                     style={{
                       left: '50%',
                       top: '50%',
@@ -664,16 +562,7 @@ export function DetailWindow({ hash }: DetailWindowProps) {
                   alt=""
                   draggable={false}
                   decoding="async"
-                  onLoad={(e) => {
-                    const img = e.currentTarget;
-                    lastLoadedSrcRef.current = img.src;
-                    const revealFull = () => setFullImageVisible(true);
-                    if (typeof img.decode === 'function') {
-                      img.decode().then(revealFull).catch(revealFull);
-                    } else {
-                      revealFull();
-                    }
-                  }}
+                  onLoad={handleFullLoad}
                   style={{
                     left: '50%',
                     top: '50%',
