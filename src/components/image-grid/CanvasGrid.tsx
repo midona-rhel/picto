@@ -9,6 +9,7 @@ import {
 import { createPortal } from 'react-dom';
 import { IconPhoto, IconUpload, IconFolderPlus } from '@tabler/icons-react';
 import { TextButton } from '../ui/TextButton';
+import { StateBlock, StateActions } from '../ui/state';
 import { MasonryImageItem, isVideoMime } from './shared';
 import { VideoScrubOverlay, type VideoScrubRect } from './VideoScrubOverlay';
 import { mediaFileUrl, mediaThumbnailUrl } from '../../lib/mediaUrl';
@@ -17,7 +18,7 @@ import { formatDuration } from '../../lib/formatters';
 import { imageDrag } from '../../lib/imageDrag';
 import { getCurrentWebview } from '#desktop/api';
 import { ImageAtlas } from './imageAtlas';
-import type { GridViewMode } from './runtime';
+import type { GridViewMode, GridEmptyContext } from './runtime';
 import {
   computeLayout,
   computeTextHeight,
@@ -113,6 +114,24 @@ function mimeToExt(mime: string): string {
     'bmp': 'bmp', 'tiff': 'tiff', 'avif': 'avif', 'heic': 'heic',
   };
   return MAP[sub] ?? sub;
+}
+
+function getEmptyStateTitle(emptyContext: GridEmptyContext, hasSearchTags: boolean): string {
+  if (hasSearchTags) return 'No results found';
+  if (emptyContext === 'inbox') return 'Inbox is empty';
+  if (emptyContext === 'untagged') return 'No untagged images';
+  if (emptyContext === 'smart-folder') return 'No matching images';
+  if (emptyContext === 'folder') return 'This folder is empty';
+  return 'No images';
+}
+
+function getEmptyStateDescription(emptyContext: GridEmptyContext, hasSearchTags: boolean): string {
+  if (hasSearchTags) return 'Try different search terms or clear filters';
+  if (emptyContext === 'inbox') return 'Run subscriptions to add new images to your inbox';
+  if (emptyContext === 'untagged') return 'All your images have been tagged';
+  if (emptyContext === 'smart-folder') return 'Try adjusting the rules for this smart folder';
+  if (emptyContext === 'folder') return 'Drag and drop files here, or import them below';
+  return 'Drag and drop files here, or click the button below to import';
 }
 
 function isCollectionTile(image: MasonryImageItem): boolean {
@@ -337,7 +356,7 @@ interface CanvasGridProps {
   onContainerWidthChange?: (width: number) => void;
   showEmptyState?: boolean;
   /** Context for empty state messaging */
-  emptyContext?: 'inbox' | 'untagged' | 'folder' | 'smart-folder' | 'default';
+  emptyContext?: GridEmptyContext;
   onLoadMore?: () => void;
   scrollContainerRef?: RefObject<HTMLDivElement | null>;
   popHash?: string | null;
@@ -1137,17 +1156,18 @@ export function CanvasGrid({
         const hasBlurhashCrossfade = !!entry.blurhash && fadeEndAt > now;
 
         if (hasBlurhashCrossfade) {
-          hasActiveCrossfade = true;
-          if (now < fadeStartAt) {
-            drawImageCover(ctx, entry.blurhash!, pos.x, drawY, pos.w, imageHeight);
-          } else {
+          // Keep blurhash fully opaque and only fade the thumbnail in.
+          // Cross-dissolving both layers causes a perceptible global dim/fade effect.
+          drawImageCover(ctx, entry.blurhash!, pos.x, drawY, pos.w, imageHeight);
+          if (now >= fadeStartAt) {
             const duration = Math.max(1, fadeEndAt - fadeStartAt);
             const progress = Math.min(1, Math.max(0, (now - fadeStartAt) / duration));
-            ctx.globalAlpha = 1 - progress;
-            drawImageCover(ctx, entry.blurhash!, pos.x, drawY, pos.w, imageHeight);
+            hasActiveCrossfade = progress < 1;
             ctx.globalAlpha = progress;
             drawThumb(ctx, entry.thumb, pos.x, drawY, pos.w, imageHeight);
             ctx.globalAlpha = 1;
+          } else {
+            hasActiveCrossfade = true;
           }
         } else {
           drawThumb(ctx, entry.thumb, pos.x, drawY, pos.w, imageHeight);
@@ -2133,6 +2153,64 @@ export function CanvasGrid({
     if (!showEmptyState) {
       return <div ref={containerRef} style={{ minHeight: 1 }} />;
     }
+    const hasSearchTags = !!searchTags?.length;
+    const title = getEmptyStateTitle(emptyContext, hasSearchTags);
+    const description = getEmptyStateDescription(emptyContext, hasSearchTags);
+    const showImportActions =
+      emptyContext !== 'inbox' &&
+      emptyContext !== 'untagged' &&
+      emptyContext !== 'smart-folder' &&
+      !hasSearchTags;
+
+    const iconNode = (
+      <div
+        style={{
+          position: 'relative',
+          width: 90,
+          height: 120,
+          marginBottom: -40,
+          maskImage: 'linear-gradient(to bottom, black 30%, transparent 100%)',
+          WebkitMaskImage: 'linear-gradient(to bottom, black 30%, transparent 100%)',
+        }}
+      >
+        <div
+          style={{
+            position: 'absolute',
+            inset: 0,
+            borderRadius: 4,
+            border: '1px solid var(--color-border-secondary)',
+            background: 'linear-gradient(180deg, var(--color-border-primary) 0%, var(--color-border-secondary) 100%)',
+            paddingTop: 8,
+            paddingLeft: 6,
+            paddingRight: 6,
+            paddingBottom: 6,
+          }}
+        >
+          <div
+            style={{
+              width: '100%',
+              height: '100%',
+              borderRadius: 2,
+              border: '1px solid var(--color-border-secondary)',
+              background: 'var(--color-theme)',
+            }}
+          />
+        </div>
+        <div
+          style={{
+            position: 'absolute',
+            inset: 0,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 1,
+          }}
+        >
+          <IconPhoto size={28} stroke={1.2} style={{ color: 'var(--color-text-tertiary)' }} />
+        </div>
+      </div>
+    );
+
     return (
       <div ref={containerRef} style={{ position: 'relative', minHeight: 400 }}>
         <div style={{
@@ -2147,89 +2225,26 @@ export function CanvasGrid({
           boxSizing: 'border-box',
           WebkitFontSmoothing: 'antialiased',
         }}>
-          {/* Portrait card with picture frame — fades out from middle, sits behind text */}
-          <div style={{
-            position: 'relative', width: 90, height: 120, marginBottom: -40,
-            maskImage: 'linear-gradient(to bottom, black 30%, transparent 100%)',
-            WebkitMaskImage: 'linear-gradient(to bottom, black 30%, transparent 100%)',
-          }}>
-            {/* Outer frame — glass-like with secondary border */}
-            <div style={{
-              position: 'absolute', inset: 0,
-              borderRadius: 4,
-              border: '1px solid var(--color-border-secondary)',
-              background: 'linear-gradient(180deg, var(--color-border-primary) 0%, var(--color-border-secondary) 100%)',
-              paddingTop: 8,
-              paddingLeft: 6,
-              paddingRight: 6,
-              paddingBottom: 6,
-            }}>
-              {/* Inner pic area */}
-              <div style={{
-                width: '100%', height: '100%',
-                borderRadius: 2,
-                border: '1px solid var(--color-border-secondary)',
-                background: 'var(--color-theme)',
-              }} />
-            </div>
-            {/* Icon — rendered on top */}
-            <div style={{
-              position: 'absolute', inset: 0,
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              zIndex: 1,
-            }}>
-              <IconPhoto size={28} stroke={1.2} style={{ color: 'var(--color-text-tertiary)' }} />
-            </div>
-          </div>
-          {/* Title */}
-          <div style={{
-            position: 'relative', zIndex: 1,
-            fontSize: 'var(--font-size-xl)',
-            lineHeight: 'var(--line-height-normal)',
-            fontWeight: 'var(--font-weight-bold)' as any,
-            color: 'var(--color-text-primary)',
-            marginBottom: 8,
-            maxWidth: 480,
-          }}>
-            {searchTags?.length ? 'No results found'
-              : emptyContext === 'inbox' ? 'Inbox is empty'
-              : emptyContext === 'untagged' ? 'No untagged images'
-              : emptyContext === 'smart-folder' ? 'No matching images'
-              : emptyContext === 'folder' ? 'This folder is empty'
-              : 'No images'}
-          </div>
-          {/* Subtitle */}
-          <div style={{
-            position: 'relative', zIndex: 1,
-            opacity: 0.5,
-            fontSize: 'var(--font-size-sm)',
-            lineHeight: 'var(--line-height-relaxed)',
-            color: 'var(--color-text-primary)',
-            marginBottom: 16,
-            maxWidth: 480,
-          }}>
-            {searchTags?.length ? 'Try different search terms or clear filters'
-              : emptyContext === 'inbox' ? 'Run subscriptions to add new images to your inbox'
-              : emptyContext === 'untagged' ? 'All your images have been tagged'
-              : emptyContext === 'smart-folder' ? 'Try adjusting the rules for this smart folder'
-              : emptyContext === 'folder' ? 'Drag and drop files here, or import them below'
-              : 'Drag and drop files here, or click the button below to import'}
-          </div>
-          {/* Action buttons — only for folder and default views */}
-          {emptyContext !== 'inbox' && emptyContext !== 'untagged' && emptyContext !== 'smart-folder' && !searchTags?.length && (
-            <div style={{ position: 'relative', zIndex: 1, display: 'flex', gap: 8 }}>
-              <TextButton onClick={onImport}>
-                <IconUpload size={14} />
-                Import Files
-              </TextButton>
-              {emptyContext === 'folder' && onImportFolder && (
-                <TextButton onClick={onImportFolder}>
-                  <IconFolderPlus size={14} />
-                  Import Folder
+          <StateBlock
+            variant="empty"
+            iconNode={iconNode}
+            title={title}
+            description={description}
+            action={showImportActions ? (
+              <StateActions>
+                <TextButton onClick={onImport}>
+                  <IconUpload size={14} />
+                  Import Files
                 </TextButton>
-              )}
-            </div>
-          )}
+                {emptyContext === 'folder' && onImportFolder && (
+                  <TextButton onClick={onImportFolder}>
+                    <IconFolderPlus size={14} />
+                    Import Folder
+                  </TextButton>
+                )}
+              </StateActions>
+            ) : null}
+          />
         </div>
       </div>
     );

@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { useDisclosure } from '@mantine/hooks';
 import {
   Text,
@@ -28,7 +28,7 @@ import { SubscriptionController } from '../../controllers/subscriptionController
 import { registerUndoAction } from '../../controllers/undoRedoController';
 import { useTaskRuntimeStore } from '../../stores/taskRuntimeStore';
 import { TextButton } from '../ui/TextButton';
-import { EmptyState } from '../ui/EmptyState';
+import { StateBlock } from '../ui/state';
 import { SettingsBlock, SettingsButtonRow, SettingsInputGroup } from './ui';
 import styles from '../Settings.module.css';
 
@@ -70,6 +70,7 @@ export function SubscriptionsPanel() {
   const [subscriptions, setSubscriptions] = useState<SubscriptionInfo[]>([]);
   const [sites, setSites] = useState<SiteInfo[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [createModalOpen, { open: openCreateModal, close: closeCreateModal }] = useDisclosure(false);
   const [creating, setCreating] = useState(false);
   const [expandedSubs, setExpandedSubs] = useState<Set<string>>(new Set());
@@ -85,15 +86,34 @@ export function SubscriptionsPanel() {
     periodic_file_limit: 50,
   });
 
+  const loadData = useCallback(async () => {
+    try {
+      setLoading(true);
+      setLoadError(null);
+      const [subsData, sitesData] = await Promise.all([
+        SubscriptionController.getSubscriptions<SubscriptionInfo>(),
+        SubscriptionController.getSites<SiteInfo>(),
+      ]);
+      setSubscriptions(subsData);
+      setSites(sitesData);
+    } catch (err) {
+      console.error('Failed to load subscriptions:', err);
+      setLoadError(err instanceof Error ? err.message : 'Failed to load subscription data');
+      notifyError('Failed to load subscription data');
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     void ensureInitialized();
-    loadData();
-  }, [ensureInitialized]);
+    void loadData();
+  }, [ensureInitialized, loadData]);
 
   useEffect(() => {
     if (!subscriptionEventSeq) return;
-    loadData();
-  }, [subscriptionEventSeq]);
+    void loadData();
+  }, [subscriptionEventSeq, loadData]);
 
   useEffect(() => {
     if (!lastSubscriptionFinished) return;
@@ -124,23 +144,6 @@ export function SubscriptionsPanel() {
       notifyError(lastSubscriptionFinished.error || `${lastSubscriptionFinished.errors_count} error(s)`, 'Sync Failed');
     }
   }, [lastSubscriptionFinished]);
-
-  const loadData = async () => {
-    try {
-      setLoading(true);
-      const [subsData, sitesData] = await Promise.all([
-        SubscriptionController.getSubscriptions<SubscriptionInfo>(),
-        SubscriptionController.getSites<SiteInfo>(),
-      ]);
-      setSubscriptions(subsData);
-      setSites(sitesData);
-    } catch (err) {
-      console.error('Failed to load subscriptions:', err);
-      notifyError('Failed to load subscription data');
-    } finally {
-      setLoading(false);
-    }
-  };
 
   const toggleExpanded = (id: string) => {
     setExpandedSubs(prev => {
@@ -383,10 +386,17 @@ export function SubscriptionsPanel() {
   };
 
   if (loading) {
+    return <StateBlock variant="loading" title="Loading subscriptions" compact minHeight={80} />;
+  }
+
+  if (loadError) {
     return (
-      <div style={{ display: 'flex', justifyContent: 'center', padding: 40 }}>
-        <Loader size="sm" />
-      </div>
+      <StateBlock
+        variant="error"
+        title="Failed to load subscriptions"
+        description={loadError}
+        action={<TextButton onClick={() => void loadData()}>Retry</TextButton>}
+      />
     );
   }
 
@@ -405,7 +415,7 @@ export function SubscriptionsPanel() {
       {/* Subscription list */}
       <SettingsBlock title="Subscriptions">
         {subscriptions.length === 0 ? (
-          <EmptyState compact icon={IconCalendarTime} description="No subscriptions yet." />
+          <StateBlock variant="empty" compact icon={IconCalendarTime} description="No subscriptions yet." />
         ) : (
           subscriptions.map((sub, i) => {
             const isExpanded = expandedSubs.has(sub.id);
