@@ -7,8 +7,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { api } from '#desktop/api';
 import { useFilterStore, mimeFilterToPrefixes, type FilterLogicMode } from '../stores/filterStore';
-import { useCacheStore } from '../stores/cacheStore';
 import { FolderController } from '../controllers/folderController';
+import { applyGridMutationEffects } from '../domain/actions/mutationEffects';
 import type { SmartFolder } from '../components/smart-folders/types';
 import type { TagFilterLogicMode } from '../components/tags/tagSelectTypes';
 import type { MasonryImageItem } from '../components/image-grid/shared';
@@ -116,10 +116,7 @@ export function useGridFeatureState({
     const fid = activeFolder?.folder_id;
     if (!fid) return;
     FolderController.sortFolderItems(fid, sortBy, direction)
-      .then(() => {
-        useCacheStore.getState().invalidateAll();
-        useCacheStore.getState().bumpGridRefresh();
-      })
+      .then(() => applyGridMutationEffects())
       .catch((e) => console.error('Failed to sort folder items:', e));
   }, [activeFolder?.folder_id]);
 
@@ -127,10 +124,7 @@ export function useGridFeatureState({
     const fid = activeFolder?.folder_id;
     if (!fid) return;
     FolderController.reverseFolderItems(fid)
-      .then(() => {
-        useCacheStore.getState().invalidateAll();
-        useCacheStore.getState().bumpGridRefresh();
-      })
+      .then(() => applyGridMutationEffects())
       .catch((e) => console.error('Failed to reverse folder items:', e));
   }, [activeFolder?.folder_id]);
 
@@ -140,10 +134,7 @@ export function useGridFeatureState({
     const hashes = selectedImages.map((img) => img.hash);
     if (hashes.length === 0) return;
     FolderController.reverseFolderItems(fid, hashes)
-      .then(() => {
-        useCacheStore.getState().invalidateAll();
-        useCacheStore.getState().bumpGridRefresh();
-      })
+      .then(() => applyGridMutationEffects())
       .catch((e) => console.error('Failed to reverse selected folder items:', e));
   }, [activeFolder?.folder_id, selectedImages]);
 
