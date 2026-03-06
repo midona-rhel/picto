@@ -42,12 +42,15 @@ export function SidebarJobStatus() {
     }
 
     if (ptrSyncing) {
-      setPtrState({ phase: 'syncing', progress: ptrProgress ?? null });
+      setPtrState((prev) => {
+        if (prev.phase === 'syncing' && prev.progress === (ptrProgress ?? null)) return prev;
+        return { phase: 'syncing', progress: ptrProgress ?? null };
+      });
       return;
     }
 
     if (!ptrLastResult) {
-      setPtrState({ phase: 'idle' });
+      setPtrState((prev) => (prev.phase === 'idle' ? prev : { phase: 'idle' }));
       return;
     }
 
@@ -56,21 +59,28 @@ export function SidebarJobStatus() {
     lastPtrResultRef.current = resultKey;
 
     if (ptrLastResult.success) {
-      setPtrState({ phase: 'done', success: true });
+      setPtrState((prev) => {
+        if (prev.phase === 'done' && prev.success === true) return prev;
+        return { phase: 'done', success: true };
+      });
       ptrFadeTimerRef.current = setTimeout(() => {
-        setPtrState({ phase: 'idle' });
+        setPtrState((prev) => (prev.phase === 'idle' ? prev : { phase: 'idle' }));
       }, 4000);
       return;
     }
 
     if (ptrLastResult.error === 'Cancelled') {
-      setPtrState({ phase: 'idle' });
+      setPtrState((prev) => (prev.phase === 'idle' ? prev : { phase: 'idle' }));
       return;
     }
 
-    setPtrState({ phase: 'done', success: false, error: ptrLastResult.error || 'Connection failed' });
+    setPtrState((prev) => {
+      const nextError = ptrLastResult.error || 'Connection failed';
+      if (prev.phase === 'done' && prev.success === false && prev.error === nextError) return prev;
+      return { phase: 'done', success: false, error: nextError };
+    });
     ptrFadeTimerRef.current = setTimeout(() => {
-      setPtrState({ phase: 'idle' });
+      setPtrState((prev) => (prev.phase === 'idle' ? prev : { phase: 'idle' }));
     }, 8000);
   }, [ptrSyncing, ptrProgress, ptrLastResult]);
 
@@ -83,27 +93,37 @@ export function SidebarJobStatus() {
     const status = ptrBootstrapStatus;
     if (status?.running) {
       wasBootstrapRunningRef.current = true;
-      setPtrBootstrapState({ phase: 'running', status });
+      setPtrBootstrapState((prev) => {
+        if (prev.phase === 'running' && prev.status === status) return prev;
+        return { phase: 'running', status };
+      });
       return;
     }
 
     if (wasBootstrapRunningRef.current) {
       wasBootstrapRunningRef.current = false;
       if (status?.last_error) {
-        setPtrBootstrapState({ phase: 'done', success: false, error: status.last_error });
+        const bootstrapError = status.last_error;
+        setPtrBootstrapState((prev) => {
+          if (prev.phase === 'done' && prev.success === false && prev.error === bootstrapError) return prev;
+          return { phase: 'done', success: false, error: bootstrapError };
+        });
         bootstrapFadeTimerRef.current = setTimeout(() => {
-          setPtrBootstrapState({ phase: 'idle' });
+          setPtrBootstrapState((prev) => (prev.phase === 'idle' ? prev : { phase: 'idle' }));
         }, 8000);
       } else {
-        setPtrBootstrapState({ phase: 'done', success: true });
+        setPtrBootstrapState((prev) => {
+          if (prev.phase === 'done' && prev.success === true) return prev;
+          return { phase: 'done', success: true };
+        });
         bootstrapFadeTimerRef.current = setTimeout(() => {
-          setPtrBootstrapState({ phase: 'idle' });
+          setPtrBootstrapState((prev) => (prev.phase === 'idle' ? prev : { phase: 'idle' }));
         }, 4000);
       }
       return;
     }
 
-    setPtrBootstrapState({ phase: 'idle' });
+    setPtrBootstrapState((prev) => (prev.phase === 'idle' ? prev : { phase: 'idle' }));
   }, [ptrBootstrapStatus]);
 
   useEffect(() => {
