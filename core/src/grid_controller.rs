@@ -214,9 +214,9 @@ impl GridController {
         let color_file_ids: Option<std::collections::HashSet<i64>> =
             if let Some(ref hex) = query.color_hex {
                 let hex = hex.clone();
-                let accuracy = query.color_accuracy.unwrap_or(20.0).clamp(5.0, 40.0);
+                let tolerance = query.color_accuracy.unwrap_or(20.0).clamp(1.0, 30.0);
                 let ids: Vec<i64> = db
-                    .with_read_conn(move |conn| color_filter_ids(conn, &hex, accuracy))
+                    .with_read_conn(move |conn| color_filter_ids(conn, &hex, tolerance))
                     .await?;
                 Some(ids.into_iter().collect())
             } else {

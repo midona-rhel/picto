@@ -13,6 +13,7 @@ import { FolderPickerService } from '../../services/folderPickerService';
 import { WindowControls } from '../layout/WindowControls';
 import { KbdTooltip } from '../ui/KbdTooltip';
 import { useNavigationStore } from '../../stores/navigationStore';
+import { useFilterStore } from '../../stores/filterStore';
 import { formatFileSize, formatDuration, getFileExtension } from '../../lib/formatters';
 import { MasonryImageItem } from './shared';
 import { GlassImagePreview } from './GlassImagePreview';
@@ -236,6 +237,8 @@ export function ImagePropertiesPanel({
 
   const navigateToFolder = useNavigationStore((s) => s.navigateToFolder);
   const navigateToFilterTags = useNavigationStore((s) => s.navigateToFilterTags);
+  const setColorFilter = useFilterStore((s) => s.setColorFilter);
+  const setFilterBarOpen = useFilterStore((s) => s.setFilterBarOpen);
 
   const selectedImage = selectedImages.length === 1 ? selectedImages[0] : null;
   const selectedCollection = selectedImage?.is_collection ? collectionSummary : null;
@@ -355,6 +358,11 @@ export function ImagePropertiesPanel({
   const handleRemoveFolderMembership = useCallback((folderId: number) => {
     onRemoveFromFolder(folderId).catch((err) => console.error('Failed to remove from folder:', err));
   }, [onRemoveFromFolder]);
+
+  const handleFindSimilarColor = useCallback((hex: string) => {
+    setColorFilter(hex.toUpperCase());
+    setFilterBarOpen(true);
+  }, [setColorFilter, setFilterBarOpen]);
 
   // Compute multi-selection aggregated values
   const commonRating = isMulti
@@ -559,7 +567,10 @@ export function ImagePropertiesPanel({
 
               {/* Reserve space to prevent layout shift */}
               {!selectedImage.is_collection && (
-                <ColorPalette colors={fileMetadata?.file.dominant_colors ?? []} />
+                <ColorPalette
+                  colors={fileMetadata?.file.dominant_colors ?? []}
+                  onFindSimilarColor={handleFindSimilarColor}
+                />
               )}
 
               <div className={styles.fieldStack}>
