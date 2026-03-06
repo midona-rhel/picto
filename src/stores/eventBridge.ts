@@ -5,7 +5,16 @@ import { useLibraryStore } from './libraryStore';
 import { SidebarController } from '../controllers/sidebarController';
 import { SelectionController } from '../controllers/selectionController';
 import { invalidateMetadata } from '../components/image-grid/metadataPrefetch';
-import type { StateChangedEvent } from '../types/api';
+import type {
+  FlowFinishedEvent,
+  GridSnapshotInvalidatedEvent,
+  LibrarySwitchedEvent,
+  LibrarySwitchingEvent,
+  SidebarInvalidatedEvent,
+  StateChangedEvent,
+  SubscriptionFinishedEvent,
+  SubscriptionStartedEvent,
+} from '../types/api';
 
 let unlisteners: UnlistenFn[] = [];
 let isSetup = false;
@@ -32,8 +41,8 @@ export async function setupEventBridge(): Promise<void> {
   if (isSetup) return;
 
   const results = await Promise.allSettled([
-    listen('state-changed', (event) => {
-      const e = event.payload as StateChangedEvent;
+    listen<StateChangedEvent>('state-changed', (event) => {
+      const e = event.payload;
 
       if (e.invalidate?.metadata_hashes?.length) {
         for (const hash of e.invalidate.metadata_hashes) {
@@ -74,12 +83,12 @@ export async function setupEventBridge(): Promise<void> {
         lastGridSeq = e.seq;
       }
     }),
-    listen<{ seq?: number }>('sidebar-invalidated', (event) => {
-      const seq = (event.payload as { seq?: number })?.seq;
+    listen<SidebarInvalidatedEvent>('sidebar-invalidated', (event) => {
+      const seq = event.payload?.seq;
       if (typeof seq === 'number' && seq === lastSidebarSeq) return; // already handled
       SidebarController.requestRefresh();
     }),
-    listen<{ scope_key?: string; seq?: number }>('grid-snapshot-invalidated', (event) => {
+    listen<GridSnapshotInvalidatedEvent>('grid-snapshot-invalidated', (event) => {
       const seq = event.payload?.seq;
       if (typeof seq === 'number' && seq === lastGridSeq) return; // already handled
       const scopeKey = event.payload?.scope_key;
@@ -91,25 +100,25 @@ export async function setupEventBridge(): Promise<void> {
       }
     }),
 
-    listen('subscription-started', () => {
+    listen<SubscriptionStartedEvent>('subscription-started', () => {
       SidebarController.requestRefresh();
     }),
-    listen('subscription-finished', () => {
-      SidebarController.requestRefresh();
-      useCacheStore.getState().invalidateAll();
-      useCacheStore.getState().bumpGridRefresh();
-    }),
-
-    listen('flow-finished', () => {
+    listen<SubscriptionFinishedEvent>('subscription-finished', () => {
       SidebarController.requestRefresh();
       useCacheStore.getState().invalidateAll();
       useCacheStore.getState().bumpGridRefresh();
     }),
 
-    listen('library-switching', () => {
+    listen<FlowFinishedEvent>('flow-finished', () => {
+      SidebarController.requestRefresh();
+      useCacheStore.getState().invalidateAll();
+      useCacheStore.getState().bumpGridRefresh();
+    }),
+
+    listen<LibrarySwitchingEvent>('library-switching', () => {
       useLibraryStore.getState().setSwitching(true);
     }),
-    listen('library-switched', () => {
+    listen<LibrarySwitchedEvent>('library-switched', () => {
       useCacheStore.getState().invalidateAll();
       useCacheStore.getState().bumpGridRefresh();
       SidebarController.requestRefresh();
