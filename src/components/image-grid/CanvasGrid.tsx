@@ -20,11 +20,14 @@ import { getCurrentWebview } from '#desktop/api';
 import { ImageAtlas } from './imageAtlas';
 import type { GridViewMode, GridEmptyContext } from './runtime';
 import {
-  computeLayout,
   computeTextHeight,
   TEXT_NAME_ROW_H,
-  type LayoutItem,
 } from './VirtualGrid';
+import {
+  BUCKET_SIZE,
+  type LayoutItem,
+} from './layoutMath';
+import { useWaterfallLayoutWorker } from './hooks/useWaterfallLayoutWorker';
 
 const DRAG_THRESHOLD_SQ = 25; // 5px²
 const BADGE_HIDDEN_TYPES = new Set(['jpg', 'jpeg', 'png', 'webp']);
@@ -393,26 +396,6 @@ interface CanvasGridProps {
   renamingHash?: string | null;
 }
 
-const BUCKET_SIZE = 256;
-
-function buildBucketIndex(positions: LayoutItem[]): Map<number, number[]> {
-  const map = new Map<number, number[]>();
-  for (let i = 0; i < positions.length; i++) {
-    const pos = positions[i];
-    const startBucket = Math.floor(pos.y / BUCKET_SIZE);
-    const endBucket = Math.floor((pos.y + pos.h) / BUCKET_SIZE);
-    for (let b = startBucket; b <= endBucket; b++) {
-      let arr = map.get(b);
-      if (!arr) {
-        arr = [];
-        map.set(b, arr);
-      }
-      arr.push(i);
-    }
-  }
-  return map;
-}
-
 /** Resize a canvas backing buffer if needed. Returns [cssW, cssH, dpr]. */
 function ensureCanvasSize(canvas: HTMLCanvasElement, dpr: number): [number, number] {
   const cssW = canvas.clientWidth;
@@ -610,10 +593,19 @@ export function CanvasGrid({
 
   // Horizontal padding prevents clipping of edge drop indicators
   const paddingX = 16;
-  const layout = useMemo(
-    () => computeLayout(layoutImages, layoutWidth, targetSize, gap, viewMode, textHeight, paddingX),
-    [layoutImages, layoutWidth, targetSize, gap, viewMode, textHeight],
-  );
+  const {
+    renderImages,
+    layout,
+    bucketIndex,
+  } = useWaterfallLayoutWorker({
+    images: layoutImages,
+    layoutWidth,
+    targetSize,
+    gap,
+    viewMode,
+    textHeight,
+    paddingX,
+  });
 
   // Estimate total scroll height while batches stream in.
   // - grid: deterministic from totalCount/columns.
@@ -633,10 +625,10 @@ export function CanvasGrid({
   });
   const estimatedTotalHeight = useMemo(() => {
     const exactHeight = layout.totalHeight;
-    const loadedAll = !totalCount || totalCount <= images.length || images.length === 0;
+    const loadedAll = !totalCount || totalCount <= renderImages.length || renderImages.length === 0;
     if (loadedAll) {
       estimateRef.current = exactHeight;
-      prevEstimateInputRef.current = { totalCount, imagesLen: images.length, viewMode, layoutWidth };
+      prevEstimateInputRef.current = { totalCount, imagesLen: renderImages.length, viewMode, layoutWidth };
       return exactHeight;
     }
 
@@ -645,7 +637,7 @@ export function CanvasGrid({
       if (!Number.isFinite(value) || value <= 0) return 1.5;
       return Math.min(8, Math.max(0.125, value));
     };
-    const loadedSample = images.slice(Math.max(0, images.length - 220));
+    const loadedSample = renderImages.slice(Math.max(0, renderImages.length - 220));
     const loadedHashes = new Set(loadedSample.map((item) => item.hash));
     const lookaheadSample = estimateSampleImages
       .slice(0, 120)
@@ -660,7 +652,7 @@ export function CanvasGrid({
       const rows = Math.ceil(totalCount / columnCount);
       projected = rows > 0 ? rows * cellH + (rows - 1) * gap + 4 : 0;
     } else {
-      let avgHeightPerItem = exactHeight / Math.max(1, images.length);
+      let avgHeightPerItem = exactHeight / Math.max(1, renderImages.length);
       if (estimatePool.length > 0) {
         if (viewMode === 'waterfall') {
           const columnCount = Math.max(1, Math.round((innerWidth + gap) / (targetSize + gap)));
@@ -710,10 +702,10 @@ export function CanvasGrid({
       widthChanged ||
       prevInput.totalCount !== null &&
       totalCount < prevInput.totalCount &&
-      images.length <= prevInput.imagesLen;
+      renderImages.length <= prevInput.imagesLen;
     if (resetEstimate) {
       estimateRef.current = projected;
-      prevEstimateInputRef.current = { totalCount, imagesLen: images.length, viewMode, layoutWidth };
+      prevEstimateInputRef.current = { totalCount, imagesLen: renderImages.length, viewMode, layoutWidth };
       return projected;
     }
 
@@ -747,14 +739,9 @@ export function CanvasGrid({
     next = Math.max(next, exactHeight);
 
     estimateRef.current = next;
-    prevEstimateInputRef.current = { totalCount, imagesLen: images.length, viewMode, layoutWidth };
+    prevEstimateInputRef.current = { totalCount, imagesLen: renderImages.length, viewMode, layoutWidth };
     return next;
-  }, [layout.totalHeight, images, estimateSampleImages, totalCount, viewMode, layoutWidth, targetSize, gap, textHeight]);
-
-  const bucketIndex = useMemo(
-    () => viewMode === 'waterfall' ? buildBucketIndex(layout.positions) : null,
-    [layout, viewMode],
-  );
+  }, [layout.totalHeight, renderImages, estimateSampleImages, totalCount, viewMode, layoutWidth, targetSize, gap, textHeight]);
   const bucketIndexRef = useRef(bucketIndex);
   bucketIndexRef.current = bucketIndex;
   const waterfallVisibleIndicesRef = useRef<number[]>([]);
@@ -770,8 +757,8 @@ export function CanvasGrid({
   viewModeRef.current = viewMode;
   const frozenRef = useRef(frozen);
   frozenRef.current = frozen;
-  const imagesRef = useRef(images);
-  imagesRef.current = images;
+  const imagesRef = useRef(renderImages);
+  imagesRef.current = renderImages;
   const selectedHashesRef = useRef(selectedHashes);
   selectedHashesRef.current = selectedHashes;
   const onImageClickRef = useRef(onImageClick);
@@ -797,9 +784,9 @@ export function CanvasGrid({
 
   const imagesByHash = useMemo(() => {
     const map = new Map<string, MasonryImageItem>();
-    for (const img of images) map.set(img.hash, img);
+    for (const img of renderImages) map.set(img.hash, img);
     return map;
-  }, [images]);
+  }, [renderImages]);
   const imagesByHashRef = useRef(imagesByHash);
   imagesByHashRef.current = imagesByHash;
 
@@ -2149,7 +2136,7 @@ export function CanvasGrid({
   }
 
   // Empty state — drop area
-  if (images.length === 0) {
+  if (renderImages.length === 0) {
     if (!showEmptyState) {
       return <div ref={containerRef} style={{ minHeight: 1 }} />;
     }
