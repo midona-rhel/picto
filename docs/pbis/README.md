@@ -7,7 +7,7 @@ This folder was reset for the first alpha release.
 1. `active-alpha/`: PBIs that are currently release-relevant for `v0.1.0-alpha.*`
 2. `archive/`: PBIs retained for history, not currently in alpha release scope
 
-## Active Alpha PBIs (55)
+## Active Alpha PBIs (59)
 
 1. [PBI-162](./active-alpha/PBI-162-import-and-subscription-entity-grouping.md)
 2. [PBI-200](./active-alpha/PBI-200-site-metadata-validation-danbooru.md)
@@ -64,8 +64,12 @@ This folder was reset for the first alpha release.
 53. [PBI-252](./active-alpha/PBI-252-subscription-setup-help-text-and-query-guidance.md)
 54. [PBI-253](./active-alpha/PBI-253-library-search-returns-no-results.md)
 55. [PBI-254](./active-alpha/PBI-254-user-guide-in-readme-or-docs.md)
+56. [PBI-255](./active-alpha/PBI-255-ole-container-detection-and-type-disambiguation.md)
+57. [PBI-256](./active-alpha/PBI-256-ole-metadata-extraction-word-count-and-core-properties.md)
+58. [PBI-257](./active-alpha/PBI-257-procreate-binary-plist-resolution-parsing.md)
+59. [PBI-258](./active-alpha/PBI-258-pdf-thumbnail-rendering-backend-integration.md)
 
-## Archived PBIs (32)
+## Archived PBIs (28)
 
 All other `PBI-*.md` files moved to `./archive/`.
 
