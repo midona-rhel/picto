@@ -197,6 +197,7 @@ interface ImagePropertiesPanelProps {
   onUpdateNotes: (text: string) => void;
   onAddToFolders: (folderIds: number[]) => Promise<void>;
   onRemoveFromFolder: (folderId: number) => Promise<void>;
+  onReanalyzeColors: () => Promise<void>;
 }
 
 export function ImagePropertiesPanel({
@@ -225,6 +226,7 @@ export function ImagePropertiesPanel({
   onUpdateNotes,
   onAddToFolders,
   onRemoveFromFolder,
+  onReanalyzeColors,
 }: ImagePropertiesPanelProps) {
   const [sectionState, setSectionState] = useState<SectionCollapseState>(loadSectionState);
   const addTagBtnRef = useRef<HTMLButtonElement>(null);
@@ -570,6 +572,7 @@ export function ImagePropertiesPanel({
                 <ColorPalette
                   colors={fileMetadata?.file.dominant_colors ?? []}
                   onFindSimilarColor={handleFindSimilarColor}
+                  onReanalyzeColors={onReanalyzeColors}
                 />
               )}
 

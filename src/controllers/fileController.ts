@@ -72,6 +72,11 @@ export const FileController = {
     return api.file.regenerateThumbnail(hash);
   },
 
+  /** Re-run dominant color extraction for a single file. */
+  reanalyzeColors(hash: string) {
+    return api.file.reanalyzeColors(hash);
+  },
+
   /** Regenerate thumbnails for multiple files. */
   regenerateThumbnailsBatch(hashes: string[]) {
     return api.file.regenerateThumbnailsBatch(hashes);

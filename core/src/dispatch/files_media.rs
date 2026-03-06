@@ -157,6 +157,14 @@ pub async fn handle(
                 "errors": errors,
             })))
         }
+        "reanalyze_file_colors" => {
+            let hash: String = match de(args, "hash") {
+                Ok(v) => v,
+                Err(e) => return Some(Err(e)),
+            };
+            let result = reanalyze_file_colors_inner(&state.db, &state.blob_store, &hash).await;
+            Some(result.and_then(|r| to_json(&r)))
+        }
         "backfill_missing_blurhashes" => {
             let limit: Option<usize> = de_opt(args, "limit");
             let result =
@@ -326,6 +334,12 @@ struct BackfillMissingBlurhashesResult {
     remaining: usize,
 }
 
+#[derive(Debug, serde::Serialize)]
+struct ReanalyzeFileColorsResult {
+    colors_extracted: usize,
+    dominant_color_hex: Option<String>,
+}
+
 async fn ensure_thumbnail_inner(
     db: &crate::sqlite::SqliteDatabase,
     blob_store: &std::sync::Arc<crate::blob_store::BlobStore>,
@@ -475,6 +489,62 @@ async fn backfill_missing_blurhashes_inner(
         regenerated_thumbnails,
         generated_blurhashes,
         remaining: remaining.max(0) as usize,
+    })
+}
+
+async fn reanalyze_file_colors_inner(
+    db: &crate::sqlite::SqliteDatabase,
+    blob_store: &std::sync::Arc<crate::blob_store::BlobStore>,
+    hash: &str,
+) -> Result<ReanalyzeFileColorsResult, String> {
+    let file = db
+        .get_file_by_hash(hash)
+        .await?
+        .ok_or_else(|| format!("File not found in database: {}", hash))?;
+
+    // Color analysis is only meaningful for images.
+    if !file.mime.starts_with("image/") {
+        db.set_file_colors(hash, Vec::new(), None).await?;
+        db.emit_compiler_event(crate::sqlite::CompilerEvent::RebuildAll);
+        return Ok(ReanalyzeFileColorsResult {
+            colors_extracted: 0,
+            dominant_color_hex: None,
+        });
+    }
+
+    let ext = mime_to_extension(&file.mime).to_string();
+    let h = hash.to_string();
+    let bs = blob_store.clone();
+    let colors =
+        tokio::task::spawn_blocking(move || -> Result<Vec<(String, f32, f32, f32)>, String> {
+            let original = bs
+                .find_original(&h, Some(&ext))
+                .map_err(|e| format!("Blob error: {}", e))?
+                .ok_or_else(|| format!("Original file not found for hash {}", h))?;
+
+            let bytes = std::fs::read(&original.0)
+                .map_err(|e| format!("Failed to read original file: {}", e))?;
+            let img =
+                image::load_from_memory(&bytes).map_err(|e| format!("Image decode failed: {}", e))?;
+            let extracted = crate::files::colors::extract_dominant_colors(&img, 8);
+            Ok(extracted
+                .iter()
+                .map(|c| (c.hex.clone(), c.l as f32, c.a as f32, c.b as f32))
+                .collect())
+        })
+        .await
+        .map_err(|e| format!("Color extraction task failed: {}", e))??;
+
+    let dominant_color_hex = colors.first().map(|(hex, _, _, _)| hex.clone());
+    let colors_extracted = colors.len();
+
+    db.set_file_colors(hash, colors, dominant_color_hex.clone())
+        .await?;
+    db.emit_compiler_event(crate::sqlite::CompilerEvent::RebuildAll);
+
+    Ok(ReanalyzeFileColorsResult {
+        colors_extracted,
+        dominant_color_hex,
     })
 }
 

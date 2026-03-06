@@ -464,6 +464,7 @@ function App() {
             onUpdateNotes={inspector.onUpdateNotes}
             onAddToFolders={inspector.onAddToFolders}
             onRemoveFromFolder={inspector.onRemoveFromFolder}
+            onReanalyzeColors={inspector.onReanalyzeColors}
           />
         )}
       </div>

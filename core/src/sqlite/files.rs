@@ -323,6 +323,18 @@ pub fn set_blurhash(
     Ok(())
 }
 
+pub fn set_dominant_color_hex(
+    conn: &Connection,
+    file_id: i64,
+    dominant_color_hex: Option<&str>,
+) -> rusqlite::Result<()> {
+    conn.execute(
+        "UPDATE file SET dominant_color_hex = ?1 WHERE file_id = ?2",
+        params![dominant_color_hex, file_id],
+    )?;
+    Ok(())
+}
+
 pub fn increment_view_count(conn: &Connection, file_id: i64) -> rusqlite::Result<()> {
     conn.execute(
         "UPDATE file SET view_count = view_count + 1, last_viewed_at = datetime('now') WHERE file_id = ?1",
@@ -1540,6 +1552,21 @@ impl SqliteDatabase {
         let b = blurhash.map(|s| s.to_string());
         self.with_conn(move |conn| set_blurhash(conn, file_id, b.as_deref()))
             .await
+    }
+
+    pub async fn set_file_colors(
+        &self,
+        hash: &str,
+        colors: Vec<(String, f32, f32, f32)>,
+        dominant_color_hex: Option<String>,
+    ) -> Result<(), String> {
+        let file_id = self.resolve_hash(hash).await?;
+        self.with_conn(move |conn| {
+            save_file_colors(conn, file_id, &colors)?;
+            set_dominant_color_hex(conn, file_id, dominant_color_hex.as_deref())?;
+            Ok(())
+        })
+        .await
     }
 
     pub async fn aggregate_file_stats(&self) -> Result<FileStats, String> {

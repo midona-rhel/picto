@@ -275,7 +275,7 @@ export async function load(name: string, _options?: { autoSave?: boolean }): Pro
 import type {
   ImageItem,
   GridPageSlimResponse, GridPageSlimQuery,
-  FileAllMetadata, FileMetadataBatchResponse, EnsureThumbnailResponse,
+  FileAllMetadata, FileMetadataBatchResponse, EnsureThumbnailResponse, ReanalyzeFileColorsResponse,
   ImportResult, BackfillBlurhashResult,
   TagDisplay, TagSearchResult, TagTuple, TagRecord,
   NamespaceSummary, TagAlias, TagRelation,
@@ -376,6 +376,8 @@ export const api = {
       invoke<EnsureThumbnailResponse>('ensure_thumbnail', { hash }),
     regenerateThumbnail: (hash: string) =>
       invoke<EnsureThumbnailResponse>('regenerate_thumbnail', { hash }),
+    reanalyzeColors: (hash: string) =>
+      invoke<ReanalyzeFileColorsResponse>('reanalyze_file_colors', { hash }),
     regenerateThumbnailsBatch: (hashes: string[]) =>
       invoke<{ total: number; regenerated: number; errors: number }>('regenerate_thumbnails_batch', { hashes }),
     getParents: (hash: string) =>
