@@ -1,12 +1,9 @@
-import { Collections } from '../Collections';
-import { FlowsWorking, type FlowResultEntry, CreateFlowModal } from '../FlowsWorking';
-import { TagManager } from '../TagManager';
-import { DuplicateManager } from '../DuplicateManager';
-import { ImageGrid } from '../image-grid/ImageGrid';
-import type { GridViewMode } from '../image-grid/ImageGrid';
-import type { DetailViewControls, DetailViewState } from '../image-grid/DetailView';
-import type { MasonryImageItem } from '../image-grid/shared';
-import type { SelectionQuerySpec } from '../image-grid/metadataPrefetch';
+import { Collections } from '#features/collections/components';
+import { FlowsWorking, type FlowResultEntry, CreateFlowModal } from '#features/subscriptions/components';
+import { TagManager } from '#features/tags/components';
+import { DuplicateManager } from '#features/duplicates/components';
+import { ImageGrid, type GridViewMode, type DetailViewControls, type DetailViewState } from '#features/grid/components';
+import type { MasonryImageItem, SelectionQuerySpec } from '#features/grid/types';
 import type { SmartFolderPredicate } from '../smart-folders/types';
 import type { AppSettings } from '../../stores/settingsStore';
 import styles from '../../App.module.css';

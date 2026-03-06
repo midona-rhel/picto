@@ -12,8 +12,8 @@ import {
   type ResolvedTagInfo,
   type SelectionQuerySpec,
   type SelectionSummary,
-} from '../components/image-grid/metadataPrefetch';
-import type { MasonryImageItem } from '../components/image-grid/shared';
+} from '#features/grid/data';
+import type { MasonryImageItem } from '#features/grid/types';
 import { parseTagString } from '../lib/tagParsing';
 import type { CollectionSummary } from '../types/api';
 

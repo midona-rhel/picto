@@ -1,5 +1,5 @@
 import { api } from '#desktop/api';
-import { prefetchMetadataBatch } from '../components/image-grid/metadataPrefetch';
+import { prefetchMetadataBatch } from '#features/grid/data';
 
 // Re-export types from central api types for backwards compatibility.
 export type { GridPageSlimResponse } from '../types/api';

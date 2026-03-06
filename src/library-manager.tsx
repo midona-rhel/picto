@@ -3,7 +3,7 @@ import ReactDOM from 'react-dom/client';
 import { MantineProvider, createTheme, rem, useMantineColorScheme } from '@mantine/core';
 import { api, getCurrentWindow } from '#desktop/api';
 import { IconX } from '@tabler/icons-react';
-import { LibraryPanel } from './components/settings/LibraryPanel';
+import { LibraryPanel } from '#features/settings/components';
 import { initSettingsStore, useSettingsStore, themeToColorScheme } from './stores/settingsStore';
 import '@mantine/core/styles.css';
 import './styles/globals.css';

@@ -3,7 +3,7 @@ import ReactDOM from 'react-dom/client';
 import { MantineProvider, createTheme, rem, useMantineColorScheme } from '@mantine/core';
 import { Notifications } from '@mantine/notifications';
 import { api } from '#desktop/api';
-import { SubscriptionsWindow } from './components/subscriptions/SubscriptionsWindow';
+import { SubscriptionsWindow } from '#features/subscriptions/components';
 import { initSettingsStore, themeToColorScheme, useSettingsStore } from './stores/settingsStore';
 import '@mantine/core/styles.css';
 import '@mantine/notifications/styles.css';
