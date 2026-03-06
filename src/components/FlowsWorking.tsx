@@ -244,29 +244,16 @@ export function FlowsWorking({
   headerTitle = 'Subscriptions',
   refreshToken,
 }: FlowsWorkingProps) {
-  const {
-    ensureInitialized,
-    runningIds,
-    runningQueryIds,
-    subscriptionProgressById,
-    runningFlowIds,
-    flowProgress,
-    lastSubscriptionFinished,
-    lastFlowFinished,
-    subscriptionEventSeq,
-    flowEventSeq,
-  } = useTaskRuntimeStore((s) => ({
-    ensureInitialized: s.ensureInitialized,
-    runningIds: s.runningSubscriptionIds,
-    runningQueryIds: s.runningQueryIds,
-    subscriptionProgressById: s.subscriptionProgressById,
-    runningFlowIds: s.runningFlowIds,
-    flowProgress: s.flowProgressById,
-    lastSubscriptionFinished: s.lastSubscriptionFinished,
-    lastFlowFinished: s.lastFlowFinished,
-    subscriptionEventSeq: s.subscriptionEventSeq,
-    flowEventSeq: s.flowEventSeq,
-  }));
+  const ensureInitialized = useTaskRuntimeStore((s) => s.ensureInitialized);
+  const runningIds = useTaskRuntimeStore((s) => s.runningSubscriptionIds);
+  const runningQueryIds = useTaskRuntimeStore((s) => s.runningQueryIds);
+  const subscriptionProgressById = useTaskRuntimeStore((s) => s.subscriptionProgressById);
+  const runningFlowIds = useTaskRuntimeStore((s) => s.runningFlowIds);
+  const flowProgress = useTaskRuntimeStore((s) => s.flowProgressById);
+  const lastSubscriptionFinished = useTaskRuntimeStore((s) => s.lastSubscriptionFinished);
+  const lastFlowFinished = useTaskRuntimeStore((s) => s.lastFlowFinished);
+  const subscriptionEventSeq = useTaskRuntimeStore((s) => s.subscriptionEventSeq);
+  const flowEventSeq = useTaskRuntimeStore((s) => s.flowEventSeq);
 
   const [flows, setFlows] = useState<FlowInfo[]>([]);
   const [sites, setSites] = useState<SitePluginInfo[]>([]);

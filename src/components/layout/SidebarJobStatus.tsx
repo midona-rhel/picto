@@ -18,21 +18,11 @@ type PtrBootstrapState =
   | { phase: 'done'; success: false; error: string };
 
 export function SidebarJobStatus() {
-  const {
-    ensureInitialized,
-    ptrSyncing,
-    ptrProgress,
-    ptrLastResult,
-    ptrBootstrapStatus,
-    subscriptionProgressById,
-  } = useTaskRuntimeStore((s) => ({
-    ensureInitialized: s.ensureInitialized,
-    ptrSyncing: s.ptrSyncing,
-    ptrProgress: s.ptrProgress,
-    ptrLastResult: s.ptrLastResult,
-    ptrBootstrapStatus: s.ptrBootstrapStatus,
-    subscriptionProgressById: s.subscriptionProgressById,
-  }));
+  const ptrSyncing = useTaskRuntimeStore((s) => s.ptrSyncing);
+  const ptrProgress = useTaskRuntimeStore((s) => s.ptrProgress);
+  const ptrLastResult = useTaskRuntimeStore((s) => s.ptrLastResult);
+  const ptrBootstrapStatus = useTaskRuntimeStore((s) => s.ptrBootstrapStatus);
+  const subscriptionProgressById = useTaskRuntimeStore((s) => s.subscriptionProgressById);
 
   const [ptrState, setPtrState] = useState<PtrState>({ phase: 'idle' });
   const [ptrBootstrapState, setPtrBootstrapState] = useState<PtrBootstrapState>({ phase: 'idle' });
@@ -44,10 +34,6 @@ export function SidebarJobStatus() {
   const subs = useMemo(() => {
     return [...subscriptionProgressById.values()].sort((a, b) => a.subscription_id.localeCompare(b.subscription_id));
   }, [subscriptionProgressById]);
-
-  useEffect(() => {
-    void ensureInitialized();
-  }, [ensureInitialized]);
 
   useEffect(() => {
     if (ptrFadeTimerRef.current) {

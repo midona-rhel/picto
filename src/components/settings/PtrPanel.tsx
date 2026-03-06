@@ -85,19 +85,11 @@ const DEFAULT_PTR_SERVER = 'https://ptr.hydrus.network:45871';
 const DEFAULT_PTR_ACCESS_KEY = '4a285629721ca442541ef2c15ea17d1f7f7578b0c3f4f5f2a05f8f0ab297786f';
 
 export function PtrPanel() {
-  const {
-    ensureInitialized,
-    syncing,
-    syncProgress,
-    ptrLastResult,
-    runtimeBootstrapStatus,
-  } = useTaskRuntimeStore((s) => ({
-    ensureInitialized: s.ensureInitialized,
-    syncing: s.ptrSyncing,
-    syncProgress: s.ptrProgress,
-    ptrLastResult: s.ptrLastResult,
-    runtimeBootstrapStatus: s.ptrBootstrapStatus,
-  }));
+  const ensureInitialized = useTaskRuntimeStore((s) => s.ensureInitialized);
+  const syncing = useTaskRuntimeStore((s) => s.ptrSyncing);
+  const syncProgress = useTaskRuntimeStore((s) => s.ptrProgress);
+  const ptrLastResult = useTaskRuntimeStore((s) => s.ptrLastResult);
+  const runtimeBootstrapStatus = useTaskRuntimeStore((s) => s.ptrBootstrapStatus);
 
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [stats, setStats] = useState<PtrStats | null>(null);
