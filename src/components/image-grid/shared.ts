@@ -1,3 +1,5 @@
+import type { EntitySlim as ApiEntitySlim } from '../../types/api';
+
 export const isEditableTarget = (target: EventTarget | null): boolean => {
   if (!(target instanceof HTMLElement)) return false;
   if (target.isContentEditable) return true;
@@ -27,33 +29,10 @@ export const mediaMimeForFilename = (filename: string) => {
 
 export const isVideoMime = (mime: string) => mime.startsWith('video/');
 
-export interface ImageItem {
-  entity_id?: number;
-  is_collection?: boolean;
-  collection_item_count?: number | null;
-  hash: string;
-  name: string | null;
-  mime: string;
-  size: number;
-  width: number | null;
-  height: number | null;
-  duration_ms: number | null;
-  num_frames: number | null;
-  has_audio: boolean;
-  status: string;
-  rating: number | null;
-  view_count: number;
-  source_urls: string[] | null;
-  imported_at: string;
-  has_thumbnail: boolean;
-  blurhash?: string | null;
-  tags?: string[];
-  dominant_colors?: { hex: string; l: number; a: number; b: number }[] | null;
-  notes?: Record<string, string> | null;
-}
+export type EntitySlim = ApiEntitySlim;
 
 // Extended type for Masonic grid with computed aspect ratio
-export interface MasonryImageItem extends ImageItem {
+export interface MasonryImageItem extends EntitySlim {
   aspectRatio: number;
 }
 
@@ -69,7 +48,7 @@ function sanitizeAspectRatio(raw: number): number {
 }
 
 /** Convert a FileInfo from the backend into a MasonryImageItem */
-export function toMasonryItem(file: ImageItem): MasonryImageItem {
+export function toMasonryItem(file: EntitySlim): MasonryImageItem {
   const w = sanitizeDimension(file.width, 300);
   const h = sanitizeDimension(file.height, 200);
   return { ...file, aspectRatio: sanitizeAspectRatio(w / h) };

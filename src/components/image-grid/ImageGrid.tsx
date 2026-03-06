@@ -24,7 +24,8 @@ import { GridController } from '../../controllers/gridController';
 import { SubscriptionController } from '../../controllers/subscriptionController';
 import { imageDrag } from '../../lib/imageDrag';
 import { mediaThumbnailUrl } from '../../lib/mediaUrl';
-import { ImageItem, MasonryImageItem, toMasonryItem } from './shared';
+import { toMasonryItem } from './shared';
+import type { EntitySlim, MasonryImageItem } from './shared';
 import { batchPreloadMediaUrls, decodeImageUrl } from './enhancedMediaCache';
 import {
   prefetchMetadata,
@@ -710,7 +711,7 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
   responseTotalCountRef.current = state.responseTotalCount;
 
   useEffect(() => {
-    const unlisten = listen<ImageItem>('file-imported', (event) => {
+    const unlisten = listen<EntitySlim>('file-imported', (event) => {
       // Skip if viewing a search, smart folder, or specific folder
       const hasTags = (searchTagsRef.current && searchTagsRef.current.length > 0)
         || (excludedSearchTagsRef.current && excludedSearchTagsRef.current.length > 0);

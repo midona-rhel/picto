@@ -273,9 +273,12 @@ export async function load(name: string, _options?: { autoSave?: boolean }): Pro
 }
 
 import type {
-  ImageItem,
+  EntityAllMetadata,
+  EntityDetails,
+  EntityMetadataBatchResponse,
+  EntitySlim,
   GridPageSlimResponse, GridPageSlimQuery,
-  FileAllMetadata, FileMetadataBatchResponse, EnsureThumbnailResponse, ReanalyzeFileColorsResponse,
+  EnsureThumbnailResponse, ReanalyzeFileColorsResponse,
   ImportResult, BackfillBlurhashResult,
   TagDisplay, TagSearchResult, TagTuple, TagRecord,
   NamespaceSummary, TagAlias, TagRelation,
@@ -328,16 +331,16 @@ export const api = {
     getPageSlim: (query: GridPageSlimQuery) =>
       invoke<GridPageSlimResponse>('get_grid_page_slim', { query }),
     getFilesMetadataBatch: (hashes: string[]) =>
-      invoke<FileMetadataBatchResponse>('get_files_metadata_batch', { hashes }),
+      invoke<EntityMetadataBatchResponse>('get_files_metadata_batch', { hashes }),
     getFileCount: () =>
       invoke<number>('get_file_count'),
   },
 
   file: {
     get: (hash: string) =>
-      invoke<ImageItem | null>('get_file', { hash }),
+      invoke<EntityDetails | null>('get_file', { hash }),
     getAllMetadata: (hash: string) =>
-      invoke<FileAllMetadata>('get_file_all_metadata', { hash }),
+      invoke<EntityAllMetadata>('get_file_all_metadata', { hash }),
     setStatus: (hash: string, status: string) =>
       invoke<void>('update_file_status', { hash, status }),
     setStatusSelection: (selection: SelectionQuerySpec, status: string) =>
@@ -762,6 +765,6 @@ export const api = {
     getNamespaceValues: (namespace: string) =>
       invoke<CompanionNamespaceValue[]>('companion_get_namespace_values', { namespace }),
     getFilesByTag: (tag: string) =>
-      invoke<ImageItem[]>('companion_get_files_by_tag', { tag }),
+      invoke<EntitySlim[]>('companion_get_files_by_tag', { tag }),
   },
 };

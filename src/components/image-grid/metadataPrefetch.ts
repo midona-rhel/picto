@@ -8,96 +8,23 @@
  * - keep selected/visible items pinned
  */
 import { api } from '#desktop/api';
-import type { SmartFolderPredicate } from '../smart-folders/types';
+import type {
+  EntityAllMetadata,
+  ResolvedTagInfo,
+  SelectionQuerySpec,
+  SelectionSummary,
+} from '../../types/api';
 
-export interface ResolvedTagInfo {
-  raw_tag: string;
-  display_tag: string;
-  namespace: string;
-  subtag: string;
-  source: string;
-  read_only: boolean;
-}
-
-export interface FileAllMetadata {
-  file: {
-    hash: string;
-    name: string | null;
-    size: number;
-    mime: string;
-    width: number | null;
-    height: number | null;
-    duration_ms: number | null;
-    num_frames: number | null;
-    has_audio: boolean;
-    status: string;
-    rating: number | null;
-    view_count: number;
-    source_urls: string[] | null;
-    imported_at: string;
-    has_thumbnail: boolean;
-    blurhash: string | null;
-    dominant_colors: { hex: string; l: number; a: number; b: number }[] | null;
-    notes: Record<string, string> | null;
-  };
-  tags: ResolvedTagInfo[];
-  parent_tags: { namespace: string; subtag: string; display: string; read_only: boolean }[];
-}
-
-export interface FileMetadataBatchResponse {
-  items: Record<string, FileAllMetadata>;
-  missing: string[];
-  generated_at: string;
-}
-
-export type SelectionMode = 'explicit_hashes' | 'all_results';
-
-export interface SelectionQuerySpec {
-  mode: SelectionMode;
-  hashes?: string[] | null;
-  search_tags?: string[] | null;
-  search_excluded_tags?: string[] | null;
-  tag_match_mode?: 'all' | 'any' | 'exact' | null;
-  smart_folder_predicate?: SmartFolderPredicate | null;
-  smart_folder_sort_field?: string | null;
-  smart_folder_sort_order?: string | null;
-  sort_field?: string | null;
-  sort_order?: string | null;
-  excluded_hashes?: string[] | null;
-  included_hashes?: string[] | null;
-  /** Status filter string: 'inbox', 'active', 'trash', 'untagged', 'recently_viewed'. Null = default (active). */
-  status?: string | null;
-  /** Folder scope: only include files in these folders (OR union). */
-  folder_ids?: number[] | null;
-  /** Folder scope exclusion: remove files in these folders. */
-  excluded_folder_ids?: number[] | null;
-  /** Included folder matching mode. */
-  folder_match_mode?: 'all' | 'any' | 'exact' | null;
-}
-
-export interface SelectionTagCount {
-  tag: string;
-  count: number;
-}
-
-export interface SelectionSummary {
-  total_count: number;
-  selected_count: number;
-  sample_hashes: string[];
-  shared_tags: SelectionTagCount[];
-  top_tags: SelectionTagCount[];
-  stats: {
-    total_size_bytes?: number | null;
-    mime_counts?: Record<string, number> | null;
-    rating_stats?: { min?: number; max?: number; shared?: number | null } | null;
-  };
-  pending: boolean;
-  generated_at: string;
-}
+export type { EntityAllMetadata };
+export type {
+  ResolvedTagInfo,
+  SelectionQuerySpec,
+  SelectionSummary,
+};
 
 type MetadataEntry = {
-  promise: Promise<FileAllMetadata>;
-  value?: FileAllMetadata;
+  promise: Promise<EntityAllMetadata>;
+  value?: EntityAllMetadata;
   approxBytes: number;
   lastTouch: number;
   pinCount: number;
@@ -144,7 +71,7 @@ function stableSelectionKey(spec: SelectionQuerySpec): string {
   return JSON.stringify(normalized);
 }
 
-function estimateMetadataBytes(metadata: FileAllMetadata): number {
+function estimateMetadataBytes(metadata: EntityAllMetadata): number {
   // Raw serialized bytes + safety factor for object/string overhead in JS heap.
   try {
     return Math.max(512, Math.ceil(JSON.stringify(metadata).length * 2.25));
@@ -173,7 +100,7 @@ function evictMetadataCache(): void {
   }
 }
 
-function upsertResolvedMetadata(hash: string, metadata: FileAllMetadata): Promise<FileAllMetadata> {
+function upsertResolvedMetadata(hash: string, metadata: EntityAllMetadata): Promise<EntityAllMetadata> {
   const existing = metadataCache.get(hash);
   const approxBytes = estimateMetadataBytes(metadata);
   const promise = Promise.resolve(metadata);
@@ -201,7 +128,7 @@ function upsertResolvedMetadata(hash: string, metadata: FileAllMetadata): Promis
   return promise;
 }
 
-function startSingleMetadataFetch(hash: string): Promise<FileAllMetadata> {
+function startSingleMetadataFetch(hash: string): Promise<EntityAllMetadata> {
   const startedAt = nowTs();
   const promise = api.file.getAllMetadata(hash).then((data) => {
     if (import.meta.env.DEV) console.log(`[props-perf] metadata arrived for ${hash.slice(0, 8)} in ${(nowTs() - startedAt).toFixed(1)}ms`);
@@ -246,7 +173,7 @@ async function prefetchMetadataBatchInternal(hashes: string[]): Promise<void> {
   }
 
   for (const chunk of chunks) {
-    const deferredByHash = new Map<string, Deferred<FileAllMetadata>>();
+    const deferredByHash = new Map<string, Deferred<EntityAllMetadata>>();
     const chunkToFetch: string[] = [];
 
     // Insert in-flight placeholders so overlapping prefetch calls do not duplicate backend work.
@@ -255,7 +182,7 @@ async function prefetchMetadataBatchInternal(hashes: string[]): Promise<void> {
         touchEntry(hash);
         continue;
       }
-      const deferred = createDeferred<FileAllMetadata>();
+      const deferred = createDeferred<EntityAllMetadata>();
       deferredByHash.set(hash, deferred);
       metadataCache.set(hash, {
         promise: deferred.promise,
@@ -308,7 +235,7 @@ export function prefetchMetadataBatch(hashes: string[]): Promise<void> {
  * Return the in-flight or completed promise. Shared — multiple consumers can
  * call this for the same hash. Starts a new fetch if nothing was prefetched.
  */
-export function getMetadata(hash: string): Promise<FileAllMetadata> {
+export function getMetadata(hash: string): Promise<EntityAllMetadata> {
   const existing = metadataCache.get(hash);
   if (existing) {
     touchEntry(hash);

@@ -11,16 +11,16 @@
  */
 
 import { mediaFileUrl, mediaThumbnailUrl } from '../../lib/mediaUrl';
-import { ImageItem } from './shared';
+import type { EntitySlim } from './shared';
 
 export type MediaVariant = 'thumb64' | 'thumb512' | 'full';
 
 // Lightweight hash → MIME map so getCachedMediaUrl() can construct
-// full-file protocol URLs without needing the full ImageItem.
+// full-file protocol URLs without needing full entity details.
 // Populated whenever preloadMediaUrl() is called.
 const mimeMap = new Map<string, string>();
 
-function urlForVariant(image: ImageItem, variant: MediaVariant): string {
+function urlForVariant(image: EntitySlim, variant: MediaVariant): string {
   if (variant === 'full') {
     return mediaFileUrl(image.hash, image.mime);
   }
@@ -54,14 +54,14 @@ export const hasCachedMediaUrl = (imageHash: string, variant: MediaVariant): boo
  * build a URL string. The actual network fetch happens when the browser
  * renders the element. The async signature is kept for API compatibility.
  */
-export const preloadMediaUrl = async (image: ImageItem, variant: MediaVariant): Promise<string> => {
+export const preloadMediaUrl = async (image: EntitySlim, variant: MediaVariant): Promise<string> => {
   // Record MIME so future getCachedMediaUrl('full') calls work
   mimeMap.set(image.hash, image.mime);
   return urlForVariant(image, variant);
 };
 
 export const batchPreloadMediaUrls = async (
-  images: ImageItem[],
+  images: EntitySlim[],
   _variant: MediaVariant,
   _priority?: 'high' | 'low',
 ): Promise<void> => {

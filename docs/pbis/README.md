@@ -7,15 +7,14 @@ This folder was reset for the first alpha release.
 1. `active-alpha/`: PBIs that are currently release-relevant for `v0.1.0-alpha.*`
 2. `archive/`: PBIs retained for history, not currently in alpha release scope
 
-## Active Alpha PBIs (7)
+## Active Alpha PBIs (6)
 
 1. [PBI-162](./active-alpha/PBI-162-import-and-subscription-entity-grouping.md)
-2. [PBI-165](./active-alpha/PBI-165-unify-media-entity-dto-naming.md)
-3. [PBI-166](./active-alpha/PBI-166-feature-first-frontend-folder-realignment.md)
-4. [PBI-200](./active-alpha/PBI-200-site-metadata-validation-danbooru.md)
-5. [PBI-220](./active-alpha/PBI-220-site-metadata-validation-rule34xxx.md)
-6. [PBI-221](./active-alpha/PBI-221-site-metadata-validation-e621.md)
-7. [PBI-224](./active-alpha/PBI-224-site-metadata-validation-framework-and-api-contract.md)
+2. [PBI-166](./active-alpha/PBI-166-feature-first-frontend-folder-realignment.md)
+3. [PBI-200](./active-alpha/PBI-200-site-metadata-validation-danbooru.md)
+4. [PBI-220](./active-alpha/PBI-220-site-metadata-validation-rule34xxx.md)
+5. [PBI-221](./active-alpha/PBI-221-site-metadata-validation-e621.md)
+6. [PBI-224](./active-alpha/PBI-224-site-metadata-validation-framework-and-api-contract.md)
 
 ## Archived PBIs (49)
 

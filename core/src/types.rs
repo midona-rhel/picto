@@ -65,7 +65,7 @@ pub struct DominantColorDto {
 }
 
 #[derive(Debug, Serialize)]
-pub struct FileInfo {
+pub struct EntityDetails {
     pub hash: String,
     pub name: Option<String>,
     pub size: i64,
@@ -92,7 +92,7 @@ pub struct FileInfo {
     pub notes: Option<JsonValue>,
 }
 
-impl From<FileRecord> for FileInfo {
+impl From<FileRecord> for EntityDetails {
     fn from(f: FileRecord) -> Self {
         let has_thumbnail = f.mime.starts_with("image/") || f.mime.starts_with("video/");
         let source_urls: Option<JsonValue> = f
@@ -127,9 +127,9 @@ impl From<FileRecord> for FileInfo {
     }
 }
 
-/// Slim file info for grid display — omits heavy fields.
+/// Slim entity info for grid display — omits heavy fields.
 #[derive(Debug, Serialize)]
-pub struct FileInfoSlim {
+pub struct EntitySlim {
     pub entity_id: i64,
     pub is_collection: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -152,7 +152,7 @@ pub struct FileInfoSlim {
     pub blurhash: Option<String>,
 }
 
-impl From<FileMetadataSlim> for FileInfoSlim {
+impl From<FileMetadataSlim> for EntitySlim {
     fn from(f: FileMetadataSlim) -> Self {
         let has_thumbnail = if f.is_collection {
             // Collection has thumbnail if a cover hash was resolved (non-empty)
@@ -187,7 +187,7 @@ impl From<FileMetadataSlim> for FileInfoSlim {
     }
 }
 
-impl From<crate::sqlite::files::FileRecord> for FileInfoSlim {
+impl From<crate::sqlite::files::FileRecord> for EntitySlim {
     fn from(f: crate::sqlite::files::FileRecord) -> Self {
         let has_thumbnail = f.mime.starts_with("image/") || f.mime.starts_with("video/");
         Self {
@@ -261,7 +261,7 @@ pub struct GridPageSlimQuery {
 
 #[derive(Debug, Serialize)]
 pub struct GridPageSlimResponse {
-    pub items: Vec<FileInfoSlim>,
+    pub items: Vec<EntitySlim>,
     pub next_cursor: Option<String>,
     pub has_more: bool,
     /// Total count of items matching the current filter (for scroll height estimation).
@@ -339,17 +339,22 @@ pub struct StorageStats {
 
 #[derive(Debug, Serialize)]
 pub struct FileAllMetadata {
-    pub file: FileInfo,
+    pub file: EntityDetails,
     pub tags: Vec<ResolvedTagInfo>,
     pub parent_tags: Vec<TagInfo>,
 }
 
 #[derive(Debug, Serialize)]
-pub struct FileMetadataBatchResponse {
+pub struct EntityMetadataBatchResponse {
     pub items: HashMap<String, FileAllMetadata>,
     pub missing: Vec<String>,
     pub generated_at: String,
 }
+
+// Temporary migration aliases while TS/front-end callsites are moved to entity-centric naming.
+pub type FileInfo = EntityDetails;
+pub type FileInfoSlim = EntitySlim;
+pub type FileMetadataBatchResponse = EntityMetadataBatchResponse;
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "snake_case")]
