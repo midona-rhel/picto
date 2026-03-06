@@ -9,6 +9,11 @@
 import { mediaThumbnailUrl, mediaFileUrl } from '../../lib/mediaUrl';
 import BlurhashDecodeWorker from './blurhashDecodeWorker?worker';
 import { api } from '#desktop/api';
+import {
+  enqueueMediaQosTask,
+  getMediaQosStats,
+  type MediaQosTaskHandle,
+} from './mediaQosScheduler';
 
 export interface AtlasEntry {
   thumb: ImageBitmap | null;
@@ -64,8 +69,8 @@ const FULL_QUALITY_HEAVY_DELAY_MS = 700;
 const FULL_QUALITY_MIN_SIDE = 1200;
 const FULL_HEAVY_DECODE_MAX_SIDE = 1500;
 const SCROLL_MAX_CONCURRENT = 3;
-const SCROLL_MAX_WEBP_CONCURRENT = 1;
-const IDLE_MAX_WEBP_CONCURRENT = 2;
+const SCROLL_MAX_HEAVY_CONCURRENT = 1;
+const IDLE_MAX_HEAVY_CONCURRENT = 2;
 const THUMB_DECODE_MAX_SIDE_SCROLL = 256;
 const THUMB_DECODE_MAX_SIDE_IDLE = 384;
 const WEBP_THUMB_DECODE_MAX_SIDE_SCROLL = 192;
@@ -85,8 +90,9 @@ export class ImageAtlas {
   private cache = new Map<string, AtlasEntry>();
   private accessCounter = 0;
   private activeLoads = 0;
-  private activeWebpLoads = 0;
+  private activeHeavyLoads = 0;
   private loadQueue: QueueItem[] = [];
+  private scheduledLoads = new Map<string, { handle: MediaQosTaskHandle; heavy: boolean }>();
   private queueWakeTimer: number | null = null;
   private blurhashQueue: Array<{ hash: string; str: string; ar: number }> = [];
   private blurhashDecodeCount = 0; // Resets each frame via resetFrameBudget()
@@ -290,6 +296,12 @@ export class ImageAtlas {
   destroy(): void {
     this.destroyed = true;
     this.loadQueue.length = 0;
+    for (const [, scheduled] of this.scheduledLoads) {
+      scheduled.handle.cancel();
+    }
+    this.scheduledLoads.clear();
+    this.activeLoads = 0;
+    this.activeHeavyLoads = 0;
     this.repairQueue.length = 0;
     this.repairQueueSet.clear();
     this.repairingThumbHashes.clear();
@@ -335,6 +347,18 @@ export class ImageAtlas {
   /** Evict cached bitmaps for given hashes so they will be re-fetched on next draw. */
   invalidateHashes(hashes: string[]): void {
     for (const hash of hashes) {
+      const thumbTask = this.taskKey(hash, 'thumb');
+      const fullTask = this.taskKey(hash, 'full');
+      const thumbScheduled = this.scheduledLoads.get(thumbTask);
+      if (thumbScheduled) {
+        thumbScheduled.handle.cancel();
+        this.completeScheduledLoad(thumbTask);
+      }
+      const fullScheduled = this.scheduledLoads.get(fullTask);
+      if (fullScheduled) {
+        fullScheduled.handle.cancel();
+        this.completeScheduledLoad(fullTask);
+      }
       const entry = this.cache.get(hash);
       if (entry) {
         entry.thumb?.close();
@@ -365,13 +389,26 @@ export class ImageAtlas {
   }
 
   getStats(): AtlasStats {
+    const qos = getMediaQosStats();
     return {
-      queueDepth: this.loadQueue.length,
+      queueDepth: this.loadQueue.length + qos.queuedByLane.visible,
       activeLoads: this.activeLoads,
       pendingBlurhash: this.pendingBlurhashByHash.size + this.blurhashQueue.length,
       cacheSize: this.cache.size,
       diskSpeed: this.diskSpeed,
     };
+  }
+
+  private taskKey(hash: string, kind: 'thumb' | 'full'): string {
+    return `${hash}:${kind}`;
+  }
+
+  private completeScheduledLoad(taskKey: string): void {
+    const scheduled = this.scheduledLoads.get(taskKey);
+    if (!scheduled) return;
+    this.scheduledLoads.delete(taskKey);
+    this.activeLoads = Math.max(0, this.activeLoads - 1);
+    if (scheduled.heavy) this.activeHeavyLoads = Math.max(0, this.activeHeavyLoads - 1);
   }
 
   private decodeBlurhash(hash: string, blurhashStr: string, aspectRatio: number): void {
@@ -509,89 +546,117 @@ export class ImageAtlas {
 
   private startLoad(item: QueueItem): void {
     const { hash, url, kind, mime, targetW, targetH } = item;
-    const isWebp = mime === 'image/webp';
+    const taskKey = this.taskKey(hash, kind);
+    if (this.scheduledLoads.has(taskKey)) return;
+    const heavyDecode = mime === 'image/webp' || mime === 'image/avif';
+
     this.activeLoads++;
-    if (isWebp) this.activeWebpLoads++;
-    const loadStart = performance.now();
-    const img = new Image();
-    img.decoding = 'async';
-    img.src = url;
+    if (heavyDecode) this.activeHeavyLoads++;
 
-    const decodeBitmap = async (): Promise<ImageBitmap> => {
-      const decodeSize = this.computeDecodeSize(kind, mime, targetW, targetH);
-      if (decodeSize) {
-        try {
-          return await createImageBitmap(img, {
-            resizeWidth: decodeSize.w,
-            resizeHeight: decodeSize.h,
-            resizeQuality: this.scrolling ? 'low' : 'medium',
-          });
-        } catch {
-          // Fall through to full-size decode when resize options are unsupported.
-        }
-      }
-      return createImageBitmap(img);
-    };
+    const handle = enqueueMediaQosTask({
+      lane: 'visible',
+      priority: this.scrolling ? 10 : 0,
+      heavy: heavyDecode,
+      run: (signal) => {
+        return new Promise<void>((resolve) => {
+          const loadStart = performance.now();
+          const img = new Image();
+          img.decoding = 'async';
+          let settled = false;
 
-    // Instant browser cache reveal — skip async round-trip for already-cached images
-    if (img.complete && img.naturalHeight > 0) {
-      decodeBitmap().then((bitmap) => {
-        if (this.destroyed) { bitmap.close(); return; }
-        const entry = this.cache.get(hash);
-        if (entry) {
-          this.applyBitmap(entry, bitmap, kind);
-          this.recordLoadTime(performance.now() - loadStart);
-        } else {
-          bitmap.close();
-        }
-      }).catch(() => {
-        if (this.destroyed) return;
-        const entry = this.cache.get(hash);
-        if (entry) this.markLoadDone(entry, kind);
-      }).finally(() => {
-        this.activeLoads = Math.max(0, this.activeLoads - 1);
-        if (isWebp) this.activeWebpLoads = Math.max(0, this.activeWebpLoads - 1);
-        this.processQueue();
-        this.scheduleQueueWake();
-      });
-      return;
-    }
+          const cleanup = () => {
+            img.onload = null;
+            img.onerror = null;
+            signal.removeEventListener('abort', onAbort);
+            img.src = '';
+          };
 
-    img.onload = () => {
-      if (this.destroyed) return;
-      // createImageBitmap decodes off-main-thread and transfers to GPU — no need for img.decode()
-      decodeBitmap().then((bitmap) => {
-        if (this.destroyed) { bitmap.close(); return; }
-        const entry = this.cache.get(hash);
-        if (entry) {
-          this.applyBitmap(entry, bitmap, kind);
-          this.recordLoadTime(performance.now() - loadStart);
-        } else {
-          bitmap.close();
-        }
-      }).catch(() => {
-        if (this.destroyed) return;
-        const entry = this.cache.get(hash);
-        if (entry) this.markLoadDone(entry, kind);
-      }).finally(() => {
-        this.activeLoads = Math.max(0, this.activeLoads - 1);
-        if (isWebp) this.activeWebpLoads = Math.max(0, this.activeWebpLoads - 1);
-        this.processQueue();
-        this.scheduleQueueWake();
-      });
-    };
-    img.onerror = () => {
-      if (this.destroyed) return;
-      const entry = this.cache.get(hash);
-      if (entry) this.markLoadDone(entry, kind);
-      if (kind === 'thumb') {
-        this.enqueueThumbnailRepair(hash);
-      }
-      this.activeLoads = Math.max(0, this.activeLoads - 1);
-      if (isWebp) this.activeWebpLoads = Math.max(0, this.activeWebpLoads - 1);
-      this.processQueue();
-      this.scheduleQueueWake();
-    };
+          const finish = () => {
+            if (settled) return;
+            settled = true;
+            cleanup();
+            this.completeScheduledLoad(taskKey);
+            this.processQueue();
+            this.scheduleQueueWake();
+            resolve();
+          };
+
+          const onAbort = () => {
+            const entry = this.cache.get(hash);
+            if (entry) this.markLoadDone(entry, kind);
+            finish();
+          };
+
+          const decodeBitmap = async (): Promise<ImageBitmap> => {
+            const decodeSize = this.computeDecodeSize(kind, mime, targetW, targetH);
+            if (decodeSize) {
+              try {
+                return await createImageBitmap(img, {
+                  resizeWidth: decodeSize.w,
+                  resizeHeight: decodeSize.h,
+                  resizeQuality: this.scrolling ? 'low' : 'medium',
+                });
+              } catch {
+                // Fall through to full-size decode when resize options are unsupported.
+              }
+            }
+            return createImageBitmap(img);
+          };
+
+          const applyDecodedBitmap = (bitmap: ImageBitmap) => {
+            if (this.destroyed || signal.aborted) {
+              bitmap.close();
+              finish();
+              return;
+            }
+            const entry = this.cache.get(hash);
+            if (entry) {
+              this.applyBitmap(entry, bitmap, kind);
+              this.recordLoadTime(performance.now() - loadStart);
+            } else {
+              bitmap.close();
+            }
+            finish();
+          };
+
+          signal.addEventListener('abort', onAbort, { once: true });
+          img.src = url;
+
+          const decodeLoaded = () => {
+            if (signal.aborted) {
+              finish();
+              return;
+            }
+            decodeBitmap()
+              .then(applyDecodedBitmap)
+              .catch(() => {
+                if (!this.destroyed) {
+                  const entry = this.cache.get(hash);
+                  if (entry) this.markLoadDone(entry, kind);
+                  if (kind === 'thumb') this.enqueueThumbnailRepair(hash);
+                }
+                finish();
+              });
+          };
+
+          if (img.complete && img.naturalHeight > 0) {
+            decodeLoaded();
+            return;
+          }
+
+          img.onload = decodeLoaded;
+          img.onerror = () => {
+            if (!this.destroyed) {
+              const entry = this.cache.get(hash);
+              if (entry) this.markLoadDone(entry, kind);
+              if (kind === 'thumb') this.enqueueThumbnailRepair(hash);
+            }
+            finish();
+          };
+        });
+      },
+    });
+    this.scheduledLoads.set(taskKey, { handle, heavy: heavyDecode });
   }
 
   private markLoadDone(entry: AtlasEntry, kind: 'thumb' | 'full'): void {
@@ -636,19 +701,20 @@ export class ImageAtlas {
 
   private processQueue(): void {
     const maxConcurrent = this.scrolling ? SCROLL_MAX_CONCURRENT : MAX_CONCURRENT;
-    const maxWebpConcurrent = this.scrolling ? SCROLL_MAX_WEBP_CONCURRENT : IDLE_MAX_WEBP_CONCURRENT;
+    const maxHeavyConcurrent = this.scrolling ? SCROLL_MAX_HEAVY_CONCURRENT : IDLE_MAX_HEAVY_CONCURRENT;
     const viewportCenter = this.viewportTop + this.viewportHeight / 2;
     while (this.activeLoads < maxConcurrent && this.loadQueue.length > 0) {
       const next = this.popNearestReadyToViewportCenter(viewportCenter, performance.now());
       if (!next) break;
       // Skip if entry was evicted while queued
       if (!this.cache.has(next.hash)) continue;
-      if (next.mime === 'image/webp' && this.activeWebpLoads >= maxWebpConcurrent) {
-        // Avoid decode storms from many queued WebP thumbs while still allowing other formats through.
+      const heavy = next.mime === 'image/webp' || next.mime === 'image/avif';
+      if (heavy && this.activeHeavyLoads >= maxHeavyConcurrent) {
+        // Avoid decode storms from many queued heavy thumbs while still allowing other formats through.
         next.readyAt = performance.now() + 20;
         this.loadQueue.push(next);
         const hasReadyNonWebp = this.loadQueue.some(
-          (item) => item.readyAt <= performance.now() && item.mime !== 'image/webp',
+          (item) => item.readyAt <= performance.now() && item.mime !== 'image/webp' && item.mime !== 'image/avif',
         );
         if (!hasReadyNonWebp) break;
         continue;
