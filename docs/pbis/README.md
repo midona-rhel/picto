@@ -15,7 +15,7 @@ This folder was reset for the first alpha release.
 4. [PBI-221](./active-alpha/PBI-221-site-metadata-validation-e621.md)
 5. [PBI-224](./active-alpha/PBI-224-site-metadata-validation-framework-and-api-contract.md)
 
-## Archived PBIs (49)
+## Archived PBIs (82)
 
 All other `PBI-*.md` files moved to `./archive/`.
 
