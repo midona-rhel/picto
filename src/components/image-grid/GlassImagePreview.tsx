@@ -4,6 +4,10 @@ import { IconPhoto } from '@tabler/icons-react';
 import { MasonryImageItem } from './shared';
 import { getCachedMediaUrl } from './enhancedMediaCache';
 import previewStyles from './GlassImagePreview.module.css';
+import {
+  MediaCardFrame,
+  MediaCardImage,
+} from '../ui/media-card';
 
 const CONTAINER_HEIGHT = 200;
 
@@ -25,11 +29,12 @@ export const GlassImagePreview = memo(function GlassImagePreview({ images }: Gla
   if (images.length === 0) {
     return (
       <div className={previewStyles.container} style={{ height: CONTAINER_HEIGHT }}>
-        <div className={previewStyles.imageBox}>
-          <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-            <IconPhoto size={48} style={{ opacity: 0.3 }} />
-          </div>
-        </div>
+        <MediaCardFrame className={previewStyles.imageBox}>
+          <MediaCardImage
+            fit="contain"
+            fallback={<IconPhoto size={48} className={previewStyles.placeholderIcon} />}
+          />
+        </MediaCardFrame>
       </div>
     );
   }
@@ -43,18 +48,23 @@ export const GlassImagePreview = memo(function GlassImagePreview({ images }: Gla
     return (
       <div className={previewStyles.container} style={{ height: CONTAINER_HEIGHT }}>
         {thumbUrl ? (
-          <div className={previewStyles.singleImage}>
-            <img src={thumbUrl} alt="" style={{ display: 'block', maxWidth: '100%', maxHeight: CONTAINER_HEIGHT, objectFit: 'contain' }} />
+          <MediaCardFrame className={previewStyles.singleImage}>
+            <MediaCardImage
+              src={thumbUrl}
+              fit="contain"
+              imageClassName={previewStyles.singleImageTag}
+            />
             <Badge size="xs" variant="filled" color="dark" className={previewStyles.mimeBadge}>
               {mimeLabel}
             </Badge>
-          </div>
+          </MediaCardFrame>
         ) : (
-          <div className={previewStyles.imageBox}>
-            <div style={{ height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              <IconPhoto size={48} style={{ opacity: 0.3 }} />
-            </div>
-          </div>
+          <MediaCardFrame className={previewStyles.imageBox}>
+            <MediaCardImage
+              fit="contain"
+              fallback={<IconPhoto size={48} className={previewStyles.placeholderIcon} />}
+            />
+          </MediaCardFrame>
         )}
       </div>
     );
@@ -80,25 +90,28 @@ export const GlassImagePreview = memo(function GlassImagePreview({ images }: Gla
           return (
             <div
               key={img.hash}
+              className={previewStyles.stackItem}
               style={{
-                position: 'absolute',
-                inset: 0,
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
                 transform: `rotate(${rot}deg) translate(${off.x}px, ${off.y}px)`,
                 zIndex: i,
                 filter: isTop ? undefined : 'brightness(0.7)',
               }}
             >
               {url ? (
-                <div className={previewStyles.stackCard}>
-                  <img src={url} alt="" style={{ display: 'block', maxWidth: '100%', maxHeight: CONTAINER_HEIGHT - 20, objectFit: 'contain' }} />
-                </div>
+                <MediaCardFrame className={previewStyles.stackCard}>
+                  <MediaCardImage
+                    src={url}
+                    fit="contain"
+                    imageClassName={previewStyles.stackImage}
+                  />
+                </MediaCardFrame>
               ) : (
-                <div className={previewStyles.stackPlaceholder}>
-                  <IconPhoto size={32} style={{ opacity: 0.2 }} />
-                </div>
+                <MediaCardFrame className={previewStyles.stackPlaceholder}>
+                  <MediaCardImage
+                    fit="contain"
+                    fallback={<IconPhoto size={32} className={previewStyles.stackPlaceholderIcon} />}
+                  />
+                </MediaCardFrame>
               )}
             </div>
           );

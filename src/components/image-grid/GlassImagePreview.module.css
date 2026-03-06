@@ -11,27 +11,10 @@
 .imageBox {
   width: 100%;
   height: 100%;
-  border-radius: 6px;
-  overflow: hidden;
 }
 
 .singleImage {
   position: relative;
-  border-radius: 6px;
-  overflow: hidden;
-  line-height: 0;
-}
-
-.singleImage::after {
-  content: "";
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  pointer-events: none;
-  box-shadow: 0 0 0 1px var(--color-black-10) inset;
-  border-radius: 6px;
 }
 
 .mimeBadge {
@@ -50,22 +33,23 @@
   height: 100%;
 }
 
+.stackItem {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
 .stackCard {
-  border-radius: 6px;
-  overflow: hidden;
-  line-height: 0;
   box-shadow: 0 0 0 1px var(--color-black-10) inset;
 }
 
 .stackPlaceholder {
   width: 120px;
   height: 120px;
-  border-radius: 6px;
   background: var(--color-white-05);
   border: 1px solid var(--ig-border-light);
-  display: flex;
-  align-items: center;
-  justify-content: center;
 }
 
 .countBadge {
@@ -76,4 +60,22 @@
   color: var(--color-white-99);
   border: none;
   z-index: 10;
+}
+
+.placeholderIcon {
+  opacity: 0.3;
+}
+
+.stackPlaceholderIcon {
+  opacity: 0.2;
+}
+
+.singleImageTag {
+  max-width: 100%;
+  max-height: 200px;
+}
+
+.stackImage {
+  max-width: 100%;
+  max-height: 180px;
 }
