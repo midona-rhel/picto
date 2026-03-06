@@ -1,4 +1,12 @@
-import type { PtrBootstrapCounts } from './core';
+import type {
+  PtrBootstrapCounts,
+  PtrSyncPhaseChangedEvent,
+  PtrSyncProgress,
+  PtrSyncResult,
+  SubscriptionFinishedEvent,
+  SubscriptionProgressEvent,
+  SubscriptionStartedEvent,
+} from './core';
 
 // ─── Event Payloads ─────────────────────────────────────────────────────────
 // Typed interfaces for all backend events. Single source of truth — all
@@ -93,6 +101,100 @@ export interface DuplicateAutoMergeFinishedEvent {
   loser_hash: string;
   distance: number;
   tags_merged: number;
+}
+
+export interface SidebarInvalidatedEvent {
+  reason?: string;
+  seq?: number;
+  ts?: string;
+}
+
+export interface GridSnapshotInvalidatedEvent {
+  scope_key?: string;
+  reason?: string;
+  seq?: number;
+  ts?: string;
+}
+
+export interface ZoomFactorChangedEvent {
+  factor: number;
+}
+
+export interface OpenDetailWindowEvent {
+  hash: string;
+  width?: number;
+  height?: number;
+}
+
+export interface FileImportedEvent {
+  entity_id: number;
+  is_collection: boolean;
+  collection_item_count?: number | null;
+  hash: string;
+  name?: string | null;
+  size: number;
+  mime: string;
+  width?: number | null;
+  height?: number | null;
+  duration_ms?: number | null;
+  num_frames?: number | null;
+  has_audio: boolean;
+  status: string;
+  rating?: number | null;
+  view_count: number;
+  imported_at: string;
+  has_thumbnail: boolean;
+  blurhash?: string | null;
+}
+
+/**
+ * Core runtime event contract.
+ * Keep in sync with `core/src/events.rs::event_names`.
+ */
+export interface CoreRuntimeEventPayloadMap {
+  'state-changed': StateChangedEvent;
+  'sidebar-invalidated': SidebarInvalidatedEvent;
+  'grid-snapshot-invalidated': GridSnapshotInvalidatedEvent;
+  'subscription-started': SubscriptionStartedEvent;
+  'subscription-progress': SubscriptionProgressEvent;
+  'subscription-finished': SubscriptionFinishedEvent;
+  'flow-started': FlowStartedEvent;
+  'flow-progress': FlowProgressEvent;
+  'flow-finished': FlowFinishedEvent;
+  'ptr-sync-started': null;
+  'ptr-sync-progress': PtrSyncProgress;
+  'ptr-sync-finished': PtrSyncResult;
+  'ptr-sync-phase-changed': PtrSyncPhaseChangedEvent;
+  'ptr-bootstrap-started': PtrBootstrapStartedEvent;
+  'ptr-bootstrap-progress': PtrBootstrapProgressEvent;
+  'ptr-bootstrap-finished': PtrBootstrapFinishedEvent;
+  'ptr-bootstrap-failed': PtrBootstrapFailedEvent;
+  'library-closed': null;
+  'zoom-factor-changed': ZoomFactorChangedEvent;
+  'file-imported': FileImportedEvent;
+  'open-detail-window': OpenDetailWindowEvent;
+  'duplicate-auto-merge-finished': DuplicateAutoMergeFinishedEvent;
+}
+
+/**
+ * Superset map for runtime channels consumed by the renderer.
+ * Includes Electron main-process channels that are not emitted by core.
+ */
+export interface RuntimeEventPayloadMap extends CoreRuntimeEventPayloadMap {
+  'library-switching': LibrarySwitchingEvent;
+  'library-switched': LibrarySwitchedEvent;
+}
+
+export type CoreRuntimeEventName = keyof CoreRuntimeEventPayloadMap;
+export type RuntimeEventName = keyof RuntimeEventPayloadMap;
+export type RuntimeEventPayload<K extends RuntimeEventName> = RuntimeEventPayloadMap[K];
+
+export interface LibrarySwitchingEvent {
+  path?: string;
+}
+
+export interface LibrarySwitchedEvent {
+  path?: string;
 }
 
 // ─── PTR Status ─────────────────────────────────────────────────────────────
