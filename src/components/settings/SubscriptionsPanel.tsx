@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useDisclosure } from '@mantine/hooks';
 import {
   Text,
@@ -24,9 +24,9 @@ import {
   IconPlayerStop,
 } from '@tabler/icons-react';
 import { notifySuccess, notifyError, notifyWarning } from '../../lib/notify';
-import { logBestEffortError, runBestEffort } from '../../lib/asyncOps';
 import { SubscriptionController } from '../../controllers/subscriptionController';
 import { registerUndoAction } from '../../controllers/undoRedoController';
+import { useTaskRuntimeStore } from '../../stores/taskRuntimeStore';
 import { TextButton } from '../ui/TextButton';
 import { EmptyState } from '../ui/EmptyState';
 import { SettingsBlock, SettingsButtonRow, SettingsInputGroup } from './ui';
@@ -61,16 +61,29 @@ interface SubscriptionInfo {
 }
 
 export function SubscriptionsPanel() {
+  const {
+    ensureInitialized,
+    runningSubs,
+    runningQueries,
+    lastSubscriptionFinished,
+    subscriptionEventSeq,
+  } = useTaskRuntimeStore((s) => ({
+    ensureInitialized: s.ensureInitialized,
+    runningSubs: s.runningSubscriptionIds,
+    runningQueries: s.runningQueryIds,
+    lastSubscriptionFinished: s.lastSubscriptionFinished,
+    subscriptionEventSeq: s.subscriptionEventSeq,
+  }));
+
   const [subscriptions, setSubscriptions] = useState<SubscriptionInfo[]>([]);
   const [sites, setSites] = useState<SiteInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [createModalOpen, { open: openCreateModal, close: closeCreateModal }] = useDisclosure(false);
   const [creating, setCreating] = useState(false);
   const [expandedSubs, setExpandedSubs] = useState<Set<string>>(new Set());
-  const [runningSubs, setRunningSubs] = useState<Set<string>>(new Set());
-  const [runningQueries, setRunningQueries] = useState<Set<string>>(new Set());
   const [addQuerySubId, setAddQuerySubId] = useState<string | null>(null);
   const [newQueryText, setNewQueryText] = useState('');
+  const lastFinishedKeyRef = useRef<string | null>(null);
 
   const [newSubscription, setNewSubscription] = useState({
     name: '',
@@ -81,47 +94,44 @@ export function SubscriptionsPanel() {
   });
 
   useEffect(() => {
+    void ensureInitialized();
     loadData();
-    SubscriptionController.getRunningSubscriptions().then((ids) => {
-      setRunningSubs(new Set(ids));
-    }).catch((error) => {
-      logBestEffortError('subscriptions.getRunningSubscriptions.initial', error);
-    });
+  }, [ensureInitialized]);
 
-    const unlistenStarted = SubscriptionController.onStarted((event) => {
-      setRunningSubs(prev => new Set(prev).add(event.subscription_id));
-    });
-    const unlistenFinished = SubscriptionController.onFinished((event) => {
-      setRunningSubs(prev => {
-        const next = new Set(prev);
-        next.delete(event.subscription_id);
-        return next;
-      });
-      setRunningQueries(prev => {
-        if (!event.query_id) return prev;
-        const next = new Set(prev);
-        next.delete(event.query_id);
-        return next;
-      });
-      if (event.status === 'succeeded') {
-        notifySuccess(`Downloaded ${event.files_downloaded}, skipped ${event.files_skipped}`, 'Sync Complete');
-      } else if (event.status === 'cancelled') {
-        if (event.failure_kind === 'inbox_full') {
-          notifyWarning('Paused — inbox is full (1000). Review inbox items to continue.', 'Sync Paused');
-        } else {
-          notifyWarning(`Cancelled — ${event.files_downloaded} downloaded`, 'Sync Stopped');
-        }
-      } else if (event.status === 'failed') {
-        notifyError(event.error || `${event.errors_count} error(s)`, 'Sync Failed');
+  useEffect(() => {
+    if (!subscriptionEventSeq) return;
+    loadData();
+  }, [subscriptionEventSeq]);
+
+  useEffect(() => {
+    if (!lastSubscriptionFinished) return;
+    const key = [
+      lastSubscriptionFinished.subscription_id,
+      lastSubscriptionFinished.query_id ?? '',
+      lastSubscriptionFinished.status,
+      lastSubscriptionFinished.files_downloaded,
+      lastSubscriptionFinished.files_skipped,
+      lastSubscriptionFinished.error ?? '',
+      lastSubscriptionFinished.failure_kind ?? '',
+    ].join(':');
+    if (lastFinishedKeyRef.current === key) return;
+    lastFinishedKeyRef.current = key;
+
+    if (lastSubscriptionFinished.status === 'succeeded') {
+      notifySuccess(
+        `Downloaded ${lastSubscriptionFinished.files_downloaded}, skipped ${lastSubscriptionFinished.files_skipped}`,
+        'Sync Complete',
+      );
+    } else if (lastSubscriptionFinished.status === 'cancelled') {
+      if (lastSubscriptionFinished.failure_kind === 'inbox_full') {
+        notifyWarning('Paused — inbox is full (1000). Review inbox items to continue.', 'Sync Paused');
+      } else {
+        notifyWarning(`Cancelled — ${lastSubscriptionFinished.files_downloaded} downloaded`, 'Sync Stopped');
       }
-      loadData();
-    });
-
-    return () => {
-      runBestEffort('subscriptions.unlistenStarted', unlistenStarted.then((fn) => fn()));
-      runBestEffort('subscriptions.unlistenFinished', unlistenFinished.then((fn) => fn()));
-    };
-  }, []);
+    } else if (lastSubscriptionFinished.status === 'failed') {
+      notifyError(lastSubscriptionFinished.error || `${lastSubscriptionFinished.errors_count} error(s)`, 'Sync Failed');
+    }
+  }, [lastSubscriptionFinished]);
 
   const loadData = async () => {
     try {
@@ -262,7 +272,6 @@ export function SubscriptionsPanel() {
   };
 
   const runQuery = async (sub: SubscriptionInfo, query: SubscriptionQueryInfo) => {
-    setRunningQueries(prev => new Set(prev).add(query.id));
     try {
       await SubscriptionController.runSubscriptionQuery({
         queryId: query.id,
@@ -270,7 +279,6 @@ export function SubscriptionsPanel() {
       });
     } catch (err) {
       notifyError(err, 'Sync Failed');
-      setRunningQueries(prev => { const n = new Set(prev); n.delete(query.id); return n; });
     }
   };
 
