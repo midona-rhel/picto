@@ -20,6 +20,7 @@ import { TagSelectService } from '../tags/tagSelectService';
 import type { TagFilterLogicMode } from '../tags/tagSelectTypes';
 import { FolderPickerService } from '../../services/folderPickerService';
 import { TextButton } from '../ui/TextButton';
+import { buildColorFilterMenu, buildRatingFilterMenu, buildTypesFilterMenu } from '../ui/context-actions/filterActions';
 import st from './FilterBar.module.css';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -204,12 +205,7 @@ export function FilterBar({
   const handleRatingPill = useCallback(() => {
     if (!ratingPillRef.current) return;
     const rect = ratingPillRef.current.getBoundingClientRect();
-    const items: ContextMenuEntry[] = RATING_OPTIONS.map((opt) => ({
-      type: 'check' as const,
-      label: opt.label,
-      checked: ratingFilter === opt.value,
-      onClick: () => setRatingFilter(opt.value),
-    }));
+    const items: ContextMenuEntry[] = buildRatingFilterMenu(RATING_OPTIONS, ratingFilter, setRatingFilter);
     ratingMenu.openAt({ x: rect.left, y: rect.bottom + 4 }, items);
   }, [ratingFilter, setRatingFilter, ratingMenu]);
 
@@ -219,13 +215,7 @@ export function FilterBar({
   const handleTypesPill = useCallback(() => {
     if (!typesPillRef.current) return;
     const rect = typesPillRef.current.getBoundingClientRect();
-    const items: ContextMenuEntry[] = [
-      {
-        type: 'custom',
-        key: 'types-panel',
-        render: () => <TypesPanel />,
-      },
-    ];
+    const items: ContextMenuEntry[] = buildTypesFilterMenu(() => <TypesPanel />);
     typesMenu.openAt({ x: rect.left, y: rect.bottom + 4 }, items);
   }, [typesMenu]);
 
@@ -235,13 +225,7 @@ export function FilterBar({
   const handleColorPill = useCallback(() => {
     if (!colorPillRef.current) return;
     const rect = colorPillRef.current.getBoundingClientRect();
-    const items: ContextMenuEntry[] = [
-      {
-        type: 'custom',
-        key: 'color-panel',
-        render: () => <ColorPanel />,
-      },
-    ];
+    const items: ContextMenuEntry[] = buildColorFilterMenu(() => <ColorPanel />);
     colorMenu.openAt({ x: rect.left, y: rect.bottom + 4 }, items);
   }, [colorFilter, colorMenu]);
 
