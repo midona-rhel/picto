@@ -24,6 +24,7 @@ export interface GridFeatureParams {
   allImagesCount: number | null;
   activeStatusFilter: string | null;
   inboxCount: number | null;
+  uncategorizedCount: number | null;
   trashCount: number | null;
   smartFolderCounts: Record<string, number>;
   folderNodes: Array<{ id: string; count?: number | null }>;
@@ -75,6 +76,7 @@ export function useGridFeatureState({
   allImagesCount,
   activeStatusFilter,
   inboxCount,
+  uncategorizedCount,
   trashCount,
   smartFolderCounts,
   folderNodes,
@@ -196,6 +198,7 @@ export function useGridFeatureState({
     : null;
   const statusFilterCount =
     activeStatusFilter === 'inbox' ? inboxCount
+    : activeStatusFilter === 'uncategorized' ? uncategorizedCount
     : activeStatusFilter === 'trash' ? trashCount
     : null;
   const activeGridScopeCount = activeFolder

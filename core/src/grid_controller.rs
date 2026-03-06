@@ -9,6 +9,7 @@ use crate::ptr_controller::PtrController;
 use crate::sqlite::bitmaps::BitmapKey;
 use crate::sqlite::files::FileMetadataSlim;
 use crate::sqlite::projections::ResolvedMetadataFull;
+use crate::sqlite::folders::list_uncategorized_entity_ids;
 use crate::sqlite::smart_folders;
 use crate::sqlite::tags::{find_tag as sql_find_tag, parse_tag_string, FileTagInfo};
 use crate::sqlite::{ScopeSnapshot, ScopeSnapshotKey, SqliteDatabase};
@@ -85,7 +86,7 @@ fn parse_include_match_mode(raw: Option<&str>, default_mode: IncludeMatchMode) -
 }
 
 /// Build a stable scope key for the scope snapshot cache.
-/// The `scope` string encodes the query type (smart_folder, search_tags, folder, untagged, status).
+/// The `scope` string encodes the query type (smart_folder, search_tags, folder, untagged, uncategorized, status).
 /// The `predicate_hash` captures filter-specific parameters so distinct predicates get distinct entries.
 fn build_scope_cache_key(
     query: &GridPageSlimQuery,
@@ -122,6 +123,8 @@ fn build_scope_cache_key(
             .unwrap_or(false)
     {
         "folder".to_string()
+    } else if query.status.as_deref() == Some("uncategorized") {
+        "uncategorized".to_string()
     } else if query.status.as_deref() == Some("untagged") {
         "untagged".to_string()
     } else {
@@ -524,6 +527,73 @@ impl GridController {
             let next_cursor = if has_more {
                 rows.last()
                     .and_then(|row| slim_cursor_value_for_sort(row, effective_sort, None))
+            } else {
+                None
+            };
+
+            return Ok(GridPageSlimResponse {
+                items: rows.into_iter().map(EntitySlim::from).collect(),
+                next_cursor,
+                has_more,
+                total_count,
+            });
+        }
+
+        if query.status.as_deref() == Some("uncategorized") {
+            let cache_key = build_scope_cache_key(&query, &sort_field, &sort_dir);
+            let (filtered_ids, total_count) = if let Some(snap) = db.scope_cache_get(&cache_key) {
+                (snap.ids, Some(snap.total_count))
+            } else {
+                let ids = db.with_read_conn(list_uncategorized_entity_ids).await?;
+
+                let ids = if let Some(ref color_ids) = color_file_ids {
+                    ids.into_iter()
+                        .filter(|id| color_ids.contains(id))
+                        .collect()
+                } else {
+                    ids
+                };
+
+                let tc = ids.len() as i64;
+                db.scope_cache_put(
+                    cache_key,
+                    ScopeSnapshot {
+                        ids: ids.clone(),
+                        total_count: tc,
+                        created_at: Instant::now(),
+                    },
+                );
+                (ids, Some(tc))
+            };
+
+            let sf = sort_field.clone();
+            let sd = sort_dir.clone();
+            let cursor = query.cursor.clone();
+            let fetch_limit = limit + 1;
+            let gf = grid_filters.clone();
+
+            let mut rows = db
+                .with_read_conn(move |conn| {
+                    crate::sqlite::files::list_files_slim_by_ids(
+                        conn,
+                        &filtered_ids,
+                        fetch_limit,
+                        &sf,
+                        &sd,
+                        cursor.as_deref(),
+                        gf.as_ref(),
+                        None,
+                    )
+                })
+                .await?;
+
+            let has_more = rows.len() as i64 > limit;
+            if has_more {
+                rows.truncate(limit as usize);
+            }
+            let next_cursor = if has_more {
+                rows.last()
+                    .and_then(|row| slim_cursor_value_for_sort(row, &sort_field, None))
             } else {
                 None
             };

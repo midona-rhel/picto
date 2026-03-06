@@ -79,6 +79,7 @@ describe('Sidebar drag-drop status targets', () => {
     useDomainStore.setState({
       allImagesCount: 100,
       inboxCount: 20,
+      uncategorizedCount: 12,
       trashCount: 5,
       untaggedCount: 10,
       recentViewedCount: 0,

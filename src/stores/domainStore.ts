@@ -18,6 +18,7 @@ interface DomainState {
   // Sidebar counts
   allImagesCount: number;
   inboxCount: number;
+  uncategorizedCount: number;
   trashCount: number;
   untaggedCount: number;
   tagsCount: number;
@@ -80,6 +81,7 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number, fallback: T): Pr
 export const useDomainStore = create<DomainState>((set, get) => ({
   allImagesCount: 0,
   inboxCount: 0,
+  uncategorizedCount: 0,
   trashCount: 0,
   untaggedCount: 0,
   tagsCount: 0,
@@ -115,7 +117,7 @@ export const useDomainStore = create<DomainState>((set, get) => ({
         SIDEBAR_FETCH_STUCK_TIMEOUT_MS,
         { nodes: [], tree_epoch: 0, generated_at: new Date(0).toISOString() },
       );
-      const [namespaceSummary, inboxCountResp, untaggedCountResp, recentViewedCountResp] = await Promise.all([
+      const [namespaceSummary, inboxCountResp, uncategorizedCountResp, untaggedCountResp, recentViewedCountResp] = await Promise.all([
         withTimeout(api.tags.getNamespaceSummary(), SIDEBAR_OPTIONAL_QUERY_TIMEOUT_MS, []),
         withTimeout(api.grid.getPageSlim({
           limit: 1,
@@ -123,6 +125,13 @@ export const useDomainStore = create<DomainState>((set, get) => ({
           sortField: 'imported_at',
           sortOrder: 'desc',
           status: 'inbox',
+        }), SIDEBAR_OPTIONAL_QUERY_TIMEOUT_MS, null),
+        withTimeout(api.grid.getPageSlim({
+          limit: 1,
+          cursor: null,
+          sortField: 'imported_at',
+          sortOrder: 'desc',
+          status: 'uncategorized',
         }), SIDEBAR_OPTIONAL_QUERY_TIMEOUT_MS, null),
         withTimeout(api.grid.getPageSlim({
           limit: 1,
@@ -146,6 +155,9 @@ export const useDomainStore = create<DomainState>((set, get) => ({
 
       const allNode = nodes.find((n) => n.id === 'system:all' || n.id === 'system:all_files');
       const inboxNode = nodes.find((n) => n.id === 'system:inbox');
+      const uncategorizedNode = nodes.find(
+        (n) => n.id === 'system:uncategorized' || n.id === 'system:uncategorized_files',
+      );
       const trashNode = nodes.find((n) => n.id === 'system:trash');
       const untaggedNode = nodes.find(
         (n) => n.id === 'system:untagged' || n.id === 'system:untagged_files',
@@ -155,6 +167,7 @@ export const useDomainStore = create<DomainState>((set, get) => ({
       );
       const duplicatesNode = nodes.find((n) => n.id === 'system:duplicates');
       const inboxCount = inboxCountResp?.total_count ?? inboxNode?.count ?? 0;
+      const uncategorizedCount = uncategorizedCountResp?.total_count ?? uncategorizedNode?.count ?? 0;
       const untaggedCount = untaggedCountResp?.total_count ?? untaggedNode?.count ?? 0;
       const recentViewedCount = recentViewedCountResp?.total_count ?? recentViewedNode?.count ?? 0;
 
@@ -186,6 +199,7 @@ export const useDomainStore = create<DomainState>((set, get) => ({
       set({
         allImagesCount: allNode?.count ?? 0,
         inboxCount,
+        uncategorizedCount,
         trashCount: trashNode?.count ?? 0,
         untaggedCount,
         tagsCount,

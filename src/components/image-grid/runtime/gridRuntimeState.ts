@@ -8,7 +8,7 @@ import type { ViewerSession } from './gridViewerSession';
 // ---------------------------------------------------------------------------
 
 export type GridViewMode = 'waterfall' | 'justified' | 'grid';
-export type GridEmptyContext = 'inbox' | 'untagged' | 'folder' | 'smart-folder' | 'default';
+export type GridEmptyContext = 'inbox' | 'uncategorized' | 'untagged' | 'folder' | 'smart-folder' | 'default';
 
 export type VirtualAllSelectionState = {
   baseSpec: Omit<SelectionQuerySpec, 'excluded_hashes'>;

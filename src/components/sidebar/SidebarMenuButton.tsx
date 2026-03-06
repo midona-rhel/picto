@@ -75,6 +75,7 @@ export function SidebarMenuButton() {
       children: [
         { type: 'item', label: 'All Images', shortcut: `${modKey}+1`, onClick: () => navigateTo('images') },
         { type: 'item', label: 'Inbox', shortcut: `${modKey}+2`, onClick: () => navigateTo('images', null, null, 'inbox') },
+        { type: 'item', label: 'Uncategorized', onClick: () => navigateTo('images', null, null, 'uncategorized') },
         { type: 'item', label: 'Untagged', shortcut: `${modKey}+3`, onClick: () => navigateTo('images', null, null, 'untagged') },
         { type: 'item', label: 'Recently Viewed', shortcut: `${modKey}+4`, onClick: () => navigateTo('images', null, null, 'recently_viewed') },
         { type: 'item', label: 'Trash', shortcut: `${modKey}+5`, onClick: () => navigateTo('images', null, null, 'trash') },

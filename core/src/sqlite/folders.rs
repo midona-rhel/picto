@@ -305,6 +305,39 @@ pub fn get_folder_entity_ids(conn: &Connection, folder_id: i64) -> rusqlite::Res
     rows.collect()
 }
 
+/// Get top-level single entities that are not assigned to any folder.
+pub fn list_uncategorized_entity_ids(conn: &Connection) -> rusqlite::Result<Vec<i64>> {
+    let mut stmt = conn.prepare_cached(
+        "SELECT me.entity_id
+         FROM media_entity me
+         WHERE me.status = 1
+           AND me.kind = 'single'
+           AND me.parent_collection_id IS NULL
+           AND NOT EXISTS (
+               SELECT 1 FROM folder_entity fe WHERE fe.entity_id = me.entity_id
+           )
+         ORDER BY me.entity_id",
+    )?;
+    let rows = stmt.query_map([], |row| row.get(0))?;
+    rows.collect()
+}
+
+/// Count top-level single entities that are not assigned to any folder.
+pub fn count_uncategorized_entities(conn: &Connection) -> rusqlite::Result<i64> {
+    conn.query_row(
+        "SELECT COUNT(*)
+         FROM media_entity me
+         WHERE me.status = 1
+           AND me.kind = 'single'
+           AND me.parent_collection_id IS NULL
+           AND NOT EXISTS (
+               SELECT 1 FROM folder_entity fe WHERE fe.entity_id = me.entity_id
+           )",
+        [],
+        |row| row.get(0),
+    )
+}
+
 fn get_entity_rank_in_folder(
     conn: &Connection,
     folder_id: i64,

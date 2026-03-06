@@ -3,6 +3,7 @@ import { useCallback } from 'react';
 import {
   IconPhoto,
   IconInbox,
+  IconFolderQuestion,
   IconTrash,
   IconBookmarkQuestion,
   IconClock,
@@ -27,7 +28,7 @@ interface SidebarProps {
 }
 
 export function Sidebar({ onSmartFolderUpdated }: SidebarProps) {
-  const { allImagesCount, inboxCount, trashCount, untaggedCount, tagsCount, recentViewedCount, duplicatesCount } = useDomainStore();
+  const { allImagesCount, inboxCount, uncategorizedCount, trashCount, untaggedCount, tagsCount, recentViewedCount, duplicatesCount } = useDomainStore();
   const { currentView, activeSmartFolder, activeFolder, activeStatusFilter, navigateTo } = useNavigationStore();
 
   const isAllImagesActive = !activeSmartFolder && !activeFolder && !activeStatusFilter && currentView === 'images';
@@ -71,6 +72,13 @@ export function Sidebar({ onSmartFolderUpdated }: SidebarProps) {
           isActive={currentView === 'images' && activeStatusFilter === 'inbox'}
           onClick={() => navigateTo('images', null, null, 'inbox')}
           onHashDrop={handleDropToInbox}
+        />
+        <SidebarItem
+          icon={<IconFolderQuestion size={16} />}
+          label="Uncategorized"
+          count={uncategorizedCount}
+          isActive={currentView === 'images' && activeStatusFilter === 'uncategorized'}
+          onClick={() => navigateTo('images', null, null, 'uncategorized')}
         />
         <SidebarItem
           icon={<IconBookmarkQuestion size={16} />}
