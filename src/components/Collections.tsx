@@ -40,6 +40,11 @@ import { api } from "#desktop/api";
 import { EmptyState } from './ui/EmptyState';
 import { TextButton } from './ui/TextButton';
 import styles from './Collections.module.css';
+import {
+  MediaCardFrame,
+  MediaCardMeta,
+  MediaCardOverlay,
+} from './ui/media-card';
 
 interface Collection {
   id: number;
@@ -346,76 +351,70 @@ export function Collections() {
             className={styles.card}
             onClick={() => navigateToCollection({ id: collection.id, name: collection.name })}
           >
-            {collection.thumbnail_url ? (
-              <Image
-                src={collection.thumbnail_url}
-                height={180}
-                alt={collection.name}
-                radius="sm"
-              />
-            ) : (
-              <Center h={180} bg="var(--box-background)" className={styles.placeholder}>
-                <IconPhoto size={32} stroke={1.5} color="gray" />
-              </Center>
-            )}
+            <MediaCardFrame>
+              {collection.thumbnail_url ? (
+                <Image
+                  src={collection.thumbnail_url}
+                  height={180}
+                  alt={collection.name}
+                  radius="sm"
+                />
+              ) : (
+                <Center h={180} bg="var(--box-background)" className={styles.placeholder}>
+                  <IconPhoto size={32} stroke={1.5} color="gray" />
+                </Center>
+              )}
 
-            {/* Bottom overlay with info */}
-            <Box
-              pos="absolute"
-              bottom={0}
-              left={0}
-              right={0}
-              p="xs"
-              className={styles.overlay}
-            >
-              <Group justify="space-between" align="flex-end">
-                <Stack gap={2}>
-                  <Text size="sm" fw={500} c="white" lineClamp={1}>{collection.name}</Text>
-                  <Text size="xs" c="dimmed">{collection.image_count} images</Text>
-                </Stack>
-                <Menu shadow="md" width={160}>
-                  <Menu.Target>
-                    <ActionIcon color="gray" onClick={(e) => e.stopPropagation()}>
-                      <IconDotsVertical size={14} />
-                    </ActionIcon>
-                  </Menu.Target>
-                  <Menu.Dropdown>
-                    <Menu.Item
-                      leftSection={<IconEdit size={14} />}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        openEditModalWithCollection(collection);
-                      }}
-                    >
-                      Edit
-                    </Menu.Item>
-                    <Menu.Item
-                      color="red"
-                      leftSection={<IconTrash size={14} />}
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        handleDeleteCollection(collection);
-                      }}
-                    >
-                      Delete
-                    </Menu.Item>
-                  </Menu.Dropdown>
-                </Menu>
-              </Group>
-            </Box>
-
-            {collection.tags.length > 0 && (
-              <Box pos="absolute" top={0} left={0} right={0} p="xs">
-                <Group gap={4}>
-                  {collection.tags.slice(0, 3).map((tag) => (
-                    <Badge key={tag} variant="light" size="xs">{tag}</Badge>
-                  ))}
-                  {collection.tags.length > 3 && (
-                    <Badge variant="light" size="xs" color="gray">+{collection.tags.length - 3}</Badge>
-                  )}
+              <MediaCardOverlay className={styles.overlayContent}>
+                <Group justify="space-between" align="flex-end">
+                  <MediaCardMeta>
+                    <Text size="sm" fw={500} c="white" lineClamp={1}>{collection.name}</Text>
+                    <Text size="xs" c="dimmed">{collection.image_count} images</Text>
+                  </MediaCardMeta>
+                  <Menu shadow="md" width={160}>
+                    <Menu.Target>
+                      <ActionIcon color="gray" onClick={(e) => e.stopPropagation()}>
+                        <IconDotsVertical size={14} />
+                      </ActionIcon>
+                    </Menu.Target>
+                    <Menu.Dropdown>
+                      <Menu.Item
+                        leftSection={<IconEdit size={14} />}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          openEditModalWithCollection(collection);
+                        }}
+                      >
+                        Edit
+                      </Menu.Item>
+                      <Menu.Item
+                        color="red"
+                        leftSection={<IconTrash size={14} />}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleDeleteCollection(collection);
+                        }}
+                      >
+                        Delete
+                      </Menu.Item>
+                    </Menu.Dropdown>
+                  </Menu>
                 </Group>
-              </Box>
-            )}
+              </MediaCardOverlay>
+
+              {collection.tags.length > 0 && (
+                <MediaCardOverlay position="top" tone="none" className={styles.topOverlayContent}>
+                  <Group gap={4}>
+                    {collection.tags.slice(0, 3).map((tag) => (
+                      <Badge key={tag} variant="light" size="xs">{tag}</Badge>
+                    ))}
+                    {collection.tags.length > 3 && (
+                      <Badge variant="light" size="xs" color="gray">+{collection.tags.length - 3}</Badge>
+                    )}
+                  </Group>
+                </MediaCardOverlay>
+              )}
+            </MediaCardFrame>
           </Box>
         ))}
       </SimpleGrid>
@@ -450,28 +449,25 @@ export function Collections() {
             className={styles.card}
             onClick={() => loadFilteredImages(card.value)}
           >
-            {card.thumbnail_hash ? (
-              <Image
-                src={`data:image/jpeg;base64,${card.thumbnail_hash}`}
-                h={120}
-                radius="sm"
-              />
-            ) : (
-              <Center h={120} bg="var(--box-background)" className={styles.placeholder}>
-                <IconPhoto size={24} stroke={1.5} color="gray" />
-              </Center>
-            )}
-            <Box
-              pos="absolute"
-              bottom={0}
-              left={0}
-              right={0}
-              p="xs"
-              className={styles.overlay}
-            >
-              <Text size="xs" fw={500} c="white" lineClamp={1}>{card.value}</Text>
-              <Text size="xs" c="dimmed">{card.count}</Text>
-            </Box>
+            <MediaCardFrame>
+              {card.thumbnail_hash ? (
+                <Image
+                  src={`data:image/jpeg;base64,${card.thumbnail_hash}`}
+                  h={120}
+                  radius="sm"
+                />
+              ) : (
+                <Center h={120} bg="var(--box-background)" className={styles.placeholder}>
+                  <IconPhoto size={24} stroke={1.5} color="gray" />
+                </Center>
+              )}
+              <MediaCardOverlay className={styles.overlayContent}>
+                <MediaCardMeta>
+                  <Text size="xs" fw={500} c="white" lineClamp={1}>{card.value}</Text>
+                  <Text size="xs" c="dimmed">{card.count}</Text>
+                </MediaCardMeta>
+              </MediaCardOverlay>
+            </MediaCardFrame>
           </Box>
         ))}
       </SimpleGrid>
@@ -509,22 +505,17 @@ export function Collections() {
         <SimpleGrid cols={{ base: 3, sm: 4, md: 5, lg: 8 }}>
           {filteredImageList.map((image) => (
             <Box key={image.hash} pos="relative" className={styles.card}>
-              <Center h={120} bg="var(--box-background)" className={styles.placeholder}>
-                <IconPhoto size={24} stroke={1.5} color="gray" />
-              </Center>
-              <Box
-                pos="absolute"
-                bottom={0}
-                left={0}
-                right={0}
-                p={4}
-                className={styles.filteredOverlay}
-              >
-                <Text size="xs" c="dimmed" lineClamp={1}>
-                  {image.hash.substring(0, 8)}
-                  {image.width && image.height ? ` · ${image.width}×${image.height}` : ''}
-                </Text>
-              </Box>
+              <MediaCardFrame>
+                <Center h={120} bg="var(--box-background)" className={styles.placeholder}>
+                  <IconPhoto size={24} stroke={1.5} color="gray" />
+                </Center>
+                <MediaCardOverlay tone="soft" className={styles.filteredOverlayContent}>
+                  <Text size="xs" c="dimmed" lineClamp={1}>
+                    {image.hash.substring(0, 8)}
+                    {image.width && image.height ? ` · ${image.width}×${image.height}` : ''}
+                  </Text>
+                </MediaCardOverlay>
+              </MediaCardFrame>
             </Box>
           ))}
         </SimpleGrid>

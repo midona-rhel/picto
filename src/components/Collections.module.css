@@ -34,14 +34,6 @@
   border-radius: var(--mantine-radius-sm);
 }
 
-.overlay {
-  background: linear-gradient(transparent, rgba(0, 0, 0, 0.8));
-}
-
-.filteredOverlay {
-  background: linear-gradient(transparent, rgba(0, 0, 0, 0.7));
-}
-
 .modalBody {
   display: flex;
   flex-direction: column;
@@ -53,4 +45,16 @@
   justify-content: flex-end;
   gap: 6px;
   margin-top: 8px;
+}
+
+.overlayContent {
+  padding: var(--mantine-spacing-xs);
+}
+
+.topOverlayContent {
+  padding: var(--mantine-spacing-xs);
+}
+
+.filteredOverlayContent {
+  padding: 4px;
 }
