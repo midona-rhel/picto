@@ -14,7 +14,7 @@ export interface FilterState {
   ratingFilter: number | null;     // null = any, 1–5 = minimum stars
   mimeFilter: Set<MimeFilterKey>;  // empty = all types
   colorFilter: string | null;      // null = any, hex string when active
-  colorAccuracy: number;           // 5–40, lower = stricter match (default: 20)
+  colorAccuracy: number;           // 1–30, lower = stricter match (default: 20)
   searchText: string;
   folderFilter: FolderFilterState;
   folderFilterMode: FilterLogicMode;
@@ -60,8 +60,17 @@ export const useFilterStore = create<FilterState>((set) => ({
       return { mimeFilter: next };
     }),
 
-  setColorFilter: (hex) => set({ colorFilter: hex }),
-  setColorAccuracy: (accuracy) => set({ colorAccuracy: Math.max(5, Math.min(40, accuracy)) }),
+  setColorFilter: (hex) => {
+    if (hex === null) {
+      set({ colorFilter: null });
+      return;
+    }
+    const normalized = hex.trim().toUpperCase();
+    if (/^#[0-9A-F]{6}$/.test(normalized)) {
+      set({ colorFilter: normalized });
+    }
+  },
+  setColorAccuracy: (accuracy) => set({ colorAccuracy: Math.max(1, Math.min(30, accuracy)) }),
 
   setSearchText: (text) => set({ searchText: text }),
 

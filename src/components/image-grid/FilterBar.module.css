@@ -115,36 +115,34 @@
 /* Color filter panel */
 
 .colorFilter {
-  width: 202px;
-  padding: 0 15px;
-  margin: 10px 0;
+  width: 236px;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  box-sizing: border-box;
 }
 
-/* Negative margins to fill panel width */
 .colorPickerWrap {
-  margin: -10px -14px 0;
+  width: 100%;
 }
 
 .palettes {
-  vertical-align: middle;
-  display: inline-block;
-  width: calc(100% + 10px);
-  margin-top: 10px;
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 6px;
+  width: 100%;
 }
 
 .palette {
   position: relative;
-  float: left;
-  display: inline-block;
-  width: 20px;
-  height: 20px;
-  border-radius: 5px;
-  margin-right: 5px;
-  margin-bottom: 5px;
-  border: 1px solid var(--color-black-30);
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  border-radius: 6px;
+  border: 1px solid var(--color-border-primary);
   box-sizing: border-box;
-  transition: opacity 300ms ease;
-  opacity: 0.8;
+  transition: opacity 150ms ease;
+  opacity: 0.9;
   cursor: pointer;
 }
 
@@ -154,54 +152,46 @@
 
 .paletteActive {
   opacity: 1;
-  border: 1px solid var(--color-white-99);
+  border-color: var(--color-white-99);
+  box-shadow: 0 0 0 1px var(--color-white-30) inset;
 }
 
 .paletteNone {
-  background: #ccc; /* guard:allow — literal "None" swatch color */
+  background: var(--color-white-20);
   overflow: hidden;
 }
 
 .paletteNone::after {
   content: '';
   position: absolute;
-  top: 6px;
-  left: -16px;
+  top: 50%;
+  left: -20%;
   height: 1px;
-  width: 44px;
-  background-color: #6a6a6a; /* guard:allow — "None" swatch strikethrough line */
-  transform: rotate(45deg);
-  transform-origin: bottom;
-}
-
-.paletteGray {
-  background: linear-gradient(135deg, #333 0%, #666 25%, #999 50%, #ccc 75%, #eee 100%); /* guard:allow — grayscale swatch gradient */
-  border: none;
+  width: 140%;
+  background-color: var(--color-text-tertiary);
+  transform: rotate(-35deg);
+  transform-origin: center;
 }
 
 .hexRow {
-  position: relative;
-  display: block;
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .hexPreview {
-  position: absolute;
-  left: 9px;
-  top: 9px;
   width: 14px;
   height: 14px;
   border-radius: 4px;
-  background-color: grey;
-  cursor: pointer;
-  pointer-events: none;
+  flex-shrink: 0;
+  border: 1px solid var(--color-border-primary);
+  box-sizing: border-box;
 }
 
 .hexInput {
-  width: 100%;
+  flex: 1;
   height: 32px;
-  padding-left: 32px;
-  margin-top: 5px;
-  margin-bottom: 4px;
+  padding: 0 10px;
   border: 1px solid var(--color-border-primary);
   border-radius: 4px;
   background: var(--ig-bg-input);
@@ -226,9 +216,8 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-top: 8px;
   font-size: var(--font-size-sm);
-  line-height: 1em;
+  line-height: 1;
 }
 
 .accuracyLabel {
@@ -240,7 +229,15 @@
 
 .accuracySliderWrap {
   flex: 1;
-  transform: scaleX(-1);
+  min-width: 0;
+}
+
+.accuracyValue {
+  width: 42px;
+  text-align: right;
+  color: var(--color-text-secondary);
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
 }
 
 /* Types panel */
@@ -296,4 +293,3 @@
 .filterSpacer {
   flex: 1;
 }
-

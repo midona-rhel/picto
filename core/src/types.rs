@@ -248,7 +248,7 @@ pub struct GridPageSlimQuery {
     /// Dominant color hex filter
     #[serde(alias = "colorHex")]
     pub color_hex: Option<String>,
-    /// Color accuracy / max distance (5-40, lower = stricter). Default 20.
+    /// Color tolerance / max distance (1-30, lower = stricter). Default 20.
     #[serde(alias = "colorAccuracy")]
     pub color_accuracy: Option<f64>,
     /// Free-text search query (FTS5 on name + notes)

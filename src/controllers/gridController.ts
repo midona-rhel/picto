@@ -34,7 +34,7 @@ export interface FetchGridPageArgs {
   mimePrefixes?: string[] | null;
   /** Dominant color hex filter */
   colorHex?: string | null;
-  /** Color accuracy / max distance (5-40, lower = stricter) */
+  /** Color tolerance / max distance (1-30, lower = stricter) */
   colorAccuracy?: number | null;
   /** Free-text search query (FTS5) */
   searchText?: string | null;

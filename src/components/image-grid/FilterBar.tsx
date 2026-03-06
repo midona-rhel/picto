@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState, type ComponentType, type ReactNode } from 'react';
+import { useCallback, useRef, useState, useEffect, type ComponentType, type ReactNode } from 'react';
 import {
   IconTag,
   IconStar,
@@ -61,6 +61,8 @@ const PALETTE_COLORS = [
   '#47C595', '#51C4C4', '#2B76E7', '#6D50ED',
 ];
 
+const SOLID_GRAY_HEX = '#808080';
+
 const RATING_OPTIONS: { label: string; value: number | null }[] = [
   { label: 'Any rating', value: null },
   { label: '1+ star', value: 1 },
@@ -103,6 +105,8 @@ export function FilterBar({
   const ratingFilter = useFilterStore((s) => s.ratingFilter);
   const mimeFilter = useFilterStore((s) => s.mimeFilter);
   const colorFilter = useFilterStore((s) => s.colorFilter);
+  const normalizedColorFilter =
+    colorFilter && /^#[0-9a-fA-F]{6}$/.test(colorFilter) ? colorFilter.toUpperCase() : null;
   const setRatingFilter = useFilterStore((s) => s.setRatingFilter);
   const setColorFilter = useFilterStore((s) => s.setColorFilter);
   const setColorAccuracy = useFilterStore((s) => s.setColorAccuracy);
@@ -231,8 +235,16 @@ export function FilterBar({
 
   function ColorPanel() {
     const currentColor = useFilterStore((s) => s.colorFilter);
-    const accuracy = useFilterStore((s) => s.colorAccuracy);
-    const [localHex, setLocalHex] = useState(currentColor ?? '');
+    const tolerance = useFilterStore((s) => s.colorAccuracy);
+    const normalizedCurrentHex =
+      currentColor && /^#[0-9a-fA-F]{6}$/.test(currentColor)
+        ? currentColor.toUpperCase()
+        : null;
+    const [localHex, setLocalHex] = useState(normalizedCurrentHex ?? '');
+
+    useEffect(() => {
+      setLocalHex(normalizedCurrentHex ?? '');
+    }, [normalizedCurrentHex]);
 
     const applyHex = (value: string) => {
       const clean = value.replace('#', '').trim();
@@ -246,7 +258,7 @@ export function FilterBar({
         <div className={st.colorPickerWrap}>
           <ColorPicker
             format="hex"
-            value={currentColor ?? '#FF0000'}
+            value={normalizedCurrentHex ?? '#FF0000'}
             onChange={(hex) => {
               setColorFilter(hex.toUpperCase());
               setLocalHex(hex.toUpperCase());
@@ -258,19 +270,23 @@ export function FilterBar({
 
         <div className={st.palettes}>
           <div
-            className={`${st.palette} ${st.paletteNone} ${currentColor === null ? st.paletteActive : ''}`}
-            onClick={() => { setColorFilter(null); colorMenu.close(); }}
+            className={`${st.palette} ${st.paletteNone} ${normalizedCurrentHex === null ? st.paletteActive : ''}`}
+            title="No color filter"
+            onClick={() => { setColorFilter(null); }}
           />
           <div
-            className={`${st.palette} ${st.paletteGray}`}
-            onClick={() => { setColorFilter('gray'); colorMenu.close(); }}
+            className={`${st.palette} ${normalizedCurrentHex === SOLID_GRAY_HEX ? st.paletteActive : ''}`}
+            style={{ backgroundColor: SOLID_GRAY_HEX }}
+            title={SOLID_GRAY_HEX}
+            onClick={() => { setColorFilter(SOLID_GRAY_HEX); setLocalHex(SOLID_GRAY_HEX); }}
           />
           {PALETTE_COLORS.map((hex) => (
             <div
               key={hex}
-              className={`${st.palette} ${currentColor === hex ? st.paletteActive : ''}`}
+              className={`${st.palette} ${normalizedCurrentHex === hex ? st.paletteActive : ''}`}
               style={{ backgroundColor: hex }}
-              onClick={() => { setColorFilter(hex); setLocalHex(hex); colorMenu.close(); }}
+              title={hex}
+              onClick={() => { setColorFilter(hex); setLocalHex(hex); }}
             />
           ))}
         </div>
@@ -278,7 +294,7 @@ export function FilterBar({
         <div className={st.hexRow}>
           <div
             className={st.hexPreview}
-            style={{ backgroundColor: currentColor ?? 'grey' }}
+            style={{ backgroundColor: normalizedCurrentHex ?? 'transparent' }}
           />
           <input
             className={st.hexInput}
@@ -292,23 +308,25 @@ export function FilterBar({
               if (/^#?[0-9a-fA-F]{6}$/.test(v)) applyHex(v);
             }}
             onKeyDown={(e) => {
-              if (e.key === 'Enter') { applyHex(localHex); colorMenu.close(); }
+              if (e.key === 'Enter') { applyHex(localHex); }
               e.stopPropagation();
             }}
           />
         </div>
 
-        {currentColor && (
+        {normalizedCurrentHex && (
           <div className={st.accuracyRow}>
-            <span className={st.accuracyLabel}>Accuracy</span>
+            <span className={st.accuracyLabel}>Tolerance</span>
             <div className={st.accuracySliderWrap}>
               <Slider
-                value={accuracy}
+                value={tolerance}
                 onChange={(v) => setColorAccuracy(v)}
-                min={5} max={40} step={1}
-                label={null} color="gray"
+                min={1} max={30} step={1}
+                label={(v) => `${v}%`}
+                color="gray"
               />
             </div>
+            <span className={st.accuracyValue}>{tolerance}%</span>
           </div>
         )}
       </div>
@@ -379,10 +397,10 @@ export function FilterBar({
           onClear={() => setRatingFilter(null)} />
 
         <FilterPill pillRef={colorPillRef} label="Color"
-          iconNode={colorFilter
-            ? <span className={st.colorDot} style={{ background: colorFilter }} />
+          iconNode={normalizedColorFilter
+            ? <span className={st.colorDot} style={{ background: normalizedColorFilter }} />
             : <IconPalette size={13} className={st.pillIcon} />}
-          isActive={colorFilter !== null} onClick={handleColorPill}
+          isActive={normalizedColorFilter !== null} onClick={handleColorPill}
           onClear={() => setColorFilter(null)} />
 
         <FilterPill pillRef={typesPillRef} icon={IconPhoto} label="Types"
