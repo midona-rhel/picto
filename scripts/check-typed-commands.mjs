@@ -6,6 +6,8 @@
  * 1. Every TypedCommand::NAME in Rust has a matching entry in TypedCommandMap in TS.
  * 2. No typed command still exists in a legacy handler's match block (no duplicates).
  * 3. Generated ts-rs files exist for every input/output struct.
+ * 4. No typed command uses plain invoke() in api.ts (should use invokeTyped).
+ * 5. Runtime contract generated files exist (PBI-325).
  */
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
@@ -16,6 +18,7 @@ const LEGACY_DIR = path.join(ROOT, 'core/src/dispatch');
 const TS_BARREL = path.join(ROOT, 'src/types/generated/commands/index.ts');
 const GENERATED_DIR = path.join(ROOT, 'src/types/generated/commands');
 const API_TS = path.join(ROOT, 'src/desktop/api.ts');
+const RUNTIME_CONTRACT_DIR = path.join(ROOT, 'src/types/generated/runtime-contract');
 
 // Extract TypedCommand NAME constants from Rust typed dispatch files.
 const TYPED_CMD_RE = /const\s+NAME:\s*&'static\s+str\s*=\s*"([a-z_]+)"/g;
@@ -110,13 +113,46 @@ async function checkGeneratedFilesExist() {
   return missing;
 }
 
+// Runtime contract types that must be generated from Rust (PBI-325).
+const RUNTIME_CONTRACT_FILES = [
+  'DerivedInvalidation.ts',
+  'Domain.ts',
+  'MutationFacts.ts',
+  'MutationReceipt.ts',
+  'RuntimeSnapshot.ts',
+  'RuntimeTask.ts',
+  'SidebarCounts.ts',
+  'TaskKind.ts',
+  'TaskProgress.ts',
+  'TaskStatus.ts',
+];
+
+async function checkRuntimeContractFiles() {
+  const missing = [];
+  let entries;
+  try {
+    entries = await fs.readdir(RUNTIME_CONTRACT_DIR);
+  } catch {
+    missing.push('Runtime contract directory missing: src/types/generated/runtime-contract/');
+    return missing;
+  }
+  const existing = new Set(entries);
+  for (const file of RUNTIME_CONTRACT_FILES) {
+    if (!existing.has(file)) {
+      missing.push(file);
+    }
+  }
+  return missing;
+}
+
 async function main() {
-  const [typedCmds, legacyCmds, tsMapCmds, fileMissing, plainInvokeCmds] = await Promise.all([
+  const [typedCmds, legacyCmds, tsMapCmds, fileMissing, plainInvokeCmds, rtContractMissing] = await Promise.all([
     extractTypedCommands(),
     extractLegacyCommands(),
     extractTsTypedCommandMap(),
     checkGeneratedFilesExist(),
     extractPlainInvokeCommands(),
+    checkRuntimeContractFiles(),
   ]);
 
   console.log(`Typed Rust commands: ${typedCmds.size}`);
@@ -162,6 +198,13 @@ async function main() {
     for (const [cmd, line] of untypedFrontend.sort((a, b) => a[0].localeCompare(b[0]))) {
       console.error(`  - ${cmd} (line ${line})`);
     }
+    hasErrors = true;
+  }
+
+  // 6. Runtime contract generated files must exist (PBI-325)
+  if (rtContractMissing.length > 0) {
+    console.error('\nMissing runtime contract generated files (run `cargo test --lib`):');
+    for (const f of rtContractMissing) console.error(`  - ${f}`);
     hasErrors = true;
   }
 
