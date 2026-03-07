@@ -14,6 +14,12 @@ const { listeners, cacheState } = vi.hoisted(() => ({
     markHashInvalidated: vi.fn(),
   },
 }));
+const domainState = {
+  applySidebarCounts: vi.fn(),
+  incrementInboxCount: vi.fn(),
+  subscriptionRunStarted: vi.fn(),
+  subscriptionRunFinished: vi.fn(),
+};
 
 vi.mock('#desktop/api', () => ({
   listen: vi.fn((name: string, handler: (event: { payload: unknown }) => void) => {
@@ -32,11 +38,7 @@ vi.mock('../cacheStore', () => ({
 
 vi.mock('../domainStore', () => ({
   useDomainStore: {
-    getState: () => ({
-      applySidebarCounts: vi.fn(),
-      subscriptionRunStarted: vi.fn(),
-      subscriptionRunFinished: vi.fn(),
-    }),
+    getState: () => domainState,
   },
 }));
 
@@ -71,6 +73,10 @@ describe('eventBridge inbox subscription import behavior', () => {
     cacheState.activeGridScope = 'system:inbox';
     cacheState.invalidateAll.mockReset();
     cacheState.bumpGridRefresh.mockReset();
+    domainState.applySidebarCounts.mockReset();
+    domainState.incrementInboxCount.mockReset();
+    domainState.subscriptionRunStarted.mockReset();
+    domainState.subscriptionRunFinished.mockReset();
     teardownEventBridge();
   });
 
@@ -106,5 +112,21 @@ describe('eventBridge inbox subscription import behavior', () => {
 
     expect(cacheState.invalidateAll).toHaveBeenCalledTimes(1);
     expect(cacheState.bumpGridRefresh).toHaveBeenCalledTimes(1);
+  });
+
+  it('increments inbox count on file-imported inbox events', async () => {
+    await setupEventBridge();
+    const onFileImported = listeners.get('file-imported');
+    expect(onFileImported).toBeTruthy();
+
+    onFileImported!({
+      payload: {
+        hash: 'abc',
+        status: 'inbox',
+      },
+    });
+
+    expect(domainState.incrementInboxCount).toHaveBeenCalledTimes(1);
+    expect(domainState.incrementInboxCount).toHaveBeenCalledWith(1);
   });
 });

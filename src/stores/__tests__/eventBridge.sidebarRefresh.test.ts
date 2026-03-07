@@ -34,6 +34,7 @@ vi.mock('../domainStore', () => ({
   useDomainStore: {
     getState: () => ({
       applySidebarCounts: vi.fn(),
+      incrementInboxCount: vi.fn(),
       subscriptionRunStarted: vi.fn(),
       subscriptionRunFinished: vi.fn(),
     }),

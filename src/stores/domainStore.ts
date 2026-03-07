@@ -45,6 +45,7 @@ interface DomainState {
   fetchSidebarTree: () => Promise<void>;
   invalidate: () => void;
   applySidebarCounts: (counts: { all_images: number; inbox: number; trash: number }) => void;
+  incrementInboxCount: (delta?: number) => void;
   subscriptionRunStarted: () => void;
   subscriptionRunFinished: () => void;
   setDuplicatesCount: (count: number) => void;
@@ -258,6 +259,18 @@ export const useDomainStore = create<DomainState>((set, get) => ({
       trashCount: counts.trash,
       liveInboxFloor: liveInboxImportRuns > 0
         ? Math.max(liveInboxFloor ?? counts.inbox, counts.inbox)
+        : liveInboxFloor,
+    });
+  },
+
+  incrementInboxCount: (delta = 1) => {
+    if (!Number.isFinite(delta) || delta <= 0) return;
+    const nextInbox = get().inboxCount + delta;
+    const { liveInboxImportRuns, liveInboxFloor } = get();
+    set({
+      inboxCount: nextInbox,
+      liveInboxFloor: liveInboxImportRuns > 0
+        ? Math.max(liveInboxFloor ?? nextInbox, nextInbox)
         : liveInboxFloor,
     });
   },
