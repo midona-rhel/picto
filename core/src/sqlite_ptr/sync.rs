@@ -6,8 +6,6 @@ use std::time::Instant;
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use tracing::info;
 
-use crate::sqlite::tags as sql_tags;
-
 use super::PtrSqliteDatabase;
 
 /// Bind parameters per statement — rusqlite `bundled` SQLite has
@@ -579,9 +577,10 @@ pub fn resolve_or_create_def_mappings(
                 let mut tag_pairs: Vec<(String, String)> = Vec::new();
                 for row in rows {
                     let (def_id, tag_string) = row?;
-                    let (ns, st) = sql_tags::parse_tag_string(&tag_string);
-                    tag_pairs.push((ns.clone(), st.clone()));
-                    resolved_rows.push((def_id, ns, st));
+                    if let Some((ns, st)) = crate::tags::parse_tag(&tag_string) {
+                        tag_pairs.push((ns.clone(), st.clone()));
+                        resolved_rows.push((def_id, ns, st));
+                    }
                 }
                 if resolved_rows.is_empty() {
                     continue;

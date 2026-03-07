@@ -340,8 +340,10 @@ impl TypedCommand for SetTagAlias {
     type Output = ();
 
     async fn execute(state: &AppState, input: Self::Input) -> Result<Self::Output, String> {
-        let (from_ns, from_st) = crate::sqlite::tags::parse_tag_string(&input.from);
-        let (to_ns, to_st) = crate::sqlite::tags::parse_tag_string(&input.to);
+        let (from_ns, from_st) = crate::tags::parse_tag(&input.from)
+            .ok_or_else(|| format!("Invalid tag: {}", input.from))?;
+        let (to_ns, to_st) = crate::tags::parse_tag(&input.to)
+            .ok_or_else(|| format!("Invalid tag: {}", input.to))?;
         state.db.add_sibling(&from_ns, &from_st, &to_ns, &to_st, "local").await?;
         crate::events::emit_mutation(
             "set_tag_alias",
@@ -359,7 +361,8 @@ impl TypedCommand for RemoveTagAlias {
     type Output = ();
 
     async fn execute(state: &AppState, input: Self::Input) -> Result<Self::Output, String> {
-        let (from_ns, from_st) = crate::sqlite::tags::parse_tag_string(&input.from);
+        let (from_ns, from_st) = crate::tags::parse_tag(&input.from)
+            .ok_or_else(|| format!("Invalid tag: {}", input.from))?;
         state.db.remove_sibling(&from_ns, &from_st, "local").await?;
         crate::events::emit_mutation(
             "remove_tag_alias",
@@ -424,8 +427,10 @@ impl TypedCommand for AddTagParent {
     type Output = ();
 
     async fn execute(state: &AppState, input: Self::Input) -> Result<Self::Output, String> {
-        let (cns, cst) = crate::sqlite::tags::parse_tag_string(&input.child);
-        let (pns, pst) = crate::sqlite::tags::parse_tag_string(&input.parent);
+        let (cns, cst) = crate::tags::parse_tag(&input.child)
+            .ok_or_else(|| format!("Invalid tag: {}", input.child))?;
+        let (pns, pst) = crate::tags::parse_tag(&input.parent)
+            .ok_or_else(|| format!("Invalid tag: {}", input.parent))?;
         state.db.add_parent(&cns, &cst, &pns, &pst, "local").await?;
         crate::events::emit_mutation(
             "add_tag_parent",
@@ -443,8 +448,10 @@ impl TypedCommand for RemoveTagParent {
     type Output = ();
 
     async fn execute(state: &AppState, input: Self::Input) -> Result<Self::Output, String> {
-        let (cns, cst) = crate::sqlite::tags::parse_tag_string(&input.child);
-        let (pns, pst) = crate::sqlite::tags::parse_tag_string(&input.parent);
+        let (cns, cst) = crate::tags::parse_tag(&input.child)
+            .ok_or_else(|| format!("Invalid tag: {}", input.child))?;
+        let (pns, pst) = crate::tags::parse_tag(&input.parent)
+            .ok_or_else(|| format!("Invalid tag: {}", input.parent))?;
         state.db.remove_parent(&cns, &cst, &pns, &pst, "local").await?;
         crate::events::emit_mutation(
             "remove_tag_parent",
@@ -462,8 +469,10 @@ impl TypedCommand for MergeTags {
     type Output = ();
 
     async fn execute(state: &AppState, input: Self::Input) -> Result<Self::Output, String> {
-        let (from_ns, from_st) = crate::sqlite::tags::parse_tag_string(&input.from_tag);
-        let (to_ns, to_st) = crate::sqlite::tags::parse_tag_string(&input.to_tag);
+        let (from_ns, from_st) = crate::tags::parse_tag(&input.from_tag)
+            .ok_or_else(|| format!("Invalid tag: {}", input.from_tag))?;
+        let (to_ns, to_st) = crate::tags::parse_tag(&input.to_tag)
+            .ok_or_else(|| format!("Invalid tag: {}", input.to_tag))?;
         let (from_id, to_id, affected_file_ids) = state.db.with_conn(move |conn| {
             let from_id = crate::sqlite::tags::get_or_create_tag(conn, &from_ns, &from_st)?;
             let to_id = crate::sqlite::tags::get_or_create_tag(conn, &to_ns, &to_st)?;

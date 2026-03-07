@@ -334,22 +334,6 @@ export interface CollectionSummary {
   rating: number | null;
 }
 
-// ─── Review Queue ───────────────────────────────────────────────────────────
-
-export interface ReviewQueueItem {
-  hash: string;
-  filename: string;
-  width: number | null;
-  height: number | null;
-  file_size: number;
-  mime: string;
-  source: string;
-  imported_at: string;
-  has_thumbnail: boolean;
-  blurhash: string | null;
-  rating: number | null;
-}
-
 // ─── Companion ──────────────────────────────────────────────────────────────
 
 export interface CompanionNamespaceValue {

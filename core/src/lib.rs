@@ -10,7 +10,7 @@ pub mod dispatch;
 pub mod duplicate_controller;
 pub mod duplicates;
 pub mod events;
-pub mod files;
+pub mod media_processing;
 pub mod flow_controller;
 pub mod folder_controller;
 pub mod gallery_dl_runner;

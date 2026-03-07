@@ -11,7 +11,7 @@ use crate::sqlite::files::FileMetadataSlim;
 use crate::sqlite::projections::ResolvedMetadataFull;
 use crate::sqlite::folders::list_uncategorized_entity_ids;
 use crate::sqlite::smart_folders;
-use crate::sqlite::tags::{find_tag as sql_find_tag, parse_tag_string, FileTagInfo};
+use crate::sqlite::tags::{find_tag as sql_find_tag, FileTagInfo};
 use crate::sqlite::{ScopeSnapshot, ScopeSnapshotKey, SqliteDatabase};
 use crate::sqlite_ptr::PtrSqliteDatabase;
 use crate::tags;
@@ -345,11 +345,7 @@ impl GridController {
                          -> rusqlite::Result<Vec<i64>> {
                             let mut out = Vec::new();
                             for tag in tag_list {
-                                let parsed = tags::parse_tag(tag).or_else(|| {
-                                    let (ns, st) = parse_tag_string(tag);
-                                    Some((ns, st))
-                                });
-                                if let Some((ns, st)) = parsed {
+                                if let Some((ns, st)) = tags::parse_tag(tag) {
                                     if let Some(tag_id) = sql_find_tag(conn, &ns, &st)? {
                                         out.push(tag_id);
                                     } else if strict_missing {

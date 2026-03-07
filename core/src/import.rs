@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use tracing::{info, warn};
 
 use super::blob_store::BlobStore;
-use super::files;
+use super::media_processing;
 use super::sqlite::import as sqlite_import;
 use super::sqlite::SqliteDatabase;
 use super::tags;
@@ -24,7 +24,7 @@ pub enum ImportError {
     #[error("Image error: {0}")]
     Image(#[from] image::ImageError),
     #[error("File processing error: {0}")]
-    FileProcessing(#[from] files::FileError),
+    FileProcessing(#[from] media_processing::FileError),
     #[error("File already imported: {0}")]
     AlreadyImported(String),
     #[error("Zero-size file: {0}")]
@@ -63,7 +63,7 @@ impl Default for ImportOptions {
         Self {
             tags: Vec::new(),
             source_urls: Vec::new(),
-            thumbnail_dimensions: files::DEFAULT_THUMBNAIL_DIMENSIONS,
+            thumbnail_dimensions: media_processing::DEFAULT_THUMBNAIL_DIMENSIONS,
             name: None,
             notes: None,
             initial_status: 0,
@@ -93,7 +93,7 @@ impl<'a> ImportPipeline<'a> {
         }
         let file_size = file_data.len() as u64;
 
-        let hash = files::get_hash_from_bytes(&file_data);
+        let hash = media_processing::get_hash_from_bytes(&file_data);
         let hex_hash = hex::encode(&hash);
 
         info!(hash = %hex_hash, path = %path.display(), "Starting file import");
@@ -107,7 +107,7 @@ impl<'a> ImportPipeline<'a> {
             return Err(ImportError::AlreadyImported(hex_hash));
         }
 
-        let file_info = match files::get_file_info(path, None) {
+        let file_info = match media_processing::get_file_info(path, None) {
             Ok(info) => {
                 info!(hash = %hex_hash, mime = %info.mime.mime_string(), "Detected MIME type");
                 info
@@ -119,8 +119,8 @@ impl<'a> ImportPipeline<'a> {
         };
         let mime_string = file_info.mime.mime_string().to_string();
 
-        if files::is_image(file_info.mime) {
-            if let Ok(true) = files::is_decompression_bomb(path) {
+        if media_processing::is_image(file_info.mime) {
+            if let Ok(true) = media_processing::is_decompression_bomb(path) {
                 warn!(hash = %hex_hash, "Skipping decompression bomb");
                 return Err(ImportError::UnsupportedFile(
                     "Image has extreme dimensions (decompression bomb)".to_string(),
@@ -128,7 +128,7 @@ impl<'a> ImportPipeline<'a> {
             }
         }
 
-        let thumbnail_result = files::generate_thumbnail_bytes(
+        let thumbnail_result = media_processing::generate_thumbnail_bytes(
             path,
             options.thumbnail_dimensions,
             file_info.mime,
@@ -139,14 +139,14 @@ impl<'a> ImportPipeline<'a> {
         .ok();
 
         let blurhash = thumbnail_result.as_ref().and_then(|(thumb, _ext)| {
-            files::blurhash::get_blurhash_from_thumbnail_bytes(thumb).ok()
+            media_processing::blurhash::get_blurhash_from_thumbnail_bytes(thumb).ok()
         });
 
         let mut colors_lab: Vec<(String, f32, f32, f32)> = Vec::new();
         let mut dominant_color_hex: Option<String> = None;
-        if files::is_image(file_info.mime) {
+        if media_processing::is_image(file_info.mime) {
             if let Ok(img) = image::load_from_memory(&file_data) {
-                let colors = files::colors::extract_dominant_colors(&img, 8);
+                let colors = media_processing::colors::extract_dominant_colors(&img, 8);
                 if !colors.is_empty() {
                     dominant_color_hex = Some(colors[0].hex.clone());
                     colors_lab = colors
@@ -219,7 +219,7 @@ impl<'a> ImportPipeline<'a> {
             .map_err(ImportError::Db)?;
 
         // Compute phash from thumbnail (faster than full image) for duplicate detection
-        if files::is_image(file_info.mime) {
+        if media_processing::is_image(file_info.mime) {
             let phash_data = thumbnail_result
                 .as_ref()
                 .map(|(b, _)| b.as_slice())

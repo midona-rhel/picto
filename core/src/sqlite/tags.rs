@@ -563,7 +563,8 @@ pub fn rename_tag(
     tag_id: i64,
     new_tag_str: &str,
 ) -> rusqlite::Result<(Vec<i64>, Option<i64>)> {
-    let (new_ns, new_st) = parse_tag_string(new_tag_str);
+    let (new_ns, new_st) = crate::tags::parse_tag(new_tag_str)
+        .ok_or_else(|| rusqlite::Error::InvalidParameterName(format!("Invalid tag: {new_tag_str}")))?;
 
     // Check if target already exists
     let existing: Option<i64> = conn
@@ -706,14 +707,6 @@ pub fn normalize_disallowed_namespaces(
     })
 }
 
-/// Parse "namespace:subtag" string into (namespace, subtag).
-/// Delegates splitting to `crate::tags::split_tag` so namespace validation
-/// (rejecting emoticon prefixes like `>` in `>:(`) is applied consistently.
-pub fn parse_tag_string(tag_str: &str) -> (String, String) {
-    let (ns, st) = crate::tags::split_tag(tag_str);
-    (ns.trim().to_lowercase(), st.trim().to_lowercase())
-}
-
 impl SqliteDatabase {
     pub async fn get_or_create_tag(&self, namespace: &str, subtag: &str) -> Result<i64, String> {
         let ns = namespace.to_string();
@@ -815,8 +808,9 @@ impl SqliteDatabase {
         tag_strings: &[String],
     ) -> Result<(), String> {
         for tag_str in tag_strings {
-            let (ns, st) = parse_tag_string(tag_str);
-            self.tag_entity(hash, &ns, &st, "local").await?;
+            if let Some((ns, st)) = crate::tags::parse_tag(tag_str) {
+                self.tag_entity(hash, &ns, &st, "local").await?;
+            }
         }
         Ok(())
     }
@@ -828,8 +822,9 @@ impl SqliteDatabase {
         tag_strings: &[String],
     ) -> Result<(), String> {
         for tag_str in tag_strings {
-            let (ns, st) = parse_tag_string(tag_str);
-            self.untag_entity(hash, &ns, &st).await?;
+            if let Some((ns, st)) = crate::tags::parse_tag(tag_str) {
+                self.untag_entity(hash, &ns, &st).await?;
+            }
         }
         Ok(())
     }
@@ -871,7 +866,7 @@ impl SqliteDatabase {
         // Resolve tag strings to tag_ids
         let mut tag_ids = Vec::new();
         for ts in tag_strings {
-            let (ns, st) = parse_tag_string(ts);
+            let Some((ns, st)) = crate::tags::parse_tag(ts) else { continue };
             let ns_c = ns.clone();
             let st_c = st.clone();
             if let Some(tid) = self
@@ -1098,7 +1093,7 @@ impl SqliteDatabase {
 
         // Parse tag strings upfront
         let parsed: Vec<(String, String)> =
-            tag_strings.iter().map(|s| parse_tag_string(s)).collect();
+            tag_strings.iter().filter_map(|s| crate::tags::parse_tag(s)).collect();
 
         let bitmaps = self.bitmaps.clone();
         let compiler_tx = self.compiler_tx.clone();
@@ -1162,7 +1157,7 @@ impl SqliteDatabase {
         }
 
         let parsed: Vec<(String, String)> =
-            tag_strings.iter().map(|s| parse_tag_string(s)).collect();
+            tag_strings.iter().filter_map(|s| crate::tags::parse_tag(s)).collect();
 
         let bitmaps = self.bitmaps.clone();
         let compiler_tx = self.compiler_tx.clone();
