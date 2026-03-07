@@ -1,4 +1,4 @@
-# PBI-403: Renderer bootstrap and lifecycle ownership cleanup
+# PBI-407: Renderer bootstrap and lifecycle ownership cleanup
 
 ## Priority
 P1

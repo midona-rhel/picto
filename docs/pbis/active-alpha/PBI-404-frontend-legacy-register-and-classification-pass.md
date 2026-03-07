@@ -1,4 +1,4 @@
-# PBI-406: Frontend legacy register and classification pass
+# PBI-404: Frontend legacy register and classification pass
 
 ## Priority
 P1

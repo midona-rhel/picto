@@ -1,4 +1,4 @@
-# PBI-402: Frontend type safety and renderer contract cleanup
+# PBI-406: Frontend type safety and renderer contract cleanup
 
 ## Priority
 P1
