@@ -459,11 +459,13 @@ pub struct ViewPrefsDto {
     pub thumbnail_fit: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, TS)]
+#[ts(export, export_to = "../../src/types/generated/commands/")]
 pub struct ViewPrefsPatch {
     pub sort_field: Option<String>,
     pub sort_order: Option<String>,
     pub view_mode: Option<String>,
+    #[ts(type = "number | null")]
     pub target_size: Option<i64>,
     pub show_name: Option<bool>,
     pub show_resolution: Option<bool>,

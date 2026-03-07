@@ -104,6 +104,55 @@ export type { BackfillMissingBlurhashesInput } from './BackfillMissingBlurhashes
 export type { SearchByColorInput } from './SearchByColorInput';
 export type { GetImageThumbnailInput } from './GetImageThumbnailInput';
 
+// Re-export generated input types — subscriptions
+export type { CreateFlowInput } from './CreateFlowInput';
+export type { DeleteFlowInput } from './DeleteFlowInput';
+export type { RenameFlowInput } from './RenameFlowInput';
+export type { SetFlowScheduleInput } from './SetFlowScheduleInput';
+export type { RunFlowInput } from './RunFlowInput';
+export type { StopFlowInput } from './StopFlowInput';
+export type { GetSiteMetadataSchemaInput } from './GetSiteMetadataSchemaInput';
+export type { ValidateSiteMetadataInput } from './ValidateSiteMetadataInput';
+export type { CreateSubscriptionInput } from './CreateSubscriptionInput';
+export type { DeleteSubscriptionInput } from './DeleteSubscriptionInput';
+export type { PauseSubscriptionInput } from './PauseSubscriptionInput';
+export type { AddSubscriptionQueryInput } from './AddSubscriptionQueryInput';
+export type { DeleteSubscriptionQueryInput } from './DeleteSubscriptionQueryInput';
+export type { PauseSubscriptionQueryInput } from './PauseSubscriptionQueryInput';
+export type { RunSubscriptionInput } from './RunSubscriptionInput';
+export type { StopSubscriptionInput } from './StopSubscriptionInput';
+export type { ResetSubscriptionInput } from './ResetSubscriptionInput';
+export type { RenameSubscriptionInput } from './RenameSubscriptionInput';
+export type { RunSubscriptionQueryInput } from './RunSubscriptionQueryInput';
+export type { SetCredentialInput } from './SetCredentialInput';
+export type { DeleteCredentialInput } from './DeleteCredentialInput';
+
+// Re-export generated input types — ptr
+export type { PtrGetTagsPaginatedInput } from './PtrGetTagsPaginatedInput';
+export type { PtrGetTagRelationInput } from './PtrGetTagRelationInput';
+
+// Re-export generated input types — system
+export type { OpenExternalUrlInput } from './OpenExternalUrlInput';
+export type { ReorderSidebarNodesInput } from './ReorderSidebarNodesInput';
+export type { GetViewPrefsInput } from './GetViewPrefsInput';
+export type { SetViewPrefsInput } from './SetViewPrefsInput';
+export type { SetZoomFactorInput } from './SetZoomFactorInput';
+
+// Re-export generated input types — duplicates
+export type { GetDuplicatesInput } from './GetDuplicatesInput';
+export type { ScanDuplicatesInput } from './ScanDuplicatesInput';
+export type { GetDuplicatePairsInput } from './GetDuplicatePairsInput';
+export type { ResolveDuplicatePairInput } from './ResolveDuplicatePairInput';
+export type { UpdateDuplicateSettingsInput } from './UpdateDuplicateSettingsInput';
+
+// Re-export generated input types — smart_folders
+export type { ReorderSmartFoldersInput } from './ReorderSmartFoldersInput';
+export type { CreateSmartFolderInput } from './CreateSmartFolderInput';
+export type { UpdateSmartFolderInput } from './UpdateSmartFolderInput';
+export type { DeleteSmartFolderInput } from './DeleteSmartFolderInput';
+export type { QuerySmartFolderInput } from './QuerySmartFolderInput';
+export type { CountSmartFolderInput } from './CountSmartFolderInput';
+
 // Re-export generated output/shared types
 export type { ImportResult } from './ImportResult';
 export type { ImportBatchResult } from './ImportBatchResult';
@@ -115,6 +164,7 @@ export type { SmartRuleGroup } from './SmartRuleGroup';
 export type { MatchMode } from './MatchMode';
 export type { PredicateRule } from './PredicateRule';
 export type { GridPageSlimQuery } from './GridPageSlimQuery';
+export type { ViewPrefsPatch } from './ViewPrefsPatch';
 
 // Command name → { input, output } map for compile-time checked dispatch.
 // Every typed command in Rust must have an entry here.
@@ -202,6 +252,45 @@ import type { ReanalyzeFileColorsInput } from './ReanalyzeFileColorsInput';
 import type { BackfillMissingBlurhashesInput } from './BackfillMissingBlurhashesInput';
 import type { SearchByColorInput } from './SearchByColorInput';
 import type { GetImageThumbnailInput } from './GetImageThumbnailInput';
+import type { CreateFlowInput } from './CreateFlowInput';
+import type { DeleteFlowInput } from './DeleteFlowInput';
+import type { RenameFlowInput } from './RenameFlowInput';
+import type { SetFlowScheduleInput } from './SetFlowScheduleInput';
+import type { RunFlowInput } from './RunFlowInput';
+import type { StopFlowInput } from './StopFlowInput';
+import type { GetSiteMetadataSchemaInput } from './GetSiteMetadataSchemaInput';
+import type { ValidateSiteMetadataInput } from './ValidateSiteMetadataInput';
+import type { CreateSubscriptionInput } from './CreateSubscriptionInput';
+import type { DeleteSubscriptionInput } from './DeleteSubscriptionInput';
+import type { PauseSubscriptionInput } from './PauseSubscriptionInput';
+import type { AddSubscriptionQueryInput } from './AddSubscriptionQueryInput';
+import type { DeleteSubscriptionQueryInput } from './DeleteSubscriptionQueryInput';
+import type { PauseSubscriptionQueryInput } from './PauseSubscriptionQueryInput';
+import type { RunSubscriptionInput } from './RunSubscriptionInput';
+import type { StopSubscriptionInput } from './StopSubscriptionInput';
+import type { ResetSubscriptionInput } from './ResetSubscriptionInput';
+import type { RenameSubscriptionInput } from './RenameSubscriptionInput';
+import type { RunSubscriptionQueryInput } from './RunSubscriptionQueryInput';
+import type { SetCredentialInput } from './SetCredentialInput';
+import type { DeleteCredentialInput } from './DeleteCredentialInput';
+import type { PtrGetTagsPaginatedInput } from './PtrGetTagsPaginatedInput';
+import type { PtrGetTagRelationInput } from './PtrGetTagRelationInput';
+import type { OpenExternalUrlInput } from './OpenExternalUrlInput';
+import type { ReorderSidebarNodesInput } from './ReorderSidebarNodesInput';
+import type { GetViewPrefsInput } from './GetViewPrefsInput';
+import type { SetViewPrefsInput } from './SetViewPrefsInput';
+import type { SetZoomFactorInput } from './SetZoomFactorInput';
+import type { GetDuplicatesInput } from './GetDuplicatesInput';
+import type { ScanDuplicatesInput } from './ScanDuplicatesInput';
+import type { GetDuplicatePairsInput } from './GetDuplicatePairsInput';
+import type { ResolveDuplicatePairInput } from './ResolveDuplicatePairInput';
+import type { UpdateDuplicateSettingsInput } from './UpdateDuplicateSettingsInput';
+import type { ReorderSmartFoldersInput } from './ReorderSmartFoldersInput';
+import type { CreateSmartFolderInput } from './CreateSmartFolderInput';
+import type { UpdateSmartFolderInput } from './UpdateSmartFolderInput';
+import type { DeleteSmartFolderInput } from './DeleteSmartFolderInput';
+import type { QuerySmartFolderInput } from './QuerySmartFolderInput';
+import type { CountSmartFolderInput } from './CountSmartFolderInput';
 
 export interface TypedCommandMap {
   // files_lifecycle
@@ -306,4 +395,78 @@ export interface TypedCommandMap {
   backfill_missing_blurhashes: { input: BackfillMissingBlurhashesInput; output: unknown };
   search_by_color: { input: SearchByColorInput; output: unknown };
   get_image_thumbnail: { input: GetImageThumbnailInput; output: unknown };
+  // subscriptions
+  get_flows: { input: Record<string, never>; output: unknown };
+  create_flow: { input: CreateFlowInput; output: unknown };
+  delete_flow: { input: DeleteFlowInput; output: null };
+  rename_flow: { input: RenameFlowInput; output: null };
+  set_flow_schedule: { input: SetFlowScheduleInput; output: null };
+  run_flow: { input: RunFlowInput; output: null };
+  stop_flow: { input: StopFlowInput; output: null };
+  get_sites: { input: Record<string, never>; output: unknown };
+  get_site_metadata_schema: { input: GetSiteMetadataSchemaInput; output: unknown };
+  validate_site_metadata: { input: ValidateSiteMetadataInput; output: unknown };
+  get_subscriptions: { input: Record<string, never>; output: unknown };
+  create_subscription: { input: CreateSubscriptionInput; output: unknown };
+  delete_subscription: { input: DeleteSubscriptionInput; output: unknown };
+  pause_subscription: { input: PauseSubscriptionInput; output: null };
+  add_subscription_query: { input: AddSubscriptionQueryInput; output: unknown };
+  delete_subscription_query: { input: DeleteSubscriptionQueryInput; output: null };
+  pause_subscription_query: { input: PauseSubscriptionQueryInput; output: null };
+  run_subscription: { input: RunSubscriptionInput; output: null };
+  stop_subscription: { input: StopSubscriptionInput; output: null };
+  reset_subscription: { input: ResetSubscriptionInput; output: null };
+  get_running_subscriptions: { input: Record<string, never>; output: unknown };
+  get_running_subscription_progress: { input: Record<string, never>; output: unknown };
+  rename_subscription: { input: RenameSubscriptionInput; output: null };
+  run_subscription_query: { input: RunSubscriptionQueryInput; output: null };
+  list_credentials: { input: Record<string, never>; output: unknown };
+  list_credential_health: { input: Record<string, never>; output: unknown };
+  set_credential: { input: SetCredentialInput; output: null };
+  delete_credential: { input: DeleteCredentialInput; output: null };
+  // ptr
+  get_ptr_status: { input: Record<string, never>; output: unknown };
+  is_ptr_syncing: { input: Record<string, never>; output: unknown };
+  get_ptr_sync_progress: { input: Record<string, never>; output: unknown };
+  ptr_sync: { input: Record<string, never>; output: unknown };
+  cancel_ptr_sync: { input: Record<string, never>; output: null };
+  ptr_cancel_bootstrap: { input: Record<string, never>; output: null };
+  ptr_bootstrap_from_hydrus_snapshot: { input: Record<string, unknown>; output: unknown };
+  ptr_get_bootstrap_status: { input: Record<string, never>; output: unknown };
+  ptr_get_compact_index_status: { input: Record<string, never>; output: unknown };
+  get_ptr_sync_perf_breakdown: { input: Record<string, never>; output: unknown };
+  ptr_get_namespace_summary: { input: Record<string, never>; output: unknown };
+  ptr_get_tags_paginated: { input: PtrGetTagsPaginatedInput; output: unknown };
+  ptr_get_tag_siblings: { input: PtrGetTagRelationInput; output: unknown };
+  ptr_get_tag_parents: { input: PtrGetTagRelationInput; output: unknown };
+  // system
+  get_settings: { input: Record<string, never>; output: unknown };
+  save_settings: { input: Record<string, unknown>; output: null };
+  get_library_info: { input: Record<string, never>; output: unknown };
+  get_perf_snapshot: { input: Record<string, never>; output: unknown };
+  check_perf_slo: { input: Record<string, never>; output: unknown };
+  open_external_url: { input: OpenExternalUrlInput; output: null };
+  get_sidebar_tree: { input: Record<string, never>; output: unknown };
+  reorder_sidebar_nodes: { input: ReorderSidebarNodesInput; output: null };
+  get_view_prefs: { input: GetViewPrefsInput; output: unknown };
+  set_view_prefs: { input: SetViewPrefsInput; output: unknown };
+  set_zoom_factor: { input: SetZoomFactorInput; output: null };
+  get_zoom_factor: { input: Record<string, never>; output: unknown };
+  enable_modern_window_style: { input: Record<string, unknown>; output: null };
+  // duplicates
+  get_duplicates: { input: GetDuplicatesInput; output: unknown };
+  scan_duplicates: { input: ScanDuplicatesInput; output: unknown };
+  get_duplicate_pairs: { input: GetDuplicatePairsInput; output: unknown };
+  resolve_duplicate_pair: { input: ResolveDuplicatePairInput; output: unknown };
+  get_duplicate_count: { input: Record<string, never>; output: unknown };
+  get_duplicate_settings: { input: Record<string, never>; output: unknown };
+  update_duplicate_settings: { input: UpdateDuplicateSettingsInput; output: unknown };
+  // smart_folders
+  reorder_smart_folders: { input: ReorderSmartFoldersInput; output: null };
+  create_smart_folder: { input: CreateSmartFolderInput; output: unknown };
+  update_smart_folder: { input: UpdateSmartFolderInput; output: unknown };
+  delete_smart_folder: { input: DeleteSmartFolderInput; output: null };
+  list_smart_folders: { input: Record<string, never>; output: unknown };
+  query_smart_folder: { input: QuerySmartFolderInput; output: unknown };
+  count_smart_folder: { input: CountSmartFolderInput; output: unknown };
 }

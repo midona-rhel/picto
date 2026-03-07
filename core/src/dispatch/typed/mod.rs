@@ -4,12 +4,17 @@
 //! returning `Some(result)` on match or `None` to fall through to the legacy
 //! string-based handlers.
 
+pub mod duplicates;
 pub mod files_lifecycle;
 pub mod files_media;
 pub mod files_metadata;
 pub mod folders;
 pub mod grid;
+pub mod ptr;
 pub mod selection;
+pub mod smart_folders;
+pub mod subscriptions;
+pub mod system;
 pub mod tags;
 
 use std::future::Future;
@@ -64,6 +69,21 @@ pub async fn typed_dispatch(
         return Some(result);
     }
     if let Some(result) = files_media::dispatch_typed(state, command, args).await {
+        return Some(result);
+    }
+    if let Some(result) = subscriptions::dispatch_typed(state, command, args).await {
+        return Some(result);
+    }
+    if let Some(result) = ptr::dispatch_typed(state, command, args).await {
+        return Some(result);
+    }
+    if let Some(result) = system::dispatch_typed(state, command, args).await {
+        return Some(result);
+    }
+    if let Some(result) = duplicates::dispatch_typed(state, command, args).await {
+        return Some(result);
+    }
+    if let Some(result) = smart_folders::dispatch_typed(state, command, args).await {
         return Some(result);
     }
     None
