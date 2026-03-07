@@ -66,20 +66,6 @@ pub enum Domain {
 }
 
 #[derive(Debug, Clone, Default, serde::Serialize)]
-pub struct Invalidate {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub sidebar_tree: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub grid_scopes: Option<Vec<String>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub selection_summary: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub metadata_hashes: Option<Vec<String>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub view_prefs: Option<bool>,
-}
-
-#[derive(Debug, Clone, Default, serde::Serialize)]
 pub struct SidebarCounts {
     pub all_images: i64,
     pub inbox: i64,
@@ -92,9 +78,17 @@ pub struct MutationImpact {
     pub file_hashes: Option<Vec<String>>,
     pub folder_ids: Option<Vec<i64>>,
     pub smart_folder_ids: Option<Vec<i64>>,
-    pub invalidate: Invalidate,
     pub compiler_batch_done: Option<bool>,
     pub sidebar_counts: Option<SidebarCounts>,
+    // Fact fields — describe what changed at the model level.
+    // derive_invalidation() converts these into DerivedInvalidation.
+    pub status_changed: Option<bool>,
+    pub tags_changed: Option<bool>,
+    pub tag_structure_changed: Option<bool>,
+    pub folder_membership_changed: Option<Vec<i64>>,
+    pub view_prefs_changed: Option<bool>,
+    /// Extra grid scopes not derivable from facts (e.g. `collection:{id}`).
+    pub extra_grid_scopes: Option<Vec<String>>,
 }
 
 impl MutationImpact {
@@ -118,30 +112,6 @@ impl MutationImpact {
         self.smart_folder_ids = Some(ids);
         self
     }
-    pub fn sidebar_tree(mut self) -> Self {
-        self.invalidate.sidebar_tree = Some(true);
-        self
-    }
-    pub fn grid_scopes(mut self, s: Vec<String>) -> Self {
-        self.invalidate.grid_scopes = Some(s);
-        self
-    }
-    pub fn grid_all(mut self) -> Self {
-        self.invalidate.grid_scopes = Some(vec!["system:all".into()]);
-        self
-    }
-    pub fn selection_summary(mut self) -> Self {
-        self.invalidate.selection_summary = Some(true);
-        self
-    }
-    pub fn metadata_hashes(mut self, h: Vec<String>) -> Self {
-        self.invalidate.metadata_hashes = Some(h);
-        self
-    }
-    pub fn view_prefs(mut self) -> Self {
-        self.invalidate.view_prefs = Some(true);
-        self
-    }
     pub fn sidebar_counts(mut self, c: SidebarCounts) -> Self {
         self.sidebar_counts = Some(c);
         self
@@ -151,7 +121,35 @@ impl MutationImpact {
         self
     }
 
-    /// File lifecycle (import, status change, delete). Invalidates sidebar, grid, selection, counts.
+    // --- Fact-setting methods ---
+
+    pub fn status_changed(mut self) -> Self {
+        self.status_changed = Some(true);
+        self
+    }
+    pub fn tags_changed(mut self) -> Self {
+        self.tags_changed = Some(true);
+        self
+    }
+    pub fn tag_structure_changed_fact(mut self) -> Self {
+        self.tag_structure_changed = Some(true);
+        self
+    }
+    pub fn folder_membership_changed(mut self, ids: Vec<i64>) -> Self {
+        self.folder_membership_changed = Some(ids);
+        self
+    }
+    pub fn view_prefs_changed(mut self) -> Self {
+        self.view_prefs_changed = Some(true);
+        self
+    }
+    /// Add extra grid scopes not derivable from facts (e.g. `collection:{id}`).
+    pub fn extra_grid_scopes(mut self, s: Vec<String>) -> Self {
+        self.extra_grid_scopes = Some(s);
+        self
+    }
+
+    /// File lifecycle (import, status change, delete). Fact: status_changed.
     ///
     /// Includes SmartFolders because status/existence changes can affect smart folder
     /// membership. Does NOT include Tags — tag bitmaps are rebuilt by the compiler
@@ -159,9 +157,7 @@ impl MutationImpact {
     pub fn file_lifecycle(db: &crate::sqlite::SqliteDatabase) -> Self {
         Self::new()
             .domains(&[Domain::Files, Domain::Sidebar, Domain::SmartFolders])
-            .sidebar_tree()
-            .grid_all()
-            .selection_summary()
+            .status_changed()
             .sidebar_counts_from(db)
     }
 
@@ -169,38 +165,32 @@ impl MutationImpact {
     pub fn file_metadata(hash: String) -> Self {
         Self::new()
             .domains(&[Domain::Files])
-            .metadata_hashes(vec![hash.clone()])
             .file_hashes(vec![hash])
     }
 
-    /// Tag change on specific files. Invalidates file metadata display.
+    /// Tag change on specific files. Fact: tags_changed.
     pub fn file_tags(hash: String) -> Self {
         Self::new()
             .domains(&[Domain::Tags, Domain::Files])
-            .metadata_hashes(vec![hash.clone()])
+            .tags_changed()
             .file_hashes(vec![hash])
     }
 
-    /// Batch tag/selection change. Invalidates grid and selection summary.
-    ///
-    /// Uses `grid_all()` because batch tag changes can affect sort order and
-    /// filter membership across all scopes. Single-file tag changes use
-    /// `file_tags()` with targeted `metadata_hashes` instead.
+    /// Batch tag change. Fact: tags_changed (no file_hashes → derives grid_all).
     pub fn batch_tags() -> Self {
         Self::new()
             .domains(&[Domain::Tags, Domain::Files])
-            .grid_all()
-            .selection_summary()
+            .tags_changed()
     }
 
     /// Sidebar structure change (folder/smart folder/subscription CRUD).
+    /// Derives sidebar_tree from Domain::Sidebar.
     pub fn sidebar(domain: Domain) -> Self {
         Self::new()
             .domains(&[domain, Domain::Sidebar])
-            .sidebar_tree()
     }
 
-    /// File status change (status update, delete, wipe). Full ecosystem invalidation.
+    /// File status change (status update, delete, wipe). Fact: status_changed.
     pub fn file_status_change(db: &crate::sqlite::SqliteDatabase) -> Self {
         Self::new()
             .domains(&[
@@ -210,12 +200,11 @@ impl MutationImpact {
                 Domain::SmartFolders,
                 Domain::Selection,
             ])
-            .sidebar_tree()
-            .selection_summary()
+            .status_changed()
             .sidebar_counts_from(db)
     }
 
-    /// File added/removed from a folder. Invalidates folder grid, sidebar, selection.
+    /// File added/removed from a folder. Fact: folder_membership_changed.
     pub fn folder_file_change(folder_id: i64) -> Self {
         Self::new()
             .domains(&[
@@ -225,30 +214,24 @@ impl MutationImpact {
                 Domain::Sidebar,
             ])
             .folder_ids(vec![folder_id])
-            .sidebar_tree()
-            .grid_scopes(vec![format!("folder:{}", folder_id)])
-            .selection_summary()
+            .folder_membership_changed(vec![folder_id])
     }
 
-    /// Tag structure change (merge, delete, normalize). Affects tags, sidebar, smart folders.
+    /// Tag structure change (merge, delete, normalize). Fact: tag_structure_changed.
     pub fn tag_structure_change() -> Self {
         Self::new()
             .domains(&[Domain::Tags, Domain::Sidebar, Domain::SmartFolders])
-            .sidebar_tree()
-            .grid_all()
-            .selection_summary()
+            .tag_structure_changed_fact()
     }
 
-    /// Folder item reorder/sort/reverse. Invalidates folder grid only.
+    /// Folder item reorder/sort/reverse. No fact flags — derives grid_scopes from folder_ids.
     pub fn folder_item_reorder(folder_id: i64) -> Self {
         Self::new()
             .domains(&[Domain::Folders])
             .folder_ids(vec![folder_id])
-            .grid_scopes(vec![format!("folder:{}", folder_id)])
     }
 
-    /// All domains changed (collection membership, subscription import with collections).
-    /// Invalidates sidebar, grid, selection, and sidebar counts.
+    /// All domains changed (subscription import with collections). Fact: status_changed.
     pub fn all_domains_change(db: &crate::sqlite::SqliteDatabase) -> Self {
         Self::new()
             .domains(&[
@@ -258,29 +241,26 @@ impl MutationImpact {
                 Domain::Sidebar,
                 Domain::SmartFolders,
             ])
-            .sidebar_tree()
-            .selection_summary()
+            .status_changed()
             .sidebar_counts_from(db)
     }
 
-    /// Batch tag change on a selection. Invalidates grid and selection summary.
+    /// Batch tag change on a selection. Fact: tags_changed.
     pub fn selection_batch_tags() -> Self {
         Self::new()
             .domains(&[Domain::Tags, Domain::Files, Domain::Selection])
-            .selection_summary()
-            .grid_all()
+            .tags_changed()
     }
 
     /// Collection metadata update (rating, source URLs). Sidebar + grid invalidation.
     pub fn collection_update(collection_id: i64) -> Self {
-        Self::sidebar(Domain::Folders)
+        Self::new()
+            .domains(&[Domain::Folders, Domain::Sidebar, Domain::Selection])
             .folder_ids(vec![collection_id])
-            .grid_all()
-            .selection_summary()
+            .extra_grid_scopes(vec!["system:all".into()])
     }
 
-    /// Single domain change with no invalidation. Used for minimal mutations
-    /// (subscription query CRUD, duplicate resolution).
+    /// Single domain change with no invalidation. Used for minimal mutations.
     pub fn domain_only(domain: Domain) -> Self {
         Self::new().domains(&[domain])
     }
@@ -288,56 +268,71 @@ impl MutationImpact {
     /// Selection-scoped file metadata change. Invalidates selection summary only.
     pub fn selection_metadata() -> Self {
         Self::new()
-            .domains(&[Domain::Files])
-            .selection_summary()
+            .domains(&[Domain::Files, Domain::Selection])
     }
 
     /// Selection-scoped file metadata change with grid refresh.
+    /// Fact: tags_changed (derives grid_all + selection_summary).
     pub fn selection_metadata_grid() -> Self {
         Self::new()
             .domains(&[Domain::Files])
-            .selection_summary()
-            .grid_all()
+            .tags_changed()
     }
 
-    /// View preferences change.
+    /// View preferences change. Fact: view_prefs_changed.
     pub fn view_prefs_change() -> Self {
         Self::new()
             .domains(&[Domain::ViewPrefs])
-            .view_prefs()
+            .view_prefs_changed()
     }
 }
 
 /// Emit a `runtime/mutation_committed` event with a `MutationReceipt`.
 ///
-/// This is the single mutation event the frontend subscribes to.
+/// Builds `MutationFacts` from the impact, calls `derive_invalidation()` to
+/// compute the transitional `invalidate` field, and emits the receipt.
+/// The frontend derives stale resources from `facts` directly.
 pub fn emit_mutation(origin: &str, impact: MutationImpact) {
     use crate::runtime_contract::mutation::{
-        DerivedInvalidation, MutationFacts, MutationReceipt,
+        derive_invalidation, MutationFacts, MutationReceipt,
         SidebarCounts as ContractSidebarCounts,
     };
 
     let seq = crate::runtime_state::next_seq();
     let ts = chrono::Utc::now().to_rfc3339();
 
+    let facts = MutationFacts {
+        domains: impact.domains,
+        file_hashes: impact.file_hashes,
+        folder_ids: impact.folder_ids,
+        smart_folder_ids: impact.smart_folder_ids,
+        compiler_batch_done: impact.compiler_batch_done,
+        status_changed: impact.status_changed,
+        tags_changed: impact.tags_changed,
+        tag_structure_changed: impact.tag_structure_changed,
+        folder_membership_changed: impact.folder_membership_changed,
+        view_prefs_changed: impact.view_prefs_changed,
+        extra_grid_scopes: impact.extra_grid_scopes,
+    };
+
+    // Transitional: compute DerivedInvalidation for backward compatibility.
+    // The frontend derives stale resources from facts directly; this field
+    // will be removed once confirmed unused by all consumers.
+    let mut invalidate = derive_invalidation(&facts);
+    if let Some(ref extra) = facts.extra_grid_scopes {
+        let mut scopes = invalidate.grid_scopes.unwrap_or_default();
+        scopes.extend(extra.clone());
+        scopes.sort();
+        scopes.dedup();
+        invalidate.grid_scopes = Some(scopes);
+    }
+
     let receipt = MutationReceipt {
         seq,
         ts,
         origin_command: origin.to_string(),
-        facts: MutationFacts {
-            domains: impact.domains,
-            file_hashes: impact.file_hashes,
-            folder_ids: impact.folder_ids,
-            smart_folder_ids: impact.smart_folder_ids,
-            compiler_batch_done: impact.compiler_batch_done,
-        },
-        invalidate: DerivedInvalidation {
-            sidebar_tree: impact.invalidate.sidebar_tree,
-            grid_scopes: impact.invalidate.grid_scopes,
-            selection_summary: impact.invalidate.selection_summary,
-            metadata_hashes: impact.invalidate.metadata_hashes,
-            view_prefs: impact.invalidate.view_prefs,
-        },
+        facts,
+        invalidate,
         sidebar_counts: impact.sidebar_counts.map(|c| ContractSidebarCounts {
             all_images: c.all_images,
             inbox: c.inbox,

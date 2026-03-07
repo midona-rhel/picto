@@ -309,10 +309,6 @@ async fn mutation_receipt_includes_sidebar_tree_invalidation() {
         "test_sidebar",
         events::MutationImpact {
             domains: vec![events::Domain::Sidebar],
-            invalidate: events::Invalidate {
-                sidebar_tree: Some(true),
-                ..Default::default()
-            },
             ..Default::default()
         },
     );
@@ -321,6 +317,7 @@ async fn mutation_receipt_includes_sidebar_tree_invalidation() {
     assert!(!evts.is_empty());
     let payload: serde_json::Value = serde_json::from_str(&evts.last().unwrap().1).unwrap();
     assert_eq!(payload["origin_command"], "test_sidebar");
+    // Domain::Sidebar → derive_invalidation sets sidebar_tree
     assert_eq!(payload["invalidate"]["sidebar_tree"], true);
 }
 
@@ -333,10 +330,7 @@ async fn mutation_receipt_includes_grid_scopes() {
         "test_grid",
         events::MutationImpact {
             domains: vec![events::Domain::Files],
-            invalidate: events::Invalidate {
-                grid_scopes: Some(vec!["scope:a".to_string(), "scope:b".to_string()]),
-                ..Default::default()
-            },
+            extra_grid_scopes: Some(vec!["scope:a".to_string(), "scope:b".to_string()]),
             ..Default::default()
         },
     );
@@ -1247,6 +1241,12 @@ fn mutation_receipt_event_contract() {
             folder_ids: None,
             smart_folder_ids: None,
             compiler_batch_done: None,
+            status_changed: None,
+            tags_changed: None,
+            tag_structure_changed: None,
+            folder_membership_changed: None,
+            view_prefs_changed: None,
+            extra_grid_scopes: None,
         },
         invalidate: DerivedInvalidation {
             sidebar_tree: Some(true),
