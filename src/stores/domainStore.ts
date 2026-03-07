@@ -35,6 +35,8 @@ interface DomainState {
   // Raw sidebar tree for custom consumers
   sidebarNodes: SidebarNodeDto[];
   treeEpoch: number;
+  liveInboxImportRuns: number;
+  liveInboxFloor: number | null;
 
   // Loading state
   loading: boolean;
@@ -43,6 +45,8 @@ interface DomainState {
   fetchSidebarTree: () => Promise<void>;
   invalidate: () => void;
   applySidebarCounts: (counts: { all_images: number; inbox: number; trash: number }) => void;
+  subscriptionRunStarted: () => void;
+  subscriptionRunFinished: () => void;
   setDuplicatesCount: (count: number) => void;
 }
 
@@ -92,6 +96,8 @@ export const useDomainStore = create<DomainState>((set, get) => ({
   folderNodes: [],
   sidebarNodes: [],
   treeEpoch: 0,
+  liveInboxImportRuns: 0,
+  liveInboxFloor: null,
   loading: false,
 
   fetchSidebarTree: async () => {
@@ -169,7 +175,11 @@ export const useDomainStore = create<DomainState>((set, get) => ({
       // Prefer the compiled sidebar node count. During subscription imports,
       // the inbox grid snapshot can intentionally stay cached for live insertion,
       // which would otherwise overwrite a fresher sidebar count.
-      const inboxCount = inboxNode?.count ?? inboxCountResp?.total_count ?? get().inboxCount;
+      const resolvedInboxCount = inboxNode?.count ?? inboxCountResp?.total_count ?? get().inboxCount;
+      const liveInboxFloor = get().liveInboxFloor;
+      const inboxCount = get().liveInboxImportRuns > 0
+        ? Math.max(resolvedInboxCount, liveInboxFloor ?? resolvedInboxCount)
+        : resolvedInboxCount;
       const uncategorizedCount = uncategorizedCountResp?.total_count ?? uncategorizedNode?.count ?? 0;
       const untaggedCount = untaggedCountResp?.total_count ?? untaggedNode?.count ?? 0;
       const recentViewedCount = recentViewedCountResp?.total_count ?? recentViewedNode?.count ?? 0;
@@ -241,10 +251,30 @@ export const useDomainStore = create<DomainState>((set, get) => ({
   },
 
   applySidebarCounts: (counts) => {
+    const { liveInboxImportRuns, liveInboxFloor } = get();
     set({
       allImagesCount: counts.all_images,
       inboxCount: counts.inbox,
       trashCount: counts.trash,
+      liveInboxFloor: liveInboxImportRuns > 0
+        ? Math.max(liveInboxFloor ?? counts.inbox, counts.inbox)
+        : liveInboxFloor,
+    });
+  },
+
+  subscriptionRunStarted: () => {
+    const { liveInboxImportRuns, liveInboxFloor, inboxCount } = get();
+    set({
+      liveInboxImportRuns: liveInboxImportRuns + 1,
+      liveInboxFloor: liveInboxFloor ?? inboxCount,
+    });
+  },
+
+  subscriptionRunFinished: () => {
+    const nextRuns = Math.max(0, get().liveInboxImportRuns - 1);
+    set({
+      liveInboxImportRuns: nextRuns,
+      liveInboxFloor: nextRuns > 0 ? get().liveInboxFloor : null,
     });
   },
 

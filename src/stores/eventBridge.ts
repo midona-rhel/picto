@@ -101,9 +101,11 @@ export async function setupEventBridge(): Promise<void> {
     }),
 
     listen<SubscriptionStartedEvent>('subscription-started', () => {
+      useDomainStore.getState().subscriptionRunStarted();
       SidebarController.requestRefresh();
     }),
     listen<SubscriptionFinishedEvent>('subscription-finished', () => {
+      useDomainStore.getState().subscriptionRunFinished();
       SidebarController.requestRefresh();
       useCacheStore.getState().invalidateAll();
       useCacheStore.getState().bumpGridRefresh();
