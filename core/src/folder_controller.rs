@@ -1,3 +1,9 @@
+//! Folder orchestration — CRUD, sidebar node construction, entity membership,
+//! collection ordering, and auto-tag propagation.
+//!
+//! Bridges between dispatch handlers and `sqlite::folders` for all folder and
+//! collection operations.
+
 use crate::sqlite::SqliteDatabase;
 use crate::types::FolderReorderMove;
 

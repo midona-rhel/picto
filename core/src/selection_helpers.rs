@@ -192,7 +192,10 @@ pub async fn selection_bitmap_for_all_results(
         db.with_conn(move |conn| compile_predicate(conn, &pred, &bitmaps))
             .await?
     } else if has_search_tags {
-        // Search tags: intersect with AllActive (inbox + active), matching grid controller.
+        // Search tags scope to AllActive (inbox + active) — trash files are excluded
+        // because the user doesn't expect trashed files in search results.
+        // Tag match defaults to All (AND) because tag search should narrow results:
+        // searching "character:samus" + "rating:safe" means files with BOTH tags.
         let include_tags = selection.search_tags.clone().unwrap_or_default();
         let exclude_tags = selection.search_excluded_tags.clone().unwrap_or_default();
         let match_mode =
@@ -218,6 +221,8 @@ pub async fn selection_bitmap_for_all_results(
             let exclude_ids = resolve_ids(&exclude_tags, false)?;
             let all_active = bitmaps.get(&BitmapKey::AllActive);
 
+            // If the user searched for tags but none resolved to valid tag_ids,
+            // return empty — the tags don't exist so no files can match.
             if !include_tags.is_empty() && include_ids.is_empty() {
                 return Ok(RoaringBitmap::new());
             }
@@ -252,7 +257,9 @@ pub async fn selection_bitmap_for_all_results(
         })
         .await?
     } else if has_folder {
-        // Folders: intersect with AllActive (inbox + active), matching grid controller.
+        // Folder scope also intersects with AllActive to exclude trash.
+        // Folder match defaults to Any (OR) because viewing multiple folders should
+        // show the UNION of their contents — unlike tag search which narrows.
         let include_folders = selection.folder_ids.clone().unwrap_or_default();
         let exclude_folders = selection.excluded_folder_ids.clone().unwrap_or_default();
         let match_mode = parse_include_match_mode(
@@ -306,7 +313,8 @@ pub async fn selection_bitmap_for_all_results(
                 // The actual view_count check happens when materialising to file_ids.
                 db.bitmaps.get(&BitmapKey::AllActive)
             }
-            // Default "All Images": active only (status=1), matching grid's DEFAULT_VISIBILITY_CLAUSE.
+            // Default "All Images" shows only status=1 (active). Inbox files are hidden
+            // until explicitly reviewed, and trash files are excluded by design.
             _ => db.bitmaps.get(&BitmapKey::Status(1)),
         }
     };

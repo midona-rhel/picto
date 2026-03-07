@@ -1,3 +1,9 @@
+//! Duplicate detection orchestration — perceptual hash scanning, pair
+//! resolution (keep/delete/merge), and smart auto-merge with tag consolidation.
+//!
+//! Delegates to `sqlite::duplicates` for pair storage and `duplicates.rs` for
+//! phash computation.
+
 use std::collections::HashMap;
 
 use rusqlite::OptionalExtension;

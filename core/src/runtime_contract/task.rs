@@ -1,3 +1,9 @@
+//! Background task contract types — visible progress indicators for
+//! long-running operations (subscriptions, flows, PTR sync, imports).
+//!
+//! Tasks are upserted via `runtime/task_upserted` events and removed
+//! via `runtime/task_removed` when complete.
+
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 

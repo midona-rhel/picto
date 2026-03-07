@@ -1,3 +1,9 @@
+//! PTR sync orchestration — manages bootstrap, delta sync, scheduling,
+//! and cancellation for the Public Tag Repository.
+//!
+//! Runs periodic sync on a 60-second schedule with back-off on failure.
+//! Exposes global state flags (`PTR_SYNCING`) for UI status indication.
+
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;

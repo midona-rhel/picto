@@ -1,3 +1,8 @@
+//! Import orchestration — bridges dispatch handlers to the import pipeline.
+//!
+//! Handles file import requests, FTS index rebuilds, and coordinates
+//! auto-merge duplicate detection during import.
+
 use std::path::PathBuf;
 
 use crate::blob_store::BlobStore;

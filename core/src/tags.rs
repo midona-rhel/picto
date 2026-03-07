@@ -41,7 +41,8 @@ fn re_leading_garbage() -> &'static Regex {
 }
 
 /// Checks if a tag starts with a single colon and has no more colons.
-/// Replaces the regex `^:(?=[^:]+$)` which uses look-ahead (not supported by regex crate).
+/// Replaces the regex `^:(?=[^:]+$)` — the Rust regex crate does not support
+/// look-ahead, so this is implemented as a manual check.
 fn is_leading_single_colon_no_more(s: &str) -> bool {
     s.starts_with(':') && s[1..].chars().all(|c| c != ':') && s.len() > 1
 }
@@ -116,7 +117,11 @@ pub fn combine_tag(namespace: &str, subtag: &str) -> String {
 }
 
 /// Strip unwanted characters and normalise text.
-/// Matches Python StripTagTextOfGumpf exactly.
+/// Matches Python StripTagTextOfGumpf exactly (ported from HydrusText.py).
+///
+/// Order matters: control chars → whitespace collapse → garbage prefix → then
+/// script-aware cleanup. The Hangul/zero-width handling must come after
+/// garbage stripping because garbage removal can change character composition.
 fn strip_tag_text_of_gumpf(t: &str) -> String {
     let mut t = re_undesired_control_characters()
         .replace_all(t, "")
@@ -126,10 +131,14 @@ fn strip_tag_text_of_gumpf(t: &str) -> String {
     t = re_leading_garbage().replace_all(&t, "").to_string();
     t = t.trim().to_string();
 
+    // Hangul filler (U+3164) is invisible but valid in actual Hangul text.
+    // Only strip it from non-Hangul tags where it's garbage.
     if re_looks_like_hangul().find(&t).is_none() {
         t = t.replace(HANGUL_FILLER_CHARACTER, "");
     }
 
+    // Zero-width joiners are valid in scripts like Devanagari but garbage in
+    // Latin-only text. Only strip when the entire string is Latin + zero-width.
     if re_this_is_all_latin_and_zero_width().is_match(&t) {
         t = re_zero_width_joiners().replace_all(&t, "").to_string();
     }
@@ -161,8 +170,13 @@ pub fn clean_tag(tag: &str) -> Result<String, String> {
         tag
     };
 
+    // Lowercase BEFORE colon check — the colon-disambiguation logic must operate
+    // on the already-lowercased string so case doesn't affect namespace detection.
     let mut tag = tag_str.to_lowercase();
 
+    // A tag like ":foo" (single leading colon, no namespace) gets doubled to "::foo"
+    // so that split_tag correctly produces ("", "foo") instead of interpreting the
+    // colon as a namespace separator.
     if is_leading_single_colon_no_more(&tag) {
         tag = format!(":{}", tag);
     }

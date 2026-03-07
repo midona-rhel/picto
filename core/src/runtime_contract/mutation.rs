@@ -1,3 +1,9 @@
+//! Mutation contract types — emitted via `runtime/mutation_committed` events.
+//!
+//! `MutationReceipt` is the primary event the frontend subscribes to.
+//! It carries sequencing metadata, what changed (`MutationFacts`), what
+//! to refresh (`DerivedInvalidation`), and optional O(1) sidebar counts.
+
 use serde::Serialize;
 use ts_rs::TS;
 
