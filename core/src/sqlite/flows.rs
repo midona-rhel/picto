@@ -80,15 +80,6 @@ pub fn get_flow_subscription_ids(conn: &Connection, flow_id: i64) -> rusqlite::R
     rows.collect()
 }
 
-pub fn get_flow_total_file_count(conn: &Connection, flow_id: i64) -> rusqlite::Result<i64> {
-    conn.query_row(
-        "SELECT COUNT(*) FROM subscription_entity
-         WHERE subscription_id IN (SELECT subscription_id FROM subscription WHERE flow_id = ?1)",
-        [flow_id],
-        |row| row.get(0),
-    )
-}
-
 impl SqliteDatabase {
     pub async fn create_flow(&self, name: &str) -> Result<Flow, String> {
         let n = name.to_string();
@@ -126,11 +117,6 @@ impl SqliteDatabase {
 
     pub async fn get_flow_subscription_ids(&self, flow_id: i64) -> Result<Vec<i64>, String> {
         self.with_read_conn(move |conn| get_flow_subscription_ids(conn, flow_id))
-            .await
-    }
-
-    pub async fn get_flow_total_file_count(&self, flow_id: i64) -> Result<i64, String> {
-        self.with_read_conn(move |conn| get_flow_total_file_count(conn, flow_id))
             .await
     }
 

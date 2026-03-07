@@ -57,10 +57,6 @@ export const FolderController = {
     return runFolderMutation(api.folders.delete(folderId));
   },
 
-  updateFolderParent(folderId: number, newParentId: number | null): Promise<void> {
-    return runFolderMutation(api.folders.updateParent(folderId, newParentId));
-  },
-
   // PBI-057: Atomic move_folder — reparent + reorder in one transaction.
   moveFolder(folderId: number, newParentId: number | null, siblingOrder: [number, number][]): Promise<void> {
     return runFolderMutation(api.folders.moveFolder(folderId, newParentId, siblingOrder));
@@ -109,10 +105,6 @@ export const FolderController = {
 
   reorderSmartFolders(moves: [number, number][]): Promise<void> {
     return api.smartFolders.reorder(moves);
-  },
-
-  reorderSidebarNodes(moves: [string, number][]): Promise<void> {
-    return runFolderMutation(api.sidebar.reorderNodes(moves));
   },
 
   reorderFolderItems(

@@ -52,32 +52,6 @@ pub fn upsert_hash_def(conn: &Connection, def_id: i64, hash_hex: &str) -> rusqli
     Ok(())
 }
 
-pub fn get_tag_def(conn: &Connection, def_id: i64) -> rusqlite::Result<Option<String>> {
-    conn.query_row(
-        "SELECT tag_string FROM ptr_tag_def WHERE def_id = ?1",
-        [def_id],
-        |row| row.get(0),
-    )
-    .map(Some)
-    .or_else(|e| match e {
-        rusqlite::Error::QueryReturnedNoRows => Ok(None),
-        e => Err(e),
-    })
-}
-
-pub fn get_hash_def(conn: &Connection, def_id: i64) -> rusqlite::Result<Option<String>> {
-    conn.query_row(
-        "SELECT hash_hex FROM ptr_hash_def WHERE def_id = ?1",
-        [def_id],
-        |row| row.get(0),
-    )
-    .map(Some)
-    .or_else(|e| match e {
-        rusqlite::Error::QueryReturnedNoRows => Ok(None),
-        e => Err(e),
-    })
-}
-
 fn multi_insert_blobs(tx: &Transaction, prefix: &str, blobs: &[Vec<u8>]) -> rusqlite::Result<()> {
     for chunk in blobs.chunks(MAX_PARAMS) {
         let placeholders = vec!["(?)"; chunk.len()].join(", ");

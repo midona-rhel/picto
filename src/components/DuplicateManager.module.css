@@ -118,12 +118,6 @@
   font-variant-numeric: tabular-nums;
 }
 
-.winnerBadge {
-  font-size: var(--font-size-xs);
-  font-weight: var(--font-weight-bold);
-  color: var(--color-positive);
-}
-
 .actionColumn {
   display: flex;
   flex-direction: column;

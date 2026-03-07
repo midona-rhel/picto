@@ -99,17 +99,8 @@ export function getCurrentWindow(): DesktopWindow {
   return new DesktopWindow();
 }
 
-export async function currentMonitor(): Promise<{ scaleFactor: number; size: { width: number; height: number } } | null> {
-  if (!window.picto?.monitor?.current) return null;
-  return window.picto.monitor.current();
-}
-
 export async function setTheme(theme: string): Promise<void> {
   await requireDesktop().api.window?.call?.('setTheme', { theme });
-}
-
-export function popupMenu(): Promise<void> {
-  return requireDesktop().api.popupMenu?.() ?? Promise.resolve();
 }
 
 export function getCurrentWebview() {
@@ -282,15 +273,14 @@ import type {
   EntitySlim,
   GridPageSlimResponse, GridPageSlimQuery,
   EnsureThumbnailResponse, ReanalyzeFileColorsResponse,
-  ImportResult, BackfillBlurhashResult,
+  ImportResult,
   TagDisplay, TagSearchResult, TagTuple, TagRecord,
-  NamespaceSummary, TagAlias, TagRelation,
+  NamespaceSummary, TagRelation,
   RenameTagResult, DeleteTagResult, NormalizeNamespacesResult,
   SelectionQuerySpec, SelectionSummary,
   Folder, FolderMembership, FolderReorderMove,
   SmartFolder, SmartFolderPredicate,
   SidebarTreeResponse,
-  DuplicateInfo,
   ScanDuplicatesResult, DuplicatePairsResponse, DuplicateSettings,
   SmartMergeResult, ResolveDuplicateAction,
   SubscriptionInfo, SubscriptionQueryInfo, FlowInfo,
@@ -299,11 +289,11 @@ import type {
   CredentialDomain, CredentialType, CredentialHealth,
   PtrStats, PtrSyncPerfBreakdown,
   PtrSyncProgress, PtrBootstrapStatus, PtrCompactIndexStatus,
-  AppSettings, StorageStats,
-  CollectionInfo, CollectionSummary, ReviewQueueItem, CompanionNamespaceValue,
+  AppSettings,
+  CollectionInfo, CollectionSummary, CompanionNamespaceValue,
   ViewPrefsDto, ViewPrefsPatch,
   FileStats, PerfSnapshot, PerfSloResult,
-  ColorSearchResult, LibraryInfo,
+  LibraryInfo,
 } from '../types/api';
 
 export function listenRuntimeEvent<K extends keyof CoreRuntimeEventPayloadMap>(
@@ -312,6 +302,25 @@ export function listenRuntimeEvent<K extends keyof CoreRuntimeEventPayloadMap>(
 ): Promise<UnlistenFn> {
   return listen<CoreRuntimeEventPayloadMap[K]>(eventName, (e) => handler(e.payload));
 }
+
+// ─── Typed command dispatch (PBI-234) ──────────────────────────────────────
+//
+// Generated types live in types/generated/commands/ (via ts-rs from Rust).
+// invokeTyped() provides compile-time checked command names and argument types.
+
+import type { TypedCommandMap } from '../types/generated/commands';
+
+type HasInput<K extends keyof TypedCommandMap> =
+  TypedCommandMap[K]['input'] extends Record<string, never> ? false : true;
+
+export function invokeTyped<K extends keyof TypedCommandMap>(
+  command: K,
+  ...args: HasInput<K> extends true ? [TypedCommandMap[K]['input']] : []
+): Promise<TypedCommandMap[K]['output']> {
+  return invoke(command, (args[0] ?? {}) as Record<string, unknown>);
+}
+
+export type { TypedCommandMap } from '../types/generated/commands';
 
 export { api as desktopTypedApi };
 
@@ -355,8 +364,6 @@ export const api = {
       invoke<void>('update_file_status', { hash, status }),
     setStatusSelection: (selection: SelectionQuerySpec, status: string) =>
       invoke<number>('update_file_status_selection', { selection, status }),
-    delete: (hash: string) =>
-      invoke<void>('delete_file', { hash }),
     deleteMany: (hashes: string[]) =>
       invoke<number>('delete_files', { hashes }),
     deleteSelection: (selection: SelectionQuerySpec) =>
@@ -367,8 +374,6 @@ export const api = {
       invoke<void>('set_file_name', { hash, name }),
     setSourceUrls: (hash: string, urls: string[]) =>
       invoke<void>('set_source_urls', { hash, urls }),
-    getNotes: (hash: string) =>
-      invoke<Record<string, string>>('get_file_notes', { hash }),
     setNotes: (hash: string, notes: Record<string, string>) =>
       invoke<void>('set_file_notes', { hash, notes }),
     incrementViewCount: (hash: string) =>
@@ -383,8 +388,6 @@ export const api = {
       invoke<void>('reveal_in_folder', { hash }),
     openInNewWindow: (hash: string, width?: number | null, height?: number | null) =>
       invoke<void>('open_in_new_window', { hash, width: width ?? null, height: height ?? null }),
-    export: (hash: string, destPath: string) =>
-      invoke<void>('export_file', { hash, dest_path: destPath }),
     ensureThumbnail: (hash: string) =>
       invoke<EnsureThumbnailResponse>('ensure_thumbnail', { hash }),
     regenerateThumbnail: (hash: string) =>
@@ -393,19 +396,11 @@ export const api = {
       invoke<ReanalyzeFileColorsResponse>('reanalyze_file_colors', { hash }),
     regenerateThumbnailsBatch: (hashes: string[]) =>
       invoke<{ total: number; regenerated: number; errors: number }>('regenerate_thumbnails_batch', { hashes }),
-    getParents: (hash: string) =>
-      invoke<string[]>('get_file_parents', { hash }),
-    getThumbnailBytes: (imageId: number) =>
-      invoke<number[]>('get_image_thumbnail', { imageId }),
   },
 
   import: {
     files: (paths: string[], tagStrings?: string[], sourceUrls?: string[], initialStatus?: number) =>
       invoke<ImportResult>('import_files', { paths, tag_strings: tagStrings, source_urls: sourceUrls, initial_status: initialStatus }),
-    rebuildFts: () =>
-      invoke<void>('rebuild_file_fts'),
-    backfillBlurhashes: (limit?: number) =>
-      invoke<BackfillBlurhashResult>('backfill_missing_blurhashes', { limit }),
   },
 
   tags: {
@@ -415,8 +410,6 @@ export const api = {
       invoke<TagTuple[]>('get_all_tags_with_counts'),
     getForFile: (hash: string) =>
       invoke<TagDisplay[]>('get_file_tags', { hash }),
-    getForFileDisplay: (hash: string) =>
-      invoke<TagDisplay[]>('get_file_tags_display', { hash }),
     add: (hash: string, tagStrings: string[]) =>
       invoke<void>('add_tags', { hash, tag_strings: tagStrings }),
     remove: (hash: string, tagStrings: string[]) =>
@@ -431,10 +424,6 @@ export const api = {
       invoke<TagRecord[]>('get_tags_paginated', params),
     getNamespaceSummary: () =>
       invoke<NamespaceSummary[]>('get_namespace_summary'),
-    lookupTypes: () =>
-      invoke<string[]>('lookup_tag_types'),
-    getAliases: () =>
-      invoke<TagAlias[]>('get_tag_aliases'),
     setAlias: (from: string, to: string) =>
       invoke<void>('set_tag_alias', { from, to }),
     removeAlias: (from: string) =>
@@ -530,8 +519,6 @@ export const api = {
     },
     delete: (id: string) =>
       invoke<void>('delete_smart_folder', { id }),
-    query: (predicate: SmartFolderPredicate, limit?: number, offset?: number) =>
-      invoke<string[]>('query_smart_folder', { predicate, limit, offset }),
     count: (predicate: SmartFolderPredicate) =>
       invoke<number>('count_smart_folder', { predicate }),
     reorder: (moves: [number, number][]) =>
@@ -546,8 +533,6 @@ export const api = {
   },
 
   duplicates: {
-    getForFile: (hash: string) =>
-      invoke<DuplicateInfo[]>('get_duplicates', { hash }),
     getPairs: (cursor?: string | null, limit?: number, status?: string) =>
       invoke<DuplicatePairsResponse>('get_duplicate_pairs', {
         ...(cursor ? { cursor } : {}),
@@ -698,8 +683,6 @@ export const api = {
   },
 
   stats: {
-    getStorageStats: () =>
-      invoke<StorageStats>('get_storage_stats'),
     getImageStorageStats: () =>
       invoke<FileStats>('get_image_storage_stats'),
     getPerfSnapshot: () =>
@@ -715,11 +698,6 @@ export const api = {
       invoke<void>('close_library'),
     wipeImageData: () =>
       invoke<void>('wipe_image_data'),
-  },
-
-  color: {
-    searchByColor: (hexColor: string, maxDistance?: number) =>
-      invoke<ColorSearchResult[]>('search_by_color', { hex_color: hexColor, max_distance: maxDistance }),
   },
 
   runtime: {
@@ -765,15 +743,6 @@ export const api = {
       }),
     delete: (id: number) =>
       invoke<void>('delete_collection', { id }),
-  },
-
-  review: {
-    getQueue: () =>
-      invoke<ReviewQueueItem[]>('get_review_queue'),
-    getItemImage: (hash: string) =>
-      invoke<number[]>('get_review_item_image', { hash }),
-    action: (hash: string, action: string) =>
-      invoke<void>('review_image_action', { hash, action: { action } }),
   },
 
   companion: {

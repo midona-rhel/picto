@@ -693,11 +693,6 @@ pub async fn handle(
                 Err(e) => Some(Err(e)),
             }
         }
-        "scan_for_collections" => {
-            tracing::debug!("Unimplemented command: scan_for_collections");
-            Some(Err("Unimplemented: 'scan_for_collections' — collection auto-detection is not yet implemented".into()))
-        }
-
         _ => None,
     }
 }

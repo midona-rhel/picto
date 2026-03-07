@@ -62,16 +62,6 @@ pub async fn handle(
             Some(to_json(&result))
         }
 
-        "repair_projections" => {
-            let result = state.db.repair_corrupt_projections().await;
-            Some(result.and_then(|count| {
-                to_json(&serde_json::json!({
-                    "repaired": count,
-                    "corruption_count": crate::perf::get_projection_corruption_count(),
-                }))
-            }))
-        }
-
         "open_external_url" => {
             let url: String = match de(args, "url") {
                 Ok(v) => v,
@@ -164,46 +154,6 @@ pub async fn handle(
         "enable_modern_window_style" => {
             tracing::debug!(command = command, "Legacy no-op command acknowledged");
             Some(ok_null())
-        }
-
-        "set_hydrus_client_api_config"
-        | "set_hydrus_runtime_config"
-        | "test_hydrus_client_api_connection"
-        | "get_hydrus_client_api_config"
-        | "get_hydrus_runtime_config"
-        | "hydrus_client_api_proxy"
-        | "hydrus_get_file_data"
-        | "hydrus_get_file_metadata"
-        | "hydrus_get_files"
-        | "hydrus_get_thumbnail"
-        | "launch_hydrus_client" => {
-            tracing::debug!(
-                command = command,
-                "Unimplemented command: Hydrus client API is not available in core"
-            );
-            Some(Err(format!(
-                "Unimplemented: '{}' — Hydrus client API integration is not available",
-                command
-            )))
-        }
-
-        "is_ai_tagger_ready"
-        | "initialize_ai_tagger"
-        | "update_tagger_config"
-        | "get_tagger_config"
-        | "get_available_models"
-        | "tag_image_by_hash"
-        | "tag_image_from_bytes"
-        | "tag_image_from_path"
-        | "get_acceleration_backend" => {
-            tracing::debug!(
-                command = command,
-                "Unimplemented command: AI tagger is not available in core"
-            );
-            Some(Err(format!(
-                "Unimplemented: '{}' — AI tagger integration is not available",
-                command
-            )))
         }
 
         _ => None,

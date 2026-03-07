@@ -170,21 +170,3 @@
   overflow: hidden;
 }
 
-.sidebarResizeHandle {
-  position: absolute;
-  top: 0;
-  right: 0;
-  width: 5px;
-  height: 100%;
-  cursor: col-resize;
-  z-index: 10;
-  border-right: 1px solid var(--color-border-secondary);
-  transition: border 200ms var(--timing-function-super);
-  transition-delay: 100ms;
-}
-
-.sidebarResizeHandle:hover {
-  border-right-width: 2px;
-  border-color: var(--color-primary-70);
-  transition-delay: 0ms;
-}

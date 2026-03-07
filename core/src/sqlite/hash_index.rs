@@ -63,15 +63,6 @@ impl HashIndex {
         file_id
     }
 
-    pub fn remove_by_id(&self, file_id: i64) -> Option<String> {
-        let mut inner = self.inner.write();
-        let hash = inner.reverse.pop(&file_id);
-        if let Some(ref h) = hash {
-            inner.forward.pop(h);
-        }
-        hash
-    }
-
     pub fn clear(&self) {
         let mut inner = self.inner.write();
         inner.forward.clear();

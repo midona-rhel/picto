@@ -1,14 +1,7 @@
 //! Shared dispatch utilities — JSON helpers, argument parsing, convenience wrappers.
 
-/// Convenience wrapper: fetch sidebar counts from bitmaps.
-pub fn sidebar_counts_from_bitmaps(
-    db: &crate::sqlite::SqliteDatabase,
-) -> crate::events::SidebarCounts {
-    crate::events::sidebar_counts_from_bitmaps(db)
-}
-
 /// Convert snake_case to camelCase: "folder_id" → "folderId"
-pub fn snake_to_camel(s: &str) -> String {
+fn snake_to_camel(s: &str) -> String {
     let mut result = String::new();
     let mut capitalize_next = false;
     for ch in s.chars() {
@@ -67,39 +60,6 @@ pub fn de_opt<T: serde::de::DeserializeOwned>(args: &serde_json::Value, key: &st
                 None
             }
         },
-    }
-}
-
-/// Strict version of de_opt that returns an error instead of None on type mismatch.
-/// Use this for optional fields where a wrong type should fail the command.
-pub fn de_opt_strict<T: serde::de::DeserializeOwned>(
-    args: &serde_json::Value,
-    key: &str,
-) -> Result<Option<T>, String> {
-    match get_field(args, key) {
-        None => Ok(None),
-        Some(v) => serde_json::from_value::<T>(v.clone())
-            .map(Some)
-            .map_err(|e| {
-                format!(
-                    "Invalid field '{}': expected {}, got {}: {}",
-                    key,
-                    std::any::type_name::<T>(),
-                    value_type_name(v),
-                    e
-                )
-            }),
-    }
-}
-
-pub fn value_type_name(v: &serde_json::Value) -> &'static str {
-    match v {
-        serde_json::Value::Null => "null",
-        serde_json::Value::Bool(_) => "boolean",
-        serde_json::Value::Number(_) => "number",
-        serde_json::Value::String(_) => "string",
-        serde_json::Value::Array(_) => "array",
-        serde_json::Value::Object(_) => "object",
     }
 }
 

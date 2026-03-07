@@ -72,11 +72,3 @@ impl RateLimiter {
     }
 }
 
-pub struct RateLimitGuard;
-
-impl RateLimitGuard {
-    pub async fn acquire(limiter: &RateLimiter, domain: &str) -> Self {
-        limiter.wait_for_slot(domain).await;
-        Self
-    }
-}

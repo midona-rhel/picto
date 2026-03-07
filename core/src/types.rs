@@ -7,6 +7,7 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
+use ts_rs::TS;
 
 use crate::sqlite::files::{FileMetadataSlim, FileRecord};
 use crate::sqlite::smart_folders::SmartFolderPredicate;
@@ -40,16 +41,19 @@ pub fn tag_display_key(namespace: &str, subtag: &str) -> String {
     }
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, TS)]
+#[ts(export, export_to = "../../src/types/generated/commands/")]
 pub struct ImportResult {
     pub hash: String,
     pub mime: String,
+    #[ts(type = "number")]
     pub size: u64,
     pub has_thumbnail: bool,
     pub tags_applied: Vec<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, TS)]
+#[ts(export, export_to = "../../src/types/generated/commands/")]
 pub struct ImportBatchResult {
     pub imported: Vec<ImportResult>,
     pub skipped: Vec<String>,
@@ -354,7 +358,6 @@ pub struct EntityMetadataBatchResponse {
 // Temporary migration aliases while TS/front-end callsites are moved to entity-centric naming.
 pub type FileInfo = EntityDetails;
 pub type FileInfoSlim = EntitySlim;
-pub type FileMetadataBatchResponse = EntityMetadataBatchResponse;
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -407,8 +410,6 @@ pub struct SelectionSummary {
     pub pending: bool,
     pub generated_at: String,
 }
-
-pub type SidebarFreshness = String;
 
 #[derive(Debug, Serialize)]
 pub struct SidebarNodeDto {

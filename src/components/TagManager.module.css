@@ -233,24 +233,6 @@
   background: var(--sidebar-item-active-bg);
 }
 
-/* Tag grid */
-.tagGroupTags {
-  gap: 2px;
-  grid-template-columns: repeat(auto-fill, minmax(199px, 1fr));
-  display: grid;
-}
-
-.tagGroupTagsList {
-  display: flex;
-  flex-direction: column;
-  gap: 0;
-}
-
-.tagGroupTagsList .tag {
-  min-width: initial;
-  width: 100%;
-}
-
 .tag {
   display: flex;
   align-items: center;

@@ -34,9 +34,6 @@ export interface EntitySlim {
 
 export interface EntityDetails extends EntitySlim {}
 
-// Temporary migration alias while call sites move to entity-first naming.
-export type ImageItem = EntitySlim;
-
 export interface GridPageSlimResponse {
   items: EntitySlim[];
   next_cursor: string | null;
@@ -108,10 +105,6 @@ export interface EntityMetadataBatchResponse {
   generated_at: string;
 }
 
-// Temporary migration aliases while call sites move to entity-first naming.
-export type FileAllMetadata = EntityAllMetadata;
-export type FileMetadataBatchResponse = EntityMetadataBatchResponse;
-
 export interface EnsureThumbnailResponse {
   regenerated_thumbnail: boolean;
   generated_blurhash: boolean;
@@ -152,23 +145,11 @@ export interface TagSearchResult {
   read_only: boolean;
 }
 
-export interface TagWithCount {
-  namespace: string;
-  subtag: string;
-  count: number;
-}
-
 export interface TagRecord {
   tag_id: number;
   namespace: string;
   subtag: string;
   file_count: number;
-}
-
-export interface PaginatedTags {
-  items: TagSearchResult[];
-  next_cursor: string | null;
-  has_more: boolean;
 }
 
 export interface NamespaceSummary {

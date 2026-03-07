@@ -182,32 +182,6 @@ pub fn get_entities_tags(
     Ok(out)
 }
 
-pub fn get_entity_implied_tags(
-    conn: &Connection,
-    entity_id: i64,
-) -> rusqlite::Result<Vec<FileTagInfo>> {
-    let mut stmt = conn.prepare_cached(
-        "SELECT t.tag_id, t.namespace, t.subtag, 'implied' as source,
-                td.display_ns, td.display_st
-         FROM entity_tag_implied eti
-         JOIN tag t ON t.tag_id = eti.tag_id
-         LEFT JOIN tag_display td ON td.tag_id = t.tag_id
-         WHERE eti.entity_id = ?1
-         ORDER BY t.namespace, t.subtag",
-    )?;
-    let rows = stmt.query_map([entity_id], |row| {
-        Ok(FileTagInfo {
-            tag_id: row.get(0)?,
-            namespace: row.get(1)?,
-            subtag: row.get(2)?,
-            source: row.get(3)?,
-            display_ns: row.get(4)?,
-            display_st: row.get(5)?,
-        })
-    })?;
-    rows.collect()
-}
-
 pub fn search_tags(conn: &Connection, query: &str, limit: i64) -> rusqlite::Result<Vec<TagRecord>> {
     if query.is_empty() {
         // Return top tags by file_count

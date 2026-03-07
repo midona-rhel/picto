@@ -20,12 +20,28 @@ const ALLOWLIST_FILE = path.join(ROOT, 'scripts/command-parity-allowlist.json');
 
 async function extractRustCommands() {
   const commands = new Set();
-  const entries = await fs.readdir(DISPATCH_DIR);
-  for (const entry of entries) {
-    if (!entry.endsWith('.rs') || entry === 'common.rs') continue;
-    const content = await fs.readFile(path.join(DISPATCH_DIR, entry), 'utf8');
-    for (const cmd of extractRustCommandsFromText(content)) commands.add(cmd);
+
+  // Recursively collect .rs files from dispatch directory (including typed/ subdirs)
+  async function scanDir(dir) {
+    const entries = await fs.readdir(dir, { withFileTypes: true });
+    for (const entry of entries) {
+      const fullPath = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        await scanDir(fullPath);
+      } else if (entry.name.endsWith('.rs') && entry.name !== 'common.rs') {
+        const content = await fs.readFile(fullPath, 'utf8');
+        for (const cmd of extractRustCommandsFromText(content)) commands.add(cmd);
+        // Also match TypedCommand const NAME patterns: const NAME: &'static str = "cmd";
+        const TYPED_CMD_RE = /const\s+NAME:\s*&'static\s+str\s*=\s*"([a-z_]+)"/g;
+        let m;
+        while ((m = TYPED_CMD_RE.exec(content)) !== null) {
+          commands.add(m[1]);
+        }
+      }
+    }
   }
+  await scanDir(DISPATCH_DIR);
+
   // Also catch inline commands in mod.rs dispatch fn (e.g., close_library)
   const modContent = await fs.readFile(path.join(DISPATCH_DIR, 'mod.rs'), 'utf8');
   const MOD_CMD_RE = /command\s*==\s*"([a-z_]+)"/g;

@@ -248,10 +248,6 @@ pub fn sidebar_counts_from_bitmaps(db: &crate::sqlite::SqliteDatabase) -> Sideba
 }
 
 pub mod event_names {
-    pub const STATE_CHANGED: &str = "state-changed";
-    pub const SIDEBAR_INVALIDATED: &str = "sidebar-invalidated";
-    pub const GRID_SNAPSHOT_INVALIDATED: &str = "grid-snapshot-invalidated";
-
     pub const SUBSCRIPTION_STARTED: &str = "subscription-started";
     pub const SUBSCRIPTION_PROGRESS: &str = "subscription-progress";
     pub const SUBSCRIPTION_FINISHED: &str = "subscription-finished";

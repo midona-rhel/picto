@@ -688,57 +688,6 @@ pub fn list_files_slim(
     rows.collect()
 }
 
-/// Batch get file metadata by file_ids — single query.
-pub fn batch_get_slim(
-    conn: &Connection,
-    file_ids: &[i64],
-) -> rusqlite::Result<Vec<FileMetadataSlim>> {
-    if file_ids.is_empty() {
-        return Ok(Vec::new());
-    }
-
-    let placeholders: Vec<String> = (1..=file_ids.len()).map(|i| format!("?{i}")).collect();
-    let sql = format!(
-        "SELECT hash, name, mime, width, height, size, status, rating, blurhash,
-                imported_at, dominant_color_hex, duration_ms, num_frames, has_audio, view_count
-         FROM file WHERE file_id IN ({})",
-        placeholders.join(",")
-    );
-
-    let params: Vec<&dyn rusqlite::types::ToSql> = file_ids
-        .iter()
-        .map(|id| id as &dyn rusqlite::types::ToSql)
-        .collect();
-
-    let mut stmt = conn.prepare(&sql)?;
-    let rows = stmt.query_map(params.as_slice(), |row| {
-        Ok(FileMetadataSlim {
-            file_id: 0,
-            entity_id: 0,
-            is_collection: false,
-            collection_item_count: None,
-            hash: row.get(0)?,
-            name: row.get(1)?,
-            mime: row.get(2)?,
-            width: row.get(3)?,
-            height: row.get(4)?,
-            size: row.get(5)?,
-            status: row.get::<_, i64>(6)? as u8,
-            rating: row.get(7)?,
-            blurhash: row.get(8)?,
-            imported_at: row.get(9)?,
-            dominant_color_hex: row.get(10)?,
-            duration_ms: row.get(11)?,
-            num_frames: row.get(12)?,
-            has_audio: row.get::<_, i64>(13)? != 0,
-            view_count: row.get(14)?,
-            position_rank: None,
-        })
-    })?;
-
-    rows.collect()
-}
-
 /// Batch get full file records by hashes.
 pub fn batch_get_by_hashes(
     conn: &Connection,
@@ -1217,28 +1166,6 @@ pub fn save_file_colors(
         rtree_stmt.execute(params![rowid, l, a, b])?;
     }
     Ok(())
-}
-
-/// Search files by Lab color range using R*Tree spatial index.
-pub fn search_by_color(
-    conn: &Connection,
-    l_range: (f32, f32),
-    a_range: (f32, f32),
-    b_range: (f32, f32),
-) -> rusqlite::Result<Vec<i64>> {
-    let mut stmt = conn.prepare_cached(
-        "SELECT DISTINCT fc.file_id
-         FROM file_color_rtree rt
-         JOIN file_color fc ON fc.rowid = rt.id
-         WHERE rt.l_max >= ?1 AND rt.l_min <= ?2
-           AND rt.a_max >= ?3 AND rt.a_min <= ?4
-           AND rt.b_max >= ?5 AND rt.b_min <= ?6",
-    )?;
-    let rows = stmt.query_map(
-        params![l_range.0, l_range.1, a_range.0, a_range.1, b_range.0, b_range.1],
-        |row| row.get(0),
-    )?;
-    rows.collect()
 }
 
 /// Get aggregate file statistics — single query.

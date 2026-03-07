@@ -23,17 +23,6 @@ pub async fn handle(
                 Err(e) => Err(e),
             })
         }
-        "get_all_detected_duplicates" => {
-            let result =
-                crate::duplicate_controller::DuplicateController::get_all_detected_duplicates(
-                    &state.db,
-                )
-                .await;
-            Some(match result {
-                Ok(r) => to_json(&r),
-                Err(e) => Err(e),
-            })
-        }
         "scan_duplicates" => {
             let threshold: Option<u32> = de::<u32>(args, "threshold").ok();
             let effective_threshold = threshold.or_else(|| {

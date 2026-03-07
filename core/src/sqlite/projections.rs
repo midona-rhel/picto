@@ -6,7 +6,7 @@
 use super::files::FileMetadataSlim;
 use super::tags::FileTagInfo;
 use super::SqliteDatabase;
-use rusqlite::{params, params_from_iter, Connection, OptionalExtension};
+use rusqlite::{params, params_from_iter, Connection};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -47,47 +47,6 @@ pub struct ResolvedMetadataFull {
     pub source_urls_json: Option<String>,
     pub notes: Option<String>,
     pub colors: Vec<(String, f64, f64, f64)>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ProjectionRow {
-    pub file_id: i64,
-    pub epoch: i64,
-    pub resolved_json: String,
-    pub parents_json: String,
-}
-
-/// Get a pre-compiled projection for a file.
-pub fn get_projection(conn: &Connection, file_id: i64) -> rusqlite::Result<Option<ProjectionRow>> {
-    conn.query_row(
-        "SELECT entity_id, epoch, resolved_json, parents_json
-         FROM entity_metadata_projection WHERE entity_id = ?1",
-        [file_id],
-        |row| {
-            Ok(ProjectionRow {
-                file_id: row.get(0)?,
-                epoch: row.get(1)?,
-                resolved_json: row.get(2)?,
-                parents_json: row.get(3)?,
-            })
-        },
-    )
-    .optional()
-}
-
-pub fn upsert_projection(
-    conn: &Connection,
-    file_id: i64,
-    epoch: i64,
-    resolved_json: &str,
-    parents_json: &str,
-) -> rusqlite::Result<()> {
-    conn.execute(
-        "INSERT OR REPLACE INTO entity_metadata_projection (entity_id, epoch, resolved_json, parents_json)
-         VALUES (?1, ?2, ?3, ?4)",
-        params![file_id, epoch, resolved_json, parents_json],
-    )?;
-    Ok(())
 }
 
 /// Batch build projections for multiple files using a single JOIN query.
