@@ -1,4 +1,4 @@
-# PBI-303: Gallery-dl runner decomposition and site adapter split
+# PBI-309: Gallery-dl runner decomposition and site adapter split
 
 ## Priority
 P1

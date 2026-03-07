@@ -1,4 +1,4 @@
-# PBI-307: Grid, selection, and sidebar query service decomposition
+# PBI-305: Grid, selection, and sidebar query service decomposition
 
 ## Priority
 P1
@@ -24,9 +24,9 @@ The backend read side is split by historical controller boundaries instead of by
 
 ## Dependencies
 Depends on:
-1. `PBI-327` for canonical scope semantics.
-2. `PBI-329` for the model-fact to derived-resource dependency contract.
-3. `PBI-330` for the business-logic conformance suite that locks scope behavior before service extraction.
+1. `PBI-300` for canonical scope semantics.
+2. `PBI-303` for the model-fact to derived-resource dependency contract.
+3. `PBI-301` for the business-logic conformance suite that locks scope behavior before service extraction.
 
 ## Not In Scope
 1. Redefining business rules for `select all`, `untagged`, `uncategorized`, or inbox visibility.
@@ -39,14 +39,14 @@ Depends on:
    - selection summaries
    - sidebar snapshots/counts
 2. Pull shared read logic out of controller glue.
-3. Consume the canonical scope resolver introduced by `PBI-327` rather than re-implementing scope semantics locally.
+3. Consume the canonical scope resolver introduced by `PBI-300` rather than re-implementing scope semantics locally.
 4. Separate:
    - scope resolution
    - entity-id population queries
    - page/cursor materialization
    - selection summary aggregation
    - sidebar snapshot/count projection
-5. Prepare the backend read side for the runtime resource model introduced by `PBI-234` and `PBI-329`.
+5. Prepare the backend read side for the runtime resource model introduced by `PBI-234` and `PBI-303`.
 
 ## Acceptance Criteria
 1. Grid, selection, and sidebar read logic have clearer service boundaries.

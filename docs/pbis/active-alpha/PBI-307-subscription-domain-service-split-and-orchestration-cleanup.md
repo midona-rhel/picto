@@ -1,4 +1,4 @@
-# PBI-302: Subscription domain service split and orchestration cleanup
+# PBI-307: Subscription domain service split and orchestration cleanup
 
 ## Priority
 P1

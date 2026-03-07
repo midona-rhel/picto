@@ -1,4 +1,4 @@
-# PBI-312: Backend persistence layer split between shared and domain-owned DB modules
+# PBI-342: Backend persistence layer split between shared and domain-owned DB modules
 
 ## Priority
 P1

@@ -1,4 +1,4 @@
-# PBI-313: Backend controller elimination and service boundary normalization
+# PBI-343: Backend controller elimination and service boundary normalization
 
 ## Priority
 P1

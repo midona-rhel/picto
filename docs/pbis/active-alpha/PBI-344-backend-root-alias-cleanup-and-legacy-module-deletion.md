@@ -1,4 +1,4 @@
-# PBI-314: Backend root alias cleanup and legacy module deletion
+# PBI-344: Backend root alias cleanup and legacy module deletion
 
 ## Priority
 P1

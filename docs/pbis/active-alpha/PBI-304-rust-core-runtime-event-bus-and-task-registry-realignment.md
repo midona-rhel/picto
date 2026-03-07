@@ -1,4 +1,4 @@
-# PBI-300: Rust core runtime event bus and task registry realignment
+# PBI-304: Rust core runtime event bus and task registry realignment
 
 ## Priority
 P1
@@ -27,10 +27,10 @@ The Rust core has no single runtime event bus or task registry. Mutation notific
 
 ## Dependencies
 Depends on:
-1. `PBI-328` for the fact-level mutation receipt shape.
+1. `PBI-302` for the fact-level mutation receipt shape.
 
 Feeds:
-1. `PBI-329` for deterministic resource invalidation from runtime facts.
+1. `PBI-303` for deterministic resource invalidation from runtime facts.
 2. renderer/runtime store cutover work under `PBI-234`.
 
 ## Not In Scope

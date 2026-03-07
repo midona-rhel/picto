@@ -16,7 +16,7 @@ Evidence:
 This architecture-focused audit pass reviewed the full Rust core file inventory, deep-read the largest and most structurally important backend modules, and produced the following outputs:
 
 1. `docs/rust-core-backend-rearchitecture-audit-2026-03-07.md`
-2. `PBI-300` through `PBI-309`
+2. `PBI-304` through `PBI-313`
 3. Cross-link to the runtime communication design docs:
    - `docs/backend-frontend-state-rearchitecture.md`
    - `docs/pbi-234-runtime-communication-implementation-plan.md`
@@ -28,7 +28,7 @@ Additional backend-only artifacts produced after the first pass:
 1. `docs/rust-core-rearchitecture-blueprint-2026-03-07.md`
 2. `docs/backend-legacy-register-2026-03-07.md`
 3. `docs/backend-deletion-program-2026-03-07.md`
-4. `PBI-315` through `PBI-320`
+4. `PBI-345` through `PBI-350`
 
 This means the audit now covers both:
 - architecture/restructure tracks
@@ -37,20 +37,20 @@ This means the audit now covers both:
 ## Recommended Execution Order (Backend)
 The 300-series PBIs are not all peers. They have a hard dependency order if the goal is to stop re-encoding wrong behavior.
 
-1. `PBI-327` canonical scope semantics engine
-2. `PBI-330` business-logic contract audit and conformance tests
-3. `PBI-328` fact-based mutation receipts and model-level invalidation
-4. `PBI-329` derived resource dependency map from model facts
-5. `PBI-300` runtime event bus and task registry realignment
-6. `PBI-307` grid/selection/sidebar query service decomposition
-7. `PBI-301` app state service lifecycle and worker boundary cleanup
-8. `PBI-302` subscription domain service split and orchestration cleanup
+1. `PBI-300` canonical scope semantics engine
+2. `PBI-301` business-logic contract audit and conformance tests
+3. `PBI-302` fact-based mutation receipts and model-level invalidation
+4. `PBI-303` derived resource dependency map from model facts
+5. `PBI-304` runtime event bus and task registry realignment
+6. `PBI-305` grid/selection/sidebar query service decomposition
+7. `PBI-306` app state service lifecycle and worker boundary cleanup
+8. `PBI-307` subscription domain service split and orchestration cleanup
 9. `PBI-308` PTR domain decomposition and runtime state cleanup
-10. `PBI-303` gallery-dl runner decomposition and site adapter split
-11. `PBI-304` SQLite schema and migration pack decomposition
-12. `PBI-305` derived read-model publish boundary cleanup
-13. `PBI-306` import, lifecycle, and entity pipeline realignment
-14. `PBI-309` media-processing adapter registry and pipeline breakup
+10. `PBI-309` gallery-dl runner decomposition and site adapter split
+11. `PBI-310` SQLite schema and migration pack decomposition
+12. `PBI-311` derived read-model publish boundary cleanup
+13. `PBI-312` import, lifecycle, and entity pipeline realignment
+14. `PBI-313` media-processing adapter registry and pipeline breakup
 
 Rationale:
 1. business semantics must be canonical before runtime invalidation is formalized

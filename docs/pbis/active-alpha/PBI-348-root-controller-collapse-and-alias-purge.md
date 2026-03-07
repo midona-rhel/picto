@@ -1,4 +1,4 @@
-# PBI-318: Root controller collapse and alias purge
+# PBI-348: Root controller collapse and alias purge
 
 ## Priority
 P1

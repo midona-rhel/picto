@@ -1,4 +1,4 @@
-# PBI-304: SQLite schema and migration pack decomposition
+# PBI-310: SQLite schema and migration pack decomposition
 
 ## Priority
 P1

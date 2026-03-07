@@ -223,7 +223,7 @@ Immediate delete-now budget after call-site moves: `~350-450 LOC`
 
 ## Relationship to existing PBIs
 
-- `PBI-233` through `PBI-314` define the structural and subsystem architecture path.
+- `PBI-233` through `PBI-344` define the structural and subsystem architecture path.
 - The deletion program that falls out of this register should be tracked separately so cleanup does not get deferred behind folder moves forever.
 - New PBIs should cover:
   1. the register/classification pass itself

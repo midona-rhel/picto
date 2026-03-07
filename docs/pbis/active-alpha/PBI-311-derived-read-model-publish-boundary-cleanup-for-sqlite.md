@@ -1,4 +1,4 @@
-# PBI-305: Derived read-model publish boundary cleanup for SQLite
+# PBI-311: Derived read-model publish boundary cleanup for SQLite
 
 ## Priority
 P1
