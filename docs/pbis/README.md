@@ -1,5 +1,4 @@
 # PBI Backlog (Alpha Reset)
-
 This folder was reset for the first alpha release.
 
 ## Structure
@@ -7,7 +6,7 @@ This folder was reset for the first alpha release.
 1. `active-alpha/`: PBIs that are currently release-relevant for `v0.1.0-alpha.*`
 2. `archive/`: PBIs retained for history, not currently in alpha release scope
 
-## Active Alpha PBIs (83)
+## Active Alpha PBIs (91)
 
 1. [PBI-118](./active-alpha/PBI-118-export-in-specified-format-and-dimension.md)
 2. [PBI-123](./active-alpha/PBI-123-folder-auto-tagging.md)
@@ -88,10 +87,19 @@ This folder was reset for the first alpha release.
 77. [PBI-307](./active-alpha/PBI-307-grid-selection-and-sidebar-query-service-decomposition.md)
 78. [PBI-308](./active-alpha/PBI-308-ptr-domain-decomposition-and-runtime-state-cleanup.md)
 79. [PBI-309](./active-alpha/PBI-309-media-processing-adapter-registry-and-pipeline-breakup.md)
-80. [PBI-401](./active-alpha/PBI-401-frontend-root-and-domain-topology-realignment.md)
-81. [PBI-402](./active-alpha/PBI-402-frontend-type-safety-and-renderer-contract-cleanup.md)
-82. [PBI-403](./active-alpha/PBI-403-renderer-bootstrap-and-lifecycle-ownership-cleanup.md)
-83. [PBI-404](./active-alpha/PBI-404-split-oversized-frontend-orchestration-modules.md)
+80. [PBI-310](./active-alpha/PBI-310-backend-top-level-module-tree-restructure.md)
+81. [PBI-311](./active-alpha/PBI-311-backend-domain-folderization-by-ownership-cluster.md)
+82. [PBI-312](./active-alpha/PBI-312-backend-persistence-layer-split-between-shared-and-domain-owned-db-modules.md)
+83. [PBI-313](./active-alpha/PBI-313-backend-controller-elimination-and-service-boundary-normalization.md)
+84. [PBI-314](./active-alpha/PBI-314-backend-root-alias-cleanup-and-legacy-module-deletion.md)
+85. [PBI-401](./active-alpha/PBI-401-frontend-root-and-domain-topology-realignment.md)
+86. [PBI-402](./active-alpha/PBI-402-frontend-type-safety-and-renderer-contract-cleanup.md)
+87. [PBI-403](./active-alpha/PBI-403-renderer-bootstrap-and-lifecycle-ownership-cleanup.md)
+88. [PBI-404](./active-alpha/PBI-404-split-oversized-frontend-orchestration-modules.md)
+89. [PBI-405](./active-alpha/PBI-405-frontend-topology-policy-and-ci-guardrails.md)
+90. [PBI-406](./active-alpha/PBI-406-frontend-legacy-register-and-classification-pass.md)
+91. [PBI-407](./active-alpha/PBI-407-frontend-legacy-deletion-campaign-and-compatibility-shim-purge.md)
+
 ## Archived PBIs
 
 Archived backlog items can be reintroduced if they become release-critical.
@@ -107,3 +115,4 @@ ls docs/pbis/archive/PBI-*.md | sed 's|docs/pbis/archive/||'
 1. This reset is for alpha release execution clarity, not for deleting backlog history.
 2. Completed PBIs should be removed from `active-alpha/` once their work is verified.
 3. `docs/pbis/FRONTEND_AUDIT_2026-03-07.md` is the current frontend cleanup audit artifact.
+4. `docs/frontend-topology-enforcement-and-legacy-deletion-plan-2026-03-07.md` is the current frontend enforcement/deletion plan.

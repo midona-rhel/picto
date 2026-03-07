@@ -127,3 +127,16 @@ src/
 
 ## Risk
 High. This is a large-scale structural cleanup. It must be done in slices, but the target layout itself needs to be explicit up front or the codebase will keep drifting.
+
+## Execution Clarification (2026-03-07)
+
+`PBI-401` defines the target topology, but it is not sufficient by itself.
+Execution should be staged through:
+
+1. `PBI-405` frontend topology policy and CI guardrails
+2. `PBI-406` frontend legacy register and classification pass
+3. `PBI-407` frontend legacy deletion campaign and compatibility shim purge
+4. `PBI-404` split oversized frontend orchestration modules
+
+The structure work is only complete when legacy paths are blocked from regrowth
+and obsolete paths are actually deleted.
