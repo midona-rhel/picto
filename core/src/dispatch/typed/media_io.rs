@@ -12,32 +12,32 @@ use super::{TypedCommand, run_typed};
 // ─── Input structs ─────────────────────────────────────────────────────────
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/types/generated/commands/")]
+#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
 pub struct ResolveFilePathInput {
     pub hash: String,
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/types/generated/commands/")]
+#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
 pub struct OpenFileDefaultInput {
     pub hash: String,
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/types/generated/commands/")]
+#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
 pub struct RevealInFolderInput {
     pub hash: String,
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/types/generated/commands/")]
+#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
 pub struct ExportFileInput {
     pub hash: String,
     pub dest_path: String,
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/types/generated/commands/")]
+#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
 pub struct OpenInNewWindowInput {
     pub hash: String,
     pub width: Option<u32>,
@@ -45,50 +45,50 @@ pub struct OpenInNewWindowInput {
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/types/generated/commands/")]
+#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
 pub struct ResolveThumbnailPathInput {
     pub hash: String,
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/types/generated/commands/")]
+#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
 pub struct EnsureThumbnailInput {
     pub hash: String,
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/types/generated/commands/")]
+#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
 pub struct RegenerateThumbnailInput {
     pub hash: String,
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/types/generated/commands/")]
+#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
 pub struct RegenerateThumbnailsBatchInput {
     pub hashes: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/types/generated/commands/")]
+#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
 pub struct ReanalyzeFileColorsInput {
     pub hash: String,
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/types/generated/commands/")]
+#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
 pub struct BackfillMissingBlurhashesInput {
     pub limit: Option<usize>,
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/types/generated/commands/")]
+#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
 pub struct SearchByColorInput {
     pub hex_color: String,
     pub max_distance: Option<f64>,
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/types/generated/commands/")]
+#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
 pub struct GetImageThumbnailInput {
     #[serde(alias = "imageId")]
     pub hash: String,

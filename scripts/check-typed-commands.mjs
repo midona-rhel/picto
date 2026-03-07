@@ -15,10 +15,10 @@ import path from 'node:path';
 const ROOT = process.cwd();
 const TYPED_DIR = path.join(ROOT, 'core/src/dispatch/typed');
 const LEGACY_DIR = path.join(ROOT, 'core/src/dispatch');
-const TS_BARREL = path.join(ROOT, 'src/types/generated/commands/index.ts');
-const GENERATED_DIR = path.join(ROOT, 'src/types/generated/commands');
-const API_TS = path.join(ROOT, 'src/desktop/api.ts');
-const RUNTIME_CONTRACT_DIR = path.join(ROOT, 'src/types/generated/runtime-contract');
+const TS_BARREL = path.join(ROOT, 'src/shared/types/generated/commands/index.ts');
+const GENERATED_DIR = path.join(ROOT, 'src/shared/types/generated/commands');
+const API_TS = path.join(ROOT, 'src/platform/api.ts');
+const RUNTIME_CONTRACT_DIR = path.join(ROOT, 'src/shared/types/generated/runtime-contract');
 
 // Extract TypedCommand NAME constants from Rust typed dispatch files.
 const TYPED_CMD_RE = /const\s+NAME:\s*&'static\s+str\s*=\s*"([a-z_]+)"/g;
@@ -133,7 +133,7 @@ async function checkRuntimeContractFiles() {
   try {
     entries = await fs.readdir(RUNTIME_CONTRACT_DIR);
   } catch {
-    missing.push('Runtime contract directory missing: src/types/generated/runtime-contract/');
+    missing.push('Runtime contract directory missing: src/shared/types/generated/runtime-contract/');
     return missing;
   }
   const existing = new Set(entries);

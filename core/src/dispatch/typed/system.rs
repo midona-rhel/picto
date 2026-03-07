@@ -13,27 +13,27 @@ use super::{TypedCommand, run_typed};
 // ─── Input structs ─────────────────────────────────────────────────────────
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/types/generated/commands/")]
+#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
 pub struct OpenExternalUrlInput {
     pub url: String,
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/types/generated/commands/")]
+#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
 pub struct ReorderSidebarNodesInput {
     #[ts(type = "[string, number][]")]
     pub moves: Vec<(String, i64)>,
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/types/generated/commands/")]
+#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
 pub struct GetViewPrefsInput {
     #[serde(default)]
     pub scope_key: Option<String>,
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/types/generated/commands/")]
+#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
 pub struct SetViewPrefsInput {
     #[serde(default)]
     pub scope_key: Option<String>,
@@ -41,7 +41,7 @@ pub struct SetViewPrefsInput {
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/types/generated/commands/")]
+#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
 pub struct SetZoomFactorInput {
     pub factor: f64,
 }

@@ -11,19 +11,19 @@ use super::{TypedCommand, run_typed};
 // ─── Input structs ─────────────────────────────────────────────────────────
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/types/generated/commands/")]
+#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
 pub struct GetGridPageSlimInput {
     pub query: crate::types::GridPageSlimQuery,
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/types/generated/commands/")]
+#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
 pub struct GetFileInput {
     pub hash: String,
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/types/generated/commands/")]
+#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
 pub struct GetFilesMetadataBatchInput {
     pub hashes: Vec<String>,
 }

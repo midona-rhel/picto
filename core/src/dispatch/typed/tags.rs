@@ -9,7 +9,7 @@ use super::{TypedCommand, run_typed};
 // ─── Input structs ─────────────────────────────────────────────────────────
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/types/generated/commands/")]
+#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
 pub struct SearchTagsInput {
     pub query: String,
     #[ts(type = "number | null")]
@@ -17,7 +17,7 @@ pub struct SearchTagsInput {
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/types/generated/commands/")]
+#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
 pub struct SearchTagsPagedInput {
     #[serde(default)]
     pub query: Option<String>,
@@ -28,41 +28,41 @@ pub struct SearchTagsPagedInput {
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/types/generated/commands/")]
+#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
 pub struct GetFileTagsInput {
     pub hash: String,
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/types/generated/commands/")]
+#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
 pub struct AddTagsInput {
     pub hash: String,
     pub tag_strings: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/types/generated/commands/")]
+#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
 pub struct RemoveTagsInput {
     pub hash: String,
     pub tag_strings: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/types/generated/commands/")]
+#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
 pub struct AddTagsBatchInput {
     pub hashes: Vec<String>,
     pub tag_strings: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/types/generated/commands/")]
+#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
 pub struct RemoveTagsBatchInput {
     pub hashes: Vec<String>,
     pub tag_strings: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/types/generated/commands/")]
+#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
 pub struct FindFilesByTagsInput {
     pub tag_strings: Vec<String>,
     #[ts(type = "number | null")]
@@ -72,55 +72,55 @@ pub struct FindFilesByTagsInput {
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/types/generated/commands/")]
+#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
 pub struct SetTagAliasInput {
     pub from: String,
     pub to: String,
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/types/generated/commands/")]
+#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
 pub struct RemoveTagAliasInput {
     pub from: String,
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/types/generated/commands/")]
+#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
 pub struct GetTagSiblingsInput {
     #[ts(type = "number")]
     pub tag_id: i64,
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/types/generated/commands/")]
+#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
 pub struct GetTagParentsInput {
     #[ts(type = "number")]
     pub tag_id: i64,
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/types/generated/commands/")]
+#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
 pub struct AddTagParentInput {
     pub child: String,
     pub parent: String,
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/types/generated/commands/")]
+#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
 pub struct RemoveTagParentInput {
     pub child: String,
     pub parent: String,
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/types/generated/commands/")]
+#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
 pub struct MergeTagsInput {
     pub from_tag: String,
     pub to_tag: String,
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/types/generated/commands/")]
+#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
 pub struct GetTagsPaginatedInput {
     pub namespace: Option<String>,
     pub search: Option<String>,
@@ -135,7 +135,7 @@ fn default_tags_limit() -> i64 {
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/types/generated/commands/")]
+#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
 pub struct RenameTagInput {
     #[ts(type = "number")]
     pub tag_id: i64,
@@ -143,20 +143,20 @@ pub struct RenameTagInput {
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/types/generated/commands/")]
+#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
 pub struct DeleteTagInput {
     #[ts(type = "number")]
     pub tag_id: i64,
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/types/generated/commands/")]
+#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
 pub struct CompanionGetNamespaceValuesInput {
     pub namespace: String,
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/types/generated/commands/")]
+#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
 pub struct CompanionGetFilesByTagInput {
     pub tag: String,
 }

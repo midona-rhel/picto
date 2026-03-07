@@ -11,25 +11,25 @@ use super::{TypedCommand, run_typed};
 // ─── Input structs ─────────────────────────────────────────────────────────
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/types/generated/commands/")]
+#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
 pub struct GetFileAllMetadataInput {
     pub hash: String,
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/types/generated/commands/")]
+#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
 pub struct GetFileTagsDisplayInput {
     pub hash: String,
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/types/generated/commands/")]
+#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
 pub struct GetFileParentsInput {
     pub hash: String,
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/types/generated/commands/")]
+#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
 pub struct UpdateRatingInput {
     pub hash: String,
     #[ts(type = "number | null")]
@@ -37,33 +37,33 @@ pub struct UpdateRatingInput {
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/types/generated/commands/")]
+#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
 pub struct SetFileNameInput {
     pub hash: String,
     pub name: Option<String>,
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/types/generated/commands/")]
+#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
 pub struct GetFileNotesInput {
     pub hash: String,
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/types/generated/commands/")]
+#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
 pub struct SetFileNotesInput {
     pub hash: String,
     pub notes: HashMap<String, String>,
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/types/generated/commands/")]
+#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
 pub struct IncrementViewCountInput {
     pub hash: String,
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/types/generated/commands/")]
+#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
 pub struct SetSourceUrlsInput {
     pub hash: String,
     pub urls: Vec<String>,

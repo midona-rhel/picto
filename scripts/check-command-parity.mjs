@@ -5,7 +5,7 @@
  *
  * Parses:
  * - core/src/dispatch/*.rs — match arm string literals ("command_name" =>)
- * - src/desktop/api.ts — invoke('command_name', ...) calls
+ * - src/platform/api.ts — invoke('command_name', ...) calls
  *
  * Reports any drift between the two surfaces, minus an explicit allowlist.
  */
@@ -15,7 +15,7 @@ import { extractRustCommandsFromText, extractTsCommandsFromText } from './check-
 
 const ROOT = process.cwd();
 const DISPATCH_DIR = path.join(ROOT, 'core/src/dispatch');
-const API_FILE = path.join(ROOT, 'src/desktop/api.ts');
+const API_FILE = path.join(ROOT, 'src/platform/api.ts');
 const ALLOWLIST_FILE = path.join(ROOT, 'scripts/command-parity-allowlist.json');
 
 async function extractRustCommands() {

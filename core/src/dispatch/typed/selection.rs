@@ -11,27 +11,27 @@ use super::{TypedCommand, run_typed};
 // ─── Input structs ─────────────────────────────────────────────────────────
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/types/generated/commands/")]
+#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
 pub struct AddTagsSelectionInput {
     pub selection: SelectionQuerySpec,
     pub tag_strings: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/types/generated/commands/")]
+#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
 pub struct RemoveTagsSelectionInput {
     pub selection: SelectionQuerySpec,
     pub tag_strings: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/types/generated/commands/")]
+#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
 pub struct GetSelectionSummaryInput {
     pub selection: SelectionQuerySpec,
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/types/generated/commands/")]
+#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
 pub struct UpdateRatingSelectionInput {
     pub selection: SelectionQuerySpec,
     #[ts(type = "number | null")]
@@ -39,14 +39,14 @@ pub struct UpdateRatingSelectionInput {
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/types/generated/commands/")]
+#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
 pub struct SetNotesSelectionInput {
     pub selection: SelectionQuerySpec,
     pub notes: HashMap<String, String>,
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/types/generated/commands/")]
+#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
 pub struct SetSourceUrlsSelectionInput {
     pub selection: SelectionQuerySpec,
     pub urls: Vec<String>,

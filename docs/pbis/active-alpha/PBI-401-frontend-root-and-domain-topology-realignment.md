@@ -14,6 +14,9 @@ Completed:
 5. Stores moved to `src/state/`.
 6. Shared code moved to `src/shared/` (lib, styles, types, services, contexts, UI primitives).
 7. Classification table documents target location for every remaining transitional item.
+8. CI/guard scripts updated to reference new paths (`platform/`, `shared/`, `app/`).
+9. ts-rs `export_to` paths updated from `src/types/generated/` to `src/shared/types/generated/`.
+10. Stale `src/types/` codegen output directory removed.
 
 Remaining (deferred to PBI-404/405):
 1. `src/components/` still contains feature-owned code to be migrated into `src/features/`.

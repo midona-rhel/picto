@@ -18,7 +18,7 @@ const backendMedia = findBackendCoreFile('media_protocol.rs');
 const backendBlobs = findBackendCoreFile('blob_store.rs');
 
 const files = [
-  path.join(root, 'src/lib/mediaUrl.ts'),
+  path.join(root, 'src/shared/lib/mediaUrl.ts'),
   ...(backendMedia ? [backendMedia] : []),
   ...(backendBlobs ? [backendBlobs] : []),
 ];
