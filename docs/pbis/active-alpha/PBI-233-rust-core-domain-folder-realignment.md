@@ -46,6 +46,8 @@ This PBI remains the umbrella for physical Rust core folder realignment, but it 
 
 `PBI-233` should be treated as the umbrella structural goal, not as one giant PR.
 
+Reference architecture: `docs/rust-core-rearchitecture-blueprint-2026-03-07.md`
+
 ## Scope
 - `core/src/` — reorganize flat controller/domain files into domain modules
 - `core/src/sqlite/` — split the monolithic sqlite directory so each domain owns its persistence

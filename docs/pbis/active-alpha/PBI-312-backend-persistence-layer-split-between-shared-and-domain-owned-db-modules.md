@@ -14,6 +14,8 @@ Evidence:
 ## Problem
 A contributor should not have to jump between `domains/*` and monolithic `sqlite/*` folders just to understand one domain. Shared DB infrastructure should stay centralized, but domain-specific queries and write helpers should move under domain ownership.
 
+Reference architecture: `docs/rust-core-rearchitecture-blueprint-2026-03-07.md`
+
 ## Scope
 - `core/src/sqlite/*`
 - `core/src/sqlite_ptr/*`

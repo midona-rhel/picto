@@ -14,6 +14,8 @@ Evidence:
 ## Problem
 Even after moving files into folders, the backend will remain confusing if service boundaries are still expressed as vague `controller` modules. Physical structure and naming need to align.
 
+Reference architecture: `docs/rust-core-rearchitecture-blueprint-2026-03-07.md`
+
 ## Scope
 - domain modules under `core/src/domains/*`
 - app/runtime modules where controller naming remains misleading
