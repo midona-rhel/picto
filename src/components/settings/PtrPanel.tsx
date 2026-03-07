@@ -12,7 +12,7 @@ import { TextButton } from '../ui/TextButton';
 import { SettingsBlock, SettingsRow, SettingsInputGroup } from './ui';
 import { PtrSyncController } from '../../controllers/ptrSyncController';
 import { runBestEffort, runCriticalAction } from '../../lib/asyncOps';
-import { useTaskRuntimeStore } from '../../stores/taskRuntimeStore';
+import { useRuntimeSyncStore } from '../../stores/runtimeSyncStore';
 
 interface AppSettings {
   ptrServerUrl: string | null;
@@ -85,11 +85,11 @@ const DEFAULT_PTR_SERVER = 'https://ptr.hydrus.network:45871';
 const DEFAULT_PTR_ACCESS_KEY = '4a285629721ca442541ef2c15ea17d1f7f7578b0c3f4f5f2a05f8f0ab297786f';
 
 export function PtrPanel() {
-  const ensureInitialized = useTaskRuntimeStore((s) => s.ensureInitialized);
-  const syncing = useTaskRuntimeStore((s) => s.ptrSyncing);
-  const syncProgress = useTaskRuntimeStore((s) => s.ptrProgress);
-  const ptrLastResult = useTaskRuntimeStore((s) => s.ptrLastResult);
-  const runtimeBootstrapStatus = useTaskRuntimeStore((s) => s.ptrBootstrapStatus);
+  const ensureInitialized = useRuntimeSyncStore((s) => s.ensureInitialized);
+  const syncing = useRuntimeSyncStore((s) => s.ptrSyncing);
+  const syncProgress = useRuntimeSyncStore((s) => s.ptrProgress);
+  const ptrLastResult = useRuntimeSyncStore((s) => s.ptrLastResult);
+  const runtimeBootstrapStatus = useRuntimeSyncStore((s) => s.ptrBootstrapStatus);
 
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [stats, setStats] = useState<PtrStats | null>(null);

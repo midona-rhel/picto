@@ -32,11 +32,6 @@ pub fn compute_phash(image_data: &[u8]) -> Result<ImageHash, image::ImageError> 
     ))
 }
 
-/// Compute the Hamming distance between two perceptual hashes.
-pub fn hamming_distance(a: &ImageHash, b: &ImageHash) -> u32 {
-    a.dist(b)
-}
-
 /// Compute phash and return as base64 string for DB storage.
 pub fn compute_phash_base64(image_data: &[u8]) -> Result<String, image::ImageError> {
     let hash = compute_phash(image_data)?;

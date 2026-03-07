@@ -1,5 +1,15 @@
 import { create } from 'zustand';
-import type { UnlistenFn } from '#desktop/api';
+import { listenRuntimeEvent, api, type UnlistenFn } from '#desktop/api';
+import type {
+  MutationReceipt,
+  RuntimeTask,
+  RuntimeSnapshot,
+  TaskKind,
+  SidebarCounts,
+  ResourceKey,
+} from '../types/generated/runtime-contract';
+import { deriveStaleResources } from '../runtime/resourceInvalidator';
+import { logBestEffortError } from '../lib/asyncOps';
 import {
   PtrSyncController,
   type PtrBootstrapStatus,
@@ -13,7 +23,10 @@ import {
   type SubscriptionFinishedEvent,
   type SubscriptionProgressEvent,
 } from '../controllers/subscriptionController';
-import { logBestEffortError } from '../lib/asyncOps';
+
+// ---------------------------------------------------------------------------
+// Derived types
+// ---------------------------------------------------------------------------
 
 export interface RuntimeSubscriptionProgress {
   subscription_id: string;
@@ -30,46 +43,86 @@ export interface RuntimeSubscriptionProgress {
   error?: string | null;
 }
 
-interface TaskRuntimeState {
-  initialized: boolean;
-  lastEventTs: number;
+// ---------------------------------------------------------------------------
+// State shape
+// ---------------------------------------------------------------------------
 
+export interface RuntimeSyncState {
+  initialized: boolean;
+
+  // --- Resource invalidation ---
+  lastSeq: number;
+  tasksById: Map<string, RuntimeTask>;
+  staleResources: Set<ResourceKey>;
+  sidebarCounts: SidebarCounts | null;
+  lastOriginCommand: string | null;
+
+  // --- PTR progress (legacy events) ---
   ptrSyncing: boolean;
   ptrProgress: PtrSyncProgress | null;
   ptrLastResult: PtrSyncResult | null;
   ptrBootstrapStatus: PtrBootstrapStatus | null;
 
+  // --- Subscription progress (legacy events) ---
   runningSubscriptionIds: Set<string>;
   runningQueryIds: Set<string>;
   subscriptionProgressById: Map<string, RuntimeSubscriptionProgress>;
   lastSubscriptionFinished: SubscriptionFinishedEvent | null;
   subscriptionEventSeq: number;
 
+  // --- Flow progress (legacy events) ---
   runningFlowIds: Set<string>;
   flowProgressById: Map<string, FlowProgressEvent>;
   lastFlowFinished: FlowFinishedEvent | null;
   flowEventSeq: number;
 
+  // Actions
   ensureInitialized: () => Promise<void>;
   teardown: () => void;
-  refreshSnapshots: () => Promise<void>;
+  applyMutationReceipt: (receipt: MutationReceipt) => void;
+  applyTaskUpsert: (task: RuntimeTask) => void;
+  applyTaskRemoved: (taskId: string) => void;
+  refreshSnapshot: () => Promise<void>;
+  refreshTaskSnapshots: () => Promise<void>;
+  markResourceFresh: (key: ResourceKey) => void;
+  markResourcesStale: (keys: Iterable<ResourceKey>) => void;
+
+  // Selectors
+  getTasksByKind: (kind: TaskKind) => RuntimeTask[];
+  isAnyTaskRunning: (kind: TaskKind) => boolean;
 }
+
+// ---------------------------------------------------------------------------
+// Module-level state
+// ---------------------------------------------------------------------------
+
+let unlisteners: UnlistenFn[] = [];
+let watchdogTimer: ReturnType<typeof setInterval> | null = null;
+let lastEventTs = 0;
+let isInitializing = false;
+const taskLingerTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const subFinishedTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
 const WATCHDOG_POLL_MS = 1000;
 const WATCHDOG_STALE_MS = 5000;
 
-let unlisteners: UnlistenFn[] = [];
-let watchdogTimer: ReturnType<typeof setInterval> | null = null;
-let isInitializing = false;
-const subFinishedTimers = new Map<string, ReturnType<typeof setTimeout>>();
-
-function clearRuntimeTimers() {
+function clearTimers() {
   if (watchdogTimer) {
     clearInterval(watchdogTimer);
     watchdogTimer = null;
   }
+  for (const timer of taskLingerTimers.values()) clearTimeout(timer);
+  taskLingerTimers.clear();
   for (const timer of subFinishedTimers.values()) clearTimeout(timer);
   subFinishedTimers.clear();
+}
+
+function lingerMs(task: RuntimeTask): number {
+  const detail = task.detail as Record<string, unknown> | undefined;
+  const failureKind = detail?.failure_kind;
+  if (failureKind === 'inbox_full') return 6000;
+  if (task.status === 'failed') return 4500;
+  return 2200;
 }
 
 function resolveFinishedSubStatusText(event: SubscriptionFinishedEvent): string {
@@ -79,9 +132,17 @@ function resolveFinishedSubStatusText(event: SubscriptionFinishedEvent): string 
   return 'Failed';
 }
 
-export const useTaskRuntimeStore = create<TaskRuntimeState>((set, get) => ({
+// ---------------------------------------------------------------------------
+// Store
+// ---------------------------------------------------------------------------
+
+export const useRuntimeSyncStore = create<RuntimeSyncState>((set, get) => ({
   initialized: false,
-  lastEventTs: Date.now(),
+  lastSeq: 0,
+  tasksById: new Map(),
+  staleResources: new Set(),
+  sidebarCounts: null,
+  lastOriginCommand: null,
 
   ptrSyncing: false,
   ptrProgress: null,
@@ -103,56 +164,54 @@ export const useTaskRuntimeStore = create<TaskRuntimeState>((set, get) => ({
     if (get().initialized || isInitializing) return;
     isInitializing = true;
     try {
-      await get().refreshSnapshots();
+      // 1. Seed from snapshots
+      await Promise.all([
+        get().refreshSnapshot(),
+        get().refreshTaskSnapshots(),
+      ]);
 
+      // 2. Subscribe to all events
       const listeners = await Promise.all([
+        // --- Runtime events ---
+        listenRuntimeEvent('runtime/mutation_committed', (receipt) => {
+          get().applyMutationReceipt(receipt);
+        }),
+        listenRuntimeEvent('runtime/task_upserted', (task) => {
+          get().applyTaskUpsert(task);
+        }),
+        listenRuntimeEvent('runtime/task_removed', (payload) => {
+          get().applyTaskRemoved(payload.task_id);
+        }),
+
+        // --- PTR legacy events ---
         PtrSyncController.onStarted(() => {
-          set((state) => ({
-            lastEventTs: Date.now(),
-            ptrSyncing: true,
-            ptrProgress: null,
-            ptrLastResult: null,
-            subscriptionEventSeq: state.subscriptionEventSeq,
-          }));
+          set({ ptrSyncing: true, ptrProgress: null, ptrLastResult: null });
         }),
         PtrSyncController.onProgress((progress) => {
-          set({
-            lastEventTs: Date.now(),
-            ptrSyncing: true,
-            ptrProgress: progress,
-          });
+          set({ ptrSyncing: true, ptrProgress: progress });
         }),
         PtrSyncController.onFinished((result) => {
-          set({
-            lastEventTs: Date.now(),
-            ptrSyncing: false,
-            ptrProgress: null,
-            ptrLastResult: result,
-          });
+          set({ ptrSyncing: false, ptrProgress: null, ptrLastResult: result });
           void PtrSyncController.getBootstrapStatus()
             .then((status) => set({ ptrBootstrapStatus: status }))
-            .catch((error) => logBestEffortError('taskRuntimeStore.ptrBootstrapStatus.onFinished', error));
+            .catch((error) => logBestEffortError('runtimeSyncStore.ptrBootstrapStatus.onFinished', error));
         }),
         PtrSyncController.onBootstrapStarted(() => {
-          set({ lastEventTs: Date.now() });
           void PtrSyncController.getBootstrapStatus()
             .then((status) => set({ ptrBootstrapStatus: status }))
-            .catch((error) => logBestEffortError('taskRuntimeStore.ptrBootstrapStatus.onBootstrapStarted', error));
+            .catch((error) => logBestEffortError('runtimeSyncStore.ptrBootstrapStatus.onBootstrapStarted', error));
         }),
         PtrSyncController.onBootstrapProgress(() => {
-          set({ lastEventTs: Date.now() });
           void PtrSyncController.getBootstrapStatus()
             .then((status) => set({ ptrBootstrapStatus: status }))
-            .catch((error) => logBestEffortError('taskRuntimeStore.ptrBootstrapStatus.onBootstrapProgress', error));
+            .catch((error) => logBestEffortError('runtimeSyncStore.ptrBootstrapStatus.onBootstrapProgress', error));
         }),
         PtrSyncController.onBootstrapFinished(() => {
-          set({ lastEventTs: Date.now() });
           void PtrSyncController.getBootstrapStatus()
             .then((status) => set({ ptrBootstrapStatus: status }))
-            .catch((error) => logBestEffortError('taskRuntimeStore.ptrBootstrapStatus.onBootstrapFinished', error));
+            .catch((error) => logBestEffortError('runtimeSyncStore.ptrBootstrapStatus.onBootstrapFinished', error));
         }),
         PtrSyncController.onBootstrapFailed((payload) => {
-          set({ lastEventTs: Date.now() });
           void PtrSyncController.getBootstrapStatus()
             .then((status) => {
               set({
@@ -163,9 +222,10 @@ export const useTaskRuntimeStore = create<TaskRuntimeState>((set, get) => ({
                 },
               });
             })
-            .catch((error) => logBestEffortError('taskRuntimeStore.ptrBootstrapStatus.onBootstrapFailed', error));
+            .catch((error) => logBestEffortError('runtimeSyncStore.ptrBootstrapStatus.onBootstrapFailed', error));
         }),
 
+        // --- Subscription legacy events ---
         SubscriptionController.onStarted((event) => {
           const timer = subFinishedTimers.get(event.subscription_id);
           if (timer) {
@@ -194,7 +254,6 @@ export const useTaskRuntimeStore = create<TaskRuntimeState>((set, get) => ({
               status: 'running',
             });
             return {
-              lastEventTs: Date.now(),
               runningSubscriptionIds,
               runningQueryIds,
               subscriptionProgressById,
@@ -208,7 +267,6 @@ export const useTaskRuntimeStore = create<TaskRuntimeState>((set, get) => ({
             runningSubscriptionIds.add(event.subscription_id);
             const runningQueryIds = new Set(state.runningQueryIds);
             if (event.query_id) runningQueryIds.add(event.query_id);
-
             const subscriptionProgressById = new Map(state.subscriptionProgressById);
             const existing = subscriptionProgressById.get(event.subscription_id);
             subscriptionProgressById.set(event.subscription_id, {
@@ -226,7 +284,6 @@ export const useTaskRuntimeStore = create<TaskRuntimeState>((set, get) => ({
               status: 'running',
             });
             return {
-              lastEventTs: Date.now(),
               runningSubscriptionIds,
               runningQueryIds,
               subscriptionProgressById,
@@ -269,7 +326,6 @@ export const useTaskRuntimeStore = create<TaskRuntimeState>((set, get) => ({
               error: event.error,
             });
             return {
-              lastEventTs: Date.now(),
               runningSubscriptionIds,
               runningQueryIds,
               subscriptionProgressById,
@@ -291,6 +347,7 @@ export const useTaskRuntimeStore = create<TaskRuntimeState>((set, get) => ({
           subFinishedTimers.set(event.subscription_id, timer);
         }),
 
+        // --- Flow legacy events ---
         SubscriptionController.onFlowStarted((event) => {
           set((state) => {
             const runningFlowIds = new Set(state.runningFlowIds);
@@ -298,7 +355,6 @@ export const useTaskRuntimeStore = create<TaskRuntimeState>((set, get) => ({
             const flowProgressById = new Map(state.flowProgressById);
             flowProgressById.delete(event.flow_id);
             return {
-              lastEventTs: Date.now(),
               runningFlowIds,
               flowProgressById,
               flowEventSeq: state.flowEventSeq + 1,
@@ -312,7 +368,6 @@ export const useTaskRuntimeStore = create<TaskRuntimeState>((set, get) => ({
             const flowProgressById = new Map(state.flowProgressById);
             flowProgressById.set(event.flow_id, event);
             return {
-              lastEventTs: Date.now(),
               runningFlowIds,
               flowProgressById,
               flowEventSeq: state.flowEventSeq + 1,
@@ -326,7 +381,6 @@ export const useTaskRuntimeStore = create<TaskRuntimeState>((set, get) => ({
             const flowProgressById = new Map(state.flowProgressById);
             flowProgressById.delete(event.flow_id);
             return {
-              lastEventTs: Date.now(),
               runningFlowIds,
               flowProgressById,
               lastFlowFinished: event,
@@ -337,18 +391,22 @@ export const useTaskRuntimeStore = create<TaskRuntimeState>((set, get) => ({
       ]);
       unlisteners = listeners;
 
+      // 3. Watchdog: poll if idle
       watchdogTimer = setInterval(() => {
-        const staleMs = Date.now() - get().lastEventTs;
+        const staleMs = Date.now() - lastEventTs;
         if (staleMs < WATCHDOG_STALE_MS) return;
-        void get().refreshSnapshots();
+        void Promise.all([
+          get().refreshSnapshot(),
+          get().refreshTaskSnapshots(),
+        ]);
       }, WATCHDOG_POLL_MS);
 
       set({ initialized: true });
     } catch (error) {
-      logBestEffortError('taskRuntimeStore.ensureInitialized', error);
-      for (const unlisten of unlisteners) unlisten();
+      logBestEffortError('runtimeSyncStore.ensureInitialized', error);
+      for (const fn of unlisteners) fn();
       unlisteners = [];
-      clearRuntimeTimers();
+      clearTimers();
       set({ initialized: false });
     } finally {
       isInitializing = false;
@@ -356,11 +414,16 @@ export const useTaskRuntimeStore = create<TaskRuntimeState>((set, get) => ({
   },
 
   teardown: () => {
-    for (const unlisten of unlisteners) unlisten();
+    for (const fn of unlisteners) fn();
     unlisteners = [];
-    clearRuntimeTimers();
+    clearTimers();
     set({
       initialized: false,
+      lastSeq: 0,
+      tasksById: new Map(),
+      staleResources: new Set(),
+      sidebarCounts: null,
+      lastOriginCommand: null,
       ptrSyncing: false,
       ptrProgress: null,
       ptrLastResult: null,
@@ -368,12 +431,94 @@ export const useTaskRuntimeStore = create<TaskRuntimeState>((set, get) => ({
       runningSubscriptionIds: new Set<string>(),
       runningQueryIds: new Set<string>(),
       subscriptionProgressById: new Map<string, RuntimeSubscriptionProgress>(),
+      lastSubscriptionFinished: null,
+      subscriptionEventSeq: 0,
       runningFlowIds: new Set<string>(),
       flowProgressById: new Map<string, FlowProgressEvent>(),
+      lastFlowFinished: null,
+      flowEventSeq: 0,
     });
   },
 
-  refreshSnapshots: async () => {
+  applyMutationReceipt: (receipt) => {
+    const state = get();
+    if (receipt.seq <= state.lastSeq) return;
+
+    lastEventTs = Date.now();
+    const newStale = deriveStaleResources(receipt);
+    const merged = new Set(state.staleResources);
+    for (const key of newStale) merged.add(key);
+
+    set({
+      lastSeq: receipt.seq,
+      staleResources: merged,
+      sidebarCounts: receipt.sidebar_counts ?? state.sidebarCounts,
+      lastOriginCommand: receipt.origin_command,
+    });
+  },
+
+  applyTaskUpsert: (task) => {
+    lastEventTs = Date.now();
+
+    set((state) => {
+      const tasksById = new Map(state.tasksById);
+      tasksById.set(task.task_id, task);
+      return { tasksById };
+    });
+
+    // Schedule linger removal for finished tasks
+    if (task.status === 'finished' || task.status === 'failed') {
+      const existing = taskLingerTimers.get(task.task_id);
+      if (existing) clearTimeout(existing);
+
+      const timer = setTimeout(() => {
+        set((state) => {
+          const current = state.tasksById.get(task.task_id);
+          if (!current || (current.status !== 'finished' && current.status !== 'failed')) return {};
+          const tasksById = new Map(state.tasksById);
+          tasksById.delete(task.task_id);
+          return { tasksById };
+        });
+        taskLingerTimers.delete(task.task_id);
+      }, lingerMs(task));
+      taskLingerTimers.set(task.task_id, timer);
+    }
+  },
+
+  applyTaskRemoved: (taskId) => {
+    lastEventTs = Date.now();
+    const timer = taskLingerTimers.get(taskId);
+    if (timer) {
+      clearTimeout(timer);
+      taskLingerTimers.delete(taskId);
+    }
+    set((state) => {
+      const tasksById = new Map(state.tasksById);
+      tasksById.delete(taskId);
+      return { tasksById };
+    });
+  },
+
+  refreshSnapshot: async () => {
+    try {
+      const snapshot: RuntimeSnapshot = await api.runtime.getSnapshot();
+      lastEventTs = Date.now();
+      set((state) => {
+        const tasksById = new Map<string, RuntimeTask>();
+        for (const task of snapshot.tasks) {
+          tasksById.set(task.task_id, task);
+        }
+        return {
+          lastSeq: Math.max(state.lastSeq, snapshot.seq),
+          tasksById,
+        };
+      });
+    } catch (error) {
+      logBestEffortError('runtimeSyncStore.refreshSnapshot', error);
+    }
+  },
+
+  refreshTaskSnapshots: async () => {
     try {
       const [
         ptrSyncing,
@@ -387,7 +532,7 @@ export const useTaskRuntimeStore = create<TaskRuntimeState>((set, get) => ({
         PtrSyncController.getBootstrapStatus(),
         SubscriptionController.getRunningSubscriptions(),
         SubscriptionController.getRunningSubscriptionProgress().catch((error) => {
-          logBestEffortError('taskRuntimeStore.runningProgress', error);
+          logBestEffortError('runtimeSyncStore.runningProgress', error);
           return [];
         }),
       ]);
@@ -400,7 +545,6 @@ export const useTaskRuntimeStore = create<TaskRuntimeState>((set, get) => ({
         const runningQueryIds = new Set<string>();
         const subscriptionProgressById = new Map(state.subscriptionProgressById);
 
-        // Remove stale running rows, keep finished rows until linger timers expire.
         for (const [subId, progress] of subscriptionProgressById.entries()) {
           if (progress.status === 'running' && !runningSubscriptionIds.has(subId)) {
             subscriptionProgressById.delete(subId);
@@ -426,18 +570,72 @@ export const useTaskRuntimeStore = create<TaskRuntimeState>((set, get) => ({
           });
         }
 
+        // Derive flow state from runtime tasks
+        const runningFlowIds = new Set<string>();
+        const flowProgressById = new Map<string, FlowProgressEvent>();
+        for (const task of state.tasksById.values()) {
+          if (task.kind !== 'flow') continue;
+          const flowId = task.task_id.replace(/^flow:/, '');
+          if (task.status === 'running' || task.status === 'cancelling') {
+            runningFlowIds.add(flowId);
+            if (task.progress) {
+              flowProgressById.set(flowId, {
+                flow_id: flowId,
+                done: task.progress.done,
+                total: task.progress.total,
+                remaining: task.progress.total - task.progress.done,
+              } as FlowProgressEvent);
+            }
+          }
+        }
+
         return {
-          lastEventTs: Date.now(),
           ptrSyncing,
           ptrProgress: ptrSyncing ? ptrProgress : null,
           ptrBootstrapStatus,
           runningSubscriptionIds,
           runningQueryIds,
           subscriptionProgressById,
+          runningFlowIds,
+          flowProgressById,
         };
       });
     } catch (error) {
-      logBestEffortError('taskRuntimeStore.refreshSnapshots', error);
+      logBestEffortError('runtimeSyncStore.refreshTaskSnapshots', error);
     }
+  },
+
+  markResourceFresh: (key) => {
+    set((state) => {
+      if (!state.staleResources.has(key)) return {};
+      const staleResources = new Set(state.staleResources);
+      staleResources.delete(key);
+      return { staleResources };
+    });
+  },
+
+  markResourcesStale: (keys) => {
+    set((state) => {
+      const staleResources = new Set(state.staleResources);
+      for (const key of keys) staleResources.add(key);
+      return { staleResources };
+    });
+  },
+
+  getTasksByKind: (kind) => {
+    const tasks: RuntimeTask[] = [];
+    for (const task of get().tasksById.values()) {
+      if (task.kind === kind) tasks.push(task);
+    }
+    return tasks;
+  },
+
+  isAnyTaskRunning: (kind) => {
+    for (const task of get().tasksById.values()) {
+      if (task.kind === kind && (task.status === 'running' || task.status === 'cancelling')) {
+        return true;
+      }
+    }
+    return false;
   },
 }));

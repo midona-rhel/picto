@@ -43,6 +43,12 @@ pub async fn dispatch(command: &str, args_json: &str) -> Result<String, String> 
         return ok_null();
     }
 
+    // ─── Runtime commands (stateless — don't need AppState) ──
+    if command == "get_runtime_snapshot" {
+        let snapshot = crate::runtime_state::get_runtime_snapshot();
+        return to_json(&snapshot);
+    }
+
     let state = crate::state::get_state()?;
 
     // ─── Domain handler routing ──────────────────────────────

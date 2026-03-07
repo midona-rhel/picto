@@ -90,61 +90,6 @@ pub fn upsert_projection(
     Ok(())
 }
 
-pub fn invalidate_projection(conn: &Connection, file_id: i64) -> rusqlite::Result<()> {
-    conn.execute(
-        "DELETE FROM entity_metadata_projection WHERE entity_id = ?1",
-        [file_id],
-    )?;
-    Ok(())
-}
-
-/// Build a projection for a single file from raw SQL data.
-pub fn build_projection_for_file(
-    conn: &Connection,
-    file_id: i64,
-    epoch: i64,
-) -> rusqlite::Result<()> {
-    let file = super::files::get_file_by_id(conn, file_id)?;
-    let file = match file {
-        Some(f) => f,
-        None => return Ok(()),
-    };
-
-    let slim = FileMetadataSlim {
-        file_id: file.file_id,
-        entity_id: file.file_id,
-        is_collection: false,
-        collection_item_count: None,
-        hash: file.hash,
-        name: file.name,
-        mime: file.mime,
-        width: file.width,
-        height: file.height,
-        size: file.size,
-        status: file.status as u8,
-        rating: file.rating,
-        blurhash: file.blurhash,
-        imported_at: file.imported_at,
-        dominant_color_hex: file.dominant_color_hex,
-        duration_ms: file.duration_ms,
-        num_frames: file.num_frames,
-        has_audio: file.has_audio,
-        view_count: file.view_count,
-        position_rank: None,
-    };
-
-    let tags = super::tags::get_entity_tags(conn, file_id)?;
-
-    let resolved = ResolvedMetadata { file: slim, tags };
-    let resolved_json = serde_json::to_string(&resolved).unwrap_or_default();
-
-    let parents_json = "[]".to_string();
-
-    upsert_projection(conn, file_id, epoch, &resolved_json, &parents_json)?;
-
-    Ok(())
-}
-
 /// Batch build projections for multiple files using a single JOIN query.
 pub fn build_projections_batch(
     conn: &Connection,

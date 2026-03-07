@@ -29,7 +29,7 @@ pub async fn handle(
             match result {
                 Ok(count) => {
                     if count > 0 {
-                        crate::events::emit_state_changed(
+                        crate::events::emit_mutation(
                             "add_tags_selection",
                             crate::events::MutationImpact::new()
                                 .domains(&[
@@ -64,7 +64,7 @@ pub async fn handle(
             match result {
                 Ok(count) => {
                     if count > 0 {
-                        crate::events::emit_state_changed(
+                        crate::events::emit_mutation(
                             "remove_tags_selection",
                             crate::events::MutationImpact::new()
                                 .domains(&[
@@ -107,7 +107,7 @@ pub async fn handle(
             match result {
                 Ok(count) => {
                     if count > 0 {
-                        crate::events::emit_state_changed(
+                        crate::events::emit_mutation(
                             "update_rating_selection",
                             crate::events::MutationImpact::new()
                                 .domains(&[crate::events::Domain::Files])
@@ -136,7 +136,7 @@ pub async fn handle(
             match result {
                 Ok(count) => {
                     if count > 0 {
-                        crate::events::emit_state_changed(
+                        crate::events::emit_mutation(
                             "set_notes_selection",
                             crate::events::MutationImpact::new()
                                 .domains(&[crate::events::Domain::Files])
@@ -165,7 +165,7 @@ pub async fn handle(
             match result {
                 Ok(count) => {
                     if count > 0 {
-                        crate::events::emit_state_changed(
+                        crate::events::emit_mutation(
                             "set_source_urls_selection",
                             crate::events::MutationImpact::new()
                                 .domains(&[crate::events::Domain::Files])

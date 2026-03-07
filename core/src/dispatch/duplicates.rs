@@ -109,7 +109,7 @@ pub async fn handle(
             .await;
             match result {
                 Ok(r) => {
-                    crate::events::emit_state_changed(
+                    crate::events::emit_mutation(
                         "resolve_duplicate_pair",
                         crate::events::MutationImpact::new()
                             .domains(&[crate::events::Domain::Files]),

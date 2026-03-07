@@ -48,8 +48,7 @@ pub fn emit_empty(name: &str) {
     emit_event(name, "null");
 }
 
-use std::sync::atomic::{AtomicU64, Ordering};
-static SEQ: AtomicU64 = AtomicU64::new(0);
+// SEQ counter lives in runtime_state — single source of truth.
 
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -193,66 +192,46 @@ impl MutationImpact {
     }
 }
 
-#[derive(Debug, serde::Serialize)]
-pub struct StateChangedEvent {
-    pub seq: u64,
-    pub ts: String,
-    pub origin_command: String,
-    pub domains: Vec<Domain>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub file_hashes: Option<Vec<String>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub folder_ids: Option<Vec<i64>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub smart_folder_ids: Option<Vec<i64>>,
-    pub invalidate: Invalidate,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub compiler_batch_done: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub sidebar_counts: Option<SidebarCounts>,
-}
-
-pub fn emit_state_changed(origin: &str, impact: MutationImpact) {
-    let seq = SEQ.fetch_add(1, Ordering::Relaxed) + 1;
-    let event = StateChangedEvent {
-        seq,
-        ts: chrono::Utc::now().to_rfc3339(),
-        origin_command: origin.to_string(),
-        domains: impact.domains,
-        file_hashes: impact.file_hashes,
-        folder_ids: impact.folder_ids,
-        smart_folder_ids: impact.smart_folder_ids,
-        invalidate: impact.invalidate,
-        compiler_batch_done: impact.compiler_batch_done,
-        sidebar_counts: impact.sidebar_counts,
+/// Emit a `runtime/mutation_committed` event with a `MutationReceipt`.
+///
+/// This is the single mutation event the frontend subscribes to.
+/// It replaces the legacy `state-changed` / `sidebar-invalidated` /
+/// `grid-snapshot-invalidated` events.
+pub fn emit_mutation(origin: &str, impact: MutationImpact) {
+    use crate::runtime_contract::mutation::{
+        DerivedInvalidation, MutationFacts, MutationReceipt,
+        SidebarCounts as ContractSidebarCounts,
     };
 
-    emit(event_names::STATE_CHANGED, &event);
+    let seq = crate::runtime_state::next_seq();
+    let ts = chrono::Utc::now().to_rfc3339();
 
-    if event.invalidate.sidebar_tree == Some(true) {
-        emit(
-            event_names::SIDEBAR_INVALIDATED,
-            &serde_json::json!({
-                "reason": origin,
-                "seq": seq,
-                "ts": &event.ts,
-            }),
-        );
-    }
+    let receipt = MutationReceipt {
+        seq,
+        ts,
+        origin_command: origin.to_string(),
+        facts: MutationFacts {
+            domains: impact.domains,
+            file_hashes: impact.file_hashes,
+            folder_ids: impact.folder_ids,
+            smart_folder_ids: impact.smart_folder_ids,
+            compiler_batch_done: impact.compiler_batch_done,
+        },
+        invalidate: DerivedInvalidation {
+            sidebar_tree: impact.invalidate.sidebar_tree,
+            grid_scopes: impact.invalidate.grid_scopes,
+            selection_summary: impact.invalidate.selection_summary,
+            metadata_hashes: impact.invalidate.metadata_hashes,
+            view_prefs: impact.invalidate.view_prefs,
+        },
+        sidebar_counts: impact.sidebar_counts.map(|c| ContractSidebarCounts {
+            all_images: c.all_images,
+            inbox: c.inbox,
+            trash: c.trash,
+        }),
+    };
 
-    if let Some(scopes) = event.invalidate.grid_scopes.as_ref() {
-        for scope_key in scopes {
-            emit(
-                event_names::GRID_SNAPSHOT_INVALIDATED,
-                &serde_json::json!({
-                    "scope_key": scope_key,
-                    "reason": origin,
-                    "seq": seq,
-                    "ts": &event.ts,
-                }),
-            );
-        }
-    }
+    emit(event_names::RUNTIME_MUTATION_COMMITTED, &receipt);
 }
 
 /// Compute system sidebar counts from bitmaps (O(1)).
@@ -298,6 +277,11 @@ pub mod event_names {
     pub const OPEN_DETAIL_WINDOW: &str = "open-detail-window";
 
     pub const DUPLICATE_AUTO_MERGE_FINISHED: &str = "duplicate-auto-merge-finished";
+
+    // --- Runtime contract (new)
+    pub const RUNTIME_MUTATION_COMMITTED: &str = "runtime/mutation_committed";
+    pub const RUNTIME_TASK_UPSERTED: &str = "runtime/task_upserted";
+    pub const RUNTIME_TASK_REMOVED: &str = "runtime/task_removed";
 }
 
 // --- Subscription lifecycle

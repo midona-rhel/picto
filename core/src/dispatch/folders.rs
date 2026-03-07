@@ -91,7 +91,7 @@ pub async fn handle(
                 .await;
             match result {
                 Ok(_) => {
-                    crate::events::emit_state_changed(
+                    crate::events::emit_mutation(
                         "move_folder",
                         crate::events::MutationImpact::sidebar(crate::events::Domain::Folders)
                             .folder_ids(vec![folder_id]),
@@ -116,7 +116,7 @@ pub async fn handle(
             .await;
             match result {
                 Ok(folder) => {
-                    crate::events::emit_state_changed(
+                    crate::events::emit_mutation(
                         "create_folder",
                         crate::events::MutationImpact::sidebar(crate::events::Domain::Folders),
                     );
@@ -140,7 +140,7 @@ pub async fn handle(
             .await;
             match result {
                 Ok(_) => {
-                    crate::events::emit_state_changed(
+                    crate::events::emit_mutation(
                         "update_folder",
                         crate::events::MutationImpact::sidebar(crate::events::Domain::Folders)
                             .folder_ids(vec![folder_id]),
@@ -160,7 +160,7 @@ pub async fn handle(
                     .await;
             match result {
                 Ok(_) => {
-                    crate::events::emit_state_changed(
+                    crate::events::emit_mutation(
                         "delete_folder",
                         crate::events::MutationImpact::sidebar(crate::events::Domain::Folders)
                             .folder_ids(vec![folder_id])
@@ -185,7 +185,7 @@ pub async fn handle(
             .await;
             match result {
                 Ok(_) => {
-                    crate::events::emit_state_changed(
+                    crate::events::emit_mutation(
                         "update_folder_parent",
                         crate::events::MutationImpact::sidebar(crate::events::Domain::Folders)
                             .folder_ids(vec![folder_id]),
@@ -208,7 +208,7 @@ pub async fn handle(
             let result = state.db.add_entity_to_folder(folder_id, &hash).await;
             match result {
                 Ok(_) => {
-                    crate::events::emit_state_changed(
+                    crate::events::emit_mutation(
                         "add_file_to_folder",
                         crate::events::MutationImpact::new()
                             .domains(&[
@@ -244,7 +244,7 @@ pub async fn handle(
             match result {
                 Ok(count) => {
                     if count > 0 {
-                        crate::events::emit_state_changed(
+                        crate::events::emit_mutation(
                             "add_files_to_folder_batch",
                             crate::events::MutationImpact::new()
                                 .domains(&[
@@ -276,7 +276,7 @@ pub async fn handle(
             let result = state.db.remove_entity_from_folder(folder_id, &hash).await;
             match result {
                 Ok(_) => {
-                    crate::events::emit_state_changed(
+                    crate::events::emit_mutation(
                         "remove_file_from_folder",
                         crate::events::MutationImpact::new()
                             .domains(&[
@@ -311,7 +311,7 @@ pub async fn handle(
             match result {
                 Ok(count) => {
                     if count > 0 {
-                        crate::events::emit_state_changed(
+                        crate::events::emit_mutation(
                             "remove_files_from_folder_batch",
                             crate::events::MutationImpact::new()
                                 .domains(&[
@@ -340,7 +340,7 @@ pub async fn handle(
             let result = state.db.reorder_folders(moves).await;
             match result {
                 Ok(_) => {
-                    crate::events::emit_state_changed(
+                    crate::events::emit_mutation(
                         "reorder_folders",
                         crate::events::MutationImpact::sidebar(crate::events::Domain::Folders),
                     );
@@ -365,7 +365,7 @@ pub async fn handle(
             match result {
                 Ok(_) => {
                     // PBI-055: Emit grid_scopes so other views observing this folder stay consistent.
-                    crate::events::emit_state_changed(
+                    crate::events::emit_mutation(
                         "reorder_folder_items",
                         crate::events::MutationImpact::new()
                             .domains(&[crate::events::Domain::Folders])
@@ -397,7 +397,7 @@ pub async fn handle(
                 .await;
             match result {
                 Ok(_) => {
-                    crate::events::emit_state_changed(
+                    crate::events::emit_mutation(
                         "sort_folder_items",
                         crate::events::MutationImpact::new()
                             .domains(&[crate::events::Domain::Folders])
@@ -418,7 +418,7 @@ pub async fn handle(
             let result = state.db.reverse_folder_items(folder_id, hashes).await;
             match result {
                 Ok(_) => {
-                    crate::events::emit_state_changed(
+                    crate::events::emit_mutation(
                         "reverse_folder_items",
                         crate::events::MutationImpact::new()
                             .domains(&[crate::events::Domain::Folders])
@@ -462,7 +462,7 @@ pub async fn handle(
                 .await;
             match result {
                 Ok(collection_id) => {
-                    crate::events::emit_state_changed(
+                    crate::events::emit_mutation(
                         "create_collection",
                         crate::events::MutationImpact::sidebar(crate::events::Domain::Folders)
                             .grid_all()
@@ -503,12 +503,12 @@ pub async fn handle(
                 .await;
             match result {
                 Ok(_) => {
-                    crate::events::emit_state_changed(
+                    crate::events::emit_mutation(
                         "update_collection",
                         crate::events::MutationImpact::sidebar(crate::events::Domain::Folders)
                             .folder_ids(vec![id]),
                     );
-                    crate::events::emit_state_changed(
+                    crate::events::emit_mutation(
                         "update_collection_grid",
                         crate::events::MutationImpact::new()
                             .domains(&[crate::events::Domain::Files])
@@ -530,7 +530,7 @@ pub async fn handle(
             let result = state.db.set_collection_rating(id, rating).await;
             match result {
                 Ok(_) => {
-                    crate::events::emit_state_changed(
+                    crate::events::emit_mutation(
                         "set_collection_rating",
                         crate::events::MutationImpact::sidebar(crate::events::Domain::Folders)
                             .folder_ids(vec![id])
@@ -558,7 +558,7 @@ pub async fn handle(
             let result = state.db.set_collection_source_urls(id, &source_urls).await;
             match result {
                 Ok(_) => {
-                    crate::events::emit_state_changed(
+                    crate::events::emit_mutation(
                         "set_collection_source_urls",
                         crate::events::MutationImpact::sidebar(crate::events::Domain::Folders)
                             .folder_ids(vec![id])
@@ -587,7 +587,7 @@ pub async fn handle(
             match result {
                 Ok(_) => {
                     state.db.scope_cache_invalidate_scope("collection");
-                    crate::events::emit_state_changed(
+                    crate::events::emit_mutation(
                         "reorder_collection_members",
                         crate::events::MutationImpact::new()
                             .domains(&[crate::events::Domain::Files])
@@ -628,7 +628,7 @@ pub async fn handle(
                     if let Some(h) = cover_hash {
                         impact = impact.metadata_hashes(vec![h]);
                     }
-                    crate::events::emit_state_changed("add_collection_members", impact);
+                    crate::events::emit_mutation("add_collection_members", impact);
                     Some(to_json(&added))
                 }
                 Err(e) => Some(Err(e)),
@@ -666,7 +666,7 @@ pub async fn handle(
                     if let Some(h) = cover_hash {
                         impact = impact.metadata_hashes(vec![h]);
                     }
-                    crate::events::emit_state_changed("remove_collection_members", impact);
+                    crate::events::emit_mutation("remove_collection_members", impact);
                     Some(to_json(&removed))
                 }
                 Err(e) => Some(Err(e)),
@@ -681,7 +681,7 @@ pub async fn handle(
             match result {
                 Ok(_) => {
                     state.db.scope_cache_invalidate_scope("collection");
-                    crate::events::emit_state_changed(
+                    crate::events::emit_mutation(
                         "delete_collection",
                         crate::events::MutationImpact::sidebar(crate::events::Domain::Folders)
                             .folder_ids(vec![id])

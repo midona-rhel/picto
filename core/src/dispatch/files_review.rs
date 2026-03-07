@@ -98,7 +98,7 @@ pub async fn handle(
                     if !folder_ids.is_empty() {
                         impact = impact.folder_ids(folder_ids);
                     }
-                    crate::events::emit_state_changed("review_image_action", impact);
+                    crate::events::emit_mutation("review_image_action", impact);
                     Some(ok_null())
                 }
                 Err(e) => Some(Err(e)),

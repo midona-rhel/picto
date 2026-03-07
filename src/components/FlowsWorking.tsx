@@ -25,8 +25,8 @@ import {
   SubscriptionController,
   type SubscriptionFinishedEvent,
 } from '../controllers/subscriptionController';
-import { useTaskRuntimeStore } from '../stores/taskRuntimeStore';
-import { listen } from '#desktop/api';
+import { useRuntimeSyncStore } from '../stores/runtimeSyncStore';
+import { listenRuntimeEvent } from '#desktop/api';
 import st from './FlowsWorking.module.css';
 
 interface SitePluginInfo {
@@ -244,16 +244,16 @@ export function FlowsWorking({
   headerTitle = 'Subscriptions',
   refreshToken,
 }: FlowsWorkingProps) {
-  const ensureInitialized = useTaskRuntimeStore((s) => s.ensureInitialized);
-  const runningIds = useTaskRuntimeStore((s) => s.runningSubscriptionIds);
-  const runningQueryIds = useTaskRuntimeStore((s) => s.runningQueryIds);
-  const subscriptionProgressById = useTaskRuntimeStore((s) => s.subscriptionProgressById);
-  const runningFlowIds = useTaskRuntimeStore((s) => s.runningFlowIds);
-  const flowProgress = useTaskRuntimeStore((s) => s.flowProgressById);
-  const lastSubscriptionFinished = useTaskRuntimeStore((s) => s.lastSubscriptionFinished);
-  const lastFlowFinished = useTaskRuntimeStore((s) => s.lastFlowFinished);
-  const subscriptionEventSeq = useTaskRuntimeStore((s) => s.subscriptionEventSeq);
-  const flowEventSeq = useTaskRuntimeStore((s) => s.flowEventSeq);
+  const ensureInitialized = useRuntimeSyncStore((s) => s.ensureInitialized);
+  const runningIds = useRuntimeSyncStore((s) => s.runningSubscriptionIds);
+  const runningQueryIds = useRuntimeSyncStore((s) => s.runningQueryIds);
+  const subscriptionProgressById = useRuntimeSyncStore((s) => s.subscriptionProgressById);
+  const runningFlowIds = useRuntimeSyncStore((s) => s.runningFlowIds);
+  const flowProgress = useRuntimeSyncStore((s) => s.flowProgressById);
+  const lastSubscriptionFinished = useRuntimeSyncStore((s) => s.lastSubscriptionFinished);
+  const lastFlowFinished = useRuntimeSyncStore((s) => s.lastFlowFinished);
+  const subscriptionEventSeq = useRuntimeSyncStore((s) => s.subscriptionEventSeq);
+  const flowEventSeq = useRuntimeSyncStore((s) => s.flowEventSeq);
 
   const [flows, setFlows] = useState<FlowInfo[]>([]);
   const [sites, setSites] = useState<SitePluginInfo[]>([]);
@@ -321,11 +321,11 @@ export function FlowsWorking({
   useEffect(() => {
     void ensureInitialized();
     loadData();
-    const unlistenStateChanged = listen<{ domains?: string[] }>('state-changed', (event) => {
-      if (event.payload.domains?.includes('subscriptions')) loadData();
+    const unlisten = listenRuntimeEvent('runtime/mutation_committed', (receipt) => {
+      if (receipt.facts.domains?.includes('subscriptions')) loadData();
     });
     return () => {
-      unlistenStateChanged.then((fn) => fn());
+      unlisten.then((fn) => fn());
     };
   }, [ensureInitialized, loadData]);
 

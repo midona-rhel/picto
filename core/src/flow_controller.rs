@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use crate::blob_store::BlobStore;
 use crate::rate_limiter::RateLimiter;
+use crate::runtime_contract::task::{RuntimeTask, TaskKind, TaskProgress, TaskStatus};
 use crate::settings::SettingsStore;
 use crate::sqlite::SqliteDatabase;
 use crate::subscription_controller::SubscriptionController;
@@ -205,6 +206,20 @@ impl FlowController {
                 subscription_count: subs.iter().filter(|s| !s.paused).count(),
             },
         );
+        {
+            let now = chrono::Utc::now().to_rfc3339();
+            crate::runtime_state::upsert_task(RuntimeTask {
+                task_id: format!("flow:{}", id),
+                kind: TaskKind::Flow,
+                status: TaskStatus::Running,
+                label: format!("Flow {}", id),
+                parent_task_id: None,
+                progress: None,
+                detail: None,
+                started_at: now.clone(),
+                updated_at: now,
+            });
+        }
 
         let mut started = 0u32;
         let mut last_err = String::new();
@@ -256,6 +271,20 @@ impl FlowController {
                     error: Some(last_err.clone()),
                 },
             );
+            {
+                let now = chrono::Utc::now().to_rfc3339();
+                crate::runtime_state::upsert_task(RuntimeTask {
+                    task_id: format!("flow:{}", id),
+                    kind: TaskKind::Flow,
+                    status: TaskStatus::Failed,
+                    label: format!("Flow {}", id),
+                    parent_task_id: None,
+                    progress: None,
+                    detail: None,
+                    started_at: now.clone(),
+                    updated_at: now,
+                });
+            }
             return Err(format!("Failed to start: {last_err}"));
         }
 
@@ -269,6 +298,24 @@ impl FlowController {
                     error: None,
                 },
             );
+            {
+                let now = chrono::Utc::now().to_rfc3339();
+                crate::runtime_state::upsert_task(RuntimeTask {
+                    task_id: format!("flow:{}", id),
+                    kind: TaskKind::Flow,
+                    status: TaskStatus::Finished,
+                    label: format!("Flow {}", id),
+                    parent_task_id: None,
+                    progress: Some(TaskProgress {
+                        done: 0,
+                        total: 0,
+                        status_text: None,
+                    }),
+                    detail: None,
+                    started_at: now.clone(),
+                    updated_at: now,
+                });
+            }
             return Ok(());
         }
 
@@ -303,6 +350,24 @@ impl FlowController {
                             remaining: still_running_count,
                         },
                     );
+                    {
+                        let now = chrono::Utc::now().to_rfc3339();
+                        crate::runtime_state::upsert_task(RuntimeTask {
+                            task_id: format!("flow:{}", flow_id_str),
+                            kind: TaskKind::Flow,
+                            status: TaskStatus::Running,
+                            label: format!("Flow {}", flow_id_str),
+                            parent_task_id: None,
+                            progress: Some(TaskProgress {
+                                done: done as u64,
+                                total: started as u64,
+                                status_text: None,
+                            }),
+                            detail: None,
+                            started_at: now.clone(),
+                            updated_at: now,
+                        });
+                    }
                 }
 
                 // PBI-002: Aggregate terminal statuses from child subscriptions.
@@ -330,6 +395,29 @@ impl FlowController {
                         error: None,
                     },
                 );
+                {
+                    let task_status = if has_failed {
+                        TaskStatus::Failed
+                    } else {
+                        TaskStatus::Finished
+                    };
+                    let now = chrono::Utc::now().to_rfc3339();
+                    crate::runtime_state::upsert_task(RuntimeTask {
+                        task_id: format!("flow:{}", flow_id_str),
+                        kind: TaskKind::Flow,
+                        status: task_status,
+                        label: format!("Flow {}", flow_id_str),
+                        parent_task_id: None,
+                        progress: Some(TaskProgress {
+                            done: started as u64,
+                            total: started as u64,
+                            status_text: None,
+                        }),
+                        detail: None,
+                        started_at: now.clone(),
+                        updated_at: now,
+                    });
+                }
             });
 
             if let Err(e) = inner.await {
@@ -337,12 +425,26 @@ impl FlowController {
                 crate::events::emit(
                     crate::events::event_names::FLOW_FINISHED,
                     &crate::events::FlowFinishedEvent {
-                        flow_id: flow_id_guard,
+                        flow_id: flow_id_guard.clone(),
                         status: "failed".to_string(),
                         started_count: None,
                         error: Some(format!("Monitor panicked: {e}")),
                     },
                 );
+                {
+                    let now = chrono::Utc::now().to_rfc3339();
+                    crate::runtime_state::upsert_task(RuntimeTask {
+                        task_id: format!("flow:{}", flow_id_guard),
+                        kind: TaskKind::Flow,
+                        status: TaskStatus::Failed,
+                        label: format!("Flow {}", flow_id_guard),
+                        parent_task_id: None,
+                        progress: None,
+                        detail: None,
+                        started_at: now.clone(),
+                        updated_at: now,
+                    });
+                }
             }
         });
 

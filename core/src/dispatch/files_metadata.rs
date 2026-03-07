@@ -63,7 +63,7 @@ pub async fn handle(
             .await;
             match result {
                 Ok(()) => {
-                    crate::events::emit_state_changed(
+                    crate::events::emit_mutation(
                         "update_rating",
                         crate::events::MutationImpact::file_metadata(hash_clone),
                     );
@@ -85,7 +85,7 @@ pub async fn handle(
             .await;
             match result {
                 Ok(()) => {
-                    crate::events::emit_state_changed(
+                    crate::events::emit_mutation(
                         "set_file_name",
                         crate::events::MutationImpact::file_metadata(hash_clone),
                     );
@@ -120,7 +120,7 @@ pub async fn handle(
             .await;
             match result {
                 Ok(()) => {
-                    crate::events::emit_state_changed(
+                    crate::events::emit_mutation(
                         "set_file_notes",
                         crate::events::MutationImpact::file_metadata(hash_clone),
                     );
@@ -141,7 +141,7 @@ pub async fn handle(
             .await;
             match result {
                 Ok(()) => {
-                    crate::events::emit_state_changed(
+                    crate::events::emit_mutation(
                         "increment_view_count",
                         crate::events::MutationImpact::new()
                             .domains(&[
@@ -178,7 +178,7 @@ pub async fn handle(
             let result = state.db.set_source_urls(&hash, urls_json.as_deref()).await;
             match result {
                 Ok(()) => {
-                    crate::events::emit_state_changed(
+                    crate::events::emit_mutation(
                         "set_source_urls",
                         crate::events::MutationImpact::file_metadata(hash),
                     );

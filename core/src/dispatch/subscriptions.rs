@@ -25,7 +25,7 @@ pub async fn handle(
                     .await;
             match result {
                 Ok(flow) => {
-                    crate::events::emit_state_changed(
+                    crate::events::emit_mutation(
                         "create_flow",
                         crate::events::MutationImpact::sidebar(
                             crate::events::Domain::Subscriptions,
@@ -51,7 +51,7 @@ pub async fn handle(
             .await;
             match result {
                 Ok(()) => {
-                    crate::events::emit_state_changed(
+                    crate::events::emit_mutation(
                         "delete_flow",
                         crate::events::MutationImpact::sidebar(
                             crate::events::Domain::Subscriptions,
@@ -81,7 +81,7 @@ pub async fn handle(
                 crate::flow_controller::FlowController::rename_flow(&state.db, id, name).await;
             match result {
                 Ok(()) => {
-                    crate::events::emit_state_changed(
+                    crate::events::emit_mutation(
                         "rename_flow",
                         crate::events::MutationImpact::sidebar(
                             crate::events::Domain::Subscriptions,
@@ -106,7 +106,7 @@ pub async fn handle(
                     .await;
             match result {
                 Ok(()) => {
-                    crate::events::emit_state_changed(
+                    crate::events::emit_mutation(
                         "set_flow_schedule",
                         crate::events::MutationImpact::sidebar(
                             crate::events::Domain::Subscriptions,
@@ -134,7 +134,7 @@ pub async fn handle(
             .await;
             match result {
                 Ok(()) => {
-                    crate::events::emit_state_changed(
+                    crate::events::emit_mutation(
                         "run_flow",
                         crate::events::MutationImpact::sidebar(
                             crate::events::Domain::Subscriptions,
@@ -158,7 +158,7 @@ pub async fn handle(
             .await;
             match result {
                 Ok(()) => {
-                    crate::events::emit_state_changed(
+                    crate::events::emit_mutation(
                         "stop_flow",
                         crate::events::MutationImpact::sidebar(
                             crate::events::Domain::Subscriptions,
@@ -232,7 +232,7 @@ pub async fn handle(
                 .await;
             match result {
                 Ok(sub) => {
-                    crate::events::emit_state_changed(
+                    crate::events::emit_mutation(
                         "create_subscription",
                         crate::events::MutationImpact::sidebar(
                             crate::events::Domain::Subscriptions,
@@ -259,7 +259,7 @@ pub async fn handle(
                 .await;
             match result {
                 Ok(count) => {
-                    crate::events::emit_state_changed(
+                    crate::events::emit_mutation(
                         "delete_subscription",
                         crate::events::MutationImpact::sidebar(
                             crate::events::Domain::Subscriptions,
@@ -292,7 +292,7 @@ pub async fn handle(
                 .await;
             match result {
                 Ok(()) => {
-                    crate::events::emit_state_changed(
+                    crate::events::emit_mutation(
                         "pause_subscription",
                         crate::events::MutationImpact::sidebar(
                             crate::events::Domain::Subscriptions,
@@ -321,7 +321,7 @@ pub async fn handle(
                 .await;
             match result {
                 Ok(query) => {
-                    crate::events::emit_state_changed(
+                    crate::events::emit_mutation(
                         "add_subscription_query",
                         crate::events::MutationImpact::new()
                             .domains(&[crate::events::Domain::Subscriptions]),
@@ -343,7 +343,7 @@ pub async fn handle(
                 .await;
             match result {
                 Ok(()) => {
-                    crate::events::emit_state_changed(
+                    crate::events::emit_mutation(
                         "delete_subscription_query",
                         crate::events::MutationImpact::new()
                             .domains(&[crate::events::Domain::Subscriptions]),
@@ -369,7 +369,7 @@ pub async fn handle(
                 .await;
             match result {
                 Ok(()) => {
-                    crate::events::emit_state_changed(
+                    crate::events::emit_mutation(
                         "pause_subscription_query",
                         crate::events::MutationImpact::new()
                             .domains(&[crate::events::Domain::Subscriptions]),
@@ -432,7 +432,7 @@ pub async fn handle(
             .await;
             match result {
                 Ok(()) => {
-                    crate::events::emit_state_changed(
+                    crate::events::emit_mutation(
                         "reset_subscription",
                         crate::events::MutationImpact::sidebar(
                             crate::events::Domain::Subscriptions,
@@ -470,7 +470,7 @@ pub async fn handle(
                 .await;
             match result {
                 Ok(()) => {
-                    crate::events::emit_state_changed(
+                    crate::events::emit_mutation(
                         "rename_subscription",
                         crate::events::MutationImpact::sidebar(
                             crate::events::Domain::Subscriptions,

@@ -773,7 +773,7 @@ impl<'a> SubscriptionSyncEngine<'a> {
                 .iter()
                 .map(|id| format!("collection:{id}")),
         );
-        crate::events::emit_state_changed(
+        crate::events::emit_mutation(
             "subscription_import_collections",
             crate::events::MutationImpact::new()
                 .domains(&[
@@ -927,7 +927,7 @@ impl<'a> SubscriptionSyncEngine<'a> {
 
                 // Emit state-changed for sidebar counts
                 self.db.scope_cache_invalidate_all();
-                crate::events::emit_state_changed(
+                crate::events::emit_mutation(
                     "subscription_import",
                     crate::events::MutationImpact::new()
                         .domains(&[
@@ -1091,7 +1091,7 @@ impl<'a> SubscriptionSyncEngine<'a> {
 
         if any_change {
             self.db.scope_cache_invalidate_all();
-            crate::events::emit_state_changed(
+            crate::events::emit_mutation(
                 "subscription_import",
                 crate::events::MutationImpact::new()
                     .domains(&[
@@ -1152,6 +1152,28 @@ impl<'a> SubscriptionSyncEngine<'a> {
             crate::events::event_names::SUBSCRIPTION_PROGRESS,
             &event,
         );
+        // RuntimeTask progress upsert
+        {
+            use crate::runtime_contract::task::{
+                RuntimeTask, TaskKind, TaskProgress, TaskStatus,
+            };
+            let now = chrono::Utc::now().to_rfc3339();
+            crate::runtime_state::upsert_task(RuntimeTask {
+                task_id: format!("sub:{}", subscription_id),
+                kind: TaskKind::Subscription,
+                status: TaskStatus::Running,
+                label: self.subscription_name.clone(),
+                parent_task_id: None,
+                progress: Some(TaskProgress {
+                    done: progress.files_downloaded as u64,
+                    total: (progress.files_downloaded + progress.files_skipped) as u64,
+                    status_text: Some(status_text.to_string()),
+                }),
+                detail: None,
+                started_at: now.clone(),
+                updated_at: now,
+            });
+        }
     }
 }
 

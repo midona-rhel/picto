@@ -16,6 +16,7 @@ use crate::types::{
 };
 
 fn schedule_progress_snapshot_clear(running_subs: RunningSubscriptions, subscription_id: String) {
+    let task_id = format!("sub:{subscription_id}");
     tokio::spawn(async move {
         sleep(Duration::from_millis(3000)).await;
         let still_running = {
@@ -24,8 +25,31 @@ fn schedule_progress_snapshot_clear(running_subs: RunningSubscriptions, subscrip
         };
         if !still_running {
             crate::subscription_sync::clear_runtime_progress_snapshot(&subscription_id);
+            crate::runtime_state::remove_task(&task_id);
         }
     });
+}
+
+fn make_sub_runtime_task(
+    sub_id: &str,
+    sub_name: &str,
+    status: crate::runtime_contract::task::TaskStatus,
+    parent_task_id: Option<String>,
+    progress: Option<crate::runtime_contract::task::TaskProgress>,
+    detail: Option<serde_json::Value>,
+) -> crate::runtime_contract::task::RuntimeTask {
+    let now = chrono::Utc::now().to_rfc3339();
+    crate::runtime_contract::task::RuntimeTask {
+        task_id: format!("sub:{sub_id}"),
+        kind: crate::runtime_contract::task::TaskKind::Subscription,
+        status,
+        label: sub_name.to_string(),
+        parent_task_id,
+        progress,
+        detail,
+        started_at: now.clone(),
+        updated_at: now,
+    }
 }
 
 fn resolve_query_name(query_id: i64, query_text: &str, display_name: Option<&str>) -> String {
@@ -467,6 +491,17 @@ impl SubscriptionController {
                     events::event_names::SUBSCRIPTION_PROGRESS,
                     &progress,
                 );
+                {
+                    let name_ref = progress.subscription_name.clone();
+                    crate::runtime_state::upsert_task(make_sub_runtime_task(
+                        &id,
+                        &name_ref,
+                        crate::runtime_contract::task::TaskStatus::Cancelling,
+                        None,
+                        None,
+                        None,
+                    ));
+                }
                 Ok(())
             }
             None => Err(format!("Subscription {} is not running", id)),
@@ -558,6 +593,14 @@ impl SubscriptionController {
                 status_text: "Starting...".to_string(),
             },
         );
+        crate::runtime_state::upsert_task(make_sub_runtime_task(
+            &id,
+            &sub.name,
+            crate::runtime_contract::task::TaskStatus::Running,
+            None,
+            None,
+            None,
+        ));
 
         let db = db.clone();
         let blob_store = blob_store.clone();
@@ -714,6 +757,28 @@ impl SubscriptionController {
                         status_text: final_status_text.to_string(),
                     },
                 );
+                {
+                    use crate::runtime_contract::task::{TaskProgress, TaskStatus};
+                    let task_status = if was_cancelled {
+                        TaskStatus::Failed
+                    } else if total_errors > 0 {
+                        TaskStatus::Failed
+                    } else {
+                        TaskStatus::Finished
+                    };
+                    crate::runtime_state::upsert_task(make_sub_runtime_task(
+                        &sub_id_for_inner_clear,
+                        &sub_name,
+                        task_status,
+                        None,
+                        Some(TaskProgress {
+                            done: total_downloaded as u64,
+                            total: (total_downloaded + total_skipped) as u64,
+                            status_text: Some(final_status_text.to_string()),
+                        }),
+                        None,
+                    ));
+                }
                 schedule_progress_snapshot_clear(
                     running_subs.clone(),
                     sub_id_for_inner_clear.clone(),
@@ -743,6 +808,14 @@ impl SubscriptionController {
                         status_text: "Failed".to_string(),
                     },
                 );
+                crate::runtime_state::upsert_task(make_sub_runtime_task(
+                    &sub_id_guard,
+                    &sub_name_guard,
+                    crate::runtime_contract::task::TaskStatus::Failed,
+                    None,
+                    None,
+                    Some(serde_json::json!({ "error": format!("Task panicked: {e}") })),
+                ));
                 schedule_progress_snapshot_clear(running_subs_guard.clone(), sub_id_guard.clone());
             }
         });
@@ -834,6 +907,18 @@ impl SubscriptionController {
                 status_text: "Starting...".to_string(),
             },
         );
+        crate::runtime_state::upsert_task(make_sub_runtime_task(
+            &subscription_id,
+            &sub.name,
+            crate::runtime_contract::task::TaskStatus::Running,
+            None,
+            None,
+            Some(serde_json::json!({
+                "query_id": query_id,
+                "query_name": query_name,
+                "mode": "query",
+            })),
+        ));
 
         let db = db.clone();
         let blob_store = blob_store.clone();
@@ -983,6 +1068,28 @@ impl SubscriptionController {
                         status_text: final_status_text.to_string(),
                     },
                 );
+                {
+                    use crate::runtime_contract::task::{TaskProgress, TaskStatus};
+                    let task_status = if was_cancelled {
+                        TaskStatus::Failed
+                    } else if total_errors > 0 {
+                        TaskStatus::Failed
+                    } else {
+                        TaskStatus::Finished
+                    };
+                    crate::runtime_state::upsert_task(make_sub_runtime_task(
+                        &sub_id_for_inner_clear,
+                        &sub_name,
+                        task_status,
+                        None,
+                        Some(TaskProgress {
+                            done: total_downloaded as u64,
+                            total: (total_downloaded + total_skipped) as u64,
+                            status_text: Some(final_status_text.to_string()),
+                        }),
+                        None,
+                    ));
+                }
                 schedule_progress_snapshot_clear(
                     running_subs.clone(),
                     sub_id_for_inner_clear.clone(),
@@ -1031,6 +1138,14 @@ impl SubscriptionController {
                         status_text: "Failed".to_string(),
                     },
                 );
+                crate::runtime_state::upsert_task(make_sub_runtime_task(
+                    &sub_id_guard,
+                    &sub_name_guard,
+                    crate::runtime_contract::task::TaskStatus::Failed,
+                    None,
+                    None,
+                    Some(serde_json::json!({ "error": format!("Task panicked: {e}") })),
+                ));
                 schedule_progress_snapshot_clear(running_subs_guard.clone(), sub_id_guard.clone());
             }
         });

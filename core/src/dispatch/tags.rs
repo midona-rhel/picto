@@ -60,7 +60,7 @@ pub async fn handle(
             match result {
                 Ok(val) => {
                     if !val.is_empty() {
-                        crate::events::emit_state_changed(
+                        crate::events::emit_mutation(
                             "add_tags",
                             crate::events::MutationImpact::file_tags(hash_clone)
                                 .selection_summary(),
@@ -85,7 +85,7 @@ pub async fn handle(
                 .await
             {
                 Ok(()) => {
-                    crate::events::emit_state_changed(
+                    crate::events::emit_mutation(
                         "remove_tags",
                         crate::events::MutationImpact::file_tags(hash_clone).selection_summary(),
                     );
@@ -113,7 +113,7 @@ pub async fn handle(
             {
                 Ok(()) => {
                     if !hashes_clone.is_empty() {
-                        crate::events::emit_state_changed(
+                        crate::events::emit_mutation(
                             "add_tags_batch",
                             crate::events::MutationImpact::batch_tags().file_hashes(hashes_clone),
                         );
@@ -142,7 +142,7 @@ pub async fn handle(
             {
                 Ok(()) => {
                     if !hashes_clone.is_empty() {
-                        crate::events::emit_state_changed(
+                        crate::events::emit_mutation(
                             "remove_tags_batch",
                             crate::events::MutationImpact::batch_tags().file_hashes(hashes_clone),
                         );
@@ -187,7 +187,7 @@ pub async fn handle(
                 .await
             {
                 Ok(()) => {
-                    crate::events::emit_state_changed(
+                    crate::events::emit_mutation(
                         "set_tag_alias",
                         crate::events::MutationImpact::sidebar(crate::events::Domain::Tags)
                             .grid_all()
@@ -206,7 +206,7 @@ pub async fn handle(
             let (from_ns, from_st) = crate::sqlite::tags::parse_tag_string(&from);
             match state.db.remove_sibling(&from_ns, &from_st, "local").await {
                 Ok(()) => {
-                    crate::events::emit_state_changed(
+                    crate::events::emit_mutation(
                         "remove_tag_alias",
                         crate::events::MutationImpact::sidebar(crate::events::Domain::Tags)
                             .grid_all()
@@ -271,7 +271,7 @@ pub async fn handle(
             let (pns, pst) = crate::sqlite::tags::parse_tag_string(&parent);
             match state.db.add_parent(&cns, &cst, &pns, &pst, "local").await {
                 Ok(()) => {
-                    crate::events::emit_state_changed(
+                    crate::events::emit_mutation(
                         "add_tag_parent",
                         crate::events::MutationImpact::sidebar(crate::events::Domain::Tags)
                             .grid_all()
@@ -299,7 +299,7 @@ pub async fn handle(
                 .await
             {
                 Ok(()) => {
-                    crate::events::emit_state_changed(
+                    crate::events::emit_mutation(
                         "remove_tag_parent",
                         crate::events::MutationImpact::sidebar(crate::events::Domain::Tags)
                             .grid_all()
@@ -360,7 +360,7 @@ pub async fn handle(
                             .db
                             .emit_compiler_event(CompilerEvent::FileTagsChanged { file_id });
                     }
-                    crate::events::emit_state_changed(
+                    crate::events::emit_mutation(
                         "merge_tags",
                         crate::events::MutationImpact::new()
                             .domains(&[
@@ -429,7 +429,7 @@ pub async fn handle(
             let result = state.db.rename_tag_by_id(tag_id, &new_name).await;
             match result {
                 Ok((affected_file_ids, merged_into)) => {
-                    crate::events::emit_state_changed(
+                    crate::events::emit_mutation(
                         "rename_tag",
                         crate::events::MutationImpact::sidebar(crate::events::Domain::Tags)
                             .grid_all()
@@ -451,7 +451,7 @@ pub async fn handle(
             let result = state.db.delete_tag_by_id(tag_id).await;
             match result {
                 Ok(affected_file_ids) => {
-                    crate::events::emit_state_changed(
+                    crate::events::emit_mutation(
                         "delete_tag",
                         crate::events::MutationImpact::new()
                             .domains(&[
@@ -477,7 +477,7 @@ pub async fn handle(
             match result {
                 Ok(stats) => {
                     if stats.tags_rewritten > 0 {
-                        crate::events::emit_state_changed(
+                        crate::events::emit_mutation(
                             "normalize_ingested_namespaces",
                             crate::events::MutationImpact::new()
                                 .domains(&[
