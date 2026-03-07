@@ -3,13 +3,15 @@
 ## Priority
 P1
 
-## Audit Status (2026-03-07)
-Status: **Not Implemented**
+## Audit Status (2026-03-08)
+Status: **Implemented**
 
-Evidence:
-1. `src/app-shell/useAppBootstrap.ts` owns window startup, theme sync, event bridge setup, task runtime initialization, menu listeners, and titlebar drag behavior.
-2. The frontend still carries multiple `react-hooks/exhaustive-deps` suppressions in lifecycle-heavy modules.
-3. Runtime/event ownership is split between `useAppBootstrap`, `setupEventBridge`, `useTaskRuntimeStore`, and view components.
+Implementation:
+1. `eventBridge.ts` and `taskRuntimeStore.ts` already deleted in PBI-402 — replaced by `runtimeSyncStore` + `refresherOrchestrator`.
+2. Extracted `src/shared/hooks/useThemeSync.ts` — unified theme sync hook (settings init + Mantine color scheme + DOM attribute). Deduplicates identical pattern from `useAppBootstrap` and 3 entrypoints (`settings.tsx`, `subscriptions.tsx`, `library-manager.tsx`). Uses refs for Mantine's `setColorScheme`/`colorScheme` to avoid exhaustive-deps suppression.
+3. Extracted `src/app/useNativeEventListeners.ts` — consolidates sidebar init, runtime sync init, refresher lifecycle, library switching/switched listeners, and menu event listeners (`open-settings`, `navigate`, `undo`, `redo`) from `useAppBootstrap`.
+4. Fixed avoidable `[]` suppression in `useAppBootstrap` startup effect by adding stable `appWindow` dep (from `useMemo`).
+5. Suppressions reduced from 21 → 16. Remaining 16 are all in image-grid/viewer modules (deferred to PBI-408): `DetailView.tsx` ×6, `useImageLoadState.ts` ×2, `useZoomCache.ts` ×1, `useGridTransitionController.ts` ×1, `useViewerMediaPipeline.ts` ×1, `VideoPlayer.tsx` ×1, `Slideshow.tsx` ×1, `useVideoPlayer.ts` ×1, `useFrameTime.ts` ×1, `useBoundaryNavigation.ts` ×1 (intentional, documented).
 
 ## Problem
 Renderer startup and event lifecycle are spread across too many layers. The app works, but the ownership model is weak: startup wiring, listener registration, theme sync, and runtime task state are assembled from side effects rather than a small number of clearly owned entry points.

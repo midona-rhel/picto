@@ -40,6 +40,8 @@ export function useBoundaryNavigation(
       return;
     }
     onNavigateRef.current(newIndex);
+  // Deps: currentIndexRef is a stable ref object. totalItemsRef/onNavigateRef are read
+  // inside the callback (not reactive deps). Suppression is intentional.
   }, [currentIndexRef]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return { navigate, boundaryFlash };

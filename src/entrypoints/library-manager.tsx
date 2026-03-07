@@ -1,10 +1,10 @@
-import React, { useEffect } from 'react';
+import React from 'react';
 import ReactDOM from 'react-dom/client';
-import { MantineProvider, createTheme, rem, useMantineColorScheme } from '@mantine/core';
+import { MantineProvider, createTheme, rem } from '@mantine/core';
 import { api, getCurrentWindow } from '#desktop/api';
 import { IconX } from '@tabler/icons-react';
 import { LibraryPanel } from '#features/settings/components';
-import { initSettingsStore, useSettingsStore, themeToColorScheme } from '../state/settingsStore';
+import { useThemeSync } from '../shared/hooks/useThemeSync';
 import '@mantine/core/styles.css';
 import '../shared/styles/globals.css';
 
@@ -90,20 +90,7 @@ const theme = createTheme({
   .catch(() => {});
 
 function LibraryManagerApp() {
-  const { loaded: settingsLoaded, settings } = useSettingsStore();
-  const { setColorScheme, colorScheme } = useMantineColorScheme();
-
-  useEffect(() => {
-    void initSettingsStore();
-  }, []);
-
-  useEffect(() => {
-    if (!settingsLoaded) return;
-    const t = settings.theme ?? (settings.colorScheme === 'light' ? 'light' : 'dark');
-    const scheme = themeToColorScheme(t);
-    if (scheme !== colorScheme) setColorScheme(scheme);
-    document.documentElement.dataset.theme = t === 'auto' ? '' : t;
-  }, [settingsLoaded, settings.theme, settings.colorScheme]); // eslint-disable-line react-hooks/exhaustive-deps
+  useThemeSync();
 
   const handleClose = () => {
     getCurrentWindow().close().catch(() => {});
