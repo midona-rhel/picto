@@ -133,8 +133,9 @@ pub async fn handle(
             let name: Option<String> = de_opt(args, "name");
             let icon: Option<String> = de_opt(args, "icon");
             let color: Option<String> = de_opt(args, "color");
+            let auto_tags: Option<Vec<String>> = de_opt(args, "auto_tags");
             let result = crate::folder_controller::FolderController::update_folder(
-                &state.db, folder_id, name, icon, color,
+                &state.db, folder_id, name, icon, color, auto_tags,
             )
             .await;
             match result {

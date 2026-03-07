@@ -215,6 +215,25 @@
   cursor: default;
 }
 
+.itemLabelRow {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+}
+
+.folderAutoTagIndicator {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  color: var(--color-text-tertiary);
+  opacity: 0.85;
+}
+
 .itemCount {
   position: relative;
   z-index: 1;

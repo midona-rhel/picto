@@ -40,6 +40,7 @@ export const FolderController = {
     name?: string | null;
     icon?: string | null;
     color?: string | null;
+    autoTags?: string[] | null;
   }): Promise<void> {
     return runFolderMutation(api.folders.update({
       folder_id: args.folderId,
@@ -48,6 +49,7 @@ export const FolderController = {
       icon: args.icon === null ? '' : (args.icon === undefined ? undefined : args.icon),
       // Send empty string to explicitly clear color; undefined means "don't change"
       color: args.color === null ? '' : (args.color === undefined ? undefined : args.color),
+      auto_tags: args.autoTags ?? undefined,
     }));
   },
 

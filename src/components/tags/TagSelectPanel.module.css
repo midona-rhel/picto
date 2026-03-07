@@ -15,6 +15,14 @@
   transition: width 200ms var(--timing-function-super);
 }
 
+.panelModal {
+  position: static;
+  width: 100%;
+  max-width: 100%;
+  height: min(70vh, 640px);
+  z-index: auto;
+}
+
 .panelCollapsed {
   width: 340px;
 }

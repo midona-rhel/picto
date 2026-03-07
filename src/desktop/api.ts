@@ -469,7 +469,7 @@ export const api = {
       invoke<Folder[]>('list_folders'),
     create: (params: { name: string; parent_id?: number | null; icon?: string; color?: string }) =>
       invoke<Folder>('create_folder', params),
-    update: (params: { folder_id: number; name?: string; icon?: string; color?: string }) =>
+    update: (params: { folder_id: number; name?: string; icon?: string; color?: string; auto_tags?: string[] }) =>
       invoke<void>('update_folder', params),
     delete: (folderId: number) =>
       invoke<void>('delete_folder', { folder_id: folderId }),

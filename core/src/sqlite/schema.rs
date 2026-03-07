@@ -6,7 +6,7 @@ pub fn apply_pragmas(conn: &Connection) -> rusqlite::Result<()> {
     conn.execute_batch(PRAGMA_SQL)
 }
 
-pub const CURRENT_VERSION: i64 = 24;
+pub const CURRENT_VERSION: i64 = 25;
 
 pub fn init_schema(conn: &Connection) -> rusqlite::Result<()> {
     conn.execute_batch(LIBRARY_DDL)?;
@@ -498,6 +498,14 @@ pub fn run_migrations(conn: &Connection, from_version: i64) -> rusqlite::Result<
              );",
         )?;
     }
+    if from_version < 25 {
+        // V25: Folder auto-tags.
+        if !has_column(conn, "folder", "auto_tags")? {
+            conn.execute_batch(
+                "ALTER TABLE folder ADD COLUMN auto_tags TEXT NOT NULL DEFAULT '[]'",
+            )?;
+        }
+    }
     // V21: Denormalized collection cover/count/size for fast grid queries.
     // Run unconditionally with has_column guards — V22 was deployed before V21,
     // so some databases have version >= 21 but lack these columns.
@@ -651,6 +659,13 @@ pub fn reconcile_schema(conn: &Connection) -> rusqlite::Result<()> {
              last_error      TEXT
          );",
     )?;
+
+    if table_exists(conn, "folder")? && !has_column(conn, "folder", "auto_tags")? {
+        conn.execute_batch(
+            "ALTER TABLE folder ADD COLUMN auto_tags TEXT NOT NULL DEFAULT '[]'",
+        )?;
+        tracing::warn!("Reconciled folder schema: added auto_tags");
+    }
 
     // Data reconciliation: some upgraded builds may have illegal collection rows
     // still linked through entity_file, which corrupts collection tile rendering.
@@ -1118,6 +1133,7 @@ CREATE TABLE IF NOT EXISTS folder (
     parent_id  INTEGER REFERENCES folder(folder_id) ON DELETE SET NULL,
     icon       TEXT,
     color      TEXT,
+    auto_tags  TEXT NOT NULL DEFAULT '[]',
     sort_order INTEGER,
     created_at TEXT,
     updated_at TEXT
@@ -1332,7 +1348,7 @@ CREATE TABLE IF NOT EXISTS kv_settings (
 
 -- Schema version
 CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL);
-INSERT OR IGNORE INTO schema_version (version) VALUES (24);
+INSERT OR IGNORE INTO schema_version (version) VALUES (25);
 "#;
 
 #[cfg(test)]
