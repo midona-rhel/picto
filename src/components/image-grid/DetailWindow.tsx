@@ -411,16 +411,6 @@ export function DetailWindow({ hash }: DetailWindowProps) {
 
   const handleMinimapMouseDown = useNavigatorDrag(minimapRef, imageSizeRef, panToNormalized);
 
-  const handleDragMouseDown = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
-    if (e.button !== 0) return;
-    const target = e.target as HTMLElement | null;
-    if (!target) return;
-    // Exclude interactive elements — everything else in the toolbar is draggable
-    if (target.closest('button, a, input, select, textarea, .no-drag-region')) return;
-    e.preventDefault();
-    void getCurrentWindow().startDragging();
-  }, []);
-
   const titleText = useMemo(() => {
     if (!currentImage) return '';
     const name = currentImage.name || currentImage.hash.slice(0, 12);
@@ -435,7 +425,7 @@ export function DetailWindow({ hash }: DetailWindowProps) {
   return (
     <div className={styles.root}>
       {currentImage && (
-        <div className={`${styles.toolbar} ${toolbarHidden ? styles.toolbarHidden : ''}`} onMouseDown={handleDragMouseDown}>
+        <div className={`${styles.toolbar} ${toolbarHidden ? styles.toolbarHidden : ''}`}>
           <div className={styles.toolbarLeft}>
             <span className={styles.titleName}>{titleText}</span>
             {images.length > 1 && (
