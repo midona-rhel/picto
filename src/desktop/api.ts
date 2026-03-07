@@ -400,108 +400,108 @@ export const api = {
 
   import: {
     files: (paths: string[], tagStrings?: string[], sourceUrls?: string[], initialStatus?: number) =>
-      invoke<ImportResult>('import_files', { paths, tag_strings: tagStrings, source_urls: sourceUrls, initial_status: initialStatus }),
+      invokeTyped('import_files', { paths, tag_strings: tagStrings, source_urls: sourceUrls, initial_status: initialStatus } as never) as unknown as Promise<ImportResult>,
   },
 
   tags: {
     search: (query: string, limit?: number) =>
-      invoke<TagSearchResult[]>('search_tags', { query, limit }),
+      invokeTyped('search_tags', { query, limit } as never) as Promise<TagSearchResult[]>,
     getAll: () =>
-      invoke<TagTuple[]>('get_all_tags_with_counts'),
+      invokeTyped('get_all_tags_with_counts') as Promise<TagTuple[]>,
     getForFile: (hash: string) =>
-      invoke<TagDisplay[]>('get_file_tags', { hash }),
+      invokeTyped('get_file_tags', { hash }) as Promise<TagDisplay[]>,
     add: (hash: string, tagStrings: string[]) =>
-      invoke<void>('add_tags', { hash, tag_strings: tagStrings }),
+      invokeTyped('add_tags', { hash, tag_strings: tagStrings }) as unknown as Promise<void>,
     remove: (hash: string, tagStrings: string[]) =>
-      invoke<void>('remove_tags', { hash, tag_strings: tagStrings }),
+      invokeTyped('remove_tags', { hash, tag_strings: tagStrings }) as unknown as Promise<void>,
     addBatch: (hashes: string[], tagStrings: string[]) =>
-      invoke<void>('add_tags_batch', { hashes, tag_strings: tagStrings }),
+      invokeTyped('add_tags_batch', { hashes, tag_strings: tagStrings }) as unknown as Promise<void>,
     removeBatch: (hashes: string[], tagStrings: string[]) =>
-      invoke<void>('remove_tags_batch', { hashes, tag_strings: tagStrings }),
+      invokeTyped('remove_tags_batch', { hashes, tag_strings: tagStrings }) as unknown as Promise<void>,
     findFilesByTags: (tagStrings: string[], limit?: number, offset?: number) =>
-      invoke<string[]>('find_files_by_tags', { tag_strings: tagStrings, limit, offset }),
+      invokeTyped('find_files_by_tags', { tag_strings: tagStrings, limit, offset } as never) as Promise<string[]>,
     getPaginated: (params: { namespace?: string; search?: string; cursor?: string; limit?: number }) =>
-      invoke<TagRecord[]>('get_tags_paginated', params),
+      invokeTyped('get_tags_paginated', params as never) as Promise<TagRecord[]>,
     getNamespaceSummary: () =>
-      invoke<NamespaceSummary[]>('get_namespace_summary'),
+      invokeTyped('get_namespace_summary') as Promise<NamespaceSummary[]>,
     setAlias: (from: string, to: string) =>
-      invoke<void>('set_tag_alias', { from, to }),
+      invokeTyped('set_tag_alias', { from, to }) as unknown as Promise<void>,
     removeAlias: (from: string) =>
-      invoke<void>('remove_tag_alias', { from }),
+      invokeTyped('remove_tag_alias', { from }) as unknown as Promise<void>,
     getSiblings: (tagId: number) =>
-      invoke<TagRelation[]>('get_tag_siblings_for_tag', { tag_id: tagId }),
+      invokeTyped('get_tag_siblings_for_tag', { tag_id: tagId }) as Promise<TagRelation[]>,
     getParents: (tagId: number) =>
-      invoke<TagRelation[]>('get_tag_parents_for_tag', { tag_id: tagId }),
+      invokeTyped('get_tag_parents_for_tag', { tag_id: tagId }) as Promise<TagRelation[]>,
     addParent: (child: string, parent: string) =>
-      invoke<void>('add_tag_parent', { child, parent }),
+      invokeTyped('add_tag_parent', { child, parent }) as unknown as Promise<void>,
     removeParent: (child: string, parent: string) =>
-      invoke<void>('remove_tag_parent', { child, parent }),
+      invokeTyped('remove_tag_parent', { child, parent }) as unknown as Promise<void>,
     merge: (fromTag: string, toTag: string) =>
-      invoke<void>('merge_tags', { from_tag: fromTag, to_tag: toTag }),
+      invokeTyped('merge_tags', { from_tag: fromTag, to_tag: toTag }) as unknown as Promise<void>,
     rename: (tagId: number, newName: string) =>
-      invoke<RenameTagResult>('rename_tag', { tag_id: tagId, new_name: newName }),
+      invokeTyped('rename_tag', { tag_id: tagId, new_name: newName }) as Promise<RenameTagResult>,
     delete: (tagId: number) =>
-      invoke<DeleteTagResult>('delete_tag', { tag_id: tagId }),
+      invokeTyped('delete_tag', { tag_id: tagId }) as Promise<DeleteTagResult>,
     normalizeNamespaces: () =>
-      invoke<NormalizeNamespacesResult>('normalize_ingested_namespaces'),
+      invokeTyped('normalize_ingested_namespaces') as Promise<NormalizeNamespacesResult>,
     searchPaged: (query: string, limit: number, offset: number) =>
-      invoke<[string, string, number][]>('search_tags_paged', { query, limit, offset }),
+      invokeTyped('search_tags_paged', { query, limit, offset } as never) as Promise<[string, string, number][]>,
   },
 
   selection: {
     getSummary: (selection: SelectionQuerySpec) =>
-      invoke<SelectionSummary>('get_selection_summary', { selection }),
+      invokeTyped('get_selection_summary', { selection } as never) as Promise<SelectionSummary>,
     addTags: (selection: SelectionQuerySpec, tagStrings: string[]) =>
-      invoke<number>('add_tags_selection', { selection, tagStrings }),
+      invokeTyped('add_tags_selection', { selection, tag_strings: tagStrings } as never),
     removeTags: (selection: SelectionQuerySpec, tagStrings: string[]) =>
-      invoke<number>('remove_tags_selection', { selection, tagStrings }),
+      invokeTyped('remove_tags_selection', { selection, tag_strings: tagStrings } as never),
     updateRating: (selection: SelectionQuerySpec, rating: number | null) =>
-      invoke<number>('update_rating_selection', { selection, rating }),
+      invokeTyped('update_rating_selection', { selection, rating } as never),
     setNotes: (selection: SelectionQuerySpec, notes: Record<string, string>) =>
-      invoke<number>('set_notes_selection', { selection, notes }),
+      invokeTyped('set_notes_selection', { selection, notes } as never),
     setSourceUrls: (selection: SelectionQuerySpec, urls: string[]) =>
-      invoke<number>('set_source_urls_selection', { selection, urls }),
+      invokeTyped('set_source_urls_selection', { selection, urls } as never),
   },
 
   folders: {
     list: () =>
-      invoke<Folder[]>('list_folders'),
+      invokeTyped('list_folders') as Promise<Folder[]>,
     create: (params: { name: string; parent_id?: number | null; icon?: string; color?: string }) =>
-      invoke<Folder>('create_folder', params),
+      invokeTyped('create_folder', params as never) as Promise<Folder>,
     update: (params: { folder_id: number; name?: string; icon?: string; color?: string; auto_tags?: string[] }) =>
-      invoke<void>('update_folder', params),
+      invokeTyped('update_folder', params as never) as unknown as Promise<void>,
     delete: (folderId: number) =>
-      invoke<void>('delete_folder', { folder_id: folderId }),
+      invokeTyped('delete_folder', { folder_id: folderId }) as unknown as Promise<void>,
     updateParent: (folderId: number, newParentId?: number | null) =>
-      invoke<void>('update_folder_parent', { folder_id: folderId, new_parent_id: newParentId }),
+      invokeTyped('update_folder_parent', { folder_id: folderId, new_parent_id: newParentId } as never) as unknown as Promise<void>,
     // PBI-057: Atomic move_folder — reparent + reorder in one transaction.
     moveFolder: (folderId: number, newParentId: number | null, siblingOrder: [number, number][]) =>
-      invoke<void>('move_folder', { folder_id: folderId, new_parent_id: newParentId, sibling_order: siblingOrder }),
+      invokeTyped('move_folder', { folder_id: folderId, new_parent_id: newParentId, sibling_order: siblingOrder }) as unknown as Promise<void>,
     addFile: (folderId: number, hash: string) =>
-      invoke<void>('add_file_to_folder', { folder_id: folderId, hash }),
+      invokeTyped('add_file_to_folder', { folder_id: folderId, hash }) as unknown as Promise<void>,
     // PBI-054: Batch add files to folder.
     addFilesBatch: (folderId: number, hashes: string[]) =>
-      invoke<number>('add_files_to_folder_batch', { folder_id: folderId, hashes }),
+      invokeTyped('add_files_to_folder_batch', { folder_id: folderId, hashes }),
     removeFile: (folderId: number, hash: string) =>
-      invoke<void>('remove_file_from_folder', { folder_id: folderId, hash }),
+      invokeTyped('remove_file_from_folder', { folder_id: folderId, hash }) as unknown as Promise<void>,
     removeFilesBatch: (folderId: number, hashes: string[]) =>
-      invoke<number>('remove_files_from_folder_batch', { folder_id: folderId, hashes }),
+      invokeTyped('remove_files_from_folder_batch', { folder_id: folderId, hashes }),
     getFiles: (folderId: number) =>
-      invoke<string[]>('get_folder_files', { folder_id: folderId }),
+      invokeTyped('get_folder_files', { folder_id: folderId }),
     getCoverHash: (folderId: number) =>
-      invoke<string | null>('get_folder_cover_hash', { folder_id: folderId }),
+      invokeTyped('get_folder_cover_hash', { folder_id: folderId }),
     getFileFolders: (hash: string) =>
-      invoke<FolderMembership[]>('get_file_folders', { hash }),
+      invokeTyped('get_file_folders', { hash }) as Promise<FolderMembership[]>,
     getEntityFolders: (entityId: number) =>
-      invoke<FolderMembership[]>('get_entity_folders', { entity_id: entityId }),
+      invokeTyped('get_entity_folders', { entity_id: entityId }) as Promise<FolderMembership[]>,
     reorder: (moves: [number, number][]) =>
-      invoke<void>('reorder_folders', { moves }),
+      invokeTyped('reorder_folders', { moves }) as unknown as Promise<void>,
     reorderItems: (folderId: number, moves: FolderReorderMove[]) =>
-      invoke<void>('reorder_folder_items', { folder_id: folderId, moves }),
+      invokeTyped('reorder_folder_items', { folder_id: folderId, moves } as never) as unknown as Promise<void>,
     sortItems: (folderId: number, sortBy: string, direction: string, hashes?: string[]) =>
-      invoke<void>('sort_folder_items', { folder_id: folderId, sort_by: sortBy, direction, hashes }),
+      invokeTyped('sort_folder_items', { folder_id: folderId, sort_by: sortBy, direction, hashes } as never) as unknown as Promise<void>,
     reverseItems: (folderId: number, hashes?: string[]) =>
-      invoke<void>('reverse_folder_items', { folder_id: folderId, hashes }),
+      invokeTyped('reverse_folder_items', { folder_id: folderId, hashes } as never) as unknown as Promise<void>,
   },
 
   smartFolders: {
@@ -698,7 +698,7 @@ export const api = {
     close: () =>
       invoke<void>('close_library'),
     wipeImageData: () =>
-      invoke<void>('wipe_image_data'),
+      invokeTyped('wipe_image_data') as unknown as Promise<void>,
   },
 
   runtime: {
@@ -719,37 +719,37 @@ export const api = {
 
   collections: {
     list: () =>
-      invoke<CollectionInfo[]>('get_collections'),
+      invokeTyped('get_collections') as Promise<CollectionInfo[]>,
     getSummary: (id: number) =>
-      invoke<CollectionSummary>('get_collection_summary', { id }),
+      invokeTyped('get_collection_summary', { id }) as Promise<CollectionSummary>,
     setRating: (id: number, rating: number | null) =>
-      invoke<void>('set_collection_rating', { id, rating }),
+      invokeTyped('set_collection_rating', { id, rating }) as unknown as Promise<void>,
     setSourceUrls: (id: number, sourceUrls: string[]) =>
-      invoke<void>('set_collection_source_urls', { id, source_urls: sourceUrls }),
+      invokeTyped('set_collection_source_urls', { id, source_urls: sourceUrls }) as unknown as Promise<void>,
     reorderMembers: (id: number, hashes: string[]) =>
-      invoke<void>('reorder_collection_members', { id, hashes }),
+      invokeTyped('reorder_collection_members', { id, hashes }) as unknown as Promise<void>,
     create: (params: { name: string; description?: string | null; tags?: string[] }) =>
-      invoke<number>('create_collection', params),
+      invokeTyped('create_collection', params as never),
     addMembers: (params: { id: number; hashes: string[] }) =>
-      invoke<number>('add_collection_members', params),
+      invokeTyped('add_collection_members', params),
     removeMembers: (params: { id: number; hashes: string[] }) =>
-      invoke<number>('remove_collection_members', params),
+      invokeTyped('remove_collection_members', params),
     update: (params: { id: number; name?: string; description?: string | null; tags?: string[]; sourceUrls?: string[] }) =>
-      invoke<void>('update_collection', {
+      invokeTyped('update_collection', {
         id: params.id,
         name: params.name,
         description: params.description,
         tags: params.tags,
         source_urls: params.sourceUrls,
-      }),
+      } as never) as unknown as Promise<void>,
     delete: (id: number) =>
-      invoke<void>('delete_collection', { id }),
+      invokeTyped('delete_collection', { id }) as unknown as Promise<void>,
   },
 
   companion: {
     getNamespaceValues: (namespace: string) =>
-      invoke<CompanionNamespaceValue[]>('companion_get_namespace_values', { namespace }),
+      invokeTyped('companion_get_namespace_values', { namespace }) as Promise<CompanionNamespaceValue[]>,
     getFilesByTag: (tag: string) =>
-      invoke<EntitySlim[]>('companion_get_files_by_tag', { tag }),
+      invokeTyped('companion_get_files_by_tag', { tag }) as Promise<EntitySlim[]>,
   },
 };

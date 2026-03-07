@@ -15,6 +15,7 @@ const TYPED_DIR = path.join(ROOT, 'core/src/dispatch/typed');
 const LEGACY_DIR = path.join(ROOT, 'core/src/dispatch');
 const TS_BARREL = path.join(ROOT, 'src/types/generated/commands/index.ts');
 const GENERATED_DIR = path.join(ROOT, 'src/types/generated/commands');
+const API_TS = path.join(ROOT, 'src/desktop/api.ts');
 
 // Extract TypedCommand NAME constants from Rust typed dispatch files.
 const TYPED_CMD_RE = /const\s+NAME:\s*&'static\s+str\s*=\s*"([a-z_]+)"/g;
@@ -80,6 +81,24 @@ async function extractTsTypedCommandMap() {
   return commands;
 }
 
+// Scan api.ts for plain invoke() calls that use a typed command name.
+// These should use invokeTyped() instead.
+const PLAIN_INVOKE_RE = /\binvoke\s*<[^>]*>\s*\(\s*'([a-z_]+)'/g;
+
+async function extractPlainInvokeCommands() {
+  const content = await fs.readFile(API_TS, 'utf8');
+  const commands = new Map(); // command → line number
+  const lines = content.split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    PLAIN_INVOKE_RE.lastIndex = 0;
+    let m;
+    while ((m = PLAIN_INVOKE_RE.exec(lines[i])) !== null) {
+      commands.set(m[1], i + 1);
+    }
+  }
+  return commands;
+}
+
 async function checkGeneratedFilesExist() {
   const missing = [];
   const entries = await fs.readdir(GENERATED_DIR);
@@ -92,11 +111,12 @@ async function checkGeneratedFilesExist() {
 }
 
 async function main() {
-  const [typedCmds, legacyCmds, tsMapCmds, fileMissing] = await Promise.all([
+  const [typedCmds, legacyCmds, tsMapCmds, fileMissing, plainInvokeCmds] = await Promise.all([
     extractTypedCommands(),
     extractLegacyCommands(),
     extractTsTypedCommandMap(),
     checkGeneratedFilesExist(),
+    extractPlainInvokeCommands(),
   ]);
 
   console.log(`Typed Rust commands: ${typedCmds.size}`);
@@ -131,6 +151,17 @@ async function main() {
   // 4. Generated files must exist
   if (fileMissing.length > 0) {
     for (const msg of fileMissing) console.error(`\n${msg}`);
+    hasErrors = true;
+  }
+
+  // 5. No typed command should use plain invoke() in api.ts (PBI-324)
+  const untypedFrontend = [...plainInvokeCmds.entries()]
+    .filter(([cmd]) => tsMapCmds.has(cmd));
+  if (untypedFrontend.length > 0) {
+    console.error('\nTyped commands using plain invoke() in api.ts (should use invokeTyped):');
+    for (const [cmd, line] of untypedFrontend.sort((a, b) => a[0].localeCompare(b[0]))) {
+      console.error(`  - ${cmd} (line ${line})`);
+    }
     hasErrors = true;
   }
 
