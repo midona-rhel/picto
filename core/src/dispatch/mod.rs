@@ -1,33 +1,16 @@
-//! Command dispatcher — routes command names to domain handler modules.
+//! Command dispatcher — routes command names to typed domain handlers.
 //!
-//! Routes command names to domain handler modules.
 //! The napi-rs addon calls `dispatch("command_name", "{...args}")` and
 //! gets back a JSON string result.
 //!
-//! ## Module structure
-//!
-//! Domain-specific handlers live in sub-modules. Each module exposes an async
-//! `handle()` that returns `Option<Result<String, String>>` — `Some` if the
-//! command belongs to that domain, `None` to fall through. New commands should
-//! be added to the appropriate domain module, not here.
+//! All commands are handled through typed dispatch (`typed::typed_dispatch`),
+//! except two pre-state commands (`close_library`, `get_runtime_snapshot`)
+//! which are handled inline before state acquisition.
 
 pub mod common;
-pub mod duplicates;
-pub mod files;
-mod files_lifecycle;
-mod files_media;
-mod files_metadata;
 pub mod typed;
-pub mod folders;
-pub mod grid;
-pub mod ptr;
-pub mod selection;
-pub mod smart_folders;
-pub mod subscriptions;
-pub mod system;
-pub mod tags;
 
-pub use common::{de, de_opt, get_field, ok_null, to_json};
+pub use common::{ok_null, to_json};
 
 /// Dispatch a command by name with JSON arguments. Returns JSON result.
 pub async fn dispatch(command: &str, args_json: &str) -> Result<String, String> {
@@ -51,38 +34,6 @@ pub async fn dispatch(command: &str, args_json: &str) -> Result<String, String> 
 
     // ─── Typed command dispatch (PBI-234) ────────────────────
     if let Some(result) = typed::typed_dispatch(&state, command, &args).await {
-        return result;
-    }
-
-    // ─── Legacy domain handler routing ───────────────────────
-    if let Some(result) = files::handle(&state, command, &args).await {
-        return result;
-    }
-    if let Some(result) = grid::handle(&state, command, &args).await {
-        return result;
-    }
-    if let Some(result) = tags::handle(&state, command, &args).await {
-        return result;
-    }
-    if let Some(result) = folders::handle(&state, command, &args).await {
-        return result;
-    }
-    if let Some(result) = selection::handle(&state, command, &args).await {
-        return result;
-    }
-    if let Some(result) = ptr::handle(&state, command, &args).await {
-        return result;
-    }
-    if let Some(result) = duplicates::handle(&state, command, &args).await {
-        return result;
-    }
-    if let Some(result) = smart_folders::handle(&state, command, &args).await {
-        return result;
-    }
-    if let Some(result) = subscriptions::handle(&state, command, &args).await {
-        return result;
-    }
-    if let Some(result) = system::handle(&state, command, &args).await {
         return result;
     }
 
