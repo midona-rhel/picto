@@ -6,7 +6,7 @@ import type { SidebarCounts } from "./SidebarCounts";
 /**
  * The primary mutation description emitted via `runtime/mutation_committed`.
  *
- * Combines sequencing metadata with what changed (`facts`), what the frontend
- * should refresh (`invalidate`), and optional O(1) sidebar counts.
+ * The frontend derives stale resources from `facts` directly.
+ * `invalidate` is transitional and will be removed once confirmed unused.
  */
 export type MutationReceipt = { seq: number, ts: string, origin_command: string, facts: MutationFacts, invalidate: DerivedInvalidation, sidebar_counts?: SidebarCounts, };

@@ -2,6 +2,35 @@
 import type { Domain } from "./Domain";
 
 /**
- * What actually changed — domain flags + affected entity IDs.
+ * What actually changed — domain flags, affected entity IDs, and change descriptors.
+ *
+ * Change descriptors (`status_changed`, `tags_changed`, etc.) tell the system
+ * *what kind* of mutation happened. `derive_invalidation()` converts these
+ * facts into the concrete `DerivedInvalidation` the frontend needs.
  */
-export type MutationFacts = { domains: Array<Domain>, file_hashes?: Array<string>, folder_ids?: Array<number>, smart_folder_ids?: Array<number>, compiler_batch_done?: boolean, };
+export type MutationFacts = { domains: Array<Domain>, file_hashes?: Array<string>, folder_ids?: Array<number>, smart_folder_ids?: Array<number>, compiler_batch_done?: boolean, 
+/**
+ * Entity status transitions (inbox/active/trash).
+ */
+status_changed?: boolean, 
+/**
+ * Tags added/removed on specific entities.
+ */
+tags_changed?: boolean, 
+/**
+ * Tag hierarchy, aliases, merges, or renames changed.
+ */
+tag_structure_changed?: boolean, 
+/**
+ * Folder IDs where membership changed (files added/removed).
+ */
+folder_membership_changed?: Array<number>, 
+/**
+ * View preferences changed (zoom, sort, display mode).
+ */
+view_prefs_changed?: boolean, 
+/**
+ * Grid scopes not derivable from other fact fields (e.g. `collection:{id}`).
+ * The frontend includes these when deriving stale grid resources.
+ */
+extra_grid_scopes?: Array<string>, };

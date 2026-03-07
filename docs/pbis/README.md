@@ -73,7 +73,6 @@ This folder was reset for the first alpha release.
 63. [PBI-257](./active-alpha/PBI-257-procreate-binary-plist-resolution-parsing.md)
 64. [PBI-258](./active-alpha/PBI-258-pdf-thumbnail-rendering-backend-integration.md)
 65. [PBI-300](./active-alpha/PBI-300-canonical-scope-semantics-engine.md)
-67. [PBI-302](./active-alpha/PBI-302-fact-based-mutation-receipts-and-model-level-invalidation.md)
 68. [PBI-303](./active-alpha/PBI-303-derived-resource-dependency-map-from-model-facts.md)
 69. [PBI-304](./active-alpha/PBI-304-rust-core-runtime-event-bus-and-task-registry-realignment.md)
 70. [PBI-305](./active-alpha/PBI-305-grid-selection-and-sidebar-query-service-decomposition.md)

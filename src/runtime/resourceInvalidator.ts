@@ -1,42 +1,115 @@
-import type { MutationReceipt, ResourceKey } from '../shared/types/generated/runtime-contract';
+import type { MutationReceipt, MutationFacts, ResourceKey } from '../shared/types/generated/runtime-contract';
 
 /**
  * Derive the set of resource keys that a MutationReceipt invalidates.
+ * Operates entirely from `receipt.facts` — does NOT read `receipt.invalidate`.
  * Pure function — no side effects, fully testable.
  */
 export function deriveStaleResources(receipt: MutationReceipt): Set<ResourceKey> {
   const keys = new Set<ResourceKey>();
-  const inv = receipt.invalidate;
+  const facts = receipt.facts;
+  const scopes: string[] = [];
 
-  if (inv.sidebar_tree || receipt.facts.compiler_batch_done) {
+  // --- Fact-driven rules ---
+
+  if (facts.status_changed) {
+    keys.add('sidebar/tree');
+    keys.add('selection/current');
+    scopes.push('system:all', 'system:inbox', 'system:trash', 'system:recently_viewed', 'smart:all');
+    if (facts.folder_ids) {
+      for (const id of facts.folder_ids) {
+        scopes.push(`folder:${id}`);
+      }
+    }
+  }
+
+  if (facts.tags_changed) {
+    keys.add('selection/current');
+    if (!facts.file_hashes) {
+      scopes.push('system:all');
+    }
+  }
+
+  if (facts.tag_structure_changed) {
+    keys.add('sidebar/tree');
+    keys.add('selection/current');
+    scopes.push('system:all', 'smart:all');
+  }
+
+  if (facts.folder_membership_changed) {
+    keys.add('sidebar/tree');
+    keys.add('selection/current');
+    for (const id of facts.folder_membership_changed) {
+      scopes.push(`folder:${id}`);
+    }
+  }
+
+  if (facts.view_prefs_changed) {
+    keys.add('view-prefs/current');
+  }
+
+  // --- Domain-driven rules (fallback for patterns without fact flags) ---
+
+  if (!keys.has('sidebar/tree') && hasDomain(facts, 'sidebar')) {
     keys.add('sidebar/tree');
   }
+
+  if (!keys.has('selection/current') && hasDomain(facts, 'selection')) {
+    keys.add('selection/current');
+  }
+
+  // compiler_batch_done refreshes sidebar tree only if Domain::Sidebar is present
+  // (handled by the domain-driven rule above).
+  if (facts.compiler_batch_done) {
+    keys.add('sidebar/tree');
+  }
+
+  // --- Entity-reference rules ---
+
+  if (facts.file_hashes) {
+    for (const hash of facts.file_hashes) {
+      keys.add(`metadata/hash:${hash}`);
+    }
+  }
+
+  // Folder IDs without folder_membership_changed → grid refresh for those
+  // folder scopes only (e.g., reorder within a folder).
+  if (!facts.folder_membership_changed && facts.folder_ids) {
+    for (const id of facts.folder_ids) {
+      scopes.push(`folder:${id}`);
+    }
+  }
+
+  if (facts.smart_folder_ids) {
+    keys.add('selection/current');
+    for (const id of facts.smart_folder_ids) {
+      scopes.push(`smart:${id}`);
+    }
+  }
+
+  // --- Extra grid scopes (non-derivable from other facts) ---
+
+  if (facts.extra_grid_scopes) {
+    scopes.push(...facts.extra_grid_scopes);
+  }
+
+  // --- Sidebar counts ---
 
   if (receipt.sidebar_counts) {
     keys.add('sidebar/counts');
   }
 
-  if (inv.grid_scopes) {
-    for (const scope of inv.grid_scopes) {
-      keys.add(`grid/${scope}`);
-    }
-  }
+  // --- Build grid resource keys from collected scopes ---
 
-  if (inv.metadata_hashes) {
-    for (const hash of inv.metadata_hashes) {
-      keys.add(`metadata/hash:${hash}`);
-    }
-  }
-
-  if (inv.selection_summary) {
-    keys.add('selection/current');
-  }
-
-  if (inv.view_prefs) {
-    keys.add('view-prefs/current');
+  for (const scope of scopes) {
+    keys.add(`grid/${scope}`);
   }
 
   return keys;
+}
+
+function hasDomain(facts: MutationFacts, domain: string): boolean {
+  return facts.domains.includes(domain as MutationFacts['domains'][number]);
 }
 
 /**
