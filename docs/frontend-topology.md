@@ -120,3 +120,26 @@ src/
 | `src/hooks/useGlobalPointerDrag.ts` | shared | `src/shared/hooks/` |
 | `src/hooks/useInlineRename.ts` | shared | `src/shared/hooks/` |
 | `src/domain/actions/` | feature-owned | `src/features/grid/actions/` |
+
+## CI Enforcement (PBI-403)
+
+The topology is enforced by `scripts/guard-topology.mjs` (run via `npm run guard:topology`).
+
+### What it blocks
+
+1. **Root drift** — new files or directories in `src/` root outside the approved set.
+2. **Deprecated imports** — imports from paths that have been fully migrated (`stores/`, `desktop/`, `app-shell/`).
+
+### What it allows
+
+- Files within transitional directories (`components/`, `controllers/`, `hooks/`, `domain/`) are allowed until PBI-404/405 complete the migration.
+- Internal imports within the same directory tree are allowed.
+
+### Contributor rules
+
+1. New domain code goes in `src/features/<feature>/`.
+2. New cross-domain primitives go in `src/shared/`.
+3. New Electron bindings go in `src/platform/`.
+4. New app-global stores go in `src/state/`.
+5. Never add new files to `src/` root — use an existing directory.
+6. Never import from `stores/`, `desktop/`, or `app-shell/` — those paths no longer exist.

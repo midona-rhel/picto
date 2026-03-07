@@ -206,7 +206,7 @@ pub async fn selection_bitmap_for_all_results(
                 |tag_list: &[String], strict_missing: bool| -> rusqlite::Result<Vec<i64>> {
                     let mut out = Vec::new();
                     for tag in tag_list {
-                        if let Some((ns, st)) = tags::parse_tag(tag) {
+                        if let Some((ns, st)) = normalize::parse_tag(tag) {
                             if let Some(tag_id) = sql_find_tag(conn, &ns, &st)? {
                                 out.push(tag_id);
                             } else if strict_missing {

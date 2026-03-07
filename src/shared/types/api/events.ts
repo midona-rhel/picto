@@ -8,7 +8,7 @@ import type {
   SubscriptionStartedEvent,
 } from './core';
 
-import type { MutationReceipt, RuntimeTask } from '../generated/runtime-contract';
+import type { MutationReceipt, TaskUpsertedEvent, TaskRemovedEvent } from '../generated/runtime-contract';
 
 // ─── Event Payloads ─────────────────────────────────────────────────────────
 // Typed interfaces for all backend events. Single source of truth — all
@@ -141,8 +141,8 @@ export interface CoreRuntimeEventPayloadMap {
 
   // Runtime contract (authoritative)
   'runtime/mutation_committed': MutationReceipt;
-  'runtime/task_upserted': RuntimeTask;
-  'runtime/task_removed': { task_id: string };
+  'runtime/task_upserted': TaskUpsertedEvent;
+  'runtime/task_removed': TaskRemovedEvent;
 }
 
 /**

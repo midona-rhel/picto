@@ -45,24 +45,32 @@ fn runtime() -> &'static Mutex<RuntimeStateInner> {
     })
 }
 
-/// Insert or update a task, then emit `runtime/task_upserted`.
+/// Insert or update a task, then emit a sequenced `runtime/task_upserted` event.
 pub fn upsert_task(task: RuntimeTask) {
+    let seq = next_seq();
     {
         let mut guard = crate::poison::mutex_or_recover(runtime(), "runtime_state::upsert_task");
         guard.tasks.insert(task.task_id.clone(), task.clone());
     }
-    crate::events::emit(crate::events::event_names::RUNTIME_TASK_UPSERTED, &task);
+    crate::events::emit(
+        crate::events::event_names::RUNTIME_TASK_UPSERTED,
+        &crate::runtime_contract::task::TaskUpsertedEvent { seq, task },
+    );
 }
 
-/// Remove a task by ID, then emit `runtime/task_removed`.
+/// Remove a task by ID, then emit a sequenced `runtime/task_removed` event.
 pub fn remove_task(task_id: &str) {
+    let seq = next_seq();
     {
         let mut guard = crate::poison::mutex_or_recover(runtime(), "runtime_state::remove_task");
         guard.tasks.remove(task_id);
     }
     crate::events::emit(
         crate::events::event_names::RUNTIME_TASK_REMOVED,
-        &serde_json::json!({ "task_id": task_id }),
+        &crate::runtime_contract::task::TaskRemovedEvent {
+            seq,
+            task_id: task_id.to_string(),
+        },
     );
 }
 

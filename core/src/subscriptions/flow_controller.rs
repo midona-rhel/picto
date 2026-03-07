@@ -203,13 +203,6 @@ impl FlowController {
             statuses.clear();
         }
 
-        crate::events::emit(
-            crate::events::event_names::FLOW_STARTED,
-            &crate::events::FlowStartedEvent {
-                flow_id: id.clone(),
-                subscription_count: subs.iter().filter(|s| !s.paused).count(),
-            },
-        );
         {
             let now = chrono::Utc::now().to_rfc3339();
             crate::runtime_state::upsert_task(RuntimeTask {
@@ -266,15 +259,6 @@ impl FlowController {
             }
         }
         if started == 0 && !last_err.is_empty() {
-            crate::events::emit(
-                crate::events::event_names::FLOW_FINISHED,
-                &crate::events::FlowFinishedEvent {
-                    flow_id: id.clone(),
-                    status: "failed".to_string(),
-                    started_count: None,
-                    error: Some(last_err.clone()),
-                },
-            );
             {
                 let now = chrono::Utc::now().to_rfc3339();
                 crate::runtime_state::upsert_task(RuntimeTask {
@@ -293,15 +277,6 @@ impl FlowController {
         }
 
         if started == 0 {
-            crate::events::emit(
-                crate::events::event_names::FLOW_FINISHED,
-                &crate::events::FlowFinishedEvent {
-                    flow_id: id.clone(),
-                    status: "succeeded".to_string(),
-                    started_count: Some(0),
-                    error: None,
-                },
-            );
             {
                 let now = chrono::Utc::now().to_rfc3339();
                 crate::runtime_state::upsert_task(RuntimeTask {
@@ -497,6 +472,9 @@ impl FlowController {
                 metadata_invalid: 0,
                 last_metadata_error: None,
                 status_text: "Cancelling…".to_string(),
+                finished_status: None,
+                failure_kind: None,
+                error: None,
             };
             crate::events::emit(
                 crate::events::event_names::SUBSCRIPTION_PROGRESS,

@@ -490,11 +490,10 @@ impl SubscriptionController {
                     metadata_invalid: 0,
                     last_metadata_error: None,
                     status_text: "Cancelling…".to_string(),
+                    finished_status: None,
+                    failure_kind: None,
+                    error: None,
                 };
-                events::emit(
-                    events::event_names::SUBSCRIPTION_PROGRESS,
-                    &progress,
-                );
                 {
                     let name_ref = progress.subscription_name.clone();
                     crate::runtime_state::upsert_task(make_sub_runtime_task(
@@ -571,16 +570,6 @@ impl SubscriptionController {
             map.insert(id.clone(), cancel.clone());
         }
 
-        events::emit(
-            events::event_names::SUBSCRIPTION_STARTED,
-            &events::SubscriptionStartedEvent {
-                subscription_id: id.clone(),
-                subscription_name: sub.name.clone(),
-                mode: "subscription".to_string(),
-                query_id: None,
-                query_name: None,
-            },
-        );
         {
             let starting_progress = crate::subscriptions::sync_engine::SubscriptionProgressEvent {
                 subscription_id: id.clone(),
@@ -595,6 +584,9 @@ impl SubscriptionController {
                 metadata_invalid: 0,
                 last_metadata_error: None,
                 status_text: "Starting...".to_string(),
+                finished_status: None,
+                failure_kind: None,
+                error: None,
             };
             crate::runtime_state::upsert_task(make_sub_runtime_task(
                 &id,
@@ -726,25 +718,6 @@ impl SubscriptionController {
                 let final_status_text =
                     resolve_finished_status_text(status, last_failure_kind.as_deref());
 
-                events::emit(
-                    events::event_names::SUBSCRIPTION_FINISHED,
-                    &events::SubscriptionFinishedEvent {
-                        subscription_id: sub_id_str.clone(),
-                        subscription_name: sub_name.clone(),
-                        mode: "subscription".to_string(),
-                        query_id: None,
-                        query_name: None,
-                        status: status.to_string(),
-                        files_downloaded: total_downloaded,
-                        files_skipped: total_skipped,
-                        errors_count: total_errors,
-                        error: last_error,
-                        failure_kind: last_failure_kind.clone(),
-                        metadata_validated: total_metadata_validated,
-                        metadata_invalid: total_metadata_invalid,
-                        last_metadata_error: last_metadata_error.clone(),
-                    },
-                );
                 {
                     use crate::runtime_contract::task::{TaskProgress, TaskStatus};
                     let task_status = if was_cancelled {
@@ -767,6 +740,9 @@ impl SubscriptionController {
                         metadata_invalid: total_metadata_invalid,
                         last_metadata_error: last_metadata_error.clone(),
                         status_text: final_status_text.to_string(),
+                        finished_status: Some(status.to_string()),
+                        failure_kind: last_failure_kind.clone(),
+                        error: last_error.clone(),
                     };
                     crate::runtime_state::upsert_task(make_sub_runtime_task(
                         &sub_id_for_inner_clear,
@@ -808,6 +784,9 @@ impl SubscriptionController {
                         metadata_invalid: 0,
                         last_metadata_error: None,
                         status_text: "Failed".to_string(),
+                        finished_status: Some("failed".to_string()),
+                        failure_kind: Some("panic".to_string()),
+                        error: Some(format!("{e}")),
                     };
                     crate::runtime_state::upsert_task(make_sub_runtime_task(
                         &sub_id_guard,
@@ -883,16 +862,6 @@ impl SubscriptionController {
             map.insert(subscription_id.clone(), cancel.clone());
         }
 
-        events::emit(
-            events::event_names::SUBSCRIPTION_STARTED,
-            &events::SubscriptionStartedEvent {
-                subscription_id: subscription_id.clone(),
-                subscription_name: sub.name.clone(),
-                mode: "query".to_string(),
-                query_id: Some(query_id.clone()),
-                query_name: Some(query_name.clone()),
-            },
-        );
         {
             let starting_progress = crate::subscriptions::sync_engine::SubscriptionProgressEvent {
                 subscription_id: subscription_id.clone(),
@@ -907,6 +876,9 @@ impl SubscriptionController {
                 metadata_invalid: 0,
                 last_metadata_error: None,
                 status_text: "Starting...".to_string(),
+                finished_status: None,
+                failure_kind: None,
+                error: None,
             };
             crate::runtime_state::upsert_task(make_sub_runtime_task(
                 &subscription_id,
@@ -1029,25 +1001,6 @@ impl SubscriptionController {
                 } else {
                     "succeeded"
                 };
-                events::emit(
-                    events::event_names::SUBSCRIPTION_FINISHED,
-                    &events::SubscriptionFinishedEvent {
-                        subscription_id: sub_id_str.clone(),
-                        subscription_name: sub_name.clone(),
-                        mode: "query".to_string(),
-                        query_id: Some(query_id_str.clone()),
-                        query_name: Some(query_name_str.clone()),
-                        status: status.to_string(),
-                        files_downloaded: total_downloaded,
-                        files_skipped: total_skipped,
-                        errors_count: total_errors,
-                        error: last_error,
-                        failure_kind: failure_kind.clone(),
-                        metadata_validated,
-                        metadata_invalid,
-                        last_metadata_error: last_metadata_error.clone(),
-                    },
-                );
                 let final_status_text =
                     resolve_finished_status_text(status, failure_kind.as_deref());
                 {
@@ -1072,6 +1025,9 @@ impl SubscriptionController {
                         metadata_invalid,
                         last_metadata_error: last_metadata_error.clone(),
                         status_text: final_status_text.to_string(),
+                        finished_status: Some(status.to_string()),
+                        failure_kind: failure_kind.clone(),
+                        error: last_error.clone(),
                     };
                     crate::runtime_state::upsert_task(make_sub_runtime_task(
                         &sub_id_for_inner_clear,
@@ -1099,25 +1055,6 @@ impl SubscriptionController {
                 );
                 let mut map = running_subs_guard.lock().await;
                 map.remove(&sub_id_guard);
-                events::emit(
-                    events::event_names::SUBSCRIPTION_FINISHED,
-                    &events::SubscriptionFinishedEvent {
-                        subscription_id: sub_id_guard.clone(),
-                        subscription_name: sub_name_guard.clone(),
-                        mode: "query".to_string(),
-                        query_id: Some(query_id_guard.clone()),
-                        query_name: Some(query_name_guard.clone()),
-                        status: "failed".to_string(),
-                        files_downloaded: 0,
-                        files_skipped: 0,
-                        errors_count: 1,
-                        error: Some(format!("Task panicked: {e}")),
-                        failure_kind: Some("unknown".to_string()),
-                        metadata_validated: 0,
-                        metadata_invalid: 0,
-                        last_metadata_error: None,
-                    },
-                );
                 {
                     let panic_progress = crate::subscriptions::sync_engine::SubscriptionProgressEvent {
                         subscription_id: sub_id_guard.clone(),
@@ -1132,6 +1069,9 @@ impl SubscriptionController {
                         metadata_invalid: 0,
                         last_metadata_error: None,
                         status_text: "Failed".to_string(),
+                        finished_status: Some("failed".to_string()),
+                        failure_kind: Some("panic".to_string()),
+                        error: Some(format!("Task panicked: {e}")),
                     };
                     crate::runtime_state::upsert_task(make_sub_runtime_task(
                         &sub_id_guard,
