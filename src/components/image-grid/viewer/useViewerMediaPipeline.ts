@@ -1,12 +1,12 @@
 import { useState, useEffect, useLayoutEffect, useRef, useCallback, type MutableRefObject, type RefObject, type SyntheticEvent } from 'react';
 import { api } from '#desktop/api';
-import { mediaFileUrl, mediaThumbnailUrl } from '../../../lib/mediaUrl';
+import { mediaFileUrl, mediaThumbnailUrl } from '../../../shared/lib/mediaUrl';
 import { useImagePreloader, queueImageDecode, isImagePreloaded } from '../useImagePreloader';
 import { useImageLoadState } from '../useImageLoadState';
 import { useZoomCache } from '../useZoomCache';
 import type { ImageSize, ZoomState } from '../useImageZoom';
 import type { MasonryImageItem } from '../shared';
-import { logBestEffortError } from '../../../lib/asyncOps';
+import { logBestEffortError } from '../../../shared/lib/asyncOps';
 import { buildNeighborDecodePlan } from './preloadPlan';
 
 export interface ViewerMediaPipelineInput {

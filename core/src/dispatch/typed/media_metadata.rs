@@ -91,7 +91,7 @@ impl TypedCommand for GetFileAllMetadata {
     type Output = serde_json::Value;
 
     async fn execute(state: &AppState, input: Self::Input) -> Result<Self::Output, String> {
-        let result = crate::metadata_controller::MetadataController::get_file_all_metadata(
+        let result = crate::metadata::controller::MetadataController::get_file_all_metadata(
             &state.db,
             &state.ptr_db,
             input.hash,
@@ -107,7 +107,7 @@ impl TypedCommand for GetFileTagsDisplay {
     type Output = serde_json::Value;
 
     async fn execute(state: &AppState, input: Self::Input) -> Result<Self::Output, String> {
-        let result = crate::metadata_controller::MetadataController::get_file_tags_display(
+        let result = crate::metadata::controller::MetadataController::get_file_tags_display(
             &state.db,
             &state.ptr_db,
             input.hash,
@@ -124,7 +124,7 @@ impl TypedCommand for GetFileParents {
 
     async fn execute(state: &AppState, input: Self::Input) -> Result<Self::Output, String> {
         let result =
-            crate::metadata_controller::MetadataController::get_file_parents(&state.db, input.hash)
+            crate::metadata::controller::MetadataController::get_file_parents(&state.db, input.hash)
                 .await?;
         serde_json::to_value(&result).map_err(|e| e.to_string())
     }
@@ -137,7 +137,7 @@ impl TypedCommand for UpdateRating {
 
     async fn execute(state: &AppState, input: Self::Input) -> Result<Self::Output, String> {
         let hash_clone = input.hash.clone();
-        crate::metadata_controller::MetadataController::update_rating(
+        crate::metadata::controller::MetadataController::update_rating(
             &state.db,
             input.hash,
             input.rating,
@@ -158,7 +158,7 @@ impl TypedCommand for SetFileName {
 
     async fn execute(state: &AppState, input: Self::Input) -> Result<Self::Output, String> {
         let hash_clone = input.hash.clone();
-        crate::metadata_controller::MetadataController::set_file_name(
+        crate::metadata::controller::MetadataController::set_file_name(
             &state.db,
             input.hash,
             input.name,
@@ -179,7 +179,7 @@ impl TypedCommand for GetFileNotes {
 
     async fn execute(state: &AppState, input: Self::Input) -> Result<Self::Output, String> {
         let result =
-            crate::metadata_controller::MetadataController::get_file_notes(&state.db, input.hash)
+            crate::metadata::controller::MetadataController::get_file_notes(&state.db, input.hash)
                 .await?;
         serde_json::to_value(&result).map_err(|e| e.to_string())
     }
@@ -192,7 +192,7 @@ impl TypedCommand for SetFileNotes {
 
     async fn execute(state: &AppState, input: Self::Input) -> Result<Self::Output, String> {
         let hash_clone = input.hash.clone();
-        crate::metadata_controller::MetadataController::set_file_notes(
+        crate::metadata::controller::MetadataController::set_file_notes(
             &state.db,
             input.hash,
             input.notes,
@@ -213,7 +213,7 @@ impl TypedCommand for IncrementViewCount {
 
     async fn execute(state: &AppState, input: Self::Input) -> Result<Self::Output, String> {
         let hash_clone = input.hash.clone();
-        crate::metadata_controller::MetadataController::increment_view_count(
+        crate::metadata::controller::MetadataController::increment_view_count(
             &state.db,
             input.hash,
         )

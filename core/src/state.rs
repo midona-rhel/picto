@@ -14,9 +14,9 @@ use tokio::sync::mpsc;
 
 use crate::blob_store::BlobStore;
 use crate::rate_limiter::RateLimiter;
-use crate::settings::SettingsStore;
+use crate::settings::store::SettingsStore;
 use crate::sqlite::{CompilerEvent, SqliteDatabase};
-use crate::sqlite_ptr::PtrSqliteDatabase;
+use crate::ptr::db::PtrSqliteDatabase;
 use crate::types::{RunningSubscriptions, SubTerminalStatuses};
 
 /// Shared application state, accessible to all command handlers.
@@ -311,7 +311,7 @@ pub async fn open_library(library_root: PathBuf) -> Result<Arc<AppState>, String
         *guard = Some(state.clone());
     }
 
-    crate::ptr_controller::PtrController::start_background_startup_maintenance(
+    crate::ptr::controller::PtrController::start_background_startup_maintenance(
         state.ptr_db.clone(),
     );
 
@@ -397,7 +397,7 @@ async fn check_scheduled_flows(
     rate_limiter: &RateLimiter,
     running_subs: &RunningSubscriptions,
     sub_terminal_statuses: &SubTerminalStatuses,
-    settings: &crate::settings::SettingsStore,
+    settings: &crate::settings::store::SettingsStore,
 ) {
     let flows = match db.list_flows().await {
         Ok(f) => f,
@@ -467,7 +467,7 @@ async fn check_scheduled_flows(
                 schedule = %flow.schedule,
                 "Scheduler: running overdue flow"
             );
-            if let Err(e) = crate::flow_controller::FlowController::run_flow(
+            if let Err(e) = crate::subscriptions::flow_controller::FlowController::run_flow(
                 db,
                 blob_store,
                 rate_limiter,
@@ -500,12 +500,12 @@ async fn check_scheduled_ptr_sync(
     }
 
     // Short-circuit when any PTR heavy phase is running (PBI-024).
-    if crate::ptr_controller::PtrController::is_ptr_busy_for_scheduler() {
+    if crate::ptr::controller::PtrController::is_ptr_busy_for_scheduler() {
         return;
     }
 
     // Don't hammer the server — back off after failed attempts
-    if crate::ptr_controller::PtrController::is_auto_sync_cooling_down() {
+    if crate::ptr::controller::PtrController::is_auto_sync_cooling_down() {
         return;
     }
 
@@ -514,7 +514,7 @@ async fn check_scheduled_ptr_sync(
     if s.ptr_last_sync_time.is_none() {
         tracing::info!("PTR has never completed initial population — starting sync");
         if let Err(e) =
-            crate::ptr_controller::PtrController::sync(ptr_db, settings, compiler_tx).await
+            crate::ptr::controller::PtrController::sync(ptr_db, settings, compiler_tx).await
         {
             tracing::warn!("Failed to start PTR initial population sync: {e}");
         }
@@ -548,7 +548,7 @@ async fn check_scheduled_ptr_sync(
             "Scheduler: running overdue PTR sync"
         );
         if let Err(e) =
-            crate::ptr_controller::PtrController::sync(ptr_db, settings, compiler_tx).await
+            crate::ptr::controller::PtrController::sync(ptr_db, settings, compiler_tx).await
         {
             tracing::warn!("Scheduler: failed to start PTR sync: {e}");
         }

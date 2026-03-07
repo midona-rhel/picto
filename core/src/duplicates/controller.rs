@@ -38,7 +38,7 @@ impl DuplicateController {
         let file_id = db.resolve_hash(&hash).await?;
         let pairs = db
             .with_read_conn(move |conn| {
-                crate::sqlite::duplicates::get_duplicates_for_file(conn, file_id)
+                crate::duplicates::db::get_duplicates_for_file(conn, file_id)
             })
             .await?;
 
@@ -78,7 +78,7 @@ impl DuplicateController {
         db: &SqliteDatabase,
     ) -> Result<Vec<DuplicatePairResponse>, String> {
         let pairs = db
-            .with_read_conn(crate::sqlite::duplicates::get_all_detected_duplicates)
+            .with_read_conn(crate::duplicates::db::get_all_detected_duplicates)
             .await?;
 
         let all_ids: Vec<i64> = pairs
@@ -118,7 +118,7 @@ impl DuplicateController {
 
         let (pairs, next_cursor, total) = db
             .with_read_conn(move |conn| {
-                crate::sqlite::duplicates::get_duplicate_pairs_paginated(
+                crate::duplicates::db::get_duplicate_pairs_paginated(
                     conn,
                     cursor_clone.as_deref(),
                     limit_val,
@@ -162,7 +162,7 @@ impl DuplicateController {
 
     /// Count detected duplicate pairs (for sidebar).
     pub async fn get_duplicate_count(db: &SqliteDatabase) -> Result<i64, String> {
-        db.with_read_conn(|conn| crate::sqlite::duplicates::count_by_status(conn, "detected"))
+        db.with_read_conn(|conn| crate::duplicates::db::count_by_status(conn, "detected"))
             .await
     }
 
@@ -191,7 +191,7 @@ impl DuplicateController {
                 let id_a = db.resolve_hash(&hash_a).await?;
                 let id_b = db.resolve_hash(&hash_b).await?;
                 db.with_conn(move |conn| {
-                    crate::sqlite::duplicates::resolve_pair_with_decision(
+                    crate::duplicates::db::resolve_pair_with_decision(
                         conn,
                         id_a,
                         id_b,
@@ -210,7 +210,7 @@ impl DuplicateController {
                 let id_a = db.resolve_hash(&hash_a).await?;
                 let id_b = db.resolve_hash(&hash_b).await?;
                 db.with_conn(move |conn| {
-                    crate::sqlite::duplicates::resolve_pair_with_decision(
+                    crate::duplicates::db::resolve_pair_with_decision(
                         conn,
                         id_a,
                         id_b,
@@ -408,7 +408,7 @@ impl DuplicateController {
             let w_fid = winner_fid;
             let l_fid = loser_fid;
             db.with_conn(move |conn| {
-                crate::sqlite::collections::repoint_entity_to_file(conn, l_fid, w_fid)?;
+                crate::folders::collections_db::repoint_entity_to_file(conn, l_fid, w_fid)?;
                 conn.execute("UPDATE file SET status = 2 WHERE file_id = ?1", [l_fid])?;
                 Ok(())
             })
@@ -421,7 +421,7 @@ impl DuplicateController {
         let loser_id = db.resolve_hash(&loser_hash).await?;
         let source_owned = decision_source.to_string();
         db.with_conn(move |conn| {
-            crate::sqlite::duplicates::resolve_pair_with_decision(
+            crate::duplicates::db::resolve_pair_with_decision(
                 conn,
                 winner_id,
                 loser_id,
@@ -483,7 +483,7 @@ impl DuplicateController {
             let w_fid = winner_id;
             let l_fid = loser_id;
             db.with_conn(move |conn| {
-                crate::sqlite::collections::repoint_entity_to_file(conn, l_fid, w_fid)?;
+                crate::folders::collections_db::repoint_entity_to_file(conn, l_fid, w_fid)?;
                 conn.execute("UPDATE file SET status = 2 WHERE file_id = ?1", [l_fid])?;
                 Ok(())
             })
@@ -493,7 +493,7 @@ impl DuplicateController {
         }
         let reason_owned = reason.to_string();
         db.with_conn(move |conn| {
-            crate::sqlite::duplicates::resolve_pair_with_decision(
+            crate::duplicates::db::resolve_pair_with_decision(
                 conn,
                 winner_id,
                 loser_id,
@@ -520,7 +520,7 @@ impl DuplicateController {
         imported_hash: &str,
         distance_threshold: u32,
     ) -> Result<Option<SmartMergeResult>, String> {
-        use crate::duplicates::BkTree;
+        use crate::duplicates::phash::BkTree;
         use img_hash::ImageHash;
 
         let imported_hash_owned = imported_hash.to_string();
@@ -598,7 +598,7 @@ impl DuplicateController {
                         (match_fid, new_fid)
                     };
                     // Insert if not already present (ON CONFLICT IGNORE)
-                    crate::sqlite::duplicates::insert_duplicate(conn, a, b, dist.clone() as f64)?;
+                    crate::duplicates::db::insert_duplicate(conn, a, b, dist.clone() as f64)?;
                 }
                 Ok(())
             }
@@ -651,7 +651,7 @@ impl DuplicateController {
         threshold: Option<u32>,
         review_threshold: Option<u32>,
     ) -> Result<ScanDuplicatesResponse, String> {
-        use crate::duplicates::{BkTree, DEFAULT_DISTANCE_THRESHOLD};
+        use crate::duplicates::phash::{BkTree, DEFAULT_DISTANCE_THRESHOLD};
         use img_hash::ImageHash;
 
         let distance_threshold = threshold.unwrap_or(DEFAULT_DISTANCE_THRESHOLD);
@@ -660,7 +660,7 @@ impl DuplicateController {
         let total_files = db.count_files(None).await? as usize;
         let reviewable_before = db
             .with_read_conn(move |conn| {
-                crate::sqlite::duplicates::count_by_status_with_max_distance(
+                crate::duplicates::db::count_by_status_with_max_distance(
                     conn,
                     "detected",
                     review_distance,
@@ -748,7 +748,7 @@ impl DuplicateController {
                 .with_conn(move |conn| {
                     let mut inserted = 0usize;
                     for (a, b, dist) in pairs_clone {
-                        if crate::sqlite::duplicates::insert_duplicate_counted(
+                        if crate::duplicates::db::insert_duplicate_counted(
                             conn,
                             a,
                             b,
@@ -765,7 +765,7 @@ impl DuplicateController {
         let review_distance = review_distance_threshold as f64;
         let reviewable_detected_total = db
             .with_read_conn(move |conn| {
-                crate::sqlite::duplicates::count_by_status_with_max_distance(
+                crate::duplicates::db::count_by_status_with_max_distance(
                     conn,
                     "detected",
                     review_distance,

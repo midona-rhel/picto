@@ -1,4 +1,4 @@
-import type { EntitySlim as ApiEntitySlim } from '../../types/api';
+import type { EntitySlim as ApiEntitySlim } from '../../shared/types/api';
 
 export const isEditableTarget = (target: EventTarget | null): boolean => {
   if (!(target instanceof HTMLElement)) return false;

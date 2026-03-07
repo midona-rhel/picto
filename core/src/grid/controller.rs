@@ -11,16 +11,16 @@ use std::time::Instant;
 
 use chrono::Utc;
 
-use crate::ptr_controller::PtrController;
+use crate::ptr::controller::PtrController;
 use crate::sqlite::bitmaps::BitmapKey;
 use crate::sqlite::files::FileMetadataSlim;
 use crate::sqlite::projections::ResolvedMetadataFull;
-use crate::sqlite::folders::list_uncategorized_entity_ids;
-use crate::sqlite::smart_folders;
-use crate::sqlite::tags::{find_tag as sql_find_tag, FileTagInfo};
+use crate::folders::db::list_uncategorized_entity_ids;
+use crate::smart_folders::db;
+use crate::tags::db::{find_tag as sql_find_tag, FileTagInfo};
 use crate::sqlite::{ScopeSnapshot, ScopeSnapshotKey, SqliteDatabase};
-use crate::sqlite_ptr::PtrSqliteDatabase;
-use crate::tags;
+use crate::ptr::db::PtrSqliteDatabase;
+use crate::tags::normalize;
 use crate::types::{
     parse_file_status, status_to_string, tag_display_key, DominantColorDto, FileAllMetadata,
     EntityDetails, EntityMetadataBatchResponse, EntitySlim, GridPageSlimQuery, GridPageSlimResponse,
@@ -957,7 +957,7 @@ impl GridController {
                 .collect();
             let ptr_lookup_count = ptr_lookup_hashes.len();
 
-            let ptr_overlay_map: HashMap<String, Vec<crate::sqlite_ptr::tags::PtrResolvedTag>> =
+            let ptr_overlay_map: HashMap<String, Vec<crate::ptr::db::tags::PtrResolvedTag>> =
                 PtrController::batch_get_overlay(ptr_db, ptr_lookup_hashes.clone())
                     .await?
                     .into_iter()

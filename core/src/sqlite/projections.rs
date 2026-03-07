@@ -4,7 +4,7 @@
 //! Compilers keep miss rate near zero; reads fall back to per-file SQL on miss.
 
 use super::files::FileMetadataSlim;
-use super::tags::FileTagInfo;
+use crate::tags::db::FileTagInfo;
 use super::SqliteDatabase;
 use rusqlite::{params, params_from_iter, Connection};
 use serde::{Deserialize, Serialize};
@@ -302,8 +302,8 @@ impl SqliteDatabase {
 
             if !fallbacks.is_empty() {
                 let fallback_ids: Vec<i64> = fallbacks.iter().map(|f| f.file_id).collect();
-                let mut tags_by_file: HashMap<i64, Vec<super::tags::FileTagInfo>> =
-                    super::tags::get_entities_tags(conn, &fallback_ids)?;
+                let mut tags_by_file: HashMap<i64, Vec<crate::tags::db::FileTagInfo>> =
+                    crate::tags::db::get_entities_tags(conn, &fallback_ids)?;
 
                 for fallback in fallbacks {
                     let source_urls_json = fallback.file.source_urls_json.clone();

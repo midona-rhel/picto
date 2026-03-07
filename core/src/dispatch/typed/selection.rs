@@ -69,7 +69,7 @@ impl TypedCommand for AddTagsSelection {
     type Output = usize;
 
     async fn execute(state: &AppState, input: Self::Input) -> Result<Self::Output, String> {
-        let count = crate::selection_controller::SelectionController::add_tags_selection(
+        let count = crate::selection::controller::SelectionController::add_tags_selection(
             &state.db, input.selection, input.tag_strings,
         ).await?;
         if count > 0 {
@@ -88,7 +88,7 @@ impl TypedCommand for RemoveTagsSelection {
     type Output = usize;
 
     async fn execute(state: &AppState, input: Self::Input) -> Result<Self::Output, String> {
-        let count = crate::selection_controller::SelectionController::remove_tags_selection(
+        let count = crate::selection::controller::SelectionController::remove_tags_selection(
             &state.db, input.selection, input.tag_strings,
         ).await?;
         if count > 0 {
@@ -108,7 +108,7 @@ impl TypedCommand for GetSelectionSummary {
 
     async fn execute(state: &AppState, input: Self::Input) -> Result<Self::Output, String> {
         let started = std::time::Instant::now();
-        let result = crate::selection_controller::SelectionController::get_selection_summary(
+        let result = crate::selection::controller::SelectionController::get_selection_summary(
             &state.db, input.selection,
         ).await?;
         crate::perf::record_selection_summary(started.elapsed().as_secs_f64() * 1000.0);
@@ -122,7 +122,7 @@ impl TypedCommand for UpdateRatingSelection {
     type Output = usize;
 
     async fn execute(state: &AppState, input: Self::Input) -> Result<Self::Output, String> {
-        let count = crate::selection_controller::SelectionController::update_rating_selection(
+        let count = crate::selection::controller::SelectionController::update_rating_selection(
             &state.db, input.selection, input.rating,
         ).await?;
         if count > 0 {
@@ -141,7 +141,7 @@ impl TypedCommand for SetNotesSelection {
     type Output = usize;
 
     async fn execute(state: &AppState, input: Self::Input) -> Result<Self::Output, String> {
-        let count = crate::selection_controller::SelectionController::set_notes_selection(
+        let count = crate::selection::controller::SelectionController::set_notes_selection(
             &state.db, input.selection, input.notes,
         ).await?;
         if count > 0 {
@@ -160,7 +160,7 @@ impl TypedCommand for SetSourceUrlsSelection {
     type Output = usize;
 
     async fn execute(state: &AppState, input: Self::Input) -> Result<Self::Output, String> {
-        let count = crate::selection_controller::SelectionController::set_source_urls_selection(
+        let count = crate::selection::controller::SelectionController::set_source_urls_selection(
             &state.db, input.selection, input.urls,
         ).await?;
         if count > 0 {

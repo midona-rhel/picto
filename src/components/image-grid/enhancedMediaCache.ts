@@ -10,7 +10,7 @@
  * converted to Blob URLs, and managed an LRU eviction policy.
  */
 
-import { mediaFileUrl, mediaThumbnailUrl } from '../../lib/mediaUrl';
+import { mediaFileUrl, mediaThumbnailUrl } from '../../shared/lib/mediaUrl';
 import type { EntitySlim } from './shared';
 
 export type MediaVariant = 'thumb64' | 'thumb512' | 'full';

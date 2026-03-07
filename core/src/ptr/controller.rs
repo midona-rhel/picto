@@ -13,14 +13,14 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use crate::events;
-use crate::ptr_client::PtrClient;
-use crate::ptr_sync::PtrSyncEngine;
-use crate::ptr_types::PtrSyncProgress;
+use crate::ptr::client::PtrClient;
+use crate::ptr::sync_engine::PtrSyncEngine;
+use crate::ptr::types::PtrSyncProgress;
 use crate::runtime_contract::task::{RuntimeTask, TaskKind, TaskProgress, TaskStatus};
-use crate::settings::SettingsStore;
+use crate::settings::store::SettingsStore;
 use crate::sqlite::CompilerEvent;
-use crate::sqlite_ptr::tags::PtrResolvedTag;
-use crate::sqlite_ptr::PtrSqliteDatabase;
+use crate::ptr::db::tags::PtrResolvedTag;
+use crate::ptr::db::PtrSqliteDatabase;
 
 /// Global flag: is a PTR sync currently running?
 pub static PTR_SYNCING: AtomicBool = AtomicBool::new(false);
@@ -58,9 +58,9 @@ pub struct PtrBootstrapStatus {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_error: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub last_result: Option<crate::sqlite_ptr::bootstrap::PtrBootstrapImportResult>,
+    pub last_result: Option<crate::ptr::db::bootstrap::PtrBootstrapImportResult>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub dry_run_result: Option<crate::sqlite_ptr::bootstrap::PtrBootstrapResult>,
+    pub dry_run_result: Option<crate::ptr::db::bootstrap::PtrBootstrapResult>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rows_total: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -74,7 +74,7 @@ pub struct PtrBootstrapStatus {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rows_per_sec: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub checkpoint: Option<crate::sqlite_ptr::bootstrap::PtrCompactCheckpoint>,
+    pub checkpoint: Option<crate::ptr::db::bootstrap::PtrCompactCheckpoint>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -295,7 +295,7 @@ impl PtrController {
 
     pub async fn get_ptr_status(
         ptr_db: &PtrSqliteDatabase,
-    ) -> Result<crate::sqlite_ptr::tags::PtrStats, String> {
+    ) -> Result<crate::ptr::db::tags::PtrStats, String> {
         ptr_db.get_stats().await
     }
 
@@ -418,7 +418,7 @@ impl PtrController {
         ptr_db: &Arc<PtrSqliteDatabase>,
         req: PtrBootstrapRequest,
     ) -> Result<serde_json::Value, String> {
-        let mode = crate::sqlite_ptr::bootstrap::PtrBootstrapMode::parse(&req.mode)?;
+        let mode = crate::ptr::db::bootstrap::PtrBootstrapMode::parse(&req.mode)?;
         if PTR_SYNCING.load(Ordering::SeqCst) {
             return Err("PTR sync is running; stop it before bootstrap".into());
         }
@@ -435,7 +435,7 @@ impl PtrController {
         let probe_result = tokio::task::spawn_blocking({
             let snapshot_dir = snapshot_dir.clone();
             let ptr_service_id = req.ptr_service_id;
-            move || crate::sqlite_ptr::bootstrap::probe_snapshot(&snapshot_dir, ptr_service_id)
+            move || crate::ptr::db::bootstrap::probe_snapshot(&snapshot_dir, ptr_service_id)
         })
         .await
         .map_err(|e| format!("PTR bootstrap probe join failed: {e}"))?;
@@ -489,7 +489,7 @@ impl PtrController {
 
         let dry_run_result = tokio::task::spawn_blocking({
             let probe = probe.clone();
-            move || crate::sqlite_ptr::bootstrap::dry_run_snapshot(&probe)
+            move || crate::ptr::db::bootstrap::dry_run_snapshot(&probe)
         })
         .await
         .map_err(|e| format!("PTR bootstrap dry-run join failed: {e}"))?;
@@ -530,7 +530,7 @@ impl PtrController {
             },
         );
 
-        if mode == crate::sqlite_ptr::bootstrap::PtrBootstrapMode::DryRun {
+        if mode == crate::ptr::db::bootstrap::PtrBootstrapMode::DryRun {
             PTR_BOOTSTRAP_RUNNING.store(false, Ordering::SeqCst);
             Self::update_bootstrap_status(|s| {
                 s.running = false;
@@ -587,7 +587,7 @@ impl PtrController {
 
         // Bridge the async CancellationToken to a synchronous AtomicBool for use in
         // spawn_blocking (bootstrap runs synchronous rusqlite code).
-        let cancel_flag: crate::sqlite_ptr::bootstrap::CancelCheck =
+        let cancel_flag: crate::ptr::db::bootstrap::CancelCheck =
             Arc::new(std::sync::atomic::AtomicBool::new(false));
         {
             let flag = cancel_flag.clone();
@@ -606,7 +606,7 @@ impl PtrController {
             });
             let import_started = std::time::Instant::now();
             let progress_cb = std::sync::Arc::new(
-                move |progress: crate::sqlite_ptr::bootstrap::PtrBootstrapProgress| {
+                move |progress: crate::ptr::db::bootstrap::PtrBootstrapProgress| {
                     let eta_seconds =
                         if progress.rows_done > 0 && progress.rows_total > progress.rows_done {
                             let elapsed_s = import_started.elapsed().as_secs_f64();
@@ -688,7 +688,7 @@ impl PtrController {
                 }
             });
 
-            let imported = crate::sqlite_ptr::bootstrap::import_snapshot(
+            let imported = crate::ptr::db::bootstrap::import_snapshot(
                 &ptr_db,
                 probe.clone(),
                 Some(progress_cb),
@@ -747,7 +747,7 @@ impl PtrController {
                     PTR_COMPACT_BUILD_RUNNING.store(true, Ordering::SeqCst);
                     let compact_started = std::time::Instant::now();
                     let compact_progress_cb = std::sync::Arc::new(
-                        move |progress: crate::sqlite_ptr::bootstrap::PtrBootstrapProgress| {
+                        move |progress: crate::ptr::db::bootstrap::PtrBootstrapProgress| {
                             let rows_per_sec = if progress.rows_done > 0 {
                                 let elapsed_s = compact_started.elapsed().as_secs_f64();
                                 if elapsed_s > 0.0 {
@@ -828,7 +828,7 @@ impl PtrController {
                             }
                         }
                     });
-                    let compact_result = crate::sqlite_ptr::bootstrap::build_compact_index(
+                    let compact_result = crate::ptr::db::bootstrap::build_compact_index(
                         &ptr_db,
                         probe,
                         Some(compact_progress_cb),
@@ -842,7 +842,7 @@ impl PtrController {
                     match compact_result {
                         Ok(_) => {
                             let compact_status =
-                                crate::sqlite_ptr::bootstrap::get_compact_index_status(&ptr_db)
+                                crate::ptr::db::bootstrap::get_compact_index_status(&ptr_db)
                                     .await
                                     .ok();
                             Self::update_bootstrap_status(|s| {
@@ -968,8 +968,8 @@ impl PtrController {
 
     pub async fn get_compact_index_status(
         ptr_db: &Arc<PtrSqliteDatabase>,
-    ) -> Result<crate::sqlite_ptr::bootstrap::PtrCompactIndexStatus, String> {
-        crate::sqlite_ptr::bootstrap::get_compact_index_status(ptr_db).await
+    ) -> Result<crate::ptr::db::bootstrap::PtrCompactIndexStatus, String> {
+        crate::ptr::db::bootstrap::get_compact_index_status(ptr_db).await
     }
 
     /// Run a full PTR sync in the background.
@@ -995,11 +995,11 @@ impl PtrController {
         let server_url = settings
             .ptr_server_url
             .as_deref()
-            .unwrap_or(crate::ptr_client::DEFAULT_PTR_URL);
+            .unwrap_or(crate::ptr::client::DEFAULT_PTR_URL);
         let access_key = settings
             .ptr_access_key
             .as_deref()
-            .unwrap_or(crate::ptr_client::DEFAULT_PTR_ACCESS_KEY);
+            .unwrap_or(crate::ptr::client::DEFAULT_PTR_ACCESS_KEY);
 
         let client = PtrClient::new(server_url, access_key);
         let engine = PtrSyncEngine::new(client, ptr_db.clone());

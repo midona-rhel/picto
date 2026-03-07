@@ -10,14 +10,14 @@ use crate::types::FolderReorderMove;
 pub struct FolderController;
 
 fn build_folder_sidebar_node(
-    folder: &crate::sqlite::folders::Folder,
+    folder: &crate::folders::db::Folder,
     count: i64,
-) -> crate::sqlite::sidebar::SidebarNode {
+) -> crate::sidebar::db::SidebarNode {
     let parent_id = folder
         .parent_id
         .map(|pid| format!("folder:{pid}"))
         .unwrap_or_else(|| "section:folders".to_string());
-    crate::sqlite::sidebar::SidebarNode {
+    crate::sidebar::db::SidebarNode {
         node_id: format!("folder:{}", folder.folder_id),
         kind: "folder".into(),
         parent_id: Some(parent_id),
@@ -43,14 +43,14 @@ fn build_folder_sidebar_node(
 
 async fn upsert_folder_sidebar_node(
     db: &SqliteDatabase,
-    folder: crate::sqlite::folders::Folder,
+    folder: crate::folders::db::Folder,
 ) -> Result<(), String> {
     use crate::sqlite::bitmaps::BitmapKey;
     let folder_bm = db.bitmaps.get(&BitmapKey::Folder(folder.folder_id));
     let active_bm = db.bitmaps.get(&BitmapKey::AllActive);
     let count = (&folder_bm & &active_bm).len() as i64;
     let node = build_folder_sidebar_node(&folder, count);
-    db.with_conn(move |conn| crate::sqlite::sidebar::upsert_sidebar_node(conn, &node))
+    db.with_conn(move |conn| crate::sidebar::db::upsert_sidebar_node(conn, &node))
         .await?;
     Ok(())
 }
@@ -68,7 +68,7 @@ impl FolderController {
         deduped.dedup();
         for folder_id in deduped {
             let folder = db
-                .with_read_conn(move |conn| crate::sqlite::folders::get_folder(conn, folder_id))
+                .with_read_conn(move |conn| crate::folders::db::get_folder(conn, folder_id))
                 .await?;
             if let Some(folder) = folder {
                 upsert_folder_sidebar_node(db, folder).await?;
@@ -83,9 +83,9 @@ impl FolderController {
         parent_id: Option<i64>,
         icon: Option<String>,
         color: Option<String>,
-    ) -> Result<crate::sqlite::folders::Folder, String> {
+    ) -> Result<crate::folders::db::Folder, String> {
         let folder = db
-            .create_folder(crate::sqlite::folders::NewFolder {
+            .create_folder(crate::folders::db::NewFolder {
                 name,
                 parent_id,
                 icon,
@@ -108,7 +108,7 @@ impl FolderController {
         auto_tags: Option<Vec<String>>,
     ) -> Result<(), String> {
         let current = db
-            .with_read_conn(move |conn| crate::sqlite::folders::get_folder(conn, folder_id))
+            .with_read_conn(move |conn| crate::folders::db::get_folder(conn, folder_id))
             .await?
             .ok_or_else(|| format!("Folder {} not found", folder_id))?;
         let final_name = name.unwrap_or(current.name);
@@ -132,7 +132,7 @@ impl FolderController {
         )
             .await?;
         let updated = db
-            .with_read_conn(move |conn| crate::sqlite::folders::get_folder(conn, folder_id))
+            .with_read_conn(move |conn| crate::folders::db::get_folder(conn, folder_id))
             .await?
             .ok_or_else(|| format!("Folder {} not found after update", folder_id))?;
         // Keep sidebar projection in sync for immediate name/icon/color refresh.
@@ -145,7 +145,7 @@ impl FolderController {
         // Also remove the sidebar_node row so the folder vanishes immediately
         let node_id = format!("folder:{}", folder_id);
         db.with_conn(move |conn| {
-            crate::sqlite::sidebar::delete_sidebar_node(conn, &node_id)?;
+            crate::sidebar::db::delete_sidebar_node(conn, &node_id)?;
             Ok(())
         })
         .await?;
@@ -159,7 +159,7 @@ impl FolderController {
     ) -> Result<(), String> {
         db.update_folder_parent(folder_id, new_parent_id).await?;
         let updated = db
-            .with_read_conn(move |conn| crate::sqlite::folders::get_folder(conn, folder_id))
+            .with_read_conn(move |conn| crate::folders::db::get_folder(conn, folder_id))
             .await?
             .ok_or_else(|| format!("Folder {} not found after parent update", folder_id))?;
         // Reparent sidebar node immediately; compiler will reconcile counts/epoch.

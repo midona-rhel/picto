@@ -2,7 +2,7 @@ import { useRef, useState } from 'react';
 import { TextInput, NumberInput, Switch, Group, Select, ColorSwatch, SimpleGrid, ActionIcon } from '@mantine/core';
 import { DatePickerInput } from '@mantine/dates';
 import { IconPlus } from '@tabler/icons-react';
-import { NamespaceTagChip } from '../ui/NamespaceTagChip';
+import { NamespaceTagChip } from '../../shared/components/NamespaceTagChip';
 import type { FieldConfig } from './fieldConfig';
 import type { SmartRule } from './types';
 import { TagPickerMenu } from './TagPickerMenu';

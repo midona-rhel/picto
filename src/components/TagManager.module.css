@@ -298,7 +298,7 @@
 }
 
 .renameInput {
-  composes: renameInput from '../styles/renameInput.module.css';
+  composes: renameInput from '../shared/styles/renameInput.module.css';
   height: 24px;
   margin: 0;
   padding: 0 2px;

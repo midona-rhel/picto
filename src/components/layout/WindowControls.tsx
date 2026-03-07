@@ -1,7 +1,7 @@
 import { useCallback } from 'react';
 import { IconMinus, IconSquare, IconX } from '@tabler/icons-react';
 import { getCurrentWindow } from '#desktop/api';
-import { runBestEffort } from '../../lib/asyncOps';
+import { runBestEffort } from '../../shared/lib/asyncOps';
 import styles from './WindowControls.module.css';
 
 export function WindowControls() {

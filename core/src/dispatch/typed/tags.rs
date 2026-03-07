@@ -197,7 +197,7 @@ impl TypedCommand for SearchTags {
     type Output = serde_json::Value;
 
     async fn execute(state: &AppState, input: Self::Input) -> Result<Self::Output, String> {
-        let result = crate::tag_controller::TagController::search_tags(
+        let result = crate::tags::controller::TagController::search_tags(
             &state.db, input.query, input.limit,
         ).await?;
         serde_json::to_value(&result).map_err(|e| e.to_string())
@@ -211,7 +211,7 @@ impl TypedCommand for SearchTagsPaged {
 
     async fn execute(state: &AppState, input: Self::Input) -> Result<Self::Output, String> {
         let query = input.query.unwrap_or_default();
-        let result = crate::tag_controller::TagController::search_tags_paged(
+        let result = crate::tags::controller::TagController::search_tags_paged(
             &state.db, query, input.limit, input.offset,
         ).await?;
         serde_json::to_value(&result).map_err(|e| e.to_string())
@@ -224,7 +224,7 @@ impl TypedCommand for GetAllTagsWithCounts {
     type Output = serde_json::Value;
 
     async fn execute(state: &AppState, _input: Self::Input) -> Result<Self::Output, String> {
-        let result = crate::tag_controller::TagController::get_all_tags_with_counts(&state.db).await?;
+        let result = crate::tags::controller::TagController::get_all_tags_with_counts(&state.db).await?;
         serde_json::to_value(&result).map_err(|e| e.to_string())
     }
 }
@@ -235,7 +235,7 @@ impl TypedCommand for GetFileTags {
     type Output = serde_json::Value;
 
     async fn execute(state: &AppState, input: Self::Input) -> Result<Self::Output, String> {
-        let result = crate::tag_controller::TagController::get_entity_tags(
+        let result = crate::tags::controller::TagController::get_entity_tags(
             &state.db, input.hash,
         ).await?;
         serde_json::to_value(&result).map_err(|e| e.to_string())
@@ -249,7 +249,7 @@ impl TypedCommand for AddTags {
 
     async fn execute(state: &AppState, input: Self::Input) -> Result<Self::Output, String> {
         let hash_clone = input.hash.clone();
-        let val = crate::tag_controller::TagController::add_tags(
+        let val = crate::tags::controller::TagController::add_tags(
             &state.db, input.hash, input.tag_strings,
         ).await?;
         if !val.is_empty() {
@@ -270,7 +270,7 @@ impl TypedCommand for RemoveTags {
 
     async fn execute(state: &AppState, input: Self::Input) -> Result<Self::Output, String> {
         let hash_clone = input.hash.clone();
-        crate::tag_controller::TagController::remove_tags(
+        crate::tags::controller::TagController::remove_tags(
             &state.db, input.hash, input.tag_strings,
         ).await?;
         crate::events::emit_mutation(
@@ -288,7 +288,7 @@ impl TypedCommand for AddTagsBatch {
 
     async fn execute(state: &AppState, input: Self::Input) -> Result<Self::Output, String> {
         let hashes_clone = input.hashes.clone();
-        crate::tag_controller::TagController::add_tags_batch(
+        crate::tags::controller::TagController::add_tags_batch(
             &state.db, input.hashes, input.tag_strings,
         ).await?;
         if !hashes_clone.is_empty() {
@@ -308,7 +308,7 @@ impl TypedCommand for RemoveTagsBatch {
 
     async fn execute(state: &AppState, input: Self::Input) -> Result<Self::Output, String> {
         let hashes_clone = input.hashes.clone();
-        crate::tag_controller::TagController::remove_tags_batch(
+        crate::tags::controller::TagController::remove_tags_batch(
             &state.db, input.hashes, input.tag_strings,
         ).await?;
         if !hashes_clone.is_empty() {
@@ -327,7 +327,7 @@ impl TypedCommand for FindFilesByTags {
     type Output = serde_json::Value;
 
     async fn execute(state: &AppState, input: Self::Input) -> Result<Self::Output, String> {
-        let result = crate::tag_controller::TagController::find_files_by_tags(
+        let result = crate::tags::controller::TagController::find_files_by_tags(
             &state.db, input.tag_strings, input.limit, input.offset,
         ).await?;
         serde_json::to_value(&result).map_err(|e| e.to_string())
@@ -340,9 +340,9 @@ impl TypedCommand for SetTagAlias {
     type Output = ();
 
     async fn execute(state: &AppState, input: Self::Input) -> Result<Self::Output, String> {
-        let (from_ns, from_st) = crate::tags::parse_tag(&input.from)
+        let (from_ns, from_st) = crate::tags::normalize::parse_tag(&input.from)
             .ok_or_else(|| format!("Invalid tag: {}", input.from))?;
-        let (to_ns, to_st) = crate::tags::parse_tag(&input.to)
+        let (to_ns, to_st) = crate::tags::normalize::parse_tag(&input.to)
             .ok_or_else(|| format!("Invalid tag: {}", input.to))?;
         state.db.add_sibling(&from_ns, &from_st, &to_ns, &to_st, "local").await?;
         crate::events::emit_mutation(
@@ -361,7 +361,7 @@ impl TypedCommand for RemoveTagAlias {
     type Output = ();
 
     async fn execute(state: &AppState, input: Self::Input) -> Result<Self::Output, String> {
-        let (from_ns, from_st) = crate::tags::parse_tag(&input.from)
+        let (from_ns, from_st) = crate::tags::normalize::parse_tag(&input.from)
             .ok_or_else(|| format!("Invalid tag: {}", input.from))?;
         state.db.remove_sibling(&from_ns, &from_st, "local").await?;
         crate::events::emit_mutation(
@@ -427,9 +427,9 @@ impl TypedCommand for AddTagParent {
     type Output = ();
 
     async fn execute(state: &AppState, input: Self::Input) -> Result<Self::Output, String> {
-        let (cns, cst) = crate::tags::parse_tag(&input.child)
+        let (cns, cst) = crate::tags::normalize::parse_tag(&input.child)
             .ok_or_else(|| format!("Invalid tag: {}", input.child))?;
-        let (pns, pst) = crate::tags::parse_tag(&input.parent)
+        let (pns, pst) = crate::tags::normalize::parse_tag(&input.parent)
             .ok_or_else(|| format!("Invalid tag: {}", input.parent))?;
         state.db.add_parent(&cns, &cst, &pns, &pst, "local").await?;
         crate::events::emit_mutation(
@@ -448,9 +448,9 @@ impl TypedCommand for RemoveTagParent {
     type Output = ();
 
     async fn execute(state: &AppState, input: Self::Input) -> Result<Self::Output, String> {
-        let (cns, cst) = crate::tags::parse_tag(&input.child)
+        let (cns, cst) = crate::tags::normalize::parse_tag(&input.child)
             .ok_or_else(|| format!("Invalid tag: {}", input.child))?;
-        let (pns, pst) = crate::tags::parse_tag(&input.parent)
+        let (pns, pst) = crate::tags::normalize::parse_tag(&input.parent)
             .ok_or_else(|| format!("Invalid tag: {}", input.parent))?;
         state.db.remove_parent(&cns, &cst, &pns, &pst, "local").await?;
         crate::events::emit_mutation(
@@ -469,13 +469,13 @@ impl TypedCommand for MergeTags {
     type Output = ();
 
     async fn execute(state: &AppState, input: Self::Input) -> Result<Self::Output, String> {
-        let (from_ns, from_st) = crate::tags::parse_tag(&input.from_tag)
+        let (from_ns, from_st) = crate::tags::normalize::parse_tag(&input.from_tag)
             .ok_or_else(|| format!("Invalid tag: {}", input.from_tag))?;
-        let (to_ns, to_st) = crate::tags::parse_tag(&input.to_tag)
+        let (to_ns, to_st) = crate::tags::normalize::parse_tag(&input.to_tag)
             .ok_or_else(|| format!("Invalid tag: {}", input.to_tag))?;
         let (from_id, to_id, affected_file_ids) = state.db.with_conn(move |conn| {
-            let from_id = crate::sqlite::tags::get_or_create_tag(conn, &from_ns, &from_st)?;
-            let to_id = crate::sqlite::tags::get_or_create_tag(conn, &to_ns, &to_st)?;
+            let from_id = crate::tags::db::get_or_create_tag(conn, &from_ns, &from_st)?;
+            let to_id = crate::tags::db::get_or_create_tag(conn, &to_ns, &to_st)?;
             let mut stmt = conn.prepare("SELECT entity_id FROM entity_tag_raw WHERE tag_id = ?1")?;
             let file_ids: Vec<i64> = stmt
                 .query_map(rusqlite::params![from_id], |row| row.get(0))?
@@ -641,7 +641,7 @@ impl TypedCommand for CompanionGetFilesByTag {
     type Output = serde_json::Value;
 
     async fn execute(state: &AppState, input: Self::Input) -> Result<Self::Output, String> {
-        let result = crate::tag_controller::TagController::find_files_by_tags(
+        let result = crate::tags::controller::TagController::find_files_by_tags(
             &state.db, vec![input.tag], None, None,
         ).await?;
         serde_json::to_value(&result).map_err(|e| e.to_string())

@@ -1,6 +1,6 @@
 /* Composed from shared primitives */
 .panel {
-  composes: panelGlass from '../../styles/pickerPanel.module.css';
+  composes: panelGlass from '../../shared/styles/pickerPanel.module.css';
   position: fixed;
   z-index: var(--z-context-menu);
   width: 540px;
@@ -28,111 +28,111 @@
 }
 
 .panelDragging {
-  composes: panelDragging from '../../styles/pickerPanel.module.css';
+  composes: panelDragging from '../../shared/styles/pickerPanel.module.css';
 }
 
 .header {
-  composes: panelHeader from '../../styles/pickerPanel.module.css';
+  composes: panelHeader from '../../shared/styles/pickerPanel.module.css';
 }
 
 .headerDragging {
-  composes: panelHeaderDragging from '../../styles/pickerPanel.module.css';
+  composes: panelHeaderDragging from '../../shared/styles/pickerPanel.module.css';
 }
 
 .pinBtn {
-  composes: pinBtn from '../../styles/pickerPanel.module.css';
+  composes: pinBtn from '../../shared/styles/pickerPanel.module.css';
 }
 
 .searchWrap {
-  composes: searchWrap from '../../styles/pickerPanel.module.css';
+  composes: searchWrap from '../../shared/styles/pickerPanel.module.css';
 }
 
 .searchInput {
-  composes: searchInput from '../../styles/pickerPanel.module.css';
+  composes: searchInput from '../../shared/styles/pickerPanel.module.css';
 }
 
 .ruleLabel {
-  composes: ruleLabel from '../../styles/pickerPanel.module.css';
+  composes: ruleLabel from '../../shared/styles/pickerPanel.module.css';
 }
 
 .logicTabs {
-  composes: logicTabs from '../../styles/pickerPanel.module.css';
+  composes: logicTabs from '../../shared/styles/pickerPanel.module.css';
 }
 
 .logicTab {
-  composes: logicTab from '../../styles/pickerPanel.module.css';
+  composes: logicTab from '../../shared/styles/pickerPanel.module.css';
 }
 
 .logicTabActive {
-  composes: logicTabActive from '../../styles/pickerPanel.module.css';
+  composes: logicTabActive from '../../shared/styles/pickerPanel.module.css';
 }
 
 .checkItem {
-  composes: checkItem from '../../styles/pickerPanel.module.css';
+  composes: checkItem from '../../shared/styles/pickerPanel.module.css';
 }
 
 .checkItemFocused {
-  composes: checkItemFocused from '../../styles/pickerPanel.module.css';
+  composes: checkItemFocused from '../../shared/styles/pickerPanel.module.css';
 }
 
 .checkItemChecked {
-  composes: checkItemChecked from '../../styles/pickerPanel.module.css';
+  composes: checkItemChecked from '../../shared/styles/pickerPanel.module.css';
 }
 
 .checkItemExcluded {
-  composes: checkItemExcluded from '../../styles/pickerPanel.module.css';
+  composes: checkItemExcluded from '../../shared/styles/pickerPanel.module.css';
 }
 
 .checkIcon {
-  composes: checkIcon from '../../styles/checkIcon.module.css';
+  composes: checkIcon from '../../shared/styles/checkIcon.module.css';
 }
 
 .checkIconChecked {
-  composes: checkIconChecked from '../../styles/checkIcon.module.css';
+  composes: checkIconChecked from '../../shared/styles/checkIcon.module.css';
 }
 
 .checkIconExcluded {
-  composes: checkIconExcluded from '../../styles/checkIcon.module.css';
+  composes: checkIconExcluded from '../../shared/styles/checkIcon.module.css';
 }
 
 .checkMark {
-  composes: checkMark from '../../styles/checkIcon.module.css';
+  composes: checkMark from '../../shared/styles/checkIcon.module.css';
 }
 
 .itemName {
-  composes: itemName from '../../styles/pickerPanel.module.css';
+  composes: itemName from '../../shared/styles/pickerPanel.module.css';
 }
 
 .itemBadge {
-  composes: itemBadge from '../../styles/pickerPanel.module.css';
+  composes: itemBadge from '../../shared/styles/pickerPanel.module.css';
 }
 
 .matchHighlight {
-  composes: matchHighlight from '../../styles/pickerPanel.module.css';
+  composes: matchHighlight from '../../shared/styles/pickerPanel.module.css';
 }
 
 .footer {
-  composes: panelFooter from '../../styles/pickerPanel.module.css';
+  composes: panelFooter from '../../shared/styles/pickerPanel.module.css';
 }
 
 .footerLeft {
-  composes: footerLeft from '../../styles/pickerPanel.module.css';
+  composes: footerLeft from '../../shared/styles/pickerPanel.module.css';
 }
 
 .footerRight {
-  composes: footerRight from '../../styles/pickerPanel.module.css';
+  composes: footerRight from '../../shared/styles/pickerPanel.module.css';
 }
 
 .shortcutTip {
-  composes: shortcutTip from '../../styles/pickerPanel.module.css';
+  composes: shortcutTip from '../../shared/styles/pickerPanel.module.css';
 }
 
 .kbd {
-  composes: kbd from '../../styles/pickerPanel.module.css';
+  composes: kbd from '../../shared/styles/pickerPanel.module.css';
 }
 
 .emptyState {
-  composes: emptyState from '../../styles/pickerPanel.module.css';
+  composes: emptyState from '../../shared/styles/pickerPanel.module.css';
 }
 
 /* TagSelectPanel-specific */

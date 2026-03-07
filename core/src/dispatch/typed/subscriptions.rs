@@ -201,7 +201,7 @@ impl TypedCommand for GetFlows {
     type Output = serde_json::Value;
 
     async fn execute(state: &AppState, _input: Self::Input) -> Result<Self::Output, String> {
-        let result = crate::flow_controller::FlowController::get_flows(&state.db).await?;
+        let result = crate::subscriptions::flow_controller::FlowController::get_flows(&state.db).await?;
         Ok(serde_json::to_value(&result).map_err(|e| e.to_string())?)
     }
 }
@@ -212,7 +212,7 @@ impl TypedCommand for CreateFlow {
     type Output = serde_json::Value;
 
     async fn execute(state: &AppState, input: Self::Input) -> Result<Self::Output, String> {
-        let flow = crate::flow_controller::FlowController::create_flow(
+        let flow = crate::subscriptions::flow_controller::FlowController::create_flow(
             &state.db,
             input.name,
             input.schedule,
@@ -232,7 +232,7 @@ impl TypedCommand for DeleteFlow {
     type Output = ();
 
     async fn execute(state: &AppState, input: Self::Input) -> Result<Self::Output, String> {
-        crate::flow_controller::FlowController::delete_flow(
+        crate::subscriptions::flow_controller::FlowController::delete_flow(
             &state.db,
             &state.blob_store,
             input.id,
@@ -259,7 +259,7 @@ impl TypedCommand for RenameFlow {
     type Output = ();
 
     async fn execute(state: &AppState, input: Self::Input) -> Result<Self::Output, String> {
-        crate::flow_controller::FlowController::rename_flow(&state.db, input.id, input.name)
+        crate::subscriptions::flow_controller::FlowController::rename_flow(&state.db, input.id, input.name)
             .await?;
         crate::events::emit_mutation(
             "rename_flow",
@@ -275,7 +275,7 @@ impl TypedCommand for SetFlowSchedule {
     type Output = ();
 
     async fn execute(state: &AppState, input: Self::Input) -> Result<Self::Output, String> {
-        crate::flow_controller::FlowController::set_flow_schedule(
+        crate::subscriptions::flow_controller::FlowController::set_flow_schedule(
             &state.db,
             input.id,
             input.schedule,
@@ -295,7 +295,7 @@ impl TypedCommand for RunFlow {
     type Output = ();
 
     async fn execute(state: &AppState, input: Self::Input) -> Result<Self::Output, String> {
-        crate::flow_controller::FlowController::run_flow(
+        crate::subscriptions::flow_controller::FlowController::run_flow(
             &state.db,
             &state.blob_store,
             &state.rate_limiter,
@@ -319,7 +319,7 @@ impl TypedCommand for StopFlow {
     type Output = ();
 
     async fn execute(state: &AppState, input: Self::Input) -> Result<Self::Output, String> {
-        crate::flow_controller::FlowController::stop_flow(
+        crate::subscriptions::flow_controller::FlowController::stop_flow(
             &state.db,
             &state.running_subscriptions,
             input.id,
@@ -339,7 +339,7 @@ impl TypedCommand for GetSites {
     type Output = serde_json::Value;
 
     async fn execute(_state: &AppState, _input: Self::Input) -> Result<Self::Output, String> {
-        Ok(serde_json::to_value(&crate::gallery_dl_runner::SITES).map_err(|e| e.to_string())?)
+        Ok(serde_json::to_value(&crate::subscriptions::gallery_dl_runner::SITES).map_err(|e| e.to_string())?)
     }
 }
 
@@ -349,7 +349,7 @@ impl TypedCommand for GetSiteMetadataSchema {
     type Output = serde_json::Value;
 
     async fn execute(_state: &AppState, input: Self::Input) -> Result<Self::Output, String> {
-        let schema = crate::gallery_dl_runner::get_site_metadata_schema(&input.site_id)
+        let schema = crate::subscriptions::gallery_dl_runner::get_site_metadata_schema(&input.site_id)
             .ok_or_else(|| format!("Unsupported site for metadata schema: {}", input.site_id))?;
         Ok(serde_json::to_value(&schema).map_err(|e| e.to_string())?)
     }
@@ -362,7 +362,7 @@ impl TypedCommand for ValidateSiteMetadata {
 
     async fn execute(_state: &AppState, input: Self::Input) -> Result<Self::Output, String> {
         let sample_url = input.sample_url.unwrap_or_default();
-        let result = crate::gallery_dl_runner::validate_site_metadata(
+        let result = crate::subscriptions::gallery_dl_runner::validate_site_metadata(
             &input.site_id,
             &sample_url,
             input.sample_metadata_json.as_ref(),
@@ -378,7 +378,7 @@ impl TypedCommand for GetSubscriptions {
 
     async fn execute(state: &AppState, _input: Self::Input) -> Result<Self::Output, String> {
         let result =
-            crate::subscription_controller::SubscriptionController::get_subscriptions(&state.db)
+            crate::subscriptions::controller::SubscriptionController::get_subscriptions(&state.db)
                 .await?;
         Ok(serde_json::to_value(&result).map_err(|e| e.to_string())?)
     }
@@ -391,7 +391,7 @@ impl TypedCommand for CreateSubscription {
 
     async fn execute(state: &AppState, input: Self::Input) -> Result<Self::Output, String> {
         let sub =
-            crate::subscription_controller::SubscriptionController::create_subscription(
+            crate::subscriptions::controller::SubscriptionController::create_subscription(
                 &state.db,
                 input.name,
                 input.site_id,
@@ -416,7 +416,7 @@ impl TypedCommand for DeleteSubscription {
 
     async fn execute(state: &AppState, input: Self::Input) -> Result<Self::Output, String> {
         let count =
-            crate::subscription_controller::SubscriptionController::delete_subscription(
+            crate::subscriptions::controller::SubscriptionController::delete_subscription(
                 &state.db,
                 &state.blob_store,
                 input.id,
@@ -443,7 +443,7 @@ impl TypedCommand for PauseSubscription {
     type Output = ();
 
     async fn execute(state: &AppState, input: Self::Input) -> Result<Self::Output, String> {
-        crate::subscription_controller::SubscriptionController::pause_subscription(
+        crate::subscriptions::controller::SubscriptionController::pause_subscription(
             &state.db,
             input.id,
             input.paused,
@@ -464,7 +464,7 @@ impl TypedCommand for AddSubscriptionQuery {
 
     async fn execute(state: &AppState, input: Self::Input) -> Result<Self::Output, String> {
         let query =
-            crate::subscription_controller::SubscriptionController::add_subscription_query(
+            crate::subscriptions::controller::SubscriptionController::add_subscription_query(
                 &state.db,
                 input.subscription_id,
                 input.query_text,
@@ -484,7 +484,7 @@ impl TypedCommand for DeleteSubscriptionQuery {
     type Output = ();
 
     async fn execute(state: &AppState, input: Self::Input) -> Result<Self::Output, String> {
-        crate::subscription_controller::SubscriptionController::delete_subscription_query(
+        crate::subscriptions::controller::SubscriptionController::delete_subscription_query(
             &state.db,
             input.id,
         )
@@ -503,7 +503,7 @@ impl TypedCommand for PauseSubscriptionQuery {
     type Output = ();
 
     async fn execute(state: &AppState, input: Self::Input) -> Result<Self::Output, String> {
-        crate::subscription_controller::SubscriptionController::pause_subscription_query(
+        crate::subscriptions::controller::SubscriptionController::pause_subscription_query(
             &state.db,
             input.id,
             input.paused,
@@ -524,7 +524,7 @@ impl TypedCommand for RunSubscription {
 
     async fn execute(state: &AppState, input: Self::Input) -> Result<Self::Output, String> {
         // PBI-043: Fire-and-forget — return null, not fake results.
-        crate::subscription_controller::SubscriptionController::run_subscription(
+        crate::subscriptions::controller::SubscriptionController::run_subscription(
             &state.db,
             &state.blob_store,
             &state.rate_limiter,
@@ -544,7 +544,7 @@ impl TypedCommand for StopSubscription {
     type Output = ();
 
     async fn execute(state: &AppState, input: Self::Input) -> Result<Self::Output, String> {
-        crate::subscription_controller::SubscriptionController::stop_subscription(
+        crate::subscriptions::controller::SubscriptionController::stop_subscription(
             &state.db,
             &state.running_subscriptions,
             input.id,
@@ -560,7 +560,7 @@ impl TypedCommand for ResetSubscription {
     type Output = ();
 
     async fn execute(state: &AppState, input: Self::Input) -> Result<Self::Output, String> {
-        crate::subscription_controller::SubscriptionController::reset_subscription_checked(
+        crate::subscriptions::controller::SubscriptionController::reset_subscription_checked(
             &state.db,
             &state.running_subscriptions,
             input.id,
@@ -581,7 +581,7 @@ impl TypedCommand for GetRunningSubscriptions {
 
     async fn execute(state: &AppState, _input: Self::Input) -> Result<Self::Output, String> {
         let result =
-            crate::subscription_controller::SubscriptionController::get_running_subscriptions(
+            crate::subscriptions::controller::SubscriptionController::get_running_subscriptions(
                 &state.running_subscriptions,
             )
             .await?;
@@ -595,7 +595,7 @@ impl TypedCommand for GetRunningSubscriptionProgress {
     type Output = serde_json::Value;
 
     async fn execute(_state: &AppState, _input: Self::Input) -> Result<Self::Output, String> {
-        let result = crate::subscription_controller::SubscriptionController::get_running_subscription_progress();
+        let result = crate::subscriptions::controller::SubscriptionController::get_running_subscription_progress();
         Ok(serde_json::to_value(&result).map_err(|e| e.to_string())?)
     }
 }
@@ -606,7 +606,7 @@ impl TypedCommand for RenameSubscription {
     type Output = ();
 
     async fn execute(state: &AppState, input: Self::Input) -> Result<Self::Output, String> {
-        crate::subscription_controller::SubscriptionController::rename_subscription(
+        crate::subscriptions::controller::SubscriptionController::rename_subscription(
             &state.db,
             input.id,
             input.name,
@@ -627,7 +627,7 @@ impl TypedCommand for RunSubscriptionQuery {
 
     async fn execute(state: &AppState, input: Self::Input) -> Result<Self::Output, String> {
         // PBI-043: Fire-and-forget — return null, not fake results.
-        crate::subscription_controller::SubscriptionController::run_subscription_query(
+        crate::subscriptions::controller::SubscriptionController::run_subscription_query(
             &state.db,
             &state.blob_store,
             &state.rate_limiter,
@@ -670,7 +670,7 @@ impl TypedCommand for SetCredential {
 
     async fn execute(state: &AppState, input: Self::Input) -> Result<Self::Output, String> {
         let site_category =
-            crate::gallery_dl_runner::canonical_site_id(input.site_category.trim()).to_string();
+            crate::subscriptions::gallery_dl_runner::canonical_site_id(input.site_category.trim()).to_string();
 
         let cred_type =
             match crate::credential_store::CredentialType::from_str(&input.credential_type) {
@@ -743,7 +743,7 @@ impl TypedCommand for DeleteCredential {
 
     async fn execute(state: &AppState, input: Self::Input) -> Result<Self::Output, String> {
         let canonical =
-            crate::gallery_dl_runner::canonical_site_id(input.site_category.trim()).to_string();
+            crate::subscriptions::gallery_dl_runner::canonical_site_id(input.site_category.trim()).to_string();
         let mut categories = vec![input.site_category.clone(), canonical.clone()];
         if canonical == "rule34" {
             categories.push("rule34xxx".to_string());

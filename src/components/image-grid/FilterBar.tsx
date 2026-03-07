@@ -14,13 +14,13 @@ import {
   useActiveFilterCount,
   type FilterLogicMode,
   type MimeFilterKey,
-} from '../../stores/filterStore';
-import { ContextMenu, useContextMenu, type ContextMenuEntry } from '../ui/ContextMenu';
+} from '../../state/filterStore';
+import { ContextMenu, useContextMenu, type ContextMenuEntry } from '../../shared/components/ContextMenu';
 import { TagSelectService } from '../tags/tagSelectService';
 import type { TagFilterLogicMode } from '../tags/tagSelectTypes';
-import { FolderPickerService } from '../../services/folderPickerService';
-import { TextButton } from '../ui/TextButton';
-import { buildColorFilterMenu, buildRatingFilterMenu, buildTypesFilterMenu } from '../ui/context-actions/filterActions';
+import { FolderPickerService } from '../../shared/services/folderPickerService';
+import { TextButton } from '../../shared/components/TextButton';
+import { buildColorFilterMenu, buildRatingFilterMenu, buildTypesFilterMenu } from '../../shared/components/context-actions/filterActions';
 import st from './FilterBar.module.css';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any

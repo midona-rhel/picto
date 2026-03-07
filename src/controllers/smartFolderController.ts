@@ -1,6 +1,6 @@
 import { api } from '#desktop/api';
 import { applyMutationEffects } from '../domain/actions/mutationEffects';
-import type { SmartFolder } from '../types/api';
+import type { SmartFolder } from '../shared/types/api';
 
 /**
  * SmartFolderController — frontend facade for smart folder CRUD.

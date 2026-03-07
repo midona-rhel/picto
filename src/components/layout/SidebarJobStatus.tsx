@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { IconAlertTriangle, IconCheck, IconCloud, IconDownload } from '@tabler/icons-react';
 
 import type { PtrBootstrapStatus, PtrSyncProgress } from '../../controllers/ptrSyncController';
-import { useRuntimeSyncStore } from '../../stores/runtimeSyncStore';
+import { useRuntimeSyncStore } from '../../state/runtimeSyncStore';
 import st from './SidebarJobStatus.module.css';
 
 type PtrState =

@@ -1,16 +1,16 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { IconFolder, IconChevronRight } from '@tabler/icons-react';
-import { mediaThumbnailUrl } from '../../lib/mediaUrl';
+import { mediaThumbnailUrl } from '../../shared/lib/mediaUrl';
 import { FolderController } from '../../controllers/folderController';
-import { notifyError, notifySuccess } from '../../lib/notify';
-import { useDomainStore } from '../../stores/domainStore';
-import type { SidebarNodeDto } from '../../types/sidebar';
-import { ContextMenu, ContextMenuEntry, useContextMenu } from '../ui/ContextMenu';
+import { notifyError, notifySuccess } from '../../shared/lib/notify';
+import { useDomainStore } from '../../state/domainStore';
+import type { SidebarNodeDto } from '../../shared/types/sidebar';
+import { ContextMenu, ContextMenuEntry, useContextMenu } from '../../shared/components/ContextMenu';
 import {
   buildFolderMultiMenu,
   buildFolderSingleMenu,
   buildFolderSurfaceMenu,
-} from '../ui/context-actions/folderActions';
+} from '../../shared/components/context-actions/folderActions';
 import { DynamicIcon, DEFAULT_FOLDER_ICON } from '../smart-folders/iconRegistry';
 import { TagSelectService } from '../tags/tagSelectService';
 import styles from './SubfolderGrid.module.css';

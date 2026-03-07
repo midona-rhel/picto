@@ -3,28 +3,16 @@
 ## Priority
 P1
 
-## Audit Status (2026-03-06)
-Status: **Partially Implemented**
+## Audit Status (2026-03-07)
+Status: **Implemented**
 
-Evidence:
-1. All commands are dispatched as raw strings: `dispatch("update_file_status", "{\"hash\": ..., \"status\": ...}")`.
-2. Arguments are manually destructured from `serde_json::Value` using `de(args, "key")` with no compile-time checking.
-3. Frontend and backend agree on command names and argument shapes only by convention — no shared schema, no generated types.
-4. A typo in a command name silently falls through to "Unknown command" at runtime.
+All 12 command domain families are fully migrated to typed dispatch:
 
-## Progress Update (2026-03-07)
-Status: **Partially Implemented**
-
-Implemented so far:
-1. Typed dispatch infrastructure exists under `core/src/dispatch/typed/`.
-2. `files_lifecycle` has a real typed vertical slice.
-3. TS command types are generated from Rust via `ts-rs` for migrated commands.
-4. Frontend has `invokeTyped()` infrastructure and a typed-command parity checker.
-
-Remaining work is split into follow-up PBIs:
-- `PBI-321` through `PBI-326`
-
-`PBI-234` should remain the umbrella for the typed dispatch migration until the legacy dispatch path is no longer the default for most domains.
+1. `core/src/dispatch/typed/` — `TypedCommand` trait with compile-time checked `Input`/`Output` types
+2. Domain modules: `media_lifecycle`, `media_metadata`, `media_io`, `folders`, `tags`, `selection`, `grid`, `subscriptions`, `ptr`, `system`, `duplicates`, `smart_folders`
+3. `dispatch/mod.rs` — all commands route through `typed::typed_dispatch()`. Two pre-state commands (`close_library`, `get_runtime_snapshot`) are handled inline because they don't require `AppState`.
+4. Frontend `invokeTyped()` — compile-time checked command names and arg types via generated `TypedCommandMap`
+5. No remaining legacy string-based command dispatch — unknown commands return an error
 
 ## Problem
 The dispatch layer has no type safety. Command names are strings, arguments are untyped JSON, and there is no shared contract between the Rust core and the TypeScript frontend. This makes it impossible to know at compile time whether a command call is correct, creates drift between frontend and backend, and means every new command requires manually matching string names and JSON shapes in both codebases.

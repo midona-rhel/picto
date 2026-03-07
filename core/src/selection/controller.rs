@@ -8,7 +8,7 @@ use std::collections::{HashMap, HashSet};
 
 use chrono::Utc;
 
-use crate::selection_helpers::{
+use crate::selection::helpers::{
     selection_bitmap_for_all_results, summarize_hashes_bulk, summarize_stats_from_bitmap,
     summarize_tags_from_bitmap,
 };

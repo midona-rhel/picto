@@ -1,7 +1,7 @@
 
 import { type ReactNode, type MouseEvent, type DragEvent, useState, useCallback } from 'react';
 import styles from './Sidebar.module.css';
-import { imageDrag } from '../../lib/imageDrag';
+import { imageDrag } from '../../shared/lib/imageDrag';
 
 interface SidebarItemProps {
   icon: ReactNode;

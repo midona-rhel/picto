@@ -1,5 +1,5 @@
 import { api } from '#desktop/api';
-import type { SelectionQuerySpec } from '../../types/api';
+import type { SelectionQuerySpec } from '../../shared/types/api';
 import { applyLifecycleMutationEffects } from './mutationEffects';
 
 type LifecycleOptions = {

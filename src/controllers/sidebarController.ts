@@ -1,4 +1,4 @@
-import { useDomainStore } from '../stores/domainStore';
+import { useDomainStore } from '../state/domainStore';
 
 /**
  * SidebarController — orchestration facade for sidebar tree fetch/invalidation.

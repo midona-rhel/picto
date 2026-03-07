@@ -80,13 +80,13 @@ impl TypedCommand for ImportFiles {
         let auto_merge_enabled = app_settings.duplicate_auto_merge_enabled
             && !app_settings.duplicate_auto_merge_subscriptions_only;
         let auto_merge_distance = if auto_merge_enabled {
-            crate::settings::similarity_pct_to_distance(
+            crate::settings::store::similarity_pct_to_distance(
                 app_settings.duplicate_auto_merge_similarity_pct,
             )
         } else {
             0
         };
-        let result = crate::import_controller::ImportController::import_files(
+        let result = crate::import::controller::ImportController::import_files(
             &state.db,
             &state.blob_store,
             input.paths,
@@ -116,7 +116,7 @@ impl TypedCommand for UpdateFileStatus {
 
     async fn execute(state: &AppState, input: Self::Input) -> Result<Self::Output, String> {
         let file_status = crate::types::parse_file_status(&input.status)?;
-        crate::lifecycle_controller::LifecycleController::update_file_status(
+        crate::lifecycle::controller::LifecycleController::update_file_status(
             &state.db,
             input.hash.clone(),
             file_status,
@@ -125,7 +125,7 @@ impl TypedCommand for UpdateFileStatus {
 
         let folder_ids =
             collect_folder_ids_for_hashes(state, &[input.hash.clone()], 1).await;
-        if let Err(err) = crate::folder_controller::FolderController::
+        if let Err(err) = crate::folders::controller::FolderController::
             refresh_sidebar_projection_for_folder_ids(&state.db, &folder_ids)
             .await
         {
@@ -152,14 +152,14 @@ impl TypedCommand for DeleteFile {
     async fn execute(state: &AppState, input: Self::Input) -> Result<Self::Output, String> {
         let folder_ids =
             collect_folder_ids_for_hashes(state, &[input.hash.clone()], 1).await;
-        crate::lifecycle_controller::LifecycleController::delete_file(
+        crate::lifecycle::controller::LifecycleController::delete_file(
             &state.db,
             &state.blob_store,
             input.hash.clone(),
         )
         .await?;
 
-        if let Err(err) = crate::folder_controller::FolderController::
+        if let Err(err) = crate::folders::controller::FolderController::
             refresh_sidebar_projection_for_folder_ids(&state.db, &folder_ids)
             .await
         {
@@ -189,7 +189,7 @@ impl TypedCommand for DeleteFiles {
             hashes_for_impact.len(),
         )
         .await;
-        let count = crate::lifecycle_controller::LifecycleController::delete_files(
+        let count = crate::lifecycle::controller::LifecycleController::delete_files(
             &state.db,
             &state.blob_store,
             input.hashes,
@@ -197,7 +197,7 @@ impl TypedCommand for DeleteFiles {
         .await?;
 
         if count > 0 {
-            if let Err(err) = crate::folder_controller::FolderController::
+            if let Err(err) = crate::folders::controller::FolderController::
                 refresh_sidebar_projection_for_folder_ids(&state.db, &folder_ids)
                 .await
             {
@@ -235,7 +235,7 @@ impl TypedCommand for WipeImageData {
     type Output = ();
 
     async fn execute(state: &AppState, _input: Self::Input) -> Result<Self::Output, String> {
-        crate::lifecycle_controller::LifecycleController::wipe_all_files(
+        crate::lifecycle::controller::LifecycleController::wipe_all_files(
             &state.db,
             &state.blob_store,
         )
@@ -265,7 +265,7 @@ impl TypedCommand for DeleteFilesSelection {
         let folder_ids =
             collect_folder_ids_for_hashes(state, &hashes_clone, hashes_clone.len()).await;
 
-        let count = crate::lifecycle_controller::LifecycleController::delete_files(
+        let count = crate::lifecycle::controller::LifecycleController::delete_files(
             &state.db,
             &state.blob_store,
             hashes,
@@ -273,7 +273,7 @@ impl TypedCommand for DeleteFilesSelection {
         .await?;
 
         if count > 0 {
-            if let Err(err) = crate::folder_controller::FolderController::
+            if let Err(err) = crate::folders::controller::FolderController::
                 refresh_sidebar_projection_for_folder_ids(&state.db, &folder_ids)
                 .await
             {
@@ -317,7 +317,7 @@ impl TypedCommand for UpdateFileStatusSelection {
                 .db
                 .update_file_status_batch(&bitmap, status_code)
                 .await?;
-            if let Err(err) = crate::folder_controller::FolderController::
+            if let Err(err) = crate::folders::controller::FolderController::
                 refresh_sidebar_projection_for_folder_ids(&state.db, &folder_ids)
                 .await
             {
@@ -352,7 +352,7 @@ pub(crate) async fn resolve_selection_bitmap(
         }
         SelectionMode::AllResults => {
             let (_, filtered) =
-                crate::selection_helpers::selection_bitmap_for_all_results(&state.db, selection)
+                crate::selection::helpers::selection_bitmap_for_all_results(&state.db, selection)
                     .await?;
             Ok(filtered)
         }

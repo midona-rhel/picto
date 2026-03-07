@@ -9,10 +9,10 @@ import {
   Text,
   Stack,
 } from '@mantine/core';
-import { TextButton } from './ui/TextButton';
-import { EmptyState } from './ui/EmptyState';
-import { glassModalStyles } from '../styles/glassModal';
-import { notifySuccess, notifyError, notifyInfo } from '../lib/notify';
+import { TextButton } from '../shared/components/TextButton';
+import { EmptyState } from '../shared/components/EmptyState';
+import { glassModalStyles } from '../shared/styles/glassModal';
+import { notifySuccess, notifyError, notifyInfo } from '../shared/lib/notify';
 import {
   IconTrash,
   IconPlus,
@@ -25,7 +25,7 @@ import {
   SubscriptionController,
   type SubscriptionFinishedEvent,
 } from '../controllers/subscriptionController';
-import { useRuntimeSyncStore } from '../stores/runtimeSyncStore';
+import { useRuntimeSyncStore } from '../state/runtimeSyncStore';
 import { listenRuntimeEvent } from '#desktop/api';
 import st from './FlowsWorking.module.css';
 

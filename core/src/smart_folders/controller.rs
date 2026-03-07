@@ -3,7 +3,7 @@
 //!
 //! Delegates to `sqlite::smart_folders` for storage and bitmap compilation.
 
-use crate::sqlite::smart_folders::{
+use crate::smart_folders::db::{
     compile_predicate, get_smart_folder, SmartFolder, SmartFolderPredicate,
 };
 use crate::sqlite::SqliteDatabase;
@@ -42,7 +42,7 @@ impl SmartFolderController {
         if let Some(ref o) = sf.sort_order {
             meta["sort_order"] = serde_json::Value::String(o.clone());
         }
-        let node = crate::sqlite::sidebar::SidebarNode {
+        let node = crate::sidebar::db::SidebarNode {
             node_id,
             kind: "smart_folder".into(),
             parent_id: Some("section:smart_folders".into()),
@@ -58,7 +58,7 @@ impl SmartFolderController {
             meta_json: Some(meta.to_string()),
             updated_at: Some(chrono::Utc::now().to_rfc3339()),
         };
-        db.with_conn(move |conn| crate::sqlite::sidebar::upsert_sidebar_node(conn, &node))
+        db.with_conn(move |conn| crate::sidebar::db::upsert_sidebar_node(conn, &node))
             .await?;
 
         Ok(created)
@@ -112,7 +112,7 @@ impl SmartFolderController {
         if let Some(ref o) = sf.sort_order {
             meta["sort_order"] = serde_json::Value::String(o.clone());
         }
-        let node = crate::sqlite::sidebar::SidebarNode {
+        let node = crate::sidebar::db::SidebarNode {
             node_id,
             kind: "smart_folder".into(),
             parent_id: Some("section:smart_folders".into()),
@@ -128,7 +128,7 @@ impl SmartFolderController {
             meta_json: Some(meta.to_string()),
             updated_at: Some(chrono::Utc::now().to_rfc3339()),
         };
-        db.with_conn(move |conn| crate::sqlite::sidebar::upsert_sidebar_node(conn, &node))
+        db.with_conn(move |conn| crate::sidebar::db::upsert_sidebar_node(conn, &node))
             .await?;
 
         Ok((updated, predicate_changed))
@@ -142,7 +142,7 @@ impl SmartFolderController {
         // Also remove the sidebar_node row so the folder vanishes immediately
         let node_id = format!("smart:{}", sf_id);
         db.with_conn(move |conn| {
-            crate::sqlite::sidebar::delete_sidebar_node(conn, &node_id)?;
+            crate::sidebar::db::delete_sidebar_node(conn, &node_id)?;
             Ok(())
         })
         .await?;

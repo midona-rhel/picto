@@ -3,7 +3,7 @@ import {
   getOrStartSelectionSummary,
   invalidateSelectionSummary,
 } from '#features/grid/data';
-import type { SelectionQuerySpec, SelectionSummary } from '../types/api';
+import type { SelectionQuerySpec, SelectionSummary } from '../shared/types/api';
 
 /**
  * SelectionController — orchestration facade for virtual-selection summary

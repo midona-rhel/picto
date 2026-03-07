@@ -2,8 +2,8 @@ import { api } from '#desktop/api';
 import { prefetchMetadataBatch } from '#features/grid/data';
 
 // Re-export types from central api types for backwards compatibility.
-export type { GridPageSlimResponse } from '../types/api';
-import type { GridPageSlimResponse } from '../types/api';
+export type { GridPageSlimResponse } from '../shared/types/api';
+import type { GridPageSlimResponse } from '../shared/types/api';
 
 export interface FetchGridPageArgs {
   limit: number;

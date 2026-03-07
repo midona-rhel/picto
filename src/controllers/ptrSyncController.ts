@@ -13,7 +13,7 @@ export type {
   PtrBootstrapProgressEvent,
   PtrBootstrapFinishedEvent,
   PtrBootstrapFailedEvent,
-} from '../types/api';
+} from '../shared/types/api';
 import type {
   PtrSyncProgress,
   PtrBootstrapStatus,
@@ -22,7 +22,7 @@ import type {
   PtrBootstrapProgressEvent,
   PtrBootstrapFinishedEvent,
   PtrBootstrapFailedEvent,
-} from '../types/api';
+} from '../shared/types/api';
 
 export const PtrSyncController = {
   sync(): Promise<unknown> {

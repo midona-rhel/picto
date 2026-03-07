@@ -1,8 +1,8 @@
-import { useRuntimeSyncStore } from '../../stores/runtimeSyncStore';
-import { useCacheStore } from '../../stores/cacheStore';
+import { useRuntimeSyncStore } from '../../state/runtimeSyncStore';
+import { useCacheStore } from '../../state/cacheStore';
 import { invalidateMetadata } from '#features/grid/data';
 import { gridResourceMatchesScope } from '../resourceInvalidator';
-import type { ResourceKey } from '../../types/generated/runtime-contract';
+import type { ResourceKey } from '../../shared/types/generated/runtime-contract';
 
 let unsub: (() => void) | null = null;
 let prevStaleRef: Set<unknown> | null = null;

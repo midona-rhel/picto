@@ -17,9 +17,9 @@ import {
 import { DisplayOptionsPanel } from './DisplayOptionsPanel';
 import { SortByRow } from './SortByRow';
 import { LayoutRow } from './LayoutRow';
-import { KbdTooltip } from '../ui/KbdTooltip';
-import { ContextMenu, useContextMenu, type ContextMenuEntry } from '../ui/ContextMenu';
-import { useFilterStore, useActiveFilterCount } from '../../stores/filterStore';
+import { KbdTooltip } from '../../shared/components/KbdTooltip';
+import { ContextMenu, useContextMenu, type ContextMenuEntry } from '../../shared/components/ContextMenu';
+import { useFilterStore, useActiveFilterCount } from '../../state/filterStore';
 import type { DetailViewState, DetailViewControls } from './DetailView';
 import type { GridViewMode } from './runtime';
 import { useGlobalKeydown } from '../../hooks/useGlobalKeydown';

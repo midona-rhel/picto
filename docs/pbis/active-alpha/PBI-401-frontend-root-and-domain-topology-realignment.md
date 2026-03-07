@@ -4,24 +4,20 @@
 P1
 
 ## Audit Status (2026-03-07)
-Status: **Not Implemented**
+Status: **Implemented — First Pass Complete**
 
-Evidence:
-1. `src/App.tsx` imports from both feature-first surfaces and legacy direct component/service paths.
-2. The codebase still has parallel ownership trees such as `src/components/sidebar/` and `src/features/sidebar/`.
-3. High-value screens like flows, tags, collections, duplicates, and parts of the sidebar still live primarily in legacy `src/components/` paths.
-4. `src/` root currently contains a flat row of app entry files and shell files:
-   - `App.tsx`
-   - `detail.tsx`
-   - `library-manager.tsx`
-   - `main.tsx`
-   - `settings.tsx`
-   - `subscriptions.tsx`
-5. Shared vs domain-owned code is not visually obvious from the directory layout, so it is hard to answer basic maintenance questions:
-   - what belongs to a feature/domain
-   - what is a shared primitive
-   - what should be deleted
-   - what is only legacy compatibility residue
+Completed:
+1. Target topology defined in `docs/frontend-topology.md`.
+2. Root of `src/` reduced to `vite-env.d.ts` only — entry files moved to `src/entrypoints/`.
+3. App shell (`App.tsx`, `useAppBootstrap.ts`) moved to `src/app/`.
+4. Desktop bridge moved to `src/platform/` (alias `#desktop` updated).
+5. Stores moved to `src/state/`.
+6. Shared code moved to `src/shared/` (lib, styles, types, services, contexts, UI primitives).
+7. Classification table documents target location for every remaining transitional item.
+
+Remaining (deferred to PBI-404/405):
+1. `src/components/` still contains feature-owned code to be migrated into `src/features/`.
+2. `src/controllers/`, `src/hooks/`, `src/domain/` are transitional — to be split between features.
 
 ## Problem
 The frontend does not have a clear topological structure. The problem is not just "some files are still in `src/components`"; it is that the project does not visibly tell you:

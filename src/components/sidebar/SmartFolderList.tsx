@@ -21,7 +21,7 @@ import {
   arrayMove,
 } from '@dnd-kit/sortable';
 
-import { ContextMenu, useContextMenu } from '../ui/ContextMenu';
+import { ContextMenu, useContextMenu } from '../../shared/components/ContextMenu';
 import { SmartFolderModal } from '../smart-folders/SmartFolderModal';
 import { DynamicIcon, DEFAULT_FOLDER_ICON } from '../smart-folders/iconRegistry';
 import type { SmartFolder } from '../smart-folders/types';
@@ -29,11 +29,11 @@ import { folderToRust } from '../smart-folders/types';
 import { FolderController } from '../../controllers/folderController';
 import { registerUndoAction } from '../../controllers/undoRedoController';
 import { SidebarController } from '../../controllers/sidebarController';
-import { useDomainStore } from '../../stores/domainStore';
-import { useNavigationStore } from '../../stores/navigationStore';
+import { useDomainStore } from '../../state/domainStore';
+import { useNavigationStore } from '../../state/navigationStore';
 import { SidebarSection } from './SidebarSection';
 import { SidebarItem } from './SidebarItem';
-import { buildSmartFolderItemMenu } from '../ui/context-actions/smartFolderActions';
+import { buildSmartFolderItemMenu } from '../../shared/components/context-actions/smartFolderActions';
 import styles from './Sidebar.module.css';
 
 interface SmartFolderListProps {

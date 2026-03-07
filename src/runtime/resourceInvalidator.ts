@@ -1,4 +1,4 @@
-import type { MutationReceipt, ResourceKey } from '../types/generated/runtime-contract';
+import type { MutationReceipt, ResourceKey } from '../shared/types/generated/runtime-contract';
 
 /**
  * Derive the set of resource keys that a MutationReceipt invalidates.

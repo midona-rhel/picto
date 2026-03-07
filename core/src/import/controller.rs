@@ -6,10 +6,10 @@
 use std::path::PathBuf;
 
 use crate::blob_store::BlobStore;
-use crate::duplicate_controller::DuplicateController;
-use crate::import::{ImportOptions, ImportPipeline};
+use crate::duplicates::controller::DuplicateController;
+use crate::import::pipeline::{ImportOptions, ImportPipeline};
 use crate::sqlite::SqliteDatabase;
-use crate::tags;
+use crate::tags::normalize;
 use crate::types::{ImportBatchResult, ImportResult};
 use tracing::warn;
 
@@ -87,7 +87,7 @@ impl ImportController {
                         tags_applied: imported.tags_applied,
                     });
                 }
-                Err(crate::import::ImportError::AlreadyImported(hash)) => {
+                Err(crate::import::pipeline::ImportError::AlreadyImported(hash)) => {
                     batch.skipped.push(hash);
                 }
                 Err(e) => {

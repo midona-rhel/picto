@@ -17,9 +17,9 @@ use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
 use crate::events;
-use crate::ptr_client::PtrClient;
-use crate::ptr_types::*;
-use crate::sqlite_ptr::PtrSqliteDatabase;
+use crate::ptr::client::PtrClient;
+use crate::ptr::types::*;
+use crate::ptr::db::PtrSqliteDatabase;
 
 /// Number of concurrent HTTP downloads.
 const DOWNLOAD_CONCURRENCY: usize = 20;
@@ -171,7 +171,7 @@ impl PtrSyncEngine {
                     _ = interval.tick() => {
                         let mut snap = crate::poison::mutex_or_recover(&heartbeat_progress, "ptr_sync_heartbeat").clone();
                         snap.heartbeat = true;
-                        crate::ptr_controller::PtrController::update_sync_progress(&snap);
+                        crate::ptr::controller::PtrController::update_sync_progress(&snap);
                         events::emit(events::event_names::PTR_SYNC_PROGRESS, &snap);
                     }
                     _ = heartbeat_cancel.cancelled() => break,
@@ -802,7 +802,7 @@ impl PtrSyncEngine {
                     let apply_started = Instant::now();
                     let counts = self
                         .ptr_db
-                        .process_chunk_content(crate::sqlite_ptr::sync::ChunkContent {
+                        .process_chunk_content(crate::ptr::db::sync::ChunkContent {
                             mapping_adds: batch.to_vec(),
                             sibling_adds: Vec::new(),
                             parent_adds: Vec::new(),
@@ -839,7 +839,7 @@ impl PtrSyncEngine {
                     let apply_started = Instant::now();
                     let counts = self
                         .ptr_db
-                        .process_chunk_content(crate::sqlite_ptr::sync::ChunkContent {
+                        .process_chunk_content(crate::ptr::db::sync::ChunkContent {
                             mapping_adds: Vec::new(),
                             sibling_adds: batch.to_vec(),
                             parent_adds: Vec::new(),
@@ -876,7 +876,7 @@ impl PtrSyncEngine {
                     let apply_started = Instant::now();
                     let counts = self
                         .ptr_db
-                        .process_chunk_content(crate::sqlite_ptr::sync::ChunkContent {
+                        .process_chunk_content(crate::ptr::db::sync::ChunkContent {
                             mapping_adds: Vec::new(),
                             sibling_adds: Vec::new(),
                             parent_adds: batch.to_vec(),
@@ -912,7 +912,7 @@ impl PtrSyncEngine {
                     }
                     let apply_started = Instant::now();
                     self.ptr_db
-                        .process_chunk_content(crate::sqlite_ptr::sync::ChunkContent {
+                        .process_chunk_content(crate::ptr::db::sync::ChunkContent {
                             mapping_adds: Vec::new(),
                             sibling_adds: Vec::new(),
                             parent_adds: Vec::new(),
@@ -947,7 +947,7 @@ impl PtrSyncEngine {
                     }
                     let apply_started = Instant::now();
                     self.ptr_db
-                        .process_chunk_content(crate::sqlite_ptr::sync::ChunkContent {
+                        .process_chunk_content(crate::ptr::db::sync::ChunkContent {
                             mapping_adds: Vec::new(),
                             sibling_adds: Vec::new(),
                             parent_adds: Vec::new(),
@@ -982,7 +982,7 @@ impl PtrSyncEngine {
                     }
                     let apply_started = Instant::now();
                     self.ptr_db
-                        .process_chunk_content(crate::sqlite_ptr::sync::ChunkContent {
+                        .process_chunk_content(crate::ptr::db::sync::ChunkContent {
                             mapping_adds: Vec::new(),
                             sibling_adds: Vec::new(),
                             parent_adds: Vec::new(),
@@ -1174,7 +1174,7 @@ impl PtrSyncEngine {
     ) {
         progress.heartbeat = false;
         *crate::poison::mutex_or_recover(shared, "ptr_sync_progress") = progress.clone();
-        crate::ptr_controller::PtrController::update_sync_progress(progress);
+        crate::ptr::controller::PtrController::update_sync_progress(progress);
         events::emit(events::event_names::PTR_SYNC_PROGRESS, progress);
     }
 

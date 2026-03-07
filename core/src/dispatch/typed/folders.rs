@@ -281,7 +281,7 @@ pub struct DeleteCollection;
 impl TypedCommand for ListFolders {
     const NAME: &'static str = "list_folders";
     type Input = serde_json::Value;
-    type Output = Vec<crate::sqlite::folders::Folder>;
+    type Output = Vec<crate::folders::db::Folder>;
 
     async fn execute(state: &AppState, _input: Self::Input) -> Result<Self::Output, String> {
         state.db.list_folders().await
@@ -311,7 +311,7 @@ impl TypedCommand for GetFolderCoverHash {
 impl TypedCommand for GetFileFolders {
     const NAME: &'static str = "get_file_folders";
     type Input = GetFileFoldersInput;
-    type Output = Vec<crate::sqlite::folders::FolderMembership>;
+    type Output = Vec<crate::folders::db::FolderMembership>;
 
     async fn execute(state: &AppState, input: Self::Input) -> Result<Self::Output, String> {
         state.db.get_entity_folder_memberships(&input.hash).await
@@ -321,7 +321,7 @@ impl TypedCommand for GetFileFolders {
 impl TypedCommand for GetEntityFolders {
     const NAME: &'static str = "get_entity_folders";
     type Input = GetEntityFoldersInput;
-    type Output = Vec<crate::sqlite::folders::FolderMembership>;
+    type Output = Vec<crate::folders::db::FolderMembership>;
 
     async fn execute(state: &AppState, input: Self::Input) -> Result<Self::Output, String> {
         state.db.get_entity_folder_memberships_by_entity_id(input.entity_id).await
@@ -347,10 +347,10 @@ impl TypedCommand for MoveFolder {
 impl TypedCommand for CreateFolder {
     const NAME: &'static str = "create_folder";
     type Input = CreateFolderInput;
-    type Output = crate::sqlite::folders::Folder;
+    type Output = crate::folders::db::Folder;
 
     async fn execute(state: &AppState, input: Self::Input) -> Result<Self::Output, String> {
-        let folder = crate::folder_controller::FolderController::create_folder(
+        let folder = crate::folders::controller::FolderController::create_folder(
             &state.db, input.name, input.parent_id, input.icon, input.color,
         ).await?;
         crate::events::emit_mutation(
@@ -367,7 +367,7 @@ impl TypedCommand for UpdateFolder {
     type Output = ();
 
     async fn execute(state: &AppState, input: Self::Input) -> Result<Self::Output, String> {
-        crate::folder_controller::FolderController::update_folder(
+        crate::folders::controller::FolderController::update_folder(
             &state.db, input.folder_id, input.name, input.icon, input.color, input.auto_tags,
         ).await?;
         crate::events::emit_mutation(
@@ -385,7 +385,7 @@ impl TypedCommand for DeleteFolder {
     type Output = ();
 
     async fn execute(state: &AppState, input: Self::Input) -> Result<Self::Output, String> {
-        crate::folder_controller::FolderController::delete_folder(&state.db, input.folder_id).await?;
+        crate::folders::controller::FolderController::delete_folder(&state.db, input.folder_id).await?;
         crate::events::emit_mutation(
             "delete_folder",
             crate::events::MutationImpact::sidebar(crate::events::Domain::Folders)
@@ -402,7 +402,7 @@ impl TypedCommand for UpdateFolderParent {
     type Output = ();
 
     async fn execute(state: &AppState, input: Self::Input) -> Result<Self::Output, String> {
-        crate::folder_controller::FolderController::update_folder_parent(
+        crate::folders::controller::FolderController::update_folder_parent(
             &state.db, input.folder_id, input.new_parent_id,
         ).await?;
         crate::events::emit_mutation(
@@ -499,7 +499,7 @@ impl TypedCommand for ReorderFolderItems {
     type Output = ();
 
     async fn execute(state: &AppState, input: Self::Input) -> Result<Self::Output, String> {
-        crate::folder_controller::FolderController::reorder_folder_items(
+        crate::folders::controller::FolderController::reorder_folder_items(
             &state.db, input.folder_id, input.moves,
         ).await?;
         crate::events::emit_mutation(
@@ -543,7 +543,7 @@ impl TypedCommand for ReverseFolderItems {
 impl TypedCommand for GetCollections {
     const NAME: &'static str = "get_collections";
     type Input = serde_json::Value;
-    type Output = Vec<crate::sqlite::collections::CollectionRecord>;
+    type Output = Vec<crate::folders::collections_db::CollectionRecord>;
 
     async fn execute(state: &AppState, _input: Self::Input) -> Result<Self::Output, String> {
         state.db.list_collections().await
@@ -553,7 +553,7 @@ impl TypedCommand for GetCollections {
 impl TypedCommand for GetCollectionSummary {
     const NAME: &'static str = "get_collection_summary";
     type Input = GetCollectionSummaryInput;
-    type Output = crate::sqlite::collections::CollectionSummary;
+    type Output = crate::folders::collections_db::CollectionSummary;
 
     async fn execute(state: &AppState, input: Self::Input) -> Result<Self::Output, String> {
         state.db.get_collection_summary(input.id).await

@@ -1,4 +1,4 @@
-import { useImageDrag } from '../../lib/imageDrag';
+import { useImageDrag } from '../../shared/lib/imageDrag';
 
 /**
  * Floating drag ghost — renders 1-3 stacked thumbnails

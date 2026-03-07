@@ -81,7 +81,7 @@ impl TypedCommand for SaveSettings {
     type Output = ();
 
     async fn execute(state: &AppState, input: Self::Input) -> Result<Self::Output, String> {
-        let value: crate::settings::AppSettings =
+        let value: crate::settings::store::AppSettings =
             serde_json::from_value(input).map_err(|e| e.to_string())?;
         state.settings.update(value);
         Ok(())
@@ -120,7 +120,7 @@ impl TypedCommand for GetPerfSnapshot {
             .map_err(|e| format!("Failed to serialize perf snapshot: {e}"))?;
         if let serde_json::Value::Object(ref mut map) = perf {
             if let Ok(ptr_val) =
-                serde_json::to_value(crate::ptr_sync::get_ptr_sync_perf_breakdown())
+                serde_json::to_value(crate::ptr::sync_engine::get_ptr_sync_perf_breakdown())
             {
                 map.insert("ptr_sync".to_string(), ptr_val);
             }
@@ -159,7 +159,7 @@ impl TypedCommand for GetSidebarTree {
     async fn execute(state: &AppState, _input: Self::Input) -> Result<Self::Output, String> {
         let started = Instant::now();
         let result =
-            crate::sidebar_controller::SidebarController::get_sidebar_tree(&state.db).await?;
+            crate::sidebar::controller::SidebarController::get_sidebar_tree(&state.db).await?;
         crate::perf::record_sidebar_tree(started.elapsed().as_secs_f64() * 1000.0);
         Ok(serde_json::to_value(&result).map_err(|e| e.to_string())?)
     }
@@ -171,7 +171,7 @@ impl TypedCommand for ReorderSidebarNodes {
     type Output = ();
 
     async fn execute(state: &AppState, input: Self::Input) -> Result<Self::Output, String> {
-        crate::sidebar_controller::SidebarController::reorder_sidebar_nodes(
+        crate::sidebar::controller::SidebarController::reorder_sidebar_nodes(
             &state.db,
             input.moves,
         )
@@ -191,7 +191,7 @@ impl TypedCommand for GetViewPrefs {
 
     async fn execute(state: &AppState, input: Self::Input) -> Result<Self::Output, String> {
         let scope_key = input.scope_key.unwrap_or_default();
-        let result = crate::view_prefs_controller::ViewPrefsController::get_view_prefs(
+        let result = crate::settings::controller::ViewPrefsController::get_view_prefs(
             &state.db, scope_key,
         )
         .await?;
@@ -206,7 +206,7 @@ impl TypedCommand for SetViewPrefs {
 
     async fn execute(state: &AppState, input: Self::Input) -> Result<Self::Output, String> {
         let scope_key = input.scope_key.unwrap_or_default();
-        let result = crate::view_prefs_controller::ViewPrefsController::set_view_prefs(
+        let result = crate::settings::controller::ViewPrefsController::set_view_prefs(
             &state.db,
             scope_key,
             input.patch,

@@ -10,7 +10,7 @@ import {
 } from '@mantine/core';
 import { IconCheck, IconKey, IconPlus, IconTrash, IconX } from '@tabler/icons-react';
 import { api, getCurrentWindow } from '#desktop/api';
-import { notifyError, notifySuccess } from '../../lib/notify';
+import { notifyError, notifySuccess } from '../../shared/lib/notify';
 import { CreateFlowModal, FlowsWorking, type FlowResultEntry } from '../FlowsWorking';
 import { SubscriptionController } from '../../controllers/subscriptionController';
 import type {
@@ -18,8 +18,8 @@ import type {
   CredentialHealth,
   CredentialType,
   SubscriptionSiteInfo,
-} from '../../types/api';
-import { TextButton } from '../ui/TextButton';
+} from '../../shared/types/api';
+import { TextButton } from '../../shared/components/TextButton';
 import styles from './SubscriptionsWindow.module.css';
 
 type CredentialFormState = {

@@ -1,11 +1,11 @@
 import { useCallback } from 'react';
 import { prefetchMetadata } from '../metadataPrefetch';
-import { useContextMenu } from '../../ui/ContextMenu';
+import { useContextMenu } from '../../../shared/components/ContextMenu';
 import type { MasonryImageItem } from '../shared';
 import type { SmartFolderPredicate } from '../../smart-folders/types';
 import type { GridRuntimeAction, GridRuntimeState, GridViewMode } from '../runtime';
 import type { LayoutItem } from '../VirtualGrid';
-import { buildGridImageContextMenu } from '../../ui/context-actions/imageActions';
+import { buildGridImageContextMenu } from '../../../shared/components/context-actions/imageActions';
 
 interface UseGridContextMenuArgs {
   scrollRef: React.RefObject<HTMLDivElement>;

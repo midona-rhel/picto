@@ -10,7 +10,7 @@ use serde_json::Value as JsonValue;
 use ts_rs::TS;
 
 use crate::sqlite::files::{FileMetadataSlim, FileRecord};
-use crate::sqlite::smart_folders::SmartFolderPredicate;
+use crate::smart_folders::db::SmartFolderPredicate;
 
 pub fn parse_file_status(status: &str) -> Result<i64, String> {
     match status {

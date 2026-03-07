@@ -56,7 +56,7 @@ impl TypedCommand for GetPtrStatus {
 
     async fn execute(state: &AppState, _input: Self::Input) -> Result<Self::Output, String> {
         let result =
-            crate::ptr_controller::PtrController::get_ptr_status(&state.ptr_db).await?;
+            crate::ptr::controller::PtrController::get_ptr_status(&state.ptr_db).await?;
         Ok(serde_json::to_value(&result).map_err(|e| e.to_string())?)
     }
 }
@@ -67,7 +67,7 @@ impl TypedCommand for IsPtrSyncing {
     type Output = serde_json::Value;
 
     async fn execute(_state: &AppState, _input: Self::Input) -> Result<Self::Output, String> {
-        let result = crate::ptr_controller::PtrController::is_ptr_syncing();
+        let result = crate::ptr::controller::PtrController::is_ptr_syncing();
         Ok(serde_json::to_value(&result).map_err(|e| e.to_string())?)
     }
 }
@@ -78,7 +78,7 @@ impl TypedCommand for GetPtrSyncProgress {
     type Output = serde_json::Value;
 
     async fn execute(_state: &AppState, _input: Self::Input) -> Result<Self::Output, String> {
-        let result = crate::ptr_controller::PtrController::get_sync_progress();
+        let result = crate::ptr::controller::PtrController::get_sync_progress();
         Ok(serde_json::to_value(&result).map_err(|e| e.to_string())?)
     }
 }
@@ -89,7 +89,7 @@ impl TypedCommand for PtrSync {
     type Output = serde_json::Value;
 
     async fn execute(state: &AppState, _input: Self::Input) -> Result<Self::Output, String> {
-        crate::ptr_controller::PtrController::sync(
+        crate::ptr::controller::PtrController::sync(
             &state.ptr_db,
             &state.settings,
             state.db.compiler_tx.clone(),
@@ -108,7 +108,7 @@ impl TypedCommand for CancelPtrSync {
     type Output = ();
 
     async fn execute(state: &AppState, _input: Self::Input) -> Result<Self::Output, String> {
-        crate::ptr_controller::PtrController::cancel_sync(&state.ptr_db)?;
+        crate::ptr::controller::PtrController::cancel_sync(&state.ptr_db)?;
         Ok(())
     }
 }
@@ -119,7 +119,7 @@ impl TypedCommand for PtrCancelBootstrap {
     type Output = ();
 
     async fn execute(state: &AppState, _input: Self::Input) -> Result<Self::Output, String> {
-        crate::ptr_controller::PtrController::cancel_bootstrap(&state.ptr_db)?;
+        crate::ptr::controller::PtrController::cancel_bootstrap(&state.ptr_db)?;
         Ok(())
     }
 }
@@ -130,9 +130,9 @@ impl TypedCommand for PtrBootstrapFromHydrusSnapshot {
     type Output = serde_json::Value;
 
     async fn execute(state: &AppState, input: Self::Input) -> Result<Self::Output, String> {
-        let req: crate::ptr_controller::PtrBootstrapRequest =
+        let req: crate::ptr::controller::PtrBootstrapRequest =
             serde_json::from_value(input).map_err(|e| format!("Invalid ptr bootstrap input: {e}"))?;
-        let result = crate::ptr_controller::PtrController::bootstrap_from_hydrus_snapshot(
+        let result = crate::ptr::controller::PtrController::bootstrap_from_hydrus_snapshot(
             &state.ptr_db,
             req,
         )
@@ -147,7 +147,7 @@ impl TypedCommand for PtrGetBootstrapStatus {
     type Output = serde_json::Value;
 
     async fn execute(_state: &AppState, _input: Self::Input) -> Result<Self::Output, String> {
-        let result = crate::ptr_controller::PtrController::get_bootstrap_status();
+        let result = crate::ptr::controller::PtrController::get_bootstrap_status();
         Ok(serde_json::to_value(&result).map_err(|e| e.to_string())?)
     }
 }
@@ -159,7 +159,7 @@ impl TypedCommand for PtrGetCompactIndexStatus {
 
     async fn execute(state: &AppState, _input: Self::Input) -> Result<Self::Output, String> {
         let result =
-            crate::ptr_controller::PtrController::get_compact_index_status(&state.ptr_db).await?;
+            crate::ptr::controller::PtrController::get_compact_index_status(&state.ptr_db).await?;
         Ok(serde_json::to_value(&result).map_err(|e| e.to_string())?)
     }
 }
@@ -170,7 +170,7 @@ impl TypedCommand for GetPtrSyncPerfBreakdown {
     type Output = serde_json::Value;
 
     async fn execute(_state: &AppState, _input: Self::Input) -> Result<Self::Output, String> {
-        let result = crate::ptr_sync::get_ptr_sync_perf_breakdown();
+        let result = crate::ptr::sync_engine::get_ptr_sync_perf_breakdown();
         Ok(serde_json::to_value(&result).map_err(|e| e.to_string())?)
     }
 }

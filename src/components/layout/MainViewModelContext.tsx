@@ -1,5 +1,5 @@
 import { createContext, useContext, type ReactNode } from 'react';
-import type { AppSettings } from '../../stores/settingsStore';
+import type { AppSettings } from '../../state/settingsStore';
 import type { SmartFolderPredicate } from '../smart-folders/types';
 import type { GridViewMode, DetailViewControls, DetailViewState } from '#features/grid/components';
 import type { MasonryImageItem, SelectionQuerySpec } from '#features/grid/types';
