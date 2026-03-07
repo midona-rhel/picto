@@ -166,7 +166,10 @@ export const useDomainStore = create<DomainState>((set, get) => ({
         (n) => n.id === 'system:recent_viewed' || n.id === 'system:recently_viewed',
       );
       const duplicatesNode = nodes.find((n) => n.id === 'system:duplicates');
-      const inboxCount = inboxCountResp?.total_count ?? inboxNode?.count ?? 0;
+      // Prefer the compiled sidebar node count. During subscription imports,
+      // the inbox grid snapshot can intentionally stay cached for live insertion,
+      // which would otherwise overwrite a fresher sidebar count.
+      const inboxCount = inboxNode?.count ?? inboxCountResp?.total_count ?? get().inboxCount;
       const uncategorizedCount = uncategorizedCountResp?.total_count ?? uncategorizedNode?.count ?? 0;
       const untaggedCount = untaggedCountResp?.total_count ?? untaggedNode?.count ?? 0;
       const recentViewedCount = recentViewedCountResp?.total_count ?? recentViewedNode?.count ?? 0;
