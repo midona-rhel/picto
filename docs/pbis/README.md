@@ -7,7 +7,7 @@ This folder was reset for the first alpha release.
 1. `active-alpha/`: PBIs that are currently release-relevant for `v0.1.0-alpha.*`
 2. `archive/`: PBIs retained for history, not currently in alpha release scope
 
-## Active Alpha PBIs (72)
+## Active Alpha PBIs (83)
 
 1. [PBI-118](./active-alpha/PBI-118-export-in-specified-format-and-dimension.md)
 2. [PBI-123](./active-alpha/PBI-123-folder-auto-tagging.md)
@@ -61,30 +61,40 @@ This folder was reset for the first alpha release.
 50. [PBI-238](./active-alpha/PBI-238-unify-tag-parsing-paths.md)
 51. [PBI-239](./active-alpha/PBI-239-core-module-documentation-and-contract-comments.md)
 52. [PBI-240](./active-alpha/PBI-240-rust-core-full-codebase-audit-for-cleanup-pbis.md)
-53. [PBI-241](./active-alpha/PBI-241-frontend-full-codebase-audit-for-cleanup-pbis.md)
-54. [PBI-242](./active-alpha/PBI-242-clean-up-project-root-folder.md)
-55. [PBI-243](./active-alpha/PBI-243-canvas-redraw-policy-on-window-resize.md)
-56. [PBI-244](./active-alpha/PBI-244-controller-driven-view-transition-lifecycle.md)
-57. [PBI-245](./active-alpha/PBI-245-blurhash-first-transition-loading-strategy.md)
-58. [PBI-246](./active-alpha/PBI-246-add-to-folder-modal-with-tree-view.md)
-59. [PBI-247](./active-alpha/PBI-247-sidebar-tree-view-needs-folder-icon-or-visual.md)
-60. [PBI-248](./active-alpha/PBI-248-unify-context-menu-bulk-selection-actions.md)
-61. [PBI-249](./active-alpha/PBI-249-inspector-scrollbar-shifts-content-layout.md)
-62. [PBI-250](./active-alpha/PBI-250-import-button-broken-on-linux.md)
-63. [PBI-251](./active-alpha/PBI-251-import-progress-indicator.md)
-64. [PBI-252](./active-alpha/PBI-252-subscription-setup-help-text-and-query-guidance.md)
-65. [PBI-253](./active-alpha/PBI-253-library-search-returns-no-results.md)
-66. [PBI-254](./active-alpha/PBI-254-user-guide-in-readme-or-docs.md)
-67. [PBI-255](./active-alpha/PBI-255-ole-container-detection-and-type-disambiguation.md)
-68. [PBI-256](./active-alpha/PBI-256-ole-metadata-extraction-word-count-and-core-properties.md)
-69. [PBI-257](./active-alpha/PBI-257-procreate-binary-plist-resolution-parsing.md)
-70. [PBI-258](./active-alpha/PBI-258-pdf-thumbnail-rendering-backend-integration.md)
-71. [PBI-259](./active-alpha/PBI-259-subscription-import-does-not-refresh-inbox-sidebar-count.md)
-72. [PBI-260](./active-alpha/PBI-260-detail-window-titlebar-drag-broken.md)
+53. [PBI-242](./active-alpha/PBI-242-clean-up-project-root-folder.md)
+54. [PBI-243](./active-alpha/PBI-243-canvas-redraw-policy-on-window-resize.md)
+55. [PBI-244](./active-alpha/PBI-244-controller-driven-view-transition-lifecycle.md)
+56. [PBI-245](./active-alpha/PBI-245-blurhash-first-transition-loading-strategy.md)
+57. [PBI-246](./active-alpha/PBI-246-add-to-folder-modal-with-tree-view.md)
+58. [PBI-247](./active-alpha/PBI-247-sidebar-tree-view-needs-folder-icon-or-visual.md)
+59. [PBI-248](./active-alpha/PBI-248-unify-context-menu-bulk-selection-actions.md)
+60. [PBI-249](./active-alpha/PBI-249-inspector-scrollbar-shifts-content-layout.md)
+61. [PBI-250](./active-alpha/PBI-250-import-button-broken-on-linux.md)
+62. [PBI-251](./active-alpha/PBI-251-import-progress-indicator.md)
+63. [PBI-252](./active-alpha/PBI-252-subscription-setup-help-text-and-query-guidance.md)
+64. [PBI-253](./active-alpha/PBI-253-library-search-returns-no-results.md)
+65. [PBI-254](./active-alpha/PBI-254-user-guide-in-readme-or-docs.md)
+66. [PBI-255](./active-alpha/PBI-255-ole-container-detection-and-type-disambiguation.md)
+67. [PBI-256](./active-alpha/PBI-256-ole-metadata-extraction-word-count-and-core-properties.md)
+68. [PBI-257](./active-alpha/PBI-257-procreate-binary-plist-resolution-parsing.md)
+69. [PBI-258](./active-alpha/PBI-258-pdf-thumbnail-rendering-backend-integration.md)
+70. [PBI-300](./active-alpha/PBI-300-rust-core-runtime-event-bus-and-task-registry-realignment.md)
+71. [PBI-301](./active-alpha/PBI-301-app-state-service-lifecycle-and-worker-boundary-cleanup.md)
+72. [PBI-302](./active-alpha/PBI-302-subscription-domain-service-split-and-orchestration-cleanup.md)
+73. [PBI-303](./active-alpha/PBI-303-gallery-dl-runner-decomposition-and-site-adapter-split.md)
+74. [PBI-304](./active-alpha/PBI-304-sqlite-schema-and-migration-pack-decomposition.md)
+75. [PBI-305](./active-alpha/PBI-305-derived-read-model-publish-boundary-cleanup-for-sqlite.md)
+76. [PBI-306](./active-alpha/PBI-306-import-lifecycle-and-entity-pipeline-realignment.md)
+77. [PBI-307](./active-alpha/PBI-307-grid-selection-and-sidebar-query-service-decomposition.md)
+78. [PBI-308](./active-alpha/PBI-308-ptr-domain-decomposition-and-runtime-state-cleanup.md)
+79. [PBI-309](./active-alpha/PBI-309-media-processing-adapter-registry-and-pipeline-breakup.md)
+80. [PBI-401](./active-alpha/PBI-401-frontend-surface-consolidation-and-feature-boundaries.md)
+81. [PBI-402](./active-alpha/PBI-402-frontend-type-safety-and-renderer-contract-cleanup.md)
+82. [PBI-403](./active-alpha/PBI-403-renderer-bootstrap-and-lifecycle-ownership-cleanup.md)
+83. [PBI-404](./active-alpha/PBI-404-split-oversized-frontend-orchestration-modules.md)
+## Archived PBIs
 
-## Archived PBIs (0)
-
-All other `PBI-*.md` files moved to `./archive/`
+Archived backlog items can be reintroduced if they become release-critical.
 
 Use this command to list archived items:
 
@@ -95,4 +105,5 @@ ls docs/pbis/archive/PBI-*.md | sed 's|docs/pbis/archive/||'
 ## Notes
 
 1. This reset is for alpha release execution clarity, not for deleting backlog history.
-2. Archived PBIs can be promoted back to `active-alpha/` if they become release-critical.
+2. Completed PBIs should be removed from `active-alpha/` once their work is verified.
+3. `docs/pbis/FRONTEND_AUDIT_2026-03-07.md` is the current frontend cleanup audit artifact.

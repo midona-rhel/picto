@@ -43,3 +43,11 @@ The subscription/download panel has a split layout where the top section handles
 
 ## Risk
 Low. Primarily layout and labeling changes with no backend work.
+
+## Audit Addendum (2026-03-07)
+
+Concrete frontend audit findings that belong under this PBI:
+
+1. `src/components/FlowsWorking.tsx` remains an 822-line screen that mixes data loading, flow CRUD, query CRUD, lifecycle listeners, notifications, and modal state.
+2. `src/components/subscriptions/SubscriptionsWindow.tsx` and `src/components/FlowsWorking.tsx` still split subscription UX ownership awkwardly between two large entry surfaces.
+3. Any UX clarification work on subscriptions should include decomposition of these surfaces so labels, help text, and hierarchy are not layered onto an already overgrown component.

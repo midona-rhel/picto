@@ -94,3 +94,11 @@ Each function is the single entry point for its transition. The controller:
 
 ## Risk
 Medium-high. Touches the core navigation flow. Must be carefully staged — extract the controller first with the existing behavior, then simplify the components to use it. Do not change behavior and ownership in the same step.
+
+## Audit Addendum (2026-03-07)
+
+Concrete frontend audit findings that belong under this PBI:
+
+1. `src/App.tsx` still coordinates shell composition, command palette wiring, scoped grid preferences, inspector state, and transition midpoint handling in one place.
+2. `src/app-shell/useAppBootstrap.ts` currently owns startup wiring, event bridge setup, task runtime initialization, theme sync, and titlebar drag behavior, which makes transition/runtime ownership harder to follow.
+3. Multiple lifecycle-heavy modules still rely on `react-hooks/exhaustive-deps` suppression, which is a signal that ownership boundaries are still too blurry around view transitions and bootstrap.
