@@ -4,17 +4,23 @@
 P0
 
 ## Audit Status (2026-03-07)
-Status: **Not Implemented**
+Status: **Implemented**
+
+### What's done:
+1. `core/src/scope/mod.rs` — shared `IncludeMatchMode` enum and `parse_include_match_mode` parser.
+2. `core/src/scope/resolver.rs` — canonical `ScopeFilter` struct with `From` impls for both `GridPageSlimQuery` and `SelectionQuerySpec`. Single `resolve_scope()` function handles all scope types: smart folder, tag search, folder, untagged, uncategorized, recently_viewed, inbox, trash, default (active). Synchronous `scope_count()` function provides canonical counts for system scopes.
+3. `core/src/grid/controller.rs` — three separate scope resolution blocks (~350 lines) collapsed into one unified block calling `resolve_scope`. Grid-specific concerns (caching, pagination, single-folder position_rank ordering, collection, recently_viewed, random) remain in the grid controller.
+4. `core/src/selection/helpers.rs` — `selection_bitmap_for_all_results` reduced from ~170 lines to ~15 lines by delegating to `resolve_scope`. Selection-specific concerns (excluded_hashes filtering) remain.
+5. Duplicate `IncludeMatchMode` enums and `parse_include_match_mode` functions removed from both files.
+6. `core/src/sqlite/compilers.rs` — sidebar system counts (all, inbox, trash, untagged, uncategorized, recently_viewed) now delegate to `scope_count()` instead of inline bitmap/SQL logic. `count_uncategorized_entities` import removed from compilers.
 
 ## Problem
-Scope semantics are currently duplicated across multiple backend paths:
+Scope semantics were previously duplicated across multiple backend paths:
 
-1. `/Users/midona/Code/imaginator/core/src/grid_controller.rs`
-2. `/Users/midona/Code/imaginator/core/src/selection_helpers.rs`
-3. `/Users/midona/Code/imaginator/core/src/sqlite/folders.rs`
-4. smart-folder compilation and related bitmap helpers
+1. `core/src/grid/controller.rs`
+2. `core/src/selection/helpers.rs`
 
-This causes business-logic drift. The same conceptual scope:
+This caused business-logic drift risk. The same conceptual scope:
 - `system:all`
 - `system:inbox`
 - `system:untagged`
@@ -36,12 +42,9 @@ Create one canonical backend scope engine that defines visible entity membership
 The backend must stop re-implementing scope rules independently per caller.
 
 ## Scope
-- `/Users/midona/Code/imaginator/core/src/grid_controller.rs`
-- `/Users/midona/Code/imaginator/core/src/selection_helpers.rs`
-- `/Users/midona/Code/imaginator/core/src/sidebar_controller.rs`
-- `/Users/midona/Code/imaginator/core/src/sqlite/folders.rs`
-- `/Users/midona/Code/imaginator/core/src/sqlite/smart_folders.rs`
-- new shared backend read/scope module(s)
+- `core/src/scope/` — canonical scope resolver module
+- `core/src/grid/controller.rs` — grid page queries (consumer)
+- `core/src/selection/helpers.rs` — selection bitmap operations (consumer)
 
 ## Implementation
 1. Introduce a canonical scope model:

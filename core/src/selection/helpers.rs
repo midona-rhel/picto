@@ -1,35 +1,16 @@
 //! Selection query helpers — shared bitmap/hash resolution for selection operations.
 //!
-//! Extracted from the former commands.rs selection helpers.
+//! Scope resolution is delegated to `crate::scope::resolver::resolve_scope`.
 
 use std::collections::{HashMap, HashSet};
 
 use roaring::RoaringBitmap;
 
+use crate::scope::resolver::{resolve_scope, ScopeFilter};
 use crate::sqlite::bitmaps::BitmapKey;
 use crate::sqlite::files::batch_get_by_hashes;
-use crate::folders::db::list_uncategorized_entity_ids;
-use crate::smart_folders::db::compile_predicate;
-use crate::tags::db::find_tag as sql_find_tag;
 use crate::sqlite::SqliteDatabase;
-use crate::tags::normalize;
 use crate::types::{tag_display_key, SelectionMode, SelectionQuerySpec, SelectionTagCount};
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum IncludeMatchMode {
-    Any,
-    All,
-    Exact,
-}
-
-fn parse_include_match_mode(raw: Option<&str>, default_mode: IncludeMatchMode) -> IncludeMatchMode {
-    match raw {
-        Some("any") => IncludeMatchMode::Any,
-        Some("exact") => IncludeMatchMode::Exact,
-        Some("all") => IncludeMatchMode::All,
-        _ => default_mode,
-    }
-}
 
 /// Collect all hashes matching a selection query (bounded snapshot).
 pub async fn collect_selection_hashes(
@@ -162,162 +143,8 @@ pub async fn selection_bitmap_for_all_results(
     db: &SqliteDatabase,
     selection: &SelectionQuerySpec,
 ) -> Result<(RoaringBitmap, RoaringBitmap), String> {
-    let has_smart_folder = selection.smart_folder_predicate.is_some();
-    let has_search_tags = selection
-        .search_tags
-        .as_ref()
-        .map(|t| !t.is_empty())
-        .unwrap_or(false)
-        || selection
-            .search_excluded_tags
-            .as_ref()
-            .map(|t| !t.is_empty())
-            .unwrap_or(false);
-    let has_folder = selection
-        .folder_ids
-        .as_ref()
-        .map(|v| !v.is_empty())
-        .unwrap_or(false)
-        || selection
-            .excluded_folder_ids
-            .as_ref()
-            .map(|v| !v.is_empty())
-            .unwrap_or(false);
-
-    // Mirror the grid controller's exact scoping logic.
-    let base = if has_smart_folder {
-        // Smart folder predicates define their own scope.
-        let pred = selection.smart_folder_predicate.clone().unwrap();
-        let bitmaps = db.bitmaps.clone();
-        db.with_conn(move |conn| compile_predicate(conn, &pred, &bitmaps))
-            .await?
-    } else if has_search_tags {
-        // Search tags scope to AllActive (inbox + active) — trash files are excluded
-        // because the user doesn't expect trashed files in search results.
-        // Tag match defaults to All (AND) because tag search should narrow results:
-        // searching "character:samus" + "rating:safe" means files with BOTH tags.
-        let include_tags = selection.search_tags.clone().unwrap_or_default();
-        let exclude_tags = selection.search_excluded_tags.clone().unwrap_or_default();
-        let match_mode =
-            parse_include_match_mode(selection.tag_match_mode.as_deref(), IncludeMatchMode::All);
-        let bitmaps = db.bitmaps.clone();
-        db.with_conn(move |conn| {
-            let resolve_ids =
-                |tag_list: &[String], strict_missing: bool| -> rusqlite::Result<Vec<i64>> {
-                    let mut out = Vec::new();
-                    for tag in tag_list {
-                        if let Some((ns, st)) = normalize::parse_tag(tag) {
-                            if let Some(tag_id) = sql_find_tag(conn, &ns, &st)? {
-                                out.push(tag_id);
-                            } else if strict_missing {
-                                return Ok(Vec::new());
-                            }
-                        }
-                    }
-                    Ok(out)
-                };
-
-            let include_ids = resolve_ids(&include_tags, match_mode != IncludeMatchMode::Any)?;
-            let exclude_ids = resolve_ids(&exclude_tags, false)?;
-            let all_active = bitmaps.get(&BitmapKey::AllActive);
-
-            // If the user searched for tags but none resolved to valid tag_ids,
-            // return empty — the tags don't exist so no files can match.
-            if !include_tags.is_empty() && include_ids.is_empty() {
-                return Ok(RoaringBitmap::new());
-            }
-
-            let mut result = if include_ids.is_empty() {
-                all_active.clone()
-            } else if match_mode == IncludeMatchMode::Any {
-                let mut union = roaring::RoaringBitmap::new();
-                for tid in &include_ids {
-                    union |= &bitmaps.get(&BitmapKey::EffectiveTag(*tid));
-                }
-                union
-            } else {
-                let mut iter = include_ids.iter();
-                let first = *iter.next().expect("include_ids not empty");
-                let mut intersect = bitmaps.get(&BitmapKey::EffectiveTag(first));
-                for tid in iter {
-                    intersect &= &bitmaps.get(&BitmapKey::EffectiveTag(*tid));
-                }
-                intersect
-            };
-
-            if !exclude_ids.is_empty() {
-                let mut excluded = roaring::RoaringBitmap::new();
-                for tid in &exclude_ids {
-                    excluded |= &bitmaps.get(&BitmapKey::EffectiveTag(*tid));
-                }
-                result -= &excluded;
-            }
-            result &= &all_active;
-            Ok(result)
-        })
-        .await?
-    } else if has_folder {
-        // Folder scope also intersects with AllActive to exclude trash.
-        // Folder match defaults to Any (OR) because viewing multiple folders should
-        // show the UNION of their contents — unlike tag search which narrows.
-        let include_folders = selection.folder_ids.clone().unwrap_or_default();
-        let exclude_folders = selection.excluded_folder_ids.clone().unwrap_or_default();
-        let match_mode = parse_include_match_mode(
-            selection.folder_match_mode.as_deref(),
-            IncludeMatchMode::Any,
-        );
-        let all_active = db.bitmaps.get(&BitmapKey::AllActive);
-
-        let mut folder_bm = if include_folders.is_empty() {
-            all_active.clone()
-        } else if match_mode == IncludeMatchMode::Any {
-            let mut union = roaring::RoaringBitmap::new();
-            for fid in &include_folders {
-                union |= &db.bitmaps.get(&BitmapKey::Folder(*fid));
-            }
-            union
-        } else {
-            let mut iter = include_folders.iter();
-            let first = *iter.next().expect("include_folders not empty");
-            let mut intersect = db.bitmaps.get(&BitmapKey::Folder(first));
-            for fid in iter {
-                intersect &= &db.bitmaps.get(&BitmapKey::Folder(*fid));
-            }
-            intersect
-        };
-        if !exclude_folders.is_empty() {
-            let mut excluded = roaring::RoaringBitmap::new();
-            for fid in &exclude_folders {
-                excluded |= &db.bitmaps.get(&BitmapKey::Folder(*fid));
-            }
-            folder_bm -= &excluded;
-        }
-        folder_bm &= &all_active;
-        folder_bm
-    } else {
-        // Status-only views — match the grid controller's status handling.
-        match selection.status.as_deref() {
-            Some("inbox") => db.bitmaps.get(&BitmapKey::Status(0)),
-            Some("trash") => db.bitmaps.get(&BitmapKey::Status(2)),
-            Some("untagged") => {
-                let all_active = db.bitmaps.get(&BitmapKey::AllActive);
-                let tagged = db.bitmaps.get(&BitmapKey::Tagged);
-                &all_active - &tagged
-            }
-            Some("uncategorized") => {
-                let uncategorized_ids = db.with_read_conn(list_uncategorized_entity_ids).await?;
-                RoaringBitmap::from_iter(uncategorized_ids.into_iter().map(|id| id as u32))
-            }
-            Some("recently_viewed") => {
-                // Bitmap approximation — AllActive with view_count > 0.
-                // The actual view_count check happens when materialising to file_ids.
-                db.bitmaps.get(&BitmapKey::AllActive)
-            }
-            // Default "All Images" shows only status=1 (active). Inbox files are hidden
-            // until explicitly reviewed, and trash files are excluded by design.
-            _ => db.bitmaps.get(&BitmapKey::Status(1)),
-        }
-    };
+    let scope_filter = ScopeFilter::from(selection);
+    let base = resolve_scope(db, &scope_filter).await?;
 
     let mut filtered = base.clone();
     if let Some(excluded_hashes) = &selection.excluded_hashes {
