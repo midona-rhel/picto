@@ -3,6 +3,7 @@
 use roaring::RoaringBitmap;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
 use super::bitmaps::{BitmapKey, BitmapStore};
 use super::compilers::CompilerEvent;
@@ -24,12 +25,14 @@ pub struct SmartFolder {
 }
 
 /// Predicate system for smart folders — groups-based format from the frontend.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../src/types/generated/commands/")]
 pub struct SmartFolderPredicate {
     pub groups: Vec<SmartRuleGroup>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../src/types/generated/commands/")]
 pub struct SmartRuleGroup {
     pub match_mode: MatchMode,
     #[serde(default)]
@@ -37,20 +40,24 @@ pub struct SmartRuleGroup {
     pub rules: Vec<PredicateRule>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../src/types/generated/commands/")]
 #[serde(rename_all = "snake_case")]
 pub enum MatchMode {
     All,
     Any,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[ts(export, export_to = "../../src/types/generated/commands/")]
 pub struct PredicateRule {
     pub field: String,
     pub op: String,
     #[serde(default)]
+    #[ts(type = "any")]
     pub value: Option<serde_json::Value>,
     #[serde(default)]
+    #[ts(type = "any")]
     pub value2: Option<serde_json::Value>,
     #[serde(default)]
     pub values: Option<Vec<String>>,

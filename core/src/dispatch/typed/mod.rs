@@ -5,6 +5,9 @@
 //! string-based handlers.
 
 pub mod files_lifecycle;
+pub mod folders;
+pub mod selection;
+pub mod tags;
 
 use std::future::Future;
 
@@ -40,6 +43,15 @@ pub async fn typed_dispatch(
     args: &serde_json::Value,
 ) -> Option<Result<String, String>> {
     if let Some(result) = files_lifecycle::dispatch_typed(state, command, args).await {
+        return Some(result);
+    }
+    if let Some(result) = folders::dispatch_typed(state, command, args).await {
+        return Some(result);
+    }
+    if let Some(result) = tags::dispatch_typed(state, command, args).await {
+        return Some(result);
+    }
+    if let Some(result) = selection::dispatch_typed(state, command, args).await {
         return Some(result);
     }
     None
