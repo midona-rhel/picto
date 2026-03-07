@@ -51,7 +51,7 @@ pub fn emit_empty(name: &str) {
 // SEQ counter lives in runtime_state — single source of truth.
 
 #[derive(Debug, Clone, serde::Serialize, ts_rs::TS)]
-#[ts(export, export_to = "../../src/types/generated/runtime-contract/")]
+#[ts(export, export_to = "../../src/shared/types/generated/runtime-contract/")]
 #[serde(rename_all = "snake_case")]
 pub enum Domain {
     Files,

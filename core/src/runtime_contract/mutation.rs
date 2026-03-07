@@ -14,7 +14,7 @@ use crate::events::Domain;
 /// Combines sequencing metadata with what changed (`facts`), what the frontend
 /// should refresh (`invalidate`), and optional O(1) sidebar counts.
 #[derive(Debug, Clone, Serialize, TS)]
-#[ts(export, export_to = "../../src/types/generated/runtime-contract/")]
+#[ts(export, export_to = "../../src/shared/types/generated/runtime-contract/")]
 pub struct MutationReceipt {
     #[ts(type = "number")]
     pub seq: u64,
@@ -29,7 +29,7 @@ pub struct MutationReceipt {
 
 /// What actually changed — domain flags + affected entity IDs.
 #[derive(Debug, Clone, Default, Serialize, TS)]
-#[ts(export, export_to = "../../src/types/generated/runtime-contract/")]
+#[ts(export, export_to = "../../src/shared/types/generated/runtime-contract/")]
 pub struct MutationFacts {
     pub domains: Vec<Domain>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -48,7 +48,7 @@ pub struct MutationFacts {
 
 /// What the frontend should refresh — mirrors the legacy `Invalidate` struct.
 #[derive(Debug, Clone, Default, Serialize, TS)]
-#[ts(export, export_to = "../../src/types/generated/runtime-contract/")]
+#[ts(export, export_to = "../../src/shared/types/generated/runtime-contract/")]
 pub struct DerivedInvalidation {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
@@ -69,7 +69,7 @@ pub struct DerivedInvalidation {
 
 /// O(1) bitmap-derived sidebar counts.
 #[derive(Debug, Clone, Default, Serialize, TS)]
-#[ts(export, export_to = "../../src/types/generated/runtime-contract/")]
+#[ts(export, export_to = "../../src/shared/types/generated/runtime-contract/")]
 pub struct SidebarCounts {
     #[ts(type = "number")]
     pub all_images: i64,

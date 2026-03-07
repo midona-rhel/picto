@@ -35,7 +35,7 @@ const EXCEPTION_BUDGETS = {
   'core/src/sqlite_ptr/sync.rs': { limit: 1300, phase: 'P1', reason: 'legacy hotspot' },
   'src/components/sidebar/FolderTree.tsx': { limit: 1000, phase: 'P1', reason: 'extract folder action registry hooks' },
   'src/components/image-grid/hooks/useGridContextMenu.tsx': { limit: 950, phase: 'P1', reason: 'split action groups by domain' },
-  'src/desktop/api.ts': { limit: 850, phase: 'P1', reason: 'split invoke surface by domain' },
+  'src/platform/api.ts': { limit: 850, phase: 'P1', reason: 'split invoke surface by domain' },
   'src/components/TagManager.tsx': { limit: 950, phase: 'P1', reason: 'extract table/filters subcomponents' },
   'src/components/image-grid/DetailWindow.tsx': { limit: 750, phase: 'P1', reason: 'shared viewer core extraction' },
   'src/hooks/useInspectorData.ts': { limit: 760, phase: 'P1', reason: 'split mutation adapters from query hooks' },

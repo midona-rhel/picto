@@ -8,7 +8,7 @@ const scanDirs = [
   path.join(root, 'src/controllers'),
 ];
 const scanFiles = [
-  path.join(root, 'src/desktop/api.ts'),
+  path.join(root, 'src/platform/api.ts'),
 ];
 const sourceExt = /\.(ts|tsx)$/;
 

@@ -37,11 +37,7 @@ const baseScenarios = [
     label: 'Core orchestration smoke',
     command: 'cargo test --manifest-path core/Cargo.toml --quiet --test orchestration',
   },
-  {
-    id: 'inbox_render_and_subscription_updates',
-    label: 'Inbox live update smoke',
-    command: 'npm run test -- src/stores/__tests__/eventBridge.inboxSubscriptionImport.test.ts --run',
-  },
+  // eventBridge tests removed — runtime sync store replaces legacy event bridge
   {
     id: 'status_move_trash_inbox',
     label: 'Sidebar status move smoke',

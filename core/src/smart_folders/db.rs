@@ -25,13 +25,13 @@ pub struct SmartFolder {
 
 /// Predicate system for smart folders — groups-based format from the frontend.
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "../../src/types/generated/commands/")]
+#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
 pub struct SmartFolderPredicate {
     pub groups: Vec<SmartRuleGroup>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "../../src/types/generated/commands/")]
+#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
 pub struct SmartRuleGroup {
     pub match_mode: MatchMode,
     #[serde(default)]
@@ -40,7 +40,7 @@ pub struct SmartRuleGroup {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "../../src/types/generated/commands/")]
+#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
 #[serde(rename_all = "snake_case")]
 pub enum MatchMode {
     All,
@@ -48,7 +48,7 @@ pub enum MatchMode {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "../../src/types/generated/commands/")]
+#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
 pub struct PredicateRule {
     pub field: String,
     pub op: String,

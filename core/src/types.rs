@@ -42,7 +42,7 @@ pub fn tag_display_key(namespace: &str, subtag: &str) -> String {
 }
 
 #[derive(Debug, Serialize, TS)]
-#[ts(export, export_to = "../../src/types/generated/commands/")]
+#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
 pub struct ImportResult {
     pub hash: String,
     pub mime: String,
@@ -53,7 +53,7 @@ pub struct ImportResult {
 }
 
 #[derive(Debug, Serialize, TS)]
-#[ts(export, export_to = "../../src/types/generated/commands/")]
+#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
 pub struct ImportBatchResult {
     pub imported: Vec<ImportResult>,
     pub skipped: Vec<String>,
@@ -218,7 +218,7 @@ impl From<crate::sqlite::files::FileRecord> for EntitySlim {
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/types/generated/commands/")]
+#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
 pub struct GridPageSlimQuery {
     pub limit: Option<usize>,
     pub cursor: Option<String>,
@@ -367,7 +367,7 @@ pub type FileInfo = EntityDetails;
 pub type FileInfoSlim = EntitySlim;
 
 #[derive(Debug, Clone, Deserialize, TS)]
-#[ts(export, export_to = "../../src/types/generated/commands/")]
+#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
 #[serde(rename_all = "snake_case")]
 pub enum SelectionMode {
     ExplicitHashes,
@@ -375,7 +375,7 @@ pub enum SelectionMode {
 }
 
 #[derive(Debug, Clone, Deserialize, TS)]
-#[ts(export, export_to = "../../src/types/generated/commands/")]
+#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
 pub struct SelectionQuerySpec {
     pub mode: SelectionMode,
     pub hashes: Option<Vec<String>>,
@@ -460,7 +460,7 @@ pub struct ViewPrefsDto {
 }
 
 #[derive(Debug, Clone, Deserialize, TS)]
-#[ts(export, export_to = "../../src/types/generated/commands/")]
+#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
 pub struct ViewPrefsPatch {
     pub sort_field: Option<String>,
     pub sort_order: Option<String>,
@@ -475,7 +475,7 @@ pub struct ViewPrefsPatch {
 }
 
 #[derive(Debug, Clone, Deserialize, TS)]
-#[ts(export, export_to = "../../src/types/generated/commands/")]
+#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
 pub struct FolderReorderMove {
     pub hash: String,
     pub before_hash: Option<String>,

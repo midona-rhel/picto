@@ -41,7 +41,7 @@ const DOMAIN_MIN_COUNTS = [
 
 const ROUTING_CHECKS = [
   {
-    file: 'src/app-shell/useAppBootstrap.ts',
+    file: 'src/app/useAppBootstrap.ts',
     checks: [
       /listen\('menu:undo'/,
       /listen\('menu:redo'/,
@@ -59,7 +59,7 @@ const ROUTING_CHECKS = [
     ],
   },
   {
-    file: 'src/lib/shortcuts.ts',
+    file: 'src/shared/lib/shortcuts.ts',
     checks: [
       /id:\s*'edit\.undo'/,
       /id:\s*'edit\.redo'/,

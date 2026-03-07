@@ -9,7 +9,7 @@ use super::{TypedCommand, run_typed};
 // ─── Input structs ─────────────────────────────────────────────────────────
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/types/generated/commands/")]
+#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
 pub struct PtrGetTagsPaginatedInput {
     pub namespace: Option<String>,
     pub search: Option<String>,
@@ -24,7 +24,7 @@ fn default_ptr_tags_limit() -> i64 {
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/types/generated/commands/")]
+#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
 pub struct PtrGetTagRelationInput {
     #[ts(type = "number")]
     pub tag_id: i64,

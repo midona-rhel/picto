@@ -4,7 +4,7 @@ import path from 'node:path';
 
 const ROOT = process.cwd();
 const RUST_EVENTS_FILE = path.join(ROOT, 'core/src/events.rs');
-const TS_EVENTS_FILE = path.join(ROOT, 'src/types/api/events.ts');
+const TS_EVENTS_FILE = path.join(ROOT, 'src/shared/types/api/events.ts');
 
 function extractRustEventNames(content) {
   const moduleMatch = content.match(/pub mod event_names\s*\{([\s\S]*?)\n\}/m);
@@ -22,7 +22,7 @@ function extractRustEventNames(content) {
 function extractTsEventNames(content) {
   const mapMatch = content.match(/export interface CoreRuntimeEventPayloadMap\s*\{([\s\S]*?)\n\}/m);
   if (!mapMatch) {
-    throw new Error('Could not find `CoreRuntimeEventPayloadMap` in src/types/api/events.ts');
+    throw new Error('Could not find `CoreRuntimeEventPayloadMap` in src/shared/types/api/events.ts');
   }
   const block = mapMatch[1];
   const names = [];

@@ -25,34 +25,34 @@ where
 // ─── Input structs ─────────────────────────────────────────────────────────
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/types/generated/commands/")]
+#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
 pub struct GetFolderFilesInput {
     #[ts(type = "number")]
     pub folder_id: i64,
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/types/generated/commands/")]
+#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
 pub struct GetFolderCoverHashInput {
     #[ts(type = "number")]
     pub folder_id: i64,
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/types/generated/commands/")]
+#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
 pub struct GetFileFoldersInput {
     pub hash: String,
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/types/generated/commands/")]
+#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
 pub struct GetEntityFoldersInput {
     #[ts(type = "number")]
     pub entity_id: i64,
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/types/generated/commands/")]
+#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
 pub struct MoveFolderInput {
     #[ts(type = "number")]
     pub folder_id: i64,
@@ -63,7 +63,7 @@ pub struct MoveFolderInput {
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/types/generated/commands/")]
+#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
 pub struct CreateFolderInput {
     pub name: String,
     #[ts(type = "number | null")]
@@ -73,7 +73,7 @@ pub struct CreateFolderInput {
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/types/generated/commands/")]
+#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
 pub struct UpdateFolderInput {
     #[ts(type = "number")]
     pub folder_id: i64,
@@ -84,14 +84,14 @@ pub struct UpdateFolderInput {
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/types/generated/commands/")]
+#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
 pub struct DeleteFolderInput {
     #[ts(type = "number")]
     pub folder_id: i64,
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/types/generated/commands/")]
+#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
 pub struct UpdateFolderParentInput {
     #[ts(type = "number")]
     pub folder_id: i64,
@@ -100,7 +100,7 @@ pub struct UpdateFolderParentInput {
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/types/generated/commands/")]
+#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
 pub struct AddFileToFolderInput {
     #[ts(type = "number")]
     pub folder_id: i64,
@@ -108,7 +108,7 @@ pub struct AddFileToFolderInput {
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/types/generated/commands/")]
+#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
 pub struct AddFilesToFolderBatchInput {
     #[ts(type = "number")]
     pub folder_id: i64,
@@ -116,7 +116,7 @@ pub struct AddFilesToFolderBatchInput {
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/types/generated/commands/")]
+#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
 pub struct RemoveFileFromFolderInput {
     #[ts(type = "number")]
     pub folder_id: i64,
@@ -124,7 +124,7 @@ pub struct RemoveFileFromFolderInput {
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/types/generated/commands/")]
+#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
 pub struct RemoveFilesFromFolderBatchInput {
     #[ts(type = "number")]
     pub folder_id: i64,
@@ -132,14 +132,14 @@ pub struct RemoveFilesFromFolderBatchInput {
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/types/generated/commands/")]
+#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
 pub struct ReorderFoldersInput {
     #[ts(type = "[number, number][]")]
     pub moves: Vec<(i64, i64)>,
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/types/generated/commands/")]
+#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
 pub struct ReorderFolderItemsInput {
     #[ts(type = "number")]
     pub folder_id: i64,
@@ -147,7 +147,7 @@ pub struct ReorderFolderItemsInput {
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/types/generated/commands/")]
+#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
 pub struct SortFolderItemsInput {
     #[ts(type = "number")]
     pub folder_id: i64,
@@ -157,7 +157,7 @@ pub struct SortFolderItemsInput {
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/types/generated/commands/")]
+#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
 pub struct ReverseFolderItemsInput {
     #[ts(type = "number")]
     pub folder_id: i64,
@@ -165,14 +165,14 @@ pub struct ReverseFolderItemsInput {
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/types/generated/commands/")]
+#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
 pub struct GetCollectionSummaryInput {
     #[ts(type = "number")]
     pub id: i64,
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/types/generated/commands/")]
+#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
 pub struct CreateCollectionInput {
     pub name: String,
     #[serde(default, deserialize_with = "deserialize_nullable_string")]
@@ -183,7 +183,7 @@ pub struct CreateCollectionInput {
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/types/generated/commands/")]
+#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
 pub struct UpdateCollectionInput {
     #[ts(type = "number")]
     pub id: i64,
@@ -197,7 +197,7 @@ pub struct UpdateCollectionInput {
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/types/generated/commands/")]
+#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
 pub struct SetCollectionRatingInput {
     #[ts(type = "number")]
     pub id: i64,
@@ -206,7 +206,7 @@ pub struct SetCollectionRatingInput {
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/types/generated/commands/")]
+#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
 pub struct SetCollectionSourceUrlsInput {
     #[ts(type = "number")]
     pub id: i64,
@@ -215,7 +215,7 @@ pub struct SetCollectionSourceUrlsInput {
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/types/generated/commands/")]
+#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
 pub struct ReorderCollectionMembersInput {
     #[ts(type = "number")]
     pub id: i64,
@@ -223,7 +223,7 @@ pub struct ReorderCollectionMembersInput {
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/types/generated/commands/")]
+#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
 pub struct AddCollectionMembersInput {
     #[ts(type = "number")]
     pub id: i64,
@@ -231,7 +231,7 @@ pub struct AddCollectionMembersInput {
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/types/generated/commands/")]
+#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
 pub struct RemoveCollectionMembersInput {
     #[ts(type = "number")]
     pub id: i64,
@@ -239,7 +239,7 @@ pub struct RemoveCollectionMembersInput {
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/types/generated/commands/")]
+#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
 pub struct DeleteCollectionInput {
     #[ts(type = "number")]
     pub id: i64,
