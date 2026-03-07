@@ -217,7 +217,8 @@ impl From<crate::sqlite::files::FileRecord> for EntitySlim {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, TS)]
+#[ts(export, export_to = "../../src/types/generated/commands/")]
 pub struct GridPageSlimQuery {
     pub limit: Option<usize>,
     pub cursor: Option<String>,
@@ -235,16 +236,20 @@ pub struct GridPageSlimQuery {
     #[serde(alias = "tagMatchMode")]
     pub tag_match_mode: Option<String>,
     #[serde(alias = "folderIds")]
+    #[ts(type = "number[] | null")]
     pub folder_ids: Option<Vec<i64>>,
     #[serde(alias = "excludedFolderIds")]
+    #[ts(type = "number[] | null")]
     pub excluded_folder_ids: Option<Vec<i64>>,
     #[serde(alias = "folderMatchMode")]
     pub folder_match_mode: Option<String>,
     /// Collection entity scope filter — restricts grid to members of this collection.
     #[serde(alias = "collectionEntityId")]
+    #[ts(type = "number | null")]
     pub collection_entity_id: Option<i64>,
     /// Minimum rating filter (1-5)
     #[serde(alias = "ratingMin")]
+    #[ts(type = "number | null")]
     pub rating_min: Option<i64>,
     /// MIME prefix filters (e.g. ["image/", "video/"])
     #[serde(alias = "mimePrefixes")]
@@ -254,12 +259,14 @@ pub struct GridPageSlimQuery {
     pub color_hex: Option<String>,
     /// Color tolerance / max distance (1-30, lower = stricter). Default 20.
     #[serde(alias = "colorAccuracy")]
+    #[ts(type = "number | null")]
     pub color_accuracy: Option<f64>,
     /// Free-text search query (FTS5 on name + notes)
     #[serde(alias = "searchText")]
     pub search_text: Option<String>,
     /// Seed for deterministic random ordering (Random view)
     #[serde(alias = "randomSeed")]
+    #[ts(type = "number | null")]
     pub random_seed: Option<i64>,
 }
 

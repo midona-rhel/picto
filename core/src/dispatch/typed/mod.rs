@@ -5,7 +5,10 @@
 //! string-based handlers.
 
 pub mod files_lifecycle;
+pub mod files_media;
+pub mod files_metadata;
 pub mod folders;
+pub mod grid;
 pub mod selection;
 pub mod tags;
 
@@ -52,6 +55,15 @@ pub async fn typed_dispatch(
         return Some(result);
     }
     if let Some(result) = selection::dispatch_typed(state, command, args).await {
+        return Some(result);
+    }
+    if let Some(result) = grid::dispatch_typed(state, command, args).await {
+        return Some(result);
+    }
+    if let Some(result) = files_metadata::dispatch_typed(state, command, args).await {
+        return Some(result);
+    }
+    if let Some(result) = files_media::dispatch_typed(state, command, args).await {
         return Some(result);
     }
     None
