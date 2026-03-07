@@ -23,6 +23,17 @@ This architecture-focused audit pass reviewed the full Rust core file inventory,
 
 This does **not** mean every low-level bug has been catalogued. It does mean the major backend re-architecture tracks are now identified and split into concrete PBIs.
 
+Additional backend-only artifacts produced after the first pass:
+
+1. `docs/rust-core-rearchitecture-blueprint-2026-03-07.md`
+2. `docs/backend-legacy-register-2026-03-07.md`
+3. `docs/backend-deletion-program-2026-03-07.md`
+4. `PBI-315` through `PBI-320`
+
+This means the audit now covers both:
+- architecture/restructure tracks
+- explicit backend legacy classification and deletion planning
+
 ## Problem
 The Rust core has accumulated technical debt that is only partially catalogued. The existing cleanup PBIs address known pain points, but a systematic sweep of every module is needed to surface:
 - Dead or redundant code paths
