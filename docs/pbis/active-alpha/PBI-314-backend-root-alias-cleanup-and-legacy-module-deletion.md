@@ -14,6 +14,8 @@ Evidence:
 ## Problem
 A backend reorganization is not complete until the old root-level aliases are removed. Otherwise the codebase will end up supporting both the old and new architecture simultaneously.
 
+Reference architecture: `docs/rust-core-rearchitecture-blueprint-2026-03-07.md`
+
 ## Scope
 - `core/src/lib.rs`
 - temporary re-exports and compatibility aliases

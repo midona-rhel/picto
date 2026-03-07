@@ -15,6 +15,8 @@ Evidence:
 ## Problem
 The backend has no clear physical top-level architecture. Even if individual services are improved, the project will remain hard to navigate until `core/src` itself is reorganized into a stable top-level module tree.
 
+Reference architecture: `docs/rust-core-rearchitecture-blueprint-2026-03-07.md`
+
 ## Scope
 - `core/src/lib.rs`
 - `core/src/` top-level structure

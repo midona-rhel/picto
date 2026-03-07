@@ -14,6 +14,8 @@ Evidence:
 ## Problem
 The backend needs a staged physical move of root-level domain files into domain folders. Without that, the architecture stays theoretical and the root remains a flat row of files.
 
+Reference architecture: `docs/rust-core-rearchitecture-blueprint-2026-03-07.md`
+
 ## Scope
 - `core/src/domains/*`
 - current root-level domain/controller/helper files
