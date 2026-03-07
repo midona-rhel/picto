@@ -6,7 +6,7 @@ This folder was reset for the first alpha release.
 1. `active-alpha/`: PBIs that are currently release-relevant for `v0.1.0-alpha.*`
 2. `archive/`: PBIs retained for history, not currently in alpha release scope
 
-## Active Alpha PBIs (97)
+## Active Alpha PBIs (101)
 
 1. [PBI-118](./active-alpha/PBI-118-export-in-specified-format-and-dimension.md)
 2. [PBI-123](./active-alpha/PBI-123-folder-auto-tagging.md)
@@ -93,13 +93,17 @@ This folder was reset for the first alpha release.
 88. [PBI-318](./active-alpha/PBI-318-root-controller-collapse-and-alias-purge.md)
 89. [PBI-319](./active-alpha/PBI-319-backend-monolith-tail-breakup-and-deletion-campaign.md)
 90. [PBI-320](./active-alpha/PBI-320-backend-topology-enforcement-and-ci-guardrails.md)
-91. [PBI-401](./active-alpha/PBI-401-frontend-root-and-domain-topology-realignment.md)
-92. [PBI-402](./active-alpha/PBI-402-frontend-type-safety-and-renderer-contract-cleanup.md)
-93. [PBI-403](./active-alpha/PBI-403-renderer-bootstrap-and-lifecycle-ownership-cleanup.md)
-94. [PBI-404](./active-alpha/PBI-404-split-oversized-frontend-orchestration-modules.md)
-95. [PBI-405](./active-alpha/PBI-405-frontend-topology-policy-and-ci-guardrails.md)
-96. [PBI-406](./active-alpha/PBI-406-frontend-legacy-register-and-classification-pass.md)
-97. [PBI-407](./active-alpha/PBI-407-frontend-legacy-deletion-campaign-and-compatibility-shim-purge.md)
+91. [PBI-327](./active-alpha/PBI-327-canonical-scope-semantics-engine.md)
+92. [PBI-328](./active-alpha/PBI-328-fact-based-mutation-receipts-and-model-level-invalidation.md)
+93. [PBI-329](./active-alpha/PBI-329-derived-resource-dependency-map-from-model-facts.md)
+94. [PBI-330](./active-alpha/PBI-330-business-logic-contract-audit-and-conformance-tests.md)
+95. [PBI-401](./active-alpha/PBI-401-frontend-root-and-domain-topology-realignment.md)
+96. [PBI-402](./active-alpha/PBI-402-frontend-type-safety-and-renderer-contract-cleanup.md)
+97. [PBI-403](./active-alpha/PBI-403-renderer-bootstrap-and-lifecycle-ownership-cleanup.md)
+98. [PBI-404](./active-alpha/PBI-404-split-oversized-frontend-orchestration-modules.md)
+99. [PBI-405](./active-alpha/PBI-405-frontend-topology-policy-and-ci-guardrails.md)
+100. [PBI-406](./active-alpha/PBI-406-frontend-legacy-register-and-classification-pass.md)
+101. [PBI-407](./active-alpha/PBI-407-frontend-legacy-deletion-campaign-and-compatibility-shim-purge.md)
 
 ## Archived PBIs
 

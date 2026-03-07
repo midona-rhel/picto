@@ -25,6 +25,19 @@ The Rust core has no single runtime event bus or task registry. Mutation notific
 - `core/src/ptr_controller.rs`
 - `core/src/ptr_sync.rs`
 
+## Dependencies
+Depends on:
+1. `PBI-328` for the fact-level mutation receipt shape.
+
+Feeds:
+1. `PBI-329` for deterministic resource invalidation from runtime facts.
+2. renderer/runtime store cutover work under `PBI-234`.
+
+## Not In Scope
+1. Defining the business meaning of scopes like `system:all`, `untagged`, or `uncategorized`.
+2. Rewriting grid/selection/sidebar query logic.
+3. Frontend-side resource dependency rules.
+
 ## Implementation
 1. Introduce a backend runtime registry module that owns:
    - monotonic runtime sequence numbers
