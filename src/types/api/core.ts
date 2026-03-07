@@ -255,6 +255,7 @@ export interface Folder {
   parent_id: number | null;
   icon: string | null;
   color: string | null;
+  auto_tags: string[];
   sort_order: number | null;
   created_at: string | null;
   updated_at: string | null;

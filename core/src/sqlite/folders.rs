@@ -2,6 +2,7 @@
 
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 
 use super::bitmaps::BitmapKey;
 use super::compilers::CompilerEvent;
@@ -17,6 +18,7 @@ pub struct Folder {
     pub parent_id: Option<i64>,
     pub icon: Option<String>,
     pub color: Option<String>,
+    pub auto_tags: Vec<String>,
     pub sort_order: Option<i64>,
     pub created_at: Option<String>,
     pub updated_at: Option<String>,
@@ -27,6 +29,16 @@ pub struct NewFolder {
     pub parent_id: Option<i64>,
     pub icon: Option<String>,
     pub color: Option<String>,
+    pub auto_tags: Vec<String>,
+}
+
+fn decode_auto_tags(raw: Option<String>) -> Vec<String> {
+    raw.and_then(|value| serde_json::from_str::<Vec<String>>(&value).ok())
+        .unwrap_or_default()
+}
+
+fn encode_auto_tags(tags: &[String]) -> String {
+    serde_json::to_string(tags).unwrap_or_else(|_| json!([]).to_string())
 }
 
 pub fn create_folder(conn: &Connection, f: &NewFolder) -> rusqlite::Result<i64> {
@@ -42,16 +54,25 @@ pub fn create_folder(conn: &Connection, f: &NewFolder) -> rusqlite::Result<i64> 
     let sort_order = max_order.unwrap_or(0) + 1;
 
     conn.execute(
-        "INSERT INTO folder (name, parent_id, icon, color, sort_order, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-        params![f.name, f.parent_id, f.icon, f.color, sort_order, now, now],
+        "INSERT INTO folder (name, parent_id, icon, color, auto_tags, sort_order, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        params![
+            f.name,
+            f.parent_id,
+            f.icon,
+            f.color,
+            encode_auto_tags(&f.auto_tags),
+            sort_order,
+            now,
+            now
+        ],
     )?;
     Ok(conn.last_insert_rowid())
 }
 
 pub fn get_folder(conn: &Connection, folder_id: i64) -> rusqlite::Result<Option<Folder>> {
     conn.query_row(
-        "SELECT folder_id, name, parent_id, icon, color, sort_order, created_at, updated_at
+        "SELECT folder_id, name, parent_id, icon, color, auto_tags, sort_order, created_at, updated_at
          FROM folder WHERE folder_id = ?1",
         [folder_id],
         |row| {
@@ -61,9 +82,10 @@ pub fn get_folder(conn: &Connection, folder_id: i64) -> rusqlite::Result<Option<
                 parent_id: row.get(2)?,
                 icon: row.get(3)?,
                 color: row.get(4)?,
-                sort_order: row.get(5)?,
-                created_at: row.get(6)?,
-                updated_at: row.get(7)?,
+                auto_tags: decode_auto_tags(row.get(5)?),
+                sort_order: row.get(6)?,
+                created_at: row.get(7)?,
+                updated_at: row.get(8)?,
             })
         },
     )
@@ -72,7 +94,7 @@ pub fn get_folder(conn: &Connection, folder_id: i64) -> rusqlite::Result<Option<
 
 pub fn list_folders(conn: &Connection) -> rusqlite::Result<Vec<Folder>> {
     let mut stmt = conn.prepare_cached(
-        "SELECT folder_id, name, parent_id, icon, color, sort_order, created_at, updated_at
+        "SELECT folder_id, name, parent_id, icon, color, auto_tags, sort_order, created_at, updated_at
          FROM folder ORDER BY sort_order",
     )?;
     let rows = stmt.query_map([], |row| {
@@ -82,9 +104,10 @@ pub fn list_folders(conn: &Connection) -> rusqlite::Result<Vec<Folder>> {
             parent_id: row.get(2)?,
             icon: row.get(3)?,
             color: row.get(4)?,
-            sort_order: row.get(5)?,
-            created_at: row.get(6)?,
-            updated_at: row.get(7)?,
+            auto_tags: decode_auto_tags(row.get(5)?),
+            sort_order: row.get(6)?,
+            created_at: row.get(7)?,
+            updated_at: row.get(8)?,
         })
     })?;
     rows.collect()
@@ -96,12 +119,13 @@ pub fn update_folder(
     name: &str,
     icon: Option<&str>,
     color: Option<&str>,
+    auto_tags: &[String],
 ) -> rusqlite::Result<()> {
     let now = chrono::Utc::now().to_rfc3339();
     conn.execute(
-        "UPDATE folder SET name = ?1, icon = ?2, color = ?3, updated_at = ?4
-         WHERE folder_id = ?5",
-        params![name, icon, color, now, folder_id],
+        "UPDATE folder SET name = ?1, icon = ?2, color = ?3, auto_tags = ?4, updated_at = ?5
+         WHERE folder_id = ?6",
+        params![name, icon, color, encode_auto_tags(auto_tags), now, folder_id],
     )?;
     Ok(())
 }
@@ -148,7 +172,7 @@ pub fn add_entity_to_folder(
     conn: &Connection,
     folder_id: i64,
     entity_id: i64,
-) -> rusqlite::Result<()> {
+) -> rusqlite::Result<bool> {
     let max_rank: Option<i64> = conn
         .query_row(
             "SELECT MAX(position_rank) FROM folder_entity WHERE folder_id = ?1",
@@ -159,20 +183,20 @@ pub fn add_entity_to_folder(
         .flatten();
     let rank = max_rank.unwrap_or(0) + RANK_GAP;
 
-    conn.execute(
+    let changed = conn.execute(
         "INSERT OR IGNORE INTO folder_entity (folder_id, entity_id, position_rank) VALUES (?1, ?2, ?3)",
         params![folder_id, entity_id, rank],
     )?;
-    Ok(())
+    Ok(changed > 0)
 }
 
 pub fn add_entities_to_folder_batch(
     conn: &Connection,
     folder_id: i64,
     entity_ids: &[i64],
-) -> rusqlite::Result<usize> {
+) -> rusqlite::Result<Vec<i64>> {
     if entity_ids.is_empty() {
-        return Ok(0);
+        return Ok(Vec::new());
     }
     let max_rank: Option<i64> = conn
         .query_row(
@@ -183,7 +207,7 @@ pub fn add_entities_to_folder_batch(
         .optional()?
         .flatten();
     let mut rank = max_rank.unwrap_or(0);
-    let mut inserted = 0usize;
+    let mut inserted = Vec::new();
     let mut stmt = conn.prepare_cached(
         "INSERT OR IGNORE INTO folder_entity (folder_id, entity_id, position_rank) VALUES (?1, ?2, ?3)",
     )?;
@@ -191,7 +215,7 @@ pub fn add_entities_to_folder_batch(
         rank += RANK_GAP;
         let changed = stmt.execute(params![folder_id, eid, rank])?;
         if changed > 0 {
-            inserted += 1;
+            inserted.push(eid);
         }
     }
     Ok(inserted)
@@ -590,8 +614,26 @@ impl SqliteDatabase {
 
     pub async fn add_entity_to_folder(&self, folder_id: i64, hash: &str) -> Result<(), String> {
         let entity_id = self.resolve_hash(hash).await?;
-        self.with_conn(move |conn| add_entity_to_folder(conn, folder_id, entity_id))
+        let inserted = self
+            .with_conn(move |conn| add_entity_to_folder(conn, folder_id, entity_id))
             .await?;
+        if inserted {
+            let auto_tags = self
+                .with_read_conn(move |conn| {
+                    Ok(get_folder(conn, folder_id)?
+                        .map(|folder| folder.auto_tags)
+                        .unwrap_or_default())
+                })
+                .await?;
+            if !auto_tags.is_empty() {
+                self.add_tags_batch_by_entity_ids(
+                    vec![entity_id],
+                    auto_tags,
+                    "folder_auto".to_string(),
+                )
+                .await?;
+            }
+        }
         self.bitmaps
             .insert(&BitmapKey::Folder(folder_id), entity_id as u32);
         self.emit_compiler_event(CompilerEvent::FolderChanged { folder_id });
@@ -609,15 +651,32 @@ impl SqliteDatabase {
         let resolved = self.resolve_hashes_batch(hashes).await?;
         let entity_ids: Vec<i64> = resolved.iter().map(|(_, id)| *id).collect();
         let eids = entity_ids.clone();
-        let inserted = self
+        let inserted_ids = self
             .with_conn(move |conn| add_entities_to_folder_batch(conn, folder_id, &eids))
             .await?;
+        if !inserted_ids.is_empty() {
+            let auto_tags = self
+                .with_read_conn(move |conn| {
+                    Ok(get_folder(conn, folder_id)?
+                        .map(|folder| folder.auto_tags)
+                        .unwrap_or_default())
+                })
+                .await?;
+            if !auto_tags.is_empty() {
+                self.add_tags_batch_by_entity_ids(
+                    inserted_ids.clone(),
+                    auto_tags,
+                    "folder_auto".to_string(),
+                )
+                .await?;
+            }
+        }
         for &eid in &entity_ids {
             self.bitmaps
                 .insert(&BitmapKey::Folder(folder_id), eid as u32);
         }
         self.emit_compiler_event(CompilerEvent::FolderChanged { folder_id });
-        Ok(inserted)
+        Ok(inserted_ids.len())
     }
 
     pub async fn remove_entity_from_folder(
@@ -726,11 +785,15 @@ impl SqliteDatabase {
         name: String,
         icon: Option<String>,
         color: Option<String>,
+        auto_tags: Vec<String>,
     ) -> Result<(), String> {
         let n = name;
         let i = icon;
         let c = color;
-        self.with_conn(move |conn| update_folder(conn, folder_id, &n, i.as_deref(), c.as_deref()))
+        let tags = auto_tags;
+        self.with_conn(move |conn| {
+            update_folder(conn, folder_id, &n, i.as_deref(), c.as_deref(), &tags)
+        })
             .await?;
         self.emit_compiler_event(CompilerEvent::FolderChanged { folder_id });
         Ok(())

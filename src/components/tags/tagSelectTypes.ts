@@ -1,7 +1,9 @@
 export type TagFilterLogicMode = 'OR' | 'AND' | 'EQUAL';
 
 export interface TagSelectPanelProps {
-  anchorEl: HTMLElement;
+  anchorEl?: HTMLElement | null;
+  mode?: 'anchored' | 'modal';
+  title?: string;
   selectedTags: string[];
   excludedTags?: string[];
   logicMode?: TagFilterLogicMode;

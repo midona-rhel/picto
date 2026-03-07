@@ -12,6 +12,7 @@ import {
   buildFolderSurfaceMenu,
 } from '../ui/context-actions/folderActions';
 import { DynamicIcon, DEFAULT_FOLDER_ICON } from '../smart-folders/iconRegistry';
+import { TagSelectService } from '../tags/tagSelectService';
 import styles from './SubfolderGrid.module.css';
 
 interface SubfolderGridProps {
@@ -29,6 +30,7 @@ interface ChildFolder {
   name: string;
   icon: string | null;
   color: string | null;
+  autoTags: string[];
   count: number;
   sortOrder: number;
 }
@@ -40,6 +42,12 @@ function extractFolderId(node: SidebarNodeDto): number | null {
   return match ? parseInt(match[1], 10) : null;
 }
 
+function extractFolderAutoTags(node: SidebarNodeDto): string[] {
+  const meta = node.meta as Record<string, unknown> | null | undefined;
+  const raw = meta?.auto_tags;
+  return Array.isArray(raw) ? raw.filter((value): value is string => typeof value === 'string') : [];
+}
+
 function deriveChildFolders(folderNodes: SidebarNodeDto[], parentFolderId: number): ChildFolder[] {
   const parentNodeId = `folder:${parentFolderId}`;
   return folderNodes
@@ -49,6 +57,7 @@ function deriveChildFolders(folderNodes: SidebarNodeDto[], parentFolderId: numbe
       name: n.name,
       icon: n.icon ?? null,
       color: n.color ?? null,
+      autoTags: extractFolderAutoTags(n),
       count: n.count ?? 0,
       sortOrder: n.sort_order ?? 0,
     }))
@@ -215,6 +224,32 @@ export function SubfolderGrid({ folderId, targetSize, totalImageCount, onOpenFol
     }
   }, [refreshSidebar]);
 
+  const openAutoTagsEditor = useCallback((folder: ChildFolder) => {
+    const original = [...folder.autoTags];
+    let draft = [...folder.autoTags];
+    TagSelectService.open({
+      mode: 'modal',
+      title: `Auto-Tags · ${folder.name}`,
+      anchorEl: null,
+      selectedTags: draft,
+      onToggle: (tag, added) => {
+        draft = added ? [...draft, tag] : draft.filter((entry) => entry !== tag);
+      },
+      onClose: () => {
+        const next = Array.from(new Set(draft)).sort();
+        const prev = Array.from(new Set(original)).sort();
+        if (JSON.stringify(next) === JSON.stringify(prev)) return;
+        void FolderController.updateFolder({ folderId: folder.folderId, autoTags: next })
+          .then(() => {
+            notifySuccess('Folder auto-tags updated', 'Folders');
+          })
+          .catch((error) => {
+            notifyError(error, 'Update Folder Auto-Tags Failed');
+          });
+      },
+    });
+  }, []);
+
   const deleteFolders = useCallback(async (folderIds: number[]) => {
     try {
       await Promise.all(folderIds.map((id) => FolderController.deleteFolder(id)));
@@ -358,6 +393,7 @@ export function SubfolderGrid({ folderId, targetSize, totalImageCount, onOpenFol
       : buildFolderSingleMenu({
         openFolder: () => onOpenFolder(folder.folderId, folder.name),
         renameFolder: () => startRenameFolder(folder),
+        setAutoTags: () => openAutoTagsEditor(folder),
         iconAndColor: {
           iconValue: folder.icon,
           colorValue: folder.color,
@@ -369,7 +405,7 @@ export function SubfolderGrid({ folderId, targetSize, totalImageCount, onOpenFol
         deleteLabel: 'Remove Folder',
       });
     contextMenu.open(e, items);
-  }, [applyColor, applyIcon, contextMenu, deleteFolders, onOpenFolder, selectedIds, startRenameFolder]);
+  }, [applyColor, applyIcon, contextMenu, deleteFolders, onOpenFolder, openAutoTagsEditor, selectedIds, startRenameFolder]);
 
   const handleGridContextMenu = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
     const target = e.target as HTMLElement;
@@ -478,6 +514,9 @@ export function SubfolderGrid({ folderId, targetSize, totalImageCount, onOpenFol
                 </div>
                 <div className={styles.metas}>
                   {folder.count} {folder.count === 1 ? 'item' : 'items'}
+                  {folder.autoTags.length > 0
+                    ? ` · ${folder.autoTags.length} auto-tag${folder.autoTags.length === 1 ? '' : 's'}`
+                    : ''}
                 </div>
               </div>
             );

@@ -780,7 +780,13 @@ async fn compile_sidebar(db: &Arc<SqliteDatabase>) -> Result<(), String> {
                 epoch: epoch as i64,
                 selectable: true,
                 expanded_by_default: false,
-                meta_json: Some(format!("{{\"folder_id\":{}}}", folder.folder_id)),
+                meta_json: Some(
+                    serde_json::json!({
+                        "folder_id": folder.folder_id,
+                        "auto_tags": folder.auto_tags,
+                    })
+                    .to_string(),
+                ),
                 updated_at: Some(chrono::Utc::now().to_rfc3339()),
             });
         }

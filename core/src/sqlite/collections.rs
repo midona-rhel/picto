@@ -1248,6 +1248,7 @@ mod tests {
                 parent_id: None,
                 icon: None,
                 color: None,
+                auto_tags: Vec::new(),
             },
         )
         .unwrap();

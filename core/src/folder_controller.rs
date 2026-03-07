@@ -24,7 +24,13 @@ fn build_folder_sidebar_node(
         epoch: 0,
         selectable: true,
         expanded_by_default: false,
-        meta_json: Some(format!("{{\"folder_id\":{}}}", folder.folder_id)),
+        meta_json: Some(
+            serde_json::json!({
+                "folder_id": folder.folder_id,
+                "auto_tags": folder.auto_tags,
+            })
+            .to_string(),
+        ),
         updated_at: Some(chrono::Utc::now().to_rfc3339()),
     }
 }
@@ -78,6 +84,7 @@ impl FolderController {
                 parent_id,
                 icon,
                 color,
+                auto_tags: Vec::new(),
             })
             .await?;
         // Insert sidebar projection immediately so the next sidebar fetch from
@@ -92,6 +99,7 @@ impl FolderController {
         name: Option<String>,
         icon: Option<String>,
         color: Option<String>,
+        auto_tags: Option<Vec<String>>,
     ) -> Result<(), String> {
         let current = db
             .with_read_conn(move |conn| crate::sqlite::folders::get_folder(conn, folder_id))
@@ -108,7 +116,14 @@ impl FolderController {
             Some(_) => color,                // explicit value
             None => current.color,           // not provided = keep
         };
-        db.update_folder(folder_id, final_name, final_icon, final_color)
+        let final_auto_tags = auto_tags.unwrap_or(current.auto_tags);
+        db.update_folder(
+            folder_id,
+            final_name,
+            final_icon,
+            final_color,
+            final_auto_tags,
+        )
             .await?;
         let updated = db
             .with_read_conn(move |conn| crate::sqlite::folders::get_folder(conn, folder_id))

@@ -5,6 +5,7 @@ import {
   IconFolderMinus,
   IconFolderPlus,
   IconFolders,
+  IconTag,
   IconUpload,
 } from '@tabler/icons-react';
 import type { ContextMenuEntry } from '../ContextMenu';
@@ -14,6 +15,7 @@ export interface FolderSingleMenuOptions {
   openFolder?: MenuAction;
   createFolder?: MenuAction;
   createSubfolder?: MenuAction;
+  setAutoTags?: MenuAction;
   renameFolder?: MenuAction;
   sortBy?: {
     currentLevelAsc?: MenuAction;
@@ -74,6 +76,15 @@ export function buildFolderSingleMenu(opts: FolderSingleMenuOptions): ContextMen
       label: 'Rename',
       icon: <IconCursorText size={14} />,
       onClick: () => invoke(opts.renameFolder),
+    });
+  }
+  if (opts.setAutoTags) {
+    if (opts.createFolder || opts.createSubfolder || opts.renameFolder) items.push({ type: 'separator' });
+    items.push({
+      type: 'item',
+      label: 'Set Auto-Tags...',
+      icon: <IconTag size={14} />,
+      onClick: () => invoke(opts.setAutoTags),
     });
   }
 

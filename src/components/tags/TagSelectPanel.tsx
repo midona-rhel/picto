@@ -16,6 +16,7 @@ import {
   useLayoutEffect,
   useMemo,
 } from 'react';
+import { Modal } from '@mantine/core';
 import { IconCheck, IconEqual, IconLayoutSidebar, IconLayersIntersect, IconLayersUnion, IconMinus, IconPin, IconPinFilled, IconPlus } from '@tabler/icons-react';
 import { OverlayShell } from '../ui/OverlayShell';
 import { useVirtualizer } from '@tanstack/react-virtual';
@@ -27,6 +28,7 @@ import type { TagFilterLogicMode, TagSelectPanelProps } from './tagSelectTypes';
 import { KbdTooltip } from '../ui/KbdTooltip';
 import { useGlobalKeydown } from '../../hooks/useGlobalKeydown';
 import { useGlobalPointerDrag } from '../../hooks/useGlobalPointerDrag';
+import { glassModalStyles } from '../../styles/glassModal';
 import st from './TagSelectPanel.module.css';
 
 function nsColor(namespace: string): string {
@@ -82,14 +84,19 @@ export function TagSelectPortal() {
     return unregister;
   }, []);
 
-  const handleClose = useCallback(() => setRequest(null), []);
+  const handleClose = useCallback(() => {
+    request?.onClose();
+    setRequest(null);
+  }, [request]);
 
   if (!request) return null;
 
   return (
     <TagSelectPanelInner
       key={openKey}
-      anchorEl={request.anchorEl}
+      anchorEl={request.anchorEl ?? null}
+      mode={request.mode ?? 'anchored'}
+      title={request.title}
       selectedTags={request.selectedTags}
       excludedTags={request.excludedTags}
       logicMode={request.logicMode}
@@ -108,6 +115,8 @@ export function TagSelectPortal() {
 
 function TagSelectPanelInner({
   anchorEl,
+  mode,
+  title,
   selectedTags,
   excludedTags,
   logicMode,
@@ -117,6 +126,7 @@ function TagSelectPanelInner({
   onLogicChange,
   onClose,
 }: TagSelectPanelProps) {
+  const isModalMode = mode === 'modal';
   const isFilterMode = !!onExclude;
   const panelRef = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
@@ -196,7 +206,7 @@ function TagSelectPanelInner({
   // Position: filter mode → below button, left-aligned; inspector mode → left of inspector panel
   useLayoutEffect(() => {
     const el = panelRef.current;
-    if (!el) return;
+    if (!el || isModalMode || !anchorEl) return;
     const anchorRect = anchorEl.getBoundingClientRect();
     const elRect = el.getBoundingClientRect();
 
@@ -221,7 +231,7 @@ function TagSelectPanelInner({
       if (y < 8) y = 8;
       setPos({ x: r, y });
     }
-  }, [anchorEl, allTags.length, isFilterMode]);
+  }, [anchorEl, allTags.length, isFilterMode, isModalMode]);
 
   useEffect(() => { searchRef.current?.focus(); }, []);
 
@@ -232,6 +242,7 @@ function TagSelectPanelInner({
   isFilterModeRef.current = isFilterMode;
 
   const onHeaderMouseDown = useCallback((e: React.MouseEvent) => {
+    if (isModalMode) return;
     if ((e.target as HTMLElement).closest('input, button, [class*="logicTab"]')) return;
     const el = panelRef.current;
     const rect = el?.getBoundingClientRect();
@@ -241,7 +252,7 @@ function TagSelectPanelInner({
     dragStart.current = { mx: e.clientX, my: e.clientY, anchor, y: pos.y };
     draggingRef.current = false;
     setDragSessionActive(true);
-  }, [pos.x, pos.y]);
+  }, [isModalMode, pos.x, pos.y]);
 
   const draggingRef = useRef(false);
   const handlePanelDragMove = useCallback((e: MouseEvent) => {
@@ -503,19 +514,22 @@ function TagSelectPanelInner({
 
   const panelClass = `${st.panel}${!showSidebar ? ` ${st.panelCollapsed}` : ''}`;
 
-  return (
-    <OverlayShell open onClose={onClose} pinned={pinned}>
+  const panelBody = (
+    <div
+      ref={panelRef}
+      className={`${panelClass}${dragging ? ` ${st.panelDragging}` : ''}${isModalMode ? ` ${st.panelModal}` : ''}`}
+      style={
+        isModalMode
+          ? undefined
+          : (isFilterMode ? { left: pos.x, top: pos.y } : { right: pos.x, top: pos.y })
+      }
+      onContextMenu={(e) => e.preventDefault()}
+    >
+      {/* Header */}
       <div
-        ref={panelRef}
-        className={`${panelClass}${dragging ? ` ${st.panelDragging}` : ''}`}
-        style={isFilterMode ? { left: pos.x, top: pos.y } : { right: pos.x, top: pos.y }}
-        onContextMenu={(e) => e.preventDefault()}
+        className={`${st.header}${dragging ? ` ${st.headerDragging}` : ''}`}
+        onMouseDown={onHeaderMouseDown}
       >
-        {/* Header */}
-        <div
-          className={`${st.header}${dragging ? ` ${st.headerDragging}` : ''}`}
-          onMouseDown={onHeaderMouseDown}
-        >
           <div className={st.searchWrap}>
             <input
               ref={searchRef}
@@ -557,7 +571,7 @@ function TagSelectPanelInner({
               </div>
             </>
           )}
-          {!isFilterMode && (
+          {!isFilterMode && !isModalMode && (
             <KbdTooltip label={showSidebar ? 'Hide sidebar' : 'Show sidebar'}>
               <button
                 className={st.pinBtn}
@@ -567,18 +581,20 @@ function TagSelectPanelInner({
               </button>
             </KbdTooltip>
           )}
-          <KbdTooltip label={pinned ? 'Cancel always on top' : 'Always on top'}>
-            <button
-              className={st.pinBtn}
-              onClick={() => setPinned((p) => !p)}
-            >
-              {pinned ? <IconPinFilled size={14} /> : <IconPin size={14} />}
-            </button>
-          </KbdTooltip>
-        </div>
+          {!isModalMode && (
+            <KbdTooltip label={pinned ? 'Cancel always on top' : 'Always on top'}>
+              <button
+                className={st.pinBtn}
+                onClick={() => setPinned((p) => !p)}
+              >
+                {pinned ? <IconPinFilled size={14} /> : <IconPin size={14} />}
+              </button>
+            </KbdTooltip>
+          )}
+      </div>
 
-        {/* Body: sidebar + content */}
-        <div className={st.body}>
+      {/* Body: sidebar + content */}
+      <div className={st.body}>
           {/* Sidebar (filter mode only) */}
           {showSidebar && (
             <div className={st.sidebar}>
@@ -723,35 +739,54 @@ function TagSelectPanelInner({
               </div>
             )}
           </div>
+      </div>
+      {/* Footer */}
+      <div className={st.footer}>
+        <div className={st.footerLeft}>
+          {isFilterMode ? (
+            <>
+              <span className={st.shortcutTip}>
+                Select <span className={st.kbd}>L-click</span>
+              </span>
+              <span className={st.shortcutTip}>
+                Exclude <span className={st.kbd}>R-click</span>
+              </span>
+            </>
+          ) : (
+            <>
+              <span className={st.shortcutTip}><span className={st.kbd}>&uarr;&darr;</span></span>
+              <span className={st.shortcutTip}><span className={st.kbd}>&crarr;</span> Select</span>
+              <span className={st.shortcutTip}><span className={st.kbd}>Tab</span></span>
+            </>
+          )}
         </div>
-
-        {/* Footer */}
-        <div className={st.footer}>
-          <div className={st.footerLeft}>
-            {isFilterMode ? (
-              <>
-                <span className={st.shortcutTip}>
-                  Select <span className={st.kbd}>L-click</span>
-                </span>
-                <span className={st.shortcutTip}>
-                  Exclude <span className={st.kbd}>R-click</span>
-                </span>
-              </>
-            ) : (
-              <>
-                <span className={st.shortcutTip}><span className={st.kbd}>&uarr;&darr;</span></span>
-                <span className={st.shortcutTip}><span className={st.kbd}>&crarr;</span> Select</span>
-                <span className={st.shortcutTip}><span className={st.kbd}>Tab</span></span>
-              </>
-            )}
-          </div>
-          <div className={st.footerRight}>
-            <span className={st.shortcutTip}>
-              <span className={st.kbd}>ESC</span>
-            </span>
-          </div>
+        <div className={st.footerRight}>
+          <span className={st.shortcutTip}>
+            <span className={st.kbd}>ESC</span>
+          </span>
         </div>
       </div>
+    </div>
+  );
+
+  if (isModalMode) {
+    return (
+      <Modal
+        opened
+        onClose={onClose}
+        title={title ?? 'Select Tags'}
+        centered
+        size="lg"
+        styles={glassModalStyles}
+      >
+        {panelBody}
+      </Modal>
+    );
+  }
+
+  return (
+    <OverlayShell open onClose={onClose} pinned={pinned}>
+      {panelBody}
     </OverlayShell>
   );
 }

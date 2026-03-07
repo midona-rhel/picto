@@ -1,6 +1,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useInlineRename } from '../../hooks/useInlineRename';
+import { IconTag } from '@tabler/icons-react';
 import {
   DndContext,
   PointerSensor,
@@ -26,6 +27,7 @@ import {
 import { DynamicIcon } from '../smart-folders/iconRegistry';
 import { imageDrag, useImageDragDropTarget } from '../../lib/imageDrag';
 import type { SidebarNodeDto } from '../../types/sidebar';
+import { TagSelectService } from '../tags/tagSelectService';
 import { SidebarSection } from './SidebarSection';
 import { SidebarItem } from './SidebarItem';
 import styles from './Sidebar.module.css';
@@ -65,6 +67,12 @@ function parseFolderId(nodeId: string): number | null {
     return isNaN(num) ? null : num;
   }
   return null;
+}
+
+function getFolderAutoTags(node: SidebarNodeDto): string[] {
+  const meta = node.meta as Record<string, unknown> | null | undefined;
+  const raw = meta?.auto_tags;
+  return Array.isArray(raw) ? raw.filter((value): value is string => typeof value === 'string') : [];
 }
 
 /** Collect all descendant node IDs (to prevent dropping a folder into its own subtree) */
@@ -481,6 +489,38 @@ export function FolderTree() {
     });
   }, [folderNodes]);
 
+  const openFolderAutoTagsEditor = useCallback((folderId: number, folderName: string, currentTags: string[]) => {
+    const original = [...currentTags];
+    let draft = [...currentTags];
+    TagSelectService.open({
+      mode: 'modal',
+      title: `Auto-Tags · ${folderName}`,
+      anchorEl: null,
+      selectedTags: draft,
+      onToggle: (tag, added) => {
+        draft = added ? [...draft, tag] : draft.filter((entry) => entry !== tag);
+      },
+      onClose: () => {
+        const next = Array.from(new Set(draft)).sort();
+        const prev = Array.from(new Set(original)).sort();
+        if (JSON.stringify(next) === JSON.stringify(prev)) return;
+        void FolderController.updateFolder({ folderId, autoTags: next }).then(() => {
+          registerUndoAction({
+            label: 'Update folder auto-tags',
+            undo: async () => {
+              await FolderController.updateFolder({ folderId, autoTags: prev });
+            },
+            redo: async () => {
+              await FolderController.updateFolder({ folderId, autoTags: next });
+            },
+          });
+        }).catch((error) => {
+          console.error('Failed to update folder auto-tags:', error);
+        });
+      },
+    });
+  }, []);
+
   const toggleSameLevelFolders = useCallback((node: TreeNode) => {
     const siblings = folderNodes.filter((entry) => entry.parent_id === node.parent_id);
     const anyCollapsed = siblings.some((entry) => collapsedNodes.has(entry.id));
@@ -525,10 +565,12 @@ export function FolderTree() {
     }
 
     const hasChildren = node.children.length > 0;
+    const autoTags = getFolderAutoTags(node);
     const items: ContextMenuEntry[] = buildFolderSingleMenu({
       createFolder: () => createSiblingFolder(node),
       createSubfolder: () => createSubfolderForNode(node, folderId),
       renameFolder: () => startRename(node.id, node.name),
+      setAutoTags: () => openFolderAutoTagsEditor(folderId, node.name, autoTags),
       sortBy: {
         currentLevelAsc: () => handleSortFolders(node.parent_id, 'asc'),
         currentLevelDesc: () => handleSortFolders(node.parent_id, 'desc'),
@@ -556,7 +598,7 @@ export function FolderTree() {
       showExport: true,
     });
     contextMenu.open(e, items);
-  }, [applyColorToFolders, applyIconToFolders, collapsedNodes.size, collapseAll, contextMenu, createSiblingFolder, createSubfolderForNode, expandAll, handleBatchDelete, handleDelete, handleSortAllFolders, handleSortFolders, selectedIds, startRename, toggleExpand, toggleSameLevelFolders]);
+  }, [applyColorToFolders, applyIconToFolders, collapsedNodes.size, collapseAll, contextMenu, createSiblingFolder, createSubfolderForNode, expandAll, handleBatchDelete, handleDelete, handleSortAllFolders, handleSortFolders, openFolderAutoTagsEditor, selectedIds, startRename, toggleExpand, toggleSameLevelFolders]);
 
   const handleFilesDropOnFolder = useCallback(async (folderId: number, hashes: string[]) => {
     try {
@@ -708,6 +750,7 @@ export function FolderTree() {
               const isRenaming = renamingId === node.id;
               const hasChildren = node.children.length > 0;
               const isExpanded = !collapsedNodes.has(node.id);
+              const autoTags = getFolderAutoTags(node);
 
               return (
                 <SortableFolderRow key={node.id} node={node} dropIndicator={dropIndicator}>
@@ -743,7 +786,16 @@ export function FolderTree() {
                         onKeyDown={renameKeyHandler}
                         onClick={(e) => e.stopPropagation()}
                       />
-                    ) : undefined}
+                    ) : (
+                      <span className={styles.itemLabelRow}>
+                        <span className={styles.itemLabel}>{node.name}</span>
+                        {autoTags.length > 0 ? (
+                          <span className={styles.folderAutoTagIndicator} title={`${autoTags.length} auto-tag${autoTags.length === 1 ? '' : 's'}`}>
+                            <IconTag size={11} />
+                          </span>
+                        ) : null}
+                      </span>
+                    )}
                   </SidebarItem>
                 </SortableFolderRow>
               );
