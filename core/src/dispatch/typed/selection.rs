@@ -75,14 +75,7 @@ impl TypedCommand for AddTagsSelection {
         if count > 0 {
             crate::events::emit_mutation(
                 "add_tags_selection",
-                crate::events::MutationImpact::new()
-                    .domains(&[
-                        crate::events::Domain::Tags,
-                        crate::events::Domain::Files,
-                        crate::events::Domain::Selection,
-                    ])
-                    .selection_summary()
-                    .grid_all(),
+                crate::events::MutationImpact::selection_batch_tags(),
             );
         }
         Ok(count)
@@ -101,14 +94,7 @@ impl TypedCommand for RemoveTagsSelection {
         if count > 0 {
             crate::events::emit_mutation(
                 "remove_tags_selection",
-                crate::events::MutationImpact::new()
-                    .domains(&[
-                        crate::events::Domain::Tags,
-                        crate::events::Domain::Files,
-                        crate::events::Domain::Selection,
-                    ])
-                    .selection_summary()
-                    .grid_all(),
+                crate::events::MutationImpact::selection_batch_tags(),
             );
         }
         Ok(count)
@@ -142,10 +128,7 @@ impl TypedCommand for UpdateRatingSelection {
         if count > 0 {
             crate::events::emit_mutation(
                 "update_rating_selection",
-                crate::events::MutationImpact::new()
-                    .domains(&[crate::events::Domain::Files])
-                    .selection_summary()
-                    .grid_all(),
+                crate::events::MutationImpact::selection_metadata_grid(),
             );
         }
         Ok(count)
@@ -164,9 +147,7 @@ impl TypedCommand for SetNotesSelection {
         if count > 0 {
             crate::events::emit_mutation(
                 "set_notes_selection",
-                crate::events::MutationImpact::new()
-                    .domains(&[crate::events::Domain::Files])
-                    .selection_summary(),
+                crate::events::MutationImpact::selection_metadata(),
             );
         }
         Ok(count)
@@ -185,9 +166,7 @@ impl TypedCommand for SetSourceUrlsSelection {
         if count > 0 {
             crate::events::emit_mutation(
                 "set_source_urls_selection",
-                crate::events::MutationImpact::new()
-                    .domains(&[crate::events::Domain::Files])
-                    .selection_summary(),
+                crate::events::MutationImpact::selection_metadata(),
             );
         }
         Ok(count)

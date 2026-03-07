@@ -191,6 +191,113 @@ impl MutationImpact {
             .domains(&[domain, Domain::Sidebar])
             .sidebar_tree()
     }
+
+    /// File status change (status update, delete, wipe). Full ecosystem invalidation.
+    pub fn file_status_change(db: &crate::sqlite::SqliteDatabase) -> Self {
+        Self::new()
+            .domains(&[
+                Domain::Files,
+                Domain::Sidebar,
+                Domain::Folders,
+                Domain::SmartFolders,
+                Domain::Selection,
+            ])
+            .sidebar_tree()
+            .selection_summary()
+            .sidebar_counts_from(db)
+    }
+
+    /// File added/removed from a folder. Invalidates folder grid, sidebar, selection.
+    pub fn folder_file_change(folder_id: i64) -> Self {
+        Self::new()
+            .domains(&[
+                Domain::Folders,
+                Domain::Files,
+                Domain::Selection,
+                Domain::Sidebar,
+            ])
+            .folder_ids(vec![folder_id])
+            .sidebar_tree()
+            .grid_scopes(vec![format!("folder:{}", folder_id)])
+            .selection_summary()
+    }
+
+    /// Tag structure change (merge, delete, normalize). Affects tags, sidebar, smart folders.
+    pub fn tag_structure_change() -> Self {
+        Self::new()
+            .domains(&[Domain::Tags, Domain::Sidebar, Domain::SmartFolders])
+            .sidebar_tree()
+            .grid_all()
+            .selection_summary()
+    }
+
+    /// Folder item reorder/sort/reverse. Invalidates folder grid only.
+    pub fn folder_item_reorder(folder_id: i64) -> Self {
+        Self::new()
+            .domains(&[Domain::Folders])
+            .folder_ids(vec![folder_id])
+            .grid_scopes(vec![format!("folder:{}", folder_id)])
+    }
+
+    /// All domains changed (collection membership, subscription import with collections).
+    /// Invalidates sidebar, grid, selection, and sidebar counts.
+    pub fn all_domains_change(db: &crate::sqlite::SqliteDatabase) -> Self {
+        Self::new()
+            .domains(&[
+                Domain::Files,
+                Domain::Folders,
+                Domain::Tags,
+                Domain::Sidebar,
+                Domain::SmartFolders,
+            ])
+            .sidebar_tree()
+            .selection_summary()
+            .sidebar_counts_from(db)
+    }
+
+    /// Batch tag change on a selection. Invalidates grid and selection summary.
+    pub fn selection_batch_tags() -> Self {
+        Self::new()
+            .domains(&[Domain::Tags, Domain::Files, Domain::Selection])
+            .selection_summary()
+            .grid_all()
+    }
+
+    /// Collection metadata update (rating, source URLs). Sidebar + grid invalidation.
+    pub fn collection_update(collection_id: i64) -> Self {
+        Self::sidebar(Domain::Folders)
+            .folder_ids(vec![collection_id])
+            .grid_all()
+            .selection_summary()
+    }
+
+    /// Single domain change with no invalidation. Used for minimal mutations
+    /// (subscription query CRUD, duplicate resolution).
+    pub fn domain_only(domain: Domain) -> Self {
+        Self::new().domains(&[domain])
+    }
+
+    /// Selection-scoped file metadata change. Invalidates selection summary only.
+    pub fn selection_metadata() -> Self {
+        Self::new()
+            .domains(&[Domain::Files])
+            .selection_summary()
+    }
+
+    /// Selection-scoped file metadata change with grid refresh.
+    pub fn selection_metadata_grid() -> Self {
+        Self::new()
+            .domains(&[Domain::Files])
+            .selection_summary()
+            .grid_all()
+    }
+
+    /// View preferences change.
+    pub fn view_prefs_change() -> Self {
+        Self::new()
+            .domains(&[Domain::ViewPrefs])
+            .view_prefs()
+    }
 }
 
 /// Emit a `runtime/mutation_committed` event with a `MutationReceipt`.

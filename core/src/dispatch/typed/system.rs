@@ -214,9 +214,7 @@ impl TypedCommand for SetViewPrefs {
         .await?;
         crate::events::emit_mutation(
             "set_view_prefs",
-            crate::events::MutationImpact::new()
-                .domains(&[crate::events::Domain::ViewPrefs])
-                .view_prefs(),
+            crate::events::MutationImpact::view_prefs_change(),
         );
         Ok(serde_json::to_value(&result).map_err(|e| e.to_string())?)
     }

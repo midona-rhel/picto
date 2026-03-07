@@ -775,18 +775,8 @@ impl<'a> SubscriptionSyncEngine<'a> {
         );
         crate::events::emit_mutation(
             "subscription_import_collections",
-            crate::events::MutationImpact::new()
-                .domains(&[
-                    crate::events::Domain::Files,
-                    crate::events::Domain::Folders,
-                    crate::events::Domain::Tags,
-                    crate::events::Domain::Sidebar,
-                    crate::events::Domain::SmartFolders,
-                ])
-                .sidebar_tree()
-                .grid_scopes(scopes)
-                .selection_summary()
-                .sidebar_counts_from(self.db),
+            crate::events::MutationImpact::all_domains_change(self.db)
+                .grid_scopes(scopes),
         );
     }
 
@@ -929,14 +919,8 @@ impl<'a> SubscriptionSyncEngine<'a> {
                 self.db.scope_cache_invalidate_all();
                 crate::events::emit_mutation(
                     "subscription_import",
-                    crate::events::MutationImpact::new()
-                        .domains(&[
-                            crate::events::Domain::Files,
-                            crate::events::Domain::Sidebar,
-                            crate::events::Domain::SmartFolders,
-                        ])
-                        .grid_scopes(vec!["system:all".to_string(), "system:inbox".to_string()])
-                        .sidebar_counts_from(self.db),
+                    crate::events::MutationImpact::file_lifecycle(self.db)
+                        .grid_scopes(vec!["system:all".to_string(), "system:inbox".to_string()]),
                 );
 
                 Ok(ImportOutcome {
@@ -1093,15 +1077,8 @@ impl<'a> SubscriptionSyncEngine<'a> {
             self.db.scope_cache_invalidate_all();
             crate::events::emit_mutation(
                 "subscription_import",
-                crate::events::MutationImpact::new()
-                    .domains(&[
-                        crate::events::Domain::Files,
-                        crate::events::Domain::Sidebar,
-                        crate::events::Domain::SmartFolders,
-                    ])
-                    .metadata_hashes(vec![hex_hash.to_string()])
-                    .grid_all()
-                    .sidebar_counts_from(self.db),
+                crate::events::MutationImpact::file_lifecycle(self.db)
+                    .metadata_hashes(vec![hex_hash.to_string()]),
             );
         }
 
