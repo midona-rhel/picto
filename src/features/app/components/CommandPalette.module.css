@@ -3,7 +3,7 @@
    ========================================================================== */
 
 .backdrop {
-  composes: panelBackdrop from '../shared/styles/pickerPanel.module.css';
+  composes: panelBackdrop from '../../../shared/styles/pickerPanel.module.css';
   background: rgba(0, 0, 0, 0.35);
 }
 
@@ -18,7 +18,7 @@
 }
 
 .panel {
-  composes: panelGlass from '../shared/styles/pickerPanel.module.css';
+  composes: panelGlass from '../../../shared/styles/pickerPanel.module.css';
   width: 480px;
   max-height: min(400px, 60vh);
   display: flex;
