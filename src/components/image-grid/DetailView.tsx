@@ -12,7 +12,7 @@ import { getCachedMediaUrl } from './enhancedMediaCache';
 import { useImageZoom, type ImageSize, type ZoomState } from './useImageZoom';
 import { useNavigatorDrag } from './useNavigatorDrag';
 import { useNavigatorRenderer } from './useNavigatorRenderer';
-import { useBoundaryNavigation } from '../../hooks/useBoundaryNavigation';
+import { useBoundaryNavigation } from '../../shared/hooks/useBoundaryNavigation';
 import { FileController } from '../../controllers/fileController';
 import { getShortcut, matchesShortcut, matchesShortcutDef } from '../../shared/lib/shortcuts';
 import { runCriticalAction } from '../../shared/lib/asyncOps';

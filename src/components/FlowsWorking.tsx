@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { useInlineRename } from '../hooks/useInlineRename';
+import { useInlineRename } from '../shared/hooks/useInlineRename';
 import {
   TextInput,
   Select,

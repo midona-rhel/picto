@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { useDebouncedCallback } from '../hooks/useDebouncedCallback';
+import { useDebouncedCallback } from '../shared/hooks/useDebouncedCallback';
 import { Loader, Modal, SegmentedControl, TextInput } from '@mantine/core';
 import { TextButton } from '../shared/components/TextButton';
 import { glassModalStyles } from '../shared/styles/glassModal';
@@ -20,7 +20,7 @@ import { writeText } from '#desktop/api';
 import { notifySuccess, notifyError, notifyWarning } from '../shared/lib/notify';
 import { getNamespaceColor } from '../shared/lib/namespaceColors';
 import { parseTagString } from '../shared/lib/tagParsing';
-import { useInlineRename } from '../hooks/useInlineRename';
+import { useInlineRename } from '../shared/hooks/useInlineRename';
 import { useNavigationStore } from '../state/navigationStore';
 import { ContextMenu, useContextMenu, type ContextMenuEntry } from '../shared/components/ContextMenu';
 import { TagRelationsModal } from './TagRelationsModal';

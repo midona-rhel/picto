@@ -9,7 +9,7 @@ import { IconChevronLeft, IconChevronRight, IconX } from '@tabler/icons-react';
 import type { MasonryImageItem } from './shared';
 import { DetailView, type DetailViewState, type DetailViewControls } from './DetailView';
 import { KbdTooltip } from '../../shared/components/KbdTooltip';
-import { useGlobalKeydown } from '../../hooks/useGlobalKeydown';
+import { useGlobalKeydown } from '../../shared/hooks/useGlobalKeydown';
 import styles from './QuickLook.module.css';
 
 interface QuickLookProps {

@@ -18,7 +18,7 @@ import { isImagePreloaded, queueImageDecode } from './image-grid/useImagePreload
 import type { DuplicatePairDto, DuplicatePairsResponse, ResolveDuplicateAction } from '../shared/types/api';
 import { useDomainStore } from '../state/domainStore';
 import { registerUndoAction } from '../controllers/undoRedoController';
-import { useGlobalKeydown } from '../hooks/useGlobalKeydown';
+import { useGlobalKeydown } from '../shared/hooks/useGlobalKeydown';
 import styles from './DuplicateManager.module.css';
 
 const PERIODIC_SCAN_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes

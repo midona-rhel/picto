@@ -4,7 +4,7 @@ import { KbdTooltip } from '../shared/components/KbdTooltip';
 import { IconPlus, IconMinus, IconArrowsMinimize, IconArrowsMaximize } from '@tabler/icons-react';
 import { useSettingsStore } from '../state/settingsStore';
 import { mediaThumbnailUrl } from '../shared/lib/mediaUrl';
-import { useGlobalPointerDrag } from '../hooks/useGlobalPointerDrag';
+import { useGlobalPointerDrag } from '../shared/hooks/useGlobalPointerDrag';
 
 interface ZoomableImageProps {
   src: string;

@@ -17,6 +17,9 @@ export default defineConfig(async ({ command }) => ({
 
   build: {
     rollupOptions: {
+      // Vite multi-page app: each HTML file is a separate Electron window entry point.
+      // These must live at the project root — Vite's dev server serves from root and
+      // resolves <script> src paths relative to the HTML file location.
       input: {
         main: resolve(__dirname, "index.html"),
         detail: resolve(__dirname, "detail.html"),

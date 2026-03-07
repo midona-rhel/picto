@@ -1,7 +1,7 @@
 
 import { useCallback, useState } from 'react';
 import { useDisclosure } from '@mantine/hooks';
-import { useInlineRename } from '../../hooks/useInlineRename';
+import { useInlineRename } from '../../shared/hooks/useInlineRename';
 import { SmartFolderController } from '../../controllers/smartFolderController';
 import {
   DndContext,

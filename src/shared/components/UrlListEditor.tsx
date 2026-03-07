@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
-import { useGlobalKeydown } from '../../hooks/useGlobalKeydown';
+import { useGlobalKeydown } from '../../shared/hooks/useGlobalKeydown';
 import { IconExternalLink, IconLink, IconPlus, IconX } from '@tabler/icons-react';
 import { FileController } from '../../controllers/fileController';
 import { KbdTooltip } from './KbdTooltip';

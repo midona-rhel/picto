@@ -1,5 +1,5 @@
 import { useCallback, useRef, useState, useEffect, useLayoutEffect, useMemo } from 'react';
-import { useGlobalPointerDrag } from '../../hooks/useGlobalPointerDrag';
+import { useGlobalPointerDrag } from '../../shared/hooks/useGlobalPointerDrag';
 
 export interface ZoomState {
   scale: number;

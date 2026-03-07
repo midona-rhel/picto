@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { useDebouncedCallback } from '../../hooks/useDebouncedCallback';
+import { useDebouncedCallback } from '../../shared/hooks/useDebouncedCallback';
 import { Slider } from '@mantine/core';
 import {
   IconChevronLeft,
@@ -22,7 +22,7 @@ import { ContextMenu, useContextMenu, type ContextMenuEntry } from '../../shared
 import { useFilterStore, useActiveFilterCount } from '../../state/filterStore';
 import type { DetailViewState, DetailViewControls } from './DetailView';
 import type { GridViewMode } from './runtime';
-import { useGlobalKeydown } from '../../hooks/useGlobalKeydown';
+import { useGlobalKeydown } from '../../shared/hooks/useGlobalKeydown';
 import st from './ImageGridControls.module.css';
 
 const MIN_SIZE = 100;
