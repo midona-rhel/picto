@@ -4,12 +4,14 @@
 P1
 
 ## Audit Status (2026-03-07)
-Status: **Not Implemented**
+Status: **Implemented**
 
-Evidence:
-1. `PBI-401` now defines the target frontend topology, but nothing currently prevents drift back into root files and catch-all folders.
-2. New code can still land in `src/components/*` or root `src/` because there is no CI enforcement.
-3. There is no current guard against new imports from deprecated legacy paths.
+Implementation:
+1. `scripts/guard-topology.mjs` — blocks root drift and deprecated import paths.
+2. Guard added to `guard:all` chain (run via `gate:legacy`).
+3. `npm run guard:topology` script registered in `package.json`.
+4. Contributor-facing policy documented in `docs/frontend-topology.md` § CI Enforcement.
+5. Transitional directories (`components/`, `controllers/`, `hooks/`, `domain/`) are allowed until PBI-404/405.
 
 ## Problem
 The frontend can only stay clean if the folder rules are enforced mechanically. Without CI guardrails, topology work will regress as soon as feature work resumes.
