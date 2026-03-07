@@ -121,8 +121,8 @@ impl PtrClient {
             .await
             .map_err(|e| format!("Metadata read error: {}", e))?;
 
-        let json_str = ptr_types::decompress_network_bytes(&bytes)?;
-        ptr_types::parse_metadata(&json_str)
+        let json_str = types::decompress_network_bytes(&bytes)?;
+        types::parse_metadata(&json_str)
     }
 
     /// Download a single update file by its hash.
@@ -158,8 +158,8 @@ impl PtrClient {
 
         // Decompress + parse on a blocking thread to avoid starving the tokio runtime
         tokio::task::spawn_blocking(move || {
-            let json_str = ptr_types::decompress_network_bytes(&bytes)?;
-            ptr_types::parse_update(&json_str)
+            let json_str = types::decompress_network_bytes(&bytes)?;
+            types::parse_update(&json_str)
         })
         .await
         .map_err(|e| format!("Parse task panicked: {}", e))?

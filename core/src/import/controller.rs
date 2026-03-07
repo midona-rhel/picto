@@ -31,7 +31,7 @@ impl ImportController {
         let mut options = ImportOptions::default();
         options.initial_status = initial_status;
         if let Some(tag_strs) = tag_strings {
-            options.tags = tags::parse_tags_ingest(&tag_strs);
+            options.tags = normalize::parse_tags_ingest(&tag_strs);
         }
         if let Some(urls) = source_urls {
             options.source_urls = urls;

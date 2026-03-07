@@ -127,9 +127,9 @@ impl TagController {
         tag_strings: Vec<String>,
     ) -> Result<Vec<String>, String> {
         let mut applied = Vec::new();
-        for (ns, st) in tags::parse_tags(&tag_strings) {
+        for (ns, st) in normalize::parse_tags(&tag_strings) {
             db.tag_entity(&hash, &ns, &st, "local").await?;
-            applied.push(tags::combine_tag(&ns, &st));
+            applied.push(normalize::combine_tag(&ns, &st));
         }
         Ok(applied)
     }
@@ -139,7 +139,7 @@ impl TagController {
         hash: String,
         tag_strings: Vec<String>,
     ) -> Result<(), String> {
-        for (ns, st) in tags::parse_tags(&tag_strings) {
+        for (ns, st) in normalize::parse_tags(&tag_strings) {
             db.untag_entity(&hash, &ns, &st).await?;
         }
         Ok(())

@@ -5,6 +5,8 @@ import type {
   RuntimeTask,
   RuntimeSnapshot,
   TaskKind,
+  TaskUpsertedEvent,
+  TaskRemovedEvent,
   SidebarCounts,
   ResourceKey,
 } from '../shared/types/generated/runtime-contract';
@@ -21,7 +23,6 @@ import {
   type FlowFinishedEvent,
   type FlowProgressEvent,
   type SubscriptionFinishedEvent,
-  type SubscriptionProgressEvent,
 } from '../controllers/subscriptionController';
 
 // ---------------------------------------------------------------------------
@@ -176,11 +177,11 @@ export const useRuntimeSyncStore = create<RuntimeSyncState>((set, get) => ({
         listenRuntimeEvent('runtime/mutation_committed', (receipt) => {
           get().applyMutationReceipt(receipt);
         }),
-        listenRuntimeEvent('runtime/task_upserted', (task) => {
-          get().applyTaskUpsert(task);
+        listenRuntimeEvent('runtime/task_upserted', (event: TaskUpsertedEvent) => {
+          get().applyTaskUpsert(event.task);
         }),
-        listenRuntimeEvent('runtime/task_removed', (payload) => {
-          get().applyTaskRemoved(payload.task_id);
+        listenRuntimeEvent('runtime/task_removed', (event: TaskRemovedEvent) => {
+          get().applyTaskRemoved(event.task_id);
         }),
 
         // --- PTR legacy events ---
@@ -225,169 +226,8 @@ export const useRuntimeSyncStore = create<RuntimeSyncState>((set, get) => ({
             .catch((error) => logBestEffortError('runtimeSyncStore.ptrBootstrapStatus.onBootstrapFailed', error));
         }),
 
-        // --- Subscription legacy events ---
-        SubscriptionController.onStarted((event) => {
-          const timer = subFinishedTimers.get(event.subscription_id);
-          if (timer) {
-            clearTimeout(timer);
-            subFinishedTimers.delete(event.subscription_id);
-          }
-          set((state) => {
-            const runningSubscriptionIds = new Set(state.runningSubscriptionIds);
-            runningSubscriptionIds.add(event.subscription_id);
-            const runningQueryIds = new Set(state.runningQueryIds);
-            if (event.query_id) runningQueryIds.add(event.query_id);
-            const subscriptionProgressById = new Map(state.subscriptionProgressById);
-            const existing = subscriptionProgressById.get(event.subscription_id);
-            subscriptionProgressById.set(event.subscription_id, {
-              subscription_id: event.subscription_id,
-              subscription_name:
-                (event.subscription_name ?? '').trim()
-                || existing?.subscription_name
-                || `Subscription ${event.subscription_id}`,
-              query_id: event.query_id,
-              query_name: event.query_name ?? existing?.query_name,
-              files_downloaded: existing?.files_downloaded ?? 0,
-              files_skipped: existing?.files_skipped ?? 0,
-              pages_fetched: existing?.pages_fetched ?? 0,
-              status_text: 'Starting...',
-              status: 'running',
-            });
-            return {
-              runningSubscriptionIds,
-              runningQueryIds,
-              subscriptionProgressById,
-              subscriptionEventSeq: state.subscriptionEventSeq + 1,
-            };
-          });
-        }),
-        SubscriptionController.onProgress((event: SubscriptionProgressEvent) => {
-          set((state) => {
-            const runningSubscriptionIds = new Set(state.runningSubscriptionIds);
-            runningSubscriptionIds.add(event.subscription_id);
-            const runningQueryIds = new Set(state.runningQueryIds);
-            if (event.query_id) runningQueryIds.add(event.query_id);
-            const subscriptionProgressById = new Map(state.subscriptionProgressById);
-            const existing = subscriptionProgressById.get(event.subscription_id);
-            subscriptionProgressById.set(event.subscription_id, {
-              subscription_id: event.subscription_id,
-              subscription_name:
-                (event.subscription_name ?? '').trim()
-                || existing?.subscription_name
-                || `Subscription ${event.subscription_id}`,
-              query_id: event.query_id,
-              query_name: event.query_name ?? existing?.query_name,
-              files_downloaded: event.files_downloaded,
-              files_skipped: event.files_skipped,
-              pages_fetched: event.pages_fetched,
-              status_text: event.status_text,
-              status: 'running',
-            });
-            return {
-              runningSubscriptionIds,
-              runningQueryIds,
-              subscriptionProgressById,
-              subscriptionEventSeq: state.subscriptionEventSeq + 1,
-            };
-          });
-        }),
-        SubscriptionController.onFinished((event: SubscriptionFinishedEvent) => {
-          const lingerMs =
-            event.failure_kind === 'inbox_full'
-              ? 6000
-              : event.status === 'failed'
-                ? 4500
-                : 2200;
-          const existingTimer = subFinishedTimers.get(event.subscription_id);
-          if (existingTimer) clearTimeout(existingTimer);
-
-          set((state) => {
-            const runningSubscriptionIds = new Set(state.runningSubscriptionIds);
-            runningSubscriptionIds.delete(event.subscription_id);
-            const runningQueryIds = new Set(state.runningQueryIds);
-            if (event.query_id) runningQueryIds.delete(event.query_id);
-            const subscriptionProgressById = new Map(state.subscriptionProgressById);
-            const existing = subscriptionProgressById.get(event.subscription_id);
-            subscriptionProgressById.set(event.subscription_id, {
-              subscription_id: event.subscription_id,
-              subscription_name:
-                (event.subscription_name ?? '').trim()
-                || existing?.subscription_name
-                || `Subscription ${event.subscription_id}`,
-              query_id: event.query_id,
-              query_name: event.query_name ?? existing?.query_name,
-              files_downloaded: event.files_downloaded,
-              files_skipped: event.files_skipped,
-              pages_fetched: existing?.pages_fetched ?? 0,
-              status_text: resolveFinishedSubStatusText(event),
-              status: 'finished',
-              finished_status: event.status,
-              failure_kind: event.failure_kind,
-              error: event.error,
-            });
-            return {
-              runningSubscriptionIds,
-              runningQueryIds,
-              subscriptionProgressById,
-              lastSubscriptionFinished: event,
-              subscriptionEventSeq: state.subscriptionEventSeq + 1,
-            };
-          });
-
-          const timer = setTimeout(() => {
-            set((state) => {
-              const current = state.subscriptionProgressById.get(event.subscription_id);
-              if (!current || current.status !== 'finished') return {};
-              const subscriptionProgressById = new Map(state.subscriptionProgressById);
-              subscriptionProgressById.delete(event.subscription_id);
-              return { subscriptionProgressById };
-            });
-            subFinishedTimers.delete(event.subscription_id);
-          }, lingerMs);
-          subFinishedTimers.set(event.subscription_id, timer);
-        }),
-
-        // --- Flow legacy events ---
-        SubscriptionController.onFlowStarted((event) => {
-          set((state) => {
-            const runningFlowIds = new Set(state.runningFlowIds);
-            runningFlowIds.add(event.flow_id);
-            const flowProgressById = new Map(state.flowProgressById);
-            flowProgressById.delete(event.flow_id);
-            return {
-              runningFlowIds,
-              flowProgressById,
-              flowEventSeq: state.flowEventSeq + 1,
-            };
-          });
-        }),
-        SubscriptionController.onFlowProgress((event) => {
-          set((state) => {
-            const runningFlowIds = new Set(state.runningFlowIds);
-            runningFlowIds.add(event.flow_id);
-            const flowProgressById = new Map(state.flowProgressById);
-            flowProgressById.set(event.flow_id, event);
-            return {
-              runningFlowIds,
-              flowProgressById,
-              flowEventSeq: state.flowEventSeq + 1,
-            };
-          });
-        }),
-        SubscriptionController.onFlowFinished((event) => {
-          set((state) => {
-            const runningFlowIds = new Set(state.runningFlowIds);
-            runningFlowIds.delete(event.flow_id);
-            const flowProgressById = new Map(state.flowProgressById);
-            flowProgressById.delete(event.flow_id);
-            return {
-              runningFlowIds,
-              flowProgressById,
-              lastFlowFinished: event,
-              flowEventSeq: state.flowEventSeq + 1,
-            };
-          });
-        }),
+        // Subscription & flow state derived from runtime/task_upserted in applyTaskUpsert.
+        // PTR bootstrap status still uses legacy events (task detail not yet packed).
       ]);
       unlisteners = listeners;
 
@@ -459,14 +299,127 @@ export const useRuntimeSyncStore = create<RuntimeSyncState>((set, get) => ({
 
   applyTaskUpsert: (task) => {
     lastEventTs = Date.now();
+    const isRunning = task.status === 'running' || task.status === 'cancelling';
+    const isTerminal = task.status === 'finished' || task.status === 'failed';
 
     set((state) => {
       const tasksById = new Map(state.tasksById);
       tasksById.set(task.task_id, task);
-      return { tasksById };
+      const patch: Partial<RuntimeSyncState> = { tasksById };
+
+      // --- Derive flow state from task events ---
+      if (task.kind === 'flow') {
+        const flowId = task.task_id.replace(/^flow:/, '');
+        const runningFlowIds = new Set(state.runningFlowIds);
+        const flowProgressById = new Map(state.flowProgressById);
+        if (isRunning) {
+          runningFlowIds.add(flowId);
+          if (task.progress) {
+            flowProgressById.set(flowId, {
+              flow_id: flowId,
+              done: task.progress.done,
+              total: task.progress.total,
+              remaining: task.progress.total - task.progress.done,
+            } as FlowProgressEvent);
+          }
+        } else if (isTerminal) {
+          runningFlowIds.delete(flowId);
+          flowProgressById.delete(flowId);
+          patch.lastFlowFinished = {
+            flow_id: flowId,
+            status: task.status === 'finished' ? 'succeeded' : 'failed',
+          } as FlowFinishedEvent;
+        }
+        patch.runningFlowIds = runningFlowIds;
+        patch.flowProgressById = flowProgressById;
+        patch.flowEventSeq = state.flowEventSeq + 1;
+      }
+
+      // --- Derive subscription state from task events ---
+      if (task.kind === 'subscription') {
+        const detail = task.detail as Record<string, unknown> | undefined;
+        if (detail) {
+          const subId = (detail.subscription_id as string) ?? task.task_id.replace(/^sub:/, '');
+          const timer = subFinishedTimers.get(subId);
+          if (timer && isRunning) {
+            clearTimeout(timer);
+            subFinishedTimers.delete(subId);
+          }
+          const runningSubscriptionIds = new Set(state.runningSubscriptionIds);
+          const runningQueryIds = new Set(state.runningQueryIds);
+          const subscriptionProgressById = new Map(state.subscriptionProgressById);
+          const existing = subscriptionProgressById.get(subId);
+
+          if (isRunning) {
+            runningSubscriptionIds.add(subId);
+            if (detail.query_id) runningQueryIds.add(detail.query_id as string);
+            subscriptionProgressById.set(subId, {
+              subscription_id: subId,
+              subscription_name:
+                ((detail.subscription_name as string) ?? '').trim()
+                || existing?.subscription_name
+                || `Subscription ${subId}`,
+              query_id: detail.query_id as string | undefined,
+              query_name: (detail.query_name as string | undefined) ?? existing?.query_name,
+              files_downloaded: (detail.files_downloaded as number) ?? 0,
+              files_skipped: (detail.files_skipped as number) ?? 0,
+              pages_fetched: (detail.pages_fetched as number) ?? 0,
+              status_text: (detail.status_text as string) ?? 'Running...',
+              status: 'running',
+            });
+          } else if (isTerminal) {
+            runningSubscriptionIds.delete(subId);
+            if (detail.query_id) runningQueryIds.delete(detail.query_id as string);
+            const finishedStatus =
+              (detail.finished_status as string)
+              ?? (task.status === 'finished' ? 'succeeded' : 'failed');
+            subscriptionProgressById.set(subId, {
+              subscription_id: subId,
+              subscription_name:
+                ((detail.subscription_name as string) ?? '').trim()
+                || existing?.subscription_name
+                || `Subscription ${subId}`,
+              query_id: detail.query_id as string | undefined,
+              query_name: (detail.query_name as string | undefined) ?? existing?.query_name,
+              files_downloaded: (detail.files_downloaded as number) ?? 0,
+              files_skipped: (detail.files_skipped as number) ?? 0,
+              pages_fetched: (detail.pages_fetched as number) ?? existing?.pages_fetched ?? 0,
+              status_text: (detail.status_text as string) ?? resolveFinishedSubStatusText({
+                status: finishedStatus as 'succeeded' | 'failed' | 'cancelled',
+                failure_kind: detail.failure_kind as string | undefined,
+              } as SubscriptionFinishedEvent),
+              status: 'finished',
+              finished_status: finishedStatus as 'succeeded' | 'failed' | 'cancelled',
+              failure_kind: detail.failure_kind as string | undefined,
+              error: detail.error as string | undefined,
+            });
+            patch.lastSubscriptionFinished = {
+              subscription_id: subId,
+              subscription_name: (detail.subscription_name as string) ?? '',
+              status: finishedStatus,
+              files_downloaded: (detail.files_downloaded as number) ?? 0,
+              files_skipped: (detail.files_skipped as number) ?? 0,
+              failure_kind: detail.failure_kind as string | undefined,
+              error: detail.error as string | undefined,
+            } as SubscriptionFinishedEvent;
+          }
+          patch.runningSubscriptionIds = runningSubscriptionIds;
+          patch.runningQueryIds = runningQueryIds;
+          patch.subscriptionProgressById = subscriptionProgressById;
+          patch.subscriptionEventSeq = state.subscriptionEventSeq + 1;
+        }
+      }
+
+      // --- Derive PTR sync state from task events ---
+      if (task.kind === 'ptr_sync') {
+        patch.ptrSyncing = isRunning;
+        if (!isRunning) patch.ptrProgress = null;
+      }
+
+      return patch;
     });
 
-    // Schedule linger removal for finished tasks
+    // Schedule linger removal for finished/failed tasks
     if (task.status === 'finished' || task.status === 'failed') {
       const existing = taskLingerTimers.get(task.task_id);
       if (existing) clearTimeout(existing);
@@ -482,6 +435,25 @@ export const useRuntimeSyncStore = create<RuntimeSyncState>((set, get) => ({
         taskLingerTimers.delete(task.task_id);
       }, lingerMs(task));
       taskLingerTimers.set(task.task_id, timer);
+
+      // Schedule subscription progress cleanup (linger then remove)
+      if (task.kind === 'subscription') {
+        const detail = task.detail as Record<string, unknown> | undefined;
+        const subId = (detail?.subscription_id as string) ?? task.task_id.replace(/^sub:/, '');
+        const existingSub = subFinishedTimers.get(subId);
+        if (existingSub) clearTimeout(existingSub);
+        const subTimer = setTimeout(() => {
+          set((state) => {
+            const current = state.subscriptionProgressById.get(subId);
+            if (!current || current.status !== 'finished') return {};
+            const subscriptionProgressById = new Map(state.subscriptionProgressById);
+            subscriptionProgressById.delete(subId);
+            return { subscriptionProgressById };
+          });
+          subFinishedTimers.delete(subId);
+        }, lingerMs(task));
+        subFinishedTimers.set(subId, subTimer);
+      }
     }
   },
 

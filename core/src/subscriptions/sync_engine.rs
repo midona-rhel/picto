@@ -125,6 +125,15 @@ pub struct SubscriptionProgressEvent {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_metadata_error: Option<String>,
     pub status_text: String,
+    /// Set on finished tasks — "succeeded", "failed", "cancelled".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub finished_status: Option<String>,
+    /// Set when failure_kind is known (e.g. "inbox_full").
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub failure_kind: Option<String>,
+    /// Error message, if any.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 /// Extract subscription progress events from the centralized runtime task registry.
@@ -969,7 +978,7 @@ impl<'a> SubscriptionSyncEngine<'a> {
             if !missing.is_empty() {
                 let tag_strings: Vec<String> = missing
                     .iter()
-                    .map(|(ns, st)| tags::combine_tag(ns, st))
+                    .map(|(ns, st)| normalize::combine_tag(ns, st))
                     .collect();
                 self.db
                     .add_tags_by_strings(hex_hash, &tag_strings)
@@ -1106,6 +1115,9 @@ impl<'a> SubscriptionSyncEngine<'a> {
             metadata_invalid: progress.metadata_invalid,
             last_metadata_error: progress.last_metadata_error.clone(),
             status_text: status_text.to_string(),
+            finished_status: None,
+            failure_kind: None,
+            error: None,
         };
         crate::events::emit(
             crate::events::event_names::SUBSCRIPTION_PROGRESS,

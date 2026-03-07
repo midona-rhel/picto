@@ -17,6 +17,8 @@ export type { SidebarCounts } from './SidebarCounts';
 export type { TaskKind } from './TaskKind';
 export type { TaskProgress } from './TaskProgress';
 export type { TaskStatus } from './TaskStatus';
+export type { TaskUpsertedEvent } from './TaskUpsertedEvent';
+export type { TaskRemovedEvent } from './TaskRemovedEvent';
 
 // ─── Frontend-only types (no Rust equivalent) ──────────────────────────────
 

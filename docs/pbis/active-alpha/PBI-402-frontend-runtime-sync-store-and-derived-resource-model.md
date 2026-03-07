@@ -4,7 +4,16 @@
 P0
 
 ## Audit Status (2026-03-07)
-Status: **Not Implemented**
+Status: **Implemented**
+
+Implementation:
+1. `src/state/runtimeSyncStore.ts` — unified Zustand store for mutation receipts, task sync, PTR/subscription/flow progress, watchdog polling, and snapshot recovery.
+2. `src/runtime/resourceInvalidator.ts` — pure `deriveStaleResources()` function mapping MutationReceipt → Set\<ResourceKey\>.
+3. `src/runtime/refresherOrchestrator.ts` — starts/stops sidebar, grid, and selection refreshers.
+4. `src/runtime/resourceRefreshers/` — 3 refreshers that subscribe to stale resource keys and trigger domain-specific refresh.
+5. Select All uses `mode: 'all_results'` spec delegated to backend API, no duplicated scope logic.
+6. Legacy `eventBridge.ts` and `taskRuntimeStore.ts` fully removed (zero imports).
+7. Bootstrap in `useAppBootstrap.ts` initializes runtime sync store and starts all refreshers.
 
 Backend dependencies:
 

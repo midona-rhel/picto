@@ -16,7 +16,7 @@ use crate::types::{
 };
 
 fn file_tag_to_resolved_info(t: FileTagInfo) -> ResolvedTagInfo {
-    let raw_tag = tags::combine_tag(&t.namespace, &t.subtag);
+    let raw_tag = normalize::combine_tag(&t.namespace, &t.subtag);
     let disp_ns = t.display_ns.as_deref().unwrap_or(&t.namespace);
     let disp_st = t.display_st.as_deref().unwrap_or(&t.subtag);
     let display_tag = tag_display_key(disp_ns, disp_st);
@@ -71,7 +71,7 @@ impl MetadataController {
             if !seen.contains(&display) {
                 seen.insert(display.clone());
                 tags.push(ResolvedTagInfo {
-                    raw_tag: tags::combine_tag(&pt.raw_ns, &pt.raw_st),
+                    raw_tag: normalize::combine_tag(&pt.raw_ns, &pt.raw_st),
                     display_tag: display,
                     namespace: pt.display_ns,
                     subtag: pt.display_st,
@@ -159,7 +159,7 @@ impl MetadataController {
             if !seen.contains(&display) {
                 seen.insert(display.clone());
                 result.push(ResolvedTagInfo {
-                    raw_tag: tags::combine_tag(&pt.raw_ns, &pt.raw_st),
+                    raw_tag: normalize::combine_tag(&pt.raw_ns, &pt.raw_st),
                     display_tag: display,
                     namespace: pt.display_ns,
                     subtag: pt.display_st,

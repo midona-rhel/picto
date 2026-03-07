@@ -16,7 +16,7 @@ use crate::sqlite::bitmaps::BitmapKey;
 use crate::sqlite::files::FileMetadataSlim;
 use crate::sqlite::projections::ResolvedMetadataFull;
 use crate::folders::db::list_uncategorized_entity_ids;
-use crate::smart_folders::db;
+use crate::smart_folders::db as smart_folders_db;
 use crate::tags::db::{find_tag as sql_find_tag, FileTagInfo};
 use crate::sqlite::{ScopeSnapshot, ScopeSnapshotKey, SqliteDatabase};
 use crate::ptr::db::PtrSqliteDatabase;
@@ -34,7 +34,7 @@ fn metadata_batch_prefetch_semaphore() -> &'static tokio::sync::Semaphore {
 }
 
 fn file_tag_to_resolved_info(t: FileTagInfo) -> ResolvedTagInfo {
-    let raw_tag = tags::combine_tag(&t.namespace, &t.subtag);
+    let raw_tag = normalize::combine_tag(&t.namespace, &t.subtag);
     let disp_ns = t.display_ns.as_deref().unwrap_or(&t.namespace);
     let disp_st = t.display_st.as_deref().unwrap_or(&t.subtag);
     let display_tag = tag_display_key(disp_ns, disp_st);
@@ -333,7 +333,7 @@ impl GridController {
                     let pred = predicate.clone();
                     let bitmaps = db.bitmaps.clone();
                     db.with_read_conn(move |conn| {
-                        let bm = smart_folders::compile_predicate(conn, &pred, &bitmaps)?;
+                        let bm = smart_folders_db::compile_predicate(conn, &pred, &bitmaps)?;
                         Ok(bm.iter().map(|id| id as i64).collect::<Vec<_>>())
                     })
                     .await?
@@ -351,7 +351,7 @@ impl GridController {
                          -> rusqlite::Result<Vec<i64>> {
                             let mut out = Vec::new();
                             for tag in tag_list {
-                                if let Some((ns, st)) = tags::parse_tag(tag) {
+                                if let Some((ns, st)) = normalize::parse_tag(tag) {
                                     if let Some(tag_id) = sql_find_tag(conn, &ns, &st)? {
                                         out.push(tag_id);
                                     } else if strict_missing {
@@ -1014,7 +1014,7 @@ impl GridController {
                     if !seen.contains(&display) {
                         seen.insert(display.clone());
                         tags.push(ResolvedTagInfo {
-                            raw_tag: tags::combine_tag(&pt.raw_ns, &pt.raw_st),
+                            raw_tag: normalize::combine_tag(&pt.raw_ns, &pt.raw_st),
                             display_tag: display,
                             namespace: pt.display_ns,
                             subtag: pt.display_st,
