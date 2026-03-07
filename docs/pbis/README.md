@@ -88,7 +88,7 @@ This folder was reset for the first alpha release.
 77. [PBI-307](./active-alpha/PBI-307-grid-selection-and-sidebar-query-service-decomposition.md)
 78. [PBI-308](./active-alpha/PBI-308-ptr-domain-decomposition-and-runtime-state-cleanup.md)
 79. [PBI-309](./active-alpha/PBI-309-media-processing-adapter-registry-and-pipeline-breakup.md)
-80. [PBI-401](./active-alpha/PBI-401-frontend-surface-consolidation-and-feature-boundaries.md)
+80. [PBI-401](./active-alpha/PBI-401-frontend-root-and-domain-topology-realignment.md)
 81. [PBI-402](./active-alpha/PBI-402-frontend-type-safety-and-renderer-contract-cleanup.md)
 82. [PBI-403](./active-alpha/PBI-403-renderer-bootstrap-and-lifecycle-ownership-cleanup.md)
 83. [PBI-404](./active-alpha/PBI-404-split-oversized-frontend-orchestration-modules.md)

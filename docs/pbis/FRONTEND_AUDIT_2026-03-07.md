@@ -46,7 +46,7 @@ These are the main sources of responsibility drift and cleanup debt.
 
 ## Findings
 
-### 1. Feature-first migration is incomplete
+### 1. Frontend topology is not explicit enough
 
 Evidence:
 
@@ -57,12 +57,13 @@ Evidence:
    - `src/components/Collections.tsx`
    - `src/components/DuplicateManager.tsx`
 3. The project currently has both `src/components/sidebar/` and `src/features/sidebar/`, both `src/components/settings/` and `src/features/settings/`, and similar dual surfaces in several domains.
+4. `src/` root still contains a broad flat row of entry and shell files instead of a clearly named app/entrypoint structure.
 
 Impact:
 
 1. Ownership is hard to infer from file location.
 2. New work can keep landing in the legacy tree because the migration boundary is not enforced.
-3. Audit/review cost stays high because imports do not communicate domain ownership cleanly.
+3. It is hard to answer basic maintenance questions like "what should be moved?", "what should be shared?", and "what should be deleted?" because the directory semantics are weak.
 
 Backlog mapping:
 
@@ -145,7 +146,7 @@ Updated with audit-specific scope:
 
 ## New PBIs Created From This Audit
 
-1. `PBI-401` — frontend surface consolidation and feature-first boundary enforcement
+1. `PBI-401` — frontend root and domain topology realignment
 2. `PBI-402` — frontend type safety and renderer contract cleanup
 3. `PBI-403` — renderer bootstrap and lifecycle ownership cleanup
 4. `PBI-404` — split oversized frontend orchestration modules
