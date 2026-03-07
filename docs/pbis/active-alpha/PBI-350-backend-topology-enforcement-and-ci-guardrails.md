@@ -1,4 +1,4 @@
-# PBI-320: Backend topology enforcement and CI guardrails
+# PBI-350: Backend topology enforcement and CI guardrails
 
 ## Priority
 P1

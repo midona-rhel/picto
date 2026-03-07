@@ -1,4 +1,4 @@
-# PBI-310: Backend top-level module tree restructure
+# PBI-340: Backend top-level module tree restructure
 
 ## Priority
 P1

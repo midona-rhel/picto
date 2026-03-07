@@ -65,7 +65,7 @@ This is the biggest structural cause of frontend/backend drift.
 This is covered by:
 
 - `PBI-234`
-- new `PBI-300`
+- new `PBI-304`
 
 ### 2. `state.rs` is a service locator plus process orchestrator
 
@@ -82,7 +82,7 @@ This is covered by:
 That is too much responsibility for one module and it makes library switching,
 worker cleanup, and future testing unnecessarily risky.
 
-This is covered by new `PBI-301`.
+This is covered by new `PBI-306`.
 
 ### 3. Subscription architecture is split along historical seams, not clean boundaries
 
@@ -99,7 +99,7 @@ Current split:
 This needs to become a layered subscription domain rather than three giant
 hybrid files.
 
-This is covered by new `PBI-302` and `PBI-303`.
+This is covered by new `PBI-305` and `PBI-343`.
 
 ### 4. SQLite schema and derived read models are too centralized
 
@@ -110,7 +110,7 @@ and historical migration logic for many unrelated domains.
 represent a cross-cutting derived-read-model system that is powerful but too
 implicit. Write paths and publish paths are not cleanly separated.
 
-This is covered by new `PBI-304` and `PBI-305`.
+This is covered by new `PBI-340` and `PBI-341`.
 
 ### 5. Import/entity lifecycle is spread across multiple weakly-defined modules
 
@@ -143,7 +143,7 @@ Relevant hotspots:
 The result is that read-model ownership is not obvious and invalidation is hard
 to reason about.
 
-This is covered by new `PBI-307`.
+This is covered by new `PBI-341`.
 
 ### 7. PTR is its own mini-application inside the backend
 
@@ -175,7 +175,7 @@ organized as helpers rather than a clear adapter pipeline.
 This area needs a cleaner capability registry and format adapter model before it
 keeps growing.
 
-This is covered by new `PBI-309`.
+This is covered by new `PBI-343`.
 
 ## Hotspot Evidence
 
@@ -202,30 +202,30 @@ with mixed responsibilities and unclear ownership boundaries.
 
 ## New PBIs Created In This Audit
 
-1. `PBI-300` Rust core runtime event bus and task registry realignment
-2. `PBI-301` app state service lifecycle and worker boundary cleanup
-3. `PBI-302` subscription domain service split and orchestration cleanup
-4. `PBI-303` gallery-dl runner decomposition and site adapter split
-5. `PBI-304` SQLite schema and migration pack decomposition
-6. `PBI-305` derived read-model publish boundary cleanup for SQLite
-7. `PBI-306` import, lifecycle, and entity pipeline realignment
-8. `PBI-307` grid, selection, and sidebar query service decomposition
+1. `PBI-304` Rust core runtime event bus and task registry realignment
+2. `PBI-306` app state service lifecycle and worker boundary cleanup
+3. `PBI-307` subscription domain service split and orchestration cleanup
+4. `PBI-309` gallery-dl runner decomposition and site adapter split
+5. `PBI-310` SQLite schema and migration pack decomposition
+6. `PBI-311` derived read-model publish boundary cleanup for SQLite
+7. `PBI-312` import, lifecycle, and entity pipeline realignment
+8. `PBI-305` grid, selection, and sidebar query service decomposition
 9. `PBI-308` PTR domain decomposition and runtime state cleanup
-10. `PBI-309` media processing adapter registry and pipeline breakup
+10. `PBI-313` media processing adapter registry and pipeline breakup
 
 ## Recommended Execution Order
 
 1. `PBI-234` typed/runtime communication foundation
-2. `PBI-300` runtime event bus and task registry
-3. `PBI-301` app state lifecycle cleanup
-4. `PBI-302` subscription domain split
-5. `PBI-303` gallery-dl runner decomposition
-6. `PBI-304` schema/migration decomposition
-7. `PBI-305` derived read-model publish boundaries
-8. `PBI-306` import/entity lifecycle realignment
-9. `PBI-307` grid/selection/sidebar query service split
+2. `PBI-304` runtime event bus and task registry
+3. `PBI-306` app state lifecycle cleanup
+4. `PBI-307` subscription domain split
+5. `PBI-309` gallery-dl runner decomposition
+6. `PBI-310` schema/migration decomposition
+7. `PBI-311` derived read-model publish boundaries
+8. `PBI-312` import/entity lifecycle realignment
+9. `PBI-305` grid/selection/sidebar query service split
 10. `PBI-308` PTR domain decomposition
-11. `PBI-309` media processing adapter registry
+11. `PBI-313` media processing adapter registry
 12. `PBI-233` physical module/folder realignment once the service boundaries are
     clearer
 13. `PBI-239` documentation pass once the architecture settles

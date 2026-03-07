@@ -1,4 +1,4 @@
-# PBI-315: Backend legacy register and ownership classification
+# PBI-345: Backend legacy register and ownership classification
 
 ## Priority
 P1

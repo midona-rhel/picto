@@ -1,4 +1,4 @@
-# PBI-317: Runtime event system compatibility purge
+# PBI-347: Runtime event system compatibility purge
 
 ## Priority
 P1

@@ -1,4 +1,4 @@
-# PBI-327: Canonical Scope Semantics Engine
+# PBI-300: Canonical Scope Semantics Engine
 
 ## Priority
 P0

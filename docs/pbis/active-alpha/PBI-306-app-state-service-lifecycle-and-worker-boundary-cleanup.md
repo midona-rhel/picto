@@ -1,4 +1,4 @@
-# PBI-301: App state service lifecycle and worker boundary cleanup
+# PBI-306: App state service lifecycle and worker boundary cleanup
 
 ## Priority
 P1

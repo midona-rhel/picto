@@ -1,4 +1,4 @@
-# PBI-306: Import, lifecycle, and entity pipeline realignment
+# PBI-312: Import, lifecycle, and entity pipeline realignment
 
 ## Priority
 P1

@@ -1,4 +1,4 @@
-# PBI-328: Fact-Based Mutation Receipts And Model-Level Invalidation
+# PBI-302: Fact-Based Mutation Receipts And Model-Level Invalidation
 
 ## Priority
 P0

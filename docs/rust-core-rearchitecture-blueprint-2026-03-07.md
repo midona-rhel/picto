@@ -623,19 +623,19 @@ Delete old root paths and any compatibility exports.
 
 Should be treated as the umbrella goal, not the executable plan.
 
-### `PBI-310` to `PBI-314`
+### `PBI-340` to `PBI-344`
 
 These are the executable structural PBIs for physical backend cleanup.
 
-### `PBI-300` to `PBI-309`
+### `PBI-304` to `PBI-313`
 
 These are service/runtime/persistence architecture PBIs that sit inside the new
 physical tree.
 
 In short:
 
-- `PBI-310..314` = where code lives
-- `PBI-300..309` = how major backend subsystems are internally shaped
+- `PBI-340..344` = where code lives
+- `PBI-300..313` = how major backend subsystems are internally shaped
 
 Both are required.
 

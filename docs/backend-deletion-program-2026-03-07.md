@@ -103,12 +103,12 @@ Every PR should state:
 
 ## Backend-only deletion PBIs to execute
 
-1. `PBI-315`: backend legacy register and ownership classification pass
-2. `PBI-316`: immediate low-risk backend wrapper and review-path deletions
-3. `PBI-317`: runtime event-system compatibility purge after mutation/task cutover
-4. `PBI-318`: root controller collapse and alias purge
-5. `PBI-319`: monolith tail breakup and post-split deletion campaign
-6. `PBI-320`: backend topology enforcement and CI guardrails
+1. `PBI-345`: backend legacy register and ownership classification pass
+2. `PBI-346`: immediate low-risk backend wrapper and review-path deletions
+3. `PBI-347`: runtime event-system compatibility purge after mutation/task cutover
+4. `PBI-348`: root controller collapse and alias purge
+5. `PBI-349`: monolith tail breakup and post-split deletion campaign
+6. `PBI-350`: backend topology enforcement and CI guardrails
 
 ## Success criteria
 

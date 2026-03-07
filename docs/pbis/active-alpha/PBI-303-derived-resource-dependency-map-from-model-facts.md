@@ -1,4 +1,4 @@
-# PBI-329: Derived Resource Dependency Map From Model Facts
+# PBI-303: Derived Resource Dependency Map From Model Facts
 
 ## Priority
 P0
