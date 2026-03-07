@@ -5,9 +5,9 @@
 //! string-based handlers.
 
 pub mod duplicates;
-pub mod files_lifecycle;
-pub mod files_media;
-pub mod files_metadata;
+pub mod media_lifecycle;
+pub mod media_io;
+pub mod media_metadata;
 pub mod folders;
 pub mod grid;
 pub mod ptr;
@@ -50,7 +50,7 @@ pub async fn typed_dispatch(
     command: &str,
     args: &serde_json::Value,
 ) -> Option<Result<String, String>> {
-    if let Some(result) = files_lifecycle::dispatch_typed(state, command, args).await {
+    if let Some(result) = media_lifecycle::dispatch_typed(state, command, args).await {
         return Some(result);
     }
     if let Some(result) = folders::dispatch_typed(state, command, args).await {
@@ -65,10 +65,10 @@ pub async fn typed_dispatch(
     if let Some(result) = grid::dispatch_typed(state, command, args).await {
         return Some(result);
     }
-    if let Some(result) = files_metadata::dispatch_typed(state, command, args).await {
+    if let Some(result) = media_metadata::dispatch_typed(state, command, args).await {
         return Some(result);
     }
-    if let Some(result) = files_media::dispatch_typed(state, command, args).await {
+    if let Some(result) = media_io::dispatch_typed(state, command, args).await {
         return Some(result);
     }
     if let Some(result) = subscriptions::dispatch_typed(state, command, args).await {

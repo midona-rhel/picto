@@ -180,7 +180,7 @@ impl<'a> SubscriptionSyncEngine<'a> {
         blob_store: &'a BlobStore,
         settings: &AppSettings,
     ) -> Result<Self, String> {
-        let binary_path = crate::files::gallery_dl_path::gallery_dl_path()?.clone();
+        let binary_path = crate::media_processing::gallery_dl_path::gallery_dl_path()?.clone();
         let runner = GalleryDlRunner::new(binary_path);
 
         Ok(Self {

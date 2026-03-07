@@ -7,7 +7,6 @@ use ts_rs::TS;
 
 use super::bitmaps::{BitmapKey, BitmapStore};
 use super::compilers::CompilerEvent;
-use super::tags::parse_tag_string;
 use super::SqliteDatabase;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -216,7 +215,7 @@ fn compile_group(
                 .as_deref()
                 .unwrap_or(&[])
                 .iter()
-                .map(|s| parse_tag_string(s))
+                .filter_map(|s| crate::tags::parse_tag(s))
         })
         .collect();
     let tag_id_map = batch_find_tag_ids(conn, &all_tag_pairs)?;
@@ -231,9 +230,12 @@ fn compile_group(
                 match op {
                     "include" | "include_all" => {
                         for tag_str in tag_values {
-                            let key = parse_tag_string(tag_str);
-                            if let Some(&tag_id) = tag_id_map.get(&key) {
-                                include_bitmaps.push(bitmaps.get(&BitmapKey::EffectiveTag(tag_id)));
+                            if let Some(key) = crate::tags::parse_tag(tag_str) {
+                                if let Some(&tag_id) = tag_id_map.get(&key) {
+                                    include_bitmaps.push(bitmaps.get(&BitmapKey::EffectiveTag(tag_id)));
+                                } else {
+                                    include_bitmaps.push(RoaringBitmap::new());
+                                }
                             } else {
                                 include_bitmaps.push(RoaringBitmap::new());
                             }
@@ -242,18 +244,20 @@ fn compile_group(
                     "include_any" => {
                         let mut any_bm = RoaringBitmap::new();
                         for tag_str in tag_values {
-                            let key = parse_tag_string(tag_str);
-                            if let Some(&tag_id) = tag_id_map.get(&key) {
-                                any_bm |= &bitmaps.get(&BitmapKey::EffectiveTag(tag_id));
+                            if let Some(key) = crate::tags::parse_tag(tag_str) {
+                                if let Some(&tag_id) = tag_id_map.get(&key) {
+                                    any_bm |= &bitmaps.get(&BitmapKey::EffectiveTag(tag_id));
+                                }
                             }
                         }
                         include_bitmaps.push(any_bm);
                     }
                     "do_not_include" => {
                         for tag_str in tag_values {
-                            let key = parse_tag_string(tag_str);
-                            if let Some(&tag_id) = tag_id_map.get(&key) {
-                                exclude_bitmaps.push(bitmaps.get(&BitmapKey::EffectiveTag(tag_id)));
+                            if let Some(key) = crate::tags::parse_tag(tag_str) {
+                                if let Some(&tag_id) = tag_id_map.get(&key) {
+                                    exclude_bitmaps.push(bitmaps.get(&BitmapKey::EffectiveTag(tag_id)));
+                                }
                             }
                         }
                     }
