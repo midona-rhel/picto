@@ -13,7 +13,7 @@ import {
   IconPinFilled,
   IconCheck,
 } from '@tabler/icons-react';
-import { useLibraryStore } from '../../state/libraryStore';
+import { useLibraryStore } from '../../../state/libraryStore';
 import { save as showSaveDialog } from '#desktop/api';
 import styles from './LibrarySwitcher.module.css';
 

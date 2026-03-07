@@ -7,7 +7,7 @@ import {
   Text,
 } from '@mantine/core';
 import { IconPlus } from '@tabler/icons-react';
-import { NamespaceTagChip } from '../shared/components/NamespaceTagChip';
+import { NamespaceTagChip } from '../../../shared/components/NamespaceTagChip';
 
 export interface TagWithType {
   name: string;

@@ -1,6 +1,6 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useInlineRename } from '../../shared/hooks/useInlineRename';
+import { useInlineRename } from '../../../shared/hooks/useInlineRename';
 import { IconTag } from '@tabler/icons-react';
 import {
   DndContext,
@@ -14,20 +14,20 @@ import {
 } from '@dnd-kit/core';
 import { useSortable, SortableContext, verticalListSortingStrategy } from '@dnd-kit/sortable';
 
-import { FolderController } from '../../controllers/folderController';
-import { registerUndoAction } from '../../shared/controllers/undoRedoController';
-import { notifyWarning } from '../../shared/lib/notify';
-import { useDomainStore } from '../../state/domainStore';
-import { useNavigationStore } from '../../state/navigationStore';
-import { ContextMenu, useContextMenu, type ContextMenuEntry } from '../../shared/components/ContextMenu';
+import { FolderController } from '../../../controllers/folderController';
+import { registerUndoAction } from '../../../shared/controllers/undoRedoController';
+import { notifyWarning } from '../../../shared/lib/notify';
+import { useDomainStore } from '../../../state/domainStore';
+import { useNavigationStore } from '../../../state/navigationStore';
+import { ContextMenu, useContextMenu, type ContextMenuEntry } from '../../../shared/components/ContextMenu';
 import {
   buildFolderMultiMenu,
   buildFolderSingleMenu,
-} from '../../shared/components/context-actions/folderActions';
-import { DynamicIcon } from '../smart-folders/iconRegistry';
-import { imageDrag, useImageDragDropTarget } from '../../shared/lib/imageDrag';
-import type { SidebarNodeDto } from '../../shared/types/sidebar';
-import { TagSelectService } from '../tags/tagSelectService';
+} from '../../../shared/components/context-actions/folderActions';
+import { DynamicIcon } from '../../smart-folders/components/iconRegistry';
+import { imageDrag, useImageDragDropTarget } from '../../../shared/lib/imageDrag';
+import type { SidebarNodeDto } from '../../../shared/types/sidebar';
+import { TagSelectService } from '../../tags/components/tagSelectService';
 import { SidebarSection } from './SidebarSection';
 import { SidebarItem } from './SidebarItem';
 import styles from './Sidebar.module.css';

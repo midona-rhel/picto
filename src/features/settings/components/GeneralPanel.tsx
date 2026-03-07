@@ -2,13 +2,13 @@ import { useState, useEffect } from 'react';
 import { Text, Loader, Select, NumberInput, Tooltip, Switch } from '@mantine/core';
 import { useMantineColorScheme } from '@mantine/core';
 import { api } from '#desktop/api';
-import { useSettingsStore, themeToColorScheme, type ReverseSearchEngine, type Theme } from '../../state/settingsStore';
-import { formatFileSize } from '../../shared/lib/formatters';
-import { runCriticalAction } from '../../shared/lib/asyncOps';
-import { TextButton } from '../../shared/components/TextButton';
+import { useSettingsStore, themeToColorScheme, type ReverseSearchEngine, type Theme } from '../../../state/settingsStore';
+import { formatFileSize } from '../../../shared/lib/formatters';
+import { runCriticalAction } from '../../../shared/lib/asyncOps';
+import { TextButton } from '../../../shared/components/TextButton';
 import { SettingsBlock, SettingsRow, SettingsButtonRow } from './ui';
-import type { FileStats } from '../../shared/types/api';
-import styles from '../Settings.module.css';
+import type { FileStats } from '../../../shared/types/api';
+import styles from './Settings.module.css';
 
 const THEMES = [ // pbi-052-suppress
   { name: 'Auto', css: 'auto', color: undefined }, // pbi-052-suppress

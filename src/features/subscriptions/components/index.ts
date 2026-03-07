@@ -1,3 +1,3 @@
-export { SubscriptionsWindow } from '../../../components/subscriptions/SubscriptionsWindow';
-export { FlowsWorking, CreateFlowModal } from '../../../components/FlowsWorking';
-export type { FlowResultEntry } from '../../../components/FlowsWorking';
+export { SubscriptionsWindow } from './SubscriptionsWindow';
+export { FlowsWorking, CreateFlowModal } from './FlowsWorking';
+export type { FlowResultEntry } from './FlowsWorking';

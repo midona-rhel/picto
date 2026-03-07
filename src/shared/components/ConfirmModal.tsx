@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import { Text, Modal } from '@mantine/core';
-import { glassModalStyles } from '../../shared/styles/glassModal';
+import { glassModalStyles } from '../styles/glassModal';
 import { TextButton } from './TextButton';
 
 interface ConfirmModalProps {

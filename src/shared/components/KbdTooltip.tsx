@@ -1,5 +1,5 @@
 import { Tooltip } from '@mantine/core';
-import { formatKeysAsArray } from '../../shared/lib/shortcuts';
+import { formatKeysAsArray } from '../lib/shortcuts';
 import st from './KbdTooltip.module.css';
 import type { ReactNode } from 'react';
 

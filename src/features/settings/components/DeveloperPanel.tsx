@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
 import { Text } from '@mantine/core';
-import { PerfController } from '../../shared/controllers/perfController';
-import type { PerfSloResult } from '../../shared/types/api';
-import { TextButton } from '../../shared/components/TextButton';
+import { PerfController } from '../../../shared/controllers/perfController';
+import type { PerfSloResult } from '../../../shared/types/api';
+import { TextButton } from '../../../shared/components/TextButton';
 import { SettingsBlock } from './ui';
 
 function formatMs(v: unknown): string {

@@ -1,9 +1,9 @@
 import { useState, useCallback, useRef } from 'react';
-import { getShortcutGroups, formatKeysDisplay, SHORTCUT_DEFS } from '../../shared/lib/shortcuts';
-import { TextButton } from '../../shared/components/TextButton';
-import type { ShortcutDef, ShortcutGroup } from '../../shared/lib/shortcuts';
+import { getShortcutGroups, formatKeysDisplay, SHORTCUT_DEFS } from '../../../shared/lib/shortcuts';
+import { TextButton } from '../../../shared/components/TextButton';
+import type { ShortcutDef, ShortcutGroup } from '../../../shared/lib/shortcuts';
 import st from './ShortcutsPanel.module.css';
-import settingsSt from '../Settings.module.css';
+import settingsSt from './Settings.module.css';
 
 const isMac =
   typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform);

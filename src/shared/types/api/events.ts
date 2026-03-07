@@ -1,23 +1,8 @@
-import type {
-  PtrBootstrapCounts,
-  PtrSyncPhaseChangedEvent,
-  PtrSyncProgress,
-  PtrSyncResult,
-  SubscriptionFinishedEvent,
-  SubscriptionProgressEvent,
-  SubscriptionStartedEvent,
-} from './core';
-
 import type { MutationReceipt, TaskUpsertedEvent, TaskRemovedEvent } from '../generated/runtime-contract';
 
 // ─── Event Payloads ─────────────────────────────────────────────────────────
 // Typed interfaces for all backend events. Single source of truth — all
 // controllers and stores should import event types from here.
-
-export interface FlowStartedEvent {
-  flow_id: string;
-  subscription_count: number;
-}
 
 export interface FlowProgressEvent {
   flow_id: string;
@@ -31,44 +16,6 @@ export interface FlowFinishedEvent {
   status: 'succeeded' | 'failed';
   started_count?: number;
   error?: string;
-}
-
-export interface PtrBootstrapStartedEvent {
-  snapshot_dir: string;
-  service_id: number;
-  mode: string;
-}
-
-export interface PtrBootstrapProgressEvent {
-  phase: string;
-  stage?: string;
-  service_id?: number;
-  running?: boolean;
-  rows_done?: number;
-  rows_total?: number;
-  rows_done_stage?: number;
-  rows_total_stage?: number;
-  rows_per_sec?: number;
-  eta_seconds?: number;
-  counts?: PtrBootstrapCounts;
-  updated_at?: string;
-  ts?: string;
-}
-
-export interface PtrBootstrapFinishedEvent {
-  success: boolean;
-  dry_run?: boolean;
-  service_id?: number;
-  result?: unknown;
-  cursor_index?: number;
-  cursor_source?: string;
-  delta_sync_started?: boolean;
-  counts?: PtrBootstrapCounts;
-}
-
-export interface PtrBootstrapFailedEvent {
-  success: false;
-  error: string;
 }
 
 export interface ZoomFactorChangedEvent {
@@ -114,25 +61,10 @@ export interface FileImportedEvent {
  * Keep in sync with `core/src/events.rs::event_names`.
  *
  * Authoritative events: `runtime/mutation_committed`, `runtime/task_upserted`,
- * `runtime/task_removed`. Legacy subscription/flow/PTR events are retained for
- * backward compatibility — migrate listeners to task-based model.
+ * `runtime/task_removed`. All domain state (subscriptions, flows, PTR) is
+ * derived from task events via `applyTaskUpsert`.
  */
 export interface CoreRuntimeEventPayloadMap {
-  // Legacy compatibility events (duplicate info carried by runtime/task_upserted)
-  'subscription-started': SubscriptionStartedEvent;
-  'subscription-progress': SubscriptionProgressEvent;
-  'subscription-finished': SubscriptionFinishedEvent;
-  'flow-started': FlowStartedEvent;
-  'flow-progress': FlowProgressEvent;
-  'flow-finished': FlowFinishedEvent;
-  'ptr-sync-started': null;
-  'ptr-sync-progress': PtrSyncProgress;
-  'ptr-sync-finished': PtrSyncResult;
-  'ptr-sync-phase-changed': PtrSyncPhaseChangedEvent;
-  'ptr-bootstrap-started': PtrBootstrapStartedEvent;
-  'ptr-bootstrap-progress': PtrBootstrapProgressEvent;
-  'ptr-bootstrap-finished': PtrBootstrapFinishedEvent;
-  'ptr-bootstrap-failed': PtrBootstrapFailedEvent;
   'library-closed': null;
   'zoom-factor-changed': ZoomFactorChangedEvent;
   'file-imported': FileImportedEvent;

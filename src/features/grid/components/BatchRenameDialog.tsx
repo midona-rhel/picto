@@ -1,13 +1,13 @@
 import { useCallback, useMemo, useState } from 'react';
 import { Modal, Stack, Group, TextInput, Text, ScrollArea } from '@mantine/core';
 import { IconArrowRight } from '@tabler/icons-react';
-import { glassModalStyles } from '../../shared/styles/glassModal';
-import { TextButton } from '../../shared/components/TextButton';
-import { FileController } from '../../shared/controllers/fileController';
-import { registerUndoAction } from '../../shared/controllers/undoRedoController';
-import { notifySuccess, notifyError } from '../../shared/lib/notify';
+import { glassModalStyles } from '../../../shared/styles/glassModal';
+import { TextButton } from '../../../shared/components/TextButton';
+import { FileController } from '../../../shared/controllers/fileController';
+import { registerUndoAction } from '../../../shared/controllers/undoRedoController';
+import { notifySuccess, notifyError } from '../../../shared/lib/notify';
 import { api } from '#desktop/api';
-import type { MasonryImageItem } from '../image-grid/shared';
+import type { MasonryImageItem } from '../../../components/image-grid/shared';
 import classes from './BatchRenameDialog.module.css';
 
 // ── Types ──────────────────────────────────────────────────────────────────

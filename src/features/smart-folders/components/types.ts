@@ -76,7 +76,7 @@ export function predicateToRust(predicate: SmartFolderPredicate): SmartFolderPre
   };
 }
 
-import type { SmartFolderIpcInput } from '../../shared/types/api';
+import type { SmartFolderIpcInput } from '../../../shared/types/api';
 
 /** Convert a folder to the Rust-compatible SmartFolder struct for IPC.
  *  Rust expects `smart_folder_id` (i64) and `predicate_json` (String). */

@@ -11,8 +11,8 @@ import {
   buildFolderSingleMenu,
   buildFolderSurfaceMenu,
 } from '../../shared/components/context-actions/folderActions';
-import { DynamicIcon, DEFAULT_FOLDER_ICON } from '../smart-folders/iconRegistry';
-import { TagSelectService } from '../tags/tagSelectService';
+import { DynamicIcon, DEFAULT_FOLDER_ICON } from '../../features/smart-folders/components/iconRegistry';
+import { TagSelectService } from '../../features/tags/components/tagSelectService';
 import styles from './SubfolderGrid.module.css';
 
 interface SubfolderGridProps {

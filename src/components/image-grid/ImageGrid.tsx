@@ -35,14 +35,14 @@ import { DetailView, type DetailViewState, type DetailViewControls } from './Det
 import { QuickLook } from './QuickLook';
 import { computeTextHeight, TEXT_NAME_ROW_H } from './VirtualGrid';
 import { CanvasGrid } from './CanvasGrid';
-import type { SmartFolderPredicate } from '../smart-folders/types';
+import type { SmartFolderPredicate } from '../../features/smart-folders/components/types';
 import type { DragDropPayload, FolderReorderMove } from '../../shared/types/api';
 import { useGridQueryBroker, type GridQueryBrokerProps } from './queryBroker';
 import { useCacheStore } from '../../state/cacheStore';
 import { useSettingsStore } from '../../state/settingsStore';
 import { useScopedDisplay } from '../../shared/contexts/ScopedDisplayContext';
-import { Slideshow } from '../Slideshow';
-import { BatchRenameDialog } from '../dialogs/BatchRenameDialog';
+import { Slideshow } from '../../features/viewer/components/Slideshow';
+import { BatchRenameDialog } from '../../features/grid/components/BatchRenameDialog';
 import { useDomainStore } from '../../state/domainStore';
 import { useNavigationStore } from '../../state/navigationStore';
 import { SubfolderGrid } from './SubfolderGrid';

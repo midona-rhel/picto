@@ -12,11 +12,11 @@ import {
   IconArrowsShuffle,
 } from '@tabler/icons-react';
 
-import { useDomainStore } from '../../state/domainStore';
-import { useNavigationStore } from '../../state/navigationStore';
-import { setStatusSelectionWithLifecycleEffects } from '../../domain/actions/fileLifecycleActions';
-import { SidebarJobStatus } from '../layout/SidebarJobStatus';
-import { runCriticalAction } from '../../shared/lib/asyncOps';
+import { useDomainStore } from '../../../state/domainStore';
+import { useNavigationStore } from '../../../state/navigationStore';
+import { setStatusSelectionWithLifecycleEffects } from '../../../domain/actions/fileLifecycleActions';
+import { SidebarJobStatus } from '../../layout/components/SidebarJobStatus';
+import { runCriticalAction } from '../../../shared/lib/asyncOps';
 import { FolderTree } from './FolderTree';
 import { LibrarySwitcher } from './LibrarySwitcher';
 import { SmartFolderList } from './SmartFolderList';

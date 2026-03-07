@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { useInlineRename } from '../shared/hooks/useInlineRename';
+import { useInlineRename } from '../../../shared/hooks/useInlineRename';
 import {
   TextInput,
   Select,
@@ -9,10 +9,10 @@ import {
   Text,
   Stack,
 } from '@mantine/core';
-import { TextButton } from '../shared/components/TextButton';
-import { EmptyState } from '../shared/components/EmptyState';
-import { glassModalStyles } from '../shared/styles/glassModal';
-import { notifySuccess, notifyError, notifyInfo } from '../shared/lib/notify';
+import { TextButton } from '../../../shared/components/TextButton';
+import { EmptyState } from '../../../shared/components/EmptyState';
+import { glassModalStyles } from '../../../shared/styles/glassModal';
+import { notifySuccess, notifyError, notifyInfo } from '../../../shared/lib/notify';
 import {
   IconTrash,
   IconPlus,
@@ -24,8 +24,8 @@ import {
 import {
   SubscriptionController,
   type SubscriptionFinishedEvent,
-} from '../controllers/subscriptionController';
-import { useRuntimeSyncStore } from '../state/runtimeSyncStore';
+} from '../../../controllers/subscriptionController';
+import { useRuntimeSyncStore } from '../../../state/runtimeSyncStore';
 import { listenRuntimeEvent } from '#desktop/api';
 import st from './FlowsWorking.module.css';
 
