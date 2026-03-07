@@ -1,3 +1,9 @@
+//! File lifecycle orchestration — status transitions (inbox → active → trash)
+//! and permanent deletion with blob cleanup.
+//!
+//! Thin wrapper over `SqliteDatabase` methods; the dispatch layer adds
+//! `MutationImpact` emission.
+
 use crate::blob_store::BlobStore;
 use crate::sqlite::SqliteDatabase;
 

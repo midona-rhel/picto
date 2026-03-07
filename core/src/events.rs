@@ -152,6 +152,10 @@ impl MutationImpact {
     }
 
     /// File lifecycle (import, status change, delete). Invalidates sidebar, grid, selection, counts.
+    ///
+    /// Includes SmartFolders because status/existence changes can affect smart folder
+    /// membership. Does NOT include Tags — tag bitmaps are rebuilt by the compiler
+    /// separately via `FileInserted`/`FileDeleted` events.
     pub fn file_lifecycle(db: &crate::sqlite::SqliteDatabase) -> Self {
         Self::new()
             .domains(&[Domain::Files, Domain::Sidebar, Domain::SmartFolders])
@@ -178,6 +182,10 @@ impl MutationImpact {
     }
 
     /// Batch tag/selection change. Invalidates grid and selection summary.
+    ///
+    /// Uses `grid_all()` because batch tag changes can affect sort order and
+    /// filter membership across all scopes. Single-file tag changes use
+    /// `file_tags()` with targeted `metadata_hashes` instead.
     pub fn batch_tags() -> Self {
         Self::new()
             .domains(&[Domain::Tags, Domain::Files])
@@ -345,7 +353,9 @@ pub fn emit_mutation(origin: &str, impact: MutationImpact) {
 /// Compute system sidebar counts from bitmaps (O(1)).
 /// Call AFTER inline bitmap updates so values reflect the mutation.
 ///
-/// `all_images` = active only (Status 1). Inbox and trash are separate.
+/// `all_images` counts only Status(1) (active), NOT inbox. This matches the
+/// frontend's "All Images" view which shows reviewed files only. Inbox and
+/// trash get their own dedicated counts.
 pub fn sidebar_counts_from_bitmaps(db: &crate::sqlite::SqliteDatabase) -> SidebarCounts {
     use crate::sqlite::bitmaps::BitmapKey;
     SidebarCounts {

@@ -1,3 +1,9 @@
+//! Selection orchestration — batch operations on file selections and
+//! selection summary computation (tag counts, shared tags, stats).
+//!
+//! Supports both `ExplicitHashes` (user-picked files) and `AllResults`
+//! (current grid scope) selection modes.
+
 use std::collections::{HashMap, HashSet};
 
 use chrono::Utc;

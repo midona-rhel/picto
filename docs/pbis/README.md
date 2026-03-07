@@ -54,7 +54,6 @@ This folder was reset for the first alpha release.
 44. [PBI-232](./active-alpha/PBI-232-theme-selector-single-click.md)
 45. [PBI-233](./active-alpha/PBI-233-rust-core-domain-folder-realignment.md)
 46. [PBI-234](./active-alpha/PBI-234-typed-dispatch-contract-between-core-and-frontend.md)
-51. [PBI-239](./active-alpha/PBI-239-core-module-documentation-and-contract-comments.md)
 52. [PBI-240](./active-alpha/PBI-240-rust-core-full-codebase-audit-for-cleanup-pbis.md)
 53. [PBI-242](./active-alpha/PBI-242-clean-up-project-root-folder.md)
 54. [PBI-243](./active-alpha/PBI-243-canvas-redraw-policy-on-window-resize.md)

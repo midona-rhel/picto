@@ -1,3 +1,8 @@
+//! Smart folder orchestration — CRUD with immediate sidebar node insertion
+//! for responsive UI, and predicate-based file preview queries.
+//!
+//! Delegates to `sqlite::smart_folders` for storage and bitmap compilation.
+
 use crate::sqlite::smart_folders::{
     compile_predicate, get_smart_folder, SmartFolder, SmartFolderPredicate,
 };

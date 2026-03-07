@@ -1,3 +1,9 @@
+//! File metadata orchestration — resolves full file details including tags,
+//! dominant colors, PTR overlay data, and display-resolved tag info.
+//!
+//! Assembles `FileAllMetadata` by joining data from the library DB, PTR
+//! overlay, and tag sibling/parent resolution.
+
 use std::collections::HashMap;
 use std::collections::HashSet;
 

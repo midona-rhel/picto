@@ -1,3 +1,9 @@
+//! Tag orchestration — search, add/remove, autocomplete, and tag info
+//! retrieval for dispatch handlers.
+//!
+//! Delegates to `sqlite::tags` for DB operations and `tags.rs` for
+//! normalization.
+
 use crate::sqlite::tags::FileTagInfo;
 use crate::sqlite::SqliteDatabase;
 use crate::tags;

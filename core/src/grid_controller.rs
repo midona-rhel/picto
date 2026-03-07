@@ -1,3 +1,9 @@
+//! Grid controller — resolves paginated file queries for the main image grid.
+//!
+//! Handles scope resolution (status, folder, tag, smart folder), sorting,
+//! pagination, and metadata prefetch. Scope resolution logic must stay in sync
+//! with `selection_helpers::selection_bitmap_for_all_results`.
+
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::sync::OnceLock;

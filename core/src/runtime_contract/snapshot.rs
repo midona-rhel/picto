@@ -1,3 +1,9 @@
+//! Snapshot contract types — full runtime state for frontend initialization.
+//!
+//! `RuntimeSnapshot` is returned by `GetRuntimeSnapshot` to seed frontend
+//! state on startup and to recover from missed events after renderer
+//! crashes or reloads.
+
 use serde::Serialize;
 use ts_rs::TS;
 

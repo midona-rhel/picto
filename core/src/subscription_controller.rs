@@ -1,3 +1,9 @@
+//! Subscription orchestration — manages subscription/flow CRUD, execution
+//! triggers, cancellation, and runtime progress tracking.
+//!
+//! Coordinates between `SubscriptionSyncEngine` for gallery-dl execution and
+//! `RuntimeTask` for frontend progress display.
+
 use std::sync::Arc;
 
 use rusqlite::params;

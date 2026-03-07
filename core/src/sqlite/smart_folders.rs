@@ -168,9 +168,13 @@ pub fn delete_smart_folder(conn: &Connection, smart_folder_id: i64) -> rusqlite:
 
 /// Compile a predicate into a RoaringBitmap using bitmap store + SQL fallback.
 ///
-/// Groups are ANDed together. Within each group, rules are combined according
-/// to the group's `match_mode` (all = AND, any = OR). If `group.negate` is set
-/// the group bitmap is inverted (AllActive - group_result).
+/// Groups are ANDed together at the top level. This means a multi-group predicate
+/// is an intersection — the file must satisfy ALL groups. This models "AND" across
+/// groups while each group can internally use either AND or OR for its rules.
+///
+/// Within each group, rules are combined according to the group's `match_mode`
+/// (all = AND, any = OR). If `group.negate` is set, the group bitmap is inverted
+/// against AllActive (never includes trash — `AllActive - group_result`).
 pub fn compile_predicate(
     conn: &Connection,
     pred: &SmartFolderPredicate,

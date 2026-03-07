@@ -1,4 +1,8 @@
-//! Flow controller — orchestrates flow-level CRUD, execution, and scheduling.
+//! Flow orchestration — groups subscriptions into scheduled execution units.
+//!
+//! Owns flow CRUD, run/stop behavior, and runtime task publication for the UI.
+//! Delegates subscription execution to `SubscriptionController`, while keeping
+//! flow-level progress and terminal status aggregation in one place.
 
 use std::sync::Arc;
 

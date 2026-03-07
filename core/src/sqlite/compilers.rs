@@ -75,6 +75,17 @@ struct CompilerPlan {
 }
 
 impl CompilerPlan {
+    /// Accumulate a compiler event into the plan.
+    ///
+    /// Dependency rules:
+    /// - File insert/delete/status → rebuild status bitmaps + ALL smart folders + sidebar.
+    ///   Status changes affect AllActive membership which every smart folder scope depends on.
+    /// - FileTagsChanged → rebuild ALL smart folders (any tag predicate could match) + sidebar.
+    ///   We can't cheaply determine which smart folders use the changed tag, so rebuild all.
+    /// - TagChanged → rebuild only that tag's bitmap + sidebar. Smart folders use EffectiveTag
+    ///   bitmaps which are rebuilt per-tag, so specific smart folders update lazily.
+    /// - TagGraphChanged → rebuild tag graph + ALL smart folders. Parent changes cascade
+    ///   through ImpliedTag bitmaps and affect every smart folder using those tags.
     fn accumulate(&mut self, event: CompilerEvent) {
         match event {
             CompilerEvent::FileInserted { file_id } => {
@@ -187,6 +198,9 @@ pub async fn start_compiler_loop(
         let mut plan = CompilerPlan::default();
         plan.accumulate(first);
 
+        // 100ms debounce: batch rapid-fire events (e.g. multi-file import) into
+        // a single compiler run. Short enough that the UI feels responsive,
+        // long enough to avoid redundant bitmap rebuilds.
         let deadline = tokio::time::Instant::now() + Duration::from_millis(100);
         loop {
             match tokio::time::timeout_at(deadline, rx.recv()).await {

@@ -1,4 +1,8 @@
-//! Application settings — stored as a JSON file on disk.
+//! Application settings — persisted JSON configuration shared across the app.
+//!
+//! Holds UI preferences, PTR configuration, duplicate settings, and
+//! subscription/gallery-dl runtime knobs. This module owns defaults and disk
+//! persistence semantics so the rest of the app can treat settings as typed data.
 
 use std::path::PathBuf;
 use std::sync::Mutex;

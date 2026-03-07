@@ -1,3 +1,9 @@
+//! Sidebar orchestration — reads the sidebar tree projection and handles
+//! node reordering.
+//!
+//! The sidebar tree is a compiled projection rebuilt by the compiler.
+//! This controller reads the projection and converts it to DTOs.
+
 use chrono::Utc;
 use serde_json::Value as JsonValue;
 
