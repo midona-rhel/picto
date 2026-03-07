@@ -348,54 +348,54 @@ function normalizeSmartFolder(r: Record<string, unknown>): SmartFolder {
 export const api = {
   grid: {
     getPageSlim: (query: GridPageSlimQuery) =>
-      invoke<GridPageSlimResponse>('get_grid_page_slim', { query }),
+      invokeTyped('get_grid_page_slim', { query } as never) as Promise<GridPageSlimResponse>,
     getFilesMetadataBatch: (hashes: string[]) =>
-      invoke<EntityMetadataBatchResponse>('get_files_metadata_batch', { hashes }),
+      invokeTyped('get_files_metadata_batch', { hashes }) as Promise<EntityMetadataBatchResponse>,
     getFileCount: () =>
-      invoke<number>('get_file_count'),
+      invokeTyped('get_file_count') as Promise<number>,
   },
 
   file: {
     get: (hash: string) =>
-      invoke<EntityDetails | null>('get_file', { hash }),
+      invokeTyped('get_file', { hash }) as Promise<EntityDetails | null>,
     getAllMetadata: (hash: string) =>
-      invoke<EntityAllMetadata>('get_file_all_metadata', { hash }),
+      invokeTyped('get_file_all_metadata', { hash }) as Promise<EntityAllMetadata>,
     setStatus: (hash: string, status: string) =>
-      invoke<void>('update_file_status', { hash, status }),
+      invokeTyped('update_file_status', { hash, status }) as unknown as Promise<void>,
     setStatusSelection: (selection: SelectionQuerySpec, status: string) =>
-      invoke<number>('update_file_status_selection', { selection, status }),
+      invokeTyped('update_file_status_selection', { selection, status } as never),
     deleteMany: (hashes: string[]) =>
-      invoke<number>('delete_files', { hashes }),
+      invokeTyped('delete_files', { hashes }),
     deleteSelection: (selection: SelectionQuerySpec) =>
-      invoke<number>('delete_files_selection', { selection }),
+      invokeTyped('delete_files_selection', { selection } as never),
     updateRating: (hash: string, rating: number | null) =>
-      invoke<void>('update_rating', { hash, rating }),
+      invokeTyped('update_rating', { hash, rating }) as unknown as Promise<void>,
     setName: (hash: string, name: string | null) =>
-      invoke<void>('set_file_name', { hash, name }),
+      invokeTyped('set_file_name', { hash, name }) as unknown as Promise<void>,
     setSourceUrls: (hash: string, urls: string[]) =>
-      invoke<void>('set_source_urls', { hash, urls }),
+      invokeTyped('set_source_urls', { hash, urls }) as unknown as Promise<void>,
     setNotes: (hash: string, notes: Record<string, string>) =>
-      invoke<void>('set_file_notes', { hash, notes }),
+      invokeTyped('set_file_notes', { hash, notes }) as unknown as Promise<void>,
     incrementViewCount: (hash: string) =>
-      invoke<void>('increment_view_count', { hash }),
+      invokeTyped('increment_view_count', { hash }) as unknown as Promise<void>,
     resolvePath: (hash: string) =>
-      invoke<string>('resolve_file_path', { hash }),
+      invokeTyped('resolve_file_path', { hash }),
     resolveThumbnailPath: (hash: string) =>
-      invoke<string>('resolve_thumbnail_path', { hash }),
+      invokeTyped('resolve_thumbnail_path', { hash }),
     openDefault: (hash: string) =>
-      invoke<void>('open_file_default', { hash }),
+      invokeTyped('open_file_default', { hash }) as unknown as Promise<void>,
     revealInFolder: (hash: string) =>
-      invoke<void>('reveal_in_folder', { hash }),
+      invokeTyped('reveal_in_folder', { hash }) as unknown as Promise<void>,
     openInNewWindow: (hash: string, width?: number | null, height?: number | null) =>
-      invoke<void>('open_in_new_window', { hash, width: width ?? null, height: height ?? null }),
+      invokeTyped('open_in_new_window', { hash, width: width ?? null, height: height ?? null }) as unknown as Promise<void>,
     ensureThumbnail: (hash: string) =>
-      invoke<EnsureThumbnailResponse>('ensure_thumbnail', { hash }),
+      invokeTyped('ensure_thumbnail', { hash }) as Promise<EnsureThumbnailResponse>,
     regenerateThumbnail: (hash: string) =>
-      invoke<EnsureThumbnailResponse>('regenerate_thumbnail', { hash }),
+      invokeTyped('regenerate_thumbnail', { hash }) as Promise<EnsureThumbnailResponse>,
     reanalyzeColors: (hash: string) =>
-      invoke<ReanalyzeFileColorsResponse>('reanalyze_file_colors', { hash }),
+      invokeTyped('reanalyze_file_colors', { hash }) as Promise<ReanalyzeFileColorsResponse>,
     regenerateThumbnailsBatch: (hashes: string[]) =>
-      invoke<{ total: number; regenerated: number; errors: number }>('regenerate_thumbnails_batch', { hashes }),
+      invokeTyped('regenerate_thumbnails_batch', { hashes }) as Promise<{ total: number; regenerated: number; errors: number }>,
   },
 
   import: {
@@ -684,7 +684,7 @@ export const api = {
 
   stats: {
     getImageStorageStats: () =>
-      invoke<FileStats>('get_image_storage_stats'),
+      invokeTyped('get_image_storage_stats') as Promise<FileStats>,
     getPerfSnapshot: () =>
       invoke<PerfSnapshot>('get_perf_snapshot'),
     checkPerfSlo: () =>
