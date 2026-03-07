@@ -107,7 +107,7 @@ export function getCurrentWebview() {
   return {
     onDragDropEvent: (handler: (event: { payload: unknown }) => void) => {
       if (!window.picto?.webview?.onDragDropEvent) return Promise.resolve(() => {});
-      return window.picto.webview.onDragDropEvent(handler as any);
+      return window.picto.webview.onDragDropEvent(handler);
     },
     startNativeDrag: (hashes: string[], iconDataUrl?: string | null) => {
       if (!window.picto?.webview?.startNativeDrag) return Promise.resolve(null);
@@ -279,7 +279,7 @@ import type {
   RenameTagResult, DeleteTagResult, NormalizeNamespacesResult,
   SelectionQuerySpec, SelectionSummary,
   Folder, FolderMembership, FolderReorderMove,
-  SmartFolder, SmartFolderPredicate,
+  SmartFolder, SmartFolderPredicate, SmartFolderIpcInput,
   SidebarTreeResponse,
   ScanDuplicatesResult, DuplicatePairsResponse, DuplicateSettings,
   SmartMergeResult, ResolveDuplicateAction,
@@ -509,11 +509,11 @@ export const api = {
       const raw = await invokeTyped('list_smart_folders') as Array<Record<string, unknown>>;
       return raw.map(normalizeSmartFolder);
     },
-    create: async (folder: SmartFolder): Promise<SmartFolder> => {
+    create: async (folder: SmartFolderIpcInput): Promise<SmartFolder> => {
       const raw = await invokeTyped('create_smart_folder', { folder } as never) as Record<string, unknown>;
       return normalizeSmartFolder(raw);
     },
-    update: async (id: string, folder: SmartFolder): Promise<SmartFolder> => {
+    update: async (id: string, folder: SmartFolderIpcInput): Promise<SmartFolder> => {
       const raw = await invokeTyped('update_smart_folder', { id, folder } as never) as Record<string, unknown>;
       return normalizeSmartFolder(raw);
     },

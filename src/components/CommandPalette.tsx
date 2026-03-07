@@ -81,16 +81,17 @@ export function CommandPalette({ open, onClose, mode, actions }: CommandPaletteP
       arr.push(a);
     }
     const groups = [...map.keys()].sort(groupSort);
-    const flat: { type: 'group'; label: string }[] | { type: 'action'; action: CommandAction; flatIdx: number }[] = [];
+    type PaletteRow = { type: 'group'; label: string } | { type: 'action'; action: CommandAction; flatIdx: number };
+    const flat: PaletteRow[] = [];
     let idx = 0;
     for (const g of groups) {
-      (flat as any[]).push({ type: 'group', label: g });
+      flat.push({ type: 'group', label: g });
       for (const a of map.get(g)!) {
-        (flat as any[]).push({ type: 'action', action: a, flatIdx: idx });
+        flat.push({ type: 'action', action: a, flatIdx: idx });
         idx++;
       }
     }
-    return { rows: flat as ({ type: 'group'; label: string } | { type: 'action'; action: CommandAction; flatIdx: number })[], actionCount: idx };
+    return { rows: flat, actionCount: idx };
   }, [filtered]);
 
   // Clamp focus

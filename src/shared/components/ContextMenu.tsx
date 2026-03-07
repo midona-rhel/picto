@@ -363,7 +363,7 @@ function SubmenuPanel({
         return (
           <SubmenuItemRow
             key={'label' in item ? item.label : `item-${idx}`}
-            item={item as any}
+            item={item}
             onClose={onClose}
             iconGutter={iconGutter}
           />

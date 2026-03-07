@@ -249,7 +249,8 @@ export interface FolderMembership {
 
 export interface FolderReorderMove {
   hash: string;
-  position_rank: number;
+  before_hash: string | null;
+  after_hash: string | null;
 }
 
 // ─── Smart Folders ───────────────────────────────────────────────────────────
@@ -257,8 +258,8 @@ export interface FolderReorderMove {
 export interface SmartRule {
   field: string;
   op: string;
-  value?: string | number | boolean;
-  value2?: string | number;
+  value?: string | number | boolean | null;
+  value2?: string | number | null;
   values?: string[];
 }
 
@@ -282,6 +283,27 @@ export interface SmartFolder {
   sort_order?: string | null;
   created_at?: string | null;
   updated_at?: string | null;
+}
+
+/** IPC input shape for create/update smart-folder commands (matches Rust serde). */
+export interface SmartFolderIpcInput {
+  smart_folder_id: number;
+  name: string;
+  icon: string | null;
+  color: string | null;
+  predicate_json: string;
+  sort_field: string | null;
+  sort_order: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
+// ─── Drag & Drop ────────────────────────────────────────────────────────────
+
+/** Webview drag-drop event payload from Electron's native drag handler. */
+export interface DragDropPayload {
+  type: 'enter' | 'leave' | 'drop';
+  paths: string[];
 }
 
 // ─── Duplicates ──────────────────────────────────────────────────────────────
@@ -399,14 +421,6 @@ export interface SubscriptionProgressEvent {
   metadata_invalid: number;
   last_metadata_error?: string | null;
   status_text: string;
-}
-
-export interface SubscriptionStartedEvent {
-  subscription_id: string;
-  subscription_name: string;
-  mode: 'subscription' | 'query';
-  query_id?: string;
-  query_name?: string;
 }
 
 export interface SubscriptionFinishedEvent {

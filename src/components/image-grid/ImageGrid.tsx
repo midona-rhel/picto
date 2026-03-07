@@ -36,6 +36,7 @@ import { QuickLook } from './QuickLook';
 import { computeTextHeight, TEXT_NAME_ROW_H } from './VirtualGrid';
 import { CanvasGrid } from './CanvasGrid';
 import type { SmartFolderPredicate } from '../smart-folders/types';
+import type { DragDropPayload, FolderReorderMove } from '../../shared/types/api';
 import { useGridQueryBroker, type GridQueryBrokerProps } from './queryBroker';
 import { useCacheStore } from '../../state/cacheStore';
 import { useSettingsStore } from '../../state/settingsStore';
@@ -508,7 +509,7 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
       return;
     }
 
-    const moves: { hash: string; after_hash?: string | null; before_hash?: string | null }[] = [];
+    const moves: FolderReorderMove[] = [];
     for (let i = 0; i < movedItems.length; i++) {
       const pos = insertAt + i;
       if (i === 0) {
@@ -825,7 +826,7 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
   useEffect(() => {
     const webview = getCurrentWebview();
     const promise = webview.onDragDropEvent(async (event) => {
-      const payload = event.payload as any;
+      const payload = event.payload as DragDropPayload;
       if (payload.type === 'enter') {
         // Never show import overlay for internal native drags.
         const pendingInternalHashes = imageDrag.getPendingNativeDragHashes();

@@ -1,11 +1,11 @@
-import type { ComponentType, ReactNode } from 'react';
+import type { ReactNode } from 'react';
+import type { TablerIcon } from '@tabler/icons-react';
 import { Loader, Text } from '@mantine/core';
 import styles from './StateBlock.module.css';
 
 type StateVariant = 'loading' | 'empty' | 'error';
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-type IconComponent = ComponentType<any>;
+type IconComponent = TablerIcon;
 
 interface StateBlockProps {
   variant: StateVariant;

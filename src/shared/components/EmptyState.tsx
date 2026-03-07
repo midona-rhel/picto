@@ -1,8 +1,8 @@
-import type { ReactNode, ComponentType } from 'react';
+import type { ReactNode } from 'react';
+import type { TablerIcon } from '@tabler/icons-react';
 import { StateBlock } from './state';
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-type IconComponent = ComponentType<any>;
+type IconComponent = TablerIcon;
 
 interface EmptyStateProps {
   /** Tabler icon component — auto-sized and colored */

@@ -57,7 +57,7 @@ export function SmartFolderModal({ opened, onClose, folder, onSaved }: SmartFold
       }
       setCounting(true);
       try {
-        const count = await api.smartFolders.count(predicateToRust(pred) as any);
+        const count = await api.smartFolders.count(predicateToRust(pred));
         setLiveCount(count);
       } catch (e) {
         console.error('Count failed:', e);
@@ -106,20 +106,20 @@ export function SmartFolderModal({ opened, onClose, folder, onSaved }: SmartFold
           sort_field: folder.sort_field,
           sort_order: folder.sort_order,
         });
-        await api.smartFolders.update(folder.id!, folderData as any);
+        await api.smartFolders.update(folder.id!, folderData);
         registerUndoAction({
           label: 'Update smart folder',
           undo: async () => {
-            await api.smartFolders.update(folder.id!, beforeData as any);
+            await api.smartFolders.update(folder.id!, beforeData);
             SidebarController.fetchInitialTree();
           },
           redo: async () => {
-            await api.smartFolders.update(folder.id!, folderData as any);
+            await api.smartFolders.update(folder.id!, folderData);
             SidebarController.fetchInitialTree();
           },
         });
       } else {
-        let created = await api.smartFolders.create(folderData as any) as any;
+        let created = await api.smartFolders.create(folderData);
         registerUndoAction({
           label: 'Create smart folder',
           undo: async () => {
@@ -127,7 +127,7 @@ export function SmartFolderModal({ opened, onClose, folder, onSaved }: SmartFold
             SidebarController.fetchInitialTree();
           },
           redo: async () => {
-            created = await api.smartFolders.create(folderData as any) as any;
+            created = await api.smartFolders.create(folderData);
             SidebarController.fetchInitialTree();
           },
         });

@@ -3,7 +3,7 @@ import { applyMutationEffects } from '../domain/actions/mutationEffects';
 
 // Re-export Folder types from central api types for backwards compatibility.
 export type { Folder, FolderMembership } from '../shared/types/api';
-import type { Folder, FolderMembership } from '../shared/types/api';
+import type { Folder, FolderMembership, FolderReorderMove } from '../shared/types/api';
 
 /**
  * FolderController — frontend facade for folder CRUD and sidebar reorder commands.
@@ -109,9 +109,9 @@ export const FolderController = {
 
   reorderFolderItems(
     folderId: number,
-    moves: { hash: string; after_hash?: string | null; before_hash?: string | null }[],
+    moves: FolderReorderMove[],
   ): Promise<void> {
-    return runFolderMutation(api.folders.reorderItems(folderId, moves as any));
+    return runFolderMutation(api.folders.reorderItems(folderId, moves));
   },
 
   sortFolderItems(

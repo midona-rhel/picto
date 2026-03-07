@@ -1,8 +1,8 @@
 export interface SmartRule {
   field: string;
   op: string;
-  value?: string | number | boolean;
-  value2?: string | number;
+  value?: string | number | boolean | null;
+  value2?: string | number | null;
   values?: string[];
 }
 
@@ -31,9 +31,9 @@ export interface SmartFolder {
 /** Convert our flat SmartRule to the Rust tagged enum format for IPC.
  *  IMPORTANT: Must always send `null` (not undefined) for optional fields
  *  so serde can deserialize Option<T> in internally-tagged enums. */
-export function ruleToRust(rule: SmartRule): Record<string, unknown> {
+export function ruleToRust(rule: SmartRule): SmartRule {
   const { field, op, value, value2, values } = rule;
-  const result: Record<string, unknown> = { field, op };
+  const result: SmartRule = { field, op };
 
   switch (field) {
     case 'tags':
@@ -66,7 +66,7 @@ export function ruleToRust(rule: SmartRule): Record<string, unknown> {
 }
 
 /** Convert predicate for IPC to backend */
-export function predicateToRust(predicate: SmartFolderPredicate) {
+export function predicateToRust(predicate: SmartFolderPredicate): SmartFolderPredicate {
   return {
     groups: predicate.groups.map((g) => ({
       match_mode: g.match_mode,
@@ -76,9 +76,11 @@ export function predicateToRust(predicate: SmartFolderPredicate) {
   };
 }
 
+import type { SmartFolderIpcInput } from '../../shared/types/api';
+
 /** Convert a folder to the Rust-compatible SmartFolder struct for IPC.
  *  Rust expects `smart_folder_id` (i64) and `predicate_json` (String). */
-export function folderToRust(folder: SmartFolder) {
+export function folderToRust(folder: SmartFolder): SmartFolderIpcInput {
   return {
     smart_folder_id: folder.id ? parseInt(folder.id, 10) : 0,
     name: folder.name,
