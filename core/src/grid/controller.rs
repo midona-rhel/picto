@@ -1,8 +1,7 @@
 //! Grid controller — resolves paginated file queries for the main image grid.
 //!
-//! Handles scope resolution (status, folder, tag, smart folder), sorting,
-//! pagination, and metadata prefetch. Scope resolution logic must stay in sync
-//! with `selection_helpers::selection_bitmap_for_all_results`.
+//! Handles scope resolution (via `crate::scope::resolver`), sorting,
+//! pagination, and metadata prefetch.
 
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
@@ -12,12 +11,11 @@ use std::time::Instant;
 use chrono::Utc;
 
 use crate::ptr::controller::PtrController;
+use crate::scope::resolver::{resolve_scope, ScopeFilter};
 use crate::sqlite::bitmaps::BitmapKey;
 use crate::sqlite::files::FileMetadataSlim;
 use crate::sqlite::projections::ResolvedMetadataFull;
-use crate::folders::db::list_uncategorized_entity_ids;
-use crate::smart_folders::db as smart_folders_db;
-use crate::tags::db::{find_tag as sql_find_tag, FileTagInfo};
+use crate::tags::db::FileTagInfo;
 use crate::sqlite::{ScopeSnapshot, ScopeSnapshotKey, SqliteDatabase};
 use crate::ptr::db::PtrSqliteDatabase;
 use crate::tags::normalize;
@@ -73,22 +71,6 @@ fn slim_cursor_value_for_sort(
     };
     // Composite cursor: "sort_value\0entity_id" for stable keyset pagination
     sort_val.map(|v| format!("{}\0{}", v, item.entity_id))
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum IncludeMatchMode {
-    Any,
-    All,
-    Exact,
-}
-
-fn parse_include_match_mode(raw: Option<&str>, default_mode: IncludeMatchMode) -> IncludeMatchMode {
-    match raw {
-        Some("any") => IncludeMatchMode::Any,
-        Some("exact") => IncludeMatchMode::Exact,
-        Some("all") => IncludeMatchMode::All,
-        _ => default_mode,
-    }
 }
 
 /// Build a stable scope key for the scope snapshot cache.
@@ -232,28 +214,6 @@ impl GridController {
                 None
             };
 
-        let has_smart_folder = query.smart_folder_predicate.is_some();
-        let has_search_tags = query
-            .search_tags
-            .as_ref()
-            .map(|t| !t.is_empty())
-            .unwrap_or(false)
-            || query
-                .search_excluded_tags
-                .as_ref()
-                .map(|t| !t.is_empty())
-                .unwrap_or(false);
-        let has_folder = query
-            .folder_ids
-            .as_ref()
-            .map(|v| !v.is_empty())
-            .unwrap_or(false)
-            || query
-                .excluded_folder_ids
-                .as_ref()
-                .map(|v| !v.is_empty())
-                .unwrap_or(false);
-
         if let Some(collection_id) = query.collection_entity_id {
             let cache_key = build_scope_cache_key(&query, &sort_field, &sort_dir);
             let (member_file_ids, total_count) = if let Some(snap) = db.scope_cache_get(&cache_key)
@@ -324,130 +284,28 @@ impl GridController {
             });
         }
 
-        if has_smart_folder || has_search_tags || has_folder {
+        // Unified scope resolution for smart_folder, tag search, folder,
+        // uncategorized, and untagged views.
+        let scope_filter = ScopeFilter::from(&query);
+        let needs_scope = scope_filter.has_smart_folder()
+            || scope_filter.has_search_tags()
+            || scope_filter.has_folder()
+            || matches!(
+                scope_filter.status.as_deref(),
+                Some("untagged") | Some("uncategorized")
+            );
+
+        if needs_scope {
             let cache_key = build_scope_cache_key(&query, &sort_field, &sort_dir);
             let (filtered_ids, total_count) = if let Some(snap) = db.scope_cache_get(&cache_key) {
                 (snap.ids, Some(snap.total_count))
             } else {
-                let ids: Vec<i64> = if let Some(predicate) = &query.smart_folder_predicate {
-                    let pred = predicate.clone();
-                    let bitmaps = db.bitmaps.clone();
-                    db.with_read_conn(move |conn| {
-                        let bm = smart_folders_db::compile_predicate(conn, &pred, &bitmaps)?;
-                        Ok(bm.iter().map(|id| id as i64).collect::<Vec<_>>())
-                    })
-                    .await?
-                } else if has_search_tags {
-                    let include_tags = query.search_tags.clone().unwrap_or_default();
-                    let exclude_tags = query.search_excluded_tags.clone().unwrap_or_default();
-                    let match_mode = parse_include_match_mode(
-                        query.tag_match_mode.as_deref(),
-                        IncludeMatchMode::All,
-                    );
-                    let bitmaps = db.bitmaps.clone();
-                    db.with_read_conn(move |conn| {
-                        let resolve_ids = |tag_list: &[String],
-                                           strict_missing: bool|
-                         -> rusqlite::Result<Vec<i64>> {
-                            let mut out = Vec::new();
-                            for tag in tag_list {
-                                if let Some((ns, st)) = normalize::parse_tag(tag) {
-                                    if let Some(tag_id) = sql_find_tag(conn, &ns, &st)? {
-                                        out.push(tag_id);
-                                    } else if strict_missing {
-                                        return Ok(Vec::new());
-                                    }
-                                }
-                            }
-                            Ok(out)
-                        };
+                let scope_bm = resolve_scope(db, &scope_filter).await?;
+                let mut ids: Vec<i64> = scope_bm.iter().map(|id| id as i64).collect();
 
-                        let include_ids =
-                            resolve_ids(&include_tags, match_mode != IncludeMatchMode::Any)?;
-                        let exclude_ids = resolve_ids(&exclude_tags, false)?;
-                        let all_active = bitmaps.get(&BitmapKey::AllActive);
-
-                        if !include_tags.is_empty() && include_ids.is_empty() {
-                            return Ok(Vec::new());
-                        }
-
-                        let mut result = if include_ids.is_empty() {
-                            all_active.clone()
-                        } else if match_mode == IncludeMatchMode::Any {
-                            let mut union = roaring::RoaringBitmap::new();
-                            for tid in &include_ids {
-                                union |= &bitmaps.get(&BitmapKey::EffectiveTag(*tid));
-                            }
-                            union
-                        } else {
-                            let mut iter = include_ids.iter();
-                            let first = *iter.next().expect("include_ids not empty");
-                            let mut intersect = bitmaps.get(&BitmapKey::EffectiveTag(first));
-                            for tid in iter {
-                                intersect &= &bitmaps.get(&BitmapKey::EffectiveTag(*tid));
-                            }
-                            intersect
-                        };
-
-                        if !exclude_ids.is_empty() {
-                            let mut excluded = roaring::RoaringBitmap::new();
-                            for tid in &exclude_ids {
-                                excluded |= &bitmaps.get(&BitmapKey::EffectiveTag(*tid));
-                            }
-                            result -= &excluded;
-                        }
-                        result &= &all_active;
-                        Ok(result.iter().map(|id| id as i64).collect::<Vec<_>>())
-                    })
-                    .await?
-                } else if has_folder {
-                    let include_folders = query.folder_ids.clone().unwrap_or_default();
-                    let exclude_folders = query.excluded_folder_ids.clone().unwrap_or_default();
-                    let match_mode = parse_include_match_mode(
-                        query.folder_match_mode.as_deref(),
-                        IncludeMatchMode::Any,
-                    );
-                    let bitmaps = db.bitmaps.clone();
-                    let all_active = bitmaps.get(&BitmapKey::AllActive);
-
-                    let mut result = if include_folders.is_empty() {
-                        all_active.clone()
-                    } else if match_mode == IncludeMatchMode::Any {
-                        let mut union = roaring::RoaringBitmap::new();
-                        for fid in &include_folders {
-                            union |= &bitmaps.get(&BitmapKey::Folder(*fid));
-                        }
-                        union
-                    } else {
-                        let mut iter = include_folders.iter();
-                        let first = *iter.next().expect("include_folders not empty");
-                        let mut intersect = bitmaps.get(&BitmapKey::Folder(first));
-                        for fid in iter {
-                            intersect &= &bitmaps.get(&BitmapKey::Folder(*fid));
-                        }
-                        intersect
-                    };
-
-                    if !exclude_folders.is_empty() {
-                        let mut excluded = roaring::RoaringBitmap::new();
-                        for fid in &exclude_folders {
-                            excluded |= &bitmaps.get(&BitmapKey::Folder(*fid));
-                        }
-                        result -= &excluded;
-                    }
-                    result &= &all_active;
-                    result.iter().map(|id| id as i64).collect::<Vec<_>>()
-                } else {
-                    Vec::new()
-                };
-
-                let ids = if let Some(ref color_ids) = color_file_ids {
-                    ids.into_iter()
-                        .filter(|id| color_ids.contains(id))
-                        .collect()
-                } else {
-                    ids
-                };
+                if let Some(ref color_ids) = color_file_ids {
+                    ids.retain(|id| color_ids.contains(id));
+                }
 
                 let tc = ids.len() as i64;
                 db.scope_cache_put(
@@ -460,8 +318,6 @@ impl GridController {
                 );
                 (ids, Some(tc))
             };
-
-            let filtered_ids = filtered_ids;
 
             let sf = sort_field.clone();
             let sd = sort_dir.clone();
@@ -529,145 +385,6 @@ impl GridController {
             let next_cursor = if has_more {
                 rows.last()
                     .and_then(|row| slim_cursor_value_for_sort(row, effective_sort, None))
-            } else {
-                None
-            };
-
-            return Ok(GridPageSlimResponse {
-                items: rows.into_iter().map(EntitySlim::from).collect(),
-                next_cursor,
-                has_more,
-                total_count,
-            });
-        }
-
-        if query.status.as_deref() == Some("uncategorized") {
-            let cache_key = build_scope_cache_key(&query, &sort_field, &sort_dir);
-            let (filtered_ids, total_count) = if let Some(snap) = db.scope_cache_get(&cache_key) {
-                (snap.ids, Some(snap.total_count))
-            } else {
-                let ids = db.with_read_conn(list_uncategorized_entity_ids).await?;
-
-                let ids = if let Some(ref color_ids) = color_file_ids {
-                    ids.into_iter()
-                        .filter(|id| color_ids.contains(id))
-                        .collect()
-                } else {
-                    ids
-                };
-
-                let tc = ids.len() as i64;
-                db.scope_cache_put(
-                    cache_key,
-                    ScopeSnapshot {
-                        ids: ids.clone(),
-                        total_count: tc,
-                        created_at: Instant::now(),
-                    },
-                );
-                (ids, Some(tc))
-            };
-
-            let sf = sort_field.clone();
-            let sd = sort_dir.clone();
-            let cursor = query.cursor.clone();
-            let fetch_limit = limit + 1;
-            let gf = grid_filters.clone();
-
-            let mut rows = db
-                .with_read_conn(move |conn| {
-                    crate::sqlite::files::list_files_slim_by_ids(
-                        conn,
-                        &filtered_ids,
-                        fetch_limit,
-                        &sf,
-                        &sd,
-                        cursor.as_deref(),
-                        gf.as_ref(),
-                        None,
-                    )
-                })
-                .await?;
-
-            let has_more = rows.len() as i64 > limit;
-            if has_more {
-                rows.truncate(limit as usize);
-            }
-            let next_cursor = if has_more {
-                rows.last()
-                    .and_then(|row| slim_cursor_value_for_sort(row, &sort_field, None))
-            } else {
-                None
-            };
-
-            return Ok(GridPageSlimResponse {
-                items: rows.into_iter().map(EntitySlim::from).collect(),
-                next_cursor,
-                has_more,
-                total_count,
-            });
-        }
-
-        if query.status.as_deref() == Some("untagged") {
-            let cache_key = build_scope_cache_key(&query, &sort_field, &sort_dir);
-            let (filtered_ids, total_count) = if let Some(snap) = db.scope_cache_get(&cache_key) {
-                (snap.ids, Some(snap.total_count))
-            } else {
-                let bitmaps = db.bitmaps.clone();
-                let all_active = bitmaps.get(&BitmapKey::AllActive);
-                let tagged = bitmaps.get(&BitmapKey::Tagged);
-                let untagged = &all_active - &tagged;
-                let ids: Vec<i64> = untagged.iter().map(|id| id as i64).collect();
-
-                let ids = if let Some(ref color_ids) = color_file_ids {
-                    ids.into_iter()
-                        .filter(|id| color_ids.contains(id))
-                        .collect()
-                } else {
-                    ids
-                };
-
-                let tc = ids.len() as i64;
-                db.scope_cache_put(
-                    cache_key,
-                    ScopeSnapshot {
-                        ids: ids.clone(),
-                        total_count: tc,
-                        created_at: Instant::now(),
-                    },
-                );
-                (ids, Some(tc))
-            };
-
-            let sf = sort_field.clone();
-            let sd = sort_dir.clone();
-            let cursor = query.cursor.clone();
-            let fetch_limit = limit + 1;
-            let gf = grid_filters.clone();
-
-            let mut rows = db
-                .with_read_conn(move |conn| {
-                    crate::sqlite::files::list_files_slim_by_ids(
-                        conn,
-                        &filtered_ids,
-                        fetch_limit,
-                        &sf,
-                        &sd,
-                        cursor.as_deref(),
-                        gf.as_ref(),
-                        None,
-                    )
-                })
-                .await?;
-
-            let has_more = rows.len() as i64 > limit;
-            if has_more {
-                rows.truncate(limit as usize);
-            }
-
-            let next_cursor = if has_more {
-                rows.last()
-                    .and_then(|row| slim_cursor_value_for_sort(row, &sort_field, None))
             } else {
                 None
             };

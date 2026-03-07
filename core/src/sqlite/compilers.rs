@@ -11,7 +11,7 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 
 use super::bitmaps::BitmapKey;
-use crate::folders::db::count_uncategorized_entities;
+use crate::scope::resolver::scope_count;
 use super::projections;
 use crate::sidebar::db as sidebar;
 use crate::smart_folders::db as smart_folders;
@@ -672,54 +672,21 @@ async fn compile_sidebar(db: &Arc<SqliteDatabase>) -> Result<(), String> {
         // Ensure sidebar is seeded
         sidebar::seed_sidebar_if_empty(conn)?;
 
-        // Update system counts from bitmaps (O(1))
-        let all_count = bitmaps.len(&BitmapKey::Status(1));
-        let inbox_count = bitmaps.len(&BitmapKey::Status(0));
-        let trash_count = bitmaps.len(&BitmapKey::Status(2));
-        let uncategorized_count = count_uncategorized_entities(conn)?;
-
-        sidebar::update_sidebar_count(conn, "system:all_files", all_count as i64, epoch as i64)?;
-        sidebar::update_sidebar_count(conn, "system:inbox", inbox_count as i64, epoch as i64)?;
-        sidebar::update_sidebar_count(
-            conn,
-            "system:uncategorized",
-            uncategorized_count,
-            epoch as i64,
-        )?;
-        sidebar::update_sidebar_count(conn, "system:trash", trash_count as i64, epoch as i64)?;
-
-        // Untagged count: AllActive (inbox + active) - Tagged
-        let all_active_count = bitmaps.len(&BitmapKey::AllActive);
-        let tagged_count = bitmaps.len(&BitmapKey::Tagged);
-        let untagged_count = all_active_count.saturating_sub(tagged_count);
-        sidebar::update_sidebar_count(
-            conn,
+        // System scope counts — delegated to the canonical scope engine.
+        for key in &[
+            "system:all_files",
+            "system:inbox",
+            "system:trash",
             "system:untagged",
-            untagged_count as i64,
-            epoch as i64,
-        )?;
-
-        // Recently viewed count
-        let recent_viewed_count: i64 = conn.query_row(
-            "SELECT COUNT(*)
-             FROM media_entity me
-             JOIN entity_file ef ON ef.entity_id = me.entity_id
-             JOIN file f ON f.file_id = ef.file_id
-             WHERE me.status = 1
-               AND me.kind = 'single'
-               AND f.view_count > 0
-               AND me.parent_collection_id IS NULL",
-            [],
-            |row| row.get(0),
-        )?;
-        sidebar::update_sidebar_count(
-            conn,
+            "system:uncategorized",
             "system:recent_viewed",
-            recent_viewed_count,
-            epoch as i64,
-        )?;
+        ] {
+            let count = scope_count(conn, &bitmaps, key)?;
+            sidebar::update_sidebar_count(conn, key, count, epoch as i64)?;
+        }
 
         // Duplicate count: unresolved detected pairs
+        // (not a scope — duplicates have their own semantics)
         let dup_count: i64 = conn.query_row(
             "SELECT COUNT(*) FROM duplicate WHERE status = 'detected'",
             [],
