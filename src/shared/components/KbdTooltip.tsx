@@ -53,6 +53,8 @@ export function KbdTooltip({ label, shortcut, children, position = 'bottom' }: K
       styles={tooltipStyles}
       transitionProps={{ transition: 'pop', duration: 150 }}
     >
+      {/* Mantine Tooltip requires a single element child for ref forwarding; ReactNode is broader */}
+      {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
       {children as any}
     </Tooltip>
   );

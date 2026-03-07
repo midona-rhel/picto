@@ -4,13 +4,21 @@
 P1
 
 ## Audit Status (2026-03-07)
-Status: **Not Implemented**
+Status: **Implemented**
 
-Evidence:
-1. Runtime files still contain `any`/`as any` escapes in smart-folder payloads, command palette flattening, drag/drop payload handling, and folder reorder commands.
-2. `src/components/image-grid/ImageGrid.tsx` still handles webview drag-drop payloads with `event.payload as any`.
-3. `src/components/smart-folders/SmartFolderModal.tsx` uses repeated `as any` casts for API calls.
-4. `src/desktop/api.ts` still exposes several loosely typed bridge helpers and handler casts.
+Implementation:
+1. Added `SmartFolderIpcInput` and `DragDropPayload` types to `src/shared/types/api/core.ts`.
+2. Removed all 6 `as any` casts from `SmartFolderModal.tsx` — `predicateToRust`/`folderToRust` now return typed `SmartFolderPredicate`/`SmartFolderIpcInput`.
+3. Removed `as any` from `ImageGrid.tsx` drag-drop handler — uses explicit `DragDropPayload` type.
+4. Removed `as any` from `folderController.ts` — uses `FolderReorderMove[]` (aligned with generated type).
+5. Fixed stale `FolderReorderMove` in `core.ts` to match generated Rust type (`before_hash`/`after_hash` instead of `position_rank`).
+6. Removed `as any` from `api.ts` `onDragDropEvent` handler and `ContextMenu.tsx` item narrowing.
+7. Removed `as any` from `smartFolderController.ts` — accepts `SmartFolderIpcInput` directly.
+8. Replaced `ComponentType<any>` in `EmptyState` and `StateBlock` with `TablerIcon` import.
+9. Fixed `App.tsx` `sf.predicate as any` — typed `SmartFolderSummary.predicate` as `SmartFolderPredicate` in `domainStore.ts`.
+10. Fixed `CommandPalette.tsx` union-array push casts — properly typed `PaletteRow[]` union.
+11. Remaining unavoidable escapes (7 total): V8 GC API (`cacheCleanup.ts` x2), Mantine Tooltip children (KbdTooltip), CSS variable in CSSProperties (DragGhost), test mocks (setup.ts, gridMarqueeSelection.test.ts x2).
+12. `npx tsc --noEmit` passes clean.
 
 ## Problem
 TypeScript coverage is no longer the main compile blocker, but the renderer still relies on too many escape hatches at the exact boundaries where regressions are expensive: IPC payloads, smart-folder predicates, drag/drop events, and context-menu state.

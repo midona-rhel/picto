@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { api } from '#desktop/api';
 import type { SidebarNodeDto, SidebarFreshness } from '../shared/types/sidebar';
+import type { SmartFolderPredicate } from '../shared/types/api';
 
 interface SmartFolderSummary {
   id: string;
@@ -9,7 +10,7 @@ interface SmartFolderSummary {
   color?: string | null;
   count: number;
   freshness: SidebarFreshness | string;
-  predicate?: unknown;
+  predicate?: SmartFolderPredicate;
   sort_field?: string | null;
   sort_order?: string | null;
 }
@@ -199,7 +200,7 @@ export const useDomainStore = create<DomainState>((set, get) => ({
           color: node.color,
           count: node.count ?? 0,
           freshness: node.freshness,
-          predicate: meta?.predicate,
+          predicate: meta?.predicate as SmartFolderPredicate | undefined,
           sort_field: meta?.sort_field as string | null | undefined,
           sort_order: meta?.sort_order as string | null | undefined,
         });

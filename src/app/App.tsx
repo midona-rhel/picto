@@ -240,7 +240,7 @@ function App() {
         label: sf.name,
         group: 'Navigation',
         icon: <IconFolderStar size={16} />,
-        execute: () => navigateToSmartFolder({ id: sf.id, name: sf.name, predicate: sf.predicate as any }),
+        execute: () => navigateToSmartFolder({ id: sf.id, name: sf.name, predicate: sf.predicate ?? { groups: [] } }),
       });
     }
 
