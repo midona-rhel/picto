@@ -11,7 +11,7 @@ import { IconPicker } from './IconPicker';
 import { FolderColorPicker } from './FolderColorPicker';
 import { DynamicIcon, DEFAULT_FOLDER_ICON } from './iconRegistry';
 import { SidebarController } from '../../controllers/sidebarController';
-import { registerUndoAction } from '../../controllers/undoRedoController';
+import { registerUndoAction } from '../../shared/controllers/undoRedoController';
 
 interface SmartFolderModalProps {
   opened: boolean;

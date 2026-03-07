@@ -4,7 +4,7 @@ import { api, getCurrentWindow, invoke, libraryHost } from '#desktop/api';
 import { KbdTooltip } from '../../shared/components/KbdTooltip';
 import { ContextMenu, type ContextMenuEntry, useContextMenu } from '../../shared/components/ContextMenu';
 import { useNavigationStore } from '../../state/navigationStore';
-import { performRedo, performUndo } from '../../controllers/undoRedoController';
+import { performRedo, performUndo } from '../../shared/controllers/undoRedoController';
 import { useUndoRedoStore } from '../../state/undoRedoStore';
 import styles from './SidebarMenuButton.module.css';
 

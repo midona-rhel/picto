@@ -27,7 +27,7 @@ import { DynamicIcon, DEFAULT_FOLDER_ICON } from '../smart-folders/iconRegistry'
 import type { SmartFolder } from '../smart-folders/types';
 import { folderToRust } from '../smart-folders/types';
 import { FolderController } from '../../controllers/folderController';
-import { registerUndoAction } from '../../controllers/undoRedoController';
+import { registerUndoAction } from '../../shared/controllers/undoRedoController';
 import { SidebarController } from '../../controllers/sidebarController';
 import { useDomainStore } from '../../state/domainStore';
 import { useNavigationStore } from '../../state/navigationStore';

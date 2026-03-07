@@ -3,7 +3,7 @@ import { Loader, NumberInput, Switch, Text } from '@mantine/core';
 import { api } from '#desktop/api';
 import type { DuplicateSettings } from '../../shared/types/api';
 import { SettingsBlock, SettingsRow } from './ui';
-import { registerUndoAction } from '../../controllers/undoRedoController';
+import { registerUndoAction } from '../../shared/controllers/undoRedoController';
 
 const MIN_SIMILARITY = 95;
 const MAX_SIMILARITY = 100;

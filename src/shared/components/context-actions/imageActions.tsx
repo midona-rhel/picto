@@ -35,10 +35,10 @@ import { DisplayOptionsPanel } from '../../../components/image-grid/DisplayOptio
 import { IconBing, IconSauceNAO, IconSogou, IconTinEye, IconYandex } from '../SearchEngineIcons';
 import type { SmartFolderPredicate } from '../../../components/smart-folders/types';
 import type { GridRuntimeAction, GridRuntimeState, GridViewMode } from '../../../components/image-grid/runtime';
-import { FileController } from '../../../controllers/fileController';
+import { FileController } from '../../controllers/fileController';
 import { FolderController } from '../../../controllers/folderController';
 import { FolderPickerService } from '../../../shared/services/folderPickerService';
-import { registerUndoAction } from '../../../controllers/undoRedoController';
+import { registerUndoAction } from '../../controllers/undoRedoController';
 import { notifyError, notifySuccess } from '../../../shared/lib/notify';
 import { useSettingsStore } from '../../../state/settingsStore';
 import { applyGridMutationEffects } from '../../../domain/actions/mutationEffects';

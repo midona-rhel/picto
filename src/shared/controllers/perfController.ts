@@ -1,5 +1,5 @@
 import { api } from '#desktop/api';
-import type { PerfSloResult } from '../shared/types/api';
+import type { PerfSloResult } from '../types/api';
 
 export const PerfController = {
   checkSlo(): Promise<PerfSloResult> {

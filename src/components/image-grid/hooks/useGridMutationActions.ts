@@ -1,8 +1,8 @@
 import { useCallback } from 'react';
-import { deepClone, registerUndoAction } from '../../../controllers/undoRedoController';
+import { deepClone, registerUndoAction } from '../../../shared/controllers/undoRedoController';
 import { api } from '#desktop/api';
 import { notifyError, notifyInfo } from '../../../shared/lib/notify';
-import { FileController } from '../../../controllers/fileController';
+import { FileController } from '../../../shared/controllers/fileController';
 import { FolderController } from '../../../controllers/folderController';
 import { SelectionController } from '../../../controllers/selectionController';
 import {

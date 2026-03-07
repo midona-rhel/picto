@@ -9,7 +9,7 @@ import { useNavigationStore, type ViewType } from '../state/navigationStore';
 import { initSettingsStore, themeToColorScheme, useSettingsStore } from '../state/settingsStore';
 import { SidebarController } from '../controllers/sidebarController';
 import { SelectionController } from '../controllers/selectionController';
-import { performRedo, performUndo } from '../controllers/undoRedoController';
+import { performRedo, performUndo } from '../shared/controllers/undoRedoController';
 import { useRuntimeSyncStore } from '../state/runtimeSyncStore';
 import { useCacheStore } from '../state/cacheStore';
 import { useLibraryStore } from '../state/libraryStore';

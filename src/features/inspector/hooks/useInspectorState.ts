@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '#desktop/api';
-import { registerUndoAction } from '../../../controllers/undoRedoController';
+import { registerUndoAction } from '../../../shared/controllers/undoRedoController';
 
 import { useInspectorData, type InspectorData } from '../../../hooks/useInspectorData';
 import type { MasonryImageItem } from '../../../components/image-grid/shared';

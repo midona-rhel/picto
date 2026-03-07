@@ -17,7 +17,7 @@ import { mediaFileUrl, mediaThumbnailUrl } from '../shared/lib/mediaUrl';
 import { isImagePreloaded, queueImageDecode } from './image-grid/useImagePreloader';
 import type { DuplicatePairDto, DuplicatePairsResponse, ResolveDuplicateAction } from '../shared/types/api';
 import { useDomainStore } from '../state/domainStore';
-import { registerUndoAction } from '../controllers/undoRedoController';
+import { registerUndoAction } from '../shared/controllers/undoRedoController';
 import { useGlobalKeydown } from '../shared/hooks/useGlobalKeydown';
 import styles from './DuplicateManager.module.css';
 

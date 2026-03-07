@@ -15,7 +15,7 @@ import {
 import { useSortable, SortableContext, verticalListSortingStrategy } from '@dnd-kit/sortable';
 
 import { FolderController } from '../../controllers/folderController';
-import { registerUndoAction } from '../../controllers/undoRedoController';
+import { registerUndoAction } from '../../shared/controllers/undoRedoController';
 import { notifyWarning } from '../../shared/lib/notify';
 import { useDomainStore } from '../../state/domainStore';
 import { useNavigationStore } from '../../state/navigationStore';
