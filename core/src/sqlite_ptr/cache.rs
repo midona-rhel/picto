@@ -50,16 +50,6 @@ pub fn batch_add_negative(
     Ok(())
 }
 
-/// Remove a hash from the negative cache (e.g., after new PTR data arrives).
-pub fn remove_negative(conn: &Connection, hash: &str) -> rusqlite::Result<()> {
-    let hash_blob = super::hash_to_blob(hash);
-    conn.execute(
-        "DELETE FROM ptr_negative_cache WHERE hash = ?1",
-        [&hash_blob],
-    )?;
-    Ok(())
-}
-
 /// Clear the entire negative cache.
 pub fn clear_negative_cache(conn: &Connection) -> rusqlite::Result<()> {
     conn.execute("DELETE FROM ptr_negative_cache", [])?;

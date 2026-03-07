@@ -294,15 +294,6 @@ pub fn get_entity_folder_memberships(
     rows.collect()
 }
 
-/// Count entities in a folder.
-pub fn count_folder_entities(conn: &Connection, folder_id: i64) -> rusqlite::Result<i64> {
-    conn.query_row(
-        "SELECT COUNT(*) FROM folder_entity WHERE folder_id = ?1",
-        [folder_id],
-        |row| row.get(0),
-    )
-}
-
 /// Get the hash of the first file in a folder (by position_rank) for cover preview.
 pub fn get_folder_cover_hash(
     conn: &Connection,

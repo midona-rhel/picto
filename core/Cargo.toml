@@ -73,5 +73,8 @@ parking_lot = "0.12"
 # CPU count for connection pool sizing
 num_cpus = "1.16"
 
+# TypeScript type generation from Rust structs (PBI-234)
+ts-rs = { version = "10", features = ["serde-compat"] }
+
 [dev-dependencies]
 tokio-test = "0.4"

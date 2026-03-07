@@ -318,11 +318,6 @@ pub async fn open_library(library_root: PathBuf) -> Result<Arc<AppState>, String
     Ok(state)
 }
 
-/// Backward-compatible alias for `open_library`.
-pub async fn initialize(library_root: PathBuf) -> Result<Arc<AppState>, String> {
-    open_library(library_root).await
-}
-
 /// Get the current library state. Returns an `Arc` (cheap clone).
 pub fn get_state() -> Result<Arc<AppState>, String> {
     let guard = state_lock()

@@ -10,7 +10,6 @@
 //! - Uses fast_image_resize for 10x faster thumbnail resizing
 
 pub mod archive;
-#[allow(dead_code)]
 pub mod blurhash;
 pub mod colors;
 pub mod ffmpeg;

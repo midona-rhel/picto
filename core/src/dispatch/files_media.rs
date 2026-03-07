@@ -59,26 +59,6 @@ pub async fn handle(
             let result = export_file_inner(&state.db, &state.blob_store, &hash, &dest_path).await;
             Some(result.and_then(|_| ok_null()))
         }
-        "save_file_data" => {
-            let file_path: String = match de(args, "filePath") {
-                Ok(v) => v,
-                Err(e) => return Some(Err(e)),
-            };
-            let data: Vec<u8> = match de(args, "data") {
-                Ok(v) => v,
-                Err(e) => return Some(Err(e)),
-            };
-            let result = tokio::task::spawn_blocking(move || {
-                std::fs::write(&file_path, &data)
-                    .map_err(|e| format!("Failed to write file: {}", e))
-            })
-            .await
-            .map_err(|e| format!("Task error: {}", e));
-            Some(match result {
-                Ok(inner) => inner.and_then(|_| ok_null()),
-                Err(e) => Err(e),
-            })
-        }
         "open_in_new_window" => {
             let hash: String = match de(args, "hash") {
                 Ok(v) => v,

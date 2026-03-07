@@ -223,92 +223,6 @@ impl MimeType {
         }
     }
 
-    /// File extension (without dot) for this MIME type.
-    #[allow(dead_code)]
-    pub fn extension(&self) -> &'static str {
-        match self {
-            Self::ImageJpeg => "jpg",
-            Self::ImagePng | Self::UndeterminedPng => "png",
-            Self::ImageBmp => "bmp",
-            Self::ImageIcon => "ico",
-            Self::ImageWebp | Self::UndeterminedWebp | Self::AnimationWebp => "webp",
-            Self::ImageTiff => "tiff",
-            Self::ImageSvg => "svg",
-            Self::ImageHeif | Self::ImageHeifSequence => "heif",
-            Self::ImageHeic | Self::ImageHeicSequence => "heic",
-            Self::ImageAvif | Self::ImageAvifSequence => "avif",
-            Self::ImageGif | Self::UndeterminedGif | Self::AnimationGif => "gif",
-            Self::ImageQoi => "qoi",
-            Self::ImageJxl | Self::UndeterminedJxl | Self::AnimationJxl => "jxl",
-            Self::AnimationApng => "apng",
-            Self::AnimationUgoira => "zip", // Ugoira is a zip of frames
-
-            Self::VideoFlv => "flv",
-            Self::VideoMp4 | Self::UndeterminedMp4 => "mp4",
-            Self::VideoMkv => "mkv",
-            Self::VideoWebm => "webm",
-            Self::VideoMpeg => "mpeg",
-            Self::VideoMov => "mov",
-            Self::VideoAvi => "avi",
-            Self::VideoWmv | Self::UndeterminedWm => "wmv",
-            Self::VideoOgv => "ogv",
-            Self::VideoRealmedia => "rm",
-
-            Self::AudioMp3 => "mp3",
-            Self::AudioOgg => "ogg",
-            Self::AudioFlac => "flac",
-            Self::AudioWma => "wma",
-            Self::AudioM4a => "m4a",
-            Self::AudioRealmedia => "ra",
-            Self::AudioTrueaudio => "tta",
-            Self::AudioWave => "wav",
-            Self::AudioMkv => "mka",
-            Self::AudioMp4 => "m4a",
-            Self::AudioWavpack => "wv",
-
-            Self::ApplicationPdf => "pdf",
-            Self::ApplicationEpub => "epub",
-            Self::ApplicationDjvu => "djvu",
-            Self::ApplicationCbz => "cbz",
-            Self::ApplicationRtf => "rtf",
-            Self::ApplicationDocx => "docx",
-            Self::ApplicationXlsx => "xlsx",
-            Self::ApplicationPptx => "pptx",
-            Self::ApplicationDoc => "doc",
-            Self::ApplicationXls => "xls",
-            Self::ApplicationPpt => "ppt",
-            Self::TextPlain => "txt",
-            Self::TextHtml => "html",
-
-            Self::ApplicationPsd => "psd",
-            Self::ApplicationClip => "clip",
-            Self::ApplicationSai2 => "sai2",
-            Self::ApplicationKrita => "kra",
-            Self::ApplicationXcf => "xcf",
-            Self::ApplicationProcreate => "procreate",
-            Self::ApplicationPaintDotNet => "pdn",
-
-            Self::ApplicationZip => "zip",
-            Self::ApplicationRar => "rar",
-            Self::Application7z => "7z",
-            Self::ApplicationGzip => "gz",
-
-            Self::ApplicationJson => "json",
-            Self::ApplicationYaml => "yaml",
-            Self::ApplicationFlash => "swf",
-            Self::ApplicationWindowsExe => "exe",
-            Self::ApplicationCbor => "cbor",
-
-            _ => "bin",
-        }
-    }
-
-    /// Whether this type can have a visual thumbnail generated.
-    #[allow(dead_code)]
-    pub fn has_thumbnail(&self) -> bool {
-        types_with_thumbnails().contains(self)
-    }
-
     /// Whether this is an image type (static, not animation).
     pub fn is_image(&self) -> bool {
         images().contains(self)
@@ -329,30 +243,6 @@ impl MimeType {
         audios().contains(self)
     }
 
-    /// Whether this type can have resolution (width/height).
-    #[allow(dead_code)]
-    pub fn has_resolution(&self) -> bool {
-        self.is_image()
-            || self.is_animation()
-            || self.is_video()
-            || matches!(
-                self,
-                Self::ApplicationPsd
-                    | Self::ApplicationClip
-                    | Self::ApplicationSai2
-                    | Self::ApplicationKrita
-                    | Self::ApplicationXcf
-                    | Self::ApplicationProcreate
-                    | Self::ApplicationPaintDotNet
-                    | Self::ApplicationPdf
-            )
-    }
-
-    /// Whether this type can have duration.
-    #[allow(dead_code)]
-    pub fn has_duration(&self) -> bool {
-        self.is_animation() || self.is_video() || self.is_audio()
-    }
 }
 
 // ---------------------------------------------------------------------------
@@ -363,8 +253,6 @@ static IMAGES: OnceLock<HashSet<MimeType>> = OnceLock::new();
 static ANIMATIONS: OnceLock<HashSet<MimeType>> = OnceLock::new();
 static VIDEOS: OnceLock<HashSet<MimeType>> = OnceLock::new();
 static AUDIOS: OnceLock<HashSet<MimeType>> = OnceLock::new();
-static TYPES_WITH_THUMBNAILS: OnceLock<HashSet<MimeType>> = OnceLock::new();
-
 fn images() -> &'static HashSet<MimeType> {
     IMAGES.get_or_init(|| {
         [
@@ -443,32 +331,10 @@ fn audios() -> &'static HashSet<MimeType> {
     })
 }
 
-fn types_with_thumbnails() -> &'static HashSet<MimeType> {
-    TYPES_WITH_THUMBNAILS.get_or_init(|| {
-        let mut s: HashSet<MimeType> = HashSet::new();
-        s.extend(images());
-        s.extend(animations());
-        s.extend(videos());
-        s.extend([
-            MimeType::ApplicationPsd,
-            MimeType::ApplicationClip,
-            MimeType::ApplicationSai2,
-            MimeType::ApplicationKrita,
-            MimeType::ApplicationXcf,
-            MimeType::ApplicationProcreate,
-            MimeType::ApplicationPaintDotNet,
-            MimeType::ApplicationPdf,
-            MimeType::ApplicationCbz,
-        ]);
-        s
-    })
-}
-
 /// Initialize all static grouping sets. Call once at startup.
 pub fn init_groupings() {
     images();
     animations();
     videos();
     audios();
-    types_with_thumbnails();
 }

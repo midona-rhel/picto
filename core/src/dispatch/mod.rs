@@ -17,7 +17,7 @@ pub mod files;
 mod files_lifecycle;
 mod files_media;
 mod files_metadata;
-mod files_review;
+pub mod typed;
 pub mod folders;
 pub mod grid;
 pub mod ptr;
@@ -27,9 +27,7 @@ pub mod subscriptions;
 pub mod system;
 pub mod tags;
 
-pub use common::{
-    de, de_opt, de_opt_strict, get_field, ok_null, snake_to_camel, to_json, value_type_name,
-};
+pub use common::{de, de_opt, get_field, ok_null, to_json};
 
 /// Dispatch a command by name with JSON arguments. Returns JSON result.
 pub async fn dispatch(command: &str, args_json: &str) -> Result<String, String> {
@@ -51,7 +49,12 @@ pub async fn dispatch(command: &str, args_json: &str) -> Result<String, String> 
 
     let state = crate::state::get_state()?;
 
-    // ─── Domain handler routing ──────────────────────────────
+    // ─── Typed command dispatch (PBI-234) ────────────────────
+    if let Some(result) = typed::typed_dispatch(&state, command, &args).await {
+        return result;
+    }
+
+    // ─── Legacy domain handler routing ───────────────────────
     if let Some(result) = files::handle(&state, command, &args).await {
         return result;
     }

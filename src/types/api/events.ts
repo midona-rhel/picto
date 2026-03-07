@@ -118,10 +118,6 @@ export interface GridSnapshotInvalidatedEvent {
   ts?: string;
 }
 
-export interface ZoomFactorChangedEvent {
-  factor: number;
-}
-
 export interface OpenDetailWindowEvent {
   hash: string;
   width?: number;

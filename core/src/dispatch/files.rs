@@ -1,5 +1,5 @@
-//! File domain routing layer — delegates to lifecycle, metadata, media, and
-//! review submodules.
+//! File domain routing layer — delegates to lifecycle, metadata, and media
+//! submodules.
 
 use crate::state::AppState;
 
@@ -15,9 +15,6 @@ pub async fn handle(
         return r;
     }
     if let r @ Some(_) = super::files_media::handle(state, command, args).await {
-        return r;
-    }
-    if let r @ Some(_) = super::files_review::handle(state, command, args).await {
         return r;
     }
     None

@@ -67,11 +67,6 @@ pub fn set_view_pref(conn: &Connection, pref: &ViewPref) -> rusqlite::Result<()>
     Ok(())
 }
 
-pub fn delete_view_pref(conn: &Connection, scope: &str) -> rusqlite::Result<()> {
-    conn.execute("DELETE FROM view_pref WHERE scope = ?1", [scope])?;
-    Ok(())
-}
-
 /// Get view pref for scope with fallback to system:all.
 pub fn get_view_pref_with_fallback(
     conn: &Connection,
@@ -99,8 +94,4 @@ impl SqliteDatabase {
         self.with_conn(move |conn| set_view_pref(conn, &pref)).await
     }
 
-    pub async fn delete_view_pref(&self, scope: &str) -> Result<(), String> {
-        let s = scope.to_string();
-        self.with_conn(move |conn| delete_view_pref(conn, &s)).await
-    }
 }

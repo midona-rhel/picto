@@ -95,22 +95,6 @@ pub fn batch_get_overlay(
     Ok(results)
 }
 
-/// Upsert an overlay entry.
-pub fn upsert_overlay(
-    conn: &Connection,
-    hash: &str,
-    tags: &[PtrResolvedTag],
-    epoch: i64,
-) -> rusqlite::Result<()> {
-    let hash_blob = super::hash_to_blob(hash);
-    let json = serde_json::to_string(tags).unwrap_or_else(|_| "[]".into());
-    conn.execute(
-        "INSERT OR REPLACE INTO ptr_overlay (hash, resolved_json, epoch) VALUES (?1, ?2, ?3)",
-        params![hash_blob, json, epoch],
-    )?;
-    Ok(())
-}
-
 /// SQL to rebuild the tag display cache (sibling resolution).
 const REBUILD_DISPLAY_SQL: &str =
     "INSERT OR REPLACE INTO ptr_tag_display (tag_id, display_ns, display_st)

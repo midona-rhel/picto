@@ -23,8 +23,6 @@ import type {
   FlowProgressEvent,
   FlowFinishedEvent,
   SubscriptionSiteInfo,
-  SiteMetadataSchema,
-  SiteMetadataValidationResult,
   CredentialDomain,
   CredentialHealth,
   CredentialType,
@@ -69,22 +67,6 @@ export const SubscriptionController = {
 
   getSiteCatalog(): Promise<SubscriptionSiteInfo[]> {
     return api.subscriptions.getSites();
-  },
-
-  getSiteMetadataSchema(siteId: string): Promise<SiteMetadataSchema> {
-    return api.subscriptions.getSiteMetadataSchema(siteId);
-  },
-
-  validateSiteMetadata(args: {
-    siteId: string;
-    sampleUrl?: string;
-    sampleMetadataJson?: Record<string, unknown> | null;
-  }): Promise<SiteMetadataValidationResult> {
-    return api.subscriptions.validateSiteMetadata({
-      site_id: args.siteId,
-      sample_url: args.sampleUrl,
-      sample_metadata_json: args.sampleMetadataJson,
-    });
   },
 
   listCredentials(): Promise<CredentialDomain[]> {

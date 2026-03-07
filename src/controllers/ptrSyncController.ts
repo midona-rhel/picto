@@ -18,8 +18,6 @@ import type {
   PtrSyncProgress,
   PtrBootstrapStatus,
   PtrSyncResult,
-  PtrCompactIndexStatus,
-  PtrSyncPhaseChangedEvent,
   PtrBootstrapStartedEvent,
   PtrBootstrapProgressEvent,
   PtrBootstrapFinishedEvent,
@@ -55,10 +53,6 @@ export const PtrSyncController = {
     return api.ptr.getBootstrapStatus();
   },
 
-  getCompactIndexStatus(): Promise<PtrCompactIndexStatus> {
-    return api.ptr.getCompactIndexStatus();
-  },
-
   cancelBootstrap(): Promise<unknown> {
     return api.ptr.cancelBootstrap();
   },
@@ -77,12 +71,6 @@ export const PtrSyncController = {
 
   onFinished(handler: (result: PtrSyncResult) => void): Promise<UnlistenFn> {
     return listen<PtrSyncResult>('ptr-sync-finished', (event) => handler(event.payload));
-  },
-
-  onPhaseChanged(handler: (event: PtrSyncPhaseChangedEvent) => void): Promise<UnlistenFn> {
-    return listen<PtrSyncPhaseChangedEvent>('ptr-sync-phase-changed', (event) =>
-      handler(event.payload),
-    );
   },
 
   onBootstrapStarted(handler: (payload: PtrBootstrapStartedEvent) => void): Promise<UnlistenFn> {
