@@ -16,8 +16,8 @@ import {
   VOLUME_SCROLL_STEP,
   VOLUME_STEP,
 } from './videoConstants';
-import { getShortcut, matchesShortcutDef } from '../../shared/lib/shortcuts';
-import { useGlobalKeydown } from '../../shared/hooks/useGlobalKeydown';
+import { getShortcut, matchesShortcutDef } from '../../../shared/lib/shortcuts';
+import { useGlobalKeydown } from '../../../shared/hooks/useGlobalKeydown';
 import styles from './VideoPlayer.module.css';
 
 export interface VideoPlayerProps {

@@ -4,8 +4,8 @@ import type { GridRuntimeState } from '../runtime/gridRuntimeState';
 import type { MasonryImageItem } from '../shared';
 import type { GridQueryKey } from './gridQueryKey';
 import { GridQueryBroker } from './GridQueryBroker';
-import type { SmartFolderPredicate } from '../../smart-folders/types';
-import { predicateToRust } from '../../smart-folders/types';
+import type { SmartFolderPredicate } from '../../../features/smart-folders/components/types';
+import { predicateToRust } from '../../../features/smart-folders/components/types';
 
 // ---------------------------------------------------------------------------
 // Props accepted by the hook (subset of ImageGridProps relevant to querying)

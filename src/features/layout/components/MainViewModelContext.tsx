@@ -1,6 +1,6 @@
 import { createContext, useContext, type ReactNode } from 'react';
-import type { AppSettings } from '../../state/settingsStore';
-import type { SmartFolderPredicate } from '../smart-folders/types';
+import type { AppSettings } from '../../../state/settingsStore';
+import type { SmartFolderPredicate } from '../../smart-folders/components/types';
 import type { GridViewMode, DetailViewControls, DetailViewState } from '#features/grid/components';
 import type { MasonryImageItem, SelectionQuerySpec } from '#features/grid/types';
 import type { FlowResultEntry } from '#features/subscriptions/components';

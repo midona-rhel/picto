@@ -1,10 +1,10 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Sidebar } from '../Sidebar';
-import { imageDrag } from '../../../shared/lib/imageDrag';
-import { useDomainStore } from '../../../state/domainStore';
-import { useNavigationStore } from '../../../state/navigationStore';
-import { useCacheStore } from '../../../state/cacheStore';
+import { imageDrag } from '../../../../shared/lib/imageDrag';
+import { useDomainStore } from '../../../../state/domainStore';
+import { useNavigationStore } from '../../../../state/navigationStore';
+import { useCacheStore } from '../../../../state/cacheStore';
 
 const {
   setStatusSelectionMock,
@@ -37,7 +37,7 @@ vi.mock('#desktop/api', () => ({
   },
 }));
 
-vi.mock('../../../controllers/selectionController', () => ({
+vi.mock('../../../../controllers/selectionController', () => ({
   SelectionController: {
     invalidateSummary: invalidateSummaryMock,
   },
@@ -55,7 +55,7 @@ vi.mock('../LibrarySwitcher', () => ({
   LibrarySwitcher: () => <div data-testid="library-switcher" />,
 }));
 
-vi.mock('../../layout/SidebarJobStatus', () => ({
+vi.mock('../../../layout/components/SidebarJobStatus', () => ({
   SidebarJobStatus: () => <div data-testid="sidebar-job-status" />,
 }));
 

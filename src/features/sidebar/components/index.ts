@@ -1,2 +1,2 @@
-export { Sidebar } from '../../../components/sidebar/Sidebar';
-export { SidebarMenuButton } from '../../../components/sidebar/SidebarMenuButton';
+export { Sidebar } from './Sidebar';
+export { SidebarMenuButton } from './SidebarMenuButton';

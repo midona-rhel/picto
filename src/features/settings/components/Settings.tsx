@@ -12,13 +12,13 @@ import {
 } from '@tabler/icons-react';
 import { getCurrentWindow } from '#desktop/api';
 
-import { GeneralPanel } from './settings/GeneralPanel';
-import { ShortcutsPanel } from './settings/ShortcutsPanel';
-import { DownloadServicesPanel } from './settings/DownloadServicesPanel';
-import { PtrPanel } from './settings/PtrPanel';
-import { DuplicatesPanel } from './settings/DuplicatesPanel';
-import { DangerZonePanel } from './settings/DangerZonePanel';
-import { DeveloperPanel } from './settings/DeveloperPanel';
+import { GeneralPanel } from './GeneralPanel';
+import { ShortcutsPanel } from './ShortcutsPanel';
+import { DownloadServicesPanel } from './DownloadServicesPanel';
+import { PtrPanel } from './PtrPanel';
+import { DuplicatesPanel } from './DuplicatesPanel';
+import { DangerZonePanel } from './DangerZonePanel';
+import { DeveloperPanel } from './DeveloperPanel';
 import styles from './Settings.module.css';
 
 interface NavItem {

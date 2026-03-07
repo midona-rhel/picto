@@ -18,17 +18,17 @@ import {
 } from 'react';
 import { Modal } from '@mantine/core';
 import { IconCheck, IconEqual, IconLayoutSidebar, IconLayersIntersect, IconLayersUnion, IconMinus, IconPin, IconPinFilled, IconPlus } from '@tabler/icons-react';
-import { OverlayShell } from '../../shared/components/OverlayShell';
+import { OverlayShell } from '../../../shared/components/OverlayShell';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { api } from '#desktop/api';
-import { getNamespaceColor } from '../../shared/lib/namespaceColors';
-import { parseTagString } from '../../shared/lib/tagParsing';
+import { getNamespaceColor } from '../../../shared/lib/namespaceColors';
+import { parseTagString } from '../../../shared/lib/tagParsing';
 import { registerTagSelectOpenHandler } from './tagSelectService';
 import type { TagFilterLogicMode, TagSelectPanelProps } from './tagSelectTypes';
-import { KbdTooltip } from '../../shared/components/KbdTooltip';
-import { useGlobalKeydown } from '../../shared/hooks/useGlobalKeydown';
-import { useGlobalPointerDrag } from '../../shared/hooks/useGlobalPointerDrag';
-import { glassModalStyles } from '../../shared/styles/glassModal';
+import { KbdTooltip } from '../../../shared/components/KbdTooltip';
+import { useGlobalKeydown } from '../../../shared/hooks/useGlobalKeydown';
+import { useGlobalPointerDrag } from '../../../shared/hooks/useGlobalPointerDrag';
+import { glassModalStyles } from '../../../shared/styles/glassModal';
 import st from './TagSelectPanel.module.css';
 
 function nsColor(namespace: string): string {

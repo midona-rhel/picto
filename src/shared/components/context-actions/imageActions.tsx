@@ -33,19 +33,19 @@ import { LayoutRow } from '../../../components/image-grid/LayoutRow';
 import { SortByRow } from '../../../components/image-grid/SortByRow';
 import { DisplayOptionsPanel } from '../../../components/image-grid/DisplayOptionsPanel';
 import { IconBing, IconSauceNAO, IconSogou, IconTinEye, IconYandex } from '../SearchEngineIcons';
-import type { SmartFolderPredicate } from '../../../components/smart-folders/types';
+import type { SmartFolderPredicate } from '../../../features/smart-folders/components/types';
 import type { GridRuntimeAction, GridRuntimeState, GridViewMode } from '../../../components/image-grid/runtime';
 import { FileController } from '../../controllers/fileController';
 import { FolderController } from '../../../controllers/folderController';
-import { FolderPickerService } from '../../../shared/services/folderPickerService';
+import { FolderPickerService } from '../../services/folderPickerService';
 import { registerUndoAction } from '../../controllers/undoRedoController';
-import { notifyError, notifySuccess } from '../../../shared/lib/notify';
+import { notifyError, notifySuccess } from '../../lib/notify';
 import { useSettingsStore } from '../../../state/settingsStore';
 import { applyGridMutationEffects } from '../../../domain/actions/mutationEffects';
 import { deleteHashesWithLifecycleEffects, setFileStatusWithLifecycleEffects } from '../../../domain/actions/fileLifecycleActions';
 import type { MasonryImageItem } from '../../../components/image-grid/shared';
 import { api } from '#desktop/api';
-import { bustThumbnailCache } from '../../../shared/lib/mediaUrl';
+import { bustThumbnailCache } from '../../lib/mediaUrl';
 import { useCacheStore } from '../../../state/cacheStore';
 
 interface BuildGridImageContextMenuArgs {

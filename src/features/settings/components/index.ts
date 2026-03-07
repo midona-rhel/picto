@@ -1,2 +1,2 @@
-export { Settings } from '../../../components/Settings';
-export { LibraryPanel } from '../../../components/settings/LibraryPanel';
+export { Settings } from './Settings';
+export { LibraryPanel } from './LibraryPanel';

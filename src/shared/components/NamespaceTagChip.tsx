@@ -2,8 +2,8 @@ import { type ReactNode } from 'react';
 import { Text, ActionIcon } from '@mantine/core';
 import { IconX } from '@tabler/icons-react';
 import { useMantineColorScheme } from '@mantine/core';
-import { namespaceChipStyle, chipStyleFromRgb } from '../../shared/lib/namespaceColors';
-import { extractNamespace as extractNamespaceFromTag } from '../../shared/lib/tagParsing';
+import { namespaceChipStyle, chipStyleFromRgb } from '../lib/namespaceColors';
+import { extractNamespace as extractNamespaceFromTag } from '../lib/tagParsing';
 import { KbdTooltip } from './KbdTooltip';
 
 interface NamespaceTagChipProps {

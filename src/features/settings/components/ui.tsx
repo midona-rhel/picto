@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react';
 import { Text } from '@mantine/core';
-import styles from '../Settings.module.css';
+import styles from './Settings.module.css';
 
 /* --------------------------------------------------------------------------
    SettingsBlock — section card (panelBlock + blockTitle + blockContent)

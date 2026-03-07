@@ -1,5 +1,5 @@
 .panel {
-  composes: panelGlass from '../../shared/styles/pickerPanel.module.css';
+  composes: panelGlass from '../styles/pickerPanel.module.css';
   --cm-icon-size: 15px;
 
   position: fixed;
@@ -108,11 +108,11 @@
 }
 
 .checkIcon {
-  composes: checkIcon from '../../shared/styles/checkIcon.module.css';
+  composes: checkIcon from '../styles/checkIcon.module.css';
 }
 
 .checkIconChecked {
-  composes: checkIconChecked from '../../shared/styles/checkIcon.module.css';
+  composes: checkIconChecked from '../styles/checkIcon.module.css';
 }
 
 .panel .item svg,
@@ -152,7 +152,7 @@
 }
 
 .submenu {
-  composes: panelGlass from '../../shared/styles/pickerPanel.module.css';
+  composes: panelGlass from '../styles/pickerPanel.module.css';
   --cm-icon-size: 15px;
 
   position: fixed;

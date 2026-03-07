@@ -1,1 +1,1 @@
-export { DynamicIcon } from '../../../components/smart-folders/iconRegistry';
+export { DynamicIcon } from '../../smart-folders/components/iconRegistry';

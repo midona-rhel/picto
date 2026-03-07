@@ -10,16 +10,16 @@ import {
 } from '@mantine/core';
 import { IconCheck, IconKey, IconPlus, IconTrash, IconX } from '@tabler/icons-react';
 import { api, getCurrentWindow } from '#desktop/api';
-import { notifyError, notifySuccess } from '../../shared/lib/notify';
-import { CreateFlowModal, FlowsWorking, type FlowResultEntry } from '../FlowsWorking';
-import { SubscriptionController } from '../../controllers/subscriptionController';
+import { notifyError, notifySuccess } from '../../../shared/lib/notify';
+import { CreateFlowModal, FlowsWorking, type FlowResultEntry } from './FlowsWorking';
+import { SubscriptionController } from '../../../controllers/subscriptionController';
 import type {
   CredentialDomain,
   CredentialHealth,
   CredentialType,
   SubscriptionSiteInfo,
-} from '../../shared/types/api';
-import { TextButton } from '../../shared/components/TextButton';
+} from '../../../shared/types/api';
+import { TextButton } from '../../../shared/components/TextButton';
 import styles from './SubscriptionsWindow.module.css';
 
 type CredentialFormState = {

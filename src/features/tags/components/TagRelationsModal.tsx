@@ -1,14 +1,14 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Loader, Modal } from '@mantine/core';
 import { useMantineColorScheme } from '@mantine/core';
-import { glassModalStyles } from '../shared/styles/glassModal';
+import { glassModalStyles } from '../../../shared/styles/glassModal';
 import Dagre from '@dagrejs/dagre';
 import { api } from '#desktop/api';
-import { getNamespaceColor } from '../shared/lib/namespaceColors';
-import { useNavigationStore } from '../state/navigationStore';
+import { getNamespaceColor } from '../../../shared/lib/namespaceColors';
+import { useNavigationStore } from '../../../state/navigationStore';
 import classes from './TagRelationsModal.module.css';
 
-import type { TagRelation } from '../shared/types/api';
+import type { TagRelation } from '../../../shared/types/api';
 
 interface TagInfo {
   tag_id: number;

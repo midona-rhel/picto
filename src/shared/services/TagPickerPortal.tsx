@@ -4,8 +4,8 @@ import { IconSearch, IconCheck } from '@tabler/icons-react';
 import { api } from '#desktop/api';
 import { getNamespaceColor } from '../lib/namespaceColors';
 import { registerTagPickerOpenHandler, type TagPickerRequest } from './tagPickerService';
-import { OverlayShell } from '../../shared/components/OverlayShell';
-import classes from '../../shared/components/ContextMenu.module.css';
+import { OverlayShell } from '../components/OverlayShell';
+import classes from '../components/ContextMenu.module.css';
 
 interface TagEntry {
   display: string;

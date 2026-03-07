@@ -1,11 +1,8 @@
-import { api, listen, type UnlistenFn } from '#desktop/api';
+import { api } from '#desktop/api';
 
-// Re-export event types from central api types for backwards compatibility.
 export type {
   SubscriptionProgressEvent,
-  SubscriptionStartedEvent,
   SubscriptionFinishedEvent,
-  FlowStartedEvent,
   FlowProgressEvent,
   FlowFinishedEvent,
   SubscriptionSiteInfo,
@@ -17,11 +14,6 @@ export type {
 } from '../shared/types/api';
 import type {
   SubscriptionProgressEvent,
-  SubscriptionStartedEvent,
-  SubscriptionFinishedEvent,
-  FlowStartedEvent,
-  FlowProgressEvent,
-  FlowFinishedEvent,
   SubscriptionSiteInfo,
   CredentialDomain,
   CredentialHealth,
@@ -187,31 +179,4 @@ export const SubscriptionController = {
     return api.flows.stop(args.id);
   },
 
-  // PBI-042: Typed lifecycle event listeners.
-  onStarted(handler: (event: SubscriptionStartedEvent) => void): Promise<UnlistenFn> {
-    return listen<SubscriptionStartedEvent>('subscription-started', (event) => handler(event.payload));
-  },
-
-  onProgress(handler: (event: SubscriptionProgressEvent) => void): Promise<UnlistenFn> {
-    return listen<SubscriptionProgressEvent>('subscription-progress', (event) =>
-      handler(event.payload)
-    );
-  },
-
-  onFinished(handler: (event: SubscriptionFinishedEvent) => void): Promise<UnlistenFn> {
-    return listen<SubscriptionFinishedEvent>('subscription-finished', (event) => handler(event.payload));
-  },
-
-  // PBI-047: Flow lifecycle event listeners.
-  onFlowStarted(handler: (event: FlowStartedEvent) => void): Promise<UnlistenFn> {
-    return listen<FlowStartedEvent>('flow-started', (event) => handler(event.payload));
-  },
-
-  onFlowProgress(handler: (event: FlowProgressEvent) => void): Promise<UnlistenFn> {
-    return listen<FlowProgressEvent>('flow-progress', (event) => handler(event.payload));
-  },
-
-  onFlowFinished(handler: (event: FlowFinishedEvent) => void): Promise<UnlistenFn> {
-    return listen<FlowFinishedEvent>('flow-finished', (event) => handler(event.payload));
-  },
 };

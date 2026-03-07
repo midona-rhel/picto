@@ -1,1 +1,1 @@
-export { DuplicateManager } from '../../../components/DuplicateManager';
+export { DuplicateManager } from './DuplicateManager';

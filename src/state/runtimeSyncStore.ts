@@ -12,11 +12,10 @@ import type {
 } from '../shared/types/generated/runtime-contract';
 import { deriveStaleResources } from '../runtime/resourceInvalidator';
 import { logBestEffortError } from '../shared/lib/asyncOps';
-import {
-  PtrSyncController,
-  type PtrBootstrapStatus,
-  type PtrSyncProgress,
-  type PtrSyncResult,
+import type {
+  PtrBootstrapStatus,
+  PtrSyncProgress,
+  PtrSyncResult,
 } from '../controllers/ptrSyncController';
 import {
   SubscriptionController,
@@ -184,50 +183,8 @@ export const useRuntimeSyncStore = create<RuntimeSyncState>((set, get) => ({
           get().applyTaskRemoved(event.task_id);
         }),
 
-        // --- PTR legacy events ---
-        PtrSyncController.onStarted(() => {
-          set({ ptrSyncing: true, ptrProgress: null, ptrLastResult: null });
-        }),
-        PtrSyncController.onProgress((progress) => {
-          set({ ptrSyncing: true, ptrProgress: progress });
-        }),
-        PtrSyncController.onFinished((result) => {
-          set({ ptrSyncing: false, ptrProgress: null, ptrLastResult: result });
-          void PtrSyncController.getBootstrapStatus()
-            .then((status) => set({ ptrBootstrapStatus: status }))
-            .catch((error) => logBestEffortError('runtimeSyncStore.ptrBootstrapStatus.onFinished', error));
-        }),
-        PtrSyncController.onBootstrapStarted(() => {
-          void PtrSyncController.getBootstrapStatus()
-            .then((status) => set({ ptrBootstrapStatus: status }))
-            .catch((error) => logBestEffortError('runtimeSyncStore.ptrBootstrapStatus.onBootstrapStarted', error));
-        }),
-        PtrSyncController.onBootstrapProgress(() => {
-          void PtrSyncController.getBootstrapStatus()
-            .then((status) => set({ ptrBootstrapStatus: status }))
-            .catch((error) => logBestEffortError('runtimeSyncStore.ptrBootstrapStatus.onBootstrapProgress', error));
-        }),
-        PtrSyncController.onBootstrapFinished(() => {
-          void PtrSyncController.getBootstrapStatus()
-            .then((status) => set({ ptrBootstrapStatus: status }))
-            .catch((error) => logBestEffortError('runtimeSyncStore.ptrBootstrapStatus.onBootstrapFinished', error));
-        }),
-        PtrSyncController.onBootstrapFailed((payload) => {
-          void PtrSyncController.getBootstrapStatus()
-            .then((status) => {
-              set({
-                ptrBootstrapStatus: {
-                  ...status,
-                  running: false,
-                  last_error: payload.error || status.last_error,
-                },
-              });
-            })
-            .catch((error) => logBestEffortError('runtimeSyncStore.ptrBootstrapStatus.onBootstrapFailed', error));
-        }),
-
-        // Subscription & flow state derived from runtime/task_upserted in applyTaskUpsert.
-        // PTR bootstrap status still uses legacy events (task detail not yet packed).
+        // All domain state (subscription, flow, PTR) is derived from
+        // runtime/task_upserted in applyTaskUpsert.
       ]);
       unlisteners = listeners;
 
@@ -413,7 +370,25 @@ export const useRuntimeSyncStore = create<RuntimeSyncState>((set, get) => ({
       // --- Derive PTR sync state from task events ---
       if (task.kind === 'ptr_sync') {
         patch.ptrSyncing = isRunning;
-        if (!isRunning) patch.ptrProgress = null;
+        const detail = task.detail as Record<string, unknown> | undefined;
+        if (isRunning && detail) {
+          // Running detail is PtrSyncProgress
+          patch.ptrProgress = detail as unknown as PtrSyncProgress;
+        } else if (isTerminal && detail) {
+          // Terminal detail is PtrSyncResult
+          patch.ptrProgress = null;
+          patch.ptrLastResult = detail as unknown as PtrSyncResult;
+        } else if (!isRunning) {
+          patch.ptrProgress = null;
+        }
+      }
+
+      // --- Derive PTR bootstrap state from task events ---
+      if (task.kind === 'ptr_bootstrap') {
+        const detail = task.detail as unknown as PtrBootstrapStatus | undefined;
+        if (detail) {
+          patch.ptrBootstrapStatus = detail;
+        }
       }
 
       return patch;
@@ -493,15 +468,9 @@ export const useRuntimeSyncStore = create<RuntimeSyncState>((set, get) => ({
   refreshTaskSnapshots: async () => {
     try {
       const [
-        ptrSyncing,
-        ptrProgress,
-        ptrBootstrapStatus,
         runningSubscriptionIdsRaw,
         runningProgress,
       ] = await Promise.all([
-        PtrSyncController.isSyncing(),
-        PtrSyncController.getSyncProgress(),
-        PtrSyncController.getBootstrapStatus(),
         SubscriptionController.getRunningSubscriptions(),
         SubscriptionController.getRunningSubscriptionProgress().catch((error) => {
           logBestEffortError('runtimeSyncStore.runningProgress', error);
@@ -545,25 +514,38 @@ export const useRuntimeSyncStore = create<RuntimeSyncState>((set, get) => ({
         // Derive flow state from runtime tasks
         const runningFlowIds = new Set<string>();
         const flowProgressById = new Map<string, FlowProgressEvent>();
+        // Derive PTR state from runtime tasks
+        let ptrSyncing = false;
+        let ptrProgress: PtrSyncProgress | null = null;
+        let ptrBootstrapStatus: PtrBootstrapStatus | null = state.ptrBootstrapStatus;
+
         for (const task of state.tasksById.values()) {
-          if (task.kind !== 'flow') continue;
-          const flowId = task.task_id.replace(/^flow:/, '');
-          if (task.status === 'running' || task.status === 'cancelling') {
-            runningFlowIds.add(flowId);
-            if (task.progress) {
-              flowProgressById.set(flowId, {
-                flow_id: flowId,
-                done: task.progress.done,
-                total: task.progress.total,
-                remaining: task.progress.total - task.progress.done,
-              } as FlowProgressEvent);
+          if (task.kind === 'flow') {
+            const flowId = task.task_id.replace(/^flow:/, '');
+            if (task.status === 'running' || task.status === 'cancelling') {
+              runningFlowIds.add(flowId);
+              if (task.progress) {
+                flowProgressById.set(flowId, {
+                  flow_id: flowId,
+                  done: task.progress.done,
+                  total: task.progress.total,
+                  remaining: task.progress.total - task.progress.done,
+                } as FlowProgressEvent);
+              }
             }
+          } else if (task.kind === 'ptr_sync') {
+            if (task.status === 'running' || task.status === 'cancelling') {
+              ptrSyncing = true;
+              if (task.detail) ptrProgress = task.detail as unknown as PtrSyncProgress;
+            }
+          } else if (task.kind === 'ptr_bootstrap') {
+            if (task.detail) ptrBootstrapStatus = task.detail as unknown as PtrBootstrapStatus;
           }
         }
 
         return {
           ptrSyncing,
-          ptrProgress: ptrSyncing ? ptrProgress : null,
+          ptrProgress,
           ptrBootstrapStatus,
           runningSubscriptionIds,
           runningQueryIds,

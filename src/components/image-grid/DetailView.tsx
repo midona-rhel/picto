@@ -3,7 +3,7 @@ import { api } from '#desktop/api';
 import { IconCheck, IconX } from '@tabler/icons-react';
 import { KbdTooltip } from '../../shared/components/KbdTooltip';
 import { MasonryImageItem, isVideoMime, toMasonryItem } from './shared';
-import { VideoPlayer } from '../video/VideoPlayer';
+import { VideoPlayer } from '../../features/viewer/components/VideoPlayer';
 import { StripView } from './StripView';
 import { GridController } from '../../controllers/gridController';
 import { useSettingsStore } from '../../state/settingsStore';

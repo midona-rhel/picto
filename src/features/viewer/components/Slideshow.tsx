@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { IconPlayerPause, IconPlayerPlay, IconChevronLeft, IconChevronRight, IconX } from '@tabler/icons-react';
-import { useGlobalKeydown } from '../shared/hooks/useGlobalKeydown';
-import { mediaFileUrl, mediaThumbnailUrl } from '../shared/lib/mediaUrl';
-import type { MasonryImageItem } from './image-grid/shared';
+import { useGlobalKeydown } from '../../../shared/hooks/useGlobalKeydown';
+import { mediaFileUrl, mediaThumbnailUrl } from '../../../shared/lib/mediaUrl';
+import type { MasonryImageItem } from '../../../components/image-grid/shared';
 import classes from './Slideshow.module.css';
 
 // ── Types ──────────────────────────────────────────────────────────────────

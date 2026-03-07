@@ -4,7 +4,7 @@ import { TagManager } from '#features/tags/components';
 import { DuplicateManager } from '#features/duplicates/components';
 import { ImageGrid } from '#features/grid/components';
 import { useMainViewFlowsState, useMainViewGridActions, useMainViewGridState, useMainViewNavigationState, useMainViewSelectionState } from './MainViewModelContext';
-import styles from '../../App.module.css';
+import styles from '../../../app/App.module.css';
 
 export function MainViewRouter() {
   const navigation = useMainViewNavigationState();

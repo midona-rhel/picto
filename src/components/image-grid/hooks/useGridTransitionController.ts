@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef } from 'react';
-import type { SmartFolderPredicate } from '../../smart-folders/types';
-import { predicateToRust } from '../../smart-folders/types';
+import type { SmartFolderPredicate } from '../../../features/smart-folders/components/types';
+import { predicateToRust } from '../../../features/smart-folders/components/types';
 import type { DetailViewControls, DetailViewState } from '../DetailView';
 import {
   type GridRuntimeAction,

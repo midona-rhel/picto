@@ -8,9 +8,9 @@ import {
   IconPin,
   IconPinFilled,
 } from '@tabler/icons-react';
-import { TagSelectService } from '../tags/tagSelectService';
+import { TagSelectService } from '../../features/tags/components/tagSelectService';
 import { FolderPickerService } from '../../shared/services/folderPickerService';
-import { WindowControls } from '../layout/WindowControls';
+import { WindowControls } from '../../features/layout/components/WindowControls';
 import { KbdTooltip } from '../../shared/components/KbdTooltip';
 import { useNavigationStore } from '../../state/navigationStore';
 import { useFilterStore } from '../../state/filterStore';

@@ -1,1 +1,1 @@
-export type { TagFilterLogicMode } from '../../../components/tags/tagSelectTypes';
+export type { TagFilterLogicMode } from '../components/tagSelectTypes';

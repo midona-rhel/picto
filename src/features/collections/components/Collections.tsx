@@ -19,10 +19,10 @@ import {
   Title,
   SimpleGrid,
 } from "@mantine/core";
-import { glassModalStyles } from '../shared/styles/glassModal';
+import { glassModalStyles } from '../../../shared/styles/glassModal';
 import { useDisclosure } from "@mantine/hooks";
-import { notifySuccess, notifyError } from '../shared/lib/notify';
-import { useNavigationStore } from '../state/navigationStore';
+import { notifySuccess, notifyError } from '../../../shared/lib/notify';
+import { useNavigationStore } from '../../../state/navigationStore';
 import {
   IconPlus,
   IconSearch,
@@ -37,14 +37,14 @@ import {
   IconBooks,
 } from "@tabler/icons-react";
 import { api } from "#desktop/api";
-import { EmptyState } from '../shared/components/EmptyState';
-import { TextButton } from '../shared/components/TextButton';
+import { EmptyState } from '../../../shared/components/EmptyState';
+import { TextButton } from '../../../shared/components/TextButton';
 import styles from './Collections.module.css';
 import {
   MediaCardFrame,
   MediaCardMeta,
   MediaCardOverlay,
-} from '../shared/components/media-card';
+} from '../../../shared/components/media-card';
 
 interface Collection {
   id: number;

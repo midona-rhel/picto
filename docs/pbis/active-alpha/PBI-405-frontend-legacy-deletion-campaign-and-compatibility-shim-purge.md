@@ -3,8 +3,8 @@
 ## Priority
 P1
 
-## Audit Status (2026-03-07)
-Status: **Partially Implemented — Tiers 1 & 2 Complete**
+## Audit Status (2026-03-08)
+Status: **Partially Implemented — Tiers 1, 2 & 3 Complete**
 
 Completed:
 1. Tier 1 deletion wave: 5 shared hooks moved from `src/hooks/` to `src/shared/hooks/`.
@@ -14,11 +14,12 @@ Completed:
    - `fileController.ts` (9 consumers updated)
    - `undoRedoController.ts` (15 consumers updated)
    - `perfController.ts` (1 consumer updated)
-5. All consumer imports updated, builds clean.
+5. Tier 3 feature migration complete: feature-owned component surfaces moved from legacy `src/components/` trees into `src/features/*/components/`.
+6. Legacy `src/components/` is now reduced to the `image-grid/` cluster, which is the Tier 4 holdout tracked by `PBI-408`.
+7. All consumer imports updated for completed waves, builds clean.
 
 Remaining:
-1. Tier 3: feature migration (move components into features/).
-2. Tier 4: image-grid split (blocked on PBI-408).
+1. Tier 4: image-grid split (blocked on PBI-408).
 
 ## Problem
 The project needs a deletion program, not just a migration program. If old paths remain after replacements land, the codebase will keep two ownership models alive indefinitely.

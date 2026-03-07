@@ -1,2 +1,2 @@
-export { CommandPalette } from '../../../components/CommandPalette';
-export type { CommandAction } from '../../../components/CommandPalette';
+export { CommandPalette } from './CommandPalette';
+export type { CommandAction } from './CommandPalette';

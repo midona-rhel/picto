@@ -2,7 +2,7 @@ import { useCallback } from 'react';
 import { prefetchMetadata } from '../metadataPrefetch';
 import { useContextMenu } from '../../../shared/components/ContextMenu';
 import type { MasonryImageItem } from '../shared';
-import type { SmartFolderPredicate } from '../../smart-folders/types';
+import type { SmartFolderPredicate } from '../../../features/smart-folders/components/types';
 import type { GridRuntimeAction, GridRuntimeState, GridViewMode } from '../runtime';
 import type { LayoutItem } from '../VirtualGrid';
 import { buildGridImageContextMenu } from '../../../shared/components/context-actions/imageActions';

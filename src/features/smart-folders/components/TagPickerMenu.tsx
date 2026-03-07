@@ -2,9 +2,9 @@ import { useState, useEffect, useRef, useLayoutEffect, useCallback } from 'react
 import { TextInput } from '@mantine/core';
 import { IconSearch, IconCheck } from '@tabler/icons-react';
 import { api } from '#desktop/api';
-import { getNamespaceColor } from '../../shared/lib/namespaceColors';
-import { OverlayShell } from '../../shared/components/OverlayShell';
-import classes from '../../shared/components/ContextMenu.module.css';
+import { getNamespaceColor } from '../../../shared/lib/namespaceColors';
+import { OverlayShell } from '../../../shared/components/OverlayShell';
+import classes from '../../../shared/components/ContextMenu.module.css';
 
 interface TagPickerMenuProps {
   selected: string[];

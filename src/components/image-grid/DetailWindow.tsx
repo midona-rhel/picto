@@ -14,7 +14,7 @@ import {
   IconFlipHorizontal,
 } from '@tabler/icons-react';
 import { toMasonryItem, isVideoMime, type MasonryImageItem } from './shared';
-import { VideoPlayer } from '../video/VideoPlayer';
+import { VideoPlayer } from '../../features/viewer/components/VideoPlayer';
 import { useSettingsStore } from '../../state/settingsStore';
 import { mediaFileUrl, mediaThumbnailUrl } from '../../shared/lib/mediaUrl';
 import { useImageZoom, type ImageSize, type ZoomState } from './useImageZoom';

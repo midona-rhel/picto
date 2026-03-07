@@ -7,8 +7,8 @@ import {
   IconSortZA,
   IconMoodSmile,
 } from '@tabler/icons-react';
-import { FolderColorPicker } from '../../../components/smart-folders/FolderColorPicker';
-import { FolderIconPicker } from '../../../components/smart-folders/FolderIconPicker';
+import { FolderColorPicker } from '../../../features/smart-folders/components/FolderColorPicker';
+import { FolderIconPicker } from '../../../features/smart-folders/components/FolderIconPicker';
 import type { ContextMenuEntry } from '../ContextMenu';
 
 export type MenuAction = () => void | Promise<void>;

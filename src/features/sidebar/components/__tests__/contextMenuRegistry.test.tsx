@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { ContextMenuEntry } from '../../../shared/components/ContextMenu';
+import type { ContextMenuEntry } from '../../../../shared/components/ContextMenu';
 import {
   buildFolderMultiMenu,
   buildFolderSingleMenu,

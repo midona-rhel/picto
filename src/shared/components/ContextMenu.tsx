@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { useGlobalKeydown } from '../../shared/hooks/useGlobalKeydown';
+import { useGlobalKeydown } from '../hooks/useGlobalKeydown';
 import { createPortal } from 'react-dom';
 import { IconCheck, IconChevronRight, IconSearch } from '@tabler/icons-react';
 import { OverlayShell } from './OverlayShell';

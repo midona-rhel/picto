@@ -1,8 +1,8 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { Modal, Stack, Group, TextInput, Text, Loader, ActionIcon } from '@mantine/core';
-import { glassModalStyles } from '../../shared/styles/glassModal';
+import { glassModalStyles } from '../../../shared/styles/glassModal';
 import { api } from '#desktop/api';
-import { TextButton } from '../../shared/components/TextButton';
+import { TextButton } from '../../../shared/components/TextButton';
 import { RuleGroupEditor } from './RuleGroupEditor';
 import type { SmartFolderPredicate } from './types';
 import type { SmartFolder } from './types';
@@ -10,8 +10,8 @@ import { createDefaultGroup, predicateToRust, folderToRust } from './types';
 import { IconPicker } from './IconPicker';
 import { FolderColorPicker } from './FolderColorPicker';
 import { DynamicIcon, DEFAULT_FOLDER_ICON } from './iconRegistry';
-import { SidebarController } from '../../controllers/sidebarController';
-import { registerUndoAction } from '../../shared/controllers/undoRedoController';
+import { SidebarController } from '../../../controllers/sidebarController';
+import { registerUndoAction } from '../../../shared/controllers/undoRedoController';
 
 interface SmartFolderModalProps {
   opened: boolean;

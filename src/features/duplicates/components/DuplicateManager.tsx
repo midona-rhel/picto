@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Loader, Text, Kbd } from '@mantine/core';
-import { EmptyState } from '../shared/components/EmptyState';
-import { TextButton } from '../shared/components/TextButton';
-import { notifySuccess, notifyError, notifyInfo, notifyWarning } from '../shared/lib/notify';
+import { EmptyState } from '../../../shared/components/EmptyState';
+import { TextButton } from '../../../shared/components/TextButton';
+import { notifySuccess, notifyError, notifyInfo, notifyWarning } from '../../../shared/lib/notify';
 import {
   IconArrowLeft,
   IconArrowRight,
@@ -13,12 +13,12 @@ import {
   IconCheck,
 } from '@tabler/icons-react';
 import { api } from '#desktop/api';
-import { mediaFileUrl, mediaThumbnailUrl } from '../shared/lib/mediaUrl';
-import { isImagePreloaded, queueImageDecode } from './image-grid/useImagePreloader';
-import type { DuplicatePairDto, DuplicatePairsResponse, ResolveDuplicateAction } from '../shared/types/api';
-import { useDomainStore } from '../state/domainStore';
-import { registerUndoAction } from '../shared/controllers/undoRedoController';
-import { useGlobalKeydown } from '../shared/hooks/useGlobalKeydown';
+import { mediaFileUrl, mediaThumbnailUrl } from '../../../shared/lib/mediaUrl';
+import { isImagePreloaded, queueImageDecode } from '../../../components/image-grid/useImagePreloader';
+import type { DuplicatePairDto, DuplicatePairsResponse, ResolveDuplicateAction } from '../../../shared/types/api';
+import { useDomainStore } from '../../../state/domainStore';
+import { registerUndoAction } from '../../../shared/controllers/undoRedoController';
+import { useGlobalKeydown } from '../../../shared/hooks/useGlobalKeydown';
 import styles from './DuplicateManager.module.css';
 
 const PERIODIC_SCAN_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
