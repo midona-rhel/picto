@@ -472,8 +472,7 @@ impl TypedCommand for AddSubscriptionQuery {
             .await?;
         crate::events::emit_mutation(
             "add_subscription_query",
-            crate::events::MutationImpact::new()
-                .domains(&[crate::events::Domain::Subscriptions]),
+            crate::events::MutationImpact::domain_only(crate::events::Domain::Subscriptions),
         );
         Ok(serde_json::to_value(&query).map_err(|e| e.to_string())?)
     }
@@ -492,8 +491,7 @@ impl TypedCommand for DeleteSubscriptionQuery {
         .await?;
         crate::events::emit_mutation(
             "delete_subscription_query",
-            crate::events::MutationImpact::new()
-                .domains(&[crate::events::Domain::Subscriptions]),
+            crate::events::MutationImpact::domain_only(crate::events::Domain::Subscriptions),
         );
         Ok(())
     }
@@ -513,8 +511,7 @@ impl TypedCommand for PauseSubscriptionQuery {
         .await?;
         crate::events::emit_mutation(
             "pause_subscription_query",
-            crate::events::MutationImpact::new()
-                .domains(&[crate::events::Domain::Subscriptions]),
+            crate::events::MutationImpact::domain_only(crate::events::Domain::Subscriptions),
         );
         Ok(())
     }

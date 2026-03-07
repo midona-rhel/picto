@@ -135,20 +135,10 @@ impl TypedCommand for UpdateFileStatus {
             tracing::warn!(error = %err, "failed to refresh folder sidebar projection after status update");
         }
         let scopes = status_mutation_grid_scopes(&folder_ids);
-        let mut impact = crate::events::MutationImpact::new()
-            .domains(&[
-                crate::events::Domain::Files,
-                crate::events::Domain::Sidebar,
-                crate::events::Domain::Folders,
-                crate::events::Domain::SmartFolders,
-                crate::events::Domain::Selection,
-            ])
+        let mut impact = crate::events::MutationImpact::file_status_change(&state.db)
             .file_hashes(vec![input.hash.clone()])
-            .sidebar_tree()
-            .selection_summary()
             .metadata_hashes(vec![input.hash])
-            .grid_scopes(scopes)
-            .sidebar_counts_from(&state.db);
+            .grid_scopes(scopes);
         if !folder_ids.is_empty() {
             impact = impact.folder_ids(folder_ids);
         }
@@ -178,19 +168,9 @@ impl TypedCommand for DeleteFile {
         {
             tracing::warn!(error = %err, "failed to refresh folder sidebar projection after delete_file");
         }
-        let mut impact = crate::events::MutationImpact::new()
-            .domains(&[
-                crate::events::Domain::Files,
-                crate::events::Domain::Sidebar,
-                crate::events::Domain::Folders,
-                crate::events::Domain::SmartFolders,
-                crate::events::Domain::Selection,
-            ])
+        let mut impact = crate::events::MutationImpact::file_status_change(&state.db)
             .file_hashes(vec![input.hash])
-            .sidebar_tree()
-            .selection_summary()
-            .grid_all()
-            .sidebar_counts_from(&state.db);
+            .grid_all();
         if !folder_ids.is_empty() {
             impact = impact.folder_ids(folder_ids);
         }
@@ -226,19 +206,9 @@ impl TypedCommand for DeleteFiles {
             {
                 tracing::warn!(error = %err, "failed to refresh folder sidebar projection after delete_files");
             }
-            let mut impact = crate::events::MutationImpact::new()
-                .domains(&[
-                    crate::events::Domain::Files,
-                    crate::events::Domain::Sidebar,
-                    crate::events::Domain::Folders,
-                    crate::events::Domain::SmartFolders,
-                    crate::events::Domain::Selection,
-                ])
+            let mut impact = crate::events::MutationImpact::file_status_change(&state.db)
                 .file_hashes(hashes_for_impact)
-                .sidebar_tree()
-                .selection_summary()
-                .grid_all()
-                .sidebar_counts_from(&state.db);
+                .grid_all();
             if !folder_ids.is_empty() {
                 impact = impact.folder_ids(folder_ids);
             }
@@ -276,17 +246,8 @@ impl TypedCommand for WipeImageData {
 
         crate::events::emit_mutation(
             "wipe_image_data",
-            crate::events::MutationImpact::new()
-                .domains(&[
-                    crate::events::Domain::Files,
-                    crate::events::Domain::Sidebar,
-                    crate::events::Domain::Folders,
-                    crate::events::Domain::SmartFolders,
-                    crate::events::Domain::Selection,
-                ])
-                .sidebar_tree()
-                .grid_all()
-                .selection_summary(),
+            crate::events::MutationImpact::file_status_change(&state.db)
+                .grid_all(),
         );
         Ok(())
     }
@@ -321,19 +282,9 @@ impl TypedCommand for DeleteFilesSelection {
             {
                 tracing::warn!(error = %err, "failed to refresh folder sidebar projection after delete_files_selection");
             }
-            let mut impact = crate::events::MutationImpact::new()
-                .domains(&[
-                    crate::events::Domain::Files,
-                    crate::events::Domain::Sidebar,
-                    crate::events::Domain::Folders,
-                    crate::events::Domain::SmartFolders,
-                    crate::events::Domain::Selection,
-                ])
+            let mut impact = crate::events::MutationImpact::file_status_change(&state.db)
                 .file_hashes(hashes_clone)
-                .sidebar_tree()
-                .selection_summary()
-                .grid_all()
-                .sidebar_counts_from(&state.db);
+                .grid_all();
             if !folder_ids.is_empty() {
                 impact = impact.folder_ids(folder_ids);
             }
@@ -375,18 +326,8 @@ impl TypedCommand for UpdateFileStatusSelection {
             {
                 tracing::warn!(error = %err, "failed to refresh folder sidebar projection after status batch update");
             }
-            let mut impact = crate::events::MutationImpact::new()
-                .domains(&[
-                    crate::events::Domain::Files,
-                    crate::events::Domain::Sidebar,
-                    crate::events::Domain::Folders,
-                    crate::events::Domain::SmartFolders,
-                    crate::events::Domain::Selection,
-                ])
-                .sidebar_tree()
-                .selection_summary()
-                .grid_scopes(scopes)
-                .sidebar_counts_from(&state.db);
+            let mut impact = crate::events::MutationImpact::file_status_change(&state.db)
+                .grid_scopes(scopes);
             if !folder_ids.is_empty() {
                 impact = impact.folder_ids(folder_ids);
             }

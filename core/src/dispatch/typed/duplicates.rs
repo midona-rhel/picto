@@ -162,8 +162,7 @@ impl TypedCommand for ResolveDuplicatePair {
         .await?;
         crate::events::emit_mutation(
             "resolve_duplicate_pair",
-            crate::events::MutationImpact::new()
-                .domains(&[crate::events::Domain::Files]),
+            crate::events::MutationImpact::domain_only(crate::events::Domain::Files),
         );
         Ok(serde_json::to_value(&result).map_err(|e| e.to_string())?)
     }

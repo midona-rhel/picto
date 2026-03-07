@@ -490,15 +490,7 @@ impl TypedCommand for MergeTags {
         }
         crate::events::emit_mutation(
             "merge_tags",
-            crate::events::MutationImpact::new()
-                .domains(&[
-                    crate::events::Domain::Tags,
-                    crate::events::Domain::Sidebar,
-                    crate::events::Domain::SmartFolders,
-                ])
-                .sidebar_tree()
-                .grid_all()
-                .selection_summary(),
+            crate::events::MutationImpact::tag_structure_change(),
         );
         Ok(())
     }
@@ -575,15 +567,7 @@ impl TypedCommand for DeleteTag {
         let affected_file_ids = state.db.delete_tag_by_id(input.tag_id).await?;
         crate::events::emit_mutation(
             "delete_tag",
-            crate::events::MutationImpact::new()
-                .domains(&[
-                    crate::events::Domain::Tags,
-                    crate::events::Domain::Sidebar,
-                    crate::events::Domain::SmartFolders,
-                ])
-                .sidebar_tree()
-                .grid_all()
-                .selection_summary(),
+            crate::events::MutationImpact::tag_structure_change(),
         );
         Ok(serde_json::json!({
             "affected_files": affected_file_ids.len(),
@@ -601,15 +585,7 @@ impl TypedCommand for NormalizeIngestedNamespaces {
         if stats.tags_rewritten > 0 {
             crate::events::emit_mutation(
                 "normalize_ingested_namespaces",
-                crate::events::MutationImpact::new()
-                    .domains(&[
-                        crate::events::Domain::Tags,
-                        crate::events::Domain::Sidebar,
-                        crate::events::Domain::SmartFolders,
-                    ])
-                    .sidebar_tree()
-                    .grid_all()
-                    .selection_summary(),
+                crate::events::MutationImpact::tag_structure_change(),
             );
         }
         Ok(serde_json::json!({

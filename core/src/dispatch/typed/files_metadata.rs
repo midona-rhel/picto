@@ -220,13 +220,8 @@ impl TypedCommand for IncrementViewCount {
         .await?;
         crate::events::emit_mutation(
             "increment_view_count",
-            crate::events::MutationImpact::new()
-                .domains(&[
-                    crate::events::Domain::Files,
-                    crate::events::Domain::Sidebar,
-                ])
-                .metadata_hashes(vec![hash_clone.clone()])
-                .file_hashes(vec![hash_clone])
+            crate::events::MutationImpact::file_metadata(hash_clone)
+                .domains(&[crate::events::Domain::Files, crate::events::Domain::Sidebar])
                 .sidebar_tree()
                 .grid_scopes(vec!["system:recently_viewed".to_string()]),
         );
