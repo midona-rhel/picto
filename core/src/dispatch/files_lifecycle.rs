@@ -43,7 +43,7 @@ pub async fn handle(
             match result {
                 Ok(ref r) => {
                     if !r.imported.is_empty() {
-                        crate::events::emit_state_changed(
+                        crate::events::emit_mutation(
                             "import_files",
                             crate::events::MutationImpact::file_lifecycle(&state.db)
                                 .grid_scopes(vec!["system:all".into(), "system:inbox".into()]),
@@ -108,7 +108,7 @@ pub async fn handle(
                     if !folder_ids.is_empty() {
                         impact = impact.folder_ids(folder_ids);
                     }
-                    crate::events::emit_state_changed("update_file_status", impact);
+                    crate::events::emit_mutation("update_file_status", impact);
                     Some(ok_null())
                 }
                 Err(e) => Some(Err(e)),
@@ -150,7 +150,7 @@ pub async fn handle(
                     if !folder_ids.is_empty() {
                         impact = impact.folder_ids(folder_ids);
                     }
-                    crate::events::emit_state_changed("delete_file", impact);
+                    crate::events::emit_mutation("delete_file", impact);
                     Some(ok_null())
                 }
                 Err(e) => Some(Err(e)),
@@ -195,7 +195,7 @@ pub async fn handle(
                         if !folder_ids.is_empty() {
                             impact = impact.folder_ids(folder_ids);
                         }
-                        crate::events::emit_state_changed("delete_files", impact);
+                        crate::events::emit_mutation("delete_files", impact);
                     }
                     Some(to_json(&count))
                 }
@@ -254,7 +254,7 @@ pub async fn handle(
                         if !folder_ids.is_empty() {
                             impact = impact.folder_ids(folder_ids);
                         }
-                        crate::events::emit_state_changed("delete_files_selection", impact);
+                        crate::events::emit_mutation("delete_files_selection", impact);
                     }
                     Some(to_json(&count))
                 }
@@ -320,7 +320,7 @@ pub async fn handle(
                 if !folder_ids.is_empty() {
                     impact = impact.folder_ids(folder_ids);
                 }
-                crate::events::emit_state_changed("update_file_status_selection", impact);
+                crate::events::emit_mutation("update_file_status_selection", impact);
             }
             Some(to_json(&count))
         }
@@ -332,7 +332,7 @@ pub async fn handle(
             .await;
             match result {
                 Ok(()) => {
-                    crate::events::emit_state_changed(
+                    crate::events::emit_mutation(
                         "wipe_image_data",
                         crate::events::MutationImpact::new()
                             .domains(&[

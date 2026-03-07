@@ -18,7 +18,7 @@ pub async fn handle(
             if let Err(e) = state.db.reorder_smart_folders(moves).await {
                 return Some(Err(e));
             }
-            crate::events::emit_state_changed(
+            crate::events::emit_mutation(
                 "reorder_smart_folders",
                 crate::events::MutationImpact::sidebar(crate::events::Domain::SmartFolders),
             );
@@ -38,7 +38,7 @@ pub async fn handle(
                     Ok(v) => v,
                     Err(e) => return Some(Err(e)),
                 };
-            crate::events::emit_state_changed(
+            crate::events::emit_mutation(
                 "create_smart_folder",
                 crate::events::MutationImpact::sidebar(crate::events::Domain::SmartFolders),
             );
@@ -76,7 +76,7 @@ pub async fn handle(
                     .grid_scopes(vec![format!("smart:{}", sf_id)])
                     .selection_summary();
             }
-            crate::events::emit_state_changed("update_smart_folder", impact);
+            crate::events::emit_mutation("update_smart_folder", impact);
             Some(to_json(&result))
         }
         "delete_smart_folder" => {
@@ -93,7 +93,7 @@ pub async fn handle(
             {
                 return Some(Err(e));
             }
-            crate::events::emit_state_changed(
+            crate::events::emit_mutation(
                 "delete_smart_folder",
                 crate::events::MutationImpact::sidebar(crate::events::Domain::SmartFolders)
                     .smart_folder_ids(vec![sf_id])

@@ -73,13 +73,6 @@
   flex-shrink: 0;
 }
 
-.separator {
-  width: 1px;
-  height: 20px;
-  background: var(--color-border-secondary);
-  margin: 0 6px;
-}
-
 .icBtn {
   composes: icBtn from '../../styles/iconButton.module.css';
   -webkit-app-region: no-drag;
@@ -119,12 +112,6 @@
 .zoomRatio:hover {
   background: var(--color-dark-4);
   color: var(--color-text-primary);
-}
-
-.navigator_toolbar {
-  display: flex;
-  align-items: center;
-  gap: 0;
 }
 
 .container {

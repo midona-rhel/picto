@@ -16,8 +16,6 @@ pub mod colors;
 pub mod ffmpeg;
 pub mod ffmpeg_path;
 pub mod gallery_dl_path;
-#[allow(dead_code)]
-pub mod image_metadata;
 pub mod office;
 pub mod pdf;
 pub mod specialty;

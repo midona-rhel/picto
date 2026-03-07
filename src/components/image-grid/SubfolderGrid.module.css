@@ -48,19 +48,6 @@
   position: relative;
 }
 
-.listEmpty {
-  display: block;
-  min-height: 64px;
-}
-
-.emptyHint {
-  color: var(--color-text-tertiary, var(--color-text-secondary));
-  font-size: var(--font-size-2xs);
-  line-height: var(--line-height-normal);
-  padding: 8px 4px 6px;
-  user-select: none;
-}
-
 /* Folder tile */
 
 .tile {

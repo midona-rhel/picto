@@ -794,34 +794,6 @@ pub fn remove_collection_members_by_hashes(
     Ok(removed)
 }
 
-/// Detach an entity from its parent collection (if any).
-/// Returns the former parent collection_id if detached, or None.
-pub fn detach_from_collection(conn: &Connection, entity_id: i64) -> rusqlite::Result<Option<i64>> {
-    let parent: Option<i64> = conn
-        .query_row(
-            "SELECT parent_collection_id FROM media_entity WHERE entity_id = ?1",
-            [entity_id],
-            |row| row.get(0),
-        )
-        .optional()?
-        .flatten();
-
-    if let Some(parent_id) = parent {
-        conn.execute(
-            "UPDATE media_entity
-             SET parent_collection_id = NULL,
-                 collection_ordinal = NULL,
-                 updated_at = CURRENT_TIMESTAMP
-             WHERE entity_id = ?1",
-            [entity_id],
-        )?;
-        sync_collection_aggregate_metadata(conn, parent_id)?;
-        Ok(Some(parent_id))
-    } else {
-        Ok(None)
-    }
-}
-
 /// Repoint an entity's file reference to a different file.
 /// Used during duplicate resolution: when a collection member's file is a duplicate,
 /// the entity keeps its place in the collection but references the winner's file instead.

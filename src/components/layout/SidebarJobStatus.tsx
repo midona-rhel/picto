@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { IconAlertTriangle, IconCheck, IconCloud, IconDownload } from '@tabler/icons-react';
 
 import type { PtrBootstrapStatus, PtrSyncProgress } from '../../controllers/ptrSyncController';
-import { useTaskRuntimeStore } from '../../stores/taskRuntimeStore';
+import { useRuntimeSyncStore } from '../../stores/runtimeSyncStore';
 import st from './SidebarJobStatus.module.css';
 
 type PtrState =
@@ -18,11 +18,11 @@ type PtrBootstrapState =
   | { phase: 'done'; success: false; error: string };
 
 export function SidebarJobStatus() {
-  const ptrSyncing = useTaskRuntimeStore((s) => s.ptrSyncing);
-  const ptrProgress = useTaskRuntimeStore((s) => s.ptrProgress);
-  const ptrLastResult = useTaskRuntimeStore((s) => s.ptrLastResult);
-  const ptrBootstrapStatus = useTaskRuntimeStore((s) => s.ptrBootstrapStatus);
-  const subscriptionProgressById = useTaskRuntimeStore((s) => s.subscriptionProgressById);
+  const ptrSyncing = useRuntimeSyncStore((s) => s.ptrSyncing);
+  const ptrProgress = useRuntimeSyncStore((s) => s.ptrProgress);
+  const ptrLastResult = useRuntimeSyncStore((s) => s.ptrLastResult);
+  const ptrBootstrapStatus = useRuntimeSyncStore((s) => s.ptrBootstrapStatus);
+  const subscriptionProgressById = useRuntimeSyncStore((s) => s.subscriptionProgressById);
 
   const [ptrState, setPtrState] = useState<PtrState>({ phase: 'idle' });
   const [ptrBootstrapState, setPtrBootstrapState] = useState<PtrBootstrapState>({ phase: 'idle' });

@@ -8,6 +8,8 @@ import type {
   SubscriptionStartedEvent,
 } from './core';
 
+import type { MutationReceipt, RuntimeTask } from '../generated/runtime-contract';
+
 // ─── Event Payloads ─────────────────────────────────────────────────────────
 // Typed interfaces for all backend events. Single source of truth — all
 // controllers and stores should import event types from here.
@@ -174,6 +176,11 @@ export interface CoreRuntimeEventPayloadMap {
   'file-imported': FileImportedEvent;
   'open-detail-window': OpenDetailWindowEvent;
   'duplicate-auto-merge-finished': DuplicateAutoMergeFinishedEvent;
+
+  // Runtime contract (new)
+  'runtime/mutation_committed': MutationReceipt;
+  'runtime/task_upserted': RuntimeTask;
+  'runtime/task_removed': { task_id: string };
 }
 
 /**

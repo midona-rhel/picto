@@ -245,18 +245,18 @@ async fn event_emit_empty_sends_null_payload() {
 }
 
 #[tokio::test]
-async fn state_changed_emits_sequence_numbers() {
+async fn mutation_receipt_emits_sequence_numbers() {
     let harness = TestHarness::new().await;
     harness.drain_events();
 
-    events::emit_state_changed(
+    events::emit_mutation(
         "test_origin",
         events::MutationImpact {
             domains: vec![events::Domain::Files],
             ..Default::default()
         },
     );
-    events::emit_state_changed(
+    events::emit_mutation(
         "test_origin_2",
         events::MutationImpact {
             domains: vec![events::Domain::Tags],
@@ -264,11 +264,11 @@ async fn state_changed_emits_sequence_numbers() {
         },
     );
 
-    let state_evts = harness.find_events("state-changed");
-    assert!(state_evts.len() >= 2);
+    let evts = harness.find_events("runtime/mutation_committed");
+    assert!(evts.len() >= 2);
 
-    let first: serde_json::Value = serde_json::from_str(&state_evts[0].1).unwrap();
-    let second: serde_json::Value = serde_json::from_str(&state_evts[1].1).unwrap();
+    let first: serde_json::Value = serde_json::from_str(&evts[0].1).unwrap();
+    let second: serde_json::Value = serde_json::from_str(&evts[1].1).unwrap();
     let seq1 = first["seq"].as_u64().unwrap();
     let seq2 = second["seq"].as_u64().unwrap();
     assert!(
@@ -278,11 +278,11 @@ async fn state_changed_emits_sequence_numbers() {
 }
 
 #[tokio::test]
-async fn state_changed_emits_sidebar_invalidated_when_flagged() {
+async fn mutation_receipt_includes_sidebar_tree_invalidation() {
     let harness = TestHarness::new().await;
     harness.drain_events();
 
-    events::emit_state_changed(
+    events::emit_mutation(
         "test_sidebar",
         events::MutationImpact {
             domains: vec![events::Domain::Sidebar],
@@ -294,18 +294,19 @@ async fn state_changed_emits_sidebar_invalidated_when_flagged() {
         },
     );
 
-    let sidebar_evts = harness.find_events("sidebar-invalidated");
-    assert_eq!(sidebar_evts.len(), 1);
-    let payload: serde_json::Value = serde_json::from_str(&sidebar_evts[0].1).unwrap();
-    assert_eq!(payload["reason"], "test_sidebar");
+    let evts = harness.find_events("runtime/mutation_committed");
+    assert!(!evts.is_empty());
+    let payload: serde_json::Value = serde_json::from_str(&evts.last().unwrap().1).unwrap();
+    assert_eq!(payload["origin_command"], "test_sidebar");
+    assert_eq!(payload["invalidate"]["sidebar_tree"], true);
 }
 
 #[tokio::test]
-async fn state_changed_emits_grid_snapshot_invalidated_per_scope() {
+async fn mutation_receipt_includes_grid_scopes() {
     let harness = TestHarness::new().await;
     harness.drain_events();
 
-    events::emit_state_changed(
+    events::emit_mutation(
         "test_grid",
         events::MutationImpact {
             domains: vec![events::Domain::Files],
@@ -317,16 +318,15 @@ async fn state_changed_emits_grid_snapshot_invalidated_per_scope() {
         },
     );
 
-    let grid_evts = harness.find_events("grid-snapshot-invalidated");
-    assert_eq!(grid_evts.len(), 2);
-    let p1: serde_json::Value = serde_json::from_str(&grid_evts[0].1).unwrap();
-    let p2: serde_json::Value = serde_json::from_str(&grid_evts[1].1).unwrap();
-    let scopes: Vec<&str> = vec![
-        p1["scope_key"].as_str().unwrap(),
-        p2["scope_key"].as_str().unwrap(),
-    ];
-    assert!(scopes.contains(&"scope:a"));
-    assert!(scopes.contains(&"scope:b"));
+    let evts = harness.find_events("runtime/mutation_committed");
+    assert!(!evts.is_empty());
+    let payload: serde_json::Value = serde_json::from_str(&evts.last().unwrap().1).unwrap();
+    let scopes = payload["invalidate"]["grid_scopes"]
+        .as_array()
+        .expect("grid_scopes should be an array");
+    let scope_strs: Vec<&str> = scopes.iter().map(|v| v.as_str().unwrap()).collect();
+    assert!(scope_strs.contains(&"scope:a"));
+    assert!(scope_strs.contains(&"scope:b"));
 }
 
 // ---------------------------------------------------------------------------
@@ -627,6 +627,7 @@ async fn grid_page_slim_folder_filters_support_any_all_and_reject() {
             parent_id: None,
             icon: None,
             color: None,
+            auto_tags: vec![],
         })
         .await
         .expect("create folder A");
@@ -637,6 +638,7 @@ async fn grid_page_slim_folder_filters_support_any_all_and_reject() {
             parent_id: None,
             icon: None,
             color: None,
+            auto_tags: vec![],
         })
         .await
         .expect("create folder B");
@@ -994,9 +996,6 @@ async fn grid_query_plan_uses_composite_index() {
 fn event_names_are_kebab_case() {
     use picto_core::events::event_names;
     let names = [
-        event_names::STATE_CHANGED,
-        event_names::SIDEBAR_INVALIDATED,
-        event_names::GRID_SNAPSHOT_INVALIDATED,
         event_names::SUBSCRIPTION_STARTED,
         event_names::SUBSCRIPTION_PROGRESS,
         event_names::SUBSCRIPTION_FINISHED,
@@ -1021,6 +1020,20 @@ fn event_names_are_kebab_case() {
         assert!(
             name.chars().all(|c| c.is_ascii_lowercase() || c == '-'),
             "Event name '{}' is not kebab-case",
+            name
+        );
+    }
+
+    // Runtime contract events use slash-delimited namespacing
+    let runtime_names = [
+        event_names::RUNTIME_MUTATION_COMMITTED,
+        event_names::RUNTIME_TASK_UPSERTED,
+        event_names::RUNTIME_TASK_REMOVED,
+    ];
+    for name in runtime_names {
+        assert!(
+            name.starts_with("runtime/"),
+            "Runtime event '{}' should be namespaced under runtime/",
             name
         );
     }
@@ -1196,34 +1209,44 @@ fn ptr_bootstrap_progress_union_shape() {
 }
 
 #[test]
-fn state_changed_event_contract() {
-    use picto_core::events::{Domain, Invalidate, StateChangedEvent};
-    let event = StateChangedEvent {
+fn mutation_receipt_event_contract() {
+    use picto_core::events::Domain;
+    use picto_core::runtime_contract::mutation::{
+        DerivedInvalidation, MutationFacts, MutationReceipt,
+    };
+    let receipt = MutationReceipt {
         seq: 1,
         ts: "2024-01-01T00:00:00Z".into(),
         origin_command: "add_tags".into(),
-        domains: vec![Domain::Tags, Domain::Files],
-        file_hashes: Some(vec!["abc123".into()]),
-        folder_ids: None,
-        smart_folder_ids: None,
-        invalidate: Invalidate {
+        facts: MutationFacts {
+            domains: vec![Domain::Tags, Domain::Files],
+            file_hashes: Some(vec!["abc123".into()]),
+            folder_ids: None,
+            smart_folder_ids: None,
+            compiler_batch_done: None,
+        },
+        invalidate: DerivedInvalidation {
             sidebar_tree: Some(true),
             grid_scopes: Some(vec!["system:all".into()]),
             ..Default::default()
         },
-        compiler_batch_done: None,
         sidebar_counts: None,
     };
-    let json: serde_json::Value = serde_json::to_value(&event).unwrap();
+    let json: serde_json::Value = serde_json::to_value(&receipt).unwrap();
     assert_eq!(json["seq"], 1);
     assert_eq!(json["origin_command"], "add_tags");
-    assert!(json["domains"].is_array());
-    assert_eq!(json["domains"].as_array().unwrap().len(), 2);
-    assert_eq!(json["file_hashes"][0], "abc123");
+    assert!(json["facts"]["domains"].is_array());
+    assert_eq!(json["facts"]["domains"].as_array().unwrap().len(), 2);
+    assert_eq!(json["facts"]["file_hashes"][0], "abc123");
     assert_eq!(json["invalidate"]["sidebar_tree"], true);
     assert_eq!(json["invalidate"]["grid_scopes"][0], "system:all");
-    assert!(json.get("folder_ids").is_none());
-    assert!(json.get("compiler_batch_done").is_none());
+    assert!(json.get("facts").unwrap().get("folder_ids").is_none());
+    assert!(
+        json.get("facts")
+            .unwrap()
+            .get("compiler_batch_done")
+            .is_none()
+    );
 }
 
 #[test]
@@ -1566,6 +1589,7 @@ async fn folder_controller_updates_sidebar_projection_immediately() {
         Some("Child Renamed".to_string()),
         Some("IconStar".to_string()),
         Some("#00ff00".to_string()),
+        None,
     )
     .await
     .expect("update folder visuals");
@@ -1595,6 +1619,7 @@ async fn folder_controller_updates_sidebar_projection_immediately() {
         None,
         Some(String::new()),
         Some(String::new()),
+        None,
     )
     .await
     .expect("clear folder visuals");
@@ -1713,18 +1738,19 @@ fn slo_pass_fail_with_samples() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-async fn file_lifecycle_preset_emits_correct_events() {
+async fn file_lifecycle_preset_emits_mutation_receipt() {
     let harness = TestHarness::new().await;
     harness.drain_events();
 
     let impact = events::MutationImpact::file_lifecycle(&harness.db);
-    events::emit_state_changed("test_file_lifecycle", impact);
+    events::emit_mutation("test_file_lifecycle", impact);
 
-    // 1. state-changed should have domains containing "files"
-    let state_evts = harness.find_events("state-changed");
-    assert!(!state_evts.is_empty(), "should emit state-changed");
-    let payload: serde_json::Value = serde_json::from_str(&state_evts.last().unwrap().1).unwrap();
-    let domains: Vec<String> = payload["domains"]
+    let evts = harness.find_events("runtime/mutation_committed");
+    assert!(!evts.is_empty(), "should emit runtime/mutation_committed");
+    let payload: serde_json::Value = serde_json::from_str(&evts.last().unwrap().1).unwrap();
+
+    // 1. facts.domains should contain "files"
+    let domains: Vec<String> = payload["facts"]["domains"]
         .as_array()
         .unwrap()
         .iter()
@@ -1735,21 +1761,23 @@ async fn file_lifecycle_preset_emits_correct_events() {
         "should include files domain"
     );
 
-    // 2. sidebar-invalidated should fire (file_lifecycle sets sidebar_tree)
-    let sidebar_evts = harness.find_events("sidebar-invalidated");
-    assert!(
-        !sidebar_evts.is_empty(),
-        "file_lifecycle should trigger sidebar-invalidated"
+    // 2. invalidate.sidebar_tree should be true
+    assert_eq!(
+        payload["invalidate"]["sidebar_tree"], true,
+        "file_lifecycle should set sidebar_tree"
     );
 
-    // 3. grid-snapshot-invalidated should fire for system:all
-    let grid_evts = harness.find_events("grid-snapshot-invalidated");
+    // 3. invalidate.grid_scopes should contain system:all
+    let grid_scopes: Vec<String> = payload["invalidate"]["grid_scopes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap().to_string())
+        .collect();
     assert!(
-        !grid_evts.is_empty(),
-        "file_lifecycle should trigger grid-snapshot-invalidated"
+        grid_scopes.contains(&"system:all".to_string()),
+        "file_lifecycle should include system:all grid scope"
     );
-    let grid_payload: serde_json::Value = serde_json::from_str(&grid_evts[0].1).unwrap();
-    assert_eq!(grid_payload["scope_key"], "system:all");
 
     // 4. sidebar_counts should be present
     assert!(
@@ -1759,84 +1787,77 @@ async fn file_lifecycle_preset_emits_correct_events() {
 }
 
 #[tokio::test]
-async fn folder_sidebar_preset_emits_sidebar_only() {
+async fn folder_sidebar_preset_emits_sidebar_receipt() {
     let harness = TestHarness::new().await;
     harness.drain_events();
 
     let impact = events::MutationImpact::sidebar(events::Domain::Folders);
-    events::emit_state_changed("test_folder_sidebar", impact);
+    events::emit_mutation("test_folder_sidebar", impact);
 
-    // 1. state-changed should have domains containing "folders" and "sidebar"
-    let state_evts = harness.find_events("state-changed");
-    assert!(!state_evts.is_empty());
-    let payload: serde_json::Value = serde_json::from_str(&state_evts.last().unwrap().1).unwrap();
-    let domains: Vec<String> = payload["domains"]
+    let evts = harness.find_events("runtime/mutation_committed");
+    assert!(!evts.is_empty());
+    let payload: serde_json::Value = serde_json::from_str(&evts.last().unwrap().1).unwrap();
+
+    // 1. facts.domains should contain "folders"
+    let domains: Vec<String> = payload["facts"]["domains"]
         .as_array()
         .unwrap()
         .iter()
         .map(|v| v.as_str().unwrap().to_string())
         .collect();
     assert!(domains.contains(&"folders".to_string()));
-    assert!(domains.contains(&"sidebar".to_string()));
 
-    // 2. sidebar-invalidated should fire
-    let sidebar_evts = harness.find_events("sidebar-invalidated");
-    assert!(
-        !sidebar_evts.is_empty(),
-        "sidebar preset should trigger sidebar-invalidated"
+    // 2. invalidate.sidebar_tree should be true
+    assert_eq!(
+        payload["invalidate"]["sidebar_tree"], true,
+        "sidebar preset should set sidebar_tree"
     );
 
-    // 3. grid-snapshot-invalidated should NOT fire (sidebar preset doesn't set grid_scopes)
-    let grid_evts = harness.find_events("grid-snapshot-invalidated");
+    // 3. invalidate.grid_scopes should be absent or null (sidebar preset doesn't set grid_scopes)
+    let grid_scopes = &payload["invalidate"]["grid_scopes"];
     assert!(
-        grid_evts.is_empty(),
-        "sidebar preset should NOT trigger grid-snapshot-invalidated"
+        grid_scopes.is_null(),
+        "sidebar preset should NOT set grid_scopes"
     );
 }
 
 #[tokio::test]
-async fn batch_tags_preset_no_duplicate_events() {
+async fn batch_tags_preset_emits_single_receipt() {
     let harness = TestHarness::new().await;
     harness.drain_events();
 
     let impact = events::MutationImpact::batch_tags();
-    events::emit_state_changed("test_batch_tags", impact);
+    events::emit_mutation("test_batch_tags", impact);
 
-    // Exactly 1 state-changed
-    let state_evts = harness.find_events("state-changed");
-    let own_evts: Vec<_> = state_evts
+    // Exactly 1 mutation receipt for this origin
+    let evts = harness.find_events("runtime/mutation_committed");
+    let own_evts: Vec<_> = evts
         .iter()
         .filter(|(_, p)| p.contains("test_batch_tags"))
         .collect();
     assert_eq!(
         own_evts.len(),
         1,
-        "should emit exactly 1 state-changed for batch_tags"
+        "should emit exactly 1 mutation receipt for batch_tags"
+    );
+    let payload: serde_json::Value = serde_json::from_str(&own_evts[0].1).unwrap();
+
+    // sidebar_tree should NOT be set (batch_tags doesn't set sidebar_tree)
+    let sidebar_tree = &payload["invalidate"]["sidebar_tree"];
+    assert!(
+        sidebar_tree.is_null(),
+        "batch_tags should NOT set sidebar_tree"
     );
 
-    // No sidebar-invalidated (batch_tags does NOT set sidebar_tree)
-    let sidebar_evts = harness.find_events("sidebar-invalidated");
-    let own_sidebar: Vec<_> = sidebar_evts
+    // grid_scopes should contain system:all
+    let grid_scopes: Vec<String> = payload["invalidate"]["grid_scopes"]
+        .as_array()
+        .unwrap()
         .iter()
-        .filter(|(_, p)| p.contains("test_batch_tags"))
+        .map(|v| v.as_str().unwrap().to_string())
         .collect();
-    assert_eq!(
-        own_sidebar.len(),
-        0,
-        "batch_tags should NOT trigger sidebar-invalidated"
+    assert!(
+        grid_scopes.contains(&"system:all".to_string()),
+        "batch_tags should include system:all grid scope"
     );
-
-    // Exactly 1 grid-snapshot-invalidated for system:all
-    let grid_evts = harness.find_events("grid-snapshot-invalidated");
-    let own_grid: Vec<_> = grid_evts
-        .iter()
-        .filter(|(_, p)| p.contains("test_batch_tags"))
-        .collect();
-    assert_eq!(
-        own_grid.len(),
-        1,
-        "should emit exactly 1 grid-snapshot-invalidated"
-    );
-    let grid_payload: serde_json::Value = serde_json::from_str(&own_grid[0].1).unwrap();
-    assert_eq!(grid_payload["scope_key"], "system:all");
 }

@@ -56,23 +56,10 @@
   z-index: 0;
 }
 
-.fadeIn {
-  composes: imgFill;
-  opacity: 0;
-}
-
 .thumbLayer {
   composes: imgFill;
   opacity: 0;
   z-index: 1;
-}
-
-.layerVisible {
-  opacity: 1;
-}
-
-.layerHidden {
-  opacity: 0;
 }
 
 /* Overlay badges */
@@ -106,20 +93,6 @@
   composes: overlayBadge;
   top: 5px;
   right: 5px;
-}
-
-/* Hover overlay */
-
-.hoverOverlay {
-  position: absolute;
-  inset: 0;
-  opacity: 0;
-  transition: opacity var(--transition-fast);
-  pointer-events: none;
-}
-
-.tile:hover .hoverOverlay {
-  opacity: 1;
 }
 
 /* Zoom/peek button */
@@ -163,15 +136,9 @@
   transition: none !important;
 }
 
-:global([data-perf-mode='1']) .fadeIn,
 :global([data-perf-mode='1']) .thumbLayer,
 :global([data-perf-mode='1']) .blurhashLayer {
   transition: none !important;
-}
-
-:global([data-perf-mode='1']) .hoverOverlay {
-  transition: none !important;
-  opacity: 0 !important;
 }
 
 :global([data-perf-mode='1']) .zoomBtn {

@@ -8,9 +8,12 @@ import { registerCacheCleanup } from '../utils/cacheCleanup';
 import { useNavigationStore, type ViewType } from '../stores/navigationStore';
 import { initSettingsStore, themeToColorScheme, useSettingsStore } from '../stores/settingsStore';
 import { SidebarController } from '../controllers/sidebarController';
+import { SelectionController } from '../controllers/selectionController';
 import { performRedo, performUndo } from '../controllers/undoRedoController';
-import { setupEventBridge, teardownEventBridge } from '../stores/eventBridge';
-import { useTaskRuntimeStore } from '../stores/taskRuntimeStore';
+import { useRuntimeSyncStore } from '../stores/runtimeSyncStore';
+import { useCacheStore } from '../stores/cacheStore';
+import { useLibraryStore } from '../stores/libraryStore';
+import { startAllRefreshers, stopAllRefreshers } from '../runtime/refresherOrchestrator';
 import { runBestEffort } from '../lib/asyncOps';
 import { useGlobalKeydown } from '../hooks/useGlobalKeydown';
 
@@ -79,11 +82,27 @@ export function useAppBootstrap(): AppBootstrap {
 
   useEffect(() => {
     void SidebarController.fetchInitialTree();
-    setupEventBridge();
-    void useTaskRuntimeStore.getState().ensureInitialized();
+    void useRuntimeSyncStore.getState().ensureInitialized();
+    startAllRefreshers();
+
+    // Library lifecycle listeners (previously in eventBridge)
+    const libraryListeners = Promise.all([
+      listen('library-switching', () => {
+        useLibraryStore.getState().setSwitching(true);
+      }),
+      listen('library-switched', () => {
+        useCacheStore.getState().invalidateAll();
+        useCacheStore.getState().bumpGridRefresh();
+        SidebarController.requestRefresh();
+        SelectionController.invalidateSummary();
+        useLibraryStore.getState().setSwitching(false);
+        useLibraryStore.getState().loadConfig();
+      }),
+    ]);
     return () => {
-      teardownEventBridge();
-      useTaskRuntimeStore.getState().teardown();
+      stopAllRefreshers();
+      useRuntimeSyncStore.getState().teardown();
+      runBestEffort('cleanup.libraryListeners', libraryListeners.then((fns) => { for (const fn of fns) fn(); }));
     };
   }, []);
 

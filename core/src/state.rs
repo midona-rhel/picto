@@ -183,7 +183,7 @@ pub async fn open_library(library_root: PathBuf) -> Result<Arc<AppState>, String
                 if result.smart_folders_rebuilt {
                     domains.push(crate::events::Domain::SmartFolders);
                 }
-                crate::events::emit_state_changed(
+                crate::events::emit_mutation(
                     "compiler_batch_done",
                     crate::events::MutationImpact {
                         domains,
@@ -352,6 +352,8 @@ async fn close_library_inner() {
         };
         guard.take()
     };
+
+    crate::runtime_state::reset();
 
     if let Some(state) = old_state {
         tracing::info!(path = %state.library_root.display(), "Closing library");

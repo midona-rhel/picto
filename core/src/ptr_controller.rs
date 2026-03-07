@@ -10,6 +10,7 @@ use crate::events;
 use crate::ptr_client::PtrClient;
 use crate::ptr_sync::PtrSyncEngine;
 use crate::ptr_types::PtrSyncProgress;
+use crate::runtime_contract::task::{RuntimeTask, TaskKind, TaskProgress, TaskStatus};
 use crate::settings::SettingsStore;
 use crate::sqlite::CompilerEvent;
 use crate::sqlite_ptr::tags::PtrResolvedTag;
@@ -150,6 +151,20 @@ impl PtrController {
             }
 
             events::emit_empty(events::event_names::PTR_SYNC_STARTED);
+            {
+                let now = chrono::Utc::now().to_rfc3339();
+                crate::runtime_state::upsert_task(RuntimeTask {
+                    task_id: "ptr:sync".to_string(),
+                    kind: TaskKind::PtrSync,
+                    status: TaskStatus::Running,
+                    label: format!("PTR {startup_phase}"),
+                    parent_task_id: None,
+                    progress: None,
+                    detail: None,
+                    started_at: now.clone(),
+                    updated_at: now,
+                });
+            }
 
             let mut progress = PtrSyncProgress {
                 phase: startup_phase.into(),
@@ -215,6 +230,20 @@ impl PtrController {
                             changed_hashes_truncated: None,
                         },
                     );
+                    {
+                        let now = chrono::Utc::now().to_rfc3339();
+                        crate::runtime_state::upsert_task(RuntimeTask {
+                            task_id: "ptr:sync".to_string(),
+                            kind: TaskKind::PtrSync,
+                            status: TaskStatus::Finished,
+                            label: format!("PTR {startup_phase}"),
+                            parent_task_id: None,
+                            progress: None,
+                            detail: None,
+                            started_at: now.clone(),
+                            updated_at: now,
+                        });
+                    }
                     tracing::info!(phase = startup_phase, "PTR startup maintenance finished");
                 }
                 Err(e) => {
@@ -222,7 +251,7 @@ impl PtrController {
                         events::event_names::PTR_SYNC_FINISHED,
                         &events::PtrSyncFinishedEvent {
                             success: false,
-                            error: Some(e),
+                            error: Some(e.clone()),
                             updates_processed: None,
                             tags_added: None,
                             schema_rebuild: Some(needs_schema_rebuild),
@@ -230,6 +259,20 @@ impl PtrController {
                             changed_hashes_truncated: None,
                         },
                     );
+                    {
+                        let now = chrono::Utc::now().to_rfc3339();
+                        crate::runtime_state::upsert_task(RuntimeTask {
+                            task_id: "ptr:sync".to_string(),
+                            kind: TaskKind::PtrSync,
+                            status: TaskStatus::Failed,
+                            label: format!("PTR {startup_phase}"),
+                            parent_task_id: None,
+                            progress: None,
+                            detail: None,
+                            started_at: now.clone(),
+                            updated_at: now,
+                        });
+                    }
                     tracing::error!(phase = startup_phase, "PTR startup maintenance failed");
                 }
             }
@@ -418,11 +461,25 @@ impl PtrController {
         events::emit(
             events::event_names::PTR_BOOTSTRAP_STARTED,
             &events::PtrBootstrapStartedEvent {
-                snapshot_dir: req.snapshot_dir,
+                snapshot_dir: req.snapshot_dir.clone(),
                 service_id: probe.service_id,
-                mode: req.mode,
+                mode: req.mode.clone(),
             },
         );
+        {
+            let now = chrono::Utc::now().to_rfc3339();
+            crate::runtime_state::upsert_task(RuntimeTask {
+                task_id: "ptr:bootstrap".to_string(),
+                kind: TaskKind::PtrBootstrap,
+                status: TaskStatus::Running,
+                label: format!("PTR bootstrap ({})", req.mode),
+                parent_task_id: None,
+                progress: None,
+                detail: None,
+                started_at: now.clone(),
+                updated_at: now,
+            });
+        }
 
         let dry_run_result = tokio::task::spawn_blocking({
             let probe = probe.clone();
@@ -488,6 +545,20 @@ impl PtrController {
                     counts: Some(serde_json::to_value(&dry_run.counts).unwrap_or_default()),
                 },
             );
+            {
+                let now = chrono::Utc::now().to_rfc3339();
+                crate::runtime_state::upsert_task(RuntimeTask {
+                    task_id: "ptr:bootstrap".to_string(),
+                    kind: TaskKind::PtrBootstrap,
+                    status: TaskStatus::Finished,
+                    label: "PTR bootstrap (dry_run)".to_string(),
+                    parent_task_id: None,
+                    progress: None,
+                    detail: None,
+                    started_at: now.clone(),
+                    updated_at: now,
+                });
+            }
             return Ok(serde_json::json!({
                 "started": false,
                 "dry_run": true,
@@ -794,6 +865,20 @@ impl PtrController {
                                     counts: None,
                                 },
                             );
+                            {
+                                let now = chrono::Utc::now().to_rfc3339();
+                                crate::runtime_state::upsert_task(RuntimeTask {
+                                    task_id: "ptr:bootstrap".to_string(),
+                                    kind: TaskKind::PtrBootstrap,
+                                    status: TaskStatus::Finished,
+                                    label: "PTR bootstrap".to_string(),
+                                    parent_task_id: None,
+                                    progress: None,
+                                    detail: None,
+                                    started_at: now.clone(),
+                                    updated_at: now,
+                                });
+                            }
                         }
                         Err(e) => {
                             Self::update_bootstrap_status(|s| {
@@ -809,6 +894,20 @@ impl PtrController {
                                     error: e,
                                 },
                             );
+                            {
+                                let now = chrono::Utc::now().to_rfc3339();
+                                crate::runtime_state::upsert_task(RuntimeTask {
+                                    task_id: "ptr:bootstrap".to_string(),
+                                    kind: TaskKind::PtrBootstrap,
+                                    status: TaskStatus::Failed,
+                                    label: "PTR bootstrap".to_string(),
+                                    parent_task_id: None,
+                                    progress: None,
+                                    detail: None,
+                                    started_at: now.clone(),
+                                    updated_at: now,
+                                });
+                            }
                         }
                     }
                 }
@@ -827,6 +926,20 @@ impl PtrController {
                             error: e,
                         },
                     );
+                    {
+                        let now = chrono::Utc::now().to_rfc3339();
+                        crate::runtime_state::upsert_task(RuntimeTask {
+                            task_id: "ptr:bootstrap".to_string(),
+                            kind: TaskKind::PtrBootstrap,
+                            status: TaskStatus::Failed,
+                            label: "PTR bootstrap".to_string(),
+                            parent_task_id: None,
+                            progress: None,
+                            detail: None,
+                            started_at: now.clone(),
+                            updated_at: now,
+                        });
+                    }
                 }
             }
 
@@ -906,6 +1019,20 @@ impl PtrController {
                 ts: None,
             },
         );
+        {
+            let now = chrono::Utc::now().to_rfc3339();
+            crate::runtime_state::upsert_task(RuntimeTask {
+                task_id: "ptr:sync".to_string(),
+                kind: TaskKind::PtrSync,
+                status: TaskStatus::Running,
+                label: "PTR sync".to_string(),
+                parent_task_id: None,
+                progress: None,
+                detail: None,
+                started_at: now.clone(),
+                updated_at: now,
+            });
+        }
 
         let cancel_check = cancel.clone();
         tokio::spawn(async move {
@@ -925,6 +1052,20 @@ impl PtrController {
                                 changed_hashes_truncated: None,
                             },
                         );
+                        {
+                            let now = chrono::Utc::now().to_rfc3339();
+                            crate::runtime_state::upsert_task(RuntimeTask {
+                                task_id: "ptr:sync".to_string(),
+                                kind: TaskKind::PtrSync,
+                                status: TaskStatus::Failed,
+                                label: "PTR sync".to_string(),
+                                parent_task_id: None,
+                                progress: None,
+                                detail: None,
+                                started_at: now.clone(),
+                                updated_at: now,
+                            });
+                        }
                     } else {
                         tracing::info!(
                             processed = progress.updates_processed,
@@ -962,6 +1103,24 @@ impl PtrController {
                                 changed_hashes_truncated: Some(progress.changed_hashes_truncated),
                             },
                         );
+                        {
+                            let now = chrono::Utc::now().to_rfc3339();
+                            crate::runtime_state::upsert_task(RuntimeTask {
+                                task_id: "ptr:sync".to_string(),
+                                kind: TaskKind::PtrSync,
+                                status: TaskStatus::Finished,
+                                label: "PTR sync".to_string(),
+                                parent_task_id: None,
+                                progress: Some(TaskProgress {
+                                    done: progress.updates_processed as u64,
+                                    total: progress.updates_processed as u64,
+                                    status_text: None,
+                                }),
+                                detail: None,
+                                started_at: now.clone(),
+                                updated_at: now,
+                            });
+                        }
                     }
                 }
                 Err(e) => {
@@ -970,7 +1129,7 @@ impl PtrController {
                         events::event_names::PTR_SYNC_FINISHED,
                         &events::PtrSyncFinishedEvent {
                             success: false,
-                            error: Some(e),
+                            error: Some(e.clone()),
                             updates_processed: None,
                             tags_added: None,
                             schema_rebuild: None,
@@ -978,6 +1137,20 @@ impl PtrController {
                             changed_hashes_truncated: None,
                         },
                     );
+                    {
+                        let now = chrono::Utc::now().to_rfc3339();
+                        crate::runtime_state::upsert_task(RuntimeTask {
+                            task_id: "ptr:sync".to_string(),
+                            kind: TaskKind::PtrSync,
+                            status: TaskStatus::Failed,
+                            label: "PTR sync".to_string(),
+                            parent_task_id: None,
+                            progress: None,
+                            detail: None,
+                            started_at: now.clone(),
+                            updated_at: now,
+                        });
+                    }
                 }
             }
             PTR_SYNCING.store(false, Ordering::SeqCst);

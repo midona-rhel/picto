@@ -55,14 +55,14 @@ interface CacheState {
   prefetchQueue: string[];
   prefetching: boolean;
 
-  // Grid refresh sequence — incremented by eventBridge on grid_scopes invalidation
+  // Grid refresh sequence — incremented by gridRefresher on grid_scopes invalidation
   gridRefreshSeq: number;
 
   // Metadata invalidation tracking — hashes whose metadata changed (name, rating, etc.)
   // ImageGrid subscribes and patches tiles in-place without a full grid reload.
   metadataInvalidatedHashes: Set<string>;
 
-  // Active grid scope — used by eventBridge for scope-aware grid_scopes filtering.
+  // Active grid scope — used by gridRefresher for scope-aware grid_scopes filtering.
   // e.g. "folder:5", "system:inbox", "system:all"
   activeGridScope: string | null;
 

@@ -272,6 +272,9 @@ export async function load(name: string, _options?: { autoSave?: boolean }): Pro
   return new LocalStore(name);
 }
 
+import type { RuntimeSnapshot } from '../types/generated/runtime-contract';
+import type { CoreRuntimeEventPayloadMap } from '../types/api/events';
+
 import type {
   EntityAllMetadata,
   EntityDetails,
@@ -302,6 +305,13 @@ import type {
   FileStats, PerfSnapshot, PerfSloResult,
   ColorSearchResult, LibraryInfo,
 } from '../types/api';
+
+export function listenRuntimeEvent<K extends keyof CoreRuntimeEventPayloadMap>(
+  eventName: K,
+  handler: (payload: CoreRuntimeEventPayloadMap[K]) => void,
+): Promise<UnlistenFn> {
+  return listen<CoreRuntimeEventPayloadMap[K]>(eventName, (e) => handler(e.payload));
+}
 
 export { api as desktopTypedApi };
 
@@ -710,6 +720,11 @@ export const api = {
   color: {
     searchByColor: (hexColor: string, maxDistance?: number) =>
       invoke<ColorSearchResult[]>('search_by_color', { hex_color: hexColor, max_distance: maxDistance }),
+  },
+
+  runtime: {
+    getSnapshot: () =>
+      invoke<RuntimeSnapshot>('get_runtime_snapshot'),
   },
 
   os: {

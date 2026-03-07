@@ -225,24 +225,6 @@ pub fn count_by_status_with_max_distance(
     )
 }
 
-pub fn update_duplicate_status(
-    conn: &Connection,
-    file_id_a: i64,
-    file_id_b: i64,
-    status: &str,
-) -> rusqlite::Result<()> {
-    let (a, b) = if file_id_a < file_id_b {
-        (file_id_a, file_id_b)
-    } else {
-        (file_id_b, file_id_a)
-    };
-    conn.execute(
-        "UPDATE duplicate SET status = ?1 WHERE file_id_a = ?2 AND file_id_b = ?3",
-        params![status, a, b],
-    )?;
-    Ok(())
-}
-
 /// Resolve a pair with full decision metadata (V7 columns).
 pub fn resolve_pair_with_decision(
     conn: &Connection,
@@ -275,28 +257,6 @@ pub fn resolve_pair_with_decision(
         ],
     )?;
     Ok(())
-}
-
-pub fn delete_duplicate(conn: &Connection, file_id_a: i64, file_id_b: i64) -> rusqlite::Result<()> {
-    let (a, b) = if file_id_a < file_id_b {
-        (file_id_a, file_id_b)
-    } else {
-        (file_id_b, file_id_a)
-    };
-    conn.execute(
-        "DELETE FROM duplicate WHERE file_id_a = ?1 AND file_id_b = ?2",
-        params![a, b],
-    )?;
-    Ok(())
-}
-
-/// Get all file_ids that have a phash set (excluding trashed files).
-pub fn get_files_with_phash(conn: &Connection) -> rusqlite::Result<Vec<(i64, String)>> {
-    let mut stmt = conn.prepare_cached(
-        "SELECT file_id, phash FROM file WHERE phash IS NOT NULL AND status IN (0, 1)",
-    )?;
-    let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
-    rows.collect()
 }
 
 impl SqliteDatabase {

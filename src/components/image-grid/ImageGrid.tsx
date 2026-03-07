@@ -651,7 +651,7 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
     dispatch({ type: 'REMOVE_HASHES', hashes: toRemove });
   }, [pendingGridRemovals, dispatch]);
 
-  // Set active grid scope for scope-aware invalidation filtering in eventBridge
+  // Set active grid scope for scope-aware invalidation filtering in gridRefresher
   useEffect(() => {
     let scope: string;
     if (collectionEntityId != null) scope = `collection:${collectionEntityId}`;
@@ -685,7 +685,7 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
     });
   }, [metadataInvalidatedHashes]);
 
-  // Reload grid when eventBridge bumps gridRefreshSeq (state-changed with grid_scopes)
+  // Reload grid when gridRefresher bumps gridRefreshSeq (mutation with grid_scopes)
   const gridRefreshSeq = useCacheStore((s) => s.gridRefreshSeq);
   const prevGridRefreshSeq = useRef(gridRefreshSeq);
   useEffect(() => {

@@ -103,7 +103,7 @@ pub async fn handle(
             if let Err(e) = result {
                 return Some(Err(e));
             }
-            crate::events::emit_state_changed(
+            crate::events::emit_mutation(
                 "reorder_sidebar_nodes",
                 crate::events::MutationImpact::sidebar(crate::events::Domain::Sidebar),
             );
@@ -130,7 +130,7 @@ pub async fn handle(
             .await;
             match result {
                 Ok(ref v) => {
-                    crate::events::emit_state_changed(
+                    crate::events::emit_mutation(
                         "set_view_prefs",
                         crate::events::MutationImpact::new()
                             .domains(&[crate::events::Domain::ViewPrefs])
