@@ -1,9 +1,9 @@
-import React, { useEffect } from 'react';
+import React from 'react';
 import ReactDOM from 'react-dom/client';
-import { MantineProvider, createTheme, rem, useMantineColorScheme } from '@mantine/core';
+import { MantineProvider, createTheme, rem } from '@mantine/core';
 import { api } from '#desktop/api';
 import { Settings } from '#features/settings/components';
-import { initSettingsStore, useSettingsStore, themeToColorScheme } from '../state/settingsStore';
+import { useThemeSync } from '../shared/hooks/useThemeSync';
 import '@mantine/core/styles.css';
 import '../shared/styles/globals.css';
 
@@ -100,22 +100,7 @@ const theme = createTheme({
   .catch(() => {});
 
 function SettingsApp() {
-  const { loaded: settingsLoaded, settings } = useSettingsStore();
-  const { setColorScheme, colorScheme } = useMantineColorScheme();
-
-  useEffect(() => {
-    void initSettingsStore();
-  }, []);
-
-  // Keep Mantine color scheme + theme attribute in sync when settings change
-  useEffect(() => {
-    if (!settingsLoaded) return;
-    const theme = settings.theme ?? (settings.colorScheme === 'light' ? 'light' : 'dark');
-    const scheme = themeToColorScheme(theme);
-    if (scheme !== colorScheme) setColorScheme(scheme);
-    document.documentElement.dataset.theme = theme === 'auto' ? '' : theme;
-  }, [settingsLoaded, settings.theme, settings.colorScheme]); // eslint-disable-line react-hooks/exhaustive-deps
-
+  useThemeSync();
   return <Settings />;
 }
 

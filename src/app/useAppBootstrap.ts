@@ -2,20 +2,16 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { MouseEvent as ReactMouseEvent } from 'react';
 import { useMantineColorScheme } from '@mantine/core';
 import { useHotkeys } from '@mantine/hooks';
-import { getCurrentWindow, setTheme as setAppTheme, api, listen } from '#desktop/api';
+import { getCurrentWindow, setTheme as setAppTheme, api } from '#desktop/api';
 
 import { registerCacheCleanup } from '../shared/lib/cacheCleanup';
-import { useNavigationStore, type ViewType } from '../state/navigationStore';
-import { initSettingsStore, themeToColorScheme, useSettingsStore } from '../state/settingsStore';
-import { SidebarController } from '../controllers/sidebarController';
-import { SelectionController } from '../controllers/selectionController';
+import { useNavigationStore } from '../state/navigationStore';
+import { useSettingsStore } from '../state/settingsStore';
 import { performRedo, performUndo } from '../shared/controllers/undoRedoController';
-import { useRuntimeSyncStore } from '../state/runtimeSyncStore';
-import { useCacheStore } from '../state/cacheStore';
-import { useLibraryStore } from '../state/libraryStore';
-import { startAllRefreshers, stopAllRefreshers } from '../runtime/refresherOrchestrator';
 import { runBestEffort } from '../shared/lib/asyncOps';
 import { useGlobalKeydown } from '../shared/hooks/useGlobalKeydown';
+import { useThemeSync } from '../shared/hooks/useThemeSync';
+import { useNativeEventListeners } from './useNativeEventListeners';
 
 export interface AppBootstrap {
   appWindow: ReturnType<typeof getCurrentWindow>;
@@ -26,10 +22,15 @@ export interface AppBootstrap {
 
 export function useAppBootstrap(): AppBootstrap {
   const { titlebarTitle, currentView } = useNavigationStore();
-  const { settings, loaded: settingsLoaded } = useSettingsStore();
-  const { colorScheme, setColorScheme } = useMantineColorScheme();
+  const { colorScheme } = useMantineColorScheme();
   const appWindow = useMemo(() => getCurrentWindow(), []);
   const isSystemDark = colorScheme === 'dark';
+
+  // ── Theme sync (settings init + Mantine color scheme + DOM attribute) ──
+  useThemeSync();
+
+  // ── Native event listeners (library lifecycle, menu events, runtime init) ──
+  useNativeEventListeners();
 
   // Displayed title lags behind titlebarTitle — only updates when grid fade-out completes.
   const [displayedTitle, setDisplayedTitle] = useState(titlebarTitle);
@@ -40,24 +41,14 @@ export function useAppBootstrap(): AppBootstrap {
     if (currentView !== 'images') setDisplayedTitle(titlebarTitle);
   }, [titlebarTitle, currentView]);
 
-  useEffect(() => {
-    void initSettingsStore();
-  }, []);
-
-  useEffect(() => {
-    if (!settingsLoaded) return;
-    const theme = settings.theme ?? (settings.colorScheme === 'light' ? 'light' : 'dark');
-    const scheme = themeToColorScheme(theme);
-    if (scheme !== colorScheme) setColorScheme(scheme);
-    document.documentElement.dataset.theme = theme === 'auto' ? '' : theme;
-  }, [settingsLoaded, settings.theme]); // eslint-disable-line react-hooks/exhaustive-deps
-
+  // ── One-time startup: cache cleanup, window style, show ──
   useEffect(() => {
     registerCacheCleanup();
     runBestEffort('startup.enableModernWindowStyle', api.os.enableModernWindowStyle(4.0));
     runBestEffort('startup.windowShow', appWindow.show());
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [appWindow]);
 
+  // ── Native theme sync (Electron window + app-level) ──
   useEffect(() => {
     const theme = isSystemDark ? 'dark' : 'light';
     void Promise.all([
@@ -79,60 +70,6 @@ export function useAppBootstrap(): AppBootstrap {
     }
     void appWindow.startDragging();
   }, [appWindow]);
-
-  useEffect(() => {
-    void SidebarController.fetchInitialTree();
-    void useRuntimeSyncStore.getState().ensureInitialized();
-    startAllRefreshers();
-
-    // Library lifecycle listeners (previously in eventBridge)
-    const libraryListeners = Promise.all([
-      listen('library-switching', () => {
-        useLibraryStore.getState().setSwitching(true);
-      }),
-      listen('library-switched', () => {
-        useCacheStore.getState().invalidateAll();
-        useCacheStore.getState().bumpGridRefresh();
-        SidebarController.requestRefresh();
-        SelectionController.invalidateSummary();
-        useLibraryStore.getState().setSwitching(false);
-        useLibraryStore.getState().loadConfig();
-      }),
-    ]);
-    return () => {
-      stopAllRefreshers();
-      useRuntimeSyncStore.getState().teardown();
-      runBestEffort('cleanup.libraryListeners', libraryListeners.then((fns) => { for (const fn of fns) fn(); }));
-    };
-  }, []);
-
-  useEffect(() => {
-    const unlisten = listen('menu:open-settings', () => {
-      runBestEffort('menu.openSettingsWindow', api.os.openSettingsWindow());
-    });
-    return () => { runBestEffort('menu.unlistenOpenSettings', unlisten.then((fn) => fn())); };
-  }, []);
-
-  useEffect(() => {
-    const unlisten = listen<string>('menu:navigate', (event) => {
-      const view = event.payload as ViewType | undefined;
-      if (view) useNavigationStore.getState().navigateTo(view);
-    });
-    return () => { runBestEffort('menu.unlistenNavigate', unlisten.then((fn) => fn())); };
-  }, []);
-
-  useEffect(() => {
-    const unlistenUndo = listen('menu:undo', () => {
-      void performUndo();
-    });
-    const unlistenRedo = listen('menu:redo', () => {
-      void performRedo();
-    });
-    return () => {
-      runBestEffort('menu.unlistenUndo', unlistenUndo.then((fn) => fn()));
-      runBestEffort('menu.unlistenRedo', unlistenRedo.then((fn) => fn()));
-    };
-  }, []);
 
   useHotkeys([
     ['mod+alt+1', () => {
