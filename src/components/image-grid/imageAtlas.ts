@@ -6,7 +6,7 @@
  * Priority queue sorts by distance to viewport center for fast scroll.
  */
 
-import { mediaThumbnailUrl, mediaFileUrl } from '../../lib/mediaUrl';
+import { mediaThumbnailUrl, mediaFileUrl } from '../../shared/lib/mediaUrl';
 import BlurhashDecodeWorker from './blurhashDecodeWorker?worker';
 import { api } from '#desktop/api';
 import {

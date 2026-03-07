@@ -5,7 +5,7 @@
  * StripView only handles vertical scrolling (W/S/Up/Down).
  */
 import { useEffect, useLayoutEffect, useRef, useState, useCallback, useMemo } from 'react';
-import { mediaThumbnailUrl, mediaFileUrl } from '../../lib/mediaUrl';
+import { mediaThumbnailUrl, mediaFileUrl } from '../../shared/lib/mediaUrl';
 import { queueImageDecode } from './useImagePreloader';
 import type { MasonryImageItem } from './shared';
 import { isVideoMime } from './shared';

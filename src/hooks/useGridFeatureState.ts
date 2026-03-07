@@ -6,7 +6,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { api } from '#desktop/api';
-import { useFilterStore, mimeFilterToPrefixes, type FilterLogicMode } from '../stores/filterStore';
+import { useFilterStore, mimeFilterToPrefixes, type FilterLogicMode } from '../state/filterStore';
 import { FolderController } from '../controllers/folderController';
 import { applyGridMutationEffects } from '../domain/actions/mutationEffects';
 import type { SmartFolder } from '#features/smart-folders/types';

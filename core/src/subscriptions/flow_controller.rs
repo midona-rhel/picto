@@ -9,9 +9,9 @@ use std::sync::Arc;
 use crate::blob_store::BlobStore;
 use crate::rate_limiter::RateLimiter;
 use crate::runtime_contract::task::{RuntimeTask, TaskKind, TaskProgress, TaskStatus};
-use crate::settings::SettingsStore;
+use crate::settings::store::SettingsStore;
 use crate::sqlite::SqliteDatabase;
-use crate::subscription_controller::SubscriptionController;
+use crate::subscriptions::controller::SubscriptionController;
 use crate::types::{
     FlowInfo, RunningSubscriptions, SubTerminalStatuses, SubscriptionInfo, SubscriptionQueryInfo,
 };
@@ -57,7 +57,7 @@ impl FlowController {
                     let sub_id = sub.subscription_id;
                     flow_total += file_count as u64;
                     let canonical_site_id =
-                        crate::gallery_dl_runner::canonical_site_id(&sub.site_id);
+                        crate::subscriptions::gallery_dl_runner::canonical_site_id(&sub.site_id);
                     SubscriptionInfo {
                         id: sub_id.to_string(),
                         name: sub.name,
@@ -139,13 +139,13 @@ impl FlowController {
             for sub_id in sub_ids {
                 let file_ids = db
                     .with_read_conn(move |conn| {
-                        crate::sqlite::subscriptions::get_subscription_entity_ids(conn, sub_id)
+                        crate::subscriptions::db::get_subscription_entity_ids(conn, sub_id)
                     })
                     .await?;
                 if !file_ids.is_empty() {
                     let resolved = db.resolve_ids_batch(&file_ids).await?;
                     let hashes: Vec<String> = resolved.into_iter().map(|(_, hash)| hash).collect();
-                    crate::lifecycle_controller::LifecycleController::delete_files(
+                    crate::lifecycle::controller::LifecycleController::delete_files(
                         db, blob_store, hashes,
                     )
                     .await?;
@@ -481,7 +481,7 @@ impl FlowController {
         }
         drop(map);
         for sub_id in cancelled_ids {
-            let progress = crate::subscription_sync::SubscriptionProgressEvent {
+            let progress = crate::subscriptions::sync_engine::SubscriptionProgressEvent {
                 subscription_id: sub_id.clone(),
                 subscription_name: names_by_id
                     .get(&sub_id)
@@ -498,11 +498,27 @@ impl FlowController {
                 last_metadata_error: None,
                 status_text: "Cancelling…".to_string(),
             };
-            crate::subscription_sync::update_runtime_progress_snapshot(progress.clone());
             crate::events::emit(
                 crate::events::event_names::SUBSCRIPTION_PROGRESS,
                 &progress,
             );
+            {
+                use crate::runtime_contract::task::TaskStatus;
+                let sub_name = progress.subscription_name.clone();
+                crate::runtime_state::upsert_task(
+                    crate::runtime_contract::task::RuntimeTask {
+                        task_id: format!("sub:{}", sub_id),
+                        kind: crate::runtime_contract::task::TaskKind::Subscription,
+                        status: TaskStatus::Cancelling,
+                        label: sub_name,
+                        parent_task_id: None,
+                        progress: None,
+                        detail: serde_json::to_value(&progress).ok(),
+                        started_at: chrono::Utc::now().to_rfc3339(),
+                        updated_at: chrono::Utc::now().to_rfc3339(),
+                    },
+                );
+            }
         }
         Ok(())
     }

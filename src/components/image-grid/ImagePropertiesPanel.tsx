@@ -9,28 +9,28 @@ import {
   IconPinFilled,
 } from '@tabler/icons-react';
 import { TagSelectService } from '../tags/tagSelectService';
-import { FolderPickerService } from '../../services/folderPickerService';
+import { FolderPickerService } from '../../shared/services/folderPickerService';
 import { WindowControls } from '../layout/WindowControls';
-import { KbdTooltip } from '../ui/KbdTooltip';
-import { useNavigationStore } from '../../stores/navigationStore';
-import { useFilterStore } from '../../stores/filterStore';
-import { formatFileSize, formatDuration, getFileExtension } from '../../lib/formatters';
+import { KbdTooltip } from '../../shared/components/KbdTooltip';
+import { useNavigationStore } from '../../state/navigationStore';
+import { useFilterStore } from '../../state/filterStore';
+import { formatFileSize, formatDuration, getFileExtension } from '../../shared/lib/formatters';
 import { MasonryImageItem } from './shared';
 import { GlassImagePreview } from './GlassImagePreview';
-import { NamespaceTagChip } from '../ui/NamespaceTagChip';
-import { StarRating } from '../ui/StarRating';
-import { InspectorSection } from '../ui/InspectorSection';
-import { PropertyRow } from '../ui/PropertyRow';
-import { UrlListEditor } from '../ui/UrlListEditor';
-import { ColorPalette } from '../ui/ColorPalette';
-import { EmptyState } from '../ui/EmptyState';
+import { NamespaceTagChip } from '../../shared/components/NamespaceTagChip';
+import { StarRating } from '../../shared/components/StarRating';
+import { InspectorSection } from '../../shared/components/InspectorSection';
+import { PropertyRow } from '../../shared/components/PropertyRow';
+import { UrlListEditor } from '../../shared/components/UrlListEditor';
+import { ColorPalette } from '../../shared/components/ColorPalette';
+import { EmptyState } from '../../shared/components/EmptyState';
 import type {
   EntityAllMetadata,
   ResolvedTagInfo,
   SelectionQuerySpec,
   SelectionSummary,
 } from './metadataPrefetch';
-import type { CollectionSummary } from '../../types/api';
+import type { CollectionSummary } from '../../shared/types/api';
 import type { FolderMembership } from '../../hooks/useInspectorData';
 import styles from './ImagePropertiesPanel.module.css';
 

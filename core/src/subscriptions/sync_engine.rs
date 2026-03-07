@@ -10,7 +10,6 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::sync::{Mutex, OnceLock};
 
 use chrono::Utc;
 use sha2::{Digest, Sha256};
@@ -19,11 +18,11 @@ use tracing::{info, warn};
 
 use crate::blob_store::BlobStore;
 use crate::credential_store;
-use crate::gallery_dl_runner::{self, FailureKind, GalleryDlRunner, ParsedMetadata, RunOptions};
-use crate::import::{ImportOptions, ImportPipeline};
-use crate::settings::AppSettings;
+use crate::subscriptions::gallery_dl_runner::{self, FailureKind, GalleryDlRunner, ParsedMetadata, RunOptions};
+use crate::import::pipeline::{ImportOptions, ImportPipeline};
+use crate::settings::store::AppSettings;
 use crate::sqlite::SqliteDatabase;
-use crate::tags;
+use crate::tags::normalize;
 
 #[derive(Debug, Clone, Default)]
 pub struct SyncProgress {
@@ -57,7 +56,7 @@ pub fn subscription_query_archive_prefix(subscription_id: i64, query_id: i64) ->
 }
 
 fn default_resume_strategy_for_site(site_id: &str) -> Option<&'static str> {
-    match crate::gallery_dl_runner::canonical_site_id(site_id) {
+    match crate::subscriptions::gallery_dl_runner::canonical_site_id(site_id) {
         // These booru-like sources accept id:<N query clauses.
         "danbooru" | "gelbooru" | "3dbooru" | "safebooru" | "rule34" | "yandere" | "e621"
         | "konachan" | "lolibooru" => Some("tag_id_lt"),
@@ -86,7 +85,7 @@ fn apply_resume_to_query(query_text: &str, resume_cursor: &str, resume_strategy:
 }
 
 fn derive_resume_cursor(
-    items: &[crate::gallery_dl_runner::DownloadedItem],
+    items: &[crate::subscriptions::gallery_dl_runner::DownloadedItem],
     strategy: &str,
 ) -> Option<String> {
     match strategy {
@@ -109,7 +108,7 @@ fn derive_resume_cursor(
 }
 
 /// Progress event emitted during subscription sync (for sidebar status display).
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SubscriptionProgressEvent {
     pub subscription_id: String,
     pub subscription_name: String,
@@ -128,37 +127,21 @@ pub struct SubscriptionProgressEvent {
     pub status_text: String,
 }
 
-static SUB_RUNTIME_PROGRESS: OnceLock<Mutex<HashMap<String, SubscriptionProgressEvent>>> =
-    OnceLock::new();
-
-fn runtime_progress_map() -> &'static Mutex<HashMap<String, SubscriptionProgressEvent>> {
-    SUB_RUNTIME_PROGRESS.get_or_init(|| Mutex::new(HashMap::new()))
-}
-
-pub fn update_runtime_progress_snapshot(progress: SubscriptionProgressEvent) {
-    let mut map = crate::poison::mutex_or_recover(
-        runtime_progress_map(),
-        "subscription_runtime_progress_update",
-    );
-    map.insert(progress.subscription_id.clone(), progress);
-}
-
-pub fn clear_runtime_progress_snapshot(subscription_id: &str) {
-    let mut map = crate::poison::mutex_or_recover(
-        runtime_progress_map(),
-        "subscription_runtime_progress_clear",
-    );
-    map.remove(subscription_id);
-}
-
-pub fn list_runtime_progress_snapshots() -> Vec<SubscriptionProgressEvent> {
-    let map = crate::poison::mutex_or_recover(
-        runtime_progress_map(),
-        "subscription_runtime_progress_list",
-    );
-    let mut values: Vec<SubscriptionProgressEvent> = map.values().cloned().collect();
-    values.sort_by(|a, b| a.subscription_id.cmp(&b.subscription_id));
-    values
+/// Extract subscription progress events from the centralized runtime task registry.
+///
+/// This replaces the old `SUB_RUNTIME_PROGRESS` parallel state — all subscription
+/// progress is now stored in `RuntimeTask.detail` via `runtime_state::upsert_task`.
+pub fn list_runtime_progress_from_tasks() -> Vec<SubscriptionProgressEvent> {
+    let mut events: Vec<SubscriptionProgressEvent> = crate::runtime_state::list_tasks()
+        .into_iter()
+        .filter(|t| t.kind == crate::runtime_contract::task::TaskKind::Subscription)
+        .filter_map(|t| {
+            t.detail
+                .and_then(|d| serde_json::from_value(d).ok())
+        })
+        .collect();
+    events.sort_by(|a, b| a.subscription_id.cmp(&b.subscription_id));
+    events
 }
 
 pub struct SubscriptionSyncEngine<'a> {
@@ -193,7 +176,7 @@ impl<'a> SubscriptionSyncEngine<'a> {
             current_query_name: None,
             last_progress_emit: std::time::Instant::now(),
             auto_merge_enabled: false,
-            auto_merge_distance: crate::duplicates::DEFAULT_DISTANCE_THRESHOLD,
+            auto_merge_distance: crate::duplicates::phash::DEFAULT_DISTANCE_THRESHOLD,
         })
     }
 
@@ -893,7 +876,7 @@ impl<'a> SubscriptionSyncEngine<'a> {
 
                 // Auto-merge duplicate detection
                 if self.auto_merge_enabled && imported.mime.starts_with("image/") {
-                    match crate::duplicate_controller::DuplicateController::check_and_auto_merge(
+                    match crate::duplicates::controller::DuplicateController::check_and_auto_merge(
                         self.db,
                         &imported.hex_hash,
                         self.auto_merge_distance,
@@ -928,7 +911,7 @@ impl<'a> SubscriptionSyncEngine<'a> {
                     imported_new: true,
                 })
             }
-            Err(crate::import::ImportError::AlreadyImported(hash)) => {
+            Err(crate::import::pipeline::ImportError::AlreadyImported(hash)) => {
                 info!(hash = %hash, "Already imported (skipped)");
                 Ok(ImportOutcome {
                     hex_hash: hash,
@@ -1124,12 +1107,10 @@ impl<'a> SubscriptionSyncEngine<'a> {
             last_metadata_error: progress.last_metadata_error.clone(),
             status_text: status_text.to_string(),
         };
-        update_runtime_progress_snapshot(event.clone());
         crate::events::emit(
             crate::events::event_names::SUBSCRIPTION_PROGRESS,
             &event,
         );
-        // RuntimeTask progress upsert
         {
             use crate::runtime_contract::task::{
                 RuntimeTask, TaskKind, TaskProgress, TaskStatus,
@@ -1146,7 +1127,7 @@ impl<'a> SubscriptionSyncEngine<'a> {
                     total: (progress.files_downloaded + progress.files_skipped) as u64,
                     status_text: Some(status_text.to_string()),
                 }),
-                detail: None,
+                detail: serde_json::to_value(&event).ok(),
                 started_at: now.clone(),
                 updated_at: now,
             });
@@ -1259,7 +1240,7 @@ fn is_generated_subscription_name(name: &str, metadata: &ParsedMetadata) -> bool
 }
 
 fn validate_metadata_for_site(site_id: &str, metadata: &ParsedMetadata) -> Result<(), String> {
-    match crate::gallery_dl_runner::canonical_site_id(site_id) {
+    match crate::subscriptions::gallery_dl_runner::canonical_site_id(site_id) {
         "pixiv" | "pixivuser" => {
             if metadata
                 .post_id
@@ -1519,14 +1500,14 @@ mod tests {
     #[test]
     fn derive_resume_cursor_uses_min_numeric_post_id() {
         let items = vec![
-            crate::gallery_dl_runner::DownloadedItem {
+            crate::subscriptions::gallery_dl_runner::DownloadedItem {
                 file_path: std::path::PathBuf::from("/tmp/a"),
                 metadata: ParsedMetadata {
                     post_id: Some("100".to_string()),
                     ..Default::default()
                 },
             },
-            crate::gallery_dl_runner::DownloadedItem {
+            crate::subscriptions::gallery_dl_runner::DownloadedItem {
                 file_path: std::path::PathBuf::from("/tmp/b"),
                 metadata: ParsedMetadata {
                     post_id: Some("93".to_string()),

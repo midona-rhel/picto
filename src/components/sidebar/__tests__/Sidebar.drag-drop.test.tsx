@@ -1,10 +1,10 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Sidebar } from '../Sidebar';
-import { imageDrag } from '../../../lib/imageDrag';
-import { useDomainStore } from '../../../stores/domainStore';
-import { useNavigationStore } from '../../../stores/navigationStore';
-import { useCacheStore } from '../../../stores/cacheStore';
+import { imageDrag } from '../../../shared/lib/imageDrag';
+import { useDomainStore } from '../../../state/domainStore';
+import { useNavigationStore } from '../../../state/navigationStore';
+import { useCacheStore } from '../../../state/cacheStore';
 
 const {
   setStatusSelectionMock,

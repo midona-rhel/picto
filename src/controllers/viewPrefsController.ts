@@ -1,8 +1,8 @@
 import { api } from '#desktop/api';
 
 // Re-export types from central api types for backwards compatibility.
-export type { ViewPrefsDto, ViewPrefsPatch } from '../types/api';
-import type { ViewPrefsDto, ViewPrefsPatch } from '../types/api';
+export type { ViewPrefsDto, ViewPrefsPatch } from '../shared/types/api';
+import type { ViewPrefsDto, ViewPrefsPatch } from '../shared/types/api';
 
 /**
  * ViewPrefsController — orchestration facade for per-scope grid view prefs.

@@ -11,7 +11,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { formatDuration } from '../../lib/formatters';
+import { formatDuration } from '../../shared/lib/formatters';
 import styles from './VideoScrubOverlay.module.css';
 
 const clamp = (v: number, min: number, max: number) => Math.min(max, Math.max(min, v));

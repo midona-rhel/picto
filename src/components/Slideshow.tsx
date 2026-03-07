@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { IconPlayerPause, IconPlayerPlay, IconChevronLeft, IconChevronRight, IconX } from '@tabler/icons-react';
 import { useGlobalKeydown } from '../hooks/useGlobalKeydown';
-import { mediaFileUrl, mediaThumbnailUrl } from '../lib/mediaUrl';
+import { mediaFileUrl, mediaThumbnailUrl } from '../shared/lib/mediaUrl';
 import type { MasonryImageItem } from './image-grid/shared';
 import classes from './Slideshow.module.css';
 

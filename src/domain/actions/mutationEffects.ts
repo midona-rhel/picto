@@ -1,7 +1,7 @@
 import { SelectionController } from '../../controllers/selectionController';
 import { SidebarController } from '../../controllers/sidebarController';
-import { useCacheStore } from '../../stores/cacheStore';
-import { useDomainStore } from '../../stores/domainStore';
+import { useCacheStore } from '../../state/cacheStore';
+import { useDomainStore } from '../../state/domainStore';
 
 export interface MutationEffects {
   selectionSummary?: boolean;

@@ -2,8 +2,8 @@ import { api } from '#desktop/api';
 import { applyMutationEffects } from '../domain/actions/mutationEffects';
 
 // Re-export Folder types from central api types for backwards compatibility.
-export type { Folder, FolderMembership } from '../types/api';
-import type { Folder, FolderMembership } from '../types/api';
+export type { Folder, FolderMembership } from '../shared/types/api';
+import type { Folder, FolderMembership } from '../shared/types/api';
 
 /**
  * FolderController — frontend facade for folder CRUD and sidebar reorder commands.

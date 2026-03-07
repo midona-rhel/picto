@@ -9,7 +9,7 @@ use crate::types::{ViewPrefsDto, ViewPrefsPatch};
 
 pub struct ViewPrefsController;
 
-fn dto_from_pref(p: crate::sqlite::view_prefs::ViewPref) -> ViewPrefsDto {
+fn dto_from_pref(p: crate::settings::db::ViewPref) -> ViewPrefsDto {
     ViewPrefsDto {
         scope_key: p.scope,
         sort_field: p.sort_field,
@@ -39,7 +39,7 @@ impl ViewPrefsController {
         patch: ViewPrefsPatch,
     ) -> Result<ViewPrefsDto, String> {
         let current = db.get_view_pref(&scope_key).await?;
-        let merged = crate::sqlite::view_prefs::ViewPref {
+        let merged = crate::settings::db::ViewPref {
             scope: scope_key.clone(),
             sort_field: patch
                 .sort_field

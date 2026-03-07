@@ -1353,7 +1353,7 @@ impl SqliteDatabase {
         // Query folder memberships BEFORE deletion (CASCADE will remove folder_entity rows)
         let fid = file_id;
         let folder_ids = self
-            .with_read_conn(move |conn| super::folders::get_entity_folder_memberships(conn, fid))
+            .with_read_conn(move |conn| crate::folders::db::get_entity_folder_memberships(conn, fid))
             .await?;
 
         let fid = file_id;

@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Select } from '@mantine/core';
 import { IconBorderAll, IconLayoutBoard } from '@tabler/icons-react';
-import { cmSelectInput, cmSelectDropdown, cmSelectOption, cmComboboxProps } from '../ui/cmSelectStyles';
+import { cmSelectInput, cmSelectDropdown, cmSelectOption, cmComboboxProps } from '../../shared/components/cmSelectStyles';
 import type { GridViewMode } from './runtime';
 
 function ModeIcon({ mode, size = 14 }: { mode: GridViewMode; size?: number }) {

@@ -14,7 +14,7 @@ export type {
   CredentialDomain,
   CredentialHealth,
   CredentialType,
-} from '../types/api';
+} from '../shared/types/api';
 import type {
   SubscriptionProgressEvent,
   SubscriptionStartedEvent,
@@ -26,7 +26,7 @@ import type {
   CredentialDomain,
   CredentialHealth,
   CredentialType,
-} from '../types/api';
+} from '../shared/types/api';
 
 export interface CreatedSubscription {
   id: string;

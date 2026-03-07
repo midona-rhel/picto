@@ -45,7 +45,7 @@ impl TypedCommand for GetGridPageSlim {
     async fn execute(state: &AppState, input: Self::Input) -> Result<Self::Output, String> {
         let started = Instant::now();
         let result =
-            crate::grid_controller::GridController::get_grid_page_slim(&state.db, input.query)
+            crate::grid::controller::GridController::get_grid_page_slim(&state.db, input.query)
                 .await?;
         crate::perf::record_grid_page_slim(started.elapsed().as_secs_f64() * 1000.0);
         serde_json::to_value(&result).map_err(|e| e.to_string())
@@ -59,7 +59,7 @@ impl TypedCommand for GetFile {
 
     async fn execute(state: &AppState, input: Self::Input) -> Result<Self::Output, String> {
         let result =
-            crate::metadata_controller::MetadataController::get_file(&state.db, input.hash)
+            crate::metadata::controller::MetadataController::get_file(&state.db, input.hash)
                 .await?;
         serde_json::to_value(&result).map_err(|e| e.to_string())
     }
@@ -71,7 +71,7 @@ impl TypedCommand for GetFilesMetadataBatch {
     type Output = serde_json::Value;
 
     async fn execute(state: &AppState, input: Self::Input) -> Result<Self::Output, String> {
-        let result = crate::grid_controller::GridController::get_files_metadata_batch(
+        let result = crate::grid::controller::GridController::get_files_metadata_batch(
             &state.db,
             &state.ptr_db,
             input.hashes,

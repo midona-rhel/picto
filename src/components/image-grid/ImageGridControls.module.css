@@ -9,7 +9,7 @@
 }
 
 .icBtn {
-  composes: icBtn from '../../styles/iconButton.module.css';
+  composes: icBtn from '../../shared/styles/iconButton.module.css';
   position: relative;
   width: 28px;
   height: 28px;

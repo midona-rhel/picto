@@ -85,7 +85,7 @@ impl TypedCommand for GetDuplicates {
 
     async fn execute(state: &AppState, input: Self::Input) -> Result<Self::Output, String> {
         let result =
-            crate::duplicate_controller::DuplicateController::get_duplicates(&state.db, input.hash)
+            crate::duplicates::controller::DuplicateController::get_duplicates(&state.db, input.hash)
                 .await?;
         Ok(serde_json::to_value(&result).map_err(|e| e.to_string())?)
     }
@@ -99,17 +99,17 @@ impl TypedCommand for ScanDuplicates {
     async fn execute(state: &AppState, input: Self::Input) -> Result<Self::Output, String> {
         let effective_threshold = input.threshold.or_else(|| {
             let s = state.settings.get();
-            Some(crate::settings::similarity_pct_to_distance(
+            Some(crate::settings::store::similarity_pct_to_distance(
                 s.duplicate_detect_similarity_pct,
             ))
         });
         let review_threshold = {
             let s = state.settings.get();
-            Some(crate::settings::similarity_pct_to_distance(
+            Some(crate::settings::store::similarity_pct_to_distance(
                 s.duplicate_review_similarity_pct,
             ))
         };
-        let result = crate::duplicate_controller::DuplicateController::scan_duplicates(
+        let result = crate::duplicates::controller::DuplicateController::scan_duplicates(
             &state.db,
             effective_threshold,
             review_threshold,
@@ -128,13 +128,13 @@ impl TypedCommand for GetDuplicatePairs {
         let max_distance = match input.status.as_deref() {
             None | Some("detected") => {
                 let s = state.settings.get();
-                Some(crate::settings::similarity_pct_to_distance(
+                Some(crate::settings::store::similarity_pct_to_distance(
                     s.duplicate_review_similarity_pct,
                 ) as f64)
             }
             _ => None,
         };
-        let result = crate::duplicate_controller::DuplicateController::get_duplicate_pairs(
+        let result = crate::duplicates::controller::DuplicateController::get_duplicate_pairs(
             &state.db,
             input.cursor,
             input.limit,
@@ -152,7 +152,7 @@ impl TypedCommand for ResolveDuplicatePair {
     type Output = serde_json::Value;
 
     async fn execute(state: &AppState, input: Self::Input) -> Result<Self::Output, String> {
-        let result = crate::duplicate_controller::DuplicateController::resolve_duplicate_pair(
+        let result = crate::duplicates::controller::DuplicateController::resolve_duplicate_pair(
             &state.db,
             &input.action,
             input.hash_a,
@@ -175,7 +175,7 @@ impl TypedCommand for GetDuplicateCount {
 
     async fn execute(state: &AppState, _input: Self::Input) -> Result<Self::Output, String> {
         let count =
-            crate::duplicate_controller::DuplicateController::get_duplicate_count(&state.db)
+            crate::duplicates::controller::DuplicateController::get_duplicate_count(&state.db)
                 .await?;
         Ok(serde_json::json!({ "count": count }))
     }

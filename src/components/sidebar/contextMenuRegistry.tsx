@@ -4,9 +4,9 @@ export {
   buildFolderSurfaceMenu,
   type FolderSingleMenuOptions,
   type FolderMultiMenuOptions,
-} from '../ui/context-actions/folderActions';
+} from '../../shared/components/context-actions/folderActions';
 
 export {
   buildSmartFolderItemMenu,
   type SmartFolderMenuOptions,
-} from '../ui/context-actions/smartFolderActions';
+} from '../../shared/components/context-actions/smartFolderActions';

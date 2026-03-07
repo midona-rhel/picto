@@ -4,9 +4,9 @@
 //! Delegates to `sqlite::tags` for DB operations and `tags.rs` for
 //! normalization.
 
-use crate::sqlite::tags::FileTagInfo;
+use crate::tags::db::FileTagInfo;
 use crate::sqlite::SqliteDatabase;
-use crate::tags;
+use super::normalize;
 use crate::types::{FileInfoSlim, TagInfo};
 
 fn tag_display_key(namespace: &str, subtag: &str) -> String {

@@ -1,5 +1,5 @@
-import { useRuntimeSyncStore } from '../../stores/runtimeSyncStore';
-import { useDomainStore } from '../../stores/domainStore';
+import { useRuntimeSyncStore } from '../../state/runtimeSyncStore';
+import { useDomainStore } from '../../state/domainStore';
 import { SidebarController } from '../../controllers/sidebarController';
 
 let unsub: (() => void) | null = null;

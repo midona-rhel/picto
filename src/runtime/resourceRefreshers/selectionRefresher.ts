@@ -1,4 +1,4 @@
-import { useRuntimeSyncStore } from '../../stores/runtimeSyncStore';
+import { useRuntimeSyncStore } from '../../state/runtimeSyncStore';
 import { SelectionController } from '../../controllers/selectionController';
 
 let unsub: (() => void) | null = null;

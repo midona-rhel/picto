@@ -1,11 +1,11 @@
 import { useCallback, useMemo, type MouseEvent } from 'react';
 import { IconMenu2 } from '@tabler/icons-react';
 import { api, getCurrentWindow, invoke, libraryHost } from '#desktop/api';
-import { KbdTooltip } from '../ui/KbdTooltip';
-import { ContextMenu, type ContextMenuEntry, useContextMenu } from '../ui/ContextMenu';
-import { useNavigationStore } from '../../stores/navigationStore';
+import { KbdTooltip } from '../../shared/components/KbdTooltip';
+import { ContextMenu, type ContextMenuEntry, useContextMenu } from '../../shared/components/ContextMenu';
+import { useNavigationStore } from '../../state/navigationStore';
 import { performRedo, performUndo } from '../../controllers/undoRedoController';
-import { useUndoRedoStore } from '../../stores/undoRedoStore';
+import { useUndoRedoStore } from '../../state/undoRedoStore';
 import styles from './SidebarMenuButton.module.css';
 
 export function SidebarMenuButton() {

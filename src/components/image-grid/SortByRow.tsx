@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Select } from '@mantine/core';
 import { IconSortAscending, IconSortDescending } from '@tabler/icons-react';
-import { cmSelectInput, cmSelectDropdown, cmSelectOption, cmComboboxProps } from '../ui/cmSelectStyles';
+import { cmSelectInput, cmSelectDropdown, cmSelectOption, cmComboboxProps } from '../../shared/components/cmSelectStyles';
 
 export function SortByRow({ field, order, onFieldChange, onOrderChange }: {
   field: string; order: string;

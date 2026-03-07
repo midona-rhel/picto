@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useRef } from 'react';
 import { api, emitTo, listen } from '#desktop/api';
 import { FileController } from '../../../controllers/fileController';
-import { notifyError, notifySuccess } from '../../../lib/notify';
+import { notifyError, notifySuccess } from '../../../shared/lib/notify';
 import { registerUndoAction } from '../../../controllers/undoRedoController';
-import { logBestEffortError, runBestEffort } from '../../../lib/asyncOps';
+import { logBestEffortError, runBestEffort } from '../../../shared/lib/asyncOps';
 import type { MasonryImageItem } from '../shared';
 import type { DetailViewControls, DetailViewState } from '../DetailView';
 import type { GridRuntimeAction, GridRuntimeState } from '../runtime';

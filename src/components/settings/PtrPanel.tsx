@@ -8,11 +8,11 @@ import {
   Loader,
 } from '@mantine/core';
 import { api, open as openDialog } from '#desktop/api';
-import { TextButton } from '../ui/TextButton';
+import { TextButton } from '../../shared/components/TextButton';
 import { SettingsBlock, SettingsRow, SettingsInputGroup } from './ui';
 import { PtrSyncController } from '../../controllers/ptrSyncController';
-import { runBestEffort, runCriticalAction } from '../../lib/asyncOps';
-import { useRuntimeSyncStore } from '../../stores/runtimeSyncStore';
+import { runBestEffort, runCriticalAction } from '../../shared/lib/asyncOps';
+import { useRuntimeSyncStore } from '../../state/runtimeSyncStore';
 
 interface AppSettings {
   ptrServerUrl: string | null;

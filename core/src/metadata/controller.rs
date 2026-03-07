@@ -7,10 +7,10 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 
-use crate::sqlite::tags::FileTagInfo;
+use crate::tags::db::FileTagInfo;
 use crate::sqlite::SqliteDatabase;
-use crate::sqlite_ptr::PtrSqliteDatabase;
-use crate::tags;
+use crate::ptr::db::PtrSqliteDatabase;
+use crate::tags::normalize;
 use crate::types::{
     tag_display_key, DominantColorDto, FileAllMetadata, FileInfo, ResolvedTagInfo, TagInfo,
 };

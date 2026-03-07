@@ -13,7 +13,7 @@ import type {
   ResolvedTagInfo,
   SelectionQuerySpec,
   SelectionSummary,
-} from '../../types/api';
+} from '../../shared/types/api';
 
 export type { EntityAllMetadata };
 export type {

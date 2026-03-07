@@ -8,11 +8,11 @@ use roaring::RoaringBitmap;
 
 use crate::sqlite::bitmaps::BitmapKey;
 use crate::sqlite::files::batch_get_by_hashes;
-use crate::sqlite::folders::list_uncategorized_entity_ids;
-use crate::sqlite::smart_folders::compile_predicate;
-use crate::sqlite::tags::find_tag as sql_find_tag;
+use crate::folders::db::list_uncategorized_entity_ids;
+use crate::smart_folders::db::compile_predicate;
+use crate::tags::db::find_tag as sql_find_tag;
 use crate::sqlite::SqliteDatabase;
-use crate::tags;
+use crate::tags::normalize;
 use crate::types::{tag_display_key, SelectionMode, SelectionQuerySpec, SelectionTagCount};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -78,7 +78,7 @@ pub async fn summarize_hashes_bulk(
     ),
     String,
 > {
-    use crate::sqlite::tags::get_entities_tags as sql_get_entities_tags;
+    use crate::tags::db::get_entities_tags as sql_get_entities_tags;
 
     let hash_vec = hashes.to_vec();
     let (files, file_tags_map) = db

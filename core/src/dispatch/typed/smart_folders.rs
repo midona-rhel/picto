@@ -19,7 +19,7 @@ pub struct ReorderSmartFoldersInput {
 #[ts(export, export_to = "../../src/types/generated/commands/")]
 pub struct CreateSmartFolderInput {
     #[ts(type = "Record<string, unknown>")]
-    pub folder: crate::sqlite::smart_folders::SmartFolder,
+    pub folder: crate::smart_folders::db::SmartFolder,
 }
 
 #[derive(Debug, Deserialize, TS)]
@@ -27,7 +27,7 @@ pub struct CreateSmartFolderInput {
 pub struct UpdateSmartFolderInput {
     pub id: String,
     #[ts(type = "Record<string, unknown>")]
-    pub folder: crate::sqlite::smart_folders::SmartFolder,
+    pub folder: crate::smart_folders::db::SmartFolder,
 }
 
 #[derive(Debug, Deserialize, TS)]
@@ -39,7 +39,7 @@ pub struct DeleteSmartFolderInput {
 #[derive(Debug, Deserialize, TS)]
 #[ts(export, export_to = "../../src/types/generated/commands/")]
 pub struct QuerySmartFolderInput {
-    pub predicate: crate::sqlite::smart_folders::SmartFolderPredicate,
+    pub predicate: crate::smart_folders::db::SmartFolderPredicate,
     #[serde(default)]
     #[ts(type = "number | null")]
     pub limit: Option<usize>,
@@ -51,7 +51,7 @@ pub struct QuerySmartFolderInput {
 #[derive(Debug, Deserialize, TS)]
 #[ts(export, export_to = "../../src/types/generated/commands/")]
 pub struct CountSmartFolderInput {
-    pub predicate: crate::sqlite::smart_folders::SmartFolderPredicate,
+    pub predicate: crate::smart_folders::db::SmartFolderPredicate,
 }
 
 // ─── Command structs ───────────────────────────────────────────────────────
@@ -88,7 +88,7 @@ impl TypedCommand for CreateSmartFolder {
 
     async fn execute(state: &AppState, input: Self::Input) -> Result<Self::Output, String> {
         let result =
-            crate::smart_folder_controller::SmartFolderController::create_smart_folder(
+            crate::smart_folders::controller::SmartFolderController::create_smart_folder(
                 &state.db,
                 input.folder,
             )
@@ -108,7 +108,7 @@ impl TypedCommand for UpdateSmartFolder {
 
     async fn execute(state: &AppState, input: Self::Input) -> Result<Self::Output, String> {
         let (result, predicate_changed) =
-            crate::smart_folder_controller::SmartFolderController::update_smart_folder(
+            crate::smart_folders::controller::SmartFolderController::update_smart_folder(
                 &state.db,
                 input.id.clone(),
                 input.folder,
@@ -135,7 +135,7 @@ impl TypedCommand for DeleteSmartFolder {
 
     async fn execute(state: &AppState, input: Self::Input) -> Result<Self::Output, String> {
         let sf_id: i64 = input.id.parse().unwrap_or(0);
-        crate::smart_folder_controller::SmartFolderController::delete_smart_folder(
+        crate::smart_folders::controller::SmartFolderController::delete_smart_folder(
             &state.db,
             input.id,
         )
@@ -157,7 +157,7 @@ impl TypedCommand for ListSmartFolders {
 
     async fn execute(state: &AppState, _input: Self::Input) -> Result<Self::Output, String> {
         let result =
-            crate::smart_folder_controller::SmartFolderController::list_smart_folders(&state.db)
+            crate::smart_folders::controller::SmartFolderController::list_smart_folders(&state.db)
                 .await?;
         Ok(serde_json::to_value(&result).map_err(|e| e.to_string())?)
     }
@@ -170,7 +170,7 @@ impl TypedCommand for QuerySmartFolder {
 
     async fn execute(state: &AppState, input: Self::Input) -> Result<Self::Output, String> {
         let result =
-            crate::smart_folder_controller::SmartFolderController::query_smart_folder(
+            crate::smart_folders::controller::SmartFolderController::query_smart_folder(
                 &state.db,
                 input.predicate,
                 input.limit,
@@ -188,7 +188,7 @@ impl TypedCommand for CountSmartFolder {
 
     async fn execute(state: &AppState, input: Self::Input) -> Result<Self::Output, String> {
         let count =
-            crate::smart_folder_controller::SmartFolderController::count_smart_folder(
+            crate::smart_folders::controller::SmartFolderController::count_smart_folder(
                 &state.db,
                 input.predicate,
             )

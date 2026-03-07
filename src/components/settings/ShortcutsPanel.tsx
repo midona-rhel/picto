@@ -1,7 +1,7 @@
 import { useState, useCallback, useRef } from 'react';
-import { getShortcutGroups, formatKeysDisplay, SHORTCUT_DEFS } from '../../lib/shortcuts';
-import { TextButton } from '../ui/TextButton';
-import type { ShortcutDef, ShortcutGroup } from '../../lib/shortcuts';
+import { getShortcutGroups, formatKeysDisplay, SHORTCUT_DEFS } from '../../shared/lib/shortcuts';
+import { TextButton } from '../../shared/components/TextButton';
+import type { ShortcutDef, ShortcutGroup } from '../../shared/lib/shortcuts';
 import st from './ShortcutsPanel.module.css';
 import settingsSt from '../Settings.module.css';
 

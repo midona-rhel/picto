@@ -1,1 +1,1 @@
-export type { SmartFolder, SmartFolderPredicate } from '../../../types/api';
+export type { SmartFolder, SmartFolderPredicate } from '../../../shared/types/api';

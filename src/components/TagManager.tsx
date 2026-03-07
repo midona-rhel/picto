@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useDebouncedCallback } from '../hooks/useDebouncedCallback';
 import { Loader, Modal, SegmentedControl, TextInput } from '@mantine/core';
-import { TextButton } from './ui/TextButton';
-import { glassModalStyles } from '../styles/glassModal';
+import { TextButton } from '../shared/components/TextButton';
+import { glassModalStyles } from '../shared/styles/glassModal';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import {
   IconLayoutGrid,
@@ -17,15 +17,15 @@ import {
 } from '@tabler/icons-react';
 import { api } from '#desktop/api';
 import { writeText } from '#desktop/api';
-import { notifySuccess, notifyError, notifyWarning } from '../lib/notify';
-import { getNamespaceColor } from '../lib/namespaceColors';
-import { parseTagString } from '../lib/tagParsing';
+import { notifySuccess, notifyError, notifyWarning } from '../shared/lib/notify';
+import { getNamespaceColor } from '../shared/lib/namespaceColors';
+import { parseTagString } from '../shared/lib/tagParsing';
 import { useInlineRename } from '../hooks/useInlineRename';
-import { useNavigationStore } from '../stores/navigationStore';
-import { ContextMenu, useContextMenu, type ContextMenuEntry } from './ui/ContextMenu';
+import { useNavigationStore } from '../state/navigationStore';
+import { ContextMenu, useContextMenu, type ContextMenuEntry } from '../shared/components/ContextMenu';
 import { TagRelationsModal } from './TagRelationsModal';
 import { registerUndoAction } from '../controllers/undoRedoController';
-import { buildTagContextMenu } from './ui/context-actions/tagActions';
+import { buildTagContextMenu } from '../shared/components/context-actions/tagActions';
 import classes from './TagManager.module.css';
 
 interface TagRecord {
@@ -40,7 +40,7 @@ interface NamespaceSummary {
   count: number;
 }
 
-import type { TagRelation, TagSearchResult } from '../types/api';
+import type { TagRelation, TagSearchResult } from '../shared/types/api';
 
 function formatTagDisplay(ns: string, subtag: string): string {
   return ns ? `${ns}:${subtag}` : subtag;

@@ -16,17 +16,17 @@ import { useSortable, SortableContext, verticalListSortingStrategy } from '@dnd-
 
 import { FolderController } from '../../controllers/folderController';
 import { registerUndoAction } from '../../controllers/undoRedoController';
-import { notifyWarning } from '../../lib/notify';
-import { useDomainStore } from '../../stores/domainStore';
-import { useNavigationStore } from '../../stores/navigationStore';
-import { ContextMenu, useContextMenu, type ContextMenuEntry } from '../ui/ContextMenu';
+import { notifyWarning } from '../../shared/lib/notify';
+import { useDomainStore } from '../../state/domainStore';
+import { useNavigationStore } from '../../state/navigationStore';
+import { ContextMenu, useContextMenu, type ContextMenuEntry } from '../../shared/components/ContextMenu';
 import {
   buildFolderMultiMenu,
   buildFolderSingleMenu,
-} from '../ui/context-actions/folderActions';
+} from '../../shared/components/context-actions/folderActions';
 import { DynamicIcon } from '../smart-folders/iconRegistry';
-import { imageDrag, useImageDragDropTarget } from '../../lib/imageDrag';
-import type { SidebarNodeDto } from '../../types/sidebar';
+import { imageDrag, useImageDragDropTarget } from '../../shared/lib/imageDrag';
+import type { SidebarNodeDto } from '../../shared/types/sidebar';
 import { TagSelectService } from '../tags/tagSelectService';
 import { SidebarSection } from './SidebarSection';
 import { SidebarItem } from './SidebarItem';

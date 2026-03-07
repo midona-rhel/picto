@@ -4,21 +4,11 @@
 //! rusqlite is synchronous — all DB calls wrapped in `spawn_blocking`.
 
 pub mod bitmaps;
-pub mod collections;
 pub mod compilers;
-pub mod duplicates;
 pub mod files;
-pub mod flows;
-pub mod folders;
 pub mod hash_index;
-pub mod import;
 pub mod projections;
 pub mod schema;
-pub mod sidebar;
-pub mod smart_folders;
-pub mod subscriptions;
-pub mod tags;
-pub mod view_prefs;
 
 use bitmaps::BitmapStore;
 use hash_index::HashIndex;

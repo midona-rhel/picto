@@ -1,7 +1,7 @@
 
 import { type ReactNode, useState } from 'react';
 import { IconChevronRight, IconPlus } from '@tabler/icons-react';
-import { KbdTooltip } from '../ui/KbdTooltip';
+import { KbdTooltip } from '../../shared/components/KbdTooltip';
 import styles from './Sidebar.module.css';
 
 interface SidebarSectionProps {

@@ -1,14 +1,14 @@
 import { useEffect, useRef } from 'react';
 import { useHotkeys } from '@mantine/hooks';
 import { notifications } from '@mantine/notifications';
-import { notifyError, notifySuccess } from '../../../lib/notify';
+import { notifyError, notifySuccess } from '../../../shared/lib/notify';
 import { FolderController } from '../../../controllers/folderController';
-import { FolderPickerService } from '../../../services/folderPickerService';
+import { FolderPickerService } from '../../../shared/services/folderPickerService';
 import { FileController } from '../../../controllers/fileController';
-import { bustThumbnailCache } from '../../../lib/mediaUrl';
-import { useCacheStore } from '../../../stores/cacheStore';
-import { useSettingsStore, type AppSettings } from '../../../stores/settingsStore';
-import { getShortcut, matchesShortcutDef } from '../../../lib/shortcuts';
+import { bustThumbnailCache } from '../../../shared/lib/mediaUrl';
+import { useCacheStore } from '../../../state/cacheStore';
+import { useSettingsStore, type AppSettings } from '../../../state/settingsStore';
+import { getShortcut, matchesShortcutDef } from '../../../shared/lib/shortcuts';
 import type { GridRuntimeAction, GridRuntimeState, GridViewMode } from '../runtime';
 import type { DetailViewControls, DetailViewState } from '../DetailView';
 

@@ -11,12 +11,12 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 
 use super::bitmaps::BitmapKey;
-use super::folders::count_uncategorized_entities;
+use crate::folders::db::count_uncategorized_entities;
 use super::projections;
-use super::sidebar;
-use super::smart_folders;
+use crate::sidebar::db as sidebar;
+use crate::smart_folders::db as smart_folders;
 use super::SqliteDatabase;
-use crate::sqlite_ptr::PtrSqliteDatabase;
+use crate::ptr::db::PtrSqliteDatabase;
 
 /// Events that trigger compiler runs.
 #[derive(Debug, Clone)]
@@ -330,7 +330,7 @@ async fn run_compilers(
     // 8. PTR overlay compiler — never on RebuildAll (shares PTR writer lock)
     if plan.rebuild_ptr_overlay || plan.rebuild_ptr_overlay_full {
         if let Some(ptr) = ptr_db {
-            if crate::ptr_controller::PtrController::is_ptr_syncing() {
+            if crate::ptr::controller::PtrController::is_ptr_syncing() {
                 tracing::info!("Skipping PTR overlay rebuild (sync in progress)");
             } else if plan.rebuild_ptr_overlay_full || plan.ptr_changed_hashes.is_empty() {
                 compile_ptr_overlay_full(ptr).await?;
@@ -773,7 +773,7 @@ async fn compile_sidebar(db: &Arc<SqliteDatabase>) -> Result<(), String> {
 
         // Folder nodes — count only non-trashed files (inbox + active)
         let active_bm = bitmaps.get(&BitmapKey::AllActive);
-        let folders = super::folders::list_folders(conn)?;
+        let folders = crate::folders::db::list_folders(conn)?;
         for folder in folders {
             let node_id = format!("folder:{}", folder.folder_id);
             let count = (bitmaps.get(&BitmapKey::Folder(folder.folder_id)) & &active_bm).len();

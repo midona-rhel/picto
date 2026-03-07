@@ -5,7 +5,7 @@
 //! - Metadata fetching (what updates exist)
 //! - Individual update downloading (definitions + content)
 
-use crate::ptr_types::{self, PtrMetadata, PtrUpdate};
+use crate::ptr::types::{self, PtrMetadata, PtrUpdate};
 
 /// Default PTR server URL (the public Hydrus PTR).
 /// Port 45871 is the standard Hydrus repository port.

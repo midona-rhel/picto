@@ -13,10 +13,10 @@ use tokio_util::sync::CancellationToken;
 use crate::blob_store::BlobStore;
 use crate::events;
 use crate::rate_limiter::RateLimiter;
-use crate::settings::SettingsStore;
-use crate::sqlite::subscriptions::{get_subscription, get_subscription_query};
+use crate::settings::store::SettingsStore;
+use crate::subscriptions::db::{get_subscription, get_subscription_query};
 use crate::sqlite::SqliteDatabase;
-use crate::subscription_sync::SubscriptionSyncEngine;
+use crate::subscriptions::sync_engine::SubscriptionSyncEngine;
 use crate::types::{
     RunningSubscriptions, SubTerminalStatuses, SubscriptionInfo, SubscriptionQueryInfo,
 };
@@ -30,7 +30,6 @@ fn schedule_progress_snapshot_clear(running_subs: RunningSubscriptions, subscrip
             map.contains_key(&subscription_id)
         };
         if !still_running {
-            crate::subscription_sync::clear_runtime_progress_snapshot(&subscription_id);
             crate::runtime_state::remove_task(&task_id);
         }
     });
@@ -222,7 +221,7 @@ impl SubscriptionController {
             .into_iter()
             .map(|(sub, total_files)| {
                 let sub_id = sub.subscription_id;
-                let canonical_site_id = crate::gallery_dl_runner::canonical_site_id(&sub.site_id);
+                let canonical_site_id = crate::subscriptions::gallery_dl_runner::canonical_site_id(&sub.site_id);
                 SubscriptionInfo {
                     id: sub_id.to_string(),
                     name: sub.name,
@@ -256,10 +255,10 @@ impl SubscriptionController {
         initial_file_limit: Option<u32>,
         periodic_file_limit: Option<u32>,
     ) -> Result<SubscriptionInfo, String> {
-        if crate::gallery_dl_runner::site_by_id(&site_id).is_none() {
+        if crate::subscriptions::gallery_dl_runner::site_by_id(&site_id).is_none() {
             return Err(format!("Unknown site: {site_id}"));
         }
-        let canonical_site_id = crate::gallery_dl_runner::canonical_site_id(&site_id).to_string();
+        let canonical_site_id = crate::subscriptions::gallery_dl_runner::canonical_site_id(&site_id).to_string();
         let sub = db
             .create_subscription(&name, &canonical_site_id, flow_id)
             .await?;
@@ -328,14 +327,14 @@ impl SubscriptionController {
         if delete_files.unwrap_or(false) {
             let file_ids = db
                 .with_read_conn(move |conn| {
-                    crate::sqlite::subscriptions::get_subscription_entity_ids(conn, sub_id)
+                    crate::subscriptions::db::get_subscription_entity_ids(conn, sub_id)
                 })
                 .await?;
 
             if !file_ids.is_empty() {
                 let resolved = db.resolve_ids_batch(&file_ids).await?;
                 let hashes: Vec<String> = resolved.into_iter().map(|(_, hash)| hash).collect();
-                crate::lifecycle_controller::LifecycleController::delete_files(
+                crate::lifecycle::controller::LifecycleController::delete_files(
                     db, blob_store, hashes,
                 )
                 .await?;
@@ -422,7 +421,7 @@ impl SubscriptionController {
         let mut archive_prefixes: Vec<String> = queries
             .iter()
             .map(|q| {
-                crate::subscription_sync::subscription_query_archive_prefix(sub_id, q.query_id)
+                crate::subscriptions::sync_engine::subscription_query_archive_prefix(sub_id, q.query_id)
             })
             .collect();
         archive_prefixes.push(format!("picto_s{sub_id}_q"));
@@ -478,7 +477,7 @@ impl SubscriptionController {
             Some(token) => {
                 token.cancel();
                 drop(map);
-                let progress = crate::subscription_sync::SubscriptionProgressEvent {
+                let progress = crate::subscriptions::sync_engine::SubscriptionProgressEvent {
                     subscription_id: id.clone(),
                     subscription_name: resolved_name,
                     mode: "subscription".to_string(),
@@ -492,7 +491,6 @@ impl SubscriptionController {
                     last_metadata_error: None,
                     status_text: "Cancelling…".to_string(),
                 };
-                crate::subscription_sync::update_runtime_progress_snapshot(progress.clone());
                 events::emit(
                     events::event_names::SUBSCRIPTION_PROGRESS,
                     &progress,
@@ -505,7 +503,7 @@ impl SubscriptionController {
                         crate::runtime_contract::task::TaskStatus::Cancelling,
                         None,
                         None,
-                        None,
+                        serde_json::to_value(&progress).ok(),
                     ));
                 }
                 Ok(())
@@ -521,9 +519,9 @@ impl SubscriptionController {
         Ok(map.keys().cloned().collect())
     }
 
-    pub fn get_running_subscription_progress() -> Vec<crate::subscription_sync::SubscriptionProgressEvent>
+    pub fn get_running_subscription_progress() -> Vec<crate::subscriptions::sync_engine::SubscriptionProgressEvent>
     {
-        crate::subscription_sync::list_runtime_progress_snapshots()
+        crate::subscriptions::sync_engine::list_runtime_progress_from_tasks()
     }
 
     pub async fn run_subscription(
@@ -563,7 +561,7 @@ impl SubscriptionController {
         if sub.site_id.is_empty() {
             return Err("Subscription has no site configured".to_string());
         }
-        if crate::gallery_dl_runner::site_by_id(&sub.site_id).is_none() {
+        if crate::subscriptions::gallery_dl_runner::site_by_id(&sub.site_id).is_none() {
             return Err(format!("Unknown site: {}", sub.site_id));
         }
 
@@ -583,8 +581,8 @@ impl SubscriptionController {
                 query_name: None,
             },
         );
-        crate::subscription_sync::update_runtime_progress_snapshot(
-            crate::subscription_sync::SubscriptionProgressEvent {
+        {
+            let starting_progress = crate::subscriptions::sync_engine::SubscriptionProgressEvent {
                 subscription_id: id.clone(),
                 subscription_name: sub.name.clone(),
                 mode: "subscription".to_string(),
@@ -597,29 +595,29 @@ impl SubscriptionController {
                 metadata_invalid: 0,
                 last_metadata_error: None,
                 status_text: "Starting...".to_string(),
-            },
-        );
-        crate::runtime_state::upsert_task(make_sub_runtime_task(
-            &id,
-            &sub.name,
-            crate::runtime_contract::task::TaskStatus::Running,
-            None,
-            None,
-            None,
-        ));
+            };
+            crate::runtime_state::upsert_task(make_sub_runtime_task(
+                &id,
+                &sub.name,
+                crate::runtime_contract::task::TaskStatus::Running,
+                None,
+                None,
+                serde_json::to_value(&starting_progress).ok(),
+            ));
+        }
 
         let db = db.clone();
         let blob_store = blob_store.clone();
         let running_subs = running_subs.clone();
         let sub_name = sub.name.clone();
         let sub_id_str = id.clone();
-        let site_id = crate::gallery_dl_runner::canonical_site_id(&sub.site_id).to_string();
+        let site_id = crate::subscriptions::gallery_dl_runner::canonical_site_id(&sub.site_id).to_string();
         let terminal_statuses = sub_terminal_statuses;
 
         let app_settings = settings.get();
         let auto_merge_enabled = app_settings.duplicate_auto_merge_enabled;
         let auto_merge_distance = if auto_merge_enabled {
-            crate::settings::similarity_pct_to_distance(
+            crate::settings::store::similarity_pct_to_distance(
                 app_settings.duplicate_auto_merge_similarity_pct,
             )
         } else {
@@ -747,8 +745,16 @@ impl SubscriptionController {
                         last_metadata_error: last_metadata_error.clone(),
                     },
                 );
-                crate::subscription_sync::update_runtime_progress_snapshot(
-                    crate::subscription_sync::SubscriptionProgressEvent {
+                {
+                    use crate::runtime_contract::task::{TaskProgress, TaskStatus};
+                    let task_status = if was_cancelled {
+                        TaskStatus::Failed
+                    } else if total_errors > 0 {
+                        TaskStatus::Failed
+                    } else {
+                        TaskStatus::Finished
+                    };
+                    let finished_progress = crate::subscriptions::sync_engine::SubscriptionProgressEvent {
                         subscription_id: sub_id_for_inner_clear.clone(),
                         subscription_name: sub_name.clone(),
                         mode: "subscription".to_string(),
@@ -761,16 +767,6 @@ impl SubscriptionController {
                         metadata_invalid: total_metadata_invalid,
                         last_metadata_error: last_metadata_error.clone(),
                         status_text: final_status_text.to_string(),
-                    },
-                );
-                {
-                    use crate::runtime_contract::task::{TaskProgress, TaskStatus};
-                    let task_status = if was_cancelled {
-                        TaskStatus::Failed
-                    } else if total_errors > 0 {
-                        TaskStatus::Failed
-                    } else {
-                        TaskStatus::Finished
                     };
                     crate::runtime_state::upsert_task(make_sub_runtime_task(
                         &sub_id_for_inner_clear,
@@ -782,7 +778,7 @@ impl SubscriptionController {
                             total: (total_downloaded + total_skipped) as u64,
                             status_text: Some(final_status_text.to_string()),
                         }),
-                        None,
+                        serde_json::to_value(&finished_progress).ok(),
                     ));
                 }
                 schedule_progress_snapshot_clear(
@@ -798,8 +794,8 @@ impl SubscriptionController {
                 );
                 let mut map = running_subs_guard.lock().await;
                 map.remove(&sub_id_guard);
-                crate::subscription_sync::update_runtime_progress_snapshot(
-                    crate::subscription_sync::SubscriptionProgressEvent {
+                {
+                    let panic_progress = crate::subscriptions::sync_engine::SubscriptionProgressEvent {
                         subscription_id: sub_id_guard.clone(),
                         subscription_name: sub_name_guard.clone(),
                         mode: "subscription".to_string(),
@@ -812,16 +808,16 @@ impl SubscriptionController {
                         metadata_invalid: 0,
                         last_metadata_error: None,
                         status_text: "Failed".to_string(),
-                    },
-                );
-                crate::runtime_state::upsert_task(make_sub_runtime_task(
-                    &sub_id_guard,
-                    &sub_name_guard,
-                    crate::runtime_contract::task::TaskStatus::Failed,
-                    None,
-                    None,
-                    Some(serde_json::json!({ "error": format!("Task panicked: {e}") })),
-                ));
+                    };
+                    crate::runtime_state::upsert_task(make_sub_runtime_task(
+                        &sub_id_guard,
+                        &sub_name_guard,
+                        crate::runtime_contract::task::TaskStatus::Failed,
+                        None,
+                        None,
+                        serde_json::to_value(&panic_progress).ok(),
+                    ));
+                }
                 schedule_progress_snapshot_clear(running_subs_guard.clone(), sub_id_guard.clone());
             }
         });
@@ -877,7 +873,7 @@ impl SubscriptionController {
         if sub.site_id.is_empty() {
             return Err("Subscription has no site configured".to_string());
         }
-        if crate::gallery_dl_runner::site_by_id(&sub.site_id).is_none() {
+        if crate::subscriptions::gallery_dl_runner::site_by_id(&sub.site_id).is_none() {
             return Err(format!("Unknown site: {}", sub.site_id));
         }
 
@@ -897,8 +893,8 @@ impl SubscriptionController {
                 query_name: Some(query_name.clone()),
             },
         );
-        crate::subscription_sync::update_runtime_progress_snapshot(
-            crate::subscription_sync::SubscriptionProgressEvent {
+        {
+            let starting_progress = crate::subscriptions::sync_engine::SubscriptionProgressEvent {
                 subscription_id: subscription_id.clone(),
                 subscription_name: sub.name.clone(),
                 mode: "query".to_string(),
@@ -911,20 +907,16 @@ impl SubscriptionController {
                 metadata_invalid: 0,
                 last_metadata_error: None,
                 status_text: "Starting...".to_string(),
-            },
-        );
-        crate::runtime_state::upsert_task(make_sub_runtime_task(
-            &subscription_id,
-            &sub.name,
-            crate::runtime_contract::task::TaskStatus::Running,
-            None,
-            None,
-            Some(serde_json::json!({
-                "query_id": query_id,
-                "query_name": query_name,
-                "mode": "query",
-            })),
-        ));
+            };
+            crate::runtime_state::upsert_task(make_sub_runtime_task(
+                &subscription_id,
+                &sub.name,
+                crate::runtime_contract::task::TaskStatus::Running,
+                None,
+                None,
+                serde_json::to_value(&starting_progress).ok(),
+            ));
+        }
 
         let db = db.clone();
         let blob_store = blob_store.clone();
@@ -933,7 +925,7 @@ impl SubscriptionController {
         let sub_id_str = subscription_id.clone();
         let query_id_str = query_id.clone();
         let query_name_str = query_name.clone();
-        let site_id = crate::gallery_dl_runner::canonical_site_id(&sub.site_id).to_string();
+        let site_id = crate::subscriptions::gallery_dl_runner::canonical_site_id(&sub.site_id).to_string();
         let query_text = query.query_text.clone();
         let query_display_name = query.display_name.clone();
         let completed_initial_run = query.completed_initial_run;
@@ -943,7 +935,7 @@ impl SubscriptionController {
         let app_settings = settings.get();
         let auto_merge_enabled = app_settings.duplicate_auto_merge_enabled;
         let auto_merge_distance = if auto_merge_enabled {
-            crate::settings::similarity_pct_to_distance(
+            crate::settings::store::similarity_pct_to_distance(
                 app_settings.duplicate_auto_merge_similarity_pct,
             )
         } else {
@@ -1058,8 +1050,16 @@ impl SubscriptionController {
                 );
                 let final_status_text =
                     resolve_finished_status_text(status, failure_kind.as_deref());
-                crate::subscription_sync::update_runtime_progress_snapshot(
-                    crate::subscription_sync::SubscriptionProgressEvent {
+                {
+                    use crate::runtime_contract::task::{TaskProgress, TaskStatus};
+                    let task_status = if was_cancelled {
+                        TaskStatus::Failed
+                    } else if total_errors > 0 {
+                        TaskStatus::Failed
+                    } else {
+                        TaskStatus::Finished
+                    };
+                    let finished_progress = crate::subscriptions::sync_engine::SubscriptionProgressEvent {
                         subscription_id: sub_id_for_inner_clear.clone(),
                         subscription_name: sub_name.clone(),
                         mode: "query".to_string(),
@@ -1072,16 +1072,6 @@ impl SubscriptionController {
                         metadata_invalid,
                         last_metadata_error: last_metadata_error.clone(),
                         status_text: final_status_text.to_string(),
-                    },
-                );
-                {
-                    use crate::runtime_contract::task::{TaskProgress, TaskStatus};
-                    let task_status = if was_cancelled {
-                        TaskStatus::Failed
-                    } else if total_errors > 0 {
-                        TaskStatus::Failed
-                    } else {
-                        TaskStatus::Finished
                     };
                     crate::runtime_state::upsert_task(make_sub_runtime_task(
                         &sub_id_for_inner_clear,
@@ -1093,7 +1083,7 @@ impl SubscriptionController {
                             total: (total_downloaded + total_skipped) as u64,
                             status_text: Some(final_status_text.to_string()),
                         }),
-                        None,
+                        serde_json::to_value(&finished_progress).ok(),
                     ));
                 }
                 schedule_progress_snapshot_clear(
@@ -1128,8 +1118,8 @@ impl SubscriptionController {
                         last_metadata_error: None,
                     },
                 );
-                crate::subscription_sync::update_runtime_progress_snapshot(
-                    crate::subscription_sync::SubscriptionProgressEvent {
+                {
+                    let panic_progress = crate::subscriptions::sync_engine::SubscriptionProgressEvent {
                         subscription_id: sub_id_guard.clone(),
                         subscription_name: sub_name_guard.clone(),
                         mode: "query".to_string(),
@@ -1142,16 +1132,16 @@ impl SubscriptionController {
                         metadata_invalid: 0,
                         last_metadata_error: None,
                         status_text: "Failed".to_string(),
-                    },
-                );
-                crate::runtime_state::upsert_task(make_sub_runtime_task(
-                    &sub_id_guard,
-                    &sub_name_guard,
-                    crate::runtime_contract::task::TaskStatus::Failed,
-                    None,
-                    None,
-                    Some(serde_json::json!({ "error": format!("Task panicked: {e}") })),
-                ));
+                    };
+                    crate::runtime_state::upsert_task(make_sub_runtime_task(
+                        &sub_id_guard,
+                        &sub_name_guard,
+                        crate::runtime_contract::task::TaskStatus::Failed,
+                        None,
+                        None,
+                        serde_json::to_value(&panic_progress).ok(),
+                    ));
+                }
                 schedule_progress_snapshot_clear(running_subs_guard.clone(), sub_id_guard.clone());
             }
         });

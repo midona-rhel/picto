@@ -7,18 +7,18 @@ use std::path::{Path, PathBuf};
 
 use tracing::{info, warn};
 
-use super::blob_store::BlobStore;
-use super::media_processing;
-use super::sqlite::import as sqlite_import;
-use super::sqlite::SqliteDatabase;
-use super::tags;
+use crate::blob_store::BlobStore;
+use crate::media_processing;
+use crate::sqlite::SqliteDatabase;
+use crate::tags::normalize as tags;
+use super::db as sqlite_import;
 
 #[derive(thiserror::Error, Debug)]
 pub enum ImportError {
     #[error("Database error: {0}")]
     Db(String),
     #[error("Blob storage error: {0}")]
-    Blob(#[from] super::blob_store::BlobError),
+    Blob(#[from] crate::blob_store::BlobError),
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
     #[error("Image error: {0}")]
@@ -179,7 +179,7 @@ impl<'a> ImportPipeline<'a> {
         }
 
         // Write blob before DB record so failures don't leave orphan rows.
-        let blob_ext = super::blob_store::mime_to_extension(&mime_string);
+        let blob_ext = crate::blob_store::mime_to_extension(&mime_string);
         self.blob_store
             .write_original(&hex_hash, &file_data, Some(blob_ext))?;
 
@@ -224,7 +224,7 @@ impl<'a> ImportPipeline<'a> {
                 .as_ref()
                 .map(|(b, _)| b.as_slice())
                 .unwrap_or(&file_data);
-            match super::duplicates::compute_phash_base64(phash_data) {
+            match crate::duplicates::phash::compute_phash_base64(phash_data) {
                 Ok(phash_b64) => {
                     if let Err(e) = self.db.set_phash(&hex_hash, &phash_b64).await {
                         warn!(hash = %hex_hash, error = %e, "Failed to store phash (non-fatal)");
@@ -275,7 +275,7 @@ impl<'a> ImportPipeline<'a> {
             .await
             .map_err(ImportError::Db)?
             .ok_or_else(|| ImportError::Db(format!("File not found in database: {hex_hash}")))?;
-        let ext = super::blob_store::mime_to_extension(&record.mime);
+        let ext = crate::blob_store::mime_to_extension(&record.mime);
         let data = self.blob_store.read_original(hex_hash, Some(ext))?;
         if let Some(parent) = dest.parent() {
             std::fs::create_dir_all(parent)?;

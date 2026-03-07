@@ -1,8 +1,8 @@
 import { useState } from 'react';
 import { api } from '#desktop/api';
-import { notifySuccess, notifyError } from '../../lib/notify';
-import { TextButton } from '../ui/TextButton';
-import { ConfirmModal } from '../ui/ConfirmModal';
+import { notifySuccess, notifyError } from '../../shared/lib/notify';
+import { TextButton } from '../../shared/components/TextButton';
+import { ConfirmModal } from '../../shared/components/ConfirmModal';
 import { SettingsBlock, SettingsButtonRow } from './ui';
 
 function getErrorMessage(err: unknown): string {

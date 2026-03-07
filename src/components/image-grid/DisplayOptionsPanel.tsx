@@ -1,5 +1,5 @@
-import { useSettingsStore } from '../../stores/settingsStore';
-import { useScopedDisplay } from '../../contexts/ScopedDisplayContext';
+import { useSettingsStore } from '../../state/settingsStore';
+import { useScopedDisplay } from '../../shared/contexts/ScopedDisplayContext';
 
 function ToggleSwitch({ checked, onClick }: { checked: boolean; onClick: () => void }) {
   return (

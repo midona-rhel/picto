@@ -7,7 +7,7 @@ import previewStyles from './GlassImagePreview.module.css';
 import {
   MediaCardFrame,
   MediaCardImage,
-} from '../ui/media-card';
+} from '../../shared/components/media-card';
 
 const CONTAINER_HEIGHT = 200;
 

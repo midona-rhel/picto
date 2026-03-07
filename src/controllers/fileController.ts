@@ -1,5 +1,5 @@
 import { api, copyFileToClipboard, copyImageToClipboard, reverseImageSearch, type ReverseImageEngine } from '#desktop/api';
-import type { TagDisplay } from '../types/api';
+import type { TagDisplay } from '../shared/types/api';
 
 /**
  * FileController — frontend facade for single-file commands.

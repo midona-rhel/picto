@@ -268,11 +268,11 @@
 }
 
 .typesCheck {
-  composes: checkIcon from '../../styles/checkIcon.module.css';
+  composes: checkIcon from '../../shared/styles/checkIcon.module.css';
 }
 
 .typesCheckActive {
-  composes: checkIconChecked from '../../styles/checkIcon.module.css';
+  composes: checkIconChecked from '../../shared/styles/checkIcon.module.css';
 }
 
 .typesLabel {

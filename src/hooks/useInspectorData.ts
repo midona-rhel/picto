@@ -4,7 +4,7 @@ import { FileController } from '../controllers/fileController';
 import { SelectionController } from '../controllers/selectionController';
 import { FolderController } from '../controllers/folderController';
 import { deepClone, registerUndoAction } from '../controllers/undoRedoController';
-import { useCacheStore } from '../stores/cacheStore';
+import { useCacheStore } from '../state/cacheStore';
 import {
   getMetadata,
   invalidateMetadata,
@@ -14,8 +14,8 @@ import {
   type SelectionSummary,
 } from '#features/grid/data';
 import type { MasonryImageItem } from '#features/grid/types';
-import { parseTagString } from '../lib/tagParsing';
-import type { CollectionSummary } from '../types/api';
+import { parseTagString } from '../shared/lib/tagParsing';
+import type { CollectionSummary } from '../shared/types/api';
 
 export interface FolderMembership {
   folder_id: number;

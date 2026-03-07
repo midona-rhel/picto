@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Loader, Text, Kbd } from '@mantine/core';
-import { EmptyState } from './ui/EmptyState';
-import { TextButton } from './ui/TextButton';
-import { notifySuccess, notifyError, notifyInfo, notifyWarning } from '../lib/notify';
+import { EmptyState } from '../shared/components/EmptyState';
+import { TextButton } from '../shared/components/TextButton';
+import { notifySuccess, notifyError, notifyInfo, notifyWarning } from '../shared/lib/notify';
 import {
   IconArrowLeft,
   IconArrowRight,
@@ -13,10 +13,10 @@ import {
   IconCheck,
 } from '@tabler/icons-react';
 import { api } from '#desktop/api';
-import { mediaFileUrl, mediaThumbnailUrl } from '../lib/mediaUrl';
+import { mediaFileUrl, mediaThumbnailUrl } from '../shared/lib/mediaUrl';
 import { isImagePreloaded, queueImageDecode } from './image-grid/useImagePreloader';
-import type { DuplicatePairDto, DuplicatePairsResponse, ResolveDuplicateAction } from '../types/api';
-import { useDomainStore } from '../stores/domainStore';
+import type { DuplicatePairDto, DuplicatePairsResponse, ResolveDuplicateAction } from '../shared/types/api';
+import { useDomainStore } from '../state/domainStore';
 import { registerUndoAction } from '../controllers/undoRedoController';
 import { useGlobalKeydown } from '../hooks/useGlobalKeydown';
 import styles from './DuplicateManager.module.css';

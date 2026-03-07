@@ -791,7 +791,7 @@ fn repair_collection_entity_file_links(conn: &Connection) -> rusqlite::Result<()
             "DELETE FROM entity_file WHERE entity_id = ?1",
             [link.collection_id],
         )?;
-        crate::sqlite::collections::sync_collection_aggregate_metadata(conn, link.collection_id)?;
+        crate::folders::collections_db::sync_collection_aggregate_metadata(conn, link.collection_id)?;
         repaired_count += 1;
     }
 

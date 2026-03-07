@@ -311,8 +311,6 @@ impl MutationImpact {
 /// Emit a `runtime/mutation_committed` event with a `MutationReceipt`.
 ///
 /// This is the single mutation event the frontend subscribes to.
-/// It replaces the legacy `state-changed` / `sidebar-invalidated` /
-/// `grid-snapshot-invalidated` events.
 pub fn emit_mutation(origin: &str, impact: MutationImpact) {
     use crate::runtime_contract::mutation::{
         DerivedInvalidation, MutationFacts, MutationReceipt,
@@ -366,6 +364,15 @@ pub fn sidebar_counts_from_bitmaps(db: &crate::sqlite::SqliteDatabase) -> Sideba
 }
 
 pub mod event_names {
+    // --- Runtime contract (authoritative) ---
+    pub const RUNTIME_MUTATION_COMMITTED: &str = "runtime/mutation_committed";
+    pub const RUNTIME_TASK_UPSERTED: &str = "runtime/task_upserted";
+    pub const RUNTIME_TASK_REMOVED: &str = "runtime/task_removed";
+
+    // --- Compatibility events (legacy) ---
+    // These duplicate information already carried by runtime/task_upserted.
+    // Retained for frontend backward compatibility; remove once all frontend
+    // listeners migrate to the task-based model.
     pub const SUBSCRIPTION_STARTED: &str = "subscription-started";
     pub const SUBSCRIPTION_PROGRESS: &str = "subscription-progress";
     pub const SUBSCRIPTION_FINISHED: &str = "subscription-finished";
@@ -384,18 +391,12 @@ pub mod event_names {
     pub const PTR_BOOTSTRAP_FINISHED: &str = "ptr-bootstrap-finished";
     pub const PTR_BOOTSTRAP_FAILED: &str = "ptr-bootstrap-failed";
 
+    // --- Non-task events (kept) ---
     pub const LIBRARY_CLOSED: &str = "library-closed";
     pub const ZOOM_FACTOR_CHANGED: &str = "zoom-factor-changed";
-
     pub const FILE_IMPORTED: &str = "file-imported";
     pub const OPEN_DETAIL_WINDOW: &str = "open-detail-window";
-
     pub const DUPLICATE_AUTO_MERGE_FINISHED: &str = "duplicate-auto-merge-finished";
-
-    // --- Runtime contract (new)
-    pub const RUNTIME_MUTATION_COMMITTED: &str = "runtime/mutation_committed";
-    pub const RUNTIME_TASK_UPSERTED: &str = "runtime/task_upserted";
-    pub const RUNTIME_TASK_REMOVED: &str = "runtime/task_removed";
 }
 
 // --- Subscription lifecycle
