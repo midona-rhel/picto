@@ -34,6 +34,30 @@ This means the audit now covers both:
 - architecture/restructure tracks
 - explicit backend legacy classification and deletion planning
 
+## Recommended Execution Order (Backend)
+The 300-series PBIs are not all peers. They have a hard dependency order if the goal is to stop re-encoding wrong behavior.
+
+1. `PBI-327` canonical scope semantics engine
+2. `PBI-330` business-logic contract audit and conformance tests
+3. `PBI-328` fact-based mutation receipts and model-level invalidation
+4. `PBI-329` derived resource dependency map from model facts
+5. `PBI-300` runtime event bus and task registry realignment
+6. `PBI-307` grid/selection/sidebar query service decomposition
+7. `PBI-301` app state service lifecycle and worker boundary cleanup
+8. `PBI-302` subscription domain service split and orchestration cleanup
+9. `PBI-308` PTR domain decomposition and runtime state cleanup
+10. `PBI-303` gallery-dl runner decomposition and site adapter split
+11. `PBI-304` SQLite schema and migration pack decomposition
+12. `PBI-305` derived read-model publish boundary cleanup
+13. `PBI-306` import, lifecycle, and entity pipeline realignment
+14. `PBI-309` media-processing adapter registry and pipeline breakup
+
+Rationale:
+1. business semantics must be canonical before runtime invalidation is formalized
+2. mutation receipts must describe model truth before task/runtime infrastructure fans them out
+3. query-service decomposition should consume canonical semantics, not invent them
+4. backend topology and media-processing cleanup should follow after runtime/read-side contracts are stable
+
 ## Problem
 The Rust core has accumulated technical debt that is only partially catalogued. The existing cleanup PBIs address known pain points, but a systematic sweep of every module is needed to surface:
 - Dead or redundant code paths

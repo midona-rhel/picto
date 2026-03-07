@@ -22,19 +22,36 @@ The backend read side is split by historical controller boundaries instead of by
 - `core/src/sidebar_controller.rs`
 - relevant `sqlite/sidebar.rs` and projection helpers
 
+## Dependencies
+Depends on:
+1. `PBI-327` for canonical scope semantics.
+2. `PBI-329` for the model-fact to derived-resource dependency contract.
+3. `PBI-330` for the business-logic conformance suite that locks scope behavior before service extraction.
+
+## Not In Scope
+1. Redefining business rules for `select all`, `untagged`, `uncategorized`, or inbox visibility.
+2. Replacing runtime event transport.
+3. Frontend store/controller invalidation behavior.
+
 ## Implementation
 1. Define explicit query services for:
    - grid/page queries
    - selection summaries
    - sidebar snapshots/counts
 2. Pull shared read logic out of controller glue.
-3. Make scope semantics explicit and reusable between grid/selection/sidebar.
-4. Prepare the backend read side for the runtime resource model introduced by `PBI-234`.
+3. Consume the canonical scope resolver introduced by `PBI-327` rather than re-implementing scope semantics locally.
+4. Separate:
+   - scope resolution
+   - entity-id population queries
+   - page/cursor materialization
+   - selection summary aggregation
+   - sidebar snapshot/count projection
+5. Prepare the backend read side for the runtime resource model introduced by `PBI-234` and `PBI-329`.
 
 ## Acceptance Criteria
 1. Grid, selection, and sidebar read logic have clearer service boundaries.
 2. Controllers become thin entry points rather than mixed query engines.
-3. Shared scope/read semantics are defined once.
+3. Shared scope/read semantics are consumed from one source, not redefined here.
 4. Future runtime invalidation can target read services cleanly.
 
 ## Test Cases
