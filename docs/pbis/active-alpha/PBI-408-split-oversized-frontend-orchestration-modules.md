@@ -1,4 +1,4 @@
-# PBI-404: Split oversized frontend orchestration modules
+# PBI-408: Split oversized frontend orchestration modules
 
 ## Priority
 P2

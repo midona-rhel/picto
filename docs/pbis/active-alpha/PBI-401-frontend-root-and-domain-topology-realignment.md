@@ -133,10 +133,11 @@ High. This is a large-scale structural cleanup. It must be done in slices, but t
 `PBI-401` defines the target topology, but it is not sufficient by itself.
 Execution should be staged through:
 
-1. `PBI-405` frontend topology policy and CI guardrails
-2. `PBI-406` frontend legacy register and classification pass
-3. `PBI-407` frontend legacy deletion campaign and compatibility shim purge
-4. `PBI-404` split oversized frontend orchestration modules
+1. `PBI-402` frontend runtime sync store and derived resource model
+2. `PBI-403` frontend topology policy and CI guardrails
+3. `PBI-404` frontend legacy register and classification pass
+4. `PBI-405` frontend legacy deletion campaign and compatibility shim purge
+5. `PBI-408` split oversized frontend orchestration modules
 
 The structure work is only complete when legacy paths are blocked from regrowth
 and obsolete paths are actually deleted.

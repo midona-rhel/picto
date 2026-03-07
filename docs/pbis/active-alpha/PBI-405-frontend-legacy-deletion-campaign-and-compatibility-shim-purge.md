@@ -1,4 +1,4 @@
-# PBI-407: Frontend legacy deletion campaign and compatibility shim purge
+# PBI-405: Frontend legacy deletion campaign and compatibility shim purge
 
 ## Priority
 P1
@@ -15,7 +15,7 @@ Evidence:
 The project needs a deletion program, not just a migration program. If old paths remain after replacements land, the codebase will keep two ownership models alive indefinitely.
 
 ## Scope
-- Frontend legacy register outputs from `PBI-406`
+- Frontend legacy register outputs from `PBI-404`
 - Compatibility shims, alias modules, and duplicate domain surfaces
 - Deletion-budget policy for cleanup PRs
 

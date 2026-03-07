@@ -198,10 +198,11 @@ These are classes of likely deletion targets, not the final ledger:
 ## Execution Sequence
 
 1. `PBI-401` defines the target topology and folder ownership rules
-2. `PBI-405` adds policy and CI guardrails
-3. `PBI-406` builds the frontend legacy register and classifies current files
-4. `PBI-407` executes the first deletion campaign and compatibility shim purge
-5. `PBI-404` and related domain PBIs split oversized modules as part of the move/delete work
+2. `PBI-402` establishes the runtime/resource synchronization model against the backend
+3. `PBI-403` adds policy and CI guardrails
+4. `PBI-404` builds the frontend legacy register and classifies current files
+5. `PBI-405` executes the first deletion campaign and compatibility shim purge
+6. `PBI-408` and related domain PBIs split oversized modules as part of the move/delete work
 
 ## Definition of Done
 

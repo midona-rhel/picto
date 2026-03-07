@@ -17,7 +17,7 @@ Statuses:
 
 | Path | Category | Reason | Replacement / Target Owner | Delete Condition | Owner PBI | Status |
 | --- | --- | --- | --- | --- | --- | --- |
-| `src/components/` | catch-all legacy domain tree | Mixes shared primitives with domain-owned screens/components | `src/features/*` for domain code, `src/shared/components/*` for real primitives | After every child path is classified and migrated | `PBI-401`, `PBI-406`, `PBI-407` | transitional |
+| `src/components/` | catch-all legacy domain tree | Mixes shared primitives with domain-owned screens/components | `src/features/*` for domain code, `src/shared/components/*` for real primitives | After every child path is classified and migrated | `PBI-401`, `PBI-404`, `PBI-405` | transitional |
 | `src/App.tsx` | root shell residue | App shell and composition root still live directly under `src/` | `src/app/` | After app shell move is complete and entrypoint imports are updated | `PBI-401` | transitional |
 | `src/detail.tsx` | root entrypoint residue | Valid entrypoint, but should live under `src/entrypoints/` | `src/entrypoints/detail.tsx` | After entrypoint folder migration lands | `PBI-401` | transitional |
 | `src/library-manager.tsx` | root entrypoint residue | Valid entrypoint, but should live under `src/entrypoints/` | `src/entrypoints/library-manager.tsx` | After entrypoint folder migration lands | `PBI-401` | transitional |
@@ -28,4 +28,4 @@ Statuses:
 ## Notes
 
 1. This file starts with seed entries only.
-2. `PBI-406` should expand this to a full classification pass over current frontend files.
+2. `PBI-404` should expand this to a full classification pass over current frontend files.

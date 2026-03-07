@@ -1,4 +1,4 @@
-# PBI-405: Frontend topology policy and CI guardrails
+# PBI-403: Frontend topology policy and CI guardrails
 
 ## Priority
 P1

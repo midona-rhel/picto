@@ -88,7 +88,7 @@ Impact:
 
 Backlog mapping:
 
-1. New `PBI-402`
+1. New `PBI-406`
 2. Existing `PBI-234` remains the broader typed dispatch contract item, but it does not cover these renderer-side cleanup tasks specifically.
 
 ### 3. Lifecycle and effect ownership are still split across too many layers
@@ -115,7 +115,7 @@ Impact:
 Backlog mapping:
 
 1. Existing `PBI-244`
-2. New `PBI-403`
+2. New `PBI-407`
 
 ### 4. Several modules are too large and mix orchestration with presentation
 
@@ -135,7 +135,7 @@ Impact:
 Backlog mapping:
 
 1. Existing `PBI-229` absorbs the subscription panel/flow surface finding.
-2. New `PBI-404`
+2. New `PBI-408`
 
 ### 5. Some current active PBIs needed concrete audit targets
 
@@ -147,9 +147,13 @@ Updated with audit-specific scope:
 ## New PBIs Created From This Audit
 
 1. `PBI-401` — frontend root and domain topology realignment
-2. `PBI-402` — frontend type safety and renderer contract cleanup
-3. `PBI-403` — renderer bootstrap and lifecycle ownership cleanup
-4. `PBI-404` — split oversized frontend orchestration modules
+2. `PBI-402` — frontend runtime sync store and derived resource model
+3. `PBI-403` — frontend topology policy and CI guardrails
+4. `PBI-404` — frontend legacy register and classification pass
+5. `PBI-405` — frontend legacy deletion campaign and compatibility shim purge
+6. `PBI-406` — frontend type safety and renderer contract cleanup
+7. `PBI-407` — renderer bootstrap and lifecycle ownership cleanup
+8. `PBI-408` — split oversized frontend orchestration modules
 
 ## Conclusion
 
@@ -159,7 +163,11 @@ The frontend has now been audited at the directory/module level, and the remaini
 
 1. Existing `PBI-229`
 2. Existing `PBI-244`
-3. New `PBI-401`
-4. New `PBI-402`
-5. New `PBI-403`
-6. New `PBI-404`
+3. `PBI-401`
+4. `PBI-402`
+5. `PBI-403`
+6. `PBI-404`
+7. `PBI-405`
+8. `PBI-406`
+9. `PBI-407`
+10. `PBI-408`
