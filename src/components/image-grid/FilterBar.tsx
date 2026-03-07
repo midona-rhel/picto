@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState, useEffect, type ComponentType, type ReactNode } from 'react';
+import { useCallback, useRef, useState, useEffect, type ReactNode } from 'react';
 import {
   IconTag,
   IconStar,
@@ -7,6 +7,7 @@ import {
   IconFolder,
   IconX,
   IconCheck,
+  type TablerIcon,
 } from '@tabler/icons-react';
 import { ColorPicker, Slider } from '@mantine/core';
 import {
@@ -16,17 +17,16 @@ import {
   type MimeFilterKey,
 } from '../../state/filterStore';
 import { ContextMenu, useContextMenu, type ContextMenuEntry } from '../../shared/components/ContextMenu';
-import { TagSelectService } from '../tags/tagSelectService';
-import type { TagFilterLogicMode } from '../tags/tagSelectTypes';
+import { TagSelectService } from '../../features/tags/components/tagSelectService';
+import type { TagFilterLogicMode } from '../../features/tags/components/tagSelectTypes';
 import { FolderPickerService } from '../../shared/services/folderPickerService';
 import { TextButton } from '../../shared/components/TextButton';
 import { buildColorFilterMenu, buildRatingFilterMenu, buildTypesFilterMenu } from '../../shared/components/context-actions/filterActions';
 import st from './FilterBar.module.css';
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 function FilterPill({ pillRef, icon: Icon, iconNode, label, value, isActive, onClick, onClear }: {
   pillRef?: React.Ref<HTMLButtonElement>;
-  icon?: ComponentType<any>;
+  icon?: TablerIcon;
   iconNode?: ReactNode;
   label: string;
   value?: string;
