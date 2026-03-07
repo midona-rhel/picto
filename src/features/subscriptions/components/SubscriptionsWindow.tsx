@@ -11,7 +11,8 @@ import {
 import { IconCheck, IconKey, IconPlus, IconTrash, IconX } from '@tabler/icons-react';
 import { api, getCurrentWindow } from '#desktop/api';
 import { notifyError, notifySuccess } from '../../../shared/lib/notify';
-import { CreateFlowModal, FlowsWorking, type FlowResultEntry } from './FlowsWorking';
+import { FlowsWorking, type FlowResultEntry } from './FlowsWorking';
+import { CreateFlowModal } from './CreateFlowModal';
 import { SubscriptionController } from '../../../controllers/subscriptionController';
 import type {
   CredentialDomain,

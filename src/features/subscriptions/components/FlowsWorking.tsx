@@ -3,15 +3,11 @@ import { useInlineRename } from '../../../shared/hooks/useInlineRename';
 import {
   TextInput,
   Select,
-  Modal,
   ActionIcon,
   Collapse,
-  Text,
-  Stack,
 } from '@mantine/core';
 import { TextButton } from '../../../shared/components/TextButton';
 import { EmptyState } from '../../../shared/components/EmptyState';
-import { glassModalStyles } from '../../../shared/styles/glassModal';
 import { notifySuccess, notifyError, notifyInfo } from '../../../shared/lib/notify';
 import {
   IconTrash,
@@ -21,218 +17,23 @@ import {
   IconPencil,
   IconRefresh,
 } from '@tabler/icons-react';
-import {
-  SubscriptionController,
-  type SubscriptionFinishedEvent,
-} from '../../../controllers/subscriptionController';
+import { SubscriptionController } from '../../../controllers/subscriptionController';
 import { useRuntimeSyncStore } from '../../../state/runtimeSyncStore';
 import { listenRuntimeEvent } from '#desktop/api';
+import type { FlowInfo, FlowsWorkingProps, SitePluginInfo, SubProgress } from '../types';
+import { SCHEDULE_OPTIONS } from '../types';
+import {
+  canonicalSiteId,
+  hasCredentialForSite,
+  formatRelativeTime,
+  flattenQueries,
+  getLastRan,
+  getFlowProgress,
+  formatSubscriptionFailureMessage,
+} from '../lib/flowUtils';
 import st from './FlowsWorking.module.css';
 
-interface SitePluginInfo {
-  id: string;
-  name: string;
-  domain: string;
-  auth_supported?: boolean;
-  auth_required_for_full_access?: boolean;
-}
-
-interface SubscriptionQueryInfo {
-  id: string;
-  query_text: string;
-  display_name: string | null;
-  paused: boolean;
-  last_check_time: string | null;
-  files_found: number;
-  last_seen_id: string | null;
-}
-
-interface SubInfo {
-  id: string;
-  name: string;
-  site_id?: string;
-  site_plugin_id?: string;
-  paused: boolean;
-  flow_id: string | null;
-  initial_file_limit: number;
-  periodic_file_limit: number;
-  created_at: string;
-  total_files: number;
-  queries: SubscriptionQueryInfo[];
-}
-
-interface FlowInfo {
-  id: string;
-  name: string;
-  schedule: string;
-  created_at: string;
-  total_files: number;
-  subscriptions: SubInfo[];
-}
-
-export interface FlowExecutionSummary {
-  added: number;
-  skipped_duplicate: number;
-  skipped_error: number;
-  errors?: string[];
-  method?: string;
-}
-
-export type FlowResultEntry = FlowExecutionSummary & { error?: string };
-
-interface FlowsWorkingProps {
-  flowId?: string | null;
-  lastResults: Record<string, FlowResultEntry>;
-  onLastResultsChange: (results: Record<string, FlowResultEntry>) => void;
-  onOpenCreateModal?: () => void;
-  showHeader?: boolean;
-  layoutMode?: 'grid' | 'list';
-  headerTitle?: string;
-  refreshToken?: number;
-}
-
-interface SubProgress {
-  filesDownloaded: number;
-  filesSkipped: number;
-  pagesFetched: number;
-  statusText: string;
-}
-
-const SCHEDULE_OPTIONS = [
-  { value: 'manual', label: 'Manual' },
-  { value: 'daily', label: 'Daily' },
-  { value: 'weekly', label: 'Weekly' },
-  { value: 'monthly', label: 'Monthly' },
-];
-
-function canonicalSiteId(siteId: string): string {
-  const normalized = siteId.trim().toLowerCase();
-  switch (normalized) {
-    case 'rule34xxx':
-    case 'rule34.xxx':
-      return 'rule34';
-    case 'e621.net':
-      return 'e621';
-    case 'furaffinity.net':
-      return 'furaffinity';
-    case 'yande.re':
-      return 'yandere';
-    case 'kemono.party':
-      return 'kemono';
-    case 'coomer.party':
-      return 'coomer';
-    case 'baraag.net':
-      return 'baraag';
-    case 'pawoo.net':
-      return 'pawoo';
-    default:
-      return normalized;
-  }
-}
-
-function hasCredentialForSite(siteId: string, credentialSites: Set<string>): boolean {
-  const canonical = canonicalSiteId(siteId);
-  return credentialSites.has(canonical) || credentialSites.has(siteId.trim().toLowerCase());
-}
-
-function formatRelativeTime(iso: string | null | undefined): string {
-  if (!iso) return 'Never';
-  const date = new Date(iso);
-  const now = new Date();
-  const diffMs = now.getTime() - date.getTime();
-  const diffMin = Math.floor(diffMs / 60000);
-  if (diffMin < 1) return 'Just now';
-  if (diffMin < 60) return `${diffMin}m ago`;
-  const diffHrs = Math.floor(diffMin / 60);
-  if (diffHrs < 24) return `${diffHrs}h ago`;
-  const diffDays = Math.floor(diffHrs / 24);
-  return `${diffDays}d ago`;
-}
-
-function flattenQueries(flow: FlowInfo, sites: SitePluginInfo[], credentialSites: Set<string>) {
-  const result: {
-    queryId: string;
-    queryText: string;
-    siteName: string;
-    sitePluginId: string;
-    backendSubId: string;
-    filesFound: number;
-    lastCheck: string | null;
-    paused: boolean;
-    missingAuth: boolean;
-  }[] = [];
-  for (const sub of flow.subscriptions) {
-    const siteIdRaw = sub.site_id ?? sub.site_plugin_id ?? '';
-    const siteId = canonicalSiteId(siteIdRaw);
-    const site = sites.find((s) => canonicalSiteId(s.id) === siteId);
-    const siteName = site?.name ?? siteIdRaw;
-    const missingAuth = Boolean(
-      site?.auth_supported &&
-      site?.auth_required_for_full_access &&
-      !hasCredentialForSite(siteId, credentialSites),
-    );
-    for (const q of sub.queries) {
-      const label = (q.display_name ?? '').trim() || q.query_text.trim() || `Query ${q.id}`;
-      result.push({
-        queryId: q.id,
-        queryText: label,
-        siteName,
-        sitePluginId: siteId,
-        backendSubId: sub.id,
-        filesFound: q.files_found,
-        lastCheck: q.last_check_time,
-        paused: q.paused,
-        missingAuth,
-      });
-    }
-  }
-  return result;
-}
-
-function getLastRan(flow: FlowInfo): string | null {
-  let latest: string | null = null;
-  for (const sub of flow.subscriptions) {
-    for (const q of sub.queries) {
-      if (!q.last_check_time) continue;
-      if (!latest || q.last_check_time > latest) latest = q.last_check_time;
-    }
-  }
-  return latest;
-}
-
-function getFlowProgress(flow: FlowInfo, progressMap: Map<string, SubProgress>): SubProgress | null {
-  let total: SubProgress | null = null;
-  for (const sub of flow.subscriptions) {
-    const p = progressMap.get(sub.id);
-    if (!p) continue;
-    if (!total) {
-      total = { ...p };
-    } else {
-      total.filesDownloaded += p.filesDownloaded;
-      total.filesSkipped += p.filesSkipped;
-      total.pagesFetched += p.pagesFetched;
-      total.statusText = p.statusText;
-    }
-  }
-  return total;
-}
-
-function formatSubscriptionFailureMessage(event: SubscriptionFinishedEvent): string {
-  const fallback = event.error || `${event.errors_count} error(s)`;
-  if (event.failure_kind === 'unauthorized') {
-    return `${fallback}. Authentication was rejected for this site.`;
-  }
-  if (event.failure_kind === 'expired') {
-    return `${fallback}. Stored credentials appear expired.`;
-  }
-  if (event.failure_kind === 'rate_limited') {
-    return `${fallback}. Source is currently rate-limited.`;
-  }
-  if (event.failure_kind === 'network') {
-    return `${fallback}. Network/connectivity issue detected.`;
-  }
-  return fallback;
-}
+export type { FlowExecutionSummary, FlowResultEntry } from '../types';
 
 export function FlowsWorking({
   flowId: _flowId,
@@ -748,75 +549,3 @@ export function FlowsWorking({
   );
 }
 
-export function CreateFlowModal({
-  opened,
-  onClose,
-  onCreated,
-}: {
-  opened: boolean;
-  onClose: () => void;
-  onCreated?: () => void;
-}) {
-  const [name, setName] = useState('');
-  const [schedule, setSchedule] = useState('manual');
-  const [loading, setLoading] = useState(false);
-
-  useEffect(() => {
-    if (opened) {
-      setName('');
-      setSchedule('manual');
-    }
-  }, [opened]);
-
-  const handleCreate = async () => {
-    if (!name.trim()) return;
-    try {
-      setLoading(true);
-      await SubscriptionController.createFlow({
-        name: name.trim(),
-        schedule: schedule !== 'manual' ? schedule : undefined,
-      });
-
-      notifySuccess(`"${name.trim()}" created. Add one or more queries in this subscription.`, 'Subscription Created');
-      onCreated?.();
-      onClose();
-    } catch (error) {
-      notifyError(`Failed to create: ${error}`);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  return (
-    <Modal opened={opened} onClose={onClose} title="New Subscription" size="sm" styles={glassModalStyles}>
-      <Stack gap="md">
-        <TextInput
-          label="Name"
-          placeholder="e.g., Artists Daily"
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          disabled={loading}
-          data-autofocus
-        />
-        <Select
-          label="Schedule"
-          value={schedule}
-          onChange={(value) => { if (value) setSchedule(value); }}
-          data={SCHEDULE_OPTIONS}
-          size="xs"
-          allowDeselect={false}
-          disabled={loading}
-        />
-        <Text size="xs" c="dimmed">
-          A subscription can contain multiple site-specific queries. Add queries after creating it.
-        </Text>
-        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 6 }}>
-          <TextButton onClick={onClose} disabled={loading}>Cancel</TextButton>
-          <TextButton onClick={handleCreate} disabled={!name.trim() || loading}>
-            Create Flow
-          </TextButton>
-        </div>
-      </Stack>
-    </Modal>
-  );
-}

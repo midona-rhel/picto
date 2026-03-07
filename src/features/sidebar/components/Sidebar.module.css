@@ -9,7 +9,7 @@
 }
 
 .scrollArea {
-  composes: scrollFade from '../../shared/styles/scrollbarFade.module.css';
+  composes: scrollFade from '../../../shared/styles/scrollbarFade.module.css';
   flex: 1;
   min-height: 0;
   overflow-x: hidden;
@@ -331,7 +331,7 @@
 /* Rename input */
 
 .renameInput {
-  composes: renameInput from '../../shared/styles/renameInput.module.css';
+  composes: renameInput from '../../../shared/styles/renameInput.module.css';
   position: relative;
   z-index: 10;
   height: 22px;

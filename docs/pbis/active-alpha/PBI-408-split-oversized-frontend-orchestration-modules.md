@@ -3,14 +3,21 @@
 ## Priority
 P2
 
-## Audit Status (2026-03-07)
-Status: **Not Implemented**
+## Status (2026-03-08)
+Status: **Implemented**
 
-Evidence:
-1. `src/components/sidebar/FolderTree.tsx` is 800+ lines and mixes rendering, DnD, context menus, sorting, CRUD, and auto-tagging.
-2. `src/hooks/useInspectorData.ts` is 700+ lines and mixes fetch orchestration, optimistic edits, undo, autosave, and selection summary logic.
-3. `src/desktop/api.ts` is 700+ lines and mixes transport, dialogs, window helpers, library host access, and local store behavior.
-4. `src/components/FlowsWorking.tsx` remains a large orchestration surface even after subscription runtime work.
+All four targets split by responsibility. `npx tsc --noEmit` clean after each phase.
+
+### Results
+
+| Target | Before | After | Extracted |
+|---|---|---|---|
+| `src/platform/api.ts` | 755 | 503 | `ipc.ts` (26), `window.ts` (95), `nativeIntegration.ts` (77), `store.ts` (70) |
+| `src/features/subscriptions/components/FlowsWorking.tsx` | 822 | 551 | `types.ts` (75), `flowUtils.ts` (131), `CreateFlowModal.tsx` (80) |
+| `src/features/sidebar/components/FolderTree.tsx` | 827 | 354 | `folderTreeData.ts` (62), `useFolderTreeActions.ts` (350), `useFolderTreeDnd.ts` (165) |
+| `src/hooks/useInspectorData.ts` | 710 | 48 | `useInspectorFetch.ts` (322), `useInspectorMutations.ts` (416) |
+
+All original files re-export from sub-modules so zero downstream consumer changes were needed.
 
 ## Problem
 Several modules are now too large to review safely and mix presentation with orchestration. This is not just a style issue; it slows down changes, encourages coarse tests, and makes regressions harder to localize.

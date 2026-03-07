@@ -139,15 +139,15 @@
 }
 
 .progressFill {
-  composes: progressFill from '../../shared/styles/progressBar.module.css';
+  composes: progressFill from '../../../shared/styles/progressBar.module.css';
 }
 
 .progressBar {
-  composes: progressBar from '../../shared/styles/progressBar.module.css';
+  composes: progressBar from '../../../shared/styles/progressBar.module.css';
 }
 
 .progressIndeterminate {
-  composes: progressIndeterminate from '../../shared/styles/progressBar.module.css';
+  composes: progressIndeterminate from '../../../shared/styles/progressBar.module.css';
 }
 
 .jobCount {
