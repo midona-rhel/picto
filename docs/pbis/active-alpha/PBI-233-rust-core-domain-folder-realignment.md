@@ -35,6 +35,17 @@ The Rust core's `src/` directory is a flat bag of files. Related modules (e.g. `
 | **lifecycle** | `lifecycle_controller.rs` |
 | **infra/shared** | `blob_store.rs`, `state.rs`, `types.rs`, `constants.rs`, `events.rs`, `perf.rs`, `poison.rs`, `rate_limiter.rs`, `media_protocol.rs`, `credential_store.rs` |
 
+## Audit Clarification (2026-03-07)
+This PBI remains the umbrella for physical Rust core folder realignment, but it was too broad on its own. The detailed target tree now lives in `docs/rust-core-target-module-tree-2026-03-07.md`, and execution should be staged through:
+
+1. `PBI-310` top-level module tree restructure
+2. `PBI-311` domain folderization by ownership cluster
+3. `PBI-312` persistence-layer split between shared and domain-owned DB modules
+4. `PBI-313` controller elimination and service boundary normalization
+5. `PBI-314` root alias cleanup and legacy module deletion
+
+`PBI-233` should be treated as the umbrella structural goal, not as one giant PR.
+
 ## Scope
 - `core/src/` — reorganize flat controller/domain files into domain modules
 - `core/src/sqlite/` — split the monolithic sqlite directory so each domain owns its persistence

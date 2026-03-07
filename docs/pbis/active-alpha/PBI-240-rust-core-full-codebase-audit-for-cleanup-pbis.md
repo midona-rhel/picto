@@ -4,12 +4,24 @@
 P1
 
 ## Audit Status (2026-03-06)
-Status: **Not Implemented**
+Status: **Partially Implemented**
 
 Evidence:
 1. Cleanup PBIs created so far (PBI-233 through PBI-239) were derived from targeted analysis of dispatch, tags, events, and files — not a comprehensive sweep.
 2. Many modules have not been audited at all: `blob_store.rs`, `import_controller.rs`, `subscription_controller.rs`, `subscription_sync.rs`, `gallery_dl_runner.rs`, `ptr_client.rs`, `ptr_sync.rs`, `duplicates.rs`, `duplicate_controller.rs`, `smart_folder_controller.rs`, `flow_controller.rs`, `settings.rs`, `state.rs`, `perf.rs`, `media_protocol.rs`, `credential_store.rs`, and large parts of `sqlite/`.
 3. Known patterns of drift: fixes applied without cleanup, redundant code paths left behind, inconsistent error handling, stale TODO comments.
+
+
+## Audit Progress (2026-03-07)
+This architecture-focused audit pass reviewed the full Rust core file inventory, deep-read the largest and most structurally important backend modules, and produced the following outputs:
+
+1. `docs/rust-core-backend-rearchitecture-audit-2026-03-07.md`
+2. `PBI-300` through `PBI-309`
+3. Cross-link to the runtime communication design docs:
+   - `docs/backend-frontend-state-rearchitecture.md`
+   - `docs/pbi-234-runtime-communication-implementation-plan.md`
+
+This does **not** mean every low-level bug has been catalogued. It does mean the major backend re-architecture tracks are now identified and split into concrete PBIs.
 
 ## Problem
 The Rust core has accumulated technical debt that is only partially catalogued. The existing cleanup PBIs address known pain points, but a systematic sweep of every module is needed to surface:
