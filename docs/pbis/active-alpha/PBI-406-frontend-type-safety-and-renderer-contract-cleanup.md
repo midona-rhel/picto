@@ -3,7 +3,7 @@
 ## Priority
 P1
 
-## Audit Status (2026-03-07)
+## Audit Status (2026-03-08)
 Status: **Implemented**
 
 Implementation:
@@ -14,11 +14,13 @@ Implementation:
 5. Fixed stale `FolderReorderMove` in `core.ts` to match generated Rust type (`before_hash`/`after_hash` instead of `position_rank`).
 6. Removed `as any` from `api.ts` `onDragDropEvent` handler and `ContextMenu.tsx` item narrowing.
 7. Removed `as any` from `smartFolderController.ts` — accepts `SmartFolderIpcInput` directly.
-8. Replaced `ComponentType<any>` in `EmptyState` and `StateBlock` with `TablerIcon` import.
+8. Replaced `ComponentType<any>` in `EmptyState`, `StateBlock`, and `FilterBar` with `TablerIcon` import.
 9. Fixed `App.tsx` `sf.predicate as any` — typed `SmartFolderSummary.predicate` as `SmartFolderPredicate` in `domainStore.ts`.
 10. Fixed `CommandPalette.tsx` union-array push casts — properly typed `PaletteRow[]` union.
-11. Remaining unavoidable escapes (7 total): V8 GC API (`cacheCleanup.ts` x2), Mantine Tooltip children (KbdTooltip), CSS variable in CSSProperties (DragGhost), test mocks (setup.ts, gridMarqueeSelection.test.ts x2).
-12. `npx tsc --noEmit` passes clean.
+11. Replaced `any[]` in `useDebouncedCallback` with proper generic `A extends unknown[]` pattern.
+12. Remaining unavoidable escapes (7 total): V8 GC API (`cacheCleanup.ts` x2), Mantine Tooltip children (`KbdTooltip.tsx`), CSS variable in CSSProperties (`DragGhost.tsx`), test mocks (`setup.ts`, `gridMarqueeSelection.test.ts` x2).
+13. Generated type `PredicateRule.ts` carries `value: any, value2: any` — acceptable-by-design since the Rust source type is `serde_json::Value` (heterogeneous union). Tightening requires upstream schema change.
+14. `npx tsc --noEmit` passes clean.
 
 ## Problem
 TypeScript coverage is no longer the main compile blocker, but the renderer still relies on too many escape hatches at the exact boundaries where regressions are expensive: IPC payloads, smart-folder predicates, drag/drop events, and context-menu state.

@@ -4,10 +4,10 @@ import { useCallback, useEffect, useRef } from 'react';
  * Returns a debounced version of the given callback.
  * The timer auto-cleans on unmount.
  */
-export function useDebouncedCallback<T extends (...args: any[]) => void>(
-  callback: T,
+export function useDebouncedCallback<A extends unknown[]>(
+  callback: (...args: A) => void,
   delay: number,
-): T {
+): (...args: A) => void {
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const cbRef = useRef(callback);
   cbRef.current = callback;
@@ -16,8 +16,8 @@ export function useDebouncedCallback<T extends (...args: any[]) => void>(
     if (timerRef.current) clearTimeout(timerRef.current);
   }, []);
 
-  return useCallback((...args: any[]) => {
+  return useCallback((...args: A) => {
     if (timerRef.current) clearTimeout(timerRef.current);
     timerRef.current = setTimeout(() => cbRef.current(...args), delay);
-  }, [delay]) as T;
+  }, [delay]);
 }
