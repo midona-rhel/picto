@@ -4,18 +4,21 @@
 P1
 
 ## Audit Status (2026-03-07)
-Status: **Partially Implemented — First Deletion Wave Complete**
+Status: **Partially Implemented — Tiers 1 & 2 Complete**
 
 Completed:
 1. Tier 1 deletion wave: 5 shared hooks moved from `src/hooks/` to `src/shared/hooks/`.
 2. `AppErrorBoundary.tsx` moved from `src/components/` to `src/shared/components/`.
 3. Associated test file moved to `src/shared/hooks/__tests__/`.
-4. All consumer imports updated, builds clean.
+4. Tier 2 deletion wave: 3 shared controllers moved from `src/controllers/` to `src/shared/controllers/`.
+   - `fileController.ts` (9 consumers updated)
+   - `undoRedoController.ts` (15 consumers updated)
+   - `perfController.ts` (1 consumer updated)
+5. All consumer imports updated, builds clean.
 
 Remaining:
-1. Tier 2: move shared controllers to `src/shared/controllers/`.
-2. Tier 3: feature migration (move components into features/).
-3. Tier 4: image-grid split (blocked on PBI-408).
+1. Tier 3: feature migration (move components into features/).
+2. Tier 4: image-grid split (blocked on PBI-408).
 
 ## Problem
 The project needs a deletion program, not just a migration program. If old paths remain after replacements land, the codebase will keep two ownership models alive indefinitely.

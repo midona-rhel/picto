@@ -12,13 +12,13 @@ import {
 import { TextButton } from '../../shared/components/TextButton';
 import { StateBlock, StateActions } from '../../shared/components/state';
 import { notifySuccess, notifyError } from '../../shared/lib/notify';
-import { registerUndoAction } from '../../controllers/undoRedoController';
+import { registerUndoAction } from '../../shared/controllers/undoRedoController';
 import { api } from '#desktop/api';
 import { listen } from '#desktop/api';
 import { open } from '#desktop/api';
 import { getCurrentWebview } from '#desktop/api';
 import { ContextMenu, useContextMenu } from '../../shared/components/ContextMenu';
-import { FileController } from '../../controllers/fileController';
+import { FileController } from '../../shared/controllers/fileController';
 import { FolderController } from '../../controllers/folderController';
 import { GridController } from '../../controllers/gridController';
 import { SubscriptionController } from '../../controllers/subscriptionController';

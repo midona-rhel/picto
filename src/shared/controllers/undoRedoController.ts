@@ -1,5 +1,5 @@
-import { notifyError, notifyInfo } from '../shared/lib/notify';
-import { useUndoRedoStore, type UndoRedoAction } from '../state/undoRedoStore';
+import { notifyError, notifyInfo } from '../lib/notify';
+import { useUndoRedoStore, type UndoRedoAction } from '../../state/undoRedoStore';
 
 let actionCounter = 0;
 

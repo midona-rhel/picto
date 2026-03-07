@@ -1,9 +1,9 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { api } from '#desktop/api';
-import { FileController } from '../controllers/fileController';
+import { FileController } from '../shared/controllers/fileController';
 import { SelectionController } from '../controllers/selectionController';
 import { FolderController } from '../controllers/folderController';
-import { deepClone, registerUndoAction } from '../controllers/undoRedoController';
+import { deepClone, registerUndoAction } from '../shared/controllers/undoRedoController';
 import { useCacheStore } from '../state/cacheStore';
 import {
   getMetadata,

@@ -24,7 +24,7 @@ import { useInlineRename } from '../shared/hooks/useInlineRename';
 import { useNavigationStore } from '../state/navigationStore';
 import { ContextMenu, useContextMenu, type ContextMenuEntry } from '../shared/components/ContextMenu';
 import { TagRelationsModal } from './TagRelationsModal';
-import { registerUndoAction } from '../controllers/undoRedoController';
+import { registerUndoAction } from '../shared/controllers/undoRedoController';
 import { buildTagContextMenu } from '../shared/components/context-actions/tagActions';
 import classes from './TagManager.module.css';
 

@@ -51,9 +51,9 @@ Every entry has a target location and explicit delete condition.
 
 | File | Classification | Target | Delete condition |
 |------|---------------|--------|-----------------|
-| `fileController.ts` | legacy-merge | `src/shared/controllers/` | move file, update consumers, delete original |
-| `undoRedoController.ts` | legacy-merge | `src/shared/controllers/` | move file, update consumers, delete original |
-| `perfController.ts` | legacy-merge | `src/shared/controllers/` | move file, update consumers, delete original |
+| `fileController.ts` | canonical | `src/shared/controllers/` | **DONE** — moved, 9 consumers updated |
+| `undoRedoController.ts` | canonical | `src/shared/controllers/` | **DONE** — moved, 15 consumers updated |
+| `perfController.ts` | canonical | `src/shared/controllers/` | **DONE** — moved, 1 consumer updated |
 | `gridController.ts` | transitional | `src/features/grid/` | move when grid feature gets real code |
 | `sidebarController.ts` | transitional | `src/features/sidebar/` | move when sidebar feature gets real code |
 | `folderController.ts` | transitional | `src/features/folders/` | move when folder feature gets real code |

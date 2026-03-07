@@ -4,7 +4,7 @@ import { notifications } from '@mantine/notifications';
 import { notifyError, notifySuccess } from '../../../shared/lib/notify';
 import { FolderController } from '../../../controllers/folderController';
 import { FolderPickerService } from '../../../shared/services/folderPickerService';
-import { FileController } from '../../../controllers/fileController';
+import { FileController } from '../../../shared/controllers/fileController';
 import { bustThumbnailCache } from '../../../shared/lib/mediaUrl';
 import { useCacheStore } from '../../../state/cacheStore';
 import { useSettingsStore, type AppSettings } from '../../../state/settingsStore';
