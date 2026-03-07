@@ -359,14 +359,16 @@ pub struct EntityMetadataBatchResponse {
 pub type FileInfo = EntityDetails;
 pub type FileInfoSlim = EntitySlim;
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, TS)]
+#[ts(export, export_to = "../../src/types/generated/commands/")]
 #[serde(rename_all = "snake_case")]
 pub enum SelectionMode {
     ExplicitHashes,
     AllResults,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, TS)]
+#[ts(export, export_to = "../../src/types/generated/commands/")]
 pub struct SelectionQuerySpec {
     pub mode: SelectionMode,
     pub hashes: Option<Vec<String>>,
@@ -381,7 +383,9 @@ pub struct SelectionQuerySpec {
     pub excluded_hashes: Option<Vec<String>>,
     pub included_hashes: Option<Vec<String>>,
     pub status: Option<String>,
+    #[ts(type = "number[] | null")]
     pub folder_ids: Option<Vec<i64>>,
+    #[ts(type = "number[] | null")]
     pub excluded_folder_ids: Option<Vec<i64>>,
     pub folder_match_mode: Option<String>,
 }
@@ -461,7 +465,8 @@ pub struct ViewPrefsPatch {
     pub thumbnail_fit: Option<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, TS)]
+#[ts(export, export_to = "../../src/types/generated/commands/")]
 pub struct FolderReorderMove {
     pub hash: String,
     pub before_hash: Option<String>,
