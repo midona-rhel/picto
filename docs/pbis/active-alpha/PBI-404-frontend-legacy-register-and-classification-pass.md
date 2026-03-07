@@ -4,12 +4,13 @@
 P1
 
 ## Audit Status (2026-03-07)
-Status: **Not Implemented**
+Status: **Implemented**
 
-Evidence:
-1. There is currently no complete ledger of which frontend files are canonical versus transitional or deletable.
-2. The codebase still contains mixed ownership between `src/components/*`, `src/features/*`, root entry files, shared helpers, and runtime/bootstrap code.
-3. Cleanup work cannot be prioritized properly without a file-by-file classification pass.
+Implementation:
+1. `docs/frontend-legacy-register.md` — comprehensive file-by-file classification.
+2. Every major frontend area classified as canonical, transitional, or legacy-merge.
+3. Each non-canonical item has a target owner and delete condition.
+4. Four-tier deletion priority: move-now, merge-shared, feature-migration, architectural-split.
 
 ## Problem
 The frontend has too much legacy and no single source of truth for what should be kept, merged, or deleted. That makes deletion reactive instead of systematic.
