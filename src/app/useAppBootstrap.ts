@@ -15,7 +15,7 @@ import { useCacheStore } from '../state/cacheStore';
 import { useLibraryStore } from '../state/libraryStore';
 import { startAllRefreshers, stopAllRefreshers } from '../runtime/refresherOrchestrator';
 import { runBestEffort } from '../shared/lib/asyncOps';
-import { useGlobalKeydown } from '../hooks/useGlobalKeydown';
+import { useGlobalKeydown } from '../shared/hooks/useGlobalKeydown';
 
 export interface AppBootstrap {
   appWindow: ReturnType<typeof getCurrentWindow>;

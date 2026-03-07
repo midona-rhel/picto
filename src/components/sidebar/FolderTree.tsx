@@ -1,6 +1,6 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useInlineRename } from '../../hooks/useInlineRename';
+import { useInlineRename } from '../../shared/hooks/useInlineRename';
 import { IconTag } from '@tabler/icons-react';
 import {
   DndContext,

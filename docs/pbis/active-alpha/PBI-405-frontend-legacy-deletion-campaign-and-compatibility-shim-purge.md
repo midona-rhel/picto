@@ -4,12 +4,18 @@
 P1
 
 ## Audit Status (2026-03-07)
-Status: **Not Implemented**
+Status: **Partially Implemented — First Deletion Wave Complete**
 
-Evidence:
-1. The frontend likely contains a substantial amount of legacy code, half-migrations, alias paths, and oversized compatibility surfaces.
-2. Past cleanup work has focused more on moving or patching code than deleting obsolete paths.
-3. Without an explicit deletion campaign, the topology migration will leave both old and new structures in place.
+Completed:
+1. Tier 1 deletion wave: 5 shared hooks moved from `src/hooks/` to `src/shared/hooks/`.
+2. `AppErrorBoundary.tsx` moved from `src/components/` to `src/shared/components/`.
+3. Associated test file moved to `src/shared/hooks/__tests__/`.
+4. All consumer imports updated, builds clean.
+
+Remaining:
+1. Tier 2: move shared controllers to `src/shared/controllers/`.
+2. Tier 3: feature migration (move components into features/).
+3. Tier 4: image-grid split (blocked on PBI-408).
 
 ## Problem
 The project needs a deletion program, not just a migration program. If old paths remain after replacements land, the codebase will keep two ownership models alive indefinitely.

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { IconSearch } from '@tabler/icons-react';
-import { useGlobalKeydown } from '../hooks/useGlobalKeydown';
+import { useGlobalKeydown } from '../shared/hooks/useGlobalKeydown';
 import classes from './CommandPalette.module.css';
 
 // ── Types ──────────────────────────────────────────────────────────────────

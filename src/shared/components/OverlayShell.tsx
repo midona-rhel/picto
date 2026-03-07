@@ -1,6 +1,6 @@
 import { useCallback } from 'react';
 import { createPortal } from 'react-dom';
-import { useGlobalKeydown } from '../../hooks/useGlobalKeydown';
+import { useGlobalKeydown } from '../../shared/hooks/useGlobalKeydown';
 import st from './OverlayShell.module.css';
 
 export interface OverlayShellProps {

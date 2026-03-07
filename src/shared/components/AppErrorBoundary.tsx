@@ -1,6 +1,6 @@
 import React from 'react';
 import { Alert, Text } from '@mantine/core';
-import { TextButton } from '../shared/components/TextButton';
+import { TextButton } from './TextButton';
 
 interface AppErrorBoundaryState {
   hasError: boolean;

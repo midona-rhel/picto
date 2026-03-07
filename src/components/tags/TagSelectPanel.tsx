@@ -26,8 +26,8 @@ import { parseTagString } from '../../shared/lib/tagParsing';
 import { registerTagSelectOpenHandler } from './tagSelectService';
 import type { TagFilterLogicMode, TagSelectPanelProps } from './tagSelectTypes';
 import { KbdTooltip } from '../../shared/components/KbdTooltip';
-import { useGlobalKeydown } from '../../hooks/useGlobalKeydown';
-import { useGlobalPointerDrag } from '../../hooks/useGlobalPointerDrag';
+import { useGlobalKeydown } from '../../shared/hooks/useGlobalKeydown';
+import { useGlobalPointerDrag } from '../../shared/hooks/useGlobalPointerDrag';
 import { glassModalStyles } from '../../shared/styles/glassModal';
 import st from './TagSelectPanel.module.css';
 
