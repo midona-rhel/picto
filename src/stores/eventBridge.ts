@@ -6,6 +6,7 @@ import { SidebarController } from '../controllers/sidebarController';
 import { SelectionController } from '../controllers/selectionController';
 import { invalidateMetadata } from '#features/grid/data';
 import type {
+  FileImportedEvent,
   FlowFinishedEvent,
   GridSnapshotInvalidatedEvent,
   LibrarySwitchedEvent,
@@ -97,6 +98,12 @@ export async function setupEventBridge(): Promise<void> {
       if (matches) {
         useCacheStore.getState().invalidateAll();
         useCacheStore.getState().bumpGridRefresh();
+      }
+    }),
+    listen<FileImportedEvent>('file-imported', (event) => {
+      const file = event.payload;
+      if (file.status === 'inbox') {
+        useDomainStore.getState().incrementInboxCount(1);
       }
     }),
 
