@@ -506,58 +506,59 @@ export const api = {
 
   smartFolders: {
     list: async (): Promise<SmartFolder[]> => {
-      const raw = await invoke<Array<Record<string, unknown>>>('list_smart_folders');
+      const raw = await invokeTyped('list_smart_folders') as Array<Record<string, unknown>>;
       return raw.map(normalizeSmartFolder);
     },
     create: async (folder: SmartFolder): Promise<SmartFolder> => {
-      const raw = await invoke<Record<string, unknown>>('create_smart_folder', { folder });
+      const raw = await invokeTyped('create_smart_folder', { folder } as never) as Record<string, unknown>;
       return normalizeSmartFolder(raw);
     },
     update: async (id: string, folder: SmartFolder): Promise<SmartFolder> => {
-      const raw = await invoke<Record<string, unknown>>('update_smart_folder', { id, folder });
+      const raw = await invokeTyped('update_smart_folder', { id, folder } as never) as Record<string, unknown>;
       return normalizeSmartFolder(raw);
     },
     delete: (id: string) =>
-      invoke<void>('delete_smart_folder', { id }),
+      invokeTyped('delete_smart_folder', { id }) as unknown as Promise<void>,
     count: (predicate: SmartFolderPredicate) =>
-      invoke<number>('count_smart_folder', { predicate }),
+      invokeTyped('count_smart_folder', { predicate } as never) as Promise<number>,
     reorder: (moves: [number, number][]) =>
-      invoke<void>('reorder_smart_folders', { moves }),
+      invokeTyped('reorder_smart_folders', { moves }) as unknown as Promise<void>,
   },
 
   sidebar: {
     getTree: () =>
-      invoke<SidebarTreeResponse>('get_sidebar_tree'),
+      invokeTyped('get_sidebar_tree') as Promise<SidebarTreeResponse>,
     reorderNodes: (moves: [string, number][]) =>
-      invoke<void>('reorder_sidebar_nodes', { moves }),
+      invokeTyped('reorder_sidebar_nodes', { moves }) as unknown as Promise<void>,
   },
 
   duplicates: {
     getPairs: (cursor?: string | null, limit?: number, status?: string) =>
-      invoke<DuplicatePairsResponse>('get_duplicate_pairs', {
-        ...(cursor ? { cursor } : {}),
-        ...(limit ? { limit } : {}),
-        ...(status ? { status } : {}),
-      }),
+      invokeTyped('get_duplicate_pairs', {
+        cursor: cursor ?? null,
+        limit: limit ?? 50,
+        status: status ?? null,
+      } as never) as Promise<DuplicatePairsResponse>,
     resolvePair: (action: ResolveDuplicateAction, hashA: string, hashB: string) =>
-      invoke<SmartMergeResult | Record<string, string>>('resolve_duplicate_pair', {
+      invokeTyped('resolve_duplicate_pair', {
         action,
         hash_a: hashA,
         hash_b: hashB,
-      }),
+        preferred_hash: null,
+      } as never) as Promise<SmartMergeResult | Record<string, string>>,
     getCount: () =>
-      invoke<{ count: number }>('get_duplicate_count'),
+      invokeTyped('get_duplicate_count') as Promise<{ count: number }>,
     scan: () =>
-      invoke<ScanDuplicatesResult>('scan_duplicates'),
+      invokeTyped('scan_duplicates', { threshold: null } as never) as Promise<ScanDuplicatesResult>,
     getSettings: () =>
-      invoke<DuplicateSettings>('get_duplicate_settings'),
+      invokeTyped('get_duplicate_settings') as Promise<DuplicateSettings>,
     updateSettings: (settings: Partial<DuplicateSettings>) =>
-      invoke<{ ok: boolean }>('update_duplicate_settings', settings),
+      invokeTyped('update_duplicate_settings', settings as never) as Promise<{ ok: boolean }>,
   },
 
   subscriptions: {
     list: () =>
-      invoke<SubscriptionInfo[]>('get_subscriptions'),
+      invokeTyped('get_subscriptions') as Promise<SubscriptionInfo[]>,
     create: (params: {
       name: string;
       site_id: string;
@@ -566,45 +567,45 @@ export const api = {
       initial_file_limit?: number;
       periodic_file_limit?: number;
     }) =>
-      invoke<SubscriptionInfo>('create_subscription', params),
+      invokeTyped('create_subscription', params as never) as Promise<SubscriptionInfo>,
     delete: (id: string, deleteFiles?: boolean) =>
-      invoke<number>('delete_subscription', { id, delete_files: deleteFiles }),
+      invokeTyped('delete_subscription', { id, delete_files: deleteFiles ?? null } as never) as Promise<number>,
     rename: (id: string, name: string) =>
-      invoke<void>('rename_subscription', { id, name }),
+      invokeTyped('rename_subscription', { id, name }) as unknown as Promise<void>,
     pause: (id: string, paused: boolean) =>
-      invoke<void>('pause_subscription', { id, paused }),
+      invokeTyped('pause_subscription', { id, paused }) as unknown as Promise<void>,
     run: (id: string) =>
-      invoke<void>('run_subscription', { id }),
+      invokeTyped('run_subscription', { id }) as unknown as Promise<void>,
     stop: (id: string) =>
-      invoke<void>('stop_subscription', { id }),
+      invokeTyped('stop_subscription', { id }) as unknown as Promise<void>,
     reset: (id: string) =>
-      invoke<void>('reset_subscription', { id }),
+      invokeTyped('reset_subscription', { id }) as unknown as Promise<void>,
     getRunning: () =>
-      invoke<string[]>('get_running_subscriptions'),
+      invokeTyped('get_running_subscriptions') as Promise<string[]>,
     getRunningProgress: () =>
-      invoke<SubscriptionProgressEvent[]>('get_running_subscription_progress'),
+      invokeTyped('get_running_subscription_progress') as Promise<SubscriptionProgressEvent[]>,
     addQuery: (subscriptionId: string, queryText: string) =>
-      invoke<SubscriptionQueryInfo>('add_subscription_query', { subscription_id: subscriptionId, query_text: queryText }),
+      invokeTyped('add_subscription_query', { subscription_id: subscriptionId, query_text: queryText }) as Promise<SubscriptionQueryInfo>,
     deleteQuery: (id: string) =>
-      invoke<void>('delete_subscription_query', { id }),
+      invokeTyped('delete_subscription_query', { id }) as unknown as Promise<void>,
     pauseQuery: (id: string, paused: boolean) =>
-      invoke<void>('pause_subscription_query', { id, paused }),
+      invokeTyped('pause_subscription_query', { id, paused }) as unknown as Promise<void>,
     runQuery: (subscriptionId: string, queryId: string) =>
-      invoke<void>('run_subscription_query', { subscription_id: subscriptionId, query_id: queryId }),
+      invokeTyped('run_subscription_query', { subscription_id: subscriptionId, query_id: queryId }) as unknown as Promise<void>,
     getSites: () =>
-      invoke<SubscriptionSiteInfo[]>('get_sites'),
+      invokeTyped('get_sites') as Promise<SubscriptionSiteInfo[]>,
     getSiteMetadataSchema: (siteId: string) =>
-      invoke<SiteMetadataSchema>('get_site_metadata_schema', { site_id: siteId }),
+      invokeTyped('get_site_metadata_schema', { site_id: siteId }) as Promise<SiteMetadataSchema>,
     validateSiteMetadata: (params: {
       site_id: string;
       sample_url?: string;
       sample_metadata_json?: Record<string, unknown> | null;
     }) =>
-      invoke<SiteMetadataValidationResult>('validate_site_metadata', params),
+      invokeTyped('validate_site_metadata', params as never) as Promise<SiteMetadataValidationResult>,
     listCredentials: () =>
-      invoke<CredentialDomain[]>('list_credentials'),
+      invokeTyped('list_credentials') as Promise<CredentialDomain[]>,
     listCredentialHealth: () =>
-      invoke<CredentialHealth[]>('list_credential_health'),
+      invokeTyped('list_credential_health') as Promise<CredentialHealth[]>,
     setCredential: (params: {
       site_category: string;
       credential_type: CredentialType;
@@ -614,86 +615,86 @@ export const api = {
       cookies?: Record<string, string> | null;
       oauth_token?: string | null;
     }) =>
-      invoke<void>('set_credential', params),
+      invokeTyped('set_credential', params as never) as unknown as Promise<void>,
     deleteCredential: (siteCategory: string) =>
-      invoke<void>('delete_credential', { site_category: siteCategory }),
+      invokeTyped('delete_credential', { site_category: siteCategory }) as unknown as Promise<void>,
   },
 
   flows: {
     list: () =>
-      invoke<FlowInfo[]>('get_flows'),
+      invokeTyped('get_flows') as Promise<FlowInfo[]>,
     create: (name: string, schedule?: string) =>
-      invoke<FlowInfo>('create_flow', { name, schedule }),
+      invokeTyped('create_flow', { name, schedule: schedule ?? null } as never) as Promise<FlowInfo>,
     delete: (id: string, deleteFiles?: boolean) =>
-      invoke<void>('delete_flow', { id, delete_files: deleteFiles }),
+      invokeTyped('delete_flow', { id, delete_files: deleteFiles ?? null } as never) as unknown as Promise<void>,
     rename: (id: string, name: string) =>
-      invoke<void>('rename_flow', { id, name }),
+      invokeTyped('rename_flow', { id, name }) as unknown as Promise<void>,
     setSchedule: (id: string, schedule: string) =>
-      invoke<void>('set_flow_schedule', { id, schedule }),
+      invokeTyped('set_flow_schedule', { id, schedule }) as unknown as Promise<void>,
     run: (id: string) =>
-      invoke<void>('run_flow', { id }),
+      invokeTyped('run_flow', { id }) as unknown as Promise<void>,
     stop: (id: string) =>
-      invoke<void>('stop_flow', { id }),
+      invokeTyped('stop_flow', { id }) as unknown as Promise<void>,
   },
 
   ptr: {
     getStatus: () =>
-      invoke<PtrStats>('get_ptr_status'),
+      invokeTyped('get_ptr_status') as Promise<PtrStats>,
     isSyncing: () =>
-      invoke<boolean>('is_ptr_syncing'),
+      invokeTyped('is_ptr_syncing') as Promise<boolean>,
     getSyncProgress: () =>
-      invoke<PtrSyncProgress | null>('get_ptr_sync_progress'),
+      invokeTyped('get_ptr_sync_progress') as Promise<PtrSyncProgress | null>,
     sync: () =>
-      invoke<{ id: string; message: string }>('ptr_sync'),
+      invokeTyped('ptr_sync') as Promise<{ id: string; message: string }>,
     cancelSync: () =>
-      invoke<void>('cancel_ptr_sync'),
+      invokeTyped('cancel_ptr_sync') as unknown as Promise<void>,
     cancelBootstrap: () =>
-      invoke<void>('ptr_cancel_bootstrap'),
+      invokeTyped('ptr_cancel_bootstrap') as unknown as Promise<void>,
     bootstrapFromSnapshot: (req: { snapshot_dir: string; ptr_service_id?: number | null; mode: string }) =>
-      invoke<Record<string, unknown>>('ptr_bootstrap_from_hydrus_snapshot', req),
+      invokeTyped('ptr_bootstrap_from_hydrus_snapshot', req) as Promise<Record<string, unknown>>,
     getBootstrapStatus: () =>
-      invoke<PtrBootstrapStatus>('ptr_get_bootstrap_status'),
+      invokeTyped('ptr_get_bootstrap_status') as Promise<PtrBootstrapStatus>,
     getCompactIndexStatus: () =>
-      invoke<PtrCompactIndexStatus>('ptr_get_compact_index_status'),
+      invokeTyped('ptr_get_compact_index_status') as Promise<PtrCompactIndexStatus>,
     getNamespaceSummary: () =>
-      invoke<NamespaceSummary[]>('ptr_get_namespace_summary'),
+      invokeTyped('ptr_get_namespace_summary') as Promise<NamespaceSummary[]>,
     getTagsPaginated: (params: { namespace?: string; search?: string; cursor?: string; limit?: number }) =>
-      invoke<TagRecord[]>('ptr_get_tags_paginated', params),
+      invokeTyped('ptr_get_tags_paginated', params as never) as Promise<TagRecord[]>,
     getTagSiblings: (tagId: number) =>
-      invoke<TagRelation[]>('ptr_get_tag_siblings', { tag_id: tagId }),
+      invokeTyped('ptr_get_tag_siblings', { tag_id: tagId }) as Promise<TagRelation[]>,
     getTagParents: (tagId: number) =>
-      invoke<TagRelation[]>('ptr_get_tag_parents', { tag_id: tagId }),
+      invokeTyped('ptr_get_tag_parents', { tag_id: tagId }) as Promise<TagRelation[]>,
     getSyncPerfBreakdown: () =>
-      invoke<PtrSyncPerfBreakdown>('get_ptr_sync_perf_breakdown'),
+      invokeTyped('get_ptr_sync_perf_breakdown') as Promise<PtrSyncPerfBreakdown>,
   },
 
   settings: {
     get: () =>
-      invoke<AppSettings>('get_settings'),
+      invokeTyped('get_settings') as Promise<AppSettings>,
     save: (settings: Partial<AppSettings>) =>
-      invoke<void>('save_settings', settings as Record<string, unknown>),
+      invokeTyped('save_settings', settings as never) as unknown as Promise<void>,
     getViewPrefs: (scopeKey?: string) =>
-      invoke<ViewPrefsDto | null>('get_view_prefs', { scope_key: scopeKey }),
+      invokeTyped('get_view_prefs', { scope_key: scopeKey ?? null } as never) as Promise<ViewPrefsDto | null>,
     setViewPrefs: (scopeKey: string | undefined, patch: ViewPrefsPatch) =>
-      invoke<ViewPrefsDto>('set_view_prefs', { scope_key: scopeKey, patch }),
+      invokeTyped('set_view_prefs', { scope_key: scopeKey ?? null, patch } as never) as Promise<ViewPrefsDto>,
     setZoomFactor: (factor: number) =>
-      invoke<void>('set_zoom_factor', { factor }),
+      invokeTyped('set_zoom_factor', { factor }) as unknown as Promise<void>,
     getZoomFactor: () =>
-      invoke<number>('get_zoom_factor'),
+      invokeTyped('get_zoom_factor') as Promise<number>,
   },
 
   stats: {
     getImageStorageStats: () =>
       invokeTyped('get_image_storage_stats') as Promise<FileStats>,
     getPerfSnapshot: () =>
-      invoke<PerfSnapshot>('get_perf_snapshot'),
+      invokeTyped('get_perf_snapshot') as Promise<PerfSnapshot>,
     checkPerfSlo: () =>
-      invoke<PerfSloResult>('check_perf_slo'),
+      invokeTyped('check_perf_slo') as Promise<PerfSloResult>,
   },
 
   library: {
     getInfo: () =>
-      invoke<LibraryInfo>('get_library_info'),
+      invokeTyped('get_library_info') as Promise<LibraryInfo>,
     close: () =>
       invoke<void>('close_library'),
     wipeImageData: () =>
@@ -707,9 +708,9 @@ export const api = {
 
   os: {
     openExternalUrl: (url: string) =>
-      invoke<void>('open_external_url', { url }),
+      invokeTyped('open_external_url', { url }) as unknown as Promise<void>,
     enableModernWindowStyle: (cornerRadius: number) =>
-      invoke<void>('enable_modern_window_style', { cornerRadius }),
+      invokeTyped('enable_modern_window_style', { cornerRadius }) as unknown as Promise<void>,
     openSettingsWindow: () =>
       invoke<void>('open_settings_window'),
     openSubscriptionsWindow: () =>
