@@ -16,8 +16,6 @@ use super::projections;
 use crate::sidebar::db as sidebar;
 use crate::smart_folders::db as smart_folders;
 use super::SqliteDatabase;
-use crate::ptr::db::PtrSqliteDatabase;
-
 /// Events that trigger compiler runs.
 #[derive(Debug, Clone)]
 pub enum CompilerEvent {
@@ -45,12 +43,6 @@ pub enum CompilerEvent {
     FolderChanged {
         folder_id: i64,
     },
-    /// Incremental PTR sync — only these hashes changed.
-    PtrSyncComplete {
-        changed_hashes: Vec<String>,
-    },
-    /// Full PTR rebuild (manual maintenance).
-    PtrFullRebuild,
     /// Duplicate pairs changed (scan, resolve, merge).
     DuplicateChanged,
     /// File view_count changed (detail/quick look viewing).
@@ -68,9 +60,6 @@ struct CompilerPlan {
     rebuild_all_smart_folders: bool,
     rebuild_sidebar: bool,
     dirty_file_ids: HashSet<i64>,
-    rebuild_ptr_overlay: bool,
-    rebuild_ptr_overlay_full: bool,
-    ptr_changed_hashes: Vec<String>,
     rebuild_all: bool,
 }
 
@@ -132,13 +121,6 @@ impl CompilerPlan {
             CompilerEvent::FolderChanged { folder_id: _ } => {
                 self.rebuild_sidebar = true;
             }
-            CompilerEvent::PtrSyncComplete { changed_hashes } => {
-                self.ptr_changed_hashes.extend(changed_hashes);
-                self.rebuild_ptr_overlay = true;
-            }
-            CompilerEvent::PtrFullRebuild => {
-                self.rebuild_ptr_overlay_full = true;
-            }
             CompilerEvent::DuplicateChanged => {
                 self.rebuild_sidebar = true;
             }
@@ -159,8 +141,6 @@ impl CompilerPlan {
             && !self.rebuild_all_smart_folders
             && !self.rebuild_sidebar
             && self.dirty_file_ids.is_empty()
-            && !self.rebuild_ptr_overlay
-            && !self.rebuild_ptr_overlay_full
             && !self.rebuild_all
     }
 }
@@ -180,7 +160,6 @@ pub struct CompilerBatchResult {
 /// of what was affected. The caller (state.rs) uses this to emit events.
 pub async fn start_compiler_loop(
     db: Arc<SqliteDatabase>,
-    ptr_db: Option<Arc<PtrSqliteDatabase>>,
     mut rx: mpsc::UnboundedReceiver<CompilerEvent>,
     on_batch_done: impl Fn(CompilerBatchResult) + Send + 'static,
 ) {
@@ -221,7 +200,7 @@ pub async fn start_compiler_loop(
             || !plan.dirty_smart_folder_ids.is_empty();
 
         // PBI-027: Determine which invalidations are needed from the plan,
-        // so we don't emit sidebar refreshes for PTR-only / metadata-only batches.
+        // so we don't emit sidebar refreshes for metadata-only batches.
         let sidebar_affected = plan.rebuild_sidebar
             || plan.rebuild_tag_graph
             || plan.rebuild_all
@@ -229,7 +208,7 @@ pub async fn start_compiler_loop(
             || !plan.dirty_smart_folder_ids.is_empty()
             || plan.rebuild_status_bitmaps;
 
-        if let Err(e) = run_compilers(&db_ref, ptr_db.as_ref(), &plan).await {
+        if let Err(e) = run_compilers(&db_ref, &plan).await {
             tracing::error!("Compiler error: {e}");
         }
 
@@ -238,7 +217,7 @@ pub async fn start_compiler_loop(
         }
 
         // PBI-032: Only invalidate scope cache when membership-affecting bitmaps changed.
-        // Metadata-only or PTR-only batches don't alter scope ID sets.
+        // Metadata-only batches don't alter scope ID sets.
         let scope_affected = plan.rebuild_status_bitmaps
             || plan.rebuild_all_smart_folders
             || !plan.dirty_smart_folder_ids.is_empty()
@@ -260,7 +239,6 @@ pub async fn start_compiler_loop(
 
 async fn run_compilers(
     db: &Arc<SqliteDatabase>,
-    ptr_db: Option<&Arc<PtrSqliteDatabase>>,
     plan: &CompilerPlan,
 ) -> Result<(), String> {
     let start = std::time::Instant::now();
@@ -325,19 +303,6 @@ async fn run_compilers(
     // 7. Sidebar compiler
     if plan.rebuild_sidebar || plan.rebuild_all {
         compile_sidebar(db).await?;
-    }
-
-    // 8. PTR overlay compiler — never on RebuildAll (shares PTR writer lock)
-    if plan.rebuild_ptr_overlay || plan.rebuild_ptr_overlay_full {
-        if let Some(ptr) = ptr_db {
-            if crate::ptr::controller::PtrController::is_ptr_syncing() {
-                tracing::info!("Skipping PTR overlay rebuild (sync in progress)");
-            } else if plan.rebuild_ptr_overlay_full || plan.ptr_changed_hashes.is_empty() {
-                compile_ptr_overlay_full(ptr).await?;
-            } else {
-                compile_ptr_overlay_incremental(ptr, &plan.ptr_changed_hashes).await?;
-            }
-        }
     }
 
     let elapsed = start.elapsed();
@@ -442,17 +407,17 @@ async fn compile_tag_graph(db: &Arc<SqliteDatabase>) -> Result<(), String> {
             "INSERT OR IGNORE INTO tag_ancestor (tag_id, ancestor_id, depth)
              WITH RECURSIVE ancestors(tag_id, ancestor_id, depth) AS (
                  SELECT child_tag_id, parent_tag_id, 1
-                 FROM tag_parent
+                 FROM tag_implication
                  UNION ALL
                  SELECT a.tag_id, tp.parent_tag_id, a.depth + 1
                  FROM ancestors a
-                 JOIN tag_parent tp ON tp.child_tag_id = a.ancestor_id
+                 JOIN tag_implication tp ON tp.child_tag_id = a.ancestor_id
                  WHERE a.depth < 50
              )
              SELECT tag_id, ancestor_id, depth FROM ancestors",
         )?;
 
-        // Rebuild tag_display from siblings
+        // Rebuild tag_display from aliases
         conn.execute("DELETE FROM tag_display", [])?;
         conn.execute_batch(
             "INSERT OR REPLACE INTO tag_display (tag_id, display_ns, display_st)
@@ -464,7 +429,7 @@ async fn compile_tag_graph(db: &Arc<SqliteDatabase>) -> Result<(), String> {
                  SELECT ts.from_tag_id,
                         t2.namespace AS display_ns,
                         t2.subtag AS display_st
-                 FROM tag_sibling ts
+                 FROM tag_alias ts
                  JOIN tag t2 ON t2.tag_id = ts.to_tag_id
              ) st ON st.from_tag_id = t.tag_id",
         )?;
@@ -801,31 +766,6 @@ async fn compile_sidebar(db: &Arc<SqliteDatabase>) -> Result<(), String> {
     Ok(())
 }
 
-async fn compile_ptr_overlay_full(ptr_db: &Arc<PtrSqliteDatabase>) -> Result<(), String> {
-    let epoch = chrono::Utc::now().timestamp();
-    let count = ptr_db.rebuild_overlay(epoch).await?;
-    ptr_db.bump_epoch().await;
-    tracing::info!(count, epoch, "PTR overlay full rebuild, caches invalidated");
-    Ok(())
-}
-
-async fn compile_ptr_overlay_incremental(
-    ptr_db: &Arc<PtrSqliteDatabase>,
-    changed_hashes: &[String],
-) -> Result<(), String> {
-    let epoch = chrono::Utc::now().timestamp();
-    let hashes = changed_hashes.to_vec();
-    let count = ptr_db.rebuild_overlay_for_hashes(hashes, epoch).await?;
-    ptr_db.bump_epoch().await;
-    tracing::info!(
-        count,
-        changed = changed_hashes.len(),
-        epoch,
-        "PTR overlay incremental rebuild, caches invalidated"
-    );
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -859,28 +799,6 @@ mod tests {
         plan.accumulate(CompilerEvent::TagChanged { tag_id: 2 });
         plan.accumulate(CompilerEvent::RebuildAll);
         assert!(plan.rebuild_all);
-    }
-
-    /// PBI-027: Metadata-only / PTR-only batches should not trigger sidebar invalidation.
-    #[test]
-    fn ptr_sync_complete_without_dirty_files_does_not_affect_sidebar() {
-        let mut plan = CompilerPlan::default();
-        plan.accumulate(CompilerEvent::PtrSyncComplete {
-            changed_hashes: vec![],
-        });
-
-        // sidebar_affected uses same logic as the compiler loop
-        let sidebar_affected = plan.rebuild_sidebar
-            || plan.rebuild_tag_graph
-            || plan.rebuild_all
-            || plan.rebuild_all_smart_folders
-            || !plan.dirty_smart_folder_ids.is_empty()
-            || plan.rebuild_status_bitmaps;
-
-        assert!(
-            !sidebar_affected,
-            "PTR sync with no changed hashes should not trigger sidebar invalidation"
-        );
     }
 
     /// PBI-027: File insertion DOES trigger sidebar (status bitmaps + sidebar rebuild).

@@ -3,7 +3,8 @@ import type { GridRuntimeState } from '../runtime/gridRuntimeState';
 import type { MasonryImageItem } from '../shared';
 import type { GridQueryKey } from './gridQueryKey';
 import { queryKeyToFetchArgs } from './gridQueryKey';
-import { GridController } from '../../../shared/controllers/gridController';
+import { api } from '#desktop/api';
+import { prefetchMetadataBatch } from '#features/grid/data';
 import { toMasonryItem } from '../shared';
 import { batchPreloadMediaUrls } from '../enhancedMediaCache';
 
@@ -187,7 +188,7 @@ export class GridQueryBroker {
 
     try {
       const args = queryKeyToFetchArgs(key, cursor, PAGE_SIZE);
-      const page = await GridController.fetchGridPage(args);
+      const page = await api.grid.getPageSlim(args);
 
       if (gen !== this.generation || this.destroyed) {
         this.stats.cancelled++;
@@ -206,7 +207,7 @@ export class GridQueryBroker {
 
       if (items.length > 0) {
         batchPreloadMediaUrls(items, 'thumb512', 'high');
-        void GridController.prefetchVisibleMetadata(items.map(i => i.hash));
+        void prefetchMetadataBatch(items.map(i => i.hash));
       }
       void this.prefetchEstimateSample(key, page.next_cursor, gen);
     } catch (err) {
@@ -283,7 +284,7 @@ export class GridQueryBroker {
       this.dispatch({ type: 'SET_ERROR', error: null });
 
       const args = queryKeyToFetchArgs(key, null, PAGE_SIZE);
-      const page = await GridController.fetchGridPage(args);
+      const page = await api.grid.getPageSlim(args);
 
       if (gen !== this.generation || this.destroyed) {
         this.stats.cancelled++;
@@ -322,7 +323,7 @@ export class GridQueryBroker {
       // Side-effects
       if (items.length > 0) {
         batchPreloadMediaUrls(items, 'thumb512', 'high');
-        void GridController.prefetchVisibleMetadata(items.map(i => i.hash));
+        void prefetchMetadataBatch(items.map(i => i.hash));
       }
       void this.prefetchEstimateSample(key, page.next_cursor, gen);
 
@@ -367,7 +368,7 @@ export class GridQueryBroker {
     const seq = ++this.lookaheadRequestSeq;
     try {
       const args = queryKeyToFetchArgs(key, cursor, LOOKAHEAD_PAGE_SIZE);
-      const page = await GridController.fetchGridPage(args);
+      const page = await api.grid.getPageSlim(args);
       if (gen !== this.generation || this.destroyed || seq !== this.lookaheadRequestSeq) return;
       const loaded = this.stateRef.current?.images ?? [];
       if (loaded.length > 0 && page.items.length > 0) {

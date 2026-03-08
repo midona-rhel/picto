@@ -1,9 +1,7 @@
 //! Simplified tag utilities for Picto.
 //!
-//! Keeps: split_tag, combine_tag, clean_tag, clean_tags (essential for PTR tag normalization).
+//! Keeps: split_tag, combine_tag, clean_tag, clean_tags (essential for tag normalization).
 //! Drops: TagFilter whitelist/blacklist, human_text_sort_key (→ natord), display string helpers.
-//!
-//! Ported from HydrusTags.py — tag cleaning logic is preserved exactly for PTR compatibility.
 
 use std::sync::OnceLock;
 
@@ -151,8 +149,7 @@ fn strip_tag_text_of_gumpf(t: &str) -> String {
     t
 }
 
-/// Clean a tag according to Hydrus rules (lowercase, strip garbage, normalise).
-/// Essential for PTR tag normalization — must match Python behavior exactly.
+/// Clean a tag (lowercase, strip garbage, normalise).
 pub fn clean_tag(tag: &str) -> Result<String, String> {
     if tag.is_empty() {
         return Err("Received an empty tag".to_string());
@@ -227,7 +224,7 @@ pub fn parse_tags(raw_tags: &[String]) -> Vec<(String, String)> {
     raw_tags.iter().filter_map(|s| parse_tag(s)).collect()
 }
 
-/// Namespaces accepted on external ingest paths (import/subscription/PTR-like feeds).
+/// Namespaces accepted on external ingest paths (import/subscription feeds).
 /// Any other `ns:tag` input is coerced to an unnamespaced tag literal `ns:tag`.
 pub fn is_ingest_namespace_allowed(namespace: &str) -> bool {
     matches!(

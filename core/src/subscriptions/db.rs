@@ -12,7 +12,7 @@ pub struct Subscription {
     pub name: String,
     pub site_id: String,
     pub paused: bool,
-    pub flow_id: Option<i64>,
+    pub group_id: Option<i64>,
     pub initial_file_limit: i64,
     pub periodic_file_limit: i64,
     pub created_at: String,
@@ -39,14 +39,14 @@ fn map_subscription_row(row: &rusqlite::Row) -> rusqlite::Result<Subscription> {
         name: row.get(1)?,
         site_id: row.get(2)?,
         paused: row.get::<_, i64>(3)? != 0,
-        flow_id: row.get(4)?,
+        group_id: row.get(4)?,
         initial_file_limit: row.get(5)?,
         periodic_file_limit: row.get(6)?,
         created_at: row.get(7)?,
     })
 }
 
-const SUB_COLS: &str = "subscription_id, name, site_id, paused, flow_id, initial_file_limit, periodic_file_limit, created_at";
+const SUB_COLS: &str = "subscription_id, name, site_id, paused, group_id, initial_file_limit, periodic_file_limit, created_at";
 
 fn map_query_row(row: &rusqlite::Row) -> rusqlite::Result<SubscriptionQuery> {
     Ok(SubscriptionQuery {
@@ -69,7 +69,7 @@ pub fn create_subscription(
     conn: &Connection,
     name: &str,
     site_id: &str,
-    flow_id: Option<i64>,
+    group_id: Option<i64>,
 ) -> rusqlite::Result<i64> {
     let now = chrono::Utc::now().to_rfc3339();
     let mut stmt = conn.prepare("PRAGMA table_info(subscription)")?;
@@ -87,21 +87,21 @@ pub fn create_subscription(
 
     if has_site_id && has_site_plugin_id {
         conn.execute(
-            "INSERT INTO subscription (name, site_id, site_plugin_id, flow_id, created_at)
+            "INSERT INTO subscription (name, site_id, site_plugin_id, group_id, created_at)
              VALUES (?1, ?2, ?2, ?3, ?4)",
-            params![name, site_id, flow_id, now],
+            params![name, site_id, group_id, now],
         )?;
     } else if has_site_id {
         conn.execute(
-            "INSERT INTO subscription (name, site_id, flow_id, created_at)
+            "INSERT INTO subscription (name, site_id, group_id, created_at)
              VALUES (?1, ?2, ?3, ?4)",
-            params![name, site_id, flow_id, now],
+            params![name, site_id, group_id, now],
         )?;
     } else if has_site_plugin_id {
         conn.execute(
-            "INSERT INTO subscription (name, site_plugin_id, flow_id, created_at)
+            "INSERT INTO subscription (name, site_plugin_id, group_id, created_at)
              VALUES (?1, ?2, ?3, ?4)",
-            params![name, site_id, flow_id, now],
+            params![name, site_id, group_id, now],
         )?;
     } else {
         return Err(rusqlite::Error::InvalidColumnName(
@@ -403,9 +403,9 @@ pub fn list_all_subscription_queries(
 }
 
 /// Subscriptions for a given flow with aggregated file counts — single query.
-pub fn list_subscriptions_for_flow_with_file_counts(
+pub fn list_subscriptions_for_group_with_file_counts(
     conn: &Connection,
-    flow_id: i64,
+    group_id: i64,
 ) -> rusqlite::Result<Vec<(Subscription, i64)>> {
     let mut stmt = conn.prepare_cached(&format!(
         "SELECT s.{}, COALESCE(fc.cnt, 0)
@@ -414,30 +414,30 @@ pub fn list_subscriptions_for_flow_with_file_counts(
                  SELECT subscription_id, COUNT(*) AS cnt
                  FROM subscription_entity GROUP BY subscription_id
              ) fc ON fc.subscription_id = s.subscription_id
-             WHERE s.flow_id = ?1
+             WHERE s.group_id = ?1
              ORDER BY s.name",
         SUB_COLS.replace(", ", ", s.")
     ))?;
-    let rows = stmt.query_map([flow_id], |row| {
+    let rows = stmt.query_map([group_id], |row| {
         Ok((map_subscription_row(row)?, row.get::<_, i64>(8)?))
     })?;
     rows.collect()
 }
 
 /// All subscription queries belonging to a flow — single query.
-pub fn list_subscription_queries_for_flow(
+pub fn list_subscription_queries_for_group(
     conn: &Connection,
-    flow_id: i64,
+    group_id: i64,
 ) -> rusqlite::Result<Vec<SubscriptionQuery>> {
     let mut stmt = conn.prepare_cached(&format!(
         "SELECT sq.{}
              FROM subscription_query sq
              INNER JOIN subscription s ON s.subscription_id = sq.subscription_id
-             WHERE s.flow_id = ?1
+             WHERE s.group_id = ?1
              ORDER BY sq.subscription_id, sq.query_id",
         QUERY_COLS.replace(", ", ", sq.")
     ))?;
-    let rows = stmt.query_map([flow_id], map_query_row)?;
+    let rows = stmt.query_map([group_id], map_query_row)?;
     rows.collect()
 }
 
@@ -546,12 +546,12 @@ impl SqliteDatabase {
         &self,
         name: &str,
         site_id: &str,
-        flow_id: Option<i64>,
+        group_id: Option<i64>,
     ) -> Result<Subscription, String> {
         let n = name.to_string();
         let tmpl = site_id.to_string();
         let sub_id = self
-            .with_conn(move |conn| create_subscription(conn, &n, &tmpl, flow_id))
+            .with_conn(move |conn| create_subscription(conn, &n, &tmpl, group_id))
             .await?;
         let sid = sub_id;
         self.with_read_conn(move |conn| get_subscription(conn, sid))
@@ -745,19 +745,19 @@ impl SqliteDatabase {
         self.with_read_conn(list_all_subscription_queries).await
     }
 
-    pub async fn list_subscriptions_for_flow_with_file_counts(
+    pub async fn list_subscriptions_for_group_with_file_counts(
         &self,
-        flow_id: i64,
+        group_id: i64,
     ) -> Result<Vec<(Subscription, i64)>, String> {
-        self.with_read_conn(move |conn| list_subscriptions_for_flow_with_file_counts(conn, flow_id))
+        self.with_read_conn(move |conn| list_subscriptions_for_group_with_file_counts(conn, group_id))
             .await
     }
 
-    pub async fn list_subscription_queries_for_flow(
+    pub async fn list_subscription_queries_for_group(
         &self,
-        flow_id: i64,
+        group_id: i64,
     ) -> Result<Vec<SubscriptionQuery>, String> {
-        self.with_read_conn(move |conn| list_subscription_queries_for_flow(conn, flow_id))
+        self.with_read_conn(move |conn| list_subscription_queries_for_group(conn, group_id))
             .await
     }
 
@@ -823,7 +823,7 @@ mod tests {
                  site_id                 TEXT NOT NULL,
                  site_plugin_id          TEXT NOT NULL,
                  paused                  INTEGER NOT NULL DEFAULT 0,
-                 flow_id                 INTEGER,
+                 group_id                 INTEGER,
                  initial_file_limit      INTEGER NOT NULL DEFAULT 100,
                  periodic_file_limit     INTEGER NOT NULL DEFAULT 50,
                  created_at              TEXT NOT NULL

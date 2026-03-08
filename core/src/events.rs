@@ -61,7 +61,6 @@ pub enum Domain {
     Sidebar,
     Selection,
     ViewPrefs,
-    Ptr,
     Subscriptions,
 }
 
@@ -364,189 +363,12 @@ pub mod event_names {
     pub const RUNTIME_TASK_UPSERTED: &str = "runtime/task_upserted";
     pub const RUNTIME_TASK_REMOVED: &str = "runtime/task_removed";
 
-    // --- Compatibility events (legacy) ---
-    // These duplicate information already carried by runtime/task_upserted.
-    // Retained for frontend backward compatibility; remove once all frontend
-    // listeners migrate to the task-based model.
-    pub const SUBSCRIPTION_STARTED: &str = "subscription-started";
-    pub const SUBSCRIPTION_PROGRESS: &str = "subscription-progress";
-    pub const SUBSCRIPTION_FINISHED: &str = "subscription-finished";
-
-    pub const FLOW_STARTED: &str = "flow-started";
-    pub const FLOW_PROGRESS: &str = "flow-progress";
-    pub const FLOW_FINISHED: &str = "flow-finished";
-
-    pub const PTR_SYNC_STARTED: &str = "ptr-sync-started";
-    pub const PTR_SYNC_PROGRESS: &str = "ptr-sync-progress";
-    pub const PTR_SYNC_FINISHED: &str = "ptr-sync-finished";
-    pub const PTR_SYNC_PHASE_CHANGED: &str = "ptr-sync-phase-changed";
-
-    pub const PTR_BOOTSTRAP_STARTED: &str = "ptr-bootstrap-started";
-    pub const PTR_BOOTSTRAP_PROGRESS: &str = "ptr-bootstrap-progress";
-    pub const PTR_BOOTSTRAP_FINISHED: &str = "ptr-bootstrap-finished";
-    pub const PTR_BOOTSTRAP_FAILED: &str = "ptr-bootstrap-failed";
-
-    // --- Non-task events (kept) ---
+    // --- Non-task events ---
     pub const LIBRARY_CLOSED: &str = "library-closed";
     pub const ZOOM_FACTOR_CHANGED: &str = "zoom-factor-changed";
     pub const FILE_IMPORTED: &str = "file-imported";
     pub const OPEN_DETAIL_WINDOW: &str = "open-detail-window";
     pub const DUPLICATE_AUTO_MERGE_FINISHED: &str = "duplicate-auto-merge-finished";
-}
-
-// --- Subscription lifecycle
-
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct SubscriptionStartedEvent {
-    pub subscription_id: String,
-    pub subscription_name: String,
-    pub mode: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub query_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub query_name: Option<String>,
-}
-
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct SubscriptionFinishedEvent {
-    pub subscription_id: String,
-    pub subscription_name: String,
-    pub mode: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub query_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub query_name: Option<String>,
-    pub status: String,
-    pub files_downloaded: usize,
-    pub files_skipped: usize,
-    pub errors_count: usize,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub error: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub failure_kind: Option<String>,
-    pub metadata_validated: usize,
-    pub metadata_invalid: usize,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub last_metadata_error: Option<String>,
-}
-
-// --- Flow lifecycle
-
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct FlowStartedEvent {
-    pub flow_id: String,
-    pub subscription_count: usize,
-}
-
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct FlowProgressEvent {
-    pub flow_id: String,
-    pub total: u32,
-    pub done: usize,
-    pub remaining: usize,
-}
-
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct FlowFinishedEvent {
-    pub flow_id: String,
-    pub status: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub started_count: Option<u32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub error: Option<String>,
-}
-
-// --- PTR sync lifecycle
-
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct PtrSyncFinishedEvent {
-    pub success: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub error: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub updates_processed: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tags_added: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub schema_rebuild: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub index_rebuild: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub changed_hashes_truncated: Option<bool>,
-}
-
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct PtrSyncPhaseChangedEvent {
-    pub phase: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub current_update_index: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub ts: Option<String>,
-}
-
-// --- PTR bootstrap lifecycle
-
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct PtrBootstrapStartedEvent {
-    pub snapshot_dir: String,
-    pub service_id: i64,
-    pub mode: String,
-}
-
-/// Superset struct for ptr-bootstrap-progress. Different call sites populate
-/// different subsets of fields; all optional fields are skipped when None.
-#[derive(Debug, Clone, Default, serde::Serialize)]
-pub struct PtrBootstrapProgressEvent {
-    pub phase: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub stage: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub service_id: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub running: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub rows_done: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub rows_total: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub rows_done_stage: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub rows_total_stage: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub rows_per_sec: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub eta_seconds: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub counts: Option<serde_json::Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub updated_at: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub ts: Option<String>,
-}
-
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct PtrBootstrapFinishedEvent {
-    pub success: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub dry_run: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub service_id: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub result: Option<serde_json::Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cursor_index: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cursor_source: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub delta_sync_started: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub counts: Option<serde_json::Value>,
-}
-
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct PtrBootstrapFailedEvent {
-    pub success: bool,
-    pub error: String,
 }
 
 // --- System / misc

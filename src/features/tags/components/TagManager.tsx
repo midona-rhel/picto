@@ -279,8 +279,8 @@ export function TagManager() {
       const display = formatTagDisplay(tag.namespace, tag.subtag);
 
       const [siblings, relations] = await Promise.all([
-        api.tags.getSiblings(tag.tag_id).catch(() => [] as TagRelation[]),
-        api.tags.getParents(tag.tag_id).catch(() => [] as TagRelation[]),
+        api.tags.getRelations(tag.tag_id, 'aliases').catch(() => [] as TagRelation[]),
+        api.tags.getRelations(tag.tag_id, 'implications').catch(() => [] as TagRelation[]),
       ]);
 
       const parentTags = relations.filter((r) => r.relation === 'parent');
@@ -290,7 +290,6 @@ export function TagManager() {
         useNavigationStore.getState().navigateToFilterTags([formatTagDisplay(ns, st)]);
       const items: ContextMenuEntry[] = buildTagContextMenu({
         tag,
-        source: 'local',
         siblings,
         parents: parentTags,
         children: childTags,
@@ -317,7 +316,7 @@ export function TagManager() {
               label: `Delete tag "${display}"`,
               undo: async () => {
                 if (snapshotHashes.length > 0) {
-                  await api.tags.addBatch(snapshotHashes, [display]);
+                  await api.tags.add(snapshotHashes, [display]);
                 }
                 await refreshAll();
               },
@@ -370,8 +369,8 @@ export function TagManager() {
       registerUndoAction({
         label: `Merge tag "${sourceDisplay}" into "${targetDisplay}"`,
         undo: async () => {
-          if (sourceHashes.length > 0) await api.tags.addBatch(sourceHashes, [sourceDisplay]);
-          if (sourceOnly.length > 0) await api.tags.removeBatch(sourceOnly, [targetDisplay]);
+          if (sourceHashes.length > 0) await api.tags.add(sourceHashes, [sourceDisplay]);
+          if (sourceOnly.length > 0) await api.tags.remove(sourceOnly, [targetDisplay]);
           await refreshAll();
         },
         redo: async () => {
@@ -409,43 +408,43 @@ export function TagManager() {
     const targetDisplay = formatTagDisplay(relationTarget.namespace, relationTarget.subtag);
     try {
       if (relationModal.type === 'alias') {
-        await api.tags.setAlias(sourceDisplay, targetDisplay);
+        await api.tags.manageAlias(sourceDisplay, targetDisplay);
         registerUndoAction({
           label: `Set alias "${sourceDisplay}"`,
           undo: async () => {
-            await api.tags.removeAlias(sourceDisplay);
+            await api.tags.manageAlias(sourceDisplay);
             await refreshAll();
           },
           redo: async () => {
-            await api.tags.setAlias(sourceDisplay, targetDisplay);
+            await api.tags.manageAlias(sourceDisplay, targetDisplay);
             await refreshAll();
           },
         });
         notifySuccess(`"${sourceDisplay}" now resolves to "${targetDisplay}"`, 'Alias Added');
       } else if (relationModal.type === 'implication') {
-        await api.tags.addParent(sourceDisplay, targetDisplay);
+        await api.tags.manageParent(sourceDisplay, targetDisplay, 'add');
         registerUndoAction({
           label: `Add implication "${targetDisplay}"`,
           undo: async () => {
-            await api.tags.removeParent(sourceDisplay, targetDisplay);
+            await api.tags.manageParent(sourceDisplay, targetDisplay, 'remove');
             await refreshAll();
           },
           redo: async () => {
-            await api.tags.addParent(sourceDisplay, targetDisplay);
+            await api.tags.manageParent(sourceDisplay, targetDisplay, 'add');
             await refreshAll();
           },
         });
         notifySuccess(`"${sourceDisplay}" now implies "${targetDisplay}"`, 'Implication Added');
       } else {
-        await api.tags.addParent(targetDisplay, sourceDisplay);
+        await api.tags.manageParent(targetDisplay, sourceDisplay, 'add');
         registerUndoAction({
           label: `Add implied-by relation "${targetDisplay}"`,
           undo: async () => {
-            await api.tags.removeParent(targetDisplay, sourceDisplay);
+            await api.tags.manageParent(targetDisplay, sourceDisplay, 'remove');
             await refreshAll();
           },
           redo: async () => {
-            await api.tags.addParent(targetDisplay, sourceDisplay);
+            await api.tags.manageParent(targetDisplay, sourceDisplay, 'add');
             await refreshAll();
           },
         });

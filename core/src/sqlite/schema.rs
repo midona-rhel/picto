@@ -6,7 +6,7 @@ pub fn apply_pragmas(conn: &Connection) -> rusqlite::Result<()> {
     conn.execute_batch(PRAGMA_SQL)
 }
 
-pub const CURRENT_VERSION: i64 = 25;
+pub const CURRENT_VERSION: i64 = 26;
 
 pub fn init_schema(conn: &Connection) -> rusqlite::Result<()> {
     conn.execute_batch(LIBRARY_DDL)?;
@@ -573,6 +573,28 @@ pub fn run_migrations(conn: &Connection, from_version: i64) -> rusqlite::Result<
         // V24: Repair illegal collection -> entity_file links from older builds.
         repair_collection_entity_file_links(conn)?;
     }
+    if from_version < 26 {
+        // V26: Rename tag_sibling → tag_alias, tag_parent → tag_implication,
+        //      flow → subscription_group, flow_id → group_id.
+        if table_exists(conn, "tag_sibling")? {
+            conn.execute_batch("ALTER TABLE tag_sibling RENAME TO tag_alias")?;
+        }
+        if table_exists(conn, "tag_parent")? {
+            conn.execute_batch("ALTER TABLE tag_parent RENAME TO tag_implication")?;
+        }
+        if table_exists(conn, "flow")? {
+            if !table_exists(conn, "subscription_group")? {
+                conn.execute_batch("ALTER TABLE flow RENAME TO subscription_group")?;
+                conn.execute_batch("ALTER TABLE subscription_group RENAME COLUMN flow_id TO group_id")?;
+            } else {
+                // DDL already created subscription_group; drop stale v4-created flow table.
+                conn.execute_batch("DROP TABLE IF EXISTS flow")?;
+            }
+        }
+        if has_column(conn, "subscription", "flow_id")? && !has_column(conn, "subscription", "group_id")? {
+            conn.execute_batch("ALTER TABLE subscription RENAME COLUMN flow_id TO group_id")?;
+        }
+    }
     conn.execute("UPDATE schema_version SET version = ?1", [CURRENT_VERSION])?;
     Ok(())
 }
@@ -834,7 +856,6 @@ fn seed_manifest(conn: &Connection) -> rusqlite::Result<()> {
         "sidebar",
         "smart_folders",
         "bitmaps",
-        "ptr_overlay",
     ];
     let mut stmt =
         conn.prepare_cached("INSERT OR IGNORE INTO manifest (key, epoch) VALUES (?1, 0)")?;
@@ -871,7 +892,6 @@ fn seed_artifact_manifest(conn: &Connection) -> rusqlite::Result<()> {
         "sidebar",
         "smart_folders",
         "bitmaps",
-        "ptr_overlay",
     ];
     for artifact in &artifacts {
         let payload_json = if *artifact == "bitmaps" {
@@ -1082,14 +1102,14 @@ CREATE TABLE IF NOT EXISTS entity_tag_raw (
 );
 CREATE INDEX IF NOT EXISTS idx_etr_tag ON entity_tag_raw(tag_id, entity_id);
 
-CREATE TABLE IF NOT EXISTS tag_sibling (
+CREATE TABLE IF NOT EXISTS tag_alias (
     from_tag_id INTEGER NOT NULL REFERENCES tag(tag_id) ON DELETE CASCADE,
     to_tag_id   INTEGER NOT NULL REFERENCES tag(tag_id) ON DELETE CASCADE,
     source      TEXT NOT NULL,
     PRIMARY KEY (from_tag_id, source)
 );
 
-CREATE TABLE IF NOT EXISTS tag_parent (
+CREATE TABLE IF NOT EXISTS tag_implication (
     child_tag_id  INTEGER NOT NULL REFERENCES tag(tag_id) ON DELETE CASCADE,
     parent_tag_id INTEGER NOT NULL REFERENCES tag(tag_id) ON DELETE CASCADE,
     source        TEXT NOT NULL,
@@ -1164,10 +1184,10 @@ CREATE TABLE IF NOT EXISTS smart_folder (
 );
 
 -- ═══════════════════════════════════════════════════
--- FLOWS
+-- SUBSCRIPTION GROUPS
 -- ═══════════════════════════════════════════════════
-CREATE TABLE IF NOT EXISTS flow (
-    flow_id    INTEGER PRIMARY KEY,
+CREATE TABLE IF NOT EXISTS subscription_group (
+    group_id   INTEGER PRIMARY KEY,
     name       TEXT NOT NULL,
     schedule   TEXT NOT NULL DEFAULT 'manual',
     created_at TEXT NOT NULL
@@ -1181,7 +1201,7 @@ CREATE TABLE IF NOT EXISTS subscription (
     name                    TEXT NOT NULL,
     site_id                 TEXT NOT NULL,
     paused                  INTEGER NOT NULL DEFAULT 0,
-    flow_id                 INTEGER REFERENCES flow(flow_id) ON DELETE CASCADE,
+    group_id                INTEGER REFERENCES subscription_group(group_id) ON DELETE CASCADE,
     initial_file_limit      INTEGER NOT NULL DEFAULT 100,
     periodic_file_limit     INTEGER NOT NULL DEFAULT 50,
     created_at              TEXT NOT NULL
@@ -1348,7 +1368,7 @@ CREATE TABLE IF NOT EXISTS kv_settings (
 
 -- Schema version
 CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL);
-INSERT OR IGNORE INTO schema_version (version) VALUES (25);
+INSERT OR IGNORE INTO schema_version (version) VALUES (26);
 "#;
 
 #[cfg(test)]
@@ -1371,15 +1391,15 @@ mod tests {
             "collection_tag",
             "tag",
             "entity_tag_raw",
-            "tag_sibling",
-            "tag_parent",
+            "tag_alias",
+            "tag_implication",
             "tag_ancestor",
             "tag_display",
             "entity_tag_implied",
             "folder",
             "folder_entity",
             "smart_folder",
-            "flow",
+            "subscription_group",
             "subscription",
             "subscription_query",
             "subscription_entity",
@@ -1433,8 +1453,8 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM manifest", [], |row| row.get(0))
             .unwrap();
         assert!(
-            count >= 8,
-            "Manifest should have at least 8 seeded keys, got {count}"
+            count >= 7,
+            "Manifest should have at least 7 seeded keys, got {count}"
         );
 
         // Global manifest snapshot metadata should be seeded
@@ -1478,8 +1498,8 @@ mod tests {
         let version = get_schema_version(&conn).unwrap();
         assert_eq!(version, Some(CURRENT_VERSION));
 
-        // Verify V4 migration artifacts (flow table + flow_id column)
-        assert!(has_column(&conn, "subscription", "flow_id").unwrap());
+        // Verify V4 migration artifacts (group table + group_id column, renamed in V26)
+        assert!(has_column(&conn, "subscription", "group_id").unwrap());
 
         // Verify V5 migration artifacts
         assert!(has_column(&conn, "file", "last_viewed_at").unwrap());
@@ -1565,16 +1585,16 @@ mod tests {
         apply_pragmas(&conn).unwrap();
         init_schema(&conn).unwrap();
 
-        // Seed minimal graph: one folder, one flow+subscription, one file with single-entity mapping.
+        // Seed minimal graph: one folder, one group+subscription, one file with single-entity mapping.
         conn.execute("INSERT INTO folder (folder_id, name) VALUES (1, 'f')", [])
             .unwrap();
         conn.execute(
-            "INSERT INTO flow (flow_id, name, schedule, created_at) VALUES (1, 'flow', 'manual', CURRENT_TIMESTAMP)",
+            "INSERT INTO subscription_group (group_id, name, schedule, created_at) VALUES (1, 'grp', 'manual', CURRENT_TIMESTAMP)",
             [],
         )
         .unwrap();
         conn.execute(
-            "INSERT INTO subscription (subscription_id, name, site_id, paused, flow_id, initial_file_limit, periodic_file_limit, created_at)
+            "INSERT INTO subscription (subscription_id, name, site_id, paused, group_id, initial_file_limit, periodic_file_limit, created_at)
              VALUES (1, 'sub', 'x', 0, 1, 100, 50, CURRENT_TIMESTAMP)",
             [],
         )

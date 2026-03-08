@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { IconFolder, IconChevronRight } from '@tabler/icons-react';
 import { mediaThumbnailUrl } from '../../shared/lib/mediaUrl';
-import { FolderController } from '../../shared/controllers/folderController';
+import { api } from '#desktop/api';
 import { notifyError, notifySuccess } from '../../shared/lib/notify';
 import { useDomainStore } from '../../state/domainStore';
 import type { SidebarNodeDto } from '../../shared/types/sidebar';
@@ -107,7 +107,7 @@ export function SubfolderGrid({ folderId, targetSize, totalImageCount, onOpenFol
     Promise.all(
       missing.map(async (f) => {
         try {
-          const hash = await FolderController.getFolderCoverHash(f.folderId);
+          const hash = await api.folders.getCoverHash(f.folderId);
           return [f.folderId, hash] as [number, string | null];
         } catch {
           return [f.folderId, null] as [number, string | null];
@@ -167,7 +167,7 @@ export function SubfolderGrid({ folderId, targetSize, totalImageCount, onOpenFol
 
   const createSubfolderInCurrentFolder = useCallback(async () => {
     try {
-      const created = await FolderController.createFolder({ name: 'New Folder', parentId: folderId });
+      const created = await api.folders.create({ name: 'New Folder', parent_id: folderId });
       pendingRenameFolderIdRef.current = created.folder_id;
       refreshSidebar();
       notifySuccess('Subfolder created', 'Folders');
@@ -190,7 +190,7 @@ export function SubfolderGrid({ folderId, targetSize, totalImageCount, onOpenFol
       return;
     }
     try {
-      await FolderController.updateFolder({ folderId: renamingFolderId, name: trimmed });
+      await api.folders.update({ folder_id: renamingFolderId, name: trimmed });
       refreshSidebar();
       notifySuccess('Folder renamed', 'Folders');
     } catch (err) {
@@ -206,7 +206,7 @@ export function SubfolderGrid({ folderId, targetSize, totalImageCount, onOpenFol
 
   const applyColor = useCallback(async (folderIds: number[], color: string | null) => {
     try {
-      await Promise.all(folderIds.map((id) => FolderController.updateFolder({ folderId: id, color })));
+      await Promise.all(folderIds.map((id) => api.folders.update({ folder_id: id, color: color === null ? '' : (color ?? undefined) })));
       refreshSidebar();
       notifySuccess(`Updated color for ${folderIds.length} folder${folderIds.length === 1 ? '' : 's'}`, 'Folders');
     } catch (err) {
@@ -216,7 +216,7 @@ export function SubfolderGrid({ folderId, targetSize, totalImageCount, onOpenFol
 
   const applyIcon = useCallback(async (folderIds: number[], icon: string | null) => {
     try {
-      await Promise.all(folderIds.map((id) => FolderController.updateFolder({ folderId: id, icon })));
+      await Promise.all(folderIds.map((id) => api.folders.update({ folder_id: id, icon: icon === null ? '' : (icon ?? undefined) })));
       refreshSidebar();
       notifySuccess(`Updated icon for ${folderIds.length} folder${folderIds.length === 1 ? '' : 's'}`, 'Folders');
     } catch (err) {
@@ -239,7 +239,7 @@ export function SubfolderGrid({ folderId, targetSize, totalImageCount, onOpenFol
         const next = Array.from(new Set(draft)).sort();
         const prev = Array.from(new Set(original)).sort();
         if (JSON.stringify(next) === JSON.stringify(prev)) return;
-        void FolderController.updateFolder({ folderId: folder.folderId, autoTags: next })
+        void api.folders.update({ folder_id: folder.folderId, auto_tags: next })
           .then(() => {
             notifySuccess('Folder auto-tags updated', 'Folders');
           })
@@ -252,7 +252,7 @@ export function SubfolderGrid({ folderId, targetSize, totalImageCount, onOpenFol
 
   const deleteFolders = useCallback(async (folderIds: number[]) => {
     try {
-      await Promise.all(folderIds.map((id) => FolderController.deleteFolder(id)));
+      await Promise.all(folderIds.map((id) => api.folders.delete(id)));
       refreshSidebar();
       setSelectedIds((prev) => {
         const next = new Set(prev);

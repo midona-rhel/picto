@@ -1,8 +1,8 @@
-//! Flow orchestration — groups subscriptions into scheduled execution units.
+//! Subscription group orchestration — groups subscriptions into scheduled execution units.
 //!
-//! Owns flow CRUD, run/stop behavior, and runtime task publication for the UI.
+//! Owns group CRUD, run/stop behavior, and runtime task publication for the UI.
 //! Delegates subscription execution to `SubscriptionController`, while keeping
-//! flow-level progress and terminal status aggregation in one place.
+//! group-level progress and terminal status aggregation in one place.
 
 use std::sync::Arc;
 
@@ -13,23 +13,23 @@ use crate::settings::store::SettingsStore;
 use crate::sqlite::SqliteDatabase;
 use crate::subscriptions::controller::SubscriptionController;
 use crate::types::{
-    FlowInfo, RunningSubscriptions, SubTerminalStatuses, SubscriptionInfo, SubscriptionQueryInfo,
+    SubscriptionGroupInfo, RunningSubscriptions, SubTerminalStatuses, SubscriptionInfo, SubscriptionQueryInfo,
 };
 
-pub struct FlowController;
+pub struct SubscriptionGroupController;
 
-impl FlowController {
+impl SubscriptionGroupController {
     // PBI-040: Bulk read — constant query count per flow instead of O(N) per subscription.
-    pub async fn get_flows(db: &SqliteDatabase) -> Result<Vec<FlowInfo>, String> {
+    pub async fn get_groups(db: &SqliteDatabase) -> Result<Vec<SubscriptionGroupInfo>, String> {
         let start = std::time::Instant::now();
-        let flows = db.list_flows().await?;
-        let mut result = Vec::with_capacity(flows.len());
+        let groups = db.list_groups().await?;
+        let mut result = Vec::with_capacity(groups.len());
 
-        for flow in flows {
-            let fid = flow.flow_id;
+        for group in groups {
+            let fid = group.group_id;
 
-            let subs_with_counts = db.list_subscriptions_for_flow_with_file_counts(fid).await?;
-            let all_queries = db.list_subscription_queries_for_flow(fid).await?;
+            let subs_with_counts = db.list_subscriptions_for_group_with_file_counts(fid).await?;
+            let all_queries = db.list_subscription_queries_for_group(fid).await?;
 
             let mut queries_map: std::collections::HashMap<i64, Vec<SubscriptionQueryInfo>> =
                 std::collections::HashMap::new();
@@ -50,12 +50,12 @@ impl FlowController {
                     });
             }
 
-            let mut flow_total: u64 = 0;
+            let mut group_total: u64 = 0;
             let sub_infos: Vec<SubscriptionInfo> = subs_with_counts
                 .into_iter()
                 .map(|(sub, file_count)| {
                     let sub_id = sub.subscription_id;
-                    flow_total += file_count as u64;
+                    group_total += file_count as u64;
                     let canonical_site_id =
                         crate::subscriptions::gallery_dl_runner::canonical_site_id(&sub.site_id);
                     SubscriptionInfo {
@@ -63,7 +63,7 @@ impl FlowController {
                         name: sub.name,
                         site_id: canonical_site_id.to_string(),
                         paused: sub.paused,
-                        flow_id: sub.flow_id.map(|id| id.to_string()),
+                        group_id: sub.group_id.map(|id| id.to_string()),
                         initial_file_limit: sub.initial_file_limit as u32,
                         periodic_file_limit: sub.periodic_file_limit as u32,
                         created_at: sub.created_at,
@@ -73,12 +73,12 @@ impl FlowController {
                 })
                 .collect();
 
-            result.push(FlowInfo {
-                id: flow.flow_id.to_string(),
-                name: flow.name,
-                schedule: flow.schedule,
-                created_at: flow.created_at,
-                total_files: flow_total,
+            result.push(SubscriptionGroupInfo {
+                id: group.group_id.to_string(),
+                name: group.name,
+                schedule: group.schedule,
+                created_at: group.created_at,
+                total_files: group_total,
                 subscriptions: sub_infos,
             });
         }
@@ -86,56 +86,56 @@ impl FlowController {
         tracing::debug!(
             elapsed_ms = start.elapsed().as_millis() as u64,
             count = result.len(),
-            "get_flows bulk read"
+            "get_groups bulk read"
         );
 
         Ok(result)
     }
 
     /// Create a new flow with optional schedule.
-    pub async fn create_flow(
+    pub async fn create_group(
         db: &SqliteDatabase,
         name: String,
         schedule: Option<String>,
-    ) -> Result<FlowInfo, String> {
+    ) -> Result<SubscriptionGroupInfo, String> {
         let trimmed = name.trim().to_string();
         if trimmed.is_empty() {
-            return Err("Flow name cannot be empty".to_string());
+            return Err("Group name cannot be empty".to_string());
         }
-        let flow = db.create_flow(&trimmed).await?;
-        let flow_id = flow.flow_id;
+        let grp = db.create_group(&trimmed).await?;
+        let group_id = grp.group_id;
 
         if let Some(ref sched) = schedule {
             validate_schedule(sched)?;
-            db.set_flow_schedule(flow_id, sched).await?;
+            db.set_group_schedule(group_id, sched).await?;
         }
 
-        let final_flow = db
-            .get_flow(flow_id)
+        let final_grp = db
+            .get_group(group_id)
             .await?
-            .ok_or_else(|| "Flow not found after creation".to_string())?;
+            .ok_or_else(|| "Group not found after creation".to_string())?;
 
-        Ok(FlowInfo {
-            id: final_flow.flow_id.to_string(),
-            name: final_flow.name,
-            schedule: final_flow.schedule,
-            created_at: final_flow.created_at,
+        Ok(SubscriptionGroupInfo {
+            id: final_grp.group_id.to_string(),
+            name: final_grp.name,
+            schedule: final_grp.schedule,
+            created_at: final_grp.created_at,
             total_files: 0,
             subscriptions: vec![],
         })
     }
 
     /// Delete a flow (CASCADE deletes subscriptions). Optionally delete associated files.
-    pub async fn delete_flow(
+    pub async fn delete_group(
         db: &SqliteDatabase,
         blob_store: &BlobStore,
         id: String,
         delete_files: Option<bool>,
     ) -> Result<(), String> {
-        let flow_id: i64 = id.parse().map_err(|_| format!("Invalid flow id: {}", id))?;
+        let group_id: i64 = id.parse().map_err(|_| format!("Invalid group id: {}", id))?;
 
         if delete_files.unwrap_or(false) {
-            let sub_ids = db.get_flow_subscription_ids(flow_id).await?;
+            let sub_ids = db.get_group_subscription_ids(group_id).await?;
             for sub_id in sub_ids {
                 let file_ids = db
                     .with_read_conn(move |conn| {
@@ -153,36 +153,36 @@ impl FlowController {
             }
         }
 
-        db.delete_flow(flow_id).await?;
+        db.delete_group(group_id).await?;
         Ok(())
     }
 
     /// Rename a flow.
-    pub async fn rename_flow(db: &SqliteDatabase, id: String, name: String) -> Result<(), String> {
-        let flow_id: i64 = id.parse().map_err(|_| format!("Invalid flow id: {}", id))?;
+    pub async fn rename_group(db: &SqliteDatabase, id: String, name: String) -> Result<(), String> {
+        let group_id: i64 = id.parse().map_err(|_| format!("Invalid group id: {}", id))?;
         let trimmed = name.trim().to_string();
         if trimmed.is_empty() {
             return Err("Name cannot be empty".to_string());
         }
-        db.rename_flow(flow_id, &trimmed).await
+        db.rename_group(group_id, &trimmed).await
     }
 
     /// Set a flow's schedule.
-    pub async fn set_flow_schedule(
+    pub async fn set_group_schedule(
         db: &SqliteDatabase,
         id: String,
         schedule: String,
     ) -> Result<(), String> {
-        let flow_id: i64 = id.parse().map_err(|_| format!("Invalid flow id: {}", id))?;
+        let group_id: i64 = id.parse().map_err(|_| format!("Invalid group id: {}", id))?;
         validate_schedule(&schedule)?;
-        db.set_flow_schedule(flow_id, &schedule).await
+        db.set_group_schedule(group_id, &schedule).await
     }
 
     /// Run all non-paused subscriptions in a flow.
     ///
     /// Emits `flow-started` immediately. Emits `flow-finished` only when all
     /// child subscriptions reach a terminal state (success, failure, or cancel).
-    pub async fn run_flow(
+    pub async fn run_group(
         db: &Arc<SqliteDatabase>,
         blob_store: &Arc<BlobStore>,
         rate_limiter: &RateLimiter,
@@ -191,11 +191,11 @@ impl FlowController {
         id: String,
         settings: &SettingsStore,
     ) -> Result<(), String> {
-        let flow_id: i64 = id.parse().map_err(|_| format!("Invalid flow id: {}", id))?;
+        let group_id: i64 = id.parse().map_err(|_| format!("Invalid group id: {}", id))?;
 
-        let subs = db.list_subscriptions_for_flow(flow_id).await?;
+        let subs = db.list_subscriptions_for_group(group_id).await?;
         if subs.is_empty() {
-            return Err("Flow has no subscriptions".to_string());
+            return Err("Group has no subscriptions".to_string());
         }
 
         {
@@ -206,10 +206,10 @@ impl FlowController {
         {
             let now = chrono::Utc::now().to_rfc3339();
             crate::runtime_state::upsert_task(RuntimeTask {
-                task_id: format!("flow:{}", id),
-                kind: TaskKind::Flow,
+                task_id: format!("group:{}", id),
+                kind: TaskKind::SubscriptionGroup,
                 status: TaskStatus::Running,
-                label: format!("Flow {}", id),
+                label: format!("Group {}", id),
                 parent_task_id: None,
                 progress: None,
                 detail: None,
@@ -252,7 +252,7 @@ impl FlowController {
                 Err(e) => {
                     tracing::warn!(
                         subscription_id = sub.subscription_id,
-                        "Flow run: failed to start subscription: {e}"
+                        "Group run: failed to start subscription: {e}"
                     );
                     last_err = e;
                 }
@@ -262,10 +262,10 @@ impl FlowController {
             {
                 let now = chrono::Utc::now().to_rfc3339();
                 crate::runtime_state::upsert_task(RuntimeTask {
-                    task_id: format!("flow:{}", id),
-                    kind: TaskKind::Flow,
+                    task_id: format!("group:{}", id),
+                    kind: TaskKind::SubscriptionGroup,
                     status: TaskStatus::Failed,
-                    label: format!("Flow {}", id),
+                    label: format!("Group {}", id),
                     parent_task_id: None,
                     progress: None,
                     detail: None,
@@ -280,10 +280,10 @@ impl FlowController {
             {
                 let now = chrono::Utc::now().to_rfc3339();
                 crate::runtime_state::upsert_task(RuntimeTask {
-                    task_id: format!("flow:{}", id),
-                    kind: TaskKind::Flow,
+                    task_id: format!("group:{}", id),
+                    kind: TaskKind::SubscriptionGroup,
                     status: TaskStatus::Finished,
-                    label: format!("Flow {}", id),
+                    label: format!("Group {}", id),
                     parent_task_id: None,
                     progress: Some(TaskProgress {
                         done: 0,
@@ -299,8 +299,8 @@ impl FlowController {
         }
 
         // PBI-034: Monitor only the subscriptions we actually started.
-        let flow_id_str = id.clone();
-        let flow_id_guard = id.clone();
+        let group_id_str = id.clone();
+        let group_id_guard = id.clone();
         let running_subs_clone = running_subs.clone();
         let terminal_statuses_clone = sub_terminal_statuses.clone();
 
@@ -323,10 +323,10 @@ impl FlowController {
                     {
                         let now = chrono::Utc::now().to_rfc3339();
                         crate::runtime_state::upsert_task(RuntimeTask {
-                            task_id: format!("flow:{}", flow_id_str),
-                            kind: TaskKind::Flow,
+                            task_id: format!("group:{}", group_id_str),
+                            kind: TaskKind::SubscriptionGroup,
                             status: TaskStatus::Running,
-                            label: format!("Flow {}", flow_id_str),
+                            label: format!("Group {}", group_id_str),
                             parent_task_id: None,
                             progress: Some(TaskProgress {
                                 done: done as u64,
@@ -353,10 +353,10 @@ impl FlowController {
                     };
                     let now = chrono::Utc::now().to_rfc3339();
                     crate::runtime_state::upsert_task(RuntimeTask {
-                        task_id: format!("flow:{}", flow_id_str),
-                        kind: TaskKind::Flow,
+                        task_id: format!("group:{}", group_id_str),
+                        kind: TaskKind::SubscriptionGroup,
                         status: task_status,
-                        label: format!("Flow {}", flow_id_str),
+                        label: format!("Group {}", group_id_str),
                         parent_task_id: None,
                         progress: Some(TaskProgress {
                             done: started as u64,
@@ -371,14 +371,14 @@ impl FlowController {
             });
 
             if let Err(e) = inner.await {
-                tracing::error!(flow_id = %flow_id_guard, "Flow monitor panicked: {e}");
+                tracing::error!(group_id = %group_id_guard, "Group monitor panicked: {e}");
                 {
                     let now = chrono::Utc::now().to_rfc3339();
                     crate::runtime_state::upsert_task(RuntimeTask {
-                        task_id: format!("flow:{}", flow_id_guard),
-                        kind: TaskKind::Flow,
+                        task_id: format!("group:{}", group_id_guard),
+                        kind: TaskKind::SubscriptionGroup,
                         status: TaskStatus::Failed,
-                        label: format!("Flow {}", flow_id_guard),
+                        label: format!("Group {}", group_id_guard),
                         parent_task_id: None,
                         progress: None,
                         detail: None,
@@ -393,20 +393,20 @@ impl FlowController {
     }
 
     /// Stop all running subscriptions belonging to a flow.
-    pub async fn stop_flow(
+    pub async fn stop_group(
         db: &SqliteDatabase,
         running_subs: &RunningSubscriptions,
         id: String,
     ) -> Result<(), String> {
-        let flow_id: i64 = id.parse().map_err(|_| format!("Invalid flow id: {}", id))?;
+        let group_id: i64 = id.parse().map_err(|_| format!("Invalid group id: {}", id))?;
 
-        let subscriptions = db.list_subscriptions_for_flow(flow_id).await?;
+        let subscriptions = db.list_subscriptions_for_group(group_id).await?;
         let mut names_by_id = std::collections::HashMap::new();
         for sub in &subscriptions {
             names_by_id.insert(sub.subscription_id.to_string(), sub.name.clone());
         }
 
-        let sub_ids = db.get_flow_subscription_ids(flow_id).await?;
+        let sub_ids = db.get_group_subscription_ids(group_id).await?;
         let map = running_subs.lock().await;
         let mut cancelled_ids = Vec::new();
         for sub_id in sub_ids {

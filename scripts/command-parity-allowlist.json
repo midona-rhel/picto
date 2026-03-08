@@ -5,7 +5,6 @@
     "reject",
     "get_all_detected_duplicates",
     "get_file_notes",
-    "ptr_cancel_bootstrap",
     "repair_projections",
     "resolve_duplicate_pair",
     "save_file_data",

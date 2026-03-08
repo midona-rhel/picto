@@ -1,4 +1,4 @@
-//! Tag CRUD, file tagging, search (FTS5), sibling/parent operations.
+//! Tag CRUD, file tagging, search (FTS5), alias/implication operations.
 
 use rusqlite::{params, params_from_iter, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
@@ -21,7 +21,7 @@ pub struct TagRelation {
     pub tag_id: i64,
     pub namespace: String,
     pub subtag: String,
-    pub relation: String, // "to"/"from" for siblings, "parent"/"child" for parents
+    pub relation: String, // "to"/"from" for aliases, "parent"/"child" for implications
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -290,14 +290,14 @@ pub fn find_tag(conn: &Connection, namespace: &str, subtag: &str) -> rusqlite::R
 }
 
 /// Add a tag sibling relationship.
-pub fn add_sibling(
+pub fn add_alias(
     conn: &Connection,
     from_tag_id: i64,
     to_tag_id: i64,
     source: &str,
 ) -> rusqlite::Result<()> {
     conn.execute(
-        "INSERT OR REPLACE INTO tag_sibling (from_tag_id, to_tag_id, source)
+        "INSERT OR REPLACE INTO tag_alias (from_tag_id, to_tag_id, source)
          VALUES (?1, ?2, ?3)",
         params![from_tag_id, to_tag_id, source],
     )?;
@@ -305,23 +305,23 @@ pub fn add_sibling(
 }
 
 /// Remove a tag sibling relationship.
-pub fn remove_sibling(conn: &Connection, from_tag_id: i64, source: &str) -> rusqlite::Result<()> {
+pub fn remove_alias(conn: &Connection, from_tag_id: i64, source: &str) -> rusqlite::Result<()> {
     conn.execute(
-        "DELETE FROM tag_sibling WHERE from_tag_id = ?1 AND source = ?2",
+        "DELETE FROM tag_alias WHERE from_tag_id = ?1 AND source = ?2",
         params![from_tag_id, source],
     )?;
     Ok(())
 }
 
 /// Add a tag parent relationship.
-pub fn add_parent(
+pub fn add_implication(
     conn: &Connection,
     child_tag_id: i64,
     parent_tag_id: i64,
     source: &str,
 ) -> rusqlite::Result<()> {
     conn.execute(
-        "INSERT OR REPLACE INTO tag_parent (child_tag_id, parent_tag_id, source)
+        "INSERT OR REPLACE INTO tag_implication (child_tag_id, parent_tag_id, source)
          VALUES (?1, ?2, ?3)",
         params![child_tag_id, parent_tag_id, source],
     )?;
@@ -329,28 +329,28 @@ pub fn add_parent(
 }
 
 /// Remove a tag parent relationship.
-pub fn remove_parent(
+pub fn remove_implication(
     conn: &Connection,
     child_tag_id: i64,
     parent_tag_id: i64,
     source: &str,
 ) -> rusqlite::Result<()> {
     conn.execute(
-        "DELETE FROM tag_parent WHERE child_tag_id = ?1 AND parent_tag_id = ?2 AND source = ?3",
+        "DELETE FROM tag_implication WHERE child_tag_id = ?1 AND parent_tag_id = ?2 AND source = ?3",
         params![child_tag_id, parent_tag_id, source],
     )?;
     Ok(())
 }
 
 /// Get all siblings for a given tag (both directions).
-pub fn get_siblings_for_tag(conn: &Connection, tag_id: i64) -> rusqlite::Result<Vec<TagRelation>> {
+pub fn get_aliases_for_tag(conn: &Connection, tag_id: i64) -> rusqlite::Result<Vec<TagRelation>> {
     let mut stmt = conn.prepare(
         "SELECT t.tag_id, t.namespace, t.subtag, 'to' as direction
-           FROM tag_sibling ts JOIN tag t ON ts.to_tag_id = t.tag_id
+           FROM tag_alias ts JOIN tag t ON ts.to_tag_id = t.tag_id
           WHERE ts.from_tag_id = ?1
          UNION
          SELECT t.tag_id, t.namespace, t.subtag, 'from' as direction
-           FROM tag_sibling ts JOIN tag t ON ts.from_tag_id = t.tag_id
+           FROM tag_alias ts JOIN tag t ON ts.from_tag_id = t.tag_id
           WHERE ts.to_tag_id = ?1",
     )?;
     let results: Vec<TagRelation> = stmt
@@ -367,14 +367,14 @@ pub fn get_siblings_for_tag(conn: &Connection, tag_id: i64) -> rusqlite::Result<
 }
 
 /// Get all parents and children for a given tag.
-pub fn get_parents_for_tag(conn: &Connection, tag_id: i64) -> rusqlite::Result<Vec<TagRelation>> {
+pub fn get_implications_for_tag(conn: &Connection, tag_id: i64) -> rusqlite::Result<Vec<TagRelation>> {
     let mut stmt = conn.prepare(
         "SELECT t.tag_id, t.namespace, t.subtag, 'parent' as relation
-           FROM tag_parent tp JOIN tag t ON tp.parent_tag_id = t.tag_id
+           FROM tag_implication tp JOIN tag t ON tp.parent_tag_id = t.tag_id
           WHERE tp.child_tag_id = ?1
          UNION
          SELECT t.tag_id, t.namespace, t.subtag, 'child' as relation
-           FROM tag_parent tp JOIN tag t ON tp.child_tag_id = t.tag_id
+           FROM tag_implication tp JOIN tag t ON tp.child_tag_id = t.tag_id
           WHERE tp.parent_tag_id = ?1",
     )?;
     let results: Vec<TagRelation> = stmt
@@ -600,11 +600,11 @@ pub fn rename_tag(
         )?;
         // Clean up old tag
         conn.execute(
-            "DELETE FROM tag_sibling WHERE from_tag_id = ?1 OR to_tag_id = ?1",
+            "DELETE FROM tag_alias WHERE from_tag_id = ?1 OR to_tag_id = ?1",
             params![tag_id],
         )?;
         conn.execute(
-            "DELETE FROM tag_parent WHERE child_tag_id = ?1 OR parent_tag_id = ?1",
+            "DELETE FROM tag_implication WHERE child_tag_id = ?1 OR parent_tag_id = ?1",
             params![tag_id],
         )?;
         conn.execute(
@@ -647,11 +647,11 @@ pub fn delete_tag(conn: &Connection, tag_id: i64) -> rusqlite::Result<Vec<i64>> 
         params![tag_id],
     )?;
     conn.execute(
-        "DELETE FROM tag_sibling WHERE from_tag_id = ?1 OR to_tag_id = ?1",
+        "DELETE FROM tag_alias WHERE from_tag_id = ?1 OR to_tag_id = ?1",
         params![tag_id],
     )?;
     conn.execute(
-        "DELETE FROM tag_parent WHERE child_tag_id = ?1 OR parent_tag_id = ?1",
+        "DELETE FROM tag_implication WHERE child_tag_id = ?1 OR parent_tag_id = ?1",
         params![tag_id],
     )?;
     conn.execute("DELETE FROM tag_fts WHERE rowid = ?1", params![tag_id])?;
@@ -911,7 +911,7 @@ impl SqliteDatabase {
         Ok(hashes)
     }
 
-    pub async fn add_sibling(
+    pub async fn add_alias(
         &self,
         from_ns: &str,
         from_st: &str,
@@ -927,14 +927,14 @@ impl SqliteDatabase {
         self.with_conn(move |conn| {
             let from_id = get_or_create_tag(conn, &fns, &fst)?;
             let to_id = get_or_create_tag(conn, &tns, &tst)?;
-            add_sibling(conn, from_id, to_id, &src)
+            add_alias(conn, from_id, to_id, &src)
         })
         .await?;
         self.emit_compiler_event(CompilerEvent::TagGraphChanged);
         Ok(())
     }
 
-    pub async fn remove_sibling(
+    pub async fn remove_alias(
         &self,
         from_ns: &str,
         from_st: &str,
@@ -945,7 +945,7 @@ impl SqliteDatabase {
         let src = source.to_string();
         self.with_conn(move |conn| {
             if let Some(from_id) = find_tag(conn, &fns, &fst)? {
-                remove_sibling(conn, from_id, &src)?;
+                remove_alias(conn, from_id, &src)?;
             }
             Ok(())
         })
@@ -954,7 +954,7 @@ impl SqliteDatabase {
         Ok(())
     }
 
-    pub async fn add_parent(
+    pub async fn add_implication(
         &self,
         child_ns: &str,
         child_st: &str,
@@ -970,14 +970,14 @@ impl SqliteDatabase {
         self.with_conn(move |conn| {
             let child_id = get_or_create_tag(conn, &cns, &cst)?;
             let parent_id = get_or_create_tag(conn, &pns, &pst)?;
-            add_parent(conn, child_id, parent_id, &src)
+            add_implication(conn, child_id, parent_id, &src)
         })
         .await?;
         self.emit_compiler_event(CompilerEvent::TagGraphChanged);
         Ok(())
     }
 
-    pub async fn remove_parent(
+    pub async fn remove_implication(
         &self,
         child_ns: &str,
         child_st: &str,
@@ -994,7 +994,7 @@ impl SqliteDatabase {
             if let (Some(child_id), Some(parent_id)) =
                 (find_tag(conn, &cns, &cst)?, find_tag(conn, &pns, &pst)?)
             {
-                remove_parent(conn, child_id, parent_id, &src)?;
+                remove_implication(conn, child_id, parent_id, &src)?;
             }
             Ok(())
         })
@@ -1003,13 +1003,13 @@ impl SqliteDatabase {
         Ok(())
     }
 
-    pub async fn get_siblings_for_tag(&self, tag_id: i64) -> Result<Vec<TagRelation>, String> {
-        self.with_read_conn(move |conn| get_siblings_for_tag(conn, tag_id))
+    pub async fn get_aliases_for_tag(&self, tag_id: i64) -> Result<Vec<TagRelation>, String> {
+        self.with_read_conn(move |conn| get_aliases_for_tag(conn, tag_id))
             .await
     }
 
-    pub async fn get_parents_for_tag(&self, tag_id: i64) -> Result<Vec<TagRelation>, String> {
-        self.with_read_conn(move |conn| get_parents_for_tag(conn, tag_id))
+    pub async fn get_implications_for_tag(&self, tag_id: i64) -> Result<Vec<TagRelation>, String> {
+        self.with_read_conn(move |conn| get_implications_for_tag(conn, tag_id))
             .await
     }
 

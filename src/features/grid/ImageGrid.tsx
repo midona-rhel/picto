@@ -18,9 +18,6 @@ import { listen } from '#desktop/api';
 import { open } from '#desktop/api';
 import { getCurrentWebview } from '#desktop/api';
 import { ContextMenu, useContextMenu } from '../../shared/components/ContextMenu';
-import { FileController } from '../../shared/controllers/fileController';
-import { FolderController } from '../../shared/controllers/folderController';
-import { GridController } from '../../shared/controllers/gridController';
 import { imageDrag } from '../../shared/lib/imageDrag';
 import { mediaThumbnailUrl } from '../../shared/lib/mediaUrl';
 import { subscriptionApi } from '../../features/subscriptions/api';
@@ -47,7 +44,7 @@ import { useDomainStore } from '../../state/domainStore';
 import { useNavigationStore } from '../../state/navigationStore';
 import { SubfolderGrid } from './SubfolderGrid';
 import { useGridMutationActions } from './hooks/useGridMutationActions';
-import { useGridScopeTransition } from './hooks/useGridScopeTransition';
+import { useGridTransitionController } from './hooks/useGridTransitionController';
 import { useGridHotkeys } from './hooks/useGridHotkeys';
 import { useGridItemActions } from './hooks/useGridItemActions';
 import { useGridKeyboardNavigation } from './hooks/useGridKeyboardNavigation';
@@ -310,7 +307,7 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
     const after = renameValue.trim() || null;
     setRenamingHash(null);
     if (after === before) return;
-    FileController.setFileName(hash, after)
+    api.file.setName(hash, after)
       .then(() => {
         registerUndoAction({
           label: 'Rename file',
@@ -526,7 +523,7 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
     dispatch({ type: 'SET_IMAGES', images: next });
 
     if (moves.length > 0) {
-      FolderController.reorderFolderItems(currentFolderId!, moves).catch(err => {
+      api.folders.reorderItems(currentFolderId!, moves).catch(err => {
         console.error('Reorder failed, reloading folder:', err);
         broker.requestReplace(queryKeyRef.current);
       });
@@ -576,7 +573,7 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
     onScopeTransitionMidpoint?.();
   }, [onScopeTransitionMidpoint, scrollRef]);
 
-  const { gridFreezeActive, handleGridTransitionEnd } = useGridScopeTransition({
+  const { gridFreezeActive, handleGridTransitionEnd } = useGridTransitionController({
     state,
     dispatch,
     broker,
@@ -770,7 +767,7 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
           const running = await subscriptionApi.getRunningSubscriptions();
           if (running.length === 0 || disposed) return;
 
-          const page = await GridController.fetchGridPage({
+          const page = await api.grid.getPageSlim({
             limit: 60,
             cursor: null,
             sortField: 'imported_at',
@@ -850,7 +847,7 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
           const currentFolderId = folderIdRef.current;
           if (currentFolderId != null && result.imported?.length > 0) {
             // PBI-054: Batch add instead of per-hash fan-out.
-            await FolderController.addFilesToFolderBatch(
+            await api.folders.addFiles(
               currentFolderId,
               result.imported,
             );

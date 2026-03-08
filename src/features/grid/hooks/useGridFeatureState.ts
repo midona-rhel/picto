@@ -7,7 +7,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { api } from '#desktop/api';
 import { useFilterStore, mimeFilterToPrefixes, type FilterLogicMode } from '../../../state/filterStore';
-import { FolderController } from '../../../shared/controllers/folderController';
 import type { SmartFolder } from '#features/smart-folders/types';
 import type { TagFilterLogicMode } from '#features/tags/types';
 import type { MasonryImageItem } from '#features/grid/types';
@@ -111,14 +110,14 @@ export function useGridFeatureState({
   const handleSortFolderAction = useCallback((sortBy: string, direction: string) => {
     const fid = activeFolder?.folder_id;
     if (!fid) return;
-    FolderController.sortFolderItems(fid, sortBy, direction)
+    api.folders.sortItems(fid, sortBy, direction)
       .catch((e) => console.error('Failed to sort folder items:', e));
   }, [activeFolder?.folder_id]);
 
   const handleReverseFolderAction = useCallback(() => {
     const fid = activeFolder?.folder_id;
     if (!fid) return;
-    FolderController.reverseFolderItems(fid)
+    api.folders.reverseItems(fid)
       .catch((e) => console.error('Failed to reverse folder items:', e));
   }, [activeFolder?.folder_id]);
 
@@ -127,7 +126,7 @@ export function useGridFeatureState({
     if (!fid) return;
     const hashes = selectedImages.map((img) => img.hash);
     if (hashes.length === 0) return;
-    FolderController.reverseFolderItems(fid, hashes)
+    api.folders.reverseItems(fid, hashes)
       .catch((e) => console.error('Failed to reverse selected folder items:', e));
   }, [activeFolder?.folder_id, selectedImages]);
 

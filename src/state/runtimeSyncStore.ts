@@ -13,8 +13,8 @@ import type {
 import { deriveStaleResources } from '../runtime/resourceInvalidator';
 import { logBestEffortError } from '../shared/lib/asyncOps';
 import {
-  type FlowFinishedEvent,
-  type FlowProgressEvent,
+  type GroupFinishedEvent,
+  type GroupProgressEvent,
   type SubscriptionFinishedEvent,
   subscriptionApi,
 } from '../features/subscriptions/api';
@@ -58,10 +58,10 @@ export interface RuntimeSyncState {
   lastSubscriptionFinished: SubscriptionFinishedEvent | null;
   subscriptionEventSeq: number;
 
-  // --- Flow progress (legacy events) ---
-  flowProgressById: Map<string, FlowProgressEvent>;
-  lastFlowFinished: FlowFinishedEvent | null;
-  flowEventSeq: number;
+  // --- Group progress (legacy events) ---
+  groupProgressById: Map<string, GroupProgressEvent>;
+  lastGroupFinished: GroupFinishedEvent | null;
+  groupEventSeq: number;
 
   // Actions
   ensureInitialized: () => Promise<void>;
@@ -135,9 +135,9 @@ export const useRuntimeSyncStore = create<RuntimeSyncState>((set, get) => ({
   lastSubscriptionFinished: null,
   subscriptionEventSeq: 0,
 
-  flowProgressById: new Map<string, FlowProgressEvent>(),
-  lastFlowFinished: null,
-  flowEventSeq: 0,
+  groupProgressById: new Map<string, GroupProgressEvent>(),
+  lastGroupFinished: null,
+  groupEventSeq: 0,
 
   ensureInitialized: async () => {
     if (get().initialized || isInitializing) return;
@@ -203,9 +203,9 @@ export const useRuntimeSyncStore = create<RuntimeSyncState>((set, get) => ({
       subscriptionProgressById: new Map<string, RuntimeSubscriptionProgress>(),
       lastSubscriptionFinished: null,
       subscriptionEventSeq: 0,
-      flowProgressById: new Map<string, FlowProgressEvent>(),
-      lastFlowFinished: null,
-      flowEventSeq: 0,
+      groupProgressById: new Map<string, GroupProgressEvent>(),
+      lastGroupFinished: null,
+      groupEventSeq: 0,
     });
   },
 
@@ -237,16 +237,16 @@ export const useRuntimeSyncStore = create<RuntimeSyncState>((set, get) => ({
       const taskProjection = projectRuntimeTasks(tasksById.values());
       const patch: Partial<RuntimeSyncState> = {
         tasksById,
-        flowProgressById: taskProjection.flowProgressById,
+        groupProgressById: taskProjection.groupProgressById,
       };
 
-      if (task.kind === 'flow') {
-        patch.flowEventSeq = state.flowEventSeq + 1;
+      if (task.kind === 'subscription_group') {
+        patch.groupEventSeq = state.groupEventSeq + 1;
         if (isTerminal) {
-          patch.lastFlowFinished = {
-            flow_id: task.task_id.replace(/^flow:/, ''),
+          patch.lastGroupFinished = {
+            group_id: task.task_id.replace(/^group:/, ''),
             status: task.status === 'finished' ? 'succeeded' : 'failed',
-          } as FlowFinishedEvent;
+          } as GroupFinishedEvent;
         }
       }
 
@@ -371,7 +371,7 @@ export const useRuntimeSyncStore = create<RuntimeSyncState>((set, get) => ({
       const taskProjection = projectRuntimeTasks(tasksById.values());
       return {
         tasksById,
-        flowProgressById: taskProjection.flowProgressById,
+        groupProgressById: taskProjection.groupProgressById,
       };
     });
   },
@@ -443,7 +443,7 @@ export const useRuntimeSyncStore = create<RuntimeSyncState>((set, get) => ({
 
         return {
           subscriptionProgressById,
-          flowProgressById: taskProjection.flowProgressById,
+          groupProgressById: taskProjection.groupProgressById,
         };
       });
     } catch (error) {

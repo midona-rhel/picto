@@ -93,7 +93,7 @@ describe('context action registries', () => {
     expect(hasInvalidSeparators(items)).toBe(false);
   });
 
-  it('preserves tag action matrix for local vs ptr context', () => {
+  it('tag context menu includes all expected actions', () => {
     const baseArgs = {
       tag: { tag_id: 1, namespace: 'artist', subtag: 'alice' },
       siblings: [],
@@ -112,16 +112,12 @@ describe('context action registries', () => {
       onDelete: () => {},
     };
 
-    const localItems = buildTagContextMenu({ ...baseArgs, source: 'local' });
-    const ptrItems = buildTagContextMenu({ ...baseArgs, source: 'ptr' });
-    const localLabels = labels(localItems);
-    const ptrLabels = labels(ptrItems);
+    const items = buildTagContextMenu(baseArgs);
+    const itemLabels = labels(items);
 
-    expect(localLabels).toContain('Rename');
-    expect(localLabels).toContain('Merge into…');
-    expect(localLabels).toContain('Delete');
-    expect(ptrLabels).not.toContain('Rename');
-    expect(ptrLabels).not.toContain('Delete');
+    expect(itemLabels).toContain('Rename');
+    expect(itemLabels).toContain('Merge into…');
+    expect(itemLabels).toContain('Delete');
   });
 
   it('keeps image action availability consistent for single and collection context', () => {

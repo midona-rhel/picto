@@ -1,4 +1,43 @@
-import type { FetchGridPageArgs } from '../../../shared/controllers/gridController';
+/**
+ * Arguments for grid page fetches — camelCase interface that maps to
+ * the Rust `GridPageSlimQuery` (which accepts camelCase via serde aliases).
+ */
+export interface FetchGridPageArgs {
+  limit: number;
+  cursor: string | null;
+  sortField: string;
+  sortOrder: string;
+  /** Smart folder predicate for bitmap-filtered pagination */
+  smartFolderPredicate?: unknown | null;
+  /** Tag search strings for bitmap-filtered pagination */
+  searchTags?: string[] | null;
+  /** Excluded tag strings for bitmap-filtered pagination */
+  searchExcludedTags?: string[] | null;
+  /** Included tag matching mode */
+  tagMatchMode?: 'all' | 'any' | 'exact' | null;
+  /** Explicit status filter */
+  status?: string | null;
+  /** Folder IDs for folder-scoped grid view (single sidebar folder or multi-folder filter) */
+  folderIds?: number[] | null;
+  /** Excluded folder IDs for folder-scoped grid filtering */
+  excludedFolderIds?: number[] | null;
+  /** Included folder matching mode */
+  folderMatchMode?: 'all' | 'any' | 'exact' | null;
+  /** Collection entity scope — restricts to members of this collection */
+  collectionEntityId?: number | null;
+  /** Minimum rating filter (1-5) */
+  ratingMin?: number | null;
+  /** MIME prefix filters (e.g. ['image/', 'video/']) */
+  mimePrefixes?: string[] | null;
+  /** Dominant color hex filter */
+  colorHex?: string | null;
+  /** Color tolerance / max distance (1-30, lower = stricter) */
+  colorAccuracy?: number | null;
+  /** Free-text search query (FTS5) */
+  searchText?: string | null;
+  /** Seed for deterministic random ordering (Random view) */
+  randomSeed?: number | null;
+}
 
 /**
  * Canonical identity for a grid query. Two queries with the same key

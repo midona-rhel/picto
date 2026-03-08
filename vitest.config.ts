@@ -6,7 +6,7 @@ export default defineConfig({
   plugins: [react()],
   resolve: {
     alias: {
-      '#desktop': resolve(__dirname, 'src/desktop'),
+      '#desktop': resolve(__dirname, 'src/platform'),
       '#features': resolve(__dirname, 'src/features'),
       '#ui': resolve(__dirname, 'src/components/ui'),
     },

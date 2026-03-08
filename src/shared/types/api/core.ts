@@ -318,7 +318,7 @@ export interface ScanDuplicatesResult {
   closest_distance: number | null;
 }
 
-// ─── Subscriptions & Flows (CRUD) ────────────────────────────────────────────
+// ─── Subscriptions & Groups (CRUD) ───────────────────────────────────────────
 
 export interface SubscriptionQueryInfo {
   id: string;
@@ -337,7 +337,7 @@ export interface SubscriptionInfo {
   name: string;
   site_id: string;
   paused: boolean;
-  flow_id: string | null;
+  group_id: string | null;
   initial_file_limit: number;
   periodic_file_limit: number;
   created_at: string;
@@ -397,7 +397,7 @@ export interface CredentialHealth {
   last_error: string | null;
 }
 
-export interface FlowInfo {
+export interface SubscriptionGroupInfo {
   id: string;
   name: string;
   schedule: string;
@@ -406,7 +406,7 @@ export interface FlowInfo {
   subscriptions: SubscriptionInfo[];
 }
 
-// ─── Subscriptions & Flows (Events) ─────────────────────────────────────────
+// ─── Subscriptions & Groups (Events) ────────────────────────────────────────
 
 export interface SubscriptionProgressEvent {
   subscription_id: string;
@@ -438,99 +438,6 @@ export interface SubscriptionFinishedEvent {
   metadata_validated: number;
   metadata_invalid: number;
   last_metadata_error?: string | null;
-}
-
-// ─── PTR (Public Tag Repository) ─────────────────────────────────────────────
-
-export interface PtrSyncProgress {
-  updates_total: number;
-  updates_processed: number;
-  tags_added: number;
-  siblings_added: number;
-  parents_added: number;
-  current_update_index: number;
-  latest_server_index: number;
-  starting_index: number;
-  phase: string;
-  heartbeat: boolean;
-  elapsed_ms: number;
-}
-
-export interface PtrBootstrapCounts {
-  hash_defs: number;
-  tag_defs: number;
-  mappings: number;
-  siblings: number;
-  parents: number;
-  max_update_index: number;
-}
-
-export interface PtrBootstrapResult {
-  service_id: number;
-  counts: PtrBootstrapCounts;
-  projected_import_seconds: number;
-  snapshot_dir: string;
-}
-
-export interface PtrBootstrapStatus {
-  running: boolean;
-  phase: string;
-  stage?: string;
-  mode: string;
-  service_id?: number;
-  started_at?: string;
-  updated_at?: string;
-  last_error?: string;
-  rows_total?: number;
-  rows_done?: number;
-  rows_done_stage?: number;
-  rows_total_stage?: number;
-  rows_per_sec?: number;
-  eta_seconds?: number;
-  checkpoint?: {
-    phase: string;
-    last_hash_id: number;
-    last_tag_id: number;
-    last_service_hash_id: number;
-  };
-  last_result?: {
-    service_id: number;
-    counts: PtrBootstrapCounts;
-    cursor_index: number;
-    snapshot_dir: string;
-  };
-  dry_run_result?: PtrBootstrapResult;
-}
-
-export interface PtrSyncResult {
-  success: boolean;
-  error?: string;
-  updates_processed?: number;
-  tags_added?: number;
-}
-
-export interface PtrCompactIndexStatus {
-  running: boolean;
-  stage: string;
-  rows_done_stage: number;
-  rows_total_stage: number;
-  rows_per_sec: number;
-  snapshot_dir?: string;
-  service_id?: number;
-  snapshot_max_index?: number;
-  updated_at?: string;
-  checkpoint: {
-    phase: string;
-    last_hash_id: number;
-    last_tag_id: number;
-    last_service_hash_id: number;
-  };
-}
-
-export interface PtrSyncPhaseChangedEvent {
-  phase: string;
-  current_update_index?: number;
-  ts?: string;
 }
 
 // ─── View Preferences ────────────────────────────────────────────────────────
@@ -582,12 +489,8 @@ export interface PercentileSnapshot {
 export interface MetadataBatchLatest {
   total_ms: number;
   local_ms: number;
-  ptr_ms: number;
   merge_ms: number;
   req_hashes: number;
-  local_hits: number;
-  ptr_lookup: number;
-  ptr_hits: number;
   missing: number;
   ts: string;
 }

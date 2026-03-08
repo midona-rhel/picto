@@ -31,12 +31,10 @@ import type {
   SidebarTreeResponse,
   ScanDuplicatesResult, DuplicatePairsResponse, DuplicateSettings,
   SmartMergeResult, ResolveDuplicateAction,
-  SubscriptionInfo, SubscriptionQueryInfo, FlowInfo,
+  SubscriptionInfo, SubscriptionQueryInfo, SubscriptionGroupInfo,
   SubscriptionProgressEvent,
   SubscriptionSiteInfo, SiteMetadataSchema, SiteMetadataValidationResult,
   CredentialDomain, CredentialType, CredentialHealth,
-  PtrStats, PtrSyncPerfBreakdown,
-  PtrSyncProgress, PtrBootstrapStatus, PtrCompactIndexStatus,
   AppSettings,
   CollectionInfo, CollectionSummary, CompanionNamespaceValue,
   ViewPrefsDto, ViewPrefsPatch,
@@ -158,32 +156,22 @@ export const api = {
       invokeTyped('get_all_tags_with_counts') as Promise<TagTuple[]>,
     getForFile: (hash: string) =>
       invokeTyped('get_file_tags', { hash }) as Promise<TagDisplay[]>,
-    add: (hash: string, tagStrings: string[]) =>
-      invokeTyped('add_tags', { hash, tag_strings: tagStrings }) as unknown as Promise<void>,
-    remove: (hash: string, tagStrings: string[]) =>
-      invokeTyped('remove_tags', { hash, tag_strings: tagStrings }) as unknown as Promise<void>,
-    addBatch: (hashes: string[], tagStrings: string[]) =>
-      invokeTyped('add_tags_batch', { hashes, tag_strings: tagStrings }) as unknown as Promise<void>,
-    removeBatch: (hashes: string[], tagStrings: string[]) =>
-      invokeTyped('remove_tags_batch', { hashes, tag_strings: tagStrings }) as unknown as Promise<void>,
+    add: (hashes: string[], tagStrings: string[]) =>
+      invokeTyped('add_tags', { hashes, tag_strings: tagStrings }) as unknown as Promise<void>,
+    remove: (hashes: string[], tagStrings: string[]) =>
+      invokeTyped('remove_tags', { hashes, tag_strings: tagStrings }) as unknown as Promise<void>,
     findFilesByTags: (tagStrings: string[], limit?: number, offset?: number) =>
       invokeTyped('find_files_by_tags', { tag_strings: tagStrings, limit, offset } as never) as Promise<string[]>,
     getPaginated: (params: { namespace?: string; search?: string; cursor?: string; limit?: number }) =>
       invokeTyped('get_tags_paginated', params as never) as Promise<TagRecord[]>,
     getNamespaceSummary: () =>
       invokeTyped('get_namespace_summary') as Promise<NamespaceSummary[]>,
-    setAlias: (from: string, to: string) =>
-      invokeTyped('set_tag_alias', { from, to }) as unknown as Promise<void>,
-    removeAlias: (from: string) =>
-      invokeTyped('remove_tag_alias', { from }) as unknown as Promise<void>,
-    getSiblings: (tagId: number) =>
-      invokeTyped('get_tag_siblings_for_tag', { tag_id: tagId }) as Promise<TagRelation[]>,
-    getParents: (tagId: number) =>
-      invokeTyped('get_tag_parents_for_tag', { tag_id: tagId }) as Promise<TagRelation[]>,
-    addParent: (child: string, parent: string) =>
-      invokeTyped('add_tag_parent', { child, parent }) as unknown as Promise<void>,
-    removeParent: (child: string, parent: string) =>
-      invokeTyped('remove_tag_parent', { child, parent }) as unknown as Promise<void>,
+    manageAlias: (from: string, to?: string) =>
+      invokeTyped('manage_tag_alias', { from, to: to ?? null }) as unknown as Promise<void>,
+    getRelations: (tagId: number, relationType: 'aliases' | 'implications') =>
+      invokeTyped('get_tag_relations', { tag_id: tagId, relation_type: relationType }) as Promise<TagRelation[]>,
+    manageParent: (child: string, parent: string, action: 'add' | 'remove') =>
+      invokeTyped('manage_tag_parent', { child, parent, action }) as unknown as Promise<void>,
     merge: (fromTag: string, toTag: string) =>
       invokeTyped('merge_tags', { from_tag: fromTag, to_tag: toTag }) as unknown as Promise<void>,
     rename: (tagId: number, newName: string) =>
@@ -223,15 +211,10 @@ export const api = {
     // PBI-057: Atomic move_folder — reparent + reorder in one transaction.
     moveFolder: (folderId: number, newParentId: number | null, siblingOrder: [number, number][]) =>
       invokeTyped('move_folder', { folder_id: folderId, new_parent_id: newParentId, sibling_order: siblingOrder }) as unknown as Promise<void>,
-    addFile: (folderId: number, hash: string) =>
-      invokeTyped('add_file_to_folder', { folder_id: folderId, hash }) as unknown as Promise<void>,
-    // PBI-054: Batch add files to folder.
-    addFilesBatch: (folderId: number, hashes: string[]) =>
-      invokeTyped('add_files_to_folder_batch', { folder_id: folderId, hashes }),
-    removeFile: (folderId: number, hash: string) =>
-      invokeTyped('remove_file_from_folder', { folder_id: folderId, hash }) as unknown as Promise<void>,
-    removeFilesBatch: (folderId: number, hashes: string[]) =>
-      invokeTyped('remove_files_from_folder_batch', { folder_id: folderId, hashes }),
+    addFiles: (folderId: number, hashes: string[]) =>
+      invokeTyped('add_files_to_folder', { folder_id: folderId, hashes }),
+    removeFiles: (folderId: number, hashes: string[]) =>
+      invokeTyped('remove_files_from_folder', { folder_id: folderId, hashes }),
     getFiles: (folderId: number) =>
       invokeTyped('get_folder_files', { folder_id: folderId }),
     getCoverHash: (folderId: number) =>
@@ -309,7 +292,7 @@ export const api = {
       name: string;
       site_id: string;
       queries: string[];
-      flow_id?: number;
+      group_id?: number;
       initial_file_limit?: number;
       periodic_file_limit?: number;
     }) =>
@@ -366,52 +349,21 @@ export const api = {
       invokeTyped('delete_credential', { site_category: siteCategory }) as unknown as Promise<void>,
   },
 
-  flows: {
+  groups: {
     list: () =>
-      invokeTyped('get_flows') as Promise<FlowInfo[]>,
+      invokeTyped('get_groups') as Promise<SubscriptionGroupInfo[]>,
     create: (name: string, schedule?: string) =>
-      invokeTyped('create_flow', { name, schedule: schedule ?? null } as never) as Promise<FlowInfo>,
+      invokeTyped('create_group', { name, schedule: schedule ?? null } as never) as Promise<SubscriptionGroupInfo>,
     delete: (id: string, deleteFiles?: boolean) =>
-      invokeTyped('delete_flow', { id, delete_files: deleteFiles ?? null } as never) as unknown as Promise<void>,
+      invokeTyped('delete_group', { id, delete_files: deleteFiles ?? null } as never) as unknown as Promise<void>,
     rename: (id: string, name: string) =>
-      invokeTyped('rename_flow', { id, name }) as unknown as Promise<void>,
+      invokeTyped('rename_group', { id, name }) as unknown as Promise<void>,
     setSchedule: (id: string, schedule: string) =>
-      invokeTyped('set_flow_schedule', { id, schedule }) as unknown as Promise<void>,
+      invokeTyped('set_group_schedule', { id, schedule }) as unknown as Promise<void>,
     run: (id: string) =>
-      invokeTyped('run_flow', { id }) as unknown as Promise<void>,
+      invokeTyped('run_group', { id }) as unknown as Promise<void>,
     stop: (id: string) =>
-      invokeTyped('stop_flow', { id }) as unknown as Promise<void>,
-  },
-
-  ptr: {
-    getStatus: () =>
-      invokeTyped('get_ptr_status') as Promise<PtrStats>,
-    isSyncing: () =>
-      invokeTyped('is_ptr_syncing') as Promise<boolean>,
-    getSyncProgress: () =>
-      invokeTyped('get_ptr_sync_progress') as Promise<PtrSyncProgress | null>,
-    sync: () =>
-      invokeTyped('ptr_sync') as Promise<{ id: string; message: string }>,
-    cancelSync: () =>
-      invokeTyped('cancel_ptr_sync') as unknown as Promise<void>,
-    cancelBootstrap: () =>
-      invokeTyped('ptr_cancel_bootstrap') as unknown as Promise<void>,
-    bootstrapFromSnapshot: (req: { snapshot_dir: string; ptr_service_id?: number | null; mode: string }) =>
-      invokeTyped('ptr_bootstrap_from_hydrus_snapshot', req) as Promise<Record<string, unknown>>,
-    getBootstrapStatus: () =>
-      invokeTyped('ptr_get_bootstrap_status') as Promise<PtrBootstrapStatus>,
-    getCompactIndexStatus: () =>
-      invokeTyped('ptr_get_compact_index_status') as Promise<PtrCompactIndexStatus>,
-    getNamespaceSummary: () =>
-      invokeTyped('ptr_get_namespace_summary') as Promise<NamespaceSummary[]>,
-    getTagsPaginated: (params: { namespace?: string; search?: string; cursor?: string; limit?: number }) =>
-      invokeTyped('ptr_get_tags_paginated', params as never) as Promise<TagRecord[]>,
-    getTagSiblings: (tagId: number) =>
-      invokeTyped('ptr_get_tag_siblings', { tag_id: tagId }) as Promise<TagRelation[]>,
-    getTagParents: (tagId: number) =>
-      invokeTyped('ptr_get_tag_parents', { tag_id: tagId }) as Promise<TagRelation[]>,
-    getSyncPerfBreakdown: () =>
-      invokeTyped('get_ptr_sync_perf_breakdown') as Promise<PtrSyncPerfBreakdown>,
+      invokeTyped('stop_group', { id }) as unknown as Promise<void>,
   },
 
   settings: {

@@ -1,9 +1,9 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { api } from '#desktop/api';
-import { SelectionController } from '../../../shared/controllers/selectionController';
-import { FolderController } from '../../../shared/controllers/folderController';
 import {
+  getOrStartSelectionSummary,
   invalidateMetadata,
+  invalidateSelectionSummary,
   type EntityAllMetadata,
   type ResolvedTagInfo,
   type SelectionQuerySpec,
@@ -98,7 +98,7 @@ export function useInspectorFetch(
       return;
     }
     if (selectedCollection) {
-      FolderController.getEntityFolders(selectedCollection.id)
+      api.folders.getEntityFolders(selectedCollection.id)
         .then(setFileFolders)
         .catch(() => setFileFolders([]));
       return;
@@ -108,11 +108,11 @@ export function useInspectorFetch(
       return;
     }
     if (selectedImages.length === 1) {
-      FolderController.getFileFolders(selectedImages[0].hash)
+      api.folders.getFileFolders(selectedImages[0].hash)
         .then(setFileFolders)
         .catch(() => setFileFolders([]));
     } else {
-      Promise.all(selectedImages.map((img) => FolderController.getFileFolders(img.hash)))
+      Promise.all(selectedImages.map((img) => api.folders.getFileFolders(img.hash)))
         .then((allFolders) => {
           if (allFolders.length === 0) { setFileFolders([]); return; }
           const first = allFolders[0];
@@ -135,7 +135,7 @@ export function useInspectorFetch(
     setCollectionSummary(null);
     setFileTags([]);
     setSelectionSummary(null);
-    SelectionController.getOrStartSummary(selectionSummarySpec)
+    getOrStartSelectionSummary(selectionSummarySpec)
       .then((summary) => {
         if (requestIdRef.current !== requestId) return;
         setSelectionSummary(summary);
@@ -285,9 +285,9 @@ export function useInspectorFetch(
   const refreshVirtualSelectionSummary = useCallback(() => {
     if (!selectionSummarySpec) return;
     const requestId = ++requestIdRef.current;
-    SelectionController.invalidateSummary(selectionSummaryKey);
+    invalidateSelectionSummary(selectionSummaryKey);
     setSelectionSummary(null);
-    SelectionController.getOrStartSummary(selectionSummarySpec)
+    getOrStartSelectionSummary(selectionSummarySpec)
       .then((summary) => {
         if (requestIdRef.current !== requestId) return;
         setSelectionSummary(summary);

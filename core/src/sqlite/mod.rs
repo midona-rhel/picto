@@ -65,7 +65,6 @@ impl Manifest {
             "sidebar",
             "smart_folders",
             "bitmaps",
-            "ptr_overlay",
         ] {
             artifact_versions.insert(key.to_string(), 0);
         }

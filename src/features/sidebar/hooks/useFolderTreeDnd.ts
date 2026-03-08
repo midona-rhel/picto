@@ -7,7 +7,7 @@ import {
   type DragEndEvent,
   type DragMoveEvent,
 } from '@dnd-kit/core';
-import { FolderController } from '../../../shared/controllers/folderController';
+import { api } from '#desktop/api';
 import { registerUndoAction } from '../../../shared/controllers/undoRedoController';
 import type { SidebarNodeDto } from '../../../shared/types/sidebar';
 import {
@@ -108,7 +108,7 @@ export function useFolderTreeDnd({ nodeMap, folderNodes, setCollapsedNodes }: Us
         if (targetFolderId == null) return;
         redoParentFolderId = targetFolderId;
         redoSiblingMoves = [];
-        await FolderController.moveFolder(draggedFolderId, targetFolderId, []);
+        await api.folders.moveFolder(draggedFolderId, targetFolderId, []);
         setCollapsedNodes((prev) => { const next = new Set(prev); next.delete(targetNode.id); return next; });
       } else {
         // PBI-057: Atomic reparent + reorder in single transaction.
@@ -131,16 +131,16 @@ export function useFolderTreeDnd({ nodeMap, folderNodes, setCollapsedNodes }: Us
         });
         redoParentFolderId = newParentFolderId;
         redoSiblingMoves = moves;
-        await FolderController.moveFolder(draggedFolderId, newParentFolderId, moves);
+        await api.folders.moveFolder(draggedFolderId, newParentFolderId, moves);
       }
 
       registerUndoAction({
         label: 'Move folder',
         undo: async () => {
-          await FolderController.moveFolder(draggedFolderId, oldParentFolderId, oldSiblingMoves);
+          await api.folders.moveFolder(draggedFolderId, oldParentFolderId, oldSiblingMoves);
         },
         redo: async () => {
-          await FolderController.moveFolder(draggedFolderId, redoParentFolderId, redoSiblingMoves);
+          await api.folders.moveFolder(draggedFolderId, redoParentFolderId, redoSiblingMoves);
         },
       });
     } catch (err) {

@@ -1,8 +1,7 @@
 import { useCallback, useEffect, useRef } from 'react';
 
-import { SelectionController } from '../../../shared/controllers/selectionController';
 import type { SelectionQuerySpec } from '../metadataPrefetch';
-import { pinMetadata, unpinMetadata } from '../metadataPrefetch';
+import { getOrStartSelectionSummary, pinMetadata, unpinMetadata } from '../metadataPrefetch';
 import { selectedImagesPreview as selectImagesPreview, virtualSelectionSpec as selectVirtualSpec } from '../runtime';
 import type { GridRuntimeAction, GridRuntimeState } from '../runtime';
 import type { MasonryImageItem } from '../shared';
@@ -128,7 +127,7 @@ export function useGridSelection({
     }
     const spec = selectVirtualSpec(state);
     if (!spec) return;
-    void SelectionController.getOrStartSummary(spec)
+    void getOrStartSelectionSummary(spec)
       .then((summary) => {
         if (!cancelled && state.virtualAllSelectedCount !== summary.selected_count) {
           dispatch({ type: 'SET_VIRTUAL_ALL_COUNT', count: summary.selected_count });

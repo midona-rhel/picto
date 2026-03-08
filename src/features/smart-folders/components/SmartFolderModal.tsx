@@ -10,7 +10,7 @@ import { createDefaultGroup, predicateToRust, folderToRust } from './types';
 import { IconPicker } from './IconPicker';
 import { FolderColorPicker } from './FolderColorPicker';
 import { DynamicIcon, DEFAULT_FOLDER_ICON } from './iconRegistry';
-import { SidebarController } from '../../../shared/controllers/sidebarController';
+import { useDomainStore } from '../../../state/domainStore';
 import { registerUndoAction } from '../../../shared/controllers/undoRedoController';
 
 interface SmartFolderModalProps {
@@ -111,11 +111,11 @@ export function SmartFolderModal({ opened, onClose, folder, onSaved }: SmartFold
           label: 'Update smart folder',
           undo: async () => {
             await api.smartFolders.update(folder.id!, beforeData);
-            SidebarController.fetchInitialTree();
+            useDomainStore.getState().fetchSidebarTree();
           },
           redo: async () => {
             await api.smartFolders.update(folder.id!, folderData);
-            SidebarController.fetchInitialTree();
+            useDomainStore.getState().fetchSidebarTree();
           },
         });
       } else {
@@ -124,15 +124,15 @@ export function SmartFolderModal({ opened, onClose, folder, onSaved }: SmartFold
           label: 'Create smart folder',
           undo: async () => {
             if (created?.id) await api.smartFolders.delete(created.id);
-            SidebarController.fetchInitialTree();
+            useDomainStore.getState().fetchSidebarTree();
           },
           redo: async () => {
             created = await api.smartFolders.create(folderData);
-            SidebarController.fetchInitialTree();
+            useDomainStore.getState().fetchSidebarTree();
           },
         });
       }
-      SidebarController.fetchInitialTree();
+      useDomainStore.getState().fetchSidebarTree();
 
       onSaved();
       onClose();

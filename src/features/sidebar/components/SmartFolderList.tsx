@@ -2,7 +2,7 @@
 import { useCallback, useState } from 'react';
 import { useDisclosure } from '@mantine/hooks';
 import { useInlineRename } from '../../../shared/hooks/useInlineRename';
-import { SmartFolderController } from '../../../shared/controllers/smartFolderController';
+import { api } from '#desktop/api';
 import {
   DndContext,
   closestCenter,
@@ -26,9 +26,7 @@ import { SmartFolderModal } from '../../smart-folders/components/SmartFolderModa
 import { DynamicIcon, DEFAULT_FOLDER_ICON } from '../../smart-folders/components/iconRegistry';
 import type { SmartFolder } from '../../smart-folders/components/types';
 import { folderToRust } from '../../smart-folders/components/types';
-import { FolderController } from '../../../shared/controllers/folderController';
 import { registerUndoAction } from '../../../shared/controllers/undoRedoController';
-import { SidebarController } from '../../../shared/controllers/sidebarController';
 import { useDomainStore } from '../../../state/domainStore';
 import { useNavigationStore } from '../../../state/navigationStore';
 import { SidebarSection } from './SidebarSection';
@@ -104,7 +102,7 @@ export function SmartFolderList({ onFolderUpdated }: SmartFolderListProps) {
     if (!folder.id) return;
     try {
       const updated = { ...folder, ...updates };
-      await SmartFolderController.update(folder.id, folderToRust(updated));
+      await api.smartFolders.update(folder.id, folderToRust(updated));
       if (options?.recordUndo !== false) {
         const before = { ...folder };
         registerUndoAction({
@@ -117,7 +115,7 @@ export function SmartFolderList({ onFolderUpdated }: SmartFolderListProps) {
           },
         });
       }
-      SidebarController.fetchInitialTree();
+      useDomainStore.getState().fetchSidebarTree();
       onFolderUpdated?.();
     } catch (e) { console.error('Update failed:', e); }
   }, [onFolderUpdated]);
@@ -160,21 +158,21 @@ export function SmartFolderList({ onFolderUpdated }: SmartFolderListProps) {
       currentSortOrder,
       duplicateSmartFolder: async () => {
         try {
-          let created = await SmartFolderController.create(folderToRust({ ...folder, id: undefined, name: `${folder.name} (copy)` }));
+          let created = await api.smartFolders.create(folderToRust({ ...folder, id: undefined, name: `${folder.name} (copy)` }));
           registerUndoAction({
             label: 'Duplicate smart folder',
             undo: async () => {
-              if (created?.id) await SmartFolderController.delete(created.id);
-              SidebarController.fetchInitialTree();
+              if (created?.id) await api.smartFolders.delete(created.id);
+              useDomainStore.getState().fetchSidebarTree();
               onFolderUpdated?.();
             },
             redo: async () => {
-              created = await SmartFolderController.create(folderToRust({ ...folder, id: undefined, name: `${folder.name} (copy)` }));
-              SidebarController.fetchInitialTree();
+              created = await api.smartFolders.create(folderToRust({ ...folder, id: undefined, name: `${folder.name} (copy)` }));
+              useDomainStore.getState().fetchSidebarTree();
               onFolderUpdated?.();
             },
           });
-          SidebarController.fetchInitialTree();
+          useDomainStore.getState().fetchSidebarTree();
           onFolderUpdated?.();
         } catch (error) {
           console.error('Duplicate failed:', error);
@@ -192,23 +190,23 @@ export function SmartFolderList({ onFolderUpdated }: SmartFolderListProps) {
         if (!folder.id) return;
         try {
           const snapshot = { ...folder };
-          await SmartFolderController.delete(folder.id);
+          await api.smartFolders.delete(folder.id);
           let recreated: SmartFolder | null = null;
           registerUndoAction({
             label: 'Delete smart folder',
             undo: async () => {
-              recreated = await SmartFolderController.create(folderToRust({ ...snapshot, id: undefined }));
-              SidebarController.fetchInitialTree();
+              recreated = await api.smartFolders.create(folderToRust({ ...snapshot, id: undefined }));
+              useDomainStore.getState().fetchSidebarTree();
               onFolderUpdated?.();
             },
             redo: async () => {
               const id = recreated?.id ?? snapshot.id;
-              if (id) await SmartFolderController.delete(id);
-              SidebarController.fetchInitialTree();
+              if (id) await api.smartFolders.delete(id);
+              useDomainStore.getState().fetchSidebarTree();
               onFolderUpdated?.();
             },
           });
-          SidebarController.fetchInitialTree();
+          useDomainStore.getState().fetchSidebarTree();
           onFolderUpdated?.();
           if (activeSmartFolder?.id === folder.id) navigateTo('images');
         } catch (error) {
@@ -268,15 +266,15 @@ export function SmartFolderList({ onFolderUpdated }: SmartFolderListProps) {
     const previousMoves: [number, number][] = folders.map((f, i) => [parseInt(f.id!, 10), (i + 1) * 1000]);
     const reordered = arrayMove(folders, oldIndex, newIndex);
     const moves: [number, number][] = reordered.map((f, i) => [parseInt(f.id!, 10), (i + 1) * 1000]);
-    FolderController.reorderSmartFolders(moves).then(() => {
+    api.smartFolders.reorder(moves).then(() => {
       registerUndoAction({
         label: 'Reorder smart folders',
         undo: async () => {
-          await FolderController.reorderSmartFolders(previousMoves);
+          await api.smartFolders.reorder(previousMoves);
           onFolderUpdated?.();
         },
         redo: async () => {
-          await FolderController.reorderSmartFolders(moves);
+          await api.smartFolders.reorder(moves);
           onFolderUpdated?.();
         },
       });

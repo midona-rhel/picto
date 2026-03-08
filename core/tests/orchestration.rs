@@ -13,18 +13,16 @@ use picto_core::sqlite::bitmaps::BitmapKey;
 use picto_core::sqlite::files::NewFile;
 use picto_core::sqlite::folders::NewFolder;
 use picto_core::sqlite::SqliteDatabase;
-use picto_core::sqlite_ptr::PtrSqliteDatabase;
 
 // ---------------------------------------------------------------------------
 // Test Harness
 // ---------------------------------------------------------------------------
 
 /// Reusable test fixture with a temporary library directory, seeded DB,
-/// PTR DB, and an event collector that captures all emitted events.
+/// and an event collector that captures all emitted events.
 struct TestHarness {
     _tmp: TempDir,
     db: Arc<SqliteDatabase>,
-    _ptr_db: Arc<PtrSqliteDatabase>,
     events: Arc<Mutex<Vec<(String, String)>>>,
     // The native event callback is a global singleton; keep orchestration tests
     // serialized so callback ownership is deterministic across this test binary.
@@ -50,10 +48,6 @@ impl TestHarness {
         let db = SqliteDatabase::open(&library_root)
             .await
             .expect("open library db");
-        let ptr_db = PtrSqliteDatabase::open(&library_root)
-            .await
-            .expect("open ptr db");
-
         let collected = Arc::new(Mutex::new(Vec::<(String, String)>::new()));
         let collected_clone = collected.clone();
         events::set_event_callback(move |name: &str, payload: &str| {
@@ -66,7 +60,6 @@ impl TestHarness {
         Self {
             _tmp: tmp,
             db,
-            _ptr_db: ptr_db,
             events: collected,
             _event_callback_guard: event_callback_guard,
         }
@@ -1013,20 +1006,6 @@ async fn grid_query_plan_uses_composite_index() {
 fn event_names_are_kebab_case() {
     use picto_core::events::event_names;
     let names = [
-        event_names::SUBSCRIPTION_STARTED,
-        event_names::SUBSCRIPTION_PROGRESS,
-        event_names::SUBSCRIPTION_FINISHED,
-        event_names::FLOW_STARTED,
-        event_names::FLOW_PROGRESS,
-        event_names::FLOW_FINISHED,
-        event_names::PTR_SYNC_STARTED,
-        event_names::PTR_SYNC_PROGRESS,
-        event_names::PTR_SYNC_FINISHED,
-        event_names::PTR_SYNC_PHASE_CHANGED,
-        event_names::PTR_BOOTSTRAP_STARTED,
-        event_names::PTR_BOOTSTRAP_PROGRESS,
-        event_names::PTR_BOOTSTRAP_FINISHED,
-        event_names::PTR_BOOTSTRAP_FAILED,
         event_names::LIBRARY_CLOSED,
         event_names::ZOOM_FACTOR_CHANGED,
         event_names::FILE_IMPORTED,
@@ -1054,175 +1033,6 @@ fn event_names_are_kebab_case() {
             name
         );
     }
-}
-
-#[test]
-fn subscription_started_event_contract() {
-    let event = picto_core::events::SubscriptionStartedEvent {
-        subscription_id: "sub_123".into(),
-        subscription_name: "Test Sub".into(),
-        mode: "subscription".into(),
-        query_id: None,
-        query_name: None,
-    };
-    let json: serde_json::Value = serde_json::to_value(&event).unwrap();
-    assert_eq!(json["subscription_id"], "sub_123");
-    assert_eq!(json["subscription_name"], "Test Sub");
-    assert_eq!(json["mode"], "subscription");
-    assert!(
-        json.get("query_id").is_none(),
-        "None fields should be skipped"
-    );
-
-    // With query_id
-    let event2 = picto_core::events::SubscriptionStartedEvent {
-        query_id: Some("q1".into()),
-        ..event
-    };
-    let json2: serde_json::Value = serde_json::to_value(&event2).unwrap();
-    assert_eq!(json2["query_id"], "q1");
-}
-
-#[test]
-fn subscription_finished_event_contract() {
-    let event = picto_core::events::SubscriptionFinishedEvent {
-        subscription_id: "sub_1".into(),
-        subscription_name: "My Sub".into(),
-        mode: "subscription".into(),
-        query_id: None,
-        query_name: None,
-        status: "succeeded".into(),
-        files_downloaded: 42,
-        files_skipped: 3,
-        errors_count: 0,
-        error: None,
-        failure_kind: None,
-        metadata_validated: 0,
-        metadata_invalid: 0,
-        last_metadata_error: None,
-    };
-    let json: serde_json::Value = serde_json::to_value(&event).unwrap();
-    assert_eq!(json["files_downloaded"], 42);
-    assert_eq!(json["files_skipped"], 3);
-    assert_eq!(json["errors_count"], 0);
-    assert_eq!(json["status"], "succeeded");
-    assert!(json.get("error").is_none());
-    assert!(json.get("query_id").is_none());
-}
-
-#[test]
-fn flow_events_contract() {
-    // FlowStartedEvent
-    let started = picto_core::events::FlowStartedEvent {
-        flow_id: "f_42".into(),
-        subscription_count: 3,
-    };
-    let json: serde_json::Value = serde_json::to_value(&started).unwrap();
-    assert_eq!(json["flow_id"], "f_42");
-    assert_eq!(json["subscription_count"], 3);
-
-    // FlowProgressEvent
-    let progress = picto_core::events::FlowProgressEvent {
-        flow_id: "f_42".into(),
-        total: 3,
-        done: 1,
-        remaining: 2,
-    };
-    let json: serde_json::Value = serde_json::to_value(&progress).unwrap();
-    assert_eq!(json["total"], 3);
-    assert_eq!(json["done"], 1);
-    assert_eq!(json["remaining"], 2);
-
-    // FlowFinishedEvent — success
-    let finished = picto_core::events::FlowFinishedEvent {
-        flow_id: "f_42".into(),
-        status: "succeeded".into(),
-        started_count: Some(3),
-        error: None,
-    };
-    let json: serde_json::Value = serde_json::to_value(&finished).unwrap();
-    assert_eq!(json["status"], "succeeded");
-    assert_eq!(json["started_count"], 3);
-    assert!(json.get("error").is_none());
-
-    // FlowFinishedEvent — failure
-    let failed = picto_core::events::FlowFinishedEvent {
-        flow_id: "f_42".into(),
-        status: "failed".into(),
-        started_count: None,
-        error: Some("plugin not found".into()),
-    };
-    let json: serde_json::Value = serde_json::to_value(&failed).unwrap();
-    assert_eq!(json["status"], "failed");
-    assert_eq!(json["error"], "plugin not found");
-    assert!(json.get("started_count").is_none());
-}
-
-#[test]
-fn ptr_sync_finished_event_contract() {
-    // Success path
-    let success = picto_core::events::PtrSyncFinishedEvent {
-        success: true,
-        error: None,
-        updates_processed: Some(100),
-        tags_added: Some(50),
-        schema_rebuild: None,
-        index_rebuild: None,
-        changed_hashes_truncated: Some(false),
-    };
-    let json: serde_json::Value = serde_json::to_value(&success).unwrap();
-    assert_eq!(json["success"], true);
-    assert!(json.get("error").is_none());
-    assert_eq!(json["updates_processed"], 100);
-    assert_eq!(json["tags_added"], 50);
-
-    // Failure path
-    let failure = picto_core::events::PtrSyncFinishedEvent {
-        success: false,
-        error: Some("Network error".into()),
-        updates_processed: None,
-        tags_added: None,
-        schema_rebuild: None,
-        index_rebuild: None,
-        changed_hashes_truncated: None,
-    };
-    let json: serde_json::Value = serde_json::to_value(&failure).unwrap();
-    assert_eq!(json["success"], false);
-    assert_eq!(json["error"], "Network error");
-    assert!(json.get("updates_processed").is_none());
-}
-
-#[test]
-fn ptr_bootstrap_progress_union_shape() {
-    // The 6 call sites populate different subsets. Default must work.
-    let minimal = picto_core::events::PtrBootstrapProgressEvent {
-        phase: "cancelling".into(),
-        stage: Some("cancelling".into()),
-        ..Default::default()
-    };
-    let json: serde_json::Value = serde_json::to_value(&minimal).unwrap();
-    assert_eq!(json["phase"], "cancelling");
-    assert_eq!(json["stage"], "cancelling");
-    assert!(json.get("service_id").is_none());
-    assert!(json.get("rows_done").is_none());
-
-    // Full progress
-    let full = picto_core::events::PtrBootstrapProgressEvent {
-        phase: "importing".into(),
-        stage: Some("compact_build".into()),
-        rows_done: Some(5000),
-        rows_total: Some(100000),
-        rows_done_stage: Some(5000),
-        rows_total_stage: Some(100000),
-        rows_per_sec: Some(1234.5),
-        eta_seconds: Some(77.0),
-        ts: Some("2024-01-01T00:00:00Z".into()),
-        ..Default::default()
-    };
-    let json: serde_json::Value = serde_json::to_value(&full).unwrap();
-    assert_eq!(json["rows_done"], 5000);
-    assert_eq!(json["rows_total"], 100000);
-    assert!(json["rows_per_sec"].as_f64().unwrap() > 1000.0);
 }
 
 #[test]
@@ -1728,7 +1538,7 @@ fn slo_pass_fail_with_samples() {
     // Record fast samples into all 4 windows — well under SLO targets
     for _ in 0..20 {
         picto_core::perf::record_grid_page_slim(10.0);
-        picto_core::perf::record_files_metadata_batch(8.0, 3.0, 3.0, 2.0, 10, 8, 2, 2, 0);
+        picto_core::perf::record_files_metadata_batch(8.0, 3.0, 2.0, 10, 0);
         picto_core::perf::record_sidebar_tree(12.0);
         picto_core::perf::record_selection_summary(15.0);
     }

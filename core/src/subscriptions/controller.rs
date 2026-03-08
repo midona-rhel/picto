@@ -226,7 +226,7 @@ impl SubscriptionController {
                     name: sub.name,
                     site_id: canonical_site_id.to_string(),
                     paused: sub.paused,
-                    flow_id: sub.flow_id.map(|id| id.to_string()),
+                    group_id: sub.group_id.map(|id| id.to_string()),
                     initial_file_limit: sub.initial_file_limit as u32,
                     periodic_file_limit: sub.periodic_file_limit as u32,
                     created_at: sub.created_at,
@@ -250,7 +250,7 @@ impl SubscriptionController {
         name: String,
         site_id: String,
         queries: Vec<String>,
-        flow_id: Option<i64>,
+        group_id: Option<i64>,
         initial_file_limit: Option<u32>,
         periodic_file_limit: Option<u32>,
     ) -> Result<SubscriptionInfo, String> {
@@ -259,7 +259,7 @@ impl SubscriptionController {
         }
         let canonical_site_id = crate::subscriptions::gallery_dl_runner::canonical_site_id(&site_id).to_string();
         let sub = db
-            .create_subscription(&name, &canonical_site_id, flow_id)
+            .create_subscription(&name, &canonical_site_id, group_id)
             .await?;
         let sub_id = sub.subscription_id;
 
@@ -304,7 +304,7 @@ impl SubscriptionController {
             name,
             site_id: canonical_site_id,
             paused: false,
-            flow_id: flow_id.map(|id| id.to_string()),
+            group_id: group_id.map(|id| id.to_string()),
             initial_file_limit: initial_file_limit.unwrap_or(100),
             periodic_file_limit: periodic_file_limit.unwrap_or(50),
             created_at: sub.created_at,

@@ -3,8 +3,8 @@ import type {
   CredentialDomain,
   CredentialHealth,
   CredentialType,
-  FlowFinishedEvent,
-  FlowProgressEvent,
+  GroupFinishedEvent,
+  GroupProgressEvent,
   SiteMetadataSchema,
   SiteMetadataValidationResult,
   SubscriptionFinishedEvent,
@@ -16,8 +16,8 @@ export type {
   CredentialDomain,
   CredentialHealth,
   CredentialType,
-  FlowFinishedEvent,
-  FlowProgressEvent,
+  GroupFinishedEvent,
+  GroupProgressEvent,
   SiteMetadataSchema,
   SiteMetadataValidationResult,
   SubscriptionFinishedEvent,
@@ -90,7 +90,7 @@ export const subscriptionApi = {
     name: string;
     siteId: string;
     queries: string[];
-    flowId?: number | null;
+    groupId?: number | null;
     initialFileLimit?: number | null;
     periodicFileLimit?: number | null;
   }): Promise<CreatedSubscription> {
@@ -98,7 +98,7 @@ export const subscriptionApi = {
       name: args.name,
       site_id: args.siteId,
       queries: args.queries,
-      flow_id: args.flowId ?? undefined,
+      group_id: args.groupId ?? undefined,
       initial_file_limit: args.initialFileLimit ?? undefined,
       periodic_file_limit: args.periodicFileLimit ?? undefined,
     }) as Promise<CreatedSubscription>;
@@ -121,30 +121,30 @@ export const subscriptionApi = {
   },
 
   getSubscriptionGroups<T>(): Promise<T[]> {
-    return api.flows.list() as Promise<T[]>;
+    return api.groups.list() as Promise<T[]>;
   },
 
   createSubscriptionGroup(args: { name: string; schedule?: string }): Promise<unknown> {
-    return api.flows.create(args.name, args.schedule);
+    return api.groups.create(args.name, args.schedule);
   },
 
   deleteSubscriptionGroup(args: { id: string; deleteFiles?: boolean }): Promise<void> {
-    return api.flows.delete(args.id, args.deleteFiles);
+    return api.groups.delete(args.id, args.deleteFiles);
   },
 
   renameSubscriptionGroup(args: { id: string; name: string }): Promise<void> {
-    return api.flows.rename(args.id, args.name);
+    return api.groups.rename(args.id, args.name);
   },
 
   setSubscriptionGroupSchedule(args: { id: string; schedule: string }): Promise<void> {
-    return api.flows.setSchedule(args.id, args.schedule);
+    return api.groups.setSchedule(args.id, args.schedule);
   },
 
   runSubscriptionGroup(args: { id: string }): Promise<void> {
-    return api.flows.run(args.id);
+    return api.groups.run(args.id);
   },
 
   stopSubscriptionGroup(args: { id: string }): Promise<void> {
-    return api.flows.stop(args.id);
+    return api.groups.stop(args.id);
   },
 };

@@ -1,6 +1,5 @@
 import { useRuntimeSyncStore } from '../../state/runtimeSyncStore';
 import { useDomainStore } from '../../state/domainStore';
-import { SidebarController } from '../../shared/controllers/sidebarController';
 
 let unsub: (() => void) | null = null;
 let debounceTimer: ReturnType<typeof setTimeout> | null = null;
@@ -34,7 +33,7 @@ export function startSidebarRefresher(): void {
     if (needsTreeRefresh) {
       if (debounceTimer) clearTimeout(debounceTimer);
       debounceTimer = setTimeout(() => {
-        SidebarController.requestRefresh();
+        useDomainStore.getState().invalidate();
         useRuntimeSyncStore.getState().markResourceFresh('sidebar/tree');
         debounceTimer = null;
       }, 120);

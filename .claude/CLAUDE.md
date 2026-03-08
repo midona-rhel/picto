@@ -15,9 +15,7 @@ Picto is an Electron desktop app with:
 
 1. `sqlite/`:
    - primary DB layer, schema, CRUD, compilers, projections, sidebar reads
-2. `sqlite_ptr/`:
-   - PTR database and sync/bootstrap logic
-3. `dispatch/`:
+2. `dispatch/`:
    - command routing by domain (`files_*`, `folders`, `tags`, `subscriptions`, `system`, etc.)
 4. `events.rs`:
    - event emission contracts (`state-changed`, `sidebar-invalidated`, grid invalidation events)

@@ -22,7 +22,7 @@ export interface SubInfo {
   site_id?: string;
   site_plugin_id?: string;
   paused: boolean;
-  flow_id: string | null;
+  group_id: string | null;
   initial_file_limit: number;
   periodic_file_limit: number;
   created_at: string;

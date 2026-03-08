@@ -1,7 +1,8 @@
 import { useState, useEffect, useRef, useLayoutEffect, useCallback, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { IconCheck, IconEqual, IconLayersIntersect, IconLayersUnion, IconMinus, IconPin, IconPinFilled } from '@tabler/icons-react';
-import { FolderController, type Folder } from '../controllers/folderController';
+import { api } from '#desktop/api';
+import type { Folder } from '../types/api';
 import { useDomainStore } from '../../state/domainStore';
 import type { FilterLogicMode } from '../../state/filterStore';
 import { DynamicIcon } from '#features/folders/components';
@@ -87,7 +88,7 @@ function FolderPickerPanel({
   }, [folderNodes]);
 
   useEffect(() => {
-    FolderController.listFolders()
+    api.folders.list()
       .then(setFolders)
       .catch((e) => console.error('Failed to fetch folders:', e));
   }, []);

@@ -5,7 +5,6 @@ import { KbdTooltip } from '../../shared/components/KbdTooltip';
 import { MasonryImageItem, isVideoMime, toMasonryItem } from './shared';
 import { VideoPlayer } from '../../features/viewer/components/VideoPlayer';
 import { StripView } from './StripView';
-import { GridController } from '../../shared/controllers/gridController';
 import { useSettingsStore } from '../../state/settingsStore';
 import { mediaFileUrl, mediaThumbnailUrl } from '../../shared/lib/mediaUrl';
 import { getCachedMediaUrl } from './enhancedMediaCache';
@@ -13,7 +12,6 @@ import { useImageZoom, type ImageSize, type ZoomState } from './useImageZoom';
 import { useNavigatorDrag } from './useNavigatorDrag';
 import { useNavigatorRenderer } from './useNavigatorRenderer';
 import { useBoundaryNavigation } from '../../shared/hooks/useBoundaryNavigation';
-import { FileController } from '../../shared/controllers/fileController';
 import { getShortcut, matchesShortcut, matchesShortcutDef } from '../../shared/lib/shortcuts';
 import { runCriticalAction } from '../../shared/lib/asyncOps';
 import { useViewerMediaPipeline } from './viewer/useViewerMediaPipeline';
@@ -90,7 +88,7 @@ export function DetailView({ images, currentIndex, onNavigate, onClose, onStateC
       collectionLoadingRef.current = true;
       try {
         // Detail collection-strip pagination is owned by DetailView, not GridQueryBroker.
-        const resp = await GridController.fetchGridPage({
+        const resp = await api.grid.getPageSlim({
           limit: COLLECTION_PAGE_SIZE,
           cursor,
           sortField: 'ordinal',
@@ -440,7 +438,7 @@ export function DetailView({ images, currentIndex, onNavigate, onClose, onStateC
         if (digit >= 0 && digit <= 5) {
           e.preventDefault();
           const hash = currentHashRef.current;
-          if (hash) FileController.updateRating(hash, digit);
+          if (hash) api.file.updateRating(hash, digit);
           return;
         }
       }
@@ -463,7 +461,7 @@ export function DetailView({ images, currentIndex, onNavigate, onClose, onStateC
         e.preventDefault();
         const hash = currentHashRef.current;
         if (hash) {
-          runCriticalAction('Open Failed', 'detail.openDefaultFromShortcut', FileController.openDefault(hash));
+          runCriticalAction('Open Failed', 'detail.openDefaultFromShortcut', api.file.openDefault(hash));
         }
         return;
       }
@@ -471,7 +469,7 @@ export function DetailView({ images, currentIndex, onNavigate, onClose, onStateC
         e.preventDefault();
         const hash = currentHashRef.current;
         if (hash) {
-          runCriticalAction('Reveal Failed', 'detail.revealFromShortcut', FileController.revealInFolder(hash));
+          runCriticalAction('Reveal Failed', 'detail.revealFromShortcut', api.file.revealInFolder(hash));
         }
         return;
       }
@@ -482,7 +480,7 @@ export function DetailView({ images, currentIndex, onNavigate, onClose, onStateC
           runCriticalAction(
             'New Window Failed',
             'detail.openInNewWindowFromShortcut',
-            FileController.openInNewWindow(img.hash, img.width, img.height),
+            api.file.openInNewWindow(img.hash, img.width, img.height),
           );
         }
         return;
@@ -494,7 +492,7 @@ export function DetailView({ images, currentIndex, onNavigate, onClose, onStateC
           runCriticalAction(
             'Regenerate Failed',
             'detail.regenerateThumbnailFromShortcut',
-            FileController.regenerateThumbnail(hash),
+            api.file.regenerateThumbnail(hash),
           );
         }
         return;

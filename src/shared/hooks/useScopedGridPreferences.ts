@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
-import { ViewPrefsController, type ViewPrefsPatch } from '../controllers/viewPrefsController';
+import { api } from '#desktop/api';
+import type { ViewPrefsPatch } from '../types/api';
 import type { AppSettings } from '../../state/settingsStore';
 import type { GridViewMode } from '#features/grid/types';
 
@@ -112,7 +113,7 @@ export function useScopedGridPreferences({
     saveViewPrefsTimer.current = setTimeout(() => {
       const mergedPatch = pendingViewPrefsPatch.current;
       pendingViewPrefsPatch.current = {};
-      void ViewPrefsController.set(gridScopeKey, mergedPatch).catch((e) => {
+      void api.settings.setViewPrefs(gridScopeKey, mergedPatch).catch((e) => {
         console.error('Failed to persist view prefs:', e);
       });
     }, 180);
@@ -146,7 +147,7 @@ export function useScopedGridPreferences({
       saveViewPrefsTimer.current = null;
     }
 
-    void ViewPrefsController.get(gridScopeKey)
+    void api.settings.getViewPrefs(gridScopeKey)
       .then((pref) => {
         if (viewPrefsLoadSeq.current !== seq) return;
         const nextViewMode =

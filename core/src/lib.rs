@@ -10,7 +10,6 @@ pub mod grid;
 pub mod import;
 pub mod lifecycle;
 pub mod metadata;
-pub mod ptr;
 pub mod scope;
 pub mod selection;
 pub mod settings;

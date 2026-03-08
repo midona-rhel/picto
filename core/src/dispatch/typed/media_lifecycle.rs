@@ -1,4 +1,4 @@
-//! Typed command implementations for media lifecycle operations:
+//! Handler functions for media lifecycle operations:
 //! import, status changes, deletion, and FTS rebuild.
 
 use serde::Deserialize;
@@ -6,7 +6,6 @@ use ts_rs::TS;
 
 use crate::state::AppState;
 use crate::types::*;
-use super::{TypedCommand, run_typed};
 
 // ─── Input structs ─────────────────────────────────────────────────────────
 
@@ -34,12 +33,6 @@ pub struct UpdateFileStatusInput {
 
 #[derive(Debug, Deserialize, TS)]
 #[ts(export, export_to = "../../src/shared/types/generated/commands/")]
-pub struct DeleteFileInput {
-    pub hash: String,
-}
-
-#[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
 pub struct DeleteFilesInput {
     pub hashes: Vec<String>,
 }
@@ -57,271 +50,164 @@ pub struct UpdateFileStatusSelectionInput {
     pub status: String,
 }
 
-// ─── Command structs ───────────────────────────────────────────────────────
+// ─── Handlers ──────────────────────────────────────────────────────────────
 
-pub struct ImportFiles;
-pub struct UpdateFileStatus;
-pub struct DeleteFile;
-pub struct DeleteFiles;
-pub struct RebuildFileFts;
-pub struct WipeImageData;
-pub struct DeleteFilesSelection;
-pub struct UpdateFileStatusSelection;
-
-// ─── TypedCommand impls ────────────────────────────────────────────────────
-
-impl TypedCommand for ImportFiles {
-    const NAME: &'static str = "import_files";
-    type Input = ImportFilesInput;
-    type Output = crate::types::ImportBatchResult;
-
-    async fn execute(state: &AppState, input: Self::Input) -> Result<Self::Output, String> {
-        let app_settings = state.settings.get();
-        let auto_merge_enabled = app_settings.duplicate_auto_merge_enabled
-            && !app_settings.duplicate_auto_merge_subscriptions_only;
-        let auto_merge_distance = if auto_merge_enabled {
-            crate::settings::store::similarity_pct_to_distance(
-                app_settings.duplicate_auto_merge_similarity_pct,
-            )
-        } else {
-            0
-        };
-        let result = crate::import::controller::ImportController::import_files(
-            &state.db,
-            &state.blob_store,
-            input.paths,
-            input.tag_strings,
-            input.source_urls,
-            auto_merge_enabled,
-            auto_merge_distance,
-            input.initial_status,
+pub async fn import_files(state: &AppState, input: ImportFilesInput) -> Result<crate::types::ImportBatchResult, String> {
+    let app_settings = state.settings.get();
+    let auto_merge_enabled = app_settings.duplicate_auto_merge_enabled
+        && !app_settings.duplicate_auto_merge_subscriptions_only;
+    let auto_merge_distance = if auto_merge_enabled {
+        crate::settings::store::similarity_pct_to_distance(
+            app_settings.duplicate_auto_merge_similarity_pct,
         )
-        .await?;
+    } else {
+        0
+    };
+    let result = crate::import::controller::ImportController::import_files(
+        &state.db,
+        &state.blob_store,
+        input.paths,
+        input.tag_strings,
+        input.source_urls,
+        auto_merge_enabled,
+        auto_merge_distance,
+        input.initial_status,
+    )
+    .await?;
 
-        if !result.imported.is_empty() {
-            crate::events::emit_mutation(
-                "import_files",
-                crate::events::MutationImpact::file_lifecycle(&state.db),
-            );
-        }
-        Ok(result)
-    }
-}
-
-impl TypedCommand for UpdateFileStatus {
-    const NAME: &'static str = "update_file_status";
-    type Input = UpdateFileStatusInput;
-    type Output = ();
-
-    async fn execute(state: &AppState, input: Self::Input) -> Result<Self::Output, String> {
-        let file_status = crate::types::parse_file_status(&input.status)?;
-        crate::lifecycle::controller::LifecycleController::update_file_status(
-            &state.db,
-            input.hash.clone(),
-            file_status,
-        )
-        .await?;
-
-        let folder_ids =
-            collect_folder_ids_for_hashes(state, &[input.hash.clone()], 1).await;
-        if let Err(err) = crate::folders::controller::FolderController::
-            refresh_sidebar_projection_for_folder_ids(&state.db, &folder_ids)
-            .await
-        {
-            tracing::warn!(error = %err, "failed to refresh folder sidebar projection after status update");
-        }
-        let mut impact = crate::events::MutationImpact::file_status_change(&state.db)
-            .file_hashes(vec![input.hash]);
-        if !folder_ids.is_empty() {
-            impact = impact.folder_ids(folder_ids);
-        }
-        crate::events::emit_mutation("update_file_status", impact);
-        Ok(())
-    }
-}
-
-impl TypedCommand for DeleteFile {
-    const NAME: &'static str = "delete_file";
-    type Input = DeleteFileInput;
-    type Output = ();
-
-    async fn execute(state: &AppState, input: Self::Input) -> Result<Self::Output, String> {
-        let folder_ids =
-            collect_folder_ids_for_hashes(state, &[input.hash.clone()], 1).await;
-        crate::lifecycle::controller::LifecycleController::delete_file(
-            &state.db,
-            &state.blob_store,
-            input.hash.clone(),
-        )
-        .await?;
-
-        if let Err(err) = crate::folders::controller::FolderController::
-            refresh_sidebar_projection_for_folder_ids(&state.db, &folder_ids)
-            .await
-        {
-            tracing::warn!(error = %err, "failed to refresh folder sidebar projection after delete_file");
-        }
-        let mut impact = crate::events::MutationImpact::file_status_change(&state.db)
-            .file_hashes(vec![input.hash]);
-        if !folder_ids.is_empty() {
-            impact = impact.folder_ids(folder_ids);
-        }
-        crate::events::emit_mutation("delete_file", impact);
-        Ok(())
-    }
-}
-
-impl TypedCommand for DeleteFiles {
-    const NAME: &'static str = "delete_files";
-    type Input = DeleteFilesInput;
-    type Output = usize;
-
-    async fn execute(state: &AppState, input: Self::Input) -> Result<Self::Output, String> {
-        let hashes_for_impact = input.hashes.clone();
-        let folder_ids = collect_folder_ids_for_hashes(
-            state,
-            &hashes_for_impact,
-            hashes_for_impact.len(),
-        )
-        .await;
-        let count = crate::lifecycle::controller::LifecycleController::delete_files(
-            &state.db,
-            &state.blob_store,
-            input.hashes,
-        )
-        .await?;
-
-        if count > 0 {
-            if let Err(err) = crate::folders::controller::FolderController::
-                refresh_sidebar_projection_for_folder_ids(&state.db, &folder_ids)
-                .await
-            {
-                tracing::warn!(error = %err, "failed to refresh folder sidebar projection after delete_files");
-            }
-            let mut impact = crate::events::MutationImpact::file_status_change(&state.db)
-                .file_hashes(hashes_for_impact);
-            if !folder_ids.is_empty() {
-                impact = impact.folder_ids(folder_ids);
-            }
-            crate::events::emit_mutation("delete_files", impact);
-        }
-        Ok(count)
-    }
-}
-
-impl TypedCommand for RebuildFileFts {
-    const NAME: &'static str = "rebuild_file_fts";
-    type Input = serde_json::Value; // accepts any args (none expected)
-    type Output = ();
-
-    async fn execute(state: &AppState, _input: Self::Input) -> Result<Self::Output, String> {
-        state
-            .db
-            .with_conn(|conn| crate::sqlite::files::rebuild_file_fts(conn))
-            .await?;
-        Ok(())
-    }
-}
-
-impl TypedCommand for WipeImageData {
-    const NAME: &'static str = "wipe_image_data";
-    type Input = serde_json::Value; // accepts any args (none expected)
-    type Output = ();
-
-    async fn execute(state: &AppState, _input: Self::Input) -> Result<Self::Output, String> {
-        crate::lifecycle::controller::LifecycleController::wipe_all_files(
-            &state.db,
-            &state.blob_store,
-        )
-        .await?;
-
+    if !result.imported.is_empty() {
         crate::events::emit_mutation(
-            "wipe_image_data",
-            crate::events::MutationImpact::file_status_change(&state.db),
+            "import_files",
+            crate::events::MutationImpact::file_lifecycle(&state.db),
         );
-        Ok(())
     }
+    Ok(result)
 }
 
-impl TypedCommand for DeleteFilesSelection {
-    const NAME: &'static str = "delete_files_selection";
-    type Input = DeleteFilesSelectionInput;
-    type Output = usize;
+pub async fn update_file_status(state: &AppState, input: UpdateFileStatusInput) -> Result<(), String> {
+    let file_status = crate::types::parse_file_status(&input.status)?;
+    crate::lifecycle::controller::LifecycleController::update_file_status(
+        &state.db, input.hash.clone(), file_status,
+    ).await?;
 
-    async fn execute(state: &AppState, input: Self::Input) -> Result<Self::Output, String> {
-        let bitmap = resolve_selection_bitmap(state, &input.selection).await?;
+    let folder_ids =
+        collect_folder_ids_for_hashes(state, &[input.hash.clone()], 1).await;
+    if let Err(err) = crate::folders::controller::FolderController::
+        refresh_sidebar_projection_for_folder_ids(&state.db, &folder_ids).await
+    {
+        tracing::warn!(error = %err, "failed to refresh folder sidebar projection after status update");
+    }
+    let mut impact = crate::events::MutationImpact::file_status_change(&state.db)
+        .file_hashes(vec![input.hash]);
+    if !folder_ids.is_empty() {
+        impact = impact.folder_ids(folder_ids);
+    }
+    crate::events::emit_mutation("update_file_status", impact);
+    Ok(())
+}
 
-        let file_ids: Vec<i64> = bitmap.iter().map(|id| id as i64).collect();
-        let pairs = state.db.resolve_ids_batch(&file_ids).await?;
-        let hashes: Vec<String> = pairs.into_iter().map(|(_, h)| h).collect();
-        let hashes_clone = hashes.clone();
-        let folder_ids =
-            collect_folder_ids_for_hashes(state, &hashes_clone, hashes_clone.len()).await;
+pub async fn delete_files(state: &AppState, input: DeleteFilesInput) -> Result<usize, String> {
+    let hashes_for_impact = input.hashes.clone();
+    let folder_ids = collect_folder_ids_for_hashes(
+        state, &hashes_for_impact, hashes_for_impact.len(),
+    ).await;
+    let count = crate::lifecycle::controller::LifecycleController::delete_files(
+        &state.db, &state.blob_store, input.hashes,
+    ).await?;
 
-        let count = crate::lifecycle::controller::LifecycleController::delete_files(
-            &state.db,
-            &state.blob_store,
-            hashes,
-        )
+    if count > 0 {
+        if let Err(err) = crate::folders::controller::FolderController::
+            refresh_sidebar_projection_for_folder_ids(&state.db, &folder_ids).await
+        {
+            tracing::warn!(error = %err, "failed to refresh folder sidebar projection after delete_files");
+        }
+        let mut impact = crate::events::MutationImpact::file_status_change(&state.db)
+            .file_hashes(hashes_for_impact);
+        if !folder_ids.is_empty() {
+            impact = impact.folder_ids(folder_ids);
+        }
+        crate::events::emit_mutation("delete_files", impact);
+    }
+    Ok(count)
+}
+
+pub async fn rebuild_file_fts(state: &AppState, _input: serde_json::Value) -> Result<(), String> {
+    state.db
+        .with_conn(|conn| crate::sqlite::files::rebuild_file_fts(conn))
         .await?;
-
-        if count > 0 {
-            if let Err(err) = crate::folders::controller::FolderController::
-                refresh_sidebar_projection_for_folder_ids(&state.db, &folder_ids)
-                .await
-            {
-                tracing::warn!(error = %err, "failed to refresh folder sidebar projection after delete_files_selection");
-            }
-            let mut impact = crate::events::MutationImpact::file_status_change(&state.db)
-                .file_hashes(hashes_clone);
-            if !folder_ids.is_empty() {
-                impact = impact.folder_ids(folder_ids);
-            }
-            crate::events::emit_mutation("delete_files_selection", impact);
-        }
-        Ok(count)
-    }
+    Ok(())
 }
 
-impl TypedCommand for UpdateFileStatusSelection {
-    const NAME: &'static str = "update_file_status_selection";
-    type Input = UpdateFileStatusSelectionInput;
-    type Output = usize;
+pub async fn wipe_image_data(state: &AppState, _input: serde_json::Value) -> Result<(), String> {
+    crate::lifecycle::controller::LifecycleController::wipe_all_files(
+        &state.db, &state.blob_store,
+    ).await?;
+    crate::events::emit_mutation(
+        "wipe_image_data",
+        crate::events::MutationImpact::file_status_change(&state.db),
+    );
+    Ok(())
+}
 
-    async fn execute(state: &AppState, input: Self::Input) -> Result<Self::Output, String> {
-        let status_code = crate::types::parse_file_status(&input.status)?;
+pub async fn delete_files_selection(state: &AppState, input: DeleteFilesSelectionInput) -> Result<usize, String> {
+    let bitmap = resolve_selection_bitmap(state, &input.selection).await?;
 
-        let bitmap = resolve_selection_bitmap(state, &input.selection).await?;
-        let count = bitmap.len() as usize;
+    let file_ids: Vec<i64> = bitmap.iter().map(|id| id as i64).collect();
+    let pairs = state.db.resolve_ids_batch(&file_ids).await?;
+    let hashes: Vec<String> = pairs.into_iter().map(|(_, h)| h).collect();
+    let hashes_clone = hashes.clone();
+    let folder_ids =
+        collect_folder_ids_for_hashes(state, &hashes_clone, hashes_clone.len()).await;
 
-        if count > 0 {
-            let mut folder_ids = input.selection.folder_ids.clone().unwrap_or_default();
-            if matches!(input.selection.mode, SelectionMode::ExplicitHashes) {
-                let explicit_hashes = input.selection.hashes.clone().unwrap_or_default();
-                let mut from_hashes =
-                    collect_folder_ids_for_hashes(state, &explicit_hashes, 200).await;
-                folder_ids.append(&mut from_hashes);
-                folder_ids.sort_unstable();
-                folder_ids.dedup();
-            }
-            state
-                .db
-                .update_file_status_batch(&bitmap, status_code)
-                .await?;
-            if let Err(err) = crate::folders::controller::FolderController::
-                refresh_sidebar_projection_for_folder_ids(&state.db, &folder_ids)
-                .await
-            {
-                tracing::warn!(error = %err, "failed to refresh folder sidebar projection after status batch update");
-            }
-            let mut impact = crate::events::MutationImpact::file_status_change(&state.db);
-            if !folder_ids.is_empty() {
-                impact = impact.folder_ids(folder_ids);
-            }
-            crate::events::emit_mutation("update_file_status_selection", impact);
+    let count = crate::lifecycle::controller::LifecycleController::delete_files(
+        &state.db, &state.blob_store, hashes,
+    ).await?;
+
+    if count > 0 {
+        if let Err(err) = crate::folders::controller::FolderController::
+            refresh_sidebar_projection_for_folder_ids(&state.db, &folder_ids).await
+        {
+            tracing::warn!(error = %err, "failed to refresh folder sidebar projection after delete_files_selection");
         }
-        Ok(count)
+        let mut impact = crate::events::MutationImpact::file_status_change(&state.db)
+            .file_hashes(hashes_clone);
+        if !folder_ids.is_empty() {
+            impact = impact.folder_ids(folder_ids);
+        }
+        crate::events::emit_mutation("delete_files_selection", impact);
     }
+    Ok(count)
+}
+
+pub async fn update_file_status_selection(state: &AppState, input: UpdateFileStatusSelectionInput) -> Result<usize, String> {
+    let status_code = crate::types::parse_file_status(&input.status)?;
+
+    let bitmap = resolve_selection_bitmap(state, &input.selection).await?;
+    let count = bitmap.len() as usize;
+
+    if count > 0 {
+        let mut folder_ids = input.selection.folder_ids.clone().unwrap_or_default();
+        if matches!(input.selection.mode, SelectionMode::ExplicitHashes) {
+            let explicit_hashes = input.selection.hashes.clone().unwrap_or_default();
+            let mut from_hashes =
+                collect_folder_ids_for_hashes(state, &explicit_hashes, 200).await;
+            folder_ids.append(&mut from_hashes);
+            folder_ids.sort_unstable();
+            folder_ids.dedup();
+        }
+        state.db.update_file_status_batch(&bitmap, status_code).await?;
+        if let Err(err) = crate::folders::controller::FolderController::
+            refresh_sidebar_projection_for_folder_ids(&state.db, &folder_ids).await
+        {
+            tracing::warn!(error = %err, "failed to refresh folder sidebar projection after status batch update");
+        }
+        let mut impact = crate::events::MutationImpact::file_status_change(&state.db);
+        if !folder_ids.is_empty() {
+            impact = impact.folder_ids(folder_ids);
+        }
+        crate::events::emit_mutation("update_file_status_selection", impact);
+    }
+    Ok(count)
 }
 
 // ─── Selection helpers ─────────────────────────────────────────────────────
@@ -399,26 +285,3 @@ pub(crate) async fn collect_folder_ids_for_hashes(
     folder_ids.dedup();
     folder_ids
 }
-
-// ─── Dispatch router ───────────────────────────────────────────────────────
-
-pub async fn dispatch_typed(
-    state: &AppState,
-    command: &str,
-    args: &serde_json::Value,
-) -> Option<Result<String, String>> {
-    match command {
-        ImportFiles::NAME => Some(run_typed::<ImportFiles>(state, args).await),
-        UpdateFileStatus::NAME => Some(run_typed::<UpdateFileStatus>(state, args).await),
-        DeleteFile::NAME => Some(run_typed::<DeleteFile>(state, args).await),
-        DeleteFiles::NAME => Some(run_typed::<DeleteFiles>(state, args).await),
-        RebuildFileFts::NAME => Some(run_typed::<RebuildFileFts>(state, args).await),
-        WipeImageData::NAME => Some(run_typed::<WipeImageData>(state, args).await),
-        DeleteFilesSelection::NAME => Some(run_typed::<DeleteFilesSelection>(state, args).await),
-        UpdateFileStatusSelection::NAME => {
-            Some(run_typed::<UpdateFileStatusSelection>(state, args).await)
-        }
-        _ => None,
-    }
-}
-

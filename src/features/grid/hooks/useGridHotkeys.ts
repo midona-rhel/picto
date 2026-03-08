@@ -1,10 +1,9 @@
 import { useEffect, useRef } from 'react';
 import { useHotkeys } from '@mantine/hooks';
 import { notifications } from '@mantine/notifications';
+import { api } from '#desktop/api';
 import { notifyError, notifySuccess } from '../../../shared/lib/notify';
-import { FolderController } from '../../../shared/controllers/folderController';
 import { FolderPickerService } from '../../../shared/services/folderPickerService';
-import { FileController } from '../../../shared/controllers/fileController';
 import { bustThumbnailCache } from '../../../shared/lib/mediaUrl';
 import { useCacheStore } from '../../../state/cacheStore';
 import { useSettingsStore, type AppSettings } from '../../../state/settingsStore';
@@ -128,8 +127,8 @@ export function useGridHotkeys({
     [
       'mod+shift+n',
       () => {
-        FolderController.createFolder({ name: 'New Folder' })
-          
+        api.folders.create({ name: 'New Folder' })
+
           .catch((err) => notifyError(err, 'Create Folder Failed'));
       },
     ],
@@ -137,8 +136,8 @@ export function useGridHotkeys({
       'alt+n',
       () => {
         if (!folderId) return;
-        FolderController.createFolder({ name: 'New Folder', parentId: folderId })
-          
+        api.folders.create({ name: 'New Folder', parent_id: folderId })
+
           .catch((err) => notifyError(err, 'Create Subfolder Failed'));
       },
     ],
@@ -162,7 +161,7 @@ export function useGridHotkeys({
                   .filter((i) => !s.virtualAllSelection!.excludedHashes.has(i.hash))
                   .map((i) => i.hash)
               : [...s.selectedHashes];
-            FolderController.addFilesToFolderBatch(fId, hashes)
+            api.folders.addFiles(fId, hashes)
               .then(() => {
                 notifySuccess(`${hashes.length} file(s) added to folder`, 'Added');
               })
@@ -182,7 +181,7 @@ export function useGridHotkeys({
               .map((i) => i.hash)
           : [...s.selectedHashes];
         if (hashes.length === 0) return;
-        FolderController.addFilesToFolderBatch(lastUsedFolder.id, hashes)
+        api.folders.addFiles(lastUsedFolder.id, hashes)
           .then(() => {
             notifySuccess(`${hashes.length} file(s) added to "${lastUsedFolder!.name}"`, 'Added');
           })
@@ -205,7 +204,7 @@ export function useGridHotkeys({
           autoClose: 3000,
           loading: true,
         });
-        FileController.regenerateThumbnailsBatch(hashes)
+        api.file.regenerateThumbnailsBatch(hashes)
           .then((r) => {
             notifySuccess(`Regenerated ${r.regenerated} thumbnail(s)`, 'Thumbnails');
             bustThumbnailCache(hashes);

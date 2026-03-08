@@ -42,11 +42,11 @@ export function SubscriptionGroupsPanel({
 }: SubscriptionGroupsPanelProps) {
   const ensureInitialized = useRuntimeSyncStore((s) => s.ensureInitialized);
   const subscriptionProgressById = useRuntimeSyncStore((s) => s.subscriptionProgressById);
-  const subscriptionGroupProgress = useRuntimeSyncStore((s) => s.flowProgressById);
+  const subscriptionGroupProgress = useRuntimeSyncStore((s) => s.groupProgressById);
   const lastSubscriptionFinished = useRuntimeSyncStore((s) => s.lastSubscriptionFinished);
-  const lastSubscriptionGroupFinished = useRuntimeSyncStore((s) => s.lastFlowFinished);
+  const lastSubscriptionGroupFinished = useRuntimeSyncStore((s) => s.lastGroupFinished);
   const subscriptionEventSeq = useRuntimeSyncStore((s) => s.subscriptionEventSeq);
-  const subscriptionGroupEventSeq = useRuntimeSyncStore((s) => s.flowEventSeq);
+  const subscriptionGroupEventSeq = useRuntimeSyncStore((s) => s.groupEventSeq);
 
   const [subscriptionGroups, setSubscriptionGroups] = useState<SubscriptionGroupInfo[]>([]);
   const [sites, setSites] = useState<SitePluginInfo[]>([]);
@@ -170,7 +170,7 @@ export function SubscriptionGroupsPanel({
   useEffect(() => {
     if (!lastSubscriptionGroupFinished) return;
     const key = [
-      lastSubscriptionGroupFinished.flow_id,
+      lastSubscriptionGroupFinished.group_id,
       lastSubscriptionGroupFinished.status,
       lastSubscriptionGroupFinished.error ?? '',
     ].join(':');
@@ -346,7 +346,7 @@ export function SubscriptionGroupsPanel({
           name: `${siteName}: ${addQuery.trim()}`,
           siteId: addSite,
           queries: [addQuery.trim()],
-          flowId: Number(subscriptionGroupId),
+          groupId: Number(subscriptionGroupId),
           initialFileLimit: 100,
           periodicFileLimit: 50,
         });
@@ -383,7 +383,7 @@ export function SubscriptionGroupsPanel({
         {subscriptionGroups.map((subscriptionGroup) => {
           const isExpanded = expandedIds.has(subscriptionGroup.id);
           const lastRan = getLastRan(subscriptionGroup);
-          // Legacy runtime progress is still keyed as `flow`; map it here until the backend event names are rewritten.
+          // Runtime progress keyed by subscription group ID.
           const hasRunningSubscriptions = subscriptionGroup.subscriptions.some((sub) => runningIds.has(sub.id));
           const isRunning = hasRunningSubscriptions || (runningSubscriptionGroupIds.has(subscriptionGroup.id) && (subscriptionGroupProgress.get(subscriptionGroup.id)?.remaining ?? 1) > 0);
           const queries = flattenQueries(subscriptionGroup, sites, credentialSites);

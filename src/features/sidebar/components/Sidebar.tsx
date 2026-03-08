@@ -14,7 +14,7 @@ import {
 
 import { useDomainStore } from '../../../state/domainStore';
 import { useNavigationStore } from '../../../state/navigationStore';
-import { setStatusSelectionWithLifecycleEffects } from '../../../shared/controllers/fileLifecycleActions';
+import { api } from '#desktop/api';
 import { SidebarJobStatus } from '../../layout/components/SidebarJobStatus';
 import { runCriticalAction } from '../../../shared/lib/asyncOps';
 import { FolderTree } from './FolderTree';
@@ -37,7 +37,7 @@ export function Sidebar({ onSmartFolderUpdated }: SidebarProps) {
     runCriticalAction(
       'Move Failed',
       `sidebar status drop (${status})`,
-      setStatusSelectionWithLifecycleEffects({ mode: 'explicit_hashes', hashes }, status),
+      api.file.setStatusSelection({ mode: 'explicit_hashes', hashes }, status),
     );
   }, []);
 

@@ -1,6 +1,5 @@
 //! Grid controller — thin entry point delegating to focused query modules.
 
-use crate::ptr::db::PtrSqliteDatabase;
 use crate::sqlite::SqliteDatabase;
 use crate::types::{EntityMetadataBatchResponse, GridPageSlimQuery, GridPageSlimResponse};
 
@@ -16,9 +15,8 @@ impl GridController {
 
     pub async fn get_files_metadata_batch(
         db: &SqliteDatabase,
-        ptr_db: &PtrSqliteDatabase,
         hashes: Vec<String>,
     ) -> Result<EntityMetadataBatchResponse, String> {
-        crate::grid::metadata::get_files_metadata_batch(db, ptr_db, hashes).await
+        crate::grid::metadata::get_files_metadata_batch(db, hashes).await
     }
 }

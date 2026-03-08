@@ -5,7 +5,7 @@
 //! shuts everything down cleanly via a `CancellationToken`.
 
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::{Arc, OnceLock, RwLock};
 
 use tokio_util::sync::CancellationToken;
@@ -14,13 +14,11 @@ use crate::blob_store::BlobStore;
 use crate::rate_limiter::RateLimiter;
 use crate::settings::store::SettingsStore;
 use crate::sqlite::SqliteDatabase;
-use crate::ptr::db::PtrSqliteDatabase;
 use crate::types::{RunningSubscriptions, SubTerminalStatuses};
 
 /// Shared application state, accessible to all command handlers.
 pub struct AppState {
     pub db: Arc<SqliteDatabase>,
-    pub ptr_db: Arc<PtrSqliteDatabase>,
     pub blob_store: Arc<BlobStore>,
     pub settings: SettingsStore,
     pub rate_limiter: RateLimiter,
@@ -31,22 +29,6 @@ pub struct AppState {
     /// Join handles for long-running background workers (bitmap flush, scheduler, etc.)
     /// Used by shutdown to deterministically await completion instead of sleeping.
     pub worker_handles: tokio::sync::Mutex<Vec<(&'static str, tokio::task::JoinHandle<()>)>>,
-}
-
-fn is_dir_writable(path: &Path) -> bool {
-    let probe = path.join(".picto_write_probe");
-    match std::fs::OpenOptions::new()
-        .create(true)
-        .truncate(true)
-        .write(true)
-        .open(&probe)
-    {
-        Ok(_) => {
-            let _ = std::fs::remove_file(&probe);
-            true
-        }
-        Err(_) => false,
-    }
 }
 
 static STATE: OnceLock<RwLock<Option<Arc<AppState>>>> = OnceLock::new();
@@ -84,73 +66,6 @@ pub async fn open_library(library_root: PathBuf) -> Result<Arc<AppState>, String
 
     let settings = SettingsStore::load(&library_root);
 
-    // Fail fast if PTR path is invalid/unwritable rather than silently falling
-    // back to temp storage. Temp fallback only allowed with PICTO_PTR_TEMP_FALLBACK=1.
-    let preferred_ptr_root = match &settings.get().ptr_data_path {
-        Some(custom) if !custom.is_empty() => PathBuf::from(custom),
-        _ => library_root.parent().unwrap_or(&library_root).join("ptr"),
-    };
-    let allow_temp_fallback = std::env::var("PICTO_PTR_TEMP_FALLBACK")
-        .map(|v| v == "1")
-        .unwrap_or(false);
-
-    let ptr_candidates = if allow_temp_fallback {
-        tracing::warn!("PICTO_PTR_TEMP_FALLBACK=1: temp-path fallback enabled (dev/test only)");
-        vec![
-            preferred_ptr_root.clone(),
-            library_root.join("ptr"),
-            std::env::temp_dir().join("picto_ptr"),
-        ]
-    } else {
-        vec![preferred_ptr_root.clone(), library_root.join("ptr")]
-    };
-
-    let mut ptr_open_error: Option<String> = None;
-    let mut ptr_db_opt: Option<Arc<PtrSqliteDatabase>> = None;
-    for candidate in &ptr_candidates {
-        if let Err(e) = std::fs::create_dir_all(candidate) {
-            ptr_open_error = Some(format!(
-                "Failed to create PTR directory {}: {}",
-                candidate.display(),
-                e
-            ));
-            continue;
-        }
-        if !is_dir_writable(candidate) {
-            tracing::warn!(path = %candidate.display(), "PTR directory is not writable");
-            ptr_open_error = Some(format!(
-                "PTR directory is not writable: {}",
-                candidate.display()
-            ));
-            continue;
-        }
-        match PtrSqliteDatabase::open(candidate).await {
-            Ok(db) => {
-                tracing::info!(path = %candidate.display(), "PTR database opened");
-                ptr_db_opt = Some(db);
-                break;
-            }
-            Err(e) => {
-                tracing::warn!(path = %candidate.display(), error = %e, "Failed to open PTR database");
-                ptr_open_error = Some(e);
-            }
-        }
-    }
-    let ptr_db: Arc<PtrSqliteDatabase> = ptr_db_opt.ok_or_else(|| {
-        let attempted = ptr_candidates
-            .iter()
-            .map(|p| p.display().to_string())
-            .collect::<Vec<_>>()
-            .join(", ");
-        format!(
-            "Failed to open PTR database.\n  Attempted paths: {}\n  Last error: {}\n  \
-             Suggested fix: Ensure the PTR data directory exists and is writable, \
-             or set a custom path in Settings > PTR > Data Path.",
-            attempted,
-            ptr_open_error.unwrap_or_else(|| "unknown error".into())
-        )
-    })?;
-
     let blob_store: Arc<BlobStore> = Arc::new(
         BlobStore::open(&library_root).map_err(|e| format!("Failed to open blob store: {}", e))?,
     );
@@ -167,7 +82,6 @@ pub async fn open_library(library_root: PathBuf) -> Result<Arc<AppState>, String
 
     let worker_handles = crate::workers::start_workers(
         &library_db,
-        &ptr_db,
         &blob_store,
         &rate_limiter,
         &running_subscriptions,
@@ -178,7 +92,6 @@ pub async fn open_library(library_root: PathBuf) -> Result<Arc<AppState>, String
 
     let state = Arc::new(AppState {
         db: library_db,
-        ptr_db,
         blob_store,
         settings,
         rate_limiter,

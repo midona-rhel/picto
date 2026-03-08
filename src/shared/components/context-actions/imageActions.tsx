@@ -35,15 +35,12 @@ import { DisplayOptionsPanel } from '../../../features/grid/DisplayOptionsPanel'
 import { IconBing, IconSauceNAO, IconSogou, IconTinEye, IconYandex } from '../SearchEngineIcons';
 import type { SmartFolderPredicate } from '../../../features/smart-folders/components/types';
 import type { GridRuntimeAction, GridRuntimeState, GridViewMode } from '../../../features/grid/runtime';
-import { FileController } from '../../controllers/fileController';
-import { FolderController } from '../../controllers/folderController';
 import { FolderPickerService } from '../../services/folderPickerService';
 import { registerUndoAction } from '../../controllers/undoRedoController';
 import { notifyError, notifySuccess } from '../../lib/notify';
 import { useSettingsStore } from '../../../state/settingsStore';
-import { deleteHashesWithLifecycleEffects, setFileStatusWithLifecycleEffects } from '../../controllers/fileLifecycleActions';
 import type { MasonryImageItem } from '../../../features/grid/shared';
-import { api } from '#desktop/api';
+import { api, copyFileToClipboard, copyImageToClipboard, reverseImageSearch } from '#desktop/api';
 import { bustThumbnailCache } from '../../lib/mediaUrl';
 import { useCacheStore } from '../../../state/cacheStore';
 
@@ -187,7 +184,7 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
         label: 'Open With Default App',
         icon: <IconExternalLink />,
         shortcut: isMac ? '\u21E7Enter' : 'Shift+Enter',
-        onClick: () => FileController.openDefault(singleHash).catch(err => {
+        onClick: () => api.file.openDefault(singleHash).catch(err => {
           notifyError(err, 'Open Failed');
         }),
       });
@@ -198,7 +195,7 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
       icon: <IconFolderOpen />,
       shortcut: isMac ? '\u2318Enter' : 'Ctrl+Enter',
       disabled: singleIsCollection,
-      onClick: () => FileController.revealInFolder(singleHash).catch(err => {
+      onClick: () => api.file.revealInFolder(singleHash).catch(err => {
         notifyError(err, 'Reveal Failed');
       }),
     });
@@ -210,7 +207,7 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
       disabled: singleIsCollection,
       onClick: async () => {
         const img = stateRef.current.images.find(i => i.hash === singleHash);
-        FileController.openInNewWindow(singleHash, img?.width, img?.height).catch(err => {
+        api.file.openInNewWindow(singleHash, img?.width, img?.height).catch(err => {
           notifyError(err, 'New Window Failed');
         });
       },
@@ -329,7 +326,7 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
             const hashes = s.virtualAllSelection
               ? s.images.filter(i => !s.virtualAllSelection!.excludedHashes.has(i.hash)).map(i => i.hash)
               : [...s.selectedHashes];
-            FolderController.addFilesToFolderBatch(fId, hashes)
+            api.folders.addFiles(fId, hashes)
               .then(() => {
                 notifySuccess(`${hashes.length} file(s) added to folder`, 'Added');
               })
@@ -376,7 +373,7 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
       icon: <IconCopy />,
       shortcut: isMac ? '\u2318C' : 'Ctrl+C',
       onClick: () => {
-        FileController.copyToClipboard(singleHash)
+        api.file.resolvePath(singleHash).then(copyFileToClipboard)
           .then(() => notifySuccess('File copied to clipboard', 'Copied'))
           .catch(err => notifyError(err, 'Copy Failed'));
       },
@@ -388,7 +385,7 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
       shortcut: isMac ? '\u2318\u2325C' : 'Ctrl+Alt+C',
       onClick: async () => {
         try {
-          const path = await FileController.resolveFilePath(singleHash);
+          const path = await api.file.resolvePath(singleHash);
           await navigator.clipboard.writeText(path);
           notifySuccess('File path copied to clipboard', 'Copied');
         } catch (err) {
@@ -425,7 +422,7 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
           label: 'Copy Thumbnail',
           icon: <IconPhoto />,
           onClick: () => {
-            FileController.copyThumbnailToClipboard(singleHash)
+            api.file.resolveThumbnailPath(singleHash).then(copyImageToClipboard)
               .then(() => notifySuccess('Thumbnail copied to clipboard', 'Copied'))
               .catch(err => notifyError(err, 'Copy Failed'));
           },
@@ -469,7 +466,7 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
         icon: e.icon,
         onClick: () => {
           notifications.show({ title: 'Searching...', message: `Uploading image to ${e.label}`, autoClose: 3000, loading: true });
-          FileController.searchByImage(singleHash, e.key)
+          api.file.resolvePath(singleHash).then(path => reverseImageSearch(path, e.key))
             .catch(err => notifyError(err, 'Search Failed'));
         },
       }));
@@ -491,7 +488,7 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
       label: 'New Subfolder',
       icon: <IconFolderPlus />,
       onClick: () => {
-        void FolderController.createFolder({ name: 'New Folder', parentId: folderId })
+        void api.folders.create({ name: 'New Folder', parent_id: folderId })
           .then(() => notifySuccess('Subfolder created', 'Folders'))
           .catch((err) => notifyError(err, 'Create Subfolder Failed'));
       },
@@ -509,8 +506,8 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
           : [...state.selectedHashes];
         if (hashes.length === 0) return;
         try {
-          const folder = await FolderController.createFolder({ name: 'New Folder' });
-          await FolderController.addFilesToFolderBatch(folder.folder_id, hashes);
+          const folder = await api.folders.create({ name: 'New Folder' });
+          await api.folders.addFiles(folder.folder_id, hashes);
           notifySuccess(`Created folder with ${hashes.length} file(s)`, 'Folder Created');
         } catch (err) {
           notifyError(err, 'Create Folder Failed');
@@ -534,7 +531,7 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
         shortcut: isMac ? '\u2318\u21E7T' : 'Ctrl+Shift+T',
         onClick: () => {
           notifications.show({ title: 'Regenerating...', message: `Regenerating ${regenHashes.length} thumbnail(s)`, autoClose: 3000, loading: true });
-          FileController.regenerateThumbnailsBatch(regenHashes)
+          api.file.regenerateThumbnailsBatch(regenHashes)
             .then(r => {
               notifySuccess(`Regenerated ${r.regenerated} thumbnail(s)`, 'Thumbnails');
               bustThumbnailCache(regenHashes);
@@ -557,9 +554,9 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
 
   if (folderId) {
     const sortAndReload = (sortBy: string, dir: string) =>
-      FolderController.sortFolderItems(folderId, sortBy, dir);
+      api.folders.sortItems(folderId, sortBy, dir);
     const reverseAndReload = (hashes?: string[]) =>
-      FolderController.reverseFolderItems(folderId, hashes);
+      api.folders.reverseItems(folderId, hashes);
     items.push({
       type: 'submenu',
       label: 'Sort by',
@@ -644,16 +641,16 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
         if (freshHash && folderId) {
           dispatch({ type: 'FILTER_IMAGES', predicate: i => i.hash !== freshHash });
           dispatch({ type: 'CLEAR_SELECTION' });
-          FolderController.removeFilesFromFolderBatch(folderId, [freshHash])
+          api.folders.removeFiles(folderId, [freshHash])
             .then(() => {
               registerUndoAction({
                 label: 'Remove from folder',
                 undo: async () => {
-                  await FolderController.addFilesToFolderBatch(folderId, [freshHash]);
+                  await api.folders.addFiles(folderId, [freshHash]);
                   requestGridReload();
                 },
                 redo: async () => {
-                  await FolderController.removeFilesFromFolderBatch(folderId, [freshHash]);
+                  await api.folders.removeFiles(folderId, [freshHash]);
                   requestGridReload();
                 },
               });
@@ -711,7 +708,7 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
       if (freshSingleHash) {
         dispatch({ type: 'FILTER_IMAGES', predicate: i => i.hash !== freshSingleHash });
         dispatch({ type: 'CLEAR_SELECTION' });
-        setFileStatusWithLifecycleEffects(freshSingleHash, 'active')
+        api.file.setStatus(freshSingleHash, 'active')
           .then(() => {
             registerUndoAction({
               label: 'Restore image',
@@ -736,11 +733,11 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
         dispatch({ type: 'FILTER_IMAGES', predicate: i => i.hash !== freshSingleHash });
         dispatch({ type: 'CLEAR_SELECTION' });
         if (inTrash) {
-          deleteHashesWithLifecycleEffects([freshSingleHash])
+          api.file.deleteMany([freshSingleHash])
             .catch(err => notifyError(err, 'Delete Failed'));
         } else {
           const previousStatus = imagesRef.current.find((img) => img.hash === freshSingleHash)?.status ?? (statusFilter ?? 'active');
-          setFileStatusWithLifecycleEffects(freshSingleHash, 'trash')
+          api.file.setStatus(freshSingleHash, 'trash')
             .then(() => {
               registerUndoAction({
                 label: 'Move image to trash',

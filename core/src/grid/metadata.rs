@@ -1,5 +1,4 @@
-//! Metadata batch prefetch — fetches full metadata for a batch of file hashes,
-//! merging local DB projections with PTR overlay tags.
+//! Metadata batch prefetch — fetches full metadata for a batch of file hashes.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::OnceLock;
@@ -7,11 +6,9 @@ use std::time::Instant;
 
 use chrono::Utc;
 
-use crate::ptr::controller::PtrController;
 use crate::sqlite::projections::ResolvedMetadataFull;
 use crate::tags::db::FileTagInfo;
 use crate::sqlite::SqliteDatabase;
-use crate::ptr::db::PtrSqliteDatabase;
 use crate::tags::normalize;
 use crate::types::{
     tag_display_key, DominantColorDto, FileAllMetadata,
@@ -43,7 +40,6 @@ fn file_tag_to_resolved_info(t: FileTagInfo) -> ResolvedTagInfo {
 
 pub async fn get_files_metadata_batch(
     db: &SqliteDatabase,
-    ptr_db: &PtrSqliteDatabase,
     hashes: Vec<String>,
 ) -> Result<EntityMetadataBatchResponse, String> {
     const MAX_BATCH: usize = 200;
@@ -65,95 +61,24 @@ pub async fn get_files_metadata_batch(
     let mut items: HashMap<String, FileAllMetadata> = HashMap::with_capacity(hashes.len());
     let mut missing = Vec::new();
 
-    let local_hashes_req = hashes.clone();
-    let ptr_hashes_req = hashes.clone();
-    let local_fut = async {
-        let local_started = Instant::now();
-        let projections = db.get_files_metadata_batch(local_hashes_req).await?;
-        let local_ms = local_started.elapsed().as_secs_f64() * 1000.0;
-        Ok::<_, String>((projections, local_ms))
-    };
-    let ptr_fut = async {
-        let ptr_started = Instant::now();
-        let negative_cached: HashSet<String> =
-            PtrController::batch_check_negative(ptr_db, ptr_hashes_req.clone())
-                .await?
-                .into_iter()
-                .collect();
-
-        let ptr_lookup_hashes: Vec<String> = ptr_hashes_req
-            .iter()
-            .filter(|h| !negative_cached.contains(*h))
-            .cloned()
-            .collect();
-        let ptr_lookup_count = ptr_lookup_hashes.len();
-
-        let ptr_overlay_map: HashMap<String, Vec<crate::ptr::db::tags::PtrResolvedTag>> =
-            PtrController::batch_get_overlay(ptr_db, ptr_lookup_hashes.clone())
-                .await?
-                .into_iter()
-                .collect();
-
-        let ptr_overlay_hits: HashSet<String> =
-            ptr_overlay_map.keys().cloned().collect();
-        let new_negative_hashes: Vec<String> = ptr_lookup_hashes
-            .into_iter()
-            .filter(|h| !ptr_overlay_hits.contains(h))
-            .collect();
-        if !new_negative_hashes.is_empty() {
-            // Memory-only — avoids writer lock contention during sync.
-            // DB negative cache is populated during overlay rebuild.
-            ptr_db
-                .add_negative_cache_mem_only(new_negative_hashes)
-                .await;
-        }
-        let ptr_ms = ptr_started.elapsed().as_secs_f64() * 1000.0;
-
-        Ok::<_, String>((ptr_lookup_count, ptr_overlay_map, ptr_overlay_hits, ptr_ms))
-    };
-
-    let (local_res, ptr_res) = tokio::join!(local_fut, ptr_fut);
-    let (projections, local_ms) = local_res?;
-    let (ptr_lookup_count, mut ptr_overlay_map, ptr_overlay_hits, ptr_ms) = ptr_res?;
+    let local_started = Instant::now();
+    let projections = db.get_files_metadata_batch(hashes.clone()).await?;
+    let local_ms = local_started.elapsed().as_secs_f64() * 1000.0;
 
     let mut proj_map: HashMap<String, ResolvedMetadataFull> = HashMap::new();
     for p in projections {
         proj_map.insert(p.resolved.file.hash.clone(), p);
     }
 
-    let local_hashes: Vec<String> = proj_map.keys().cloned().collect();
-
     let merge_started = Instant::now();
     for hash in &hashes {
         if let Some(full) = proj_map.remove(hash) {
-            let ptr_tags = ptr_overlay_map.remove(hash).unwrap_or_default();
-
-            let mut seen = HashSet::new();
-            let mut tags: Vec<ResolvedTagInfo> = full
+            let tags: Vec<ResolvedTagInfo> = full
                 .resolved
                 .tags
                 .into_iter()
-                .map(|t| {
-                    let info = file_tag_to_resolved_info(t);
-                    seen.insert(info.display_tag.clone());
-                    info
-                })
+                .map(file_tag_to_resolved_info)
                 .collect();
-
-            for pt in ptr_tags {
-                let display = tag_display_key(&pt.display_ns, &pt.display_st);
-                if !seen.contains(&display) {
-                    seen.insert(display.clone());
-                    tags.push(ResolvedTagInfo {
-                        raw_tag: normalize::combine_tag(&pt.raw_ns, &pt.raw_st),
-                        display_tag: display,
-                        namespace: pt.display_ns,
-                        subtag: pt.display_st,
-                        source: "ptr".to_string(),
-                        read_only: true,
-                    });
-                }
-            }
 
             let source_urls: Option<serde_json::Value> = full
                 .source_urls_json
@@ -214,20 +139,15 @@ pub async fn get_files_metadata_batch(
 
     if total_ms >= SLOW_BATCH_WARN_MS
         || local_ms >= SLOW_STAGE_WARN_MS
-        || ptr_ms >= SLOW_STAGE_WARN_MS
         || merge_ms >= SLOW_STAGE_WARN_MS
     {
         tracing::warn!(
             target: "picto::core::grid_controller",
-            "slow get_files_metadata_batch total_ms={:.2} local_ms={:.2} ptr_ms={:.2} merge_ms={:.2} req_hashes={} local_hits={} ptr_lookup={} ptr_hits={} missing={}",
+            "slow get_files_metadata_batch total_ms={:.2} local_ms={:.2} merge_ms={:.2} req_hashes={} missing={}",
             total_ms,
             local_ms,
-            ptr_ms,
             merge_ms,
             hashes.len(),
-            local_hashes.len(),
-            ptr_lookup_count,
-            ptr_overlay_hits.len(),
             missing.len(),
         );
     }
@@ -235,12 +155,8 @@ pub async fn get_files_metadata_batch(
     crate::perf::record_files_metadata_batch(
         total_ms,
         local_ms,
-        ptr_ms,
         merge_ms,
         hashes.len(),
-        local_hashes.len(),
-        ptr_lookup_count,
-        ptr_overlay_hits.len(),
         missing.len(),
     );
 

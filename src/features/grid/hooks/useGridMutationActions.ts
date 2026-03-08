@@ -2,15 +2,6 @@ import { useCallback } from 'react';
 import { deepClone, registerUndoAction } from '../../../shared/controllers/undoRedoController';
 import { api } from '#desktop/api';
 import { notifyError, notifyInfo } from '../../../shared/lib/notify';
-import { FileController } from '../../../shared/controllers/fileController';
-import { FolderController } from '../../../shared/controllers/folderController';
-import { SelectionController } from '../../../shared/controllers/selectionController';
-import {
-  deleteHashesWithLifecycleEffects,
-  deleteSelectionWithLifecycleEffects,
-  setFileStatusWithLifecycleEffects,
-  setStatusSelectionWithLifecycleEffects,
-} from '../../../shared/controllers/fileLifecycleActions';
 import type { GridRuntimeAction, GridRuntimeState } from '../runtime';
 import {
   buildExplicitSelectionSpec,
@@ -77,8 +68,8 @@ export function useGridMutationActions({
       });
       dispatch({ type: 'CLEAR_SELECTION' });
       const promise = inTrash
-        ? deleteSelectionWithLifecycleEffects(spec)
-        : setStatusSelectionWithLifecycleEffects(spec, 'trash');
+        ? api.file.deleteSelection(spec)
+        : api.file.setStatusSelection(spec, 'trash');
       promise
         .then((count) => {
           if (!inTrash) {
@@ -119,12 +110,12 @@ export function useGridMutationActions({
     dispatch({ type: 'CLEAR_SELECTION' });
 
     if (inTrash) {
-      deleteHashesWithLifecycleEffects(hashes)
+      api.file.deleteMany(hashes)
         .catch((err) => {
           notifyError(err, 'Delete Failed');
         });
     } else {
-      setStatusSelectionWithLifecycleEffects(explicitSpec, 'trash')
+      api.file.setStatusSelection(explicitSpec, 'trash')
         .then(() => {
           registerUndoAction({
             label: `Move ${hashes.length.toLocaleString()} image${
@@ -152,13 +143,13 @@ export function useGridMutationActions({
       const normalizedRating = rating || null;
       if (virtualAllSelection) {
         const spec = selectVirtualSpec(stateRef.current)!;
-        SelectionController.updateRatingSelection(spec, normalizedRating).catch((err) =>
+        api.selection.updateRating(spec, normalizedRating).catch((err) =>
           notifyError(err, 'Rating Failed'),
         );
       } else {
         const hashes = [...selectedHashes];
         if (hashes.length === 0) return;
-        Promise.all(hashes.map((hash) => FileController.updateRating(hash, rating))).catch((err) =>
+        Promise.all(hashes.map((hash) => api.file.updateRating(hash, rating))).catch((err) =>
           notifyError(err, 'Rating Failed'),
         );
       }
@@ -176,7 +167,7 @@ export function useGridMutationActions({
         predicate: (i) => virtualAllSelection.excludedHashes.has(i.hash),
       });
       dispatch({ type: 'CLEAR_SELECTION' });
-      setStatusSelectionWithLifecycleEffects(spec, 'active')
+      api.file.setStatusSelection(spec, 'active')
         .then((count) => {
           registerUndoAction({
             label: `Restore ${count.toLocaleString()} image${count === 1 ? '' : 's'}`,
@@ -203,7 +194,7 @@ export function useGridMutationActions({
     const hashSet = new Set(hashes);
     dispatch({ type: 'FILTER_IMAGES', predicate: (i) => !hashSet.has(i.hash) });
     dispatch({ type: 'CLEAR_SELECTION' });
-    setStatusSelectionWithLifecycleEffects(explicitSpec, 'active')
+    api.file.setStatusSelection(explicitSpec, 'active')
       .then((count) => {
         registerUndoAction({
           label: `Restore ${count.toLocaleString()} image${count === 1 ? '' : 's'}`,
@@ -225,7 +216,7 @@ export function useGridMutationActions({
 
   const handleInboxAction = useCallback(
     (hash: string, status: 'active' | 'trash') => {
-      setFileStatusWithLifecycleEffects(hash, status)
+      api.file.setStatus(hash, status)
         .then(() => {
           registerUndoAction({
             label: status === 'active' ? 'Accept inbox image' : 'Reject inbox image',
@@ -255,16 +246,16 @@ export function useGridMutationActions({
     if (hashes.length === 0) return;
     dispatch({ type: 'FILTER_IMAGES', predicate: (i) => !effective.has(i.hash) });
     dispatch({ type: 'CLEAR_SELECTION' });
-    FolderController.removeFilesFromFolderBatch(folderId, hashes)
+    api.folders.removeFiles(folderId, hashes)
       .then(() => {
         registerUndoAction({
           label: `Remove ${hashes.length} from folder`,
           undo: async () => {
-            await FolderController.addFilesToFolderBatch(folderId, hashes);
+            await api.folders.addFiles(folderId, hashes);
             broker.requestReplace(queryKeyRef.current);
           },
           redo: async () => {
-            await FolderController.removeFilesFromFolderBatch(folderId, hashes);
+            await api.folders.removeFiles(folderId, hashes);
             broker.requestReplace(queryKeyRef.current);
           },
         });

@@ -221,8 +221,8 @@ export function TagRelationsModal({ opened, onClose, tag }: TagRelationsModalPro
     setSiblings([]);
 
     Promise.all([
-      api.tags.getSiblings(tag.tag_id).catch(() => []),
-      api.tags.getParents(tag.tag_id).catch(() => []),
+      api.tags.getRelations(tag.tag_id, 'aliases').catch(() => []),
+      api.tags.getRelations(tag.tag_id, 'implications').catch(() => []),
     ]).then(([sibs, rels]) => {
       const p = rels.filter((r) => r.relation === 'parent');
       const c = rels.filter((r) => r.relation === 'child');

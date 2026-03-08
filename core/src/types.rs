@@ -538,7 +538,7 @@ pub struct ColorSearchResult {
 }
 
 #[derive(Debug, Serialize)]
-pub struct FlowInfo {
+pub struct SubscriptionGroupInfo {
     pub id: String,
     pub name: String,
     pub schedule: String,
@@ -553,7 +553,7 @@ pub struct SubscriptionInfo {
     pub name: String,
     pub site_id: String,
     pub paused: bool,
-    pub flow_id: Option<String>,
+    pub group_id: Option<String>,
     pub initial_file_limit: u32,
     pub periodic_file_limit: u32,
     pub created_at: String,

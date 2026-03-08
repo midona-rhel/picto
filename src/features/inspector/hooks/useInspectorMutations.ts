@@ -1,8 +1,5 @@
 import { useCallback } from 'react';
 import { api } from '#desktop/api';
-import { FileController } from '../../../shared/controllers/fileController';
-import { SelectionController } from '../../../shared/controllers/selectionController';
-import { FolderController } from '../../../shared/controllers/folderController';
 import { deepClone, registerUndoAction } from '../../../shared/controllers/undoRedoController';
 import { useCacheStore } from '../../../state/cacheStore';
 import {
@@ -31,15 +28,15 @@ export function useInspectorMutations(
       const tagsSnapshot = [...tags];
       if (selectionSummarySpec) {
         const specSnapshot = deepClone(selectionSummarySpec);
-        await SelectionController.addTagsSelection(specSnapshot, tagsSnapshot);
+        await api.selection.addTags(specSnapshot, tagsSnapshot);
         registerUndoAction({
           label: `Add ${tagsSnapshot.length} tag${tagsSnapshot.length === 1 ? '' : 's'}`,
           undo: async () => {
-            await SelectionController.removeTagsSelection(specSnapshot, tagsSnapshot);
+            await api.selection.removeTags(specSnapshot, tagsSnapshot);
             refreshVirtualSelectionSummary();
           },
           redo: async () => {
-            await SelectionController.addTagsSelection(specSnapshot, tagsSnapshot);
+            await api.selection.addTags(specSnapshot, tagsSnapshot);
             refreshVirtualSelectionSummary();
           },
         });
@@ -79,15 +76,15 @@ export function useInspectorMutations(
       } else {
         const hashes = selectedImages.map((img) => img.hash);
         if (hashes.length === 0) return;
-        await api.tags.addBatch(hashes, tagsSnapshot);
+        await api.tags.add(hashes, tagsSnapshot);
         registerUndoAction({
           label: `Add ${tagsSnapshot.length} tag${tagsSnapshot.length === 1 ? '' : 's'}`,
           undo: async () => {
-            await api.tags.removeBatch(hashes, tagsSnapshot);
+            await api.tags.remove(hashes, tagsSnapshot);
             refreshMetadata();
           },
           redo: async () => {
-            await api.tags.addBatch(hashes, tagsSnapshot);
+            await api.tags.add(hashes, tagsSnapshot);
             refreshMetadata();
           },
         });
@@ -103,15 +100,15 @@ export function useInspectorMutations(
       const tagsSnapshot = [...tags];
       if (selectionSummarySpec) {
         const specSnapshot = deepClone(selectionSummarySpec);
-        await SelectionController.removeTagsSelection(specSnapshot, tagsSnapshot);
+        await api.selection.removeTags(specSnapshot, tagsSnapshot);
         registerUndoAction({
           label: `Remove ${tagsSnapshot.length} tag${tagsSnapshot.length === 1 ? '' : 's'}`,
           undo: async () => {
-            await SelectionController.addTagsSelection(specSnapshot, tagsSnapshot);
+            await api.selection.addTags(specSnapshot, tagsSnapshot);
             refreshVirtualSelectionSummary();
           },
           redo: async () => {
-            await SelectionController.removeTagsSelection(specSnapshot, tagsSnapshot);
+            await api.selection.removeTags(specSnapshot, tagsSnapshot);
             refreshVirtualSelectionSummary();
           },
         });
@@ -152,15 +149,15 @@ export function useInspectorMutations(
       } else {
         const hashes = selectedImages.map((img) => img.hash);
         if (hashes.length === 0) return;
-        await api.tags.removeBatch(hashes, tagsSnapshot);
+        await api.tags.remove(hashes, tagsSnapshot);
         registerUndoAction({
           label: `Remove ${tagsSnapshot.length} tag${tagsSnapshot.length === 1 ? '' : 's'}`,
           undo: async () => {
-            await api.tags.addBatch(hashes, tagsSnapshot);
+            await api.tags.add(hashes, tagsSnapshot);
             refreshMetadata();
           },
           redo: async () => {
-            await api.tags.removeBatch(hashes, tagsSnapshot);
+            await api.tags.remove(hashes, tagsSnapshot);
             refreshMetadata();
           },
         });
@@ -175,7 +172,7 @@ export function useInspectorMutations(
     async (rating: number) => {
       const normalizedRating = rating || null;
       if (selectionSummarySpec) {
-        await SelectionController.updateRatingSelection(selectionSummarySpec, normalizedRating);
+        await api.selection.updateRating(selectionSummarySpec, normalizedRating);
         refreshVirtualSelectionSummary();
       } else if (selectedCollection) {
         const current = collectionSummary ?? await api.collections.getSummary(selectedCollection.id);
@@ -202,7 +199,7 @@ export function useInspectorMutations(
             rating: (await getMetadata(hash)).file.rating ?? null,
           })),
         );
-        await Promise.all(hashes.map((hash) => FileController.updateRating(hash, rating)));
+        await Promise.all(hashes.map((hash) => api.file.updateRating(hash, rating)));
         registerUndoAction({
           label: `Update rating (${hashes.length} image${hashes.length === 1 ? '' : 's'})`,
           undo: async () => {
@@ -248,7 +245,7 @@ export function useInspectorMutations(
         return;
       }
       if (selectionSummarySpec) {
-        await SelectionController.setSourceUrlsSelection(selectionSummarySpec, urls);
+        await api.selection.setSourceUrls(selectionSummarySpec, urls);
         refreshVirtualSelectionSummary();
       } else {
         const hashes = selectedImages.map((img) => img.hash);
@@ -261,7 +258,7 @@ export function useInspectorMutations(
         );
         await Promise.all(hashes.map((hash) => {
           invalidateMetadata(hash);
-          return FileController.setSourceUrls(hash, urls);
+          return api.file.setSourceUrls(hash, urls);
         }));
         registerUndoAction({
           label: `Update source URLs (${hashes.length} image${hashes.length === 1 ? '' : 's'})`,
@@ -303,7 +300,7 @@ export function useInspectorMutations(
         const notesObj: Record<string, string> = {};
         if (text) notesObj.description = text;
         if (selectionSummarySpec) {
-          SelectionController.setNotesSelection(selectionSummarySpec, notesObj)
+          api.selection.setNotes(selectionSummarySpec, notesObj)
             .catch((e) => console.error('Failed to save notes:', e));
         } else {
           if (selectedImages.length === 0) return;
@@ -324,7 +321,7 @@ export function useInspectorMutations(
       if (folderIdsSnapshot.length === 0 || hashesSnapshot.length === 0) return;
       await Promise.all(
         folderIdsSnapshot.map((folderId) =>
-          FolderController.addFilesToFolderBatch(folderId, hashesSnapshot),
+          api.folders.addFiles(folderId, hashesSnapshot),
         ),
       );
       registerUndoAction({
@@ -332,26 +329,26 @@ export function useInspectorMutations(
         undo: async () => {
           await Promise.all(
             folderIdsSnapshot.map((folderId) =>
-              FolderController.removeFilesFromFolderBatch(folderId, hashesSnapshot),
+              api.folders.removeFiles(folderId, hashesSnapshot),
             ),
           );
           if (hashesSnapshot.length === 1) {
-            FolderController.getFileFolders(hashesSnapshot[0]).then(setFileFolders).catch(() => {});
+            api.folders.getFileFolders(hashesSnapshot[0]).then(setFileFolders).catch(() => {});
           }
         },
         redo: async () => {
           await Promise.all(
             folderIdsSnapshot.map((folderId) =>
-              FolderController.addFilesToFolderBatch(folderId, hashesSnapshot),
+              api.folders.addFiles(folderId, hashesSnapshot),
             ),
           );
           if (hashesSnapshot.length === 1) {
-            FolderController.getFileFolders(hashesSnapshot[0]).then(setFileFolders).catch(() => {});
+            api.folders.getFileFolders(hashesSnapshot[0]).then(setFileFolders).catch(() => {});
           }
         },
       });
       if (selectedImages.length === 1) {
-        FolderController.getFileFolders(selectedImages[0].hash)
+        api.folders.getFileFolders(selectedImages[0].hash)
           .then(setFileFolders)
           .catch(() => {});
       }
@@ -364,16 +361,16 @@ export function useInspectorMutations(
       if (selectedImages.length !== 1) return;
       if (selectedCollection) return;
       const hash = selectedImages[0].hash;
-      await FolderController.removeFileFromFolder(folderId, hash);
+      await api.folders.removeFiles(folderId, [hash]);
       registerUndoAction({
         label: 'Remove from folder',
         undo: async () => {
-          await FolderController.addFileToFolder(folderId, hash);
-          FolderController.getFileFolders(hash).then(setFileFolders).catch(() => {});
+          await api.folders.addFiles(folderId, [hash]);
+          api.folders.getFileFolders(hash).then(setFileFolders).catch(() => {});
         },
         redo: async () => {
-          await FolderController.removeFileFromFolder(folderId, hash);
-          FolderController.getFileFolders(hash).then(setFileFolders).catch(() => {});
+          await api.folders.removeFiles(folderId, [hash]);
+          api.folders.getFileFolders(hash).then(setFileFolders).catch(() => {});
         },
       });
       setFileFolders((prev) => prev.filter((f) => f.folder_id !== folderId));
@@ -390,7 +387,7 @@ export function useInspectorMutations(
       if (selectionSummarySpec || selectedCollection || selectedImages.length !== 1) return;
       const hash = selectedImages[0].hash;
 
-      await FileController.reanalyzeColors(hash);
+      await api.file.reanalyzeColors(hash);
       invalidateMetadata(hash);
 
       const metadata = await getMetadata(hash);

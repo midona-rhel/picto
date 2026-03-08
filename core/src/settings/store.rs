@@ -1,8 +1,8 @@
 //! Application settings — persisted JSON configuration shared across the app.
 //!
-//! Holds UI preferences, PTR configuration, duplicate settings, and
-//! subscription/gallery-dl runtime knobs. This module owns defaults and disk
-//! persistence semantics so the rest of the app can treat settings as typed data.
+//! Holds UI preferences, duplicate settings, and subscription/gallery-dl
+//! runtime knobs. This module owns defaults and disk persistence semantics
+//! so the rest of the app can treat settings as typed data.
 
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -34,21 +34,6 @@ pub struct AppSettings {
     pub grid_sort_field: String,
     #[serde(default = "default_grid_sort_order")]
     pub grid_sort_order: String,
-    #[serde(default)]
-    pub ptr_server_url: Option<String>,
-    #[serde(default)]
-    pub ptr_access_key: Option<String>,
-    #[serde(default)]
-    pub ptr_enabled: bool,
-    #[serde(default)]
-    pub ptr_auto_sync: bool,
-    #[serde(default = "default_ptr_sync_schedule")]
-    pub ptr_sync_schedule: String,
-    #[serde(default)]
-    pub ptr_last_sync_time: Option<String>,
-    /// Custom path for PTR database. If None, defaults to `{library_root}/../ptr/`.
-    #[serde(default)]
-    pub ptr_data_path: Option<String>,
     #[serde(default)]
     pub zoom_factor: Option<f64>,
     #[serde(default = "default_duplicate_detect_similarity_pct")]
@@ -101,9 +86,6 @@ fn default_grid_sort_field() -> String {
 fn default_grid_sort_order() -> String {
     "asc".into()
 }
-fn default_ptr_sync_schedule() -> String {
-    "weekly".into()
-}
 fn default_duplicate_detect_similarity_pct() -> u32 {
     97
 }
@@ -149,13 +131,6 @@ impl Default for AppSettings {
             window_maximized: false,
             grid_sort_field: default_grid_sort_field(),
             grid_sort_order: default_grid_sort_order(),
-            ptr_server_url: None,
-            ptr_access_key: None,
-            ptr_enabled: false,
-            ptr_auto_sync: false,
-            ptr_sync_schedule: default_ptr_sync_schedule(),
-            ptr_last_sync_time: None,
-            ptr_data_path: None,
             zoom_factor: None,
             duplicate_detect_similarity_pct: default_duplicate_detect_similarity_pct(),
             duplicate_review_similarity_pct: default_duplicate_review_similarity_pct(),

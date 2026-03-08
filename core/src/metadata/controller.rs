@@ -1,15 +1,10 @@
 //! File metadata orchestration — resolves full file details including tags,
-//! dominant colors, PTR overlay data, and display-resolved tag info.
-//!
-//! Assembles `FileAllMetadata` by joining data from the library DB, PTR
-//! overlay, and tag sibling/parent resolution.
+//! dominant colors, and display-resolved tag info.
 
 use std::collections::HashMap;
-use std::collections::HashSet;
 
 use crate::tags::db::FileTagInfo;
 use crate::sqlite::SqliteDatabase;
-use crate::ptr::db::PtrSqliteDatabase;
 use crate::tags::normalize;
 use crate::types::{
     tag_display_key, DominantColorDto, FileAllMetadata, FileInfo, ResolvedTagInfo, TagInfo,
@@ -41,7 +36,6 @@ impl MetadataController {
 
     pub async fn get_file_all_metadata(
         db: &SqliteDatabase,
-        ptr_db: &PtrSqliteDatabase,
         hash: String,
     ) -> Result<FileAllMetadata, String> {
         let file = db
@@ -49,37 +43,11 @@ impl MetadataController {
             .await?
             .ok_or_else(|| format!("File not found: {}", hash))?;
         let local_tags = db.get_entity_tags(&hash).await?;
-        // Use overlay (pre-compiled) path — no live graph joins
-        let ptr_tags = ptr_db
-            .get_overlay(&hash)
-            .await
-            .unwrap_or(None)
-            .unwrap_or_default();
 
-        let mut seen = HashSet::new();
-        let mut tags: Vec<ResolvedTagInfo> = local_tags
+        let tags: Vec<ResolvedTagInfo> = local_tags
             .into_iter()
-            .map(|t| {
-                let info = file_tag_to_resolved_info(t);
-                seen.insert(info.display_tag.clone());
-                info
-            })
+            .map(file_tag_to_resolved_info)
             .collect();
-
-        for pt in ptr_tags {
-            let display = tag_display_key(&pt.display_ns, &pt.display_st);
-            if !seen.contains(&display) {
-                seen.insert(display.clone());
-                tags.push(ResolvedTagInfo {
-                    raw_tag: normalize::combine_tag(&pt.raw_ns, &pt.raw_st),
-                    display_tag: display,
-                    namespace: pt.display_ns,
-                    subtag: pt.display_st,
-                    source: "ptr".to_string(),
-                    read_only: true,
-                });
-            }
-        }
 
         let file_id = db.resolve_hash(&hash).await?;
 
@@ -136,38 +104,14 @@ impl MetadataController {
 
     pub async fn get_file_tags_display(
         db: &SqliteDatabase,
-        ptr_db: &PtrSqliteDatabase,
         hash: String,
     ) -> Result<Vec<ResolvedTagInfo>, String> {
-        let (local_result, ptr_result) =
-            tokio::join!(db.get_entity_tags(&hash), ptr_db.get_overlay(&hash),);
-        let local_tags = local_result?;
-        let ptr_tags = ptr_result.unwrap_or(None).unwrap_or_default();
+        let local_tags = db.get_entity_tags(&hash).await?;
 
-        let mut seen = HashSet::new();
-        let mut result: Vec<ResolvedTagInfo> = local_tags
+        let result: Vec<ResolvedTagInfo> = local_tags
             .into_iter()
-            .map(|t| {
-                let info = file_tag_to_resolved_info(t);
-                seen.insert(info.display_tag.clone());
-                info
-            })
+            .map(file_tag_to_resolved_info)
             .collect();
-
-        for pt in ptr_tags {
-            let display = tag_display_key(&pt.display_ns, &pt.display_st);
-            if !seen.contains(&display) {
-                seen.insert(display.clone());
-                result.push(ResolvedTagInfo {
-                    raw_tag: normalize::combine_tag(&pt.raw_ns, &pt.raw_st),
-                    display_tag: display,
-                    namespace: pt.display_ns,
-                    subtag: pt.display_st,
-                    source: "ptr".to_string(),
-                    read_only: true,
-                });
-            }
-        }
 
         Ok(result)
     }

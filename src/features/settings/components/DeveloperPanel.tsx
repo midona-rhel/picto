@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Text } from '@mantine/core';
-import { PerfController } from '../../../shared/controllers/perfController';
+import { api } from '#desktop/api';
 import type { PerfSloResult } from '../../../shared/types/api';
 import { TextButton } from '../../../shared/components/TextButton';
 import { SettingsBlock } from './ui';
@@ -21,7 +21,7 @@ export function DeveloperPanel() {
     if (!background) setLoading(true);
     setRefreshing(background);
     try {
-      const result = await PerfController.checkSlo();
+      const result = await api.stats.checkPerfSlo();
       setSlo(result);
       setError(null);
     } catch (err) {

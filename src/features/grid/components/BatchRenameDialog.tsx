@@ -3,7 +3,6 @@ import { Modal, Stack, Group, TextInput, Text, ScrollArea } from '@mantine/core'
 import { IconArrowRight } from '@tabler/icons-react';
 import { glassModalStyles } from '../../../shared/styles/glassModal';
 import { TextButton } from '../../../shared/components/TextButton';
-import { FileController } from '../../../shared/controllers/fileController';
 import { registerUndoAction } from '../../../shared/controllers/undoRedoController';
 import { notifySuccess, notifyError } from '../../../shared/lib/notify';
 import { api } from '#desktop/api';
@@ -113,7 +112,7 @@ export function BatchRenameDialog({ opened, onClose, images }: BatchRenameDialog
     setSaving(true);
     try {
       for (const item of toRename) {
-        await FileController.setFileName(item.hash, item.after || null);
+        await api.file.setName(item.hash, item.after || null);
       }
       registerUndoAction({
         label: `Batch rename ${toRename.length} file(s)`,

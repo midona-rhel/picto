@@ -1,6 +1,6 @@
 import { useEffect } from 'react';
 import { api, listen } from '#desktop/api';
-import { SidebarController } from '../shared/controllers/sidebarController';
+import { useDomainStore } from '../state/domainStore';
 import { useRuntimeSyncStore } from '../state/runtimeSyncStore';
 import { useLibraryStore } from '../state/libraryStore';
 import { useNavigationStore, type ViewType } from '../state/navigationStore';
@@ -20,7 +20,7 @@ import type { ResourceKey } from '../shared/types/generated/runtime-contract';
  */
 export function useNativeEventListeners(): void {
   useEffect(() => {
-    void SidebarController.fetchInitialTree();
+    void useDomainStore.getState().fetchSidebarTree();
     void useRuntimeSyncStore.getState().ensureInitialized();
     startAllRefreshers();
 

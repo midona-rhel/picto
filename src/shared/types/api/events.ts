@@ -4,15 +4,15 @@ import type { MutationReceipt, TaskUpsertedEvent, TaskRemovedEvent } from '../ge
 // Typed interfaces for all backend events. Single source of truth — all
 // controllers and stores should import event types from here.
 
-export interface FlowProgressEvent {
-  flow_id: string;
+export interface GroupProgressEvent {
+  group_id: string;
   total: number;
   done: number;
   remaining: number;
 }
 
-export interface FlowFinishedEvent {
-  flow_id: string;
+export interface GroupFinishedEvent {
+  group_id: string;
   status: 'succeeded' | 'failed';
   started_count?: number;
   error?: string;
@@ -61,7 +61,7 @@ export interface FileImportedEvent {
  * Keep in sync with `core/src/events.rs::event_names`.
  *
  * Authoritative events: `runtime/mutation_committed`, `runtime/task_upserted`,
- * `runtime/task_removed`. All domain state (subscriptions, flows, PTR) is
+ * `runtime/task_removed`. All domain state (subscriptions, groups) is
  * derived from task events via `applyTaskUpsert`.
  */
 export interface CoreRuntimeEventPayloadMap {
@@ -98,17 +98,6 @@ export interface LibrarySwitchedEvent {
   path?: string;
 }
 
-// ─── PTR Status ─────────────────────────────────────────────────────────────
-
-export interface PtrStats {
-  tag_count: number;
-  file_stub_count: number;
-  mapping_count: number;
-  sibling_count: number;
-  parent_count: number;
-  sync_position: number;
-}
-
 // ─── App Settings ───────────────────────────────────────────────────────────
 
 /** Backend uses `#[serde(rename_all = "camelCase")]` — JSON keys are camelCase */
@@ -124,13 +113,6 @@ export interface AppSettings {
   windowMaximized: boolean;
   gridSortField: string;
   gridSortOrder: string;
-  ptrServerUrl?: string | null;
-  ptrAccessKey?: string | null;
-  ptrEnabled: boolean;
-  ptrAutoSync: boolean;
-  ptrSyncSchedule: string;
-  ptrLastSyncTime?: string | null;
-  ptrDataPath?: string | null;
   zoomFactor?: number | null;
   duplicateDetectSimilarityPct: number;
   duplicateReviewSimilarityPct: number;
@@ -161,45 +143,6 @@ export interface DuplicateInfo {
   other_hash: string;
   distance: number;
   status: string;
-}
-
-// ─── PTR Sync Perf Breakdown ────────────────────────────────────────────────
-
-export interface PtrSyncRunPerf {
-  started_at: string;
-  finished_at?: string | null;
-  elapsed_ms?: number | null;
-  updates_processed: number;
-  tags_added: number;
-  siblings_added: number;
-  parents_added: number;
-}
-
-export interface PtrSyncChunkPerf {
-  ts: string;
-  index_start: number;
-  index_end: number;
-  defs_insert_ms: number;
-  resolve_ids_ms: number;
-  content_write_ms: number;
-  mapping_add_apply_ms: number;
-  sibling_add_apply_ms: number;
-  parent_add_apply_ms: number;
-  mapping_del_apply_ms: number;
-  sibling_del_apply_ms: number;
-  parent_del_apply_ms: number;
-  mapping_adds: number;
-  sibling_adds: number;
-  parent_adds: number;
-  mapping_dels: number;
-  sibling_dels: number;
-  parent_dels: number;
-  total_batches: number;
-}
-
-export interface PtrSyncPerfBreakdown {
-  latest_run?: PtrSyncRunPerf | null;
-  latest_chunk?: PtrSyncChunkPerf | null;
 }
 
 // ─── Collections ────────────────────────────────────────────────────────────

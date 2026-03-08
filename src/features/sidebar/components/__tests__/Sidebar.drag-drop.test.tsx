@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Sidebar } from '../Sidebar';
 import { imageDrag } from '../../../../shared/lib/imageDrag';
@@ -8,13 +8,11 @@ import { useCacheStore } from '../../../../state/cacheStore';
 
 const {
   setStatusSelectionMock,
-  invalidateSummaryMock,
   sidebarGetTreeMock,
   tagsNamespaceSummaryMock,
   gridGetPageSlimMock,
 } = vi.hoisted(() => ({
   setStatusSelectionMock: vi.fn(),
-  invalidateSummaryMock: vi.fn(),
   sidebarGetTreeMock: vi.fn(),
   tagsNamespaceSummaryMock: vi.fn(),
   gridGetPageSlimMock: vi.fn(),
@@ -34,12 +32,6 @@ vi.mock('#desktop/api', () => ({
     grid: {
       getPageSlim: gridGetPageSlimMock,
     },
-  },
-}));
-
-vi.mock('../../../../controllers/selectionController', () => ({
-  SelectionController: {
-    invalidateSummary: invalidateSummaryMock,
   },
 }));
 
@@ -72,7 +64,6 @@ function dispatchInternalDrop(label: string, hashes: string[]) {
 describe('Sidebar drag-drop status targets', () => {
   beforeEach(() => {
     setStatusSelectionMock.mockReset();
-    invalidateSummaryMock.mockReset();
     sidebarGetTreeMock.mockReset();
     tagsNamespaceSummaryMock.mockReset();
     gridGetPageSlimMock.mockReset();
@@ -119,8 +110,6 @@ describe('Sidebar drag-drop status targets', () => {
       { mode: 'explicit_hashes', hashes: ['hash_a', 'hash_b'] },
       'active',
     );
-    await waitFor(() => expect(invalidateSummaryMock).toHaveBeenCalledTimes(1));
-    await waitFor(() => expect(useCacheStore.getState().gridRefreshSeq).toBe(1));
   });
 
   it('drops to Inbox and sets inbox status', async () => {
@@ -131,8 +120,6 @@ describe('Sidebar drag-drop status targets', () => {
       { mode: 'explicit_hashes', hashes: ['hash_x'] },
       'inbox',
     );
-    await waitFor(() => expect(invalidateSummaryMock).toHaveBeenCalledTimes(1));
-    await waitFor(() => expect(useCacheStore.getState().gridRefreshSeq).toBe(1));
   });
 
   it('drops to Trash and sets trash status', async () => {
@@ -143,7 +130,5 @@ describe('Sidebar drag-drop status targets', () => {
       { mode: 'explicit_hashes', hashes: ['hash_z'] },
       'trash',
     );
-    await waitFor(() => expect(invalidateSummaryMock).toHaveBeenCalledTimes(1));
-    await waitFor(() => expect(useCacheStore.getState().gridRefreshSeq).toBe(1));
   });
 });

@@ -1,7 +1,7 @@
 //! Background worker lifecycle — spawning and shutdown.
 //!
 //! `start_workers()` spawns all library-scoped background tasks
-//! (compiler loop, bitmap flush, flow scheduler, PTR startup maintenance).
+//! (compiler loop, bitmap flush, flow scheduler).
 //!
 //! `stop_workers()` joins all handles with a timeout for clean shutdown.
 
@@ -12,7 +12,6 @@ use tokio_util::sync::CancellationToken;
 use crate::blob_store::BlobStore;
 use crate::rate_limiter::RateLimiter;
 use crate::sqlite::SqliteDatabase;
-use crate::ptr::db::PtrSqliteDatabase;
 use crate::types::{RunningSubscriptions, SubTerminalStatuses};
 
 /// Shutdown timeout for joining background workers.
@@ -24,7 +23,6 @@ const SHUTDOWN_JOIN_TIMEOUT: std::time::Duration = std::time::Duration::from_sec
 /// and passed to `stop_workers()` on shutdown.
 pub async fn start_workers(
     db: &Arc<SqliteDatabase>,
-    ptr_db: &Arc<PtrSqliteDatabase>,
     blob_store: &Arc<BlobStore>,
     rate_limiter: &RateLimiter,
     running_subscriptions: &RunningSubscriptions,
@@ -36,11 +34,9 @@ pub async fn start_workers(
     // ── Compiler loop ──────────────────────────────────
     {
         let compiler_db = db.clone();
-        let compiler_ptr = ptr_db.clone();
         if let Some(rx) = compiler_db.take_compiler_rx().await {
             let handle = tokio::spawn(crate::sqlite::compilers::start_compiler_loop(
                 compiler_db.clone(),
-                Some(compiler_ptr),
                 rx,
                 |result| {
                     let mut domains = Vec::new();
@@ -95,7 +91,6 @@ pub async fn start_workers(
         let sched_rl = rate_limiter.clone();
         let sched_running = running_subscriptions.clone();
         let sched_terminal = sub_terminal_statuses.clone();
-        let sched_ptr_db = ptr_db.clone();
         let sched_cancel = cancel.clone();
         let handle = tokio::spawn(async move {
             // Startup delay — let the app settle before checking schedules
@@ -107,16 +102,6 @@ pub async fn start_workers(
                 }
             }
 
-            // Immediate PTR check on startup — start initial population ASAP
-            if let Ok(state) = crate::state::get_state() {
-                crate::scheduler::check_scheduled_ptr_sync(
-                    &sched_ptr_db,
-                    &state.settings,
-                    state.db.compiler_tx.clone(),
-                )
-                .await;
-            }
-
             loop {
                 tokio::select! {
                     _ = tokio::time::sleep(std::time::Duration::from_secs(60)) => {}
@@ -126,7 +111,7 @@ pub async fn start_workers(
                     }
                 }
                 if let Ok(state) = crate::state::get_state() {
-                    crate::scheduler::check_scheduled_flows(
+                    crate::scheduler::check_scheduled_groups(
                         &sched_db,
                         &sched_blob,
                         &sched_rl,
@@ -135,22 +120,11 @@ pub async fn start_workers(
                         &state.settings,
                     )
                     .await;
-                    crate::scheduler::check_scheduled_ptr_sync(
-                        &sched_ptr_db,
-                        &state.settings,
-                        state.db.compiler_tx.clone(),
-                    )
-                    .await;
                 }
             }
         });
-        handles.push(("flow_scheduler", handle));
+        handles.push(("group_scheduler", handle));
     }
-
-    // ── PTR startup maintenance ────────────────────────
-    crate::ptr::controller::PtrController::start_background_startup_maintenance(
-        ptr_db.clone(),
-    );
 
     handles
 }

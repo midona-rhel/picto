@@ -1,5 +1,5 @@
 //! Background task contract types — visible progress indicators for
-//! long-running operations (subscriptions, flows, PTR sync, imports).
+//! long-running operations (subscriptions, flows, imports).
 //!
 //! Tasks are upserted via `runtime/task_upserted` events and removed
 //! via `runtime/task_removed` when complete.
@@ -33,9 +33,7 @@ pub struct RuntimeTask {
 #[serde(rename_all = "snake_case")]
 pub enum TaskKind {
     Subscription,
-    Flow,
-    PtrSync,
-    PtrBootstrap,
+    SubscriptionGroup,
     Import,
 }
 

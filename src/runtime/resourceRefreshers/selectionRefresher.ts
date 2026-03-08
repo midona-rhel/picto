@@ -1,5 +1,5 @@
 import { useRuntimeSyncStore } from '../../state/runtimeSyncStore';
-import { SelectionController } from '../../shared/controllers/selectionController';
+import { invalidateSelectionSummary } from '#features/grid/data';
 
 let unsub: (() => void) | null = null;
 let prevStaleRef: Set<unknown> | null = null;
@@ -12,7 +12,7 @@ export function startSelectionRefresher(): void {
     prevStaleRef = state.staleResources;
 
     if (state.staleResources.has('selection/current')) {
-      SelectionController.invalidateSummary();
+      invalidateSelectionSummary();
       useRuntimeSyncStore.getState().markResourceFresh('selection/current');
     }
   });
