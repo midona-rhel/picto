@@ -5,7 +5,7 @@ import { MainViewModelProvider, type MainViewModel } from '../MainViewModelConte
 
 const mocks = vi.hoisted(() => ({
   imageGrid: vi.fn(),
-  flowsWorking: vi.fn(),
+  subscriptionGroupsPanel: vi.fn(),
 }));
 
 vi.mock('#features/collections/components', () => ({
@@ -13,11 +13,11 @@ vi.mock('#features/collections/components', () => ({
 }));
 
 vi.mock('#features/subscriptions/components', () => ({
-  FlowsWorking: (props: unknown) => {
-    mocks.flowsWorking(props);
-    return <div data-testid="view-flows">flows-view</div>;
+  SubscriptionGroupsPanel: (props: unknown) => {
+    mocks.subscriptionGroupsPanel(props);
+    return <div data-testid="view-subscriptions">subscriptions-view</div>;
   },
-  CreateFlowModal: () => null,
+  CreateSubscriptionGroupModal: () => null,
 }));
 
 vi.mock('#features/tags/components', () => ({
@@ -79,12 +79,12 @@ function createMainViewModel(overrides?: Partial<MainViewModel['navigation']>): 
       onSelectionSummarySpecChange: () => {},
       onDetailViewStateChange: () => {},
     },
-    flows: {
-      activeFlowId: 'flow-1',
-      flowLastResults: {},
-      setFlowLastResults: () => {},
-      flowRefreshToken: 7,
-      onOpenCreateFlowModal: () => {},
+    subscriptions: {
+      activeSubscriptionGroupId: 'flow-1',
+      subscriptionGroupLastResults: {},
+      setSubscriptionGroupLastResults: () => {},
+      subscriptionRefreshToken: 7,
+      onOpenCreateSubscriptionGroupModal: () => {},
     },
   };
 }
@@ -100,7 +100,7 @@ function renderRouter(model: MainViewModel) {
 describe('MainViewRouter', () => {
   beforeEach(() => {
     mocks.imageGrid.mockClear();
-    mocks.flowsWorking.mockClear();
+    mocks.subscriptionGroupsPanel.mockClear();
   });
 
   it('renders image grid and passes scope/query state from provider', () => {
@@ -136,14 +136,14 @@ describe('MainViewRouter', () => {
     expect(screen.getByTestId('view-duplicates')).toBeTruthy();
   });
 
-  it('renders flows view and forwards flow model state', () => {
-    const model = createMainViewModel({ currentView: 'flows' });
+  it('renders subscriptions view and forwards subscription model state', () => {
+    const model = createMainViewModel({ currentView: 'subscriptions' });
     renderRouter(model);
 
-    expect(screen.getByTestId('view-flows')).toBeTruthy();
-    expect(mocks.flowsWorking).toHaveBeenCalledTimes(1);
-    expect(mocks.flowsWorking.mock.calls[0][0]).toMatchObject({
-      flowId: 'flow-1',
+    expect(screen.getByTestId('view-subscriptions')).toBeTruthy();
+    expect(mocks.subscriptionGroupsPanel).toHaveBeenCalledTimes(1);
+    expect(mocks.subscriptionGroupsPanel.mock.calls[0][0]).toMatchObject({
+      subscriptionGroupId: 'flow-1',
       refreshToken: 7,
     });
   });

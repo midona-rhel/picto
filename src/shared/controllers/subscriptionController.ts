@@ -151,31 +151,31 @@ export const SubscriptionController = {
     return api.subscriptions.rename(args.id, args.name);
   },
 
-  getFlows<T>(): Promise<T[]> {
+  getSubscriptionGroups<T>(): Promise<T[]> {
     return api.flows.list() as Promise<T[]>;
   },
 
-  createFlow(args: { name: string; schedule?: string }): Promise<unknown> {
+  createSubscriptionGroup(args: { name: string; schedule?: string }): Promise<unknown> {
     return api.flows.create(args.name, args.schedule);
   },
 
-  deleteFlow(args: { id: string; deleteFiles?: boolean }): Promise<void> {
+  deleteSubscriptionGroup(args: { id: string; deleteFiles?: boolean }): Promise<void> {
     return api.flows.delete(args.id, args.deleteFiles);
   },
 
-  renameFlow(args: { id: string; name: string }): Promise<void> {
+  renameSubscriptionGroup(args: { id: string; name: string }): Promise<void> {
     return api.flows.rename(args.id, args.name);
   },
 
-  setFlowSchedule(args: { id: string; schedule: string }): Promise<void> {
+  setSubscriptionGroupSchedule(args: { id: string; schedule: string }): Promise<void> {
     return api.flows.setSchedule(args.id, args.schedule);
   },
 
-  runFlow(args: { id: string }): Promise<void> {
+  runSubscriptionGroup(args: { id: string }): Promise<void> {
     return api.flows.run(args.id);
   },
 
-  stopFlow(args: { id: string }): Promise<void> {
+  stopSubscriptionGroup(args: { id: string }): Promise<void> {
     return api.flows.stop(args.id);
   },
 

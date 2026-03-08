@@ -6,7 +6,7 @@ import { notifySuccess, notifyError } from '../../../shared/lib/notify';
 import { SubscriptionController } from '../../../shared/controllers/subscriptionController';
 import { SCHEDULE_OPTIONS } from '../types';
 
-export function CreateFlowModal({
+export function CreateSubscriptionGroupModal({
   opened,
   onClose,
   onCreated,
@@ -30,12 +30,12 @@ export function CreateFlowModal({
     if (!name.trim()) return;
     try {
       setLoading(true);
-      await SubscriptionController.createFlow({
+      await SubscriptionController.createSubscriptionGroup({
         name: name.trim(),
         schedule: schedule !== 'manual' ? schedule : undefined,
       });
 
-      notifySuccess(`"${name.trim()}" created. Add one or more queries in this subscription.`, 'Subscription Created');
+      notifySuccess(`"${name.trim()}" created. Add one or more subscriptions or queries to this group.`, 'Subscription Group Created');
       onCreated?.();
       onClose();
     } catch (error) {
@@ -46,7 +46,7 @@ export function CreateFlowModal({
   };
 
   return (
-    <Modal opened={opened} onClose={onClose} title="New Subscription" size="sm" styles={glassModalStyles}>
+    <Modal opened={opened} onClose={onClose} title="New Subscription Group" size="sm" styles={glassModalStyles}>
       <Stack gap="md">
         <TextInput
           label="Name"
@@ -66,12 +66,12 @@ export function CreateFlowModal({
           disabled={loading}
         />
         <Text size="xs" c="dimmed">
-          A subscription can contain multiple site-specific queries. Add queries after creating it.
+          A subscription group can contain multiple site-specific subscriptions and queries. Add them after creating it.
         </Text>
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 6 }}>
           <TextButton onClick={onClose} disabled={loading}>Cancel</TextButton>
           <TextButton onClick={handleCreate} disabled={!name.trim() || loading}>
-            Create Flow
+            Create Subscription Group
           </TextButton>
         </div>
       </Stack>

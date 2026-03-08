@@ -1,5 +1,5 @@
 /* ==========================================================================
-   FlowsWorking — responsive card grid
+   SubscriptionGroupsPanel — responsive card grid
    ========================================================================== */
 
 .root {
@@ -54,16 +54,16 @@
   gap: 10px;
 }
 
-.cardList .flowCard,
-.cardList .flowCardRunning {
+.cardList .subscriptionGroupCard,
+.cardList .subscriptionGroupCardRunning {
   width: 100%;
 }
 
 /* --------------------------------------------------------------------------
-   Flow card
+   Subscription group card
    -------------------------------------------------------------------------- */
 
-.flowCard {
+.subscriptionGroupCard {
   border-radius: 8px;
   border: 1px solid var(--color-border-secondary);
   background: var(--color-bg-secondary);
@@ -71,26 +71,26 @@
   transition: border-color 150ms ease;
 }
 
-[data-mantine-color-scheme="light"] .flowCard {
+[data-mantine-color-scheme="light"] .subscriptionGroupCard {
   background: var(--color-white-60);
 }
 
-.flowCard:hover {
+.subscriptionGroupCard:hover {
   border-color: var(--color-border-primary);
 }
 
-[data-mantine-color-scheme="light"] .flowCard:hover {
+[data-mantine-color-scheme="light"] .subscriptionGroupCard:hover {
   border-color: var(--color-black-20);
 }
 
 /* Running state */
-.flowCardRunning {
-  composes: flowCard;
+.subscriptionGroupCardRunning {
+  composes: subscriptionGroupCard;
   border-color: var(--color-primary);
   position: relative;
 }
 
-.flowCardRunning::before {
+.subscriptionGroupCardRunning::before {
   content: "";
   position: absolute;
   top: 0;
@@ -117,7 +117,7 @@
   padding: 10px 12px 0;
 }
 
-.flowName {
+.subscriptionGroupName {
   font-size: 13px;
   font-weight: 600;
   color: var(--color-text-primary);

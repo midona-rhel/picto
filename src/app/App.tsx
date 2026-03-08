@@ -7,7 +7,7 @@ import { useDomainStore } from '../state/domainStore';
 import { CommandPalette, type CommandAction } from '#features/app/components';
 import { SHORTCUT_DEFS, formatKeysDisplay, getShortcut, matchesShortcutDef } from '../shared/lib/shortcuts';
 import { GridViewMode, ImageGridControls, FilterBar, ImagePropertiesPanel, DragGhost } from '#features/grid/components';
-import { MainViewModelProvider, MainViewRouter, CreateFlowModal, WindowControls } from '#features/layout/components';
+import { MainViewModelProvider, MainViewRouter, CreateSubscriptionGroupModal, WindowControls } from '#features/layout/components';
 import { Sidebar, SidebarMenuButton } from '#features/sidebar/components';
 import { TagPickerPortal } from '../shared/services/TagPickerPortal';
 import { TagSelectPortal } from '#features/tags/components';
@@ -53,11 +53,11 @@ function parseShortcutKeys(keys: string): { key: string; code: string; meta: boo
 function App() {
   const startupTsRef = useRef<number>(performance.now());
   const [shellVisible, setShellVisible] = useState(false);
-  const [flowRefreshToken, setFlowRefreshToken] = useState(0);
+  const [subscriptionRefreshToken, setSubscriptionRefreshToken] = useState(0);
 
   // --- Navigation ---
   const {
-    currentView, activeSmartFolder, activeFolder, activeCollection, activeFlow, activeStatusFilter, filterTags,
+    currentView, activeSmartFolder, activeFolder, activeCollection, activeSubscriptionGroup, activeStatusFilter, filterTags,
     canGoBack, canGoForward,
     goBack, goForward,
     setActiveSmartFolder,
@@ -80,7 +80,7 @@ function App() {
     propertiesPanelWidth: settings.propertiesPanelWidth,
   });
 
-  // --- Grid feature state (search, filters, flows, folder sort) ---
+  // --- Grid feature state (search, filters, subscriptions, folder sort) ---
   const grid = useGridFeatureState({
     currentView,
     isDetailMode: inspector.isDetailMode,
@@ -344,12 +344,12 @@ function App() {
         onSelectionSummarySpecChange: inspector.setSelectionSummarySpec,
         onDetailViewStateChange: inspector.handleDetailViewStateChange,
       },
-      flows: {
-        activeFlowId: activeFlow?.id,
-        flowLastResults: grid.flowLastResults,
-        setFlowLastResults: grid.setFlowLastResults,
-        flowRefreshToken,
-        onOpenCreateFlowModal: () => grid.setCreateFlowModalOpen(true),
+      subscriptions: {
+        activeSubscriptionGroupId: activeSubscriptionGroup?.id,
+        subscriptionGroupLastResults: grid.subscriptionGroupLastResults,
+        setSubscriptionGroupLastResults: grid.setSubscriptionGroupLastResults,
+        subscriptionRefreshToken,
+        onOpenCreateSubscriptionGroupModal: () => grid.setCreateSubscriptionGroupModalOpen(true),
       },
     }),
     [
@@ -385,11 +385,11 @@ function App() {
       inspector.handleSelectedImagesChange,
       inspector.setSelectionSummarySpec,
       inspector.handleDetailViewStateChange,
-      activeFlow?.id,
-      grid.flowLastResults,
-      grid.setFlowLastResults,
-      flowRefreshToken,
-      grid.setCreateFlowModalOpen,
+      activeSubscriptionGroup?.id,
+      grid.subscriptionGroupLastResults,
+      grid.setSubscriptionGroupLastResults,
+      subscriptionRefreshToken,
+      grid.setCreateSubscriptionGroupModalOpen,
     ],
   );
 
@@ -524,10 +524,10 @@ function App() {
       <TagSelectPortal />
       <FolderPickerPortal />
       <DragGhost />
-      <CreateFlowModal
-        opened={grid.createFlowModalOpen}
-        onClose={() => grid.setCreateFlowModalOpen(false)}
-        onCreated={() => setFlowRefreshToken((v) => v + 1)}
+      <CreateSubscriptionGroupModal
+        opened={grid.createSubscriptionGroupModalOpen}
+        onClose={() => grid.setCreateSubscriptionGroupModalOpen(false)}
+        onCreated={() => setSubscriptionRefreshToken((v) => v + 1)}
       />
       <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} mode={paletteMode} actions={paletteActions} />
     </div>

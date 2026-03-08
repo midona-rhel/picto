@@ -1,9 +1,9 @@
 import { Collections } from '#features/collections/components';
-import { FlowsWorking, type FlowResultEntry, CreateFlowModal } from '#features/subscriptions/components';
+import { SubscriptionGroupsPanel, type SubscriptionGroupResultEntry, CreateSubscriptionGroupModal } from '#features/subscriptions/components';
 import { TagManager } from '#features/tags/components';
 import { DuplicateManager } from '#features/duplicates/components';
 import { ImageGrid } from '#features/grid/components';
-import { useMainViewFlowsState, useMainViewGridActions, useMainViewGridState, useMainViewNavigationState, useMainViewSelectionState } from './MainViewModelContext';
+import { useMainViewSubscriptionsState, useMainViewGridActions, useMainViewGridState, useMainViewNavigationState, useMainViewSelectionState } from './MainViewModelContext';
 import styles from '../../../app/App.module.css';
 
 export function MainViewRouter() {
@@ -11,7 +11,7 @@ export function MainViewRouter() {
   const grid = useMainViewGridState();
   const gridActions = useMainViewGridActions();
   const selection = useMainViewSelectionState();
-  const flows = useMainViewFlowsState();
+  const subscriptions = useMainViewSubscriptionsState();
 
   switch (navigation.currentView) {
     case 'images':
@@ -55,15 +55,15 @@ export function MainViewRouter() {
       );
     case 'collections':
       return <div className={styles.frame}><Collections /></div>;
-    case 'flows':
+    case 'subscriptions':
       return (
         <div className={styles.frame}>
-          <FlowsWorking
-            flowId={flows.activeFlowId}
-            lastResults={flows.flowLastResults}
-            onLastResultsChange={flows.setFlowLastResults}
-            onOpenCreateModal={flows.onOpenCreateFlowModal}
-            refreshToken={flows.flowRefreshToken}
+          <SubscriptionGroupsPanel
+            subscriptionGroupId={subscriptions.activeSubscriptionGroupId}
+            lastResults={subscriptions.subscriptionGroupLastResults}
+            onLastResultsChange={subscriptions.setSubscriptionGroupLastResults}
+            onOpenCreateModal={subscriptions.onOpenCreateSubscriptionGroupModal}
+            refreshToken={subscriptions.subscriptionRefreshToken}
           />
         </div>
       );
@@ -76,5 +76,5 @@ export function MainViewRouter() {
   }
 }
 
-export { CreateFlowModal };
-export type { FlowResultEntry };
+export { CreateSubscriptionGroupModal };
+export type { SubscriptionGroupResultEntry };

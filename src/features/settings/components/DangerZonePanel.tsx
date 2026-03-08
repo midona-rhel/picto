@@ -23,7 +23,7 @@ export function DangerZonePanel() {
     try {
       setWiping(true);
       await api.library.wipeImageData();
-      notifySuccess('All images and review queue entries were removed. Flows were kept.', 'Image Data Cleared');
+      notifySuccess('All images and review queue entries were removed. Subscription groups were kept.', 'Image Data Cleared');
       setConfirmWipeOpened(false);
       setTimeout(() => window.location.reload(), 150);
     } catch (err) {
@@ -36,7 +36,7 @@ export function DangerZonePanel() {
 
   return (
     <>
-      <SettingsBlock title="Wipe Image Data" description="Remove all image library data and review queue items while keeping flows. This action is irreversible.">
+      <SettingsBlock title="Wipe Image Data" description="Remove all image library data and review queue items while keeping subscription groups. This action is irreversible.">
         <SettingsButtonRow>
           <TextButton danger onClick={() => setConfirmWipeOpened(true)} disabled={wiping}>
             Wipe Image Data
@@ -54,7 +54,7 @@ export function DangerZonePanel() {
         loading={wiping}
       >
         This will delete all images, tags, collections, review queue entries, and duplicate/provenance caches.
-        Flows will remain.
+        Subscription groups will remain.
       </ConfirmModal>
     </>
   );

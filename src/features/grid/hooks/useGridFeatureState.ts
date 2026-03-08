@@ -1,5 +1,5 @@
 /**
- * useGridFeatureState — search tags/text, filter bar, flow modal, folder sort
+ * useGridFeatureState — search tags/text, filter bar, subscription modal, folder sort
  * actions, smart-folder refresh, color debounce, and active scope count.
  */
 
@@ -11,7 +11,7 @@ import { FolderController } from '../../../shared/controllers/folderController';
 import type { SmartFolder } from '#features/smart-folders/types';
 import type { TagFilterLogicMode } from '#features/tags/types';
 import type { MasonryImageItem } from '#features/grid/types';
-import type { FlowResultEntry } from '#features/subscriptions/components';
+import type { SubscriptionGroupResultEntry } from '#features/subscriptions/components';
 
 export interface GridFeatureParams {
   currentView: string;
@@ -35,10 +35,10 @@ export interface GridFeatureState {
   setSearchTags: (tags: string[]) => void;
   searchText: string;
   setSearchText: (text: string) => void;
-  flowLastResults: Record<number, FlowResultEntry>;
-  setFlowLastResults: React.Dispatch<React.SetStateAction<Record<number, FlowResultEntry>>>;
-  createFlowModalOpen: boolean;
-  setCreateFlowModalOpen: (v: boolean) => void;
+  subscriptionGroupLastResults: Record<string, SubscriptionGroupResultEntry>;
+  setSubscriptionGroupLastResults: React.Dispatch<React.SetStateAction<Record<string, SubscriptionGroupResultEntry>>>;
+  createSubscriptionGroupModalOpen: boolean;
+  setCreateSubscriptionGroupModalOpen: (v: boolean) => void;
   effectiveSearchTags: string[];
   smartFolderRefresh: number;
   handleSmartFolderUpdated: () => Promise<void>;
@@ -86,8 +86,8 @@ export function useGridFeatureState({
   const [excludedSearchTags, setExcludedSearchTags] = useState<string[]>([]);
   const [tagLogicMode, setTagLogicMode] = useState<TagFilterLogicMode>('OR');
   const [searchText, setSearchText] = useState('');
-  const [flowLastResults, setFlowLastResults] = useState<Record<number, FlowResultEntry>>({});
-  const [createFlowModalOpen, setCreateFlowModalOpen] = useState(false);
+  const [subscriptionGroupLastResults, setSubscriptionGroupLastResults] = useState<Record<string, SubscriptionGroupResultEntry>>({});
+  const [createSubscriptionGroupModalOpen, setCreateSubscriptionGroupModalOpen] = useState(false);
 
   const effectiveSearchTags = useMemo(() => {
     if (!filterTags || filterTags.length === 0) return searchTags;
@@ -206,8 +206,8 @@ export function useGridFeatureState({
   return {
     searchTags, setSearchTags,
     searchText, setSearchText,
-    flowLastResults, setFlowLastResults,
-    createFlowModalOpen, setCreateFlowModalOpen,
+    subscriptionGroupLastResults, setSubscriptionGroupLastResults,
+    createSubscriptionGroupModalOpen, setCreateSubscriptionGroupModalOpen,
     effectiveSearchTags,
     smartFolderRefresh, handleSmartFolderUpdated,
     handleSortFolderAction, handleReverseFolderAction, handleReverseSelectedAction,

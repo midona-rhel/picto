@@ -96,7 +96,7 @@ describe('Sidebar drag-drop status targets', () => {
       activeSmartFolder: null,
       activeFolder: null,
       activeCollection: null,
-      activeFlow: null,
+      activeSubscriptionGroup: null,
       activeStatusFilter: null,
       filterTags: null,
     });

@@ -11,8 +11,8 @@ import {
 import { IconCheck, IconKey, IconPlus, IconTrash, IconX } from '@tabler/icons-react';
 import { api, getCurrentWindow } from '#desktop/api';
 import { notifyError, notifySuccess } from '../../../shared/lib/notify';
-import { FlowsWorking, type FlowResultEntry } from './FlowsWorking';
-import { CreateFlowModal } from './CreateFlowModal';
+import { SubscriptionGroupsPanel, type SubscriptionGroupResultEntry } from './SubscriptionGroupsPanel';
+import { CreateSubscriptionGroupModal } from './CreateSubscriptionGroupModal';
 import { SubscriptionController } from '../../../shared/controllers/subscriptionController';
 import type {
   CredentialDomain,
@@ -133,8 +133,8 @@ function validateCredentialForm(form: CredentialFormState): string | null {
 
 export function SubscriptionsWindow() {
   const [createModalOpen, setCreateModalOpen] = useState(false);
-  const [flowRefreshToken, setFlowRefreshToken] = useState(0);
-  const [flowLastResults, setFlowLastResults] = useState<Record<string, FlowResultEntry>>({});
+  const [subscriptionRefreshToken, setSubscriptionRefreshToken] = useState(0);
+  const [subscriptionGroupLastResults, setSubscriptionGroupLastResults] = useState<Record<string, SubscriptionGroupResultEntry>>({});
   const [sites, setSites] = useState<SubscriptionSiteInfo[]>([]);
   const [credentials, setCredentials] = useState<CredentialDomain[]>([]);
   const [credentialHealth, setCredentialHealth] = useState<CredentialHealth[]>([]);
@@ -380,22 +380,22 @@ export function SubscriptionsWindow() {
             </TextButton>
           </div>
           <div className={`${styles.flowsWrap} ${styles.cardsContainer}`}>
-            <FlowsWorking
-              flowId={null}
-              lastResults={flowLastResults}
-              onLastResultsChange={setFlowLastResults}
+            <SubscriptionGroupsPanel
+              subscriptionGroupId={null}
+              lastResults={subscriptionGroupLastResults}
+              onLastResultsChange={setSubscriptionGroupLastResults}
               showHeader={false}
               layoutMode="list"
-              refreshToken={flowRefreshToken}
+              refreshToken={subscriptionRefreshToken}
             />
           </div>
         </section>
       </div>
 
-      <CreateFlowModal
+      <CreateSubscriptionGroupModal
         opened={createModalOpen}
         onClose={() => setCreateModalOpen(false)}
-        onCreated={() => setFlowRefreshToken((v) => v + 1)}
+        onCreated={() => setSubscriptionRefreshToken((v) => v + 1)}
       />
 
       <Modal

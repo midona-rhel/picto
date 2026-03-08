@@ -1,5 +1,5 @@
 import type { SubscriptionFinishedEvent } from '../../../shared/types/api/core';
-import type { FlowInfo, SitePluginInfo, SubProgress } from '../types';
+import type { SubscriptionGroupInfo, SitePluginInfo, SubProgress } from '../types';
 
 export function canonicalSiteId(siteId: string): string {
   const normalized = siteId.trim().toLowerCase();
@@ -45,7 +45,7 @@ export function formatRelativeTime(iso: string | null | undefined): string {
   return `${diffDays}d ago`;
 }
 
-export function flattenQueries(flow: FlowInfo, sites: SitePluginInfo[], credentialSites: Set<string>) {
+export function flattenQueries(subscriptionGroup: SubscriptionGroupInfo, sites: SitePluginInfo[], credentialSites: Set<string>) {
   const result: {
     queryId: string;
     queryText: string;
@@ -57,7 +57,7 @@ export function flattenQueries(flow: FlowInfo, sites: SitePluginInfo[], credenti
     paused: boolean;
     missingAuth: boolean;
   }[] = [];
-  for (const sub of flow.subscriptions) {
+  for (const sub of subscriptionGroup.subscriptions) {
     const siteIdRaw = sub.site_id ?? sub.site_plugin_id ?? '';
     const siteId = canonicalSiteId(siteIdRaw);
     const site = sites.find((s) => canonicalSiteId(s.id) === siteId);
@@ -85,9 +85,9 @@ export function flattenQueries(flow: FlowInfo, sites: SitePluginInfo[], credenti
   return result;
 }
 
-export function getLastRan(flow: FlowInfo): string | null {
+export function getLastRan(subscriptionGroup: SubscriptionGroupInfo): string | null {
   let latest: string | null = null;
-  for (const sub of flow.subscriptions) {
+  for (const sub of subscriptionGroup.subscriptions) {
     for (const q of sub.queries) {
       if (!q.last_check_time) continue;
       if (!latest || q.last_check_time > latest) latest = q.last_check_time;
@@ -96,9 +96,9 @@ export function getLastRan(flow: FlowInfo): string | null {
   return latest;
 }
 
-export function getFlowProgress(flow: FlowInfo, progressMap: Map<string, SubProgress>): SubProgress | null {
+export function getSubscriptionGroupProgress(subscriptionGroup: SubscriptionGroupInfo, progressMap: Map<string, SubProgress>): SubProgress | null {
   let total: SubProgress | null = null;
-  for (const sub of flow.subscriptions) {
+  for (const sub of subscriptionGroup.subscriptions) {
     const p = progressMap.get(sub.id);
     if (!p) continue;
     if (!total) {

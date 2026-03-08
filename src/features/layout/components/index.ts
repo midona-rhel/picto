@@ -1,5 +1,5 @@
-export { MainViewRouter, CreateFlowModal } from './MainViewRouter';
-export type { FlowResultEntry } from './MainViewRouter';
+export { MainViewRouter, CreateSubscriptionGroupModal } from './MainViewRouter';
+export type { SubscriptionGroupResultEntry } from './MainViewRouter';
 export { MainViewModelProvider } from './MainViewModelContext';
 export type { MainViewModel } from './MainViewModelContext';
 export { WindowControls } from './WindowControls';

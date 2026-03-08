@@ -8,12 +8,12 @@
 import { create } from 'zustand';
 import type { SmartFolder } from '#features/smart-folders/types';
 
-export type ViewType = 'images' | 'collections' | 'flows' | 'duplicates' | 'tags';
+export type ViewType = 'images' | 'collections' | 'subscriptions' | 'duplicates' | 'tags';
 
 export const VIEW_LABELS: Record<ViewType, string> = {
   images: 'All Images',
   collections: 'Albums',
-  flows: 'Flows',
+  subscriptions: 'Subscriptions',
   duplicates: 'Duplicates',
   tags: 'Tags',
 };
@@ -23,7 +23,7 @@ export interface ActiveFolder {
   name: string;
 }
 
-export interface ActiveFlow {
+export interface ActiveSubscriptionGroup {
   id: string;
   name: string;
 }
@@ -38,7 +38,7 @@ interface HistoryEntry {
   smartFolder: SmartFolder | null;
   folder: ActiveFolder | null;
   collection: ActiveCollection | null;
-  flow: ActiveFlow | null;
+  subscriptionGroup: ActiveSubscriptionGroup | null;
   statusFilter: string | null;
   filterTags: string[] | null;
 }
@@ -49,7 +49,7 @@ interface NavigationState {
   activeSmartFolder: SmartFolder | null;
   activeFolder: ActiveFolder | null;
   activeCollection: ActiveCollection | null;
-  activeFlow: ActiveFlow | null;
+  activeSubscriptionGroup: ActiveSubscriptionGroup | null;
   activeStatusFilter: string | null;
   filterTags: string[] | null;
 
@@ -71,8 +71,8 @@ interface NavigationState {
   navigateToSmartFolder: (folder: SmartFolder) => void;
   /** Navigate to a collection drill-down session (images view scoped to collection members). */
   navigateToCollection: (collection: ActiveCollection) => void;
-  /** Navigate to a flow (sets view to 'flows', clears folder/smart folder) */
-  navigateToFlow: (flow: ActiveFlow) => void;
+  /** Navigate to a subscription group (sets view to 'subscriptions', clears folder/smart folder) */
+  navigateToSubscriptionGroup: (subscriptionGroup: ActiveSubscriptionGroup) => void;
   /** Navigate to images view filtered by specific tags */
   navigateToFilterTags: (tags: string[]) => void;
 
@@ -80,11 +80,11 @@ interface NavigationState {
   titlebarTitle: string;
 }
 
-function computeTitle(state: { activeFolder?: ActiveFolder | null; activeSmartFolder?: SmartFolder | null; activeCollection?: ActiveCollection | null; activeFlow?: ActiveFlow | null; activeStatusFilter?: string | null; filterTags?: string[] | null; currentView?: ViewType; folder?: ActiveFolder | null; smartFolder?: SmartFolder | null; collection?: ActiveCollection | null; flow?: ActiveFlow | null; statusFilter?: string | null; view?: ViewType }): string {
+function computeTitle(state: { activeFolder?: ActiveFolder | null; activeSmartFolder?: SmartFolder | null; activeCollection?: ActiveCollection | null; activeSubscriptionGroup?: ActiveSubscriptionGroup | null; activeStatusFilter?: string | null; filterTags?: string[] | null; currentView?: ViewType; folder?: ActiveFolder | null; smartFolder?: SmartFolder | null; collection?: ActiveCollection | null; subscriptionGroup?: ActiveSubscriptionGroup | null; statusFilter?: string | null; view?: ViewType }): string {
   const folder = state.activeFolder ?? state.folder;
   const smartFolder = state.activeSmartFolder ?? state.smartFolder;
   const collection = state.activeCollection ?? state.collection;
-  const flow = state.activeFlow ?? state.flow;
+  const subscriptionGroup = state.activeSubscriptionGroup ?? state.subscriptionGroup;
   const statusFilter = state.activeStatusFilter ?? state.statusFilter;
   const filterTags = state.filterTags;
   const view = state.currentView ?? state.view ?? 'images';
@@ -92,7 +92,7 @@ function computeTitle(state: { activeFolder?: ActiveFolder | null; activeSmartFo
   if (folder) return folder.name;
   if (smartFolder) return smartFolder.name;
   if (collection) return collection.name;
-  if (flow) return flow.name;
+  if (subscriptionGroup) return subscriptionGroup.name;
   if (statusFilter === 'inbox') return 'Inbox';
   if (statusFilter === 'uncategorized') return 'Uncategorized';
   if (statusFilter === 'trash') return 'Trash';
@@ -107,11 +107,11 @@ export const useNavigationStore = create<NavigationState>((set, get) => ({
   activeSmartFolder: null,
   activeFolder: null,
   activeCollection: null,
-  activeFlow: null,
+  activeSubscriptionGroup: null,
   activeStatusFilter: null,
   filterTags: null,
 
-  history: [{ view: 'images', smartFolder: null, folder: null, collection: null, flow: null, statusFilter: null, filterTags: null }],
+  history: [{ view: 'images', smartFolder: null, folder: null, collection: null, subscriptionGroup: null, statusFilter: null, filterTags: null }],
   historyIndex: 0,
   canGoBack: false,
   canGoForward: false,
@@ -121,7 +121,7 @@ export const useNavigationStore = create<NavigationState>((set, get) => ({
   navigateTo: (view, smartFolder = null, folder = null, statusFilter = null) => {
     const state = get();
     const trimmed = state.history.slice(0, state.historyIndex + 1);
-    const entry: HistoryEntry = { view, smartFolder, folder, collection: null, flow: null, statusFilter, filterTags: null };
+    const entry: HistoryEntry = { view, smartFolder, folder, collection: null, subscriptionGroup: null, statusFilter, filterTags: null };
     const newHistory = [...trimmed, entry];
     const newIndex = newHistory.length - 1;
 
@@ -130,14 +130,14 @@ export const useNavigationStore = create<NavigationState>((set, get) => ({
       activeSmartFolder: smartFolder,
       activeFolder: folder,
       activeCollection: null,
-      activeFlow: null,
+      activeSubscriptionGroup: null,
       activeStatusFilter: statusFilter,
       filterTags: null,
       history: newHistory,
       historyIndex: newIndex,
       canGoBack: newIndex > 0,
       canGoForward: false,
-      titlebarTitle: computeTitle({ activeFolder: folder, activeSmartFolder: smartFolder, activeCollection: null, activeFlow: null, activeStatusFilter: statusFilter, currentView: view }),
+      titlebarTitle: computeTitle({ activeFolder: folder, activeSmartFolder: smartFolder, activeCollection: null, activeSubscriptionGroup: null, activeStatusFilter: statusFilter, currentView: view }),
     });
   },
 
@@ -152,7 +152,7 @@ export const useNavigationStore = create<NavigationState>((set, get) => ({
       activeSmartFolder: entry.smartFolder,
       activeFolder: entry.folder,
       activeCollection: entry.collection,
-      activeFlow: entry.flow,
+      activeSubscriptionGroup: entry.subscriptionGroup,
       activeStatusFilter: entry.statusFilter,
       filterTags: entry.filterTags,
       historyIndex: newIndex,
@@ -173,7 +173,7 @@ export const useNavigationStore = create<NavigationState>((set, get) => ({
       activeSmartFolder: entry.smartFolder,
       activeFolder: entry.folder,
       activeCollection: entry.collection,
-      activeFlow: entry.flow,
+      activeSubscriptionGroup: entry.subscriptionGroup,
       activeStatusFilter: entry.statusFilter,
       filterTags: entry.filterTags,
       historyIndex: newIndex,
@@ -187,6 +187,7 @@ export const useNavigationStore = create<NavigationState>((set, get) => ({
     set((state) => ({
       activeFolder: folder,
       activeCollection: null,
+      activeSubscriptionGroup: null,
       titlebarTitle: computeTitle({ ...state, activeFolder: folder }),
     }));
   },
@@ -195,6 +196,7 @@ export const useNavigationStore = create<NavigationState>((set, get) => ({
     set((state) => ({
       activeSmartFolder: folder,
       activeCollection: null,
+      activeSubscriptionGroup: null,
       titlebarTitle: computeTitle({ ...state, activeSmartFolder: folder }),
     }));
   },
@@ -215,7 +217,7 @@ export const useNavigationStore = create<NavigationState>((set, get) => ({
       smartFolder: null,
       folder: null,
       collection,
-      flow: null,
+      subscriptionGroup: null,
       statusFilter: null,
       filterTags: null,
     };
@@ -227,7 +229,7 @@ export const useNavigationStore = create<NavigationState>((set, get) => ({
       activeSmartFolder: null,
       activeFolder: null,
       activeCollection: collection,
-      activeFlow: null,
+      activeSubscriptionGroup: null,
       activeStatusFilter: null,
       filterTags: null,
       history: newHistory,
@@ -238,33 +240,33 @@ export const useNavigationStore = create<NavigationState>((set, get) => ({
     });
   },
 
-  navigateToFlow: (flow) => {
+  navigateToSubscriptionGroup: (subscriptionGroup) => {
     const state = get();
     const trimmed = state.history.slice(0, state.historyIndex + 1);
-    const entry: HistoryEntry = { view: 'flows', smartFolder: null, folder: null, collection: null, flow, statusFilter: null, filterTags: null };
+    const entry: HistoryEntry = { view: 'subscriptions', smartFolder: null, folder: null, collection: null, subscriptionGroup, statusFilter: null, filterTags: null };
     const newHistory = [...trimmed, entry];
     const newIndex = newHistory.length - 1;
 
     set({
-      currentView: 'flows',
+      currentView: 'subscriptions',
       activeSmartFolder: null,
       activeFolder: null,
       activeCollection: null,
-      activeFlow: flow,
+      activeSubscriptionGroup: subscriptionGroup,
       activeStatusFilter: null,
       filterTags: null,
       history: newHistory,
       historyIndex: newIndex,
       canGoBack: newIndex > 0,
       canGoForward: false,
-      titlebarTitle: computeTitle({ activeFlow: flow, currentView: 'flows' }),
+      titlebarTitle: computeTitle({ activeSubscriptionGroup: subscriptionGroup, currentView: 'subscriptions' }),
     });
   },
 
   navigateToFilterTags: (tags) => {
     const state = get();
     const trimmed = state.history.slice(0, state.historyIndex + 1);
-    const entry: HistoryEntry = { view: 'images', smartFolder: null, folder: null, collection: null, flow: null, statusFilter: null, filterTags: tags };
+    const entry: HistoryEntry = { view: 'images', smartFolder: null, folder: null, collection: null, subscriptionGroup: null, statusFilter: null, filterTags: tags };
     const newHistory = [...trimmed, entry];
     const newIndex = newHistory.length - 1;
 
@@ -273,7 +275,7 @@ export const useNavigationStore = create<NavigationState>((set, get) => ({
       activeSmartFolder: null,
       activeFolder: null,
       activeCollection: null,
-      activeFlow: null,
+      activeSubscriptionGroup: null,
       activeStatusFilter: null,
       filterTags: tags,
       history: newHistory,

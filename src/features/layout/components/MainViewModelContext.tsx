@@ -3,7 +3,7 @@ import type { AppSettings } from '../../../state/settingsStore';
 import type { SmartFolderPredicate } from '../../smart-folders/components/types';
 import type { GridViewMode, DetailViewControls, DetailViewState } from '#features/grid/components';
 import type { MasonryImageItem, SelectionQuerySpec } from '#features/grid/types';
-import type { FlowResultEntry } from '#features/subscriptions/components';
+import type { SubscriptionGroupResultEntry } from '#features/subscriptions/components';
 
 type MainViewNavigationState = {
   currentView: string;
@@ -50,12 +50,12 @@ type MainViewSelectionState = {
   onDetailViewStateChange: (state: DetailViewState | null, controls: DetailViewControls | null) => void;
 };
 
-type MainViewFlowsState = {
-  activeFlowId?: string;
-  flowLastResults: Record<number, FlowResultEntry>;
-  setFlowLastResults: (next: Record<number, FlowResultEntry>) => void;
-  flowRefreshToken?: number;
-  onOpenCreateFlowModal: () => void;
+type MainViewSubscriptionsState = {
+  activeSubscriptionGroupId?: string;
+  subscriptionGroupLastResults: Record<string, SubscriptionGroupResultEntry>;
+  setSubscriptionGroupLastResults: (next: Record<string, SubscriptionGroupResultEntry>) => void;
+  subscriptionRefreshToken?: number;
+  onOpenCreateSubscriptionGroupModal: () => void;
 };
 
 export type MainViewModel = {
@@ -63,7 +63,7 @@ export type MainViewModel = {
   grid: MainViewGridState;
   gridActions: MainViewGridActions;
   selection: MainViewSelectionState;
-  flows: MainViewFlowsState;
+  subscriptions: MainViewSubscriptionsState;
 };
 
 const MainViewModelContext = createContext<MainViewModel | null>(null);
@@ -101,6 +101,6 @@ export function useMainViewSelectionState(): MainViewSelectionState {
   return useMainViewModel().selection;
 }
 
-export function useMainViewFlowsState(): MainViewFlowsState {
-  return useMainViewModel().flows;
+export function useMainViewSubscriptionsState(): MainViewSubscriptionsState {
+  return useMainViewModel().subscriptions;
 }

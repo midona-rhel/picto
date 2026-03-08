@@ -43,7 +43,7 @@ export function DeveloperPanel() {
   return (
     <SettingsBlock
       title="SLO Check"
-      description="Global performance SLOs for interactive flows."
+      description="Global performance SLOs for interactive app workflows."
     >
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
         <Text size="xs" c="dimmed">

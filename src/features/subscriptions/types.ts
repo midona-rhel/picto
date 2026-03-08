@@ -30,7 +30,7 @@ export interface SubInfo {
   queries: SubscriptionQueryInfo[];
 }
 
-export interface FlowInfo {
+export interface SubscriptionGroupInfo {
   id: string;
   name: string;
   schedule: string;
@@ -39,7 +39,7 @@ export interface FlowInfo {
   subscriptions: SubInfo[];
 }
 
-export interface FlowExecutionSummary {
+export interface SubscriptionGroupExecutionSummary {
   added: number;
   skipped_duplicate: number;
   skipped_error: number;
@@ -47,12 +47,12 @@ export interface FlowExecutionSummary {
   method?: string;
 }
 
-export type FlowResultEntry = FlowExecutionSummary & { error?: string };
+export type SubscriptionGroupResultEntry = SubscriptionGroupExecutionSummary & { error?: string };
 
-export interface FlowsWorkingProps {
-  flowId?: string | null;
-  lastResults: Record<string, FlowResultEntry>;
-  onLastResultsChange: (results: Record<string, FlowResultEntry>) => void;
+export interface SubscriptionGroupsPanelProps {
+  subscriptionGroupId?: string | null;
+  lastResults: Record<string, SubscriptionGroupResultEntry>;
+  onLastResultsChange: (results: Record<string, SubscriptionGroupResultEntry>) => void;
   onOpenCreateModal?: () => void;
   showHeader?: boolean;
   layoutMode?: 'grid' | 'list';
