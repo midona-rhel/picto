@@ -17,10 +17,67 @@ use serde_json::json;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex as StdMutex, OnceLock};
+use std::time::{Duration, Instant};
 use tokio::sync::{mpsc, Mutex};
 
 pub use compilers::CompilerEvent;
+
+const SLOW_READ_WARN_MS: u64 = 100;
+const SLOW_WRITE_WARN_MS: u64 = 100;
+const SLOW_TX_WARN_MS: u64 = 200;
+const SLOW_QUERY_LOG_WINDOW: Duration = Duration::from_secs(1);
+
+#[derive(Debug, Clone, Copy)]
+struct SlowQueryWindow {
+    started_at: Instant,
+    count: u64,
+    max_elapsed_ms: u64,
+}
+
+static SLOW_QUERY_WINDOWS: OnceLock<StdMutex<HashMap<&'static str, SlowQueryWindow>>> =
+    OnceLock::new();
+
+fn record_slow_query(kind: &'static str, elapsed_ms: u64) {
+    let windows = SLOW_QUERY_WINDOWS.get_or_init(|| StdMutex::new(HashMap::new()));
+    let mut guard = crate::poison::mutex_or_recover(windows, "sqlite::slow_query_windows");
+    let now = Instant::now();
+
+    match guard.get_mut(kind) {
+        Some(window) if now.duration_since(window.started_at) <= SLOW_QUERY_LOG_WINDOW => {
+            window.count += 1;
+            window.max_elapsed_ms = window.max_elapsed_ms.max(elapsed_ms);
+        }
+        Some(window) => {
+            if window.count > 1 {
+                tracing::warn!(
+                    kind,
+                    suppressed = window.count - 1,
+                    max_elapsed_ms = window.max_elapsed_ms,
+                    window_ms = SLOW_QUERY_LOG_WINDOW.as_millis() as u64,
+                    "suppressed repeated slow sqlite queries"
+                );
+            }
+            *window = SlowQueryWindow {
+                started_at: now,
+                count: 1,
+                max_elapsed_ms: elapsed_ms,
+            };
+            tracing::warn!(kind, elapsed_ms, "slow sqlite query");
+        }
+        None => {
+            guard.insert(
+                kind,
+                SlowQueryWindow {
+                    started_at: now,
+                    count: 1,
+                    max_elapsed_ms: elapsed_ms,
+                },
+            );
+            tracing::warn!(kind, elapsed_ms, "slow sqlite query");
+        }
+    }
+}
 
 fn parse_active_bitmap_file(payload_json: Option<&str>) -> Option<String> {
     payload_json
@@ -428,8 +485,8 @@ impl SqliteDatabase {
             let conn = conn.blocking_lock();
             let result = f(&conn).map_err(|e| format!("SQLite error: {e}"));
             let elapsed_ms = start.elapsed().as_millis() as u64;
-            if elapsed_ms > 100 {
-                tracing::warn!(elapsed_ms, "slow read query");
+            if elapsed_ms > SLOW_READ_WARN_MS {
+                record_slow_query("read", elapsed_ms);
             }
             result
         })
@@ -450,8 +507,8 @@ impl SqliteDatabase {
             let conn = conn.blocking_lock();
             let result = f(&conn).map_err(|e| format!("SQLite error: {e}"));
             let elapsed_ms = start.elapsed().as_millis() as u64;
-            if elapsed_ms > 100 {
-                tracing::warn!(elapsed_ms, "slow write query");
+            if elapsed_ms > SLOW_WRITE_WARN_MS {
+                record_slow_query("write", elapsed_ms);
             }
             result
         })
@@ -471,8 +528,8 @@ impl SqliteDatabase {
             let mut conn = conn.blocking_lock();
             let result = f(&mut conn).map_err(|e| format!("SQLite error: {e}"));
             let elapsed_ms = start.elapsed().as_millis() as u64;
-            if elapsed_ms > 200 {
-                tracing::warn!(elapsed_ms, "slow transaction");
+            if elapsed_ms > SLOW_TX_WARN_MS {
+                record_slow_query("transaction", elapsed_ms);
             }
             result
         })

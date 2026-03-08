@@ -3,20 +3,20 @@
 ## Priority
 P1
 
-## Audit Status (2026-03-07)
-Status: **Not Implemented**
+## Audit Status (2026-03-08)
+Status: **Partially Implemented**
 
 Evidence:
-1. `core/src/gallery_dl_runner.rs` is 2400+ lines.
-2. It currently owns site registry data, query URL templating, credential shaping, temp config generation, subprocess spawning, output scanning, sidecar parsing, and failure interpretation.
-3. Site-specific behavior is encoded in one giant runner module rather than in explicit adapters.
-4. Auth requirements and query capabilities are represented as static data inside the same module that spawns child processes.
+1. Gallery-dl code has moved under `core/src/subscriptions/gallery_dl_runner.rs`, but it is still a monolith that combines registry, auth shaping, config generation, execution, parsing, and failure classification.
+2. Site-specific behavior is still encoded as branches and static data inside the runner rather than explicit adapters.
+3. Auth requirements and query capabilities are still represented close to process execution logic.
+4. The move improved topology, but not the internal ownership split this PBI is supposed to enforce.
 
 ## Problem
 `gallery_dl_runner.rs` is a monolith. Registry, capability description, authentication shaping, process execution, and result parsing are all coupled together. This makes adding or debugging a source unnecessarily risky and keeps subscription behavior tied to one oversized file.
 
 ## Scope
-- `core/src/gallery_dl_runner.rs`
+- `core/src/subscriptions/gallery_dl_runner.rs`
 - supporting credential and query-shaping helpers
 
 ## Implementation

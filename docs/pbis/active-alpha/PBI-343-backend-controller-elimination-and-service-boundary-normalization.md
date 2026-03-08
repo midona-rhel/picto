@@ -3,13 +3,13 @@
 ## Priority
 P1
 
-## Audit Status (2026-03-07)
-Status: **Not Implemented**
+## Audit Status (2026-03-08)
+Status: **Partially Implemented**
 
 Evidence:
-1. Many backend files are named `*_controller.rs` even when they own orchestration, domain logic, runtime state, or query logic.
-2. The term `controller` is overloaded and obscures whether a file is a service, orchestrator, query layer, or transport entry point.
-3. The flat root made this naming drift worse; folderization alone will not fully solve it.
+1. Controller naming is no longer a flat-root problem, but many domain folders still use `controller.rs` for modules that are really orchestration or service boundaries.
+2. Examples include `core/src/subscriptions/controller.rs`, `core/src/metadata/controller.rs`, `core/src/duplicates/controller.rs`, and `core/src/smart_folders/controller.rs`.
+3. The term `controller` still obscures whether a file is a thin domain entry point, a query service, or an orchestrator.
 
 ## Problem
 Even after moving files into folders, the backend will remain confusing if service boundaries are still expressed as vague `controller` modules. Physical structure and naming need to align.

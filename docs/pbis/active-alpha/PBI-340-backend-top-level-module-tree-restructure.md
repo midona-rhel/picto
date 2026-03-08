@@ -3,14 +3,14 @@
 ## Priority
 P1
 
-## Audit Status (2026-03-07)
-Status: **Not Implemented**
+## Audit Status (2026-03-08)
+Status: **Partially Implemented**
 
 Evidence:
-1. `core/src/lib.rs` exports a long flat list of root modules.
-2. `core/src/` still contains dozens of domain/controller files directly at the root.
-3. There is no top-level separation between app lifecycle, runtime state, infra, persistence, media processing, and business domains.
-4. Contributors currently need filename memory rather than folder structure to navigate the backend.
+1. `core/src/lib.rs` now exposes real domain folders like `duplicates`, `folders`, `grid`, `metadata`, `selection`, `smart_folders`, `subscriptions`, and `tags`.
+2. The root is no longer a flat bag of controller files, but the target top-level architecture is still incomplete.
+3. There is still no explicit `app/`, `runtime/`, `infra/`, or `persistence/` split; cross-cutting modules remain mixed at root.
+4. Top-level navigation is better than before, but the intended stable module tree is not complete yet.
 
 ## Problem
 The backend has no clear physical top-level architecture. Even if individual services are improved, the project will remain hard to navigate until `core/src` itself is reorganized into a stable top-level module tree.
