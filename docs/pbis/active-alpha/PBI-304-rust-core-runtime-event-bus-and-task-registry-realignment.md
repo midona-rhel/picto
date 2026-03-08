@@ -4,20 +4,20 @@
 P1
 
 ## Audit Status (2026-03-07)
-Status: **Partially Implemented**
+Status: **Implemented**
 
 ### What's done:
 1. `core/src/runtime_state.rs` — centralized task registry with `upsert_task`, `remove_task`, `get_runtime_snapshot`. Monotonic sequence counter shared with `events.rs`.
 2. `core/src/runtime_contract/` — typed contract types (`MutationReceipt`, `RuntimeTask`, `RuntimeSnapshot`, `TaskKind`, `TaskStatus`, `TaskProgress`) with ts-rs TypeScript generation.
 3. `core/src/events.rs` — `emit_mutation()` produces sequenced `MutationReceipt` events. Legacy `state-changed` / `sidebar-invalidated` / `grid-snapshot-invalidated` events fully removed.
 4. All three task families (subscriptions, flows, PTR) publish through `runtime_state::upsert_task`. `SUB_RUNTIME_PROGRESS` parallel state removed — subscription progress is now stored in `RuntimeTask.detail`.
-5. Frontend `runtimeSyncStore.ts` subscribes to `runtime/mutation_committed`, `runtime/task_upserted`, `runtime/task_removed`.
+5. Frontend `runtimeSyncStore.ts` subscribes to `runtime/mutation_committed`, `runtime/task_upserted`, `runtime/task_removed`. All legacy domain-specific event listeners removed.
 6. Snapshot recovery via `get_runtime_snapshot` dispatch command wired end-to-end.
+7. Task events carry monotonic sequence numbers via the shared `runtime_state::next_seq()` counter.
+8. All legacy domain-specific events (`subscription-started/progress/finished`, `flow-started/progress/finished`, `ptr-sync-*`, `ptr-bootstrap-*`) fully removed from both backend emission and frontend subscription. Frontend derives all domain state from task events via `applyTaskUpsert`.
 
-### What remains:
-1. PTR controller still maintains operational `AtomicBool` guard flags (`PTR_SYNCING`, `PTR_BOOTSTRAP_RUNNING`, `PTR_COMPACT_BUILD_RUNNING`) for mutual exclusion. These serve a different purpose than progress reporting but represent parallel state.
-2. Legacy domain-specific events (`subscription-started`, `flow-started`, `ptr-sync-started`, etc.) still emitted alongside `upsert_task` for frontend backward compatibility. Frontend listeners should migrate to task-based model.
-3. Task events (`runtime/task_upserted`, `runtime/task_removed`) are not sequenced — only mutation events carry sequence numbers.
+### Design note — PTR AtomicBool guards:
+PTR controller retains operational `AtomicBool` flags (`PTR_SYNCING`, `PTR_BOOTSTRAP_RUNNING`, `PTR_COMPACT_BUILD_RUNNING`) for mutual exclusion via `compare_exchange`. These are concurrency primitives (test-and-set mutex guards), not runtime state — they prevent concurrent sync/bootstrap/compact operations. Centralizing them behind the task registry would add complexity without benefit since `compare_exchange` on an `AtomicBool` is the correct primitive for this use case.
 
 ## Problem
 The Rust core has no single runtime event bus or task registry. Mutation notifications, long-running task progress, and pollable fallback state are each implemented differently depending on domain. This makes the backend hard to reason about and directly causes renderer desynchronization after reloads, listener loss, or parallel background work.
@@ -67,7 +67,7 @@ Feeds:
 ## Test Cases
 1. Start a subscription, reload the renderer, and confirm task snapshot recovery works.
 2. Run PTR sync and confirm runtime task state remains available through snapshot + events.
-3. Verify old compatibility events still fire during migration.
+3. Verify legacy events are fully removed — no `subscription-*`, `flow-*`, or `ptr-*` event names in `event_names` module or frontend listeners.
 
 ## Risk
 High. This touches the backend runtime contract and several long-running worker paths simultaneously.

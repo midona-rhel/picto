@@ -16,7 +16,7 @@ use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
-use crate::events;
+
 use crate::ptr::client::PtrClient;
 use crate::ptr::types::*;
 use crate::ptr::db::PtrSqliteDatabase;
@@ -172,7 +172,6 @@ impl PtrSyncEngine {
                         let mut snap = crate::poison::mutex_or_recover(&heartbeat_progress, "ptr_sync_heartbeat").clone();
                         snap.heartbeat = true;
                         crate::ptr::controller::PtrController::update_sync_progress(&snap);
-                        events::emit(events::event_names::PTR_SYNC_PROGRESS, &snap);
                     }
                     _ = heartbeat_cancel.cancelled() => break,
                 }
@@ -1174,8 +1173,8 @@ impl PtrSyncEngine {
     ) {
         progress.heartbeat = false;
         *crate::poison::mutex_or_recover(shared, "ptr_sync_progress") = progress.clone();
+        // update_sync_progress publishes a RuntimeTask event with progress as detail.
         crate::ptr::controller::PtrController::update_sync_progress(progress);
-        events::emit(events::event_names::PTR_SYNC_PROGRESS, progress);
     }
 
     fn emit_progress_shared_throttled(
@@ -1193,18 +1192,12 @@ impl PtrSyncEngine {
         }
     }
 
-    fn emit_phase_changed(last_phase: &mut String, phase: &str, current_update_index: u64) {
+    fn emit_phase_changed(last_phase: &mut String, phase: &str, _current_update_index: u64) {
         if last_phase == phase {
             return;
         }
         *last_phase = phase.to_string();
-        events::emit(
-            events::event_names::PTR_SYNC_PHASE_CHANGED,
-            &events::PtrSyncPhaseChangedEvent {
-                phase: phase.to_string(),
-                current_update_index: Some(current_update_index),
-                ts: Some(Utc::now().to_rfc3339()),
-            },
-        );
+        // Phase changes are now embedded in PtrSyncProgress.phase,
+        // delivered via task events from update_sync_progress.
     }
 }

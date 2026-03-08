@@ -241,13 +241,13 @@ impl TypedCommand for DeleteFlow {
         .await?;
         crate::events::emit_mutation(
             "delete_flow",
-            crate::events::MutationImpact::sidebar(crate::events::Domain::Subscriptions)
+            crate::events::MutationImpact::new()
                 .domains(&[
                     crate::events::Domain::Subscriptions,
                     crate::events::Domain::Sidebar,
                     crate::events::Domain::Files,
-                ])
-                .selection_summary(),
+                    crate::events::Domain::Selection,
+                ]),
         );
         Ok(())
     }
@@ -425,13 +425,13 @@ impl TypedCommand for DeleteSubscription {
             .await?;
         crate::events::emit_mutation(
             "delete_subscription",
-            crate::events::MutationImpact::sidebar(crate::events::Domain::Subscriptions)
+            crate::events::MutationImpact::new()
                 .domains(&[
                     crate::events::Domain::Subscriptions,
                     crate::events::Domain::Sidebar,
                     crate::events::Domain::Files,
-                ])
-                .selection_summary(),
+                    crate::events::Domain::Selection,
+                ]),
         );
         Ok(serde_json::to_value(&count).map_err(|e| e.to_string())?)
     }

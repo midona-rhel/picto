@@ -320,15 +320,6 @@ impl FlowController {
                     drop(map);
 
                     let done = started as usize - still_running_count;
-                    crate::events::emit(
-                        crate::events::event_names::FLOW_PROGRESS,
-                        &crate::events::FlowProgressEvent {
-                            flow_id: flow_id_str.clone(),
-                            total: started,
-                            done,
-                            remaining: still_running_count,
-                        },
-                    );
                     {
                         let now = chrono::Utc::now().to_rfc3339();
                         crate::runtime_state::upsert_task(RuntimeTask {
@@ -354,26 +345,6 @@ impl FlowController {
                 let has_failed = started_sub_ids
                     .iter()
                     .any(|id| statuses.get(id).map(|s| s == "failed").unwrap_or(false));
-                let has_cancelled = started_sub_ids
-                    .iter()
-                    .any(|id| statuses.get(id).map(|s| s == "cancelled").unwrap_or(false));
-                let final_status = if has_failed {
-                    "failed"
-                } else if has_cancelled {
-                    "cancelled"
-                } else {
-                    "succeeded"
-                };
-
-                crate::events::emit(
-                    crate::events::event_names::FLOW_FINISHED,
-                    &crate::events::FlowFinishedEvent {
-                        flow_id: flow_id_str.clone(),
-                        status: final_status.to_string(),
-                        started_count: Some(started),
-                        error: None,
-                    },
-                );
                 {
                     let task_status = if has_failed {
                         TaskStatus::Failed
@@ -401,15 +372,6 @@ impl FlowController {
 
             if let Err(e) = inner.await {
                 tracing::error!(flow_id = %flow_id_guard, "Flow monitor panicked: {e}");
-                crate::events::emit(
-                    crate::events::event_names::FLOW_FINISHED,
-                    &crate::events::FlowFinishedEvent {
-                        flow_id: flow_id_guard.clone(),
-                        status: "failed".to_string(),
-                        started_count: None,
-                        error: Some(format!("Monitor panicked: {e}")),
-                    },
-                );
                 {
                     let now = chrono::Utc::now().to_rfc3339();
                     crate::runtime_state::upsert_task(RuntimeTask {
@@ -476,10 +438,6 @@ impl FlowController {
                 failure_kind: None,
                 error: None,
             };
-            crate::events::emit(
-                crate::events::event_names::SUBSCRIPTION_PROGRESS,
-                &progress,
-            );
             {
                 use crate::runtime_contract::task::TaskStatus;
                 let sub_name = progress.subscription_name.clone();

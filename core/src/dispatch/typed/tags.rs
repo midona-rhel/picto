@@ -255,8 +255,7 @@ impl TypedCommand for AddTags {
         if !val.is_empty() {
             crate::events::emit_mutation(
                 "add_tags",
-                crate::events::MutationImpact::file_tags(hash_clone)
-                    .selection_summary(),
+                crate::events::MutationImpact::file_tags(hash_clone),
             );
         }
         Ok(val)
@@ -275,7 +274,7 @@ impl TypedCommand for RemoveTags {
         ).await?;
         crate::events::emit_mutation(
             "remove_tags",
-            crate::events::MutationImpact::file_tags(hash_clone).selection_summary(),
+            crate::events::MutationImpact::file_tags(hash_clone),
         );
         Ok(())
     }
@@ -347,9 +346,7 @@ impl TypedCommand for SetTagAlias {
         state.db.add_sibling(&from_ns, &from_st, &to_ns, &to_st, "local").await?;
         crate::events::emit_mutation(
             "set_tag_alias",
-            crate::events::MutationImpact::sidebar(crate::events::Domain::Tags)
-                .grid_all()
-                .selection_summary(),
+            crate::events::MutationImpact::tag_structure_change(),
         );
         Ok(())
     }
@@ -366,9 +363,7 @@ impl TypedCommand for RemoveTagAlias {
         state.db.remove_sibling(&from_ns, &from_st, "local").await?;
         crate::events::emit_mutation(
             "remove_tag_alias",
-            crate::events::MutationImpact::sidebar(crate::events::Domain::Tags)
-                .grid_all()
-                .selection_summary(),
+            crate::events::MutationImpact::tag_structure_change(),
         );
         Ok(())
     }
@@ -434,9 +429,7 @@ impl TypedCommand for AddTagParent {
         state.db.add_parent(&cns, &cst, &pns, &pst, "local").await?;
         crate::events::emit_mutation(
             "add_tag_parent",
-            crate::events::MutationImpact::sidebar(crate::events::Domain::Tags)
-                .grid_all()
-                .selection_summary(),
+            crate::events::MutationImpact::tag_structure_change(),
         );
         Ok(())
     }
@@ -455,9 +448,7 @@ impl TypedCommand for RemoveTagParent {
         state.db.remove_parent(&cns, &cst, &pns, &pst, "local").await?;
         crate::events::emit_mutation(
             "remove_tag_parent",
-            crate::events::MutationImpact::sidebar(crate::events::Domain::Tags)
-                .grid_all()
-                .selection_summary(),
+            crate::events::MutationImpact::tag_structure_change(),
         );
         Ok(())
     }
@@ -556,9 +547,7 @@ impl TypedCommand for RenameTag {
         let (affected_file_ids, merged_into) = state.db.rename_tag_by_id(input.tag_id, &input.new_name).await?;
         crate::events::emit_mutation(
             "rename_tag",
-            crate::events::MutationImpact::sidebar(crate::events::Domain::Tags)
-                .grid_all()
-                .selection_summary(),
+            crate::events::MutationImpact::tag_structure_change(),
         );
         Ok(serde_json::json!({
             "affected_files": affected_file_ids.len(),

@@ -101,8 +101,7 @@ impl TypedCommand for ImportFiles {
         if !result.imported.is_empty() {
             crate::events::emit_mutation(
                 "import_files",
-                crate::events::MutationImpact::file_lifecycle(&state.db)
-                    .grid_scopes(vec!["system:all".into(), "system:inbox".into()]),
+                crate::events::MutationImpact::file_lifecycle(&state.db),
             );
         }
         Ok(result)
@@ -131,11 +130,8 @@ impl TypedCommand for UpdateFileStatus {
         {
             tracing::warn!(error = %err, "failed to refresh folder sidebar projection after status update");
         }
-        let scopes = status_mutation_grid_scopes(&folder_ids);
         let mut impact = crate::events::MutationImpact::file_status_change(&state.db)
-            .file_hashes(vec![input.hash.clone()])
-            .metadata_hashes(vec![input.hash])
-            .grid_scopes(scopes);
+            .file_hashes(vec![input.hash]);
         if !folder_ids.is_empty() {
             impact = impact.folder_ids(folder_ids);
         }
@@ -166,8 +162,7 @@ impl TypedCommand for DeleteFile {
             tracing::warn!(error = %err, "failed to refresh folder sidebar projection after delete_file");
         }
         let mut impact = crate::events::MutationImpact::file_status_change(&state.db)
-            .file_hashes(vec![input.hash])
-            .grid_all();
+            .file_hashes(vec![input.hash]);
         if !folder_ids.is_empty() {
             impact = impact.folder_ids(folder_ids);
         }
@@ -204,8 +199,7 @@ impl TypedCommand for DeleteFiles {
                 tracing::warn!(error = %err, "failed to refresh folder sidebar projection after delete_files");
             }
             let mut impact = crate::events::MutationImpact::file_status_change(&state.db)
-                .file_hashes(hashes_for_impact)
-                .grid_all();
+                .file_hashes(hashes_for_impact);
             if !folder_ids.is_empty() {
                 impact = impact.folder_ids(folder_ids);
             }
@@ -243,8 +237,7 @@ impl TypedCommand for WipeImageData {
 
         crate::events::emit_mutation(
             "wipe_image_data",
-            crate::events::MutationImpact::file_status_change(&state.db)
-                .grid_all(),
+            crate::events::MutationImpact::file_status_change(&state.db),
         );
         Ok(())
     }
@@ -280,8 +273,7 @@ impl TypedCommand for DeleteFilesSelection {
                 tracing::warn!(error = %err, "failed to refresh folder sidebar projection after delete_files_selection");
             }
             let mut impact = crate::events::MutationImpact::file_status_change(&state.db)
-                .file_hashes(hashes_clone)
-                .grid_all();
+                .file_hashes(hashes_clone);
             if !folder_ids.is_empty() {
                 impact = impact.folder_ids(folder_ids);
             }
@@ -312,7 +304,6 @@ impl TypedCommand for UpdateFileStatusSelection {
                 folder_ids.sort_unstable();
                 folder_ids.dedup();
             }
-            let scopes = status_mutation_grid_scopes(&folder_ids);
             state
                 .db
                 .update_file_status_batch(&bitmap, status_code)
@@ -323,8 +314,7 @@ impl TypedCommand for UpdateFileStatusSelection {
             {
                 tracing::warn!(error = %err, "failed to refresh folder sidebar projection after status batch update");
             }
-            let mut impact = crate::events::MutationImpact::file_status_change(&state.db)
-                .grid_scopes(scopes);
+            let mut impact = crate::events::MutationImpact::file_status_change(&state.db);
             if !folder_ids.is_empty() {
                 impact = impact.folder_ids(folder_ids);
             }
@@ -410,23 +400,6 @@ pub(crate) async fn collect_folder_ids_for_hashes(
     folder_ids
 }
 
-pub(crate) fn status_mutation_grid_scopes(folder_ids: &[i64]) -> Vec<String> {
-    let mut scopes = vec![
-        "system:all".to_string(),
-        "system:inbox".to_string(),
-        "system:trash".to_string(),
-        "system:recently_viewed".to_string(),
-        // Conservative smart-folder fallback when precise smart IDs are unavailable.
-        "smart:all".to_string(),
-    ];
-    for folder_id in folder_ids {
-        scopes.push(format!("folder:{folder_id}"));
-    }
-    scopes.sort();
-    scopes.dedup();
-    scopes
-}
-
 // ─── Dispatch router ───────────────────────────────────────────────────────
 
 pub async fn dispatch_typed(
@@ -449,30 +422,3 @@ pub async fn dispatch_typed(
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::status_mutation_grid_scopes;
-
-    #[test]
-    fn status_scopes_include_system_and_smart_fallback() {
-        let scopes = status_mutation_grid_scopes(&[]);
-        assert!(scopes.contains(&"system:all".to_string()));
-        assert!(scopes.contains(&"system:inbox".to_string()));
-        assert!(scopes.contains(&"system:trash".to_string()));
-        assert!(scopes.contains(&"smart:all".to_string()));
-    }
-
-    #[test]
-    fn status_scopes_include_folder_targets_without_duplicates() {
-        let scopes = status_mutation_grid_scopes(&[4, 4, 9]);
-        let folder_scopes = scopes
-            .iter()
-            .filter(|s| s.starts_with("folder:"))
-            .cloned()
-            .collect::<Vec<_>>();
-        assert_eq!(
-            folder_scopes,
-            vec!["folder:4".to_string(), "folder:9".to_string()]
-        );
-    }
-}

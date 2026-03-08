@@ -2,7 +2,8 @@
 //! and cancellation for the Public Tag Repository.
 //!
 //! Runs periodic sync on a 60-second schedule with back-off on failure.
-//! Exposes global state flags (`PTR_SYNCING`) for UI status indication.
+//! Uses global AtomicBool flags (`PTR_SYNCING`, `PTR_BOOTSTRAP_RUNNING`,
+//! `PTR_COMPACT_BUILD_RUNNING`) for mutual exclusion between operations.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -16,7 +17,7 @@ use crate::events;
 use crate::ptr::client::PtrClient;
 use crate::ptr::sync_engine::PtrSyncEngine;
 use crate::ptr::types::PtrSyncProgress;
-use crate::runtime_contract::task::{RuntimeTask, TaskKind, TaskProgress, TaskStatus};
+use crate::runtime_contract::task::{RuntimeTask, TaskKind, TaskStatus};
 use crate::settings::store::SettingsStore;
 use crate::sqlite::CompilerEvent;
 use crate::ptr::db::tags::PtrResolvedTag;
@@ -156,36 +157,11 @@ impl PtrController {
                 }
             }
 
-            events::emit_empty(events::event_names::PTR_SYNC_STARTED);
-            {
-                let now = chrono::Utc::now().to_rfc3339();
-                crate::runtime_state::upsert_task(RuntimeTask {
-                    task_id: "ptr:sync".to_string(),
-                    kind: TaskKind::PtrSync,
-                    status: TaskStatus::Running,
-                    label: format!("PTR {startup_phase}"),
-                    parent_task_id: None,
-                    progress: None,
-                    detail: None,
-                    started_at: now.clone(),
-                    updated_at: now,
-                });
-            }
-
             let mut progress = PtrSyncProgress {
                 phase: startup_phase.into(),
                 ..Default::default()
             };
-            events::emit(
-                events::event_names::PTR_SYNC_PHASE_CHANGED,
-                &events::PtrSyncPhaseChangedEvent {
-                    phase: startup_phase.into(),
-                    current_update_index: None,
-                    ts: None,
-                },
-            );
             Self::update_sync_progress(&progress);
-            events::emit(events::event_names::PTR_SYNC_PROGRESS, &progress);
 
             let heartbeat_cancel = CancellationToken::new();
             let heartbeat_cancel_clone = heartbeat_cancel.clone();
@@ -196,16 +172,13 @@ impl PtrController {
                 loop {
                     tokio::select! {
                         _ = interval.tick() => {
-                            let mut snap = PtrSyncProgress {
+                            let snap = PtrSyncProgress {
                                 phase: startup_phase.into(),
                                 heartbeat: true,
                                 elapsed_ms: heartbeat_start.elapsed().as_millis() as u64,
                                 ..Default::default()
                             };
                             PtrController::update_sync_progress(&snap);
-                            events::emit(events::event_names::PTR_SYNC_PROGRESS, &snap);
-                            // Avoid carrying heartbeat=true in poll fallback snapshots
-                            snap.heartbeat = false;
                         }
                         _ = heartbeat_cancel_clone.cancelled() => break,
                     }
@@ -223,10 +196,10 @@ impl PtrController {
             match rebuild_res {
                 Ok(()) => {
                     progress.elapsed_ms = heartbeat_start.elapsed().as_millis() as u64;
-                    Self::update_sync_progress(&progress);
-                    events::emit(
-                        events::event_names::PTR_SYNC_FINISHED,
-                        &events::PtrSyncFinishedEvent {
+                    Self::emit_sync_task(
+                        TaskStatus::Finished,
+                        &format!("PTR {startup_phase}"),
+                        serde_json::to_value(&events::PtrSyncFinishedEvent {
                             success: true,
                             error: None,
                             updates_processed: None,
@@ -234,28 +207,16 @@ impl PtrController {
                             schema_rebuild: Some(needs_schema_rebuild),
                             index_rebuild: Some(needs_index_rebuild && !needs_schema_rebuild),
                             changed_hashes_truncated: None,
-                        },
+                        })
+                        .ok(),
                     );
-                    {
-                        let now = chrono::Utc::now().to_rfc3339();
-                        crate::runtime_state::upsert_task(RuntimeTask {
-                            task_id: "ptr:sync".to_string(),
-                            kind: TaskKind::PtrSync,
-                            status: TaskStatus::Finished,
-                            label: format!("PTR {startup_phase}"),
-                            parent_task_id: None,
-                            progress: None,
-                            detail: None,
-                            started_at: now.clone(),
-                            updated_at: now,
-                        });
-                    }
                     tracing::info!(phase = startup_phase, "PTR startup maintenance finished");
                 }
                 Err(e) => {
-                    events::emit(
-                        events::event_names::PTR_SYNC_FINISHED,
-                        &events::PtrSyncFinishedEvent {
+                    Self::emit_sync_task(
+                        TaskStatus::Failed,
+                        &format!("PTR {startup_phase}"),
+                        serde_json::to_value(&events::PtrSyncFinishedEvent {
                             success: false,
                             error: Some(e.clone()),
                             updates_processed: None,
@@ -263,22 +224,9 @@ impl PtrController {
                             schema_rebuild: Some(needs_schema_rebuild),
                             index_rebuild: Some(needs_index_rebuild && !needs_schema_rebuild),
                             changed_hashes_truncated: None,
-                        },
+                        })
+                        .ok(),
                     );
-                    {
-                        let now = chrono::Utc::now().to_rfc3339();
-                        crate::runtime_state::upsert_task(RuntimeTask {
-                            task_id: "ptr:sync".to_string(),
-                            kind: TaskKind::PtrSync,
-                            status: TaskStatus::Failed,
-                            label: format!("PTR {startup_phase}"),
-                            parent_task_id: None,
-                            progress: None,
-                            detail: None,
-                            started_at: now.clone(),
-                            updated_at: now,
-                        });
-                    }
                     tracing::error!(phase = startup_phase, "PTR startup maintenance failed");
                 }
             }
@@ -316,10 +264,16 @@ impl PtrController {
     }
 
     /// Called by the sync engine to update the pollable progress.
+    /// Also publishes a task event with the progress packed as detail.
     pub fn update_sync_progress(progress: &PtrSyncProgress) {
         if let Ok(mut g) = PTR_PROGRESS.lock() {
             *g = Some(progress.clone());
         }
+        Self::emit_sync_task(
+            TaskStatus::Running,
+            &format!("PTR sync ({})", progress.phase),
+            serde_json::to_value(progress).ok(),
+        );
     }
 
     fn update_bootstrap_status(update: impl FnOnce(&mut PtrBootstrapStatus)) {
@@ -327,6 +281,39 @@ impl PtrController {
             update(&mut g);
             g.updated_at = Some(chrono::Utc::now().to_rfc3339());
         }
+    }
+
+    /// Emit a task event for PTR sync with optional detail.
+    fn emit_sync_task(status: TaskStatus, label: &str, detail: Option<serde_json::Value>) {
+        let now = chrono::Utc::now().to_rfc3339();
+        crate::runtime_state::upsert_task(RuntimeTask {
+            task_id: "ptr:sync".to_string(),
+            kind: TaskKind::PtrSync,
+            status,
+            label: label.to_string(),
+            parent_task_id: None,
+            progress: None,
+            detail,
+            started_at: now.clone(),
+            updated_at: now,
+        });
+    }
+
+    /// Emit a task event for PTR bootstrap with current status snapshot as detail.
+    fn emit_bootstrap_task(status: TaskStatus, label: &str) {
+        let snap = Self::get_bootstrap_status();
+        let now = chrono::Utc::now().to_rfc3339();
+        crate::runtime_state::upsert_task(RuntimeTask {
+            task_id: "ptr:bootstrap".to_string(),
+            kind: TaskKind::PtrBootstrap,
+            status,
+            label: label.to_string(),
+            parent_task_id: None,
+            progress: None,
+            detail: serde_json::to_value(&snap).ok(),
+            started_at: now.clone(),
+            updated_at: now,
+        });
     }
 
     /// Returns true if the auto-sync cooldown is still active (last attempt was recent).
@@ -369,17 +356,13 @@ impl PtrController {
             if let Some(progress) = progress_guard.as_mut() {
                 progress.phase = "cancelling".into();
                 progress.heartbeat = false;
-                events::emit(events::event_names::PTR_SYNC_PROGRESS, progress);
+                Self::emit_sync_task(
+                    TaskStatus::Cancelling,
+                    "PTR sync (cancelling)",
+                    serde_json::to_value(&*progress).ok(),
+                );
             }
         }
-        events::emit(
-            events::event_names::PTR_SYNC_PHASE_CHANGED,
-            &events::PtrSyncPhaseChangedEvent {
-                phase: "cancelling".into(),
-                current_update_index: None,
-                ts: None,
-            },
-        );
         Ok(())
     }
 
@@ -403,14 +386,7 @@ impl PtrController {
         Self::update_bootstrap_status(|s| {
             s.phase = "cancelling".into();
         });
-        events::emit(
-            events::event_names::PTR_BOOTSTRAP_PROGRESS,
-            &events::PtrBootstrapProgressEvent {
-                phase: "cancelling".into(),
-                stage: Some("cancelling".into()),
-                ..Default::default()
-            },
-        );
+        Self::emit_bootstrap_task(TaskStatus::Cancelling, "PTR bootstrap (cancelling)");
         Ok(())
     }
 
@@ -464,28 +440,7 @@ impl PtrController {
             s.rows_per_sec = None;
             s.checkpoint = None;
         });
-        events::emit(
-            events::event_names::PTR_BOOTSTRAP_STARTED,
-            &events::PtrBootstrapStartedEvent {
-                snapshot_dir: req.snapshot_dir.clone(),
-                service_id: probe.service_id,
-                mode: req.mode.clone(),
-            },
-        );
-        {
-            let now = chrono::Utc::now().to_rfc3339();
-            crate::runtime_state::upsert_task(RuntimeTask {
-                task_id: "ptr:bootstrap".to_string(),
-                kind: TaskKind::PtrBootstrap,
-                status: TaskStatus::Running,
-                label: format!("PTR bootstrap ({})", req.mode),
-                parent_task_id: None,
-                progress: None,
-                detail: None,
-                started_at: now.clone(),
-                updated_at: now,
-            });
-        }
+        Self::emit_bootstrap_task(TaskStatus::Running, &format!("PTR bootstrap ({})", req.mode));
 
         let dry_run_result = tokio::task::spawn_blocking({
             let probe = probe.clone();
@@ -520,15 +475,7 @@ impl PtrController {
             s.rows_done = Some(0);
             s.eta_seconds = Some(dry_run.projected_import_seconds);
         });
-        events::emit(
-            events::event_names::PTR_BOOTSTRAP_PROGRESS,
-            &events::PtrBootstrapProgressEvent {
-                phase: "dry_run_complete".into(),
-                service_id: Some(dry_run.service_id),
-                counts: Some(serde_json::to_value(&dry_run.counts).unwrap_or_default()),
-                ..Default::default()
-            },
-        );
+        Self::emit_bootstrap_task(TaskStatus::Running, "PTR bootstrap (dry_run_complete)");
 
         if mode == crate::ptr::db::bootstrap::PtrBootstrapMode::DryRun {
             PTR_BOOTSTRAP_RUNNING.store(false, Ordering::SeqCst);
@@ -538,33 +485,7 @@ impl PtrController {
                 s.stage = "dry_run".into();
                 s.rows_done = Some(0);
             });
-            events::emit(
-                events::event_names::PTR_BOOTSTRAP_FINISHED,
-                &events::PtrBootstrapFinishedEvent {
-                    success: true,
-                    dry_run: Some(true),
-                    service_id: Some(dry_run.service_id),
-                    result: None,
-                    cursor_index: None,
-                    cursor_source: None,
-                    delta_sync_started: None,
-                    counts: Some(serde_json::to_value(&dry_run.counts).unwrap_or_default()),
-                },
-            );
-            {
-                let now = chrono::Utc::now().to_rfc3339();
-                crate::runtime_state::upsert_task(RuntimeTask {
-                    task_id: "ptr:bootstrap".to_string(),
-                    kind: TaskKind::PtrBootstrap,
-                    status: TaskStatus::Finished,
-                    label: "PTR bootstrap (dry_run)".to_string(),
-                    parent_task_id: None,
-                    progress: None,
-                    detail: None,
-                    started_at: now.clone(),
-                    updated_at: now,
-                });
-            }
+            Self::emit_bootstrap_task(TaskStatus::Finished, "PTR bootstrap (dry_run)");
             return Ok(serde_json::json!({
                 "started": false,
                 "dry_run": true,
@@ -643,20 +564,7 @@ impl PtrController {
                         s.rows_per_sec = Some(rows_per_sec);
                         s.eta_seconds = eta_seconds;
                     });
-                    events::emit(
-                        events::event_names::PTR_BOOTSTRAP_PROGRESS,
-                        &events::PtrBootstrapProgressEvent {
-                            phase: progress.phase,
-                            rows_done: Some(progress.rows_done),
-                            rows_total: Some(progress.rows_total),
-                            rows_done_stage: Some(progress.rows_done),
-                            rows_total_stage: Some(progress.rows_total),
-                            rows_per_sec: Some(rows_per_sec),
-                            eta_seconds: eta_seconds.map(|s| s as f64),
-                            ts: Some(progress.ts),
-                            ..Default::default()
-                        },
-                    );
+                    PtrController::emit_bootstrap_task(TaskStatus::Running, "PTR bootstrap (importing)");
                 },
             );
             let heartbeat_cancel = CancellationToken::new();
@@ -667,21 +575,7 @@ impl PtrController {
                 loop {
                     tokio::select! {
                         _ = interval.tick() => {
-                            let snap = PtrController::get_bootstrap_status();
-                            events::emit(events::event_names::PTR_BOOTSTRAP_PROGRESS, &events::PtrBootstrapProgressEvent {
-                                phase: snap.phase,
-                                stage: Some(snap.stage),
-                                service_id: snap.service_id,
-                                running: Some(snap.running),
-                                rows_done: snap.rows_done,
-                                rows_total: snap.rows_total,
-                                rows_done_stage: snap.rows_done_stage,
-                                rows_total_stage: snap.rows_total_stage,
-                                rows_per_sec: snap.rows_per_sec,
-                                eta_seconds: snap.eta_seconds.map(|s| s as f64),
-                                updated_at: snap.updated_at,
-                                ..Default::default()
-                            });
+                            PtrController::emit_bootstrap_task(TaskStatus::Running, "PTR bootstrap (importing)");
                         }
                         _ = heartbeat_cancel_clone.cancelled() => break,
                     }
@@ -779,23 +673,7 @@ impl PtrController {
                                 s.rows_per_sec = Some(rows_per_sec);
                                 s.eta_seconds = eta_seconds;
                             });
-                            events::emit(
-                                events::event_names::PTR_BOOTSTRAP_PROGRESS,
-                                &events::PtrBootstrapProgressEvent {
-                                    phase: progress.phase,
-                                    stage: Some("compact_build".into()),
-                                    running: Some(true),
-                                    rows_done: Some(progress.rows_done),
-                                    rows_total: Some(progress.rows_total),
-                                    rows_done_stage: Some(progress.rows_done),
-                                    rows_total_stage: Some(progress.rows_total),
-                                    rows_per_sec: Some(rows_per_sec),
-                                    eta_seconds: eta_seconds.map(|s| s as f64),
-                                    updated_at: Some(chrono::Utc::now().to_rfc3339()),
-                                    ts: Some(progress.ts),
-                                    ..Default::default()
-                                },
-                            );
+                            PtrController::emit_bootstrap_task(TaskStatus::Running, "PTR bootstrap (compact_build)");
                         },
                     );
                     // 1s heartbeat ensures frontend receives events even between
@@ -808,21 +686,7 @@ impl PtrController {
                         loop {
                             tokio::select! {
                                 _ = interval.tick() => {
-                                    let snap = PtrController::get_bootstrap_status();
-                                    events::emit(events::event_names::PTR_BOOTSTRAP_PROGRESS, &events::PtrBootstrapProgressEvent {
-                                        phase: snap.phase,
-                                        stage: Some(snap.stage),
-                                        service_id: snap.service_id,
-                                        running: Some(snap.running),
-                                        rows_done: snap.rows_done,
-                                        rows_total: snap.rows_total,
-                                        rows_done_stage: snap.rows_done_stage,
-                                        rows_total_stage: snap.rows_total_stage,
-                                        rows_per_sec: snap.rows_per_sec,
-                                        eta_seconds: snap.eta_seconds.map(|s| s as f64),
-                                        updated_at: snap.updated_at,
-                                        ..Default::default()
-                                    });
+                                    PtrController::emit_bootstrap_task(TaskStatus::Running, "PTR bootstrap (compact_build)");
                                 }
                                 _ = compact_hb_cancel_clone.cancelled() => break,
                             }
@@ -858,33 +722,7 @@ impl PtrController {
                                     s.checkpoint = Some(cs.checkpoint);
                                 }
                             });
-                            events::emit(
-                                events::event_names::PTR_BOOTSTRAP_FINISHED,
-                                &events::PtrBootstrapFinishedEvent {
-                                    success: true,
-                                    dry_run: None,
-                                    service_id: None,
-                                    result: Some(serde_json::to_value(&result).unwrap_or_default()),
-                                    cursor_index: Some(final_cursor),
-                                    cursor_source: Some("snapshot".into()),
-                                    delta_sync_started: Some(delta_sync_started),
-                                    counts: None,
-                                },
-                            );
-                            {
-                                let now = chrono::Utc::now().to_rfc3339();
-                                crate::runtime_state::upsert_task(RuntimeTask {
-                                    task_id: "ptr:bootstrap".to_string(),
-                                    kind: TaskKind::PtrBootstrap,
-                                    status: TaskStatus::Finished,
-                                    label: "PTR bootstrap".to_string(),
-                                    parent_task_id: None,
-                                    progress: None,
-                                    detail: None,
-                                    started_at: now.clone(),
-                                    updated_at: now,
-                                });
-                            }
+                            Self::emit_bootstrap_task(TaskStatus::Finished, "PTR bootstrap");
                         }
                         Err(e) => {
                             Self::update_bootstrap_status(|s| {
@@ -893,27 +731,7 @@ impl PtrController {
                                 s.stage = "failed".into();
                                 s.last_error = Some(e.clone());
                             });
-                            events::emit(
-                                events::event_names::PTR_BOOTSTRAP_FAILED,
-                                &events::PtrBootstrapFailedEvent {
-                                    success: false,
-                                    error: e,
-                                },
-                            );
-                            {
-                                let now = chrono::Utc::now().to_rfc3339();
-                                crate::runtime_state::upsert_task(RuntimeTask {
-                                    task_id: "ptr:bootstrap".to_string(),
-                                    kind: TaskKind::PtrBootstrap,
-                                    status: TaskStatus::Failed,
-                                    label: "PTR bootstrap".to_string(),
-                                    parent_task_id: None,
-                                    progress: None,
-                                    detail: None,
-                                    started_at: now.clone(),
-                                    updated_at: now,
-                                });
-                            }
+                            Self::emit_bootstrap_task(TaskStatus::Failed, "PTR bootstrap");
                         }
                     }
                 }
@@ -925,27 +743,7 @@ impl PtrController {
                         s.stage = "failed".into();
                         s.last_error = Some(e.clone());
                     });
-                    events::emit(
-                        events::event_names::PTR_BOOTSTRAP_FAILED,
-                        &events::PtrBootstrapFailedEvent {
-                            success: false,
-                            error: e,
-                        },
-                    );
-                    {
-                        let now = chrono::Utc::now().to_rfc3339();
-                        crate::runtime_state::upsert_task(RuntimeTask {
-                            task_id: "ptr:bootstrap".to_string(),
-                            kind: TaskKind::PtrBootstrap,
-                            status: TaskStatus::Failed,
-                            label: "PTR bootstrap".to_string(),
-                            parent_task_id: None,
-                            progress: None,
-                            detail: None,
-                            started_at: now.clone(),
-                            updated_at: now,
-                        });
-                    }
+                    Self::emit_bootstrap_task(TaskStatus::Failed, "PTR bootstrap");
                 }
             }
 
@@ -1016,29 +814,7 @@ impl PtrController {
             *guard = Some(Instant::now());
         }
 
-        events::emit_empty(events::event_names::PTR_SYNC_STARTED);
-        events::emit(
-            events::event_names::PTR_SYNC_PHASE_CHANGED,
-            &events::PtrSyncPhaseChangedEvent {
-                phase: "starting".into(),
-                current_update_index: None,
-                ts: None,
-            },
-        );
-        {
-            let now = chrono::Utc::now().to_rfc3339();
-            crate::runtime_state::upsert_task(RuntimeTask {
-                task_id: "ptr:sync".to_string(),
-                kind: TaskKind::PtrSync,
-                status: TaskStatus::Running,
-                label: "PTR sync".to_string(),
-                parent_task_id: None,
-                progress: None,
-                detail: None,
-                started_at: now.clone(),
-                updated_at: now,
-            });
-        }
+        Self::emit_sync_task(TaskStatus::Running, "PTR sync", None);
 
         let cancel_check = cancel.clone();
         tokio::spawn(async move {
@@ -1046,9 +822,10 @@ impl PtrController {
                 Ok(progress) => {
                     if cancel_check.is_cancelled() {
                         tracing::info!("PTR sync was cancelled");
-                        events::emit(
-                            events::event_names::PTR_SYNC_FINISHED,
-                            &events::PtrSyncFinishedEvent {
+                        Self::emit_sync_task(
+                            TaskStatus::Failed,
+                            "PTR sync",
+                            serde_json::to_value(&events::PtrSyncFinishedEvent {
                                 success: false,
                                 error: Some("Cancelled".into()),
                                 updates_processed: None,
@@ -1056,22 +833,9 @@ impl PtrController {
                                 schema_rebuild: None,
                                 index_rebuild: None,
                                 changed_hashes_truncated: None,
-                            },
+                            })
+                            .ok(),
                         );
-                        {
-                            let now = chrono::Utc::now().to_rfc3339();
-                            crate::runtime_state::upsert_task(RuntimeTask {
-                                task_id: "ptr:sync".to_string(),
-                                kind: TaskKind::PtrSync,
-                                status: TaskStatus::Failed,
-                                label: "PTR sync".to_string(),
-                                parent_task_id: None,
-                                progress: None,
-                                detail: None,
-                                started_at: now.clone(),
-                                updated_at: now,
-                            });
-                        }
                     } else {
                         tracing::info!(
                             processed = progress.updates_processed,
@@ -1097,9 +861,10 @@ impl PtrController {
                                 changed_hashes: progress.changed_hashes.clone(),
                             });
                         }
-                        events::emit(
-                            events::event_names::PTR_SYNC_FINISHED,
-                            &events::PtrSyncFinishedEvent {
+                        Self::emit_sync_task(
+                            TaskStatus::Finished,
+                            "PTR sync",
+                            serde_json::to_value(&events::PtrSyncFinishedEvent {
                                 success: true,
                                 error: None,
                                 updates_processed: Some(progress.updates_processed),
@@ -1107,33 +872,17 @@ impl PtrController {
                                 schema_rebuild: None,
                                 index_rebuild: None,
                                 changed_hashes_truncated: Some(progress.changed_hashes_truncated),
-                            },
+                            })
+                            .ok(),
                         );
-                        {
-                            let now = chrono::Utc::now().to_rfc3339();
-                            crate::runtime_state::upsert_task(RuntimeTask {
-                                task_id: "ptr:sync".to_string(),
-                                kind: TaskKind::PtrSync,
-                                status: TaskStatus::Finished,
-                                label: "PTR sync".to_string(),
-                                parent_task_id: None,
-                                progress: Some(TaskProgress {
-                                    done: progress.updates_processed as u64,
-                                    total: progress.updates_processed as u64,
-                                    status_text: None,
-                                }),
-                                detail: None,
-                                started_at: now.clone(),
-                                updated_at: now,
-                            });
-                        }
                     }
                 }
                 Err(e) => {
                     tracing::error!(error = %e, "PTR sync failed");
-                    events::emit(
-                        events::event_names::PTR_SYNC_FINISHED,
-                        &events::PtrSyncFinishedEvent {
+                    Self::emit_sync_task(
+                        TaskStatus::Failed,
+                        "PTR sync",
+                        serde_json::to_value(&events::PtrSyncFinishedEvent {
                             success: false,
                             error: Some(e.clone()),
                             updates_processed: None,
@@ -1141,22 +890,9 @@ impl PtrController {
                             schema_rebuild: None,
                             index_rebuild: None,
                             changed_hashes_truncated: None,
-                        },
+                        })
+                        .ok(),
                     );
-                    {
-                        let now = chrono::Utc::now().to_rfc3339();
-                        crate::runtime_state::upsert_task(RuntimeTask {
-                            task_id: "ptr:sync".to_string(),
-                            kind: TaskKind::PtrSync,
-                            status: TaskStatus::Failed,
-                            label: "PTR sync".to_string(),
-                            parent_task_id: None,
-                            progress: None,
-                            detail: None,
-                            started_at: now.clone(),
-                            updated_at: now,
-                        });
-                    }
                 }
             }
             PTR_SYNCING.store(false, Ordering::SeqCst);
