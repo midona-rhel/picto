@@ -4,7 +4,6 @@ import {
   IconSettings2,
   IconCommand,
   IconDownload,
-  IconCloud,
   IconCopy,
   IconAlertTriangle,
   IconCode,
@@ -15,7 +14,6 @@ import { getCurrentWindow } from '#desktop/api';
 import { GeneralPanel } from './GeneralPanel';
 import { ShortcutsPanel } from './ShortcutsPanel';
 import { DownloadServicesPanel } from './DownloadServicesPanel';
-import { PtrPanel } from './PtrPanel';
 import { DuplicatesPanel } from './DuplicatesPanel';
 import { DangerZonePanel } from './DangerZonePanel';
 import { DeveloperPanel } from './DeveloperPanel';
@@ -36,7 +34,6 @@ const SIDEBAR_PANELS: SidebarEntry[] = [
   { id: 'shortcuts', label: 'Shortcuts', icon: IconCommand, panel: () => <ShortcutsPanel />, keywords: 'keyboard shortcut keybind hotkey' },
   { type: 'separator' },
   { id: 'downloads', label: 'Downloads', icon: IconDownload, panel: () => <DownloadServicesPanel />, keywords: 'download service gallery-dl rate limit batch' },
-  { id: 'ptr', label: 'PTR', icon: IconCloud, panel: () => <PtrPanel />, keywords: 'ptr public tag repository hydrus sync tags' },
   { id: 'duplicates', label: 'Duplicates', icon: IconCopy, panel: () => <DuplicatesPanel />, keywords: 'duplicate merge phash similarity threshold' },
   { type: 'separator' },
   { id: 'developer', label: 'Developer', icon: IconCode, panel: () => <DeveloperPanel />, keywords: 'developer perf slo diagnostics debug' },
