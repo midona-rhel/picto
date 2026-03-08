@@ -1,6 +1,6 @@
 import { useCallback } from 'react';
 import { api } from '#desktop/api';
-import { deepClone, registerUndoAction } from '../../../shared/controllers/undoRedoController';
+import { registerUndoAction } from '../../../shared/controllers/undoRedoController';
 import { useCacheStore } from '../../../state/cacheStore';
 import {
   getMetadata,
@@ -27,7 +27,7 @@ export function useInspectorMutations(
       if (tags.length === 0) return;
       const tagsSnapshot = [...tags];
       if (selectionSummarySpec) {
-        const specSnapshot = deepClone(selectionSummarySpec);
+        const specSnapshot = structuredClone(selectionSummarySpec);
         await api.selection.addTags(specSnapshot, tagsSnapshot);
         registerUndoAction({
           label: `Add ${tagsSnapshot.length} tag${tagsSnapshot.length === 1 ? '' : 's'}`,
@@ -99,7 +99,7 @@ export function useInspectorMutations(
       if (tags.length === 0) return;
       const tagsSnapshot = [...tags];
       if (selectionSummarySpec) {
-        const specSnapshot = deepClone(selectionSummarySpec);
+        const specSnapshot = structuredClone(selectionSummarySpec);
         await api.selection.removeTags(specSnapshot, tagsSnapshot);
         registerUndoAction({
           label: `Remove ${tagsSnapshot.length} tag${tagsSnapshot.length === 1 ? '' : 's'}`,

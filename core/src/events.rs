@@ -51,7 +51,7 @@ pub fn emit_empty(name: &str) {
 // SEQ counter lives in runtime_state — single source of truth.
 
 #[derive(Debug, Clone, serde::Serialize, ts_rs::TS)]
-#[ts(export, export_to = "../../src/shared/types/generated/runtime-contract/")]
+#[ts(export_to = "../../src/shared/types/generated/runtime-contract/")]
 #[serde(rename_all = "snake_case")]
 pub enum Domain {
     Files,
@@ -64,12 +64,7 @@ pub enum Domain {
     Subscriptions,
 }
 
-#[derive(Debug, Clone, Default, serde::Serialize)]
-pub struct SidebarCounts {
-    pub all_images: i64,
-    pub inbox: i64,
-    pub trash: i64,
-}
+pub use crate::runtime_contract::mutation::SidebarCounts;
 
 #[derive(Debug, Clone, Default)]
 pub struct MutationImpact {
@@ -80,7 +75,6 @@ pub struct MutationImpact {
     pub compiler_batch_done: Option<bool>,
     pub sidebar_counts: Option<SidebarCounts>,
     // Fact fields — describe what changed at the model level.
-    // derive_invalidation() converts these into DerivedInvalidation.
     pub status_changed: Option<bool>,
     pub tags_changed: Option<bool>,
     pub tag_structure_changed: Option<bool>,
@@ -109,10 +103,6 @@ impl MutationImpact {
     }
     pub fn smart_folder_ids(mut self, ids: Vec<i64>) -> Self {
         self.smart_folder_ids = Some(ids);
-        self
-    }
-    pub fn sidebar_counts(mut self, c: SidebarCounts) -> Self {
-        self.sidebar_counts = Some(c);
         self
     }
     pub fn sidebar_counts_from(mut self, db: &crate::sqlite::SqliteDatabase) -> Self {
@@ -288,13 +278,11 @@ impl MutationImpact {
 
 /// Emit a `runtime/mutation_committed` event with a `MutationReceipt`.
 ///
-/// Builds `MutationFacts` from the impact, calls `derive_invalidation()` to
-/// compute the transitional `invalidate` field, and emits the receipt.
+/// Builds `MutationFacts` from the impact and emits the receipt.
 /// The frontend derives stale resources from `facts` directly.
 pub fn emit_mutation(origin: &str, impact: MutationImpact) {
     use crate::runtime_contract::mutation::{
-        derive_invalidation, MutationFacts, MutationReceipt,
-        SidebarCounts as ContractSidebarCounts,
+        MutationFacts, MutationReceipt,
     };
 
     let seq = crate::runtime_state::next_seq();
@@ -314,29 +302,12 @@ pub fn emit_mutation(origin: &str, impact: MutationImpact) {
         extra_grid_scopes: impact.extra_grid_scopes,
     };
 
-    // Transitional: compute DerivedInvalidation for backward compatibility.
-    // The frontend derives stale resources from facts directly; this field
-    // will be removed once confirmed unused by all consumers.
-    let mut invalidate = derive_invalidation(&facts);
-    if let Some(ref extra) = facts.extra_grid_scopes {
-        let mut scopes = invalidate.grid_scopes.unwrap_or_default();
-        scopes.extend(extra.clone());
-        scopes.sort();
-        scopes.dedup();
-        invalidate.grid_scopes = Some(scopes);
-    }
-
     let receipt = MutationReceipt {
         seq,
         ts,
         origin_command: origin.to_string(),
         facts,
-        invalidate,
-        sidebar_counts: impact.sidebar_counts.map(|c| ContractSidebarCounts {
-            all_images: c.all_images,
-            inbox: c.inbox,
-            trash: c.trash,
-        }),
+        sidebar_counts: impact.sidebar_counts,
     };
 
     emit(event_names::RUNTIME_MUTATION_COMMITTED, &receipt);

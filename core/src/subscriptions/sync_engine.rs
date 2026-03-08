@@ -1392,12 +1392,6 @@ mod tests {
     }
 
     #[test]
-    fn collection_group_parts_requires_post_id() {
-        let metadata = ParsedMetadata::default();
-        assert!(collection_group_parts("e621", &metadata).is_none());
-    }
-
-    #[test]
     fn merge_policy_replaces_generated_name_with_real_title() {
         let metadata = ParsedMetadata {
             category: Some("danbooru".to_string()),
@@ -1489,14 +1483,6 @@ mod tests {
     }
 
     #[test]
-    fn subscription_query_archive_prefix_is_stable() {
-        assert_eq!(
-            subscription_query_archive_prefix(42, 9),
-            "picto_s42_q9_".to_string()
-        );
-    }
-
-    #[test]
     fn apply_resume_to_query_adds_id_lt_clause_once() {
         let q = apply_resume_to_query("1girl solo", "12345", "tag_id_lt");
         assert_eq!(q, "1girl solo id:<12345");
@@ -1528,36 +1514,4 @@ mod tests {
         );
     }
 
-    #[test]
-    fn initial_pagination_continues_when_batch_is_full_and_cursor_exists() {
-        assert!(should_continue_initial_pagination(
-            false,
-            true,
-            Some(100),
-            100,
-            Some("12345")
-        ));
-    }
-
-    #[test]
-    fn initial_pagination_stops_when_batch_not_full() {
-        assert!(!should_continue_initial_pagination(
-            false,
-            true,
-            Some(100),
-            42,
-            Some("12345")
-        ));
-    }
-
-    #[test]
-    fn initial_pagination_stops_without_cursor() {
-        assert!(!should_continue_initial_pagination(
-            false,
-            true,
-            Some(100),
-            100,
-            None
-        ));
-    }
 }

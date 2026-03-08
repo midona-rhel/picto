@@ -2,67 +2,45 @@
 
 ## Purpose
 
-The dispatch layer routes command names from the frontend (via napi-rs IPC) to typed domain handlers. It provides compile-time type safety for command arguments and return values.
+The dispatch layer routes command names from the frontend (via napi-rs IPC) to typed handler functions.
 
 ## Routing Model
 
 ```
 Frontend → napi addon → dispatch(command, args_json)
                             │
-                            ├── "close_library"     → inline (no state needed)
-                            ├── "get_runtime_snapshot" → inline (stateless)
+                            ├── "close_library"        → inline (no state needed)
+                            ├── "get_runtime_snapshot"  → inline (stateless)
                             │
-                            └── typed_dispatch(state, command, args)
-                                  │
-                                  ├── media_lifecycle::dispatch_typed()
-                                  ├── folders::dispatch_typed()
-                                  ├── tags::dispatch_typed()
-                                  ├── selection::dispatch_typed()
-                                  ├── grid::dispatch_typed()
-                                  ├── media_metadata::dispatch_typed()
-                                  ├── media_io::dispatch_typed()
-                                  ├── subscriptions::dispatch_typed()
-                                  ├── ptr::dispatch_typed()
-                                  ├── system::dispatch_typed()
-                                  ├── duplicates::dispatch_typed()
-                                  └── smart_folders::dispatch_typed()
+                            └── flat match on command name
+                                  → call!(typed::{domain}::{handler}, &state, args)
 ```
 
-Each domain module's `dispatch_typed()` returns `Option<Result<String, String>>`:
-- `Some(Ok(json))` — command matched and succeeded
-- `Some(Err(msg))` — command matched but failed
-- `None` — command not handled, fall through to next module
+`dispatch/mod.rs` contains a single flat `match command { ... }` with one arm per command (~142 commands). The `call!()` macro deserializes the JSON args into the handler's input struct, calls the async handler, and serializes the output.
 
-Routing order is not semantically significant — each command name is unique across all modules.
+## Handler Functions
 
-## TypedCommand Trait
-
-Every command is a zero-sized struct implementing `TypedCommand`:
+Each domain has a file in `dispatch/typed/` containing plain async functions:
 
 ```rust
-trait TypedCommand {
-    const NAME: &'static str;           // IPC command string (e.g. "import_files")
-    type Input: DeserializeOwned;       // Deserialized from JSON args
-    type Output: Serialize;             // Serialized to JSON result
-    fn execute(state, input) -> Result<Output, String>;
-}
+pub async fn some_command(state: &AppState, input: SomeInput) -> Result<SomeOutput, String> { ... }
 ```
 
-The `run_typed::<C>()` helper deserializes args, calls execute, serializes output.
+Input structs derive `Deserialize` + `TS` for automatic TypeScript binding generation.
 
 ## Command Naming Convention
 
-Command names are IPC contract strings shared between Rust and TypeScript. They use `snake_case` (e.g. `import_files`, `update_file_status`, `search_tags`). These are NOT Rust module names — the IPC strings are stable and must not be renamed without updating the TypeScript side.
+Command names are IPC contract strings shared between Rust and TypeScript. They use `snake_case` (e.g. `import_files`, `update_file_status`). These are stable and must not be renamed without updating the TypeScript side (`TypedCommandMap` in `commands/index.ts`).
 
 ## Contracts
 
-- Every command handler returns `Result<String, String>` where the `String` is JSON.
-- Mutation commands must construct a `MutationImpact` and call `emit_mutation()` to notify the frontend.
-- Read-only queries (grid, metadata, sidebar) just return data without emitting mutations.
+- Every handler returns `Result<T, String>` where T is serialized to JSON by `call!()`.
+- Mutation commands construct a `MutationImpact` and call `emit_mutation()` to notify the frontend.
+- Read-only queries just return data without emitting mutations.
 
 ## Key Files
 
-- `core/src/dispatch/mod.rs` — top-level dispatch entry point
+- `core/src/dispatch/mod.rs` — flat command match + `call!()` macro
 - `core/src/dispatch/common.rs` — JSON helpers (`ok_null`, `to_json`)
-- `core/src/dispatch/typed/mod.rs` — `TypedCommand` trait, `typed_dispatch` router
-- `core/src/dispatch/typed/*.rs` — per-domain command implementations
+- `core/src/dispatch/typed/mod.rs` — module declarations
+- `core/src/dispatch/typed/*.rs` — per-domain handler functions

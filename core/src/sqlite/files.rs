@@ -166,29 +166,7 @@ pub fn get_file_by_hash(conn: &Connection, hash: &str) -> rusqlite::Result<Optio
                 notes, source_urls_json, dominant_color_hex
          FROM file WHERE hash = ?1",
         [hash],
-        |row| {
-            Ok(FileRecord {
-                file_id: row.get(0)?,
-                hash: row.get(1)?,
-                name: row.get(2)?,
-                size: row.get(3)?,
-                mime: row.get(4)?,
-                width: row.get(5)?,
-                height: row.get(6)?,
-                duration_ms: row.get(7)?,
-                num_frames: row.get(8)?,
-                has_audio: row.get::<_, i64>(9)? != 0,
-                blurhash: row.get(10)?,
-                status: row.get(11)?,
-                rating: row.get(12)?,
-                view_count: row.get(13)?,
-                phash: row.get(14)?,
-                imported_at: row.get(15)?,
-                notes: row.get(16)?,
-                source_urls_json: row.get(17)?,
-                dominant_color_hex: row.get(18)?,
-            })
-        },
+        |row| row_to_file_record(row),
     )
     .optional()
 }
@@ -200,29 +178,7 @@ pub fn get_file_by_id(conn: &Connection, file_id: i64) -> rusqlite::Result<Optio
                 notes, source_urls_json, dominant_color_hex
          FROM file WHERE file_id = ?1",
         [file_id],
-        |row| {
-            Ok(FileRecord {
-                file_id: row.get(0)?,
-                hash: row.get(1)?,
-                name: row.get(2)?,
-                size: row.get(3)?,
-                mime: row.get(4)?,
-                width: row.get(5)?,
-                height: row.get(6)?,
-                duration_ms: row.get(7)?,
-                num_frames: row.get(8)?,
-                has_audio: row.get::<_, i64>(9)? != 0,
-                blurhash: row.get(10)?,
-                status: row.get(11)?,
-                rating: row.get(12)?,
-                view_count: row.get(13)?,
-                phash: row.get(14)?,
-                imported_at: row.get(15)?,
-                notes: row.get(16)?,
-                source_urls_json: row.get(17)?,
-                dominant_color_hex: row.get(18)?,
-            })
-        },
+        |row| row_to_file_record(row),
     )
     .optional()
 }
@@ -612,6 +568,55 @@ fn row_to_entity_slim(row: &rusqlite::Row) -> rusqlite::Result<FileMetadataSlim>
     })
 }
 
+/// Map a database row to FileRecord. Column order must match FILE_RECORD_SELECT.
+fn row_to_file_record(row: &rusqlite::Row) -> rusqlite::Result<FileRecord> {
+    Ok(FileRecord {
+        file_id: row.get(0)?,
+        hash: row.get(1)?,
+        name: row.get(2)?,
+        size: row.get(3)?,
+        mime: row.get(4)?,
+        width: row.get(5)?,
+        height: row.get(6)?,
+        duration_ms: row.get(7)?,
+        num_frames: row.get(8)?,
+        has_audio: row.get::<_, i64>(9)? != 0,
+        blurhash: row.get(10)?,
+        status: row.get(11)?,
+        rating: row.get(12)?,
+        view_count: row.get(13)?,
+        phash: row.get(14)?,
+        imported_at: row.get(15)?,
+        notes: row.get(16)?,
+        source_urls_json: row.get(17)?,
+        dominant_color_hex: row.get(18)?,
+    })
+}
+
+/// Populate the `_grid_filter` temp table with the given file IDs for efficient JOINs.
+fn populate_grid_filter(conn: &Connection, file_ids: &[i64]) -> rusqlite::Result<()> {
+    conn.execute(
+        "CREATE TEMP TABLE IF NOT EXISTS _grid_filter (file_id INTEGER PRIMARY KEY)",
+        [],
+    )?;
+    conn.execute("DELETE FROM _grid_filter", [])?;
+    for chunk in file_ids.chunks(500) {
+        let placeholders: String = chunk
+            .iter()
+            .enumerate()
+            .map(|(i, _)| format!("(?{})", i + 1))
+            .collect::<Vec<_>>()
+            .join(",");
+        let sql = format!("INSERT INTO _grid_filter (file_id) VALUES {}", placeholders);
+        let params: Vec<&dyn rusqlite::types::ToSql> = chunk
+            .iter()
+            .map(|id| id as &dyn rusqlite::types::ToSql)
+            .collect();
+        conn.execute(&sql, params.as_slice())?;
+    }
+    Ok(())
+}
+
 /// List entities (singles + collections) with keyset pagination.
 /// `cursor` is the last seen value of the sort column for keyset pagination.
 pub fn list_files_slim(
@@ -783,28 +788,7 @@ pub fn list_files_slim_by_ids(
         "<"
     };
 
-    // Build temp table for filtered entity_ids for efficient JOIN
-    conn.execute(
-        "CREATE TEMP TABLE IF NOT EXISTS _grid_filter (file_id INTEGER PRIMARY KEY)",
-        [],
-    )?;
-    conn.execute("DELETE FROM _grid_filter", [])?;
-
-    // Batch INSERT — chunks of 500 values per statement to reduce overhead
-    for chunk in file_ids.chunks(500) {
-        let placeholders: String = chunk
-            .iter()
-            .enumerate()
-            .map(|(i, _)| format!("(?{})", i + 1))
-            .collect::<Vec<_>>()
-            .join(",");
-        let sql = format!("INSERT INTO _grid_filter (file_id) VALUES {}", placeholders);
-        let params: Vec<&dyn rusqlite::types::ToSql> = chunk
-            .iter()
-            .map(|id| id as &dyn rusqlite::types::ToSql)
-            .collect();
-        conn.execute(&sql, params.as_slice())?;
-    }
+    populate_grid_filter(conn, file_ids)?;
 
     let mut sql = format!(
         "SELECT {}
@@ -889,27 +873,7 @@ pub fn list_files_slim_by_folder_rank(
     let dir = if sort_dir == "asc" { "ASC" } else { "DESC" };
     let op = if sort_dir == "asc" { ">" } else { "<" };
 
-    // Build temp table for filtered file_ids
-    conn.execute(
-        "CREATE TEMP TABLE IF NOT EXISTS _grid_filter (file_id INTEGER PRIMARY KEY)",
-        [],
-    )?;
-    conn.execute("DELETE FROM _grid_filter", [])?;
-
-    for chunk in file_ids.chunks(500) {
-        let placeholders: String = chunk
-            .iter()
-            .enumerate()
-            .map(|(i, _)| format!("(?{})", i + 1))
-            .collect::<Vec<_>>()
-            .join(",");
-        let sql = format!("INSERT INTO _grid_filter (file_id) VALUES {}", placeholders);
-        let params: Vec<&dyn rusqlite::types::ToSql> = chunk
-            .iter()
-            .map(|id| id as &dyn rusqlite::types::ToSql)
-            .collect();
-        conn.execute(&sql, params.as_slice())?;
-    }
+    populate_grid_filter(conn, file_ids)?;
 
     let mut sql = format!(
         "SELECT {}, fe.position_rank
@@ -978,27 +942,7 @@ pub fn list_files_slim_by_collection_rank(
         return Ok(Vec::new());
     }
 
-    // Build temp table for filtered file_ids
-    conn.execute(
-        "CREATE TEMP TABLE IF NOT EXISTS _grid_filter (file_id INTEGER PRIMARY KEY)",
-        [],
-    )?;
-    conn.execute("DELETE FROM _grid_filter", [])?;
-
-    for chunk in file_ids.chunks(500) {
-        let placeholders: String = chunk
-            .iter()
-            .enumerate()
-            .map(|(i, _)| format!("(?{})", i + 1))
-            .collect::<Vec<_>>()
-            .join(",");
-        let sql = format!("INSERT INTO _grid_filter (file_id) VALUES {}", placeholders);
-        let params: Vec<&dyn rusqlite::types::ToSql> = chunk
-            .iter()
-            .map(|id| id as &dyn rusqlite::types::ToSql)
-            .collect();
-        conn.execute(&sql, params.as_slice())?;
-    }
+    populate_grid_filter(conn, file_ids)?;
 
     let mut sql = String::from(
         "SELECT f.hash, f.name, f.mime, f.width, f.height, f.size, f.status, f.rating, f.blurhash,

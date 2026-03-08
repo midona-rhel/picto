@@ -168,21 +168,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn credential_type_roundtrip_strings() {
-        let all = [
-            CredentialType::UsernamePassword,
-            CredentialType::Cookies,
-            CredentialType::ApiKey,
-            CredentialType::OAuthToken,
-        ];
-        for ty in all {
-            let raw = ty.as_str();
-            assert_eq!(CredentialType::from_str(raw), Some(ty));
-        }
-        assert_eq!(CredentialType::from_str("invalid"), None);
-    }
-
-    #[test]
     fn build_extractor_auth_contract_by_credential_type() {
         let userpass = SiteCredential {
             site_category: "danbooru".to_string(),

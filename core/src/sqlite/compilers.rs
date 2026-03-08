@@ -831,7 +831,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn sidebar_untagged_count_uses_all_active_minus_tagged() {
+    async fn sidebar_untagged_count_uses_active_minus_tagged() {
         let dir = tempfile::tempdir().unwrap();
         let db = Arc::new(SqliteDatabase::open(dir.path()).await.unwrap());
 
@@ -894,8 +894,8 @@ mod tests {
             .await
             .unwrap();
 
-        // AllActive = inbox + active = 3; tagged (within AllActive) = 1 => untagged = 2
-        assert_eq!(untagged, 2);
+        // active = 2 (active_t + active_u); tagged = 1 (active_t) => untagged = 1
+        assert_eq!(untagged, 1);
     }
 
     #[tokio::test]

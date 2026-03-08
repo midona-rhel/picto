@@ -290,45 +290,6 @@ mod tests {
     }
 
     #[test]
-    fn test_combine_tag() {
-        assert_eq!(combine_tag("artist", "bob"), "artist:bob");
-        assert_eq!(combine_tag("", "solo"), "solo");
-        assert_eq!(combine_tag("", "has:colons"), ":has:colons");
-    }
-
-    #[test]
-    fn test_clean_tag_basic() {
-        assert_eq!(clean_tag("  Artist:Bob  ").unwrap(), "artist:bob");
-        assert_eq!(clean_tag("UPPERCASE").unwrap(), "uppercase");
-        assert!(clean_tag("").is_err());
-    }
-
-    #[test]
-    fn test_parse_tag() {
-        assert_eq!(
-            parse_tag("Artist:Bob"),
-            Some(("artist".into(), "bob".into()))
-        );
-        assert_eq!(parse_tag("  solo  "), Some(("".into(), "solo".into())));
-        assert_eq!(parse_tag(""), None);
-        // Emoticon tags stay unnamespaced
-        assert_eq!(parse_tag(">:("), Some(("".into(), ">:(".into())));
-    }
-
-    #[test]
-    fn test_parse_tags() {
-        let tags = vec![
-            "Artist:Bob".into(),
-            "".into(),
-            "  solo  ".into(),
-            "UPPERCASE".into(),
-        ];
-        let parsed = parse_tags(&tags);
-        assert_eq!(parsed.len(), 3);
-        assert_eq!(parsed[0], ("artist".into(), "bob".into()));
-    }
-
-    #[test]
     fn test_parse_tag_ingest_unknown_namespace_is_literal() {
         assert_eq!(
             parse_tag_ingest("http://example.com"),

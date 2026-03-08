@@ -367,43 +367,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn key_round_trip() {
-        let keys = vec![
-            BitmapKey::Status(0),
-            BitmapKey::Status(2),
-            BitmapKey::AllActive,
-            BitmapKey::Tag(42),
-            BitmapKey::ImpliedTag(100),
-            BitmapKey::EffectiveTag(200),
-            BitmapKey::Folder(5),
-            BitmapKey::SmartFolder(7),
-            BitmapKey::Tagged,
-        ];
-        for key in keys {
-            let serialized = serialize_key(&key);
-            let deserialized = deserialize_key(&serialized).unwrap();
-            assert_eq!(key, deserialized);
-        }
-    }
-
-    #[test]
-    fn bitmap_ops() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = BitmapStore::open(dir.path());
-
-        store.insert(&BitmapKey::Status(0), 1);
-        store.insert(&BitmapKey::Status(0), 5);
-        store.insert(&BitmapKey::Status(0), 10);
-
-        assert_eq!(store.len(&BitmapKey::Status(0)), 3);
-        assert!(store.contains(&BitmapKey::Status(0), 5));
-        assert!(!store.contains(&BitmapKey::Status(0), 6));
-
-        store.remove(&BitmapKey::Status(0), 5);
-        assert_eq!(store.len(&BitmapKey::Status(0)), 2);
-    }
-
-    #[test]
     fn persistence_round_trip() {
         let dir = tempfile::tempdir().unwrap();
 

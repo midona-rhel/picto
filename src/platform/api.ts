@@ -97,8 +97,6 @@ export const api = {
       invokeTyped('get_grid_page_slim', { query } as never) as Promise<GridPageSlimResponse>,
     getFilesMetadataBatch: (hashes: string[]) =>
       invokeTyped('get_files_metadata_batch', { hashes }) as Promise<EntityMetadataBatchResponse>,
-    getFileCount: () =>
-      invokeTyped('get_file_count') as Promise<number>,
   },
 
   file: {
@@ -107,23 +105,23 @@ export const api = {
     getAllMetadata: (hash: string) =>
       invokeTyped('get_file_all_metadata', { hash }) as Promise<EntityAllMetadata>,
     setStatus: (hash: string, status: string) =>
-      invokeTyped('update_file_status', { hash, status }) as unknown as Promise<void>,
+      invokeTyped('update_file_status', { hash, status } as never) as unknown as Promise<void>,
     setStatusSelection: (selection: SelectionQuerySpec, status: string) =>
-      invokeTyped('update_file_status_selection', { selection, status } as never),
+      invokeTyped('update_file_status', { selection, status } as never),
     deleteMany: (hashes: string[]) =>
-      invokeTyped('delete_files', { hashes }),
+      invokeTyped('delete_files', { hashes } as never),
     deleteSelection: (selection: SelectionQuerySpec) =>
-      invokeTyped('delete_files_selection', { selection } as never),
+      invokeTyped('delete_files', { selection } as never),
     updateRating: (hash: string, rating: number | null) =>
-      invokeTyped('update_rating', { hash, rating }) as unknown as Promise<void>,
+      invokeTyped('update_file_metadata', { hash, rating } as never) as unknown as Promise<void>,
     setName: (hash: string, name: string | null) =>
-      invokeTyped('set_file_name', { hash, name }) as unknown as Promise<void>,
+      invokeTyped('update_file_metadata', { hash, name } as never) as unknown as Promise<void>,
     setSourceUrls: (hash: string, urls: string[]) =>
-      invokeTyped('set_source_urls', { hash, urls }) as unknown as Promise<void>,
+      invokeTyped('update_file_metadata', { hash, source_urls: urls } as never) as unknown as Promise<void>,
     setNotes: (hash: string, notes: Record<string, string>) =>
-      invokeTyped('set_file_notes', { hash, notes }) as unknown as Promise<void>,
+      invokeTyped('update_file_metadata', { hash, notes } as never) as unknown as Promise<void>,
     incrementViewCount: (hash: string) =>
-      invokeTyped('increment_view_count', { hash }) as unknown as Promise<void>,
+      invokeTyped('update_file_metadata', { hash, increment_view_count: true } as never) as unknown as Promise<void>,
     resolvePath: (hash: string) =>
       invokeTyped('resolve_file_path', { hash }),
     resolveThumbnailPath: (hash: string) =>
@@ -170,8 +168,8 @@ export const api = {
       invokeTyped('manage_tag_alias', { from, to: to ?? null }) as unknown as Promise<void>,
     getRelations: (tagId: number, relationType: 'aliases' | 'implications') =>
       invokeTyped('get_tag_relations', { tag_id: tagId, relation_type: relationType }) as Promise<TagRelation[]>,
-    manageParent: (child: string, parent: string, action: 'add' | 'remove') =>
-      invokeTyped('manage_tag_parent', { child, parent, action }) as unknown as Promise<void>,
+    manageImplication: (child: string, parent: string, action: 'add' | 'remove') =>
+      invokeTyped('manage_tag_implication', { child, parent, action }) as unknown as Promise<void>,
     merge: (fromTag: string, toTag: string) =>
       invokeTyped('merge_tags', { from_tag: fromTag, to_tag: toTag }) as unknown as Promise<void>,
     rename: (tagId: number, newName: string) =>
@@ -179,7 +177,7 @@ export const api = {
     delete: (tagId: number) =>
       invokeTyped('delete_tag', { tag_id: tagId }) as Promise<DeleteTagResult>,
     searchPaged: (query: string, limit: number, offset: number) =>
-      invokeTyped('search_tags_paged', { query, limit, offset } as never) as Promise<[string, string, number][]>,
+      invokeTyped('search_tags', { query, limit, offset } as never) as Promise<[string, string, number][]>,
   },
 
   selection: {
@@ -190,11 +188,11 @@ export const api = {
     removeTags: (selection: SelectionQuerySpec, tagStrings: string[]) =>
       invokeTyped('remove_tags_selection', { selection, tag_strings: tagStrings } as never),
     updateRating: (selection: SelectionQuerySpec, rating: number | null) =>
-      invokeTyped('update_rating_selection', { selection, rating } as never),
+      invokeTyped('update_selection_metadata', { selection, rating } as never),
     setNotes: (selection: SelectionQuerySpec, notes: Record<string, string>) =>
-      invokeTyped('set_notes_selection', { selection, notes } as never),
+      invokeTyped('update_selection_metadata', { selection, notes } as never),
     setSourceUrls: (selection: SelectionQuerySpec, urls: string[]) =>
-      invokeTyped('set_source_urls_selection', { selection, urls } as never),
+      invokeTyped('update_selection_metadata', { selection, source_urls: urls } as never),
   },
 
   folders: {
@@ -228,9 +226,9 @@ export const api = {
     reorderItems: (folderId: number, moves: FolderReorderMove[]) =>
       invokeTyped('reorder_folder_items', { folder_id: folderId, moves } as never) as unknown as Promise<void>,
     sortItems: (folderId: number, sortBy: string, direction: string, hashes?: string[]) =>
-      invokeTyped('sort_folder_items', { folder_id: folderId, sort_by: sortBy, direction, hashes } as never) as unknown as Promise<void>,
+      invokeTyped('reorder_folder_items', { folder_id: folderId, sort_by: sortBy, direction, hashes } as never) as unknown as Promise<void>,
     reverseItems: (folderId: number, hashes?: string[]) =>
-      invokeTyped('reverse_folder_items', { folder_id: folderId, hashes } as never) as unknown as Promise<void>,
+      invokeTyped('reorder_folder_items', { folder_id: folderId, reverse: true, hashes } as never) as unknown as Promise<void>,
   },
 
   smartFolders: {
@@ -383,7 +381,7 @@ export const api = {
 
   stats: {
     getImageStorageStats: () =>
-      invokeTyped('get_image_storage_stats') as Promise<FileStats>,
+      invokeTyped('get_storage_stats') as Promise<FileStats>,
     getPerfSnapshot: () =>
       invokeTyped('get_perf_snapshot') as Promise<PerfSnapshot>,
     checkPerfSlo: () =>
@@ -407,8 +405,6 @@ export const api = {
   os: {
     openExternalUrl: (url: string) =>
       invokeTyped('open_external_url', { url }) as unknown as Promise<void>,
-    enableModernWindowStyle: (cornerRadius: number) =>
-      invokeTyped('enable_modern_window_style', { cornerRadius }) as unknown as Promise<void>,
     openSettingsWindow: () =>
       invoke<void>('open_settings_window'),
     openSubscriptionsWindow: () =>

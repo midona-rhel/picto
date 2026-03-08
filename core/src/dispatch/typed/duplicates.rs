@@ -8,13 +8,13 @@ use crate::state::AppState;
 // ─── Input structs ─────────────────────────────────────────────────────────
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct GetDuplicatesInput {
     pub hash: String,
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct ScanDuplicatesInput {
     #[ts(type = "number | null")]
     #[serde(default)]
@@ -22,7 +22,7 @@ pub struct ScanDuplicatesInput {
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct GetDuplicatePairsInput {
     #[serde(default)]
     pub cursor: Option<String>,
@@ -38,7 +38,7 @@ fn default_duplicate_pairs_limit() -> usize {
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct ResolveDuplicatePairInput {
     pub action: String,
     pub hash_a: String,
@@ -48,7 +48,7 @@ pub struct ResolveDuplicatePairInput {
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct UpdateDuplicateSettingsInput {
     #[serde(default, rename = "duplicateDetectSimilarityPct")]
     #[ts(type = "number | null")]

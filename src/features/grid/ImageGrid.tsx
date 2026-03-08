@@ -1,10 +1,6 @@
 import { useEffect, useLayoutEffect, useCallback, useRef, useMemo, useState } from 'react';
 import { useGridRuntime } from './runtime';
-import {
-  effectiveSelectedHashes as selectEffectiveHashes,
-  transitionOpacity,
-  transitionCss,
-} from './runtime';
+import { effectiveSelectedHashes as selectEffectiveHashes } from './runtime';
 import {
   type GridViewMode,
   type GridEmptyContext,
@@ -14,44 +10,35 @@ import { StateBlock, StateActions } from '../../shared/components/state';
 import { notifySuccess, notifyError } from '../../shared/lib/notify';
 import { registerUndoAction } from '../../shared/controllers/undoRedoController';
 import { api } from '#desktop/api';
-import { listen } from '#desktop/api';
 import { open } from '#desktop/api';
 import { getCurrentWebview } from '#desktop/api';
 import { ContextMenu, useContextMenu } from '../../shared/components/ContextMenu';
 import { imageDrag } from '../../shared/lib/imageDrag';
-import { mediaThumbnailUrl } from '../../shared/lib/mediaUrl';
-import { subscriptionApi } from '../../features/subscriptions/api';
-import { toMasonryItem } from './shared';
-import type { EntitySlim, MasonryImageItem } from './shared';
-import { batchPreloadMediaUrls, decodeImageUrl } from './enhancedMediaCache';
+import type { MasonryImageItem } from './shared';
 import {
   prefetchMetadata,
   type SelectionQuerySpec,
 } from './metadataPrefetch';
-import { DetailView, type DetailViewState, type DetailViewControls } from './DetailView';
-import { QuickLook } from './QuickLook';
-import { computeTextHeight, TEXT_NAME_ROW_H } from './VirtualGrid';
-import { CanvasGrid } from './CanvasGrid';
+import { DomGridSurface } from './DomGridSurface';
 import type { SmartFolderPredicate } from '../../features/smart-folders/components/types';
 import type { DragDropPayload, FolderReorderMove } from '../../shared/types/api';
-import { useGridQueryBroker, type GridQueryBrokerProps } from './queryBroker';
 import { useCacheStore } from '../../state/cacheStore';
 import { useSettingsStore } from '../../state/settingsStore';
 import { useScopedDisplay } from '../../shared/contexts/ScopedDisplayContext';
-import { Slideshow } from '../../features/viewer/components/Slideshow';
 import { BatchRenameDialog } from '../../features/grid/components/BatchRenameDialog';
 import { useDomainStore } from '../../state/domainStore';
 import { useNavigationStore } from '../../state/navigationStore';
 import { SubfolderGrid } from './SubfolderGrid';
+import type { DetailViewState, DetailViewControls } from '../../features/viewer/hooks/useViewerHost';
+import type { ViewerHostController } from '../../features/viewer/hooks/useViewerHost';
+import { useGridData } from './hooks/useGridData';
 import { useGridMutationActions } from './hooks/useGridMutationActions';
-import { useGridTransitionController } from './hooks/useGridTransitionController';
 import { useGridHotkeys } from './hooks/useGridHotkeys';
 import { useGridItemActions } from './hooks/useGridItemActions';
 import { useGridKeyboardNavigation } from './hooks/useGridKeyboardNavigation';
 import { useGridContextMenu } from './hooks/useGridContextMenu';
 import { useGridSelection } from './hooks/useGridSelection';
 import { useGridMarqueeSelection } from './hooks/useGridMarqueeSelection';
-import { sortLiveImages } from './liveSort';
 
 // Re-export GridViewMode from runtime for backward compatibility
 export type { GridViewMode } from './runtime';
@@ -68,9 +55,6 @@ function resolveGridEmptyContext(
   if (statusFilter === 'untagged') return 'untagged';
   return 'default';
 }
-
-const INITIAL_PREWARM_THUMB_COUNT = 32;
-const INITIAL_PREWARM_MAX_MS = 180;
 
 interface ImageGridProps {
   searchTags?: string[];
@@ -111,22 +95,10 @@ interface ImageGridProps {
   externalFreeze?: boolean;
   /** Fires when scope transition fade-out completes (grid is at opacity 0). */
   onScopeTransitionMidpoint?: () => void;
+  viewer: ViewerHostController;
 }
 
-async function prewarmInitialThumbs(items: MasonryImageItem[]): Promise<void> {
-  if (items.length === 0) return;
-  const urls = items
-    .slice(0, INITIAL_PREWARM_THUMB_COUNT)
-    .map((item) => mediaThumbnailUrl(item.hash));
-  if (urls.length === 0) return;
-
-  await Promise.race([
-    Promise.allSettled(urls.map((url) => decodeImageUrl(url))),
-    new Promise<void>((resolve) => window.setTimeout(resolve, INITIAL_PREWARM_MAX_MS)),
-  ]);
-}
-
-export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartFolderPredicate, smartFolderSortField, smartFolderSortOrder, folderId, collectionEntityId, filterFolderIds, excludedFilterFolderIds, folderMatchMode, statusFilter, viewMode = 'waterfall', targetSize = 250, onViewModeChange, sortField = 'imported_at', sortOrder = 'asc', onSortFieldChange, onSortOrderChange, onContainerWidthChange, refreshTrigger, onSelectedImagesChange, onSelectionSummarySpecChange, selectedScopeCount = null, onDetailViewStateChange, ratingMin, mimePrefixes, colorHex, colorAccuracy, searchText, externalFreeze = false, onScopeTransitionMidpoint }: ImageGridProps) {
+export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartFolderPredicate, smartFolderSortField, smartFolderSortOrder, folderId, collectionEntityId, filterFolderIds, excludedFilterFolderIds, folderMatchMode, statusFilter, viewMode = 'waterfall', targetSize = 250, onViewModeChange, sortField = 'imported_at', sortOrder = 'asc', onSortFieldChange, onSortOrderChange, onContainerWidthChange, refreshTrigger, onSelectedImagesChange, onSelectionSummarySpecChange, selectedScopeCount = null, onDetailViewStateChange, ratingMin, mimePrefixes, colorHex, colorAccuracy, searchText, externalFreeze = false, onScopeTransitionMidpoint, viewer }: ImageGridProps) {
   const { state, dispatch } = useGridRuntime({
     viewMode,
     targetSize,
@@ -164,42 +136,34 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
   // Track whether the first load has completed so we don't show "No images"
   // while the DB query is still in flight.
   const initialLoadDone = useRef(false);
-  const [estimateSampleImages, setEstimateSampleImages] = useState<MasonryImageItem[]>([]);
-
   const displayViewModeRef = useRef(state.displayViewMode);
   displayViewModeRef.current = state.displayViewMode;
-  const brokerProps: GridQueryBrokerProps = useMemo(() => ({
-    folderId: folderId ?? null,
-    collectionEntityId: collectionEntityId ?? null,
-    filterFolderIds: filterFolderIds ?? null,
-    excludedFilterFolderIds: excludedFilterFolderIds ?? null,
-    folderMatchMode: folderMatchMode ?? null,
-    statusFilter: statusFilter ?? null,
-    searchTags: searchTags ?? null,
-    excludedSearchTags: excludedSearchTags ?? null,
-    tagMatchMode: tagMatchMode ?? null,
-    smartFolderPredicate: smartFolderPredicate ?? null,
-    smartFolderSortField: smartFolderSortField ?? null,
-    smartFolderSortOrder: smartFolderSortOrder ?? null,
-    sortField,
-    sortOrder,
-    ratingMin: ratingMin ?? null,
-    mimePrefixes: mimePrefixes ?? null,
-    colorHex: colorHex ?? null,
-    colorAccuracy: colorAccuracy ?? null,
-    searchText: searchText || null,
-  }), [folderId, collectionEntityId, filterFolderIds, excludedFilterFolderIds, folderMatchMode, statusFilter, searchTags, excludedSearchTags, tagMatchMode, smartFolderPredicate, smartFolderSortField, smartFolderSortOrder, sortField, sortOrder, ratingMin, mimePrefixes, colorHex, colorAccuracy, searchText]);
-  const { broker, queryKey, requestReplace, requestAppend } = useGridQueryBroker(
-    brokerProps,
+  const { queryKey, requestReplace, requestAppend } = useGridData({
+    queryInput: {
+      folderId: folderId ?? null,
+      collectionEntityId: collectionEntityId ?? null,
+      filterFolderIds: filterFolderIds ?? null,
+      excludedFilterFolderIds: excludedFilterFolderIds ?? null,
+      folderMatchMode: folderMatchMode ?? null,
+      statusFilter: statusFilter ?? null,
+      searchTags: searchTags ?? null,
+      excludedSearchTags: excludedSearchTags ?? null,
+      tagMatchMode: tagMatchMode ?? null,
+      smartFolderPredicate: smartFolderPredicate ?? null,
+      smartFolderSortField: smartFolderSortField ?? null,
+      smartFolderSortOrder: smartFolderSortOrder ?? null,
+      sortField,
+      sortOrder,
+      ratingMin: ratingMin ?? null,
+      mimePrefixes: mimePrefixes ?? null,
+      colorHex: colorHex ?? null,
+      colorAccuracy: colorAccuracy ?? null,
+      searchText: searchText || null,
+    },
     dispatch,
     stateRef,
-    displayViewModeRef,
-    prewarmInitialThumbs,
-    () => { initialLoadDone.current = true; },
-    setEstimateSampleImages,
-  );
-  const queryKeyRef = useRef(queryKey);
-  queryKeyRef.current = queryKey;
+    onFirstCommit: () => { initialLoadDone.current = true; },
+  });
 
   const gap = 8;
 
@@ -255,8 +219,7 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
     statusFilter,
     folderId,
     collectionEntityId,
-    broker,
-    queryKeyRef,
+    requestGridReload: () => { void requestReplace(); },
   });
 
   // Helper: get the single selected hash (for actions that require exactly one)
@@ -264,7 +227,6 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
     ? [...state.selectedHashes][0]
     : null;
 
-  const [slideshowOpen, setSlideshowOpen] = useState(false);
   const [batchRenameOpen, setBatchRenameOpen] = useState(false);
 
   const [renamingHash, setRenamingHash] = useState<string | null>(null);
@@ -346,9 +308,7 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
     stateRef,
     imagesRef,
     singleSelectedHash,
-    dispatch,
-    navigateToCollection,
-    onDetailViewStateChange,
+    viewer,
     selectedScopeCount,
   });
 
@@ -362,12 +322,6 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
         console.warn('Failed to increment view count:', err);
       });
   }, [stateRef]);
-
-  // QuickLook intentionally skips onImageChange on mount; record the initial open here.
-  useEffect(() => {
-    if (!state.quickLookHash) return;
-    recordImageView(state.quickLookHash);
-  }, [state.quickLookHash, recordImageView]);
 
   const displaySettingsRef = useRef(displaySettings);
   displaySettingsRef.current = displaySettings;
@@ -391,7 +345,6 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
   useGridHotkeys({
     stateRef,
     dispatch,
-    onDetailViewStateChange,
     activateVirtualSelectAll,
     handleOpenWithDefaultApp,
     handleRevealInFolder,
@@ -403,7 +356,7 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
     onViewModeChange,
     updateSetting,
     grayscalePreview: displaySettings.grayscalePreview,
-    setSlideshowOpen,
+    openSlideshow: viewer.openSlideshow,
     setBatchRenameOpen,
     startInlineRename,
     folderId,
@@ -414,13 +367,15 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
     handleRateSelected,
     handleOpenQuickLook,
     handleOpenDetail,
+    viewerOpen: viewer.isOpen,
+    closeViewer: viewer.close,
     statusFilter,
     handleInboxAction,
   });
 
   const handleImageClick = useCallback((image: MasonryImageItem, event: React.MouseEvent) => {
     if (event.detail === 2) {
-      dispatch({ type: 'OPEN_DETAIL', hash: image.hash });
+      viewer.openDetail(image.hash);
       return;
     }
     // Prefetch metadata at click time so the properties panel has it instantly
@@ -475,7 +430,7 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
       dispatch({ type: 'SELECT_HASHES', hashes: new Set([image.hash]) });
     }
     dispatch({ type: 'SET_LAST_CLICKED', hash: image.hash });
-  }, [dispatch, navigateToCollection]);
+  }, [dispatch, viewer]);
 
   const isReorderScope = !!state.displayFolderId || !!collectionEntityId;
 
@@ -501,7 +456,7 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
       dispatch({ type: 'SET_IMAGES', images: next });
       api.collections.reorderMembers(currentCollectionId, next.map((img) => img.hash)).catch(err => {
         console.error('Collection reorder failed, reloading collection:', err);
-        broker.requestReplace(queryKeyRef.current);
+        void requestReplace();
       });
       return;
     }
@@ -525,10 +480,10 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
     if (moves.length > 0) {
       api.folders.reorderItems(currentFolderId!, moves).catch(err => {
         console.error('Reorder failed, reloading folder:', err);
-        broker.requestReplace(queryKeyRef.current);
+        void requestReplace();
       });
     }
-  }, [folderId, collectionEntityId, dispatch, broker]);
+  }, [folderId, collectionEntityId, dispatch, requestReplace]);
 
   const handleImport = async () => {
     try {
@@ -561,80 +516,129 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
     }
   }, [requestAppend]);
 
+  const handleViewerDetailImageChange = useCallback((hash: string) => {
+    recordImageView(hash);
+    dispatch({ type: 'SELECT_HASHES', hashes: new Set([hash]) });
+    dispatch({ type: 'SET_LAST_CLICKED', hash });
+  }, [dispatch, recordImageView]);
+
+  const handleViewerQuickLookOpen = useCallback((hash: string) => {
+    recordImageView(hash);
+  }, [recordImageView]);
+
+  const handleViewerQuickLookImageChange = useCallback((hash: string) => {
+    recordImageView(hash);
+    dispatch({ type: 'SELECT_HASHES', hashes: new Set([hash]) });
+    dispatch({ type: 'SET_LAST_CLICKED', hash });
+    const idx = imagesRef.current.findIndex(i => i.hash === hash);
+    if (idx >= 0) scrollToIndex(idx);
+  }, [dispatch, recordImageView, scrollToIndex]);
+
+  const handleViewerCloseDetail = useCallback((exitHash: string) => {
+    if (!exitHash) return;
+    dispatch({ type: 'SELECT_HASHES', hashes: new Set([exitHash]) });
+    dispatch({ type: 'SET_LAST_CLICKED', hash: exitHash });
+  }, [dispatch]);
+
+  const handleViewerCloseQuickLook = useCallback(() => {
+    // Quick Look closing no longer drives pop animation in the grid.
+  }, []);
+
+  useEffect(() => {
+    viewer.registerSource({
+      images: state.images,
+      totalCount: state.responseTotalCount ?? selectedScopeCount,
+      hasMore: state.hasMore,
+      loadMore: state.hasMore ? loadMore : undefined,
+      inboxMode: statusFilter === 'inbox',
+      onInboxAction: statusFilter === 'inbox' ? handleInboxAction : undefined,
+      onDetailStateChange: onDetailViewStateChange,
+      onDetailImageChange: handleViewerDetailImageChange,
+      onQuickLookOpen: handleViewerQuickLookOpen,
+      onQuickLookImageChange: handleViewerQuickLookImageChange,
+      onCloseDetail: handleViewerCloseDetail,
+      onCloseQuickLook: handleViewerCloseQuickLook,
+    });
+  }, [
+    viewer,
+    state.images,
+    state.responseTotalCount,
+    state.hasMore,
+    selectedScopeCount,
+    loadMore,
+    statusFilter,
+    handleInboxAction,
+    onDetailViewStateChange,
+    handleViewerDetailImageChange,
+    handleViewerQuickLookOpen,
+    handleViewerQuickLookImageChange,
+    handleViewerCloseDetail,
+    handleViewerCloseQuickLook,
+  ]);
+
   const folderIdRef = useRef(folderId);
   folderIdRef.current = folderId;
 
-  // Reset scroll to top at the midpoint of scope transitions (after fade-out,
-  // before new data renders). This prevents stale scroll positions carrying over.
-  const handleScopeTransitionMidpoint = useCallback(() => {
+  const gridFreezeActive = externalFreeze;
+
+  const scopeKey = useMemo(() => JSON.stringify({
+    searchTags: searchTags ?? [],
+    excludedSearchTags: excludedSearchTags ?? [],
+    tagMatchMode: tagMatchMode ?? null,
+    smartFolderPredicate: smartFolderPredicate ? JSON.stringify(smartFolderPredicate) : null,
+    folderId: folderId ?? null,
+    collectionEntityId: collectionEntityId ?? null,
+    filterFolderIds: filterFolderIds ?? [],
+    excludedFilterFolderIds: excludedFilterFolderIds ?? [],
+    folderMatchMode: folderMatchMode ?? null,
+    statusFilter: statusFilter ?? null,
+  }), [
+    searchTags,
+    excludedSearchTags,
+    tagMatchMode,
+    smartFolderPredicate,
+    folderId,
+    collectionEntityId,
+    filterFolderIds,
+    excludedFilterFolderIds,
+    folderMatchMode,
+    statusFilter,
+  ]);
+
+  useEffect(() => {
+    dispatch({
+      type: 'COMMIT_GEOMETRY',
+      viewMode,
+      targetSize,
+      folderId: folderId ?? null,
+      searchTags,
+      emptyContext: resolveGridEmptyContext(smartFolderPredicate, folderId, statusFilter),
+    });
+  }, [dispatch, viewMode, targetSize, folderId, searchTags, smartFolderPredicate, statusFilter]);
+
+  useEffect(() => {
+    viewer.close('');
+    onDetailViewStateChange?.(null, null);
+    dispatch({ type: 'CLEAR_SELECTION' });
+    dispatch({ type: 'SET_SELECTED_SUBFOLDER', id: null });
+    dispatch({ type: 'SET_CURSOR', cursor: null, hasMore: true });
     if (scrollRef.current) {
       scrollRef.current.scrollTop = 0;
     }
     onScopeTransitionMidpoint?.();
-  }, [onScopeTransitionMidpoint, scrollRef]);
+  }, [dispatch, onDetailViewStateChange, onScopeTransitionMidpoint, scopeKey, viewer, scrollRef]);
 
-  const { gridFreezeActive, handleGridTransitionEnd } = useGridTransitionController({
-    state,
-    dispatch,
-    broker,
-    queryKeyRef,
-    externalFreeze,
-    viewMode,
-    targetSize,
-    folderId: folderId ?? null,
-    collectionEntityId: collectionEntityId ?? null,
-    filterFolderIds,
-    excludedFilterFolderIds,
-    folderMatchMode: folderMatchMode ?? null,
-    statusFilter,
-    searchTags,
-    excludedSearchTags,
-    tagMatchMode: tagMatchMode ?? null,
-    smartFolderPredicate,
-    onDetailViewStateChange,
-    onScopeTransitionMidpoint: handleScopeTransitionMidpoint,
-    resolveEmptyContext: resolveGridEmptyContext,
-  });
-
-  // Sort change — reload without clearing selection (same images, different order)
-  const prevSortField = useRef(sortField);
-  const prevSortOrder = useRef(sortOrder);
   useEffect(() => {
-    if (prevSortField.current === sortField && prevSortOrder.current === sortOrder) return;
-    prevSortField.current = sortField;
-    prevSortOrder.current = sortOrder;
-    requestReplace();
-  }, [sortField, sortOrder, requestReplace]);
-
-  // Filter change (rating, mime, color, search text) — reload without clearing selection
-  const prevRatingMin = useRef(ratingMin);
-  const prevMimePrefixes = useRef(mimePrefixes);
-  const prevColorHex = useRef(colorHex);
-  const prevColorAccuracy = useRef(colorAccuracy);
-  const prevSearchText = useRef(searchText);
-  useEffect(() => {
-    const mimeChanged = JSON.stringify(prevMimePrefixes.current) !== JSON.stringify(mimePrefixes);
-    if (
-      prevRatingMin.current === ratingMin &&
-      !mimeChanged &&
-      prevColorHex.current === colorHex &&
-      prevColorAccuracy.current === colorAccuracy &&
-      prevSearchText.current === searchText
-    ) return;
-    prevRatingMin.current = ratingMin;
-    prevMimePrefixes.current = mimePrefixes;
-    prevColorHex.current = colorHex;
-    prevColorAccuracy.current = colorAccuracy;
-    prevSearchText.current = searchText;
-    requestReplace();
-  }, [ratingMin, mimePrefixes, colorHex, colorAccuracy, searchText, requestReplace]);
+    initialLoadDone.current = false;
+    void requestReplace();
+  }, [queryKey, requestReplace]);
 
   // Background refresh from subscriptions
   const prevRefreshTrigger = useRef(refreshTrigger);
   useEffect(() => {
     if (prevRefreshTrigger.current !== refreshTrigger) {
       prevRefreshTrigger.current = refreshTrigger;
-      requestReplace();
+      void requestReplace();
     }
   }, [refreshTrigger, requestReplace]);
 
@@ -689,136 +693,9 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
   useEffect(() => {
     if (prevGridRefreshSeq.current !== gridRefreshSeq) {
       prevGridRefreshSeq.current = gridRefreshSeq;
-      requestReplace();
+      void requestReplace();
     }
   }, [gridRefreshSeq, requestReplace]);
-
-  // Real-time: listen for per-file imports and prepend/append to grid
-  const searchTagsRef = useRef(searchTags);
-  searchTagsRef.current = searchTags;
-  const excludedSearchTagsRef = useRef(excludedSearchTags);
-  excludedSearchTagsRef.current = excludedSearchTags;
-  const smartFolderPredicateRef = useRef(smartFolderPredicate);
-  smartFolderPredicateRef.current = smartFolderPredicate;
-  const sortFieldRef = useRef(sortField);
-  sortFieldRef.current = sortField;
-  const sortOrderRef = useRef(sortOrder);
-  sortOrderRef.current = sortOrder;
-  const statusFilterRef = useRef(statusFilter);
-  statusFilterRef.current = statusFilter;
-  const responseTotalCountRef = useRef(state.responseTotalCount);
-  responseTotalCountRef.current = state.responseTotalCount;
-
-  useEffect(() => {
-    const unlisten = listen<EntitySlim>('file-imported', (event) => {
-      // Skip if viewing a search, smart folder, or specific folder
-      const hasTags = (searchTagsRef.current && searchTagsRef.current.length > 0)
-        || (excludedSearchTagsRef.current && excludedSearchTagsRef.current.length > 0);
-      const hasSmartFolder = smartFolderPredicateRef.current && smartFolderPredicateRef.current.groups.length > 0;
-      if (hasTags || hasSmartFolder) return;
-      if (folderIdRef.current != null) return;
-
-      // New imports go to inbox — only live-insert when viewing inbox
-      const filter = statusFilterRef.current;
-      if (filter !== 'inbox') return;
-
-      const newItem = toMasonryItem(event.payload);
-      const currentImages = stateRef.current.images;
-      if (currentImages.some(i => i.hash === newItem.hash)) return;
-      const next = sortLiveImages(
-        [newItem, ...currentImages],
-        sortFieldRef.current,
-        (sortOrderRef.current === 'desc' ? 'desc' : 'asc'),
-      );
-      dispatch({ type: 'SET_IMAGES', images: next });
-      if (typeof responseTotalCountRef.current === 'number') {
-        dispatch({
-          type: 'SET_RESPONSE_TOTAL_COUNT',
-          count: responseTotalCountRef.current + 1,
-        });
-      }
-
-      batchPreloadMediaUrls([newItem], 'thumb512', 'high');
-    });
-    return () => { unlisten.then(fn => fn()); };
-  }, [dispatch]);
-
-  // Fallback for missed file-imported events: while subscriptions are running
-  // and Inbox is active, merge newly fetched inbox items into the current grid
-  // without replacing the whole dataset.
-  useEffect(() => {
-    const hasTags = (searchTags && searchTags.length > 0)
-      || (excludedSearchTags && excludedSearchTags.length > 0);
-    const hasSmartFolder = !!(smartFolderPredicate && smartFolderPredicate.groups.length > 0);
-    const inInboxScope = statusFilter === 'inbox'
-      && !hasTags
-      && !hasSmartFolder
-      && folderId == null
-      && collectionEntityId == null;
-    if (!inInboxScope) return;
-
-    let disposed = false;
-    let inFlight = false;
-    const timer = setInterval(() => {
-      if (inFlight || disposed) return;
-      inFlight = true;
-      void (async () => {
-        try {
-          const running = await subscriptionApi.getRunningSubscriptions();
-          if (running.length === 0 || disposed) return;
-
-          const page = await api.grid.getPageSlim({
-            limit: 60,
-            cursor: null,
-            sortField: 'imported_at',
-            sortOrder: 'desc',
-            status: 'inbox',
-          });
-          if (disposed) return;
-
-          const currentImages = stateRef.current.images;
-          const currentHashes = new Set(currentImages.map((img) => img.hash));
-          const incoming = page.items
-            .map(toMasonryItem)
-            .filter((img) => !currentHashes.has(img.hash));
-          if (incoming.length === 0) return;
-
-          const merged = sortLiveImages(
-            [...incoming, ...currentImages],
-            sortFieldRef.current,
-            (sortOrderRef.current === 'desc' ? 'desc' : 'asc'),
-          );
-          dispatch({ type: 'SET_IMAGES', images: merged });
-          const pageTotal = page.total_count;
-          if (typeof pageTotal === 'number') {
-            dispatch({ type: 'SET_RESPONSE_TOTAL_COUNT', count: pageTotal });
-          } else if (typeof stateRef.current.responseTotalCount === 'number') {
-            dispatch({
-              type: 'SET_RESPONSE_TOTAL_COUNT',
-              count: stateRef.current.responseTotalCount + incoming.length,
-            });
-          }
-        } catch {
-          // Best-effort fallback; normal event path remains primary.
-        } finally {
-          inFlight = false;
-        }
-      })();
-    }, 1200);
-
-    return () => {
-      disposed = true;
-      clearInterval(timer);
-    };
-  }, [
-    statusFilter,
-    searchTags,
-    excludedSearchTags,
-    smartFolderPredicate,
-    folderId,
-    collectionEntityId,
-    dispatch,
-  ]);
 
   useEffect(() => {
     const webview = getCurrentWebview();
@@ -853,7 +730,7 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
             );
           }
           notifySuccess(`Imported ${result.imported.length} file(s), ${result.skipped.length} skipped.`, 'Import Complete');
-          broker.requestReplace(queryKeyRef.current);
+          void requestReplace();
         } catch (err) {
           notifyError(err, 'Import Failed');
         }
@@ -906,13 +783,14 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
     handleCopyTags,
     handlePasteTags,
     hasCopiedTags,
+    handleOpenDetail: viewer.openDetail,
     collectionEntityId,
     navigateToCollection,
     setRenameValue,
     setRenamingHash,
     renameCancelledRef,
     setBatchRenameOpen,
-    requestGridReload: () => broker.requestReplace(queryKeyRef.current),
+    requestGridReload: () => { void requestReplace(); },
   });
 
   if (state.error) {
@@ -940,7 +818,6 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
         data-grid-container
         onContextMenu={handleContextMenu}
         onPointerDown={handleBoxPointerDown}
-        onTransitionEnd={handleGridTransitionEnd}
         style={{
           flex: 1,
           // Reserve scrollbar gutter on both sides for symmetric padding.
@@ -949,14 +826,8 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
           overflowX: 'hidden',
           userSelect: 'none',
           WebkitUserSelect: 'none',
-          opacity: state.detailHash ? 0 : transitionOpacity(state.transitionStage),
-          transition: transitionCss(state.transitionStage),
-          position: state.detailHash ? 'absolute' : 'relative',
-          pointerEvents: (state.detailHash || gridFreezeActive) ? 'none' : 'auto',
-          visibility: state.detailHash ? 'hidden' : 'visible',
-          contentVisibility: state.detailHash ? 'hidden' : 'visible',
-          inset: state.detailHash ? 0 : undefined,
-          zIndex: state.detailHash ? -1 : undefined,
+          position: 'relative',
+          pointerEvents: gridFreezeActive ? 'none' : 'auto',
           filter: displaySettings.grayscalePreview ? 'grayscale(1)' : undefined,
         } as React.CSSProperties}
       >
@@ -975,7 +846,7 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
               }}
             />
           )}
-          <CanvasGrid
+          <DomGridSurface
             images={state.images}
             targetSize={state.displayTargetSize}
             gap={gap}
@@ -992,7 +863,7 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
             scrollContainerRef={scrollRef}
             popHash={state.popHash}
             onPopComplete={() => dispatch({ type: 'SET_POP_HASH', hash: null })}
-            frozen={!!state.detailHash || gridFreezeActive}
+            frozen={gridFreezeActive}
             marqueeActive={state.boxActive}
             showTileName={displaySettings.showTileName}
             showResolution={displaySettings.showResolution}
@@ -1006,105 +877,14 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
             reorderMode={isReorderScope}
             onReorder={isReorderScope ? handleReorder : undefined}
             totalCount={state.responseTotalCount ?? selectedScopeCount}
-            estimateSampleImages={estimateSampleImages}
             renamingHash={renamingHash}
+            renameValue={renameValue}
+            renameInputRef={renameInputRef}
+            onRenameChange={setRenameValue}
+            onRenameCommit={commitRename}
+            onRenameCancel={cancelRename}
           />
-          {/* Inline rename overlay — positioned in layout-space so it scrolls with content */}
-          {renamingHash && (() => {
-            const positions = canvasLayoutRef.current;
-            const imgs = imagesRef.current;
-            const idx = imgs.findIndex(i => i.hash === renamingHash);
-            const pos = idx >= 0 ? positions[idx] : null;
-            if (!pos) return null;
-            const th = computeTextHeight(displaySettings.showTileName, displaySettings.showResolution);
-            const imageHeight = pos.h - th;
-            // Offset by the canvas grid root's top within the scroll container
-            const canvasRoot = scrollRef.current?.querySelector<HTMLElement>('[data-canvas-grid-root]');
-            const offsetTop = canvasRoot?.offsetTop ?? 0;
-            return (
-              <input
-                ref={renameInputRef}
-                value={renameValue}
-                onChange={(e) => setRenameValue(e.target.value)}
-                onKeyDown={(e) => {
-                  e.stopPropagation();
-                  if (e.key === 'Enter') commitRename();
-                  if (e.key === 'Escape') cancelRename();
-                }}
-                onBlur={commitRename}
-                style={{
-                  position: 'absolute',
-                  top: offsetTop + pos.y + imageHeight,
-                  left: pos.x,
-                  width: pos.w,
-                  height: TEXT_NAME_ROW_H,
-                  fontSize: 'var(--font-size-md)',
-                  lineHeight: '1',
-                  textAlign: 'center',
-                  padding: '0 4px',
-                  border: '1px solid var(--color-primary)',
-                  borderRadius: 3,
-                  background: 'var(--color-bg-primary, #1e1e1e)',
-                  color: 'var(--color-text-primary)',
-                  outline: 'none',
-                  boxSizing: 'border-box',
-                  zIndex: 10,
-                  fontFamily: 'var(--font-family)',
-                }}
-              />
-            );
-          })()}
         </div>
-
-      {/* Detail view — replaces grid */}
-      {state.detailHash && state.viewerSession && (
-        <DetailView
-          images={state.images}
-          currentIndex={state.viewerSession.currentIndex}
-          onNavigate={(delta) => dispatch({ type: 'VIEWER_NAVIGATE', delta })}
-          totalCount={state.responseTotalCount ?? selectedScopeCount}
-          onClose={(exitHash) => {
-            dispatch({ type: 'CLOSE_DETAIL' });
-            dispatch({ type: 'SET_POP_HASH', hash: exitHash });
-            dispatch({ type: 'SELECT_HASHES', hashes: new Set([exitHash]) });
-            dispatch({ type: 'SET_LAST_CLICKED', hash: exitHash });
-            onDetailViewStateChange?.(null, null);
-          }}
-          onStateChange={(dvState, controls) => {
-            onDetailViewStateChange?.(dvState, controls);
-          }}
-          onImageChange={(hash) => {
-            recordImageView(hash);
-            dispatch({ type: 'SELECT_HASHES', hashes: new Set([hash]) });
-            dispatch({ type: 'SET_LAST_CLICKED', hash });
-          }}
-          onLoadMore={state.hasMore ? loadMore : undefined}
-          inboxMode={statusFilter === 'inbox'}
-          onInboxAction={statusFilter === 'inbox' ? handleInboxAction : undefined}
-        />
-      )}
-
-      {/* QuickLook overlay — above everything */}
-      {state.quickLookHash && state.viewerSession && (
-        <QuickLook
-          images={state.images}
-          currentIndex={state.viewerSession.currentIndex}
-          onNavigate={(delta) => dispatch({ type: 'VIEWER_NAVIGATE', delta })}
-          totalCount={state.responseTotalCount ?? selectedScopeCount}
-          onClose={(exitHash) => {
-            dispatch({ type: 'CLOSE_QUICK_LOOK' });
-            dispatch({ type: 'SET_POP_HASH', hash: exitHash });
-          }}
-          onImageChange={(hash) => {
-            recordImageView(hash);
-            dispatch({ type: 'SELECT_HASHES', hashes: new Set([hash]) });
-            dispatch({ type: 'SET_LAST_CLICKED', hash });
-            const idx = imagesRef.current.findIndex(i => i.hash === hash);
-            if (idx >= 0) scrollToIndex(idx);
-          }}
-          onLoadMore={state.hasMore ? loadMore : undefined}
-        />
-      )}
 
       {contextMenu.state && (
         <ContextMenu
@@ -1153,16 +933,6 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
             Drop files to import
           </div>
         </div>
-      )}
-
-      {slideshowOpen && state.images.length > 0 && (
-        <Slideshow
-          images={state.images}
-          startIndex={state.images.findIndex(i => i.hash === singleSelectedHash) >= 0
-            ? state.images.findIndex(i => i.hash === singleSelectedHash)
-            : 0}
-          onClose={() => setSlideshowOpen(false)}
-        />
       )}
 
       <BatchRenameDialog

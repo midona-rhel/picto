@@ -12,12 +12,11 @@ import type {
 } from '../shared/types/generated/runtime-contract';
 import { deriveStaleResources } from '../runtime/resourceInvalidator';
 import { logBestEffortError } from '../shared/lib/asyncOps';
-import {
-  type GroupFinishedEvent,
-  type GroupProgressEvent,
-  type SubscriptionFinishedEvent,
-  subscriptionApi,
-} from '../features/subscriptions/api';
+import type {
+  GroupFinishedEvent,
+  GroupProgressEvent,
+  SubscriptionFinishedEvent,
+} from '../shared/types/api';
 import { projectRuntimeTasks } from './runtimeTaskProjection';
 
 // ---------------------------------------------------------------------------
@@ -401,8 +400,8 @@ export const useRuntimeSyncStore = create<RuntimeSyncState>((set, get) => ({
         runningSubscriptionIdsRaw,
         runningProgress,
       ] = await Promise.all([
-        subscriptionApi.getRunningSubscriptions(),
-        subscriptionApi.getRunningSubscriptionProgress().catch((error) => {
+        api.subscriptions.getRunning(),
+        api.subscriptions.getRunningProgress().catch((error) => {
           logBestEffortError('runtimeSyncStore.runningProgress', error);
           return [];
         }),

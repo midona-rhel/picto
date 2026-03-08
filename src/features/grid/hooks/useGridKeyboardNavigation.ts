@@ -1,5 +1,5 @@
 import { useCallback, useRef } from 'react';
-import { computeLayout, computeTextHeight } from '../VirtualGrid';
+import { computeLayout, computeTextHeight } from '../gridLayout';
 import { prefetchMetadata } from '../metadataPrefetch';
 import type { MasonryImageItem } from '../shared';
 import type { GridRuntimeAction, GridRuntimeState, GridViewMode } from '../runtime';
@@ -42,11 +42,11 @@ export function useGridKeyboardNavigation({
   const getCanvasOffsetTop = useCallback((): number => {
     const container = scrollRef.current;
     if (!container) return 0;
-    const canvasRoot = container.querySelector<HTMLElement>('[data-canvas-grid-root]');
-    if (!canvasRoot) return 0;
+    const surfaceRoot = container.querySelector<HTMLElement>('[data-grid-surface-root]');
+    if (!surfaceRoot) return 0;
     const scrollRect = container.getBoundingClientRect();
-    const canvasRect = canvasRoot.getBoundingClientRect();
-    return container.scrollTop + (canvasRect.top - scrollRect.top);
+    const surfaceRect = surfaceRoot.getBoundingClientRect();
+    return container.scrollTop + (surfaceRect.top - scrollRect.top);
   }, []);
 
   const handleContainerWidthChange = useCallback(

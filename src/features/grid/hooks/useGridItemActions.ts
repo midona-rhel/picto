@@ -4,8 +4,8 @@ import { notifyError, notifySuccess } from '../../../shared/lib/notify';
 import { registerUndoAction } from '../../../shared/controllers/undoRedoController';
 import { logBestEffortError, runBestEffort } from '../../../shared/lib/asyncOps';
 import type { MasonryImageItem } from '../shared';
-import type { DetailViewControls, DetailViewState } from '../DetailView';
-import type { GridRuntimeAction, GridRuntimeState } from '../runtime';
+import type { GridRuntimeState } from '../runtime';
+import type { ViewerHostController } from '../../../features/viewer/hooks/useViewerHost';
 
 let copiedTags: string[] | null = null;
 
@@ -14,9 +14,7 @@ interface UseGridItemActionsArgs {
   stateRef: { current: GridRuntimeState };
   imagesRef: { current: MasonryImageItem[] };
   singleSelectedHash: string | null;
-  dispatch: React.Dispatch<GridRuntimeAction>;
-  navigateToCollection: (collection: { id: number; name: string }) => void;
-  onDetailViewStateChange?: (state: DetailViewState | null, controls: DetailViewControls | null) => void;
+  viewer: ViewerHostController;
   selectedScopeCount?: number | null;
 }
 
@@ -37,21 +35,18 @@ export function useGridItemActions({
   stateRef,
   imagesRef,
   singleSelectedHash,
-  dispatch,
+  viewer,
   selectedScopeCount,
 }: UseGridItemActionsArgs): GridItemActionsResult {
   const handleOpenDetail = useCallback(() => {
     if (!singleSelectedHash) return;
-    dispatch({ type: 'OPEN_DETAIL', hash: singleSelectedHash });
-  }, [singleSelectedHash, dispatch]);
+    viewer.openDetail(singleSelectedHash);
+  }, [singleSelectedHash, viewer]);
 
   const handleOpenQuickLook = useCallback(() => {
-    if (state.quickLookHash) {
-      dispatch({ type: 'CLOSE_QUICK_LOOK' });
-    } else if (singleSelectedHash) {
-      dispatch({ type: 'OPEN_QUICK_LOOK', hash: singleSelectedHash });
-    }
-  }, [singleSelectedHash, state.quickLookHash, dispatch]);
+    if (!singleSelectedHash) return;
+    viewer.toggleQuickLook(singleSelectedHash);
+  }, [singleSelectedHash, viewer]);
 
   const handleOpenWithDefaultApp = useCallback(() => {
     if (!singleSelectedHash) return;

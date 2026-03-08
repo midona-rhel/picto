@@ -10,7 +10,7 @@ use crate::settings::store::SettingsStore;
 use crate::sqlite::SqliteDatabase;
 use crate::types::{RunningSubscriptions, SubTerminalStatuses};
 
-/// Check all flows for overdue scheduled runs and trigger them.
+/// Check all subscription groups for overdue scheduled runs and trigger them.
 pub async fn check_scheduled_groups(
     db: &Arc<SqliteDatabase>,
     blob_store: &Arc<BlobStore>,
@@ -22,7 +22,7 @@ pub async fn check_scheduled_groups(
     let groups = match db.list_groups().await {
         Ok(f) => f,
         Err(e) => {
-            tracing::warn!("Scheduler: failed to list flows: {e}");
+            tracing::warn!("Scheduler: failed to list groups: {e}");
             return;
         }
     };
@@ -82,10 +82,10 @@ pub async fn check_scheduled_groups(
         if is_overdue {
             let group_id_str = group.group_id.to_string();
             tracing::info!(
-                flow_id = group.group_id,
+                group_id = group.group_id,
                 name = %group.name,
                 schedule = %group.schedule,
-                "Scheduler: running overdue flow"
+                "Scheduler: running overdue group"
             );
             if let Err(e) = crate::subscriptions::subscription_group_controller::SubscriptionGroupController::run_group(
                 db,
@@ -99,8 +99,8 @@ pub async fn check_scheduled_groups(
             .await
             {
                 tracing::warn!(
-                    flow_id = group.group_id,
-                    "Scheduler: failed to start flow: {e}"
+                    group_id = group.group_id,
+                    "Scheduler: failed to start group: {e}"
                 );
             }
         }

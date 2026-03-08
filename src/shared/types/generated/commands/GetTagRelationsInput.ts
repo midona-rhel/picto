@@ -2,6 +2,6 @@
 
 export type GetTagRelationsInput = { tag_id: number, 
 /**
- * "siblings" or "parents"
+ * "aliases" or "implications"
  */
 relation_type: string, };

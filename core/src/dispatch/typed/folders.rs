@@ -24,34 +24,34 @@ where
 // ─── Input structs ─────────────────────────────────────────────────────────
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct GetFolderFilesInput {
     #[ts(type = "number")]
     pub folder_id: i64,
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct GetFolderCoverHashInput {
     #[ts(type = "number")]
     pub folder_id: i64,
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct GetFileFoldersInput {
     pub hash: String,
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct GetEntityFoldersInput {
     #[ts(type = "number")]
     pub entity_id: i64,
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct MoveFolderInput {
     #[ts(type = "number")]
     pub folder_id: i64,
@@ -62,7 +62,7 @@ pub struct MoveFolderInput {
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct CreateFolderInput {
     pub name: String,
     #[ts(type = "number | null")]
@@ -72,7 +72,7 @@ pub struct CreateFolderInput {
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct UpdateFolderInput {
     #[ts(type = "number")]
     pub folder_id: i64,
@@ -83,14 +83,14 @@ pub struct UpdateFolderInput {
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct DeleteFolderInput {
     #[ts(type = "number")]
     pub folder_id: i64,
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct UpdateFolderParentInput {
     #[ts(type = "number")]
     pub folder_id: i64,
@@ -99,7 +99,7 @@ pub struct UpdateFolderParentInput {
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct AddFilesToFolderInput {
     #[ts(type = "number")]
     pub folder_id: i64,
@@ -107,7 +107,7 @@ pub struct AddFilesToFolderInput {
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct RemoveFilesFromFolderInput {
     #[ts(type = "number")]
     pub folder_id: i64,
@@ -115,47 +115,40 @@ pub struct RemoveFilesFromFolderInput {
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct ReorderFoldersInput {
     #[ts(type = "[number, number][]")]
     pub moves: Vec<(i64, i64)>,
 }
 
+/// Unified folder item reorder. Exactly one mode: `moves` (drag-drop),
+/// `sort_by`+`direction` (sort), or `reverse: true` (reverse).
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct ReorderFolderItemsInput {
     #[ts(type = "number")]
     pub folder_id: i64,
-    pub moves: Vec<crate::types::FolderReorderMove>,
-}
-
-#[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
-pub struct SortFolderItemsInput {
-    #[ts(type = "number")]
-    pub folder_id: i64,
-    pub sort_by: String,
-    pub direction: String,
+    #[serde(default)]
+    pub moves: Option<Vec<crate::types::FolderReorderMove>>,
+    #[serde(default)]
+    pub sort_by: Option<String>,
+    #[serde(default)]
+    pub direction: Option<String>,
+    #[serde(default)]
     pub hashes: Option<Vec<String>>,
+    #[serde(default)]
+    pub reverse: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
-pub struct ReverseFolderItemsInput {
-    #[ts(type = "number")]
-    pub folder_id: i64,
-    pub hashes: Option<Vec<String>>,
-}
-
-#[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct GetCollectionSummaryInput {
     #[ts(type = "number")]
     pub id: i64,
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct CreateCollectionInput {
     pub name: String,
     #[serde(default, deserialize_with = "deserialize_nullable_string")]
@@ -166,7 +159,7 @@ pub struct CreateCollectionInput {
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct UpdateCollectionInput {
     #[ts(type = "number")]
     pub id: i64,
@@ -180,7 +173,7 @@ pub struct UpdateCollectionInput {
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct SetCollectionRatingInput {
     #[ts(type = "number")]
     pub id: i64,
@@ -189,7 +182,7 @@ pub struct SetCollectionRatingInput {
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct SetCollectionSourceUrlsInput {
     #[ts(type = "number")]
     pub id: i64,
@@ -198,7 +191,7 @@ pub struct SetCollectionSourceUrlsInput {
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct ReorderCollectionMembersInput {
     #[ts(type = "number")]
     pub id: i64,
@@ -206,7 +199,7 @@ pub struct ReorderCollectionMembersInput {
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct AddCollectionMembersInput {
     #[ts(type = "number")]
     pub id: i64,
@@ -214,7 +207,7 @@ pub struct AddCollectionMembersInput {
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct RemoveCollectionMembersInput {
     #[ts(type = "number")]
     pub id: i64,
@@ -222,7 +215,7 @@ pub struct RemoveCollectionMembersInput {
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct DeleteCollectionInput {
     #[ts(type = "number")]
     pub id: i64,
@@ -338,29 +331,20 @@ pub async fn reorder_folders(state: &AppState, input: ReorderFoldersInput) -> Re
 }
 
 pub async fn reorder_folder_items(state: &AppState, input: ReorderFolderItemsInput) -> Result<(), String> {
-    crate::folders::controller::FolderController::reorder_folder_items(
-        &state.db, input.folder_id, input.moves,
-    ).await?;
+    if let Some(moves) = input.moves {
+        crate::folders::controller::FolderController::reorder_folder_items(
+            &state.db, input.folder_id, moves,
+        ).await?;
+    } else if let Some(sort_by) = input.sort_by {
+        let direction = input.direction.unwrap_or_else(|| "asc".to_string());
+        state.db.sort_folder_items(input.folder_id, sort_by, direction, input.hashes).await?;
+    } else if input.reverse == Some(true) {
+        state.db.reverse_folder_items(input.folder_id, input.hashes).await?;
+    } else {
+        return Err("No reorder operation specified".to_string());
+    }
     crate::events::emit_mutation(
         "reorder_folder_items",
-        crate::events::MutationImpact::folder_item_reorder(input.folder_id),
-    );
-    Ok(())
-}
-
-pub async fn sort_folder_items(state: &AppState, input: SortFolderItemsInput) -> Result<(), String> {
-    state.db.sort_folder_items(input.folder_id, input.sort_by, input.direction, input.hashes).await?;
-    crate::events::emit_mutation(
-        "sort_folder_items",
-        crate::events::MutationImpact::folder_item_reorder(input.folder_id),
-    );
-    Ok(())
-}
-
-pub async fn reverse_folder_items(state: &AppState, input: ReverseFolderItemsInput) -> Result<(), String> {
-    state.db.reverse_folder_items(input.folder_id, input.hashes).await?;
-    crate::events::emit_mutation(
-        "reverse_folder_items",
         crate::events::MutationImpact::folder_item_reorder(input.folder_id),
     );
     Ok(())

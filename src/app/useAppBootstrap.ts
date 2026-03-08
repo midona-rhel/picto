@@ -2,9 +2,8 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { MouseEvent as ReactMouseEvent } from 'react';
 import { useMantineColorScheme } from '@mantine/core';
 import { useHotkeys } from '@mantine/hooks';
-import { getCurrentWindow, setTheme as setAppTheme, api } from '#desktop/api';
+import { getCurrentWindow, setTheme as setAppTheme } from '#desktop/api';
 
-import { registerCacheCleanup } from '../shared/lib/cacheCleanup';
 import { useNavigationStore } from '../state/navigationStore';
 import { useSettingsStore } from '../state/settingsStore';
 import { performRedo, performUndo } from '../shared/controllers/undoRedoController';
@@ -41,10 +40,8 @@ export function useAppBootstrap(): AppBootstrap {
     if (currentView !== 'images') setDisplayedTitle(titlebarTitle);
   }, [titlebarTitle, currentView]);
 
-  // ── One-time startup: cache cleanup, window style, show ──
+  // ── One-time startup: show window ──
   useEffect(() => {
-    registerCacheCleanup();
-    runBestEffort('startup.enableModernWindowStyle', api.os.enableModernWindowStyle(4.0));
     runBestEffort('startup.windowShow', appWindow.show());
   }, [appWindow]);
 

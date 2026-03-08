@@ -8,53 +8,53 @@ use crate::state::AppState;
 // ─── Input structs ─────────────────────────────────────────────────────────
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct CreateGroupInput {
     pub name: String,
     pub schedule: Option<String>,
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct DeleteGroupInput {
     pub id: String,
     pub delete_files: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct RenameGroupInput {
     pub id: String,
     pub name: String,
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct SetGroupScheduleInput {
     pub id: String,
     pub schedule: String,
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct RunGroupInput {
     pub id: String,
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct StopGroupInput {
     pub id: String,
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct GetSiteMetadataSchemaInput {
     pub site_id: String,
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct ValidateSiteMetadataInput {
     pub site_id: String,
     #[serde(default)]
@@ -64,7 +64,7 @@ pub struct ValidateSiteMetadataInput {
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct CreateSubscriptionInput {
     pub name: String,
     pub site_id: String,
@@ -78,73 +78,73 @@ pub struct CreateSubscriptionInput {
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct DeleteSubscriptionInput {
     pub id: String,
     pub delete_files: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct PauseSubscriptionInput {
     pub id: String,
     pub paused: bool,
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct AddSubscriptionQueryInput {
     pub subscription_id: String,
     pub query_text: String,
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct DeleteSubscriptionQueryInput {
     pub id: String,
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct PauseSubscriptionQueryInput {
     pub id: String,
     pub paused: bool,
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct RunSubscriptionInput {
     pub id: String,
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct StopSubscriptionInput {
     pub id: String,
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct ResetSubscriptionInput {
     pub id: String,
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct RenameSubscriptionInput {
     pub id: String,
     pub name: String,
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct RunSubscriptionQueryInput {
     pub subscription_id: String,
     pub query_id: String,
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct SetCredentialInput {
     pub site_category: String,
     pub credential_type: String,
@@ -156,7 +156,7 @@ pub struct SetCredentialInput {
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct DeleteCredentialInput {
     pub site_category: String,
 }
@@ -169,14 +169,14 @@ pub async fn get_groups(state: &AppState, _input: serde_json::Value) -> Result<s
 }
 
 pub async fn create_group(state: &AppState, input: CreateGroupInput) -> Result<serde_json::Value, String> {
-    let flow = crate::subscriptions::subscription_group_controller::SubscriptionGroupController::create_group(
+    let group = crate::subscriptions::subscription_group_controller::SubscriptionGroupController::create_group(
         &state.db, input.name, input.schedule,
     ).await?;
     crate::events::emit_mutation(
         "create_group",
         crate::events::MutationImpact::sidebar(crate::events::Domain::Subscriptions),
     );
-    Ok(serde_json::to_value(&flow).map_err(|e| e.to_string())?)
+    Ok(serde_json::to_value(&group).map_err(|e| e.to_string())?)
 }
 
 pub async fn delete_group(state: &AppState, input: DeleteGroupInput) -> Result<(), String> {

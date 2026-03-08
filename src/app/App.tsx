@@ -9,6 +9,8 @@ import { SHORTCUT_DEFS, formatKeysDisplay, getShortcut, matchesShortcutDef } fro
 import { GridViewMode, ImageGridControls, FilterBar, ImagePropertiesPanel, DragGhost } from '#features/grid/components';
 import { MainViewModelProvider, MainViewRouter, CreateSubscriptionGroupModal, WindowControls } from '#features/layout/components';
 import { Sidebar, SidebarMenuButton } from '#features/sidebar/components';
+import { ViewerHost } from '#features/viewer/components';
+import { useViewerHost } from '#features/viewer/hooks/useViewerHost';
 import { TagPickerPortal } from '../shared/services/TagPickerPortal';
 import { TagSelectPortal } from '#features/tags/components';
 import { FolderPickerPortal } from '../shared/services/FolderPickerPortal';
@@ -79,6 +81,7 @@ function App() {
     currentView,
     propertiesPanelWidth: settings.propertiesPanelWidth,
   });
+  const viewer = useViewerHost();
 
   // --- Grid feature state (search, filters, subscriptions, folder sort) ---
   const grid = useGridFeatureState({
@@ -348,6 +351,7 @@ function App() {
         subscriptionRefreshToken,
         onOpenCreateSubscriptionGroupModal: () => grid.setCreateSubscriptionGroupModalOpen(true),
       },
+      viewer,
     }),
     [
       currentView,
@@ -384,6 +388,7 @@ function App() {
       inspector.handleDetailViewStateChange,
       subscriptionRefreshToken,
       grid.setCreateSubscriptionGroupModalOpen,
+      viewer,
     ],
   );
 
@@ -478,6 +483,7 @@ function App() {
           <ScopedDisplayProvider value={scopedDisplayValue}>
             <MainViewModelProvider value={mainViewModel}>
               <MainViewRouter />
+              <ViewerHost viewer={viewer} />
             </MainViewModelProvider>
           </ScopedDisplayProvider>
         </div>

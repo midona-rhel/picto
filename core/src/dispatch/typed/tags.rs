@@ -8,16 +8,8 @@ use crate::state::AppState;
 // ─── Input structs ─────────────────────────────────────────────────────────
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct SearchTagsInput {
-    pub query: String,
-    #[ts(type = "number | null")]
-    pub limit: Option<usize>,
-}
-
-#[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
-pub struct SearchTagsPagedInput {
     #[serde(default)]
     pub query: Option<String>,
     #[ts(type = "number | null")]
@@ -27,27 +19,27 @@ pub struct SearchTagsPagedInput {
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct GetFileTagsInput {
     pub hash: String,
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct AddTagsInput {
     pub hashes: Vec<String>,
     pub tag_strings: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct RemoveTagsInput {
     pub hashes: Vec<String>,
     pub tag_strings: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct FindFilesByTagsInput {
     pub tag_strings: Vec<String>,
     #[ts(type = "number | null")]
@@ -57,7 +49,7 @@ pub struct FindFilesByTagsInput {
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct ManageTagAliasInput {
     pub from: String,
     /// When present, sets the alias. When absent/null, removes it.
@@ -65,8 +57,8 @@ pub struct ManageTagAliasInput {
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
-pub struct ManageTagParentInput {
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
+pub struct ManageTagImplicationInput {
     pub child: String,
     pub parent: String,
     /// "add" or "remove"
@@ -74,23 +66,23 @@ pub struct ManageTagParentInput {
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct GetTagRelationsInput {
     #[ts(type = "number")]
     pub tag_id: i64,
-    /// "siblings" or "parents"
+    /// "aliases" or "implications"
     pub relation_type: String,
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct MergeTagsInput {
     pub from_tag: String,
     pub to_tag: String,
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct GetTagsPaginatedInput {
     pub namespace: Option<String>,
     pub search: Option<String>,
@@ -105,7 +97,7 @@ fn default_tags_limit() -> i64 {
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct RenameTagInput {
     #[ts(type = "number")]
     pub tag_id: i64,
@@ -113,20 +105,20 @@ pub struct RenameTagInput {
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct DeleteTagInput {
     #[ts(type = "number")]
     pub tag_id: i64,
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct CompanionGetNamespaceValuesInput {
     pub namespace: String,
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct CompanionGetFilesByTagInput {
     pub tag: String,
 }
@@ -134,18 +126,18 @@ pub struct CompanionGetFilesByTagInput {
 // ─── Handlers ──────────────────────────────────────────────────────────────
 
 pub async fn search_tags(state: &AppState, input: SearchTagsInput) -> Result<serde_json::Value, String> {
-    let result = crate::tags::controller::TagController::search_tags(
-        &state.db, input.query, input.limit,
-    ).await?;
-    serde_json::to_value(&result).map_err(|e| e.to_string())
-}
-
-pub async fn search_tags_paged(state: &AppState, input: SearchTagsPagedInput) -> Result<serde_json::Value, String> {
     let query = input.query.unwrap_or_default();
-    let result = crate::tags::controller::TagController::search_tags_paged(
-        &state.db, query, input.limit, input.offset,
-    ).await?;
-    serde_json::to_value(&result).map_err(|e| e.to_string())
+    if input.offset.is_some() {
+        let result = crate::tags::controller::TagController::search_tags_paged(
+            &state.db, query, input.limit, input.offset,
+        ).await?;
+        serde_json::to_value(&result).map_err(|e| e.to_string())
+    } else {
+        let result = crate::tags::controller::TagController::search_tags(
+            &state.db, query, input.limit,
+        ).await?;
+        serde_json::to_value(&result).map_err(|e| e.to_string())
+    }
 }
 
 pub async fn get_all_tags_with_counts(state: &AppState, _input: serde_json::Value) -> Result<serde_json::Value, String> {
@@ -161,30 +153,28 @@ pub async fn get_file_tags(state: &AppState, input: GetFileTagsInput) -> Result<
 }
 
 pub async fn add_tags(state: &AppState, input: AddTagsInput) -> Result<(), String> {
-    let hashes_clone = input.hashes.clone();
-    crate::tags::controller::TagController::add_tags_batch(
-        &state.db, input.hashes, input.tag_strings,
-    ).await?;
-    if !hashes_clone.is_empty() {
-        crate::events::emit_mutation(
-            "add_tags",
-            crate::events::MutationImpact::batch_tags().file_hashes(hashes_clone),
-        );
+    if input.tag_strings.is_empty() || input.hashes.is_empty() {
+        return Ok(());
     }
+    let hashes_clone = input.hashes.clone();
+    state.db.add_tags_batch(&input.hashes, &input.tag_strings).await?;
+    crate::events::emit_mutation(
+        "add_tags",
+        crate::events::MutationImpact::batch_tags().file_hashes(hashes_clone),
+    );
     Ok(())
 }
 
 pub async fn remove_tags(state: &AppState, input: RemoveTagsInput) -> Result<(), String> {
-    let hashes_clone = input.hashes.clone();
-    crate::tags::controller::TagController::remove_tags_batch(
-        &state.db, input.hashes, input.tag_strings,
-    ).await?;
-    if !hashes_clone.is_empty() {
-        crate::events::emit_mutation(
-            "remove_tags",
-            crate::events::MutationImpact::batch_tags().file_hashes(hashes_clone),
-        );
+    if input.tag_strings.is_empty() || input.hashes.is_empty() {
+        return Ok(());
     }
+    let hashes_clone = input.hashes.clone();
+    state.db.remove_tags_batch(&input.hashes, &input.tag_strings).await?;
+    crate::events::emit_mutation(
+        "remove_tags",
+        crate::events::MutationImpact::batch_tags().file_hashes(hashes_clone),
+    );
     Ok(())
 }
 
@@ -246,7 +236,7 @@ pub async fn get_tag_relations(state: &AppState, input: GetTagRelationsInput) ->
     serde_json::to_value(&result).map_err(|e| e.to_string())
 }
 
-pub async fn manage_tag_parent(state: &AppState, input: ManageTagParentInput) -> Result<(), String> {
+pub async fn manage_tag_implication(state: &AppState, input: ManageTagImplicationInput) -> Result<(), String> {
     let (cns, cst) = crate::tags::normalize::parse_tag(&input.child)
         .ok_or_else(|| format!("Invalid tag: {}", input.child))?;
     let (pns, pst) = crate::tags::normalize::parse_tag(&input.parent)
@@ -259,7 +249,7 @@ pub async fn manage_tag_parent(state: &AppState, input: ManageTagParentInput) ->
     }
 
     crate::events::emit_mutation(
-        "manage_tag_parent",
+        "manage_tag_implication",
         crate::events::MutationImpact::tag_structure_change(),
     );
     Ok(())

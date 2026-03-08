@@ -11,8 +11,6 @@
 export type { ImportFilesInput } from './ImportFilesInput';
 export type { UpdateFileStatusInput } from './UpdateFileStatusInput';
 export type { DeleteFilesInput } from './DeleteFilesInput';
-export type { DeleteFilesSelectionInput } from './DeleteFilesSelectionInput';
-export type { UpdateFileStatusSelectionInput } from './UpdateFileStatusSelectionInput';
 
 // Re-export generated input types — folders
 export type { GetFolderFilesInput } from './GetFolderFilesInput';
@@ -28,8 +26,6 @@ export type { AddFilesToFolderInput } from './AddFilesToFolderInput';
 export type { RemoveFilesFromFolderInput } from './RemoveFilesFromFolderInput';
 export type { ReorderFoldersInput } from './ReorderFoldersInput';
 export type { ReorderFolderItemsInput } from './ReorderFolderItemsInput';
-export type { SortFolderItemsInput } from './SortFolderItemsInput';
-export type { ReverseFolderItemsInput } from './ReverseFolderItemsInput';
 export type { GetCollectionSummaryInput } from './GetCollectionSummaryInput';
 export type { CreateCollectionInput } from './CreateCollectionInput';
 export type { UpdateCollectionInput } from './UpdateCollectionInput';
@@ -42,13 +38,12 @@ export type { DeleteCollectionInput } from './DeleteCollectionInput';
 
 // Re-export generated input types — tags
 export type { SearchTagsInput } from './SearchTagsInput';
-export type { SearchTagsPagedInput } from './SearchTagsPagedInput';
 export type { GetFileTagsInput } from './GetFileTagsInput';
 export type { AddTagsInput } from './AddTagsInput';
 export type { RemoveTagsInput } from './RemoveTagsInput';
 export type { FindFilesByTagsInput } from './FindFilesByTagsInput';
 export type { ManageTagAliasInput } from './ManageTagAliasInput';
-export type { ManageTagParentInput } from './ManageTagParentInput';
+export type { ManageTagImplicationInput } from './ManageTagImplicationInput';
 export type { GetTagRelationsInput } from './GetTagRelationsInput';
 export type { MergeTagsInput } from './MergeTagsInput';
 export type { GetTagsPaginatedInput } from './GetTagsPaginatedInput';
@@ -61,9 +56,7 @@ export type { CompanionGetFilesByTagInput } from './CompanionGetFilesByTagInput'
 export type { AddTagsSelectionInput } from './AddTagsSelectionInput';
 export type { RemoveTagsSelectionInput } from './RemoveTagsSelectionInput';
 export type { GetSelectionSummaryInput } from './GetSelectionSummaryInput';
-export type { UpdateRatingSelectionInput } from './UpdateRatingSelectionInput';
-export type { SetNotesSelectionInput } from './SetNotesSelectionInput';
-export type { SetSourceUrlsSelectionInput } from './SetSourceUrlsSelectionInput';
+export type { UpdateSelectionMetadataInput } from './UpdateSelectionMetadataInput';
 
 // Re-export generated input types — grid
 export type { GetGridPageSlimInput } from './GetGridPageSlimInput';
@@ -74,12 +67,8 @@ export type { GetFilesMetadataBatchInput } from './GetFilesMetadataBatchInput';
 export type { GetFileAllMetadataInput } from './GetFileAllMetadataInput';
 export type { GetFileTagsDisplayInput } from './GetFileTagsDisplayInput';
 export type { GetFileParentsInput } from './GetFileParentsInput';
-export type { UpdateRatingInput } from './UpdateRatingInput';
-export type { SetFileNameInput } from './SetFileNameInput';
 export type { GetFileNotesInput } from './GetFileNotesInput';
-export type { SetFileNotesInput } from './SetFileNotesInput';
-export type { IncrementViewCountInput } from './IncrementViewCountInput';
-export type { SetSourceUrlsInput } from './SetSourceUrlsInput';
+export type { UpdateFileMetadataInput } from './UpdateFileMetadataInput';
 
 // Re-export generated input types — files_media
 export type { ResolveFilePathInput } from './ResolveFilePathInput';
@@ -159,8 +148,6 @@ export type { ViewPrefsPatch } from './ViewPrefsPatch';
 import type { ImportFilesInput } from './ImportFilesInput';
 import type { UpdateFileStatusInput } from './UpdateFileStatusInput';
 import type { DeleteFilesInput } from './DeleteFilesInput';
-import type { DeleteFilesSelectionInput } from './DeleteFilesSelectionInput';
-import type { UpdateFileStatusSelectionInput } from './UpdateFileStatusSelectionInput';
 import type { ImportBatchResult } from './ImportBatchResult';
 import type { GetFolderFilesInput } from './GetFolderFilesInput';
 import type { GetFolderCoverHashInput } from './GetFolderCoverHashInput';
@@ -175,8 +162,6 @@ import type { AddFilesToFolderInput } from './AddFilesToFolderInput';
 import type { RemoveFilesFromFolderInput } from './RemoveFilesFromFolderInput';
 import type { ReorderFoldersInput } from './ReorderFoldersInput';
 import type { ReorderFolderItemsInput } from './ReorderFolderItemsInput';
-import type { SortFolderItemsInput } from './SortFolderItemsInput';
-import type { ReverseFolderItemsInput } from './ReverseFolderItemsInput';
 import type { GetCollectionSummaryInput } from './GetCollectionSummaryInput';
 import type { CreateCollectionInput } from './CreateCollectionInput';
 import type { UpdateCollectionInput } from './UpdateCollectionInput';
@@ -187,13 +172,12 @@ import type { AddCollectionMembersInput } from './AddCollectionMembersInput';
 import type { RemoveCollectionMembersInput } from './RemoveCollectionMembersInput';
 import type { DeleteCollectionInput } from './DeleteCollectionInput';
 import type { SearchTagsInput } from './SearchTagsInput';
-import type { SearchTagsPagedInput } from './SearchTagsPagedInput';
 import type { GetFileTagsInput } from './GetFileTagsInput';
 import type { AddTagsInput } from './AddTagsInput';
 import type { RemoveTagsInput } from './RemoveTagsInput';
 import type { FindFilesByTagsInput } from './FindFilesByTagsInput';
 import type { ManageTagAliasInput } from './ManageTagAliasInput';
-import type { ManageTagParentInput } from './ManageTagParentInput';
+import type { ManageTagImplicationInput } from './ManageTagImplicationInput';
 import type { GetTagRelationsInput } from './GetTagRelationsInput';
 import type { MergeTagsInput } from './MergeTagsInput';
 import type { GetTagsPaginatedInput } from './GetTagsPaginatedInput';
@@ -204,21 +188,15 @@ import type { CompanionGetFilesByTagInput } from './CompanionGetFilesByTagInput'
 import type { AddTagsSelectionInput } from './AddTagsSelectionInput';
 import type { RemoveTagsSelectionInput } from './RemoveTagsSelectionInput';
 import type { GetSelectionSummaryInput } from './GetSelectionSummaryInput';
-import type { UpdateRatingSelectionInput } from './UpdateRatingSelectionInput';
-import type { SetNotesSelectionInput } from './SetNotesSelectionInput';
-import type { SetSourceUrlsSelectionInput } from './SetSourceUrlsSelectionInput';
+import type { UpdateSelectionMetadataInput } from './UpdateSelectionMetadataInput';
 import type { GetGridPageSlimInput } from './GetGridPageSlimInput';
 import type { GetFileInput } from './GetFileInput';
 import type { GetFilesMetadataBatchInput } from './GetFilesMetadataBatchInput';
 import type { GetFileAllMetadataInput } from './GetFileAllMetadataInput';
 import type { GetFileTagsDisplayInput } from './GetFileTagsDisplayInput';
 import type { GetFileParentsInput } from './GetFileParentsInput';
-import type { UpdateRatingInput } from './UpdateRatingInput';
-import type { SetFileNameInput } from './SetFileNameInput';
 import type { GetFileNotesInput } from './GetFileNotesInput';
-import type { SetFileNotesInput } from './SetFileNotesInput';
-import type { IncrementViewCountInput } from './IncrementViewCountInput';
-import type { SetSourceUrlsInput } from './SetSourceUrlsInput';
+import type { UpdateFileMetadataInput } from './UpdateFileMetadataInput';
 import type { ResolveFilePathInput } from './ResolveFilePathInput';
 import type { OpenFileDefaultInput } from './OpenFileDefaultInput';
 import type { RevealInFolderInput } from './RevealInFolderInput';
@@ -273,12 +251,10 @@ import type { CountSmartFolderInput } from './CountSmartFolderInput';
 export interface TypedCommandMap {
   // files_lifecycle
   import_files: { input: ImportFilesInput; output: ImportBatchResult };
-  update_file_status: { input: UpdateFileStatusInput; output: null };
+  update_file_status: { input: UpdateFileStatusInput; output: number };
   delete_files: { input: DeleteFilesInput; output: number };
   rebuild_file_fts: { input: Record<string, never>; output: null };
   wipe_image_data: { input: Record<string, never>; output: null };
-  delete_files_selection: { input: DeleteFilesSelectionInput; output: number };
-  update_file_status_selection: { input: UpdateFileStatusSelectionInput; output: number };
   // folders
   list_folders: { input: Record<string, never>; output: unknown };
   get_folder_files: { input: GetFolderFilesInput; output: string[] };
@@ -294,8 +270,6 @@ export interface TypedCommandMap {
   remove_files_from_folder: { input: RemoveFilesFromFolderInput; output: number };
   reorder_folders: { input: ReorderFoldersInput; output: null };
   reorder_folder_items: { input: ReorderFolderItemsInput; output: null };
-  sort_folder_items: { input: SortFolderItemsInput; output: null };
-  reverse_folder_items: { input: ReverseFolderItemsInput; output: null };
   get_collections: { input: Record<string, never>; output: unknown };
   get_collection_summary: { input: GetCollectionSummaryInput; output: unknown };
   create_collection: { input: CreateCollectionInput; output: number };
@@ -308,7 +282,6 @@ export interface TypedCommandMap {
   delete_collection: { input: DeleteCollectionInput; output: null };
   // tags
   search_tags: { input: SearchTagsInput; output: unknown };
-  search_tags_paged: { input: SearchTagsPagedInput; output: unknown };
   get_all_tags_with_counts: { input: Record<string, never>; output: unknown };
   get_file_tags: { input: GetFileTagsInput; output: unknown };
   add_tags: { input: AddTagsInput; output: null };
@@ -317,7 +290,7 @@ export interface TypedCommandMap {
   manage_tag_alias: { input: ManageTagAliasInput; output: null };
   get_tag_aliases: { input: Record<string, never>; output: unknown };
   get_tag_relations: { input: GetTagRelationsInput; output: unknown };
-  manage_tag_parent: { input: ManageTagParentInput; output: null };
+  manage_tag_implication: { input: ManageTagImplicationInput; output: null };
   merge_tags: { input: MergeTagsInput; output: null };
   lookup_tag_types: { input: Record<string, never>; output: string[] };
   get_tags_paginated: { input: GetTagsPaginatedInput; output: unknown };
@@ -331,9 +304,7 @@ export interface TypedCommandMap {
   add_tags_selection: { input: AddTagsSelectionInput; output: number };
   remove_tags_selection: { input: RemoveTagsSelectionInput; output: number };
   get_selection_summary: { input: GetSelectionSummaryInput; output: unknown };
-  update_rating_selection: { input: UpdateRatingSelectionInput; output: number };
-  set_notes_selection: { input: SetNotesSelectionInput; output: number };
-  set_source_urls_selection: { input: SetSourceUrlsSelectionInput; output: number };
+  update_selection_metadata: { input: UpdateSelectionMetadataInput; output: number };
   // grid
   get_grid_page_slim: { input: GetGridPageSlimInput; output: unknown };
   get_file: { input: GetFileInput; output: unknown };
@@ -343,14 +314,9 @@ export interface TypedCommandMap {
   get_file_all_metadata: { input: GetFileAllMetadataInput; output: unknown };
   get_file_tags_display: { input: GetFileTagsDisplayInput; output: unknown };
   get_file_parents: { input: GetFileParentsInput; output: unknown };
-  update_rating: { input: UpdateRatingInput; output: null };
-  set_file_name: { input: SetFileNameInput; output: null };
+  update_file_metadata: { input: UpdateFileMetadataInput; output: null };
   get_file_notes: { input: GetFileNotesInput; output: unknown };
-  set_file_notes: { input: SetFileNotesInput; output: null };
-  increment_view_count: { input: IncrementViewCountInput; output: null };
-  set_source_urls: { input: SetSourceUrlsInput; output: null };
   get_storage_stats: { input: Record<string, never>; output: unknown };
-  get_image_storage_stats: { input: Record<string, never>; output: unknown };
   // files_media
   resolve_file_path: { input: ResolveFilePathInput; output: string };
   open_file_default: { input: OpenFileDefaultInput; output: null };
@@ -407,7 +373,6 @@ export interface TypedCommandMap {
   set_view_prefs: { input: SetViewPrefsInput; output: unknown };
   set_zoom_factor: { input: SetZoomFactorInput; output: null };
   get_zoom_factor: { input: Record<string, never>; output: unknown };
-  enable_modern_window_style: { input: Record<string, unknown>; output: null };
   // duplicates
   get_duplicates: { input: GetDuplicatesInput; output: unknown };
   scan_duplicates: { input: ScanDuplicatesInput; output: unknown };

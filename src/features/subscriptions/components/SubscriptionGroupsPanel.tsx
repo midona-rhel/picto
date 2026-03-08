@@ -18,8 +18,7 @@ import {
   IconRefresh,
 } from '@tabler/icons-react';
 import { useRuntimeSyncStore } from '../../../state/runtimeSyncStore';
-import { listenRuntimeEvent } from '#desktop/api';
-import { subscriptionApi } from '../api';
+import { api, listenRuntimeEvent } from '#desktop/api';
 import type { SubscriptionGroupInfo, SubscriptionGroupsPanelProps, SitePluginInfo, SubProgress } from '../types';
 import { SCHEDULE_OPTIONS } from '../types';
 import {
@@ -109,9 +108,9 @@ export function SubscriptionGroupsPanel({
   const loadData = useCallback(async () => {
     try {
       const [subscriptionGroupsData, sitesData, creds] = await Promise.all([
-        subscriptionApi.getSubscriptionGroups<SubscriptionGroupInfo>(),
-        subscriptionApi.getSiteCatalog(),
-        subscriptionApi.listCredentials().catch(() => []),
+        api.groups.list() as unknown as Promise<SubscriptionGroupInfo[]>,
+        api.subscriptions.getSites(),
+        api.subscriptions.listCredentials().catch(() => []),
       ]);
       setSubscriptionGroups(subscriptionGroupsData);
       setSites(sitesData);
@@ -185,7 +184,7 @@ export function SubscriptionGroupsPanel({
 
   const handleRenameCommit = useCallback(async (id: string, newName: string) => {
     try {
-      await subscriptionApi.renameSubscriptionGroup({ id, name: newName });
+      await api.groups.rename(id, newName);
       await loadData();
     } catch (e) { console.error('Rename failed:', e); }
   }, [loadData]);
@@ -204,7 +203,7 @@ export function SubscriptionGroupsPanel({
 
   const handleDelete = async (subscriptionGroupId: string) => {
     try {
-      await subscriptionApi.deleteSubscriptionGroup({ id: subscriptionGroupId });
+      await api.groups.delete(subscriptionGroupId);
       await loadData();
     } catch (error) {
       notifyError(`Failed to delete: ${error}`);
@@ -247,7 +246,7 @@ export function SubscriptionGroupsPanel({
       }
 
       setSubscriptionGroupMessage(subscriptionGroup.id, 'Starting…');
-      await subscriptionApi.runSubscriptionGroup({ id: subscriptionGroup.id });
+      await api.groups.run(subscriptionGroup.id);
       setSubscriptionGroupMessage(subscriptionGroup.id, 'Run requested');
       notifyInfo(`Started "${subscriptionGroup.name}"`, 'Subscription Group Started');
       await loadData();
@@ -259,7 +258,7 @@ export function SubscriptionGroupsPanel({
 
   const handleStop = async (subscriptionGroup: SubscriptionGroupInfo) => {
     try {
-      await subscriptionApi.stopSubscriptionGroup({ id: subscriptionGroup.id });
+      await api.groups.stop(subscriptionGroup.id);
       notifyInfo(`Stopping "${subscriptionGroup.name}"...`, 'Stopping');
     } catch (error) {
       notifyError(`Failed to stop: ${error}`);
@@ -269,7 +268,7 @@ export function SubscriptionGroupsPanel({
   const handleReset = async (subscriptionGroup: SubscriptionGroupInfo) => {
     try {
       for (const sub of subscriptionGroup.subscriptions) {
-        await subscriptionApi.resetSubscription({ id: sub.id });
+        await api.subscriptions.reset(sub.id);
       }
       notifySuccess(`"${subscriptionGroup.name}" reset. Next run starts fresh.`, 'Reset Complete');
       await loadData();
@@ -280,7 +279,7 @@ export function SubscriptionGroupsPanel({
 
   const handleScheduleChange = async (subscriptionGroupId: string, schedule: string) => {
     try {
-      await subscriptionApi.setSubscriptionGroupSchedule({ id: subscriptionGroupId, schedule });
+      await api.groups.setSchedule(subscriptionGroupId, schedule);
       setSubscriptionGroups((prev) => prev.map((group) => group.id === subscriptionGroupId ? { ...group, schedule } : group));
     } catch (error) {
       notifyError(`Failed to set schedule: ${error}`);
@@ -289,7 +288,7 @@ export function SubscriptionGroupsPanel({
 
   const handleDeleteQuery = async (queryId: string) => {
     try {
-      await subscriptionApi.deleteSubscriptionQuery({ id: queryId });
+      await api.subscriptions.deleteQuery(queryId);
       await loadData();
     } catch (error) {
       notifyError(`Failed to delete query: ${error}`);
@@ -309,10 +308,7 @@ export function SubscriptionGroupsPanel({
       );
     }
     try {
-      await subscriptionApi.runSubscriptionQuery({
-        subscriptionId: subId,
-        queryId,
-      });
+      await api.subscriptions.runQuery(subId, queryId);
       notifyInfo(`Started query "${queryText}"`, 'Query Started');
     } catch (error) {
       notifyError(`Failed to run query: ${error}`);
@@ -339,16 +335,16 @@ export function SubscriptionGroupsPanel({
       const subscriptionGroup = subscriptionGroups.find((group) => group.id === subscriptionGroupId);
       const existingSub = subscriptionGroup?.subscriptions.find((s) => (s.site_id ?? s.site_plugin_id) === addSite);
       if (existingSub) {
-        await subscriptionApi.addSubscriptionQuery({ subscriptionId: existingSub.id, queryText: addQuery.trim() });
+        await api.subscriptions.addQuery(existingSub.id, addQuery.trim());
       } else {
         const siteName = sites.find((s) => s.id === addSite)?.name ?? addSite;
-        await subscriptionApi.createSubscription({
+        await api.subscriptions.create({
           name: `${siteName}: ${addQuery.trim()}`,
-          siteId: addSite,
+          site_id: addSite,
           queries: [addQuery.trim()],
-          groupId: Number(subscriptionGroupId),
-          initialFileLimit: 100,
-          periodicFileLimit: 50,
+          group_id: Number(subscriptionGroupId),
+          initial_file_limit: 100,
+          periodic_file_limit: 50,
         });
       }
       setAddQuery('');

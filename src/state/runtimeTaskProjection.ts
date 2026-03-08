@@ -1,5 +1,5 @@
 import type { RuntimeTask } from '../shared/types/generated/runtime-contract';
-import type { GroupProgressEvent } from '../features/subscriptions/api';
+import type { GroupProgressEvent } from '../shared/types/api';
 
 export interface RuntimeTaskProjection {
   groupProgressById: Map<string, GroupProgressEvent>;

@@ -8,21 +8,21 @@ use crate::state::AppState;
 // ─── Input structs ─────────────────────────────────────────────────────────
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct ReorderSmartFoldersInput {
     #[ts(type = "[number, number][]")]
     pub moves: Vec<(i64, i64)>,
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct CreateSmartFolderInput {
     #[ts(type = "Record<string, unknown>")]
     pub folder: crate::smart_folders::db::SmartFolder,
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct UpdateSmartFolderInput {
     pub id: String,
     #[ts(type = "Record<string, unknown>")]
@@ -30,13 +30,13 @@ pub struct UpdateSmartFolderInput {
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct DeleteSmartFolderInput {
     pub id: String,
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct QuerySmartFolderInput {
     pub predicate: crate::smart_folders::db::SmartFolderPredicate,
     #[serde(default)]
@@ -48,7 +48,7 @@ pub struct QuerySmartFolderInput {
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct CountSmartFolderInput {
     pub predicate: crate::smart_folders::db::SmartFolderPredicate,
 }

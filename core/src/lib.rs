@@ -8,7 +8,6 @@ pub mod duplicates;
 pub mod folders;
 pub mod grid;
 pub mod import;
-pub mod lifecycle;
 pub mod metadata;
 pub mod scope;
 pub mod selection;

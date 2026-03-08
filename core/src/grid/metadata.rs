@@ -7,11 +7,10 @@ use std::time::Instant;
 use chrono::Utc;
 
 use crate::sqlite::projections::ResolvedMetadataFull;
-use crate::tags::db::FileTagInfo;
 use crate::sqlite::SqliteDatabase;
-use crate::tags::normalize;
+use crate::metadata::controller::file_tag_to_resolved_info;
 use crate::types::{
-    tag_display_key, DominantColorDto, FileAllMetadata,
+    DominantColorDto, FileAllMetadata,
     EntityDetails, EntityMetadataBatchResponse,
     ResolvedTagInfo,
 };
@@ -20,22 +19,6 @@ static METADATA_BATCH_PREFETCH_SEMAPHORE: OnceLock<tokio::sync::Semaphore> = Onc
 
 fn metadata_batch_prefetch_semaphore() -> &'static tokio::sync::Semaphore {
     METADATA_BATCH_PREFETCH_SEMAPHORE.get_or_init(|| tokio::sync::Semaphore::new(2))
-}
-
-fn file_tag_to_resolved_info(t: FileTagInfo) -> ResolvedTagInfo {
-    let raw_tag = normalize::combine_tag(&t.namespace, &t.subtag);
-    let disp_ns = t.display_ns.as_deref().unwrap_or(&t.namespace);
-    let disp_st = t.display_st.as_deref().unwrap_or(&t.subtag);
-    let display_tag = tag_display_key(disp_ns, disp_st);
-    let read_only = t.source != "local";
-    ResolvedTagInfo {
-        raw_tag,
-        display_tag,
-        namespace: t.display_ns.unwrap_or(t.namespace),
-        subtag: t.display_st.unwrap_or(t.subtag),
-        source: t.source,
-        read_only,
-    }
 }
 
 pub async fn get_files_metadata_batch(

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef } from 'react';
 
 import type { GridRuntimeAction } from '../runtime';
-import type { LayoutItem } from '../VirtualGrid';
+import type { LayoutItem } from '../gridLayout';
 import type { MasonryImageItem } from '../shared';
 
 export const MARQUEE_BUCKET_SIZE = 256;

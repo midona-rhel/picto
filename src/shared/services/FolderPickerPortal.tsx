@@ -5,7 +5,7 @@ import { api } from '#desktop/api';
 import type { Folder } from '../types/api';
 import { useDomainStore } from '../../state/domainStore';
 import type { FilterLogicMode } from '../../state/filterStore';
-import { DynamicIcon } from '#features/folders/components';
+import { DynamicIcon } from '#features/smart-folders/components/iconRegistry';
 import { registerFolderPickerOpenHandler, type FolderPickerRequest } from './folderPickerService';
 import st from './FolderPicker.module.css';
 

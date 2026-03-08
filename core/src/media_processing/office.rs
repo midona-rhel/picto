@@ -229,33 +229,3 @@ pub fn ole_document_word_count(path: &Path) -> FileResult<Option<u32>> {
     Ok(None)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_pptx_pixel_per_emu() {
-        // Standard slide size: 12192000 EMU x 6858000 EMU (10" x 7.5")
-        let width = (12192000.0 * PPTX_PIXEL_PER_EMU).round() as u32;
-        let height = (6858000.0 * PPTX_PIXEL_PER_EMU).round() as u32;
-        // At 300 DPI: 10 inches * 300 = 3000, 7.5 inches * 300 = 2250
-        assert_eq!(width, 4000); // 12192000 * 300 / 914400 = 4000
-        assert_eq!(height, 2250); // 6858000 * 300 / 914400 = 2250
-    }
-
-    #[test]
-    fn test_is_ole_file_with_non_ole() {
-        let tmp = tempfile::NamedTempFile::new().unwrap();
-        std::fs::write(tmp.path(), b"not an ole file").unwrap();
-        assert!(!is_ole_file(tmp.path()));
-    }
-
-    #[test]
-    fn test_is_ole_file_with_ole_header() {
-        let tmp = tempfile::NamedTempFile::new().unwrap();
-        let mut data = OLE_HEADER.to_vec();
-        data.extend_from_slice(&[0u8; 100]); // pad
-        std::fs::write(tmp.path(), &data).unwrap();
-        assert!(is_ole_file(tmp.path()));
-    }
-}

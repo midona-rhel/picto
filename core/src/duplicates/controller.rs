@@ -74,35 +74,6 @@ impl DuplicateController {
         Ok(result)
     }
 
-    pub async fn get_all_detected_duplicates(
-        db: &SqliteDatabase,
-    ) -> Result<Vec<DuplicatePairResponse>, String> {
-        let pairs = db
-            .with_read_conn(crate::duplicates::db::get_all_detected_duplicates)
-            .await?;
-
-        let all_ids: Vec<i64> = pairs
-            .iter()
-            .flat_map(|p| [p.file_id_a, p.file_id_b])
-            .collect();
-        let resolved = db.resolve_ids_batch(&all_ids).await?;
-        let id_to_hash: HashMap<i64, String> = resolved.into_iter().collect();
-
-        let result = pairs
-            .iter()
-            .filter_map(|pair| {
-                let hash_a = id_to_hash.get(&pair.file_id_a)?.clone();
-                let hash_b = id_to_hash.get(&pair.file_id_b)?.clone();
-                Some(DuplicatePairResponse {
-                    hash_a,
-                    hash_b,
-                    distance: pair.distance,
-                })
-            })
-            .collect();
-        Ok(result)
-    }
-
     /// Get paginated duplicate pairs.
     pub async fn get_duplicate_pairs(
         db: &SqliteDatabase,

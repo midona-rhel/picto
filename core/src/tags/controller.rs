@@ -7,15 +7,7 @@
 use crate::tags::db::FileTagInfo;
 use crate::sqlite::SqliteDatabase;
 use super::normalize;
-use crate::types::{FileInfoSlim, TagInfo};
-
-fn tag_display_key(namespace: &str, subtag: &str) -> String {
-    if namespace.is_empty() {
-        subtag.to_string()
-    } else {
-        format!("{}:{}", namespace, subtag)
-    }
-}
+use crate::types::{tag_display_key, FileInfoSlim, TagInfo};
 
 fn file_tag_to_tag_info(t: &FileTagInfo) -> TagInfo {
     TagInfo {
@@ -145,27 +137,4 @@ impl TagController {
         Ok(())
     }
 
-    pub async fn add_tags_batch(
-        db: &SqliteDatabase,
-        hashes: Vec<String>,
-        tag_strings: Vec<String>,
-    ) -> Result<(), String> {
-        if tag_strings.is_empty() || hashes.is_empty() {
-            return Ok(());
-        }
-        db.add_tags_batch(&hashes, &tag_strings).await?;
-        Ok(())
-    }
-
-    pub async fn remove_tags_batch(
-        db: &SqliteDatabase,
-        hashes: Vec<String>,
-        tag_strings: Vec<String>,
-    ) -> Result<(), String> {
-        if tag_strings.is_empty() || hashes.is_empty() {
-            return Ok(());
-        }
-        db.remove_tags_batch(&hashes, &tag_strings).await?;
-        Ok(())
-    }
 }

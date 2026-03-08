@@ -12,27 +12,27 @@ use crate::types::*;
 // ─── Input structs ─────────────────────────────────────────────────────────
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct OpenExternalUrlInput {
     pub url: String,
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct ReorderSidebarNodesInput {
     #[ts(type = "[string, number][]")]
     pub moves: Vec<(String, i64)>,
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct GetViewPrefsInput {
     #[serde(default)]
     pub scope_key: Option<String>,
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct SetViewPrefsInput {
     #[serde(default)]
     pub scope_key: Option<String>,
@@ -40,7 +40,7 @@ pub struct SetViewPrefsInput {
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct SetZoomFactorInput {
     pub factor: f64,
 }
@@ -93,16 +93,41 @@ pub async fn open_external_url(_state: &AppState, input: OpenExternalUrlInput) -
 
 pub async fn get_sidebar_tree(state: &AppState, _input: serde_json::Value) -> Result<serde_json::Value, String> {
     let started = Instant::now();
-    let result =
-        crate::sidebar::controller::SidebarController::get_sidebar_tree(&state.db).await?;
+    let nodes = state.db.get_sidebar_tree().await?;
+    let tree_epoch = state.db.manifest.published_epoch();
+    let result = crate::types::SidebarTreeResponse {
+        nodes: nodes
+            .into_iter()
+            .map(|n| {
+                let meta: Option<serde_json::Value> = n
+                    .meta_json
+                    .as_deref()
+                    .and_then(|s| serde_json::from_str(s).ok());
+                crate::types::SidebarNodeDto {
+                    id: n.node_id,
+                    kind: n.kind,
+                    parent_id: n.parent_id,
+                    name: n.name,
+                    icon: n.icon,
+                    color: n.color,
+                    sort_order: n.sort_order,
+                    count: n.count,
+                    freshness: n.freshness,
+                    selectable: n.selectable,
+                    expanded_by_default: n.expanded_by_default,
+                    meta,
+                }
+            })
+            .collect(),
+        tree_epoch,
+        generated_at: chrono::Utc::now().to_rfc3339(),
+    };
     crate::perf::record_sidebar_tree(started.elapsed().as_secs_f64() * 1000.0);
     Ok(serde_json::to_value(&result).map_err(|e| e.to_string())?)
 }
 
 pub async fn reorder_sidebar_nodes(state: &AppState, input: ReorderSidebarNodesInput) -> Result<(), String> {
-    crate::sidebar::controller::SidebarController::reorder_sidebar_nodes(
-        &state.db, input.moves,
-    ).await?;
+    state.db.reorder_sidebar_nodes(input.moves).await?;
     crate::events::emit_mutation(
         "reorder_sidebar_nodes",
         crate::events::MutationImpact::sidebar(crate::events::Domain::Sidebar),
@@ -146,9 +171,4 @@ pub async fn set_zoom_factor(state: &AppState, input: SetZoomFactorInput) -> Res
 pub async fn get_zoom_factor(state: &AppState, _input: serde_json::Value) -> Result<serde_json::Value, String> {
     let factor = state.settings.get().zoom_factor.unwrap_or(1.0);
     Ok(serde_json::to_value(&factor).map_err(|e| e.to_string())?)
-}
-
-pub async fn enable_modern_window_style(_state: &AppState, _input: serde_json::Value) -> Result<(), String> {
-    tracing::debug!(command = "enable_modern_window_style", "Legacy no-op command acknowledged");
-    Ok(())
 }

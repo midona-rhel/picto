@@ -10,51 +10,45 @@ use crate::types::SelectionQuerySpec;
 // ─── Input structs ─────────────────────────────────────────────────────────
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct AddTagsSelectionInput {
     pub selection: SelectionQuerySpec,
     pub tag_strings: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct RemoveTagsSelectionInput {
     pub selection: SelectionQuerySpec,
     pub tag_strings: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct GetSelectionSummaryInput {
     pub selection: SelectionQuerySpec,
 }
 
+/// Unified selection metadata update. All fields except `selection` are optional.
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
-pub struct UpdateRatingSelectionInput {
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
+pub struct UpdateSelectionMetadataInput {
     pub selection: SelectionQuerySpec,
+    #[serde(default, deserialize_with = "deserialize_some")]
     #[ts(type = "number | null")]
-    pub rating: Option<i64>,
+    pub rating: Option<Option<i64>>,
+    #[serde(default)]
+    pub notes: Option<HashMap<String, String>>,
+    #[serde(default)]
+    pub source_urls: Option<Vec<String>>,
 }
 
-#[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
-pub struct SetNotesSelectionInput {
-    pub selection: SelectionQuerySpec,
-    pub notes: HashMap<String, String>,
-}
-
-#[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
-pub struct SetSourceUrlsSelectionInput {
-    pub selection: SelectionQuerySpec,
-    pub urls: Vec<String>,
-}
+use super::super::common::deserialize_some;
 
 // ─── Handlers ──────────────────────────────────────────────────────────────
 
 pub async fn add_tags_selection(state: &AppState, input: AddTagsSelectionInput) -> Result<usize, String> {
-    let count = crate::selection::controller::SelectionController::add_tags_selection(
+    let count = crate::selection::mutations::add_tags_selection(
         &state.db, input.selection, input.tag_strings,
     ).await?;
     if count > 0 {
@@ -67,7 +61,7 @@ pub async fn add_tags_selection(state: &AppState, input: AddTagsSelectionInput) 
 }
 
 pub async fn remove_tags_selection(state: &AppState, input: RemoveTagsSelectionInput) -> Result<usize, String> {
-    let count = crate::selection::controller::SelectionController::remove_tags_selection(
+    let count = crate::selection::mutations::remove_tags_selection(
         &state.db, input.selection, input.tag_strings,
     ).await?;
     if count > 0 {
@@ -81,48 +75,46 @@ pub async fn remove_tags_selection(state: &AppState, input: RemoveTagsSelectionI
 
 pub async fn get_selection_summary(state: &AppState, input: GetSelectionSummaryInput) -> Result<serde_json::Value, String> {
     let started = std::time::Instant::now();
-    let result = crate::selection::controller::SelectionController::get_selection_summary(
+    let result = crate::selection::summary::get_selection_summary(
         &state.db, input.selection,
     ).await?;
     crate::perf::record_selection_summary(started.elapsed().as_secs_f64() * 1000.0);
     serde_json::to_value(&result).map_err(|e| e.to_string())
 }
 
-pub async fn update_rating_selection(state: &AppState, input: UpdateRatingSelectionInput) -> Result<usize, String> {
-    let count = crate::selection::controller::SelectionController::update_rating_selection(
-        &state.db, input.selection, input.rating,
-    ).await?;
-    if count > 0 {
-        crate::events::emit_mutation(
-            "update_rating_selection",
-            crate::events::MutationImpact::selection_metadata_grid(),
-        );
-    }
-    Ok(count)
-}
+pub async fn update_selection_metadata(state: &AppState, input: UpdateSelectionMetadataInput) -> Result<usize, String> {
+    let mut total_count = 0;
+    let mut need_grid = false;
 
-pub async fn set_notes_selection(state: &AppState, input: SetNotesSelectionInput) -> Result<usize, String> {
-    let count = crate::selection::controller::SelectionController::set_notes_selection(
-        &state.db, input.selection, input.notes,
-    ).await?;
-    if count > 0 {
-        crate::events::emit_mutation(
-            "set_notes_selection",
-            crate::events::MutationImpact::selection_metadata(),
-        );
+    if let Some(rating) = input.rating {
+        let count = crate::selection::mutations::update_rating_selection(
+            &state.db, input.selection.clone(), rating,
+        ).await?;
+        total_count += count;
+        need_grid = true;
     }
-    Ok(count)
-}
 
-pub async fn set_source_urls_selection(state: &AppState, input: SetSourceUrlsSelectionInput) -> Result<usize, String> {
-    let count = crate::selection::controller::SelectionController::set_source_urls_selection(
-        &state.db, input.selection, input.urls,
-    ).await?;
-    if count > 0 {
-        crate::events::emit_mutation(
-            "set_source_urls_selection",
-            crate::events::MutationImpact::selection_metadata(),
-        );
+    if let Some(notes) = input.notes {
+        let count = crate::selection::mutations::set_notes_selection(
+            &state.db, input.selection.clone(), notes,
+        ).await?;
+        total_count += count;
     }
-    Ok(count)
+
+    if let Some(urls) = input.source_urls {
+        let count = crate::selection::mutations::set_source_urls_selection(
+            &state.db, input.selection, urls,
+        ).await?;
+        total_count += count;
+    }
+
+    if total_count > 0 {
+        let impact = if need_grid {
+            crate::events::MutationImpact::selection_metadata_grid()
+        } else {
+            crate::events::MutationImpact::selection_metadata()
+        };
+        crate::events::emit_mutation("update_selection_metadata", impact);
+    }
+    Ok(total_count)
 }

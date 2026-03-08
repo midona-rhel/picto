@@ -145,10 +145,10 @@ impl SubscriptionGroupController {
                 if !file_ids.is_empty() {
                     let resolved = db.resolve_ids_batch(&file_ids).await?;
                     let hashes: Vec<String> = resolved.into_iter().map(|(_, hash)| hash).collect();
-                    crate::lifecycle::controller::LifecycleController::delete_files(
-                        db, blob_store, hashes,
-                    )
-                    .await?;
+                    for hash in &hashes {
+                        db.delete_file_by_hash(hash).await?;
+                        blob_store.delete(hash).map_err(|e| e.to_string())?;
+                    }
                 }
             }
         }

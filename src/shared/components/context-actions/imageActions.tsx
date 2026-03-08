@@ -72,6 +72,7 @@ interface BuildGridImageContextMenuArgs {
   handleCopyTags: () => void;
   handlePasteTags: () => void;
   hasCopiedTags: boolean;
+  handleOpenDetail: (hash: string) => void;
   collectionEntityId?: number | null;
   navigateToCollection: (collection: { id: number; name: string }) => void;
   setRenameValue: Dispatch<SetStateAction<string>>;
@@ -133,6 +134,7 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
     handleCopyTags,
     handlePasteTags,
     hasCopiedTags,
+    handleOpenDetail,
     collectionEntityId,
     navigateToCollection,
     setRenameValue,
@@ -162,7 +164,7 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
       icon: <IconArrowsMaximize />,
       shortcut: 'Enter',
       onClick: () => {
-        dispatch({ type: 'OPEN_DETAIL', hash: singleHash });
+        handleOpenDetail(singleHash);
       },
     });
     if (singleIsCollection && singleCollectionId != null) {

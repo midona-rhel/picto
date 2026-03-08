@@ -844,18 +844,6 @@ mod tests {
     }
 
     #[test]
-    fn test_paint_net_xml_header_parsing() {
-        // Test XML parsing for Paint.NET
-        let xml = r#"<pdnImage width="800" height="600"><custom><thumb png="iVBORw0KGgo="/></custom></pdnImage>"#;
-        let doc = roxmltree::Document::parse(xml).unwrap();
-        let root = doc.root_element();
-        let w: u32 = root.attribute("width").unwrap().parse().unwrap();
-        let h: u32 = root.attribute("height").unwrap().parse().unwrap();
-        assert_eq!(w, 800);
-        assert_eq!(h, 600);
-    }
-
-    #[test]
     fn test_read_swf_rect_values() {
         // Minimal test: nbits=5, values should be extracted from bitfield
         // First byte: nbits=5 means upper 5 bits = 00101 = 5

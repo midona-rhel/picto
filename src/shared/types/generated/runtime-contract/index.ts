@@ -7,7 +7,6 @@
  * Regenerate types: `cargo test --lib`
  */
 
-export type { DerivedInvalidation } from './DerivedInvalidation';
 export type { Domain } from './Domain';
 export type { MutationFacts } from './MutationFacts';
 export type { MutationReceipt } from './MutationReceipt';

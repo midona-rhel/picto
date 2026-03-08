@@ -4,7 +4,7 @@ import { useContextMenu } from '../../../shared/components/ContextMenu';
 import type { MasonryImageItem } from '../shared';
 import type { SmartFolderPredicate } from '../../../features/smart-folders/components/types';
 import type { GridRuntimeAction, GridRuntimeState, GridViewMode } from '../runtime';
-import type { LayoutItem } from '../VirtualGrid';
+import type { LayoutItem } from '../gridLayout';
 import { buildGridImageContextMenu } from '../../../shared/components/context-actions/imageActions';
 
 interface UseGridContextMenuArgs {
@@ -37,6 +37,7 @@ interface UseGridContextMenuArgs {
   handleCopyTags: () => void;
   handlePasteTags: () => void;
   hasCopiedTags: boolean;
+  handleOpenDetail: (hash: string) => void;
   collectionEntityId?: number | null;
   navigateToCollection: (collection: { id: number; name: string }) => void;
   setRenameValue: React.Dispatch<React.SetStateAction<string>>;
@@ -76,6 +77,7 @@ export function useGridContextMenu({
   handleCopyTags,
   handlePasteTags,
   hasCopiedTags,
+  handleOpenDetail,
   collectionEntityId,
   navigateToCollection,
   setRenameValue,
@@ -159,6 +161,7 @@ export function useGridContextMenu({
       handleCopyTags,
       handlePasteTags,
       hasCopiedTags,
+      handleOpenDetail,
       collectionEntityId,
       navigateToCollection,
       setRenameValue,
@@ -201,6 +204,7 @@ export function useGridContextMenu({
     activateVirtualSelectAll,
     handleCopyTags,
     handlePasteTags,
+    handleOpenDetail,
     folderId,
     getCanvasOffsetTop,
     dispatch,

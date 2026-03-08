@@ -68,6 +68,7 @@ describe('domainStore inbox count resolution', () => {
     await useDomainStore.getState().fetchSidebarTree();
 
     expect(useDomainStore.getState().inboxCount).toBe(7);
+    expect(getPageSlimMock).not.toHaveBeenCalled();
   });
 
   it('does not let a stale sidebar fetch lower live inbox count during subscription imports', async () => {
@@ -91,6 +92,7 @@ describe('domainStore inbox count resolution', () => {
     await useDomainStore.getState().fetchSidebarTree();
 
     expect(useDomainStore.getState().inboxCount).toBe(7);
+    expect(getPageSlimMock).not.toHaveBeenCalled();
   });
 
   it('allows inbox count to decrease again after subscription imports finish', async () => {
@@ -115,5 +117,6 @@ describe('domainStore inbox count resolution', () => {
     await useDomainStore.getState().fetchSidebarTree();
 
     expect(useDomainStore.getState().inboxCount).toBe(4);
+    expect(getPageSlimMock).not.toHaveBeenCalled();
   });
 });

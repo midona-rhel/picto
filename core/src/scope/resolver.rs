@@ -244,9 +244,9 @@ async fn resolve_status(
         Some("inbox") => Ok(db.bitmaps.get(&BitmapKey::Status(0))),
         Some("trash") => Ok(db.bitmaps.get(&BitmapKey::Status(2))),
         Some("untagged") => {
-            let all_active = db.bitmaps.get(&BitmapKey::AllActive);
+            let active = db.bitmaps.get(&BitmapKey::Status(1));
             let tagged = db.bitmaps.get(&BitmapKey::Tagged);
-            Ok(&all_active - &tagged)
+            Ok(&active - &tagged)
         }
         Some("uncategorized") => {
             let uncategorized_ids = db.with_read_conn(list_uncategorized_entity_ids).await?;
@@ -270,7 +270,7 @@ async fn resolve_status(
 /// - `system:all_files` = active (status=1)
 /// - `system:inbox` = inbox (status=0)
 /// - `system:trash` = trash (status=2)
-/// - `system:untagged` = AllActive minus Tagged
+/// - `system:untagged` = active (status=1) minus Tagged
 /// - `system:uncategorized` = active singles not in any folder
 /// - `system:recent_viewed` = active singles with view_count > 0
 pub fn scope_count(
@@ -283,9 +283,9 @@ pub fn scope_count(
         "system:inbox" => Ok(bitmaps.len(&BitmapKey::Status(0)) as i64),
         "system:trash" => Ok(bitmaps.len(&BitmapKey::Status(2)) as i64),
         "system:untagged" => {
-            let all_active = bitmaps.len(&BitmapKey::AllActive);
+            let active = bitmaps.len(&BitmapKey::Status(1));
             let tagged = bitmaps.len(&BitmapKey::Tagged);
-            Ok(all_active.saturating_sub(tagged) as i64)
+            Ok(active.saturating_sub(tagged) as i64)
         }
         "system:uncategorized" => count_uncategorized_entities(conn),
         "system:recent_viewed" => conn.query_row(

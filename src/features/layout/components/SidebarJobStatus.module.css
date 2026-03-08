@@ -86,42 +86,7 @@
   min-width: 0;
 }
 
-.jobPhaseError {
-  composes: jobPhase;
-  color: var(--color-negative);
-}
-
-.jobDomain {
-  font-size: var(--font-size-xs);
-  color: var(--color-text-tertiary);
-  white-space: nowrap;
-  flex-shrink: 0;
-}
-
-.jobCancel {
-  margin-left: auto;
-  flex-shrink: 0;
-  width: 16px;
-  height: 16px;
-  border-radius: 3px;
-  border: none;
-  background: transparent;
-  color: var(--color-text-tertiary);
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
-  opacity: 0.6;
-  transition: opacity 100ms, color 100ms;
-}
-
-.jobCancel:hover {
-  opacity: 1;
-  color: var(--color-text-primary);
-}
-
-/* Bottom-right: progress bar + count */
+/* Bottom-right: progress bar */
 .jobProgressRow {
   display: flex;
   align-items: center;
@@ -142,46 +107,7 @@
   composes: progressFill from '../../../shared/styles/progressBar.module.css';
 }
 
-.progressBar {
-  composes: progressBar from '../../../shared/styles/progressBar.module.css';
-}
-
 .progressIndeterminate {
   composes: progressIndeterminate from '../../../shared/styles/progressBar.module.css';
 }
 
-.jobCount {
-  font-size: var(--font-size-xs);
-  color: var(--color-text-tertiary);
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-  flex-shrink: 0;
-}
-
-/* --------------------------------------------------------------------------
-   Error state — red tint for failed jobs
-   -------------------------------------------------------------------------- */
-
-.jobCardError {
-  border-color: color-mix(in srgb, var(--color-negative) 30%, transparent);
-  background: color-mix(in srgb, var(--color-negative) 6%, transparent);
-}
-
-[data-mantine-color-scheme="light"] .jobCardError {
-  background: color-mix(in srgb, var(--color-negative) 5%, transparent);
-}
-
-.jobIconError {
-  composes: jobIcon;
-  background: color-mix(in srgb, var(--color-negative) 15%, transparent);
-  color: var(--color-negative);
-}
-
-.jobCountError {
-  font-size: var(--font-size-xs);
-  color: var(--color-negative);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  min-width: 0;
-}

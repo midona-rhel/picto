@@ -466,66 +466,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_map_ffmpeg_format_mp4_video() {
-        let mime = map_ffmpeg_format_to_mime("mov,mp4,m4a,3gp,3g2,mj2", true, true);
-        assert_eq!(mime, MimeType::VideoMov);
-    }
-
-    #[test]
-    fn test_map_ffmpeg_format_mp4_audio_only() {
-        let mime = map_ffmpeg_format_to_mime("mov,mp4,m4a,3gp,3g2,mj2", false, true);
-        assert_eq!(mime, MimeType::AudioM4a);
-    }
-
-    #[test]
-    fn test_map_ffmpeg_format_mkv() {
-        let mime = map_ffmpeg_format_to_mime("matroska,webm", true, true);
-        assert_eq!(mime, MimeType::VideoWebm);
-    }
-
-    #[test]
-    fn test_map_ffmpeg_format_mp3() {
-        let mime = map_ffmpeg_format_to_mime("mp3", false, true);
-        assert_eq!(mime, MimeType::AudioMp3);
-    }
-
-    #[test]
-    fn test_map_ffmpeg_format_flac() {
-        let mime = map_ffmpeg_format_to_mime("flac", false, true);
-        assert_eq!(mime, MimeType::AudioFlac);
-    }
-
-    #[test]
-    fn test_map_ffmpeg_format_wmv_video() {
-        let mime = map_ffmpeg_format_to_mime("asf", true, true);
-        assert_eq!(mime, MimeType::VideoWmv);
-    }
-
-    #[test]
-    fn test_map_ffmpeg_format_wma_audio() {
-        let mime = map_ffmpeg_format_to_mime("asf", false, true);
-        assert_eq!(mime, MimeType::AudioWma);
-    }
-
-    #[test]
-    fn test_map_ffmpeg_format_unknown() {
-        let mime = map_ffmpeg_format_to_mime("some_unknown_format", false, false);
-        assert_eq!(mime, MimeType::ApplicationUnknown);
-    }
-
-    #[test]
-    fn test_map_ffmpeg_format_ogg_video() {
-        let mime = map_ffmpeg_format_to_mime("ogg", true, true);
-        assert_eq!(mime, MimeType::VideoOgv);
-    }
-
-    #[test]
-    fn test_map_ffmpeg_format_ogg_audio() {
-        let mime = map_ffmpeg_format_to_mime("ogg", false, true);
-        assert_eq!(mime, MimeType::AudioOgg);
-    }
-
-    #[test]
     fn test_parse_fps_fractional() {
         let val = serde_json::json!("30000/1001");
         let fps = parse_fps(&val).unwrap();

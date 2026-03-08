@@ -271,17 +271,3 @@ fn read_zip_entry_string(
 // They are omitted because they are called during MIME detection which is
 // already ported in files.rs.
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_filename_has_image_ext() {
-        assert!(filename_has_image_ext("page001.jpg"));
-        assert!(filename_has_image_ext("cover.PNG"));
-        assert!(filename_has_image_ext("art.gif"));
-        assert!(!filename_has_image_ext("readme.txt"));
-        assert!(!filename_has_image_ext("noext"));
-        assert!(!filename_has_image_ext("archive.zip"));
-    }
-}

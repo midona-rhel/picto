@@ -8,7 +8,6 @@
 import { describe, it, expect } from 'vitest';
 import { deriveStaleResources, gridResourceMatchesScope } from '../resourceInvalidator';
 import type { MutationReceipt, MutationFacts, ResourceKey } from '../../shared/types/generated/runtime-contract';
-import type { DerivedInvalidation } from '../../shared/types/generated/runtime-contract/DerivedInvalidation';
 import type { Domain } from '../../shared/types/generated/runtime-contract/Domain';
 
 // ---------------------------------------------------------------------------
@@ -28,7 +27,6 @@ function makeReceipt(
     ts: '2026-01-01T00:00:00Z',
     origin_command: 'test',
     facts,
-    invalidate: {} as DerivedInvalidation,
     ...extras,
   };
 }

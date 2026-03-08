@@ -153,6 +153,7 @@
   min-width: 0;
   height: 100%;
   overflow: hidden;
+  position: relative;
   display: flex;
   flex-direction: column;
   box-sizing: border-box;
@@ -169,4 +170,3 @@
   flex-direction: column;
   overflow: hidden;
 }
-

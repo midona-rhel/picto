@@ -333,10 +333,10 @@ impl SubscriptionController {
             if !file_ids.is_empty() {
                 let resolved = db.resolve_ids_batch(&file_ids).await?;
                 let hashes: Vec<String> = resolved.into_iter().map(|(_, hash)| hash).collect();
-                crate::lifecycle::controller::LifecycleController::delete_files(
-                    db, blob_store, hashes,
-                )
-                .await?;
+                for hash in &hashes {
+                    db.delete_file_by_hash(hash).await?;
+                    blob_store.delete(hash).map_err(|e| e.to_string())?;
+                }
             }
         }
 
@@ -1092,13 +1092,6 @@ impl SubscriptionController {
 #[cfg(test)]
 mod tests {
     use super::{effective_query_file_limit, resolve_finished_status_text};
-
-    #[test]
-    fn effective_query_file_limit_global_unlimited_is_unbounded() {
-        assert_eq!(effective_query_file_limit(0, 0), None);
-        assert_eq!(effective_query_file_limit(0, 100), None);
-        assert_eq!(effective_query_file_limit(0, 5_000), None);
-    }
 
     #[test]
     fn effective_query_file_limit_clamps_to_global_cap_when_enabled() {

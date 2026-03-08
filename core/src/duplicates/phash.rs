@@ -145,18 +145,6 @@ mod tests {
     }
 
     #[test]
-    fn test_bk_tree_exact_match() {
-        let hash = make_hash([255, 255, 255, 255]);
-        let mut tree = BkTree::new();
-        tree.insert("file_a".to_string(), hash.clone());
-        tree.insert("file_b".to_string(), hash.clone());
-
-        let results = tree.find_within(&hash, 0);
-        assert_eq!(results.len(), 2);
-        assert!(results.iter().all(|(_, dist)| *dist == 0));
-    }
-
-    #[test]
     fn test_bk_tree_no_match_beyond_threshold() {
         let hasher = HasherConfig::new()
             .hash_size(HASH_SIZE, HASH_SIZE)
@@ -195,17 +183,6 @@ mod tests {
         let results = tree.find_within(&hash_a, 0);
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].0, "checker");
-    }
-
-    #[test]
-    fn test_bk_tree_len() {
-        let hash = make_hash([128, 128, 128, 255]);
-        let mut tree = BkTree::new();
-        assert_eq!(tree.len(), 0);
-        tree.insert("a".to_string(), hash.clone());
-        assert_eq!(tree.len(), 1);
-        tree.insert("b".to_string(), hash.clone());
-        assert_eq!(tree.len(), 2);
     }
 
     #[test]

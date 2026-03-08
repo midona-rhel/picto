@@ -1,8 +1,6 @@
 //! File metadata orchestration — resolves full file details including tags,
 //! dominant colors, and display-resolved tag info.
 
-use std::collections::HashMap;
-
 use crate::tags::db::FileTagInfo;
 use crate::sqlite::SqliteDatabase;
 use crate::tags::normalize;
@@ -10,7 +8,7 @@ use crate::types::{
     tag_display_key, DominantColorDto, FileAllMetadata, FileInfo, ResolvedTagInfo, TagInfo,
 };
 
-fn file_tag_to_resolved_info(t: FileTagInfo) -> ResolvedTagInfo {
+pub fn file_tag_to_resolved_info(t: FileTagInfo) -> ResolvedTagInfo {
     let raw_tag = normalize::combine_tag(&t.namespace, &t.subtag);
     let disp_ns = t.display_ns.as_deref().unwrap_or(&t.namespace);
     let disp_st = t.display_st.as_deref().unwrap_or(&t.subtag);
@@ -29,11 +27,6 @@ fn file_tag_to_resolved_info(t: FileTagInfo) -> ResolvedTagInfo {
 pub struct MetadataController;
 
 impl MetadataController {
-    pub async fn get_file(db: &SqliteDatabase, hash: String) -> Result<Option<FileInfo>, String> {
-        let file = db.get_file_by_hash(&hash).await?;
-        Ok(file.map(FileInfo::from))
-    }
-
     pub async fn get_file_all_metadata(
         db: &SqliteDatabase,
         hash: String,
@@ -151,46 +144,4 @@ impl MetadataController {
         .await
     }
 
-    pub async fn update_rating(
-        db: &SqliteDatabase,
-        hash: String,
-        rating: Option<i64>,
-    ) -> Result<(), String> {
-        db.update_rating(&hash, rating).await
-    }
-
-    pub async fn set_file_name(
-        db: &SqliteDatabase,
-        hash: String,
-        name: Option<String>,
-    ) -> Result<(), String> {
-        db.set_file_name(&hash, name.as_deref()).await
-    }
-
-    pub async fn get_file_notes(
-        db: &SqliteDatabase,
-        hash: String,
-    ) -> Result<Option<HashMap<String, String>>, String> {
-        let file = db.get_file_by_hash(&hash).await?;
-        match file {
-            Some(f) => Ok(f
-                .notes
-                .as_deref()
-                .and_then(|s| serde_json::from_str(s).ok())),
-            None => Ok(None),
-        }
-    }
-
-    pub async fn set_file_notes(
-        db: &SqliteDatabase,
-        hash: String,
-        notes: HashMap<String, String>,
-    ) -> Result<(), String> {
-        let json = serde_json::to_string(&notes).map_err(|e| e.to_string())?;
-        db.set_notes(&hash, Some(&json)).await
-    }
-
-    pub async fn increment_view_count(db: &SqliteDatabase, hash: String) -> Result<(), String> {
-        db.increment_view_count(&hash).await
-    }
 }

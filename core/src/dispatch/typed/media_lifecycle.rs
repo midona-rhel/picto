@@ -10,7 +10,7 @@ use crate::types::*;
 // ─── Input structs ─────────────────────────────────────────────────────────
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct ImportFilesInput {
     pub paths: Vec<String>,
     pub tag_strings: Option<Vec<String>>,
@@ -25,29 +25,18 @@ fn default_initial_status() -> i64 {
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct UpdateFileStatusInput {
-    pub hash: String,
+    pub hash: Option<String>,
+    pub selection: Option<SelectionQuerySpec>,
     pub status: String,
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct DeleteFilesInput {
-    pub hashes: Vec<String>,
-}
-
-#[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
-pub struct DeleteFilesSelectionInput {
-    pub selection: SelectionQuerySpec,
-}
-
-#[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
-pub struct UpdateFileStatusSelectionInput {
-    pub selection: SelectionQuerySpec,
-    pub status: String,
+    pub hashes: Option<Vec<String>>,
+    pub selection: Option<SelectionQuerySpec>,
 }
 
 // ─── Handlers ──────────────────────────────────────────────────────────────
@@ -84,36 +73,75 @@ pub async fn import_files(state: &AppState, input: ImportFilesInput) -> Result<c
     Ok(result)
 }
 
-pub async fn update_file_status(state: &AppState, input: UpdateFileStatusInput) -> Result<(), String> {
+pub async fn update_file_status(state: &AppState, input: UpdateFileStatusInput) -> Result<usize, String> {
     let file_status = crate::types::parse_file_status(&input.status)?;
-    crate::lifecycle::controller::LifecycleController::update_file_status(
-        &state.db, input.hash.clone(), file_status,
-    ).await?;
 
-    let folder_ids =
-        collect_folder_ids_for_hashes(state, &[input.hash.clone()], 1).await;
-    if let Err(err) = crate::folders::controller::FolderController::
-        refresh_sidebar_projection_for_folder_ids(&state.db, &folder_ids).await
-    {
-        tracing::warn!(error = %err, "failed to refresh folder sidebar projection after status update");
+    if let Some(hash) = input.hash {
+        // Single file mode
+        state.db.update_file_status(&hash, file_status).await?;
+        let folder_ids = collect_folder_ids_for_hashes(state, &[hash.clone()], 1).await;
+        if let Err(err) = crate::folders::controller::FolderController::
+            refresh_sidebar_projection_for_folder_ids(&state.db, &folder_ids).await
+        {
+            tracing::warn!(error = %err, "failed to refresh folder sidebar projection after status update");
+        }
+        let mut impact = crate::events::MutationImpact::file_status_change(&state.db)
+            .file_hashes(vec![hash]);
+        if !folder_ids.is_empty() {
+            impact = impact.folder_ids(folder_ids);
+        }
+        crate::events::emit_mutation("update_file_status", impact);
+        Ok(1)
+    } else if let Some(selection) = input.selection {
+        // Selection mode
+        let bitmap = resolve_selection_bitmap(state, &selection).await?;
+        let count = bitmap.len() as usize;
+        if count > 0 {
+            let mut folder_ids = selection.folder_ids.clone().unwrap_or_default();
+            if matches!(selection.mode, SelectionMode::ExplicitHashes) {
+                let explicit_hashes = selection.hashes.clone().unwrap_or_default();
+                let mut from_hashes =
+                    collect_folder_ids_for_hashes(state, &explicit_hashes, 200).await;
+                folder_ids.append(&mut from_hashes);
+                folder_ids.sort_unstable();
+                folder_ids.dedup();
+            }
+            state.db.update_file_status_batch(&bitmap, file_status).await?;
+            if let Err(err) = crate::folders::controller::FolderController::
+                refresh_sidebar_projection_for_folder_ids(&state.db, &folder_ids).await
+            {
+                tracing::warn!(error = %err, "failed to refresh folder sidebar projection after status batch update");
+            }
+            let mut impact = crate::events::MutationImpact::file_status_change(&state.db);
+            if !folder_ids.is_empty() {
+                impact = impact.folder_ids(folder_ids);
+            }
+            crate::events::emit_mutation("update_file_status", impact);
+        }
+        Ok(count)
+    } else {
+        Err("Either hash or selection must be provided".into())
     }
-    let mut impact = crate::events::MutationImpact::file_status_change(&state.db)
-        .file_hashes(vec![input.hash]);
-    if !folder_ids.is_empty() {
-        impact = impact.folder_ids(folder_ids);
-    }
-    crate::events::emit_mutation("update_file_status", impact);
-    Ok(())
 }
 
 pub async fn delete_files(state: &AppState, input: DeleteFilesInput) -> Result<usize, String> {
-    let hashes_for_impact = input.hashes.clone();
-    let folder_ids = collect_folder_ids_for_hashes(
-        state, &hashes_for_impact, hashes_for_impact.len(),
-    ).await;
-    let count = crate::lifecycle::controller::LifecycleController::delete_files(
-        &state.db, &state.blob_store, input.hashes,
-    ).await?;
+    let hashes = if let Some(hashes) = input.hashes {
+        hashes
+    } else if let Some(selection) = input.selection {
+        let bitmap = resolve_selection_bitmap(state, &selection).await?;
+        let file_ids: Vec<i64> = bitmap.iter().map(|id| id as i64).collect();
+        let pairs = state.db.resolve_ids_batch(&file_ids).await?;
+        pairs.into_iter().map(|(_, h)| h).collect()
+    } else {
+        return Err("Either hashes or selection must be provided".into());
+    };
+
+    let count = hashes.len();
+    let folder_ids = collect_folder_ids_for_hashes(state, &hashes, count).await;
+    for hash in &hashes {
+        state.db.delete_file_by_hash(hash).await?;
+        state.blob_store.delete(hash).map_err(|e| e.to_string())?;
+    }
 
     if count > 0 {
         if let Err(err) = crate::folders::controller::FolderController::
@@ -122,7 +150,7 @@ pub async fn delete_files(state: &AppState, input: DeleteFilesInput) -> Result<u
             tracing::warn!(error = %err, "failed to refresh folder sidebar projection after delete_files");
         }
         let mut impact = crate::events::MutationImpact::file_status_change(&state.db)
-            .file_hashes(hashes_for_impact);
+            .file_hashes(hashes);
         if !folder_ids.is_empty() {
             impact = impact.folder_ids(folder_ids);
         }
@@ -139,75 +167,13 @@ pub async fn rebuild_file_fts(state: &AppState, _input: serde_json::Value) -> Re
 }
 
 pub async fn wipe_image_data(state: &AppState, _input: serde_json::Value) -> Result<(), String> {
-    crate::lifecycle::controller::LifecycleController::wipe_all_files(
-        &state.db, &state.blob_store,
-    ).await?;
+    state.db.wipe_all_files().await?;
+    state.blob_store.wipe().map_err(|e| e.to_string())?;
     crate::events::emit_mutation(
         "wipe_image_data",
         crate::events::MutationImpact::file_status_change(&state.db),
     );
     Ok(())
-}
-
-pub async fn delete_files_selection(state: &AppState, input: DeleteFilesSelectionInput) -> Result<usize, String> {
-    let bitmap = resolve_selection_bitmap(state, &input.selection).await?;
-
-    let file_ids: Vec<i64> = bitmap.iter().map(|id| id as i64).collect();
-    let pairs = state.db.resolve_ids_batch(&file_ids).await?;
-    let hashes: Vec<String> = pairs.into_iter().map(|(_, h)| h).collect();
-    let hashes_clone = hashes.clone();
-    let folder_ids =
-        collect_folder_ids_for_hashes(state, &hashes_clone, hashes_clone.len()).await;
-
-    let count = crate::lifecycle::controller::LifecycleController::delete_files(
-        &state.db, &state.blob_store, hashes,
-    ).await?;
-
-    if count > 0 {
-        if let Err(err) = crate::folders::controller::FolderController::
-            refresh_sidebar_projection_for_folder_ids(&state.db, &folder_ids).await
-        {
-            tracing::warn!(error = %err, "failed to refresh folder sidebar projection after delete_files_selection");
-        }
-        let mut impact = crate::events::MutationImpact::file_status_change(&state.db)
-            .file_hashes(hashes_clone);
-        if !folder_ids.is_empty() {
-            impact = impact.folder_ids(folder_ids);
-        }
-        crate::events::emit_mutation("delete_files_selection", impact);
-    }
-    Ok(count)
-}
-
-pub async fn update_file_status_selection(state: &AppState, input: UpdateFileStatusSelectionInput) -> Result<usize, String> {
-    let status_code = crate::types::parse_file_status(&input.status)?;
-
-    let bitmap = resolve_selection_bitmap(state, &input.selection).await?;
-    let count = bitmap.len() as usize;
-
-    if count > 0 {
-        let mut folder_ids = input.selection.folder_ids.clone().unwrap_or_default();
-        if matches!(input.selection.mode, SelectionMode::ExplicitHashes) {
-            let explicit_hashes = input.selection.hashes.clone().unwrap_or_default();
-            let mut from_hashes =
-                collect_folder_ids_for_hashes(state, &explicit_hashes, 200).await;
-            folder_ids.append(&mut from_hashes);
-            folder_ids.sort_unstable();
-            folder_ids.dedup();
-        }
-        state.db.update_file_status_batch(&bitmap, status_code).await?;
-        if let Err(err) = crate::folders::controller::FolderController::
-            refresh_sidebar_projection_for_folder_ids(&state.db, &folder_ids).await
-        {
-            tracing::warn!(error = %err, "failed to refresh folder sidebar projection after status batch update");
-        }
-        let mut impact = crate::events::MutationImpact::file_status_change(&state.db);
-        if !folder_ids.is_empty() {
-            impact = impact.folder_ids(folder_ids);
-        }
-        crate::events::emit_mutation("update_file_status_selection", impact);
-    }
-    Ok(count)
 }
 
 // ─── Selection helpers ─────────────────────────────────────────────────────

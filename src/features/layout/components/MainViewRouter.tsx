@@ -3,7 +3,7 @@ import { SubscriptionGroupsPanel, CreateSubscriptionGroupModal } from '#features
 import { TagManager } from '#features/tags/components';
 import { DuplicateManager } from '#features/duplicates/components';
 import { ImageGrid } from '#features/grid/components';
-import { useMainViewSubscriptionsState, useMainViewGridActions, useMainViewGridState, useMainViewNavigationState, useMainViewSelectionState } from './MainViewModelContext';
+import { useMainViewSubscriptionsState, useMainViewGridActions, useMainViewGridState, useMainViewNavigationState, useMainViewSelectionState, useMainViewViewerState } from './MainViewModelContext';
 import styles from '../../../app/App.module.css';
 
 export function MainViewRouter() {
@@ -12,6 +12,7 @@ export function MainViewRouter() {
   const gridActions = useMainViewGridActions();
   const selection = useMainViewSelectionState();
   const subscriptions = useMainViewSubscriptionsState();
+  const viewer = useMainViewViewerState();
 
   switch (navigation.currentView) {
     case 'images':
@@ -50,6 +51,7 @@ export function MainViewRouter() {
             tagMatchMode={grid.tagMatchMode}
             externalFreeze={false}
             onScopeTransitionMidpoint={gridActions.onScopeTransitionMidpoint}
+            viewer={viewer}
           />
         </div>
       );

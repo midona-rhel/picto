@@ -1,7 +1,6 @@
 import type { GridRuntimeState } from './gridRuntimeState';
 import type { MasonryImageItem } from '../shared';
 import type { SelectionQuerySpec } from '../metadataPrefetch';
-import { isTransitionFrozen } from './gridTransitionPipeline';
 
 /**
  * Returns the effective set of selected hashes, accounting for virtual-all mode.
@@ -80,6 +79,6 @@ export function buildExplicitSelectionSpec(hashes: string[]): SelectionQuerySpec
 /**
  * Whether the grid should be frozen (transition in progress or externally frozen).
  */
-export function isGridFrozen(state: GridRuntimeState, externalFreeze: boolean): boolean {
-  return isTransitionFrozen(state.transitionStage) || externalFreeze;
+export function isGridFrozen(_state: GridRuntimeState, externalFreeze: boolean): boolean {
+  return externalFreeze;
 }

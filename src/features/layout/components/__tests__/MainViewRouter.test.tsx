@@ -83,6 +83,20 @@ function createMainViewModel(overrides?: Partial<MainViewModel['navigation']>): 
       subscriptionRefreshToken: 7,
       onOpenCreateSubscriptionGroupModal: () => {},
     },
+    viewer: {
+      mode: null,
+      session: null,
+      source: null,
+      isOpen: false,
+      isDetailOpen: false,
+      isQuickLookOpen: false,
+      registerSource: () => {},
+      openDetail: () => {},
+      toggleQuickLook: () => {},
+      openSlideshow: () => {},
+      close: () => {},
+      navigate: () => {},
+    },
   };
 }
 

@@ -48,7 +48,6 @@ pub async fn dispatch(command: &str, args_json: &str) -> Result<String, String> 
 
         // ── Tags ──────────────────────────────────────────────
         "search_tags" => call!(typed::tags::search_tags, &state, args),
-        "search_tags_paged" => call!(typed::tags::search_tags_paged, &state, args),
         "get_all_tags_with_counts" => call!(typed::tags::get_all_tags_with_counts, &state, args),
         "get_file_tags" => call!(typed::tags::get_file_tags, &state, args),
         "add_tags" => call!(typed::tags::add_tags, &state, args),
@@ -57,7 +56,7 @@ pub async fn dispatch(command: &str, args_json: &str) -> Result<String, String> 
         "manage_tag_alias" => call!(typed::tags::manage_tag_alias, &state, args),
         "get_tag_aliases" => call!(typed::tags::get_tag_aliases, &state, args),
         "get_tag_relations" => call!(typed::tags::get_tag_relations, &state, args),
-        "manage_tag_parent" => call!(typed::tags::manage_tag_parent, &state, args),
+        "manage_tag_implication" => call!(typed::tags::manage_tag_implication, &state, args),
         "merge_tags" => call!(typed::tags::merge_tags, &state, args),
         "lookup_tag_types" => call!(typed::tags::lookup_tag_types, &state, args),
         "get_tags_paginated" => call!(typed::tags::get_tags_paginated, &state, args),
@@ -72,9 +71,7 @@ pub async fn dispatch(command: &str, args_json: &str) -> Result<String, String> 
         "add_tags_selection" => call!(typed::selection::add_tags_selection, &state, args),
         "remove_tags_selection" => call!(typed::selection::remove_tags_selection, &state, args),
         "get_selection_summary" => call!(typed::selection::get_selection_summary, &state, args),
-        "update_rating_selection" => call!(typed::selection::update_rating_selection, &state, args),
-        "set_notes_selection" => call!(typed::selection::set_notes_selection, &state, args),
-        "set_source_urls_selection" => call!(typed::selection::set_source_urls_selection, &state, args),
+        "update_selection_metadata" => call!(typed::selection::update_selection_metadata, &state, args),
 
         // ── Duplicates ────────────────────────────────────────
         "get_duplicates" => call!(typed::duplicates::get_duplicates, &state, args),
@@ -98,14 +95,9 @@ pub async fn dispatch(command: &str, args_json: &str) -> Result<String, String> 
         "get_file_all_metadata" => call!(typed::media_metadata::get_file_all_metadata, &state, args),
         "get_file_tags_display" => call!(typed::media_metadata::get_file_tags_display, &state, args),
         "get_file_parents" => call!(typed::media_metadata::get_file_parents, &state, args),
-        "update_rating" => call!(typed::media_metadata::update_rating, &state, args),
-        "set_file_name" => call!(typed::media_metadata::set_file_name, &state, args),
+        "update_file_metadata" => call!(typed::media_metadata::update_file_metadata, &state, args),
         "get_file_notes" => call!(typed::media_metadata::get_file_notes, &state, args),
-        "set_file_notes" => call!(typed::media_metadata::set_file_notes, &state, args),
-        "increment_view_count" => call!(typed::media_metadata::increment_view_count, &state, args),
-        "set_source_urls" => call!(typed::media_metadata::set_source_urls, &state, args),
         "get_storage_stats" => call!(typed::media_metadata::get_storage_stats, &state, args),
-        "get_image_storage_stats" => call!(typed::media_metadata::get_image_storage_stats, &state, args),
 
         // ── System ────────────────────────────────────────────
         "get_settings" => call!(typed::system::get_settings, &state, args),
@@ -120,8 +112,6 @@ pub async fn dispatch(command: &str, args_json: &str) -> Result<String, String> 
         "set_view_prefs" => call!(typed::system::set_view_prefs, &state, args),
         "set_zoom_factor" => call!(typed::system::set_zoom_factor, &state, args),
         "get_zoom_factor" => call!(typed::system::get_zoom_factor, &state, args),
-        "enable_modern_window_style" => call!(typed::system::enable_modern_window_style, &state, args),
-
         // ── Folders & Collections ─────────────────────────────
         "list_folders" => call!(typed::folders::list_folders, &state, args),
         "get_folder_files" => call!(typed::folders::get_folder_files, &state, args),
@@ -137,8 +127,6 @@ pub async fn dispatch(command: &str, args_json: &str) -> Result<String, String> 
         "remove_files_from_folder" => call!(typed::folders::remove_files_from_folder, &state, args),
         "reorder_folders" => call!(typed::folders::reorder_folders, &state, args),
         "reorder_folder_items" => call!(typed::folders::reorder_folder_items, &state, args),
-        "sort_folder_items" => call!(typed::folders::sort_folder_items, &state, args),
-        "reverse_folder_items" => call!(typed::folders::reverse_folder_items, &state, args),
         "get_collections" => call!(typed::folders::get_collections, &state, args),
         "get_collection_summary" => call!(typed::folders::get_collection_summary, &state, args),
         "create_collection" => call!(typed::folders::create_collection, &state, args),
@@ -171,8 +159,6 @@ pub async fn dispatch(command: &str, args_json: &str) -> Result<String, String> 
         "delete_files" => call!(typed::media_lifecycle::delete_files, &state, args),
         "rebuild_file_fts" => call!(typed::media_lifecycle::rebuild_file_fts, &state, args),
         "wipe_image_data" => call!(typed::media_lifecycle::wipe_image_data, &state, args),
-        "delete_files_selection" => call!(typed::media_lifecycle::delete_files_selection, &state, args),
-        "update_file_status_selection" => call!(typed::media_lifecycle::update_file_status_selection, &state, args),
 
         // ── Subscriptions ─────────────────────────────────────
         "get_groups" => call!(typed::subscriptions::get_groups, &state, args),

@@ -3,6 +3,7 @@ import type { AppSettings } from '../../../state/settingsStore';
 import type { SmartFolderPredicate } from '../../smart-folders/components/types';
 import type { GridViewMode, DetailViewControls, DetailViewState } from '#features/grid/components';
 import type { MasonryImageItem, SelectionQuerySpec } from '#features/grid/types';
+import type { ViewerHostController } from '#features/viewer/hooks/useViewerHost';
 type MainViewNavigationState = {
   currentView: string;
   activeSmartFolderPredicate?: SmartFolderPredicate;
@@ -53,12 +54,15 @@ type MainViewSubscriptionsState = {
   onOpenCreateSubscriptionGroupModal: () => void;
 };
 
+type MainViewViewerState = ViewerHostController;
+
 export type MainViewModel = {
   navigation: MainViewNavigationState;
   grid: MainViewGridState;
   gridActions: MainViewGridActions;
   selection: MainViewSelectionState;
   subscriptions: MainViewSubscriptionsState;
+  viewer: MainViewViewerState;
 };
 
 const MainViewModelContext = createContext<MainViewModel | null>(null);
@@ -98,4 +102,8 @@ export function useMainViewSelectionState(): MainViewSelectionState {
 
 export function useMainViewSubscriptionsState(): MainViewSubscriptionsState {
   return useMainViewModel().subscriptions;
+}
+
+export function useMainViewViewerState(): MainViewViewerState {
+  return useMainViewModel().viewer;
 }

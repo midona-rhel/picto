@@ -135,11 +135,6 @@ export const imageDrag = {
     _nativeDragEndListeners.add(handler);
     return () => { _nativeDragEndListeners.delete(handler); };
   },
-  /** @deprecated Use startNativeDragSession instead. */
-  setPendingNativeDragHashes(hashes: string[]) { this.startNativeDragSession(hashes); },
-  /** @deprecated Use clearNativeDragSession instead. */
-  clearPendingNativeDragHashes() { this.clearNativeDragSession(); },
-
   getDropTargetFolderId(): number | null {
     return _state?.dropTargetFolderId ?? null;
   },

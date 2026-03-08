@@ -9,14 +9,12 @@ import { useCacheStore } from '../../../state/cacheStore';
 import { useSettingsStore, type AppSettings } from '../../../state/settingsStore';
 import { getShortcut, matchesShortcutDef } from '../../../shared/lib/shortcuts';
 import type { GridRuntimeAction, GridRuntimeState, GridViewMode } from '../runtime';
-import type { DetailViewControls, DetailViewState } from '../DetailView';
 
 let lastUsedFolder: { id: number; name: string } | null = null;
 
 interface UseGridHotkeysArgs {
   stateRef: { current: GridRuntimeState };
   dispatch: React.Dispatch<GridRuntimeAction>;
-  onDetailViewStateChange?: (state: DetailViewState | null, controls: DetailViewControls | null) => void;
   activateVirtualSelectAll: () => void;
   handleOpenWithDefaultApp: () => void;
   handleRevealInFolder: () => void;
@@ -28,7 +26,7 @@ interface UseGridHotkeysArgs {
   onViewModeChange?: (mode: GridViewMode) => void;
   updateSetting: <K extends keyof AppSettings>(key: K, value: AppSettings[K]) => void;
   grayscalePreview: boolean;
-  setSlideshowOpen: React.Dispatch<React.SetStateAction<boolean>>;
+  openSlideshow: (hash?: string | null) => void;
   setBatchRenameOpen: React.Dispatch<React.SetStateAction<boolean>>;
   startInlineRename: () => void;
   folderId?: number | null;
@@ -39,6 +37,8 @@ interface UseGridHotkeysArgs {
   handleRateSelected: (rating: number) => void;
   handleOpenQuickLook: () => void;
   handleOpenDetail: () => void;
+  viewerOpen: boolean;
+  closeViewer: (exitHash?: string) => void;
   statusFilter?: string | null;
   handleInboxAction?: (hash: string, status: 'active' | 'trash') => void;
 }
@@ -46,7 +46,6 @@ interface UseGridHotkeysArgs {
 export function useGridHotkeys({
   stateRef,
   dispatch,
-  onDetailViewStateChange,
   activateVirtualSelectAll,
   handleOpenWithDefaultApp,
   handleRevealInFolder,
@@ -58,7 +57,7 @@ export function useGridHotkeys({
   onViewModeChange,
   updateSetting,
   grayscalePreview,
-  setSlideshowOpen,
+  openSlideshow,
   setBatchRenameOpen,
   startInlineRename,
   folderId,
@@ -69,6 +68,8 @@ export function useGridHotkeys({
   handleRateSelected,
   handleOpenQuickLook,
   handleOpenDetail,
+  viewerOpen,
+  closeViewer,
   statusFilter,
   handleInboxAction,
 }: UseGridHotkeysArgs): void {
@@ -87,13 +88,8 @@ export function useGridHotkeys({
     [
       'escape',
       () => {
-        if (stateRef.current.detailHash) {
-          dispatch({ type: 'CLOSE_DETAIL' });
-          onDetailViewStateChange?.(null, null);
-          return;
-        }
-        if (stateRef.current.quickLookHash) {
-          dispatch({ type: 'CLOSE_QUICK_LOOK' });
+        if (viewerOpen) {
+          closeViewer();
           return;
         }
         dispatch({ type: 'CLEAR_SELECTION' });
@@ -112,7 +108,12 @@ export function useGridHotkeys({
     [
       'F5',
       () => {
-        if (stateRef.current.images.length > 0) setSlideshowOpen(true);
+        if (stateRef.current.images.length > 0) {
+          const selectedHash = stateRef.current.selectedHashes.size === 1
+            ? [...stateRef.current.selectedHashes][0]
+            : null;
+          openSlideshow(selectedHash);
+        }
       },
     ],
     ['mod+r', () => handleRenameRef.current()],
@@ -225,14 +226,12 @@ export function useGridHotkeys({
   statusFilterRef.current = statusFilter;
   const handleInboxActionRef = useRef(handleInboxAction);
   handleInboxActionRef.current = handleInboxAction;
-  const detailHashRef = useRef(stateRef.current.detailHash);
-  detailHashRef.current = stateRef.current.detailHash;
-  const quickLookHashRef = useRef(stateRef.current.quickLookHash);
-  quickLookHashRef.current = stateRef.current.quickLookHash;
+  const viewerOpenRef = useRef(viewerOpen);
+  viewerOpenRef.current = viewerOpen;
   useEffect(() => {
     const handleNativeKey = (e: KeyboardEvent) => {
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
-      if (detailHashRef.current || quickLookHashRef.current) return;
+      if (viewerOpenRef.current) return;
 
       const wasdMap: Record<string, string> = {
         w: 'ArrowUp',
@@ -291,5 +290,5 @@ export function useGridHotkeys({
     };
     window.addEventListener('keydown', handleNativeKey);
     return () => window.removeEventListener('keydown', handleNativeKey);
-  }, []);
+  }, [openSlideshow, closeViewer]);
 }

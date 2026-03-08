@@ -125,36 +125,8 @@ export const useDomainStore = create<DomainState>((set, get) => ({
         SIDEBAR_FETCH_STUCK_TIMEOUT_MS,
         { nodes: [], tree_epoch: 0, generated_at: new Date(0).toISOString() },
       );
-      const [namespaceSummary, inboxCountResp, uncategorizedCountResp, untaggedCountResp, recentViewedCountResp] = await Promise.all([
+      const [namespaceSummary] = await Promise.all([
         withTimeout(api.tags.getNamespaceSummary(), SIDEBAR_OPTIONAL_QUERY_TIMEOUT_MS, []),
-        withTimeout(api.grid.getPageSlim({
-          limit: 1,
-          cursor: null,
-          sortField: 'imported_at',
-          sortOrder: 'desc',
-          status: 'inbox',
-        }), SIDEBAR_OPTIONAL_QUERY_TIMEOUT_MS, null),
-        withTimeout(api.grid.getPageSlim({
-          limit: 1,
-          cursor: null,
-          sortField: 'imported_at',
-          sortOrder: 'desc',
-          status: 'uncategorized',
-        }), SIDEBAR_OPTIONAL_QUERY_TIMEOUT_MS, null),
-        withTimeout(api.grid.getPageSlim({
-          limit: 1,
-          cursor: null,
-          sortField: 'imported_at',
-          sortOrder: 'desc',
-          status: 'untagged',
-        }), SIDEBAR_OPTIONAL_QUERY_TIMEOUT_MS, null),
-        withTimeout(api.grid.getPageSlim({
-          limit: 1,
-          cursor: null,
-          sortField: 'imported_at',
-          sortOrder: 'desc',
-          status: 'recently_viewed',
-        }), SIDEBAR_OPTIONAL_QUERY_TIMEOUT_MS, null),
       ]);
       const nodes = tree.nodes;
       const tagsCount = Array.isArray(namespaceSummary)
@@ -177,14 +149,14 @@ export const useDomainStore = create<DomainState>((set, get) => ({
       // Prefer the compiled sidebar node count. During subscription imports,
       // the inbox grid snapshot can intentionally stay cached for live insertion,
       // which would otherwise overwrite a fresher sidebar count.
-      const resolvedInboxCount = inboxNode?.count ?? inboxCountResp?.total_count ?? get().inboxCount;
+      const resolvedInboxCount = inboxNode?.count ?? get().inboxCount;
       const liveInboxFloor = get().liveInboxFloor;
       const inboxCount = get().liveInboxImportRuns > 0
         ? Math.max(resolvedInboxCount, liveInboxFloor ?? resolvedInboxCount)
         : resolvedInboxCount;
-      const uncategorizedCount = uncategorizedCountResp?.total_count ?? uncategorizedNode?.count ?? 0;
-      const untaggedCount = untaggedCountResp?.total_count ?? untaggedNode?.count ?? 0;
-      const recentViewedCount = recentViewedCountResp?.total_count ?? recentViewedNode?.count ?? 0;
+      const uncategorizedCount = uncategorizedNode?.count ?? 0;
+      const untaggedCount = untaggedNode?.count ?? 0;
+      const recentViewedCount = recentViewedNode?.count ?? 0;
 
       const smartNodes = nodes.filter((n) => n.kind === 'smart_folder');
       const smartFolders: SmartFolderSummary[] = [];

@@ -422,29 +422,29 @@ export function TagManager() {
         });
         notifySuccess(`"${sourceDisplay}" now resolves to "${targetDisplay}"`, 'Alias Added');
       } else if (relationModal.type === 'implication') {
-        await api.tags.manageParent(sourceDisplay, targetDisplay, 'add');
+        await api.tags.manageImplication(sourceDisplay, targetDisplay, 'add');
         registerUndoAction({
           label: `Add implication "${targetDisplay}"`,
           undo: async () => {
-            await api.tags.manageParent(sourceDisplay, targetDisplay, 'remove');
+            await api.tags.manageImplication(sourceDisplay, targetDisplay, 'remove');
             await refreshAll();
           },
           redo: async () => {
-            await api.tags.manageParent(sourceDisplay, targetDisplay, 'add');
+            await api.tags.manageImplication(sourceDisplay, targetDisplay, 'add');
             await refreshAll();
           },
         });
         notifySuccess(`"${sourceDisplay}" now implies "${targetDisplay}"`, 'Implication Added');
       } else {
-        await api.tags.manageParent(targetDisplay, sourceDisplay, 'add');
+        await api.tags.manageImplication(targetDisplay, sourceDisplay, 'add');
         registerUndoAction({
           label: `Add implied-by relation "${targetDisplay}"`,
           undo: async () => {
-            await api.tags.manageParent(targetDisplay, sourceDisplay, 'remove');
+            await api.tags.manageImplication(targetDisplay, sourceDisplay, 'remove');
             await refreshAll();
           },
           redo: async () => {
-            await api.tags.manageParent(targetDisplay, sourceDisplay, 'add');
+            await api.tags.manageImplication(targetDisplay, sourceDisplay, 'add');
             await refreshAll();
           },
         });

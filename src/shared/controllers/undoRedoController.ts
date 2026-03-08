@@ -3,11 +3,6 @@ import { useUndoRedoStore, type UndoRedoAction } from '../../state/undoRedoStore
 
 let actionCounter = 0;
 
-export function deepClone<T>(value: T): T {
-  if (typeof structuredClone === 'function') return structuredClone(value);
-  return JSON.parse(JSON.stringify(value)) as T;
-}
-
 export function registerUndoAction(input: Omit<UndoRedoAction, 'id'>): void {
   actionCounter += 1;
   useUndoRedoStore.getState().pushAction({

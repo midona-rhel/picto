@@ -510,25 +510,21 @@ pub fn is_allowed_mime(mime: MimeType) -> bool {
 /// File information extracted from a file.
 #[derive(Debug, Clone)]
 pub struct FileInfo {
-    #[allow(dead_code)]
-    pub size: u64,
     pub mime: MimeType,
     pub width: Option<u32>,
     pub height: Option<u32>,
     pub duration_ms: Option<u64>,
     pub num_frames: Option<u32>,
     pub has_audio: bool,
-    #[allow(dead_code)]
-    pub num_words: Option<u32>,
 }
 
 /// Extract file info: size, dimensions, duration, frames, audio, word count.
 pub fn get_file_info(path: &Path, mime: Option<MimeType>) -> FileResult<FileInfo> {
-    let metadata = std::fs::metadata(path)
-        .map_err(|e| FileError::NotFound(format!("{}: {}", path.display(), e)))?;
-    let size = metadata.len();
+    let file_size = std::fs::metadata(path)
+        .map_err(|e| FileError::NotFound(format!("{}: {}", path.display(), e)))?
+        .len();
 
-    if size == 0 {
+    if file_size == 0 {
         return Err(FileError::ZeroSizeFile(path.display().to_string()));
     }
 
@@ -555,7 +551,6 @@ pub fn get_file_info(path: &Path, mime: Option<MimeType>) -> FileResult<FileInfo
     let mut height: Option<u32> = None;
     let mut duration_ms: Option<u64> = None;
     let mut num_frames: Option<u32> = None;
-    let mut num_words: Option<u32> = None;
     let mut has_audio = definitely_has_audio(mime);
 
     if mime == MimeType::ApplicationCbz || mime == MimeType::ApplicationEpub {
@@ -592,25 +587,21 @@ pub fn get_file_info(path: &Path, mime: Option<MimeType>) -> FileResult<FileInfo
             height = Some(h);
         }
     } else if mime == MimeType::ApplicationPdf {
-        if let Ok((nw, (w, h))) = pdf::get_pdf_info(path) {
-            num_words = nw;
+        if let Ok((_nw, (w, h))) = pdf::get_pdf_info(path) {
             width = w;
             height = h;
         }
     } else if mime == MimeType::ApplicationPptx {
-        let (nw, (w, h)) = office::get_pptx_info(path);
-        num_words = nw;
+        let (_nw, (w, h)) = office::get_pptx_info(path);
         width = w;
         height = h;
     } else if mime == MimeType::ApplicationDocx {
-        num_words = office::get_docx_info(path);
+        let _ = office::get_docx_info(path);
     } else if matches!(
         mime,
         MimeType::ApplicationDoc | MimeType::ApplicationPpt | MimeType::ApplicationXls
     ) {
-        if let Ok(nw) = office::ole_document_word_count(path) {
-            num_words = nw;
-        }
+        let _ = office::ole_document_word_count(path);
     } else if mime == MimeType::ApplicationFlash {
         if let Ok(((w, h), dur, nf)) = specialty::get_flash_properties(path) {
             width = Some(w);
@@ -666,14 +657,12 @@ pub fn get_file_info(path: &Path, mime: Option<MimeType>) -> FileResult<FileInfo
     }
 
     Ok(FileInfo {
-        size,
         mime,
         width,
         height,
         duration_ms,
         num_frames,
         has_audio,
-        num_words,
     })
 }
 
@@ -763,7 +752,6 @@ pub fn get_hash_from_bytes(data: &[u8]) -> Vec<u8> {
 pub enum ThumbnailScaleType {
     ScaleDownOnly = 0,
     ScaleToFit = 1,
-    #[allow(dead_code)]
     ScaleToFill = 2,
 }
 

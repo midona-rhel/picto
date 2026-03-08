@@ -1,5 +1,5 @@
 /**
- * Cache store — grid page data (metadata LRU), selection state, prefetch queue.
+ * Cache store — grid page data (metadata LRU) and selection state.
  *
  * Provides a centralized metadata cache for the image grid.
  * Frontend constructs asset URLs via convertFileSrc from hash.
@@ -51,10 +51,6 @@ interface CacheState {
   selectedHashes: Set<string>;
   lastSelectedHash: string | null;
 
-  // Prefetch queue
-  prefetchQueue: string[];
-  prefetching: boolean;
-
   // Grid refresh sequence — incremented by gridRefresher on grid_scopes invalidation
   gridRefreshSeq: number;
 
@@ -91,9 +87,6 @@ interface CacheState {
   deselectAll: () => void;
   setSelection: (hashes: string[]) => void;
 
-  // Prefetch
-  enqueuePrefetch: (hashes: string[]) => void;
-  processPrefetchQueue: () => Promise<void>;
 }
 
 export const useCacheStore = create<CacheState>((set, get) => ({
@@ -101,8 +94,6 @@ export const useCacheStore = create<CacheState>((set, get) => ({
   currentPageHashes: [],
   selectedHashes: new Set(),
   lastSelectedHash: null,
-  prefetchQueue: [],
-  prefetching: false,
   gridRefreshSeq: 0,
   metadataInvalidatedHashes: new Set(),
   activeGridScope: null,
@@ -266,35 +257,4 @@ export const useCacheStore = create<CacheState>((set, get) => ({
     set({ selectedHashes: new Set(hashes), lastSelectedHash: hashes[hashes.length - 1] ?? null });
   },
 
-  // Prefetch
-  enqueuePrefetch: (hashes: string[]) => {
-    set((state) => {
-      const existing = new Set(state.prefetchQueue);
-      const cache = state.metadataCache;
-      const newItems = hashes.filter((h) => !existing.has(h) && !cache.has(h));
-      return { prefetchQueue: [...state.prefetchQueue, ...newItems] };
-    });
-
-    // Auto-process if not already running
-    if (!get().prefetching) {
-      get().processPrefetchQueue();
-    }
-  },
-
-  processPrefetchQueue: async () => {
-    const state = get();
-    if (state.prefetching || state.prefetchQueue.length === 0) return;
-
-    set({ prefetching: true });
-
-    try {
-      while (get().prefetchQueue.length > 0) {
-        const batch = get().prefetchQueue.slice(0, 50);
-        set((s) => ({ prefetchQueue: s.prefetchQueue.slice(50) }));
-        await get().fetchMetadataBatch(batch);
-      }
-    } finally {
-      set({ prefetching: false });
-    }
-  },
 }));
