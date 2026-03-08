@@ -75,7 +75,6 @@ This folder was reset for the first alpha release.
 65. [PBI-300](./active-alpha/PBI-300-canonical-scope-semantics-engine.md)
 68. [PBI-303](./active-alpha/PBI-303-derived-resource-dependency-map-from-model-facts.md)
 69. [PBI-304](./active-alpha/PBI-304-rust-core-runtime-event-bus-and-task-registry-realignment.md)
-70. [PBI-305](./active-alpha/PBI-305-grid-selection-and-sidebar-query-service-decomposition.md)
 71. [PBI-306](./active-alpha/PBI-306-app-state-service-lifecycle-and-worker-boundary-cleanup.md)
 72. [PBI-307](./active-alpha/PBI-307-subscription-domain-service-split-and-orchestration-cleanup.md)
 73. [PBI-308](./active-alpha/PBI-308-ptr-domain-decomposition-and-runtime-state-cleanup.md)
