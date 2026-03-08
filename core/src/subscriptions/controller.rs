@@ -11,7 +11,6 @@ use tokio::time::{sleep, Duration};
 use tokio_util::sync::CancellationToken;
 
 use crate::blob_store::BlobStore;
-use crate::events;
 use crate::rate_limiter::RateLimiter;
 use crate::settings::store::SettingsStore;
 use crate::subscriptions::db::{get_subscription, get_subscription_query};

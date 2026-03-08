@@ -74,7 +74,7 @@ parking_lot = "0.12"
 num_cpus = "1.16"
 
 # TypeScript type generation from Rust structs (PBI-234)
-ts-rs = { version = "10", features = ["serde-compat"] }
+ts-rs = { version = "10", features = ["serde-compat", "no-serde-warnings"] }
 
 [dev-dependencies]
 tokio-test = "0.4"

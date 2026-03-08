@@ -116,12 +116,9 @@ impl TypedCommand for UpdateSmartFolder {
             .await?;
         let sf_id: i64 = input.id.parse().unwrap_or(0);
         let mut impact =
-            crate::events::MutationImpact::sidebar(crate::events::Domain::SmartFolders)
-                .smart_folder_ids(vec![sf_id]);
+            crate::events::MutationImpact::sidebar(crate::events::Domain::SmartFolders);
         if predicate_changed {
-            impact = impact
-                .grid_scopes(vec![format!("smart:{}", sf_id)])
-                .selection_summary();
+            impact = impact.smart_folder_ids(vec![sf_id]);
         }
         crate::events::emit_mutation("update_smart_folder", impact);
         Ok(serde_json::to_value(&result).map_err(|e| e.to_string())?)
@@ -143,8 +140,7 @@ impl TypedCommand for DeleteSmartFolder {
         crate::events::emit_mutation(
             "delete_smart_folder",
             crate::events::MutationImpact::sidebar(crate::events::Domain::SmartFolders)
-                .smart_folder_ids(vec![sf_id])
-                .selection_summary(),
+                .smart_folder_ids(vec![sf_id]),
         );
         Ok(())
     }

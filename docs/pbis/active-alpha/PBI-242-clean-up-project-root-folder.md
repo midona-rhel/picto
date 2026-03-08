@@ -3,14 +3,19 @@
 ## Priority
 P2
 
-## Audit Status (2026-03-06)
-Status: **Not Implemented**
+## Audit Status (2026-03-07)
+Status: **Implemented**
 
-Evidence:
-1. The project root contains a mix of concerns: audit files (`AUDIT.md`), multiple Vite HTML entry points (`detail.html`, `settings.html`, `subscriptions.html`, `library-manager.html`, `index.html`), config files, and build artifacts.
-2. HTML entry points for Electron windows are scattered at root level instead of being co-located with their source.
-3. `AUDIT.md` is a one-off artifact that belongs in `docs/`.
-4. The root is cluttered enough that navigating it requires scrolling past unrelated files to find what you need.
+Resolution:
+1. `AUDIT.md` moved to `docs/AUDIT.md`.
+2. HTML entry points (`detail.html`, `settings.html`, `subscriptions.html`, `library-manager.html`, `index.html`) remain at project root — this is a Vite multi-page app constraint. Documented in `vite.config.ts` lines 20-22 above the `rollupOptions.input` block.
+3. Root now contains only: config files, package management, HTML entry points (documented), and source directories. No stale artifacts remain.
+
+Previous evidence (2026-03-06):
+1. The project root contained audit files (`AUDIT.md`) mixed with config and entry points.
+2. HTML entry points for Electron windows were at root without documentation of why.
+3. `AUDIT.md` was a one-off artifact that belonged in `docs/`.
+4. The root was cluttered enough that navigating it required scrolling past unrelated files.
 
 ## Problem
 The project root is a dumping ground. HTML entry points for different Electron windows, audit documents, config files, and build tooling all sit at the same level. This makes it hard to scan the root and understand the project structure at a glance.

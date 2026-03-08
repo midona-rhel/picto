@@ -768,7 +768,7 @@ impl<'a> SubscriptionSyncEngine<'a> {
         crate::events::emit_mutation(
             "subscription_import_collections",
             crate::events::MutationImpact::all_domains_change(self.db)
-                .grid_scopes(scopes),
+                .extra_grid_scopes(scopes),
         );
     }
 
@@ -911,8 +911,7 @@ impl<'a> SubscriptionSyncEngine<'a> {
                 self.db.scope_cache_invalidate_all();
                 crate::events::emit_mutation(
                     "subscription_import",
-                    crate::events::MutationImpact::file_lifecycle(self.db)
-                        .grid_scopes(vec!["system:all".to_string(), "system:inbox".to_string()]),
+                    crate::events::MutationImpact::file_lifecycle(self.db),
                 );
 
                 Ok(ImportOutcome {
@@ -1070,7 +1069,7 @@ impl<'a> SubscriptionSyncEngine<'a> {
             crate::events::emit_mutation(
                 "subscription_import",
                 crate::events::MutationImpact::file_lifecycle(self.db)
-                    .metadata_hashes(vec![hex_hash.to_string()]),
+                    .file_hashes(vec![hex_hash.to_string()]),
             );
         }
 
@@ -1119,10 +1118,6 @@ impl<'a> SubscriptionSyncEngine<'a> {
             failure_kind: None,
             error: None,
         };
-        crate::events::emit(
-            crate::events::event_names::SUBSCRIPTION_PROGRESS,
-            &event,
-        );
         {
             use crate::runtime_contract::task::{
                 RuntimeTask, TaskKind, TaskProgress, TaskStatus,

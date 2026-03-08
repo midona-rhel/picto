@@ -183,27 +183,13 @@ pub async fn open_library(library_root: PathBuf) -> Result<Arc<AppState>, String
                 if result.smart_folders_rebuilt {
                     domains.push(crate::events::Domain::SmartFolders);
                 }
-                crate::events::emit_mutation(
-                    "compiler_batch_done",
-                    crate::events::MutationImpact {
-                        domains,
-                        invalidate: crate::events::Invalidate {
-                            sidebar_tree: if result.sidebar_affected {
-                                Some(true)
-                            } else {
-                                None
-                            },
-                            grid_scopes: if result.smart_folders_rebuilt {
-                                Some(vec!["system:all".into()])
-                            } else {
-                                None
-                            },
-                            ..Default::default()
-                        },
-                        compiler_batch_done: Some(true),
-                        ..Default::default()
-                    },
-                );
+                let mut impact = crate::events::MutationImpact::new()
+                    .domains(&domains);
+                impact.compiler_batch_done = Some(true);
+                if result.smart_folders_rebuilt {
+                    impact = impact.extra_grid_scopes(vec!["system:all".into()]);
+                }
+                crate::events::emit_mutation("compiler_batch_done", impact);
             },
         ));
         worker_handles.push(("compiler_loop", handle));

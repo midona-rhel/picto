@@ -388,9 +388,9 @@ impl TypedCommand for DeleteFolder {
         crate::folders::controller::FolderController::delete_folder(&state.db, input.folder_id).await?;
         crate::events::emit_mutation(
             "delete_folder",
-            crate::events::MutationImpact::sidebar(crate::events::Domain::Folders)
-                .folder_ids(vec![input.folder_id])
-                .selection_summary(),
+            crate::events::MutationImpact::new()
+                .domains(&[crate::events::Domain::Folders, crate::events::Domain::Sidebar, crate::events::Domain::Selection])
+                .folder_ids(vec![input.folder_id]),
         );
         Ok(())
     }
@@ -572,9 +572,9 @@ impl TypedCommand for CreateCollection {
         ).await?;
         crate::events::emit_mutation(
             "create_collection",
-            crate::events::MutationImpact::sidebar(crate::events::Domain::Folders)
-                .grid_all()
-                .selection_summary(),
+            crate::events::MutationImpact::new()
+                .domains(&[crate::events::Domain::Folders, crate::events::Domain::Sidebar, crate::events::Domain::Selection])
+                .extra_grid_scopes(vec!["system:all".into()]),
         );
         Ok(collection_id)
     }
@@ -647,7 +647,7 @@ impl TypedCommand for ReorderCollectionMembers {
         crate::events::emit_mutation(
             "reorder_collection_members",
             crate::events::MutationImpact::domain_only(crate::events::Domain::Files)
-                .grid_all(),
+                .extra_grid_scopes(vec!["system:all".into()]),
         );
         Ok(())
     }
@@ -684,9 +684,9 @@ impl TypedCommand for AddCollectionMembers {
         state.db.scope_cache_invalidate_scope("collection");
         let cover_hash = collection_cover_hash(&state.db, input.id).await;
         let mut impact = crate::events::MutationImpact::all_domains_change(&state.db)
-            .grid_scopes(vec![format!("collection:{}", input.id), "folder:all".into()]);
+            .extra_grid_scopes(vec![format!("collection:{}", input.id), "folder:all".into()]);
         if let Some(h) = cover_hash {
-            impact = impact.metadata_hashes(vec![h]);
+            impact = impact.file_hashes(vec![h]);
         }
         crate::events::emit_mutation("add_collection_members", impact);
         Ok(added)
@@ -703,9 +703,9 @@ impl TypedCommand for RemoveCollectionMembers {
         state.db.scope_cache_invalidate_scope("collection");
         let cover_hash = collection_cover_hash(&state.db, input.id).await;
         let mut impact = crate::events::MutationImpact::all_domains_change(&state.db)
-            .grid_scopes(vec![format!("collection:{}", input.id), "folder:all".into()]);
+            .extra_grid_scopes(vec![format!("collection:{}", input.id), "folder:all".into()]);
         if let Some(h) = cover_hash {
-            impact = impact.metadata_hashes(vec![h]);
+            impact = impact.file_hashes(vec![h]);
         }
         crate::events::emit_mutation("remove_collection_members", impact);
         Ok(removed)
@@ -722,10 +722,10 @@ impl TypedCommand for DeleteCollection {
         state.db.scope_cache_invalidate_scope("collection");
         crate::events::emit_mutation(
             "delete_collection",
-            crate::events::MutationImpact::sidebar(crate::events::Domain::Folders)
+            crate::events::MutationImpact::new()
+                .domains(&[crate::events::Domain::Folders, crate::events::Domain::Sidebar, crate::events::Domain::Selection])
                 .folder_ids(vec![input.id])
-                .grid_all()
-                .selection_summary(),
+                .extra_grid_scopes(vec!["system:all".into()]),
         );
         Ok(())
     }
