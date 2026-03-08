@@ -7,7 +7,7 @@
 use serde::Serialize;
 use ts_rs::TS;
 
-#[derive(Debug, Clone, Serialize, TS)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
 #[ts(export_to = "../../src/shared/types/generated/runtime-contract/")]
 #[serde(rename_all = "snake_case")]
 pub enum Domain {

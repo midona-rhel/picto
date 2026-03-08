@@ -76,7 +76,13 @@ impl MutationImpact {
     }
 
     pub fn domains(mut self, d: &[Domain]) -> Self {
-        self.domains = d.to_vec();
+        let mut domains = Vec::with_capacity(d.len());
+        for domain in d {
+            if !domains.contains(domain) {
+                domains.push(domain.clone());
+            }
+        }
+        self.domains = domains;
         self
     }
     pub fn file_hashes(mut self, h: Vec<String>) -> Self {
@@ -161,8 +167,7 @@ impl MutationImpact {
     /// Sidebar structure change (folder/smart folder/subscription CRUD).
     /// Derives sidebar_tree from Domain::Sidebar.
     pub fn sidebar(domain: Domain) -> Self {
-        Self::new()
-            .domains(&[domain, Domain::Sidebar])
+        Self::new().domains(&[domain, Domain::Sidebar])
     }
 
     /// File status change (status update, delete, wipe). Fact: status_changed.
