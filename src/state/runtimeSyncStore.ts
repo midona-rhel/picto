@@ -12,11 +12,6 @@ import type {
 } from '../shared/types/generated/runtime-contract';
 import { deriveStaleResources } from '../runtime/resourceInvalidator';
 import { logBestEffortError } from '../shared/lib/asyncOps';
-import type {
-  PtrBootstrapStatus,
-  PtrSyncProgress,
-  PtrSyncResult,
-} from '../shared/controllers/ptrSyncController';
 import {
   type FlowFinishedEvent,
   type FlowProgressEvent,
@@ -58,21 +53,12 @@ export interface RuntimeSyncState {
   sidebarCounts: SidebarCounts | null;
   lastOriginCommand: string | null;
 
-  // --- PTR progress (legacy events) ---
-  ptrSyncing: boolean;
-  ptrProgress: PtrSyncProgress | null;
-  ptrLastResult: PtrSyncResult | null;
-  ptrBootstrapStatus: PtrBootstrapStatus | null;
-
   // --- Subscription progress (legacy events) ---
-  runningSubscriptionIds: Set<string>;
-  runningQueryIds: Set<string>;
   subscriptionProgressById: Map<string, RuntimeSubscriptionProgress>;
   lastSubscriptionFinished: SubscriptionFinishedEvent | null;
   subscriptionEventSeq: number;
 
   // --- Flow progress (legacy events) ---
-  runningFlowIds: Set<string>;
   flowProgressById: Map<string, FlowProgressEvent>;
   lastFlowFinished: FlowFinishedEvent | null;
   flowEventSeq: number;
@@ -145,18 +131,10 @@ export const useRuntimeSyncStore = create<RuntimeSyncState>((set, get) => ({
   sidebarCounts: null,
   lastOriginCommand: null,
 
-  ptrSyncing: false,
-  ptrProgress: null,
-  ptrLastResult: null,
-  ptrBootstrapStatus: null,
-
-  runningSubscriptionIds: new Set<string>(),
-  runningQueryIds: new Set<string>(),
   subscriptionProgressById: new Map<string, RuntimeSubscriptionProgress>(),
   lastSubscriptionFinished: null,
   subscriptionEventSeq: 0,
 
-  runningFlowIds: new Set<string>(),
   flowProgressById: new Map<string, FlowProgressEvent>(),
   lastFlowFinished: null,
   flowEventSeq: 0,
@@ -184,8 +162,8 @@ export const useRuntimeSyncStore = create<RuntimeSyncState>((set, get) => ({
           get().applyTaskRemoved(event.task_id);
         }),
 
-        // All domain state (subscription, flow, PTR) is derived from
-        // runtime/task_upserted in applyTaskUpsert.
+        // Active runtime task state is derived from runtime/task_upserted in
+        // applyTaskUpsert plus snapshot recovery in refreshTaskSnapshots.
       ]);
       unlisteners = listeners;
 
@@ -222,16 +200,9 @@ export const useRuntimeSyncStore = create<RuntimeSyncState>((set, get) => ({
       staleResources: new Set(),
       sidebarCounts: null,
       lastOriginCommand: null,
-      ptrSyncing: false,
-      ptrProgress: null,
-      ptrLastResult: null,
-      ptrBootstrapStatus: null,
-      runningSubscriptionIds: new Set<string>(),
-      runningQueryIds: new Set<string>(),
       subscriptionProgressById: new Map<string, RuntimeSubscriptionProgress>(),
       lastSubscriptionFinished: null,
       subscriptionEventSeq: 0,
-      runningFlowIds: new Set<string>(),
       flowProgressById: new Map<string, FlowProgressEvent>(),
       lastFlowFinished: null,
       flowEventSeq: 0,
@@ -263,14 +234,10 @@ export const useRuntimeSyncStore = create<RuntimeSyncState>((set, get) => ({
     set((state) => {
       const tasksById = new Map(state.tasksById);
       tasksById.set(task.task_id, task);
-      const taskProjection = projectRuntimeTasks(tasksById.values(), state.ptrBootstrapStatus);
+      const taskProjection = projectRuntimeTasks(tasksById.values());
       const patch: Partial<RuntimeSyncState> = {
         tasksById,
-        runningFlowIds: taskProjection.runningFlowIds,
         flowProgressById: taskProjection.flowProgressById,
-        ptrSyncing: taskProjection.ptrSyncing,
-        ptrProgress: taskProjection.ptrProgress,
-        ptrBootstrapStatus: taskProjection.ptrBootstrapStatus,
       };
 
       if (task.kind === 'flow') {
@@ -293,14 +260,10 @@ export const useRuntimeSyncStore = create<RuntimeSyncState>((set, get) => ({
             clearTimeout(timer);
             subFinishedTimers.delete(subId);
           }
-          const runningSubscriptionIds = new Set(state.runningSubscriptionIds);
-          const runningQueryIds = new Set(state.runningQueryIds);
           const subscriptionProgressById = new Map(state.subscriptionProgressById);
           const existing = subscriptionProgressById.get(subId);
 
           if (isRunning) {
-            runningSubscriptionIds.add(subId);
-            if (detail.query_id) runningQueryIds.add(detail.query_id as string);
             subscriptionProgressById.set(subId, {
               subscription_id: subId,
               subscription_name:
@@ -316,8 +279,6 @@ export const useRuntimeSyncStore = create<RuntimeSyncState>((set, get) => ({
               status: 'running',
             });
           } else if (isTerminal) {
-            runningSubscriptionIds.delete(subId);
-            if (detail.query_id) runningQueryIds.delete(detail.query_id as string);
             const finishedStatus =
               (detail.finished_status as string)
               ?? (task.status === 'finished' ? 'succeeded' : 'failed');
@@ -351,15 +312,9 @@ export const useRuntimeSyncStore = create<RuntimeSyncState>((set, get) => ({
               error: detail.error as string | undefined,
             } as SubscriptionFinishedEvent;
           }
-          patch.runningSubscriptionIds = runningSubscriptionIds;
-          patch.runningQueryIds = runningQueryIds;
           patch.subscriptionProgressById = subscriptionProgressById;
           patch.subscriptionEventSeq = state.subscriptionEventSeq + 1;
         }
-      }
-
-      if (task.kind === 'ptr_sync' && isTerminal && task.detail) {
-        patch.ptrLastResult = task.detail as unknown as PtrSyncResult;
       }
 
       return patch;
@@ -413,14 +368,10 @@ export const useRuntimeSyncStore = create<RuntimeSyncState>((set, get) => ({
     set((state) => {
       const tasksById = new Map(state.tasksById);
       tasksById.delete(taskId);
-      const taskProjection = projectRuntimeTasks(tasksById.values(), state.ptrBootstrapStatus);
+      const taskProjection = projectRuntimeTasks(tasksById.values());
       return {
         tasksById,
-        runningFlowIds: taskProjection.runningFlowIds,
         flowProgressById: taskProjection.flowProgressById,
-        ptrSyncing: taskProjection.ptrSyncing,
-        ptrProgress: taskProjection.ptrProgress,
-        ptrBootstrapStatus: taskProjection.ptrBootstrapStatus,
       };
     });
   },
@@ -462,7 +413,6 @@ export const useRuntimeSyncStore = create<RuntimeSyncState>((set, get) => ({
           ...runningSubscriptionIdsRaw,
           ...runningProgress.map((p) => p.subscription_id),
         ]);
-        const runningQueryIds = new Set<string>();
         const subscriptionProgressById = new Map(state.subscriptionProgressById);
 
         for (const [subId, progress] of subscriptionProgressById.entries()) {
@@ -472,7 +422,6 @@ export const useRuntimeSyncStore = create<RuntimeSyncState>((set, get) => ({
         }
 
         for (const progress of runningProgress) {
-          if (progress.query_id) runningQueryIds.add(progress.query_id);
           const existing = subscriptionProgressById.get(progress.subscription_id);
           subscriptionProgressById.set(progress.subscription_id, {
             subscription_id: progress.subscription_id,
@@ -490,16 +439,10 @@ export const useRuntimeSyncStore = create<RuntimeSyncState>((set, get) => ({
           });
         }
 
-        const taskProjection = projectRuntimeTasks(state.tasksById.values(), state.ptrBootstrapStatus);
+        const taskProjection = projectRuntimeTasks(state.tasksById.values());
 
         return {
-          ptrSyncing: taskProjection.ptrSyncing,
-          ptrProgress: taskProjection.ptrProgress,
-          ptrBootstrapStatus: taskProjection.ptrBootstrapStatus,
-          runningSubscriptionIds,
-          runningQueryIds,
           subscriptionProgressById,
-          runningFlowIds: taskProjection.runningFlowIds,
           flowProgressById: taskProjection.flowProgressById,
         };
       });

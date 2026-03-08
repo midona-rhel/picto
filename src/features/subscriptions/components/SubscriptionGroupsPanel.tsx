@@ -41,10 +41,7 @@ export function SubscriptionGroupsPanel({
   refreshToken,
 }: SubscriptionGroupsPanelProps) {
   const ensureInitialized = useRuntimeSyncStore((s) => s.ensureInitialized);
-  const runningIds = useRuntimeSyncStore((s) => s.runningSubscriptionIds);
-  const runningQueryIds = useRuntimeSyncStore((s) => s.runningQueryIds);
   const subscriptionProgressById = useRuntimeSyncStore((s) => s.subscriptionProgressById);
-  const runningSubscriptionGroupIds = useRuntimeSyncStore((s) => s.runningFlowIds);
   const subscriptionGroupProgress = useRuntimeSyncStore((s) => s.flowProgressById);
   const lastSubscriptionFinished = useRuntimeSyncStore((s) => s.lastSubscriptionFinished);
   const lastSubscriptionGroupFinished = useRuntimeSyncStore((s) => s.lastFlowFinished);
@@ -75,6 +72,23 @@ export function SubscriptionGroupsPanel({
     }
     return next;
   }, [subscriptionProgressById]);
+  const runningIds = useMemo(() => {
+    const next = new Set<string>();
+    for (const [subId, progress] of subscriptionProgressById.entries()) {
+      if (progress.status === 'running') next.add(subId);
+    }
+    return next;
+  }, [subscriptionProgressById]);
+  const runningQueryIds = useMemo(() => {
+    const next = new Set<string>();
+    for (const progress of subscriptionProgressById.values()) {
+      if (progress.status === 'running' && progress.query_id) next.add(progress.query_id);
+    }
+    return next;
+  }, [subscriptionProgressById]);
+  const runningSubscriptionGroupIds = useMemo(() => {
+    return new Set(subscriptionGroupProgress.keys());
+  }, [subscriptionGroupProgress]);
 
   const setSubscriptionGroupMessage = useCallback((subscriptionGroupId: string, message: string) => {
     setSubscriptionGroupActionMessage((prev) => {
