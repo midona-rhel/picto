@@ -6,7 +6,7 @@ This folder was reset for the first alpha release.
 1. `active-alpha/`: PBIs that are currently release-relevant for `v0.1.0-alpha.*`
 2. `archive/`: PBIs retained for history, not currently in alpha release scope
 
-## Active Alpha PBIs (97)
+## Active Alpha PBIs (114)
 
 1. [PBI-118](./active-alpha/PBI-118-export-in-specified-format-and-dimension.md)
 2. [PBI-123](./active-alpha/PBI-123-folder-auto-tagging.md)
@@ -102,6 +102,23 @@ This folder was reset for the first alpha release.
 95. [PBI-406](./active-alpha/PBI-406-frontend-type-safety-and-renderer-contract-cleanup.md)
 96. [PBI-407](./active-alpha/PBI-407-renderer-bootstrap-and-lifecycle-ownership-cleanup.md)
 97. [PBI-408](./active-alpha/PBI-408-split-oversized-frontend-orchestration-modules.md)
+98. [PBI-500](./active-alpha/PBI-500-big-bang-truth-rewrite-and-code-deletion-campaign.md)
+99. [PBI-501](./active-alpha/PBI-501-canonical-naming-break.md)
+100. [PBI-502](./active-alpha/PBI-502-renderer-boundary-collapse.md)
+101. [PBI-503](./active-alpha/PBI-503-runtime-contract-purge.md)
+102. [PBI-504](./active-alpha/PBI-504-frontend-state-topology-reset.md)
+103. [PBI-505](./active-alpha/PBI-505-media-entity-and-lifecycle-realignment.md)
+104. [PBI-506](./active-alpha/PBI-506-collections-as-aggregate-projection.md)
+105. [PBI-507](./active-alpha/PBI-507-tags-domain-rewrite.md)
+106. [PBI-508](./active-alpha/PBI-508-folders-and-smart-folders-simplification.md)
+107. [PBI-509](./active-alpha/PBI-509-grid-and-scope-model-unification.md)
+108. [PBI-510](./active-alpha/PBI-510-sidebar-and-navigation-read-model.md)
+109. [PBI-511](./active-alpha/PBI-511-inspector-and-metadata-consolidation.md)
+110. [PBI-512](./active-alpha/PBI-512-subscriptions-and-gallery-dl-simplification.md)
+111. [PBI-513](./active-alpha/PBI-513-ptr-internalization.md)
+112. [PBI-514](./active-alpha/PBI-514-app-shell-and-shared-layer-deletion.md)
+113. [PBI-515](./active-alpha/PBI-515-css-and-ui-primitive-consolidation.md)
+114. [PBI-516](./active-alpha/PBI-516-test-strategy-rewrite.md)
 
 ## Archived PBIs
 

@@ -23,6 +23,7 @@ import {
   type SubscriptionFinishedEvent,
   subscriptionApi,
 } from '../features/subscriptions/api';
+import { projectRuntimeTasks } from './runtimeTaskProjection';
 
 // ---------------------------------------------------------------------------
 // Derived types
@@ -262,34 +263,24 @@ export const useRuntimeSyncStore = create<RuntimeSyncState>((set, get) => ({
     set((state) => {
       const tasksById = new Map(state.tasksById);
       tasksById.set(task.task_id, task);
-      const patch: Partial<RuntimeSyncState> = { tasksById };
+      const taskProjection = projectRuntimeTasks(tasksById.values(), state.ptrBootstrapStatus);
+      const patch: Partial<RuntimeSyncState> = {
+        tasksById,
+        runningFlowIds: taskProjection.runningFlowIds,
+        flowProgressById: taskProjection.flowProgressById,
+        ptrSyncing: taskProjection.ptrSyncing,
+        ptrProgress: taskProjection.ptrProgress,
+        ptrBootstrapStatus: taskProjection.ptrBootstrapStatus,
+      };
 
-      // --- Derive flow state from task events ---
       if (task.kind === 'flow') {
-        const flowId = task.task_id.replace(/^flow:/, '');
-        const runningFlowIds = new Set(state.runningFlowIds);
-        const flowProgressById = new Map(state.flowProgressById);
-        if (isRunning) {
-          runningFlowIds.add(flowId);
-          if (task.progress) {
-            flowProgressById.set(flowId, {
-              flow_id: flowId,
-              done: task.progress.done,
-              total: task.progress.total,
-              remaining: task.progress.total - task.progress.done,
-            } as FlowProgressEvent);
-          }
-        } else if (isTerminal) {
-          runningFlowIds.delete(flowId);
-          flowProgressById.delete(flowId);
+        patch.flowEventSeq = state.flowEventSeq + 1;
+        if (isTerminal) {
           patch.lastFlowFinished = {
-            flow_id: flowId,
+            flow_id: task.task_id.replace(/^flow:/, ''),
             status: task.status === 'finished' ? 'succeeded' : 'failed',
           } as FlowFinishedEvent;
         }
-        patch.runningFlowIds = runningFlowIds;
-        patch.flowProgressById = flowProgressById;
-        patch.flowEventSeq = state.flowEventSeq + 1;
       }
 
       // --- Derive subscription state from task events ---
@@ -367,28 +358,8 @@ export const useRuntimeSyncStore = create<RuntimeSyncState>((set, get) => ({
         }
       }
 
-      // --- Derive PTR sync state from task events ---
-      if (task.kind === 'ptr_sync') {
-        patch.ptrSyncing = isRunning;
-        const detail = task.detail as Record<string, unknown> | undefined;
-        if (isRunning && detail) {
-          // Running detail is PtrSyncProgress
-          patch.ptrProgress = detail as unknown as PtrSyncProgress;
-        } else if (isTerminal && detail) {
-          // Terminal detail is PtrSyncResult
-          patch.ptrProgress = null;
-          patch.ptrLastResult = detail as unknown as PtrSyncResult;
-        } else if (!isRunning) {
-          patch.ptrProgress = null;
-        }
-      }
-
-      // --- Derive PTR bootstrap state from task events ---
-      if (task.kind === 'ptr_bootstrap') {
-        const detail = task.detail as unknown as PtrBootstrapStatus | undefined;
-        if (detail) {
-          patch.ptrBootstrapStatus = detail;
-        }
+      if (task.kind === 'ptr_sync' && isTerminal && task.detail) {
+        patch.ptrLastResult = task.detail as unknown as PtrSyncResult;
       }
 
       return patch;
@@ -442,7 +413,15 @@ export const useRuntimeSyncStore = create<RuntimeSyncState>((set, get) => ({
     set((state) => {
       const tasksById = new Map(state.tasksById);
       tasksById.delete(taskId);
-      return { tasksById };
+      const taskProjection = projectRuntimeTasks(tasksById.values(), state.ptrBootstrapStatus);
+      return {
+        tasksById,
+        runningFlowIds: taskProjection.runningFlowIds,
+        flowProgressById: taskProjection.flowProgressById,
+        ptrSyncing: taskProjection.ptrSyncing,
+        ptrProgress: taskProjection.ptrProgress,
+        ptrBootstrapStatus: taskProjection.ptrBootstrapStatus,
+      };
     });
   },
 
@@ -511,47 +490,17 @@ export const useRuntimeSyncStore = create<RuntimeSyncState>((set, get) => ({
           });
         }
 
-        // Derive flow state from runtime tasks
-        const runningFlowIds = new Set<string>();
-        const flowProgressById = new Map<string, FlowProgressEvent>();
-        // Derive PTR state from runtime tasks
-        let ptrSyncing = false;
-        let ptrProgress: PtrSyncProgress | null = null;
-        let ptrBootstrapStatus: PtrBootstrapStatus | null = state.ptrBootstrapStatus;
-
-        for (const task of state.tasksById.values()) {
-          if (task.kind === 'flow') {
-            const flowId = task.task_id.replace(/^flow:/, '');
-            if (task.status === 'running' || task.status === 'cancelling') {
-              runningFlowIds.add(flowId);
-              if (task.progress) {
-                flowProgressById.set(flowId, {
-                  flow_id: flowId,
-                  done: task.progress.done,
-                  total: task.progress.total,
-                  remaining: task.progress.total - task.progress.done,
-                } as FlowProgressEvent);
-              }
-            }
-          } else if (task.kind === 'ptr_sync') {
-            if (task.status === 'running' || task.status === 'cancelling') {
-              ptrSyncing = true;
-              if (task.detail) ptrProgress = task.detail as unknown as PtrSyncProgress;
-            }
-          } else if (task.kind === 'ptr_bootstrap') {
-            if (task.detail) ptrBootstrapStatus = task.detail as unknown as PtrBootstrapStatus;
-          }
-        }
+        const taskProjection = projectRuntimeTasks(state.tasksById.values(), state.ptrBootstrapStatus);
 
         return {
-          ptrSyncing,
-          ptrProgress,
-          ptrBootstrapStatus,
+          ptrSyncing: taskProjection.ptrSyncing,
+          ptrProgress: taskProjection.ptrProgress,
+          ptrBootstrapStatus: taskProjection.ptrBootstrapStatus,
           runningSubscriptionIds,
           runningQueryIds,
           subscriptionProgressById,
-          runningFlowIds,
-          flowProgressById,
+          runningFlowIds: taskProjection.runningFlowIds,
+          flowProgressById: taskProjection.flowProgressById,
         };
       });
     } catch (error) {
