@@ -6,7 +6,7 @@ This folder tracks the current active alpha backlog.
 1. `active-alpha/`: PBIs that are currently active
 2. `archive/`: PBIs kept for history or deferred work
 
-## Active Alpha PBIs (88)
+## Active Alpha PBIs (89)
 
 1. [PBI-118](./active-alpha/PBI-118-export-in-specified-format-and-dimension.md)
 2. [PBI-123](./active-alpha/PBI-123-folder-auto-tagging.md)
@@ -80,10 +80,11 @@ This folder tracks the current active alpha backlog.
 70. [PBI-348](./active-alpha/PBI-348-root-controller-collapse-and-alias-purge.md)
 71. [PBI-349](./active-alpha/PBI-349-backend-monolith-tail-breakup-and-deletion-campaign.md)
 72. [PBI-350](./active-alpha/PBI-350-backend-topology-enforcement-and-ci-guardrails.md)
-73. [PBI-500](./active-alpha/PBI-500-big-bang-truth-rewrite-and-code-deletion-campaign.md)
-74. [PBI-501](./active-alpha/PBI-501-canonical-naming-break.md)
-75. [PBI-502](./active-alpha/PBI-502-renderer-boundary-collapse.md)
-76. [PBI-503](./active-alpha/PBI-503-runtime-contract-purge.md)
+73. [PBI-352](./active-alpha/PBI-352-backend-mutationimpact-emitter-purge.md)
+74. [PBI-500](./active-alpha/PBI-500-big-bang-truth-rewrite-and-code-deletion-campaign.md)
+75. [PBI-501](./active-alpha/PBI-501-canonical-naming-break.md)
+76. [PBI-502](./active-alpha/PBI-502-renderer-boundary-collapse.md)
+77. [PBI-503](./active-alpha/PBI-503-runtime-contract-purge.md)
 77. [PBI-504](./active-alpha/PBI-504-frontend-state-topology-reset.md)
 78. [PBI-505](./active-alpha/PBI-505-media-entity-and-lifecycle-realignment.md)
 79. [PBI-506](./active-alpha/PBI-506-collections-as-aggregate-projection.md)
