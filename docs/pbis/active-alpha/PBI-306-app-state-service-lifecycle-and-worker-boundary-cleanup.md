@@ -3,15 +3,16 @@
 ## Priority
 P1
 
-## Audit Status (2026-03-07)
-Status: **Not Implemented**
+## Audit Status (2026-03-08)
+Status: **Implemented**
 
-Evidence:
-1. `core/src/state.rs` owns the global singleton, library switching, worker spawning, compiler wiring, PTR path selection, cancellation, and scheduler startup.
-2. `AppState` currently acts as both domain service container and process lifecycle coordinator.
-3. Background worker startup is partially wired directly inside `open_library()`.
-4. The compiler loop emits frontend-facing state events directly from the startup path.
-5. Library open/close semantics are difficult to test in isolation because service construction and worker orchestration are intertwined.
+### Delivered
+- Extracted scheduler logic (`check_scheduled_flows`, `check_scheduled_ptr_sync`) into `core/src/scheduler.rs`
+- Extracted worker spawning (`start_workers`) and shutdown (`stop_workers`) into `core/src/workers.rs`
+- `state.rs` reduced from 543 to 249 lines — now a pure service container + lifecycle coordinator
+- `open_library()` service construction is cleanly separated from worker orchestration
+- `close_library_inner()` delegates worker shutdown to `stop_workers()`
+- All 302 Rust tests pass, TypeScript clean
 
 ## Problem
 `state.rs` is a service locator plus a process supervisor plus a lifecycle controller. This makes global state brittle, obscures service boundaries, and makes shutdown/restart behavior harder to reason about than it should be.

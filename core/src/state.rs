@@ -10,12 +10,10 @@ use std::sync::{Arc, OnceLock, RwLock};
 
 use tokio_util::sync::CancellationToken;
 
-use tokio::sync::mpsc;
-
 use crate::blob_store::BlobStore;
 use crate::rate_limiter::RateLimiter;
 use crate::settings::store::SettingsStore;
-use crate::sqlite::{CompilerEvent, SqliteDatabase};
+use crate::sqlite::SqliteDatabase;
 use crate::ptr::db::PtrSqliteDatabase;
 use crate::types::{RunningSubscriptions, SubTerminalStatuses};
 
@@ -166,116 +164,17 @@ pub async fn open_library(library_root: PathBuf) -> Result<Arc<AppState>, String
         Arc::new(tokio::sync::Mutex::new(HashMap::new()));
 
     let cancel = CancellationToken::new();
-    let mut worker_handles: Vec<(&'static str, tokio::task::JoinHandle<()>)> = Vec::new();
 
-    let compiler_db = library_db.clone();
-    let compiler_ptr = ptr_db.clone();
-    if let Some(rx) = compiler_db.take_compiler_rx().await {
-        let handle = tokio::spawn(crate::sqlite::compilers::start_compiler_loop(
-            compiler_db.clone(),
-            Some(compiler_ptr),
-            rx,
-            |result| {
-                let mut domains = Vec::new();
-                if result.sidebar_affected {
-                    domains.push(crate::events::Domain::Sidebar);
-                }
-                if result.smart_folders_rebuilt {
-                    domains.push(crate::events::Domain::SmartFolders);
-                }
-                let mut impact = crate::events::MutationImpact::new()
-                    .domains(&domains);
-                impact.compiler_batch_done = Some(true);
-                if result.smart_folders_rebuilt {
-                    impact = impact.extra_grid_scopes(vec!["system:all".into()]);
-                }
-                crate::events::emit_mutation("compiler_batch_done", impact);
-            },
-        ));
-        worker_handles.push(("compiler_loop", handle));
-    }
-
-    library_db.emit_compiler_event(crate::sqlite::CompilerEvent::RebuildAll);
-
-    {
-        let flush_db = library_db.clone();
-        let flush_cancel = cancel.clone();
-        let handle = tokio::spawn(async move {
-            loop {
-                tokio::select! {
-                    _ = tokio::time::sleep(std::time::Duration::from_secs(30)) => {}
-                    _ = flush_cancel.cancelled() => {
-                        tracing::info!("Bitmap flush loop cancelled");
-                        // Final flush before exiting
-                        let _ = flush_db.flush().await;
-                        return;
-                    }
-                }
-                if let Err(e) = flush_db.flush().await {
-                    tracing::warn!("Periodic flush failed: {e}");
-                }
-            }
-        });
-        worker_handles.push(("bitmap_flush", handle));
-    }
-
-    {
-        let sched_db = library_db.clone();
-        let sched_blob = blob_store.clone();
-        let sched_rl = rate_limiter.clone();
-        let sched_running = running_subscriptions.clone();
-        let sched_terminal = sub_terminal_statuses.clone();
-        let sched_ptr_db = ptr_db.clone();
-        let sched_cancel = cancel.clone();
-        let handle = tokio::spawn(async move {
-            // Startup delay — let the app settle before checking schedules
-            tokio::select! {
-                _ = tokio::time::sleep(std::time::Duration::from_secs(10)) => {}
-                _ = sched_cancel.cancelled() => {
-                    tracing::info!("Flow scheduler cancelled during startup delay");
-                    return;
-                }
-            }
-
-            // Immediate PTR check on startup — start initial population ASAP
-            if let Ok(state) = get_state() {
-                check_scheduled_ptr_sync(
-                    &sched_ptr_db,
-                    &state.settings,
-                    state.db.compiler_tx.clone(),
-                )
-                .await;
-            }
-
-            loop {
-                tokio::select! {
-                    _ = tokio::time::sleep(std::time::Duration::from_secs(60)) => {}
-                    _ = sched_cancel.cancelled() => {
-                        tracing::info!("Flow scheduler cancelled");
-                        return;
-                    }
-                }
-                if let Ok(state) = get_state() {
-                    check_scheduled_flows(
-                        &sched_db,
-                        &sched_blob,
-                        &sched_rl,
-                        &sched_running,
-                        &sched_terminal,
-                        &state.settings,
-                    )
-                    .await;
-                    check_scheduled_ptr_sync(
-                        &sched_ptr_db,
-                        &state.settings,
-                        state.db.compiler_tx.clone(),
-                    )
-                    .await;
-                }
-            }
-        });
-        worker_handles.push(("flow_scheduler", handle));
-    }
+    let worker_handles = crate::workers::start_workers(
+        &library_db,
+        &ptr_db,
+        &blob_store,
+        &rate_limiter,
+        &running_subscriptions,
+        &sub_terminal_statuses,
+        &cancel,
+    )
+    .await;
 
     let state = Arc::new(AppState {
         db: library_db,
@@ -297,10 +196,6 @@ pub async fn open_library(library_root: PathBuf) -> Result<Arc<AppState>, String
         *guard = Some(state.clone());
     }
 
-    crate::ptr::controller::PtrController::start_background_startup_maintenance(
-        state.ptr_db.clone(),
-    );
-
     Ok(state)
 }
 
@@ -320,9 +215,6 @@ pub async fn close_library() -> Result<(), String> {
     close_library_inner().await;
     Ok(())
 }
-
-/// Shutdown timeout for joining background workers.
-const SHUTDOWN_JOIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
 async fn close_library_inner() {
     let old_state = {
@@ -345,198 +237,12 @@ async fn close_library_inner() {
             let mut guard = state.worker_handles.lock().await;
             std::mem::take(&mut *guard)
         };
-
-        if !handles.is_empty() {
-            tracing::info!(count = handles.len(), "Awaiting background worker shutdown");
-            let join_all = async {
-                for (name, handle) in handles {
-                    match handle.await {
-                        Ok(()) => tracing::debug!(worker = name, "Worker shut down cleanly"),
-                        Err(e) => tracing::warn!(worker = name, error = %e, "Worker join failed"),
-                    }
-                }
-            };
-
-            if tokio::time::timeout(SHUTDOWN_JOIN_TIMEOUT, join_all)
-                .await
-                .is_err()
-            {
-                tracing::warn!(
-                    timeout_secs = SHUTDOWN_JOIN_TIMEOUT.as_secs(),
-                    "Some workers did not shut down within timeout"
-                );
-            }
-        }
+        crate::workers::stop_workers(handles).await;
 
         if let Err(e) = state.db.flush().await {
             tracing::warn!("Final flush on close failed: {e}");
         }
 
         tracing::info!("Library closed");
-    }
-}
-
-/// Check all flows for overdue scheduled runs and trigger them.
-async fn check_scheduled_flows(
-    db: &Arc<SqliteDatabase>,
-    blob_store: &Arc<BlobStore>,
-    rate_limiter: &RateLimiter,
-    running_subs: &RunningSubscriptions,
-    sub_terminal_statuses: &SubTerminalStatuses,
-    settings: &crate::settings::store::SettingsStore,
-) {
-    let flows = match db.list_flows().await {
-        Ok(f) => f,
-        Err(e) => {
-            tracing::warn!("Scheduler: failed to list flows: {e}");
-            return;
-        }
-    };
-
-    for flow in flows {
-        if flow.schedule == "manual" {
-            continue;
-        }
-
-        let interval_secs: i64 = match flow.schedule.as_str() {
-            "daily" => 86_400,
-            "weekly" => 604_800,
-            "monthly" => 2_592_000, // 30 days
-            _ => continue,
-        };
-
-        let subs = match db.list_subscriptions_for_flow(flow.flow_id).await {
-            Ok(s) => s,
-            Err(_) => continue,
-        };
-
-        if subs.is_empty() {
-            continue;
-        }
-
-        let mut latest_check: Option<chrono::DateTime<chrono::Utc>> = None;
-        let mut has_any_queries = false;
-        for sub in &subs {
-            let queries = match db.get_subscription_queries(sub.subscription_id).await {
-                Ok(q) => q,
-                Err(_) => continue,
-            };
-            for q in &queries {
-                has_any_queries = true;
-                if let Some(ref t) = q.last_check_time {
-                    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(t) {
-                        let utc = dt.with_timezone(&chrono::Utc);
-                        latest_check = Some(
-                            latest_check
-                                .map_or(utc, |prev: chrono::DateTime<chrono::Utc>| prev.max(utc)),
-                        );
-                    }
-                }
-            }
-        }
-
-        if !has_any_queries {
-            continue;
-        }
-
-        let now = chrono::Utc::now();
-        let is_overdue = match latest_check {
-            None => true, // Never ran
-            Some(last) => (now - last).num_seconds() >= interval_secs,
-        };
-
-        if is_overdue {
-            let flow_id_str = flow.flow_id.to_string();
-            tracing::info!(
-                flow_id = flow.flow_id,
-                name = %flow.name,
-                schedule = %flow.schedule,
-                "Scheduler: running overdue flow"
-            );
-            if let Err(e) = crate::subscriptions::flow_controller::FlowController::run_flow(
-                db,
-                blob_store,
-                rate_limiter,
-                running_subs,
-                sub_terminal_statuses,
-                flow_id_str,
-                settings,
-            )
-            .await
-            {
-                tracing::warn!(
-                    flow_id = flow.flow_id,
-                    "Scheduler: failed to start flow: {e}"
-                );
-            }
-        }
-    }
-}
-
-/// Check if PTR needs syncing — either initial population or scheduled auto-sync.
-async fn check_scheduled_ptr_sync(
-    ptr_db: &Arc<PtrSqliteDatabase>,
-    settings: &SettingsStore,
-    compiler_tx: mpsc::UnboundedSender<CompilerEvent>,
-) {
-    let s = settings.get();
-
-    if !s.ptr_enabled {
-        return;
-    }
-
-    // Short-circuit when any PTR heavy phase is running (PBI-024).
-    if crate::ptr::controller::PtrController::is_ptr_busy_for_scheduler() {
-        return;
-    }
-
-    // Don't hammer the server — back off after failed attempts
-    if crate::ptr::controller::PtrController::is_auto_sync_cooling_down() {
-        return;
-    }
-
-    // Force sync if PTR has never completed initial population,
-    // regardless of auto_sync or schedule settings.
-    if s.ptr_last_sync_time.is_none() {
-        tracing::info!("PTR has never completed initial population — starting sync");
-        if let Err(e) =
-            crate::ptr::controller::PtrController::sync(ptr_db, settings, compiler_tx).await
-        {
-            tracing::warn!("Failed to start PTR initial population sync: {e}");
-        }
-        return;
-    }
-
-    // Regular auto-sync: requires auto_sync enabled + valid schedule
-    if !s.ptr_auto_sync {
-        return;
-    }
-
-    let interval_secs: i64 = match s.ptr_sync_schedule.as_str() {
-        "daily" => 86_400,
-        "weekly" => 604_800,
-        "monthly" => 2_592_000,
-        _ => return,
-    };
-
-    let now = chrono::Utc::now();
-    let is_overdue = match &s.ptr_last_sync_time {
-        Some(t) => match chrono::DateTime::parse_from_rfc3339(t) {
-            Ok(last) => (now - last.with_timezone(&chrono::Utc)).num_seconds() >= interval_secs,
-            Err(_) => true,
-        },
-        None => unreachable!(), // Handled above
-    };
-
-    if is_overdue {
-        tracing::info!(
-            schedule = %s.ptr_sync_schedule,
-            "Scheduler: running overdue PTR sync"
-        );
-        if let Err(e) =
-            crate::ptr::controller::PtrController::sync(ptr_db, settings, compiler_tx).await
-        {
-            tracing::warn!("Scheduler: failed to start PTR sync: {e}");
-        }
     }
 }

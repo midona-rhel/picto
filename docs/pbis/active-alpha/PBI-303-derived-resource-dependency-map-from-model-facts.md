@@ -3,8 +3,16 @@
 ## Priority
 P0
 
-## Audit Status (2026-03-07)
-Status: **Not Implemented**
+## Audit Status (2026-03-08)
+Status: **Implemented**
+
+### Delivered
+- Unit tests for `deriveStaleResources()` (29 tests) covering all fact types, domain fallbacks, combined facts, scope matching
+- Unit tests for `derive_invalidation()` (15 Rust tests) confirming Rust/TypeScript parity
+- Removed `applyMutationEffects` and all callers (FolderController, SmartFolderController, fileLifecycleActions, useGridFeatureState, imageActions)
+- Deleted `mutationEffects.ts` entirely
+- Migrated library-switched handler from direct invalidation to `markResourcesStale` via resource system
+- All resource invalidation now flows through `deriveStaleResources()` → resource refreshers
 
 ## Problem
 The system currently treats invalidation as if the UI is the model:

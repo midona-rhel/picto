@@ -1,19 +1,3 @@
-const INGEST_ALLOWED_NAMESPACES = new Set<string>([
-  'creator',
-  'studio',
-  'character',
-  'person',
-  'series',
-  'species',
-  'meta',
-  'system',
-  'artist',
-  'copyright',
-  'general',
-  'rating',
-  'source',
-]);
-
 function isValidNamespaceCandidate(value: string): boolean {
   if (!value) return true;
   const first = value[0];
@@ -26,8 +10,11 @@ function isValidNamespaceCandidate(value: string): boolean {
 }
 
 /**
- * Parse a tag display/raw string with backend-compatible namespace semantics.
- * Unknown namespace prefixes are treated as literal tag text.
+ * Parse a tag display/raw string with backend `parse_tag`-compatible semantics.
+ *
+ * This is intentionally generic parser behavior, not ingest policy. The backend
+ * may coerce unknown namespaces to literals on external ingest paths, but the
+ * renderer should not re-apply that rule to already-stored or user-entered tags.
  */
 export function parseTagString(rawTag: string): { namespace: string; subtag: string } {
   const idx = rawTag.indexOf(':');
@@ -35,11 +22,6 @@ export function parseTagString(rawTag: string): { namespace: string; subtag: str
 
   const candidate = rawTag.slice(0, idx);
   if (!isValidNamespaceCandidate(candidate)) {
-    return { namespace: '', subtag: rawTag };
-  }
-
-  const lowered = candidate.toLowerCase();
-  if (!INGEST_ALLOWED_NAMESPACES.has(lowered)) {
     return { namespace: '', subtag: rawTag };
   }
 

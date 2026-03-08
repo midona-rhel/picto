@@ -24,7 +24,7 @@ import type {
   ImportResult,
   TagDisplay, TagSearchResult, TagTuple, TagRecord,
   NamespaceSummary, TagRelation,
-  RenameTagResult, DeleteTagResult, NormalizeNamespacesResult,
+  RenameTagResult, DeleteTagResult,
   SelectionQuerySpec, SelectionSummary,
   Folder, FolderMembership, FolderReorderMove,
   SmartFolder, SmartFolderPredicate, SmartFolderIpcInput,
@@ -190,8 +190,6 @@ export const api = {
       invokeTyped('rename_tag', { tag_id: tagId, new_name: newName }) as Promise<RenameTagResult>,
     delete: (tagId: number) =>
       invokeTyped('delete_tag', { tag_id: tagId }) as Promise<DeleteTagResult>,
-    normalizeNamespaces: () =>
-      invokeTyped('normalize_ingested_namespaces') as Promise<NormalizeNamespacesResult>,
     searchPaged: (query: string, limit: number, offset: number) =>
       invokeTyped('search_tags_paged', { query, limit, offset } as never) as Promise<[string, string, number][]>,
   },

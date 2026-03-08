@@ -4,6 +4,17 @@
 
 Tags are the primary organizational primitive. Every file can have zero or more `(namespace, subtag)` pairs stored in the `entity_tag_raw` junction table. Tags support hierarchical organization via parent relationships, display aliasing via siblings, and search via FTS5.
 
+## Blunt Rule
+
+Tag logic has been trying to do too many jobs at once.
+
+There should be only two real rules:
+
+1. generic tag parsing and normalization for stored or user-entered tags
+2. optional ingest-time coercion for external sources
+
+The mistake is letting ingest policy leak into general renderer parsing and general tag behavior. That is how a simple domain gets weird.
+
 ## Tag Normalization Pipeline
 
 All tag strings pass through a cleaning pipeline ported from Hydrus (HydrusTags.py):
@@ -17,6 +28,8 @@ All tag strings pass through a cleaning pipeline ported from Hydrus (HydrusTags.
 
 - **`parse_tag(raw) -> Option<(String, String)>`** — full `clean_tag` + `split_tag`. Used for all local operations (user input, DB lookups, search queries).
 - **`parse_tag_ingest(raw) -> Option<(String, String)>`** — full `clean_tag` + `split_tag` + namespace allowlist check. Unknown namespaces are coerced to unnamespaced literals (`foo:bar` → `("", "foo:bar")`). Used for external sources (import, subscription, PTR feeds).
+
+That distinction needs to stay backend-only. The frontend should parse tags using the generic rule, not the ingest rule.
 
 ### Ingest Namespace Allowlist
 
@@ -44,9 +57,16 @@ All tag strings pass through a cleaning pipeline ported from Hydrus (HydrusTags.
 - Hangul filler character (U+3164) is only stripped when the tag text does NOT contain actual Hangul characters — this preserves valid Hangul tags while removing invisible filler from Latin text.
 - Zero-width joiners are stripped only from Latin-only text to preserve valid use in scripts like Devanagari.
 
+## Current Over-Complexity
+
+1. The Hydrus-derived cleaning rules may be justified for compatibility, but they are already expensive complexity.
+2. Site-specific metadata extraction in subscription ingest is a separate concern and should not become general tag semantics.
+3. Renderer code should not re-decide whether a namespace is "allowed" after the backend has already stored the tag.
+4. If a tag contains a literal colon and should remain literal, ingest should coerce it once. The rest of the system should stop being clever.
+
 ## Key Files
 
-- `core/src/tags.rs` — normalization pipeline, `parse_tag`, `parse_tag_ingest`
-- `core/src/sqlite/tags.rs` — tag CRUD, FTS5 search, sibling/parent operations, batch tagging
-- `core/src/tag_controller.rs` — orchestration layer for dispatch
+- `core/src/tags/normalize.rs` — normalization pipeline, `parse_tag`, `parse_tag_ingest`
+- `core/src/tags/db.rs` — tag CRUD, FTS5 search, sibling/parent operations, batch tagging
+- `core/src/tags/controller.rs` — orchestration layer for dispatch
 - `core/src/dispatch/typed/tags.rs` — typed command handlers

@@ -109,7 +109,6 @@ export function TagManager() {
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const loadingMoreRef = useRef(false);
-  const normalizeRanRef = useRef(false);
 
   useLayoutEffect(() => {
     const el = scrollRef.current;
@@ -240,14 +239,6 @@ export function TagManager() {
     let cancelled = false;
     (async () => {
       setLoading(true);
-      if (source === 'local' && !normalizeRanRef.current) {
-        normalizeRanRef.current = true;
-        try {
-          await api.tags.normalizeNamespaces();
-        } catch (err) {
-          console.warn('Namespace normalization command failed:', err);
-        }
-      }
       await fetchNamespaces();
       await fetchTags();
       if (!cancelled) setLoading(false);

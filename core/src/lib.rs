@@ -31,6 +31,8 @@ pub mod poison;
 pub mod rate_limiter;
 pub mod runtime_contract;
 pub mod runtime_state;
+pub mod scheduler;
 pub mod sqlite;
 pub mod state;
 pub mod types;
+pub mod workers;
