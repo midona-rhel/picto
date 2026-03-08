@@ -260,6 +260,25 @@ impl MutationImpact {
             .domains(&[Domain::ViewPrefs])
             .view_prefs_changed()
     }
+
+    /// Compiler publish completion. Transitional compatibility shape until
+    /// compiler-side publication facts are fully explicit.
+    pub fn compiler_publish(sidebar_affected: bool, smart_folders_rebuilt: bool) -> Self {
+        let mut domains = Vec::new();
+        if sidebar_affected {
+            domains.push(Domain::Sidebar);
+        }
+        if smart_folders_rebuilt {
+            domains.push(Domain::SmartFolders);
+        }
+
+        let mut impact = Self::new().domains(&domains);
+        impact.compiler_batch_done = Some(true);
+        if smart_folders_rebuilt {
+            impact = impact.extra_grid_scopes(vec!["system:all".into()]);
+        }
+        impact
+    }
 }
 
 /// Emit a `runtime/mutation_committed` event with a `MutationReceipt`.

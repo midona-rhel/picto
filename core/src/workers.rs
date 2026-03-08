@@ -39,20 +39,13 @@ pub async fn start_workers(
                 compiler_db.clone(),
                 rx,
                 |result| {
-                    let mut domains = Vec::new();
-                    if result.sidebar_affected {
-                        domains.push(crate::events::Domain::Sidebar);
-                    }
-                    if result.smart_folders_rebuilt {
-                        domains.push(crate::events::Domain::SmartFolders);
-                    }
-                    let mut impact = crate::events::MutationImpact::new()
-                        .domains(&domains);
-                    impact.compiler_batch_done = Some(true);
-                    if result.smart_folders_rebuilt {
-                        impact = impact.extra_grid_scopes(vec!["system:all".into()]);
-                    }
-                    crate::events::emit_mutation("compiler_batch_done", impact);
+                    crate::events::emit_mutation(
+                        "compiler_batch_done",
+                        crate::events::MutationImpact::compiler_publish(
+                            result.sidebar_affected,
+                            result.smart_folders_rebuilt,
+                        ),
+                    );
                 },
             ));
             handles.push(("compiler_loop", handle));
