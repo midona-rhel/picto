@@ -144,6 +144,7 @@ describe('context action registries', () => {
       handleRemoveFromFolder: () => {},
       handleRemoveFromCollection: () => {},
       handleInboxAction: () => {},
+      handleInboxSelectionAction: () => {},
       handleCopyTags: () => {},
       handlePasteTags: () => {},
       hasCopiedTags: false,
@@ -187,6 +188,7 @@ describe('context action registries', () => {
       handleRemoveFromFolder: () => {},
       handleRemoveFromCollection: () => {},
       handleInboxAction: () => {},
+      handleInboxSelectionAction: () => {},
       handleCopyTags: () => {},
       handlePasteTags: () => {},
       hasCopiedTags: false,
@@ -214,5 +216,68 @@ describe('context action registries', () => {
     expect(singleLabels).toContain('Open');
     expect(singleLabels).toContain('Open With Default App');
     expect(collectionLabels).toContain('Edit Collection');
+  });
+
+  it('shows bulk inbox actions for multi-selection in inbox scope', () => {
+    const items = buildGridImageContextMenu({
+      contextPoint: { x: 10, y: 10 },
+      isMac: false,
+      state: {
+        selectedHashes: new Set<string>(['a', 'b']),
+        virtualAllSelection: null,
+        virtualAllSelectedCount: 2,
+        images: [
+          { hash: 'a', status: 'inbox', mime: 'image/jpeg', name: 'a' },
+          { hash: 'b', status: 'inbox', mime: 'image/jpeg', name: 'b' },
+        ],
+      } as never,
+      stateRef: {
+        current: {
+          selectedHashes: new Set<string>(['a', 'b']),
+          virtualAllSelection: null,
+          images: [
+            { hash: 'a', status: 'inbox', mime: 'image/jpeg', name: 'a' },
+            { hash: 'b', status: 'inbox', mime: 'image/jpeg', name: 'b' },
+          ],
+        },
+      } as never,
+      imagesRef: { current: [] } as never,
+      dispatch: vi.fn(),
+      viewMode: 'waterfall',
+      sortField: 'imported_at',
+      sortOrder: 'desc',
+      statusFilter: 'inbox',
+      effectiveSelectedHashes: new Set<string>(['a', 'b']),
+      activateVirtualSelectAll: () => {},
+      handleDeleteSelected: () => {},
+      handleRestoreSelected: () => {},
+      handleRemoveFromFolder: () => {},
+      handleRemoveFromCollection: () => {},
+      handleInboxAction: () => {},
+      handleInboxSelectionAction: () => {},
+      handleCopyTags: () => {},
+      handlePasteTags: () => {},
+      hasCopiedTags: false,
+      handleOpenDetail: () => {},
+      navigateToCollection: () => {},
+      setRenameValue: () => {},
+      setRenamingHash: () => {},
+      renameCancelledRef: { current: false },
+      setBatchRenameOpen: () => {},
+      requestGridReload: () => {},
+      rightClickedHash: 'a',
+      wasAlreadySelected: true,
+      hasSelection: true,
+      singleHash: null,
+      singleImage: null,
+      singleIsCollection: false,
+      singleCollectionId: null,
+      effectiveVirtual: null,
+      effectiveSize: 2,
+    });
+
+    const itemLabels = labels(items);
+    expect(itemLabels).toContain('Accept 2 Images');
+    expect(itemLabels).toContain('Reject 2 Images');
   });
 });

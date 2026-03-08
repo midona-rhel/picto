@@ -25,6 +25,7 @@ interface GridMutationActions {
   handleRateSelected: (rating: number) => void;
   handleRestoreSelected: () => void;
   handleInboxAction: (hash: string, status: 'active' | 'trash') => void;
+  handleInboxSelectionAction: (status: 'active' | 'trash') => void;
   handleRemoveFromFolder: () => void;
   handleRemoveFromCollection: () => void;
 }
@@ -231,6 +232,75 @@ export function useGridMutationActions({
     dispatch({ type: 'REMOVE_HASHES', hashes: new Set([hash]) });
   }, [dispatch, requestGridReload]);
 
+  const handleInboxSelectionAction = useCallback((status: 'active' | 'trash') => {
+    const { virtualAllSelection, selectedHashes } = stateRef.current;
+    const actionVerb = status === 'active' ? 'Accept' : 'Reject';
+    const actionPast = status === 'active' ? 'Accepted' : 'Rejected';
+
+    if (virtualAllSelection) {
+      const spec = selectVirtualSpec(stateRef.current);
+      if (!spec) return;
+      const specSnapshot = structuredClone(spec);
+      dispatch({
+        type: 'FILTER_IMAGES',
+        predicate: (i) => virtualAllSelection.excludedHashes.has(i.hash),
+      });
+      dispatch({ type: 'CLEAR_SELECTION' });
+      api.file.setStatusSelection(spec, status)
+        .then((count) => {
+          const affectedCount = Number(count ?? 0);
+          registerUndoAction({
+            label: `${actionVerb} ${affectedCount.toLocaleString()} inbox image${affectedCount === 1 ? '' : 's'}`,
+            undo: async () => {
+              await api.file.setStatusSelection(specSnapshot, 'inbox');
+              requestGridReload();
+            },
+            redo: async () => {
+              await api.file.setStatusSelection(specSnapshot, status);
+              requestGridReload();
+            },
+          });
+          notifyInfo(
+            `${actionPast} ${affectedCount.toLocaleString()} image${affectedCount === 1 ? '' : 's'}`,
+            actionPast,
+          );
+        })
+        .catch((err) => {
+          notifyError(err, status === 'active' ? 'Accept Failed' : 'Reject Failed');
+        });
+      return;
+    }
+
+    const hashes = Array.from(selectedHashes);
+    if (hashes.length === 0) return;
+    const explicitSpec = buildExplicitSelectionSpec(hashes);
+    const hashSet = new Set(hashes);
+    dispatch({ type: 'FILTER_IMAGES', predicate: (i) => !hashSet.has(i.hash) });
+    dispatch({ type: 'CLEAR_SELECTION' });
+    api.file.setStatusSelection(explicitSpec, status)
+      .then((count) => {
+        const affectedCount = Number(count ?? hashes.length);
+        registerUndoAction({
+          label: `${actionVerb} ${affectedCount.toLocaleString()} inbox image${affectedCount === 1 ? '' : 's'}`,
+          undo: async () => {
+            await api.file.setStatusSelection(explicitSpec, 'inbox');
+            requestGridReload();
+          },
+          redo: async () => {
+            await api.file.setStatusSelection(explicitSpec, status);
+            requestGridReload();
+          },
+        });
+        notifyInfo(
+          `${actionPast} ${affectedCount.toLocaleString()} image${affectedCount === 1 ? '' : 's'}`,
+          actionPast,
+        );
+      })
+      .catch((err) => {
+        notifyError(err, status === 'active' ? 'Accept Failed' : 'Reject Failed');
+      });
+  }, [dispatch, requestGridReload, stateRef]);
+
   const handleRemoveFromFolder = useCallback(() => {
     if (!folderId) return;
     const effective = selectEffectiveHashes(stateRef.current);
@@ -288,6 +358,7 @@ export function useGridMutationActions({
     handleRateSelected,
     handleRestoreSelected,
     handleInboxAction,
+    handleInboxSelectionAction,
     handleRemoveFromFolder,
     handleRemoveFromCollection,
   };

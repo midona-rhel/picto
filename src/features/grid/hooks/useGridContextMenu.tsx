@@ -34,6 +34,7 @@ interface UseGridContextMenuArgs {
   handleRemoveFromFolder: () => void;
   handleRemoveFromCollection: () => void;
   handleInboxAction: (hash: string, status: 'active' | 'trash') => void;
+  handleInboxSelectionAction: (status: 'active' | 'trash') => void;
   handleCopyTags: () => void;
   handlePasteTags: () => void;
   hasCopiedTags: boolean;
@@ -74,6 +75,7 @@ export function useGridContextMenu({
   handleRemoveFromFolder,
   handleRemoveFromCollection,
   handleInboxAction,
+  handleInboxSelectionAction,
   handleCopyTags,
   handlePasteTags,
   hasCopiedTags,
@@ -158,6 +160,7 @@ export function useGridContextMenu({
       handleRemoveFromFolder,
       handleRemoveFromCollection,
       handleInboxAction,
+      handleInboxSelectionAction,
       handleCopyTags,
       handlePasteTags,
       hasCopiedTags,
@@ -198,6 +201,7 @@ export function useGridContextMenu({
     handleRestoreSelected,
     handleRemoveFromFolder,
     handleInboxAction,
+    handleInboxSelectionAction,
     statusFilter,
     state.images,
     contextMenu,

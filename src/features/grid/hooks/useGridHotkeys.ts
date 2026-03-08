@@ -41,6 +41,7 @@ interface UseGridHotkeysArgs {
   closeViewer: (exitHash?: string) => void;
   statusFilter?: string | null;
   handleInboxAction?: (hash: string, status: 'active' | 'trash') => void;
+  handleInboxSelectionAction?: (status: 'active' | 'trash') => void;
 }
 
 export function useGridHotkeys({
@@ -72,6 +73,7 @@ export function useGridHotkeys({
   closeViewer,
   statusFilter,
   handleInboxAction,
+  handleInboxSelectionAction,
 }: UseGridHotkeysArgs): void {
   const handleGridNavigationRef = useRef(handleGridNavigation);
   handleGridNavigationRef.current = handleGridNavigation;
@@ -80,7 +82,6 @@ export function useGridHotkeys({
   handleRenameRef.current = startInlineRename;
 
   useHotkeys([
-    ['mod+f', () => console.log('Focus search')],
     ['mod+a', () => activateVirtualSelectAll()],
     ['shift+Enter', handleOpenWithDefaultApp],
     ['mod+Enter', handleRevealInFolder],
@@ -226,6 +227,8 @@ export function useGridHotkeys({
   statusFilterRef.current = statusFilter;
   const handleInboxActionRef = useRef(handleInboxAction);
   handleInboxActionRef.current = handleInboxAction;
+  const handleInboxSelectionActionRef = useRef(handleInboxSelectionAction);
+  handleInboxSelectionActionRef.current = handleInboxSelectionAction;
   const viewerOpenRef = useRef(viewerOpen);
   viewerOpenRef.current = viewerOpen;
   useEffect(() => {
@@ -263,17 +266,23 @@ export function useGridHotkeys({
         }
       }
 
-      // Inbox reject from grid — Backspace rejects selected image(s)
+      // Inbox accept/reject from grid — apply to the current selection.
       if (statusFilterRef.current === 'inbox' && handleInboxActionRef.current) {
+        const acceptDef = getShortcut('inbox.accept');
+        if (acceptDef && matchesShortcutDef(e, acceptDef)) {
+          const s = stateRef.current;
+          if ((s.virtualAllSelection || s.selectedHashes.size > 0) && handleInboxSelectionActionRef.current) {
+            e.preventDefault();
+            handleInboxSelectionActionRef.current('active');
+            return;
+          }
+        }
         const rejectDef = getShortcut('inbox.reject');
         if (rejectDef && matchesShortcutDef(e, rejectDef)) {
           const s = stateRef.current;
-          const hashes = s.virtualAllSelection
-            ? s.images.filter((i) => !s.virtualAllSelection!.excludedHashes.has(i.hash)).map((i) => i.hash)
-            : [...s.selectedHashes];
-          if (hashes.length > 0) {
+          if ((s.virtualAllSelection || s.selectedHashes.size > 0) && handleInboxSelectionActionRef.current) {
             e.preventDefault();
-            for (const hash of hashes) handleInboxActionRef.current!(hash, 'trash');
+            handleInboxSelectionActionRef.current('trash');
           }
           return;
         }

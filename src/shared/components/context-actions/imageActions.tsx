@@ -69,6 +69,7 @@ interface BuildGridImageContextMenuArgs {
   handleRemoveFromFolder: () => void;
   handleRemoveFromCollection: () => void;
   handleInboxAction: (hash: string, status: 'active' | 'trash') => void;
+  handleInboxSelectionAction: (status: 'active' | 'trash') => void;
   handleCopyTags: () => void;
   handlePasteTags: () => void;
   hasCopiedTags: boolean;
@@ -131,6 +132,7 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
     handleRemoveFromFolder,
     handleRemoveFromCollection,
     handleInboxAction,
+    handleInboxSelectionAction,
     handleCopyTags,
     handlePasteTags,
     hasCopiedTags,
@@ -294,18 +296,25 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
     items.push({ type: 'separator' });
   }
 
-  if (statusFilter === 'inbox' && singleHash) {
+  if (statusFilter === 'inbox' && (singleHash || hasSelection)) {
+    const bulkInboxAction = !!effectiveVirtual || effectiveSize > 1;
     items.push({
       type: 'item',
-      label: 'Accept',
+      label: bulkInboxAction ? `Accept ${effectiveSize} Image${effectiveSize === 1 ? '' : 's'}` : 'Accept',
       icon: <IconCheck />,
-      onClick: () => handleInboxAction(singleHash, 'active'),
+      onClick: () => {
+        if (bulkInboxAction) handleInboxSelectionAction('active');
+        else if (singleHash) handleInboxAction(singleHash, 'active');
+      },
     });
     items.push({
       type: 'item',
-      label: 'Reject',
+      label: bulkInboxAction ? `Reject ${effectiveSize} Image${effectiveSize === 1 ? '' : 's'}` : 'Reject',
       icon: <IconX />,
-      onClick: () => handleInboxAction(singleHash, 'trash'),
+      onClick: () => {
+        if (bulkInboxAction) handleInboxSelectionAction('trash');
+        else if (singleHash) handleInboxAction(singleHash, 'trash');
+      },
     });
     items.push({ type: 'separator' });
   }

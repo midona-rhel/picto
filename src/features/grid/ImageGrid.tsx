@@ -138,7 +138,7 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
   const initialLoadDone = useRef(false);
   const displayViewModeRef = useRef(state.displayViewMode);
   displayViewModeRef.current = state.displayViewMode;
-  const { queryKey, requestReplace, requestAppend } = useGridData({
+  const { queryKey, outlineImages, outlineTotalCount, requestReplace } = useGridData({
     queryInput: {
       folderId: folderId ?? null,
       collectionEntityId: collectionEntityId ?? null,
@@ -161,15 +161,16 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
       searchText: searchText || null,
     },
     dispatch,
-    stateRef,
     onFirstCommit: () => { initialLoadDone.current = true; },
   });
 
   const gap = 8;
+  const activeGridImages = outlineImages ?? state.images;
+  const resolvedGridTotalCount = outlineTotalCount ?? selectedScopeCount ?? activeGridImages.length;
 
   // Refs for values that change frequently but shouldn't invalidate handleImageClick
-  const imagesRef = useRef(state.images);
-  imagesRef.current = state.images;
+  const imagesRef = useRef(activeGridImages);
+  imagesRef.current = activeGridImages;
   const lastClickedHashRef = useRef(state.lastClickedHash);
   lastClickedHashRef.current = state.lastClickedHash;
 
@@ -211,6 +212,7 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
     handleRateSelected,
     handleRestoreSelected,
     handleInboxAction,
+    handleInboxSelectionAction,
     handleRemoveFromFolder,
     handleRemoveFromCollection,
   } = useGridMutationActions({
@@ -276,9 +278,10 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
           undo: () => api.file.setName(hash, before),
           redo: () => api.file.setName(hash, after),
         });
+        void requestReplace();
       })
       .catch(err => notifyError(err, 'Rename Failed'));
-  }, [renameValue]);
+  }, [renameValue, requestReplace]);
 
   const renameCancelledRef = useRef(false);
   const cancelRename = useCallback(() => {
@@ -371,6 +374,7 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
     closeViewer: viewer.close,
     statusFilter,
     handleInboxAction,
+    handleInboxSelectionAction,
   });
 
   const handleImageClick = useCallback((image: MasonryImageItem, event: React.MouseEvent) => {
@@ -505,17 +509,6 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
   };
 
 
-  const loadingMore = useRef(false);
-  const loadMore = useCallback(async () => {
-    if (loadingMore.current || !stateRef.current.hasMore) return;
-    loadingMore.current = true;
-    try {
-      await requestAppend();
-    } finally {
-      loadingMore.current = false;
-    }
-  }, [requestAppend]);
-
   const handleViewerDetailImageChange = useCallback((hash: string) => {
     recordImageView(hash);
     dispatch({ type: 'SELECT_HASHES', hashes: new Set([hash]) });
@@ -546,10 +539,8 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
 
   useEffect(() => {
     viewer.registerSource({
-      images: state.images,
-      totalCount: state.responseTotalCount ?? selectedScopeCount,
-      hasMore: state.hasMore,
-      loadMore: state.hasMore ? loadMore : undefined,
+      images: activeGridImages,
+      totalCount: resolvedGridTotalCount,
       inboxMode: statusFilter === 'inbox',
       onInboxAction: statusFilter === 'inbox' ? handleInboxAction : undefined,
       onDetailStateChange: onDetailViewStateChange,
@@ -561,11 +552,8 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
     });
   }, [
     viewer,
-    state.images,
-    state.responseTotalCount,
-    state.hasMore,
-    selectedScopeCount,
-    loadMore,
+    activeGridImages,
+    resolvedGridTotalCount,
     statusFilter,
     handleInboxAction,
     onDetailViewStateChange,
@@ -621,7 +609,6 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
     onDetailViewStateChange?.(null, null);
     dispatch({ type: 'CLEAR_SELECTION' });
     dispatch({ type: 'SET_SELECTED_SUBFOLDER', id: null });
-    dispatch({ type: 'SET_CURSOR', cursor: null, hasMore: true });
     if (scrollRef.current) {
       scrollRef.current.scrollTop = 0;
     }
@@ -780,6 +767,7 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
     handleRemoveFromFolder,
     handleRemoveFromCollection,
     handleInboxAction,
+    handleInboxSelectionAction,
     handleCopyTags,
     handlePasteTags,
     hasCopiedTags,
@@ -836,7 +824,7 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
             <SubfolderGrid
               folderId={state.displayFolderId}
               targetSize={state.displayTargetSize}
-              totalImageCount={state.images.length}
+              totalImageCount={activeGridImages.length}
               onOpenFolder={(id, name) => navigateToFolder({ folder_id: id, name })}
               selectedSubfolderId={state.selectedSubfolderId}
               paused={gridFreezeActive}
@@ -847,7 +835,7 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
             />
           )}
           <DomGridSurface
-            images={state.images}
+            images={activeGridImages}
             targetSize={state.displayTargetSize}
             gap={gap}
             viewMode={state.displayViewMode}
@@ -859,7 +847,6 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
             onContainerWidthChange={handleContainerWidthChange}
             showEmptyState={initialLoadDone.current && !hasVisibleSubfolders}
             emptyContext={state.displayEmptyContext}
-            onLoadMore={state.hasMore ? loadMore : undefined}
             scrollContainerRef={scrollRef}
             popHash={state.popHash}
             onPopComplete={() => dispatch({ type: 'SET_POP_HASH', hash: null })}
@@ -876,7 +863,6 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
             onLayoutChange={(positions) => { canvasLayoutRef.current = positions; }}
             reorderMode={isReorderScope}
             onReorder={isReorderScope ? handleReorder : undefined}
-            totalCount={state.responseTotalCount ?? selectedScopeCount}
             renamingHash={renamingHash}
             renameValue={renameValue}
             renameInputRef={renameInputRef}
@@ -940,8 +926,8 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
         onClose={() => setBatchRenameOpen(false)}
         images={
           state.virtualAllSelection
-            ? state.images.filter(i => !state.virtualAllSelection!.excludedHashes.has(i.hash))
-            : state.images.filter(i => state.selectedHashes.has(i.hash))
+            ? activeGridImages.filter(i => !state.virtualAllSelection!.excludedHashes.has(i.hash))
+            : activeGridImages.filter(i => state.selectedHashes.has(i.hash))
         }
       />
     </div>
