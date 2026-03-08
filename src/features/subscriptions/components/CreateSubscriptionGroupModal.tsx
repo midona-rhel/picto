@@ -3,7 +3,7 @@ import { Modal, Select, Stack, Text, TextInput } from '@mantine/core';
 import { TextButton } from '../../../shared/components/TextButton';
 import { glassModalStyles } from '../../../shared/styles/glassModal';
 import { notifySuccess, notifyError } from '../../../shared/lib/notify';
-import { SubscriptionController } from '../../../shared/controllers/subscriptionController';
+import { subscriptionApi } from '../api';
 import { SCHEDULE_OPTIONS } from '../types';
 
 export function CreateSubscriptionGroupModal({
@@ -30,7 +30,7 @@ export function CreateSubscriptionGroupModal({
     if (!name.trim()) return;
     try {
       setLoading(true);
-      await SubscriptionController.createSubscriptionGroup({
+      await subscriptionApi.createSubscriptionGroup({
         name: name.trim(),
         schedule: schedule !== 'manual' ? schedule : undefined,
       });

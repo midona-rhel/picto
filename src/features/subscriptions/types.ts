@@ -39,20 +39,7 @@ export interface SubscriptionGroupInfo {
   subscriptions: SubInfo[];
 }
 
-export interface SubscriptionGroupExecutionSummary {
-  added: number;
-  skipped_duplicate: number;
-  skipped_error: number;
-  errors?: string[];
-  method?: string;
-}
-
-export type SubscriptionGroupResultEntry = SubscriptionGroupExecutionSummary & { error?: string };
-
 export interface SubscriptionGroupsPanelProps {
-  subscriptionGroupId?: string | null;
-  lastResults: Record<string, SubscriptionGroupResultEntry>;
-  onLastResultsChange: (results: Record<string, SubscriptionGroupResultEntry>) => void;
   onOpenCreateModal?: () => void;
   showHeader?: boolean;
   layoutMode?: 'grid' | 'list';

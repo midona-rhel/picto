@@ -80,9 +80,6 @@ function createMainViewModel(overrides?: Partial<MainViewModel['navigation']>): 
       onDetailViewStateChange: () => {},
     },
     subscriptions: {
-      activeSubscriptionGroupId: 'flow-1',
-      subscriptionGroupLastResults: {},
-      setSubscriptionGroupLastResults: () => {},
       subscriptionRefreshToken: 7,
       onOpenCreateSubscriptionGroupModal: () => {},
     },
@@ -143,7 +140,6 @@ describe('MainViewRouter', () => {
     expect(screen.getByTestId('view-subscriptions')).toBeTruthy();
     expect(mocks.subscriptionGroupsPanel).toHaveBeenCalledTimes(1);
     expect(mocks.subscriptionGroupsPanel.mock.calls[0][0]).toMatchObject({
-      subscriptionGroupId: 'flow-1',
       refreshToken: 7,
     });
   });

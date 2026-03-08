@@ -18,11 +18,11 @@ import type {
   PtrSyncResult,
 } from '../shared/controllers/ptrSyncController';
 import {
-  SubscriptionController,
   type FlowFinishedEvent,
   type FlowProgressEvent,
   type SubscriptionFinishedEvent,
-} from '../shared/controllers/subscriptionController';
+  subscriptionApi,
+} from '../features/subscriptions/api';
 
 // ---------------------------------------------------------------------------
 // Derived types
@@ -471,8 +471,8 @@ export const useRuntimeSyncStore = create<RuntimeSyncState>((set, get) => ({
         runningSubscriptionIdsRaw,
         runningProgress,
       ] = await Promise.all([
-        SubscriptionController.getRunningSubscriptions(),
-        SubscriptionController.getRunningSubscriptionProgress().catch((error) => {
+        subscriptionApi.getRunningSubscriptions(),
+        subscriptionApi.getRunningSubscriptionProgress().catch((error) => {
           logBestEffortError('runtimeSyncStore.runningProgress', error);
           return [];
         }),

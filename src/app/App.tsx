@@ -57,7 +57,7 @@ function App() {
 
   // --- Navigation ---
   const {
-    currentView, activeSmartFolder, activeFolder, activeCollection, activeSubscriptionGroup, activeStatusFilter, filterTags,
+    currentView, activeSmartFolder, activeFolder, activeCollection, activeStatusFilter, filterTags,
     canGoBack, canGoForward,
     goBack, goForward,
     setActiveSmartFolder,
@@ -345,9 +345,6 @@ function App() {
         onDetailViewStateChange: inspector.handleDetailViewStateChange,
       },
       subscriptions: {
-        activeSubscriptionGroupId: activeSubscriptionGroup?.id,
-        subscriptionGroupLastResults: grid.subscriptionGroupLastResults,
-        setSubscriptionGroupLastResults: grid.setSubscriptionGroupLastResults,
         subscriptionRefreshToken,
         onOpenCreateSubscriptionGroupModal: () => grid.setCreateSubscriptionGroupModalOpen(true),
       },
@@ -385,9 +382,6 @@ function App() {
       inspector.handleSelectedImagesChange,
       inspector.setSelectionSummarySpec,
       inspector.handleDetailViewStateChange,
-      activeSubscriptionGroup?.id,
-      grid.subscriptionGroupLastResults,
-      grid.setSubscriptionGroupLastResults,
       subscriptionRefreshToken,
       grid.setCreateSubscriptionGroupModalOpen,
     ],

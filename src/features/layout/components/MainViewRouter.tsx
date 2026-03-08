@@ -1,5 +1,5 @@
 import { Collections } from '#features/collections/components';
-import { SubscriptionGroupsPanel, type SubscriptionGroupResultEntry, CreateSubscriptionGroupModal } from '#features/subscriptions/components';
+import { SubscriptionGroupsPanel, CreateSubscriptionGroupModal } from '#features/subscriptions/components';
 import { TagManager } from '#features/tags/components';
 import { DuplicateManager } from '#features/duplicates/components';
 import { ImageGrid } from '#features/grid/components';
@@ -59,9 +59,6 @@ export function MainViewRouter() {
       return (
         <div className={styles.frame}>
           <SubscriptionGroupsPanel
-            subscriptionGroupId={subscriptions.activeSubscriptionGroupId}
-            lastResults={subscriptions.subscriptionGroupLastResults}
-            onLastResultsChange={subscriptions.setSubscriptionGroupLastResults}
             onOpenCreateModal={subscriptions.onOpenCreateSubscriptionGroupModal}
             refreshToken={subscriptions.subscriptionRefreshToken}
           />
@@ -77,4 +74,3 @@ export function MainViewRouter() {
 }
 
 export { CreateSubscriptionGroupModal };
-export type { SubscriptionGroupResultEntry };

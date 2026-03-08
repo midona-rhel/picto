@@ -21,9 +21,9 @@ import { ContextMenu, useContextMenu } from '../../shared/components/ContextMenu
 import { FileController } from '../../shared/controllers/fileController';
 import { FolderController } from '../../shared/controllers/folderController';
 import { GridController } from '../../shared/controllers/gridController';
-import { SubscriptionController } from '../../shared/controllers/subscriptionController';
 import { imageDrag } from '../../shared/lib/imageDrag';
 import { mediaThumbnailUrl } from '../../shared/lib/mediaUrl';
+import { subscriptionApi } from '../../features/subscriptions/api';
 import { toMasonryItem } from './shared';
 import type { EntitySlim, MasonryImageItem } from './shared';
 import { batchPreloadMediaUrls, decodeImageUrl } from './enhancedMediaCache';
@@ -767,7 +767,7 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
       inFlight = true;
       void (async () => {
         try {
-          const running = await SubscriptionController.getRunningSubscriptions();
+          const running = await subscriptionApi.getRunningSubscriptions();
           if (running.length === 0 || disposed) return;
 
           const page = await GridController.fetchGridPage({

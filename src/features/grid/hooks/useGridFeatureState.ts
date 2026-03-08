@@ -11,8 +11,6 @@ import { FolderController } from '../../../shared/controllers/folderController';
 import type { SmartFolder } from '#features/smart-folders/types';
 import type { TagFilterLogicMode } from '#features/tags/types';
 import type { MasonryImageItem } from '#features/grid/types';
-import type { SubscriptionGroupResultEntry } from '#features/subscriptions/components';
-
 export interface GridFeatureParams {
   currentView: string;
   isDetailMode: boolean;
@@ -35,8 +33,6 @@ export interface GridFeatureState {
   setSearchTags: (tags: string[]) => void;
   searchText: string;
   setSearchText: (text: string) => void;
-  subscriptionGroupLastResults: Record<string, SubscriptionGroupResultEntry>;
-  setSubscriptionGroupLastResults: React.Dispatch<React.SetStateAction<Record<string, SubscriptionGroupResultEntry>>>;
   createSubscriptionGroupModalOpen: boolean;
   setCreateSubscriptionGroupModalOpen: (v: boolean) => void;
   effectiveSearchTags: string[];
@@ -86,7 +82,6 @@ export function useGridFeatureState({
   const [excludedSearchTags, setExcludedSearchTags] = useState<string[]>([]);
   const [tagLogicMode, setTagLogicMode] = useState<TagFilterLogicMode>('OR');
   const [searchText, setSearchText] = useState('');
-  const [subscriptionGroupLastResults, setSubscriptionGroupLastResults] = useState<Record<string, SubscriptionGroupResultEntry>>({});
   const [createSubscriptionGroupModalOpen, setCreateSubscriptionGroupModalOpen] = useState(false);
 
   const effectiveSearchTags = useMemo(() => {
@@ -206,7 +201,6 @@ export function useGridFeatureState({
   return {
     searchTags, setSearchTags,
     searchText, setSearchText,
-    subscriptionGroupLastResults, setSubscriptionGroupLastResults,
     createSubscriptionGroupModalOpen, setCreateSubscriptionGroupModalOpen,
     effectiveSearchTags,
     smartFolderRefresh, handleSmartFolderUpdated,

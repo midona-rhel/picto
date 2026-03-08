@@ -3,8 +3,6 @@ import type { AppSettings } from '../../../state/settingsStore';
 import type { SmartFolderPredicate } from '../../smart-folders/components/types';
 import type { GridViewMode, DetailViewControls, DetailViewState } from '#features/grid/components';
 import type { MasonryImageItem, SelectionQuerySpec } from '#features/grid/types';
-import type { SubscriptionGroupResultEntry } from '#features/subscriptions/components';
-
 type MainViewNavigationState = {
   currentView: string;
   activeSmartFolderPredicate?: SmartFolderPredicate;
@@ -51,9 +49,6 @@ type MainViewSelectionState = {
 };
 
 type MainViewSubscriptionsState = {
-  activeSubscriptionGroupId?: string;
-  subscriptionGroupLastResults: Record<string, SubscriptionGroupResultEntry>;
-  setSubscriptionGroupLastResults: (next: Record<string, SubscriptionGroupResultEntry>) => void;
   subscriptionRefreshToken?: number;
   onOpenCreateSubscriptionGroupModal: () => void;
 };

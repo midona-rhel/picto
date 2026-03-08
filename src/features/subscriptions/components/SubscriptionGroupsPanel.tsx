@@ -17,9 +17,9 @@ import {
   IconPencil,
   IconRefresh,
 } from '@tabler/icons-react';
-import { SubscriptionController } from '../../../shared/controllers/subscriptionController';
 import { useRuntimeSyncStore } from '../../../state/runtimeSyncStore';
 import { listenRuntimeEvent } from '#desktop/api';
+import { subscriptionApi } from '../api';
 import type { SubscriptionGroupInfo, SubscriptionGroupsPanelProps, SitePluginInfo, SubProgress } from '../types';
 import { SCHEDULE_OPTIONS } from '../types';
 import {
@@ -33,12 +33,7 @@ import {
 } from '../lib/subscriptionGroupUtils';
 import st from './SubscriptionGroupsPanel.module.css';
 
-export type { SubscriptionGroupExecutionSummary, SubscriptionGroupResultEntry } from '../types';
-
 export function SubscriptionGroupsPanel({
-  subscriptionGroupId: _subscriptionGroupId,
-  lastResults,
-  onLastResultsChange: _onLastResultsChange,
   onOpenCreateModal,
   showHeader = true,
   layoutMode = 'grid',
@@ -100,9 +95,9 @@ export function SubscriptionGroupsPanel({
   const loadData = useCallback(async () => {
     try {
       const [subscriptionGroupsData, sitesData, creds] = await Promise.all([
-        SubscriptionController.getSubscriptionGroups<SubscriptionGroupInfo>(),
-        SubscriptionController.getSiteCatalog(),
-        SubscriptionController.listCredentials().catch(() => []),
+        subscriptionApi.getSubscriptionGroups<SubscriptionGroupInfo>(),
+        subscriptionApi.getSiteCatalog(),
+        subscriptionApi.listCredentials().catch(() => []),
       ]);
       setSubscriptionGroups(subscriptionGroupsData);
       setSites(sitesData);
@@ -176,7 +171,7 @@ export function SubscriptionGroupsPanel({
 
   const handleRenameCommit = useCallback(async (id: string, newName: string) => {
     try {
-      await SubscriptionController.renameSubscriptionGroup({ id, name: newName });
+      await subscriptionApi.renameSubscriptionGroup({ id, name: newName });
       await loadData();
     } catch (e) { console.error('Rename failed:', e); }
   }, [loadData]);
@@ -195,7 +190,7 @@ export function SubscriptionGroupsPanel({
 
   const handleDelete = async (subscriptionGroupId: string) => {
     try {
-      await SubscriptionController.deleteSubscriptionGroup({ id: subscriptionGroupId });
+      await subscriptionApi.deleteSubscriptionGroup({ id: subscriptionGroupId });
       await loadData();
     } catch (error) {
       notifyError(`Failed to delete: ${error}`);
@@ -238,7 +233,7 @@ export function SubscriptionGroupsPanel({
       }
 
       setSubscriptionGroupMessage(subscriptionGroup.id, 'Starting…');
-      await SubscriptionController.runSubscriptionGroup({ id: subscriptionGroup.id });
+      await subscriptionApi.runSubscriptionGroup({ id: subscriptionGroup.id });
       setSubscriptionGroupMessage(subscriptionGroup.id, 'Run requested');
       notifyInfo(`Started "${subscriptionGroup.name}"`, 'Subscription Group Started');
       await loadData();
@@ -250,7 +245,7 @@ export function SubscriptionGroupsPanel({
 
   const handleStop = async (subscriptionGroup: SubscriptionGroupInfo) => {
     try {
-      await SubscriptionController.stopSubscriptionGroup({ id: subscriptionGroup.id });
+      await subscriptionApi.stopSubscriptionGroup({ id: subscriptionGroup.id });
       notifyInfo(`Stopping "${subscriptionGroup.name}"...`, 'Stopping');
     } catch (error) {
       notifyError(`Failed to stop: ${error}`);
@@ -260,7 +255,7 @@ export function SubscriptionGroupsPanel({
   const handleReset = async (subscriptionGroup: SubscriptionGroupInfo) => {
     try {
       for (const sub of subscriptionGroup.subscriptions) {
-        await SubscriptionController.resetSubscription({ id: sub.id });
+        await subscriptionApi.resetSubscription({ id: sub.id });
       }
       notifySuccess(`"${subscriptionGroup.name}" reset. Next run starts fresh.`, 'Reset Complete');
       await loadData();
@@ -271,7 +266,7 @@ export function SubscriptionGroupsPanel({
 
   const handleScheduleChange = async (subscriptionGroupId: string, schedule: string) => {
     try {
-      await SubscriptionController.setSubscriptionGroupSchedule({ id: subscriptionGroupId, schedule });
+      await subscriptionApi.setSubscriptionGroupSchedule({ id: subscriptionGroupId, schedule });
       setSubscriptionGroups((prev) => prev.map((group) => group.id === subscriptionGroupId ? { ...group, schedule } : group));
     } catch (error) {
       notifyError(`Failed to set schedule: ${error}`);
@@ -280,7 +275,7 @@ export function SubscriptionGroupsPanel({
 
   const handleDeleteQuery = async (queryId: string) => {
     try {
-      await SubscriptionController.deleteSubscriptionQuery({ id: queryId });
+      await subscriptionApi.deleteSubscriptionQuery({ id: queryId });
       await loadData();
     } catch (error) {
       notifyError(`Failed to delete query: ${error}`);
@@ -300,7 +295,7 @@ export function SubscriptionGroupsPanel({
       );
     }
     try {
-      await SubscriptionController.runSubscriptionQuery({
+      await subscriptionApi.runSubscriptionQuery({
         subscriptionId: subId,
         queryId,
       });
@@ -330,10 +325,10 @@ export function SubscriptionGroupsPanel({
       const subscriptionGroup = subscriptionGroups.find((group) => group.id === subscriptionGroupId);
       const existingSub = subscriptionGroup?.subscriptions.find((s) => (s.site_id ?? s.site_plugin_id) === addSite);
       if (existingSub) {
-        await SubscriptionController.addSubscriptionQuery({ subscriptionId: existingSub.id, queryText: addQuery.trim() });
+        await subscriptionApi.addSubscriptionQuery({ subscriptionId: existingSub.id, queryText: addQuery.trim() });
       } else {
         const siteName = sites.find((s) => s.id === addSite)?.name ?? addSite;
-        await SubscriptionController.createSubscription({
+        await subscriptionApi.createSubscription({
           name: `${siteName}: ${addQuery.trim()}`,
           siteId: addSite,
           queries: [addQuery.trim()],
@@ -374,7 +369,6 @@ export function SubscriptionGroupsPanel({
         {subscriptionGroups.map((subscriptionGroup) => {
           const isExpanded = expandedIds.has(subscriptionGroup.id);
           const lastRan = getLastRan(subscriptionGroup);
-          const lastResult = lastResults[subscriptionGroup.id];
           // Legacy runtime progress is still keyed as `flow`; map it here until the backend event names are rewritten.
           const hasRunningSubscriptions = subscriptionGroup.subscriptions.some((sub) => runningIds.has(sub.id));
           const isRunning = hasRunningSubscriptions || (runningSubscriptionGroupIds.has(subscriptionGroup.id) && (subscriptionGroupProgress.get(subscriptionGroup.id)?.remaining ?? 1) > 0);
@@ -414,11 +408,6 @@ export function SubscriptionGroupsPanel({
               <div className={st.cardMeta}>
                 <span className={st.metaFiles}>{subscriptionGroup.total_files} files</span>
                 {!isRunning && <span className={st.metaTime}>Last run: {formatRelativeTime(lastRan)}</span>}
-                {lastResult && (
-                  <span className={st.metaResult}>
-                    Last: {lastResult.added} downloaded · {lastResult.skipped_duplicate} skipped
-                  </span>
-                )}
               </div>
               {actionMessage && (
                 <div className={st.cardFeedback} aria-live="polite">

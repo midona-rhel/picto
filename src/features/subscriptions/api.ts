@@ -1,24 +1,29 @@
 import { api } from '#desktop/api';
-
-export type {
-  SubscriptionProgressEvent,
-  SubscriptionFinishedEvent,
-  FlowProgressEvent,
+import type {
+  CredentialDomain,
+  CredentialHealth,
+  CredentialType,
   FlowFinishedEvent,
-  SubscriptionSiteInfo,
+  FlowProgressEvent,
   SiteMetadataSchema,
   SiteMetadataValidationResult,
-  CredentialDomain,
-  CredentialHealth,
-  CredentialType,
-} from '../types/api';
-import type {
+  SubscriptionFinishedEvent,
   SubscriptionProgressEvent,
   SubscriptionSiteInfo,
+} from '../../shared/types/api';
+
+export type {
   CredentialDomain,
   CredentialHealth,
   CredentialType,
-} from '../types/api';
+  FlowFinishedEvent,
+  FlowProgressEvent,
+  SiteMetadataSchema,
+  SiteMetadataValidationResult,
+  SubscriptionFinishedEvent,
+  SubscriptionProgressEvent,
+  SubscriptionSiteInfo,
+};
 
 export interface CreatedSubscription {
   id: string;
@@ -36,25 +41,13 @@ export interface CreatedSubscriptionQuery {
   paused: boolean;
 }
 
-/**
- * SubscriptionController — frontend facade for subscription command/event
- * orchestration. Keeps component code from owning direct transport calls.
- */
-export const SubscriptionController = {
+export const subscriptionApi = {
   getRunningSubscriptions(): Promise<string[]> {
     return api.subscriptions.getRunning();
   },
 
   getRunningSubscriptionProgress(): Promise<SubscriptionProgressEvent[]> {
     return api.subscriptions.getRunningProgress();
-  },
-
-  getSubscriptions<T>(): Promise<T[]> {
-    return api.subscriptions.list() as Promise<T[]>;
-  },
-
-  getSites<T>(): Promise<T[]> {
-    return api.subscriptions.getSites() as Promise<T[]>;
   },
 
   getSiteCatalog(): Promise<SubscriptionSiteInfo[]> {
@@ -111,22 +104,6 @@ export const SubscriptionController = {
     }) as Promise<CreatedSubscription>;
   },
 
-  pauseSubscription(args: { id: string; paused: boolean }): Promise<void> {
-    return api.subscriptions.pause(args.id, args.paused);
-  },
-
-  deleteSubscription(args: { id: string; deleteFiles: boolean }): Promise<number> {
-    return api.subscriptions.delete(args.id, args.deleteFiles);
-  },
-
-  runSubscription(args: { id: string }): Promise<void> {
-    return api.subscriptions.run(args.id);
-  },
-
-  stopSubscription(args: { id: string }): Promise<void> {
-    return api.subscriptions.stop(args.id);
-  },
-
   resetSubscription(args: { id: string }): Promise<void> {
     return api.subscriptions.reset(args.id);
   },
@@ -135,20 +112,12 @@ export const SubscriptionController = {
     return api.subscriptions.runQuery(args.subscriptionId, args.queryId) as Promise<void>;
   },
 
-  pauseSubscriptionQuery(args: { id: string; paused: boolean }): Promise<void> {
-    return api.subscriptions.pauseQuery(args.id, args.paused);
-  },
-
   deleteSubscriptionQuery(args: { id: string }): Promise<void> {
     return api.subscriptions.deleteQuery(args.id);
   },
 
   addSubscriptionQuery(args: { subscriptionId: string; queryText: string }): Promise<CreatedSubscriptionQuery> {
     return api.subscriptions.addQuery(args.subscriptionId, args.queryText) as Promise<CreatedSubscriptionQuery>;
-  },
-
-  renameSubscription(args: { id: string; name: string }): Promise<void> {
-    return api.subscriptions.rename(args.id, args.name);
   },
 
   getSubscriptionGroups<T>(): Promise<T[]> {
@@ -178,5 +147,4 @@ export const SubscriptionController = {
   stopSubscriptionGroup(args: { id: string }): Promise<void> {
     return api.flows.stop(args.id);
   },
-
 };

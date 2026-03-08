@@ -11,9 +11,9 @@ import {
 import { IconCheck, IconKey, IconPlus, IconTrash, IconX } from '@tabler/icons-react';
 import { api, getCurrentWindow } from '#desktop/api';
 import { notifyError, notifySuccess } from '../../../shared/lib/notify';
-import { SubscriptionGroupsPanel, type SubscriptionGroupResultEntry } from './SubscriptionGroupsPanel';
+import { SubscriptionGroupsPanel } from './SubscriptionGroupsPanel';
 import { CreateSubscriptionGroupModal } from './CreateSubscriptionGroupModal';
-import { SubscriptionController } from '../../../shared/controllers/subscriptionController';
+import { subscriptionApi } from '../api';
 import type {
   CredentialDomain,
   CredentialHealth,
@@ -134,7 +134,6 @@ function validateCredentialForm(form: CredentialFormState): string | null {
 export function SubscriptionsWindow() {
   const [createModalOpen, setCreateModalOpen] = useState(false);
   const [subscriptionRefreshToken, setSubscriptionRefreshToken] = useState(0);
-  const [subscriptionGroupLastResults, setSubscriptionGroupLastResults] = useState<Record<string, SubscriptionGroupResultEntry>>({});
   const [sites, setSites] = useState<SubscriptionSiteInfo[]>([]);
   const [credentials, setCredentials] = useState<CredentialDomain[]>([]);
   const [credentialHealth, setCredentialHealth] = useState<CredentialHealth[]>([]);
@@ -154,9 +153,9 @@ export function SubscriptionsWindow() {
   const loadCredentialData = useCallback(async () => {
     try {
       const [siteCatalog, storedCreds, health] = await Promise.all([
-        SubscriptionController.getSiteCatalog(),
-        SubscriptionController.listCredentials(),
-        SubscriptionController.listCredentialHealth(),
+        subscriptionApi.getSiteCatalog(),
+        subscriptionApi.listCredentials(),
+        subscriptionApi.listCredentialHealth(),
       ]);
       setSites(siteCatalog);
       setCredentials(storedCreds);
@@ -230,7 +229,7 @@ export function SubscriptionsWindow() {
       const parsedRule34 = isRule34Credential
         ? parseRule34Credential(credentialForm.rule34Raw)
         : null;
-      await SubscriptionController.setCredential({
+      await subscriptionApi.setCredential({
         siteCategory: credentialForm.siteCategory,
         credentialType: credentialForm.credentialType,
         displayName: credentialForm.displayName || null,
@@ -255,7 +254,7 @@ export function SubscriptionsWindow() {
 
   const deleteCredential = async (siteCategory: string) => {
     try {
-      await SubscriptionController.deleteCredential(siteCategory);
+      await subscriptionApi.deleteCredential(siteCategory);
       notifySuccess('Credential removed');
       await loadCredentialData();
     } catch (error) {
@@ -381,9 +380,6 @@ export function SubscriptionsWindow() {
           </div>
           <div className={`${styles.flowsWrap} ${styles.cardsContainer}`}>
             <SubscriptionGroupsPanel
-              subscriptionGroupId={null}
-              lastResults={subscriptionGroupLastResults}
-              onLastResultsChange={setSubscriptionGroupLastResults}
               showHeader={false}
               layoutMode="list"
               refreshToken={subscriptionRefreshToken}
