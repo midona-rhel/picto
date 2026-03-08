@@ -338,7 +338,8 @@ pub fn seed_sidebar_if_empty(conn: &Connection) -> rusqlite::Result<()> {
 
 impl SqliteDatabase {
     pub async fn get_sidebar_tree(&self) -> Result<Vec<SidebarNode>, String> {
-        self.with_read_conn(get_sidebar_tree).await
+        self.with_read_conn_labeled("sidebar/get_tree", get_sidebar_tree)
+            .await
     }
 
     pub async fn reorder_sidebar_nodes(&self, moves: Vec<(String, i64)>) -> Result<(), String> {

@@ -33,12 +33,13 @@ struct SlowQueryWindow {
     started_at: Instant,
     count: u64,
     max_elapsed_ms: u64,
+    max_label: &'static str,
 }
 
 static SLOW_QUERY_WINDOWS: OnceLock<StdMutex<HashMap<&'static str, SlowQueryWindow>>> =
     OnceLock::new();
 
-fn record_slow_query(kind: &'static str, elapsed_ms: u64) {
+fn record_slow_query(kind: &'static str, label: &'static str, elapsed_ms: u64) {
     let windows = SLOW_QUERY_WINDOWS.get_or_init(|| StdMutex::new(HashMap::new()));
     let mut guard = crate::poison::mutex_or_recover(windows, "sqlite::slow_query_windows");
     let now = Instant::now();
@@ -46,12 +47,16 @@ fn record_slow_query(kind: &'static str, elapsed_ms: u64) {
     match guard.get_mut(kind) {
         Some(window) if now.duration_since(window.started_at) <= SLOW_QUERY_LOG_WINDOW => {
             window.count += 1;
-            window.max_elapsed_ms = window.max_elapsed_ms.max(elapsed_ms);
+            if elapsed_ms >= window.max_elapsed_ms {
+                window.max_elapsed_ms = elapsed_ms;
+                window.max_label = label;
+            }
         }
         Some(window) => {
             if window.count > 1 {
                 tracing::warn!(
                     kind,
+                    label = window.max_label,
                     suppressed = window.count - 1,
                     max_elapsed_ms = window.max_elapsed_ms,
                     window_ms = SLOW_QUERY_LOG_WINDOW.as_millis() as u64,
@@ -62,8 +67,9 @@ fn record_slow_query(kind: &'static str, elapsed_ms: u64) {
                 started_at: now,
                 count: 1,
                 max_elapsed_ms: elapsed_ms,
+                max_label: label,
             };
-            tracing::warn!(kind, elapsed_ms, "slow sqlite query");
+            tracing::warn!(kind, label, elapsed_ms, "slow sqlite query");
         }
         None => {
             guard.insert(
@@ -72,9 +78,10 @@ fn record_slow_query(kind: &'static str, elapsed_ms: u64) {
                     started_at: now,
                     count: 1,
                     max_elapsed_ms: elapsed_ms,
+                    max_label: label,
                 },
             );
-            tracing::warn!(kind, elapsed_ms, "slow sqlite query");
+            tracing::warn!(kind, label, elapsed_ms, "slow sqlite query");
         }
     }
 }
@@ -478,6 +485,19 @@ impl SqliteDatabase {
         F: FnOnce(&Connection) -> rusqlite::Result<R> + Send + 'static,
         R: Send + 'static,
     {
+        self.with_read_conn_labeled("unlabeled_read", f).await
+    }
+
+    /// Run a read-only closure on a pooled reader connection with a diagnostic label.
+    pub async fn with_read_conn_labeled<F, R>(
+        &self,
+        label: &'static str,
+        f: F,
+    ) -> Result<R, String>
+    where
+        F: FnOnce(&Connection) -> rusqlite::Result<R> + Send + 'static,
+        R: Send + 'static,
+    {
         let idx = self.read_pool_idx.fetch_add(1, Ordering::Relaxed) % self.read_pool.len();
         let conn = self.read_pool[idx].clone();
         tokio::task::spawn_blocking(move || {
@@ -486,7 +506,7 @@ impl SqliteDatabase {
             let result = f(&conn).map_err(|e| format!("SQLite error: {e}"));
             let elapsed_ms = start.elapsed().as_millis() as u64;
             if elapsed_ms > SLOW_READ_WARN_MS {
-                record_slow_query("read", elapsed_ms);
+                record_slow_query("read", label, elapsed_ms);
             }
             result
         })
@@ -501,6 +521,15 @@ impl SqliteDatabase {
         F: FnOnce(&Connection) -> rusqlite::Result<R> + Send + 'static,
         R: Send + 'static,
     {
+        self.with_conn_labeled("unlabeled_write", f).await
+    }
+
+    /// Run a synchronous closure with the database connection and a diagnostic label.
+    pub async fn with_conn_labeled<F, R>(&self, label: &'static str, f: F) -> Result<R, String>
+    where
+        F: FnOnce(&Connection) -> rusqlite::Result<R> + Send + 'static,
+        R: Send + 'static,
+    {
         let conn = self.conn.clone();
         tokio::task::spawn_blocking(move || {
             let start = std::time::Instant::now();
@@ -508,7 +537,7 @@ impl SqliteDatabase {
             let result = f(&conn).map_err(|e| format!("SQLite error: {e}"));
             let elapsed_ms = start.elapsed().as_millis() as u64;
             if elapsed_ms > SLOW_WRITE_WARN_MS {
-                record_slow_query("write", elapsed_ms);
+                record_slow_query("write", label, elapsed_ms);
             }
             result
         })
@@ -522,6 +551,19 @@ impl SqliteDatabase {
         F: FnOnce(&mut Connection) -> rusqlite::Result<R> + Send + 'static,
         R: Send + 'static,
     {
+        self.with_conn_mut_labeled("unlabeled_transaction", f).await
+    }
+
+    /// Run a synchronous transactional closure with a diagnostic label.
+    pub async fn with_conn_mut_labeled<F, R>(
+        &self,
+        label: &'static str,
+        f: F,
+    ) -> Result<R, String>
+    where
+        F: FnOnce(&mut Connection) -> rusqlite::Result<R> + Send + 'static,
+        R: Send + 'static,
+    {
         let conn = self.conn.clone();
         tokio::task::spawn_blocking(move || {
             let start = std::time::Instant::now();
@@ -529,7 +571,7 @@ impl SqliteDatabase {
             let result = f(&mut conn).map_err(|e| format!("SQLite error: {e}"));
             let elapsed_ms = start.elapsed().as_millis() as u64;
             if elapsed_ms > SLOW_TX_WARN_MS {
-                record_slow_query("transaction", elapsed_ms);
+                record_slow_query("transaction", label, elapsed_ms);
             }
             result
         })
@@ -544,7 +586,7 @@ impl SqliteDatabase {
         }
         let hash_owned = hash.to_string();
         let id = self
-            .with_read_conn(move |conn| {
+            .with_read_conn_labeled("hash_index/resolve_hash", move |conn| {
                 conn.query_row(
                     "SELECT file_id FROM file WHERE hash = ?1",
                     [&hash_owned],
@@ -562,7 +604,7 @@ impl SqliteDatabase {
             return Ok(hash);
         }
         let hash = self
-            .with_read_conn(move |conn| {
+            .with_read_conn_labeled("hash_index/resolve_id", move |conn| {
                 conn.query_row(
                     "SELECT hash FROM file WHERE file_id = ?1",
                     [file_id],
@@ -591,7 +633,7 @@ impl SqliteDatabase {
         if !misses.is_empty() {
             let hash_index = self.hash_index.clone();
             let db_results = self
-                .with_read_conn(move |conn| {
+                .with_read_conn_labeled("hash_index/resolve_ids_batch", move |conn| {
                     let placeholders = std::iter::repeat_n("?", misses.len())
                         .collect::<Vec<_>>()
                         .join(", ");
@@ -639,7 +681,7 @@ impl SqliteDatabase {
         if !misses.is_empty() {
             let hash_index = self.hash_index.clone();
             let db_results = self
-                .with_read_conn(move |conn| {
+                .with_read_conn_labeled("hash_index/resolve_hashes_batch", move |conn| {
                     let placeholders = std::iter::repeat_n("?", misses.len())
                         .collect::<Vec<_>>()
                         .join(", ");
