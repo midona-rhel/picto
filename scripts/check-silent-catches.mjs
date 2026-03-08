@@ -8,16 +8,15 @@ const ALLOW_MARKERS = ['silent-catch-ok', 'best-effort-ok', 'intentional-noop-ca
 
 const TARGET_PATHS = [
   'src/app-shell',
-  'src/components/sidebar',
-  'src/components/layout/WindowControls.tsx',
-  'src/components/layout/SidebarJobStatus.tsx',
-  'src/components/image-grid/DetailView.tsx',
-  'src/components/image-grid/DetailWindow.tsx',
-  'src/components/image-grid/QuickLook.tsx',
-  'src/components/image-grid/hooks/useGridItemActions.ts',
-  'src/components/settings/GeneralPanel.tsx',
-  'src/components/settings/PtrPanel.tsx',
-  'src/components/settings/SubscriptionsPanel.tsx',
+  'src/features/sidebar',
+  'src/features/layout/components/WindowControls.tsx',
+  'src/features/layout/components/SidebarJobStatus.tsx',
+  'src/features/grid/DetailView.tsx',
+  'src/features/grid/DetailWindow.tsx',
+  'src/features/grid/QuickLook.tsx',
+  'src/features/grid/hooks/useGridItemActions.ts',
+  'src/features/settings/components/GeneralPanel.tsx',
+  'src/features/settings/components/PtrPanel.tsx',
 ];
 
 const EMPTY_PROMISE_CATCH_RE =

@@ -1,5 +1,5 @@
 import { createContext, useContext } from 'react';
-import type { DisplayOptions } from '../../hooks/useScopedGridPreferences';
+import type { DisplayOptions } from '../hooks/useScopedGridPreferences';
 
 interface ScopedDisplayContextValue {
   displayOptions: DisplayOptions;

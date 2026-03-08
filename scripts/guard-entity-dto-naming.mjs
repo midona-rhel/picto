@@ -4,7 +4,7 @@ import path from 'node:path';
 
 const root = process.cwd();
 const scanDirs = [
-  path.join(root, 'src/components/image-grid'),
+  path.join(root, 'src/features/grid'),
   path.join(root, 'src/controllers'),
 ];
 const scanFiles = [

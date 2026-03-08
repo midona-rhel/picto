@@ -3,7 +3,7 @@ import { Modal, Select, Stack, Text, TextInput } from '@mantine/core';
 import { TextButton } from '../../../shared/components/TextButton';
 import { glassModalStyles } from '../../../shared/styles/glassModal';
 import { notifySuccess, notifyError } from '../../../shared/lib/notify';
-import { SubscriptionController } from '../../../controllers/subscriptionController';
+import { SubscriptionController } from '../../../shared/controllers/subscriptionController';
 import { SCHEDULE_OPTIONS } from '../types';
 
 export function CreateFlowModal({

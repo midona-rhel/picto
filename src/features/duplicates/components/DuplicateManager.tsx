@@ -14,7 +14,7 @@ import {
 } from '@tabler/icons-react';
 import { api } from '#desktop/api';
 import { mediaFileUrl, mediaThumbnailUrl } from '../../../shared/lib/mediaUrl';
-import { isImagePreloaded, queueImageDecode } from '../../../components/image-grid/useImagePreloader';
+import { isImagePreloaded, queueImageDecode } from '../../grid/useImagePreloader';
 import type { DuplicatePairDto, DuplicatePairsResponse, ResolveDuplicateAction } from '../../../shared/types/api';
 import { useDomainStore } from '../../../state/domainStore';
 import { registerUndoAction } from '../../../shared/controllers/undoRedoController';

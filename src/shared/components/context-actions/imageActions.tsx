@@ -29,21 +29,20 @@ import {
 import { notifications } from '@mantine/notifications';
 import type { Dispatch, MutableRefObject, ReactNode, SetStateAction } from 'react';
 import type { ContextMenuEntry } from '../ContextMenu';
-import { LayoutRow } from '../../../components/image-grid/LayoutRow';
-import { SortByRow } from '../../../components/image-grid/SortByRow';
-import { DisplayOptionsPanel } from '../../../components/image-grid/DisplayOptionsPanel';
+import { LayoutRow } from '../../../features/grid/LayoutRow';
+import { SortByRow } from '../../../features/grid/SortByRow';
+import { DisplayOptionsPanel } from '../../../features/grid/DisplayOptionsPanel';
 import { IconBing, IconSauceNAO, IconSogou, IconTinEye, IconYandex } from '../SearchEngineIcons';
 import type { SmartFolderPredicate } from '../../../features/smart-folders/components/types';
-import type { GridRuntimeAction, GridRuntimeState, GridViewMode } from '../../../components/image-grid/runtime';
+import type { GridRuntimeAction, GridRuntimeState, GridViewMode } from '../../../features/grid/runtime';
 import { FileController } from '../../controllers/fileController';
-import { FolderController } from '../../../controllers/folderController';
+import { FolderController } from '../../controllers/folderController';
 import { FolderPickerService } from '../../services/folderPickerService';
 import { registerUndoAction } from '../../controllers/undoRedoController';
 import { notifyError, notifySuccess } from '../../lib/notify';
 import { useSettingsStore } from '../../../state/settingsStore';
-import { applyGridMutationEffects } from '../../../domain/actions/mutationEffects';
-import { deleteHashesWithLifecycleEffects, setFileStatusWithLifecycleEffects } from '../../../domain/actions/fileLifecycleActions';
-import type { MasonryImageItem } from '../../../components/image-grid/shared';
+import { deleteHashesWithLifecycleEffects, setFileStatusWithLifecycleEffects } from '../../controllers/fileLifecycleActions';
+import type { MasonryImageItem } from '../../../features/grid/shared';
 import { api } from '#desktop/api';
 import { bustThumbnailCache } from '../../lib/mediaUrl';
 import { useCacheStore } from '../../../state/cacheStore';
@@ -557,11 +556,10 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
   });
 
   if (folderId) {
-    const reloadGrid = () => applyGridMutationEffects(requestGridReload);
     const sortAndReload = (sortBy: string, dir: string) =>
-      FolderController.sortFolderItems(folderId, sortBy, dir).then(reloadGrid);
+      FolderController.sortFolderItems(folderId, sortBy, dir);
     const reverseAndReload = (hashes?: string[]) =>
-      FolderController.reverseFolderItems(folderId, hashes).then(reloadGrid);
+      FolderController.reverseFolderItems(folderId, hashes);
     items.push({
       type: 'submenu',
       label: 'Sort by',
@@ -713,7 +711,7 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
       if (freshSingleHash) {
         dispatch({ type: 'FILTER_IMAGES', predicate: i => i.hash !== freshSingleHash });
         dispatch({ type: 'CLEAR_SELECTION' });
-        setFileStatusWithLifecycleEffects(freshSingleHash, 'active', { gridReload: requestGridReload })
+        setFileStatusWithLifecycleEffects(freshSingleHash, 'active')
           .then(() => {
             registerUndoAction({
               label: 'Restore image',
@@ -738,11 +736,11 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
         dispatch({ type: 'FILTER_IMAGES', predicate: i => i.hash !== freshSingleHash });
         dispatch({ type: 'CLEAR_SELECTION' });
         if (inTrash) {
-          deleteHashesWithLifecycleEffects([freshSingleHash], { gridReload: requestGridReload })
+          deleteHashesWithLifecycleEffects([freshSingleHash])
             .catch(err => notifyError(err, 'Delete Failed'));
         } else {
           const previousStatus = imagesRef.current.find((img) => img.hash === freshSingleHash)?.status ?? (statusFilter ?? 'active');
-          setFileStatusWithLifecycleEffects(freshSingleHash, 'trash', { gridReload: requestGridReload })
+          setFileStatusWithLifecycleEffects(freshSingleHash, 'trash')
             .then(() => {
               registerUndoAction({
                 label: 'Move image to trash',

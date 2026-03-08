@@ -14,7 +14,7 @@ import {
 
 import { useDomainStore } from '../../../state/domainStore';
 import { useNavigationStore } from '../../../state/navigationStore';
-import { setStatusSelectionWithLifecycleEffects } from '../../../domain/actions/fileLifecycleActions';
+import { setStatusSelectionWithLifecycleEffects } from '../../../shared/controllers/fileLifecycleActions';
 import { SidebarJobStatus } from '../../layout/components/SidebarJobStatus';
 import { runCriticalAction } from '../../../shared/lib/asyncOps';
 import { FolderTree } from './FolderTree';

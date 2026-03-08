@@ -1,2 +1,2 @@
-export { DetailWindow } from '../../../components/image-grid/DetailWindow';
+export { DetailWindow } from '../../grid/DetailWindow';
 export { Slideshow } from './Slideshow';

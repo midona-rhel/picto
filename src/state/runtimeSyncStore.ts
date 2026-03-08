@@ -16,13 +16,13 @@ import type {
   PtrBootstrapStatus,
   PtrSyncProgress,
   PtrSyncResult,
-} from '../controllers/ptrSyncController';
+} from '../shared/controllers/ptrSyncController';
 import {
   SubscriptionController,
   type FlowFinishedEvent,
   type FlowProgressEvent,
   type SubscriptionFinishedEvent,
-} from '../controllers/subscriptionController';
+} from '../shared/controllers/subscriptionController';
 
 // ---------------------------------------------------------------------------
 // Derived types

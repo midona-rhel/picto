@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef } from 'react';
-import { FolderController } from '../../../controllers/folderController';
+import { FolderController } from '../../../shared/controllers/folderController';
 import { registerUndoAction } from '../../../shared/controllers/undoRedoController';
 import { notifyWarning } from '../../../shared/lib/notify';
 import { useInlineRename } from '../../../shared/hooks/useInlineRename';

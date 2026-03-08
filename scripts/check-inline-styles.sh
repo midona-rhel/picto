@@ -7,10 +7,10 @@
 # Exit code 1 if violations found (for CI gating).
 
 AUDITED_PATHS=(
-  "src/components/image-grid"
-  "src/components/sidebar"
-  "src/components/layout"
-  "src/components/settings"
+  "src/features/grid"
+  "src/features/sidebar"
+  "src/features/layout"
+  "src/features/settings"
 )
 
 # Patterns that indicate non-token color/font usage in TSX inline styles.
