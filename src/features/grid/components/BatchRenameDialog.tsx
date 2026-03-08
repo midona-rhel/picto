@@ -7,7 +7,7 @@ import { FileController } from '../../../shared/controllers/fileController';
 import { registerUndoAction } from '../../../shared/controllers/undoRedoController';
 import { notifySuccess, notifyError } from '../../../shared/lib/notify';
 import { api } from '#desktop/api';
-import type { MasonryImageItem } from '../../../components/image-grid/shared';
+import type { MasonryImageItem } from '../shared';
 import classes from './BatchRenameDialog.module.css';
 
 // ── Types ──────────────────────────────────────────────────────────────────

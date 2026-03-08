@@ -2,7 +2,7 @@
 import { useCallback, useState } from 'react';
 import { useDisclosure } from '@mantine/hooks';
 import { useInlineRename } from '../../../shared/hooks/useInlineRename';
-import { SmartFolderController } from '../../../controllers/smartFolderController';
+import { SmartFolderController } from '../../../shared/controllers/smartFolderController';
 import {
   DndContext,
   closestCenter,
@@ -26,9 +26,9 @@ import { SmartFolderModal } from '../../smart-folders/components/SmartFolderModa
 import { DynamicIcon, DEFAULT_FOLDER_ICON } from '../../smart-folders/components/iconRegistry';
 import type { SmartFolder } from '../../smart-folders/components/types';
 import { folderToRust } from '../../smart-folders/components/types';
-import { FolderController } from '../../../controllers/folderController';
+import { FolderController } from '../../../shared/controllers/folderController';
 import { registerUndoAction } from '../../../shared/controllers/undoRedoController';
-import { SidebarController } from '../../../controllers/sidebarController';
+import { SidebarController } from '../../../shared/controllers/sidebarController';
 import { useDomainStore } from '../../../state/domainStore';
 import { useNavigationStore } from '../../../state/navigationStore';
 import { SidebarSection } from './SidebarSection';

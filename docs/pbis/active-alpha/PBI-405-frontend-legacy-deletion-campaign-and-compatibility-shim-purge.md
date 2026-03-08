@@ -3,23 +3,20 @@
 ## Priority
 P1
 
-## Audit Status (2026-03-08)
-Status: **Partially Implemented — Tiers 1, 2 & 3 Complete**
+## Status (2026-03-08)
+Status: **Implemented**
 
-Completed:
-1. Tier 1 deletion wave: 5 shared hooks moved from `src/hooks/` to `src/shared/hooks/`.
-2. `AppErrorBoundary.tsx` moved from `src/components/` to `src/shared/components/`.
-3. Associated test file moved to `src/shared/hooks/__tests__/`.
-4. Tier 2 deletion wave: 3 shared controllers moved from `src/controllers/` to `src/shared/controllers/`.
-   - `fileController.ts` (9 consumers updated)
-   - `undoRedoController.ts` (15 consumers updated)
-   - `perfController.ts` (1 consumer updated)
-5. Tier 3 feature migration complete: feature-owned component surfaces moved from legacy `src/components/` trees into `src/features/*/components/`.
-6. Legacy `src/components/` is now reduced to the `image-grid/` cluster, which is the Tier 4 holdout tracked by `PBI-408`.
-7. All consumer imports updated for completed waves, builds clean.
+### Results
 
-Remaining:
-1. Tier 4: image-grid split (blocked on PBI-408).
+1. **Tier 1**: 5 shared hooks moved to `src/shared/hooks/`. `AppErrorBoundary.tsx` moved to `src/shared/components/`.
+2. **Tier 2**: 3 shared controllers moved to `src/shared/controllers/` (`fileController`, `undoRedoController`, `perfController`).
+3. **Tier 3**: Feature-owned component surfaces moved from `src/components/` into `src/features/*/components/`.
+4. **Tier 4**: `src/components/image-grid/` (81 files) moved to `src/features/grid/`. `src/components/` deleted.
+5. **Tier 5**: `src/controllers/` (8 files, 30+ consumer imports) moved to `src/shared/controllers/`. `src/controllers/` deleted.
+6. **Tier 6**: `src/domain/actions/fileLifecycleActions.ts` (1 file, 3 consumers) moved to `src/shared/controllers/`. `src/domain/` deleted.
+7. **Tier 7**: `src/hooks/` (6 files) distributed: inspector hooks → `src/features/inspector/hooks/`, `useGridFeatureState` → `src/features/grid/hooks/`, `useScopedGridPreferences` → `src/shared/hooks/`, dead `useTagEditor` deleted. `src/hooks/` deleted.
+
+All legacy top-level directories (`src/components/`, `src/controllers/`, `src/domain/`, `src/hooks/`) eliminated. `npx tsc --noEmit` passes clean.
 
 ## Problem
 The project needs a deletion program, not just a migration program. If old paths remain after replacements land, the codebase will keep two ownership models alive indefinitely.

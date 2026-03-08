@@ -13,11 +13,11 @@ import { TagPickerPortal } from '../shared/services/TagPickerPortal';
 import { TagSelectPortal } from '#features/tags/components';
 import { FolderPickerPortal } from '../shared/services/FolderPickerPortal';
 import { KbdTooltip } from '../shared/components/KbdTooltip';
-import { useScopedGridPreferences } from '../hooks/useScopedGridPreferences';
+import { useScopedGridPreferences } from '../shared/hooks/useScopedGridPreferences';
 import { ScopedDisplayProvider } from '../shared/contexts/ScopedDisplayContext';
 import { useAppBootstrap } from './useAppBootstrap';
 import { useInspectorState } from '../features/inspector/hooks/useInspectorState';
-import { useGridFeatureState } from '../hooks/useGridFeatureState';
+import { useGridFeatureState } from '../features/grid/hooks/useGridFeatureState';
 import styles from './App.module.css';
 
 const isMac = navigator.platform.includes('Mac');

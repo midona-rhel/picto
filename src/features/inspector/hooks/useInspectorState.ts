@@ -2,10 +2,10 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '#desktop/api';
 import { registerUndoAction } from '../../../shared/controllers/undoRedoController';
 
-import { useInspectorData, type InspectorData } from '../../../hooks/useInspectorData';
-import type { MasonryImageItem } from '../../../components/image-grid/shared';
-import type { DetailViewState, DetailViewControls } from '../../../components/image-grid/DetailView';
-import type { SelectionQuerySpec } from '../../../components/image-grid/metadataPrefetch';
+import { useInspectorData, type InspectorData } from './useInspectorData';
+import type { MasonryImageItem } from '../../grid/shared';
+import type { DetailViewState, DetailViewControls } from '../../grid/DetailView';
+import type { SelectionQuerySpec } from '../../grid/metadataPrefetch';
 
 export interface InspectorStateParams {
   showInspectorSetting: boolean;

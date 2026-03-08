@@ -1,6 +1,6 @@
 import { useRuntimeSyncStore } from '../../state/runtimeSyncStore';
 import { useDomainStore } from '../../state/domainStore';
-import { SidebarController } from '../../controllers/sidebarController';
+import { SidebarController } from '../../shared/controllers/sidebarController';
 
 let unsub: (() => void) | null = null;
 let debounceTimer: ReturnType<typeof setTimeout> | null = null;

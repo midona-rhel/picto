@@ -29,19 +29,21 @@ function countMatches(text, re) {
 }
 
 const DOMAIN_MIN_COUNTS = [
-  { file: 'src/components/image-grid/ImageGrid.tsx', min: 10 },
-  { file: 'src/components/TagManager.tsx', min: 5 },
-  { file: 'src/components/sidebar/FolderTree.tsx', min: 10 },
-  { file: 'src/components/sidebar/SmartFolderList.tsx', min: 4 },
-  { file: 'src/components/smart-folders/SmartFolderModal.tsx', min: 2 },
-  { file: 'src/components/settings/SubscriptionsPanel.tsx', min: 6 },
-  { file: 'src/components/settings/DuplicatesPanel.tsx', min: 1 },
-  { file: 'src/components/DuplicateManager.tsx', min: 1 },
+  { file: 'src/features/grid/ImageGrid.tsx', min: 1 },
+  { file: 'src/features/grid/hooks/useGridMutationActions.ts', min: 7 },
+  { file: 'src/features/grid/hooks/useGridItemActions.ts', min: 1 },
+  { file: 'src/features/tags/components/TagManager.tsx', min: 5 },
+  { file: 'src/features/sidebar/hooks/useFolderTreeActions.ts', min: 10 },
+  { file: 'src/features/sidebar/hooks/useFolderTreeDnd.ts', min: 1 },
+  { file: 'src/features/sidebar/components/SmartFolderList.tsx', min: 4 },
+  { file: 'src/features/smart-folders/components/SmartFolderModal.tsx', min: 2 },
+  { file: 'src/features/settings/components/DuplicatesPanel.tsx', min: 1 },
+  { file: 'src/features/duplicates/components/DuplicateManager.tsx', min: 1 },
 ];
 
 const ROUTING_CHECKS = [
   {
-    file: 'src/app/useAppBootstrap.ts',
+    file: 'src/app/useNativeEventListeners.ts',
     checks: [
       /listen\('menu:undo'/,
       /listen\('menu:redo'/,
@@ -50,7 +52,7 @@ const ROUTING_CHECKS = [
     ],
   },
   {
-    file: 'electron/main.mjs',
+    file: 'electron/windows/menu.mjs',
     checks: [
       /label:\s*'Undo'/,
       /label:\s*'Redo'/,

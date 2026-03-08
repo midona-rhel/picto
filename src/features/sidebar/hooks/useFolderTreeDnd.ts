@@ -7,7 +7,7 @@ import {
   type DragEndEvent,
   type DragMoveEvent,
 } from '@dnd-kit/core';
-import { FolderController } from '../../../controllers/folderController';
+import { FolderController } from '../../../shared/controllers/folderController';
 import { registerUndoAction } from '../../../shared/controllers/undoRedoController';
 import type { SidebarNodeDto } from '../../../shared/types/sidebar';
 import {

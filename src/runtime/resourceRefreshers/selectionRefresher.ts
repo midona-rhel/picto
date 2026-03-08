@@ -1,5 +1,5 @@
 import { useRuntimeSyncStore } from '../../state/runtimeSyncStore';
-import { SelectionController } from '../../controllers/selectionController';
+import { SelectionController } from '../../shared/controllers/selectionController';
 
 let unsub: (() => void) | null = null;
 let prevStaleRef: Set<unknown> | null = null;

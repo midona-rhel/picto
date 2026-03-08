@@ -1,14 +1,13 @@
 import { useEffect } from 'react';
 import { api, listen } from '#desktop/api';
-import { SidebarController } from '../controllers/sidebarController';
-import { SelectionController } from '../controllers/selectionController';
+import { SidebarController } from '../shared/controllers/sidebarController';
 import { useRuntimeSyncStore } from '../state/runtimeSyncStore';
-import { useCacheStore } from '../state/cacheStore';
 import { useLibraryStore } from '../state/libraryStore';
 import { useNavigationStore, type ViewType } from '../state/navigationStore';
 import { startAllRefreshers, stopAllRefreshers } from '../runtime/refresherOrchestrator';
 import { performUndo, performRedo } from '../shared/controllers/undoRedoController';
 import { runBestEffort } from '../shared/lib/asyncOps';
+import type { ResourceKey } from '../shared/types/generated/runtime-contract';
 
 /**
  * Consolidates all native event listeners and runtime init/teardown
@@ -31,10 +30,12 @@ export function useNativeEventListeners(): void {
         useLibraryStore.getState().setSwitching(true);
       }),
       listen('library-switched', () => {
-        useCacheStore.getState().invalidateAll();
-        useCacheStore.getState().bumpGridRefresh();
-        SidebarController.requestRefresh();
-        SelectionController.invalidateSummary();
+        useRuntimeSyncStore.getState().markResourcesStale([
+          'sidebar/tree' as ResourceKey,
+          'sidebar/counts' as ResourceKey,
+          'grid/system:all' as ResourceKey,
+          'selection/current' as ResourceKey,
+        ]);
         useLibraryStore.getState().setSwitching(false);
         useLibraryStore.getState().loadConfig();
       }),

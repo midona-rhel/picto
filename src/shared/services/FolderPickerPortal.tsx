@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useLayoutEffect, useCallback, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { IconCheck, IconEqual, IconLayersIntersect, IconLayersUnion, IconMinus, IconPin, IconPinFilled } from '@tabler/icons-react';
-import { FolderController, type Folder } from '../../controllers/folderController';
+import { FolderController, type Folder } from '../controllers/folderController';
 import { useDomainStore } from '../../state/domainStore';
 import type { FilterLogicMode } from '../../state/filterStore';
 import { DynamicIcon } from '#features/folders/components';

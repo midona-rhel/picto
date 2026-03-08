@@ -1,7 +1,7 @@
 /**
  * Guard: grid architecture invariants.
  *
- * Scans src/components/image-grid/ for violations of the grid architecture
+ * Scans src/features/grid/ for violations of the grid architecture
  * established in PBIs 151–156:
  *
  * 1. GridController.fetchGridPage only in GridQueryBroker.ts
@@ -17,7 +17,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 const root = process.cwd();
-const gridDir = path.join(root, 'src', 'components', 'image-grid');
+const gridDir = path.join(root, 'src', 'features', 'grid');
 
 // ── File walker ────────────────────────────────────────────────
 

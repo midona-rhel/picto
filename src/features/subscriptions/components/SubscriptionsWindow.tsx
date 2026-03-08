@@ -13,7 +13,7 @@ import { api, getCurrentWindow } from '#desktop/api';
 import { notifyError, notifySuccess } from '../../../shared/lib/notify';
 import { FlowsWorking, type FlowResultEntry } from './FlowsWorking';
 import { CreateFlowModal } from './CreateFlowModal';
-import { SubscriptionController } from '../../../controllers/subscriptionController';
+import { SubscriptionController } from '../../../shared/controllers/subscriptionController';
 import type {
   CredentialDomain,
   CredentialHealth,

@@ -17,7 +17,7 @@ import {
   IconPencil,
   IconRefresh,
 } from '@tabler/icons-react';
-import { SubscriptionController } from '../../../controllers/subscriptionController';
+import { SubscriptionController } from '../../../shared/controllers/subscriptionController';
 import { useRuntimeSyncStore } from '../../../state/runtimeSyncStore';
 import { listenRuntimeEvent } from '#desktop/api';
 import type { FlowInfo, FlowsWorkingProps, SitePluginInfo, SubProgress } from '../types';

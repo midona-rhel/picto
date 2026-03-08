@@ -10,7 +10,7 @@ import {
 import { api, open as openDialog } from '#desktop/api';
 import { TextButton } from '../../../shared/components/TextButton';
 import { SettingsBlock, SettingsRow, SettingsInputGroup } from './ui';
-import { PtrSyncController } from '../../../controllers/ptrSyncController';
+import { PtrSyncController } from '../../../shared/controllers/ptrSyncController';
 import { runBestEffort, runCriticalAction } from '../../../shared/lib/asyncOps';
 import { useRuntimeSyncStore } from '../../../state/runtimeSyncStore';
 

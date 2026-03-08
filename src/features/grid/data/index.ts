@@ -9,13 +9,13 @@ export {
   getOrStartSelectionSummary,
   invalidateSelectionSummary,
   getMetadataCacheDebugStats,
-} from '../../../components/image-grid/metadataPrefetch';
+} from '../metadataPrefetch';
 
 export type {
   EntityAllMetadata,
   ResolvedTagInfo,
   SelectionQuerySpec,
   SelectionSummary,
-} from '../../../components/image-grid/metadataPrefetch';
+} from '../metadataPrefetch';
 
-export { cleanupMediaCache } from '../../../components/image-grid/enhancedMediaCache';
+export { cleanupMediaCache } from '../enhancedMediaCache';
