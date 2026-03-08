@@ -7,7 +7,19 @@
 use serde::Serialize;
 use ts_rs::TS;
 
-use crate::events::Domain;
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/runtime-contract/")]
+#[serde(rename_all = "snake_case")]
+pub enum Domain {
+    Files,
+    Folders,
+    SmartFolders,
+    Tags,
+    Sidebar,
+    Selection,
+    ViewPrefs,
+    Subscriptions,
+}
 
 /// The primary mutation description emitted via `runtime/mutation_committed`.
 ///

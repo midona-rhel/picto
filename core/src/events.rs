@@ -50,21 +50,7 @@ pub fn emit_empty(name: &str) {
 
 // SEQ counter lives in runtime_state — single source of truth.
 
-#[derive(Debug, Clone, serde::Serialize, ts_rs::TS)]
-#[ts(export_to = "../../src/shared/types/generated/runtime-contract/")]
-#[serde(rename_all = "snake_case")]
-pub enum Domain {
-    Files,
-    Folders,
-    SmartFolders,
-    Tags,
-    Sidebar,
-    Selection,
-    ViewPrefs,
-    Subscriptions,
-}
-
-pub use crate::runtime_contract::mutation::SidebarCounts;
+pub use crate::runtime_contract::mutation::{Domain, SidebarCounts};
 
 #[derive(Debug, Clone, Default)]
 pub struct MutationImpact {
