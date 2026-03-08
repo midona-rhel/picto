@@ -7,7 +7,6 @@ import { FolderPickerService } from '../../../shared/services/folderPickerServic
 import { bustThumbnailCache } from '../../../shared/lib/mediaUrl';
 import { useCacheStore } from '../../../state/cacheStore';
 import { useSettingsStore, type AppSettings } from '../../../state/settingsStore';
-import { getShortcut, matchesShortcutDef } from '../../../shared/lib/shortcuts';
 import type { GridRuntimeAction, GridRuntimeState, GridViewMode } from '../runtime';
 
 let lastUsedFolder: { id: number; name: string } | null = null;
@@ -40,8 +39,6 @@ interface UseGridHotkeysArgs {
   viewerOpen: boolean;
   closeViewer: (exitHash?: string) => void;
   statusFilter?: string | null;
-  handleInboxAction?: (hash: string, status: 'active' | 'trash') => void;
-  handleInboxSelectionAction?: (status: 'active' | 'trash') => void;
 }
 
 export function useGridHotkeys({
@@ -71,9 +68,7 @@ export function useGridHotkeys({
   handleOpenDetail,
   viewerOpen,
   closeViewer,
-  statusFilter,
-  handleInboxAction,
-  handleInboxSelectionAction,
+  statusFilter: _statusFilter,
 }: UseGridHotkeysArgs): void {
   const handleGridNavigationRef = useRef(handleGridNavigation);
   handleGridNavigationRef.current = handleGridNavigation;
@@ -223,12 +218,6 @@ export function useGridHotkeys({
   handleOpenQuickLookRef.current = handleOpenQuickLook;
   const handleOpenDetailRef = useRef(handleOpenDetail);
   handleOpenDetailRef.current = handleOpenDetail;
-  const statusFilterRef = useRef(statusFilter);
-  statusFilterRef.current = statusFilter;
-  const handleInboxActionRef = useRef(handleInboxAction);
-  handleInboxActionRef.current = handleInboxAction;
-  const handleInboxSelectionActionRef = useRef(handleInboxSelectionAction);
-  handleInboxSelectionActionRef.current = handleInboxSelectionAction;
   const viewerOpenRef = useRef(viewerOpen);
   viewerOpenRef.current = viewerOpen;
   useEffect(() => {
@@ -262,28 +251,6 @@ export function useGridHotkeys({
         if (digit >= 0 && digit <= 5) {
           e.preventDefault();
           handleRateSelectedRef.current(digit);
-          return;
-        }
-      }
-
-      // Inbox accept/reject from grid — apply to the current selection.
-      if (statusFilterRef.current === 'inbox' && handleInboxActionRef.current) {
-        const acceptDef = getShortcut('inbox.accept');
-        if (acceptDef && matchesShortcutDef(e, acceptDef)) {
-          const s = stateRef.current;
-          if ((s.virtualAllSelection || s.selectedHashes.size > 0) && handleInboxSelectionActionRef.current) {
-            e.preventDefault();
-            handleInboxSelectionActionRef.current('active');
-            return;
-          }
-        }
-        const rejectDef = getShortcut('inbox.reject');
-        if (rejectDef && matchesShortcutDef(e, rejectDef)) {
-          const s = stateRef.current;
-          if ((s.virtualAllSelection || s.selectedHashes.size > 0) && handleInboxSelectionActionRef.current) {
-            e.preventDefault();
-            handleInboxSelectionActionRef.current('trash');
-          }
           return;
         }
       }

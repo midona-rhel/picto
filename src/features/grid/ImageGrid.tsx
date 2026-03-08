@@ -138,7 +138,7 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
   const initialLoadDone = useRef(false);
   const displayViewModeRef = useRef(state.displayViewMode);
   displayViewModeRef.current = state.displayViewMode;
-  const { queryKey, outlineImages, outlineTotalCount, requestReplace } = useGridData({
+  const { queryKey, outlineTotalCount, requestReplace } = useGridData({
     queryInput: {
       folderId: folderId ?? null,
       collectionEntityId: collectionEntityId ?? null,
@@ -165,7 +165,7 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
   });
 
   const gap = 8;
-  const activeGridImages = outlineImages ?? state.images;
+  const activeGridImages = state.images;
   const resolvedGridTotalCount = outlineTotalCount ?? selectedScopeCount ?? activeGridImages.length;
 
   // Refs for values that change frequently but shouldn't invalidate handleImageClick
@@ -373,8 +373,6 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
     viewerOpen: viewer.isOpen,
     closeViewer: viewer.close,
     statusFilter,
-    handleInboxAction,
-    handleInboxSelectionAction,
   });
 
   const handleImageClick = useCallback((image: MasonryImageItem, event: React.MouseEvent) => {
