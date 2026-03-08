@@ -186,11 +186,18 @@ Every entry has a target location and explicit delete condition.
 | `videoConstants.ts` | transitional | `src/features/viewer/` | same |
 | `videoTimeFormat.ts` | transitional | `src/features/viewer/` | same |
 
-## src/components/image-grid/ (blocked on PBI-408 split)
+## Historical note: src/components/image-grid/ migration
 
-All 44 source files + 10 hooks + 4 queryBroker + 7 runtime + 2 viewer files are transitional.
-Target: `src/features/grid/` after PBI-408 architectural split.
-Delete condition: split image-grid into rendering, runtime, hooks, queries, media, and viewer subsystems, then move each into `src/features/grid/`.
+This migration is complete.
+
+The old `src/components/image-grid/` tree was split and moved into:
+
+1. `src/features/grid/`
+2. `src/features/grid/hooks/`
+3. `src/features/grid/queryBroker/`
+4. `src/features/grid/runtime/`
+5. `src/features/grid/viewer/`
+6. `src/features/viewer/`
 
 | Subsystem | Files | Target subdirectory |
 |-----------|-------|-------------------|
@@ -223,10 +230,10 @@ Total: 3 moves + consumer import updates.
 
 ### Tier 3: Feature migration (PBI-405)
 
-Move components from `src/components/<domain>/` into `src/features/<domain>/`.
-Update barrel re-exports to point at local code. Delete `src/components/<domain>/`.
+Completed. Feature-owned surfaces moved from `src/components/<domain>/`
+into `src/features/<domain>/`.
 
 ### Tier 4: Architectural split (PBI-408)
 
-`src/components/image-grid/` (65+ files) needs decomposition before migration.
-Split by subsystem (see table above), then move into `src/features/grid/`.
+Completed. The old `src/components/image-grid/` tree was decomposed and
+deleted after migration.

@@ -5,20 +5,17 @@ Supersedes: ~~PBI-230~~ (batch inbox accept/reject — merged into this PBI)
 ## Priority
 P1
 
-## Audit Status (2026-03-06)
-Status: **Not Implemented**
+## Audit Status (2026-03-08)
+Status: **Partially Implemented**
 
 Evidence:
-1. Context menu actions do not consistently handle the distinction between single-item and multi-selection operations.
-2. Some actions that should operate on the full selection (e.g. add to folder, accept/reject) only apply to the right-clicked item.
-3. Specifically: a user tried Ctrl+A → right-click → Accept in the inbox, but only one item was processed. The workaround is opening each image individually and using Enter/Backspace one at a time.
-4. Some actions that are single-item-only (e.g. rename) have no defined behavior when multiple items are selected.
+1. The grid context menu now has real selection-aware bulk actions in [src/shared/components/context-actions/imageActions.tsx](./src/shared/components/context-actions/imageActions.tsx), including delete, remove from folder, remove from collection, copy/paste tags, thumbnail regeneration, and folder add flows.
+2. Single-item actions like Rename and Open in New Window are correctly scoped to the primary/right-clicked item.
+3. However, inbox Accept/Reject still only appear behind `singleHash` and still call `handleInboxAction(singleHash, ...)`, so the specific bulk inbox case from this PBI is still not solved.
+4. There is still no context-menu header showing selection count, and no dedicated batch accept/reject shortcut in [src/features/grid/hooks/useGridHotkeys.ts](./src/features/grid/hooks/useGridHotkeys.ts).
 
 ## Problem
-The context menu does not have a clear policy for how each action behaves when one vs many items are selected. This leads to:
-- Bulk operations that silently apply to only one item (e.g. batch accept/reject in inbox)
-- Single-item operations that are ambiguous when shown with a multi-selection (e.g. rename — which item?)
-- Inconsistent user expectations about what "right-click with selection" means
+The main remaining issue is not the entire context menu surface. It is the inconsistent handling of inbox accept/reject versus the otherwise selection-aware bulk actions.
 
 ## Desired policy
 

@@ -3,20 +3,17 @@
 ## Priority
 P2
 
-## Audit Status (2026-03-06)
-Status: **Blocked (Subscription Workstream Deferred)**
-
-Blocked Reason:
-1. Subscription workstream is deferred by product direction for now.
-2. Keep this PBI in backlog but do not execute until unblocked.
+## Audit Status (2026-03-08)
+Status: **Partially Implemented**
 
 Evidence:
-1. A user reported: "Might want to have a short note on how to set up subscriptions, idk what a query is on twitter for instance."
-2. The subscription panel has no inline help, tooltips, or examples explaining what to enter for each site.
-3. Different sites use different query formats (tags for Danbooru, URLs for Twitter, etc.) but this is not communicated.
+1. The subscription workstream is active; the previous "deferred" blocker is stale.
+2. The add-query UI in [src/features/subscriptions/components/SubscriptionGroupsPanel.tsx](./src/features/subscriptions/components/SubscriptionGroupsPanel.tsx) still uses a generic `placeholder="Query"` with no per-site guidance.
+3. There is still no inline help icon, tooltip, or expandable explainer showing example query formats for different sites.
+4. There is some auth guidance now: when adding a query to a site that supports auth and lacks credentials, the UI shows an informational notification directing the user to configure credentials.
 
 ## Problem
-The subscription panel assumes users already know the query format for each supported site. There is no help text, placeholder examples, or documentation inline. New users don't know what to type and have no way to learn without external help.
+The remaining gap is query guidance, not subscription enablement itself. Users can create and run subscriptions, but the add-query form still assumes they already know each site's query syntax.
 
 ## Scope
 - Subscription panel download input area

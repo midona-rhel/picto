@@ -3,17 +3,17 @@
 ## Priority
 P2
 
-## Audit Status (2026-03-06)
-Status: **Not Implemented**
+## Audit Status (2026-03-08)
+Status: **Partially Implemented**
 
 Evidence:
-1. "Add to folder" in the grid context menu currently opens a nested context menu (submenu) listing folders.
-2. The submenu is flat — no folder hierarchy, no expand/collapse, no search.
-3. For libraries with deep folder trees, the submenu is unusable.
-4. The sidebar already has a working tree view component with expand/collapse, but it is not reused here.
+1. "Add to folder" no longer opens a nested submenu. It now opens the shared folder picker portal from [src/shared/services/FolderPickerPortal.tsx](./src/shared/services/FolderPickerPortal.tsx).
+2. The picker already supports search, keyboard navigation, multi-selection use, and a stable floating panel UI instead of fragile submenu hover behavior.
+3. However, the picker is still a flat alphabetized list (`flatFolders`) rather than a hierarchical tree matching the sidebar.
+4. There is still no expand/collapse navigation for nested folders, so the core tree-view requirement from this PBI remains open.
 
 ## Problem
-The "Add to folder" action opens as a nested context menu, which is a poor fit for folder selection. Context menu submenus are hard to navigate, can't show hierarchy, and disappear on accidental mouse-out. Users need a proper folder picker that shows the full tree structure and supports both single and multi-image operations.
+The submenu problem is solved, but the folder picker still does not expose actual hierarchy. For large nested libraries, a flat searchable list is better than a submenu, but still weaker than a real tree view.
 
 ## Desired behavior
 1. Clicking "Add to folder" in the context menu opens a **modal dialog** (not a submenu).
@@ -36,12 +36,12 @@ The "Add to folder" action opens as a nested context menu, which is a poor fit f
 6. Close the modal and show a brief toast: "Added N items to [folder name]".
 
 ## Acceptance Criteria
-1. "Add to folder" opens a modal, not a context menu submenu.
+1. "Add to folder" opens a modal or dedicated picker surface, not a context menu submenu.
 2. Modal shows a tree view matching the sidebar folder hierarchy.
 3. Folders can be expanded/collapsed to navigate nested structure.
 4. Single image: added to selected folder on confirm.
 5. Multi-selection: all selected images added to selected folder on confirm.
-6. Modal is keyboard-navigable (arrow keys for tree, Enter to confirm, Escape to cancel).
+6. Picker is keyboard-navigable (arrow keys for tree/list, Enter to confirm, Escape to cancel).
 
 ## Test Cases
 1. Right-click single image → Add to folder → modal opens with tree → select folder → image added.

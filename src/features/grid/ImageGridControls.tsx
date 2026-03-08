@@ -442,7 +442,7 @@ export function ImageGridControls({
             <input
               className={st.searchInput}
               type="text"
-              placeholder="Search..."
+              placeholder="Search files, notes, sources..."
               value={localSearchText}
               onChange={(e) => handleSearchInput(e.target.value)}
             />

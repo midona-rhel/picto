@@ -1,7 +1,7 @@
 # Frontend Topology Enforcement and Legacy Deletion Plan
 
 Date: 2026-03-07
-Related structural umbrella: `PBI-401`
+Related structural umbrella: completed frontend restructure work (`PBI-401` to `PBI-408`)
 
 ## Purpose
 
@@ -195,14 +195,21 @@ These are classes of likely deletion targets, not the final ledger:
 5. dead exports and alias modules retained only to avoid import cleanup
 6. old shared folders that actually contain domain code
 
-## Execution Sequence
+## Status
 
-1. `PBI-401` defines the target topology and folder ownership rules
-2. `PBI-402` establishes the runtime/resource synchronization model against the backend
-3. `PBI-403` adds policy and CI guardrails
-4. `PBI-404` builds the frontend legacy register and classifies current files
-5. `PBI-405` executes the first deletion campaign and compatibility shim purge
-6. `PBI-408` and related domain PBIs split oversized modules as part of the move/delete work
+The original execution sequence in this document has been carried out.
+
+Completed:
+
+1. `PBI-401` topology definition
+2. `PBI-402` runtime/resource synchronization model
+3. `PBI-403` topology guardrails
+4. `PBI-404` legacy register/classification pass
+5. `PBI-405` deletion campaign
+6. `PBI-408` oversized module split work
+
+This document remains useful as policy/reference, but it should no longer be
+read as an active execution plan.
 
 ## Definition of Done
 

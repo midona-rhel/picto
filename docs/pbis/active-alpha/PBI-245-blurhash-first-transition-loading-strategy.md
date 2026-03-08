@@ -3,13 +3,14 @@
 ## Priority
 P1
 
-## Audit Status (2026-03-06)
-Status: **Not Implemented**
+## Audit Status (2026-03-08)
+Status: **Partially Implemented**
 
 Evidence:
-1. Blurhash data is already stored per-image in the database and available on grid items.
-2. Current transitions between views/scopes show either stale cached images from the previous view or blank placeholders during loading.
-3. There is no defined loading strategy that uses blurhash as a progressive placeholder during transitions.
+1. The grid already has viewport-priority lazy loading in [src/features/grid/gridLazyLoadManager.ts](./src/features/grid/gridLazyLoadManager.ts), including intersection-based prioritization, bounded concurrent loads, and cancellation for off-screen items.
+2. Real thumbnails already fade in through [src/features/grid/VirtualGrid.module.css](./src/features/grid/VirtualGrid.module.css), and cached thumbnails skip redundant transitions.
+3. However, the placeholder path in [src/features/grid/VirtualGrid.tsx](./src/features/grid/VirtualGrid.tsx) still uses `dominant_color_hex`, not blurhash.
+4. There is no blurhash decode/render path in `src/`, and no explicit transition-time tile reset that forces visible items back to a blurhash placeholder on scope changes.
 
 ## Problem
 When transitioning between views (e.g. changing folder, navigating from inbox to all images, entering/exiting detail), the image loading experience is inconsistent. Cached thumbnails from the previous view may linger, blank tiles may flash, or images may pop in at random times. There is no deliberate visual loading sequence that feels intentional and polished.
@@ -41,7 +42,7 @@ t=200ms+ Images continue fading in across the viewport
 ```
 
 ## Scope
-- `src/components/image-grid/` — tile rendering, image loading lifecycle
+- `src/features/grid/` — tile rendering, image loading lifecycle
 - Image cache layer — add ability to evict rendered state without dropping cached bytes
 - Blurhash decode — ensure it's fast enough for batch decode of visible tiles
 
@@ -71,6 +72,17 @@ t=200ms+ Images continue fading in across the viewport
 4. Already-cached images still go through the blurhash → fade-in sequence (just faster).
 5. Viewport-priority loading: visible images load before off-screen images.
 6. The experience feels intentional and polished, not like a loading bug.
+
+## Current State
+Implemented:
+1. Viewport-priority loading
+2. Thumbnail fade-in
+3. Cached thumbnail fast path
+
+Missing:
+1. Blurhash rendering in grid/detail views
+2. Transition-time tile reset to blurhash
+3. Explicit delayed load sequencing tied to scope/view transitions
 
 ## Test Cases
 1. Switch from folder A to folder B — all tiles show blurhash, then fade to thumbnails.

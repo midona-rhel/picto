@@ -3,13 +3,14 @@
 ## Priority
 P1
 
-## Audit Status (2026-03-06)
+## Audit Status (2026-03-08)
 Status: **Not Implemented**
 
 Evidence:
-1. A user reported: "There doesn't seem to be a loading bar/indicator when importing pictures so you don't know if the program is doing anything while importing or not."
-2. After selecting files for import, there is no visible feedback until the import completes.
-3. For small imports (< 10 files) the delay is brief, but for larger imports (50+ files) the lack of feedback makes the app feel frozen.
+1. Manual import in [src/features/grid/ImageGrid.tsx](./src/features/grid/ImageGrid.tsx) still only shows a completion toast after `api.import.files(...)` resolves.
+2. There is no renderer event carrying per-file manual import progress, and `import_files` in [core/src/dispatch/typed/media_lifecycle.rs](./core/src/dispatch/typed/media_lifecycle.rs) still returns only the final batch result.
+3. The only live per-file import event currently exposed to the renderer is `file-imported`, emitted from subscription sync in [core/src/subscriptions/sync_engine.rs](./core/src/subscriptions/sync_engine.rs), not from the normal manual import path.
+4. So the app can live-insert subscription imports, but it still cannot show a true progress indicator for ordinary button/drag imports.
 
 ## Problem
 File imports provide no progress feedback. After the user selects files, the UI gives no indication that work is happening — no progress bar, no spinner, no file count, nothing. Users don't know if the import is running, stuck, or failed.

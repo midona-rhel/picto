@@ -3,16 +3,17 @@
 ## Priority
 P1
 
-## Audit Status (2026-03-06)
-Status: **Not Implemented**
+## Audit Status (2026-03-08)
+Status: **Partially Implemented / Needs Linux Verification**
 
 Evidence:
-1. A user on Linux reported: "The Import picture button doesn't seem to work."
-2. The button appears clickable but does not trigger a file picker dialog or any visible action.
-3. May be an Electron native dialog issue on Linux (file picker not opening), or the button handler not firing.
+1. The Import button is wired in [src/features/grid/ImageGrid.tsx](./src/features/grid/ImageGrid.tsx) and calls the Electron dialog bridge through [src/platform/nativeIntegration.ts](./src/platform/nativeIntegration.ts).
+2. The Electron side exposes a generic open dialog handler in [electron/ipc/registerHandlers.mjs](./electron/ipc/registerHandlers.mjs) using `dialog.showOpenDialog(...)`.
+3. The frontend now has visible error handling around the import flow (`notifyError(err, 'Import Failed')`) instead of a silent no-op if the dialog or import throws.
+4. What is still missing is an actual Linux-specific reproduction or compatibility fix. From code alone, there is no platform-specific branch explaining or fixing the original Linux report.
 
 ## Problem
-The import button in the UI does not function on Linux. Users cannot import local files through the primary UI affordance. This is a platform parity issue — import works on macOS and Windows.
+The reported Linux failure has not been reproduced or fixed in a platform-specific way. The current code path looks correct, but this PBI still needs Linux validation before it can be closed.
 
 ## Scope
 - Import button click handler — verify it triggers Electron's native file dialog
@@ -28,6 +29,7 @@ The import button in the UI does not function on Linux. Users cannot import loca
 1. Import button opens a file picker dialog on Linux.
 2. Selected files are imported into the library.
 3. If the dialog cannot open, an error message is shown instead of silent failure.
+4. Linux verification evidence is recorded so this does not remain a speculative bug.
 
 ## Test Cases
 1. Linux (GNOME): click Import → file picker opens → select files → files imported.
