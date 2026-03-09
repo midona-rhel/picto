@@ -170,10 +170,30 @@ impl MutationImpact {
         Self::new().domains(&[domain, Domain::Sidebar])
     }
 
+    /// Subscription/group/query structure change with no file mutation.
+    pub fn subscriptions_sidebar() -> Self {
+        Self::sidebar(Domain::Subscriptions)
+    }
+
     /// File status change (status update, delete, wipe). Fact: status_changed.
     pub fn file_status_change(db: &crate::sqlite::SqliteDatabase) -> Self {
         Self::new()
             .domains(&[
+                Domain::Files,
+                Domain::Sidebar,
+                Domain::Folders,
+                Domain::SmartFolders,
+                Domain::Selection,
+            ])
+            .status_changed()
+            .sidebar_counts_from(db)
+    }
+
+    /// Subscription/group deletion that also mutates library file status.
+    pub fn subscriptions_file_status_change(db: &crate::sqlite::SqliteDatabase) -> Self {
+        Self::new()
+            .domains(&[
+                Domain::Subscriptions,
                 Domain::Files,
                 Domain::Sidebar,
                 Domain::Folders,
@@ -326,13 +346,13 @@ pub fn emit_mutation(origin: &str, impact: MutationImpact) {
 /// Compute system sidebar counts from bitmaps (O(1)).
 /// Call AFTER inline bitmap updates so values reflect the mutation.
 ///
-/// `all_images` counts only Status(1) (active), NOT inbox. This matches the
-/// frontend's "All Images" view which shows reviewed files only. Inbox and
+/// `all_active` counts only Status(1) (active), NOT inbox. This matches the
+/// frontend's "All Active" view which shows reviewed files only. Inbox and
 /// trash get their own dedicated counts.
 pub fn sidebar_counts_from_bitmaps(db: &crate::sqlite::SqliteDatabase) -> SidebarCounts {
     use crate::sqlite::bitmaps::BitmapKey;
     SidebarCounts {
-        all_images: db.bitmaps.len(&BitmapKey::Status(1)) as i64,
+        all_active: db.bitmaps.len(&BitmapKey::Status(1)) as i64,
         inbox: db.bitmaps.len(&BitmapKey::Status(0)) as i64,
         trash: db.bitmaps.len(&BitmapKey::Status(2)) as i64,
     }

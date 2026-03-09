@@ -174,24 +174,23 @@ pub async fn create_group(state: &AppState, input: CreateGroupInput) -> Result<s
     ).await?;
     crate::events::emit_mutation(
         "create_group",
-        crate::events::MutationImpact::sidebar(crate::events::Domain::Subscriptions),
+        crate::events::MutationImpact::subscriptions_sidebar(),
     );
     Ok(serde_json::to_value(&group).map_err(|e| e.to_string())?)
 }
 
 pub async fn delete_group(state: &AppState, input: DeleteGroupInput) -> Result<(), String> {
+    let delete_files = input.delete_files.unwrap_or(false);
     crate::subscriptions::subscription_group_controller::SubscriptionGroupController::delete_group(
         &state.db, &state.blob_store, input.id, input.delete_files,
     ).await?;
     crate::events::emit_mutation(
         "delete_group",
-        crate::events::MutationImpact::new()
-            .domains(&[
-                crate::events::Domain::Subscriptions,
-                crate::events::Domain::Sidebar,
-                crate::events::Domain::Files,
-                crate::events::Domain::Selection,
-            ]),
+        if delete_files {
+            crate::events::MutationImpact::subscriptions_file_status_change(&state.db)
+        } else {
+            crate::events::MutationImpact::subscriptions_sidebar()
+        },
     );
     Ok(())
 }
@@ -200,7 +199,7 @@ pub async fn rename_group(state: &AppState, input: RenameGroupInput) -> Result<(
     crate::subscriptions::subscription_group_controller::SubscriptionGroupController::rename_group(&state.db, input.id, input.name).await?;
     crate::events::emit_mutation(
         "rename_group",
-        crate::events::MutationImpact::sidebar(crate::events::Domain::Subscriptions),
+        crate::events::MutationImpact::subscriptions_sidebar(),
     );
     Ok(())
 }
@@ -211,7 +210,7 @@ pub async fn set_group_schedule(state: &AppState, input: SetGroupScheduleInput) 
     ).await?;
     crate::events::emit_mutation(
         "set_group_schedule",
-        crate::events::MutationImpact::sidebar(crate::events::Domain::Subscriptions),
+        crate::events::MutationImpact::subscriptions_sidebar(),
     );
     Ok(())
 }
@@ -228,7 +227,7 @@ pub async fn run_group(state: &AppState, input: RunGroupInput) -> Result<(), Str
     ).await?;
     crate::events::emit_mutation(
         "run_group",
-        crate::events::MutationImpact::sidebar(crate::events::Domain::Subscriptions),
+        crate::events::MutationImpact::subscriptions_sidebar(),
     );
     Ok(())
 }
@@ -239,7 +238,7 @@ pub async fn stop_group(state: &AppState, input: StopGroupInput) -> Result<(), S
     ).await?;
     crate::events::emit_mutation(
         "stop_group",
-        crate::events::MutationImpact::sidebar(crate::events::Domain::Subscriptions),
+        crate::events::MutationImpact::subscriptions_sidebar(),
     );
     Ok(())
 }
@@ -279,24 +278,23 @@ pub async fn create_subscription(state: &AppState, input: CreateSubscriptionInpu
     ).await?;
     crate::events::emit_mutation(
         "create_subscription",
-        crate::events::MutationImpact::sidebar(crate::events::Domain::Subscriptions),
+        crate::events::MutationImpact::subscriptions_sidebar(),
     );
     Ok(serde_json::to_value(&sub).map_err(|e| e.to_string())?)
 }
 
 pub async fn delete_subscription(state: &AppState, input: DeleteSubscriptionInput) -> Result<serde_json::Value, String> {
+    let delete_files = input.delete_files.unwrap_or(false);
     let count = crate::subscriptions::controller::SubscriptionController::delete_subscription(
         &state.db, &state.blob_store, input.id, input.delete_files,
     ).await?;
     crate::events::emit_mutation(
         "delete_subscription",
-        crate::events::MutationImpact::new()
-            .domains(&[
-                crate::events::Domain::Subscriptions,
-                crate::events::Domain::Sidebar,
-                crate::events::Domain::Files,
-                crate::events::Domain::Selection,
-            ]),
+        if delete_files {
+            crate::events::MutationImpact::subscriptions_file_status_change(&state.db)
+        } else {
+            crate::events::MutationImpact::subscriptions_sidebar()
+        },
     );
     Ok(serde_json::to_value(&count).map_err(|e| e.to_string())?)
 }
@@ -307,7 +305,7 @@ pub async fn pause_subscription(state: &AppState, input: PauseSubscriptionInput)
     ).await?;
     crate::events::emit_mutation(
         "pause_subscription",
-        crate::events::MutationImpact::sidebar(crate::events::Domain::Subscriptions),
+        crate::events::MutationImpact::subscriptions_sidebar(),
     );
     Ok(())
 }
@@ -318,7 +316,7 @@ pub async fn add_subscription_query(state: &AppState, input: AddSubscriptionQuer
     ).await?;
     crate::events::emit_mutation(
         "add_subscription_query",
-        crate::events::MutationImpact::domain_only(crate::events::Domain::Subscriptions),
+        crate::events::MutationImpact::subscriptions_sidebar(),
     );
     Ok(serde_json::to_value(&query).map_err(|e| e.to_string())?)
 }
@@ -329,7 +327,7 @@ pub async fn delete_subscription_query(state: &AppState, input: DeleteSubscripti
     ).await?;
     crate::events::emit_mutation(
         "delete_subscription_query",
-        crate::events::MutationImpact::domain_only(crate::events::Domain::Subscriptions),
+        crate::events::MutationImpact::subscriptions_sidebar(),
     );
     Ok(())
 }
@@ -340,7 +338,7 @@ pub async fn pause_subscription_query(state: &AppState, input: PauseSubscription
     ).await?;
     crate::events::emit_mutation(
         "pause_subscription_query",
-        crate::events::MutationImpact::domain_only(crate::events::Domain::Subscriptions),
+        crate::events::MutationImpact::subscriptions_sidebar(),
     );
     Ok(())
 }
@@ -371,7 +369,7 @@ pub async fn reset_subscription(state: &AppState, input: ResetSubscriptionInput)
     ).await?;
     crate::events::emit_mutation(
         "reset_subscription",
-        crate::events::MutationImpact::sidebar(crate::events::Domain::Subscriptions),
+        crate::events::MutationImpact::subscriptions_sidebar(),
     );
     Ok(())
 }
@@ -394,7 +392,7 @@ pub async fn rename_subscription(state: &AppState, input: RenameSubscriptionInpu
     ).await?;
     crate::events::emit_mutation(
         "rename_subscription",
-        crate::events::MutationImpact::sidebar(crate::events::Domain::Subscriptions),
+        crate::events::MutationImpact::subscriptions_sidebar(),
     );
     Ok(())
 }
