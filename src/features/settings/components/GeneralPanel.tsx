@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Text, Loader, Select, NumberInput, Tooltip, Switch } from '@mantine/core';
+import { Text, Loader, Select, NumberInput, Switch } from '@mantine/core';
 import { useMantineColorScheme } from '@mantine/core';
 import { api } from '#desktop/api';
 import { useSettingsStore, themeToColorScheme, type ReverseSearchEngine, type Theme } from '../../../state/settingsStore';
@@ -98,13 +98,13 @@ export function GeneralPanel() {
         <SettingsRow label="Theme">
           <div className={styles.themesPicker}>
             {THEMES.map((t) => (
-              <Tooltip key={t.css} label={t.name} position="top" withArrow>
-                <button
-                  className={`${styles.themeSwatch} ${t.css === 'auto' ? styles.themeAuto : ''} ${activeTheme === t.css ? styles.themeActive : ''}`}
-                  style={t.color ? { backgroundColor: t.color } : undefined}
-                  onClick={() => handleThemeChange(t.css)}
-                />
-              </Tooltip>
+              <button
+                key={t.css}
+                className={`${styles.themeSwatch} ${t.css === 'auto' ? styles.themeAuto : ''} ${activeTheme === t.css ? styles.themeActive : ''}`}
+                style={t.color ? { backgroundColor: t.color } : undefined}
+                title={t.name}
+                onClick={() => handleThemeChange(t.css)}
+              />
             ))}
           </div>
         </SettingsRow>
