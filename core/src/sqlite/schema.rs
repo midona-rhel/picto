@@ -602,6 +602,47 @@ pub fn run_migrations(conn: &Connection, from_version: i64) -> rusqlite::Result<
 /// Reconcile schema drift for databases that may already report CURRENT_VERSION
 /// but are missing tables/columns introduced in newer builds.
 pub fn reconcile_schema(conn: &Connection) -> rusqlite::Result<()> {
+    // Legacy subscription-group drift:
+    // - older builds used `flow` / `flow_id`
+    // - some partial schemas can miss `subscription_group` entirely
+    if table_exists(conn, "flow")? {
+        if !table_exists(conn, "subscription_group")? {
+            conn.execute_batch("ALTER TABLE flow RENAME TO subscription_group")?;
+            if has_column(conn, "subscription_group", "flow_id")?
+                && !has_column(conn, "subscription_group", "group_id")?
+            {
+                conn.execute_batch(
+                    "ALTER TABLE subscription_group RENAME COLUMN flow_id TO group_id",
+                )?;
+            }
+            tracing::warn!(
+                "Reconciled subscription schema: renamed legacy flow table to subscription_group"
+            );
+        } else {
+            conn.execute_batch("DROP TABLE IF EXISTS flow")?;
+            tracing::warn!("Reconciled subscription schema: dropped stale legacy flow table");
+        }
+    }
+
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS subscription_group (
+             group_id   INTEGER PRIMARY KEY,
+             name       TEXT NOT NULL,
+             schedule   TEXT NOT NULL DEFAULT 'manual',
+             created_at TEXT NOT NULL
+         );",
+    )?;
+
+    if table_exists(conn, "subscription")?
+        && has_column(conn, "subscription", "flow_id")?
+        && !has_column(conn, "subscription", "group_id")?
+    {
+        conn.execute_batch("ALTER TABLE subscription RENAME COLUMN flow_id TO group_id")?;
+        tracing::warn!(
+            "Reconciled subscription schema: renamed subscription.flow_id to group_id"
+        );
+    }
+
     // Some legacy DBs still have `subscription.site_plugin_id` but not `site_id`.
     if table_exists(conn, "subscription")? && !has_column(conn, "subscription", "site_id")? {
         conn.execute_batch("ALTER TABLE subscription ADD COLUMN site_id TEXT")?;
