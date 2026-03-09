@@ -2,13 +2,71 @@
 //!
 //! Called by the group_scheduler worker spawned in `workers.rs`.
 
+use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 use crate::blob_store::BlobStore;
 use crate::rate_limiter::RateLimiter;
 use crate::settings::store::SettingsStore;
 use crate::sqlite::SqliteDatabase;
 use crate::types::{RunningSubscriptions, SubTerminalStatuses};
+
+const SCHEDULER_WARN_WINDOW: Duration = Duration::from_secs(300);
+
+#[derive(Debug, Clone)]
+struct SchedulerWarnWindow {
+    started_at: Instant,
+    count: u64,
+    message: String,
+}
+
+static SCHEDULER_WARNINGS: OnceLock<Mutex<HashMap<&'static str, SchedulerWarnWindow>>> =
+    OnceLock::new();
+
+fn warn_scheduler_failure(kind: &'static str, message: String) {
+    let warnings = SCHEDULER_WARNINGS.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut guard = crate::poison::mutex_or_recover(warnings, "scheduler::warnings");
+    let now = Instant::now();
+
+    match guard.get_mut(kind) {
+        Some(window)
+            if window.message == message
+                && now.duration_since(window.started_at) <= SCHEDULER_WARN_WINDOW =>
+        {
+            window.count += 1;
+        }
+        Some(window) => {
+            if window.count > 1 {
+                tracing::warn!(
+                    scheduler_kind = kind,
+                    suppressed = window.count - 1,
+                    message = %window.message,
+                    window_secs = SCHEDULER_WARN_WINDOW.as_secs(),
+                    "Scheduler: suppressed repeated failure"
+                );
+            }
+            *window = SchedulerWarnWindow {
+                started_at: now,
+                count: 1,
+                message: message.clone(),
+            };
+            tracing::warn!(scheduler_kind = kind, "{message}");
+        }
+        None => {
+            guard.insert(
+                kind,
+                SchedulerWarnWindow {
+                    started_at: now,
+                    count: 1,
+                    message: message.clone(),
+                },
+            );
+            tracing::warn!(scheduler_kind = kind, "{message}");
+        }
+    }
+}
 
 /// Check all subscription groups for overdue scheduled runs and trigger them.
 pub async fn check_scheduled_groups(
@@ -22,7 +80,7 @@ pub async fn check_scheduled_groups(
     let groups = match db.list_groups().await {
         Ok(f) => f,
         Err(e) => {
-            tracing::warn!("Scheduler: failed to list groups: {e}");
+            warn_scheduler_failure("list_groups", format!("Scheduler: failed to list groups: {e}"));
             return;
         }
     };
@@ -98,9 +156,12 @@ pub async fn check_scheduled_groups(
             )
             .await
             {
-                tracing::warn!(
-                    group_id = group.group_id,
-                    "Scheduler: failed to start group: {e}"
+                warn_scheduler_failure(
+                    "run_group",
+                    format!(
+                        "Scheduler: failed to start group {}: {}",
+                        group.group_id, e
+                    ),
                 );
             }
         }
