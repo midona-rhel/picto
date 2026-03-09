@@ -53,6 +53,8 @@ describe('deriveStaleResources', () => {
     expect(result).toContain('grid/system:all');
     expect(result).toContain('grid/system:inbox');
     expect(result).toContain('grid/system:trash');
+    expect(result).toContain('grid/system:untagged');
+    expect(result).toContain('grid/system:uncategorized');
     expect(result).toContain('grid/system:recently_viewed');
     expect(result).toContain('grid/smart:all');
   });
@@ -76,6 +78,7 @@ describe('deriveStaleResources', () => {
       file_hashes: ['abc', 'def'],
     })));
     expect(result).toContain('selection/current');
+    expect(result).toContain('grid/system:untagged');
     expect(result).toContain('metadata/hash:abc');
     expect(result).toContain('metadata/hash:def');
     expect(result).not.toContain('grid/system:all');
@@ -85,6 +88,7 @@ describe('deriveStaleResources', () => {
     const result = keys(makeReceipt(makeFacts({ tags_changed: true })));
     expect(result).toContain('selection/current');
     expect(result).toContain('grid/system:all');
+    expect(result).toContain('grid/system:untagged');
   });
 
   // --- tag_structure_changed ---
@@ -105,6 +109,7 @@ describe('deriveStaleResources', () => {
     })));
     expect(result).toContain('sidebar/tree');
     expect(result).toContain('selection/current');
+    expect(result).toContain('grid/system:uncategorized');
     expect(result).toContain('grid/folder:5');
     expect(result).toContain('grid/folder:15');
   });
@@ -184,7 +189,7 @@ describe('deriveStaleResources', () => {
   it('sidebar_counts present yields sidebar/counts', () => {
     const result = keys(makeReceipt(
       makeFacts({}),
-      { sidebar_counts: { all_images: 100, inbox: 5, trash: 2 } },
+      { sidebar_counts: { all_active: 100, inbox: 5, trash: 2 } },
     ));
     expect(result).toContain('sidebar/counts');
   });

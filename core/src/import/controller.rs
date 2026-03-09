@@ -81,6 +81,15 @@ impl ImportController {
                             );
                         }
                     }
+                    if let Ok(Some(record)) = db.get_file_by_hash(&imported.hex_hash).await {
+                        let slim = crate::types::FileInfoSlim::from(record);
+                        crate::events::emit(crate::events::event_names::FILE_IMPORTED, &slim);
+                    }
+                    db.scope_cache_invalidate_all();
+                    crate::events::emit_mutation(
+                        "manual_import",
+                        crate::events::MutationImpact::file_lifecycle(db),
+                    );
                     batch.imported.push(ImportResult {
                         hash: imported.hex_hash,
                         mime: imported.mime,

@@ -15,7 +15,15 @@ export function deriveStaleResources(receipt: MutationReceipt): Set<ResourceKey>
   if (facts.status_changed) {
     keys.add('sidebar/tree');
     keys.add('selection/current');
-    scopes.push('system:all', 'system:inbox', 'system:trash', 'system:recently_viewed', 'smart:all');
+    scopes.push(
+      'system:all',
+      'system:inbox',
+      'system:trash',
+      'system:untagged',
+      'system:uncategorized',
+      'system:recently_viewed',
+      'smart:all',
+    );
     if (facts.folder_ids) {
       for (const id of facts.folder_ids) {
         scopes.push(`folder:${id}`);
@@ -25,6 +33,7 @@ export function deriveStaleResources(receipt: MutationReceipt): Set<ResourceKey>
 
   if (facts.tags_changed) {
     keys.add('selection/current');
+    scopes.push('system:untagged');
     if (!facts.file_hashes) {
       scopes.push('system:all');
     }
@@ -39,6 +48,7 @@ export function deriveStaleResources(receipt: MutationReceipt): Set<ResourceKey>
   if (facts.folder_membership_changed) {
     keys.add('sidebar/tree');
     keys.add('selection/current');
+    scopes.push('system:uncategorized');
     for (const id of facts.folder_membership_changed) {
       scopes.push(`folder:${id}`);
     }

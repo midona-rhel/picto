@@ -9,10 +9,11 @@ import { TextButton } from '../../shared/components/TextButton';
 import { StateBlock, StateActions } from '../../shared/components/state';
 import { notifyError } from '../../shared/lib/notify';
 import { registerUndoAction } from '../../shared/controllers/undoRedoController';
-import { api, getCurrentWebview, open } from '#desktop/api';
+import { api, getCurrentWebview, listenRuntimeEvent, open } from '#desktop/api';
 import { ContextMenu, useContextMenu } from '../../shared/components/ContextMenu';
 import { imageDrag } from '../../shared/lib/imageDrag';
-import type { MediaItem } from './shared';
+import { sortLiveImages } from './liveSort';
+import { toMasonryItem, type MediaItem } from './shared';
 import {
   prefetchMetadata,
   type SelectionQuerySpec,
@@ -38,6 +39,7 @@ import { useGridKeyboardNavigation } from './hooks/useGridKeyboardNavigation';
 import { useGridContextMenu } from './hooks/useGridContextMenu';
 import { useGridSelection } from './hooks/useGridSelection';
 import { useGridMarqueeSelection } from './hooks/useGridMarqueeSelection';
+import type { FileImportedEvent } from '../../shared/types/api/events';
 
 // Re-export GridViewMode from runtime for backward compatibility
 export type { GridViewMode } from './runtime';
@@ -56,6 +58,12 @@ interface GridRenderSnapshot {
   selectedHashes: Set<string>;
   totalCount: number;
   viewMode: GridViewMode;
+  targetSize: number;
+  showTileName: boolean;
+  showResolution: boolean;
+  showExtension: boolean;
+  showExtensionLabel: boolean;
+  thumbnailFitMode: 'cover' | 'contain';
   key: string;
 }
 
@@ -63,6 +71,8 @@ interface GridViewportAnchor {
   hash: string;
   offsetTop: number;
 }
+
+type GridTransitionStage = 'idle' | 'fading_out_old' | 'fading_in_new';
 
 function resolveGridEmptyContext(
   smartFolderPredicate: SmartFolderPredicate | null | undefined,
@@ -212,7 +222,7 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
   ]);
   const renderCommitKey = `${queryKey}|${layoutKey}|${activeGridImages.length}`;
   const [motionPhase, setMotionPhase] = useState<GridMotionPhase>('initial_loading');
-  const [transitionRunning, setTransitionRunning] = useState(false);
+  const [transitionStage, setTransitionStage] = useState<GridTransitionStage>('idle');
   const [previousLayer, setPreviousLayer] = useState<GridRenderSnapshot | null>(null);
   const [previousLayerKind, setPreviousLayerKind] = useState<GridTransitionKind | null>(null);
   const liveEnteredRef = useRef(false);
@@ -238,8 +248,26 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
     selectedHashes: new Set(effectiveSelectedHashes),
     totalCount: resolvedGridTotalCount,
     viewMode: state.displayViewMode,
+    targetSize: state.displayTargetSize,
+    showTileName: displaySettings.showTileName,
+    showResolution: displaySettings.showResolution,
+    showExtension: displaySettings.showExtension,
+    showExtensionLabel: displaySettings.showExtensionLabel,
+    thumbnailFitMode: displaySettings.thumbnailFitMode,
     key: renderCommitKey,
-  }), [activeGridImages, effectiveSelectedHashes, renderCommitKey, resolvedGridTotalCount, state.displayViewMode]);
+  }), [
+    activeGridImages,
+    displaySettings.showExtension,
+    displaySettings.showExtensionLabel,
+    displaySettings.showResolution,
+    displaySettings.showTileName,
+    displaySettings.thumbnailFitMode,
+    effectiveSelectedHashes,
+    renderCommitKey,
+    resolvedGridTotalCount,
+    state.displayTargetSize,
+    state.displayViewMode,
+  ]);
 
   // Keep imageDrag module-level ref in sync so tiles can read it without a prop
   useLayoutEffect(() => {
@@ -470,7 +498,7 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
     pendingTransitionRef.current = null;
     setPreviousLayer(null);
     setPreviousLayerKind(null);
-    setTransitionRunning(false);
+    setTransitionStage('idle');
     setMotionPhase('ready');
   }, []);
 
@@ -483,23 +511,27 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
     };
     setPreviousLayer(snapshot && snapshot.images.length > 0 ? snapshot : null);
     setPreviousLayerKind(kind);
-    setTransitionRunning(false);
+    setTransitionStage('idle');
     setMotionPhase(kind === 'mode' ? 'mode_switching' : 'scope_switching');
   }, [captureViewportAnchor, layoutKey, queryKey]);
 
   const armTransition = useCallback((kind: GridTransitionKind, anchor: GridViewportAnchor | null) => {
-    if (kind === 'mode') {
-      restoreViewportAnchor(anchor);
-    } else if (scrollRef.current) {
-      scrollRef.current.scrollTop = 0;
-      onScopeTransitionMidpoint?.();
-    }
-    const duration = reducedMotion ? 0 : kind === 'mode' ? 160 : 160;
+    const fadeOutDuration = reducedMotion ? 0 : kind === 'scope' ? 120 : 160;
+    const fadeInDuration = reducedMotion ? 0 : 160;
     requestAnimationFrame(() => {
-      setTransitionRunning(true);
+      setTransitionStage('fading_out_old');
       transitionClearTimerRef.current = window.setTimeout(() => {
-        clearTransition();
-      }, duration + 24);
+        if (kind === 'mode') {
+          restoreViewportAnchor(anchor);
+        } else if (scrollRef.current) {
+          scrollRef.current.scrollTop = 0;
+          onScopeTransitionMidpoint?.();
+        }
+        setTransitionStage('fading_in_new');
+        transitionClearTimerRef.current = window.setTimeout(() => {
+          clearTransition();
+        }, fadeInDuration + 24);
+      }, fadeOutDuration + 24);
     });
   }, [clearTransition, onScopeTransitionMidpoint, reducedMotion, restoreViewportAnchor, scrollRef]);
 
@@ -685,6 +717,56 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
       notifyError(err, 'Import Failed');
     }
   };
+
+  useEffect(() => {
+    const unlisten = listenRuntimeEvent('file-imported', (event: FileImportedEvent) => {
+      if (folderId != null || collectionEntityId != null || smartFolderPredicate) return;
+      if (searchTags?.length || excludedSearchTags?.length || filterFolderIds?.length || excludedFilterFolderIds?.length) return;
+      if (ratingMin != null || mimePrefixes?.length || colorHex || searchText) return;
+      if (statusFilter === 'trash' || statusFilter === 'untagged' || statusFilter === 'uncategorized' || statusFilter === 'recently_viewed') return;
+      if (statusFilter === 'inbox' && event.status !== 'inbox') return;
+      if ((statusFilter == null || statusFilter === 'active') && event.status !== 'active') return;
+
+      const nextItem = toMasonryItem({
+        ...event,
+        name: event.name ?? null,
+        width: event.width ?? null,
+        height: event.height ?? null,
+        duration_ms: event.duration_ms ?? null,
+        num_frames: event.num_frames ?? null,
+        rating: event.rating ?? null,
+        source_urls: null,
+      });
+      const currentImages = stateRef.current.images;
+      if (currentImages.some((image) => image.hash === nextItem.hash)) return;
+
+      const nextImages = sortLiveImages(
+        [...currentImages, nextItem],
+        sortField,
+        sortOrder as 'asc' | 'desc',
+      );
+      dispatch({ type: 'SET_IMAGES', images: nextImages });
+    });
+    return () => {
+      void unlisten.then((fn) => fn());
+    };
+  }, [
+    collectionEntityId,
+    colorHex,
+    dispatch,
+    excludedFilterFolderIds,
+    excludedSearchTags,
+    filterFolderIds,
+    folderId,
+    mimePrefixes,
+    ratingMin,
+    searchTags,
+    searchText,
+    smartFolderPredicate,
+    sortField,
+    sortOrder,
+    statusFilter,
+  ]);
 
 
   const handleViewerDetailImageChange = useCallback((hash: string) => {
@@ -1022,16 +1104,17 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
 
   const firstLoadOpacity = liveEnteredRef.current ? 1 : 0;
   const liveLayerOpacity = previousLayer
-    ? (transitionRunning ? 1 : 0)
+    ? (transitionStage === 'fading_in_new' ? 1 : 0)
     : firstLoadOpacity;
+  const liveLayerVisibility = previousLayer && transitionStage !== 'fading_in_new'
+    ? 'hidden'
+    : 'visible';
   const liveLayerDuration = reducedMotion
     ? 0
-    : previousLayerKind === 'mode'
+    : previousLayer
       ? 160
-      : previousLayerKind === 'scope'
-        ? 160
-        : 180;
-  const previousLayerOpacity = transitionRunning ? 0 : 1;
+      : 180;
+  const previousLayerOpacity = transitionStage === 'fading_out_old' ? 0 : 1;
   const previousLayerDuration = reducedMotion
     ? 0
     : previousLayerKind === 'scope'
@@ -1076,7 +1159,7 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
             >
               <DomGridSurface
                 images={previousLayer.images}
-                targetSize={state.displayTargetSize}
+                targetSize={previousLayer.targetSize}
                 gap={gap}
                 viewMode={previousLayer.viewMode}
                 selectedHashes={previousLayer.selectedHashes}
@@ -1090,11 +1173,11 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
                 scrollContainerRef={scrollRef}
                 frozen
                 marqueeActive={false}
-                showTileName={displaySettings.showTileName}
-                showResolution={displaySettings.showResolution}
-                showExtension={displaySettings.showExtension}
-                showExtensionLabel={displaySettings.showExtensionLabel}
-                thumbnailFitMode={displaySettings.thumbnailFitMode}
+                showTileName={previousLayer.showTileName}
+                showResolution={previousLayer.showResolution}
+                showExtension={previousLayer.showExtension}
+                showExtensionLabel={previousLayer.showExtensionLabel}
+                thumbnailFitMode={previousLayer.thumbnailFitMode}
                 reorderMode={false}
               />
             </div>
@@ -1104,6 +1187,7 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
               position: 'relative',
               zIndex: 1,
               opacity: liveLayerOpacity,
+              visibility: liveLayerVisibility,
               transition: liveLayerDuration > 0
                 ? `opacity ${liveLayerDuration}ms ease-out`
                 : 'none',
