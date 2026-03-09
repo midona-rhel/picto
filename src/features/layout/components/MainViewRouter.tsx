@@ -4,6 +4,7 @@ import { TagManager } from '#features/tags/components';
 import { DuplicateManager } from '#features/duplicates/components';
 import { ImageGrid } from '#features/grid/components';
 import { useMainViewSubscriptionsState, useMainViewGridActions, useMainViewGridState, useMainViewNavigationState, useMainViewSelectionState, useMainViewViewerState } from './MainViewModelContext';
+import { MainViewProgressBar } from './MainViewProgressBar';
 import styles from '../../../app/App.module.css';
 
 export function MainViewRouter() {
@@ -41,7 +42,7 @@ export function MainViewRouter() {
             onSelectedImagesChange={selection.onSelectedImagesChange}
             onSelectionSummarySpecChange={selection.onSelectionSummarySpecChange}
             selectedScopeCount={grid.selectedScopeCount}
-            onDetailViewStateChange={selection.onDetailViewStateChange}
+            onMediaViewStateChange={selection.onMediaViewStateChange}
             ratingMin={grid.ratingFilter}
             mimePrefixes={grid.mimePrefixes}
             colorHex={grid.colorHex}
@@ -53,6 +54,7 @@ export function MainViewRouter() {
             onScopeTransitionMidpoint={gridActions.onScopeTransitionMidpoint}
             viewer={viewer}
           />
+          <MainViewProgressBar />
         </div>
       );
     case 'collections':

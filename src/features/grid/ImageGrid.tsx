@@ -1,5 +1,4 @@
 import { useEffect, useLayoutEffect, useCallback, useRef, useMemo, useState } from 'react';
-import { notifications } from '@mantine/notifications';
 import { useGridRuntime } from './runtime';
 import { effectiveSelectedHashes as selectEffectiveHashes } from './runtime';
 import {
@@ -10,7 +9,7 @@ import { TextButton } from '../../shared/components/TextButton';
 import { StateBlock, StateActions } from '../../shared/components/state';
 import { notifyError } from '../../shared/lib/notify';
 import { registerUndoAction } from '../../shared/controllers/undoRedoController';
-import { api, getCurrentWebview, listenRuntimeEvent, open } from '#desktop/api';
+import { api, getCurrentWebview, open } from '#desktop/api';
 import { ContextMenu, useContextMenu } from '../../shared/components/ContextMenu';
 import { imageDrag } from '../../shared/lib/imageDrag';
 import type { MediaItem } from './shared';
@@ -22,6 +21,7 @@ import { DomGridSurface } from './DomGridSurface';
 import type { SmartFolderPredicate } from '../../features/smart-folders/components/types';
 import type { DragDropPayload, FolderReorderMove } from '../../shared/types/api';
 import { useGridMetadataStore } from '../../state/gridMetadataStore';
+import { useManualImportStore } from '../../state/manualImportStore';
 import { useSettingsStore } from '../../state/settingsStore';
 import { useScopedDisplay } from '../../shared/contexts/ScopedDisplayContext';
 import { BatchRenameDialog } from '../../features/grid/components/BatchRenameDialog';
@@ -38,10 +38,31 @@ import { useGridKeyboardNavigation } from './hooks/useGridKeyboardNavigation';
 import { useGridContextMenu } from './hooks/useGridContextMenu';
 import { useGridSelection } from './hooks/useGridSelection';
 import { useGridMarqueeSelection } from './hooks/useGridMarqueeSelection';
-import type { ManualImportProgressEvent } from '../../shared/types/api/events';
 
 // Re-export GridViewMode from runtime for backward compatibility
 export type { GridViewMode } from './runtime';
+
+type GridMotionPhase =
+  | 'initial_loading'
+  | 'ready'
+  | 'mode_switching'
+  | 'scope_switching'
+  | 'refreshing';
+
+type GridTransitionKind = 'mode' | 'scope';
+
+interface GridRenderSnapshot {
+  images: MediaItem[];
+  selectedHashes: Set<string>;
+  totalCount: number;
+  viewMode: GridViewMode;
+  key: string;
+}
+
+interface GridViewportAnchor {
+  hash: string;
+  offsetTop: number;
+}
 
 function resolveGridEmptyContext(
   smartFolderPredicate: SmartFolderPredicate | null | undefined,
@@ -99,7 +120,6 @@ interface ImageGridProps {
 }
 
 export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartFolderPredicate, smartFolderSortField, smartFolderSortOrder, folderId, collectionEntityId, filterFolderIds, excludedFilterFolderIds, folderMatchMode, statusFilter, viewMode = 'waterfall', targetSize = 250, onViewModeChange, sortField = 'imported_at', sortOrder = 'asc', onSortFieldChange, onSortOrderChange, onContainerWidthChange, refreshTrigger, onSelectedImagesChange, onSelectionSummarySpecChange, selectedScopeCount = null, onMediaViewStateChange, ratingMin, mimePrefixes, colorHex, colorAccuracy, searchText, externalFreeze = false, onScopeTransitionMidpoint, viewer }: ImageGridProps) {
-  const manualImportNotificationId = 'manual-import-progress';
   const { state, dispatch } = useGridRuntime({
     viewMode,
     targetSize,
@@ -139,6 +159,17 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
   const initialLoadDone = useRef(false);
   const displayViewModeRef = useRef(state.displayViewMode);
   displayViewModeRef.current = state.displayViewMode;
+  const [reducedMotion, setReducedMotion] = useState(false);
+  useEffect(() => {
+    if (typeof window === 'undefined' || !window.matchMedia) return;
+    const mediaQuery = window.matchMedia('(prefers-reduced-motion: reduce)');
+    const sync = () => setReducedMotion(mediaQuery.matches);
+    sync();
+    mediaQuery.addEventListener('change', sync);
+    return () => {
+      mediaQuery.removeEventListener('change', sync);
+    };
+  }, []);
   const { queryKey, outlineTotalCount, requestReplace } = useGridData({
     queryInput: {
       folderId: folderId ?? null,
@@ -168,6 +199,29 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
   const gap = 8;
   const activeGridImages = state.images;
   const resolvedGridTotalCount = outlineTotalCount ?? selectedScopeCount ?? activeGridImages.length;
+  const layoutKey = useMemo(() => JSON.stringify({
+    viewMode: state.displayViewMode,
+    targetSize: state.displayTargetSize,
+    showTileName: displaySettings.showTileName,
+    showResolution: displaySettings.showResolution,
+  }), [
+    displaySettings.showResolution,
+    displaySettings.showTileName,
+    state.displayTargetSize,
+    state.displayViewMode,
+  ]);
+  const renderCommitKey = `${queryKey}|${layoutKey}|${activeGridImages.length}`;
+  const [motionPhase, setMotionPhase] = useState<GridMotionPhase>('initial_loading');
+  const [transitionRunning, setTransitionRunning] = useState(false);
+  const [previousLayer, setPreviousLayer] = useState<GridRenderSnapshot | null>(null);
+  const [previousLayerKind, setPreviousLayerKind] = useState<GridTransitionKind | null>(null);
+  const liveEnteredRef = useRef(false);
+  const pendingTransitionRef = useRef<{ kind: GridTransitionKind; key: string; anchor: GridViewportAnchor | null } | null>(null);
+  const latestAnchorRef = useRef<GridViewportAnchor | null>(null);
+  const previousQueryKeyRef = useRef<string | null>(null);
+  const previousLayoutKeyRef = useRef<string | null>(null);
+  const lastReadySnapshotRef = useRef<GridRenderSnapshot | null>(null);
+  const transitionClearTimerRef = useRef<number | null>(null);
 
   // Refs for values that change frequently but shouldn't invalidate handleImageClick
   const imagesRef = useRef(activeGridImages);
@@ -179,6 +233,13 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
     () => selectEffectiveHashes(state),
     [state.images, state.selectedHashes, state.virtualAllSelection],
   );
+  const currentSnapshot = useMemo<GridRenderSnapshot>(() => ({
+    images: activeGridImages,
+    selectedHashes: new Set(effectiveSelectedHashes),
+    totalCount: resolvedGridTotalCount,
+    viewMode: state.displayViewMode,
+    key: renderCommitKey,
+  }), [activeGridImages, effectiveSelectedHashes, renderCommitKey, resolvedGridTotalCount, state.displayViewMode]);
 
   // Keep imageDrag module-level ref in sync so tiles can read it without a prop
   useLayoutEffect(() => {
@@ -346,6 +407,118 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
     onContainerWidthChange,
   });
 
+  const captureViewportAnchor = useCallback((): GridViewportAnchor | null => {
+    const scrollEl = scrollRef.current;
+    if (!scrollEl) return null;
+    const scrollRect = scrollEl.getBoundingClientRect();
+    const tiles = Array.from(scrollEl.querySelectorAll<HTMLElement>('[data-hash]'));
+    let best: GridViewportAnchor | null = null;
+    let bestTop = Number.POSITIVE_INFINITY;
+    for (const tile of tiles) {
+      const rect = tile.getBoundingClientRect();
+      if (rect.bottom <= scrollRect.top || rect.top >= scrollRect.bottom) continue;
+      const visibleTop = Math.max(rect.top, scrollRect.top);
+      if (visibleTop < bestTop) {
+        const hash = tile.dataset.hash;
+        if (!hash) continue;
+        bestTop = visibleTop;
+        best = {
+          hash,
+          offsetTop: rect.top - scrollRect.top,
+        };
+      }
+    }
+    return best;
+  }, [scrollRef]);
+
+  const restoreViewportAnchor = useCallback((anchor: GridViewportAnchor | null) => {
+    if (!anchor) return;
+    const scrollEl = scrollRef.current;
+    if (!scrollEl) return;
+    const index = imagesRef.current.findIndex((image) => image.hash === anchor.hash);
+    if (index < 0) return;
+    const position = canvasLayoutRef.current[index];
+    if (!position) return;
+    scrollEl.scrollTop = Math.max(0, position.y - anchor.offsetTop);
+  }, [scrollRef]);
+
+  useEffect(() => {
+    const scrollEl = scrollRef.current;
+    if (!scrollEl) return;
+    let rafId = 0;
+    const syncAnchor = () => {
+      rafId = 0;
+      latestAnchorRef.current = captureViewportAnchor();
+    };
+    const onScroll = () => {
+      if (rafId) return;
+      rafId = window.requestAnimationFrame(syncAnchor);
+    };
+    syncAnchor();
+    scrollEl.addEventListener('scroll', onScroll, { passive: true });
+    return () => {
+      scrollEl.removeEventListener('scroll', onScroll);
+      if (rafId) window.cancelAnimationFrame(rafId);
+    };
+  }, [captureViewportAnchor, scrollRef]);
+
+  const clearTransition = useCallback(() => {
+    if (transitionClearTimerRef.current != null) {
+      window.clearTimeout(transitionClearTimerRef.current);
+      transitionClearTimerRef.current = null;
+    }
+    pendingTransitionRef.current = null;
+    setPreviousLayer(null);
+    setPreviousLayerKind(null);
+    setTransitionRunning(false);
+    setMotionPhase('ready');
+  }, []);
+
+  const beginTransition = useCallback((kind: GridTransitionKind) => {
+    const snapshot = lastReadySnapshotRef.current;
+    pendingTransitionRef.current = {
+      kind,
+      key: kind === 'mode' ? layoutKey : queryKey,
+      anchor: kind === 'mode' ? (latestAnchorRef.current ?? captureViewportAnchor()) : null,
+    };
+    setPreviousLayer(snapshot && snapshot.images.length > 0 ? snapshot : null);
+    setPreviousLayerKind(kind);
+    setTransitionRunning(false);
+    setMotionPhase(kind === 'mode' ? 'mode_switching' : 'scope_switching');
+  }, [captureViewportAnchor, layoutKey, queryKey]);
+
+  const armTransition = useCallback((kind: GridTransitionKind, anchor: GridViewportAnchor | null) => {
+    if (kind === 'mode') {
+      restoreViewportAnchor(anchor);
+    } else if (scrollRef.current) {
+      scrollRef.current.scrollTop = 0;
+      onScopeTransitionMidpoint?.();
+    }
+    const duration = reducedMotion ? 0 : kind === 'mode' ? 160 : 160;
+    requestAnimationFrame(() => {
+      setTransitionRunning(true);
+      transitionClearTimerRef.current = window.setTimeout(() => {
+        clearTransition();
+      }, duration + 24);
+    });
+  }, [clearTransition, onScopeTransitionMidpoint, reducedMotion, restoreViewportAnchor, scrollRef]);
+
+  const handleGridVisibleCommit = useCallback(() => {
+    latestAnchorRef.current = captureViewportAnchor();
+    if (!liveEnteredRef.current) {
+      liveEnteredRef.current = true;
+      setMotionPhase('ready');
+      return;
+    }
+    const pending = pendingTransitionRef.current;
+    if (!pending) {
+      if (motionPhase === 'refreshing') setMotionPhase('ready');
+      return;
+    }
+    if (pending.key !== (pending.kind === 'mode' ? layoutKey : queryKey)) return;
+    armTransition(pending.kind, pending.anchor);
+  }, [armTransition, captureViewportAnchor, layoutKey, motionPhase, queryKey]);
+
   useGridHotkeys({
     stateRef,
     dispatch,
@@ -499,46 +672,19 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
       });
       if (!selected) return;
       const paths = Array.isArray(selected) ? selected : [selected];
-      notifications.show({
-        id: manualImportNotificationId,
-        title: 'Importing...',
-        message: `Preparing ${paths.length} file(s)`,
-        autoClose: false,
-        withCloseButton: false,
-        loading: true,
-      });
+      useManualImportStore.getState().start(paths.length);
       const result = await api.import.files(paths);
-      notifications.update({
-        id: manualImportNotificationId,
-        title: 'Import Complete',
-        message: `Imported ${result.imported.length} file(s), ${result.skipped.length} skipped${result.errors.length ? `, ${result.errors.length} failed` : ''}.`,
-        autoClose: 5000,
-        withCloseButton: true,
-        loading: false,
-        color: result.errors.length > 0 ? 'yellow' : 'green',
+      useManualImportStore.getState().finish({
+        imported: result.imported.length,
+        skipped: result.skipped.length,
+        errors: result.errors.length,
       });
       void requestReplace();
     } catch (err) {
-      notifications.hide(manualImportNotificationId);
+      useManualImportStore.getState().fail();
       notifyError(err, 'Import Failed');
     }
   };
-
-  useEffect(() => {
-    const unlisten = listenRuntimeEvent('manual-import-progress', (event: ManualImportProgressEvent) => {
-      notifications.update({
-        id: manualImportNotificationId,
-        title: 'Importing...',
-        message: `${event.done}/${event.total} • ${event.current_file}`,
-        autoClose: false,
-        withCloseButton: false,
-        loading: true,
-      });
-    });
-    return () => {
-      void unlisten.then((fn) => fn());
-    };
-  }, []);
 
 
   const handleViewerDetailImageChange = useCallback((hash: string) => {
@@ -641,22 +787,35 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
     onMediaViewStateChange?.(null, null);
     dispatch({ type: 'CLEAR_SELECTION' });
     dispatch({ type: 'SET_SELECTED_SUBFOLDER', id: null });
-    if (scrollRef.current) {
-      scrollRef.current.scrollTop = 0;
-    }
-    onScopeTransitionMidpoint?.();
-  }, [dispatch, onMediaViewStateChange, onScopeTransitionMidpoint, scopeKey, viewer, scrollRef]);
+  }, [dispatch, onMediaViewStateChange, scopeKey, viewer]);
 
   useEffect(() => {
+    if (previousQueryKeyRef.current !== null && previousQueryKeyRef.current !== queryKey) {
+      beginTransition('scope');
+    }
+    previousQueryKeyRef.current = queryKey;
     initialLoadDone.current = false;
     void requestReplace();
-  }, [queryKey, requestReplace]);
+  }, [beginTransition, queryKey, requestReplace]);
+
+  useEffect(() => {
+    if (
+      pendingTransitionRef.current?.kind !== 'scope' &&
+      previousLayoutKeyRef.current !== null &&
+      previousLayoutKeyRef.current !== layoutKey &&
+      previousQueryKeyRef.current === queryKey
+    ) {
+      beginTransition('mode');
+    }
+    previousLayoutKeyRef.current = layoutKey;
+  }, [beginTransition, layoutKey, queryKey]);
 
   // Background refresh from subscriptions
   const prevRefreshTrigger = useRef(refreshTrigger);
   useEffect(() => {
     if (prevRefreshTrigger.current !== refreshTrigger) {
       prevRefreshTrigger.current = refreshTrigger;
+      setMotionPhase((phase) => phase === 'ready' ? 'refreshing' : phase);
       void requestReplace();
     }
   }, [refreshTrigger, requestReplace]);
@@ -712,9 +871,34 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
   useEffect(() => {
     if (prevGridRefreshSeq.current !== gridRefreshSeq) {
       prevGridRefreshSeq.current = gridRefreshSeq;
+      setMotionPhase((phase) => phase === 'ready' ? 'refreshing' : phase);
       void requestReplace();
     }
   }, [gridRefreshSeq, requestReplace]);
+
+  useEffect(() => {
+    if (motionPhase !== 'scope_switching' || activeGridImages.length > 0) return;
+    const pending = pendingTransitionRef.current;
+    if (!pending || pending.kind !== 'scope') return;
+    armTransition('scope', null);
+  }, [activeGridImages.length, armTransition, motionPhase]);
+
+  useEffect(() => {
+    if (motionPhase !== 'initial_loading') return;
+    if (!initialLoadDone.current || activeGridImages.length > 0) return;
+    liveEnteredRef.current = true;
+    setMotionPhase('ready');
+  }, [activeGridImages.length, motionPhase]);
+
+  useEffect(() => {
+    lastReadySnapshotRef.current = currentSnapshot;
+  }, [currentSnapshot]);
+
+  useEffect(() => () => {
+    if (transitionClearTimerRef.current != null) {
+      window.clearTimeout(transitionClearTimerRef.current);
+    }
+  }, []);
 
   useEffect(() => {
     const webview = getCurrentWebview();
@@ -738,14 +922,7 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
         const paths = payload.paths;
         if (paths.length === 0) return;
         try {
-          notifications.show({
-            id: manualImportNotificationId,
-            title: 'Importing...',
-            message: `Preparing ${paths.length} file(s)`,
-            autoClose: false,
-            withCloseButton: false,
-            loading: true,
-          });
+          useManualImportStore.getState().start(paths.length);
           const result = await api.import.files(paths);
           // If viewing a folder, add imported files to it
           const currentFolderId = folderIdRef.current;
@@ -756,18 +933,14 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
               result.imported.map((file) => file.hash),
             );
           }
-          notifications.update({
-            id: manualImportNotificationId,
-            title: 'Import Complete',
-            message: `Imported ${result.imported.length} file(s), ${result.skipped.length} skipped${result.errors.length ? `, ${result.errors.length} failed` : ''}.`,
-            autoClose: 5000,
-            withCloseButton: true,
-            loading: false,
-            color: result.errors.length > 0 ? 'yellow' : 'green',
+          useManualImportStore.getState().finish({
+            imported: result.imported.length,
+            skipped: result.skipped.length,
+            errors: result.errors.length,
           });
           void requestReplace();
         } catch (err) {
-          notifications.hide(manualImportNotificationId);
+          useManualImportStore.getState().fail();
           notifyError(err, 'Import Failed');
         }
       }
@@ -847,6 +1020,24 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
     );
   }
 
+  const firstLoadOpacity = liveEnteredRef.current ? 1 : 0;
+  const liveLayerOpacity = previousLayer
+    ? (transitionRunning ? 1 : 0)
+    : firstLoadOpacity;
+  const liveLayerDuration = reducedMotion
+    ? 0
+    : previousLayerKind === 'mode'
+      ? 160
+      : previousLayerKind === 'scope'
+        ? 160
+        : 180;
+  const previousLayerOpacity = transitionRunning ? 0 : 1;
+  const previousLayerDuration = reducedMotion
+    ? 0
+    : previousLayerKind === 'scope'
+      ? 120
+      : 160;
+
   return (
     <div style={{ height: '100%', display: 'flex', position: 'relative' }}>
       {/* Grid area — kept mounted but hidden when detail view is active to preserve scroll position */}
@@ -869,6 +1060,55 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
         } as React.CSSProperties}
       >
           <div style={{ height: 8 }} />
+          <div style={{ position: 'relative' }}>
+          {previousLayer && (
+            <div
+              style={{
+                position: 'absolute',
+                inset: 0,
+                zIndex: 2,
+                pointerEvents: 'none',
+                opacity: previousLayerOpacity,
+                transition: previousLayerDuration > 0
+                  ? `opacity ${previousLayerDuration}ms ease-out`
+                  : 'none',
+              }}
+            >
+              <DomGridSurface
+                images={previousLayer.images}
+                targetSize={state.displayTargetSize}
+                gap={gap}
+                viewMode={previousLayer.viewMode}
+                selectedHashes={previousLayer.selectedHashes}
+                searchTags={state.displaySearchTags}
+                onImageClick={handleImageClick}
+                onImport={handleImport}
+                onImportFolder={undefined}
+                onContainerWidthChange={undefined}
+                showEmptyState={false}
+                emptyContext={state.displayEmptyContext}
+                scrollContainerRef={scrollRef}
+                frozen
+                marqueeActive={false}
+                showTileName={displaySettings.showTileName}
+                showResolution={displaySettings.showResolution}
+                showExtension={displaySettings.showExtension}
+                showExtensionLabel={displaySettings.showExtensionLabel}
+                thumbnailFitMode={displaySettings.thumbnailFitMode}
+                reorderMode={false}
+              />
+            </div>
+          )}
+          <div
+            style={{
+              position: 'relative',
+              zIndex: 1,
+              opacity: liveLayerOpacity,
+              transition: liveLayerDuration > 0
+                ? `opacity ${liveLayerDuration}ms ease-out`
+                : 'none',
+            }}
+          >
           {state.displayFolderId != null && displaySettings.showSubfolders && (
             <SubfolderGrid
               folderId={state.displayFolderId}
@@ -918,7 +1158,11 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
             onRenameChange={setRenameValue}
             onRenameCommit={commitRename}
             onRenameCancel={cancelRename}
+            renderCommitKey={renderCommitKey}
+            onFirstVisibleCommit={handleGridVisibleCommit}
           />
+          </div>
+          </div>
         </div>
 
       {contextMenu.state && (
