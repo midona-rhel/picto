@@ -763,6 +763,84 @@ pub fn reconcile_schema(conn: &Connection) -> rusqlite::Result<()> {
          );",
     )?;
 
+    // Current-version libraries can still be partially migrated if an older
+    // build advanced schema_version without landing every derived/read-model
+    // table. Recreate the current canonical tables here so compilers and
+    // sidebar reads do not fail later with missing-table errors.
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS tag_ancestor (
+             tag_id      INTEGER NOT NULL REFERENCES tag(tag_id) ON DELETE CASCADE,
+             ancestor_id INTEGER NOT NULL REFERENCES tag(tag_id) ON DELETE CASCADE,
+             depth       INTEGER NOT NULL,
+             PRIMARY KEY (tag_id, ancestor_id)
+         );
+         CREATE INDEX IF NOT EXISTS idx_ta_ancestor ON tag_ancestor(ancestor_id, tag_id);
+
+         CREATE TABLE IF NOT EXISTS tag_display (
+             tag_id      INTEGER PRIMARY KEY REFERENCES tag(tag_id) ON DELETE CASCADE,
+             display_ns  TEXT NOT NULL,
+             display_st  TEXT NOT NULL
+         );
+
+         CREATE TABLE IF NOT EXISTS entity_tag_implied (
+             entity_id INTEGER NOT NULL REFERENCES media_entity(entity_id) ON DELETE CASCADE,
+             tag_id    INTEGER NOT NULL REFERENCES tag(tag_id) ON DELETE CASCADE,
+             PRIMARY KEY (entity_id, tag_id)
+         );
+         CREATE INDEX IF NOT EXISTS idx_eti_tag ON entity_tag_implied(tag_id, entity_id);
+
+         CREATE TABLE IF NOT EXISTS sidebar_node (
+             node_id             TEXT PRIMARY KEY,
+             kind                TEXT NOT NULL,
+             parent_id           TEXT,
+             name                TEXT NOT NULL,
+             icon                TEXT,
+             color               TEXT,
+             sort_order          INTEGER,
+             count               INTEGER,
+             freshness           TEXT NOT NULL DEFAULT 'stale',
+             epoch               INTEGER NOT NULL DEFAULT 0,
+             selectable          INTEGER NOT NULL DEFAULT 1,
+             expanded_by_default INTEGER NOT NULL DEFAULT 0,
+             meta_json           TEXT,
+             updated_at          TEXT
+         );
+
+         CREATE TABLE IF NOT EXISTS entity_metadata_projection (
+             entity_id     INTEGER PRIMARY KEY,
+             epoch         INTEGER NOT NULL,
+             resolved_json TEXT NOT NULL,
+             parents_json  TEXT NOT NULL
+         );
+
+         CREATE TABLE IF NOT EXISTS manifest (
+             key   TEXT PRIMARY KEY,
+             epoch INTEGER NOT NULL DEFAULT 0
+         );
+
+         CREATE TABLE IF NOT EXISTS artifact_manifest_meta (
+             id             INTEGER PRIMARY KEY CHECK (id = 1),
+             manifest_epoch INTEGER NOT NULL DEFAULT 0,
+             updated_at     TEXT
+         );
+
+         CREATE TABLE IF NOT EXISTS artifact_manifest_entry (
+             manifest_epoch       INTEGER NOT NULL,
+             artifact_name        TEXT NOT NULL,
+             artifact_version     INTEGER NOT NULL,
+             built_from_truth_seq INTEGER NOT NULL DEFAULT 0,
+             payload_json         TEXT NOT NULL DEFAULT '{}',
+             PRIMARY KEY (manifest_epoch, artifact_name)
+         );
+
+         CREATE TABLE IF NOT EXISTS kv_settings (
+             key   TEXT PRIMARY KEY,
+             value TEXT
+         );",
+    )?;
+    seed_manifest(conn)?;
+    seed_artifact_manifest(conn)?;
+
     if table_exists(conn, "folder")? && !has_column(conn, "folder", "auto_tags")? {
         conn.execute_batch(
             "ALTER TABLE folder ADD COLUMN auto_tags TEXT NOT NULL DEFAULT '[]'",
