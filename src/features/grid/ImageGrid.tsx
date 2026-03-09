@@ -21,6 +21,7 @@ import {
 import { DomGridSurface } from './DomGridSurface';
 import type { SmartFolderPredicate } from '../../features/smart-folders/components/types';
 import type { DragDropPayload, FolderReorderMove } from '../../shared/types/api';
+import { useImportActionStore } from '../../state/importActionStore';
 import { useGridMetadataStore } from '../../state/gridMetadataStore';
 import { useManualImportStore } from '../../state/manualImportStore';
 import { useSettingsStore } from '../../state/settingsStore';
@@ -195,7 +196,7 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
   const gap = 8;
   const activeGridImages = state.images;
   const resolvedGridTotalCount = outlineTotalCount ?? selectedScopeCount ?? activeGridImages.length;
-  const layoutKey = useMemo(() => JSON.stringify({
+  const renderLayoutKey = useMemo(() => JSON.stringify({
     viewMode: state.displayViewMode,
     targetSize: state.displayTargetSize,
     showTileName: displaySettings.showTileName,
@@ -206,7 +207,16 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
     state.displayTargetSize,
     state.displayViewMode,
   ]);
-  const renderCommitKey = `${queryKey}|${layoutKey}|${activeGridImages.length}`;
+  const transitionLayoutKey = useMemo(() => JSON.stringify({
+    viewMode: state.displayViewMode,
+    showTileName: displaySettings.showTileName,
+    showResolution: displaySettings.showResolution,
+  }), [
+    displaySettings.showResolution,
+    displaySettings.showTileName,
+    state.displayViewMode,
+  ]);
+  const renderCommitKey = `${queryKey}|${renderLayoutKey}|${activeGridImages.length}`;
   const [motionPhase, setMotionPhase] = useState<GridMotionPhase>('initial_loading');
   const [transitionStage, setTransitionStage] = useState<GridTransitionStage>('idle');
   const [previousLayerKind, setPreviousLayerKind] = useState<GridTransitionKind | null>(null);
@@ -214,7 +224,7 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
   const pendingTransitionRef = useRef<{ kind: GridTransitionKind; key: string; anchor: GridViewportAnchor | null } | null>(null);
   const latestAnchorRef = useRef<GridViewportAnchor | null>(null);
   const previousQueryKeyRef = useRef<string | null>(null);
-  const previousLayoutKeyRef = useRef<string | null>(null);
+  const previousTransitionLayoutKeyRef = useRef<string | null>(null);
   const transitionClearTimerRef = useRef<number | null>(null);
   const liveLayerRef = useRef<HTMLDivElement | null>(null);
   const frozenLayerHostRef = useRef<HTMLDivElement | null>(null);
@@ -473,13 +483,13 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
   const beginTransition = useCallback((kind: GridTransitionKind) => {
     pendingTransitionRef.current = {
       kind,
-      key: kind === 'mode' ? layoutKey : queryKey,
+      key: kind === 'mode' ? transitionLayoutKey : queryKey,
       anchor: kind === 'mode' ? (latestAnchorRef.current ?? captureViewportAnchor()) : null,
     };
     setPreviousLayerKind(kind);
     setTransitionStage('idle');
     setMotionPhase(kind === 'mode' ? 'mode_switching' : 'scope_switching');
-  }, [captureViewportAnchor, layoutKey, queryKey]);
+  }, [captureViewportAnchor, queryKey, transitionLayoutKey]);
 
   const armTransition = useCallback((kind: GridTransitionKind, anchor: GridViewportAnchor | null) => {
     const fadeOutDuration = reducedMotion ? 0 : 200;
@@ -523,9 +533,9 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
       if (motionPhase === 'refreshing') setMotionPhase('ready');
       return;
     }
-    if (pending.key !== (pending.kind === 'mode' ? layoutKey : queryKey)) return;
+    if (pending.key !== (pending.kind === 'mode' ? transitionLayoutKey : queryKey)) return;
     armTransition(pending.kind, pending.anchor);
-  }, [armTransition, captureViewportAnchor, layoutKey, motionPhase, queryKey]);
+  }, [armTransition, captureViewportAnchor, motionPhase, queryKey, transitionLayoutKey]);
 
   useGridHotkeys({
     stateRef,
@@ -669,7 +679,10 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
     }
   }, [folderId, collectionEntityId, dispatch, requestReplace]);
 
-  const handleImport = async () => {
+  const importRequestToken = useImportActionStore((s) => s.requestToken);
+  const lastImportRequestTokenRef = useRef(importRequestToken);
+
+  const handleImport = useCallback(async () => {
     try {
       const selected = await open({
         multiple: true,
@@ -711,7 +724,13 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
       useManualImportStore.getState().fail();
       notifyError(err, 'Import Failed');
     }
-  };
+  }, [requestReplace]);
+
+  useEffect(() => {
+    if (importRequestToken === lastImportRequestTokenRef.current) return;
+    lastImportRequestTokenRef.current = importRequestToken;
+    void handleImport();
+  }, [handleImport, importRequestToken]);
 
   useEffect(() => {
     const unlisten = listenRuntimeEvent('file-imported', (event: FileImportedEvent) => {
@@ -878,14 +897,14 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
   useEffect(() => {
     if (
       pendingTransitionRef.current?.kind !== 'scope' &&
-      previousLayoutKeyRef.current !== null &&
-      previousLayoutKeyRef.current !== layoutKey &&
+      previousTransitionLayoutKeyRef.current !== null &&
+      previousTransitionLayoutKeyRef.current !== transitionLayoutKey &&
       previousQueryKeyRef.current === queryKey
     ) {
       beginTransition('mode');
     }
-    previousLayoutKeyRef.current = layoutKey;
-  }, [beginTransition, layoutKey, queryKey]);
+    previousTransitionLayoutKeyRef.current = transitionLayoutKey;
+  }, [beginTransition, queryKey, transitionLayoutKey]);
 
   // Background refresh from subscriptions
   const prevRefreshTrigger = useRef(refreshTrigger);
@@ -1122,15 +1141,15 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
     liveEnteredRef.current &&
     liveLayerRef.current &&
     pendingFrozenLayerRef.current == null &&
-    previousLayoutKeyRef.current !== null &&
-    previousLayoutKeyRef.current !== layoutKey &&
+    previousTransitionLayoutKeyRef.current !== null &&
+    previousTransitionLayoutKeyRef.current !== transitionLayoutKey &&
     previousQueryKeyRef.current === queryKey
   ) {
     const node = liveLayerRef.current.cloneNode(true) as HTMLDivElement;
     node.dataset.frozenGridLayer = '1';
     pendingFrozenLayerRef.current = {
       kind: 'mode',
-      key: layoutKey,
+      key: transitionLayoutKey,
       anchor: latestAnchorRef.current ?? captureViewportAnchor(),
       node,
     };

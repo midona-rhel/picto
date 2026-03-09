@@ -1,6 +1,7 @@
 import { useEffect } from 'react';
 import { api, listen } from '#desktop/api';
 import { useDomainStore } from '../state/domainStore';
+import { useImportActionStore } from '../state/importActionStore';
 import { useRuntimeSyncStore } from '../state/runtimeSyncStore';
 import { useLibraryStore } from '../state/libraryStore';
 import { useNavigationStore, type ViewType } from '../state/navigationStore';
@@ -52,6 +53,16 @@ export function useNativeEventListeners(): void {
       runBestEffort('menu.openSettingsWindow', api.os.openSettingsWindow());
     });
     return () => { runBestEffort('menu.unlistenOpenSettings', unlisten.then((fn) => fn())); };
+  }, []);
+
+  useEffect(() => {
+    const unlisten = listen('menu:import-files', () => {
+      if (useNavigationStore.getState().currentView !== 'images') {
+        useNavigationStore.getState().navigateTo('images');
+      }
+      useImportActionStore.getState().requestImportDialog();
+    });
+    return () => { runBestEffort('menu.unlistenImportFiles', unlisten.then((fn) => fn())); };
   }, []);
 
   useEffect(() => {
