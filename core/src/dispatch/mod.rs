@@ -144,6 +144,7 @@ pub async fn dispatch(command: &str, args_json: &str) -> Result<String, String> 
 
         // ── Media Lifecycle ───────────────────────────────────
         "import_files" => call!(typed::media_lifecycle::import_files, &state, args),
+        "import_folder" => call!(typed::media_lifecycle::import_folder, &state, args),
         "update_file_status" => call!(typed::media_lifecycle::update_file_status, &state, args),
         "delete_files" => call!(typed::media_lifecycle::delete_files, &state, args),
         "wipe_image_data" => call!(typed::media_lifecycle::wipe_image_data, &state, args),

@@ -3,11 +3,14 @@
 //! Handles file import requests, FTS index rebuilds, and coordinates
 //! auto-merge duplicate detection during import.
 
-use std::path::PathBuf;
+use std::collections::{HashMap, HashSet};
+use std::fs;
+use std::path::{Path, PathBuf};
 
 use crate::blob_store::BlobStore;
 use crate::duplicates::controller::DuplicateController;
-use crate::events::{self, ManualImportProgressEvent};
+use crate::events::{self, Domain, ManualImportProgressEvent, MutationImpact};
+use crate::folders::controller::FolderController;
 use crate::import::pipeline::{ImportOptions, ImportPipeline};
 use crate::sqlite::SqliteDatabase;
 use crate::tags::normalize;
@@ -65,25 +68,8 @@ impl ImportController {
             let result = pipeline.import_file(path, &options).await;
             match result {
                 Ok(imported) => {
-                    if auto_merge_enabled {
-                        if let Err(e) = DuplicateController::check_and_auto_merge(
-                            db,
-                            &imported.hex_hash,
-                            auto_merge_distance,
-                        )
-                        .await
-                        {
-                            warn!(
-                                hash = %imported.hex_hash,
-                                error = %e,
-                                "Duplicate auto-merge during manual import failed"
-                            );
-                        }
-                    }
-                    if let Ok(Some(record)) = db.get_file_by_hash(&imported.hex_hash).await {
-                        let slim = crate::types::FileInfoSlim::from(record);
-                        crate::events::emit(crate::events::event_names::FILE_IMPORTED, &slim);
-                    }
+                    maybe_auto_merge(db, &imported.hex_hash, auto_merge_enabled, auto_merge_distance).await;
+                    emit_file_imported(db, &imported.hex_hash).await;
                     db.scope_cache_invalidate_all();
                     crate::events::emit_mutation(
                         "manual_import",
@@ -111,19 +97,272 @@ impl ImportController {
                 .map(str::to_owned)
                 .unwrap_or_else(|| path.display().to_string());
 
-            events::emit(
-                events::event_names::MANUAL_IMPORT_PROGRESS,
-                &ManualImportProgressEvent {
-                    done: index + 1,
-                    total,
-                    current_file,
-                    imported: batch.imported.len(),
-                    skipped: batch.skipped.len(),
-                    errors: batch.errors.len(),
-                },
+            emit_progress(
+                index + 1,
+                total,
+                current_file,
+                batch.imported.len(),
+                batch.skipped.len(),
+                batch.errors.len(),
             );
         }
 
         Ok(batch)
     }
+
+    pub async fn import_folder(
+        db: &SqliteDatabase,
+        blob_store: &BlobStore,
+        path: String,
+        preserve_structure: bool,
+        parent_folder_id: Option<i64>,
+        auto_merge_enabled: bool,
+        auto_merge_distance: u32,
+        initial_status: i64,
+    ) -> Result<ImportBatchResult, String> {
+        let root_path = {
+            let path = PathBuf::from(path);
+            path.canonicalize().unwrap_or(path)
+        };
+        if !root_path.is_dir() {
+            return Err(format!("Folder not found: {}", root_path.display()));
+        }
+
+        let (directories, file_paths) = collect_import_paths(&root_path)?;
+        let pipeline = ImportPipeline::new(db, blob_store);
+
+        let mut options = ImportOptions::default();
+        options.initial_status = initial_status;
+
+        let mut batch = ImportBatchResult {
+            imported: Vec::new(),
+            skipped: Vec::new(),
+            errors: Vec::new(),
+        };
+
+        let mut folder_cache = HashMap::<PathBuf, i64>::new();
+        let mut created_folder_ids = Vec::<i64>::new();
+        let mut touched_folder_ids = HashSet::<i64>::new();
+
+        if preserve_structure {
+            let root_name = root_path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .filter(|name| !name.is_empty())
+                .unwrap_or("Imported Folder")
+                .to_string();
+            let root_folder = FolderController::create_folder(
+                db,
+                root_name,
+                parent_folder_id,
+                None,
+                None,
+            )
+            .await?;
+            folder_cache.insert(PathBuf::new(), root_folder.folder_id);
+            created_folder_ids.push(root_folder.folder_id);
+            touched_folder_ids.insert(root_folder.folder_id);
+
+            for directory in directories {
+                let relative = match directory.strip_prefix(&root_path) {
+                    Ok(relative) if !relative.as_os_str().is_empty() => relative.to_path_buf(),
+                    _ => continue,
+                };
+                let parent_relative = relative
+                    .parent()
+                    .map(|parent| parent.to_path_buf())
+                    .unwrap_or_default();
+                let Some(parent_id) = folder_cache.get(&parent_relative).copied() else {
+                    continue;
+                };
+                let name = directory
+                    .file_name()
+                    .and_then(|entry| entry.to_str())
+                    .filter(|entry| !entry.is_empty())
+                    .unwrap_or("Imported Folder")
+                    .to_string();
+                let folder = FolderController::create_folder(db, name, Some(parent_id), None, None).await?;
+                folder_cache.insert(relative, folder.folder_id);
+                created_folder_ids.push(folder.folder_id);
+                touched_folder_ids.insert(folder.folder_id);
+            }
+
+            if !created_folder_ids.is_empty() {
+                FolderController::refresh_sidebar_projection_for_folder_ids(db, &created_folder_ids).await?;
+                crate::events::emit_mutation(
+                    "import_folder_structure",
+                    MutationImpact::sidebar(Domain::Folders).folder_ids(created_folder_ids.clone()),
+                );
+            }
+        }
+
+        if file_paths.is_empty() {
+            return Ok(batch);
+        }
+
+        let total = file_paths.len();
+        for (index, file_path) in file_paths.iter().enumerate() {
+            let target_folder_id = if preserve_structure {
+                let relative_parent = file_path
+                    .strip_prefix(&root_path)
+                    .ok()
+                    .and_then(|relative| relative.parent())
+                    .map(Path::to_path_buf)
+                    .unwrap_or_default();
+                folder_cache.get(&relative_parent).copied()
+            } else {
+                parent_folder_id
+            };
+
+            let mut imported_hashes = Vec::<String>::new();
+            let mut skipped_hashes = Vec::<String>::new();
+
+            match pipeline.import_file(file_path, &options).await {
+                Ok(imported) => {
+                    maybe_auto_merge(db, &imported.hex_hash, auto_merge_enabled, auto_merge_distance).await;
+                    imported_hashes.push(imported.hex_hash.clone());
+                    emit_file_imported(db, &imported.hex_hash).await;
+                    batch.imported.push(ImportResult {
+                        hash: imported.hex_hash,
+                        mime: imported.mime,
+                        size: imported.size,
+                        has_thumbnail: imported.has_thumbnail,
+                        tags_applied: imported.tags_applied,
+                    });
+                }
+                Err(crate::import::pipeline::ImportError::AlreadyImported(hash)) => {
+                    skipped_hashes.push(hash.clone());
+                    batch.skipped.push(hash);
+                }
+                Err(e) => {
+                    batch.errors.push(e.to_string());
+                }
+            }
+
+            if let Some(folder_id) = target_folder_id {
+                let membership_hashes: Vec<String> = imported_hashes
+                    .iter()
+                    .cloned()
+                    .chain(skipped_hashes.iter().cloned())
+                    .collect();
+                if !membership_hashes.is_empty() {
+                    db.add_entities_to_folder_batch(folder_id, &membership_hashes).await?;
+                    touched_folder_ids.insert(folder_id);
+                }
+            }
+
+            if !imported_hashes.is_empty() {
+                db.scope_cache_invalidate_all();
+                let mut impact = MutationImpact::file_lifecycle(db);
+                if let Some(folder_id) = target_folder_id {
+                    impact = impact.folder_ids(vec![folder_id]);
+                }
+                crate::events::emit_mutation("import_folder", impact);
+            } else if let Some(folder_id) = target_folder_id {
+                if !skipped_hashes.is_empty() {
+                    crate::events::emit_mutation(
+                        "import_folder_membership",
+                        MutationImpact::folder_file_change(folder_id),
+                    );
+                }
+            }
+
+            let current_file = file_path
+                .strip_prefix(&root_path)
+                .unwrap_or(file_path)
+                .display()
+                .to_string();
+            emit_progress(
+                index + 1,
+                total,
+                current_file,
+                batch.imported.len(),
+                batch.skipped.len(),
+                batch.errors.len(),
+            );
+        }
+
+        if !touched_folder_ids.is_empty() {
+            let touched_folder_ids: Vec<i64> = touched_folder_ids.into_iter().collect();
+            FolderController::refresh_sidebar_projection_for_folder_ids(db, &touched_folder_ids).await?;
+        }
+
+        Ok(batch)
+    }
+}
+
+async fn maybe_auto_merge(
+    db: &SqliteDatabase,
+    hash: &str,
+    auto_merge_enabled: bool,
+    auto_merge_distance: u32,
+) {
+    if !auto_merge_enabled {
+        return;
+    }
+    if let Err(e) = DuplicateController::check_and_auto_merge(db, hash, auto_merge_distance).await {
+        warn!(
+            hash = %hash,
+            error = %e,
+            "Duplicate auto-merge during manual import failed"
+        );
+    }
+}
+
+async fn emit_file_imported(db: &SqliteDatabase, hash: &str) {
+    if let Ok(Some(record)) = db.get_file_by_hash(hash).await {
+        let slim = crate::types::FileInfoSlim::from(record);
+        crate::events::emit(crate::events::event_names::FILE_IMPORTED, &slim);
+    }
+}
+
+fn emit_progress(
+    done: usize,
+    total: usize,
+    current_file: String,
+    imported: usize,
+    skipped: usize,
+    errors: usize,
+) {
+    events::emit(
+        events::event_names::MANUAL_IMPORT_PROGRESS,
+        &ManualImportProgressEvent {
+            done,
+            total,
+            current_file,
+            imported,
+            skipped,
+            errors,
+        },
+    );
+}
+
+fn collect_import_paths(root: &Path) -> Result<(Vec<PathBuf>, Vec<PathBuf>), String> {
+    let mut directories = Vec::<PathBuf>::new();
+    let mut files = Vec::<PathBuf>::new();
+    let mut stack = vec![root.to_path_buf()];
+
+    while let Some(directory) = stack.pop() {
+        let entries = fs::read_dir(&directory)
+            .map_err(|err| format!("Failed to read {}: {err}", directory.display()))?;
+        let mut child_paths = Vec::<PathBuf>::new();
+        for entry in entries {
+            let entry = entry.map_err(|err| format!("Failed to read entry in {}: {err}", directory.display()))?;
+            child_paths.push(entry.path());
+        }
+        child_paths.sort();
+
+        for path in child_paths {
+            if path.is_dir() {
+                directories.push(path.clone());
+                stack.push(path);
+            } else if path.is_file() {
+                files.push(path.canonicalize().unwrap_or(path));
+            }
+        }
+    }
+
+    directories.sort();
+    files.sort();
+    Ok((directories, files))
 }

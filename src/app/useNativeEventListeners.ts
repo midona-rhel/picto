@@ -4,11 +4,13 @@ import { useDomainStore } from '../state/domainStore';
 import { useImportActionStore } from '../state/importActionStore';
 import { useRuntimeSyncStore } from '../state/runtimeSyncStore';
 import { useLibraryStore } from '../state/libraryStore';
+import { useManualImportStore } from '../state/manualImportStore';
 import { useNavigationStore, type ViewType } from '../state/navigationStore';
 import { startAllRefreshers, stopAllRefreshers } from '../runtime/refresherOrchestrator';
 import { performUndo, performRedo } from '../shared/controllers/undoRedoController';
 import { runBestEffort } from '../shared/lib/asyncOps';
 import type { ResourceKey } from '../shared/types/generated/runtime-contract';
+import type { ManualImportProgressEvent } from '../shared/types/api/events';
 
 /**
  * Consolidates all native event listeners and runtime init/teardown
@@ -60,9 +62,26 @@ export function useNativeEventListeners(): void {
       if (useNavigationStore.getState().currentView !== 'images') {
         useNavigationStore.getState().navigateTo('images');
       }
-      useImportActionStore.getState().requestImportDialog();
+      useImportActionStore.getState().requestImportFilesDialog();
     });
     return () => { runBestEffort('menu.unlistenImportFiles', unlisten.then((fn) => fn())); };
+  }, []);
+
+  useEffect(() => {
+    const unlisten = listen('menu:import-folder', () => {
+      if (useNavigationStore.getState().currentView !== 'images') {
+        useNavigationStore.getState().navigateTo('images');
+      }
+      useImportActionStore.getState().requestImportFolderDialog();
+    });
+    return () => { runBestEffort('menu.unlistenImportFolder', unlisten.then((fn) => fn())); };
+  }, []);
+
+  useEffect(() => {
+    const unlisten = listen<ManualImportProgressEvent>('manual-import-progress', (event) => {
+      useManualImportStore.getState().update(event.payload);
+    });
+    return () => { runBestEffort('manualImportProgress.unlisten', unlisten.then((fn) => fn())); };
   }, []);
 
   useEffect(() => {

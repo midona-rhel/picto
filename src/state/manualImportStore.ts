@@ -3,17 +3,20 @@ import { create } from 'zustand';
 import type { ManualImportProgressEvent } from '../shared/types/api/events';
 
 type ManualImportStatus = 'idle' | 'running' | 'completed';
+type ManualImportSource = 'none' | 'renderer' | 'backend';
 
 interface ManualImportState {
   visible: boolean;
   status: ManualImportStatus;
+  source: ManualImportSource;
   label: string;
   done: number;
   total: number;
   imported: number;
   skipped: number;
   errors: number;
-  start: (total: number, label?: string) => void;
+  start: (total: number, label?: string, source?: Exclude<ManualImportSource, 'none'>) => void;
+  startBackend: (label?: string) => void;
   update: (progress: ManualImportProgressEvent) => void;
   setProgress: (progress: { done: number; total: number; imported: number; skipped: number; errors: number; label?: string }) => void;
   finish: (result: { imported: number; skipped: number; errors: number }) => void;
@@ -33,6 +36,7 @@ function clearHideTimer(): void {
 export const useManualImportStore = create<ManualImportState>((set, get) => ({
   visible: false,
   status: 'idle',
+  source: 'none',
   label: 'Adding files',
   done: 0,
   total: 0,
@@ -40,11 +44,12 @@ export const useManualImportStore = create<ManualImportState>((set, get) => ({
   skipped: 0,
   errors: 0,
 
-  start: (total, label = 'Adding files') => {
+  start: (total, label = 'Adding files', source = 'renderer') => {
     clearHideTimer();
     set({
-      visible: total > 0,
+      visible: true,
       status: 'running',
+      source,
       label,
       done: 0,
       total,
@@ -54,13 +59,21 @@ export const useManualImportStore = create<ManualImportState>((set, get) => ({
     });
   },
 
+  startBackend: (label = 'Adding files') => {
+    get().start(0, label, 'backend');
+  },
+
   update: (progress) => {
-    if (get().status === 'idle') {
-      get().start(progress.total);
+    const state = get();
+    if (state.status === 'idle') {
+      get().start(progress.total, undefined, 'backend');
+    } else if (state.source !== 'backend') {
+      return;
     }
     set({
       visible: true,
       status: 'running',
+      source: 'backend',
       done: progress.done,
       total: progress.total,
       imported: progress.imported,
@@ -76,6 +89,7 @@ export const useManualImportStore = create<ManualImportState>((set, get) => ({
     set((state) => ({
       visible: true,
       status: 'running',
+      source: 'renderer',
       label: progress.label ?? state.label,
       done: progress.done,
       total: progress.total,
@@ -91,6 +105,7 @@ export const useManualImportStore = create<ManualImportState>((set, get) => ({
     set({
       visible: true,
       status: 'completed',
+      source: 'none',
       done: total,
       total,
       imported,
@@ -107,6 +122,7 @@ export const useManualImportStore = create<ManualImportState>((set, get) => ({
     set({
       visible: false,
       status: 'idle',
+      source: 'none',
       done: 0,
       total: 0,
       imported: 0,
@@ -120,6 +136,7 @@ export const useManualImportStore = create<ManualImportState>((set, get) => ({
     set({
       visible: false,
       status: 'idle',
+      source: 'none',
       done: 0,
       total: 0,
       imported: 0,

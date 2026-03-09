@@ -20,6 +20,19 @@ pub struct ImportFilesInput {
     pub initial_status: i64,
 }
 
+#[derive(Debug, Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
+pub struct ImportFolderInput {
+    pub path: String,
+    #[serde(default)]
+    pub preserve_structure: bool,
+    #[serde(default)]
+    pub parent_folder_id: Option<i64>,
+    #[serde(default = "default_initial_status")]
+    #[ts(type = "number")]
+    pub initial_status: i64,
+}
+
 fn default_initial_status() -> i64 {
     1
 }
@@ -71,6 +84,30 @@ pub async fn import_files(state: &AppState, input: ImportFilesInput) -> Result<c
         );
     }
     Ok(result)
+}
+
+pub async fn import_folder(state: &AppState, input: ImportFolderInput) -> Result<crate::types::ImportBatchResult, String> {
+    let app_settings = state.settings.get();
+    let auto_merge_enabled = app_settings.duplicate_auto_merge_enabled
+        && !app_settings.duplicate_auto_merge_subscriptions_only;
+    let auto_merge_distance = if auto_merge_enabled {
+        crate::settings::store::similarity_pct_to_distance(
+            app_settings.duplicate_auto_merge_similarity_pct,
+        )
+    } else {
+        0
+    };
+    crate::import::controller::ImportController::import_folder(
+        &state.db,
+        &state.blob_store,
+        input.path,
+        input.preserve_structure,
+        input.parent_folder_id,
+        auto_merge_enabled,
+        auto_merge_distance,
+        input.initial_status,
+    )
+    .await
 }
 
 pub async fn update_file_status(state: &AppState, input: UpdateFileStatusInput) -> Result<usize, String> {

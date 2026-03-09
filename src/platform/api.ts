@@ -148,6 +148,13 @@ export const api = {
   import: {
     files: (paths: string[], tagStrings?: string[], sourceUrls?: string[], initialStatus?: number) =>
       invokeTyped('import_files', { paths, tag_strings: tagStrings, source_urls: sourceUrls, initial_status: initialStatus } as never) as unknown as Promise<ImportBatchResult>,
+    folder: (path: string, preserveStructure: boolean, parentFolderId?: number | null, initialStatus?: number) =>
+      invokeTyped('import_folder', {
+        path,
+        preserve_structure: preserveStructure,
+        parent_folder_id: parentFolderId ?? null,
+        initial_status: initialStatus,
+      } as never) as unknown as Promise<ImportBatchResult>,
   },
 
   tags: {

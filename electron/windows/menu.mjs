@@ -135,6 +135,11 @@ export function createMenuManager({
             accelerator: 'CmdOrCtrl+I',
             click: () => sendToFocusedWindow('menu:import-files'),
           },
+          {
+            label: 'Import Folder…',
+            accelerator: 'Shift+CmdOrCtrl+I',
+            click: () => sendToFocusedWindow('menu:import-folder'),
+          },
           { type: 'separator' },
           isMac ? { role: 'close' } : { role: 'quit' },
         ],

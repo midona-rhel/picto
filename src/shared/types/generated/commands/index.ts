@@ -9,6 +9,7 @@
 
 // Re-export generated input types — files_lifecycle
 export type { ImportFilesInput } from './ImportFilesInput';
+export type { ImportFolderInput } from './ImportFolderInput';
 export type { UpdateFileStatusInput } from './UpdateFileStatusInput';
 export type { DeleteFilesInput } from './DeleteFilesInput';
 
@@ -146,6 +147,7 @@ export type { ViewPrefsPatch } from './ViewPrefsPatch';
 // Command name → { input, output } map for compile-time checked dispatch.
 // Every typed command in Rust must have an entry here.
 import type { ImportFilesInput } from './ImportFilesInput';
+import type { ImportFolderInput } from './ImportFolderInput';
 import type { UpdateFileStatusInput } from './UpdateFileStatusInput';
 import type { DeleteFilesInput } from './DeleteFilesInput';
 import type { ImportBatchResult } from './ImportBatchResult';
@@ -251,6 +253,7 @@ import type { CountSmartFolderInput } from './CountSmartFolderInput';
 export interface TypedCommandMap {
   // files_lifecycle
   import_files: { input: ImportFilesInput; output: ImportBatchResult };
+  import_folder: { input: ImportFolderInput; output: ImportBatchResult };
   update_file_status: { input: UpdateFileStatusInput; output: number };
   delete_files: { input: DeleteFilesInput; output: number };
   rebuild_file_fts: { input: Record<string, never>; output: null };
