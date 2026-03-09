@@ -602,6 +602,46 @@ pub fn run_migrations(conn: &Connection, from_version: i64) -> rusqlite::Result<
 /// Reconcile schema drift for databases that may already report CURRENT_VERSION
 /// but are missing tables/columns introduced in newer builds.
 pub fn reconcile_schema(conn: &Connection) -> rusqlite::Result<()> {
+    // Legacy tag-graph drift:
+    // - older builds used `tag_sibling` / `tag_parent`
+    // - some partial schemas can miss `tag_alias` / `tag_implication` entirely
+    if table_exists(conn, "tag_sibling")? {
+        if !table_exists(conn, "tag_alias")? {
+            conn.execute_batch("ALTER TABLE tag_sibling RENAME TO tag_alias")?;
+            tracing::warn!("Reconciled tag schema: renamed legacy tag_sibling table to tag_alias");
+        } else {
+            conn.execute_batch("DROP TABLE IF EXISTS tag_sibling")?;
+            tracing::warn!("Reconciled tag schema: dropped stale legacy tag_sibling table");
+        }
+    }
+
+    if table_exists(conn, "tag_parent")? {
+        if !table_exists(conn, "tag_implication")? {
+            conn.execute_batch("ALTER TABLE tag_parent RENAME TO tag_implication")?;
+            tracing::warn!(
+                "Reconciled tag schema: renamed legacy tag_parent table to tag_implication"
+            );
+        } else {
+            conn.execute_batch("DROP TABLE IF EXISTS tag_parent")?;
+            tracing::warn!("Reconciled tag schema: dropped stale legacy tag_parent table");
+        }
+    }
+
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS tag_alias (
+             from_tag_id INTEGER NOT NULL REFERENCES tag(tag_id) ON DELETE CASCADE,
+             to_tag_id   INTEGER NOT NULL REFERENCES tag(tag_id) ON DELETE CASCADE,
+             source      TEXT NOT NULL DEFAULT 'manual',
+             PRIMARY KEY (from_tag_id, source)
+         );
+         CREATE TABLE IF NOT EXISTS tag_implication (
+             child_tag_id  INTEGER NOT NULL REFERENCES tag(tag_id) ON DELETE CASCADE,
+             parent_tag_id INTEGER NOT NULL REFERENCES tag(tag_id) ON DELETE CASCADE,
+             source        TEXT NOT NULL DEFAULT 'manual',
+             PRIMARY KEY (child_tag_id, parent_tag_id, source)
+         );",
+    )?;
+
     // Legacy subscription-group drift:
     // - older builds used `flow` / `flow_id`
     // - some partial schemas can miss `subscription_group` entirely
