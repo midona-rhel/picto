@@ -1904,4 +1904,54 @@ mod tests {
         assert_eq!(parent, Some(900));
         assert_eq!(ordinal, Some(7));
     }
+
+    #[test]
+    fn reconcile_schema_restores_missing_current_read_model_tables() {
+        let conn = Connection::open_in_memory().unwrap();
+        apply_pragmas(&conn).unwrap();
+        init_schema(&conn).unwrap();
+
+        conn.execute_batch(
+            "DROP TABLE IF EXISTS tag_ancestor;
+             DROP TABLE IF EXISTS tag_display;
+             DROP TABLE IF EXISTS entity_tag_implied;
+             DROP TABLE IF EXISTS sidebar_node;
+             DROP TABLE IF EXISTS entity_metadata_projection;
+             DROP TABLE IF EXISTS artifact_manifest_entry;
+             DROP TABLE IF EXISTS artifact_manifest_meta;
+             DROP TABLE IF EXISTS manifest;
+             DROP TABLE IF EXISTS kv_settings;",
+        )
+        .unwrap();
+
+        reconcile_schema(&conn).unwrap();
+
+        for table in &[
+            "tag_ancestor",
+            "tag_display",
+            "entity_tag_implied",
+            "sidebar_node",
+            "entity_metadata_projection",
+            "manifest",
+            "artifact_manifest_meta",
+            "artifact_manifest_entry",
+            "kv_settings",
+        ] {
+            assert!(table_exists(&conn, table).unwrap(), "Table '{table}' should be recreated");
+        }
+
+        let manifest_rows: i64 = conn
+            .query_row("SELECT COUNT(*) FROM manifest", [], |row| row.get(0))
+            .unwrap();
+        assert!(manifest_rows > 0, "Manifest seed rows should be restored");
+
+        let meta_exists: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM artifact_manifest_meta WHERE id = 1",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(meta_exists, 1, "Artifact manifest meta row should be restored");
+    }
 }
