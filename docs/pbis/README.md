@@ -56,7 +56,7 @@ This folder tracks the current active alpha backlog.
 46. [PBI-244](./active-alpha/PBI-244-controller-driven-view-transition-lifecycle.md)
 47. [PBI-245](./active-alpha/PBI-245-blurhash-first-transition-loading-strategy.md)
 48. [PBI-246](./active-alpha/PBI-246-add-to-folder-modal-with-tree-view.md)
-49. [PBI-250](./active-alpha/PBI-250-import-button-broken-on-linux.md)
+49. [PBI-250](./active-alpha/PBI-250-import-dialog-and-picker-reliability.md)
 50. [PBI-252](./active-alpha/PBI-252-subscription-setup-help-text-and-query-guidance.md)
 51. [PBI-254](./active-alpha/PBI-254-user-guide-in-readme-or-docs.md)
 52. [PBI-255](./active-alpha/PBI-255-ole-container-detection-and-type-disambiguation.md)
