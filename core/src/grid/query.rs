@@ -7,13 +7,22 @@ use std::collections::HashSet;
 use std::hash::{Hash, Hasher};
 use std::time::Instant;
 
+use serde::Serialize;
+
 use crate::scope::resolver::{resolve_scope, ScopeFilter};
 use crate::sqlite::bitmaps::BitmapKey;
+use crate::sqlite::files::GridFilters;
 use crate::sqlite::files::FileMetadataSlim;
 use crate::sqlite::{ScopeSnapshot, ScopeSnapshotKey, SqliteDatabase};
 use crate::types::{
     parse_file_status, EntitySlim, GridPageSlimQuery, GridPageSlimResponse,
 };
+
+#[derive(Debug, Serialize)]
+pub struct GridOutlineResponse {
+    pub items: Vec<EntitySlim>,
+    pub total_count: Option<i64>,
+}
 
 fn slim_cursor_value_for_sort(
     item: &FileMetadataSlim,
@@ -183,6 +192,331 @@ fn color_filter_ids(
     rows.collect()
 }
 
+fn build_grid_filters(query: &GridPageSlimQuery) -> Option<GridFilters> {
+    let has_any = query.rating_min.is_some()
+        || query
+            .mime_prefixes
+            .as_ref()
+            .map(|v| !v.is_empty())
+            .unwrap_or(false)
+        || query
+            .search_text
+            .as_ref()
+            .map(|s| !s.is_empty())
+            .unwrap_or(false);
+
+    if !has_any {
+        return None;
+    }
+
+    Some(GridFilters {
+        rating_min: query.rating_min,
+        mime_prefixes: query.mime_prefixes.clone(),
+        search_text: query.search_text.clone(),
+    })
+}
+
+pub async fn get_grid_outline(
+    db: &SqliteDatabase,
+    query: GridPageSlimQuery,
+) -> Result<GridOutlineResponse, String> {
+    let sort_field = query
+        .sort_field
+        .clone()
+        .unwrap_or_else(|| "imported_at".to_string());
+    let sort_dir = query
+        .sort_order
+        .clone()
+        .unwrap_or_else(|| "desc".to_string());
+    let grid_filters = build_grid_filters(&query);
+
+    let color_file_ids: Option<HashSet<i64>> = if let Some(ref hex) = query.color_hex {
+        let hex = hex.clone();
+        let tolerance = query.color_accuracy.unwrap_or(20.0).clamp(1.0, 30.0);
+        let ids: Vec<i64> = db
+            .with_read_conn(move |conn| color_filter_ids(conn, &hex, tolerance))
+            .await?;
+        Some(ids.into_iter().collect())
+    } else {
+        None
+    };
+
+    if let Some(collection_id) = query.collection_entity_id {
+        let cache_key = build_scope_cache_key(&query, &sort_field, &sort_dir);
+        let member_file_ids = if let Some(snap) = db.scope_cache_get(&cache_key) {
+            snap.ids
+        } else {
+            let mut ids = db.list_collection_member_file_ids(collection_id).await?;
+            if let Some(ref color_ids) = color_file_ids {
+                ids.retain(|id| color_ids.contains(id));
+            }
+            db.scope_cache_put(
+                cache_key,
+                ScopeSnapshot {
+                    total_count: ids.len() as i64,
+                    ids: ids.clone(),
+                    created_at: Instant::now(),
+                },
+            );
+            ids
+        };
+
+        if member_file_ids.is_empty() {
+            return Ok(GridOutlineResponse {
+                items: Vec::new(),
+                total_count: Some(0),
+            });
+        }
+
+        let rows = db
+            .with_read_conn(move |conn| {
+                crate::sqlite::files::list_files_slim_by_collection_rank(
+                    conn,
+                    &member_file_ids,
+                    collection_id,
+                    member_file_ids.len() as i64 + 1,
+                    None,
+                    grid_filters.as_ref(),
+                )
+            })
+            .await?;
+
+        let items: Vec<EntitySlim> = rows.into_iter().map(EntitySlim::from).collect();
+        return Ok(GridOutlineResponse {
+            total_count: Some(items.len() as i64),
+            items,
+        });
+    }
+
+    let scope_filter = ScopeFilter::from(&query);
+    let needs_scope = scope_filter.has_smart_folder()
+        || scope_filter.has_search_tags()
+        || scope_filter.has_folder()
+        || matches!(
+            scope_filter.status.as_deref(),
+            Some("untagged") | Some("uncategorized")
+        );
+
+    if needs_scope {
+        let cache_key = build_scope_cache_key(&query, &sort_field, &sort_dir);
+        let filtered_ids = if let Some(snap) = db.scope_cache_get(&cache_key) {
+            snap.ids
+        } else {
+            let scope_bm = resolve_scope(db, &scope_filter).await?;
+            let mut ids: Vec<i64> = scope_bm.iter().map(|id| id as i64).collect();
+            if let Some(ref color_ids) = color_file_ids {
+                ids.retain(|id| color_ids.contains(id));
+            }
+            db.scope_cache_put(
+                cache_key,
+                ScopeSnapshot {
+                    total_count: ids.len() as i64,
+                    ids: ids.clone(),
+                    created_at: Instant::now(),
+                },
+            );
+            ids
+        };
+
+        if filtered_ids.is_empty() {
+            return Ok(GridOutlineResponse {
+                items: Vec::new(),
+                total_count: Some(0),
+            });
+        }
+
+        let has_excluded_folders = query
+            .excluded_folder_ids
+            .as_ref()
+            .map(|v| !v.is_empty())
+            .unwrap_or(false);
+        let is_single_folder = query
+            .folder_ids
+            .as_ref()
+            .map(|v| v.len() == 1)
+            .unwrap_or(false)
+            && !has_excluded_folders
+            && query
+                .folder_match_mode
+                .as_deref()
+                .map(|m| m == "all" || m == "exact")
+                .unwrap_or(true);
+
+        let rows = if is_single_folder {
+            let fid = query.folder_ids.as_ref().unwrap()[0];
+            db.with_read_conn(move |conn| {
+                crate::sqlite::files::list_files_slim_by_folder_rank(
+                    conn,
+                    &filtered_ids,
+                    fid,
+                    filtered_ids.len() as i64 + 1,
+                    "asc",
+                    None,
+                    grid_filters.as_ref(),
+                )
+            })
+            .await?
+        } else {
+            let sf = sort_field.clone();
+            let sd = sort_dir.clone();
+            db.with_read_conn(move |conn| {
+                crate::sqlite::files::list_files_slim_by_ids(
+                    conn,
+                    &filtered_ids,
+                    filtered_ids.len() as i64 + 1,
+                    &sf,
+                    &sd,
+                    None,
+                    grid_filters.as_ref(),
+                    None,
+                )
+            })
+            .await?
+        };
+
+        let items: Vec<EntitySlim> = rows.into_iter().map(EntitySlim::from).collect();
+        return Ok(GridOutlineResponse {
+            total_count: Some(items.len() as i64),
+            items,
+        });
+    }
+
+    if query.status.as_deref() == Some("recently_viewed") {
+        const RECENTLY_VIEWED_CAP: i64 = 500;
+        let rows: Vec<(crate::sqlite::files::FileMetadataSlim, String)> = db
+            .with_read_conn(move |conn| {
+                let mut stmt = conn.prepare(
+                    "SELECT hash, name, mime, width, height, size, status, rating, blurhash,
+                            imported_at, dominant_color_hex, duration_ms, num_frames, has_audio, view_count,
+                            file_id, last_viewed_at
+                     FROM file WHERE view_count > 0 AND status = 1
+                     AND file_id IN (
+                       SELECT file_id FROM file WHERE view_count > 0 AND status = 1
+                       ORDER BY last_viewed_at DESC, file_id DESC LIMIT 500
+                     )
+                     ORDER BY last_viewed_at DESC, file_id DESC LIMIT 500",
+                )?;
+                let rows = stmt.query_map([], |row| {
+                    let slim = crate::sqlite::files::FileMetadataSlim {
+                        file_id: row.get(15)?,
+                        entity_id: row.get(15)?,
+                        is_collection: false,
+                        collection_item_count: None,
+                        hash: row.get(0)?,
+                        name: row.get(1)?,
+                        mime: row.get(2)?,
+                        width: row.get(3)?,
+                        height: row.get(4)?,
+                        size: row.get(5)?,
+                        status: row.get::<_, i64>(6)? as u8,
+                        rating: row.get(7)?,
+                        blurhash: row.get(8)?,
+                        imported_at: row.get(9)?,
+                        dominant_color_hex: row.get(10)?,
+                        duration_ms: row.get(11)?,
+                        num_frames: row.get(12)?,
+                        has_audio: row.get::<_, i64>(13)? != 0,
+                        view_count: row.get(14)?,
+                        position_rank: None,
+                    };
+                    let last_viewed_at: String =
+                        row.get::<_, Option<String>>(16)?.unwrap_or_default();
+                    Ok((slim, last_viewed_at))
+                })?;
+                rows.collect()
+            })
+            .await?;
+
+        let items: Vec<EntitySlim> = rows.into_iter().map(|(r, _)| EntitySlim::from(r)).collect();
+        return Ok(GridOutlineResponse {
+            total_count: Some(items.len() as i64).map(|count| count.min(RECENTLY_VIEWED_CAP)),
+            items,
+        });
+    }
+
+    if query.status.as_deref() == Some("random") {
+        let random_seed = query.random_seed.unwrap_or(0);
+        let bitmaps = db.bitmaps.clone();
+        let active_bm = bitmaps.get(&BitmapKey::Status(1));
+        let mut filtered_ids: Vec<i64> = active_bm.iter().map(|id| id as i64).collect();
+
+        if let Some(ref color_ids) = color_file_ids {
+            filtered_ids.retain(|id| color_ids.contains(id));
+        }
+
+        let rows = db
+            .with_read_conn(move |conn| {
+                crate::sqlite::files::list_files_slim_by_ids(
+                    conn,
+                    &filtered_ids,
+                    filtered_ids.len() as i64 + 1,
+                    "random",
+                    "asc",
+                    None,
+                    grid_filters.as_ref(),
+                    Some(random_seed),
+                )
+            })
+            .await?;
+
+        let items: Vec<EntitySlim> = rows.into_iter().map(EntitySlim::from).collect();
+        return Ok(GridOutlineResponse {
+            total_count: Some(items.len() as i64),
+            items,
+        });
+    }
+
+    let status_int = match query.status.as_deref() {
+        Some(s) => Some(parse_file_status(s)?),
+        None => None,
+    };
+
+    let rows = if let Some(ref color_ids) = color_file_ids {
+        let bitmaps = db.bitmaps.clone();
+        let status_bm = match status_int {
+            Some(0) => bitmaps.get(&BitmapKey::Status(0)),
+            Some(2) => bitmaps.get(&BitmapKey::Status(2)),
+            _ => bitmaps.get(&BitmapKey::Status(1)),
+        };
+        let filtered_ids: Vec<i64> = status_bm
+            .iter()
+            .map(|id| id as i64)
+            .filter(|id| color_ids.contains(id))
+            .collect();
+        let sf = sort_field.clone();
+        let sd = sort_dir.clone();
+        db.with_read_conn(move |conn| {
+            crate::sqlite::files::list_files_slim_by_ids(
+                conn,
+                &filtered_ids,
+                filtered_ids.len() as i64 + 1,
+                &sf,
+                &sd,
+                None,
+                grid_filters.as_ref(),
+                None,
+            )
+        })
+        .await?
+    } else {
+        db.list_files_slim(
+            i64::MAX / 4,
+            status_int,
+            sort_field.clone(),
+            sort_dir.clone(),
+            None,
+            grid_filters,
+        )
+        .await?
+    };
+
+    let items: Vec<EntitySlim> = rows.into_iter().map(EntitySlim::from).collect();
+    Ok(GridOutlineResponse {
+        total_count: Some(items.len() as i64),
+        items,
+    })
+}
+
 pub async fn get_grid_page_slim(
     db: &SqliteDatabase,
     query: GridPageSlimQuery,
@@ -197,28 +531,7 @@ pub async fn get_grid_page_slim(
         .clone()
         .unwrap_or_else(|| "desc".to_string());
 
-    let grid_filters = {
-        let has_any = query.rating_min.is_some()
-            || query
-                .mime_prefixes
-                .as_ref()
-                .map(|v| !v.is_empty())
-                .unwrap_or(false)
-            || query
-                .search_text
-                .as_ref()
-                .map(|s| !s.is_empty())
-                .unwrap_or(false);
-        if has_any {
-            Some(crate::sqlite::files::GridFilters {
-                rating_min: query.rating_min,
-                mime_prefixes: query.mime_prefixes.clone(),
-                search_text: query.search_text.clone(),
-            })
-        } else {
-            None
-        }
-    };
+    let grid_filters = build_grid_filters(&query);
 
     let color_file_ids: Option<HashSet<i64>> =
         if let Some(ref hex) = query.color_hex {
@@ -580,7 +893,7 @@ pub async fn get_grid_page_slim(
         let status_bm = match status_int {
             Some(0) => bitmaps.get(&BitmapKey::Status(0)),
             Some(2) => bitmaps.get(&BitmapKey::Status(2)),
-            // Default: active only (status=1). AllActive includes inbox.
+            // Default: active only (status=1).
             _ => bitmaps.get(&BitmapKey::Status(1)),
         };
         let filtered_ids: Vec<i64> = status_bm

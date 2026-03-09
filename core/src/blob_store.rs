@@ -222,11 +222,6 @@ impl BlobStore {
             .join(format!("{}.{}", hex_hash, ext)))
     }
 
-    /// Legacy path to the thumbnail (`.jpg`): `blobs/t/<ab>/<cd>/<hash>.jpg`
-    pub fn thumbnail_path(&self, hex_hash: &str) -> BlobResult<PathBuf> {
-        self.thumbnail_path_with_ext(hex_hash, "jpg")
-    }
-
     /// Find thumbnail path, checking `.jpg` first then `.png` for backwards
     /// compatibility with existing libraries.
     pub fn find_thumbnail_path(&self, hex_hash: &str) -> BlobResult<Option<PathBuf>> {

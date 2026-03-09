@@ -11,9 +11,7 @@ use std::sync::{Mutex, OnceLock};
 use crate::runtime_contract::snapshot::RuntimeSnapshot;
 use crate::runtime_contract::task::RuntimeTask;
 
-// ---------------------------------------------------------------------------
-// Sequence counter — single source of truth for the whole process
-// ---------------------------------------------------------------------------
+// --- Sequence counter — single source of truth for the whole process ---
 
 static SEQ: AtomicU64 = AtomicU64::new(0);
 
@@ -22,14 +20,11 @@ pub fn next_seq() -> u64 {
     SEQ.fetch_add(1, Ordering::Relaxed) + 1
 }
 
-/// Return the current sequence number without incrementing.
-pub fn current_seq() -> u64 {
+fn current_seq() -> u64 {
     SEQ.load(Ordering::Relaxed)
 }
 
-// ---------------------------------------------------------------------------
-// Task registry
-// ---------------------------------------------------------------------------
+// --- Task registry ---
 
 struct RuntimeStateInner {
     tasks: HashMap<String, RuntimeTask>,
@@ -74,8 +69,8 @@ pub fn remove_task(task_id: &str) {
     );
 }
 
-/// Get a single task by ID (clone).
-pub fn get_task(task_id: &str) -> Option<RuntimeTask> {
+#[cfg(test)]
+fn get_task(task_id: &str) -> Option<RuntimeTask> {
     let guard = crate::poison::mutex_or_recover(runtime(), "runtime_state::get_task");
     guard.tasks.get(task_id).cloned()
 }

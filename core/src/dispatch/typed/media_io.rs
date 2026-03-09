@@ -30,13 +30,6 @@ pub struct RevealInFolderInput {
 
 #[derive(Debug, Deserialize, TS)]
 #[ts(export_to = "../../src/shared/types/generated/commands/")]
-pub struct ExportFileInput {
-    pub hash: String,
-    pub dest_path: String,
-}
-
-#[derive(Debug, Deserialize, TS)]
-#[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct OpenInNewWindowInput {
     pub hash: String,
     pub width: Option<u32>,
@@ -77,20 +70,6 @@ pub struct ReanalyzeFileColorsInput {
 #[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct BackfillMissingBlurhashesInput {
     pub limit: Option<usize>,
-}
-
-#[derive(Debug, Deserialize, TS)]
-#[ts(export_to = "../../src/shared/types/generated/commands/")]
-pub struct SearchByColorInput {
-    pub hex_color: String,
-    pub max_distance: Option<f64>,
-}
-
-#[derive(Debug, Deserialize, TS)]
-#[ts(export_to = "../../src/shared/types/generated/commands/")]
-pub struct GetImageThumbnailInput {
-    #[serde(alias = "imageId")]
-    pub hash: String,
 }
 
 // ─── Private result structs ────────────────────────────────────────────────
@@ -168,55 +147,6 @@ fn reveal_in_folder_os(path: &str) -> Result<(), String> {
                 .map_err(|e| format!("Failed to open folder: {}", e))?;
         }
     }
-
-    Ok(())
-}
-
-async fn export_file_inner(
-    db: &crate::sqlite::SqliteDatabase,
-    blob_store: &std::sync::Arc<crate::blob_store::BlobStore>,
-    hash: &str,
-    dest_path: &str,
-) -> Result<(), String> {
-    let file = db
-        .get_file_by_hash(hash)
-        .await?
-        .ok_or_else(|| format!("File not found in database: {}", hash))?;
-    let ext = mime_to_extension(&file.mime).to_string();
-    let dest = std::path::Path::new(dest_path);
-    let parent = dest
-        .parent()
-        .ok_or_else(|| "Invalid destination path: no parent directory".to_string())?;
-    let canonical_parent = parent
-        .canonicalize()
-        .map_err(|e| format!("Destination directory does not exist: {}", e))?;
-
-    let blocked_prefixes = [
-        "/etc", "/usr", "/bin", "/sbin", "/lib", "/var", "/sys", "/proc", "/dev",
-        "C:\\Windows", "C:\\Program Files",
-    ];
-    let parent_str = canonical_parent.to_string_lossy();
-    for prefix in &blocked_prefixes {
-        if parent_str.starts_with(prefix) {
-            return Err(format!(
-                "Export to system directory '{}' is not allowed",
-                prefix
-            ));
-        }
-    }
-
-    let blob_ref = blob_store.clone();
-    let hash_clone = hash.to_string();
-    let dest = dest.to_path_buf();
-    tokio::task::spawn_blocking(move || {
-        let data = blob_ref
-            .read_original(&hash_clone, Some(&ext))
-            .map_err(|e| format!("Failed to read blob: {}", e))?;
-        std::fs::write(&dest, &data).map_err(|e| format!("Failed to write export: {}", e))?;
-        Ok::<(), String>(())
-    })
-    .await
-    .map_err(|e| format!("Export task failed: {}", e))??;
 
     Ok(())
 }
@@ -385,7 +315,7 @@ async fn reanalyze_file_colors_inner(
 
     if !file.mime.starts_with("image/") {
         db.set_file_colors(hash, Vec::new(), None).await?;
-        db.emit_compiler_event(crate::sqlite::CompilerEvent::RebuildAll);
+        db.emit_read_model_event(crate::sqlite::ReadModelEvent::RebuildAll);
         return Ok(ReanalyzeFileColorsResult {
             colors_extracted: 0,
             dominant_color_hex: None,
@@ -420,88 +350,12 @@ async fn reanalyze_file_colors_inner(
 
     db.set_file_colors(hash, colors, dominant_color_hex.clone())
         .await?;
-    db.emit_compiler_event(crate::sqlite::CompilerEvent::RebuildAll);
+    db.emit_read_model_event(crate::sqlite::ReadModelEvent::RebuildAll);
 
     Ok(ReanalyzeFileColorsResult {
         colors_extracted,
         dominant_color_hex,
     })
-}
-
-async fn color_search(
-    db: &crate::sqlite::SqliteDatabase,
-    hex_color: String,
-    max_distance: Option<f64>,
-) -> Result<Vec<crate::types::ColorSearchResult>, String> {
-    let max_dist = max_distance.unwrap_or(25.0).max(1.0).min(100.0);
-
-    let hex = hex_color.trim_start_matches('#');
-    if hex.len() != 6 {
-        return Err(format!("Invalid hex color: {}", hex_color));
-    }
-    let r = u8::from_str_radix(&hex[0..2], 16).map_err(|_| "Invalid red component")?;
-    let g = u8::from_str_radix(&hex[2..4], 16).map_err(|_| "Invalid green component")?;
-    let b = u8::from_str_radix(&hex[4..6], 16).map_err(|_| "Invalid blue component")?;
-
-    use palette::{IntoColor, Lab, Srgb};
-    let srgb = Srgb::new(r, g, b);
-    let lab: Lab = srgb.into_linear::<f32>().into_color();
-
-    let target_l = lab.l as f64;
-    let target_a = lab.a as f64;
-    let target_b = lab.b as f64;
-
-    let results = db
-        .with_read_conn(move |conn| {
-            let l_range = max_dist;
-            let a_range = max_dist * 2.0;
-            let b_range = max_dist * 2.0;
-            let mut stmt = conn.prepare(
-                "SELECT fc.l, fc.a, fc.b, f.hash
-                 FROM file_color_rtree rt
-                 JOIN file_color fc ON fc.rowid = rt.id
-                 JOIN file f ON f.file_id = fc.file_id
-                 WHERE rt.l_max >= ?1 AND rt.l_min <= ?2
-                   AND rt.a_max >= ?3 AND rt.a_min <= ?4
-                   AND rt.b_max >= ?5 AND rt.b_min <= ?6",
-            )?;
-            let rows = stmt.query_map(
-                rusqlite::params![
-                    target_l - l_range,
-                    target_l + l_range,
-                    target_a - a_range,
-                    target_a + a_range,
-                    target_b - b_range,
-                    target_b + b_range,
-                ],
-                |row| {
-                    Ok((
-                        row.get::<_, f64>(0)?,
-                        row.get::<_, f64>(1)?,
-                        row.get::<_, f64>(2)?,
-                        row.get::<_, String>(3)?,
-                    ))
-                },
-            )?;
-
-            let mut results = Vec::new();
-            let mut seen = std::collections::HashSet::new();
-            for row in rows {
-                let (l, a, b, hash) = row?;
-                let dl = target_l - l;
-                let da = target_a - a;
-                let db_val = target_b - b;
-                let distance = (dl * dl + da * da + db_val * db_val).sqrt();
-                if distance <= max_dist && seen.insert(hash.clone()) {
-                    results.push(crate::types::ColorSearchResult { hash, distance });
-                }
-            }
-            results.sort_by(|a, b| a.distance.partial_cmp(&b.distance).unwrap());
-            Ok(results)
-        })
-        .await?;
-
-    Ok(results)
 }
 
 // ─── Handlers ──────────────────────────────────────────────────────────────
@@ -520,10 +374,6 @@ pub async fn reveal_in_folder(state: &AppState, input: RevealInFolderInput) -> R
     let path = resolve_file_path_inner(&state.db, &state.blob_store, &input.hash).await?;
     reveal_in_folder_os(&path)?;
     Ok(())
-}
-
-pub async fn export_file(state: &AppState, input: ExportFileInput) -> Result<(), String> {
-    export_file_inner(&state.db, &state.blob_store, &input.hash, &input.dest_path).await
 }
 
 pub async fn open_in_new_window(_state: &AppState, input: OpenInNewWindowInput) -> Result<(), String> {
@@ -597,19 +447,3 @@ pub async fn backfill_missing_blurhashes(state: &AppState, input: BackfillMissin
     serde_json::to_value(&result).map_err(|e| e.to_string())
 }
 
-pub async fn search_by_color(state: &AppState, input: SearchByColorInput) -> Result<serde_json::Value, String> {
-    let result = color_search(&state.db, input.hex_color, input.max_distance).await?;
-    serde_json::to_value(&result).map_err(|e| e.to_string())
-}
-
-pub async fn get_image_thumbnail(state: &AppState, input: GetImageThumbnailInput) -> Result<serde_json::Value, String> {
-    let bs = state.blob_store.clone();
-    let hash = input.hash;
-    let result = tokio::task::spawn_blocking(move || {
-        bs.read_thumbnail(&hash).map_err(|e| e.to_string())
-    })
-    .await
-    .map_err(|e| format!("Task error: {}", e))?;
-    let data = result?;
-    serde_json::to_value(&data).map_err(|e| e.to_string())
-}

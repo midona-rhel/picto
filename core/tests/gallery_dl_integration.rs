@@ -10,7 +10,7 @@
 //! - gallery-dl installed (via vendor/ or system PATH)
 //! - Network access
 
-use picto_core::gallery_dl_runner::{
+use picto_core::subscriptions::gallery_dl_runner::{
     self, build_url, site_by_id, GalleryDlRunner, RunOptions, SITES,
 };
 use std::path::PathBuf;

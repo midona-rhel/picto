@@ -98,8 +98,8 @@ impl From<&crate::types::SelectionQuerySpec> for ScopeFilter {
 ///
 /// Resolution cascade:
 /// 1. Smart folder predicate → `compile_predicate`
-/// 2. Tag search → EffectiveTag bitmap ops (AND/OR), intersect AllActive
-/// 3. Folder → Folder bitmap ops (AND/OR), intersect AllActive
+/// 2. Tag search → EffectiveTag bitmap ops (AND/OR), intersect active (status=1)
+/// 3. Folder → Folder bitmap ops (AND/OR), intersect active (status=1)
 /// 4. Status fallback: inbox, trash, untagged, uncategorized, recently_viewed, default
 pub async fn resolve_scope(
     db: &SqliteDatabase,
@@ -156,7 +156,7 @@ async fn resolve_tag_search(
 
         let include_ids = resolve_ids(&include_tags, match_mode != IncludeMatchMode::Any)?;
         let exclude_ids = resolve_ids(&exclude_tags, false)?;
-        let all_active = bitmaps.get(&BitmapKey::AllActive);
+        let active = bitmaps.get(&BitmapKey::Status(1));
 
         // If the user searched for tags but none resolved to valid tag_ids,
         // return empty — the tags don't exist so no files can match.
@@ -165,7 +165,7 @@ async fn resolve_tag_search(
         }
 
         let mut result = if include_ids.is_empty() {
-            all_active.clone()
+            active.clone()
         } else if match_mode == IncludeMatchMode::Any {
             let mut union = RoaringBitmap::new();
             for tid in &include_ids {
@@ -189,7 +189,7 @@ async fn resolve_tag_search(
             }
             result -= &excluded;
         }
-        result &= &all_active;
+        result &= &active;
         Ok(result)
     })
     .await
@@ -205,10 +205,10 @@ fn resolve_folder(
         filter.folder_match_mode.as_deref(),
         IncludeMatchMode::Any,
     );
-    let all_active = db.bitmaps.get(&BitmapKey::AllActive);
+    let active = db.bitmaps.get(&BitmapKey::Status(1));
 
     let mut result = if include_folders.is_empty() {
-        all_active.clone()
+        active.clone()
     } else if match_mode == IncludeMatchMode::Any {
         let mut union = RoaringBitmap::new();
         for fid in &include_folders {
@@ -232,7 +232,7 @@ fn resolve_folder(
         }
         result -= &excluded;
     }
-    result &= &all_active;
+    result &= &active;
     Ok(result)
 }
 
@@ -255,11 +255,11 @@ async fn resolve_status(
             ))
         }
         Some("recently_viewed") => {
-            // Bitmap approximation — AllActive. Actual view_count check
+            // Bitmap approximation — active only. Actual view_count check
             // happens in the grid controller's SQL query.
-            Ok(db.bitmaps.get(&BitmapKey::AllActive))
+            Ok(db.bitmaps.get(&BitmapKey::Status(1)))
         }
-        // Default "All Images" = status=1 (active only).
+        // Default "All Active" = status=1 (active only).
         _ => Ok(db.bitmaps.get(&BitmapKey::Status(1))),
     }
 }

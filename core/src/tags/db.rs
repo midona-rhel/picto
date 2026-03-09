@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
 use crate::sqlite::bitmaps::BitmapKey;
-use crate::sqlite::compilers::CompilerEvent;
+use crate::sqlite::ReadModelEvent;
 use crate::sqlite::SqliteDatabase;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -737,8 +737,8 @@ impl SqliteDatabase {
         // Update tag bitmap
         self.bitmaps
             .insert(&BitmapKey::Tag(tag_id), entity_id as u32);
-        self.emit_compiler_event(CompilerEvent::FileTagsChanged { file_id: entity_id });
-        self.emit_compiler_event(CompilerEvent::TagChanged { tag_id });
+        self.emit_read_model_event(ReadModelEvent::FileTagsChanged { file_id: entity_id });
+        self.emit_read_model_event(ReadModelEvent::TagChanged { tag_id });
         Ok(true)
     }
 
@@ -766,8 +766,8 @@ impl SqliteDatabase {
         if let Some((tag_id, true)) = result {
             self.bitmaps
                 .remove(&BitmapKey::Tag(tag_id), entity_id as u32);
-            self.emit_compiler_event(CompilerEvent::FileTagsChanged { file_id: entity_id });
-            self.emit_compiler_event(CompilerEvent::TagChanged { tag_id });
+            self.emit_read_model_event(ReadModelEvent::FileTagsChanged { file_id: entity_id });
+            self.emit_read_model_event(ReadModelEvent::TagChanged { tag_id });
         }
 
         Ok(result.map(|(_, r)| r).unwrap_or(false))
@@ -930,7 +930,7 @@ impl SqliteDatabase {
             add_alias(conn, from_id, to_id, &src)
         })
         .await?;
-        self.emit_compiler_event(CompilerEvent::TagGraphChanged);
+        self.emit_read_model_event(ReadModelEvent::TagGraphChanged);
         Ok(())
     }
 
@@ -950,7 +950,7 @@ impl SqliteDatabase {
             Ok(())
         })
         .await?;
-        self.emit_compiler_event(CompilerEvent::TagGraphChanged);
+        self.emit_read_model_event(ReadModelEvent::TagGraphChanged);
         Ok(())
     }
 
@@ -973,7 +973,7 @@ impl SqliteDatabase {
             add_implication(conn, child_id, parent_id, &src)
         })
         .await?;
-        self.emit_compiler_event(CompilerEvent::TagGraphChanged);
+        self.emit_read_model_event(ReadModelEvent::TagGraphChanged);
         Ok(())
     }
 
@@ -999,7 +999,7 @@ impl SqliteDatabase {
             Ok(())
         })
         .await?;
-        self.emit_compiler_event(CompilerEvent::TagGraphChanged);
+        self.emit_read_model_event(ReadModelEvent::TagGraphChanged);
         Ok(())
     }
 
@@ -1050,12 +1050,12 @@ impl SqliteDatabase {
             .with_conn(move |conn| rename_tag(conn, tag_id, &new_str))
             .await?;
 
-        self.emit_compiler_event(CompilerEvent::TagChanged { tag_id });
+        self.emit_read_model_event(ReadModelEvent::TagChanged { tag_id });
         if let Some(target_id) = merged_into {
-            self.emit_compiler_event(CompilerEvent::TagChanged { tag_id: target_id });
+            self.emit_read_model_event(ReadModelEvent::TagChanged { tag_id: target_id });
         }
         for &eid in &affected_entity_ids {
-            self.emit_compiler_event(CompilerEvent::FileTagsChanged { file_id: eid });
+            self.emit_read_model_event(ReadModelEvent::FileTagsChanged { file_id: eid });
         }
         Ok((affected_entity_ids, merged_into))
     }
@@ -1063,9 +1063,9 @@ impl SqliteDatabase {
     pub async fn delete_tag_by_id(&self, tag_id: i64) -> Result<Vec<i64>, String> {
         let affected_entity_ids = self.with_conn(move |conn| delete_tag(conn, tag_id)).await?;
 
-        self.emit_compiler_event(CompilerEvent::TagChanged { tag_id });
+        self.emit_read_model_event(ReadModelEvent::TagChanged { tag_id });
         for &eid in &affected_entity_ids {
-            self.emit_compiler_event(CompilerEvent::FileTagsChanged { file_id: eid });
+            self.emit_read_model_event(ReadModelEvent::FileTagsChanged { file_id: eid });
         }
         Ok(affected_entity_ids)
     }
@@ -1075,7 +1075,7 @@ impl SqliteDatabase {
     ) -> Result<NamespaceNormalizationStats, String> {
         let stats = self.with_conn(normalize_disallowed_namespaces).await?;
         if stats.tags_rewritten > 0 {
-            self.emit_compiler_event(CompilerEvent::TagGraphChanged);
+            self.emit_read_model_event(ReadModelEvent::TagGraphChanged);
         }
         Ok(stats)
     }
@@ -1096,7 +1096,7 @@ impl SqliteDatabase {
             tag_strings.iter().filter_map(|s| crate::tags::normalize::parse_tag(s)).collect();
 
         let bitmaps = self.bitmaps.clone();
-        let compiler_tx = self.compiler_tx.clone();
+        let read_model_tx = self.read_model_tx.clone();
 
         self.with_conn(move |conn| {
             for (ns, st) in &parsed {
@@ -1136,10 +1136,10 @@ impl SqliteDatabase {
                         bitmaps.insert(&BitmapKey::Tag(tag_id), eid as u32);
                     }
                 }
-                let _ = compiler_tx.send(CompilerEvent::TagChanged { tag_id });
+                let _ = read_model_tx.send(ReadModelEvent::TagChanged { tag_id });
             }
             for &eid in &entity_ids {
-                let _ = compiler_tx.send(CompilerEvent::FileTagsChanged { file_id: eid });
+                let _ = read_model_tx.send(ReadModelEvent::FileTagsChanged { file_id: eid });
             }
             Ok(())
         })
@@ -1160,7 +1160,7 @@ impl SqliteDatabase {
             tag_strings.iter().filter_map(|s| crate::tags::normalize::parse_tag(s)).collect();
 
         let bitmaps = self.bitmaps.clone();
-        let compiler_tx = self.compiler_tx.clone();
+        let read_model_tx = self.read_model_tx.clone();
 
         self.with_conn(move |conn| {
             for (ns, st) in &parsed {
@@ -1198,11 +1198,11 @@ impl SqliteDatabase {
                     for &eid in &entity_ids {
                         bitmaps.remove(&BitmapKey::Tag(tag_id), eid as u32);
                     }
-                    let _ = compiler_tx.send(CompilerEvent::TagChanged { tag_id });
+                    let _ = read_model_tx.send(ReadModelEvent::TagChanged { tag_id });
                 }
             }
             for &eid in &entity_ids {
-                let _ = compiler_tx.send(CompilerEvent::FileTagsChanged { file_id: eid });
+                let _ = read_model_tx.send(ReadModelEvent::FileTagsChanged { file_id: eid });
             }
             Ok(())
         })

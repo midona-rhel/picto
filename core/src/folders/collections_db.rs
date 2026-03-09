@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 
 use crate::sqlite::bitmaps::BitmapKey;
-use crate::sqlite::compilers::CompilerEvent;
+use crate::sqlite::ReadModelEvent;
 use crate::sqlite::SqliteDatabase;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1049,9 +1049,9 @@ impl SqliteDatabase {
 
             // Rebuild status/tag/sidebar/smart-folder derived artifacts so
             // counts and visibility reflect collection-member replacement.
-            self.emit_compiler_event(CompilerEvent::StatusBatchChanged);
-            self.emit_compiler_event(CompilerEvent::TagGraphChanged);
-            self.emit_compiler_event(CompilerEvent::FolderChanged { folder_id: 0 });
+            self.emit_read_model_event(ReadModelEvent::StatusBatchChanged);
+            self.emit_read_model_event(ReadModelEvent::TagGraphChanged);
+            self.emit_read_model_event(ReadModelEvent::FolderChanged { folder_id: 0 });
         }
         Ok(added)
     }
@@ -1066,9 +1066,9 @@ impl SqliteDatabase {
             .with_conn(move |conn| remove_collection_members_by_hashes(conn, collection_id, &hs))
             .await?;
         if removed > 0 {
-            self.emit_compiler_event(CompilerEvent::StatusBatchChanged);
-            self.emit_compiler_event(CompilerEvent::TagGraphChanged);
-            self.emit_compiler_event(CompilerEvent::FolderChanged { folder_id: 0 });
+            self.emit_read_model_event(ReadModelEvent::StatusBatchChanged);
+            self.emit_read_model_event(ReadModelEvent::TagGraphChanged);
+            self.emit_read_model_event(ReadModelEvent::FolderChanged { folder_id: 0 });
         }
         Ok(removed)
     }

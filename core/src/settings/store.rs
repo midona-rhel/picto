@@ -16,8 +16,8 @@ pub struct AppSettings {
     pub grid_target_size: f64,
     #[serde(default = "default_grid_view_mode")]
     pub grid_view_mode: String,
-    #[serde(default = "default_properties_panel_width")]
-    pub properties_panel_width: f64,
+    #[serde(default = "default_inspector_width")]
+    pub inspector_width: f64,
     #[serde(default = "default_color_scheme")]
     pub color_scheme: String,
     #[serde(default)]
@@ -68,7 +68,7 @@ fn default_grid_target_size() -> f64 {
 fn default_grid_view_mode() -> String {
     "waterfall".into()
 }
-fn default_properties_panel_width() -> f64 {
+fn default_inspector_width() -> f64 {
     280.0
 }
 fn default_color_scheme() -> String {
@@ -122,7 +122,7 @@ impl Default for AppSettings {
         Self {
             grid_target_size: default_grid_target_size(),
             grid_view_mode: default_grid_view_mode(),
-            properties_panel_width: default_properties_panel_width(),
+            inspector_width: default_inspector_width(),
             color_scheme: default_color_scheme(),
             window_x: None,
             window_y: None,

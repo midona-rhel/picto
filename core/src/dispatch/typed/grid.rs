@@ -38,6 +38,11 @@ pub async fn get_grid_page_slim(state: &AppState, input: GetGridPageSlimInput) -
     serde_json::to_value(&result).map_err(|e| e.to_string())
 }
 
+pub async fn get_grid_outline(state: &AppState, input: GetGridPageSlimInput) -> Result<serde_json::Value, String> {
+    let result = crate::grid::query::get_grid_outline(&state.db, input.query).await?;
+    serde_json::to_value(&result).map_err(|e| e.to_string())
+}
+
 pub async fn get_file(state: &AppState, input: GetFileInput) -> Result<serde_json::Value, String> {
     let file = state.db.get_file_by_hash(&input.hash).await?;
     let result = file.map(crate::types::FileInfo::from);
@@ -51,9 +56,4 @@ pub async fn get_files_metadata_batch(state: &AppState, input: GetFilesMetadataB
     )
     .await?;
     serde_json::to_value(&result).map_err(|e| e.to_string())
-}
-
-pub async fn get_file_count(state: &AppState, _input: serde_json::Value) -> Result<serde_json::Value, String> {
-    let count = state.db.count_files(None).await?;
-    serde_json::to_value(&count).map_err(|e| e.to_string())
 }

@@ -7,13 +7,14 @@ pub mod bitmaps;
 pub mod compilers;
 pub mod files;
 pub mod hash_index;
+pub mod publish;
 pub mod projections;
+pub mod read_model;
 pub mod schema;
 
 use bitmaps::BitmapStore;
 use hash_index::HashIndex;
 use rusqlite::Connection;
-use serde_json::json;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -21,7 +22,7 @@ use std::sync::{Arc, Mutex as StdMutex, OnceLock};
 use std::time::{Duration, Instant};
 use tokio::sync::{mpsc, Mutex};
 
-pub use compilers::CompilerEvent;
+pub use read_model::{DerivedArtifact, PublishedArtifacts, ReadModelBatchResult, ReadModelEvent};
 
 const SLOW_READ_WARN_MS: u64 = 100;
 const SLOW_WRITE_WARN_MS: u64 = 100;
@@ -86,251 +87,6 @@ fn record_slow_query(kind: &'static str, label: &'static str, elapsed_ms: u64) {
     }
 }
 
-fn parse_active_bitmap_file(payload_json: Option<&str>) -> Option<String> {
-    payload_json
-        .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok())
-        .and_then(|v| {
-            v.get("active_file")
-                .and_then(|s| s.as_str())
-                .map(|s| s.to_string())
-        })
-}
-
-struct ManifestState {
-    published_epoch: u64,
-    published_artifact_versions: HashMap<String, u64>,
-    published_artifact_payloads: HashMap<String, String>,
-    working_artifact_versions: HashMap<String, u64>,
-    working_artifact_payloads: HashMap<String, String>,
-    dirty: bool,
-}
-
-/// Global manifest snapshot tracker for derived artifact publication.
-///
-/// Compatibility note:
-/// Current compiler/projection code still calls `get(key)` / `bump(key)` as if this were a key->epoch
-/// map. Internally, these now mutate artifact versions and `flush_to_db()` publishes a new manifest
-/// snapshot (`manifest_epoch`) with a full set of artifact entries.
-pub struct Manifest {
-    state: std::sync::RwLock<ManifestState>,
-}
-
-impl Manifest {
-    pub fn new() -> Self {
-        let mut artifact_versions = HashMap::new();
-        let mut artifact_payloads = HashMap::new();
-        for key in [
-            "global",
-            "files",
-            "tags",
-            "tag_graph",
-            "effective_tags",
-            "metadata_projection",
-            "sidebar",
-            "smart_folders",
-            "bitmaps",
-        ] {
-            artifact_versions.insert(key.to_string(), 0);
-        }
-        artifact_payloads.insert(
-            "bitmaps".to_string(),
-            json!({"active_file":"bitmaps.bin"}).to_string(),
-        );
-        Self {
-            state: std::sync::RwLock::new(ManifestState {
-                published_epoch: 0,
-                published_artifact_versions: artifact_versions.clone(),
-                published_artifact_payloads: artifact_payloads.clone(),
-                working_artifact_versions: artifact_versions,
-                working_artifact_payloads: artifact_payloads,
-                dirty: false,
-            }),
-        }
-    }
-
-    /// Load the latest published manifest snapshot (artifact versions) from the database.
-    pub fn load_from_db(conn: &Connection) -> rusqlite::Result<Self> {
-        let m = Self::new();
-
-        let has_new_manifest_tables: bool = conn.query_row(
-            "SELECT COUNT(*) > 0 FROM sqlite_master
-             WHERE type='table' AND name='artifact_manifest_meta'",
-            [],
-            |row| row.get(0),
-        )?;
-
-        if has_new_manifest_tables {
-            let published_epoch: u64 = conn
-                .query_row(
-                    "SELECT manifest_epoch FROM artifact_manifest_meta WHERE id = 1",
-                    [],
-                    |row| row.get::<_, u64>(0),
-                )
-                .unwrap_or(0);
-
-            let mut stmt = conn.prepare_cached(
-                "SELECT artifact_name, artifact_version, payload_json
-                 FROM artifact_manifest_entry
-                 WHERE manifest_epoch = ?1",
-            )?;
-            let rows = stmt.query_map([published_epoch], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, u64>(1)?,
-                    row.get::<_, String>(2)?,
-                ))
-            })?;
-
-            let mut loaded_any = false;
-            {
-                let mut state = crate::poison::write_or_recover(&m.state, "manifest::init");
-                state.published_epoch = published_epoch;
-                for row in rows {
-                    let (name, version, payload_json) = row?;
-                    state
-                        .published_artifact_versions
-                        .insert(name.clone(), version);
-                    state
-                        .published_artifact_payloads
-                        .insert(name.clone(), payload_json.clone());
-                    state
-                        .working_artifact_versions
-                        .insert(name.clone(), version);
-                    state.working_artifact_payloads.insert(name, payload_json);
-                    loaded_any = true;
-                }
-                state.dirty = false;
-            }
-
-            if loaded_any {
-                return Ok(m);
-            }
-        }
-
-        // No artifact snapshot entries found — return defaults (all versions at 0).
-        // A RebuildAll compiler event on startup will recompute everything.
-        Ok(m)
-    }
-
-    /// Get the current published manifest epoch.
-    pub fn published_epoch(&self) -> u64 {
-        crate::poison::read_or_recover(&self.state, "manifest::published_epoch").published_epoch
-    }
-
-    /// Get the artifact version for a given key in the current published snapshot.
-    pub fn published_artifact_version(&self, key: &str) -> u64 {
-        crate::poison::read_or_recover(&self.state, "manifest::published_artifact_version")
-            .published_artifact_versions
-            .get(key)
-            .copied()
-            .unwrap_or(0)
-    }
-
-    /// Bump the artifact version for a key in the working snapshot and return the new value.
-    pub fn bump_working_artifact_version(&self, key: &str) -> u64 {
-        let mut state = crate::poison::write_or_recover(&self.state, "manifest::bump_version");
-        let new_version = {
-            let version = state
-                .working_artifact_versions
-                .entry(key.to_string())
-                .or_insert(0);
-            *version += 1;
-            *version
-        };
-        state.dirty = true;
-        new_version
-    }
-
-    /// Get the raw manifest payload JSON for an artifact (if present in the current published snapshot).
-    pub fn published_artifact_payload_json(&self, key: &str) -> Option<String> {
-        crate::poison::read_or_recover(&self.state, "manifest::published_payload")
-            .published_artifact_payloads
-            .get(key)
-            .cloned()
-    }
-
-    /// Set the raw manifest payload JSON for an artifact in the working snapshot.
-    pub fn set_working_artifact_payload_json(&self, key: &str, payload_json: String) {
-        let mut state = crate::poison::write_or_recover(&self.state, "manifest::set_payload");
-        let changed = state
-            .working_artifact_payloads
-            .get(key)
-            .map(|existing| existing != &payload_json)
-            .unwrap_or(true);
-        if changed {
-            state
-                .working_artifact_payloads
-                .insert(key.to_string(), payload_json);
-            state.dirty = true;
-        }
-    }
-
-    /// Flush a new manifest snapshot to the artifact manifest tables.
-    pub fn flush_to_db(&self, conn: &mut Connection) -> rusqlite::Result<()> {
-        let mut state = crate::poison::write_or_recover(&self.state, "manifest::flush");
-        if !state.dirty {
-            return Ok(());
-        }
-
-        let next_manifest_epoch = state.published_epoch + 1;
-        let artifact_versions = state.working_artifact_versions.clone();
-        let artifact_payloads = state.working_artifact_payloads.clone();
-
-        let tx = conn.transaction()?;
-
-        tx.execute(
-            "INSERT OR IGNORE INTO artifact_manifest_meta (id, manifest_epoch, updated_at)
-             VALUES (1, 0, CURRENT_TIMESTAMP)",
-            [],
-        )?;
-
-        {
-            let mut entry_stmt = tx.prepare_cached(
-                "INSERT OR REPLACE INTO artifact_manifest_entry
-                    (manifest_epoch, artifact_name, artifact_version, built_from_truth_seq, payload_json)
-                 VALUES (?1, ?2, ?3, 0, ?4)",
-            )?;
-            for (artifact_name, artifact_version) in artifact_versions.iter() {
-                let payload_json = artifact_payloads
-                    .get(artifact_name)
-                    .cloned()
-                    .unwrap_or_else(|| "{}".to_string());
-                entry_stmt.execute(rusqlite::params![
-                    next_manifest_epoch,
-                    artifact_name,
-                    artifact_version,
-                    payload_json
-                ])?;
-            }
-        }
-
-        tx.execute(
-            "UPDATE artifact_manifest_meta
-             SET manifest_epoch = ?1, updated_at = CURRENT_TIMESTAMP
-             WHERE id = 1",
-            [next_manifest_epoch],
-        )?;
-
-        tx.commit()?;
-
-        // Keep only last 2 epochs to prevent unbounded accumulation
-        if next_manifest_epoch > 2 {
-            conn.execute(
-                "DELETE FROM artifact_manifest_entry WHERE manifest_epoch < ?1",
-                [next_manifest_epoch - 1],
-            )?;
-        }
-
-        state.published_epoch = next_manifest_epoch;
-        state.published_artifact_versions = artifact_versions.clone();
-        state.published_artifact_payloads = artifact_payloads.clone();
-        state.working_artifact_versions = artifact_versions;
-        state.working_artifact_payloads = artifact_payloads;
-        state.dirty = false;
-        Ok(())
-    }
-}
-
 /// Cached snapshot of a filtered scope — avoids rebuilding temp id-sets on
 /// consecutive page fetches for the same scope+filter+sort combination.
 #[derive(Debug, Clone)]
@@ -358,9 +114,9 @@ pub struct SqliteDatabase {
     read_pool_idx: AtomicUsize,
     pub bitmaps: Arc<BitmapStore>,
     pub hash_index: Arc<HashIndex>,
-    pub manifest: Arc<Manifest>,
-    pub compiler_tx: mpsc::UnboundedSender<CompilerEvent>,
-    compiler_rx: Arc<Mutex<Option<mpsc::UnboundedReceiver<CompilerEvent>>>>,
+    pub manifest: Arc<publish::Manifest>,
+    pub read_model_tx: mpsc::UnboundedSender<ReadModelEvent>,
+    read_model_rx: Arc<Mutex<Option<mpsc::UnboundedReceiver<ReadModelEvent>>>>,
     db_path: PathBuf,
     /// Scope snapshot cache for grid paging (avoids repeated temp-table rebuilds).
     /// Key: scope+predicate+sort. Value: stable ordered id list.
@@ -417,11 +173,10 @@ impl SqliteDatabase {
         .await
         .map_err(|e| format!("Join error: {e}"))??;
 
-        let manifest =
-            Manifest::load_from_db(&conn).map_err(|e| format!("Failed to load manifest: {e}"))?;
+        let manifest = publish::Manifest::load_from_db(&conn)
+            .map_err(|e| format!("Failed to load manifest: {e}"))?;
 
-        let active_bitmap_file =
-            parse_active_bitmap_file(manifest.published_artifact_payload_json("bitmaps").as_deref());
+        let active_bitmap_file = publish::active_bitmap_file_from_manifest(&manifest);
 
         let bitmaps = BitmapStore::open_with_active_file(&db_dir, active_bitmap_file.as_deref());
         let startup_keep = vec![
@@ -454,7 +209,7 @@ impl SqliteDatabase {
         }
         tracing::info!("Opened {pool_size} read-only connections");
 
-        let (compiler_tx, compiler_rx) = mpsc::unbounded_channel();
+        let (read_model_tx, read_model_rx) = mpsc::unbounded_channel();
 
         let db = Arc::new(Self {
             conn: Arc::new(Mutex::new(conn)),
@@ -463,8 +218,8 @@ impl SqliteDatabase {
             bitmaps: Arc::new(bitmaps),
             hash_index: Arc::new(HashIndex::new()),
             manifest: Arc::new(manifest),
-            compiler_tx,
-            compiler_rx: Arc::new(Mutex::new(Some(compiler_rx))),
+            read_model_tx,
+            read_model_rx: Arc::new(Mutex::new(Some(read_model_rx))),
             db_path,
             scope_cache: Arc::new(std::sync::RwLock::new(std::collections::HashMap::new())),
         });
@@ -473,8 +228,8 @@ impl SqliteDatabase {
     }
 
     /// Take the compiler receiver (can only be called once, for the compiler task).
-    pub async fn take_compiler_rx(&self) -> Option<mpsc::UnboundedReceiver<CompilerEvent>> {
-        self.compiler_rx.lock().await.take()
+    pub async fn take_read_model_rx(&self) -> Option<mpsc::UnboundedReceiver<ReadModelEvent>> {
+        self.read_model_rx.lock().await.take()
     }
 
     /// Run a read-only closure on a pooled reader connection.
@@ -709,52 +464,14 @@ impl SqliteDatabase {
         Ok(results)
     }
 
-    pub fn emit_compiler_event(&self, event: CompilerEvent) {
-        let _ = self.compiler_tx.send(event);
+    pub fn emit_read_model_event(&self, event: ReadModelEvent) {
+        let _ = self.read_model_tx.send(event);
     }
 
     pub async fn flush(&self) -> Result<(), String> {
-        let previous_active = parse_active_bitmap_file(
-            self.manifest
-                .published_artifact_payload_json("bitmaps")
-                .as_deref(),
-        );
-        let mut new_active_for_cleanup: Option<String> = None;
-        if self.bitmaps.is_dirty() {
-            let bitmap_version = self.manifest.bump_working_artifact_version("bitmaps");
-            let active_file = self
-                .bitmaps
-                .flush_versioned(bitmap_version)
-                .map_err(|e| format!("Bitmap flush error: {e}"))?;
-            new_active_for_cleanup = Some(active_file.clone());
-            self.manifest.set_working_artifact_payload_json(
-                "bitmaps",
-                json!({ "active_file": active_file }).to_string(),
-            );
-        }
-
-        let manifest = self.manifest.clone();
-        self.with_conn_mut(move |conn| manifest.flush_to_db(conn))
-            .await?;
-
-        if let Some(active_file) = new_active_for_cleanup {
-            let mut keep = vec![active_file.clone()];
-            if let Some(prev) = previous_active.filter(|p| p != &active_file) {
-                keep.push(prev);
-            }
-            match self.bitmaps.prune_artifacts(&keep) {
-                Ok(deleted) => {
-                    if deleted > 0 {
-                        tracing::info!(deleted, "Pruned stale bitmap artifact files");
-                    }
-                }
-                Err(e) => {
-                    tracing::warn!(error = %e, "Bitmap artifact cleanup (post-flush) failed");
-                }
-            }
-        }
-
-        Ok(())
+        publish::publish_pending(&Arc::new(self.clone_for_publish()), &[])
+            .await
+            .map(|_| ())
     }
 
     pub fn db_dir(&self) -> PathBuf {
@@ -808,9 +525,27 @@ impl SqliteDatabase {
     }
 }
 
+impl SqliteDatabase {
+    fn clone_for_publish(&self) -> Self {
+        Self {
+            conn: self.conn.clone(),
+            read_pool: self.read_pool.clone(),
+            read_pool_idx: AtomicUsize::new(self.read_pool_idx.load(Ordering::Relaxed)),
+            bitmaps: self.bitmaps.clone(),
+            hash_index: self.hash_index.clone(),
+            manifest: self.manifest.clone(),
+            read_model_tx: self.read_model_tx.clone(),
+            read_model_rx: self.read_model_rx.clone(),
+            db_path: self.db_path.clone(),
+            scope_cache: self.scope_cache.clone(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::Manifest;
+    use super::publish::Manifest;
+    use super::DerivedArtifact;
     use rusqlite::Connection;
 
     fn init_manifest_tables(conn: &Connection) {
@@ -848,7 +583,7 @@ mod tests {
         assert_eq!(manifest.published_artifact_version("files"), 0);
         assert_eq!(manifest.published_epoch(), 0);
 
-        let new_files_version = manifest.bump_working_artifact_version("files");
+        let new_files_version = manifest.mark_artifact_dirty(DerivedArtifact::Files);
         assert_eq!(new_files_version, 1);
         manifest.set_working_artifact_payload_json(
             "bitmaps",

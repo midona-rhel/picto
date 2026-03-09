@@ -4,11 +4,11 @@ use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
 use super::bitmaps::BitmapKey;
-use super::compilers::CompilerEvent;
+use super::ReadModelEvent;
 use super::SqliteDatabase;
 
 /// Default visibility clause: active (1) only, excludes inbox (0) and trash (2).
-pub const DEFAULT_VISIBILITY_CLAUSE: &str = "status = 1";
+const DEFAULT_VISIBILITY_CLAUSE: &str = "status = 1";
 
 /// Slim DTO for grid display — no filesystem paths.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -152,11 +152,6 @@ pub fn insert_file(conn: &Connection, f: &NewFile) -> rusqlite::Result<i64> {
     )?;
 
     Ok(file_id)
-}
-
-pub fn rebuild_file_fts(conn: &Connection) -> rusqlite::Result<()> {
-    conn.execute("INSERT INTO file_fts(file_fts) VALUES('rebuild')", [])?;
-    Ok(())
 }
 
 pub fn get_file_by_hash(conn: &Connection, hash: &str) -> rusqlite::Result<Option<FileRecord>> {
@@ -1171,7 +1166,7 @@ impl SqliteDatabase {
         self.with_conn(|conn| wipe_all_files(conn)).await?;
         self.hash_index.clear();
         self.bitmaps.clear();
-        self.emit_compiler_event(CompilerEvent::RebuildAll);
+        self.emit_read_model_event(ReadModelEvent::RebuildAll);
         Ok(())
     }
 
@@ -1182,7 +1177,7 @@ impl SqliteDatabase {
         self.hash_index.insert(hash, file_id);
         self.bitmaps
             .insert(&BitmapKey::Status(status), file_id as u32);
-        self.emit_compiler_event(CompilerEvent::FileInserted { file_id });
+        self.emit_read_model_event(ReadModelEvent::FileInserted { file_id });
         Ok(file_id)
     }
 
@@ -1229,7 +1224,7 @@ impl SqliteDatabase {
         }
         self.bitmaps.insert(&BitmapKey::Status(status), fid_u32);
 
-        self.emit_compiler_event(CompilerEvent::FileStatusChanged { file_id });
+        self.emit_read_model_event(ReadModelEvent::FileStatusChanged { file_id });
         Ok(())
     }
 
@@ -1287,7 +1282,7 @@ impl SqliteDatabase {
         }
 
         // One compiler event for the whole batch
-        self.emit_compiler_event(CompilerEvent::StatusBatchChanged);
+        self.emit_read_model_event(ReadModelEvent::StatusBatchChanged);
         Ok(count)
     }
 
@@ -1314,7 +1309,7 @@ impl SqliteDatabase {
                 .remove(&BitmapKey::Folder(membership.folder_id), fid_u32);
         }
         self.hash_index.remove_by_hash(hash);
-        self.emit_compiler_event(CompilerEvent::FileDeleted { file_id });
+        self.emit_read_model_event(ReadModelEvent::FileDeleted { file_id });
         Ok(())
     }
 
@@ -1407,7 +1402,7 @@ impl SqliteDatabase {
         let file_id = self.resolve_hash(hash).await?;
         self.with_conn(move |conn| increment_view_count(conn, file_id))
             .await?;
-        self.emit_compiler_event(CompilerEvent::ViewCountChanged);
+        self.emit_read_model_event(ReadModelEvent::ViewCountChanged);
         Ok(())
     }
 

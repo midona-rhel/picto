@@ -127,7 +127,7 @@ async fn scope_contract_uncategorized_means_active_without_folder() {
         .expect("create folder");
     harness
         .db
-        .add_entity_to_folder(folder.folder_id, "uc_1")
+        .add_entities_to_folder_batch(folder.folder_id, &["uc_1".to_string()])
         .await
         .expect("add to folder");
 
@@ -274,10 +274,8 @@ async fn scope_contract_folder_default_union() {
         })
         .await
         .unwrap();
-    harness.db.add_entity_to_folder(fa.folder_id, "fu_1").await.unwrap();
-    harness.db.add_entity_to_folder(fa.folder_id, "fu_3").await.unwrap();
-    harness.db.add_entity_to_folder(fb.folder_id, "fu_2").await.unwrap();
-    harness.db.add_entity_to_folder(fb.folder_id, "fu_3").await.unwrap();
+    harness.db.add_entities_to_folder_batch(fa.folder_id, &["fu_1".to_string(), "fu_3".to_string()]).await.unwrap();
+    harness.db.add_entities_to_folder_batch(fb.folder_id, &["fu_2".to_string(), "fu_3".to_string()]).await.unwrap();
 
     let filter = ScopeFilter {
         folder_ids: Some(vec![fa.folder_id, fb.folder_id]),
@@ -324,10 +322,8 @@ async fn scope_contract_folder_intersection() {
         })
         .await
         .unwrap();
-    harness.db.add_entity_to_folder(fa.folder_id, "fint_1").await.unwrap();
-    harness.db.add_entity_to_folder(fa.folder_id, "fint_3").await.unwrap();
-    harness.db.add_entity_to_folder(fb.folder_id, "fint_2").await.unwrap();
-    harness.db.add_entity_to_folder(fb.folder_id, "fint_3").await.unwrap();
+    harness.db.add_entities_to_folder_batch(fa.folder_id, &["fint_1".to_string(), "fint_3".to_string()]).await.unwrap();
+    harness.db.add_entities_to_folder_batch(fb.folder_id, &["fint_2".to_string(), "fint_3".to_string()]).await.unwrap();
 
     let filter = ScopeFilter {
         folder_ids: Some(vec![fa.folder_id, fb.folder_id]),
@@ -372,10 +368,8 @@ async fn scope_contract_folder_exclusion() {
         })
         .await
         .unwrap();
-    harness.db.add_entity_to_folder(fa.folder_id, "fex_1").await.unwrap();
-    harness.db.add_entity_to_folder(fa.folder_id, "fex_3").await.unwrap();
-    harness.db.add_entity_to_folder(fb.folder_id, "fex_2").await.unwrap();
-    harness.db.add_entity_to_folder(fb.folder_id, "fex_3").await.unwrap();
+    harness.db.add_entities_to_folder_batch(fa.folder_id, &["fex_1".to_string(), "fex_3".to_string()]).await.unwrap();
+    harness.db.add_entities_to_folder_batch(fb.folder_id, &["fex_2".to_string(), "fex_3".to_string()]).await.unwrap();
 
     let filter = ScopeFilter {
         folder_ids: Some(vec![fa.folder_id]),
@@ -480,7 +474,7 @@ async fn scope_contract_scope_count_agrees_with_resolve_scope() {
         })
         .await
         .unwrap();
-    harness.db.add_entity_to_folder(folder.folder_id, "cnt_2").await.unwrap();
+    harness.db.add_entities_to_folder_batch(folder.folder_id, &["cnt_2".to_string()]).await.unwrap();
 
     let cases: Vec<(&str, ScopeFilter)> = vec![
         (

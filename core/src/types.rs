@@ -153,7 +153,7 @@ pub struct EntitySlim {
     pub imported_at: String,
     pub has_thumbnail: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub blurhash: Option<String>,
+    pub dominant_color_hex: Option<String>,
 }
 
 impl From<FileMetadataSlim> for EntitySlim {
@@ -186,7 +186,7 @@ impl From<FileMetadataSlim> for EntitySlim {
             view_count: f.view_count,
             imported_at: f.imported_at,
             has_thumbnail,
-            blurhash: f.blurhash,
+            dominant_color_hex: f.dominant_color_hex,
         }
     }
 }
@@ -212,7 +212,7 @@ impl From<crate::sqlite::files::FileRecord> for EntitySlim {
             view_count: f.view_count,
             imported_at: f.imported_at,
             has_thumbnail,
-            blurhash: f.blurhash,
+            dominant_color_hex: f.dominant_color_hex,
         }
     }
 }
@@ -344,11 +344,6 @@ pub struct ResolvedTagInfo {
 }
 
 #[derive(Debug, Serialize)]
-pub struct StorageStats {
-    pub file_count: i64,
-}
-
-#[derive(Debug, Serialize)]
 pub struct FileAllMetadata {
     pub file: EntityDetails,
     pub tags: Vec<ResolvedTagInfo>,
@@ -362,7 +357,6 @@ pub struct EntityMetadataBatchResponse {
     pub generated_at: String,
 }
 
-// Temporary migration aliases while TS/front-end callsites are moved to entity-centric naming.
 pub type FileInfo = EntityDetails;
 pub type FileInfoSlim = EntitySlim;
 
@@ -483,20 +477,6 @@ pub struct FolderReorderMove {
 }
 
 #[derive(Debug, Serialize)]
-pub struct DuplicateInfo {
-    pub other_hash: String,
-    pub distance: f64,
-    pub status: String,
-}
-
-#[derive(Debug, Serialize)]
-pub struct DuplicatePairResponse {
-    pub hash_a: String,
-    pub hash_b: String,
-    pub distance: f64,
-}
-
-#[derive(Debug, Serialize)]
 pub struct ScanDuplicatesResponse {
     pub candidates_found: usize,
     pub pairs_inserted: usize,
@@ -529,12 +509,6 @@ pub struct SmartMergeResult {
     pub winner_hash: String,
     pub loser_hash: String,
     pub tags_merged: usize,
-}
-
-#[derive(Debug, Serialize)]
-pub struct ColorSearchResult {
-    pub hash: String,
-    pub distance: f64,
 }
 
 #[derive(Debug, Serialize)]
@@ -579,5 +553,5 @@ pub type RunningSubscriptions =
     std::sync::Arc<tokio::sync::Mutex<HashMap<String, tokio_util::sync::CancellationToken>>>;
 
 /// Terminal status map for finished subscriptions. Key = subscription ID, Value = terminal status string.
-/// Written by subscription tasks on exit, read by flow monitor to aggregate final flow status.
+/// Written by subscription tasks on exit, read by group monitor to aggregate final group status.
 pub type SubTerminalStatuses = std::sync::Arc<tokio::sync::Mutex<HashMap<String, String>>>;

@@ -1,11 +1,7 @@
 //! Office document file handling (OOXML and OLE formats).
 //!
-//! Ported from:
-//! - `hydrus/core/files/HydrusOfficeOpenXMLHandling.py` (DOCX, XLSX, PPTX)
-//! - `hydrus/core/files/HydrusOLEHandling.py` (DOC, XLS, PPT)
-//!
 //! OOXML files are ZIP archives containing XML metadata.
-//! OLE files use the legacy Compound Binary File format.
+//! OLE files use the Compound Binary File format.
 
 use std::io::{Cursor, Read};
 use std::path::Path;
@@ -16,7 +12,7 @@ use super::{FileError, FileResult};
 
 // --- OOXML (Office Open XML) Handling ---
 
-/// Assumed DPI for PPTX resolution calculation (matches Python's PPTX_ASSUMED_DPI = 300).
+/// Assumed DPI for PPTX resolution calculation.
 const PPTX_ASSUMED_DPI: f64 = 300.0;
 
 /// EMU (English Metric Units) per inch. PowerPoint uses EMU for coordinates.
@@ -28,7 +24,6 @@ const PPTX_PIXEL_PER_EMU: f64 = PPTX_ASSUMED_DPI / EMU_PER_INCH;
 
 /// Get PowerPoint presentation slide dimensions.
 ///
-/// Ported from `HydrusOfficeOpenXMLHandling.PowerPointResolution()`.
 /// Reads `ppt/presentation.xml` from the PPTX (ZIP) archive and extracts
 /// the `sldSz` element's `cx` and `cy` attributes (in EMU).
 pub fn powerpoint_resolution(path: &Path) -> FileResult<(u32, u32)> {
@@ -70,7 +65,6 @@ pub fn powerpoint_resolution(path: &Path) -> FileResult<(u32, u32)> {
 
 /// Get word count from an OOXML document's extended properties.
 ///
-/// Ported from `HydrusOfficeOpenXMLHandling.OfficeDocumentWordCount()`.
 /// Reads `docProps/app.xml` from the OOXML archive and extracts the `Words` element.
 pub fn office_document_word_count(path: &Path) -> FileResult<u32> {
     let xml = read_ooxml_entry(path, "docProps/app.xml")?;
@@ -99,7 +93,6 @@ pub fn office_document_word_count(path: &Path) -> FileResult<u32> {
 
 /// Get PPTX info: word count and slide dimensions.
 ///
-/// Ported from `HydrusOfficeOpenXMLHandling.GetPPTXInfo()`.
 /// Returns `(num_words, (width, height))`.
 pub fn get_pptx_info(path: &Path) -> (Option<u32>, (Option<u32>, Option<u32>)) {
     let resolution = powerpoint_resolution(path).ok();
@@ -113,17 +106,8 @@ pub fn get_pptx_info(path: &Path) -> (Option<u32>, (Option<u32>, Option<u32>)) {
     (num_words, (width, height))
 }
 
-/// Get DOCX info: word count.
-///
-/// Ported from `HydrusOfficeOpenXMLHandling.GetDOCXInfo()`.
-/// Returns word count or None.
-pub fn get_docx_info(path: &Path) -> Option<u32> {
-    office_document_word_count(path).ok()
-}
-
 /// Generate a thumbnail from an OOXML document.
 ///
-/// Ported from `HydrusOfficeOpenXMLHandling.GenerateThumbnailNumPyFromOfficePath()`.
 /// Extracts `docProps/thumbnail.jpeg` from the archive and resizes it.
 pub fn generate_thumbnail_from_office(
     path: &Path,
@@ -188,44 +172,5 @@ fn read_ooxml_entry_bytes(path: &Path, entry_path: &str) -> FileResult<Vec<u8>> 
     entry.read_to_end(&mut buf).map_err(FileError::Io)?;
 
     Ok(buf)
-}
-
-// --- OLE (Legacy Office) Handling ---
-
-/// OLE Compound Binary File header signature.
-const OLE_HEADER: [u8; 8] = [0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1];
-
-/// Check if a file is an OLE Compound Binary File.
-///
-/// Ported from `HydrusOLEHandling.isOleFile()`.
-pub fn is_ole_file(path: &Path) -> bool {
-    let mut file = match std::fs::File::open(path) {
-        Ok(f) => f,
-        Err(_) => return false,
-    };
-
-    let mut header = [0u8; 8];
-    match file.read_exact(&mut header) {
-        Ok(()) => header == OLE_HEADER,
-        Err(_) => false,
-    }
-}
-
-/// Get word count from a legacy OLE Office document.
-///
-/// Ported from `HydrusOLEHandling.OfficeOLEDocumentWordCount()`.
-///
-/// Note: Full OLE parsing requires a dedicated library (like `olefile` in Python).
-/// Without one, we cannot reliably extract metadata from OLE files.
-/// This returns None as we don't have an OLE parsing library.
-pub fn ole_document_word_count(path: &Path) -> FileResult<Option<u32>> {
-    if !is_ole_file(path) {
-        return Err(FileError::UnsupportedFile("File is not OLE!".to_string()));
-    }
-
-    // TODO: Port full OLE metadata parsing when an OLE library is available.
-    // Python uses `olefile.OleFileIO(path).get_metadata().num_words`.
-    // Without an OLE parsing library, we cannot extract word count.
-    Ok(None)
 }
 

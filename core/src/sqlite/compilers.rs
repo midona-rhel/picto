@@ -1,54 +1,23 @@
-//! Compiler system — background task that reacts to data mutations
-//! and rebuilds compiled artifacts (bitmaps, projections, sidebar counts).
+//! Compiler system — background task that rebuilds derived read-model artifacts.
 //!
-//! Write operations enqueue `CompilerEvent`s. A background task debounces
-//! (50-200ms), then runs affected compilers in dependency order.
+//! Domain writes enqueue `ReadModelEvent`s without knowing compiler internals.
+//! This loop debounces those events, rebuilds affected read models, and hands
+//! publication off to the explicit publish boundary.
 
 use roaring::RoaringBitmap;
-use std::collections::HashSet;
+use std::collections::{BTreeSet, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
 
 use super::bitmaps::BitmapKey;
-use crate::scope::resolver::scope_count;
+use super::publish;
+use super::read_model::{DerivedArtifact, ReadModelBatchResult, ReadModelEvent};
 use super::projections;
+use crate::scope::resolver::scope_count;
 use crate::sidebar::db as sidebar;
 use crate::smart_folders::db as smart_folders;
 use super::SqliteDatabase;
-/// Events that trigger compiler runs.
-#[derive(Debug, Clone)]
-pub enum CompilerEvent {
-    FileInserted {
-        file_id: i64,
-    },
-    FileDeleted {
-        file_id: i64,
-    },
-    FileStatusChanged {
-        file_id: i64,
-    },
-    /// Batch status change — bitmaps already updated by caller, just rebuild sidebar/smart folders.
-    StatusBatchChanged,
-    FileTagsChanged {
-        file_id: i64,
-    },
-    TagChanged {
-        tag_id: i64,
-    },
-    TagGraphChanged,
-    SmartFolderChanged {
-        smart_folder_id: i64,
-    },
-    FolderChanged {
-        folder_id: i64,
-    },
-    /// Duplicate pairs changed (scan, resolve, merge).
-    DuplicateChanged,
-    /// File view_count changed (detail/quick look viewing).
-    ViewCountChanged,
-    RebuildAll,
-}
 
 /// Which compilers need to run based on accumulated events.
 #[derive(Default)]
@@ -75,59 +44,59 @@ impl CompilerPlan {
     ///   bitmaps which are rebuilt per-tag, so specific smart folders update lazily.
     /// - TagGraphChanged → rebuild tag graph + ALL smart folders. Parent changes cascade
     ///   through ImpliedTag bitmaps and affect every smart folder using those tags.
-    fn accumulate(&mut self, event: CompilerEvent) {
+    fn accumulate(&mut self, event: ReadModelEvent) {
         match event {
-            CompilerEvent::FileInserted { file_id } => {
+            ReadModelEvent::FileInserted { file_id } => {
                 self.rebuild_status_bitmaps = true;
                 self.rebuild_sidebar = true;
                 self.rebuild_all_smart_folders = true;
                 self.dirty_file_ids.insert(file_id);
             }
-            CompilerEvent::FileDeleted { file_id } => {
+            ReadModelEvent::FileDeleted { file_id } => {
                 self.rebuild_status_bitmaps = true;
                 self.rebuild_sidebar = true;
                 self.rebuild_all_smart_folders = true;
                 self.dirty_file_ids.insert(file_id);
             }
-            CompilerEvent::FileStatusChanged { file_id } => {
+            ReadModelEvent::FileStatusChanged { file_id } => {
                 self.rebuild_status_bitmaps = true;
                 self.rebuild_sidebar = true;
                 self.rebuild_all_smart_folders = true;
                 self.dirty_file_ids.insert(file_id);
             }
-            CompilerEvent::StatusBatchChanged => {
+            ReadModelEvent::StatusBatchChanged => {
                 self.rebuild_status_bitmaps = true;
                 self.rebuild_sidebar = true;
                 self.rebuild_all_smart_folders = true;
             }
-            CompilerEvent::FileTagsChanged { file_id } => {
+            ReadModelEvent::FileTagsChanged { file_id } => {
                 self.rebuild_all_smart_folders = true;
                 self.rebuild_sidebar = true;
                 self.dirty_file_ids.insert(file_id);
             }
-            CompilerEvent::TagChanged { tag_id } => {
+            ReadModelEvent::TagChanged { tag_id } => {
                 self.dirty_tag_ids.insert(tag_id);
                 self.rebuild_sidebar = true;
             }
-            CompilerEvent::TagGraphChanged => {
+            ReadModelEvent::TagGraphChanged => {
                 self.rebuild_tag_graph = true;
                 self.rebuild_all_smart_folders = true;
                 self.rebuild_sidebar = true;
             }
-            CompilerEvent::SmartFolderChanged { smart_folder_id } => {
+            ReadModelEvent::SmartFolderChanged { smart_folder_id } => {
                 self.dirty_smart_folder_ids.insert(smart_folder_id);
                 self.rebuild_sidebar = true;
             }
-            CompilerEvent::FolderChanged { folder_id: _ } => {
+            ReadModelEvent::FolderChanged { folder_id: _ } => {
                 self.rebuild_sidebar = true;
             }
-            CompilerEvent::DuplicateChanged => {
+            ReadModelEvent::DuplicateChanged => {
                 self.rebuild_sidebar = true;
             }
-            CompilerEvent::ViewCountChanged => {
+            ReadModelEvent::ViewCountChanged => {
                 self.rebuild_sidebar = true;
             }
-            CompilerEvent::RebuildAll => {
+            ReadModelEvent::RebuildAll => {
                 self.rebuild_all = true;
             }
         }
@@ -145,23 +114,14 @@ impl CompilerPlan {
     }
 }
 
-/// Result of a compiler batch run — describes which domains were affected.
-/// The caller is responsible for translating this into event emissions
-/// (the compiler layer itself does not emit frontend events).
-pub struct CompilerBatchResult {
-    pub sidebar_affected: bool,
-    pub smart_folders_rebuilt: bool,
-    pub scope_affected: bool,
-}
-
 /// Start the compiler background task.
 ///
 /// `on_batch_done` is called after each compiler batch completes, with a summary
 /// of what was affected. The caller (state.rs) uses this to emit events.
 pub async fn start_compiler_loop(
     db: Arc<SqliteDatabase>,
-    mut rx: mpsc::UnboundedReceiver<CompilerEvent>,
-    on_batch_done: impl Fn(CompilerBatchResult) + Send + 'static,
+    mut rx: mpsc::UnboundedReceiver<ReadModelEvent>,
+    on_batch_done: impl Fn(ReadModelBatchResult) + Send + 'static,
 ) {
     tracing::info!("Compiler loop started");
 
@@ -208,13 +168,26 @@ pub async fn start_compiler_loop(
             || !plan.dirty_smart_folder_ids.is_empty()
             || plan.rebuild_status_bitmaps;
 
-        if let Err(e) = run_compilers(&db_ref, &plan).await {
-            tracing::error!("Compiler error: {e}");
-        }
+        let dirty_artifacts = match run_compilers(&db_ref, &plan).await {
+            Ok(dirty_artifacts) => dirty_artifacts,
+            Err(e) => {
+                tracing::error!("Compiler error: {e}");
+                continue;
+            }
+        };
 
-        if let Err(e) = db_ref.flush().await {
-            tracing::error!("Flush error after compilation: {e}");
-        }
+        let published = match publish::publish_pending(
+            &db_ref,
+            &dirty_artifacts.into_iter().collect::<Vec<_>>(),
+        )
+        .await
+        {
+            Ok(published) => published,
+            Err(e) => {
+                tracing::error!("Publish error after compilation: {e}");
+                continue;
+            }
+        };
 
         // PBI-032: Only invalidate scope cache when membership-affecting bitmaps changed.
         // Metadata-only batches don't alter scope ID sets.
@@ -229,10 +202,11 @@ pub async fn start_compiler_loop(
             db_ref.scope_cache_invalidate_all();
         }
 
-        on_batch_done(CompilerBatchResult {
+        on_batch_done(ReadModelBatchResult {
             sidebar_affected,
             smart_folders_rebuilt,
             scope_affected,
+            published,
         });
     }
 }
@@ -240,26 +214,31 @@ pub async fn start_compiler_loop(
 async fn run_compilers(
     db: &Arc<SqliteDatabase>,
     plan: &CompilerPlan,
-) -> Result<(), String> {
+) -> Result<BTreeSet<DerivedArtifact>, String> {
     let start = std::time::Instant::now();
+    let mut dirty_artifacts = BTreeSet::new();
 
     // 1. Status bitmap compiler
     if plan.rebuild_status_bitmaps || plan.rebuild_all {
         compile_status_bitmaps(db).await?;
+        dirty_artifacts.insert(DerivedArtifact::Files);
     }
 
     // 2. Tag bitmap compiler (incremental)
     if plan.rebuild_all {
         compile_all_tag_bitmaps(db).await?;
-    } else {
+        dirty_artifacts.insert(DerivedArtifact::Tags);
+    } else if !plan.dirty_tag_ids.is_empty() {
         for &tag_id in &plan.dirty_tag_ids {
             compile_tag_bitmap(db, tag_id).await?;
         }
+        dirty_artifacts.insert(DerivedArtifact::Tags);
     }
 
     // 3. Tag graph compiler (siblings, ancestors, implied tags)
     if plan.rebuild_tag_graph || plan.rebuild_all {
         compile_tag_graph(db).await?;
+        dirty_artifacts.insert(DerivedArtifact::TagGraph);
     }
 
     // 4. Effective tag compiler
@@ -270,6 +249,7 @@ async fn run_compilers(
             plan.rebuild_all || plan.rebuild_tag_graph,
         )
         .await?;
+        dirty_artifacts.insert(DerivedArtifact::EffectiveTags);
     }
 
     // 4b. Tagged bitmap (union of all tagged files)
@@ -279,6 +259,7 @@ async fn run_compilers(
         || plan.rebuild_status_bitmaps
     {
         compile_tagged_bitmap(db).await?;
+        dirty_artifacts.insert(DerivedArtifact::Tags);
     }
 
     // 5. Metadata projection compiler
@@ -289,26 +270,30 @@ async fn run_compilers(
             plan.rebuild_all || plan.rebuild_tag_graph,
         )
         .await?;
+        dirty_artifacts.insert(DerivedArtifact::MetadataProjection);
     }
 
     // 6. Smart folder compiler
     if plan.rebuild_all_smart_folders || plan.rebuild_all {
         compile_all_smart_folders(db).await?;
-    } else {
+        dirty_artifacts.insert(DerivedArtifact::SmartFolders);
+    } else if !plan.dirty_smart_folder_ids.is_empty() {
         for &sf_id in &plan.dirty_smart_folder_ids {
             compile_smart_folder(db, sf_id).await?;
         }
+        dirty_artifacts.insert(DerivedArtifact::SmartFolders);
     }
 
     // 7. Sidebar compiler
     if plan.rebuild_sidebar || plan.rebuild_all {
         compile_sidebar(db).await?;
+        dirty_artifacts.insert(DerivedArtifact::Sidebar);
     }
 
     let elapsed = start.elapsed();
     tracing::debug!("Compiler batch completed in {elapsed:?}");
 
-    Ok(())
+    Ok(dirty_artifacts)
 }
 
 
@@ -341,8 +326,6 @@ async fn compile_status_bitmaps(db: &Arc<SqliteDatabase>) -> Result<(), String> 
         Ok(())
     })
     .await?;
-
-    db.manifest.bump_working_artifact_version("files");
     Ok(())
 }
 
@@ -360,8 +343,6 @@ async fn compile_tag_bitmap(db: &Arc<SqliteDatabase>, tag_id: i64) -> Result<(),
         Ok(())
     })
     .await?;
-
-    db.manifest.bump_working_artifact_version("tags");
     Ok(())
 }
 
@@ -393,8 +374,6 @@ async fn compile_all_tag_bitmaps(db: &Arc<SqliteDatabase>) -> Result<(), String>
         Ok(())
     })
     .await?;
-
-    db.manifest.bump_working_artifact_version("tags");
     Ok(())
 }
 
@@ -472,8 +451,6 @@ async fn compile_tag_graph(db: &Arc<SqliteDatabase>) -> Result<(), String> {
         Ok(())
     })
     .await?;
-
-    db.manifest.bump_working_artifact_version("tag_graph");
     Ok(())
 }
 
@@ -506,8 +483,6 @@ async fn compile_effective_tags(
             bitmaps.set(BitmapKey::EffectiveTag(tag_id), &direct | &implied);
         }
     }
-
-    db.manifest.bump_working_artifact_version("effective_tags");
     Ok(())
 }
 
@@ -569,8 +544,6 @@ async fn compile_metadata_projections(
     }
 
     // Bump version AFTER writes succeed
-    db.manifest
-        .bump_working_artifact_version("metadata_projection");
     Ok(())
 }
 
@@ -602,8 +575,6 @@ async fn compile_all_smart_folders(db: &Arc<SqliteDatabase>) -> Result<(), Strin
         Ok(())
     })
     .await?;
-
-    db.manifest.bump_working_artifact_version("smart_folders");
     Ok(())
 }
 
@@ -622,8 +593,6 @@ async fn compile_smart_folder(
         Ok(())
     })
     .await?;
-
-    db.manifest.bump_working_artifact_version("smart_folders");
     Ok(())
 }
 
@@ -762,7 +731,6 @@ async fn compile_sidebar(db: &Arc<SqliteDatabase>) -> Result<(), String> {
     .await?;
 
     // Bump version AFTER all writes succeed
-    db.manifest.bump_working_artifact_version("sidebar");
     Ok(())
 }
 
@@ -775,19 +743,19 @@ mod tests {
         let mut plan = CompilerPlan::default();
         assert!(plan.is_empty());
 
-        plan.accumulate(CompilerEvent::FileInserted { file_id: 1 });
+        plan.accumulate(ReadModelEvent::FileInserted { file_id: 1 });
         assert!(!plan.is_empty());
         assert!(plan.rebuild_status_bitmaps);
         assert!(plan.rebuild_sidebar);
         assert!(plan.dirty_file_ids.contains(&1));
 
-        plan.accumulate(CompilerEvent::TagChanged { tag_id: 42 });
+        plan.accumulate(ReadModelEvent::TagChanged { tag_id: 42 });
         assert!(plan.dirty_tag_ids.contains(&42));
 
-        plan.accumulate(CompilerEvent::FileStatusChanged { file_id: 2 });
+        plan.accumulate(ReadModelEvent::FileStatusChanged { file_id: 2 });
         assert!(plan.dirty_file_ids.contains(&2));
 
-        plan.accumulate(CompilerEvent::FileTagsChanged { file_id: 3 });
+        plan.accumulate(ReadModelEvent::FileTagsChanged { file_id: 3 });
         assert!(plan.dirty_file_ids.contains(&3));
         assert!(plan.rebuild_all_smart_folders);
     }
@@ -795,9 +763,9 @@ mod tests {
     #[test]
     fn compiler_plan_rebuild_all_subsumes_incremental() {
         let mut plan = CompilerPlan::default();
-        plan.accumulate(CompilerEvent::TagChanged { tag_id: 1 });
-        plan.accumulate(CompilerEvent::TagChanged { tag_id: 2 });
-        plan.accumulate(CompilerEvent::RebuildAll);
+        plan.accumulate(ReadModelEvent::TagChanged { tag_id: 1 });
+        plan.accumulate(ReadModelEvent::TagChanged { tag_id: 2 });
+        plan.accumulate(ReadModelEvent::RebuildAll);
         assert!(plan.rebuild_all);
     }
 
@@ -805,7 +773,7 @@ mod tests {
     #[test]
     fn file_insert_does_affect_sidebar() {
         let mut plan = CompilerPlan::default();
-        plan.accumulate(CompilerEvent::FileInserted { file_id: 1 });
+        plan.accumulate(ReadModelEvent::FileInserted { file_id: 1 });
 
         let sidebar_affected = plan.rebuild_sidebar
             || plan.rebuild_tag_graph
@@ -823,7 +791,7 @@ mod tests {
     #[test]
     fn view_count_change_affects_sidebar_only() {
         let mut plan = CompilerPlan::default();
-        plan.accumulate(CompilerEvent::ViewCountChanged);
+        plan.accumulate(ReadModelEvent::ViewCountChanged);
         assert!(plan.rebuild_sidebar);
         assert!(!plan.rebuild_status_bitmaps);
         assert!(!plan.rebuild_all_smart_folders);
@@ -1141,8 +1109,8 @@ mod tests {
         // Send 100 rapid events through the compiler channel
         for i in 1..=100 {
             let _ = db
-                .compiler_tx
-                .send(CompilerEvent::FileInserted { file_id: i });
+                .read_model_tx
+                .send(ReadModelEvent::FileInserted { file_id: i });
         }
 
         // The debounce window is 100ms. After events settle + compile,
@@ -1153,8 +1121,8 @@ mod tests {
         // All 100 rapid events should be batched - the channel should be
         // drained. Send one more event and verify it still works.
         let _ = db
-            .compiler_tx
-            .send(CompilerEvent::FileStatusChanged { file_id: 1 });
+            .read_model_tx
+            .send(ReadModelEvent::FileStatusChanged { file_id: 1 });
 
         // This test verifies the channel accepts events after rapid fire.
         // The actual debounce is structural (CompilerPlan accumulation).

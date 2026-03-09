@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use crate::sqlite::bitmaps::{BitmapKey, BitmapStore};
-use crate::sqlite::compilers::CompilerEvent;
+use crate::sqlite::ReadModelEvent;
 use crate::sqlite::SqliteDatabase;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -174,29 +174,29 @@ pub fn delete_smart_folder(conn: &Connection, smart_folder_id: i64) -> rusqlite:
 ///
 /// Within each group, rules are combined according to the group's `match_mode`
 /// (all = AND, any = OR). If `group.negate` is set, the group bitmap is inverted
-/// against AllActive (never includes trash — `AllActive - group_result`).
+/// against active (status=1) — `active - group_result`.
 pub fn compile_predicate(
     conn: &Connection,
     pred: &SmartFolderPredicate,
     bitmaps: &BitmapStore,
 ) -> rusqlite::Result<RoaringBitmap> {
-    let all_active = bitmaps.get(&BitmapKey::AllActive);
+    let active = bitmaps.get(&BitmapKey::Status(1));
 
     if pred.groups.is_empty() {
-        return Ok(all_active);
+        return Ok(active);
     }
 
     let mut final_result: Option<RoaringBitmap> = None;
 
     for group in &pred.groups {
-        let group_bm = compile_group(conn, group, bitmaps, &all_active)?;
+        let group_bm = compile_group(conn, group, bitmaps, &active)?;
         final_result = Some(match final_result {
             Some(prev) => prev & &group_bm,
             None => group_bm,
         });
     }
 
-    Ok(final_result.unwrap_or(all_active))
+    Ok(final_result.unwrap_or(active))
 }
 
 /// Compile a single rule group into a bitmap.
@@ -204,7 +204,7 @@ fn compile_group(
     conn: &Connection,
     group: &SmartRuleGroup,
     bitmaps: &BitmapStore,
-    all_active: &RoaringBitmap,
+    active: &RoaringBitmap,
 ) -> rusqlite::Result<RoaringBitmap> {
     let mut include_bitmaps: Vec<RoaringBitmap> = Vec::new();
     let mut exclude_bitmaps: Vec<RoaringBitmap> = Vec::new();
@@ -448,7 +448,7 @@ fn compile_group(
     let combined = match group.match_mode {
         MatchMode::All => {
             if include_bitmaps.is_empty() {
-                all_active.clone()
+                active.clone()
             } else {
                 let mut result = include_bitmaps[0].clone();
                 for bm in &include_bitmaps[1..] {
@@ -459,7 +459,7 @@ fn compile_group(
         }
         MatchMode::Any => {
             if include_bitmaps.is_empty() {
-                all_active.clone()
+                active.clone()
             } else {
                 let mut result = RoaringBitmap::new();
                 for bm in &include_bitmaps {
@@ -470,13 +470,13 @@ fn compile_group(
         }
     };
 
-    let mut result = combined & all_active;
+    let mut result = combined & active;
     for exclude in &exclude_bitmaps {
         result -= exclude;
     }
 
     if group.negate {
-        result = all_active - &result;
+        result = active - &result;
     }
 
     Ok(result)
@@ -709,27 +709,21 @@ impl SqliteDatabase {
         sort_field: Option<String>,
         sort_order: Option<String>,
     ) -> Result<SmartFolder, String> {
-        let n = name.clone();
-        let pj = predicate_json.clone();
-        let i = icon.clone();
-        let c = color.clone();
-        let sf = sort_field.clone();
-        let so = sort_order.clone();
         let sf_id = self
             .with_conn(move |conn| {
                 create_smart_folder(
                     conn,
-                    &n,
-                    &pj,
-                    i.as_deref(),
-                    c.as_deref(),
-                    sf.as_deref(),
-                    so.as_deref(),
+                    &name,
+                    &predicate_json,
+                    icon.as_deref(),
+                    color.as_deref(),
+                    sort_field.as_deref(),
+                    sort_order.as_deref(),
                 )
             })
             .await?;
 
-        self.emit_compiler_event(CompilerEvent::SmartFolderChanged {
+        self.emit_read_model_event(ReadModelEvent::SmartFolderChanged {
             smart_folder_id: sf_id,
         });
 
@@ -746,7 +740,7 @@ impl SqliteDatabase {
         let sf_id = sf.smart_folder_id;
         self.with_conn(move |conn| update_smart_folder(conn, &sf))
             .await?;
-        self.emit_compiler_event(CompilerEvent::SmartFolderChanged {
+        self.emit_read_model_event(ReadModelEvent::SmartFolderChanged {
             smart_folder_id: sf_id,
         });
         Ok(())
@@ -755,7 +749,7 @@ impl SqliteDatabase {
     pub async fn reorder_smart_folders(&self, moves: Vec<(i64, i64)>) -> Result<(), String> {
         self.with_conn(move |conn| reorder_smart_folders(conn, &moves))
             .await?;
-        self.emit_compiler_event(CompilerEvent::SmartFolderChanged { smart_folder_id: 0 });
+        self.emit_read_model_event(ReadModelEvent::SmartFolderChanged { smart_folder_id: 0 });
         Ok(())
     }
 
@@ -764,42 +758,6 @@ impl SqliteDatabase {
             .remove_key(&BitmapKey::SmartFolder(smart_folder_id));
         self.with_conn(move |conn| delete_smart_folder(conn, smart_folder_id))
             .await
-    }
-
-    /// Query a smart folder using bitmap compilation.
-    pub async fn query_smart_folder(
-        &self,
-        smart_folder_id: i64,
-        limit: i64,
-        offset: i64,
-    ) -> Result<Vec<i64>, String> {
-        let bm = self.bitmaps.get(&BitmapKey::SmartFolder(smart_folder_id));
-        if !bm.is_empty() {
-            let file_ids: Vec<i64> = bm
-                .iter()
-                .skip(offset as usize)
-                .take(limit as usize)
-                .map(|id| id as i64)
-                .collect();
-            return Ok(file_ids);
-        }
-
-        let bitmaps = self.bitmaps.clone();
-        self.with_read_conn(move |conn| {
-            let sf = get_smart_folder(conn, smart_folder_id)?
-                .ok_or(rusqlite::Error::QueryReturnedNoRows)?;
-            let pred: SmartFolderPredicate = serde_json::from_str(&sf.predicate_json)
-                .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
-            let result = compile_predicate(conn, &pred, &bitmaps)?;
-            let file_ids: Vec<i64> = result
-                .iter()
-                .skip(offset as usize)
-                .take(limit as usize)
-                .map(|id| id as i64)
-                .collect();
-            Ok(file_ids)
-        })
-        .await
     }
 
     /// Count files matching a smart folder.

@@ -159,13 +159,6 @@ pub async fn delete_files(state: &AppState, input: DeleteFilesInput) -> Result<u
     Ok(count)
 }
 
-pub async fn rebuild_file_fts(state: &AppState, _input: serde_json::Value) -> Result<(), String> {
-    state.db
-        .with_conn(|conn| crate::sqlite::files::rebuild_file_fts(conn))
-        .await?;
-    Ok(())
-}
-
 pub async fn wipe_image_data(state: &AppState, _input: serde_json::Value) -> Result<(), String> {
     state.db.wipe_all_files().await?;
     state.blob_store.wipe().map_err(|e| e.to_string())?;
@@ -219,12 +212,11 @@ pub(crate) async fn collect_folder_ids_for_hashes(
         return Vec::new();
     }
 
-    let query_ids = entity_ids.clone();
     let mut folder_ids: Vec<i64> = match state
         .db
         .with_read_conn(move |conn| {
             let mut all = Vec::<i64>::new();
-            for chunk in query_ids.chunks(900) {
+            for chunk in entity_ids.chunks(900) {
                 let placeholders = (0..chunk.len())
                     .map(|i| format!("?{}", i + 1))
                     .collect::<Vec<_>>()

@@ -15,24 +15,6 @@ pub struct GetFileAllMetadataInput {
     pub hash: String,
 }
 
-#[derive(Debug, Deserialize, TS)]
-#[ts(export_to = "../../src/shared/types/generated/commands/")]
-pub struct GetFileTagsDisplayInput {
-    pub hash: String,
-}
-
-#[derive(Debug, Deserialize, TS)]
-#[ts(export_to = "../../src/shared/types/generated/commands/")]
-pub struct GetFileParentsInput {
-    pub hash: String,
-}
-
-#[derive(Debug, Deserialize, TS)]
-#[ts(export_to = "../../src/shared/types/generated/commands/")]
-pub struct GetFileNotesInput {
-    pub hash: String,
-}
-
 /// Unified metadata update. All fields except `hash` are optional —
 /// only present fields are applied. Use `null` to clear rating/name.
 #[derive(Debug, Deserialize, TS)]
@@ -62,27 +44,6 @@ pub async fn get_file_all_metadata(state: &AppState, input: GetFileAllMetadataIn
         &state.db, input.hash,
     ).await?;
     serde_json::to_value(&result).map_err(|e| e.to_string())
-}
-
-pub async fn get_file_tags_display(state: &AppState, input: GetFileTagsDisplayInput) -> Result<serde_json::Value, String> {
-    let result = crate::metadata::controller::MetadataController::get_file_tags_display(
-        &state.db, input.hash,
-    ).await?;
-    serde_json::to_value(&result).map_err(|e| e.to_string())
-}
-
-pub async fn get_file_parents(state: &AppState, input: GetFileParentsInput) -> Result<serde_json::Value, String> {
-    let result =
-        crate::metadata::controller::MetadataController::get_file_parents(&state.db, input.hash)
-            .await?;
-    serde_json::to_value(&result).map_err(|e| e.to_string())
-}
-
-pub async fn get_file_notes(state: &AppState, input: GetFileNotesInput) -> Result<serde_json::Value, String> {
-    let file = state.db.get_file_by_hash(&input.hash).await?;
-    let notes: Option<HashMap<String, String>> = file
-        .and_then(|f| f.notes.as_deref().and_then(|s| serde_json::from_str(s).ok()));
-    serde_json::to_value(&notes).map_err(|e| e.to_string())
 }
 
 pub async fn update_file_metadata(state: &AppState, input: UpdateFileMetadataInput) -> Result<(), String> {

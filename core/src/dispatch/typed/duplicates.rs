@@ -9,12 +9,6 @@ use crate::state::AppState;
 
 #[derive(Debug, Deserialize, TS)]
 #[ts(export_to = "../../src/shared/types/generated/commands/")]
-pub struct GetDuplicatesInput {
-    pub hash: String,
-}
-
-#[derive(Debug, Deserialize, TS)]
-#[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct ScanDuplicatesInput {
     #[ts(type = "number | null")]
     #[serde(default)]
@@ -43,8 +37,6 @@ pub struct ResolveDuplicatePairInput {
     pub action: String,
     pub hash_a: String,
     pub hash_b: String,
-    #[serde(default)]
-    pub preferred_hash: Option<String>,
 }
 
 #[derive(Debug, Deserialize, TS)]
@@ -66,13 +58,6 @@ pub struct UpdateDuplicateSettingsInput {
 }
 
 // ─── Handlers ──────────────────────────────────────────────────────────────
-
-pub async fn get_duplicates(state: &AppState, input: GetDuplicatesInput) -> Result<serde_json::Value, String> {
-    let result =
-        crate::duplicates::controller::DuplicateController::get_duplicates(&state.db, input.hash)
-            .await?;
-    Ok(serde_json::to_value(&result).map_err(|e| e.to_string())?)
-}
 
 pub async fn scan_duplicates(state: &AppState, input: ScanDuplicatesInput) -> Result<serde_json::Value, String> {
     let effective_threshold = input.threshold.or_else(|| {
@@ -123,7 +108,6 @@ pub async fn resolve_duplicate_pair(state: &AppState, input: ResolveDuplicatePai
         &input.action,
         input.hash_a,
         input.hash_b,
-        input.preferred_hash,
     )
     .await?;
     crate::events::emit_mutation(

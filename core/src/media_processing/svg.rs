@@ -1,17 +1,10 @@
-//! SVG file handling.
-//!
-//! Ported from `hydrus/client/ClientSVGHandling.py` which uses Qt SVG rendering.
-//! We use the `resvg` crate for SVG parsing and rendering instead of Qt.
+//! SVG file handling — uses `resvg` for parsing and rendering.
 
 use std::path::Path;
 
 use super::{FileError, FileResult};
 
 /// Get the resolution (width, height) of an SVG file.
-///
-/// Ported from `ClientSVGHandling.GetSVGResolution()`.
-/// Python uses `QSvgRenderer.defaultSize()`. We parse the SVG using `resvg`'s `usvg` tree
-/// to get the default size from the viewBox/width/height attributes.
 pub fn get_svg_resolution(path: &Path) -> FileResult<(u32, u32)> {
     let svg_data = std::fs::read(path).map_err(FileError::Io)?;
 
@@ -24,15 +17,10 @@ pub fn get_svg_resolution(path: &Path) -> FileResult<(u32, u32)> {
     let width = size.width() as u32;
     let height = size.height() as u32;
 
-    // Python: defaultSize() can return 0x0 for some SVGs, which is handled upstream
     Ok((width.max(1), height.max(1)))
 }
 
 /// Generate a thumbnail PNG from an SVG file.
-///
-/// Ported from `ClientSVGHandling.GenerateThumbnailNumPyFromSVGPath()`.
-/// Python renders via `QSvgRenderer` into a `QImage`. We use `resvg` to render to a pixmap
-/// and then encode as PNG.
 pub fn generate_thumbnail_from_svg(
     path: &Path,
     target_resolution: (u32, u32),
@@ -46,13 +34,11 @@ pub fn generate_thumbnail_from_svg(
 
     let (target_width, target_height) = target_resolution;
 
-    // Python: renders at target_resolution with aspect ratio preserved, transparent background
     let mut pixmap = tiny_skia::Pixmap::new(target_width, target_height).ok_or_else(|| {
         FileError::Thumbnail("Failed to create pixmap for SVG rendering".to_string())
     })?;
 
-    // Calculate scale to fit within target resolution while maintaining aspect ratio
-    // (matches Python's KeepAspectRatio behavior)
+    // Scale to fit within target resolution while maintaining aspect ratio
     let svg_size = tree.size();
     let scale_x = target_width as f32 / svg_size.width();
     let scale_y = target_height as f32 / svg_size.height();

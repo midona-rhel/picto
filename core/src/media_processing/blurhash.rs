@@ -18,7 +18,7 @@ pub fn get_blurhash_from_thumbnail_bytes(thumbnail_bytes: &[u8]) -> Result<Strin
         return Ok(String::new());
     }
 
-    // Choose component counts based on aspect ratio — matches Python exactly
+    // Choose component counts based on aspect ratio
     let ratio = width as f64 / height as f64;
     let (components_x, components_y) = if ratio > 4.0 / 3.0 {
         (5, 3)
@@ -28,7 +28,7 @@ pub fn get_blurhash_from_thumbnail_bytes(thumbnail_bytes: &[u8]) -> Result<Strin
         (4, 4)
     };
 
-    // Downscale to 100x100 max — matches Python's CUTOFF_DIMENSION = 100
+    // Downscale to 100x100 max for performance
     let cutoff = 100;
     let rgba = if width > cutoff || height > cutoff {
         let resized = image::imageops::resize(

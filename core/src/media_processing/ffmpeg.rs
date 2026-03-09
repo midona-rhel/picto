@@ -8,9 +8,7 @@ use std::process::Command;
 
 use crate::constants::MimeType;
 
-// ===========================================================================
-// Error type
-// ===========================================================================
+// --- Error type ---
 
 #[derive(thiserror::Error, Debug)]
 pub enum FfmpegError {
@@ -30,9 +28,7 @@ pub enum FfmpegError {
 
 pub type FfmpegResult<T> = Result<T, FfmpegError>;
 
-// ===========================================================================
-// Internal helpers — run ffprobe/ffmpeg
-// ===========================================================================
+// --- Internal helpers — run ffprobe/ffmpeg ---
 
 /// Run ffprobe and return parsed JSON output.
 fn run_ffprobe(path: &Path) -> FfmpegResult<serde_json::Value> {
@@ -116,9 +112,7 @@ fn run_ffmpeg_frame(
     Ok(output.stdout)
 }
 
-// ===========================================================================
-// ffprobe JSON helpers
-// ===========================================================================
+// --- ffprobe JSON helpers ---
 
 /// Find the first stream of a given codec_type in ffprobe JSON.
 fn find_stream<'a>(
@@ -139,9 +133,7 @@ fn parse_duration_ms(val: &serde_json::Value) -> Option<u64> {
         .filter(|&ms| ms > 0)
 }
 
-// ===========================================================================
-// Video properties
-// ===========================================================================
+// --- Video properties ---
 
 #[derive(Debug, Clone)]
 pub struct VideoProperties {
@@ -258,9 +250,7 @@ fn apply_rotation(video: &serde_json::Value, width: u32, height: u32) -> (u32, u
     (width, height)
 }
 
-// ===========================================================================
-// Audio properties
-// ===========================================================================
+// --- Audio properties ---
 
 /// Get audio duration in milliseconds.
 pub fn get_audio_duration_ms(path: &Path) -> FfmpegResult<u64> {
@@ -277,9 +267,7 @@ pub fn get_audio_duration_ms(path: &Path) -> FfmpegResult<u64> {
     Ok(duration_ms)
 }
 
-// ===========================================================================
-// MIME detection
-// ===========================================================================
+// --- MIME detection ---
 
 /// Determine MIME type using ffprobe's format probing.
 pub fn get_mime(path: &Path) -> FfmpegResult<MimeType> {
@@ -379,27 +367,7 @@ fn map_ffmpeg_format_to_mime(format_name: &str, has_video: bool, has_audio: bool
     }
 }
 
-// ===========================================================================
-// Legacy wrapper
-// ===========================================================================
-
-/// Extract video properties matching the tuple return signature.
-pub fn get_ffmpeg_video_properties(
-    path: &Path,
-    _force_count_frames_manually: bool,
-) -> FfmpegResult<((u32, u32), u64, u64, bool)> {
-    let props = get_video_properties(path)?;
-    Ok((
-        (props.width, props.height),
-        props.duration_ms,
-        props.num_frames,
-        props.has_audio,
-    ))
-}
-
-// ===========================================================================
-// Animation detection
-// ===========================================================================
+// --- Animation detection ---
 
 /// Check if a file is animated (has more than 1 frame).
 pub fn file_is_animated(path: &Path) -> bool {
@@ -409,32 +377,7 @@ pub fn file_is_animated(path: &Path) -> bool {
     }
 }
 
-// ===========================================================================
-// Video thumbnail generation
-// ===========================================================================
-
-/// Render a video frame as JPEG bytes for thumbnail generation.
-///
-/// Seeks to `percentage_in`% of the video and extracts a single frame,
-/// scaled down to fit within `target_resolution`.
-pub fn render_video_frame_to_png(
-    path: &Path,
-    target_resolution: (u32, u32),
-    percentage_in: u32,
-    _num_frames: u64,
-    duration_ms: u64,
-) -> FfmpegResult<Vec<u8>> {
-    render_video_thumbnail(
-        path,
-        target_resolution,
-        percentage_in,
-        if duration_ms > 0 {
-            Some(duration_ms)
-        } else {
-            None
-        },
-    )
-}
+// --- Video thumbnail generation ---
 
 /// Render a specific frame from a video file as JPEG bytes.
 ///
@@ -457,9 +400,7 @@ pub fn render_video_thumbnail(
     run_ffmpeg_frame(path, seek_secs, tw, th)
 }
 
-// ===========================================================================
-// Tests
-// ===========================================================================
+// --- Tests ---
 
 #[cfg(test)]
 mod tests {

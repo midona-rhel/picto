@@ -7,9 +7,7 @@ use std::sync::OnceLock;
 
 use regex::Regex;
 
-// ---------------------------------------------------------------------------
-// Regex patterns (lazy-initialised, mirrors HydrusText.py globals)
-// ---------------------------------------------------------------------------
+// Regex patterns (lazy-initialised)
 
 static RE_UNDESIRED_CONTROL_CHARACTERS: OnceLock<Regex> = OnceLock::new();
 static RE_ONE_OR_MORE_WHITESPACE: OnceLock<Regex> = OnceLock::new();
@@ -64,9 +62,7 @@ fn re_looks_like_hangul() -> &'static Regex {
         .get_or_init(|| Regex::new(r"[\u{1100}-\u{11FF}\u{AC00}-\u{D7AF}]").unwrap())
 }
 
-// ---------------------------------------------------------------------------
-// Core tag functions
-// ---------------------------------------------------------------------------
+// --- Core tag functions ---
 
 /// A valid namespace is either empty (leading-colon = no namespace) or starts
 /// with a letter and contains only letters, digits, underscores, hyphens, or
@@ -115,7 +111,6 @@ pub fn combine_tag(namespace: &str, subtag: &str) -> String {
 }
 
 /// Strip unwanted characters and normalise text.
-/// Matches Python StripTagTextOfGumpf exactly (ported from HydrusText.py).
 ///
 /// Order matters: control chars → whitespace collapse → garbage prefix → then
 /// script-aware cleanup. The Hangul/zero-width handling must come after

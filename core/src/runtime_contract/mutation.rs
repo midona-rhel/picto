@@ -90,7 +90,7 @@ pub struct MutationFacts {
 #[ts(export_to = "../../src/shared/types/generated/runtime-contract/")]
 pub struct SidebarCounts {
     #[ts(type = "number")]
-    pub all_images: i64,
+    pub all_active: i64,
     #[ts(type = "number")]
     pub inbox: i64,
     #[ts(type = "number")]

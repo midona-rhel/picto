@@ -273,10 +273,8 @@ async fn grid_page_slim_folder_filters_support_any_all_and_reject() {
         .await
         .expect("create folder B");
 
-    harness.db.add_entity_to_folder(fa.folder_id, "f_any_1").await.expect("add f1->A");
-    harness.db.add_entity_to_folder(fa.folder_id, "f_any_3").await.expect("add f3->A");
-    harness.db.add_entity_to_folder(fb.folder_id, "f_any_2").await.expect("add f2->B");
-    harness.db.add_entity_to_folder(fb.folder_id, "f_any_3").await.expect("add f3->B");
+    harness.db.add_entities_to_folder_batch(fa.folder_id, &["f_any_1".to_string(), "f_any_3".to_string()]).await.expect("add f1,f3->A");
+    harness.db.add_entities_to_folder_batch(fb.folder_id, &["f_any_2".to_string(), "f_any_3".to_string()]).await.expect("add f2,f3->B");
 
     let any_query = picto_core::types::GridPageSlimQuery {
         limit: Some(20),

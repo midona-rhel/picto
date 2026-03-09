@@ -42,40 +42,6 @@ pub fn insert_duplicate_counted(
     Ok(changed > 0)
 }
 
-pub fn get_duplicates_for_file(
-    conn: &Connection,
-    file_id: i64,
-) -> rusqlite::Result<Vec<DuplicatePair>> {
-    let mut stmt = conn.prepare_cached(
-        "SELECT file_id_a, file_id_b, distance, status FROM duplicate
-         WHERE (file_id_a = ?1 OR file_id_b = ?1) AND status = 'detected'",
-    )?;
-    let rows = stmt.query_map([file_id], |row| {
-        Ok(DuplicatePair {
-            file_id_a: row.get(0)?,
-            file_id_b: row.get(1)?,
-            distance: row.get(2)?,
-            status: row.get(3)?,
-        })
-    })?;
-    rows.collect()
-}
-
-pub fn get_all_detected_duplicates(conn: &Connection) -> rusqlite::Result<Vec<DuplicatePair>> {
-    let mut stmt = conn.prepare_cached(
-        "SELECT file_id_a, file_id_b, distance, status FROM duplicate
-         WHERE status = 'detected' ORDER BY distance ASC",
-    )?;
-    let rows = stmt.query_map([], |row| {
-        Ok(DuplicatePair {
-            file_id_a: row.get(0)?,
-            file_id_b: row.get(1)?,
-            distance: row.get(2)?,
-            status: row.get(3)?,
-        })
-    })?;
-    rows.collect()
-}
 
 /// Keyset-paginated query for duplicate pairs.
 /// Cursor format: "distance,file_id_a,file_id_b" (or None for first page).
@@ -272,37 +238,4 @@ impl SqliteDatabase {
             .await
     }
 
-    pub async fn get_duplicates_for_hash(&self, hash: &str) -> Result<Vec<(String, f64)>, String> {
-        let file_id = self.resolve_hash(hash).await?;
-        let pairs = self
-            .with_read_conn(move |conn| get_duplicates_for_file(conn, file_id))
-            .await?;
-
-        let other_ids: Vec<i64> = pairs
-            .iter()
-            .map(|p| {
-                if p.file_id_a == file_id {
-                    p.file_id_b
-                } else {
-                    p.file_id_a
-                }
-            })
-            .collect();
-        let resolved = self.resolve_ids_batch(&other_ids).await?;
-        let id_to_hash: std::collections::HashMap<i64, String> = resolved.into_iter().collect();
-
-        let result = pairs
-            .iter()
-            .filter_map(|pair| {
-                let other_id = if pair.file_id_a == file_id {
-                    pair.file_id_b
-                } else {
-                    pair.file_id_a
-                };
-                let h = id_to_hash.get(&other_id)?.clone();
-                Some((h, pair.distance))
-            })
-            .collect();
-        Ok(result)
-    }
 }

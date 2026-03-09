@@ -42,9 +42,9 @@ pub async fn dispatch(command: &str, args_json: &str) -> Result<String, String> 
     match command {
         // ── Grid ──────────────────────────────────────────────
         "get_grid_page_slim" => call!(typed::grid::get_grid_page_slim, &state, args),
+        "get_grid_outline" => call!(typed::grid::get_grid_outline, &state, args),
         "get_file" => call!(typed::grid::get_file, &state, args),
         "get_files_metadata_batch" => call!(typed::grid::get_files_metadata_batch, &state, args),
-        "get_file_count" => call!(typed::grid::get_file_count, &state, args),
 
         // ── Tags ──────────────────────────────────────────────
         "search_tags" => call!(typed::tags::search_tags, &state, args),
@@ -54,16 +54,13 @@ pub async fn dispatch(command: &str, args_json: &str) -> Result<String, String> 
         "remove_tags" => call!(typed::tags::remove_tags, &state, args),
         "find_files_by_tags" => call!(typed::tags::find_files_by_tags, &state, args),
         "manage_tag_alias" => call!(typed::tags::manage_tag_alias, &state, args),
-        "get_tag_aliases" => call!(typed::tags::get_tag_aliases, &state, args),
         "get_tag_relations" => call!(typed::tags::get_tag_relations, &state, args),
         "manage_tag_implication" => call!(typed::tags::manage_tag_implication, &state, args),
         "merge_tags" => call!(typed::tags::merge_tags, &state, args),
-        "lookup_tag_types" => call!(typed::tags::lookup_tag_types, &state, args),
         "get_tags_paginated" => call!(typed::tags::get_tags_paginated, &state, args),
         "get_namespace_summary" => call!(typed::tags::get_namespace_summary, &state, args),
         "rename_tag" => call!(typed::tags::rename_tag, &state, args),
         "delete_tag" => call!(typed::tags::delete_tag, &state, args),
-        "normalize_ingested_namespaces" => call!(typed::tags::normalize_ingested_namespaces, &state, args),
         "companion_get_namespace_values" => call!(typed::tags::companion_get_namespace_values, &state, args),
         "companion_get_files_by_tag" => call!(typed::tags::companion_get_files_by_tag, &state, args),
 
@@ -74,7 +71,6 @@ pub async fn dispatch(command: &str, args_json: &str) -> Result<String, String> 
         "update_selection_metadata" => call!(typed::selection::update_selection_metadata, &state, args),
 
         // ── Duplicates ────────────────────────────────────────
-        "get_duplicates" => call!(typed::duplicates::get_duplicates, &state, args),
         "scan_duplicates" => call!(typed::duplicates::scan_duplicates, &state, args),
         "get_duplicate_pairs" => call!(typed::duplicates::get_duplicate_pairs, &state, args),
         "resolve_duplicate_pair" => call!(typed::duplicates::resolve_duplicate_pair, &state, args),
@@ -87,16 +83,12 @@ pub async fn dispatch(command: &str, args_json: &str) -> Result<String, String> 
         "create_smart_folder" => call!(typed::smart_folders::create_smart_folder, &state, args),
         "update_smart_folder" => call!(typed::smart_folders::update_smart_folder, &state, args),
         "delete_smart_folder" => call!(typed::smart_folders::delete_smart_folder, &state, args),
-        "query_smart_folder" => call!(typed::smart_folders::query_smart_folder, &state, args),
         "count_smart_folder" => call!(typed::smart_folders::count_smart_folder, &state, args),
         "reorder_smart_folders" => call!(typed::smart_folders::reorder_smart_folders, &state, args),
 
         // ── Media Metadata ────────────────────────────────────
         "get_file_all_metadata" => call!(typed::media_metadata::get_file_all_metadata, &state, args),
-        "get_file_tags_display" => call!(typed::media_metadata::get_file_tags_display, &state, args),
-        "get_file_parents" => call!(typed::media_metadata::get_file_parents, &state, args),
         "update_file_metadata" => call!(typed::media_metadata::update_file_metadata, &state, args),
-        "get_file_notes" => call!(typed::media_metadata::get_file_notes, &state, args),
         "get_storage_stats" => call!(typed::media_metadata::get_storage_stats, &state, args),
 
         // ── System ────────────────────────────────────────────
@@ -142,7 +134,6 @@ pub async fn dispatch(command: &str, args_json: &str) -> Result<String, String> 
         "resolve_file_path" => call!(typed::media_io::resolve_file_path, &state, args),
         "open_file_default" => call!(typed::media_io::open_file_default, &state, args),
         "reveal_in_folder" => call!(typed::media_io::reveal_in_folder, &state, args),
-        "export_file" => call!(typed::media_io::export_file, &state, args),
         "open_in_new_window" => call!(typed::media_io::open_in_new_window, &state, args),
         "resolve_thumbnail_path" => call!(typed::media_io::resolve_thumbnail_path, &state, args),
         "ensure_thumbnail" => call!(typed::media_io::ensure_thumbnail, &state, args),
@@ -150,14 +141,11 @@ pub async fn dispatch(command: &str, args_json: &str) -> Result<String, String> 
         "regenerate_thumbnails_batch" => call!(typed::media_io::regenerate_thumbnails_batch, &state, args),
         "reanalyze_file_colors" => call!(typed::media_io::reanalyze_file_colors, &state, args),
         "backfill_missing_blurhashes" => call!(typed::media_io::backfill_missing_blurhashes, &state, args),
-        "search_by_color" => call!(typed::media_io::search_by_color, &state, args),
-        "get_image_thumbnail" => call!(typed::media_io::get_image_thumbnail, &state, args),
 
         // ── Media Lifecycle ───────────────────────────────────
         "import_files" => call!(typed::media_lifecycle::import_files, &state, args),
         "update_file_status" => call!(typed::media_lifecycle::update_file_status, &state, args),
         "delete_files" => call!(typed::media_lifecycle::delete_files, &state, args),
-        "rebuild_file_fts" => call!(typed::media_lifecycle::rebuild_file_fts, &state, args),
         "wipe_image_data" => call!(typed::media_lifecycle::wipe_image_data, &state, args),
 
         // ── Subscriptions ─────────────────────────────────────

@@ -24,6 +24,35 @@ pub fn file_tag_to_resolved_info(t: FileTagInfo) -> ResolvedTagInfo {
     }
 }
 
+/// Query implied (parent) tags for a file by entity_id.
+fn get_implied_tags(conn: &rusqlite::Connection, entity_id: i64) -> rusqlite::Result<Vec<TagInfo>> {
+    let mut stmt = conn.prepare(
+        "SELECT t.tag_id, t.namespace, t.subtag,
+                COALESCE(td.display_ns, t.namespace),
+                COALESCE(td.display_st, t.subtag)
+         FROM entity_tag_implied eti
+         JOIN tag t ON t.tag_id = eti.tag_id
+         LEFT JOIN tag_display td ON td.tag_id = t.tag_id
+         WHERE eti.entity_id = ?1",
+    )?;
+    let rows = stmt.query_map([entity_id], |row| {
+        let tag_id: i64 = row.get(0)?;
+        let ns: String = row.get(1)?;
+        let st: String = row.get(2)?;
+        let disp_ns: String = row.get(3)?;
+        let disp_st: String = row.get(4)?;
+        Ok(TagInfo {
+            tag_id,
+            namespace: ns,
+            subtag: st,
+            display: tag_display_key(&disp_ns, &disp_st),
+            file_count: 0,
+            read_only: true,
+        })
+    })?;
+    rows.collect()
+}
+
 pub struct MetadataController;
 
 impl MetadataController {
@@ -44,40 +73,13 @@ impl MetadataController {
 
         let file_id = db.resolve_hash(&hash).await?;
 
-        // Query dominant colors from file_color table
         let fid_for_colors = file_id;
         let colors = db
             .with_read_conn(move |conn| crate::sqlite::files::get_file_colors(conn, fid_for_colors))
             .await?;
 
         let parent_tags: Vec<TagInfo> = db
-            .with_read_conn(move |conn| {
-                let mut stmt = conn.prepare(
-                    "SELECT t.tag_id, t.namespace, t.subtag,
-                            COALESCE(td.display_ns, t.namespace),
-                            COALESCE(td.display_st, t.subtag)
-                     FROM entity_tag_implied eti
-                     JOIN tag t ON t.tag_id = eti.tag_id
-                     LEFT JOIN tag_display td ON td.tag_id = t.tag_id
-                     WHERE eti.entity_id = ?1",
-                )?;
-                let rows = stmt.query_map([file_id], |row| {
-                    let tag_id: i64 = row.get(0)?;
-                    let ns: String = row.get(1)?;
-                    let st: String = row.get(2)?;
-                    let disp_ns: String = row.get(3)?;
-                    let disp_st: String = row.get(4)?;
-                    Ok(TagInfo {
-                        tag_id,
-                        namespace: ns,
-                        subtag: st.clone(),
-                        display: tag_display_key(&disp_ns, &disp_st),
-                        file_count: 0,
-                        read_only: true,
-                    })
-                })?;
-                rows.collect()
-            })
+            .with_read_conn(move |conn| get_implied_tags(conn, file_id))
             .await?;
 
         let mut file_info = FileInfo::from(file);
@@ -93,55 +95,6 @@ impl MetadataController {
             tags,
             parent_tags,
         })
-    }
-
-    pub async fn get_file_tags_display(
-        db: &SqliteDatabase,
-        hash: String,
-    ) -> Result<Vec<ResolvedTagInfo>, String> {
-        let local_tags = db.get_entity_tags(&hash).await?;
-
-        let result: Vec<ResolvedTagInfo> = local_tags
-            .into_iter()
-            .map(file_tag_to_resolved_info)
-            .collect();
-
-        Ok(result)
-    }
-
-    pub async fn get_file_parents(
-        db: &SqliteDatabase,
-        hash: String,
-    ) -> Result<Vec<TagInfo>, String> {
-        let file_id = db.resolve_hash(&hash).await?;
-        db.with_read_conn(move |conn| {
-            let mut stmt = conn.prepare(
-                "SELECT t.tag_id, t.namespace, t.subtag,
-                        COALESCE(td.display_ns, t.namespace),
-                        COALESCE(td.display_st, t.subtag)
-                 FROM entity_tag_implied eti
-                 JOIN tag t ON t.tag_id = eti.tag_id
-                 LEFT JOIN tag_display td ON td.tag_id = t.tag_id
-                 WHERE eti.entity_id = ?1",
-            )?;
-            let rows = stmt.query_map([file_id], |row| {
-                let tag_id: i64 = row.get(0)?;
-                let ns: String = row.get(1)?;
-                let st: String = row.get(2)?;
-                let disp_ns: String = row.get(3)?;
-                let disp_st: String = row.get(4)?;
-                Ok(TagInfo {
-                    tag_id,
-                    namespace: ns,
-                    subtag: st,
-                    display: tag_display_key(&disp_ns, &disp_st),
-                    file_count: 0,
-                    read_only: true,
-                })
-            })?;
-            rows.collect()
-        })
-        .await
     }
 
 }

@@ -3,7 +3,7 @@
 use rusqlite::Connection;
 
 use crate::sqlite::bitmaps::BitmapKey;
-use crate::sqlite::compilers::CompilerEvent;
+use crate::sqlite::ReadModelEvent;
 use crate::sqlite::files::{self, NewFile};
 use crate::tags::db as tags_db;
 use crate::sqlite::SqliteDatabase;
@@ -122,7 +122,7 @@ impl SqliteDatabase {
                 bitmaps.insert(&BitmapKey::Tag(tag_id), result.file_id as u32);
             }
 
-            self.emit_compiler_event(CompilerEvent::FileInserted {
+            self.emit_read_model_event(ReadModelEvent::FileInserted {
                 file_id: result.file_id,
             });
         }

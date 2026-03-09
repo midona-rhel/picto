@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::sqlite::bitmaps::BitmapKey;
-use crate::sqlite::compilers::CompilerEvent;
+use crate::sqlite::ReadModelEvent;
 use crate::sqlite::SqliteDatabase;
 
 /// Gap between position_rank values for folder file ordering.
@@ -234,8 +234,7 @@ pub fn remove_entity_from_folder(
     Ok(())
 }
 
-/// Reorder an entity within a folder (move between prev and next).
-pub fn reorder_entity(
+fn reorder_entity(
     conn: &Connection,
     folder_id: i64,
     entity_id: i64,
@@ -586,7 +585,7 @@ pub fn reorder_folders(conn: &Connection, moves: &[(i64, i64)]) -> rusqlite::Res
 impl SqliteDatabase {
     pub async fn create_folder(&self, f: NewFolder) -> Result<Folder, String> {
         let folder_id = self.with_conn(move |conn| create_folder(conn, &f)).await?;
-        self.emit_compiler_event(CompilerEvent::FolderChanged { folder_id });
+        self.emit_read_model_event(ReadModelEvent::FolderChanged { folder_id });
         let fid = folder_id;
         self.with_read_conn(move |conn| get_folder(conn, fid))
             .await?
@@ -603,34 +602,6 @@ impl SqliteDatabase {
             .await
     }
 
-    pub async fn add_entity_to_folder(&self, folder_id: i64, hash: &str) -> Result<(), String> {
-        let entity_id = self.resolve_hash(hash).await?;
-        let inserted = self
-            .with_conn(move |conn| add_entity_to_folder(conn, folder_id, entity_id))
-            .await?;
-        if inserted {
-            let auto_tags = self
-                .with_read_conn(move |conn| {
-                    Ok(get_folder(conn, folder_id)?
-                        .map(|folder| folder.auto_tags)
-                        .unwrap_or_default())
-                })
-                .await?;
-            if !auto_tags.is_empty() {
-                self.add_tags_batch_by_entity_ids(
-                    vec![entity_id],
-                    auto_tags,
-                    "folder_auto".to_string(),
-                )
-                .await?;
-            }
-        }
-        self.bitmaps
-            .insert(&BitmapKey::Folder(folder_id), entity_id as u32);
-        self.emit_compiler_event(CompilerEvent::FolderChanged { folder_id });
-        Ok(())
-    }
-
     pub async fn add_entities_to_folder_batch(
         &self,
         folder_id: i64,
@@ -641,10 +612,13 @@ impl SqliteDatabase {
         }
         let resolved = self.resolve_hashes_batch(hashes).await?;
         let entity_ids: Vec<i64> = resolved.iter().map(|(_, id)| *id).collect();
-        let eids = entity_ids.clone();
         let inserted_ids = self
-            .with_conn(move |conn| add_entities_to_folder_batch(conn, folder_id, &eids))
+            .with_conn({
+                let eids = entity_ids.clone();
+                move |conn| add_entities_to_folder_batch(conn, folder_id, &eids)
+            })
             .await?;
+        let inserted_count = inserted_ids.len();
         if !inserted_ids.is_empty() {
             let auto_tags = self
                 .with_read_conn(move |conn| {
@@ -655,7 +629,7 @@ impl SqliteDatabase {
                 .await?;
             if !auto_tags.is_empty() {
                 self.add_tags_batch_by_entity_ids(
-                    inserted_ids.clone(),
+                    inserted_ids,
                     auto_tags,
                     "folder_auto".to_string(),
                 )
@@ -666,22 +640,8 @@ impl SqliteDatabase {
             self.bitmaps
                 .insert(&BitmapKey::Folder(folder_id), eid as u32);
         }
-        self.emit_compiler_event(CompilerEvent::FolderChanged { folder_id });
-        Ok(inserted_ids.len())
-    }
-
-    pub async fn remove_entity_from_folder(
-        &self,
-        folder_id: i64,
-        hash: &str,
-    ) -> Result<(), String> {
-        let entity_id = self.resolve_hash(hash).await?;
-        self.with_conn(move |conn| remove_entity_from_folder(conn, folder_id, entity_id))
-            .await?;
-        self.bitmaps
-            .remove(&BitmapKey::Folder(folder_id), entity_id as u32);
-        self.emit_compiler_event(CompilerEvent::FolderChanged { folder_id });
-        Ok(())
+        self.emit_read_model_event(ReadModelEvent::FolderChanged { folder_id });
+        Ok(inserted_count)
     }
 
     pub async fn remove_entities_from_folder_batch(
@@ -694,38 +654,40 @@ impl SqliteDatabase {
         }
         let resolved = self.resolve_hashes_batch(hashes).await?;
         let entity_ids: Vec<i64> = resolved.iter().map(|(_, id)| *id).collect();
-        let eids = entity_ids.clone();
         let removed = self
-            .with_conn(move |conn| {
-                let mut count = 0usize;
-                for chunk in eids.chunks(500) {
-                    let placeholders: String = (0..chunk.len())
-                        .map(|i| format!("?{}", i + 2))
-                        .collect::<Vec<_>>()
-                        .join(",");
-                    let sql = format!(
-                        "DELETE FROM folder_entity WHERE folder_id = ?1 AND entity_id IN ({placeholders})"
-                    );
-                    let mut param_values: Vec<rusqlite::types::Value> =
-                        Vec::with_capacity(chunk.len() + 1);
-                    param_values.push(rusqlite::types::Value::Integer(folder_id));
-                    for &eid in chunk {
-                        param_values.push(rusqlite::types::Value::Integer(eid));
+            .with_conn({
+                let eids = entity_ids.clone();
+                move |conn| {
+                    let mut count = 0usize;
+                    for chunk in eids.chunks(500) {
+                        let placeholders: String = (0..chunk.len())
+                            .map(|i| format!("?{}", i + 2))
+                            .collect::<Vec<_>>()
+                            .join(",");
+                        let sql = format!(
+                            "DELETE FROM folder_entity WHERE folder_id = ?1 AND entity_id IN ({placeholders})"
+                        );
+                        let mut param_values: Vec<rusqlite::types::Value> =
+                            Vec::with_capacity(chunk.len() + 1);
+                        param_values.push(rusqlite::types::Value::Integer(folder_id));
+                        for &eid in chunk {
+                            param_values.push(rusqlite::types::Value::Integer(eid));
+                        }
+                        let changed = conn.execute(
+                            &sql,
+                            rusqlite::params_from_iter(param_values.iter()),
+                        )?;
+                        count += changed;
                     }
-                    let changed = conn.execute(
-                        &sql,
-                        rusqlite::params_from_iter(param_values.iter()),
-                    )?;
-                    count += changed;
+                    Ok(count)
                 }
-                Ok(count)
             })
             .await?;
         for &eid in &entity_ids {
             self.bitmaps
                 .remove(&BitmapKey::Folder(folder_id), eid as u32);
         }
-        self.emit_compiler_event(CompilerEvent::FolderChanged { folder_id });
+        self.emit_read_model_event(ReadModelEvent::FolderChanged { folder_id });
         Ok(removed)
     }
 
@@ -766,7 +728,7 @@ impl SqliteDatabase {
     ) -> Result<(), String> {
         self.with_conn(move |conn| update_folder_parent(conn, folder_id, new_parent_id))
             .await?;
-        self.emit_compiler_event(CompilerEvent::FolderChanged { folder_id });
+        self.emit_read_model_event(ReadModelEvent::FolderChanged { folder_id });
         Ok(())
     }
 
@@ -786,14 +748,14 @@ impl SqliteDatabase {
             update_folder(conn, folder_id, &n, i.as_deref(), c.as_deref(), &tags)
         })
             .await?;
-        self.emit_compiler_event(CompilerEvent::FolderChanged { folder_id });
+        self.emit_read_model_event(ReadModelEvent::FolderChanged { folder_id });
         Ok(())
     }
 
     pub async fn reorder_folders(&self, moves: Vec<(i64, i64)>) -> Result<(), String> {
         self.with_conn(move |conn| reorder_folders(conn, &moves))
             .await?;
-        self.emit_compiler_event(CompilerEvent::FolderChanged { folder_id: 0 });
+        self.emit_read_model_event(ReadModelEvent::FolderChanged { folder_id: 0 });
         Ok(())
     }
 
@@ -805,41 +767,7 @@ impl SqliteDatabase {
     ) -> Result<(), String> {
         self.with_conn(move |conn| move_folder(conn, folder_id, new_parent_id, &sibling_order))
             .await?;
-        self.emit_compiler_event(CompilerEvent::FolderChanged { folder_id });
-        Ok(())
-    }
-
-    pub async fn reorder_entity_in_folder(
-        &self,
-        folder_id: i64,
-        hash: &str,
-        prev_hash: Option<&str>,
-        next_hash: Option<&str>,
-    ) -> Result<(), String> {
-        let target_entity_id = self.resolve_hash(hash).await?;
-        let prev_entity_id = match prev_hash {
-            Some(h) => Some(self.resolve_hash(h).await?),
-            None => None,
-        };
-        let next_entity_id = match next_hash {
-            Some(h) => Some(self.resolve_hash(h).await?),
-            None => None,
-        };
-
-        self.with_conn(move |conn| {
-            let prev_rank = match prev_entity_id {
-                Some(eid) => get_entity_rank_in_folder(conn, folder_id, eid)?,
-                None => None,
-            };
-            let next_rank = match next_entity_id {
-                Some(eid) => get_entity_rank_in_folder(conn, folder_id, eid)?,
-                None => None,
-            };
-            reorder_entity(conn, folder_id, target_entity_id, prev_rank, next_rank)
-        })
-        .await?;
-
-        self.emit_compiler_event(CompilerEvent::FolderChanged { folder_id });
+        self.emit_read_model_event(ReadModelEvent::FolderChanged { folder_id });
         Ok(())
     }
 
@@ -913,7 +841,7 @@ impl SqliteDatabase {
         })
         .await?;
 
-        self.emit_compiler_event(CompilerEvent::FolderChanged { folder_id });
+        self.emit_read_model_event(ReadModelEvent::FolderChanged { folder_id });
         Ok(())
     }
 
@@ -940,7 +868,7 @@ impl SqliteDatabase {
             sort_folder_items(conn, folder_id, &sb, &dir, entity_ids.as_deref())
         })
         .await?;
-        self.emit_compiler_event(CompilerEvent::FolderChanged { folder_id });
+        self.emit_read_model_event(ReadModelEvent::FolderChanged { folder_id });
         Ok(())
     }
 
@@ -961,7 +889,7 @@ impl SqliteDatabase {
         };
         self.with_conn(move |conn| reverse_folder_items(conn, folder_id, entity_ids.as_deref()))
             .await?;
-        self.emit_compiler_event(CompilerEvent::FolderChanged { folder_id });
+        self.emit_read_model_event(ReadModelEvent::FolderChanged { folder_id });
         Ok(())
     }
 }

@@ -24,15 +24,6 @@ pub enum CredentialType {
 }
 
 impl CredentialType {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::UsernamePassword => "username_password",
-            Self::Cookies => "cookies",
-            Self::ApiKey => "api_key",
-            Self::OAuthToken => "oauth_token",
-        }
-    }
-
     pub fn from_str(s: &str) -> Option<Self> {
         match s {
             "username_password" => Some(Self::UsernamePassword),

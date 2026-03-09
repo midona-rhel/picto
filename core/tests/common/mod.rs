@@ -2,6 +2,8 @@
 //!
 //! Provides a reusable `TestHarness` with seeded DB + event collector.
 
+#![allow(dead_code)] // Each test binary uses a different subset of helpers.
+
 use std::sync::{Arc, Mutex};
 use tempfile::TempDir;
 
@@ -141,27 +143,21 @@ impl TestHarness {
             .insert(&BitmapKey::EffectiveTag(tag_id), entity_id as u32);
     }
 
-    /// Seed status/all-active bitmaps for an active file in bitmap-path tests.
+    /// Seed active status bitmap (Status(1) only).
     pub fn bitmaps_mark_active(&self, entity_id: i64) {
         self.db
             .bitmaps
             .insert(&BitmapKey::Status(1), entity_id as u32);
-        self.db
-            .bitmaps
-            .insert(&BitmapKey::AllActive, entity_id as u32);
     }
 
-    /// Seed inbox status bitmap (Status(0) + AllActive).
+    /// Seed inbox status bitmap (Status(0) only).
     pub fn bitmaps_mark_inbox(&self, entity_id: i64) {
         self.db
             .bitmaps
             .insert(&BitmapKey::Status(0), entity_id as u32);
-        self.db
-            .bitmaps
-            .insert(&BitmapKey::AllActive, entity_id as u32);
     }
 
-    /// Seed trash status bitmap (Status(2) only — NOT AllActive).
+    /// Seed trash status bitmap (Status(2) only).
     pub fn bitmaps_mark_trash(&self, entity_id: i64) {
         self.db
             .bitmaps

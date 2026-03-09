@@ -10,7 +10,6 @@ use ts_rs::TS;
 #[test]
 fn export_all_bindings() {
     // dispatch::typed
-    picto_core::dispatch::typed::duplicates::GetDuplicatesInput::export().unwrap();
     picto_core::dispatch::typed::duplicates::ScanDuplicatesInput::export().unwrap();
     picto_core::dispatch::typed::duplicates::GetDuplicatePairsInput::export().unwrap();
     picto_core::dispatch::typed::duplicates::ResolveDuplicatePairInput::export().unwrap();
@@ -46,7 +45,6 @@ fn export_all_bindings() {
     picto_core::dispatch::typed::media_io::ResolveFilePathInput::export().unwrap();
     picto_core::dispatch::typed::media_io::OpenFileDefaultInput::export().unwrap();
     picto_core::dispatch::typed::media_io::RevealInFolderInput::export().unwrap();
-    picto_core::dispatch::typed::media_io::ExportFileInput::export().unwrap();
     picto_core::dispatch::typed::media_io::OpenInNewWindowInput::export().unwrap();
     picto_core::dispatch::typed::media_io::ResolveThumbnailPathInput::export().unwrap();
     picto_core::dispatch::typed::media_io::EnsureThumbnailInput::export().unwrap();
@@ -54,17 +52,12 @@ fn export_all_bindings() {
     picto_core::dispatch::typed::media_io::RegenerateThumbnailsBatchInput::export().unwrap();
     picto_core::dispatch::typed::media_io::ReanalyzeFileColorsInput::export().unwrap();
     picto_core::dispatch::typed::media_io::BackfillMissingBlurhashesInput::export().unwrap();
-    picto_core::dispatch::typed::media_io::SearchByColorInput::export().unwrap();
-    picto_core::dispatch::typed::media_io::GetImageThumbnailInput::export().unwrap();
 
     picto_core::dispatch::typed::media_lifecycle::ImportFilesInput::export().unwrap();
     picto_core::dispatch::typed::media_lifecycle::UpdateFileStatusInput::export().unwrap();
     picto_core::dispatch::typed::media_lifecycle::DeleteFilesInput::export().unwrap();
 
     picto_core::dispatch::typed::media_metadata::GetFileAllMetadataInput::export().unwrap();
-    picto_core::dispatch::typed::media_metadata::GetFileTagsDisplayInput::export().unwrap();
-    picto_core::dispatch::typed::media_metadata::GetFileParentsInput::export().unwrap();
-    picto_core::dispatch::typed::media_metadata::GetFileNotesInput::export().unwrap();
     picto_core::dispatch::typed::media_metadata::UpdateFileMetadataInput::export().unwrap();
 
     picto_core::dispatch::typed::selection::AddTagsSelectionInput::export().unwrap();
@@ -76,7 +69,6 @@ fn export_all_bindings() {
     picto_core::dispatch::typed::smart_folders::CreateSmartFolderInput::export().unwrap();
     picto_core::dispatch::typed::smart_folders::UpdateSmartFolderInput::export().unwrap();
     picto_core::dispatch::typed::smart_folders::DeleteSmartFolderInput::export().unwrap();
-    picto_core::dispatch::typed::smart_folders::QuerySmartFolderInput::export().unwrap();
     picto_core::dispatch::typed::smart_folders::CountSmartFolderInput::export().unwrap();
 
     picto_core::dispatch::typed::subscriptions::CreateGroupInput::export().unwrap();

@@ -402,7 +402,7 @@ pub fn list_all_subscription_queries(
     rows.collect()
 }
 
-/// Subscriptions for a given flow with aggregated file counts — single query.
+/// Subscriptions for a given group with aggregated file counts — single query.
 pub fn list_subscriptions_for_group_with_file_counts(
     conn: &Connection,
     group_id: i64,
@@ -424,7 +424,7 @@ pub fn list_subscriptions_for_group_with_file_counts(
     rows.collect()
 }
 
-/// All subscription queries belonging to a flow — single query.
+/// All subscription queries belonging to a group — single query.
 pub fn list_subscription_queries_for_group(
     conn: &Connection,
     group_id: i64,

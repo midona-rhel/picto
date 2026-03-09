@@ -8,10 +8,10 @@ use std::collections::HashMap;
 
 use rusqlite::OptionalExtension;
 
-use crate::sqlite::compilers::CompilerEvent;
+use crate::sqlite::ReadModelEvent;
 use crate::sqlite::SqliteDatabase;
 use crate::types::{
-    DuplicateInfo, DuplicatePairDto, DuplicatePairResponse, DuplicatePairsResponse,
+    DuplicatePairDto, DuplicatePairsResponse,
     ScanDuplicatesResponse, SmartMergeResult,
 };
 
@@ -31,49 +31,6 @@ fn format_priority(mime: &str) -> u32 {
 }
 
 impl DuplicateController {
-    pub async fn get_duplicates(
-        db: &SqliteDatabase,
-        hash: String,
-    ) -> Result<Vec<DuplicateInfo>, String> {
-        let file_id = db.resolve_hash(&hash).await?;
-        let pairs = db
-            .with_read_conn(move |conn| {
-                crate::duplicates::db::get_duplicates_for_file(conn, file_id)
-            })
-            .await?;
-
-        let other_ids: Vec<i64> = pairs
-            .iter()
-            .map(|p| {
-                if p.file_id_a == file_id {
-                    p.file_id_b
-                } else {
-                    p.file_id_a
-                }
-            })
-            .collect();
-        let resolved = db.resolve_ids_batch(&other_ids).await?;
-        let id_to_hash: HashMap<i64, String> = resolved.into_iter().collect();
-
-        let result = pairs
-            .iter()
-            .filter_map(|pair| {
-                let other_id = if pair.file_id_a == file_id {
-                    pair.file_id_b
-                } else {
-                    pair.file_id_a
-                };
-                let other_hash = id_to_hash.get(&other_id)?.clone();
-                Some(DuplicateInfo {
-                    other_hash,
-                    distance: pair.distance,
-                    status: pair.status.clone(),
-                })
-            })
-            .collect();
-        Ok(result)
-    }
-
     /// Get paginated duplicate pairs.
     pub async fn get_duplicate_pairs(
         db: &SqliteDatabase,
@@ -143,7 +100,6 @@ impl DuplicateController {
         action: &str,
         hash_a: String,
         hash_b: String,
-        _preferred_hash: Option<String>,
     ) -> Result<serde_json::Value, String> {
         match action {
             "smart_merge" => {
@@ -174,7 +130,7 @@ impl DuplicateController {
                     )
                 })
                 .await?;
-                db.emit_compiler_event(CompilerEvent::DuplicateChanged);
+                db.emit_read_model_event(ReadModelEvent::DuplicateChanged);
                 Ok(serde_json::json!({ "status": "ignored_false_positive" }))
             }
             "keep_both" => {
@@ -193,7 +149,7 @@ impl DuplicateController {
                     )
                 })
                 .await?;
-                db.emit_compiler_event(CompilerEvent::DuplicateChanged);
+                db.emit_read_model_event(ReadModelEvent::DuplicateChanged);
                 Ok(serde_json::json!({ "status": "dismissed_keep_both" }))
             }
             _ => Err(format!(
@@ -405,10 +361,10 @@ impl DuplicateController {
         })
         .await?;
 
-        db.emit_compiler_event(CompilerEvent::FileTagsChanged {
+        db.emit_read_model_event(ReadModelEvent::FileTagsChanged {
             file_id: db.resolve_hash(&winner_hash).await?,
         });
-        db.emit_compiler_event(CompilerEvent::DuplicateChanged);
+        db.emit_read_model_event(ReadModelEvent::DuplicateChanged);
 
         Ok(SmartMergeResult {
             winner_hash,
@@ -477,7 +433,7 @@ impl DuplicateController {
         })
         .await?;
 
-        db.emit_compiler_event(CompilerEvent::DuplicateChanged);
+        db.emit_read_model_event(ReadModelEvent::DuplicateChanged);
         Ok(())
     }
 
@@ -549,34 +505,31 @@ impl DuplicateController {
 
         let imported_hash_for_pairs = imported_hash.to_string();
         let matches_for_pairs = matches.clone();
-        db.with_conn({
-            let hash_ref = imported_hash_for_pairs.clone();
-            move |conn| {
-                let new_fid: i64 = conn.query_row(
+        db.with_conn(move |conn| {
+            let new_fid: i64 = conn.query_row(
+                "SELECT file_id FROM file WHERE hash = ?1",
+                [&imported_hash_for_pairs],
+                |row| row.get(0),
+            )?;
+            for (match_hash, dist) in &matches_for_pairs {
+                let match_fid: i64 = conn.query_row(
                     "SELECT file_id FROM file WHERE hash = ?1",
-                    [&hash_ref],
+                    [match_hash],
                     |row| row.get(0),
                 )?;
-                for (match_hash, dist) in &matches_for_pairs {
-                    let match_fid: i64 = conn.query_row(
-                        "SELECT file_id FROM file WHERE hash = ?1",
-                        [match_hash],
-                        |row| row.get(0),
-                    )?;
-                    let (a, b) = if new_fid < match_fid {
-                        (new_fid, match_fid)
-                    } else {
-                        (match_fid, new_fid)
-                    };
-                    // Insert if not already present (ON CONFLICT IGNORE)
-                    crate::duplicates::db::insert_duplicate(conn, a, b, dist.clone() as f64)?;
-                }
-                Ok(())
+                let (a, b) = if new_fid < match_fid {
+                    (new_fid, match_fid)
+                } else {
+                    (match_fid, new_fid)
+                };
+                // Insert if not already present (ON CONFLICT IGNORE)
+                crate::duplicates::db::insert_duplicate(conn, a, b, *dist as f64)?;
             }
+            Ok(())
         })
         .await?;
 
-        db.emit_compiler_event(CompilerEvent::DuplicateChanged);
+        db.emit_read_model_event(ReadModelEvent::DuplicateChanged);
 
         let (closest_hash, closest_dist) = matches.iter().min_by_key(|(_, d)| *d).unwrap();
 
@@ -714,11 +667,10 @@ impl DuplicateController {
         let mut pairs_inserted = 0usize;
 
         if !pairs.is_empty() {
-            let pairs_clone = pairs.clone();
             pairs_inserted = db
                 .with_conn(move |conn| {
                     let mut inserted = 0usize;
-                    for (a, b, dist) in pairs_clone {
+                    for (a, b, dist) in pairs {
                         if crate::duplicates::db::insert_duplicate_counted(
                             conn,
                             a,
@@ -746,7 +698,7 @@ impl DuplicateController {
         let reviewable_detected_new = reviewable_detected_total.saturating_sub(reviewable_before);
 
         if pairs_inserted > 0 {
-            db.emit_compiler_event(CompilerEvent::DuplicateChanged);
+            db.emit_read_model_event(ReadModelEvent::DuplicateChanged);
         }
 
         Ok(ScanDuplicatesResponse {

@@ -1,13 +1,5 @@
-//! File processing utilities for Picto.
-//!
-//! Provides MIME detection by file header bytes, file info extraction (size, dimensions,
-//! duration, frames, audio, word count), thumbnail generation with SIMD-accelerated
-//! resizing, and hash computation.
-//!
-//! Adapted from the Hydrus file handling modules with simplifications:
-//! - Dropped perceptual hash (use img_hash crate in Phase 4)
-//! - Dropped Hydrus filesystem layout (we use content packs)
-//! - Uses fast_image_resize for 10x faster thumbnail resizing
+//! File processing — MIME detection, file info extraction (size, dimensions,
+//! duration, frames, audio, word count), thumbnail generation, and hash computation.
 
 pub mod archive;
 pub mod blurhash;
@@ -28,9 +20,7 @@ use sha2::{Digest as Sha2Digest, Sha256};
 
 use crate::constants::MimeType;
 
-// ---------------------------------------------------------------------------
-// Error types
-// ---------------------------------------------------------------------------
+// --- Error types ---
 
 #[derive(thiserror::Error, Debug)]
 pub enum FileError {
@@ -54,9 +44,7 @@ pub enum FileError {
 
 pub type FileResult<T> = Result<T, FileError>;
 
-// ---------------------------------------------------------------------------
-// Constants
-// ---------------------------------------------------------------------------
+// --- Constants ---
 
 /// Default thumbnail bounding box (longest side)
 pub const DEFAULT_THUMBNAIL_DIMENSIONS: (u32, u32) = (500, 500);
@@ -64,9 +52,7 @@ pub const DEFAULT_THUMBNAIL_DIMENSIONS: (u32, u32) = (500, 500);
 /// Number of bytes to read for header-based MIME detection
 const HEADER_READ_SIZE: usize = 256;
 
-// ---------------------------------------------------------------------------
-// Header-based MIME detection
-// ---------------------------------------------------------------------------
+// --- Header-based MIME detection ---
 
 /// A single header check: (offsets, byte_patterns). At least one offset+pattern must match.
 type HeaderPair = (&'static [usize], &'static [&'static [u8]]);
@@ -252,9 +238,7 @@ fn passes_header_rule(rule: HeaderRule, file_bytes: &[u8]) -> bool {
     true
 }
 
-// ---------------------------------------------------------------------------
-// Animation detection helpers
-// ---------------------------------------------------------------------------
+// --- Animation detection helpers ---
 
 /// Check if a PNG has an acTL chunk (APNG).
 fn is_png_animated(header_bytes: &[u8]) -> bool {
@@ -325,9 +309,7 @@ fn looks_like_svg(bytes: &[u8]) -> bool {
         || has_match(b"<!DOCTYPE SVG")
 }
 
-// ---------------------------------------------------------------------------
-// MIME detection
-// ---------------------------------------------------------------------------
+// --- MIME detection ---
 
 /// Detect MIME type from file header bytes.
 pub fn get_mime(path: &Path) -> FileResult<MimeType> {
@@ -397,7 +379,6 @@ pub fn get_mime(path: &Path) -> FileResult<MimeType> {
                     }
                 }
                 MimeType::UndeterminedOle => {
-                    // TODO: Port OLE file inspection
                     return Ok(MimeType::ApplicationDoc);
                 }
                 _ => return Ok(mime),
@@ -438,28 +419,14 @@ pub fn get_mime(path: &Path) -> FileResult<MimeType> {
     Ok(MimeType::ApplicationUnknown)
 }
 
-// ---------------------------------------------------------------------------
-// Type predicate helpers
-// ---------------------------------------------------------------------------
+// --- Type predicate helpers ---
 
 pub fn is_image(mime: MimeType) -> bool {
     mime.is_image()
 }
 
-pub fn is_animation(mime: MimeType) -> bool {
-    mime.is_animation()
-}
-
-pub fn is_video(mime: MimeType) -> bool {
-    mime.is_video()
-}
-
-pub fn is_audio(mime: MimeType) -> bool {
-    mime.is_audio()
-}
-
-pub fn definitely_has_audio(mime: MimeType) -> bool {
-    is_audio(mime) || mime == MimeType::ApplicationFlash
+fn definitely_has_audio(mime: MimeType) -> bool {
+    mime.is_audio() || mime == MimeType::ApplicationFlash
 }
 
 /// Check if a MIME type is allowed for import.
@@ -503,9 +470,7 @@ pub fn is_allowed_mime(mime: MimeType) -> bool {
     )
 }
 
-// ---------------------------------------------------------------------------
-// File info extraction
-// ---------------------------------------------------------------------------
+// --- File info extraction ---
 
 /// File information extracted from a file.
 #[derive(Debug, Clone)]
@@ -595,13 +560,6 @@ pub fn get_file_info(path: &Path, mime: Option<MimeType>) -> FileResult<FileInfo
         let (_nw, (w, h)) = office::get_pptx_info(path);
         width = w;
         height = h;
-    } else if mime == MimeType::ApplicationDocx {
-        let _ = office::get_docx_info(path);
-    } else if matches!(
-        mime,
-        MimeType::ApplicationDoc | MimeType::ApplicationPpt | MimeType::ApplicationXls
-    ) {
-        let _ = office::ole_document_word_count(path);
     } else if mime == MimeType::ApplicationFlash {
         if let Ok(((w, h), dur, nf)) = specialty::get_flash_properties(path) {
             width = Some(w);
@@ -621,7 +579,7 @@ pub fn get_file_info(path: &Path, mime: Option<MimeType>) -> FileResult<FileInfo
             duration_ms = dur;
             num_frames = nf;
         }
-    } else if is_video(mime)
+    } else if mime.is_video()
         || matches!(
             mime,
             MimeType::ImageHeifSequence
@@ -630,15 +588,14 @@ pub fn get_file_info(path: &Path, mime: Option<MimeType>) -> FileResult<FileInfo
                 | MimeType::AnimationJxl
         )
     {
-        if let Ok((res, dur_ms, nframes, audio)) = ffmpeg::get_ffmpeg_video_properties(path, false)
-        {
-            width = Some(res.0);
-            height = Some(res.1);
-            duration_ms = Some(dur_ms);
-            num_frames = Some(nframes as u32);
-            has_audio = audio;
+        if let Ok(props) = ffmpeg::get_video_properties(path) {
+            width = Some(props.width);
+            height = Some(props.height);
+            duration_ms = Some(props.duration_ms);
+            num_frames = Some(props.num_frames as u32);
+            has_audio = props.has_audio;
         }
-    } else if is_animation(mime) {
+    } else if mime.is_animation() {
         if let Ok(props) = get_animation_properties(path, mime) {
             width = Some(props.0);
             height = Some(props.1);
@@ -650,7 +607,7 @@ pub fn get_file_info(path: &Path, mime: Option<MimeType>) -> FileResult<FileInfo
             width = Some(dims.0);
             height = Some(dims.1);
         }
-    } else if is_audio(mime) {
+    } else if mime.is_audio() {
         if let Ok(dur_ms) = ffmpeg::get_audio_duration_ms(path) {
             duration_ms = Some(dur_ms);
         }
@@ -733,9 +690,7 @@ fn get_animation_properties(path: &Path, mime: MimeType) -> FileResult<(u32, u32
     }
 }
 
-// ---------------------------------------------------------------------------
-// Hashing
-// ---------------------------------------------------------------------------
+// --- Hashing ---
 
 /// Compute SHA-256 hash of a byte buffer.
 pub fn get_hash_from_bytes(data: &[u8]) -> Vec<u8> {
@@ -744,9 +699,7 @@ pub fn get_hash_from_bytes(data: &[u8]) -> Vec<u8> {
     hasher.finalize().to_vec()
 }
 
-// ---------------------------------------------------------------------------
-// Thumbnail resolution calculation
-// ---------------------------------------------------------------------------
+// --- Thumbnail resolution calculation ---
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ThumbnailScaleType {
@@ -814,9 +767,7 @@ pub fn get_thumbnail_resolution(
     (tw, th)
 }
 
-// ---------------------------------------------------------------------------
-// Thumbnail generation (with SIMD-accelerated resize via fast_image_resize)
-// ---------------------------------------------------------------------------
+// --- Thumbnail generation (with SIMD-accelerated resize via fast_image_resize) ---
 
 /// Resize an image using fast_image_resize (SIMD-accelerated, ~10x faster than image crate).
 fn fast_resize(img: &image::DynamicImage, tw: u32, th: u32) -> FileResult<image::DynamicImage> {
@@ -896,7 +847,9 @@ pub fn generate_thumbnail_bytes(
     } else if mime == MimeType::ImageSvg {
         return as_jpg(svg::generate_thumbnail_from_svg(path, target_resolution));
     } else if mime == MimeType::ApplicationPdf {
-        return as_jpg(pdf::generate_thumbnail_from_pdf(path, target_resolution));
+        return Err(FileError::Thumbnail(
+            "PDF thumbnail generation not supported".to_string(),
+        ));
     } else if mime == MimeType::ApplicationPptx {
         return as_jpg(office::generate_thumbnail_from_office(
             path,
@@ -925,27 +878,18 @@ pub fn generate_thumbnail_bytes(
         ));
     } else {
         // Animations (non-webp) and video: use ffmpeg
-        if is_animation(mime) {
+        if mime.is_animation() {
             return generate_image_thumbnail(path, target_resolution);
         }
 
-        match ffmpeg::render_video_frame_to_png(
-            path,
-            target_resolution,
-            percentage_in,
-            num_frames.unwrap_or(1) as u64,
-            duration_ms.unwrap_or(0),
-        ) {
+        let dur = duration_ms.filter(|&ms| ms > 0);
+        match ffmpeg::render_video_thumbnail(path, target_resolution, percentage_in, dur) {
             Ok(bytes) => return Ok((bytes, "jpg".into())),
             Err(_) => {
                 if percentage_in > 0 {
-                    if let Ok(bytes) = ffmpeg::render_video_frame_to_png(
-                        path,
-                        target_resolution,
-                        0,
-                        num_frames.unwrap_or(1) as u64,
-                        duration_ms.unwrap_or(0),
-                    ) {
+                    if let Ok(bytes) =
+                        ffmpeg::render_video_thumbnail(path, target_resolution, 0, dur)
+                    {
                         return Ok((bytes, "jpg".into()));
                     }
                 }

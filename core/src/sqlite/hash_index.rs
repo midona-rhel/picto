@@ -29,7 +29,8 @@ impl HashIndex {
         }
     }
 
-    pub fn with_capacity(capacity: usize) -> Self {
+    #[cfg(test)]
+    fn with_capacity(capacity: usize) -> Self {
         let cap = NonZeroUsize::new(capacity.max(1)).unwrap();
         Self {
             inner: RwLock::new(HashIndexInner {

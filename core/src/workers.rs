@@ -1,7 +1,7 @@
 //! Background worker lifecycle — spawning and shutdown.
 //!
 //! `start_workers()` spawns all library-scoped background tasks
-//! (compiler loop, bitmap flush, flow scheduler).
+//! (compiler loop, bitmap flush, group scheduler).
 //!
 //! `stop_workers()` joins all handles with a timeout for clean shutdown.
 
@@ -34,11 +34,12 @@ pub async fn start_workers(
     // ── Compiler loop ──────────────────────────────────
     {
         let compiler_db = db.clone();
-        if let Some(rx) = compiler_db.take_compiler_rx().await {
+        if let Some(rx) = compiler_db.take_read_model_rx().await {
             let handle = tokio::spawn(crate::sqlite::compilers::start_compiler_loop(
                 compiler_db.clone(),
                 rx,
                 |result| {
+                    crate::events::emit("runtime/read_model_published", &result.published);
                     crate::events::emit_mutation(
                         "compiler_batch_done",
                         crate::events::MutationImpact::compiler_publish(
@@ -51,7 +52,7 @@ pub async fn start_workers(
             handles.push(("compiler_loop", handle));
         }
 
-        compiler_db.emit_compiler_event(crate::sqlite::CompilerEvent::RebuildAll);
+        compiler_db.emit_read_model_event(crate::sqlite::ReadModelEvent::RebuildAll);
     }
 
     // ── Bitmap flush worker ────────────────────────────
@@ -77,7 +78,7 @@ pub async fn start_workers(
         handles.push(("bitmap_flush", handle));
     }
 
-    // ── Flow scheduler ─────────────────────────────────
+    // ── Group scheduler ────────────────────────────────
     {
         let sched_db = db.clone();
         let sched_blob = blob_store.clone();
@@ -90,7 +91,7 @@ pub async fn start_workers(
             tokio::select! {
                 _ = tokio::time::sleep(std::time::Duration::from_secs(10)) => {}
                 _ = sched_cancel.cancelled() => {
-                    tracing::info!("Flow scheduler cancelled during startup delay");
+                    tracing::info!("Group scheduler cancelled during startup delay");
                     return;
                 }
             }
@@ -99,7 +100,7 @@ pub async fn start_workers(
                 tokio::select! {
                     _ = tokio::time::sleep(std::time::Duration::from_secs(60)) => {}
                     _ = sched_cancel.cancelled() => {
-                        tracing::info!("Flow scheduler cancelled");
+                        tracing::info!("Group scheduler cancelled");
                         return;
                     }
                 }

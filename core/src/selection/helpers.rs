@@ -2,7 +2,7 @@
 //!
 //! Scope resolution is delegated to `crate::scope::resolver::resolve_scope`.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use roaring::RoaringBitmap;
 
@@ -10,40 +10,7 @@ use crate::scope::resolver::{resolve_scope, ScopeFilter};
 use crate::sqlite::bitmaps::BitmapKey;
 use crate::sqlite::files::batch_get_by_hashes;
 use crate::sqlite::SqliteDatabase;
-use crate::types::{tag_display_key, SelectionMode, SelectionQuerySpec, SelectionTagCount};
-
-/// Collect all hashes matching a selection query (bounded snapshot).
-pub async fn collect_selection_hashes(
-    db: &SqliteDatabase,
-    selection: &SelectionQuerySpec,
-) -> Result<Vec<String>, String> {
-    match &selection.mode {
-        SelectionMode::ExplicitHashes => {
-            let excluded: HashSet<String> = selection
-                .excluded_hashes
-                .clone()
-                .unwrap_or_default()
-                .into_iter()
-                .collect();
-            let hashes = selection.hashes.clone().unwrap_or_default();
-            if excluded.is_empty() {
-                Ok(hashes)
-            } else {
-                Ok(hashes
-                    .into_iter()
-                    .filter(|h| !excluded.contains(h))
-                    .collect())
-            }
-        }
-        SelectionMode::AllResults => {
-            // Reuse bitmap resolution (handles exclusions internally).
-            let (_base_bm, filtered_bm) = selection_bitmap_for_all_results(db, selection).await?;
-            let file_ids: Vec<i64> = filtered_bm.iter().map(|id| id as i64).collect();
-            let resolved = db.resolve_ids_batch(&file_ids).await?;
-            Ok(resolved.into_iter().map(|(_, h)| h).collect())
-        }
-    }
-}
+use crate::types::{tag_display_key, SelectionQuerySpec, SelectionTagCount};
 
 pub async fn summarize_hashes_bulk(
     db: &SqliteDatabase,

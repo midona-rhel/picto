@@ -1,6 +1,6 @@
 //! Subscription sync engine — downloads files via gallery-dl subprocess.
 //!
-//! Flow per query:
+//! Steps per query:
 //! 1. Build URL from subscription's gallery-dl URL template + query text
 //! 2. Load credentials from OS keychain (if configured for that site)
 //! 3. Spawn gallery-dl subprocess with appropriate flags
@@ -51,7 +51,7 @@ struct CollectionGroup {
     hashes: Vec<String>,
 }
 
-pub fn subscription_query_archive_prefix(subscription_id: i64, query_id: i64) -> String {
+pub(crate) fn subscription_query_archive_prefix(subscription_id: i64, query_id: i64) -> String {
     format!("picto_s{subscription_id}_q{query_id}_")
 }
 

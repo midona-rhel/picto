@@ -146,9 +146,18 @@ pub async fn get_all_tags_with_counts(state: &AppState, _input: serde_json::Valu
 }
 
 pub async fn get_file_tags(state: &AppState, input: GetFileTagsInput) -> Result<serde_json::Value, String> {
-    let result = crate::tags::controller::TagController::get_entity_tags(
-        &state.db, input.hash,
-    ).await?;
+    let tags = state.db.get_entity_tags(&input.hash).await?;
+    let result: Vec<crate::types::TagInfo> = tags
+        .iter()
+        .map(|t| crate::types::TagInfo {
+            tag_id: t.tag_id,
+            display: crate::types::tag_display_key(&t.namespace, &t.subtag),
+            namespace: t.namespace.clone(),
+            subtag: t.subtag.clone(),
+            file_count: 0,
+            read_only: t.source != "local",
+        })
+        .collect();
     serde_json::to_value(&result).map_err(|e| e.to_string())
 }
 
@@ -208,25 +217,6 @@ pub async fn manage_tag_alias(state: &AppState, input: ManageTagAliasInput) -> R
     Ok(())
 }
 
-pub async fn get_tag_aliases(state: &AppState, _input: serde_json::Value) -> Result<serde_json::Value, String> {
-    let aliases = state.db.with_conn(|conn| {
-        let mut stmt = conn.prepare("SELECT t1.namespace || ':' || t1.subtag, t2.namespace || ':' || t2.subtag FROM tag_alias ts JOIN tag t1 ON ts.from_tag_id = t1.tag_id JOIN tag t2 ON ts.to_tag_id = t2.tag_id")?;
-        let rows = stmt.query_map([], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-        })?;
-        let mut result: Vec<(String, String)> = Vec::new();
-        for row in rows {
-            result.push(row?);
-        }
-        Ok(result)
-    }).await?;
-    let json_aliases: Vec<serde_json::Value> = aliases
-        .iter()
-        .map(|(from, to)| serde_json::json!({"from": from, "to": to}))
-        .collect();
-    serde_json::to_value(&json_aliases).map_err(|e| e.to_string())
-}
-
 pub async fn get_tag_relations(state: &AppState, input: GetTagRelationsInput) -> Result<serde_json::Value, String> {
     let result = match input.relation_type.as_str() {
         "aliases" => state.db.get_aliases_for_tag(input.tag_id).await?,
@@ -278,25 +268,17 @@ pub async fn merge_tags(state: &AppState, input: MergeTagsInput) -> Result<(), S
         Ok((from_id, to_id, file_ids))
     }).await?;
 
-    use crate::sqlite::compilers::CompilerEvent;
-    state.db.emit_compiler_event(CompilerEvent::TagChanged { tag_id: from_id });
-    state.db.emit_compiler_event(CompilerEvent::TagChanged { tag_id: to_id });
+    use crate::sqlite::ReadModelEvent;
+    state.db.emit_read_model_event(ReadModelEvent::TagChanged { tag_id: from_id });
+    state.db.emit_read_model_event(ReadModelEvent::TagChanged { tag_id: to_id });
     for file_id in affected_file_ids {
-        state.db.emit_compiler_event(CompilerEvent::FileTagsChanged { file_id });
+        state.db.emit_read_model_event(ReadModelEvent::FileTagsChanged { file_id });
     }
     crate::events::emit_mutation(
         "merge_tags",
         crate::events::MutationImpact::tag_structure_change(),
     );
     Ok(())
-}
-
-pub async fn lookup_tag_types(state: &AppState, _input: serde_json::Value) -> Result<Vec<String>, String> {
-    state.db.with_read_conn(|conn| {
-        let mut stmt = conn.prepare("SELECT DISTINCT namespace FROM tag WHERE file_count > 0")?;
-        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
-        rows.collect::<rusqlite::Result<Vec<String>>>()
-    }).await
 }
 
 pub async fn get_tags_paginated(state: &AppState, input: GetTagsPaginatedInput) -> Result<serde_json::Value, String> {
@@ -335,21 +317,6 @@ pub async fn delete_tag(state: &AppState, input: DeleteTagInput) -> Result<serde
     );
     Ok(serde_json::json!({
         "affected_files": affected_file_ids.len(),
-    }))
-}
-
-pub async fn normalize_ingested_namespaces(state: &AppState, _input: serde_json::Value) -> Result<serde_json::Value, String> {
-    let stats = state.db.normalize_disallowed_namespaces().await?;
-    if stats.tags_rewritten > 0 {
-        crate::events::emit_mutation(
-            "normalize_ingested_namespaces",
-            crate::events::MutationImpact::tag_structure_change(),
-        );
-    }
-    Ok(serde_json::json!({
-        "tags_rewritten": stats.tags_rewritten,
-        "tags_merged": stats.tags_merged,
-        "affected_files": stats.affected_files,
     }))
 }
 

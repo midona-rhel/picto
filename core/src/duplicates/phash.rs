@@ -5,9 +5,7 @@
 
 use img_hash::{HasherConfig, ImageHash};
 
-// ---------------------------------------------------------------------------
-// Perceptual hash
-// ---------------------------------------------------------------------------
+// --- Perceptual hash ---
 
 /// Default Hamming distance threshold for "likely duplicate" (0 = identical, lower = more similar).
 /// 8 is a good default — matches images with minor compression artifacts or resizes.
@@ -38,9 +36,7 @@ pub fn compute_phash_base64(image_data: &[u8]) -> Result<String, image::ImageErr
     Ok(hash.to_base64())
 }
 
-// ---------------------------------------------------------------------------
-// BK-tree for Hamming distance
-// ---------------------------------------------------------------------------
+// --- BK-tree for Hamming distance ---
 
 /// A BK-tree node for efficient near-neighbor search in Hamming space.
 struct BkNode {

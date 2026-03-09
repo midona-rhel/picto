@@ -16,19 +16,17 @@ use std::sync::RwLock;
 /// Key identifying a specific bitmap in the store.
 ///
 /// Design notes:
-/// - `AllActive` is `Status(0) | Status(1)` explicitly rather than `!Status(2)` because
-///   new status values could be added in the future, and we want AllActive to be a positive
-///   assertion, not a negation.
 /// - `Tag` vs `ImpliedTag` vs `EffectiveTag`: three bitmaps per tag enables efficient updates.
 ///   When a file is directly tagged, only `Tag(id)` changes. When parent relationships change,
 ///   only `ImpliedTag(id)` is recomputed. `EffectiveTag(id)` is the union and is what queries use.
 /// - `Tagged` exists as a precomputed union of all tagged file_ids to make the "untagged" view
-///   a simple `AllActive - Tagged` bitmap operation instead of a full-table scan.
+///   a simple `Status(1) - Tagged` bitmap operation instead of a full-table scan.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum BitmapKey {
     /// Files with a given status (0=inbox, 1=active, 2=trash)
     Status(i64),
-    /// Union of Status(0) | Status(1) — all non-trash files
+    /// No longer written by new code paths. Kept for backward-compatible
+    /// deserialization of legacy bitmaps.bin files (tag byte = 1).
     AllActive,
     /// Files directly tagged with tag_id
     Tag(i64),
@@ -52,7 +50,8 @@ pub struct BitmapStore {
 }
 
 impl BitmapStore {
-    pub fn open(dir: &Path) -> Self {
+    #[cfg(test)]
+    fn open(dir: &Path) -> Self {
         Self::open_with_active_file(dir, None)
     }
 
