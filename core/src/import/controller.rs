@@ -54,8 +54,6 @@ impl ImportController {
             });
         }
 
-        let results = pipeline.import_files(&file_paths, &options).await;
-
         let mut batch = ImportBatchResult {
             imported: Vec::new(),
             skipped: Vec::new(),
@@ -63,7 +61,8 @@ impl ImportController {
         };
 
         let total = file_paths.len();
-        for (index, (path, result)) in file_paths.iter().zip(results.into_iter()).enumerate() {
+        for (index, path) in file_paths.iter().enumerate() {
+            let result = pipeline.import_file(path, &options).await;
             match result {
                 Ok(imported) => {
                     if auto_merge_enabled {
