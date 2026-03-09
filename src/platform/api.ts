@@ -19,9 +19,9 @@ import type {
   EntityDetails,
   EntityMetadataBatchResponse,
   EntitySlim,
+  GridOutlineResponse,
   GridPageSlimResponse, GridPageSlimQuery,
   EnsureThumbnailResponse, ReanalyzeFileColorsResponse,
-  ImportResult,
   TagDisplay, TagSearchResult, TagTuple, TagRecord,
   NamespaceSummary, TagRelation,
   RenameTagResult, DeleteTagResult,
@@ -55,6 +55,7 @@ export function listenRuntimeEvent<K extends keyof CoreRuntimeEventPayloadMap>(
 // invokeTyped() provides compile-time checked command names and argument types.
 
 import type { TypedCommandMap } from '../shared/types/generated/commands';
+import type { ImportBatchResult } from '../shared/types/generated/commands';
 
 type HasInput<K extends keyof TypedCommandMap> =
   TypedCommandMap[K]['input'] extends Record<string, never> ? false : true;
@@ -95,11 +96,13 @@ export const api = {
   grid: {
     getPageSlim: (query: GridPageSlimQuery) =>
       invokeTyped('get_grid_page_slim', { query } as never) as Promise<GridPageSlimResponse>,
+    getOutline: (query: GridPageSlimQuery) =>
+      invoke('get_grid_outline', { query }) as Promise<GridOutlineResponse>,
     getFilesMetadataBatch: (hashes: string[]) =>
       invokeTyped('get_files_metadata_batch', { hashes }) as Promise<EntityMetadataBatchResponse>,
   },
 
-  file: {
+  files: {
     get: (hash: string) =>
       invokeTyped('get_file', { hash }) as Promise<EntityDetails | null>,
     getAllMetadata: (hash: string) =>
@@ -144,7 +147,7 @@ export const api = {
 
   import: {
     files: (paths: string[], tagStrings?: string[], sourceUrls?: string[], initialStatus?: number) =>
-      invokeTyped('import_files', { paths, tag_strings: tagStrings, source_urls: sourceUrls, initial_status: initialStatus } as never) as unknown as Promise<ImportResult>,
+      invokeTyped('import_files', { paths, tag_strings: tagStrings, source_urls: sourceUrls, initial_status: initialStatus } as never) as unknown as Promise<ImportBatchResult>,
   },
 
   tags: {
@@ -271,7 +274,6 @@ export const api = {
         action,
         hash_a: hashA,
         hash_b: hashB,
-        preferred_hash: null,
       } as never) as Promise<SmartMergeResult | Record<string, string>>,
     getCount: () =>
       invokeTyped('get_duplicate_count') as Promise<{ count: number }>,

@@ -53,7 +53,15 @@ export interface FileImportedEvent {
   view_count: number;
   imported_at: string;
   has_thumbnail: boolean;
-  blurhash?: string | null;
+}
+
+export interface ManualImportProgressEvent {
+  done: number;
+  total: number;
+  current_file: string;
+  imported: number;
+  skipped: number;
+  errors: number;
 }
 
 /**
@@ -68,6 +76,7 @@ export interface CoreRuntimeEventPayloadMap {
   'library-closed': null;
   'zoom-factor-changed': ZoomFactorChangedEvent;
   'file-imported': FileImportedEvent;
+  'manual-import-progress': ManualImportProgressEvent;
   'open-detail-window': OpenDetailWindowEvent;
   'duplicate-auto-merge-finished': DuplicateAutoMergeFinishedEvent;
 
@@ -104,7 +113,7 @@ export interface LibrarySwitchedEvent {
 export interface AppSettings {
   gridTargetSize: number;
   gridViewMode: string;
-  propertiesPanelWidth: number;
+  inspectorWidth: number;
   colorScheme: string;
   windowX?: number | null;
   windowY?: number | null;

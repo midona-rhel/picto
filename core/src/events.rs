@@ -368,6 +368,7 @@ pub mod event_names {
     pub const LIBRARY_CLOSED: &str = "library-closed";
     pub const ZOOM_FACTOR_CHANGED: &str = "zoom-factor-changed";
     pub const FILE_IMPORTED: &str = "file-imported";
+    pub const MANUAL_IMPORT_PROGRESS: &str = "manual-import-progress";
     pub const OPEN_DETAIL_WINDOW: &str = "open-detail-window";
     pub const DUPLICATE_AUTO_MERGE_FINISHED: &str = "duplicate-auto-merge-finished";
 }
@@ -394,4 +395,14 @@ pub struct DuplicateAutoMergeFinishedEvent {
     pub loser_hash: String,
     pub distance: u32,
     pub tags_merged: usize,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ManualImportProgressEvent {
+    pub done: usize,
+    pub total: usize,
+    pub current_file: String,
+    pub imported: usize,
+    pub skipped: usize,
+    pub errors: usize,
 }

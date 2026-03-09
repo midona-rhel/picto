@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useCallback, useRef, useMemo, useState } from 'react';
+import { notifications } from '@mantine/notifications';
 import { useGridRuntime } from './runtime';
 import { effectiveSelectedHashes as selectEffectiveHashes } from './runtime';
 import {
@@ -7,14 +8,12 @@ import {
 } from './runtime';
 import { TextButton } from '../../shared/components/TextButton';
 import { StateBlock, StateActions } from '../../shared/components/state';
-import { notifySuccess, notifyError } from '../../shared/lib/notify';
+import { notifyError } from '../../shared/lib/notify';
 import { registerUndoAction } from '../../shared/controllers/undoRedoController';
-import { api } from '#desktop/api';
-import { open } from '#desktop/api';
-import { getCurrentWebview } from '#desktop/api';
+import { api, getCurrentWebview, listenRuntimeEvent, open } from '#desktop/api';
 import { ContextMenu, useContextMenu } from '../../shared/components/ContextMenu';
 import { imageDrag } from '../../shared/lib/imageDrag';
-import type { MasonryImageItem } from './shared';
+import type { MediaItem } from './shared';
 import {
   prefetchMetadata,
   type SelectionQuerySpec,
@@ -22,14 +21,14 @@ import {
 import { DomGridSurface } from './DomGridSurface';
 import type { SmartFolderPredicate } from '../../features/smart-folders/components/types';
 import type { DragDropPayload, FolderReorderMove } from '../../shared/types/api';
-import { useCacheStore } from '../../state/cacheStore';
+import { useGridMetadataStore } from '../../state/gridMetadataStore';
 import { useSettingsStore } from '../../state/settingsStore';
 import { useScopedDisplay } from '../../shared/contexts/ScopedDisplayContext';
 import { BatchRenameDialog } from '../../features/grid/components/BatchRenameDialog';
 import { useDomainStore } from '../../state/domainStore';
 import { useNavigationStore } from '../../state/navigationStore';
 import { SubfolderGrid } from './SubfolderGrid';
-import type { DetailViewState, DetailViewControls } from '../../features/viewer/hooks/useViewerHost';
+import type { MediaViewState, MediaViewControls } from '../../features/viewer/hooks/useViewerHost';
 import type { ViewerHostController } from '../../features/viewer/hooks/useViewerHost';
 import { useGridData } from './hooks/useGridData';
 import { useGridMutationActions } from './hooks/useGridMutationActions';
@@ -39,6 +38,7 @@ import { useGridKeyboardNavigation } from './hooks/useGridKeyboardNavigation';
 import { useGridContextMenu } from './hooks/useGridContextMenu';
 import { useGridSelection } from './hooks/useGridSelection';
 import { useGridMarqueeSelection } from './hooks/useGridMarqueeSelection';
+import type { ManualImportProgressEvent } from '../../shared/types/api/events';
 
 // Re-export GridViewMode from runtime for backward compatibility
 export type { GridViewMode } from './runtime';
@@ -82,10 +82,10 @@ interface ImageGridProps {
   onSortOrderChange?: (order: string) => void;
   onContainerWidthChange?: (width: number) => void;
   refreshTrigger?: number;
-  onSelectedImagesChange?: (images: MasonryImageItem[]) => void;
+  onSelectedImagesChange?: (images: MediaItem[]) => void;
   onSelectionSummarySpecChange?: (spec: SelectionQuerySpec | null) => void;
   selectedScopeCount?: number | null;
-  onDetailViewStateChange?: (state: DetailViewState | null, controls: DetailViewControls | null) => void;
+  onMediaViewStateChange?: (state: MediaViewState | null, controls: MediaViewControls | null) => void;
   // Filter bar props
   ratingMin?: number | null;
   mimePrefixes?: string[] | null;
@@ -98,7 +98,8 @@ interface ImageGridProps {
   viewer: ViewerHostController;
 }
 
-export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartFolderPredicate, smartFolderSortField, smartFolderSortOrder, folderId, collectionEntityId, filterFolderIds, excludedFilterFolderIds, folderMatchMode, statusFilter, viewMode = 'waterfall', targetSize = 250, onViewModeChange, sortField = 'imported_at', sortOrder = 'asc', onSortFieldChange, onSortOrderChange, onContainerWidthChange, refreshTrigger, onSelectedImagesChange, onSelectionSummarySpecChange, selectedScopeCount = null, onDetailViewStateChange, ratingMin, mimePrefixes, colorHex, colorAccuracy, searchText, externalFreeze = false, onScopeTransitionMidpoint, viewer }: ImageGridProps) {
+export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartFolderPredicate, smartFolderSortField, smartFolderSortOrder, folderId, collectionEntityId, filterFolderIds, excludedFilterFolderIds, folderMatchMode, statusFilter, viewMode = 'waterfall', targetSize = 250, onViewModeChange, sortField = 'imported_at', sortOrder = 'asc', onSortFieldChange, onSortOrderChange, onContainerWidthChange, refreshTrigger, onSelectedImagesChange, onSelectionSummarySpecChange, selectedScopeCount = null, onMediaViewStateChange, ratingMin, mimePrefixes, colorHex, colorAccuracy, searchText, externalFreeze = false, onScopeTransitionMidpoint, viewer }: ImageGridProps) {
+  const manualImportNotificationId = 'manual-import-progress';
   const { state, dispatch } = useGridRuntime({
     viewMode,
     targetSize,
@@ -271,12 +272,12 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
     const after = renameValue.trim() || null;
     setRenamingHash(null);
     if (after === before) return;
-    api.file.setName(hash, after)
+    api.files.setName(hash, after)
       .then(() => {
         registerUndoAction({
           label: 'Rename file',
-          undo: () => api.file.setName(hash, before),
-          redo: () => api.file.setName(hash, after),
+          undo: () => api.files.setName(hash, before),
+          redo: () => api.files.setName(hash, after),
         });
         void requestReplace();
       })
@@ -318,7 +319,7 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
   const recordImageView = useCallback((hash: string) => {
     const image = stateRef.current.images.find((img) => img.hash === hash);
     if (!image || image.is_collection) return;
-    void api.file
+    void api.files
       .incrementViewCount(hash)
       
       .catch((err) => {
@@ -375,7 +376,7 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
     statusFilter,
   });
 
-  const handleImageClick = useCallback((image: MasonryImageItem, event: React.MouseEvent) => {
+  const handleImageClick = useCallback((image: MediaItem, event: React.MouseEvent) => {
     if (event.detail === 2) {
       viewer.openDetail(image.hash);
       return;
@@ -446,7 +447,7 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
     const remaining = prev.filter(img => !movedSet.has(img.hash));
     const movedItems = movedHashes
       .map(h => prev.find(img => img.hash === h))
-      .filter(Boolean) as MasonryImageItem[];
+      .filter(Boolean) as MediaItem[];
 
     const movedBefore = prev.slice(0, targetIndex).filter(img => movedSet.has(img.hash)).length;
     const insertAt = Math.max(0, Math.min(remaining.length, targetIndex - movedBefore));
@@ -498,13 +499,46 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
       });
       if (!selected) return;
       const paths = Array.isArray(selected) ? selected : [selected];
+      notifications.show({
+        id: manualImportNotificationId,
+        title: 'Importing...',
+        message: `Preparing ${paths.length} file(s)`,
+        autoClose: false,
+        withCloseButton: false,
+        loading: true,
+      });
       const result = await api.import.files(paths);
-      notifySuccess(`Imported ${result.imported.length} file(s), ${result.skipped.length} skipped.`, 'Import Complete');
-      requestReplace();
+      notifications.update({
+        id: manualImportNotificationId,
+        title: 'Import Complete',
+        message: `Imported ${result.imported.length} file(s), ${result.skipped.length} skipped${result.errors.length ? `, ${result.errors.length} failed` : ''}.`,
+        autoClose: 5000,
+        withCloseButton: true,
+        loading: false,
+        color: result.errors.length > 0 ? 'yellow' : 'green',
+      });
+      void requestReplace();
     } catch (err) {
+      notifications.hide(manualImportNotificationId);
       notifyError(err, 'Import Failed');
     }
   };
+
+  useEffect(() => {
+    const unlisten = listenRuntimeEvent('manual-import-progress', (event: ManualImportProgressEvent) => {
+      notifications.update({
+        id: manualImportNotificationId,
+        title: 'Importing...',
+        message: `${event.done}/${event.total} • ${event.current_file}`,
+        autoClose: false,
+        withCloseButton: false,
+        loading: true,
+      });
+    });
+    return () => {
+      void unlisten.then((fn) => fn());
+    };
+  }, []);
 
 
   const handleViewerDetailImageChange = useCallback((hash: string) => {
@@ -541,7 +575,7 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
       totalCount: resolvedGridTotalCount,
       inboxMode: statusFilter === 'inbox',
       onInboxAction: statusFilter === 'inbox' ? handleInboxAction : undefined,
-      onDetailStateChange: onDetailViewStateChange,
+      onDetailStateChange: onMediaViewStateChange,
       onDetailImageChange: handleViewerDetailImageChange,
       onQuickLookOpen: handleViewerQuickLookOpen,
       onQuickLookImageChange: handleViewerQuickLookImageChange,
@@ -554,7 +588,7 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
     resolvedGridTotalCount,
     statusFilter,
     handleInboxAction,
-    onDetailViewStateChange,
+    onMediaViewStateChange,
     handleViewerDetailImageChange,
     handleViewerQuickLookOpen,
     handleViewerQuickLookImageChange,
@@ -604,14 +638,14 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
 
   useEffect(() => {
     viewer.close('');
-    onDetailViewStateChange?.(null, null);
+    onMediaViewStateChange?.(null, null);
     dispatch({ type: 'CLEAR_SELECTION' });
     dispatch({ type: 'SET_SELECTED_SUBFOLDER', id: null });
     if (scrollRef.current) {
       scrollRef.current.scrollTop = 0;
     }
     onScopeTransitionMidpoint?.();
-  }, [dispatch, onDetailViewStateChange, onScopeTransitionMidpoint, scopeKey, viewer, scrollRef]);
+  }, [dispatch, onMediaViewStateChange, onScopeTransitionMidpoint, scopeKey, viewer, scrollRef]);
 
   useEffect(() => {
     initialLoadDone.current = false;
@@ -628,12 +662,12 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
   }, [refreshTrigger, requestReplace]);
 
   // Optimistic grid removal — inspector enqueues hashes when removing from active folder.
-  // Also handles detail view: images array shrinks → DetailView auto-advances.
-  const pendingGridRemovals = useCacheStore((s) => s.pendingGridRemovals);
+  // Also handles detail view: images array shrinks → MediaView auto-advances.
+  const pendingGridRemovals = useGridMetadataStore((s) => s.pendingGridRemovals);
   useEffect(() => {
     if (pendingGridRemovals.size === 0) return;
     const toRemove = new Set(pendingGridRemovals);
-    useCacheStore.getState().clearGridRemovals();
+    useGridMetadataStore.getState().clearGridRemovals();
     dispatch({ type: 'FILTER_IMAGES', predicate: img => !toRemove.has(img.hash) });
     dispatch({ type: 'REMOVE_HASHES', hashes: toRemove });
   }, [pendingGridRemovals, dispatch]);
@@ -646,17 +680,17 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
     else if (statusFilter === 'inbox') scope = 'system:inbox';
     else if (statusFilter === 'trash') scope = 'system:trash';
     else scope = 'system:all';
-    useCacheStore.getState().setActiveGridScope(scope);
+    useGridMetadataStore.getState().setActiveGridScope(scope);
   }, [folderId, collectionEntityId, statusFilter]);
 
   // Patch grid tiles in-place when metadata changes (name, rating, etc.) without full reload
-  const metadataInvalidatedHashes = useCacheStore((s) => s.metadataInvalidatedHashes);
+  const metadataInvalidatedHashes = useGridMetadataStore((s) => s.metadataInvalidatedHashes);
   useEffect(() => {
     if (metadataInvalidatedHashes.size === 0) return;
     const hashes = [...metadataInvalidatedHashes];
-    useCacheStore.getState().clearInvalidatedHashes();
+    useGridMetadataStore.getState().clearInvalidatedHashes();
 
-    useCacheStore.getState().fetchMetadataBatch(hashes).then((results) => {
+    useGridMetadataStore.getState().fetchMetadataBatch(hashes).then((results) => {
       if (results.length === 0) return;
       const metaMap = new Map(results.map(r => [r.file.hash, r.file]));
       const currentImages = stateRef.current.images;
@@ -673,7 +707,7 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
   }, [metadataInvalidatedHashes]);
 
   // Reload grid when gridRefresher bumps gridRefreshSeq (mutation with grid_scopes)
-  const gridRefreshSeq = useCacheStore((s) => s.gridRefreshSeq);
+  const gridRefreshSeq = useGridMetadataStore((s) => s.gridRefreshSeq);
   const prevGridRefreshSeq = useRef(gridRefreshSeq);
   useEffect(() => {
     if (prevGridRefreshSeq.current !== gridRefreshSeq) {
@@ -704,6 +738,14 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
         const paths = payload.paths;
         if (paths.length === 0) return;
         try {
+          notifications.show({
+            id: manualImportNotificationId,
+            title: 'Importing...',
+            message: `Preparing ${paths.length} file(s)`,
+            autoClose: false,
+            withCloseButton: false,
+            loading: true,
+          });
           const result = await api.import.files(paths);
           // If viewing a folder, add imported files to it
           const currentFolderId = folderIdRef.current;
@@ -711,12 +753,21 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
             // PBI-054: Batch add instead of per-hash fan-out.
             await api.folders.addFiles(
               currentFolderId,
-              result.imported,
+              result.imported.map((file) => file.hash),
             );
           }
-          notifySuccess(`Imported ${result.imported.length} file(s), ${result.skipped.length} skipped.`, 'Import Complete');
+          notifications.update({
+            id: manualImportNotificationId,
+            title: 'Import Complete',
+            message: `Imported ${result.imported.length} file(s), ${result.skipped.length} skipped${result.errors.length ? `, ${result.errors.length} failed` : ''}.`,
+            autoClose: 5000,
+            withCloseButton: true,
+            loading: false,
+            color: result.errors.length > 0 ? 'yellow' : 'green',
+          });
           void requestReplace();
         } catch (err) {
+          notifications.hide(manualImportNotificationId);
           notifyError(err, 'Import Failed');
         }
       }

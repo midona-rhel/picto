@@ -7,6 +7,7 @@ use std::path::PathBuf;
 
 use crate::blob_store::BlobStore;
 use crate::duplicates::controller::DuplicateController;
+use crate::events::{self, ManualImportProgressEvent};
 use crate::import::pipeline::{ImportOptions, ImportPipeline};
 use crate::sqlite::SqliteDatabase;
 use crate::tags::normalize;
@@ -61,7 +62,8 @@ impl ImportController {
             errors: Vec::new(),
         };
 
-        for result in results {
+        let total = file_paths.len();
+        for (index, (path, result)) in file_paths.iter().zip(results.into_iter()).enumerate() {
             match result {
                 Ok(imported) => {
                     if auto_merge_enabled {
@@ -94,6 +96,24 @@ impl ImportController {
                     batch.errors.push(e.to_string());
                 }
             }
+
+            let current_file = path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .map(str::to_owned)
+                .unwrap_or_else(|| path.display().to_string());
+
+            events::emit(
+                events::event_names::MANUAL_IMPORT_PROGRESS,
+                &ManualImportProgressEvent {
+                    done: index + 1,
+                    total,
+                    current_file,
+                    imported: batch.imported.len(),
+                    skipped: batch.skipped.len(),
+                    errors: batch.errors.len(),
+                },
+            );
         }
 
         Ok(batch)
