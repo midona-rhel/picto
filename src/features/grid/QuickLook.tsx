@@ -6,14 +6,14 @@
  */
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { IconChevronLeft, IconChevronRight, IconX } from '@tabler/icons-react';
-import type { MasonryImageItem } from './shared';
+import type { MediaItem } from './shared';
 import { DetailView, type DetailViewState, type DetailViewControls } from './DetailView';
 import { KbdTooltip } from '../../shared/components/KbdTooltip';
 import { useGlobalKeydown } from '../../shared/hooks/useGlobalKeydown';
 import styles from './QuickLook.module.css';
 
 interface QuickLookProps {
-  images: MasonryImageItem[];
+  images: MediaItem[];
   currentIndex: number;
   onNavigate: (delta: number) => void;
   onClose: (exitHash: string) => void;

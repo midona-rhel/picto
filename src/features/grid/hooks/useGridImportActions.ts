@@ -1,0 +1,166 @@
+import { useCallback, useEffect, useState } from 'react';
+import { notifyError } from '../../../shared/lib/notify';
+import { api, getCurrentWebview, open } from '#desktop/api';
+import type { DragDropPayload } from '../../../shared/types/api';
+import { useImportActionStore } from '../../../state/importActionStore';
+import { useManualImportStore } from '../../../state/manualImportStore';
+import { imageDrag } from '../../../shared/lib/imageDrag';
+
+export function useGridImportActions(args: {
+  folderIdRef: React.MutableRefObject<number | null | undefined>;
+  requestGridReload: () => Promise<void>;
+  setDragOver: (over: boolean) => void;
+}) {
+  const { folderIdRef, requestGridReload, setDragOver } = args;
+  const [folderImportDialog, setFolderImportDialog] = useState<{
+    path: string;
+    preserveStructure: boolean;
+  } | null>(null);
+
+  const importRequestToken = useImportActionStore((s) => s.requestToken);
+  const importHandledToken = useImportActionStore((s) => s.handledToken);
+  const importRequestKind = useImportActionStore((s) => s.requestKind);
+  const markImportHandled = useImportActionStore((s) => s.markHandled);
+
+  const importPaths = useCallback(async (paths: string[]) => {
+    if (paths.length === 0) return;
+    const store = useManualImportStore.getState();
+    const currentFolderId = folderIdRef.current;
+    let imported = 0;
+    let skipped = 0;
+    let errors = 0;
+    store.start(paths.length);
+
+    for (let index = 0; index < paths.length; index += 1) {
+      const result = await api.import.files([paths[index]]);
+      const importedHashes = result.imported.map((file) => file.hash);
+      if (currentFolderId != null && importedHashes.length > 0) {
+        await api.folders.addFiles(currentFolderId, importedHashes);
+      }
+      imported += result.imported.length;
+      skipped += result.skipped.length;
+      errors += result.errors.length;
+      store.setProgress({
+        done: index + 1,
+        total: paths.length,
+        imported,
+        skipped,
+        errors,
+      });
+      await requestGridReload();
+    }
+
+    store.finish({ imported, skipped, errors });
+  }, [folderIdRef, requestGridReload]);
+
+  const handleImport = useCallback(async () => {
+    try {
+      const selected = await open({
+        multiple: true,
+        filters: [{
+          name: 'Images',
+          extensions: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'tiff', 'svg', 'mp4', 'webm', 'mov', 'mkv', 'avi'],
+        }],
+      });
+      if (!selected) return;
+      const paths = Array.isArray(selected) ? selected : [selected];
+      await importPaths(paths);
+    } catch (err) {
+      useManualImportStore.getState().fail();
+      notifyError(err, 'Import Failed');
+    }
+  }, [importPaths]);
+
+  const handleImportFolderRequest = useCallback(async () => {
+    const selected = await open({
+      properties: ['openDirectory'],
+      message: 'Select a folder to import',
+    });
+    const pickedPath = Array.isArray(selected) ? selected[0] : selected;
+    if (!pickedPath) return;
+    setFolderImportDialog({
+      path: pickedPath,
+      preserveStructure: true,
+    });
+  }, []);
+
+  const handleConfirmImportFolder = useCallback(async () => {
+    const pendingImport = folderImportDialog;
+    if (!pendingImport) return;
+    setFolderImportDialog(null);
+    try {
+      const store = useManualImportStore.getState();
+      store.startBackend('Adding folder');
+      const result = await api.import.folder(
+        pendingImport.path,
+        pendingImport.preserveStructure,
+        folderIdRef.current ?? null,
+      );
+      await requestGridReload();
+      store.finish({
+        imported: result.imported.length,
+        skipped: result.skipped.length,
+        errors: result.errors.length,
+      });
+    } catch (err) {
+      useManualImportStore.getState().fail();
+      notifyError(err, 'Import Folder Failed');
+    }
+  }, [folderIdRef, folderImportDialog, requestGridReload]);
+
+  useEffect(() => {
+    if (importRequestToken === importHandledToken) return;
+    markImportHandled(importRequestToken);
+    if (importRequestKind === 'folder') {
+      void handleImportFolderRequest();
+      return;
+    }
+    void handleImport();
+  }, [
+    handleImport,
+    handleImportFolderRequest,
+    importHandledToken,
+    importRequestKind,
+    importRequestToken,
+    markImportHandled,
+  ]);
+
+  useEffect(() => {
+    const webview = getCurrentWebview();
+    const promise = webview.onDragDropEvent(async (event) => {
+      const payload = event.payload as DragDropPayload;
+      if (payload.type === 'enter') {
+        setDragOver(!imageDrag.getPendingNativeDragHashes());
+        return;
+      }
+      if (payload.type === 'leave') {
+        setDragOver(false);
+        return;
+      }
+      if (payload.type !== 'drop') return;
+
+      setDragOver(false);
+      const pendingHashes = imageDrag.getPendingNativeDragHashes();
+      imageDrag.clearNativeDragSession();
+      if (pendingHashes) return;
+
+      try {
+        await importPaths(payload.paths);
+      } catch (err) {
+        useManualImportStore.getState().fail();
+        notifyError(err, 'Import Failed');
+      }
+    });
+    return () => {
+      promise.then((unlisten) => unlisten());
+    };
+  }, [importPaths, setDragOver]);
+
+  return {
+    folderImportDialog,
+    setFolderImportDialog,
+    handleImport,
+    handleImportFolderRequest,
+    handleConfirmImportFolder,
+  };
+}

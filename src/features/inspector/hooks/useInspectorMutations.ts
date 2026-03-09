@@ -1,17 +1,17 @@
 import { useCallback } from 'react';
 import { api } from '#desktop/api';
 import { registerUndoAction } from '../../../shared/controllers/undoRedoController';
-import { useCacheStore } from '../../../state/cacheStore';
+import { useGridMetadataStore } from '../../../state/gridMetadataStore';
 import {
   getMetadata,
   invalidateMetadata,
   type SelectionQuerySpec,
 } from '#features/grid/data';
-import type { MasonryImageItem } from '#features/grid/types';
+import type { MediaItem } from '#features/grid/types';
 import type { InspectorFetchState } from './useInspectorFetch';
 
 export function useInspectorMutations(
-  selectedImages: MasonryImageItem[],
+  selectedImages: MediaItem[],
   selectionSummarySpec: SelectionQuerySpec | null,
   fetch: InspectorFetchState,
 ) {
@@ -199,20 +199,20 @@ export function useInspectorMutations(
             rating: (await getMetadata(hash)).file.rating ?? null,
           })),
         );
-        await Promise.all(hashes.map((hash) => api.file.updateRating(hash, rating)));
+        await Promise.all(hashes.map((hash) => api.files.updateRating(hash, rating)));
         registerUndoAction({
           label: `Update rating (${hashes.length} image${hashes.length === 1 ? '' : 's'})`,
           undo: async () => {
             await Promise.all(
               previousRatings.map(({ hash, rating: previousRating }) =>
-                api.file.updateRating(hash, previousRating),
+                api.files.updateRating(hash, previousRating),
               ),
             );
             refreshMetadata();
           },
           redo: async () => {
             await Promise.all(
-              hashes.map((hash) => api.file.updateRating(hash, normalizedRating)),
+              hashes.map((hash) => api.files.updateRating(hash, normalizedRating)),
             );
             refreshMetadata();
           },
@@ -258,19 +258,19 @@ export function useInspectorMutations(
         );
         await Promise.all(hashes.map((hash) => {
           invalidateMetadata(hash);
-          return api.file.setSourceUrls(hash, urls);
+          return api.files.setSourceUrls(hash, urls);
         }));
         registerUndoAction({
           label: `Update source URLs (${hashes.length} image${hashes.length === 1 ? '' : 's'})`,
           undo: async () => {
             await Promise.all(
-              previousUrls.map(({ hash, urls: prevUrls }) => api.file.setSourceUrls(hash, prevUrls)),
+              previousUrls.map(({ hash, urls: prevUrls }) => api.files.setSourceUrls(hash, prevUrls)),
             );
             refreshMetadata();
           },
           redo: async () => {
             await Promise.all(
-              hashes.map((hash) => api.file.setSourceUrls(hash, urls)),
+              hashes.map((hash) => api.files.setSourceUrls(hash, urls)),
             );
             refreshMetadata();
           },
@@ -304,7 +304,7 @@ export function useInspectorMutations(
             .catch((e) => console.error('Failed to save notes:', e));
         } else {
           if (selectedImages.length === 0) return;
-          Promise.all(selectedImages.map((img) => api.file.setNotes(img.hash, notesObj)))
+          Promise.all(selectedImages.map((img) => api.files.setNotes(img.hash, notesObj)))
             .catch((e) => console.error('Failed to save notes:', e));
         }
       }, 500);
@@ -374,9 +374,9 @@ export function useInspectorMutations(
         },
       });
       setFileFolders((prev) => prev.filter((f) => f.folder_id !== folderId));
-      const activeScope = useCacheStore.getState().activeGridScope;
+      const activeScope = useGridMetadataStore.getState().activeGridScope;
       if (activeScope === `folder:${folderId}`) {
-        useCacheStore.getState().enqueueGridRemoval(hash);
+        useGridMetadataStore.getState().enqueueGridRemoval(hash);
       }
     },
     [selectedImages, selectedCollection, setFileFolders],
@@ -387,7 +387,7 @@ export function useInspectorMutations(
       if (selectionSummarySpec || selectedCollection || selectedImages.length !== 1) return;
       const hash = selectedImages[0].hash;
 
-      await api.file.reanalyzeColors(hash);
+      await api.files.reanalyzeColors(hash);
       invalidateMetadata(hash);
 
       const metadata = await getMetadata(hash);
@@ -395,7 +395,7 @@ export function useInspectorMutations(
       setFileTags(metadata.tags);
       setSourceUrls(metadata.file.source_urls ?? []);
       setNotes(metadata.file.notes?.description ?? '');
-      useCacheStore.getState().invalidateHash(hash);
+      useGridMetadataStore.getState().invalidateHash(hash);
     },
     [selectedImages, selectedCollection, selectionSummarySpec, setFileMetadata, setFileTags, setSourceUrls, setNotes],
   );

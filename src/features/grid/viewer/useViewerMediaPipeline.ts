@@ -5,13 +5,13 @@ import { useImagePreloader, queueImageDecode, isImagePreloaded } from '../useIma
 import { useImageLoadState } from '../useImageLoadState';
 import { useZoomCache } from '../useZoomCache';
 import type { ImageSize, ZoomState } from '../useImageZoom';
-import type { MasonryImageItem } from '../shared';
+import type { MediaItem } from '../shared';
 import { logBestEffortError } from '../../../shared/lib/asyncOps';
 import { buildNeighborDecodePlan } from './preloadPlan';
 
 export interface ViewerMediaPipelineInput {
-  currentImage: MasonryImageItem | null;
-  images: Array<Pick<MasonryImageItem, 'hash' | 'mime'>>;
+  currentImage: MediaItem | null;
+  images: Array<Pick<MediaItem, 'hash' | 'mime'>>;
   currentIndex: number;
   imageUrl: string;
   isVideo: boolean;

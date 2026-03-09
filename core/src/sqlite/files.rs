@@ -29,7 +29,6 @@ pub struct FileMetadataSlim {
     pub size: i64,
     pub status: u8,
     pub rating: Option<i64>,
-    pub blurhash: Option<String>,
     pub imported_at: String,
     pub dominant_color_hex: Option<String>,
     pub duration_ms: Option<i64>,
@@ -54,7 +53,6 @@ pub struct FileRecord {
     pub duration_ms: Option<i64>,
     pub num_frames: Option<i64>,
     pub has_audio: bool,
-    pub blurhash: Option<String>,
     pub status: i64,
     pub rating: Option<i64>,
     pub view_count: i64,
@@ -76,7 +74,6 @@ pub struct NewFile {
     pub duration_ms: Option<i64>,
     pub num_frames: Option<i64>,
     pub has_audio: bool,
-    pub blurhash: Option<String>,
     pub status: i64,
     pub imported_at: String,
     pub notes: Option<String>,
@@ -110,9 +107,9 @@ pub fn insert_file(conn: &Connection, f: &NewFile) -> rusqlite::Result<i64> {
 
     conn.execute(
         "INSERT INTO file (file_id, hash, name, size, mime, width, height, duration_ms, num_frames,
-         has_audio, blurhash, status, imported_at, notes, source_urls_json,
+         has_audio, status, imported_at, notes, source_urls_json,
          dominant_color_hex, dominant_palette_blob)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
         params![
             file_id,
             f.hash,
@@ -124,7 +121,6 @@ pub fn insert_file(conn: &Connection, f: &NewFile) -> rusqlite::Result<i64> {
             f.duration_ms,
             f.num_frames,
             f.has_audio as i64,
-            f.blurhash,
             f.status,
             f.imported_at,
             f.notes,
@@ -157,7 +153,7 @@ pub fn insert_file(conn: &Connection, f: &NewFile) -> rusqlite::Result<i64> {
 pub fn get_file_by_hash(conn: &Connection, hash: &str) -> rusqlite::Result<Option<FileRecord>> {
     conn.query_row(
         "SELECT file_id, hash, name, size, mime, width, height, duration_ms, num_frames,
-                has_audio, blurhash, status, rating, view_count, phash, imported_at,
+                has_audio, status, rating, view_count, phash, imported_at,
                 notes, source_urls_json, dominant_color_hex
          FROM file WHERE hash = ?1",
         [hash],
@@ -169,7 +165,7 @@ pub fn get_file_by_hash(conn: &Connection, hash: &str) -> rusqlite::Result<Optio
 pub fn get_file_by_id(conn: &Connection, file_id: i64) -> rusqlite::Result<Option<FileRecord>> {
     conn.query_row(
         "SELECT file_id, hash, name, size, mime, width, height, duration_ms, num_frames,
-                has_audio, blurhash, status, rating, view_count, phash, imported_at,
+                has_audio, status, rating, view_count, phash, imported_at,
                 notes, source_urls_json, dominant_color_hex
          FROM file WHERE file_id = ?1",
         [file_id],
@@ -258,18 +254,6 @@ pub fn set_phash(conn: &Connection, file_id: i64, phash: &str) -> rusqlite::Resu
     conn.execute(
         "UPDATE file SET phash = ?1 WHERE file_id = ?2",
         params![phash, file_id],
-    )?;
-    Ok(())
-}
-
-pub fn set_blurhash(
-    conn: &Connection,
-    file_id: i64,
-    blurhash: Option<&str>,
-) -> rusqlite::Result<()> {
-    conn.execute(
-        "UPDATE file SET blurhash = ?1 WHERE file_id = ?2",
-        params![blurhash, file_id],
     )?;
     Ok(())
 }
@@ -508,10 +492,6 @@ const ENTITY_SLIM_SELECT: &str =
          ELSE COALESCE(f.rating, me.rating)
      END AS rating,
      CASE
-         WHEN me.kind = 'collection' THEN cover_f.blurhash
-         ELSE COALESCE(f.blurhash, cover_f.blurhash)
-     END AS blurhash,
-     CASE
          WHEN me.kind = 'collection' THEN COALESCE(me.created_at, '')
          ELSE COALESCE(f.imported_at, me.created_at, '')
      END AS imported_at,
@@ -551,14 +531,13 @@ fn row_to_entity_slim(row: &rusqlite::Row) -> rusqlite::Result<FileMetadataSlim>
         size: row.get(8)?,
         status: row.get::<_, i64>(9)? as u8,
         rating: row.get(10)?,
-        blurhash: row.get(11)?,
-        imported_at: row.get(12)?,
-        dominant_color_hex: row.get(13)?,
-        duration_ms: row.get(14)?,
-        num_frames: row.get(15)?,
-        has_audio: row.get::<_, i64>(16)? != 0,
-        view_count: row.get(17)?,
-        file_id: row.get(18)?,
+        imported_at: row.get(11)?,
+        dominant_color_hex: row.get(12)?,
+        duration_ms: row.get(13)?,
+        num_frames: row.get(14)?,
+        has_audio: row.get::<_, i64>(15)? != 0,
+        view_count: row.get(16)?,
+        file_id: row.get(17)?,
         position_rank: None,
     })
 }
@@ -576,15 +555,14 @@ fn row_to_file_record(row: &rusqlite::Row) -> rusqlite::Result<FileRecord> {
         duration_ms: row.get(7)?,
         num_frames: row.get(8)?,
         has_audio: row.get::<_, i64>(9)? != 0,
-        blurhash: row.get(10)?,
-        status: row.get(11)?,
-        rating: row.get(12)?,
-        view_count: row.get(13)?,
-        phash: row.get(14)?,
-        imported_at: row.get(15)?,
-        notes: row.get(16)?,
-        source_urls_json: row.get(17)?,
-        dominant_color_hex: row.get(18)?,
+        status: row.get(10)?,
+        rating: row.get(11)?,
+        view_count: row.get(12)?,
+        phash: row.get(13)?,
+        imported_at: row.get(14)?,
+        notes: row.get(15)?,
+        source_urls_json: row.get(16)?,
+        dominant_color_hex: row.get(17)?,
     })
 }
 
@@ -700,7 +678,7 @@ pub fn batch_get_by_hashes(
     let placeholders: Vec<String> = (1..=hashes.len()).map(|i| format!("?{i}")).collect();
     let sql = format!(
         "SELECT file_id, hash, name, size, mime, width, height, duration_ms, num_frames,
-                has_audio, blurhash, status, rating, view_count, phash, imported_at,
+                has_audio, status, rating, view_count, phash, imported_at,
                 notes, source_urls_json, dominant_color_hex
          FROM file WHERE hash IN ({})",
         placeholders.join(",")
@@ -724,15 +702,14 @@ pub fn batch_get_by_hashes(
             duration_ms: row.get(7)?,
             num_frames: row.get(8)?,
             has_audio: row.get::<_, i64>(9)? != 0,
-            blurhash: row.get(10)?,
-            status: row.get(11)?,
-            rating: row.get(12)?,
-            view_count: row.get(13)?,
-            phash: row.get(14)?,
-            imported_at: row.get(15)?,
-            notes: row.get(16)?,
-            source_urls_json: row.get(17)?,
-            dominant_color_hex: row.get(18)?,
+            status: row.get(10)?,
+            rating: row.get(11)?,
+            view_count: row.get(12)?,
+            phash: row.get(13)?,
+            imported_at: row.get(14)?,
+            notes: row.get(15)?,
+            source_urls_json: row.get(16)?,
+            dominant_color_hex: row.get(17)?,
         })
     })?;
 
@@ -917,7 +894,7 @@ pub fn list_files_slim_by_folder_rank(
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt.query_map(params_refs.as_slice(), |row| {
         let mut item = row_to_entity_slim(row)?;
-        item.position_rank = row.get(19)?; // position_rank after 19 entity_slim columns
+        item.position_rank = row.get(18)?; // position_rank after 18 entity_slim columns
         Ok(item)
     })?;
 
@@ -940,7 +917,7 @@ pub fn list_files_slim_by_collection_rank(
     populate_grid_filter(conn, file_ids)?;
 
     let mut sql = String::from(
-        "SELECT f.hash, f.name, f.mime, f.width, f.height, f.size, f.status, f.rating, f.blurhash,
+        "SELECT f.hash, f.name, f.mime, f.width, f.height, f.size, f.status, f.rating,
                 f.imported_at, f.dominant_color_hex, f.duration_ms, f.num_frames, f.has_audio, f.view_count,
                 f.file_id, ef.entity_id, COALESCE(me.collection_ordinal, 0)
          FROM file f
@@ -984,8 +961,8 @@ pub fn list_files_slim_by_collection_rank(
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt.query_map(params_refs.as_slice(), |row| {
         Ok(FileMetadataSlim {
-            file_id: row.get(15)?,
-            entity_id: row.get(16)?,
+            file_id: row.get(14)?,
+            entity_id: row.get(15)?,
             is_collection: false,
             collection_item_count: None,
             hash: row.get(0)?,
@@ -996,14 +973,13 @@ pub fn list_files_slim_by_collection_rank(
             size: row.get(5)?,
             status: row.get::<_, i64>(6)? as u8,
             rating: row.get(7)?,
-            blurhash: row.get(8)?,
-            imported_at: row.get(9)?,
-            dominant_color_hex: row.get(10)?,
-            duration_ms: row.get(11)?,
-            num_frames: row.get(12)?,
-            has_audio: row.get::<_, i64>(13)? != 0,
-            view_count: row.get(14)?,
-            position_rank: row.get(17)?,
+            imported_at: row.get(8)?,
+            dominant_color_hex: row.get(9)?,
+            duration_ms: row.get(10)?,
+            num_frames: row.get(11)?,
+            has_audio: row.get::<_, i64>(12)? != 0,
+            view_count: row.get(13)?,
+            position_rank: row.get(16)?,
         })
     })?;
 
@@ -1358,7 +1334,6 @@ impl SqliteDatabase {
                         size: r.size,
                         status: r.status as u8,
                         rating: r.rating,
-                        blurhash: r.blurhash,
                         imported_at: r.imported_at,
                         dominant_color_hex: r.dominant_color_hex,
                         duration_ms: r.duration_ms,
@@ -1413,13 +1388,6 @@ impl SqliteDatabase {
             .await
     }
 
-    pub async fn set_blurhash(&self, hash: &str, blurhash: Option<&str>) -> Result<(), String> {
-        let file_id = self.resolve_hash(hash).await?;
-        let b = blurhash.map(|s| s.to_string());
-        self.with_conn(move |conn| set_blurhash(conn, file_id, b.as_deref()))
-            .await
-    }
-
     pub async fn set_file_colors(
         &self,
         hash: &str,
@@ -1464,7 +1432,6 @@ mod tests {
                 duration_ms: None,
                 num_frames: None,
                 has_audio: false,
-                blurhash: None,
                 status: 0,
                 imported_at: now,
                 notes: None,

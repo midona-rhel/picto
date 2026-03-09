@@ -167,7 +167,7 @@ impl FolderController {
         Ok(())
     }
 
-    // PBI-055: Batch reorder — single transaction, single invalidation.
+    // Batch reorder — single transaction, single invalidation.
     pub async fn reorder_folder_items(
         db: &SqliteDatabase,
         folder_id: i64,

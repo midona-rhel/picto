@@ -16,15 +16,10 @@ interface NamespaceTagChipProps {
   size?: 'sm' | 'md';
 }
 
-/** Extract namespace from "namespace:subtag" format */
-export function extractNamespace(tag: string): string {
-  return extractNamespaceFromTag(tag);
-}
-
 export function NamespaceTagChip({ tag, namespace, onRemove, onLabelClick, icon, colorRgb, size = 'md' }: NamespaceTagChipProps) {
   const { colorScheme } = useMantineColorScheme();
   const isDark = colorScheme === 'dark';
-  const ns = namespace ?? extractNamespace(tag);
+  const ns = namespace ?? extractNamespaceFromTag(tag);
   const chipStyle = colorRgb
     ? chipStyleFromRgb(colorRgb, isDark)
     : namespaceChipStyle(ns, isDark);

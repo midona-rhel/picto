@@ -19,6 +19,7 @@ use tracing::{info, warn};
 use crate::blob_store::BlobStore;
 use crate::credential_store;
 use crate::subscriptions::gallery_dl_runner::{self, FailureKind, GalleryDlRunner, ParsedMetadata, RunOptions};
+use crate::subscriptions::policy::resolve_query_name;
 use crate::import::pipeline::{ImportOptions, ImportPipeline};
 use crate::settings::store::AppSettings;
 use crate::sqlite::SqliteDatabase;
@@ -1140,22 +1141,6 @@ impl<'a> SubscriptionSyncEngine<'a> {
             });
         }
     }
-}
-
-fn resolve_query_name(query_id: i64, query_text: &str, display_name: Option<&str>) -> String {
-    if let Some(name) = display_name.map(str::trim).filter(|name| !name.is_empty()) {
-        // Legacy migration guard: numeric-only display names ("1", "2", ...)
-        // are treated as placeholders when a real query text exists.
-        let is_numeric_placeholder = name.chars().all(|c| c.is_ascii_digit());
-        if !is_numeric_placeholder || query_text.trim().is_empty() {
-            return name.to_string();
-        }
-    }
-    let trimmed = query_text.trim();
-    if !trimmed.is_empty() {
-        return trimmed.to_string();
-    }
-    format!("Query {query_id}")
 }
 
 fn effective_inbox_limit(_configured: u32) -> u32 {

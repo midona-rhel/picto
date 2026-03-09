@@ -221,7 +221,7 @@ pub fn search_tags(conn: &Connection, query: &str, limit: i64) -> rusqlite::Resu
     rows.collect()
 }
 
-// PBI-038: Paged tag query — supports offset for incremental loading.
+// Paged tag query — supports offset for incremental loading.
 pub fn search_tags_paged(
     conn: &Connection,
     query: &str,
@@ -785,7 +785,7 @@ impl SqliteDatabase {
             .await
     }
 
-    // PBI-038: Paged tag search.
+    // Paged tag search.
     pub async fn search_tags_paged(
         &self,
         query: &str,

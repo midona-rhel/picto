@@ -17,7 +17,7 @@ interface SmartFolderSummary {
 
 interface DomainState {
   // Sidebar counts
-  allImagesCount: number;
+  allActiveCount: number;
   inboxCount: number;
   uncategorizedCount: number;
   trashCount: number;
@@ -45,7 +45,7 @@ interface DomainState {
   // Actions
   fetchSidebarTree: () => Promise<void>;
   invalidate: () => void;
-  applySidebarCounts: (counts: { all_images: number; inbox: number; trash: number }) => void;
+  applySidebarCounts: (counts: { all_active: number; inbox: number; trash: number }) => void;
   incrementInboxCount: (delta?: number) => void;
   subscriptionRunStarted: () => void;
   subscriptionRunFinished: () => void;
@@ -85,7 +85,7 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number, fallback: T): Pr
 }
 
 export const useDomainStore = create<DomainState>((set, get) => ({
-  allImagesCount: 0,
+  allActiveCount: 0,
   inboxCount: 0,
   uncategorizedCount: 0,
   trashCount: 0,
@@ -184,7 +184,7 @@ export const useDomainStore = create<DomainState>((set, get) => ({
       const folderNodes = nodes.filter((n) => n.kind === 'folder');
 
       set({
-        allImagesCount: allNode?.count ?? 0,
+        allActiveCount: allNode?.count ?? 0,
         inboxCount,
         uncategorizedCount,
         trashCount: trashNode?.count ?? 0,
@@ -227,7 +227,7 @@ export const useDomainStore = create<DomainState>((set, get) => ({
   applySidebarCounts: (counts) => {
     const { liveInboxImportRuns, liveInboxFloor } = get();
     set({
-      allImagesCount: counts.all_images,
+      allActiveCount: counts.all_active,
       inboxCount: counts.inbox,
       trashCount: counts.trash,
       liveInboxFloor: liveInboxImportRuns > 0

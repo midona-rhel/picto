@@ -39,14 +39,14 @@ Picto is an Electron desktop app with:
 
 ### Frontend (`src/`)
 
-1. `stores/domainStore.ts`:
+1. `state/domainStore.ts`:
    - sidebar counts/tree + smart-folder summaries
-2. `stores/cacheStore.ts`:
-   - grid cache/refresh state
-3. `stores/eventBridge.ts`:
-   - native event ingestion and invalidation fanout
-4. `components/image-grid/`:
-   - grid UI, selection, query broker, live insert ordering
+2. `state/gridMetadataStore.ts`:
+   - grid metadata cache, refresh triggers, optimistic removals
+3. `state/runtimeSyncStore.ts`:
+   - runtime task state + resource invalidation fanout
+4. `features/grid/`:
+   - grid UI, selection, query broker, MediaView, InspectorPanel
 
 ## Data Model Conventions
 

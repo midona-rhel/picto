@@ -43,7 +43,7 @@ impl TagController {
             .collect())
     }
 
-    // PBI-038: Paged tag search with counts for picker.
+    // Paged tag search with counts for picker.
     pub async fn search_tags_paged(
         db: &SqliteDatabase,
         query: String,

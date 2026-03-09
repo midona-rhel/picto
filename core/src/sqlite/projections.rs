@@ -81,7 +81,7 @@ fn build_projections_batch_chunk(
 
     let sql = format!(
         "SELECT f.file_id, f.hash, f.name, f.mime, f.width, f.height, f.size, f.status,
-                f.rating, f.blurhash, f.imported_at, f.dominant_color_hex,
+                f.rating, f.imported_at, f.dominant_color_hex,
                 f.duration_ms, f.num_frames, f.has_audio, f.view_count,
                 t.tag_id, t.namespace, t.subtag, td.display_ns, td.display_st, etr.source
          FROM file f
@@ -144,27 +144,26 @@ fn build_projections_batch_chunk(
                 size: row.get(6)?,
                 status: row.get::<_, i64>(7)? as u8,
                 rating: row.get(8)?,
-                blurhash: row.get(9)?,
-                imported_at: row.get(10)?,
-                dominant_color_hex: row.get(11)?,
-                duration_ms: row.get(12)?,
-                num_frames: row.get(13)?,
-                has_audio: row.get::<_, i64>(14)? != 0,
-                view_count: row.get(15)?,
+                imported_at: row.get(9)?,
+                dominant_color_hex: row.get(10)?,
+                duration_ms: row.get(11)?,
+                num_frames: row.get(12)?,
+                has_audio: row.get::<_, i64>(13)? != 0,
+                view_count: row.get(14)?,
                 position_rank: None,
             });
         }
 
         // Collect tag if present (LEFT JOIN may produce NULL tag_id)
-        let tag_id: Option<i64> = row.get(16)?;
+        let tag_id: Option<i64> = row.get(15)?;
         if let Some(tid) = tag_id {
             current_tags.push(FileTagInfo {
                 tag_id: tid,
-                namespace: row.get(17)?,
-                subtag: row.get(18)?,
-                display_ns: row.get(19)?,
-                display_st: row.get(20)?,
-                source: row.get(21)?,
+                namespace: row.get(16)?,
+                subtag: row.get(17)?,
+                display_ns: row.get(18)?,
+                display_st: row.get(19)?,
+                source: row.get(20)?,
             });
         }
     }
@@ -221,7 +220,7 @@ impl SqliteDatabase {
                 .join(", ");
             let sql = format!(
                 "SELECT f.file_id, f.hash, f.name, f.size, f.mime, f.width, f.height, f.duration_ms, f.num_frames,
-                        f.has_audio, f.blurhash, f.status, f.rating, f.view_count, f.phash, f.imported_at,
+                        f.has_audio, f.status, f.rating, f.view_count, f.phash, f.imported_at,
                         f.notes, f.source_urls_json, f.dominant_color_hex,
                         p.epoch, p.resolved_json
                  FROM file f
@@ -243,18 +242,17 @@ impl SqliteDatabase {
                     duration_ms: row.get(7)?,
                     num_frames: row.get(8)?,
                     has_audio: row.get::<_, i64>(9)? != 0,
-                    blurhash: row.get(10)?,
-                    status: row.get(11)?,
-                    rating: row.get(12)?,
-                    view_count: row.get(13)?,
-                    phash: row.get(14)?,
-                    imported_at: row.get(15)?,
-                    notes: row.get(16)?,
-                    source_urls_json: row.get(17)?,
-                    dominant_color_hex: row.get(18)?,
+                    status: row.get(10)?,
+                    rating: row.get(11)?,
+                    view_count: row.get(12)?,
+                    phash: row.get(13)?,
+                    imported_at: row.get(14)?,
+                    notes: row.get(15)?,
+                    source_urls_json: row.get(16)?,
+                    dominant_color_hex: row.get(17)?,
                 };
-                let proj_epoch: Option<i64> = row.get(19)?;
-                let proj_resolved_json: Option<String> = row.get(20)?;
+                let proj_epoch: Option<i64> = row.get(18)?;
+                let proj_resolved_json: Option<String> = row.get(19)?;
                 Ok((file, proj_epoch, proj_resolved_json))
             })?;
 
@@ -281,7 +279,7 @@ impl SqliteDatabase {
                                 continue;
                             }
                             Err(e) => {
-                                // PBI-012: Corruption detected — log, count, and queue rebuild.
+                                // Corruption detected — log, count, and queue rebuild.
                                 tracing::warn!(
                                     target: "picto::core::projections",
                                     "corrupt projection JSON for file_id={file_id}: {e} (first 200 chars: {:?})",
@@ -322,7 +320,6 @@ impl SqliteDatabase {
                         size: file.size,
                         status: file.status as u8,
                         rating: file.rating,
-                        blurhash: file.blurhash,
                         imported_at: file.imported_at,
                         dominant_color_hex: file.dominant_color_hex,
                         duration_ms: file.duration_ms,

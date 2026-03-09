@@ -217,7 +217,7 @@ export function DuplicateManager() {
             label: `Resolve duplicate (${action})`,
             undo: async () => {
               if (loserHash) {
-                await api.file.setStatus(loserHash, 'active');
+                await api.files.setStatus(loserHash, 'active');
               }
               // Re-scan to re-detect/open the pair state.
               await api.duplicates.scan();

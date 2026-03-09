@@ -24,7 +24,6 @@ CREATE TABLE IF NOT EXISTS file (
     duration_ms     INTEGER,
     num_frames      INTEGER,
     has_audio       INTEGER NOT NULL DEFAULT 0,
-    blurhash        TEXT,
     status          INTEGER NOT NULL DEFAULT 0,
     rating          INTEGER,
     view_count      INTEGER NOT NULL DEFAULT 0,

@@ -104,7 +104,6 @@ pub async fn get_files_metadata_batch(
                         source_urls,
                         imported_at: slim.imported_at,
                         has_thumbnail,
-                        blurhash: slim.blurhash,
                         dominant_color_hex: slim.dominant_color_hex,
                         dominant_colors,
                         notes,

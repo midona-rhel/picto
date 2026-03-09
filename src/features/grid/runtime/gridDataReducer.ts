@@ -1,6 +1,17 @@
 import type { GridRuntimeAction } from './gridRuntimeReducer';
 import type { GridDataState } from './gridDataState';
 
+function uniqueByHash<T extends { hash: string }>(items: T[]): T[] {
+  const seen = new Set<string>();
+  const deduped: T[] = [];
+  for (const item of items) {
+    if (seen.has(item.hash)) continue;
+    seen.add(item.hash);
+    deduped.push(item);
+  }
+  return deduped;
+}
+
 function isDataAction(action: GridRuntimeAction): boolean {
   return action.type === 'SET_IMAGES'
     || action.type === 'APPEND_IMAGES'
@@ -18,10 +29,10 @@ export function gridDataReducer(state: GridDataState, action: GridRuntimeAction)
 
   switch (action.type) {
     case 'SET_IMAGES':
-      return { ...state, images: action.images };
+      return { ...state, images: uniqueByHash(action.images) };
 
     case 'APPEND_IMAGES': {
-      const merged = [...state.images, ...action.images];
+      const merged = uniqueByHash([...state.images, ...action.images]);
       return {
         ...state,
         images: merged,

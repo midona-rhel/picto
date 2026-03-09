@@ -1,25 +1,25 @@
 import {
-  computeLayout,
+  BUCKET_SIZE,
   buildBucketIndex,
   buildBucketIndexEntries,
   bucketIndexEntriesToMap,
+  computeLayout,
+  safeAspectRatio,
+  type BucketIndexEntry,
   type LayoutItem,
   type LayoutResult,
-  type BucketIndexEntry,
-  BUCKET_SIZE,
-  safeAspectRatio,
 } from './layoutMath';
 
 export {
-  computeLayout,
+  BUCKET_SIZE,
   buildBucketIndex,
   buildBucketIndexEntries,
   bucketIndexEntriesToMap,
+  computeLayout,
+  safeAspectRatio,
+  type BucketIndexEntry,
   type LayoutItem,
   type LayoutResult,
-  type BucketIndexEntry,
-  BUCKET_SIZE,
-  safeAspectRatio,
 };
 
 export const TEXT_NAME_ROW_H = 20;

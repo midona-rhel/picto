@@ -112,12 +112,6 @@
   background-color: var(--color-black-10);
 }
 
-.navItemIcon {
-  width: 20px;
-  height: 20px;
-  flex-shrink: 0;
-}
-
 .separator {
   height: 1px;
   margin: 2px 0;

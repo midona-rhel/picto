@@ -140,8 +140,6 @@ pub async fn dispatch(command: &str, args_json: &str) -> Result<String, String> 
         "regenerate_thumbnail" => call!(typed::media_io::regenerate_thumbnail, &state, args),
         "regenerate_thumbnails_batch" => call!(typed::media_io::regenerate_thumbnails_batch, &state, args),
         "reanalyze_file_colors" => call!(typed::media_io::reanalyze_file_colors, &state, args),
-        "backfill_missing_blurhashes" => call!(typed::media_io::backfill_missing_blurhashes, &state, args),
-
         // ── Media Lifecycle ───────────────────────────────────
         "import_files" => call!(typed::media_lifecycle::import_files, &state, args),
         "import_folder" => call!(typed::media_lifecycle::import_folder, &state, args),

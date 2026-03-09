@@ -1,8 +1,8 @@
 import { createContext, useContext, type ReactNode } from 'react';
 import type { AppSettings } from '../../../state/settingsStore';
 import type { SmartFolderPredicate } from '../../smart-folders/components/types';
-import type { GridViewMode, DetailViewControls, DetailViewState } from '#features/grid/components';
-import type { MasonryImageItem, SelectionQuerySpec } from '#features/grid/types';
+import type { GridViewMode, MediaViewControls, MediaViewState } from '#features/grid/components';
+import type { MediaItem, SelectionQuerySpec } from '#features/grid/types';
 import type { ViewerHostController } from '#features/viewer/hooks/useViewerHost';
 type MainViewNavigationState = {
   currentView: string;
@@ -44,9 +44,9 @@ type MainViewGridActions = {
 };
 
 type MainViewSelectionState = {
-  onSelectedImagesChange: (images: MasonryImageItem[]) => void;
+  onSelectedImagesChange: (images: MediaItem[]) => void;
   onSelectionSummarySpecChange: (spec: SelectionQuerySpec | null) => void;
-  onDetailViewStateChange: (state: DetailViewState | null, controls: DetailViewControls | null) => void;
+  onMediaViewStateChange: (state: MediaViewState | null, controls: MediaViewControls | null) => void;
 };
 
 type MainViewSubscriptionsState = {

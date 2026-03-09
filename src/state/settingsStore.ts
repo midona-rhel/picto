@@ -14,7 +14,7 @@ export type Theme = 'auto' | 'dark' | 'blue' | 'purple' | 'gray' | 'light' | 'li
 export interface AppSettings {
   gridTargetSize: number;
   gridViewMode: 'waterfall' | 'justified' | 'grid';
-  propertiesPanelWidth: number;
+  inspectorWidth: number;
   colorScheme: 'dark' | 'light';
   theme: Theme;
   gridSortField: 'imported_at' | 'size' | 'rating' | 'view_count';
@@ -34,7 +34,7 @@ export interface AppSettings {
   videoVolume: number;
   videoPlaybackRate: number;
   grayscalePreview: boolean;
-  showMinimap: boolean;
+  showNavigator: boolean;
 }
 
 /** Derive Mantine color scheme from a Theme value. */
@@ -47,7 +47,7 @@ export function themeToColorScheme(theme: Theme): 'auto' | 'dark' | 'light' {
 const DEFAULTS: AppSettings = {
   gridTargetSize: 250,
   gridViewMode: 'waterfall',
-  propertiesPanelWidth: 250,
+  inspectorWidth: 250,
   colorScheme: 'dark',
   theme: 'dark',
   gridSortField: 'imported_at',
@@ -67,7 +67,7 @@ const DEFAULTS: AppSettings = {
   videoVolume: 0.9,
   videoPlaybackRate: 1.0,
   grayscalePreview: false,
-  showMinimap: true,
+  showNavigator: true,
 };
 
 interface SettingsState {

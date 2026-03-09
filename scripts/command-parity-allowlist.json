@@ -3,7 +3,6 @@
   "rust_only": [
     "approve",
     "reject",
-    "get_all_detected_duplicates",
     "get_file_notes",
     "repair_projections",
     "resolve_duplicate_pair",

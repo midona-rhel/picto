@@ -87,8 +87,6 @@ pub struct EntityDetails {
     pub imported_at: String,
     pub has_thumbnail: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub blurhash: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub dominant_color_hex: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dominant_colors: Option<Vec<DominantColorDto>>,
@@ -123,7 +121,6 @@ impl From<FileRecord> for EntityDetails {
             source_urls,
             imported_at: f.imported_at,
             has_thumbnail,
-            blurhash: f.blurhash,
             dominant_color_hex: f.dominant_color_hex,
             dominant_colors: None,
             notes,

@@ -6,7 +6,7 @@ import { useSettingsStore, type AppSettings } from '../state/settingsStore';
 import { useDomainStore } from '../state/domainStore';
 import { CommandPalette, type CommandAction } from '#features/app/components';
 import { SHORTCUT_DEFS, formatKeysDisplay, getShortcut, matchesShortcutDef } from '../shared/lib/shortcuts';
-import { GridViewMode, ImageGridControls, FilterBar, ImagePropertiesPanel, DragGhost } from '#features/grid/components';
+import { GridViewMode, ImageGridControls, FilterBar, InspectorPanel, DragGhost } from '#features/grid/components';
 import { MainViewModelProvider, MainViewRouter, CreateSubscriptionGroupModal, WindowControls } from '#features/layout/components';
 import { Sidebar, SidebarMenuButton } from '#features/sidebar/components';
 import { ViewerHost } from '#features/viewer/components';
@@ -69,7 +69,7 @@ function App() {
   const { settings, updateSetting, loaded: settingsLoaded } = useSettingsStore();
 
   // --- Sidebar data ---
-  const { allImagesCount, inboxCount, uncategorizedCount, trashCount, smartFolderCounts, folderNodes } = useDomainStore();
+  const { allActiveCount, inboxCount, uncategorizedCount, trashCount, smartFolderCounts, folderNodes } = useDomainStore();
 
   // --- Bootstrap (init, theme, events, menu, hotkeys, titlebar drag) ---
   const { handleTitlebarMouseDown, displayedTitle, handleScopeTransitionMidpoint } =
@@ -79,7 +79,7 @@ function App() {
   const inspector = useInspectorState({
     showInspectorSetting: settings.showInspector,
     currentView,
-    propertiesPanelWidth: settings.propertiesPanelWidth,
+    inspectorWidthSetting: settings.inspectorWidth,
   });
   const viewer = useViewerHost();
 
@@ -91,7 +91,7 @@ function App() {
     activeSmartFolder,
     setActiveSmartFolder,
     filterTags,
-    allImagesCount,
+    allImagesCount: allActiveCount,
     activeStatusFilter,
     inboxCount,
     uncategorizedCount,
@@ -209,7 +209,7 @@ function App() {
 
     // System navigation targets
     const navTargets: { id: string; label: string; icon: React.ReactNode; go: () => void }[] = [
-      { id: 'go.allImages', label: 'All Images', icon: <IconPhoto size={16} />, go: () => navigateTo('images', null, null, null) },
+      { id: 'go.allActive', label: 'All Active', icon: <IconPhoto size={16} />, go: () => navigateTo('images', null, null, null) },
       { id: 'go.inbox', label: 'Inbox', icon: <IconInbox size={16} />, go: () => navigateTo('images', null, null, 'inbox') },
       { id: 'go.uncategorized', label: 'Uncategorized', icon: <IconFolderQuestion size={16} />, go: () => navigateTo('images', null, null, 'uncategorized') },
       { id: 'go.untagged', label: 'Untagged', icon: <IconTag size={16} />, go: () => navigateTo('images', null, null, 'untagged') },
@@ -248,7 +248,7 @@ function App() {
     }
 
     // Shortcut-based actions (skip nav ones we already added, and skip palette itself)
-    const skipIds = new Set(['nav.commandPalette', 'nav.goToFolder', 'nav.allImages', 'nav.inbox', 'nav.untagged', 'nav.trash', 'nav.recentViewed']);
+    const skipIds = new Set(['nav.commandPalette', 'nav.goToFolder', 'nav.allActive', 'nav.inbox', 'nav.untagged', 'nav.trash', 'nav.recentViewed']);
     for (const def of SHORTCUT_DEFS) {
       if (skipIds.has(def.id)) continue;
       actions.push({
@@ -345,7 +345,7 @@ function App() {
       selection: {
         onSelectedImagesChange: inspector.handleSelectedImagesChange,
         onSelectionSummarySpecChange: inspector.setSelectionSummarySpec,
-        onDetailViewStateChange: inspector.handleDetailViewStateChange,
+        onMediaViewStateChange: inspector.handleMediaViewStateChange,
       },
       subscriptions: {
         subscriptionRefreshToken,
@@ -385,7 +385,7 @@ function App() {
       handleGridScopeTransitionMidpoint,
       inspector.handleSelectedImagesChange,
       inspector.setSelectionSummarySpec,
-      inspector.handleDetailViewStateChange,
+      inspector.handleMediaViewStateChange,
       subscriptionRefreshToken,
       grid.setCreateSubscriptionGroupModalOpen,
       viewer,
@@ -448,8 +448,8 @@ function App() {
               onViewModeChange={handleGridViewModeChange}
               searchText={grid.searchText}
               onSearchTextChange={grid.setSearchText}
-              detailViewState={inspector.detailViewState}
-              detailViewControls={inspector.detailViewControls}
+              detailViewState={inspector.mediaViewState}
+              detailViewControls={inspector.mediaViewControls}
             />
           </div>
           {!isMac && !inspector.showInspector && <WindowControls />}
@@ -489,13 +489,13 @@ function App() {
         </div>
 
         {inspector.showInspector && (
-          <ImagePropertiesPanel
+          <InspectorPanel
             selectedImages={inspector.selectedImages}
             selectionSummarySpec={inspector.selectionSummarySpec}
             imageName={inspector.imageName}
             onImageNameChange={inspector.handleNameChange}
-            width={settings.propertiesPanelWidth}
-            onWidthChange={(w) => updateSetting('propertiesPanelWidth', w)}
+            width={settings.inspectorWidth}
+            onWidthChange={(w) => updateSetting('inspectorWidth', w)}
             onResizeDragChange={inspector.setInspectorResizeDragging}
             titlebarHeight={48}
             onTitlebarMouseDown={handleTitlebarMouseDown}

@@ -77,7 +77,7 @@ function createMainViewModel(overrides?: Partial<MainViewModel['navigation']>): 
     selection: {
       onSelectedImagesChange: () => {},
       onSelectionSummarySpecChange: () => {},
-      onDetailViewStateChange: () => {},
+      onMediaViewStateChange: () => {},
     },
     subscriptions: {
       subscriptionRefreshToken: 7,

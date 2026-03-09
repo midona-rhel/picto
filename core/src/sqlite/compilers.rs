@@ -159,7 +159,7 @@ pub async fn start_compiler_loop(
             || plan.rebuild_all
             || !plan.dirty_smart_folder_ids.is_empty();
 
-        // PBI-027: Determine which invalidations are needed from the plan,
+        // Determine which invalidations are needed from the plan,
         // so we don't emit sidebar refreshes for metadata-only batches.
         let sidebar_affected = plan.rebuild_sidebar
             || plan.rebuild_tag_graph
@@ -189,7 +189,7 @@ pub async fn start_compiler_loop(
             }
         };
 
-        // PBI-032: Only invalidate scope cache when membership-affecting bitmaps changed.
+        // Only invalidate scope cache when membership-affecting bitmaps changed.
         // Metadata-only batches don't alter scope ID sets.
         let scope_affected = plan.rebuild_status_bitmaps
             || plan.rebuild_all_smart_folders
@@ -769,7 +769,7 @@ mod tests {
         assert!(plan.rebuild_all);
     }
 
-    /// PBI-027: File insertion DOES trigger sidebar (status bitmaps + sidebar rebuild).
+    /// File insertion DOES trigger sidebar (status bitmaps + sidebar rebuild).
     #[test]
     fn file_insert_does_affect_sidebar() {
         let mut plan = CompilerPlan::default();

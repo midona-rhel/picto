@@ -11,7 +11,8 @@ use crate::rate_limiter::RateLimiter;
 use crate::runtime_contract::task::{RuntimeTask, TaskKind, TaskProgress, TaskStatus};
 use crate::settings::store::SettingsStore;
 use crate::sqlite::SqliteDatabase;
-use crate::subscriptions::controller::SubscriptionController;
+use crate::subscriptions::run_orchestrator::SubscriptionRunOrchestrator;
+use crate::subscriptions::runtime_tasks::publish_cancelling;
 use crate::types::{
     SubscriptionGroupInfo, RunningSubscriptions, SubTerminalStatuses, SubscriptionInfo, SubscriptionQueryInfo,
 };
@@ -19,7 +20,7 @@ use crate::types::{
 pub struct SubscriptionGroupController;
 
 impl SubscriptionGroupController {
-    // PBI-040: Bulk read — constant query count per flow instead of O(N) per subscription.
+    // Bulk read — constant query count per flow instead of O(N) per subscription.
     pub async fn get_groups(db: &SqliteDatabase) -> Result<Vec<SubscriptionGroupInfo>, String> {
         let start = std::time::Instant::now();
         let groups = db.list_groups().await?;
@@ -220,7 +221,7 @@ impl SubscriptionGroupController {
 
         let mut started = 0u32;
         let mut last_err = String::new();
-        // PBI-034: Track only the IDs we actually started, not all non-paused subs.
+        // Track only the IDs we actually started, not all non-paused subs.
         let mut started_sub_ids: Vec<String> = Vec::new();
 
         for sub in subs {
@@ -234,7 +235,7 @@ impl SubscriptionGroupController {
                     continue;
                 }
             }
-            match SubscriptionController::run_subscription(
+            match SubscriptionRunOrchestrator::run_subscription(
                 db,
                 blob_store,
                 rate_limiter,
@@ -298,7 +299,7 @@ impl SubscriptionGroupController {
             return Ok(());
         }
 
-        // PBI-034: Monitor only the subscriptions we actually started.
+        // Monitor only the subscriptions we actually started.
         let group_id_str = id.clone();
         let group_id_guard = id.clone();
         let running_subs_clone = running_subs.clone();
@@ -340,7 +341,7 @@ impl SubscriptionGroupController {
                     }
                 }
 
-                // PBI-002: Aggregate terminal statuses from child subscriptions.
+                // Aggregate terminal statuses from child subscriptions.
                 let statuses = terminal_statuses_clone.lock().await;
                 let has_failed = started_sub_ids
                     .iter()
@@ -418,43 +419,11 @@ impl SubscriptionGroupController {
         }
         drop(map);
         for sub_id in cancelled_ids {
-            let progress = crate::subscriptions::sync_engine::SubscriptionProgressEvent {
-                subscription_id: sub_id.clone(),
-                subscription_name: names_by_id
-                    .get(&sub_id)
-                    .cloned()
-                    .unwrap_or_else(|| format!("Subscription {sub_id}")),
-                mode: "subscription".to_string(),
-                query_id: None,
-                query_name: None,
-                files_downloaded: 0,
-                files_skipped: 0,
-                pages_fetched: 0,
-                metadata_validated: 0,
-                metadata_invalid: 0,
-                last_metadata_error: None,
-                status_text: "Cancelling…".to_string(),
-                finished_status: None,
-                failure_kind: None,
-                error: None,
-            };
-            {
-                use crate::runtime_contract::task::TaskStatus;
-                let sub_name = progress.subscription_name.clone();
-                crate::runtime_state::upsert_task(
-                    crate::runtime_contract::task::RuntimeTask {
-                        task_id: format!("sub:{}", sub_id),
-                        kind: crate::runtime_contract::task::TaskKind::Subscription,
-                        status: TaskStatus::Cancelling,
-                        label: sub_name,
-                        parent_task_id: None,
-                        progress: None,
-                        detail: serde_json::to_value(&progress).ok(),
-                        started_at: chrono::Utc::now().to_rfc3339(),
-                        updated_at: chrono::Utc::now().to_rfc3339(),
-                    },
-                );
-            }
+            let sub_name = names_by_id
+                .get(&sub_id)
+                .cloned()
+                .unwrap_or_else(|| format!("Subscription {sub_id}"));
+            publish_cancelling(&sub_id, &sub_name);
         }
         Ok(())
     }

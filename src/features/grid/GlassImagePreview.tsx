@@ -1,7 +1,7 @@
 import { useMemo, memo } from 'react';
 import { Badge } from '@mantine/core';
 import { IconPhoto } from '@tabler/icons-react';
-import { MasonryImageItem } from './shared';
+import type { MediaItem } from './shared';
 import { getCachedMediaUrl } from './enhancedMediaCache';
 import previewStyles from './GlassImagePreview.module.css';
 import {
@@ -12,7 +12,7 @@ import {
 const CONTAINER_HEIGHT = 200;
 
 interface GlassImagePreviewProps {
-  images: MasonryImageItem[];
+  images: MediaItem[];
 }
 
 export const GlassImagePreview = memo(function GlassImagePreview({ images }: GlassImagePreviewProps) {

@@ -4,7 +4,7 @@ import { Sidebar } from '../Sidebar';
 import { imageDrag } from '../../../../shared/lib/imageDrag';
 import { useDomainStore } from '../../../../state/domainStore';
 import { useNavigationStore } from '../../../../state/navigationStore';
-import { useCacheStore } from '../../../../state/cacheStore';
+import { useGridMetadataStore } from '../../../../state/gridMetadataStore';
 
 const {
   setStatusSelectionMock,
@@ -68,7 +68,7 @@ describe('Sidebar drag-drop status targets', () => {
     tagsNamespaceSummaryMock.mockReset();
     gridGetPageSlimMock.mockReset();
     useDomainStore.setState({
-      allImagesCount: 100,
+      allActiveCount: 100,
       inboxCount: 20,
       uncategorizedCount: 12,
       trashCount: 5,
@@ -91,7 +91,7 @@ describe('Sidebar drag-drop status targets', () => {
       activeStatusFilter: null,
       filterTags: null,
     });
-    useCacheStore.setState({ gridRefreshSeq: 0, metadataCache: new Map() });
+    useGridMetadataStore.setState({ gridRefreshSeq: 0, metadataCache: new Map() });
     setStatusSelectionMock.mockResolvedValue(0);
     sidebarGetTreeMock.mockResolvedValue({ nodes: [], tree_epoch: 1, generated_at: new Date(0).toISOString() });
     tagsNamespaceSummaryMock.mockResolvedValue([]);
@@ -102,9 +102,9 @@ describe('Sidebar drag-drop status targets', () => {
     imageDrag.clearNativeDragSession();
   });
 
-  it('drops to All Images and restores active status', async () => {
+  it('drops to All Active and restores active status', async () => {
     render(<Sidebar />);
-    dispatchInternalDrop('All Images', ['hash_a', 'hash_b']);
+    dispatchInternalDrop('All Active', ['hash_a', 'hash_b']);
 
     expect(setStatusSelectionMock).toHaveBeenCalledWith(
       { mode: 'explicit_hashes', hashes: ['hash_a', 'hash_b'] },

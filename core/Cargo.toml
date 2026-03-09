@@ -16,7 +16,6 @@ tokio-util = "0.7"
 image = "0.25"
 fast_image_resize = { version = "5", features = ["image"] }
 webp = "0.3"
-blurhash = "0.2"
 kmeans_colors = { version = "0.7", default-features = false, features = ["palette_color"] }
 palette = { version = "0.7", default-features = false, features = ["std"] }
 lcms2 = "6.1"

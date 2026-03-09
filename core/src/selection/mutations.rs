@@ -27,7 +27,7 @@ async fn collect_file_ids(
                 .into_iter()
                 .filter(|h| !excluded.contains(h))
                 .collect();
-            // PBI-011: Use lightweight hash→file_id resolver instead of loading full records.
+            // Use lightweight hash→file_id resolver instead of loading full records.
             let resolved = db.resolve_hashes_batch(&filtered).await?;
             let file_ids: Vec<i64> = resolved.into_iter().map(|(_, id)| id).collect();
             Ok(file_ids)

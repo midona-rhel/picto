@@ -569,6 +569,79 @@ pub fn run_migrations(conn: &Connection, from_version: i64) -> rusqlite::Result<
             conn.execute_batch("ALTER TABLE subscription RENAME COLUMN flow_id TO group_id")?;
         }
     }
+    if from_version < 27 && has_column(conn, "file", "blurhash")? {
+        // V27: Remove legacy blurhash storage. The product now uses dominant color
+        // placeholders only, so the column and all related drift can go away.
+        conn.execute_batch(
+            "PRAGMA foreign_keys = OFF;
+             DROP TABLE IF EXISTS file_fts;
+
+             CREATE TABLE file_new (
+                 file_id              INTEGER PRIMARY KEY,
+                 hash                 TEXT    NOT NULL UNIQUE,
+                 name                 TEXT,
+                 size                 INTEGER NOT NULL,
+                 mime                 TEXT    NOT NULL,
+                 width                INTEGER,
+                 height               INTEGER,
+                 duration_ms          INTEGER,
+                 num_frames           INTEGER,
+                 has_audio            INTEGER NOT NULL DEFAULT 0,
+                 status               INTEGER NOT NULL DEFAULT 0,
+                 rating               INTEGER,
+                 view_count           INTEGER NOT NULL DEFAULT 0,
+                 last_viewed_at       TEXT,
+                 phash                TEXT,
+                 imported_at          TEXT    NOT NULL,
+                 notes                TEXT,
+                 source_urls_json     TEXT,
+                 dominant_color_hex   TEXT,
+                 dominant_palette_blob BLOB,
+                 name_source          TEXT NOT NULL DEFAULT 'unknown'
+             );
+
+             INSERT INTO file_new (
+                 file_id, hash, name, size, mime, width, height, duration_ms,
+                 num_frames, has_audio, status, rating, view_count,
+                 last_viewed_at, phash, imported_at, notes, source_urls_json,
+                 dominant_color_hex, dominant_palette_blob, name_source
+             )
+             SELECT
+                 file_id, hash, name, size, mime, width, height, duration_ms,
+                 num_frames, has_audio, status, rating, view_count,
+                 last_viewed_at, phash, imported_at, notes, source_urls_json,
+                 dominant_color_hex, dominant_palette_blob, name_source
+             FROM file;
+
+             DROP TABLE file;
+             ALTER TABLE file_new RENAME TO file;
+
+             CREATE INDEX IF NOT EXISTS idx_file_status     ON file(status);
+             CREATE INDEX IF NOT EXISTS idx_file_imported   ON file(imported_at);
+             CREATE INDEX IF NOT EXISTS idx_file_size       ON file(size);
+             CREATE INDEX IF NOT EXISTS idx_file_rating     ON file(rating);
+             CREATE INDEX IF NOT EXISTS idx_file_view_count ON file(view_count);
+             CREATE INDEX IF NOT EXISTS idx_file_phash      ON file(phash) WHERE phash IS NOT NULL;
+             CREATE INDEX IF NOT EXISTS idx_file_last_viewed ON file(last_viewed_at) WHERE last_viewed_at IS NOT NULL;
+             CREATE INDEX IF NOT EXISTS idx_file_mime       ON file(mime);
+             CREATE INDEX IF NOT EXISTS idx_file_status_imported  ON file(status, imported_at DESC, file_id DESC);
+             CREATE INDEX IF NOT EXISTS idx_file_status_viewed    ON file(status, last_viewed_at DESC, file_id DESC);
+             CREATE INDEX IF NOT EXISTS idx_file_status_rating    ON file(status, rating DESC, file_id DESC);
+             CREATE INDEX IF NOT EXISTS idx_file_status_size      ON file(status, size DESC, file_id DESC);
+             CREATE INDEX IF NOT EXISTS idx_file_status_viewcount ON file(status, view_count DESC, file_id DESC);
+             CREATE INDEX IF NOT EXISTS idx_file_status_name      ON file(status, name COLLATE NOCASE, file_id);
+
+             CREATE VIRTUAL TABLE file_fts USING fts5(
+                 name, notes, source_urls,
+                 content='file',
+                 content_rowid='file_id',
+                 tokenize='unicode61'
+             );
+             INSERT INTO file_fts(rowid, name, notes, source_urls)
+             SELECT file_id, name, notes, source_urls_json FROM file;
+             PRAGMA foreign_keys = ON;",
+        )?;
+    }
     conn.execute("UPDATE schema_version SET version = ?1", [CURRENT_VERSION])?;
     Ok(())
 }

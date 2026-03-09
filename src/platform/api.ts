@@ -88,6 +88,49 @@ function normalizeSmartFolder(r: Record<string, unknown>): SmartFolder {
   };
 }
 
+const filesApi = {
+  get: (hash: string) =>
+    invokeTyped('get_file', { hash }) as Promise<EntityDetails | null>,
+  getAllMetadata: (hash: string) =>
+    invokeTyped('get_file_all_metadata', { hash }) as Promise<EntityAllMetadata>,
+  setStatus: (hash: string, status: string) =>
+    invokeTyped('update_file_status', { hash, status } as never) as unknown as Promise<void>,
+  setStatusSelection: (selection: SelectionQuerySpec, status: string) =>
+    invokeTyped('update_file_status', { selection, status } as never),
+  deleteMany: (hashes: string[]) =>
+    invokeTyped('delete_files', { hashes } as never),
+  deleteSelection: (selection: SelectionQuerySpec) =>
+    invokeTyped('delete_files', { selection } as never),
+  updateRating: (hash: string, rating: number | null) =>
+    invokeTyped('update_file_metadata', { hash, rating } as never) as unknown as Promise<void>,
+  setName: (hash: string, name: string | null) =>
+    invokeTyped('update_file_metadata', { hash, name } as never) as unknown as Promise<void>,
+  setSourceUrls: (hash: string, urls: string[]) =>
+    invokeTyped('update_file_metadata', { hash, source_urls: urls } as never) as unknown as Promise<void>,
+  setNotes: (hash: string, notes: Record<string, string>) =>
+    invokeTyped('update_file_metadata', { hash, notes } as never) as unknown as Promise<void>,
+  incrementViewCount: (hash: string) =>
+    invokeTyped('update_file_metadata', { hash, increment_view_count: true } as never) as unknown as Promise<void>,
+  resolvePath: (hash: string) =>
+    invokeTyped('resolve_file_path', { hash }),
+  resolveThumbnailPath: (hash: string) =>
+    invokeTyped('resolve_thumbnail_path', { hash }),
+  openDefault: (hash: string) =>
+    invokeTyped('open_file_default', { hash }) as unknown as Promise<void>,
+  revealInFolder: (hash: string) =>
+    invokeTyped('reveal_in_folder', { hash }) as unknown as Promise<void>,
+  openInNewWindow: (hash: string, width?: number | null, height?: number | null) =>
+    invokeTyped('open_in_new_window', { hash, width: width ?? null, height: height ?? null }) as unknown as Promise<void>,
+  ensureThumbnail: (hash: string) =>
+    invokeTyped('ensure_thumbnail', { hash }) as Promise<EnsureThumbnailResponse>,
+  regenerateThumbnail: (hash: string) =>
+    invokeTyped('regenerate_thumbnail', { hash }) as Promise<EnsureThumbnailResponse>,
+  reanalyzeColors: (hash: string) =>
+    invokeTyped('reanalyze_file_colors', { hash }) as Promise<ReanalyzeFileColorsResponse>,
+  regenerateThumbnailsBatch: (hashes: string[]) =>
+    invokeTyped('regenerate_thumbnails_batch', { hashes }) as Promise<{ total: number; regenerated: number; errors: number }>,
+};
+
 /**
  * Typed API surface — single place where all backend command strings live.
  * Every invoke() in the codebase should route through here.
@@ -102,48 +145,8 @@ export const api = {
       invokeTyped('get_files_metadata_batch', { hashes }) as Promise<EntityMetadataBatchResponse>,
   },
 
-  files: {
-    get: (hash: string) =>
-      invokeTyped('get_file', { hash }) as Promise<EntityDetails | null>,
-    getAllMetadata: (hash: string) =>
-      invokeTyped('get_file_all_metadata', { hash }) as Promise<EntityAllMetadata>,
-    setStatus: (hash: string, status: string) =>
-      invokeTyped('update_file_status', { hash, status } as never) as unknown as Promise<void>,
-    setStatusSelection: (selection: SelectionQuerySpec, status: string) =>
-      invokeTyped('update_file_status', { selection, status } as never),
-    deleteMany: (hashes: string[]) =>
-      invokeTyped('delete_files', { hashes } as never),
-    deleteSelection: (selection: SelectionQuerySpec) =>
-      invokeTyped('delete_files', { selection } as never),
-    updateRating: (hash: string, rating: number | null) =>
-      invokeTyped('update_file_metadata', { hash, rating } as never) as unknown as Promise<void>,
-    setName: (hash: string, name: string | null) =>
-      invokeTyped('update_file_metadata', { hash, name } as never) as unknown as Promise<void>,
-    setSourceUrls: (hash: string, urls: string[]) =>
-      invokeTyped('update_file_metadata', { hash, source_urls: urls } as never) as unknown as Promise<void>,
-    setNotes: (hash: string, notes: Record<string, string>) =>
-      invokeTyped('update_file_metadata', { hash, notes } as never) as unknown as Promise<void>,
-    incrementViewCount: (hash: string) =>
-      invokeTyped('update_file_metadata', { hash, increment_view_count: true } as never) as unknown as Promise<void>,
-    resolvePath: (hash: string) =>
-      invokeTyped('resolve_file_path', { hash }),
-    resolveThumbnailPath: (hash: string) =>
-      invokeTyped('resolve_thumbnail_path', { hash }),
-    openDefault: (hash: string) =>
-      invokeTyped('open_file_default', { hash }) as unknown as Promise<void>,
-    revealInFolder: (hash: string) =>
-      invokeTyped('reveal_in_folder', { hash }) as unknown as Promise<void>,
-    openInNewWindow: (hash: string, width?: number | null, height?: number | null) =>
-      invokeTyped('open_in_new_window', { hash, width: width ?? null, height: height ?? null }) as unknown as Promise<void>,
-    ensureThumbnail: (hash: string) =>
-      invokeTyped('ensure_thumbnail', { hash }) as Promise<EnsureThumbnailResponse>,
-    regenerateThumbnail: (hash: string) =>
-      invokeTyped('regenerate_thumbnail', { hash }) as Promise<EnsureThumbnailResponse>,
-    reanalyzeColors: (hash: string) =>
-      invokeTyped('reanalyze_file_colors', { hash }) as Promise<ReanalyzeFileColorsResponse>,
-    regenerateThumbnailsBatch: (hashes: string[]) =>
-      invokeTyped('regenerate_thumbnails_batch', { hashes }) as Promise<{ total: number; regenerated: number; errors: number }>,
-  },
+  files: filesApi,
+  file: filesApi,
 
   import: {
     files: (paths: string[], tagStrings?: string[], sourceUrls?: string[], initialStatus?: number) =>

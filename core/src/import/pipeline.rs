@@ -138,10 +138,6 @@ impl<'a> ImportPipeline<'a> {
         )
         .ok();
 
-        let blurhash = thumbnail_result.as_ref().and_then(|(thumb, _ext)| {
-            media_processing::blurhash::get_blurhash_from_thumbnail_bytes(thumb).ok()
-        });
-
         let mut colors_lab: Vec<(String, f32, f32, f32)> = Vec::new();
         let mut dominant_color_hex: Option<String> = None;
         if media_processing::is_image(file_info.mime) {
@@ -198,7 +194,6 @@ impl<'a> ImportPipeline<'a> {
             duration_ms: file_info.duration_ms.map(|d| d as i64),
             num_frames: file_info.num_frames.map(|n| n as i64),
             has_audio: file_info.has_audio,
-            blurhash,
             status: options.initial_status,
             notes: notes_json,
             source_urls: if options.source_urls.is_empty() {

@@ -17,7 +17,6 @@ interface FileMetadataSlim {
   size: number;
   status: number;
   rating: number | null;
-  blurhash: string | null;
   imported_at: string;
   dominant_color_hex: string | null;
   duration_ms: number | null;
@@ -44,9 +43,6 @@ interface CacheState {
   // Metadata cache (hash → resolved metadata)
   metadataCache: Map<string, ResolvedMetadata>;
 
-  // Current grid page hashes (ordered)
-  currentPageHashes: string[];
-
   // Selection state
   selectedHashes: Set<string>;
   lastSelectedHash: string | null;
@@ -69,7 +65,6 @@ interface CacheState {
   // Actions
   fetchMetadataBatch: (hashes: string[]) => Promise<ResolvedMetadata[]>;
   getMetadata: (hash: string) => ResolvedMetadata | undefined;
-  setCurrentPage: (hashes: string[]) => void;
   invalidateHash: (hash: string) => void;
   invalidateAll: () => void;
   bumpGridRefresh: () => void;
@@ -89,9 +84,8 @@ interface CacheState {
 
 }
 
-export const useCacheStore = create<CacheState>((set, get) => ({
+export const useGridMetadataStore = create<CacheState>((set, get) => ({
   metadataCache: new Map(),
-  currentPageHashes: [],
   selectedHashes: new Set(),
   lastSelectedHash: null,
   gridRefreshSeq: 0,
@@ -120,7 +114,6 @@ export const useCacheStore = create<CacheState>((set, get) => ({
             size: meta.file.size,
             status: typeof meta.file.status === 'string' ? parseInt(meta.file.status) || 0 : meta.file.status as unknown as number,
             rating: meta.file.rating,
-            blurhash: meta.file.blurhash,
             imported_at: meta.file.imported_at,
             dominant_color_hex: meta.file.dominant_colors?.[0]?.hex ?? null as string | null,
             duration_ms: meta.file.duration_ms,
@@ -169,10 +162,6 @@ export const useCacheStore = create<CacheState>((set, get) => ({
 
   getMetadata: (hash: string) => {
     return get().metadataCache.get(hash);
-  },
-
-  setCurrentPage: (hashes: string[]) => {
-    set({ currentPageHashes: hashes });
   },
 
   invalidateHash: (hash: string) => {

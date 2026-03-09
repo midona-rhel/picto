@@ -1,4 +1,4 @@
-import type { MasonryImageItem } from '../shared';
+import type { MediaItem } from '../shared';
 
 // ---------------------------------------------------------------------------
 // ViewerSession — centralized navigation state for detail/peek/window viewers
@@ -14,7 +14,7 @@ export interface ViewerSession {
  * Returns index 0 if hash is not found in images.
  */
 export function createSession(
-  images: MasonryImageItem[],
+  images: MediaItem[],
   hash: string,
 ): ViewerSession {
   const idx = images.findIndex(i => i.hash === hash);
@@ -30,7 +30,7 @@ export function createSession(
  */
 export function navigateSession(
   session: ViewerSession,
-  images: MasonryImageItem[],
+  images: MediaItem[],
   delta: number,
 ): ViewerSession {
   if (images.length === 0) return session;
@@ -49,7 +49,7 @@ export function navigateSession(
  */
 export function rebaseSession(
   session: ViewerSession,
-  newImages: MasonryImageItem[],
+  newImages: MediaItem[],
 ): ViewerSession | null {
   if (newImages.length === 0) return null;
   const idx = newImages.findIndex(i => i.hash === session.currentHash);
@@ -67,7 +67,7 @@ export function rebaseSession(
  */
 export function clampSession(
   session: ViewerSession,
-  images: MasonryImageItem[],
+  images: MediaItem[],
 ): ViewerSession {
   if (images.length === 0) return session;
   const clamped = Math.min(session.currentIndex, images.length - 1);

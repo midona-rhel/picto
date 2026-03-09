@@ -3,26 +3,26 @@ import { api } from '#desktop/api';
 import { registerUndoAction } from '../../../shared/controllers/undoRedoController';
 
 import { useInspectorData, type InspectorData } from './useInspectorData';
-import type { MasonryImageItem } from '../../grid/shared';
-import type { DetailViewState, DetailViewControls } from '../../grid/DetailView';
+import type { MediaItem } from '../../grid/shared';
+import type { MediaViewState, MediaViewControls } from '../../grid/MediaView';
 import type { SelectionQuerySpec } from '../../grid/metadataPrefetch';
 
 export interface InspectorStateParams {
   showInspectorSetting: boolean;
   currentView: string;
-  propertiesPanelWidth: number;
+  inspectorWidthSetting: number;
 }
 
 export interface InspectorState extends InspectorData {
-  selectedImages: MasonryImageItem[];
-  handleSelectedImagesChange: (images: MasonryImageItem[]) => void;
+  selectedImages: MediaItem[];
+  handleSelectedImagesChange: (images: MediaItem[]) => void;
   selectionSummarySpec: SelectionQuerySpec | null;
   setSelectionSummarySpec: (spec: SelectionQuerySpec | null) => void;
   imageName: string;
   handleNameChange: (name: string) => void;
-  detailViewState: DetailViewState | null;
-  detailViewControls: DetailViewControls | null;
-  handleDetailViewStateChange: (state: DetailViewState | null, controls: DetailViewControls | null) => void;
+  mediaViewState: MediaViewState | null;
+  mediaViewControls: MediaViewControls | null;
+  handleMediaViewStateChange: (state: MediaViewState | null, controls: MediaViewControls | null) => void;
   inspectorResizeDragging: boolean;
   setInspectorResizeDragging: (v: boolean) => void;
   showInspector: boolean;
@@ -32,7 +32,7 @@ export interface InspectorState extends InspectorData {
   togglePin: () => void;
 }
 
-function isSameDetailViewState(a: DetailViewState | null, b: DetailViewState | null): boolean {
+function isSameMediaViewState(a: MediaViewState | null, b: MediaViewState | null): boolean {
   if (a === b) return true;
   if (!a || !b) return false;
   const EPSILON = 0.0001;
@@ -46,7 +46,7 @@ function isSameDetailViewState(a: DetailViewState | null, b: DetailViewState | n
   );
 }
 
-function isSameDetailViewControls(a: DetailViewControls | null, b: DetailViewControls | null): boolean {
+function isSameMediaViewControls(a: MediaViewControls | null, b: MediaViewControls | null): boolean {
   if (a === b) return true;
   if (!a || !b) return false;
   return (
@@ -61,21 +61,21 @@ function isSameDetailViewControls(a: DetailViewControls | null, b: DetailViewCon
 export function useInspectorState({
   showInspectorSetting,
   currentView,
-  propertiesPanelWidth,
+  inspectorWidthSetting,
 }: InspectorStateParams): InspectorState {
-  const [selectedImages, setSelectedImages] = useState<MasonryImageItem[]>([]);
+  const [selectedImages, setSelectedImages] = useState<MediaItem[]>([]);
   const [selectionSummarySpec, setSelectionSummarySpec] = useState<SelectionQuerySpec | null>(null);
   const [imageName, setImageName] = useState('');
   const [isPinned, setIsPinned] = useState(false);
 
-  const selectedImageRef = useRef<MasonryImageItem | null>(null);
+  const selectedImageRef = useRef<MediaItem | null>(null);
   selectedImageRef.current = selectedImages.length === 1 ? selectedImages[0] : null;
   const saveNameTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingNameChangeRef = useRef<{ hash: string; before: string | null } | null>(null);
 
   const togglePin = useCallback(() => setIsPinned((v) => !v), []);
 
-  const handleSelectedImagesChange = useCallback((images: MasonryImageItem[]) => {
+  const handleSelectedImagesChange = useCallback((images: MediaItem[]) => {
     if (isPinned) return;
     if (saveNameTimer.current) {
       clearTimeout(saveNameTimer.current);
@@ -131,12 +131,12 @@ export function useInspectorState({
         pendingNameChangeRef.current = null;
         return;
       }
-      api.file.setName(hash, nextName)
+      api.files.setName(hash, nextName)
         .then(() => {
           registerUndoAction({
             label: 'Rename file',
-            undo: () => api.file.setName(hash, before),
-            redo: () => api.file.setName(hash, nextName),
+            undo: () => api.files.setName(hash, before),
+            redo: () => api.files.setName(hash, nextName),
           });
         })
         .catch((e: unknown) => {
@@ -157,17 +157,17 @@ export function useInspectorState({
     }
   }, []);
 
-  const [detailViewState, setDetailViewState] = useState<DetailViewState | null>(null);
-  const [detailViewControls, setDetailViewControls] = useState<DetailViewControls | null>(null);
-  const handleDetailViewStateChange = useCallback((state: DetailViewState | null, controls: DetailViewControls | null) => {
-    setDetailViewState((prev) => (isSameDetailViewState(prev, state) ? prev : state));
-    setDetailViewControls((prev) => (isSameDetailViewControls(prev, controls) ? prev : controls));
+  const [mediaViewState, setMediaViewState] = useState<MediaViewState | null>(null);
+  const [mediaViewControls, setMediaViewControls] = useState<MediaViewControls | null>(null);
+  const handleMediaViewStateChange = useCallback((state: MediaViewState | null, controls: MediaViewControls | null) => {
+    setMediaViewState((prev) => (isSameMediaViewState(prev, state) ? prev : state));
+    setMediaViewControls((prev) => (isSameMediaViewControls(prev, controls) ? prev : controls));
   }, []);
 
   const [inspectorResizeDragging, setInspectorResizeDragging] = useState(false);
   const showInspector = showInspectorSetting && currentView === 'images';
-  const inspectorWidth = showInspector ? propertiesPanelWidth : 0;
-  const isDetailMode = !!detailViewState;
+  const inspectorWidth = showInspector ? inspectorWidthSetting : 0;
+  const isDetailMode = !!mediaViewState;
 
   useEffect(() => {
     if (!showInspector && inspectorResizeDragging) {
@@ -188,9 +188,9 @@ export function useInspectorState({
     setSelectionSummarySpec,
     imageName,
     handleNameChange,
-    detailViewState,
-    detailViewControls,
-    handleDetailViewStateChange,
+    mediaViewState,
+    mediaViewControls,
+    handleMediaViewStateChange,
     inspectorResizeDragging,
     setInspectorResizeDragging,
     showInspector,

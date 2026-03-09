@@ -2,7 +2,7 @@ import { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo } fr
 import { api } from '#desktop/api';
 import { IconCheck, IconX } from '@tabler/icons-react';
 import { KbdTooltip } from '../../shared/components/KbdTooltip';
-import { MasonryImageItem, isVideoMime, toMasonryItem } from './shared';
+import { isVideoMime, toMasonryItem, type MediaItem } from './shared';
 import { VideoPlayer } from '../../features/viewer/components/VideoPlayer';
 import { StripView } from './StripView';
 import { useSettingsStore } from '../../state/settingsStore';
@@ -37,7 +37,7 @@ export interface DetailViewControls {
 }
 
 interface DetailViewProps {
-  images: MasonryImageItem[];
+  images: MediaItem[];
   currentIndex: number;
   onNavigate: (delta: number) => void;
   onClose: (exitHash: string) => void;
@@ -75,7 +75,7 @@ export function DetailView({ images, currentIndex, onNavigate, onClose, onStateC
   const isVideo = currentImage ? isVideoMime(currentImage.mime) : false;
 
   const stripMode = isCollection;
-  const [collectionImages, setCollectionImages] = useState<MasonryImageItem[]>([]);
+  const [collectionImages, setCollectionImages] = useState<MediaItem[]>([]);
   const collectionCursorRef = useRef<string | null>(null);
   const collectionHasMoreRef = useRef(true);
   const collectionLoadingRef = useRef(false);
@@ -315,7 +315,7 @@ export function DetailView({ images, currentIndex, onNavigate, onClose, onStateC
   // Update image transform + navigator via direct DOM writes — zero React re-renders during zoom/pan
   const imageSizeRef = useRef(imageSize);
   imageSizeRef.current = imageSize;
-  const showMinimap = useSettingsStore(s => s.settings.showMinimap);
+  const showMinimap = false;
   useNavigatorRenderer(imgRef, navigatorRef, navViewportRef, imageSizeRef, zoomState, showMinimap ? navigatorRect : null, NAV_SIZE, thumbImgRef);
 
   // Keep strip visible during collection -> image transition until thumbnail is ready.

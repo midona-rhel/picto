@@ -2,7 +2,6 @@
 //! duration, frames, audio, word count), thumbnail generation, and hash computation.
 
 pub mod archive;
-pub mod blurhash;
 pub mod colors;
 pub mod ffmpeg;
 pub mod ffmpeg_path;
@@ -47,7 +46,7 @@ pub type FileResult<T> = Result<T, FileError>;
 // --- Constants ---
 
 /// Default thumbnail bounding box (longest side)
-pub const DEFAULT_THUMBNAIL_DIMENSIONS: (u32, u32) = (500, 500);
+pub const DEFAULT_THUMBNAIL_DIMENSIONS: (u32, u32) = (512, 512);
 
 /// Number of bytes to read for header-based MIME detection
 const HEADER_READ_SIZE: usize = 256;

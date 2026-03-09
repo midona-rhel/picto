@@ -11,7 +11,7 @@ import type { SmartFolder } from '#features/smart-folders/types';
 export type ViewType = 'images' | 'collections' | 'subscriptions' | 'duplicates' | 'tags';
 
 export const VIEW_LABELS: Record<ViewType, string> = {
-  images: 'All Images',
+  images: 'All Active',
   collections: 'Albums',
   subscriptions: 'Subscriptions',
   duplicates: 'Duplicates',

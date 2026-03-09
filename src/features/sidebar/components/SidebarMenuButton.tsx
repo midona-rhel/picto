@@ -73,7 +73,7 @@ export function SidebarMenuButton() {
       type: 'submenu',
       label: 'View',
       children: [
-        { type: 'item', label: 'All Images', shortcut: `${modKey}+1`, onClick: () => navigateTo('images') },
+        { type: 'item', label: 'All Active', shortcut: `${modKey}+1`, onClick: () => navigateTo('images') },
         { type: 'item', label: 'Inbox', shortcut: `${modKey}+2`, onClick: () => navigateTo('images', null, null, 'inbox') },
         { type: 'item', label: 'Uncategorized', onClick: () => navigateTo('images', null, null, 'uncategorized') },
         { type: 'item', label: 'Untagged', shortcut: `${modKey}+3`, onClick: () => navigateTo('images', null, null, 'untagged') },

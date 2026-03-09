@@ -9,7 +9,7 @@ import { useGlobalPointerDrag } from '../../../shared/hooks/useGlobalPointerDrag
 interface ZoomableImageProps {
   src: string;
   alt?: string;
-  hash?: string; // For minimap thumbnail
+  hash?: string; // For navigator thumbnail
 }
 
 export function ZoomableImage({ src, alt, hash }: ZoomableImageProps) {
@@ -229,7 +229,7 @@ export function ZoomableImage({ src, alt, hash }: ZoomableImageProps) {
     );
   }
 
-  const showMinimap = useSettingsStore(s => s.settings.showMinimap);
+  const showNavigator = useSettingsStore(s => s.settings.showNavigator);
 
   const dw = naturalW * scale;
   const dh = naturalH * scale;
@@ -237,37 +237,37 @@ export function ZoomableImage({ src, alt, hash }: ZoomableImageProps) {
   const imgTop = (containerH - dh) / 2 + ty;
 
   const isZoomedIn = scale > containScale * 1.01;
-  const MINIMAP_MAX = 120;
-  const minimapScale = naturalW > 0 ? Math.min(MINIMAP_MAX / naturalW, MINIMAP_MAX / naturalH) : 0;
-  const mmW = naturalW * minimapScale;
-  const mmH = naturalH * minimapScale;
+  const NAV_MAX = 120;
+  const navScale = naturalW > 0 ? Math.min(NAV_MAX / naturalW, NAV_MAX / naturalH) : 0;
+  const navW = naturalW * navScale;
+  const navH = naturalH * navScale;
 
   const visX = Math.max(0, -imgLeft / scale);
   const visY = Math.max(0, -imgTop / scale);
   const visW = Math.min(naturalW, containerW / scale);
   const visH = Math.min(naturalH, containerH / scale);
 
-  const rectX = visX * minimapScale;
-  const rectY = visY * minimapScale;
-  const rectW = Math.min(mmW, visW * minimapScale);
-  const rectH = Math.min(mmH, visH * minimapScale);
+  const rectX = visX * navScale;
+  const rectY = visY * navScale;
+  const rectW = Math.min(navW, visW * navScale);
+  const rectH = Math.min(navH, visH * navScale);
 
-  const handleMinimapClick = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+  const handleNavigatorClick = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
     e.stopPropagation();
     e.preventDefault();
     const rect = e.currentTarget.getBoundingClientRect();
     const mx = e.clientX - rect.left;
     const my = e.clientY - rect.top;
     // Convert to image coords and center viewport there
-    const imageX = mx / minimapScale;
-    const imageY = my / minimapScale;
+    const imageX = mx / navScale;
+    const imageY = my / navScale;
     const newTx = scale * (naturalW / 2 - imageX);
     const newTy = scale * (naturalH / 2 - imageY);
     const [cx, cy] = clamp(newTx, newTy, scale);
     setAnimate(false);
     setTx(cx);
     setTy(cy);
-  }, [minimapScale, scale, naturalW, naturalH, clamp]);
+  }, [navScale, scale, naturalW, naturalH, clamp]);
 
   return (
     <div
@@ -303,17 +303,17 @@ export function ZoomableImage({ src, alt, hash }: ZoomableImageProps) {
         }}
       />
 
-      {/* Minimap overlay */}
-      {showMinimap && isZoomedIn && mmW > 0 && (
+      {/* Navigator overlay */}
+      {showNavigator && isZoomedIn && navW > 0 && (
         <div
-          onClick={handleMinimapClick}
+          onClick={handleNavigatorClick}
           onMouseDown={(e) => e.stopPropagation()}
           style={{
             position: 'absolute',
             bottom: 16,
             left: 16,
-            width: mmW,
-            height: mmH,
+            width: navW,
+            height: navH,
             borderRadius: 4,
             overflow: 'hidden',
             background: 'rgba(0,0,0,0.6)',
@@ -327,8 +327,8 @@ export function ZoomableImage({ src, alt, hash }: ZoomableImageProps) {
             alt=""
             draggable={false}
             style={{
-              width: mmW,
-              height: mmH,
+              width: navW,
+              height: navH,
               objectFit: 'contain',
               pointerEvents: 'none',
               opacity: 0.8,

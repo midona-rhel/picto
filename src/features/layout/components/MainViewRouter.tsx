@@ -51,7 +51,6 @@ export function MainViewRouter() {
             excludedSearchTags={grid.excludedSearchTags}
             tagMatchMode={grid.tagMatchMode}
             externalFreeze={false}
-            onScopeTransitionMidpoint={gridActions.onScopeTransitionMidpoint}
             viewer={viewer}
           />
           <MainViewProgressBar />

@@ -5,8 +5,8 @@ import { api } from '#desktop/api';
 import { notifyError, notifySuccess } from '../../../shared/lib/notify';
 import { FolderPickerService } from '../../../shared/services/folderPickerService';
 import { bustThumbnailCache } from '../../../shared/lib/mediaUrl';
-import { useCacheStore } from '../../../state/cacheStore';
-import { useSettingsStore, type AppSettings } from '../../../state/settingsStore';
+import { useGridMetadataStore } from '../../../state/gridMetadataStore';
+import type { AppSettings } from '../../../state/settingsStore';
 import type { GridRuntimeAction, GridRuntimeState, GridViewMode } from '../runtime';
 
 let lastUsedFolder: { id: number; name: string } | null = null;
@@ -100,7 +100,6 @@ export function useGridHotkeys({
     ['alt+2', () => onViewModeChange?.('waterfall')],
     ['alt+3', () => onViewModeChange?.('justified')],
     ['mod+alt+g', () => updateSetting('grayscalePreview', !grayscalePreview)],
-    ['mod+alt+8', () => updateSetting('showMinimap', !useSettingsStore.getState().settings.showMinimap)],
     [
       'F5',
       () => {
@@ -205,7 +204,7 @@ export function useGridHotkeys({
           .then((r) => {
             notifySuccess(`Regenerated ${r.regenerated} thumbnail(s)`, 'Thumbnails');
             bustThumbnailCache(hashes);
-            useCacheStore.getState().bumpGridRefresh();
+            useGridMetadataStore.getState().bumpGridRefresh();
           })
           .catch((err) => notifyError(err, 'Regenerate Failed'));
       },

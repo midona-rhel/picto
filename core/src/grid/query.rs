@@ -386,7 +386,7 @@ pub async fn get_grid_outline(
         let rows: Vec<(crate::sqlite::files::FileMetadataSlim, String)> = db
             .with_read_conn(move |conn| {
                 let mut stmt = conn.prepare(
-                    "SELECT hash, name, mime, width, height, size, status, rating, blurhash,
+                    "SELECT hash, name, mime, width, height, size, status, rating,
                             imported_at, dominant_color_hex, duration_ms, num_frames, has_audio, view_count,
                             file_id, last_viewed_at
                      FROM file WHERE view_count > 0 AND status = 1
@@ -398,8 +398,8 @@ pub async fn get_grid_outline(
                 )?;
                 let rows = stmt.query_map([], |row| {
                     let slim = crate::sqlite::files::FileMetadataSlim {
-                        file_id: row.get(15)?,
-                        entity_id: row.get(15)?,
+                        file_id: row.get(14)?,
+                        entity_id: row.get(14)?,
                         is_collection: false,
                         collection_item_count: None,
                         hash: row.get(0)?,
@@ -410,17 +410,16 @@ pub async fn get_grid_outline(
                         size: row.get(5)?,
                         status: row.get::<_, i64>(6)? as u8,
                         rating: row.get(7)?,
-                        blurhash: row.get(8)?,
-                        imported_at: row.get(9)?,
-                        dominant_color_hex: row.get(10)?,
-                        duration_ms: row.get(11)?,
-                        num_frames: row.get(12)?,
-                        has_audio: row.get::<_, i64>(13)? != 0,
-                        view_count: row.get(14)?,
+                        imported_at: row.get(8)?,
+                        dominant_color_hex: row.get(9)?,
+                        duration_ms: row.get(10)?,
+                        num_frames: row.get(11)?,
+                        has_audio: row.get::<_, i64>(12)? != 0,
+                        view_count: row.get(13)?,
                         position_rank: None,
                     };
                     let last_viewed_at: String =
-                        row.get::<_, Option<String>>(16)?.unwrap_or_default();
+                        row.get::<_, Option<String>>(15)?.unwrap_or_default();
                     Ok((slim, last_viewed_at))
                 })?;
                 rows.collect()
@@ -747,7 +746,7 @@ pub async fn get_grid_page_slim(
         let mut rows: Vec<(crate::sqlite::files::FileMetadataSlim, String)> = db
             .with_read_conn(move |conn| {
                 let mut sql = String::from(
-                    "SELECT hash, name, mime, width, height, size, status, rating, blurhash,
+                    "SELECT hash, name, mime, width, height, size, status, rating,
                             imported_at, dominant_color_hex, duration_ms, num_frames, has_audio, view_count,
                             file_id, last_viewed_at
                      FROM file WHERE view_count > 0 AND status = 1
@@ -782,8 +781,8 @@ pub async fn get_grid_page_slim(
                 let mut stmt = conn.prepare(&sql)?;
                 let rows = stmt.query_map(params_refs.as_slice(), |row| {
                     let slim = crate::sqlite::files::FileMetadataSlim {
-                        file_id: row.get(15)?,
-                        entity_id: row.get(15)?,
+                        file_id: row.get(14)?,
+                        entity_id: row.get(14)?,
                         is_collection: false,
                         collection_item_count: None,
                         hash: row.get(0)?,
@@ -794,16 +793,15 @@ pub async fn get_grid_page_slim(
                         size: row.get(5)?,
                         status: row.get::<_, i64>(6)? as u8,
                         rating: row.get(7)?,
-                        blurhash: row.get(8)?,
-                        imported_at: row.get(9)?,
-                        dominant_color_hex: row.get(10)?,
-                        duration_ms: row.get(11)?,
-                        num_frames: row.get(12)?,
-                        has_audio: row.get::<_, i64>(13)? != 0,
-                        view_count: row.get(14)?,
+                        imported_at: row.get(8)?,
+                        dominant_color_hex: row.get(9)?,
+                        duration_ms: row.get(10)?,
+                        num_frames: row.get(11)?,
+                        has_audio: row.get::<_, i64>(12)? != 0,
+                        view_count: row.get(13)?,
                         position_rank: None,
                     };
-                    let last_viewed_at: String = row.get::<_, Option<String>>(16)?.unwrap_or_default();
+                    let last_viewed_at: String = row.get::<_, Option<String>>(15)?.unwrap_or_default();
                     Ok((slim, last_viewed_at))
                 })?;
                 rows.collect()

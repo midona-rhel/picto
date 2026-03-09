@@ -7,7 +7,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { mediaThumbnailUrl, mediaFileUrl } from '../../shared/lib/mediaUrl';
 import { queueImageDecode } from './useImagePreloader';
-import type { MasonryImageItem } from './shared';
+import type { MediaItem } from './shared';
 import { isVideoMime } from './shared';
 import styles from './StripView.module.css';
 
@@ -16,7 +16,7 @@ const OVERSCAN = 2000;
 const SCROLL_STEP = 200;
 
 interface StripViewProps {
-  images: MasonryImageItem[];
+  images: MediaItem[];
   initialIndex: number;
   zoomScale?: number;
   resetKey?: number;
@@ -29,12 +29,14 @@ interface LayoutEntry {
   width: number;
 }
 
-function computeLayout(images: MasonryImageItem[], containerWidth: number, scale: number): LayoutEntry[] {
+function computeLayout(images: MediaItem[], containerWidth: number, scale: number): LayoutEntry[] {
   const layout: LayoutEntry[] = [];
   const contentWidth = containerWidth * scale;
   let y = 0;
   for (const img of images) {
-    const h = contentWidth / img.aspectRatio;
+    const width = typeof img.width === 'number' && img.width > 0 ? img.width : 1;
+    const height = typeof img.height === 'number' && img.height > 0 ? img.height : 1;
+    const h = contentWidth / (width / height);
     layout.push({ offsetY: y, height: h, width: contentWidth });
     y += h + GAP;
   }
@@ -191,7 +193,7 @@ export function StripView({
 // ─── Individual image slot with thumbnail → full decode ──────
 
 interface StripImageSlotProps {
-  image: MasonryImageItem;
+  image: MediaItem;
   offsetY: number;
   height: number;
   width: number;

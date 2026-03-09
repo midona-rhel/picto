@@ -1,8 +1,6 @@
-// Hydrus-style namespace → RGB color mapping
-
 type RGB = [number, number, number];
 
-export const NAMESPACE_COLORS: Record<string, RGB> = {
+const NAMESPACE_COLORS: Record<string, RGB> = {
   creator:   [170, 0, 0],
   studio:    [128, 0, 0],
   character: [0, 170, 0],

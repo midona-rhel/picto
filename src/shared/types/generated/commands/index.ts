@@ -82,7 +82,6 @@ export type { EnsureThumbnailInput } from './EnsureThumbnailInput';
 export type { RegenerateThumbnailInput } from './RegenerateThumbnailInput';
 export type { RegenerateThumbnailsBatchInput } from './RegenerateThumbnailsBatchInput';
 export type { ReanalyzeFileColorsInput } from './ReanalyzeFileColorsInput';
-export type { BackfillMissingBlurhashesInput } from './BackfillMissingBlurhashesInput';
 export type { SearchByColorInput } from './SearchByColorInput';
 export type { GetImageThumbnailInput } from './GetImageThumbnailInput';
 
@@ -209,7 +208,6 @@ import type { EnsureThumbnailInput } from './EnsureThumbnailInput';
 import type { RegenerateThumbnailInput } from './RegenerateThumbnailInput';
 import type { RegenerateThumbnailsBatchInput } from './RegenerateThumbnailsBatchInput';
 import type { ReanalyzeFileColorsInput } from './ReanalyzeFileColorsInput';
-import type { BackfillMissingBlurhashesInput } from './BackfillMissingBlurhashesInput';
 import type { SearchByColorInput } from './SearchByColorInput';
 import type { GetImageThumbnailInput } from './GetImageThumbnailInput';
 import type { CreateGroupInput } from './CreateGroupInput';
@@ -331,7 +329,6 @@ export interface TypedCommandMap {
   regenerate_thumbnail: { input: RegenerateThumbnailInput; output: unknown };
   regenerate_thumbnails_batch: { input: RegenerateThumbnailsBatchInput; output: unknown };
   reanalyze_file_colors: { input: ReanalyzeFileColorsInput; output: unknown };
-  backfill_missing_blurhashes: { input: BackfillMissingBlurhashesInput; output: unknown };
   search_by_color: { input: SearchByColorInput; output: unknown };
   get_image_thumbnail: { input: GetImageThumbnailInput; output: unknown };
   // subscriptions

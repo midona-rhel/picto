@@ -20,7 +20,7 @@ export interface AppBootstrap {
 }
 
 export function useAppBootstrap(): AppBootstrap {
-  const { titlebarTitle, currentView } = useNavigationStore();
+  const { titlebarTitle } = useNavigationStore();
   const { colorScheme } = useMantineColorScheme();
   const appWindow = useMemo(() => getCurrentWindow(), []);
   const isSystemDark = colorScheme === 'dark';
@@ -31,14 +31,13 @@ export function useAppBootstrap(): AppBootstrap {
   // ── Native event listeners (library lifecycle, menu events, runtime init) ──
   useNativeEventListeners();
 
-  // Displayed title lags behind titlebarTitle — only updates when grid fade-out completes.
   const [displayedTitle, setDisplayedTitle] = useState(titlebarTitle);
   const handleScopeTransitionMidpoint = useCallback(() => {
     setDisplayedTitle(useNavigationStore.getState().titlebarTitle);
   }, []);
   useEffect(() => {
-    if (currentView !== 'images') setDisplayedTitle(titlebarTitle);
-  }, [titlebarTitle, currentView]);
+    setDisplayedTitle(titlebarTitle);
+  }, [titlebarTitle]);
 
   // ── One-time startup: show window ──
   useEffect(() => {

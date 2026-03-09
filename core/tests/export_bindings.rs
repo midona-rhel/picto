@@ -51,7 +51,6 @@ fn export_all_bindings() {
     picto_core::dispatch::typed::media_io::RegenerateThumbnailInput::export().unwrap();
     picto_core::dispatch::typed::media_io::RegenerateThumbnailsBatchInput::export().unwrap();
     picto_core::dispatch::typed::media_io::ReanalyzeFileColorsInput::export().unwrap();
-    picto_core::dispatch::typed::media_io::BackfillMissingBlurhashesInput::export().unwrap();
 
     picto_core::dispatch::typed::media_lifecycle::ImportFilesInput::export().unwrap();
     picto_core::dispatch::typed::media_lifecycle::UpdateFileStatusInput::export().unwrap();

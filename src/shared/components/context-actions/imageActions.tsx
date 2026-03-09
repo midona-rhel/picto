@@ -39,17 +39,17 @@ import { FolderPickerService } from '../../services/folderPickerService';
 import { registerUndoAction } from '../../controllers/undoRedoController';
 import { notifyError, notifySuccess } from '../../lib/notify';
 import { useSettingsStore } from '../../../state/settingsStore';
-import type { MasonryImageItem } from '../../../features/grid/shared';
+import type { MediaItem } from '../../../features/grid/shared';
 import { api, copyFileToClipboard, copyImageToClipboard, reverseImageSearch } from '#desktop/api';
 import { bustThumbnailCache } from '../../lib/mediaUrl';
-import { useCacheStore } from '../../../state/cacheStore';
+import { useGridMetadataStore } from '../../../state/gridMetadataStore';
 
 interface BuildGridImageContextMenuArgs {
   contextPoint: { x: number; y: number };
   isMac: boolean;
   state: GridRuntimeState;
   stateRef: MutableRefObject<GridRuntimeState>;
-  imagesRef: MutableRefObject<MasonryImageItem[]>;
+  imagesRef: MutableRefObject<MediaItem[]>;
   dispatch: Dispatch<GridRuntimeAction>;
   viewMode: GridViewMode;
   onViewModeChange?: (mode: GridViewMode) => void;
@@ -85,7 +85,7 @@ interface BuildGridImageContextMenuArgs {
   wasAlreadySelected: boolean;
   hasSelection: boolean;
   singleHash: string | null;
-  singleImage: MasonryImageItem | null;
+  singleImage: MediaItem | null;
   singleIsCollection: boolean;
   singleCollectionId: number | null;
   effectiveVirtual: GridRuntimeState['virtualAllSelection'] | null;
@@ -188,7 +188,7 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
         label: 'Open With Default App',
         icon: <IconExternalLink />,
         shortcut: isMac ? '\u21E7Enter' : 'Shift+Enter',
-        onClick: () => api.file.openDefault(singleHash).catch(err => {
+        onClick: () => api.files.openDefault(singleHash).catch(err => {
           notifyError(err, 'Open Failed');
         }),
       });
@@ -199,7 +199,7 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
       icon: <IconFolderOpen />,
       shortcut: isMac ? '\u2318Enter' : 'Ctrl+Enter',
       disabled: singleIsCollection,
-      onClick: () => api.file.revealInFolder(singleHash).catch(err => {
+      onClick: () => api.files.revealInFolder(singleHash).catch(err => {
         notifyError(err, 'Reveal Failed');
       }),
     });
@@ -211,7 +211,7 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
       disabled: singleIsCollection,
       onClick: async () => {
         const img = stateRef.current.images.find(i => i.hash === singleHash);
-        api.file.openInNewWindow(singleHash, img?.width, img?.height).catch(err => {
+        api.files.openInNewWindow(singleHash, img?.width, img?.height).catch(err => {
           notifyError(err, 'New Window Failed');
         });
       },
@@ -384,7 +384,7 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
       icon: <IconCopy />,
       shortcut: isMac ? '\u2318C' : 'Ctrl+C',
       onClick: () => {
-        api.file.resolvePath(singleHash).then(copyFileToClipboard)
+        api.files.resolvePath(singleHash).then(copyFileToClipboard)
           .then(() => notifySuccess('File copied to clipboard', 'Copied'))
           .catch(err => notifyError(err, 'Copy Failed'));
       },
@@ -396,7 +396,7 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
       shortcut: isMac ? '\u2318\u2325C' : 'Ctrl+Alt+C',
       onClick: async () => {
         try {
-          const path = await api.file.resolvePath(singleHash);
+          const path = await api.files.resolvePath(singleHash);
           await navigator.clipboard.writeText(path);
           notifySuccess('File path copied to clipboard', 'Copied');
         } catch (err) {
@@ -433,7 +433,7 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
           label: 'Copy Thumbnail',
           icon: <IconPhoto />,
           onClick: () => {
-            api.file.resolveThumbnailPath(singleHash).then(copyImageToClipboard)
+            api.files.resolveThumbnailPath(singleHash).then(copyImageToClipboard)
               .then(() => notifySuccess('Thumbnail copied to clipboard', 'Copied'))
               .catch(err => notifyError(err, 'Copy Failed'));
           },
@@ -477,7 +477,7 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
         icon: e.icon,
         onClick: () => {
           notifications.show({ title: 'Searching...', message: `Uploading image to ${e.label}`, autoClose: 3000, loading: true });
-          api.file.resolvePath(singleHash).then(path => reverseImageSearch(path, e.key))
+          api.files.resolvePath(singleHash).then(path => reverseImageSearch(path, e.key))
             .catch(err => notifyError(err, 'Search Failed'));
         },
       }));
@@ -542,11 +542,11 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
         shortcut: isMac ? '\u2318\u21E7T' : 'Ctrl+Shift+T',
         onClick: () => {
           notifications.show({ title: 'Regenerating...', message: `Regenerating ${regenHashes.length} thumbnail(s)`, autoClose: 3000, loading: true });
-          api.file.regenerateThumbnailsBatch(regenHashes)
+          api.files.regenerateThumbnailsBatch(regenHashes)
             .then(r => {
               notifySuccess(`Regenerated ${r.regenerated} thumbnail(s)`, 'Thumbnails');
               bustThumbnailCache(regenHashes);
-              useCacheStore.getState().bumpGridRefresh();
+              useGridMetadataStore.getState().bumpGridRefresh();
             })
             .catch(err => notifyError(err, 'Regenerate Failed'));
         },
@@ -719,16 +719,16 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
       if (freshSingleHash) {
         dispatch({ type: 'FILTER_IMAGES', predicate: i => i.hash !== freshSingleHash });
         dispatch({ type: 'CLEAR_SELECTION' });
-        api.file.setStatus(freshSingleHash, 'active')
+        api.files.setStatus(freshSingleHash, 'active')
           .then(() => {
             registerUndoAction({
               label: 'Restore image',
               undo: async () => {
-                await api.file.setStatus(freshSingleHash, 'trash');
+                await api.files.setStatus(freshSingleHash, 'trash');
                 requestGridReload();
               },
               redo: async () => {
-                await api.file.setStatus(freshSingleHash, 'active');
+                await api.files.setStatus(freshSingleHash, 'active');
                 requestGridReload();
               },
             });
@@ -744,20 +744,20 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
         dispatch({ type: 'FILTER_IMAGES', predicate: i => i.hash !== freshSingleHash });
         dispatch({ type: 'CLEAR_SELECTION' });
         if (inTrash) {
-          api.file.deleteMany([freshSingleHash])
+          api.files.deleteMany([freshSingleHash])
             .catch(err => notifyError(err, 'Delete Failed'));
         } else {
           const previousStatus = imagesRef.current.find((img) => img.hash === freshSingleHash)?.status ?? (statusFilter ?? 'active');
-          api.file.setStatus(freshSingleHash, 'trash')
+          api.files.setStatus(freshSingleHash, 'trash')
             .then(() => {
               registerUndoAction({
                 label: 'Move image to trash',
                 undo: async () => {
-                  await api.file.setStatus(freshSingleHash, previousStatus);
+                  await api.files.setStatus(freshSingleHash, previousStatus);
                   requestGridReload();
                 },
                 redo: async () => {
-                  await api.file.setStatus(freshSingleHash, 'trash');
+                  await api.files.setStatus(freshSingleHash, 'trash');
                   requestGridReload();
                 },
               });

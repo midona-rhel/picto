@@ -15,7 +15,7 @@ const isMac =
 
 export const SHORTCUT_DEFS: ShortcutDef[] = [
   // Navigation
-  { id: 'nav.allImages',      label: 'All Images',         group: 'Navigation', keys: 'Mod+1' },
+  { id: 'nav.allActive',      label: 'All Active',         group: 'Navigation', keys: 'Mod+1' },
   { id: 'nav.inbox',          label: 'Inbox',              group: 'Navigation', keys: 'Mod+2' },
   { id: 'nav.untagged',       label: 'Untagged',           group: 'Navigation', keys: 'Mod+3' },
   { id: 'nav.recentViewed',   label: 'Recently Viewed',    group: 'Navigation', keys: 'Mod+4' },
@@ -80,7 +80,7 @@ export const SHORTCUT_DEFS: ShortcutDef[] = [
   { id: 'nav.back',             label: 'Go Back',             group: 'Navigation', keys: 'Alt+ArrowLeft',  description: 'Return to previous view' },
   { id: 'nav.forward',          label: 'Go Forward',          group: 'Navigation', keys: 'Alt+ArrowRight', description: 'Go forward in view history' },
   { id: 'view.alwaysOnTop',     label: 'Always on Top',       group: 'View', keys: 'Shift+T',    description: 'Toggle window always on top' },
-  { id: 'view.minimap',         label: 'Toggle Minimap',      group: 'View', keys: 'Mod+Alt+8',  description: 'Toggle navigator minimap when zoomed' },
+  { id: 'view.navigator',       label: 'Toggle Navigator',    group: 'View', keys: 'Mod+Alt+8',  description: 'Toggle navigator overlay when zoomed' },
 
   // Layout shortcuts
   { id: 'view.layoutGrid',      label: 'Grid Layout',         group: 'View', keys: 'Alt+1',     description: 'Switch to grid layout' },

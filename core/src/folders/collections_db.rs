@@ -1184,7 +1184,6 @@ mod tests {
             duration_ms: None,
             num_frames: None,
             has_audio: false,
-            blurhash: None,
             status,
             imported_at: now.clone(),
             notes: None,

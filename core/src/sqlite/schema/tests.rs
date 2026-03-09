@@ -128,6 +128,7 @@ use super::support::{has_column, table_exists};
 
         // Verify V5 migration artifacts
         assert!(has_column(&conn, "file", "last_viewed_at").unwrap());
+        assert!(!has_column(&conn, "file", "blurhash").unwrap());
 
         // Verify V7 migration artifacts
         assert!(has_column(&conn, "duplicate", "decision_at").unwrap());
@@ -283,6 +284,46 @@ use super::support::{has_column, table_exists};
             .query_row("SELECT COUNT(*) FROM subscription_entity WHERE subscription_id = 1 AND entity_id = 100", [], |row| row.get(0))
             .unwrap();
         assert_eq!(sub_links, 1);
+    }
+
+    #[test]
+    fn v27_removes_blurhash_column_from_file_table() {
+        let conn = Connection::open_in_memory().unwrap();
+        apply_pragmas(&conn).unwrap();
+        init_schema(&conn).unwrap();
+
+        conn.execute("UPDATE schema_version SET version = 26", [])
+            .unwrap();
+        conn.execute_batch("ALTER TABLE file ADD COLUMN blurhash TEXT;")
+            .unwrap();
+        conn.execute(
+            "INSERT INTO file (
+                file_id, hash, name, size, mime, width, height, duration_ms, num_frames,
+                has_audio, blurhash, status, rating, view_count, last_viewed_at, phash,
+                imported_at, notes, source_urls_json, dominant_color_hex, dominant_palette_blob, name_source
+            ) VALUES (
+                1, 'hash_v27', 'name', 1, 'image/png', 100, 100, NULL, NULL,
+                0, 'legacy-blurhash', 1, NULL, 0, NULL, NULL,
+                CURRENT_TIMESTAMP, NULL, NULL, '#000000', NULL, 'unknown'
+            )",
+            [],
+        )
+        .unwrap();
+
+        run_migrations(&conn, 26).unwrap();
+
+        assert_eq!(get_schema_version(&conn).unwrap(), Some(CURRENT_VERSION));
+        assert!(!has_column(&conn, "file", "blurhash").unwrap());
+
+        let row: (String, Option<String>) = conn
+            .query_row(
+                "SELECT hash, dominant_color_hex FROM file WHERE file_id = 1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(row.0, "hash_v27");
+        assert_eq!(row.1.as_deref(), Some("#000000"));
     }
 
     #[test]

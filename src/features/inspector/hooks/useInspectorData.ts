@@ -1,5 +1,5 @@
 import type { EntityAllMetadata, ResolvedTagInfo, SelectionQuerySpec, SelectionSummary } from '#features/grid/data';
-import type { MasonryImageItem } from '#features/grid/types';
+import type { MediaItem } from '#features/grid/types';
 import type { CollectionSummary } from '../../../shared/types/api';
 import { useInspectorFetch } from './useInspectorFetch';
 import { useInspectorMutations } from './useInspectorMutations';
@@ -29,7 +29,7 @@ export interface InspectorData {
 }
 
 export function useInspectorData(
-  selectedImages: MasonryImageItem[],
+  selectedImages: MediaItem[],
   selectionSummarySpec: SelectionQuerySpec | null,
 ): InspectorData {
   const fetch = useInspectorFetch(selectedImages, selectionSummarySpec);

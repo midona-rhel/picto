@@ -9,7 +9,7 @@ import {
   type SelectionQuerySpec,
   type SelectionSummary,
 } from '#features/grid/data';
-import type { MasonryImageItem } from '#features/grid/types';
+import type { MediaItem } from '#features/grid/types';
 import { parseTagString } from '../../../shared/lib/tagParsing';
 import type { CollectionSummary } from '../../../shared/types/api';
 import type { FolderMembership } from './useInspectorData';
@@ -43,7 +43,7 @@ export interface InspectorFetchState {
 }
 
 export function useInspectorFetch(
-  selectedImages: MasonryImageItem[],
+  selectedImages: MediaItem[],
   selectionSummarySpec: SelectionQuerySpec | null,
 ): InspectorFetchState {
   const [fileTags, setFileTags] = useState<ResolvedTagInfo[]>([]);
@@ -195,7 +195,7 @@ export function useInspectorFetch(
 
         if (selectedImages.length === 1) {
           setCollectionSummary(null);
-          const metadata = await api.file.getAllMetadata(selectedImages[0].hash);
+          const metadata = await api.files.getAllMetadata(selectedImages[0].hash);
           if (requestIdRef.current !== requestId) return;
           if (import.meta.env.DEV) console.log(
             `[props-perf] metadata applied for [${hashPreview}] — ${(performance.now() - selectionTime).toFixed(1)}ms total, ${metadata.tags.length} tags`,
@@ -204,7 +204,7 @@ export function useInspectorFetch(
           setFileTags(metadata.tags);
         } else {
           setCollectionSummary(null);
-          const allMetadata = await Promise.all(selectedImages.map((img) => api.file.getAllMetadata(img.hash)));
+          const allMetadata = await Promise.all(selectedImages.map((img) => api.files.getAllMetadata(img.hash)));
           if (requestIdRef.current !== requestId) return;
           if (allMetadata.length === 0) {
             setFileTags([]);
@@ -259,14 +259,14 @@ export function useInspectorFetch(
     for (const img of selectedImages) invalidateMetadata(img.hash);
 
     if (selectedImages.length === 1) {
-      api.file.getAllMetadata(selectedImages[0].hash)
+      api.files.getAllMetadata(selectedImages[0].hash)
         .then((metadata) => {
           setFileMetadata(metadata);
           setFileTags(metadata.tags);
         })
         .catch(() => {});
     } else if (selectedImages.length > 1) {
-      Promise.all(selectedImages.map((img) => api.file.getAllMetadata(img.hash)))
+      Promise.all(selectedImages.map((img) => api.files.getAllMetadata(img.hash)))
         .then((allMetadata) => {
           if (allMetadata.length === 0) {
             setFileTags([]);

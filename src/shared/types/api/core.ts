@@ -26,7 +26,7 @@ export interface EntitySlim {
   source_urls: string[] | null;
   imported_at: string;
   has_thumbnail: boolean;
-  blurhash?: string | null;
+  dominant_color_hex?: string | null;
   tags?: string[];
   dominant_colors?: { hex: string; l: number; a: number; b: number }[] | null;
   notes?: Record<string, string> | null;
@@ -38,6 +38,11 @@ export interface GridPageSlimResponse {
   items: EntitySlim[];
   next_cursor: string | null;
   has_more: boolean;
+  total_count: number | null;
+}
+
+export interface GridOutlineResponse {
+  items: EntitySlim[];
   total_count: number | null;
 }
 
@@ -91,7 +96,6 @@ export interface EntityAllMetadata {
     source_urls: string[] | null;
     imported_at: string;
     has_thumbnail: boolean;
-    blurhash: string | null;
     dominant_colors: { hex: string; l: number; a: number; b: number }[] | null;
     notes: Record<string, string> | null;
   };
@@ -107,9 +111,7 @@ export interface EntityMetadataBatchResponse {
 
 export interface EnsureThumbnailResponse {
   regenerated_thumbnail: boolean;
-  generated_blurhash: boolean;
   has_thumbnail: boolean;
-  blurhash?: string | null;
 }
 
 export interface ReanalyzeFileColorsResponse {
@@ -121,13 +123,6 @@ export interface ImportResult {
   imported: string[];
   skipped: string[];
   errors: string[];
-}
-
-export interface BackfillBlurhashResult {
-  processed: number;
-  regenerated_thumbnails: number;
-  generated_blurhashes: number;
-  remaining: number;
 }
 
 // ─── Tags ────────────────────────────────────────────────────────────────────

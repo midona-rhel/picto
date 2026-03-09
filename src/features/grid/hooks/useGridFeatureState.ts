@@ -9,7 +9,7 @@ import { api } from '#desktop/api';
 import { useFilterStore, mimeFilterToPrefixes, type FilterLogicMode } from '../../../state/filterStore';
 import type { SmartFolder } from '#features/smart-folders/types';
 import type { TagFilterLogicMode } from '#features/tags/types';
-import type { MasonryImageItem } from '#features/grid/types';
+import type { MediaItem } from '#features/grid/types';
 export interface GridFeatureParams {
   currentView: string;
   isDetailMode: boolean;
@@ -24,7 +24,7 @@ export interface GridFeatureParams {
   trashCount: number | null;
   smartFolderCounts: Record<string, number>;
   folderNodes: Array<{ id: string; count?: number | null }>;
-  selectedImages: MasonryImageItem[];
+  selectedImages: MediaItem[];
 }
 
 export interface GridFeatureState {

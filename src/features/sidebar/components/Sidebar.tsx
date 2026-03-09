@@ -28,20 +28,20 @@ interface SidebarProps {
 }
 
 export function Sidebar({ onSmartFolderUpdated }: SidebarProps) {
-  const { allImagesCount, inboxCount, uncategorizedCount, trashCount, untaggedCount, tagsCount, recentViewedCount, duplicatesCount } = useDomainStore();
+  const { allActiveCount, inboxCount, uncategorizedCount, trashCount, untaggedCount, tagsCount, recentViewedCount, duplicatesCount } = useDomainStore();
   const { currentView, activeSmartFolder, activeFolder, activeStatusFilter, navigateTo } = useNavigationStore();
 
-  const isAllImagesActive = !activeSmartFolder && !activeFolder && !activeStatusFilter && currentView === 'images';
+  const isAllActiveScope = !activeSmartFolder && !activeFolder && !activeStatusFilter && currentView === 'images';
 
   const handleStatusDrop = useCallback((hashes: string[], status: 'active' | 'inbox' | 'trash') => {
     runCriticalAction(
       'Move Failed',
       `sidebar status drop (${status})`,
-      api.file.setStatusSelection({ mode: 'explicit_hashes', hashes }, status),
+      api.files.setStatusSelection({ mode: 'explicit_hashes', hashes }, status),
     );
   }, []);
 
-  const handleDropToAllImages = useCallback((hashes: string[]) => {
+  const handleDropToAllActive = useCallback((hashes: string[]) => {
     handleStatusDrop(hashes, 'active');
   }, [handleStatusDrop]);
 
@@ -59,11 +59,11 @@ export function Sidebar({ onSmartFolderUpdated }: SidebarProps) {
       <div className={styles.scrollArea}>
         <SidebarItem
           icon={<IconPhoto size={16} />}
-          label="All Images"
-          count={allImagesCount}
-          isActive={isAllImagesActive}
+          label="All Active"
+          count={allActiveCount}
+          isActive={isAllActiveScope}
           onClick={() => navigateTo('images')}
-          onHashDrop={handleDropToAllImages}
+          onHashDrop={handleDropToAllActive}
         />
         <SidebarItem
           icon={<IconInbox size={16} />}

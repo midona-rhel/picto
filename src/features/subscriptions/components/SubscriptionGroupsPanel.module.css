@@ -168,13 +168,6 @@
   flex-wrap: wrap;
 }
 
-.metaResult {
-  font-size: 11px;
-  color: var(--color-text-secondary);
-  white-space: nowrap;
-  margin-left: auto;
-}
-
 .metaFiles {
   font-size: 11px;
   color: var(--color-text-tertiary);

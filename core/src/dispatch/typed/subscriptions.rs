@@ -344,7 +344,7 @@ pub async fn pause_subscription_query(state: &AppState, input: PauseSubscription
 }
 
 pub async fn run_subscription(state: &AppState, input: RunSubscriptionInput) -> Result<(), String> {
-    crate::subscriptions::controller::SubscriptionController::run_subscription(
+    crate::subscriptions::run_orchestrator::SubscriptionRunOrchestrator::run_subscription(
         &state.db,
         &state.blob_store,
         &state.rate_limiter,
@@ -357,7 +357,7 @@ pub async fn run_subscription(state: &AppState, input: RunSubscriptionInput) -> 
 }
 
 pub async fn stop_subscription(state: &AppState, input: StopSubscriptionInput) -> Result<(), String> {
-    crate::subscriptions::controller::SubscriptionController::stop_subscription(
+    crate::subscriptions::run_orchestrator::SubscriptionRunOrchestrator::stop_subscription(
         &state.db, &state.running_subscriptions, input.id,
     ).await?;
     Ok(())
@@ -375,14 +375,14 @@ pub async fn reset_subscription(state: &AppState, input: ResetSubscriptionInput)
 }
 
 pub async fn get_running_subscriptions(state: &AppState, _input: serde_json::Value) -> Result<serde_json::Value, String> {
-    let result = crate::subscriptions::controller::SubscriptionController::get_running_subscriptions(
+    let result = crate::subscriptions::run_orchestrator::SubscriptionRunOrchestrator::get_running_subscriptions(
         &state.running_subscriptions,
     ).await?;
     Ok(serde_json::to_value(&result).map_err(|e| e.to_string())?)
 }
 
 pub async fn get_running_subscription_progress(_state: &AppState, _input: serde_json::Value) -> Result<serde_json::Value, String> {
-    let result = crate::subscriptions::controller::SubscriptionController::get_running_subscription_progress();
+    let result = crate::subscriptions::run_orchestrator::SubscriptionRunOrchestrator::get_running_subscription_progress();
     Ok(serde_json::to_value(&result).map_err(|e| e.to_string())?)
 }
 
@@ -398,7 +398,7 @@ pub async fn rename_subscription(state: &AppState, input: RenameSubscriptionInpu
 }
 
 pub async fn run_subscription_query(state: &AppState, input: RunSubscriptionQueryInput) -> Result<(), String> {
-    crate::subscriptions::controller::SubscriptionController::run_subscription_query(
+    crate::subscriptions::run_orchestrator::SubscriptionRunOrchestrator::run_subscription_query(
         &state.db,
         &state.blob_store,
         &state.rate_limiter,

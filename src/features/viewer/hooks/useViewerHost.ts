@@ -1,6 +1,6 @@
 import { useCallback, useMemo, useRef, useState } from 'react';
-import type { DetailViewControls, DetailViewState } from '../../grid/DetailView';
-import type { MasonryImageItem } from '../../grid/shared';
+import type { MediaViewControls, MediaViewState } from '../../grid/MediaView';
+import type { MediaItem } from '../../grid/shared';
 import {
   clampSession,
   createSession,
@@ -9,18 +9,16 @@ import {
   type ViewerSession,
 } from '../../grid/runtime/gridViewerSession';
 
-export type { DetailViewControls, DetailViewState } from '../../grid/DetailView';
+export type { MediaViewControls, MediaViewState } from '../../grid/MediaView';
 
 export type ViewerOverlayMode = 'detail' | 'quick_look' | 'slideshow' | null;
 
 export interface ViewerSource {
-  images: MasonryImageItem[];
+  images: MediaItem[];
   totalCount: number | null;
-  hasMore: boolean;
-  loadMore?: () => void;
   inboxMode?: boolean;
   onInboxAction?: (hash: string, status: 'active' | 'trash') => void;
-  onDetailStateChange?: (state: DetailViewState | null, controls: DetailViewControls | null) => void;
+  onDetailStateChange?: (state: MediaViewState | null, controls: MediaViewControls | null) => void;
   onDetailImageChange?: (hash: string) => void;
   onQuickLookOpen?: (hash: string) => void;
   onQuickLookImageChange?: (hash: string) => void;
@@ -43,7 +41,7 @@ export interface ViewerHostController {
   navigate: (delta: number) => void;
 }
 
-function rebaseOpenSession(session: ViewerSession | null, images: MasonryImageItem[]): ViewerSession | null {
+function rebaseOpenSession(session: ViewerSession | null, images: MediaItem[]): ViewerSession | null {
   if (!session) return null;
   const rebased = rebaseSession(session, images);
   if (rebased) return rebased;
@@ -74,6 +72,7 @@ export function useViewerHost(): ViewerHostController {
     sourceRef.current = source;
     if (!mode) return;
     setSession((prev) => {
+      if (!prev) return prev; // no active session to rebase
       const next = rebaseOpenSession(prev, source.images);
       if (!next) {
         queueMicrotask(() => close(''));

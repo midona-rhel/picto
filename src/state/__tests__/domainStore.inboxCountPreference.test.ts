@@ -29,7 +29,7 @@ describe('domainStore inbox count resolution', () => {
     getPageSlimMock.mockReset();
 
     useDomainStore.setState({
-      allImagesCount: 0,
+      allActiveCount: 0,
       inboxCount: 4,
       uncategorizedCount: 0,
       trashCount: 0,
@@ -57,7 +57,7 @@ describe('domainStore inbox count resolution', () => {
   it('prefers sidebar tree inbox count over stale cached inbox grid totals', async () => {
     getTreeMock.mockResolvedValue({
       nodes: [
-        { id: 'system:all', kind: 'system', name: 'All Images', count: 10 },
+        { id: 'system:all', kind: 'system', name: 'All Active', count: 10 },
         { id: 'system:inbox', kind: 'system', name: 'Inbox', count: 7 },
         { id: 'system:trash', kind: 'system', name: 'Trash', count: 0 },
       ],
@@ -74,14 +74,14 @@ describe('domainStore inbox count resolution', () => {
   it('does not let a stale sidebar fetch lower live inbox count during subscription imports', async () => {
     useDomainStore.getState().subscriptionRunStarted();
     useDomainStore.getState().applySidebarCounts({
-      all_images: 10,
+      all_active: 10,
       inbox: 7,
       trash: 0,
     });
 
     getTreeMock.mockResolvedValue({
       nodes: [
-        { id: 'system:all', kind: 'system', name: 'All Images', count: 10 },
+        { id: 'system:all', kind: 'system', name: 'All Active', count: 10 },
         { id: 'system:inbox', kind: 'system', name: 'Inbox', count: 4 },
         { id: 'system:trash', kind: 'system', name: 'Trash', count: 0 },
       ],
@@ -98,7 +98,7 @@ describe('domainStore inbox count resolution', () => {
   it('allows inbox count to decrease again after subscription imports finish', async () => {
     useDomainStore.getState().subscriptionRunStarted();
     useDomainStore.getState().applySidebarCounts({
-      all_images: 10,
+      all_active: 10,
       inbox: 7,
       trash: 0,
     });
@@ -106,7 +106,7 @@ describe('domainStore inbox count resolution', () => {
 
     getTreeMock.mockResolvedValue({
       nodes: [
-        { id: 'system:all', kind: 'system', name: 'All Images', count: 10 },
+        { id: 'system:all', kind: 'system', name: 'All Active', count: 10 },
         { id: 'system:inbox', kind: 'system', name: 'Inbox', count: 4 },
         { id: 'system:trash', kind: 'system', name: 'Trash', count: 0 },
       ],

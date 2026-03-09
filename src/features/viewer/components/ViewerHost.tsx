@@ -1,4 +1,4 @@
-import { DetailView } from '../../grid/DetailView';
+import { MediaView } from '../../grid/MediaView';
 import { QuickLook } from '../../grid/QuickLook';
 import { Slideshow } from './Slideshow';
 import type { ViewerHostController } from '../hooks/useViewerHost';
@@ -30,7 +30,6 @@ export function ViewerHost({ viewer }: ViewerHostProps) {
         totalCount={source.totalCount}
         onClose={(exitHash) => viewer.close(exitHash)}
         onImageChange={(hash) => source.onQuickLookImageChange?.(hash)}
-        onLoadMore={source.hasMore ? source.loadMore : undefined}
       />
     );
   }
@@ -44,7 +43,7 @@ export function ViewerHost({ viewer }: ViewerHostProps) {
         background: 'var(--color-background)',
       }}
     >
-      <DetailView
+      <MediaView
         images={source.images}
         currentIndex={session.currentIndex}
         onNavigate={viewer.navigate}
@@ -52,10 +51,10 @@ export function ViewerHost({ viewer }: ViewerHostProps) {
         onClose={(exitHash) => viewer.close(exitHash)}
         onStateChange={(state, controls) => source.onDetailStateChange?.(state, controls)}
         onImageChange={(hash) => source.onDetailImageChange?.(hash)}
-        onLoadMore={source.hasMore ? source.loadMore : undefined}
         inboxMode={source.inboxMode}
         onInboxAction={source.onInboxAction}
       />
     </div>
   );
 }
+
