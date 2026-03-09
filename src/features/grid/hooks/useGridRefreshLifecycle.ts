@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, type Dispatch } from 'react';
+import { useEffect, useMemo, useRef, type Dispatch, type RefObject } from 'react';
 import { useGridMetadataStore } from '../../../state/gridMetadataStore';
 import { resolveGridEmptyContext } from '../gridEmptyContext';
 import type { GridRuntimeAction } from '../runtime';
@@ -6,6 +6,7 @@ import type { MasonryImageItem } from '../shared';
 import type { SmartFolderPredicate } from '../../smart-folders/components/types';
 import type { ViewerHostController } from '../../viewer/hooks/useViewerHost';
 import type { MediaViewControls, MediaViewState } from '../../viewer/hooks/useViewerHost';
+import { FADE_SETTLE_MS } from '../runtime/gridTransitionPipeline';
 
 export function useGridRefreshLifecycle(args: {
   dispatch: Dispatch<GridRuntimeAction>;
@@ -28,6 +29,7 @@ export function useGridRefreshLifecycle(args: {
   initialLoadDone: { current: boolean };
   viewer: ViewerHostController;
   onMediaViewStateChange?: (state: MediaViewState | null, controls: MediaViewControls | null) => void;
+  scrollRef: RefObject<HTMLDivElement | null>;
 }) {
   const {
     dispatch,
@@ -50,6 +52,7 @@ export function useGridRefreshLifecycle(args: {
     initialLoadDone,
     viewer,
     onMediaViewStateChange,
+    scrollRef,
   } = args;
 
   const pendingGridRemovals = useGridMetadataStore((s) => s.pendingGridRemovals);
@@ -91,21 +94,107 @@ export function useGridRefreshLifecycle(args: {
     });
   }, [dispatch, folderId, searchTags, smartFolderPredicate, statusFilter, targetSize, viewMode]);
 
+  // ---------------------------------------------------------------------------
+  // Refs to avoid re-triggering effects on unstable identity values
+  // ---------------------------------------------------------------------------
+
   const viewerRef = useRef(viewer);
   viewerRef.current = viewer;
   const onMediaViewStateChangeRef = useRef(onMediaViewStateChange);
   onMediaViewStateChangeRef.current = onMediaViewStateChange;
-  useEffect(() => {
-    viewerRef.current.close('');
-    onMediaViewStateChangeRef.current?.(null, null);
-    dispatch({ type: 'CLEAR_SELECTION' });
-    dispatch({ type: 'SET_SELECTED_SUBFOLDER', id: null });
-  }, [dispatch, scopeKey]);
+  const requestReplaceRef = useRef(requestReplace);
+  requestReplaceRef.current = requestReplace;
+
+  // ---------------------------------------------------------------------------
+  // Transition orchestration
+  // ---------------------------------------------------------------------------
+
+  // Track previous scopeKey and queryKey to detect which changed
+  const prevScopeKeyRef = useRef(scopeKey);
+  const prevQueryKeyRef = useRef(queryKey);
+  const fadeOutTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const fadeInTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const isFirstRenderRef = useRef(true);
 
   useEffect(() => {
-    initialLoadDone.current = false;
-    void requestReplace();
-  }, [initialLoadDone, queryKey, requestReplace]);
+    // On first render, just do a plain load — no fade
+    if (isFirstRenderRef.current) {
+      isFirstRenderRef.current = false;
+      prevScopeKeyRef.current = scopeKey;
+      prevQueryKeyRef.current = queryKey;
+      initialLoadDone.current = false;
+      void requestReplaceRef.current();
+      return;
+    }
+
+    const scopeChanged = prevScopeKeyRef.current !== scopeKey;
+    const queryChanged = prevQueryKeyRef.current !== queryKey;
+
+    prevScopeKeyRef.current = scopeKey;
+    prevQueryKeyRef.current = queryKey;
+
+    // Nothing changed — skip
+    if (!scopeChanged && !queryChanged) return;
+
+    // Clear any pending transition timers (rapid clicks restart the fade)
+    if (fadeOutTimerRef.current) {
+      clearTimeout(fadeOutTimerRef.current);
+      fadeOutTimerRef.current = null;
+    }
+    if (fadeInTimerRef.current) {
+      clearTimeout(fadeInTimerRef.current);
+      fadeInTimerRef.current = null;
+    }
+
+    // 1. Lock grid immediately — no debounce
+    dispatch({ type: 'SET_TRANSITION_STAGE', stage: 'fading_out' });
+
+    // 2. After fade-out completes, swap data and fade in
+    fadeOutTimerRef.current = setTimeout(async () => {
+      fadeOutTimerRef.current = null;
+
+      if (scopeChanged) {
+        // Scope change: close viewer, clear selection, reset scroll
+        viewerRef.current.close('');
+        onMediaViewStateChangeRef.current?.(null, null);
+        dispatch({ type: 'CLEAR_SELECTION' });
+        dispatch({ type: 'SET_SELECTED_SUBFOLDER', id: null });
+        dispatch({ type: 'CLEAR_DATASET' });
+        if (scrollRef.current) {
+          scrollRef.current.scrollTop = 0;
+        }
+      }
+
+      // Replace data while grid is invisible
+      initialLoadDone.current = false;
+      await requestReplaceRef.current();
+
+      // 3. Start fade-in
+      dispatch({ type: 'SET_TRANSITION_STAGE', stage: 'fading_in' });
+
+      // 4. After fade-in completes, return to idle
+      fadeInTimerRef.current = setTimeout(() => {
+        fadeInTimerRef.current = null;
+        dispatch({ type: 'SET_TRANSITION_STAGE', stage: 'idle' });
+      }, FADE_SETTLE_MS);
+    }, FADE_SETTLE_MS);
+
+    return () => {
+      if (fadeOutTimerRef.current) {
+        clearTimeout(fadeOutTimerRef.current);
+        fadeOutTimerRef.current = null;
+      }
+      if (fadeInTimerRef.current) {
+        clearTimeout(fadeInTimerRef.current);
+        fadeInTimerRef.current = null;
+      }
+    };
+  }, [dispatch, scopeKey, queryKey, initialLoadDone, scrollRef]);
+
+  // ---------------------------------------------------------------------------
+  // External refresh triggers (gridRefreshSeq, refreshTrigger)
+  // These do a plain requestReplace — no fade transition
+  // ---------------------------------------------------------------------------
 
   const prevRefreshTrigger = useRef(refreshTrigger);
   useEffect(() => {
@@ -115,6 +204,10 @@ export function useGridRefreshLifecycle(args: {
     }
   }, [refreshTrigger, requestReplace]);
 
+  // ---------------------------------------------------------------------------
+  // Optimistic grid removals
+  // ---------------------------------------------------------------------------
+
   useEffect(() => {
     if (pendingGridRemovals.size === 0) return;
     const toRemove = new Set(pendingGridRemovals);
@@ -122,6 +215,10 @@ export function useGridRefreshLifecycle(args: {
     dispatch({ type: 'FILTER_IMAGES', predicate: (img) => !toRemove.has(img.hash) });
     dispatch({ type: 'REMOVE_HASHES', hashes: toRemove });
   }, [dispatch, pendingGridRemovals]);
+
+  // ---------------------------------------------------------------------------
+  // Active grid scope tracking
+  // ---------------------------------------------------------------------------
 
   useEffect(() => {
     let scope: string;
@@ -132,6 +229,10 @@ export function useGridRefreshLifecycle(args: {
     else scope = 'system:all';
     useGridMetadataStore.getState().setActiveGridScope(scope);
   }, [collectionEntityId, folderId, statusFilter]);
+
+  // ---------------------------------------------------------------------------
+  // Metadata invalidation — patch tiles in-place
+  // ---------------------------------------------------------------------------
 
   useEffect(() => {
     if (metadataInvalidatedHashes.size === 0) return;
@@ -155,6 +256,10 @@ export function useGridRefreshLifecycle(args: {
       if (changed) dispatch({ type: 'SET_IMAGES', images: next });
     });
   }, [dispatch, metadataInvalidatedHashes, stateRef]);
+
+  // ---------------------------------------------------------------------------
+  // Grid refresh sequence (from backend invalidation)
+  // ---------------------------------------------------------------------------
 
   const prevGridRefreshSeq = useRef(gridRefreshSeq);
   useEffect(() => {

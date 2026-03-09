@@ -21,11 +21,16 @@ function isDataAction(action: GridRuntimeAction): boolean {
     || action.type === 'SET_HAS_MORE'
     || action.type === 'SET_ERROR'
     || action.type === 'CLEAR_DATASET'
-    || action.type === 'COMMIT_GEOMETRY';
+    || action.type === 'COMMIT_GEOMETRY'
+    || action.type === 'SET_TRANSITION_STAGE';
 }
 
 export function gridDataReducer(state: GridDataState, action: GridRuntimeAction): GridDataState {
   if (!isDataAction(action)) return state;
+
+  if (action.type === 'SET_TRANSITION_STAGE') {
+    return { ...state, transitionStage: action.stage };
+  }
 
   switch (action.type) {
     case 'SET_IMAGES':

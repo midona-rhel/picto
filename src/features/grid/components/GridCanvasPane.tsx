@@ -5,6 +5,8 @@ import { GridInlineRenameOverlay } from './GridInlineRenameOverlay';
 import type { MasonryImageItem, MediaItem } from '../shared';
 import type { LayoutItem } from '../layoutMath';
 import type { GridEmptyContext, GridViewMode } from '../runtime';
+import type { TransitionStage } from '../runtime/gridTransitionPipeline';
+import { transitionOpacity, transitionCss, isTransitionFrozen } from '../runtime/gridTransitionPipeline';
 
 export function GridCanvasPane(props: {
   scrollRef: RefObject<HTMLDivElement | null>;
@@ -55,6 +57,7 @@ export function GridCanvasPane(props: {
   cancelRename: () => void;
   positions: LayoutItem[];
   renameImages: MediaItem[];
+  transitionStage: TransitionStage;
 }) {
   const {
     scrollRef,
@@ -105,6 +108,7 @@ export function GridCanvasPane(props: {
     cancelRename,
     positions,
     renameImages,
+    transitionStage,
   } = props;
 
   return (
@@ -123,6 +127,8 @@ export function GridCanvasPane(props: {
         position: 'relative',
         pointerEvents: gridFreezeActive ? 'none' : 'auto',
         filter: grayscalePreview ? 'grayscale(1)' : undefined,
+        opacity: transitionOpacity(transitionStage),
+        transition: transitionCss(transitionStage),
       } as React.CSSProperties}
     >
       <div style={{ height: 8 }} />
@@ -154,7 +160,7 @@ export function GridCanvasPane(props: {
           scrollContainerRef={scrollRef}
           popHash={popHash}
           onPopComplete={onPopComplete}
-          frozen={gridFreezeActive}
+          frozen={gridFreezeActive || isTransitionFrozen(transitionStage)}
           marqueeActive={marqueeActive}
           showTileName={showTileName}
           showResolution={showResolution}

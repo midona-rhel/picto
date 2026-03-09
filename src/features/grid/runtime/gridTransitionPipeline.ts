@@ -15,13 +15,10 @@ export type TransitionStage = 'idle' | 'fading_out' | 'fading_in';
 // ---------------------------------------------------------------------------
 
 /** CSS transition duration for grid opacity fades (ms). */
-export const FADE_DURATION_MS = 120;
+export const FADE_DURATION_MS = 150;
 
 /** Minimum wait before committing a transition — FADE_DURATION_MS + safety buffer (ms). */
-export const FADE_SETTLE_MS = 130;
-
-/** Debounce window for coalescing multi-step scope navigation state changes (ms). */
-export const SCOPE_COALESCE_MS = 32;
+export const FADE_SETTLE_MS = 160;
 
 // ---------------------------------------------------------------------------
 // Selectors

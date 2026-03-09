@@ -43,10 +43,6 @@ interface CacheState {
   // Metadata cache (hash → resolved metadata)
   metadataCache: Map<string, ResolvedMetadata>;
 
-  // Selection state
-  selectedHashes: Set<string>;
-  lastSelectedHash: string | null;
-
   // Grid refresh sequence — incremented by gridRefresher on grid_scopes invalidation
   gridRefreshSeq: number;
 
@@ -74,20 +70,10 @@ interface CacheState {
   enqueueGridRemoval: (hash: string) => void;
   clearGridRemovals: () => void;
 
-  // Selection actions
-  select: (hash: string) => void;
-  deselect: (hash: string) => void;
-  toggleSelect: (hash: string) => void;
-  selectAll: (hashes: string[]) => void;
-  deselectAll: () => void;
-  setSelection: (hashes: string[]) => void;
-
 }
 
 export const useGridMetadataStore = create<CacheState>((set, get) => ({
   metadataCache: new Map(),
-  selectedHashes: new Set(),
-  lastSelectedHash: null,
   gridRefreshSeq: 0,
   metadataInvalidatedHashes: new Set(),
   activeGridScope: null,
@@ -206,44 +192,6 @@ export const useGridMetadataStore = create<CacheState>((set, get) => ({
 
   clearGridRemovals: () => {
     set({ pendingGridRemovals: new Set() });
-  },
-
-  // Selection
-  select: (hash: string) => {
-    set((state) => {
-      const newSet = new Set(state.selectedHashes);
-      newSet.add(hash);
-      return { selectedHashes: newSet, lastSelectedHash: hash };
-    });
-  },
-
-  deselect: (hash: string) => {
-    set((state) => {
-      const newSet = new Set(state.selectedHashes);
-      newSet.delete(hash);
-      return { selectedHashes: newSet };
-    });
-  },
-
-  toggleSelect: (hash: string) => {
-    const state = get();
-    if (state.selectedHashes.has(hash)) {
-      state.deselect(hash);
-    } else {
-      state.select(hash);
-    }
-  },
-
-  selectAll: (hashes: string[]) => {
-    set({ selectedHashes: new Set(hashes), lastSelectedHash: hashes[hashes.length - 1] ?? null });
-  },
-
-  deselectAll: () => {
-    set({ selectedHashes: new Set(), lastSelectedHash: null });
-  },
-
-  setSelection: (hashes: string[]) => {
-    set({ selectedHashes: new Set(hashes), lastSelectedHash: hashes[hashes.length - 1] ?? null });
   },
 
 }));

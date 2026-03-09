@@ -7,7 +7,6 @@ import { VideoPlayer } from '../../features/viewer/components/VideoPlayer';
 import { StripView } from './StripView';
 import { useSettingsStore } from '../../state/settingsStore';
 import { mediaFileUrl, mediaThumbnailUrl } from '../../shared/lib/mediaUrl';
-import { getCachedMediaUrl } from './enhancedMediaCache';
 import { useImageZoom, type ImageSize, type ZoomState } from './useImageZoom';
 import { useNavigatorDrag } from './useNavigatorDrag';
 import { useNavigatorRenderer } from './useNavigatorRenderer';
@@ -206,7 +205,7 @@ export function DetailView({ images, currentIndex, onNavigate, onClose, onStateC
 
   const imageUrl = useMemo(() => {
     if (!currentImage) return '';
-    return getCachedMediaUrl(currentImage.hash, 'full') || mediaFileUrl(currentImage.hash, currentImage.mime);
+    return mediaFileUrl(currentImage.hash, currentImage.mime);
   }, [currentImage]);
 
   // Navigate with boundary flash — adapt delta-based onNavigate to absolute-index API

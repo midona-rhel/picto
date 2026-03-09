@@ -4,6 +4,7 @@ import type {
   GridEmptyContext,
 } from './gridRuntimeState';
 import type { VirtualAllSelectionState } from './gridUiState';
+import type { TransitionStage } from './gridTransitionPipeline';
 
 // ---------------------------------------------------------------------------
 // Action types
@@ -48,6 +49,9 @@ type CommitGeometry = {
 // Viewer
 type SetPopHash = { type: 'SET_POP_HASH'; hash: string | null };
 
+// Transition
+type SetTransitionStage = { type: 'SET_TRANSITION_STAGE'; stage: TransitionStage };
+
 // Misc
 type SetBoxActive = { type: 'SET_BOX_ACTIVE'; active: boolean };
 type SetDragOver = { type: 'SET_DRAG_OVER'; over: boolean };
@@ -74,5 +78,6 @@ export type GridRuntimeAction =
   | SetSelectedSubfolder
   | CommitGeometry
   | SetPopHash
+  | SetTransitionStage
   | SetBoxActive
   | SetDragOver;

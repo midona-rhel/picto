@@ -348,6 +348,7 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
     initialLoadDone,
     viewer,
     onMediaViewStateChange,
+    scrollRef,
   });
 
   useGridViewerSource({
@@ -462,6 +463,7 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
         cancelRename={cancelRename}
         positions={canvasLayoutRef.current}
         renameImages={imagesRef.current}
+        transitionStage={state.transitionStage}
       />
 
       <GridDialogsLayer

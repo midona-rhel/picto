@@ -1,5 +1,6 @@
 import type { MasonryImageItem } from '../shared';
 import type { GridEmptyContext, GridRuntimeInitProps, GridViewMode } from './gridRuntimeState';
+import type { TransitionStage } from './gridTransitionPipeline';
 
 export interface GridDataState {
   images: MasonryImageItem[];
@@ -7,6 +8,7 @@ export interface GridDataState {
   hasMore: boolean;
   defaultGridCursor: string | null;
   error: string | null;
+  transitionStage: TransitionStage;
   displayViewMode: GridViewMode;
   displayTargetSize: number;
   displayFolderId: number | null;
@@ -21,6 +23,7 @@ export function createInitialGridDataState(props: GridRuntimeInitProps): GridDat
     hasMore: true,
     defaultGridCursor: null,
     error: null,
+    transitionStage: 'idle',
     displayViewMode: props.viewMode,
     displayTargetSize: props.targetSize,
     displayFolderId: props.folderId,

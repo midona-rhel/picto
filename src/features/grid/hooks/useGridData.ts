@@ -3,7 +3,6 @@ import { api } from '#desktop/api';
 import { prefetchMetadataBatch } from '#features/grid/data';
 import type { GridRuntimeAction } from '../runtime/gridRuntimeReducer';
 import type { GridRuntimeState } from '../runtime/gridRuntimeState';
-import { batchPreloadMediaUrls } from '../enhancedMediaCache';
 import { toMasonryItem } from '../shared';
 import {
   buildGridQuery,
@@ -101,8 +100,7 @@ export function useGridData({
       dispatch({ type: 'SET_IMAGES', images: items });
 
       if (items.length > 0) {
-        batchPreloadMediaUrls(items, 'thumb512', 'high');
-        void prefetchMetadataBatch(items.map((item) => item.hash));
+void prefetchMetadataBatch(items.map((item) => item.hash));
       }
     } catch (err) {
       if (generation !== generationRef.current) return;
@@ -162,8 +160,7 @@ export function useGridData({
       dispatch({ type: 'APPEND_IMAGES', images: items, maxItems: MAX_LOADED_ITEMS });
 
       if (items.length > 0) {
-        batchPreloadMediaUrls(items, 'thumb512', 'high');
-        void prefetchMetadataBatch(items.map((item) => item.hash));
+void prefetchMetadataBatch(items.map((item) => item.hash));
       }
     } catch (err) {
       if (generation !== generationRef.current) return;

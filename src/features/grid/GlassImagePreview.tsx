@@ -2,7 +2,7 @@ import { useMemo, memo } from 'react';
 import { Badge } from '@mantine/core';
 import { IconPhoto } from '@tabler/icons-react';
 import type { MediaItem } from './shared';
-import { getCachedMediaUrl } from './enhancedMediaCache';
+import { mediaThumbnailUrl } from '../../shared/lib/mediaUrl';
 import previewStyles from './GlassImagePreview.module.css';
 import {
   MediaCardFrame,
@@ -20,8 +20,7 @@ export const GlassImagePreview = memo(function GlassImagePreview({ images }: Gla
   const thumbUrls = useMemo(() => {
     const urls = new Map<string, string>();
     for (const img of images) {
-      const url = getCachedMediaUrl(img.hash, 'thumb512');
-      if (url) urls.set(img.hash, url);
+      urls.set(img.hash, mediaThumbnailUrl(img.hash));
     }
     return urls;
   }, [images]);

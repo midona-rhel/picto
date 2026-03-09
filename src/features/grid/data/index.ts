@@ -17,5 +17,3 @@ export type {
   SelectionQuerySpec,
   SelectionSummary,
 } from '../metadataPrefetch';
-
-export { cleanupMediaCache } from '../enhancedMediaCache';
