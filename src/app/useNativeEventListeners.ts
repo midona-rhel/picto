@@ -1,14 +1,12 @@
 import { useEffect } from 'react';
-import { api, listen, listenRuntimeEvent } from '#desktop/api';
+import { api, listen } from '#desktop/api';
 import { useDomainStore } from '../state/domainStore';
 import { useRuntimeSyncStore } from '../state/runtimeSyncStore';
 import { useLibraryStore } from '../state/libraryStore';
-import { useManualImportStore } from '../state/manualImportStore';
 import { useNavigationStore, type ViewType } from '../state/navigationStore';
 import { startAllRefreshers, stopAllRefreshers } from '../runtime/refresherOrchestrator';
 import { performUndo, performRedo } from '../shared/controllers/undoRedoController';
 import { runBestEffort } from '../shared/lib/asyncOps';
-import type { ManualImportProgressEvent } from '../shared/types/api/events';
 import type { ResourceKey } from '../shared/types/generated/runtime-contract';
 
 /**
@@ -74,15 +72,6 @@ export function useNativeEventListeners(): void {
     return () => {
       runBestEffort('menu.unlistenUndo', unlistenUndo.then((fn) => fn()));
       runBestEffort('menu.unlistenRedo', unlistenRedo.then((fn) => fn()));
-    };
-  }, []);
-
-  useEffect(() => {
-    const unlisten = listenRuntimeEvent('manual-import-progress', (event: ManualImportProgressEvent) => {
-      useManualImportStore.getState().update(event);
-    });
-    return () => {
-      runBestEffort('runtime.unlistenManualImportProgress', unlisten.then((fn) => fn()));
     };
   }, []);
 }

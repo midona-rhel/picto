@@ -15,6 +15,7 @@ interface ManualImportState {
   errors: number;
   start: (total: number, label?: string) => void;
   update: (progress: ManualImportProgressEvent) => void;
+  setProgress: (progress: { done: number; total: number; imported: number; skipped: number; errors: number; label?: string }) => void;
   finish: (result: { imported: number; skipped: number; errors: number }) => void;
   fail: () => void;
   clear: () => void;
@@ -66,6 +67,22 @@ export const useManualImportStore = create<ManualImportState>((set, get) => ({
       skipped: progress.skipped,
       errors: progress.errors,
     });
+  },
+
+  setProgress: (progress) => {
+    if (get().status === 'idle') {
+      get().start(progress.total, progress.label);
+    }
+    set((state) => ({
+      visible: true,
+      status: 'running',
+      label: progress.label ?? state.label,
+      done: progress.done,
+      total: progress.total,
+      imported: progress.imported,
+      skipped: progress.skipped,
+      errors: progress.errors,
+    }));
   },
 
   finish: ({ imported, skipped, errors }) => {
