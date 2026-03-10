@@ -51,6 +51,7 @@ export function useCanvasBaseDraw(args: {
   isScrollingRef: { current: boolean };
   viewModeRef: { current: GridViewMode };
   layoutRef: { current: { positions: LayoutItem[] } };
+  bucketIndexRef: { current: Map<number, number[]> | null };
   imagesRef: { current: MasonryImageItem[] };
   lastVisibleRef: { current: LastVisibleState | null };
   textHeightRef: { current: number };
@@ -88,6 +89,7 @@ export function useCanvasBaseDraw(args: {
     isScrollingRef,
     viewModeRef,
     layoutRef,
+    bucketIndexRef,
     imagesRef,
     lastVisibleRef,
     textHeightRef,
@@ -165,6 +167,7 @@ export function useCanvasBaseDraw(args: {
       viewportHeight: vh,
       isScrolling,
       queueDepth: atlas.getStats().queueDepth,
+      bucketIndex: bucketIndexRef.current,
     });
     const {
       startIdx,
@@ -187,7 +190,7 @@ export function useCanvasBaseDraw(args: {
       positions,
       imgs,
       atlasGet: (hash) => atlas.get(hash),
-      atlasEnsure: (hash, mime, tileWidth, tileHeight, y) => atlas.ensure(hash, mime, tileWidth, tileHeight, y),
+      atlasEnsure: (hash, y) => atlas.ensure(hash, y),
       now,
       theme,
       visible: { startIdx, visibleIndices, visibleIterEnd, scrollTop, cssH, th, br },
@@ -207,7 +210,7 @@ export function useCanvasBaseDraw(args: {
       const pos = positions[i];
       const image = imgs[i];
       if (!pos || !image) continue;
-      atlas.ensure(image.hash, image.mime, pos.w, pos.h - th, pos.y + pos.h / 2);
+      atlas.ensure(image.hash, pos.y + pos.h / 2);
       prefetched++;
     }
 
@@ -264,6 +267,7 @@ export function useCanvasBaseDraw(args: {
     isScrollingRef,
     lastVisibleRef,
     layoutRef,
+    bucketIndexRef,
     markDirty,
     perfRef,
     renamingHashRef,

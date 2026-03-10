@@ -246,7 +246,7 @@ export function CanvasGrid({
   // Horizontal padding prevents clipping of edge drop indicators
   const paddingX = 16;
   const textHeight = computeTextHeight(showTileName, showResolution);
-  const { renderImages, layout } = useWaterfallLayoutWorker({
+  const { renderImages, layout, bucketIndex } = useWaterfallLayoutWorker({
     images: layoutImages,
     layoutWidth,
     targetSize,
@@ -274,6 +274,8 @@ export function CanvasGrid({
   });
   const layoutRef = useRef(layout);
   layoutRef.current = layout;
+  const bucketIndexRef = useRef(bucketIndex);
+  bucketIndexRef.current = bucketIndex;
   const prevLayoutRef = useRef(layout);
   const viewModeRef = useRef(viewMode);
   viewModeRef.current = viewMode;
@@ -337,6 +339,7 @@ export function CanvasGrid({
     isScrollingRef,
     viewModeRef,
     layoutRef,
+    bucketIndexRef,
     imagesRef,
     lastVisibleRef,
     textHeightRef,

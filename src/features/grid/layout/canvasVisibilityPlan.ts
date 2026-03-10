@@ -1,4 +1,5 @@
 import type { LayoutItem } from '../layoutMath';
+import { BUCKET_SIZE } from '../layoutMath';
 
 export interface CanvasVisibilityPlan {
   startIdx: number;
@@ -33,8 +34,9 @@ export function buildCanvasVisibilityPlan(args: {
   viewportHeight: number;
   isScrolling: boolean;
   queueDepth: number;
+  bucketIndex?: Map<number, number[]> | null;
 }): CanvasVisibilityPlan {
-  const { positions, scrollTop, viewportHeight, isScrolling, queueDepth } = args;
+  const { positions, scrollTop, viewportHeight, isScrolling, queueDepth, bucketIndex } = args;
 
   if (positions.length === 0 || viewportHeight === 0) {
     return {
@@ -66,6 +68,32 @@ export function buildCanvasVisibilityPlan(args: {
   const prefetchTop = Math.max(0, scrollTop - prefetchPx);
   const prefetchBottom = scrollTop + viewportHeight + prefetchPx;
 
+  if (bucketIndex && bucketIndex.size > 0) {
+    const visibleIndices = collectBucketWindowIndices(positions, bucketIndex, top, bottom);
+    const visibleSet = new Set(visibleIndices);
+    const prefetchCandidates = collectBucketWindowIndices(positions, bucketIndex, prefetchTop, prefetchBottom)
+      .filter((index) => !visibleSet.has(index));
+    const below: number[] = [];
+    const above: number[] = [];
+    for (const index of prefetchCandidates) {
+      const pos = positions[index];
+      if (!pos) continue;
+      if (pos.y >= bottom) below.push(index);
+      else above.push(index);
+    }
+    const prefetchIndices = below.concat(above.reverse()).slice(0, prefetchLimit);
+    const cancelPadPx = isScrolling ? 1400 : 2600;
+    return {
+      startIdx: 0,
+      endIdx: visibleIndices.length,
+      visibleIndices,
+      visibleIterEnd: visibleIndices.length,
+      prefetchIndices,
+      cancelTop: prefetchTop - cancelPadPx,
+      cancelBottom: prefetchBottom + cancelPadPx,
+    };
+  }
+
   const pfStart = lowerBound(positions, prefetchTop, (p) => p.y + p.h);
   const pfEnd = lowerBound(positions, prefetchBottom, (p) => p.y);
 
@@ -89,4 +117,38 @@ export function buildCanvasVisibilityPlan(args: {
     cancelTop: prefetchTop - cancelPadPx,
     cancelBottom: prefetchBottom + cancelPadPx,
   };
+}
+
+function collectBucketWindowIndices(
+  positions: LayoutItem[],
+  bucketIndex: Map<number, number[]>,
+  top: number,
+  bottom: number,
+): number[] {
+  const startBucket = Math.floor(top / BUCKET_SIZE);
+  const endBucket = Math.floor(bottom / BUCKET_SIZE);
+  const seen = new Set<number>();
+  const indices: number[] = [];
+
+  for (let bucket = startBucket; bucket <= endBucket; bucket += 1) {
+    const bucketIndices = bucketIndex.get(bucket);
+    if (!bucketIndices) continue;
+    for (const index of bucketIndices) {
+      if (seen.has(index)) continue;
+      seen.add(index);
+      const pos = positions[index];
+      if (!pos) continue;
+      if (pos.y + pos.h < top || pos.y > bottom) continue;
+      indices.push(index);
+    }
+  }
+
+  indices.sort((a, b) => {
+    const posA = positions[a];
+    const posB = positions[b];
+    if (posA.y !== posB.y) return posA.y - posB.y;
+    if (posA.x !== posB.x) return posA.x - posB.x;
+    return a - b;
+  });
+  return indices;
 }
