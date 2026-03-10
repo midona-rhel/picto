@@ -90,4 +90,8 @@ describe('thumbnailPipeline source selection', () => {
       requestedLongEdge: 512,
     }));
   });
+
+  it('caps oversized full-quality requests at the display proxy budget', () => {
+    expect(__private__.quantizeLongEdge(4096)).toBe(2048);
+  });
 });

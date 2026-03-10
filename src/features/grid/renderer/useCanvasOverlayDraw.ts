@@ -86,7 +86,7 @@ export function useCanvasOverlayDraw(args: {
     if (!overlay) return;
 
     if (!overlayCtxRef.current || overlayCtxRef.current.canvas !== overlay) {
-      overlayCtxRef.current = overlay.getContext('2d', { alpha: true });
+      overlayCtxRef.current = overlay.getContext('2d', { alpha: true, desynchronized: true });
     }
     const ctx = overlayCtxRef.current;
     if (!ctx) return;

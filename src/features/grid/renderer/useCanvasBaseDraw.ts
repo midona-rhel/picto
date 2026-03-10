@@ -120,7 +120,7 @@ export function useCanvasBaseDraw(args: {
     scrollTopRef.current = metrics.localScrollTop;
 
     if (!ctxRef.current || ctxRef.current.canvas !== canvas) {
-      ctxRef.current = canvas.getContext('2d', { alpha: true });
+      ctxRef.current = canvas.getContext('2d', { alpha: true, desynchronized: true });
     }
     const ctx = ctxRef.current;
     if (!ctx) return;

@@ -5,6 +5,7 @@ import {
   THUMBNAIL_PIPELINE_MAX_ACTIVE_IDLE,
   THUMBNAIL_PIPELINE_MAX_ACTIVE_SCROLL,
   THUMBNAIL_PIPELINE_MAX_FULL_ACTIVE_IDLE,
+  THUMBNAIL_PIPELINE_MAX_FULL_LONG_EDGE,
   THUMBNAIL_PIPELINE_MAX_FULL_ACTIVE_SCROLL,
   THUMBNAIL_PIPELINE_MAX_ENTRIES,
   THUMBNAIL_PIPELINE_SOURCE_EDGE,
@@ -362,7 +363,10 @@ function isEligibleForFullQuality(args: EnsureThumbnailArgs): boolean {
 
 function quantizeLongEdge(value: number): number {
   const step = 128;
-  return Math.max(THUMBNAIL_PIPELINE_SOURCE_EDGE, Math.ceil(value / step) * step);
+  return Math.min(
+    THUMBNAIL_PIPELINE_MAX_FULL_LONG_EDGE,
+    Math.max(THUMBNAIL_PIPELINE_SOURCE_EDGE, Math.ceil(value / step) * step),
+  );
 }
 
 function getRequestPriority(args: EnsureThumbnailArgs): ThumbnailRequestPriority {
