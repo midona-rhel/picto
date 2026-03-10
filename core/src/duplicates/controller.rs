@@ -31,6 +31,48 @@ fn format_priority(mime: &str) -> u32 {
 }
 
 impl DuplicateController {
+    fn repoint_entity_relationships(
+        conn: &rusqlite::Connection,
+        winner_id: i64,
+        loser_id: i64,
+    ) -> rusqlite::Result<Vec<i64>> {
+        conn.execute(
+            "INSERT OR IGNORE INTO subscription_entity (subscription_id, entity_id)
+             SELECT subscription_id, ?1
+             FROM subscription_entity
+             WHERE entity_id = ?2",
+            rusqlite::params![winner_id, loser_id],
+        )?;
+        conn.execute(
+            "DELETE FROM subscription_entity WHERE entity_id = ?1",
+            [loser_id],
+        )?;
+
+        let mut folder_stmt = conn.prepare_cached(
+            "SELECT folder_id FROM folder_entity WHERE entity_id = ?1 ORDER BY folder_id",
+        )?;
+        let affected_folder_ids = folder_stmt
+            .query_map([loser_id], |row| row.get::<_, i64>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+
+        conn.execute(
+            "INSERT OR IGNORE INTO folder_entity (folder_id, entity_id, position_rank)
+             SELECT fe.folder_id, ?1, fe.position_rank
+             FROM folder_entity fe
+             WHERE fe.entity_id = ?2
+               AND NOT EXISTS (
+                   SELECT 1
+                   FROM folder_entity existing
+                   WHERE existing.folder_id = fe.folder_id
+                     AND existing.entity_id = ?1
+               )",
+            rusqlite::params![winner_id, loser_id],
+        )?;
+        conn.execute("DELETE FROM folder_entity WHERE entity_id = ?1", [loser_id])?;
+
+        Ok(affected_folder_ids)
+    }
+
     /// Get paginated duplicate pairs.
     pub async fn get_duplicate_pairs(
         db: &SqliteDatabase,
@@ -331,18 +373,23 @@ impl DuplicateController {
             })
             .await?;
 
-        if loser_in_collection {
+        let affected_folder_ids = if loser_in_collection {
             let w_fid = winner_fid;
             let l_fid = loser_fid;
             db.with_conn(move |conn| {
                 crate::folders::collections_db::repoint_entity_to_file(conn, l_fid, w_fid)?;
+                let folder_ids = Self::repoint_entity_relationships(conn, w_fid, l_fid)?;
                 conn.execute("UPDATE file SET status = 2 WHERE file_id = ?1", [l_fid])?;
-                Ok(())
+                Ok(folder_ids)
             })
-            .await?;
+            .await?
         } else {
             db.update_file_status(&loser_hash, 2).await?;
-        }
+            let w_fid = winner_fid;
+            let l_fid = loser_fid;
+            db.with_conn(move |conn| Self::repoint_entity_relationships(conn, w_fid, l_fid))
+                .await?
+        };
 
         let winner_id = db.resolve_hash(&winner_hash).await?;
         let loser_id = db.resolve_hash(&loser_hash).await?;
@@ -364,6 +411,9 @@ impl DuplicateController {
         db.emit_read_model_event(ReadModelEvent::FileTagsChanged {
             file_id: db.resolve_hash(&winner_hash).await?,
         });
+        for folder_id in affected_folder_ids {
+            db.emit_read_model_event(ReadModelEvent::FolderChanged { folder_id });
+        }
         db.emit_read_model_event(ReadModelEvent::DuplicateChanged);
 
         Ok(SmartMergeResult {
@@ -406,18 +456,23 @@ impl DuplicateController {
             })
             .await?;
 
-        if loser_in_collection {
+        let affected_folder_ids = if loser_in_collection {
             let w_fid = winner_id;
             let l_fid = loser_id;
             db.with_conn(move |conn| {
                 crate::folders::collections_db::repoint_entity_to_file(conn, l_fid, w_fid)?;
+                let folder_ids = Self::repoint_entity_relationships(conn, w_fid, l_fid)?;
                 conn.execute("UPDATE file SET status = 2 WHERE file_id = ?1", [l_fid])?;
-                Ok(())
+                Ok(folder_ids)
             })
-            .await?;
+            .await?
         } else {
             db.update_file_status(trash_hash, 2).await?;
-        }
+            let w_fid = winner_id;
+            let l_fid = loser_id;
+            db.with_conn(move |conn| Self::repoint_entity_relationships(conn, w_fid, l_fid))
+                .await?
+        };
         let reason_owned = reason.to_string();
         db.with_conn(move |conn| {
             crate::duplicates::db::resolve_pair_with_decision(
@@ -433,6 +488,9 @@ impl DuplicateController {
         })
         .await?;
 
+        for folder_id in affected_folder_ids {
+            db.emit_read_model_event(ReadModelEvent::FolderChanged { folder_id });
+        }
         db.emit_read_model_event(ReadModelEvent::DuplicateChanged);
         Ok(())
     }

@@ -82,12 +82,9 @@ impl<'a> ImportPipeline<'a> {
     }
 
     fn cleanup_partial_blob_write(&self, hex_hash: &str, mime_string: &str) {
-        let original_ext = crate::blob_store::mime_to_extension(mime_string);
-        if let Err(err) = self.blob_store.delete_original(hex_hash, Some(original_ext)) {
-            warn!(hash = %hex_hash, error = %err, "Failed to clean up partial original blob");
-        }
-        if let Err(err) = self.blob_store.delete_thumbnail(hex_hash) {
-            warn!(hash = %hex_hash, error = %err, "Failed to clean up partial thumbnail blob");
+        let _ = mime_string;
+        if let Err(err) = self.blob_store.delete(hex_hash) {
+            warn!(hash = %hex_hash, error = %err, "Failed to clean up partial blob writes");
         }
     }
 
