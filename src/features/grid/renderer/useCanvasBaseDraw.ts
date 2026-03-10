@@ -1,11 +1,11 @@
 import { useCallback, type Dispatch, type SetStateAction } from 'react';
-import { buildCanvasVisibilityPlan, type WaterfallSeenState } from '../layout/canvasVisibilityPlan';
+import { buildCanvasVisibilityPlan } from '../layout/canvasVisibilityPlan';
 import { drawCanvasBaseLayer } from './canvasGridDrawHelpers';
 import type { GridViewMode } from '../runtime';
 import type { MasonryImageItem } from '../shared';
 import type { LayoutItem } from '../layoutMath';
 import type { GridDebugStats } from './canvasGridDebug';
-import type { ThumbnailPipeline } from '../media/thumbnailPipeline';
+import type { ThumbnailPipeline } from '../../../shared/lib/canvas/thumbnailPipeline';
 
 interface ThemeState {
   primaryColor: string;
@@ -52,10 +52,6 @@ export function useCanvasBaseDraw(args: {
   viewModeRef: { current: GridViewMode };
   layoutRef: { current: { positions: LayoutItem[] } };
   imagesRef: { current: MasonryImageItem[] };
-  bucketIndexRef: { current: Map<number, number[]> | null };
-  waterfallVisibleIndicesRef: { current: number[] };
-  waterfallPrefetchIndicesRef: { current: number[] };
-  waterfallSeenStateRef: { current: WaterfallSeenState };
   lastVisibleRef: { current: LastVisibleState | null };
   textHeightRef: { current: number };
   showTileNameRef: { current: boolean };
@@ -93,10 +89,6 @@ export function useCanvasBaseDraw(args: {
     viewModeRef,
     layoutRef,
     imagesRef,
-    bucketIndexRef,
-    waterfallVisibleIndicesRef,
-    waterfallPrefetchIndicesRef,
-    waterfallSeenStateRef,
     lastVisibleRef,
     textHeightRef,
     showTileNameRef,
@@ -149,15 +141,12 @@ export function useCanvasBaseDraw(args: {
     atlas.setScrolling(isScrollingRef.current);
 
     const t0 = import.meta.env.DEV ? performance.now() : 0;
-    atlas.resetFrameBudget();
 
     const positions = layoutRef.current.positions;
     const imgs = imagesRef.current;
     const scrollTop = scrollTopRef.current;
     const vh = viewportHeightRef.current;
     const isScrolling = isScrollingRef.current;
-
-    atlas.setViewport(scrollTop, vh);
 
     const dpr = window.devicePixelRatio || 1;
     const [cssW, cssH] = ensureCanvasSize(canvas, dpr);
@@ -174,13 +163,8 @@ export function useCanvasBaseDraw(args: {
       positions,
       scrollTop,
       viewportHeight: vh,
-      mode: viewModeRef.current,
-      bucketIndex: bucketIndexRef.current,
       isScrolling,
       queueDepth: atlas.getStats().queueDepth,
-      waterfallVisibleOut: waterfallVisibleIndicesRef.current,
-      waterfallPrefetchOut: waterfallPrefetchIndicesRef.current,
-      waterfallSeenState: waterfallSeenStateRef.current,
     });
     const {
       startIdx,
@@ -270,7 +254,6 @@ export function useCanvasBaseDraw(args: {
     }
   }, [
     atlasRef,
-    bucketIndexRef,
     canvasRef,
     ctxRef,
     frozenRef,
@@ -296,8 +279,5 @@ export function useCanvasBaseDraw(args: {
     videoScrubIdxRef,
     viewModeRef,
     viewportHeightRef,
-    waterfallPrefetchIndicesRef,
-    waterfallSeenStateRef,
-    waterfallVisibleIndicesRef,
   ]);
 }

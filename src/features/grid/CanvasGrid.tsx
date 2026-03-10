@@ -3,9 +3,10 @@ import {
   useState,
   useEffect,
   useMemo,
+  useCallback,
   RefObject,
 } from 'react';
-import { MasonryImageItem } from './shared';
+import { isVideoMime, MasonryImageItem } from './shared';
 import { VideoScrubOverlay } from './VideoScrubOverlay';
 import { mediaFileUrl } from '../../shared/lib/mediaUrl';
 import { imageDrag } from '../../shared/lib/imageDrag';
@@ -13,24 +14,17 @@ import type { GridViewMode, GridEmptyContext } from './runtime';
 import {
   type LayoutItem,
 } from './layoutMath';
-import { useGridLayoutEngine } from './layout/gridLayoutEngine';
+import { useWaterfallLayoutWorker } from './hooks/useWaterfallLayoutWorker';
+import { computeTextHeight } from './gridLayout';
 import { useEstimatedGridTotalHeight } from './layout/useEstimatedGridTotalHeight';
-import {
-  type WaterfallSeenState,
-} from './layout/canvasVisibilityPlan';
 import { hasSameLayoutGeometry } from './renderer/canvasGridPrimitives';
 import { useCanvasRedrawScheduler } from './renderer/useCanvasRedrawScheduler';
-import { useCanvasHoverInteractions } from './renderer/useCanvasHoverInteractions';
-import { useThumbnailPipelineLifecycle } from './media/useThumbnailPipelineLifecycle';
+import { useCanvasPointerInteractions } from './renderer/useCanvasPointerInteractions';
+import { useThumbnailPipelineLifecycle } from '../../shared/lib/canvas/useThumbnailPipelineLifecycle';
 import { useCanvasViewport } from './renderer/useCanvasViewport';
-import { useCanvasDragInteractions } from './renderer/useCanvasDragInteractions';
 import { useCanvasBaseDraw } from './renderer/useCanvasBaseDraw';
 import { useCanvasOverlayDraw } from './renderer/useCanvasOverlayDraw';
-import { useCanvasHitTesting } from './renderer/useCanvasHitTesting';
-import { useCanvasScrollAnchor } from './renderer/useCanvasScrollAnchor';
-import { useCanvasLoadMore } from './renderer/useCanvasLoadMore';
-import { useCanvasClickInteractions } from './renderer/useCanvasClickInteractions';
-import { useCanvasPopAnimation } from './renderer/useCanvasPopAnimation';
+import { hitTestCanvasTile } from './renderer/canvasHitTesting';
 import type { GridDebugStats } from './renderer/canvasGridDebug';
 import { CanvasGridDebugHud } from './renderer/CanvasGridDebugHud';
 import { HoverPreviewPortal } from './renderer/HoverPreviewPortal';
@@ -251,19 +245,14 @@ export function CanvasGrid({
 
   // Horizontal padding prevents clipping of edge drop indicators
   const paddingX = 16;
-  const {
-    textHeight,
-    renderImages,
-    layout,
-    bucketIndex,
-  } = useGridLayoutEngine({
+  const textHeight = computeTextHeight(showTileName, showResolution);
+  const { renderImages, layout } = useWaterfallLayoutWorker({
     images: layoutImages,
     layoutWidth,
     targetSize,
     gap,
     viewMode,
-    showTileName,
-    showResolution,
+    textHeight,
     paddingX,
   });
 
@@ -283,16 +272,6 @@ export function CanvasGrid({
     textHeight,
     paddingX,
   });
-  const bucketIndexRef = useRef(bucketIndex);
-  bucketIndexRef.current = bucketIndex;
-  const waterfallVisibleIndicesRef = useRef<number[]>([]);
-  const waterfallPrefetchIndicesRef = useRef<number[]>([]);
-  const waterfallHitIndicesRef = useRef<number[]>([]);
-  const waterfallSeenStateRef = useRef<WaterfallSeenState>({
-    seen: new Uint32Array(0),
-    token: 1,
-  });
-
   const layoutRef = useRef(layout);
   layoutRef.current = layout;
   const prevLayoutRef = useRef(layout);
@@ -359,10 +338,6 @@ export function CanvasGrid({
     viewModeRef,
     layoutRef,
     imagesRef,
-    bucketIndexRef,
-    waterfallVisibleIndicesRef,
-    waterfallPrefetchIndicesRef,
-    waterfallSeenStateRef,
     lastVisibleRef,
     textHeightRef,
     showTileNameRef,
@@ -381,37 +356,88 @@ export function CanvasGrid({
 
   drawBaseRef.current = drawBase;
 
-  useCanvasLoadMore({
-    scrollContainerRef,
-    onLoadMore,
-    onLoadMoreRef,
-    getScrollMetrics,
-    layoutRef,
-    threshold: LOAD_MORE_THRESHOLD,
-  });
+  // -- load-more trigger (inlined from useCanvasLoadMore) --
+  useEffect(() => {
+    const scrollElement = scrollContainerRef?.current;
+    if (!scrollElement || !onLoadMore) return;
+    const onScroll = () => {
+      const metrics = getScrollMetrics();
+      if (metrics.localScrollTop + metrics.viewportHeight > layoutRef.current.totalHeight - LOAD_MORE_THRESHOLD) {
+        onLoadMoreRef.current?.();
+      }
+    };
+    scrollElement.addEventListener('scroll', onScroll, { passive: true });
+    return () => {
+      scrollElement.removeEventListener('scroll', onScroll);
+    };
+  }, [getScrollMetrics, layoutRef, onLoadMore, onLoadMoreRef, scrollContainerRef]);
 
   useEffect(() => { markDirty('both'); }, [layout, markDirty]);
-  useCanvasScrollAnchor({
-    layout,
-    prevLayoutRef,
-    scrollContainerRef,
-    getScrollMetrics,
-  });
+  // -- scroll anchor preservation (inlined from useCanvasScrollAnchor) --
+  useEffect(() => {
+    const prev = prevLayoutRef.current;
+    prevLayoutRef.current = layout;
+    if (!prev || prev.positions === layout.positions) return;
+    if (prev.positions.length !== layout.positions.length) return;
+
+    const scrollEl = scrollContainerRef?.current;
+    if (!scrollEl) return;
+    const metrics = getScrollMetrics();
+    const st = metrics.localScrollTop;
+    const vh = metrics.viewportHeight;
+    if (vh === 0) return;
+
+    const viewportCenter = st + vh / 2;
+    let anchorIdx = -1;
+    let bestDist = Infinity;
+    for (let i = 0; i < prev.positions.length; i++) {
+      const p = prev.positions[i];
+      const tileCenter = p.y + p.h / 2;
+      const dist = Math.abs(tileCenter - viewportCenter);
+      if (dist < bestDist) {
+        bestDist = dist;
+        anchorIdx = i;
+      }
+    }
+    if (anchorIdx < 0 || anchorIdx >= layout.positions.length) return;
+
+    const oldTileCenter = prev.positions[anchorIdx].y + prev.positions[anchorIdx].h / 2;
+    const offsetInViewport = oldTileCenter - st;
+    const newTileCenter = layout.positions[anchorIdx].y + layout.positions[anchorIdx].h / 2;
+    const newScrollTop = newTileCenter - offsetInViewport;
+    scrollEl.scrollTop = Math.max(0, metrics.canvasTopInScroll + newScrollTop);
+  }, [getScrollMetrics, layout, prevLayoutRef, scrollContainerRef]);
 
   useEffect(() => { markDirty('overlay'); }, [selectedHashes, markDirty]);
   useEffect(() => { markDirty('base'); }, [thumbnailFitMode, showExtension, showExtensionLabel, markDirty]);
-  const { hitTest, isZoomButtonHit } = useCanvasHitTesting({
-    canvasRef,
-    layoutRef,
-    viewModeRef,
-    scrollTopRef,
-    viewportHeightRef,
-    bucketIndexRef,
-    waterfallSeenStateRef,
-    waterfallHitIndicesRef,
-    textHeightRef,
-    zoomBtnSize: ZOOM_BTN_SIZE,
-  });
+  const hitTest = useCallback((clientX: number, clientY: number): number | null => {
+    const canvas = canvasRef.current;
+    if (!canvas) return null;
+    const rect = canvas.getBoundingClientRect();
+    return hitTestCanvasTile({
+      positions: layoutRef.current.positions,
+      mouseX: clientX - rect.left,
+      mouseY: clientY - rect.top + scrollTopRef.current,
+      scrollTop: scrollTopRef.current,
+      viewportHeight: viewportHeightRef.current,
+    });
+  }, [canvasRef, layoutRef, scrollTopRef, viewportHeightRef]);
+
+  const isZoomButtonHit = useCallback((clientX: number, clientY: number, tileIdx: number): boolean => {
+    const canvas = canvasRef.current;
+    if (!canvas) return false;
+    const rect = canvas.getBoundingClientRect();
+    const mx = clientX - rect.left;
+    const my = clientY - rect.top + scrollTopRef.current;
+    const pos = layoutRef.current.positions[tileIdx];
+    if (!pos) return false;
+    const imageHeight = pos.h - textHeightRef.current;
+    const bgW = ZOOM_BTN_SIZE + 4;
+    const bgH = ZOOM_BTN_SIZE + 2;
+    const zx = pos.x + pos.w - bgW;
+    const zy = pos.y + imageHeight - bgH;
+    return mx >= zx && mx < zx + bgW && my >= zy && my < zy + bgH;
+  }, [canvasRef, layoutRef, scrollTopRef, textHeightRef]);
 
   const {
     hoverPreview,
@@ -424,12 +450,26 @@ export function CanvasGrid({
     clearPendingHoverTimers,
     clearPendingVideoScrubTimer,
     clearVideoScrubIndex,
-  } = useCanvasHoverInteractions({
+    reorderDragRef,
+    handlePointerDown,
+    handleCanvasDragOver,
+    handleCanvasDrop,
+    handleCanvasDragLeave,
+    clearDragState,
+  } = useCanvasPointerInteractions({
     hitTest,
     isZoomButtonHit,
-    imagesRef,
-    layoutRef,
     canvasRef,
+    scrollContainerRef,
+    getScrollMetrics,
+    imagesRef,
+    selectedHashesRef,
+    layoutRef,
+    viewModeRef,
+    viewportHeightRef,
+    reorderModeRef,
+    dragDisabledRef,
+    onReorderRef,
     scrollTopRef,
     textHeightRef,
     hoveredTileRef,
@@ -450,32 +490,6 @@ export function CanvasGrid({
     clearVideoScrubIndex();
     setVideoScrub((prev) => (prev ? null : prev));
   };
-  const {
-    reorderDragRef,
-    handlePointerDown,
-    handleCanvasDragOver,
-    handleCanvasDrop,
-    handleCanvasDragLeave,
-    clearDragState,
-  } = useCanvasDragInteractions({
-    hitTest,
-    isZoomButtonHit,
-    canvasRef,
-    scrollContainerRef,
-    getScrollMetrics,
-    imagesRef,
-    selectedHashesRef,
-    layoutRef,
-    viewModeRef,
-    viewportHeightRef,
-    bucketIndexRef,
-    waterfallSeenStateRef,
-    waterfallHitIndicesRef,
-    reorderModeRef,
-    dragDisabledRef,
-    onReorderRef,
-    markDirty,
-  });
   const drawOverlay = useCanvasOverlayDraw({
     lastVisibleRef,
     overlayCanvasRef,
@@ -502,22 +516,49 @@ export function CanvasGrid({
     return imageDrag.onNativeDragEnd(clearDragState);
   }, [clearDragState]);
 
-  const { handleClick } = useCanvasClickInteractions({
-    hitTest,
-    isZoomButtonHit,
-    imagesRef,
-    onImageClickRef,
-    showHoverPreview,
-  });
+  // -- click interactions (inlined from useCanvasClickInteractions) --
+  const handleClick = useCallback((e: React.MouseEvent) => {
+    const idx = hitTest(e.clientX, e.clientY);
+    if (idx == null) return;
+    const image = imagesRef.current[idx];
+    if (!image) return;
 
-  useCanvasPopAnimation({
-    popHash,
-    scrollContainerRef,
-    onPopComplete,
-    getScrollMetrics,
-    layoutRef,
-    imagesRef,
-  });
+    if (isZoomButtonHit(e.clientX, e.clientY, idx)) {
+      if (!isVideoMime(image.mime) && !image.is_collection) showHoverPreview(image);
+      return;
+    }
+
+    onImageClickRef.current(image, e);
+  }, [hitTest, imagesRef, isZoomButtonHit, onImageClickRef, showHoverPreview]);
+
+  // -- pop animation / scroll-into-view (inlined from useCanvasPopAnimation) --
+  useEffect(() => {
+    if (!popHash) return;
+    const scrollEl = scrollContainerRef?.current;
+    if (!scrollEl) {
+      onPopComplete?.();
+      return;
+    }
+
+    const positions = layoutRef.current.positions;
+    const imgs = imagesRef.current;
+    const idx = imgs.findIndex((img) => img.hash === popHash);
+    if (idx === -1 || !positions[idx]) {
+      onPopComplete?.();
+      return;
+    }
+
+    const pos = positions[idx];
+    const metrics = getScrollMetrics();
+    const viewportH = metrics.viewportHeight;
+    const scrollTop = metrics.localScrollTop;
+
+    if (pos.y < scrollTop || pos.y + pos.h > scrollTop + viewportH) {
+      const targetLocalScroll = pos.y - viewportH / 2 + pos.h / 2;
+      scrollEl.scrollTop = Math.max(0, metrics.canvasTopInScroll + targetLocalScroll);
+    }
+    onPopComplete?.();
+  }, [getScrollMetrics, imagesRef, layoutRef, onPopComplete, popHash, scrollContainerRef]);
 
   // Not yet measured
   if (containerWidth === 0) {

@@ -30,6 +30,63 @@ interface GridMutationActions {
   handleRemoveFromCollection: () => void;
 }
 
+/* ------------------------------------------------------------------ */
+/*  Shared helpers                                                     */
+/* ------------------------------------------------------------------ */
+
+const plural = (n: number) => `${n.toLocaleString()} image${n === 1 ? '' : 's'}`;
+
+/** Optimistically remove matching images and clear selection. */
+function optimisticRemove(
+  state: GridRuntimeState,
+  dispatch: React.Dispatch<GridRuntimeAction>,
+) {
+  const { virtualAllSelection } = state;
+  if (virtualAllSelection) {
+    dispatch({ type: 'FILTER_IMAGES', predicate: (i) => virtualAllSelection.excludedHashes.has(i.hash) });
+  } else {
+    const sel = state.selectedHashes;
+    dispatch({ type: 'FILTER_IMAGES', predicate: (i) => !sel.has(i.hash) });
+  }
+  dispatch({ type: 'CLEAR_SELECTION' });
+}
+
+/** Run a status-change mutation on the current selection, with undo/redo and notification. */
+function statusMutation(
+  state: GridRuntimeState,
+  dispatch: React.Dispatch<GridRuntimeAction>,
+  targetStatus: string,
+  undoStatus: string,
+  label: (n: number) => string,
+  successTitle: string,
+  errorTitle: string,
+  requestGridReload: () => void,
+) {
+  const { virtualAllSelection, selectedHashes } = state;
+
+  optimisticRemove(state, dispatch);
+
+  const spec = virtualAllSelection
+    ? selectVirtualSpec(state)!
+    : buildExplicitSelectionSpec([...selectedHashes]);
+
+  if (!virtualAllSelection && selectedHashes.size === 0) return;
+
+  const specSnapshot = structuredClone(spec);
+
+  api.file.setStatusSelection(spec, targetStatus)
+    .then((count) => {
+      const n = Number(count ?? selectedHashes.size);
+      registerUndoAction({
+        label: label(n),
+        undo: async () => { await api.file.setStatusSelection(specSnapshot, undoStatus); requestGridReload(); },
+        redo: async () => { await api.file.setStatusSelection(specSnapshot, targetStatus); requestGridReload(); },
+      });
+      notifyInfo(`${label(n)}`, successTitle);
+    })
+    .catch((err) => notifyError(err, errorTitle));
+}
+
 export function useGridMutationActions({
   stateRef,
   dispatch,
@@ -52,85 +109,53 @@ export function useGridMutationActions({
   }, []);
 
   const handleDeleteSelected = useCallback(() => {
-    const { virtualAllSelection, selectedHashes, images } = stateRef.current;
+    const state = stateRef.current;
+    const { virtualAllSelection, selectedHashes, images } = state;
     const inTrash = statusFilter === 'trash';
 
-    if (virtualAllSelection) {
-      const spec = selectVirtualSpec(stateRef.current)!;
-      const specSnapshot = structuredClone(spec);
-      const undoStatus = statusFilter ?? 'active';
-      dispatch({
-        type: 'FILTER_IMAGES',
-        predicate: (i) => virtualAllSelection.excludedHashes.has(i.hash),
-      });
-      dispatch({ type: 'CLEAR_SELECTION' });
-      const promise = inTrash
-        ? api.file.deleteSelection(spec)
-        : api.file.setStatusSelection(spec, 'trash');
-      promise
-        .then((count) => {
-          const affectedCount = Number(count ?? 0);
-          if (!inTrash) {
-            registerUndoAction({
-              label: `Move ${affectedCount.toLocaleString()} image${affectedCount === 1 ? '' : 's'} to trash`,
-              undo: async () => {
-                await api.file.setStatusSelection(specSnapshot, undoStatus);
-                requestGridReload();
-              },
-              redo: async () => {
-                await api.file.setStatusSelection(specSnapshot, 'trash');
-                requestGridReload();
-              },
-            });
-          }
-          notifyInfo(
-            `${affectedCount.toLocaleString()} image${affectedCount === 1 ? '' : 's'} ${
-              inTrash ? 'permanently deleted' : 'moved to trash'
-            }`,
-            inTrash ? 'Deleted' : 'Moved to Trash',
-          );
-        })
-        .catch((err) => {
-          notifyError(err, 'Delete Failed');
-        });
-      return;
-    }
-
-    if (selectedHashes.size === 0) return;
-    const hashes = Array.from(selectedHashes);
-    const previousStatuses = hashes.map((hash) => ({
-      hash,
-      status: images.find((img) => img.hash === hash)?.status ?? (statusFilter ?? 'active'),
-    }));
-    const explicitSpec = buildExplicitSelectionSpec(hashes);
-    const hashSet = new Set(hashes);
-    dispatch({ type: 'FILTER_IMAGES', predicate: (i) => !hashSet.has(i.hash) });
-    dispatch({ type: 'CLEAR_SELECTION' });
-
+    // Permanent delete in trash: no undo
     if (inTrash) {
-      api.file.deleteMany(hashes).catch((err) => {
-        notifyError(err, 'Delete Failed');
-      });
+      optimisticRemove(state, dispatch);
+      if (virtualAllSelection) {
+        const spec = selectVirtualSpec(state)!;
+        api.file.deleteSelection(spec)
+          .then((count) => notifyInfo(`${plural(Number(count ?? 0))} permanently deleted`, 'Deleted'))
+          .catch((err) => notifyError(err, 'Delete Failed'));
+      } else if (selectedHashes.size > 0) {
+        api.file.deleteMany([...selectedHashes]).catch((err) => notifyError(err, 'Delete Failed'));
+      }
       return;
     }
 
-    api.file.setStatusSelection(explicitSpec, 'trash')
-      .then(() => {
-        registerUndoAction({
-          label: `Move ${hashes.length.toLocaleString()} image${hashes.length === 1 ? '' : 's'} to trash`,
-          undo: async () => {
-            await restoreStatusesByHash(previousStatuses);
-            requestGridReload();
-          },
-          redo: async () => {
-            await api.file.setStatusSelection(explicitSpec, 'trash');
-            requestGridReload();
-          },
-        });
-      })
-      .catch((err) => {
-        notifyError(err, 'Delete Failed');
-      });
+    // Move to trash with per-item status restore for explicit selection
+    if (!virtualAllSelection) {
+      if (selectedHashes.size === 0) return;
+      const hashes = [...selectedHashes];
+      const previousStatuses = hashes.map((hash) => ({
+        hash,
+        status: images.find((img) => img.hash === hash)?.status ?? (statusFilter ?? 'active'),
+      }));
+      const explicitSpec = buildExplicitSelectionSpec(hashes);
+      optimisticRemove(state, dispatch);
+      api.file.setStatusSelection(explicitSpec, 'trash')
+        .then(() => {
+          registerUndoAction({
+            label: `Move ${plural(hashes.length)} to trash`,
+            undo: async () => { await restoreStatusesByHash(previousStatuses); requestGridReload(); },
+            redo: async () => { await api.file.setStatusSelection(explicitSpec, 'trash'); requestGridReload(); },
+          });
+        })
+        .catch((err) => notifyError(err, 'Delete Failed'));
+      return;
+    }
+
+    // Virtual all-selection: move to trash
+    const undoStatus = statusFilter ?? 'active';
+    statusMutation(
+      state, dispatch, 'trash', undoStatus,
+      (n) => `Move ${plural(n)} to trash`,
+      'Moved to Trash', 'Delete Failed', requestGridReload,
+    );
   }, [stateRef, statusFilter, dispatch, restoreStatusesByHash, requestGridReload]);
 
   const handleRateSelected = useCallback((rating: number) => {
@@ -138,12 +163,9 @@ export function useGridMutationActions({
     const normalizedRating = rating || null;
     if (virtualAllSelection) {
       const spec = selectVirtualSpec(stateRef.current)!;
-      api.selection.updateRating(spec, normalizedRating).catch((err) =>
-        notifyError(err, 'Rating Failed'),
-      );
+      api.selection.updateRating(spec, normalizedRating).catch((err) => notifyError(err, 'Rating Failed'));
       return;
     }
-
     const hashes = [...selectedHashes];
     if (hashes.length === 0) return;
     Promise.all(hashes.map((hash) => api.file.updateRating(hash, rating))).catch((err) =>
@@ -152,62 +174,11 @@ export function useGridMutationActions({
   }, [stateRef]);
 
   const handleRestoreSelected = useCallback(() => {
-    const { virtualAllSelection, selectedHashes } = stateRef.current;
-    if (virtualAllSelection) {
-      const spec = selectVirtualSpec(stateRef.current)!;
-      const specSnapshot = structuredClone(spec);
-      dispatch({
-        type: 'FILTER_IMAGES',
-        predicate: (i) => virtualAllSelection.excludedHashes.has(i.hash),
-      });
-      dispatch({ type: 'CLEAR_SELECTION' });
-      api.file.setStatusSelection(spec, 'active')
-        .then((count) => {
-          const affectedCount = Number(count ?? 0);
-          registerUndoAction({
-            label: `Restore ${affectedCount.toLocaleString()} image${affectedCount === 1 ? '' : 's'}`,
-            undo: async () => {
-              await api.file.setStatusSelection(specSnapshot, 'trash');
-              requestGridReload();
-            },
-            redo: async () => {
-              await api.file.setStatusSelection(specSnapshot, 'active');
-              requestGridReload();
-            },
-          });
-          notifyInfo(`${affectedCount.toLocaleString()} image${affectedCount === 1 ? '' : 's'} restored`, 'Restored');
-        })
-        .catch((err) => {
-          notifyError(err, 'Restore Failed');
-        });
-      return;
-    }
-
-    if (selectedHashes.size === 0) return;
-    const hashes = Array.from(selectedHashes);
-    const explicitSpec = buildExplicitSelectionSpec(hashes);
-    const hashSet = new Set(hashes);
-    dispatch({ type: 'FILTER_IMAGES', predicate: (i) => !hashSet.has(i.hash) });
-    dispatch({ type: 'CLEAR_SELECTION' });
-    api.file.setStatusSelection(explicitSpec, 'active')
-      .then((count) => {
-        const affectedCount = Number(count ?? 0);
-        registerUndoAction({
-          label: `Restore ${affectedCount.toLocaleString()} image${affectedCount === 1 ? '' : 's'}`,
-          undo: async () => {
-            await api.file.setStatusSelection(explicitSpec, 'trash');
-            requestGridReload();
-          },
-          redo: async () => {
-            await api.file.setStatusSelection(explicitSpec, 'active');
-            requestGridReload();
-          },
-        });
-        notifyInfo(`${affectedCount.toLocaleString()} image${affectedCount === 1 ? '' : 's'} restored`, 'Restored');
-      })
-      .catch((err) => {
-        notifyError(err, 'Restore Failed');
-      });
+    statusMutation(
+      stateRef.current, dispatch, 'active', 'trash',
+      (n) => `Restore ${plural(n)}`,
+      'Restored', 'Restore Failed', requestGridReload,
+    );
   }, [stateRef, dispatch, requestGridReload]);
 
   const handleInboxAction = useCallback((hash: string, status: 'active' | 'trash') => {
@@ -215,90 +186,23 @@ export function useGridMutationActions({
       .then(() => {
         registerUndoAction({
           label: status === 'active' ? 'Accept inbox image' : 'Reject inbox image',
-          undo: async () => {
-            await api.file.setStatus(hash, 'inbox');
-            requestGridReload();
-          },
-          redo: async () => {
-            await api.file.setStatus(hash, status);
-            requestGridReload();
-          },
+          undo: async () => { await api.file.setStatus(hash, 'inbox'); requestGridReload(); },
+          redo: async () => { await api.file.setStatus(hash, status); requestGridReload(); },
         });
       })
-      .catch((err) => {
-        notifyError(err, status === 'active' ? 'Accept Failed' : 'Reject Failed');
-      });
+      .catch((err) => notifyError(err, status === 'active' ? 'Accept Failed' : 'Reject Failed'));
     dispatch({ type: 'FILTER_IMAGES', predicate: (i) => i.hash !== hash });
     dispatch({ type: 'REMOVE_HASHES', hashes: new Set([hash]) });
   }, [dispatch, requestGridReload]);
 
   const handleInboxSelectionAction = useCallback((status: 'active' | 'trash') => {
-    const { virtualAllSelection, selectedHashes } = stateRef.current;
-    const actionVerb = status === 'active' ? 'Accept' : 'Reject';
-    const actionPast = status === 'active' ? 'Accepted' : 'Rejected';
-
-    if (virtualAllSelection) {
-      const spec = selectVirtualSpec(stateRef.current);
-      if (!spec) return;
-      const specSnapshot = structuredClone(spec);
-      dispatch({
-        type: 'FILTER_IMAGES',
-        predicate: (i) => virtualAllSelection.excludedHashes.has(i.hash),
-      });
-      dispatch({ type: 'CLEAR_SELECTION' });
-      api.file.setStatusSelection(spec, status)
-        .then((count) => {
-          const affectedCount = Number(count ?? 0);
-          registerUndoAction({
-            label: `${actionVerb} ${affectedCount.toLocaleString()} inbox image${affectedCount === 1 ? '' : 's'}`,
-            undo: async () => {
-              await api.file.setStatusSelection(specSnapshot, 'inbox');
-              requestGridReload();
-            },
-            redo: async () => {
-              await api.file.setStatusSelection(specSnapshot, status);
-              requestGridReload();
-            },
-          });
-          notifyInfo(
-            `${actionPast} ${affectedCount.toLocaleString()} image${affectedCount === 1 ? '' : 's'}`,
-            actionPast,
-          );
-        })
-        .catch((err) => {
-          notifyError(err, status === 'active' ? 'Accept Failed' : 'Reject Failed');
-        });
-      return;
-    }
-
-    const hashes = Array.from(selectedHashes);
-    if (hashes.length === 0) return;
-    const explicitSpec = buildExplicitSelectionSpec(hashes);
-    const hashSet = new Set(hashes);
-    dispatch({ type: 'FILTER_IMAGES', predicate: (i) => !hashSet.has(i.hash) });
-    dispatch({ type: 'CLEAR_SELECTION' });
-    api.file.setStatusSelection(explicitSpec, status)
-      .then((count) => {
-        const affectedCount = Number(count ?? hashes.length);
-        registerUndoAction({
-          label: `${actionVerb} ${affectedCount.toLocaleString()} inbox image${affectedCount === 1 ? '' : 's'}`,
-          undo: async () => {
-            await api.file.setStatusSelection(explicitSpec, 'inbox');
-            requestGridReload();
-          },
-          redo: async () => {
-            await api.file.setStatusSelection(explicitSpec, status);
-            requestGridReload();
-          },
-        });
-        notifyInfo(
-          `${actionPast} ${affectedCount.toLocaleString()} image${affectedCount === 1 ? '' : 's'}`,
-          actionPast,
-        );
-      })
-      .catch((err) => {
-        notifyError(err, status === 'active' ? 'Accept Failed' : 'Reject Failed');
-      });
+    const verb = status === 'active' ? 'Accept' : 'Reject';
+    const past = status === 'active' ? 'Accepted' : 'Rejected';
+    statusMutation(
+      stateRef.current, dispatch, status, 'inbox',
+      (n) => `${verb} ${plural(n)}`,
+      past, `${verb} Failed`, requestGridReload,
+    );
   }, [dispatch, requestGridReload, stateRef]);
 
   const handleRemoveFromFolder = useCallback(() => {
@@ -312,19 +216,11 @@ export function useGridMutationActions({
       .then(() => {
         registerUndoAction({
           label: `Remove ${hashes.length} from folder`,
-          undo: async () => {
-            await api.folders.addFiles(folderId, hashes);
-            requestGridReload();
-          },
-          redo: async () => {
-            await api.folders.removeFiles(folderId, hashes);
-            requestGridReload();
-          },
+          undo: async () => { await api.folders.addFiles(folderId, hashes); requestGridReload(); },
+          redo: async () => { await api.folders.removeFiles(folderId, hashes); requestGridReload(); },
         });
       })
-      .catch((err) => {
-        notifyError(err, 'Remove from Folder Failed');
-      });
+      .catch((err) => notifyError(err, 'Remove from Folder Failed'));
   }, [folderId, stateRef, dispatch, requestGridReload]);
 
   const handleRemoveFromCollection = useCallback(() => {
@@ -338,19 +234,11 @@ export function useGridMutationActions({
       .then(() => {
         registerUndoAction({
           label: `Remove ${hashes.length} from collection`,
-          undo: async () => {
-            await api.collections.addMembers({ id: collectionEntityId, hashes });
-            requestGridReload();
-          },
-          redo: async () => {
-            await api.collections.removeMembers({ id: collectionEntityId, hashes });
-            requestGridReload();
-          },
+          undo: async () => { await api.collections.addMembers({ id: collectionEntityId, hashes }); requestGridReload(); },
+          redo: async () => { await api.collections.removeMembers({ id: collectionEntityId, hashes }); requestGridReload(); },
         });
       })
-      .catch((err) => {
-        notifyError(err, 'Remove from Collection Failed');
-      });
+      .catch((err) => notifyError(err, 'Remove from Collection Failed'));
   }, [collectionEntityId, stateRef, dispatch, requestGridReload]);
 
   return {

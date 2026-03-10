@@ -1,0 +1,281 @@
+/* Inspector panel */
+
+.panel {
+  height: 100%;
+  background: var(--inspector-background);
+  flex-shrink: 0;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+}
+
+.panelDragging {
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.panelDragging * {
+  transition: none !important;
+}
+
+/* Resize handle */
+
+.resizeHandle {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 5px;
+  cursor: col-resize;
+  z-index: 10;
+  border-left: 1px solid var(--color-border-secondary);
+  transition: border 200ms var(--timing-function-super);
+  transition-delay: 100ms;
+}
+
+.resizeHandle:hover {
+  border-left-width: 2px;
+  border-color: var(--color-primary-70);
+  transition-delay: 0ms;
+}
+
+/* Titlebar spacer */
+
+.titlebarSpacer {
+  flex-shrink: 0;
+  -webkit-app-region: drag;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding: 0 8px;
+}
+
+.pinBtn {
+  composes: icBtn from '../../../shared/styles/iconButton.module.css';
+  width: 28px;
+  height: 28px;
+  min-width: 28px;
+  -webkit-app-region: no-drag;
+}
+
+.pinBtnActive {
+  color: var(--color-text-primary);
+}
+
+/* Scrollable content */
+
+.scrollContent {
+  composes: scrollYStable from '../../../shared/styles/scrollArea.module.css';
+  flex: 1;
+  padding: 0 16px 48px 16px;
+}
+
+.contentStack {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  color: var(--color-text-primary);
+}
+
+/* Selection count */
+
+.selectionTitle {
+  text-align: center;
+  font-size: var(--font-size-md);
+  height: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-text-primary);
+  margin: 12px 0 8px;
+}
+
+/* Fields */
+
+.fieldStack {
+  display: flex;
+  flex-direction: column;
+  margin-top: 8px;
+}
+
+.fieldInput {
+  font-family: var(--font-family);
+  font-size: var(--font-size-md);
+  line-height: 20px;
+  min-height: 32px;
+  background: var(--color-black-20);
+  border: 1px solid var(--color-border-secondary);
+  border-radius: 6px;
+  padding: 6px 10px;
+  margin-bottom: 8px;
+  color: var(--color-text-primary);
+  outline: none;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.fieldInput:focus {
+  border-color: var(--color-primary);
+}
+
+.fieldInput::placeholder {
+  color: var(--color-text-tertiary);
+}
+
+.fieldInput[readonly] {
+  cursor: default;
+  opacity: 0.7;
+}
+
+/* Field row — composed from shared primitive */
+
+.fieldRow {
+  composes: fieldRow from '../../../shared/styles/fieldRow.module.css';
+  margin-bottom: 8px;
+}
+
+.fieldRowIcon {
+  composes: fieldRowIcon from '../../../shared/styles/fieldRow.module.css';
+}
+
+.fieldRowSep {
+  composes: fieldRowSep from '../../../shared/styles/fieldRow.module.css';
+}
+
+.fieldRowContent {
+  composes: fieldRowContent from '../../../shared/styles/fieldRow.module.css';
+}
+
+.fieldRowPlaceholder {
+  composes: fieldRowPlaceholder from '../../../shared/styles/fieldRow.module.css';
+}
+
+.fieldRowPopover {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  z-index: 10;
+  background: var(--box-background-glass);
+  backdrop-filter: blur(var(--box-background-blur));
+  -webkit-backdrop-filter: blur(var(--box-background-blur));
+  border: 1px solid var(--color-border-secondary);
+  border-radius: 6px;
+  box-shadow: var(--box-border-shadow);
+  margin-top: 2px;
+  padding: 0;
+}
+
+.fieldRowPopoverTextarea {
+  display: block;
+  width: 100%;
+  min-height: 60px;
+  max-height: 200px;
+  background: none;
+  border: none;
+  outline: none;
+  resize: none;
+  font-family: var(--font-family);
+  font-size: var(--font-size-md);
+  line-height: var(--line-height-relaxed);
+  color: var(--color-text-primary);
+  padding: 8px 10px;
+  box-sizing: border-box;
+  overflow-y: auto;
+  field-sizing: content;
+}
+
+.fieldRowPopoverTextarea::placeholder {
+  color: var(--color-text-tertiary);
+}
+
+/* Tags & Folders — same layout */
+
+.tagsWrap,
+.foldersWrap {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+/* Export button */
+
+.exportButton {
+  composes: btnReset from '../../../shared/styles/buttonReset.module.css';
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 36px;
+  margin-top: 12px;
+  background: var(--color-white-05);
+  border-radius: 6px;
+  color: var(--color-text-primary);
+  font-family: var(--font-family);
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-medium);
+  transition: background 150ms var(--timing-function-super);
+}
+
+.exportButton:hover {
+  background: var(--color-white-10);
+}
+
+/* Add button */
+
+.addButton {
+  composes: btnReset from '../../../shared/styles/buttonReset.module.css';
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  color: var(--color-text-primary);
+  border-radius: 6px;
+}
+
+.addButton > svg,
+.addButton > img {
+  opacity: 0.5;
+}
+
+.addButton:hover > svg,
+.addButton:hover > img {
+  opacity: 1;
+}
+
+/* Properties table */
+
+.propsStack {
+  display: flex;
+  flex-direction: column;
+}
+
+/* Loading */
+
+.loadingCenter {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 120px;
+}
+
+/* Light theme overrides */
+
+[data-mantine-color-scheme="light"] .fieldInput {
+  background: var(--color-white-50);
+  border-color: var(--color-border-secondary);
+}
+
+[data-mantine-color-scheme="light"] .fieldInput:focus {
+  background: var(--color-white-80);
+  border-color: var(--color-primary);
+}
+
+[data-mantine-color-scheme="light"] .exportButton {
+  background: var(--color-black-10);
+}
+
+[data-mantine-color-scheme="light"] .exportButton:hover {
+  background: var(--color-black-10);
+}

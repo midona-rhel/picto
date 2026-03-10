@@ -144,13 +144,13 @@
 }
 
 .sidebar {
+  composes: scrollY from '../../../shared/styles/scrollArea.module.css';
   position: absolute;
   top: 0;
   left: 0;
   bottom: 0;
   width: 200px;
   cursor: pointer;
-  overflow-y: auto;
   padding: 4px;
 }
 
@@ -197,10 +197,8 @@
 }
 
 .sidebarName {
+  composes: truncate from '../../../shared/styles/textClamp.module.css';
   max-width: 130px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
   flex: 1;
   opacity: 0.85;
   transition: opacity 120ms ease;
@@ -255,9 +253,8 @@
 }
 
 .tagsContainer {
+  composes: scrollY from '../../../shared/styles/scrollArea.module.css';
   flex: 1;
-  overflow-y: auto;
-  overflow-x: hidden;
   padding: 4px 0;
 }
 

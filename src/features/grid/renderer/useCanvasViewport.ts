@@ -1,49 +1,18 @@
 import { useCallback, useEffect, useRef, useState, type RefObject } from 'react';
 
-const SCROLLBAR_JITTER_PX = 20;
-
 function useMeasuredContainerWidth() {
   const [width, setWidth] = useState(0);
-  const widthRef = useRef(0);
   const roRef = useRef<ResizeObserver | null>(null);
-  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const hasMeasured = useRef(false);
 
   const ref = useCallback((element: HTMLDivElement | null) => {
     if (roRef.current) {
       roRef.current.disconnect();
       roRef.current = null;
     }
-    if (timerRef.current) {
-      clearTimeout(timerRef.current);
-      timerRef.current = null;
-    }
-    hasMeasured.current = false;
     if (!element) return;
 
     const observer = new ResizeObserver(([entry]) => {
-      const rounded = Math.round(entry.contentRect.width);
-      if (!hasMeasured.current) {
-        hasMeasured.current = true;
-        widthRef.current = rounded;
-        setWidth(rounded);
-        return;
-      }
-
-      const previous = widthRef.current;
-      if (rounded === previous) return;
-      if (Math.abs(rounded - previous) > SCROLLBAR_JITTER_PX) {
-        widthRef.current = rounded;
-        setWidth(rounded);
-        return;
-      }
-
-      if (timerRef.current) clearTimeout(timerRef.current);
-      timerRef.current = setTimeout(() => {
-        if (rounded === widthRef.current) return;
-        widthRef.current = rounded;
-        setWidth(rounded);
-      }, 90);
+      setWidth(Math.round(entry.contentRect.width));
     });
 
     observer.observe(element);

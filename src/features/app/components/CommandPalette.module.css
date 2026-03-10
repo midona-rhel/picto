@@ -115,11 +115,9 @@
 }
 
 .itemLabel {
+  composes: truncate from '../../../shared/styles/textClamp.module.css';
   flex: 1;
   min-width: 0;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
   font-size: var(--font-size-md);
   color: var(--color-text-primary);
 }

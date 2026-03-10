@@ -3,10 +3,9 @@
    ========================================================================== */
 
 .root {
+  composes: scrollY from '../../../shared/styles/scrollArea.module.css';
   height: 100%;
   min-height: 0;
-  overflow-y: auto;
-  overflow-x: hidden;
   padding: 0 12px 12px;
 }
 
@@ -118,14 +117,12 @@
 }
 
 .subscriptionGroupName {
+  composes: truncate from '../../../shared/styles/textClamp.module.css';
   font-size: 13px;
   font-weight: 600;
   color: var(--color-text-primary);
   min-width: 0;
   flex: 1;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
   display: block;
 }
 
@@ -197,21 +194,17 @@
 }
 
 .progressStatus {
+  composes: truncate from '../../../shared/styles/textClamp.module.css';
   font-size: 11px;
   color: var(--color-text-tertiary);
   margin-bottom: 4px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 .progressStatusDetail {
+  composes: truncate from '../../../shared/styles/textClamp.module.css';
   font-size: 11px;
   color: var(--color-text-secondary);
   margin-bottom: 6px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 .progressBar {
@@ -286,14 +279,12 @@
 }
 
 .queryText {
+  composes: truncate from '../../../shared/styles/textClamp.module.css';
   font-size: 12px;
   font-family: var(--font-family-mono, "SF Mono", "Cascadia Code", "Fira Code", ui-monospace, monospace);
   color: var(--color-text-primary);
   flex: 1;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .queryAuthWarning {

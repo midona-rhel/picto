@@ -11,7 +11,10 @@ import {
   type SelectionQuerySpec,
 } from './metadataPrefetch';
 import type { SmartFolderPredicate } from '../../features/smart-folders/components/types';
-import { GridCanvasPane } from './components/GridCanvasPane';
+import { CanvasGrid } from './CanvasGrid';
+import { SubfolderGrid } from '../folders/components/SubfolderGrid';
+import { GridInlineRenameOverlay } from './components/GridInlineRenameOverlay';
+import { transitionOpacity, transitionCss, isTransitionFrozen } from './runtime/gridTransitionPipeline';
 import { GridDialogsLayer } from './components/GridDialogsLayer';
 import { GridErrorState } from './components/GridErrorState';
 import { useNavigationStore } from '../../state/navigationStore';
@@ -411,60 +414,91 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
 
   return (
     <div style={{ height: '100%', display: 'flex', position: 'relative' }}>
-      <GridCanvasPane
-        scrollRef={scrollRef}
-        handleContextMenu={handleContextMenu}
-        handleBoxPointerDown={handleBoxPointerDown}
-        gridFreezeActive={gridFreezeActive}
-        grayscalePreview={displaySettings.grayscalePreview}
-        displayFolderId={state.displayFolderId}
-        showSubfolders={displaySettings.showSubfolders}
-        hasVisibleSubfolders={hasVisibleSubfolders}
-        displayTargetSize={state.displayTargetSize}
-        totalImageCount={activeGridImages.length}
-        onOpenFolder={(id, name) => navigateToFolder({ folder_id: id, name })}
-        selectedSubfolderId={state.selectedSubfolderId}
-        onSelectedSubfolderChange={(id) => {
-          dispatch({ type: 'SET_SELECTED_SUBFOLDER', id });
-          dispatch({ type: 'SELECT_HASHES', hashes: new Set() });
-        }}
-        images={activeGridImages}
-        selectedHashes={effectiveSelectedHashes}
-        searchTags={state.displaySearchTags}
-        gap={gap}
-        viewMode={state.displayViewMode}
-        onImageClick={handleImageClick}
-        onImport={handleImport}
-        onImportFolder={handleImportFolderRequest}
-        onContainerWidthChange={handleContainerWidthChange}
-        showEmptyState={initialLoadDone.current}
-        emptyContext={state.displayEmptyContext}
-        popHash={state.popHash}
-        onPopComplete={() => dispatch({ type: 'SET_POP_HASH', hash: null })}
-        marqueeActive={state.boxActive}
-        showTileName={displaySettings.showTileName}
-        showResolution={displaySettings.showResolution}
-        showExtension={displaySettings.showExtension}
-        showExtensionLabel={displaySettings.showExtensionLabel}
-        thumbnailFitMode={displaySettings.thumbnailFitMode}
-        marqueeRectRef={marqueeRectRef}
-        marqueeHitHashesRef={marqueeHitHashesRef}
-        scheduleRedrawRef={scheduleRedrawRef}
-        onLayoutChange={(positions) => { canvasLayoutRef.current = positions; }}
-        reorderMode={isReorderScope}
-        onReorder={isReorderScope ? handleReorder : undefined}
-        onLoadMore={state.hasMore ? loadMore : undefined}
-        totalCount={resolvedGridTotalCount}
-        renamingHash={renamingHash}
-        renameInputRef={renameInputRef}
-        renameValue={renameValue}
-        setRenameValue={setRenameValue}
-        commitRename={commitRename}
-        cancelRename={cancelRename}
-        positions={canvasLayoutRef.current}
-        renameImages={imagesRef.current}
-        transitionStage={state.transitionStage}
-      />
+      <div
+        ref={scrollRef as React.RefObject<HTMLDivElement>}
+        data-grid-container
+        onContextMenu={handleContextMenu}
+        onPointerDown={handleBoxPointerDown}
+        style={{
+          flex: 1,
+          overflowY: 'auto',
+          scrollbarGutter: 'stable both-edges',
+          overflowX: 'hidden',
+          userSelect: 'none',
+          WebkitUserSelect: 'none',
+          position: 'relative',
+          pointerEvents: gridFreezeActive ? 'none' : 'auto',
+          filter: displaySettings.grayscalePreview ? 'grayscale(1)' : undefined,
+          opacity: transitionOpacity(state.transitionStage),
+          transition: transitionCss(state.transitionStage),
+        } as React.CSSProperties}
+      >
+        <div style={{ height: 8 }} />
+        <div style={{ position: 'relative' }}>
+          {state.displayFolderId != null && displaySettings.showSubfolders && (
+            <SubfolderGrid
+              folderId={state.displayFolderId}
+              targetSize={state.displayTargetSize}
+              totalImageCount={activeGridImages.length}
+              onOpenFolder={(id, name) => navigateToFolder({ folder_id: id, name })}
+              selectedSubfolderId={state.selectedSubfolderId}
+              paused={gridFreezeActive}
+              onSelectedSubfolderChange={(id) => {
+                dispatch({ type: 'SET_SELECTED_SUBFOLDER', id });
+                dispatch({ type: 'SELECT_HASHES', hashes: new Set() });
+              }}
+            />
+          )}
+          <CanvasGrid
+            images={activeGridImages}
+            targetSize={state.displayTargetSize}
+            gap={gap}
+            viewMode={state.displayViewMode}
+            selectedHashes={effectiveSelectedHashes}
+            searchTags={state.displaySearchTags}
+            onImageClick={handleImageClick}
+            onImport={handleImport}
+            onImportFolder={handleImportFolderRequest}
+            onContainerWidthChange={handleContainerWidthChange}
+            showEmptyState={initialLoadDone.current && !hasVisibleSubfolders}
+            emptyContext={state.displayEmptyContext}
+            scrollContainerRef={scrollRef}
+            popHash={state.popHash}
+            onPopComplete={() => dispatch({ type: 'SET_POP_HASH', hash: null })}
+            frozen={gridFreezeActive || isTransitionFrozen(state.transitionStage)}
+            marqueeActive={state.boxActive}
+            showTileName={displaySettings.showTileName}
+            showResolution={displaySettings.showResolution}
+            showExtension={displaySettings.showExtension}
+            showExtensionLabel={displaySettings.showExtensionLabel}
+            thumbnailFitMode={displaySettings.thumbnailFitMode}
+            marqueeRectRef={marqueeRectRef}
+            marqueeHitHashesRef={marqueeHitHashesRef}
+            scheduleRedrawRef={scheduleRedrawRef}
+            onLayoutChange={(positions) => { canvasLayoutRef.current = positions; }}
+            reorderMode={isReorderScope}
+            onReorder={isReorderScope ? handleReorder : undefined}
+            onLoadMore={state.hasMore ? loadMore : undefined}
+            totalCount={resolvedGridTotalCount}
+            renamingHash={renamingHash}
+          />
+          {renamingHash && (
+            <GridInlineRenameOverlay
+              renamingHash={renamingHash}
+              positions={canvasLayoutRef.current}
+              images={imagesRef.current}
+              showTileName={displaySettings.showTileName}
+              showResolution={displaySettings.showResolution}
+              scrollRoot={scrollRef.current}
+              renameInputRef={renameInputRef}
+              renameValue={renameValue}
+              setRenameValue={setRenameValue}
+              commitRename={commitRename}
+              cancelRename={cancelRename}
+            />
+          )}
+        </div>
+      </div>
 
       <GridDialogsLayer
         contextMenuState={contextMenu.state}

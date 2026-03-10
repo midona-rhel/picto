@@ -79,16 +79,14 @@
 }
 
 .siteGrid {
+  composes: scrollYStable from '../../../shared/styles/scrollArea.module.css';
   display: grid;
   grid-template-columns: 1fr;
   gap: 6px;
   height: 220px;
   min-height: 220px;
   max-height: 220px;
-  overflow-y: auto;
-  overflow-x: hidden;
   padding-right: 4px;
-  scrollbar-gutter: stable;
 }
 
 .cardsContainer {

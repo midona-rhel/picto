@@ -1,6 +1,6 @@
 import { ConfirmModal } from '../../../shared/components/ConfirmModal';
 import { ContextMenu } from '../../../shared/components/ContextMenu';
-import { BatchRenameDialog } from './BatchRenameDialog';
+import { BatchRenameDialog } from '../../../shared/components/BatchRenameDialog';
 import { GridDropOverlay } from './GridDropOverlay';
 import type { MasonryImageItem } from '../shared';
 

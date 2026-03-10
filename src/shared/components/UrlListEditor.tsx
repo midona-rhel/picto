@@ -205,7 +205,7 @@ export function UrlListEditor({ urls, onChange, readOnly }: UrlListEditorProps) 
               {!readOnly && (
                 <KbdTooltip label="Remove">
                   <button
-                    className={styles.urlRemoveBtn}
+                    className={styles.urlActionBtn}
                     onClick={() => handleRemove(idx)}
                   >
                     <IconX size={13} />

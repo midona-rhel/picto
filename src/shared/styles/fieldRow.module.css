@@ -1,0 +1,64 @@
+.fieldRow {
+  display: flex;
+  align-items: center;
+  min-height: 32px;
+  background: var(--color-black-20);
+  border: 1px solid var(--color-border-secondary);
+  border-radius: 6px;
+  box-sizing: border-box;
+  width: 100%;
+}
+
+.fieldRowIcon {
+  composes: btnReset from './buttonReset.module.css';
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  min-width: 32px;
+  align-self: stretch;
+  flex-shrink: 0;
+  border-radius: 5px 0 0 5px;
+  color: var(--color-text-primary);
+  opacity: 0.5;
+  transition: opacity 150ms var(--timing-function-super),
+              background 150ms var(--timing-function-super);
+}
+
+.fieldRowIcon:hover {
+  opacity: 1;
+  background: var(--color-white-05);
+}
+
+.fieldRowSep {
+  width: 1px;
+  align-self: stretch;
+  background: var(--color-border-secondary);
+  flex-shrink: 0;
+}
+
+.fieldRowContent {
+  composes: truncate from './textClamp.module.css';
+  flex: 1;
+  min-width: 0;
+  padding: 0 10px;
+  font-family: var(--font-family);
+  font-size: var(--font-size-md);
+  line-height: 30px;
+  color: var(--color-text-primary);
+  cursor: default;
+}
+
+.fieldRowPlaceholder {
+  color: var(--color-text-tertiary);
+  cursor: text;
+}
+
+[data-mantine-color-scheme="light"] .fieldRow {
+  background: var(--color-white-50);
+  border-color: var(--color-border-secondary);
+}
+
+[data-mantine-color-scheme="light"] .fieldRowIcon:hover {
+  background: var(--color-black-10);
+}

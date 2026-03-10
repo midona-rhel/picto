@@ -68,21 +68,17 @@
 }
 
 .jobName {
+  composes: truncate from '../../../shared/styles/textClamp.module.css';
   font-size: var(--font-size-sm);
   font-weight: var(--font-weight-bold);
   color: var(--color-text-primary);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
   min-width: 0;
 }
 
 .jobPhase {
+  composes: truncate from '../../../shared/styles/textClamp.module.css';
   font-size: var(--font-size-xs);
   color: var(--color-text-tertiary);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
   min-width: 0;
 }
 

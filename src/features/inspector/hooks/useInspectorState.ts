@@ -4,7 +4,7 @@ import { registerUndoAction } from '../../../shared/controllers/undoRedoControll
 
 import { useInspectorData, type InspectorData } from './useInspectorData';
 import type { MediaItem } from '../../grid/shared';
-import type { MediaViewState, MediaViewControls } from '../../grid/MediaView';
+import type { MediaViewState, MediaViewControls } from '../../viewer/components/MediaView';
 import type { SelectionQuerySpec } from '../../grid/metadataPrefetch';
 
 export interface InspectorStateParams {

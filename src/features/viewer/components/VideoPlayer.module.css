@@ -157,15 +157,12 @@
    -------------------------------------------------------------------------- */
 
 .icBtn {
+  composes: btnReset from '../../../shared/styles/buttonReset.module.css';
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  padding: 0;
-  border: none;
   border-radius: 5px;
-  background: transparent;
   color: var(--color-white-80);
-  cursor: pointer;
   width: 32px;
   height: 32px;
   min-width: 32px;
@@ -300,16 +297,14 @@
 }
 
 .rateMenuItem {
+  composes: btnReset from '../../../shared/styles/buttonReset.module.css';
   display: block;
   width: 100%;
   padding: 4px 12px;
-  border: none;
-  background: transparent;
   color: var(--color-white-70);
   font-size: 12px;
   font-family: 'SF Mono', 'Menlo', 'Consolas', monospace;
   text-align: center;
-  cursor: pointer;
   white-space: nowrap;
 }
 

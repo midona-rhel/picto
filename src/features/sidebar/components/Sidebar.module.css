@@ -83,16 +83,14 @@
 }
 
 .sectionAddBtn {
+  composes: btnReset from '../../../shared/styles/buttonReset.module.css';
   display: flex;
   align-items: center;
   justify-content: center;
   width: 24px;
   height: 24px;
   border-radius: 4px;
-  border: none;
-  background: transparent;
   color: var(--color-text-tertiary);
-  cursor: pointer;
   opacity: 0;
   transition: opacity 200ms var(--timing-function-super);
 }
@@ -201,13 +199,11 @@
 }
 
 .itemLabel {
+  composes: truncate from '../../../shared/styles/textClamp.module.css';
   position: relative;
   z-index: 1;
   flex: 1;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
   font-size: var(--font-size-md);
   font-weight: var(--font-weight-regular);
   line-height: 26px;

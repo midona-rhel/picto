@@ -11,12 +11,11 @@
 
 /* Sidebar */
 .sidebar {
+  composes: scrollY from '../../../shared/styles/scrollArea.module.css';
   width: 200px;
   height: 100%;
   flex-shrink: 0;
   padding: 0 16px;
-  overflow-y: auto;
-  overflow-x: hidden;
   border-right: 1px solid var(--color-border-secondary);
   background-color: var(--color-white-05);
 }
@@ -77,19 +76,17 @@
 
 /* Nav items */
 .navItem {
+  composes: btnReset from '../../../shared/styles/buttonReset.module.css';
   display: flex;
   align-items: center;
   gap: 6px;
   height: 32px;
   padding: 0 6px;
-  cursor: pointer;
   font-size: 13px;
   line-height: 20px;
   border-radius: 6px;
   color: var(--color-text-primary);
   transition: all 100ms var(--timing-function-super, cubic-bezier(0.4, 0, 0.22, 1));
-  border: none;
-  background: transparent;
   width: 100%;
   -webkit-app-region: no-drag;
   text-align: left;
@@ -113,9 +110,8 @@
 }
 
 .separator {
-  height: 1px;
+  composes: separator from '../../../shared/styles/separator.module.css';
   margin: 2px 0;
-  background-color: var(--color-border-secondary);
 }
 
 /* Content area */
@@ -144,20 +140,17 @@
 }
 
 .closeButton {
+  composes: btnReset from '../../../shared/styles/buttonReset.module.css';
   -webkit-app-region: no-drag;
   margin-left: auto;
   width: 24px;
   height: 24px;
   border-radius: 4px;
-  border: none;
-  background: transparent;
   display: flex;
   align-items: center;
   justify-content: center;
-  cursor: pointer;
   color: var(--color-text-secondary);
   transition: all 250ms ease;
-  padding: 0;
 }
 
 .closeButton:hover {
@@ -170,10 +163,9 @@
 }
 
 .contentBody {
+  composes: scrollY from '../../../shared/styles/scrollArea.module.css';
   flex: 1;
   padding: 16px;
-  overflow-y: auto;
-  overflow-x: hidden;
 }
 
 /* Panel blocks */
@@ -251,9 +243,8 @@
 }
 
 .blockSeparator {
+  composes: separator from '../../../shared/styles/separator.module.css';
   margin: 12px 0;
-  height: 1px;
-  background-color: var(--color-border-secondary);
 }
 
 .labelItems {
@@ -265,10 +256,10 @@
 }
 
 .labelItemsSeparator {
-  margin: 0 12px;
   width: 1px;
   height: 26px;
-  background-color: var(--color-border-secondary);
+  margin: 0 12px;
+  background: var(--color-border-secondary);
   align-self: center;
 }
 

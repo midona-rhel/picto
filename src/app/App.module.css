@@ -84,29 +84,11 @@
 }
 
 .panelToggleBtn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
-  border: none;
-  border-radius: 5px;
-  background: transparent;
-  color: var(--color-text-primary);
-  cursor: pointer;
+  composes: icBtn from '../shared/styles/iconButton.module.css';
   width: 28px;
   height: 28px;
   min-width: 28px;
-  flex-shrink: 0;
   -webkit-app-region: no-drag;
-  transition: background 150ms var(--timing-function-super);
-}
-
-.panelToggleBtn:hover {
-  background: var(--ig-bg-hover);
-}
-
-.panelToggleBtn:active {
-  background: var(--ig-bg-active);
 }
 
 .titlebarRight {

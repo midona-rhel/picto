@@ -60,11 +60,9 @@
 }
 
 .functionName {
+  composes: truncate from '../../../shared/styles/textClamp.module.css';
   flex: 4;
   padding: 4px 12px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
   min-width: 0;
 }
 
@@ -133,19 +131,17 @@
 }
 
 .clearShortcutButton {
+  composes: btnReset from '../../../shared/styles/buttonReset.module.css';
   position: absolute;
   top: 50%;
   right: 6px;
   transform: translateY(-50%);
   height: 18px;
-  border: none;
-  background: transparent;
   color: var(--color-text-tertiary);
   font-size: 11px;
   line-height: 18px;
   padding: 0 4px;
   border-radius: 4px;
-  cursor: pointer;
 }
 
 .clearShortcutButton:hover {

@@ -122,11 +122,9 @@
 }
 
 .label {
+  composes: truncate from '../styles/textClamp.module.css';
   flex: 1;
   min-width: 0;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 
 .shortcut {

@@ -1,7 +1,7 @@
 import { formatDuration } from '../../../shared/lib/formatters';
 import { TEXT_NAME_ROW_H } from '../gridLayout';
 import type { LayoutItem } from '../layoutMath';
-import type { ThumbnailPipelineEntry } from '../media/thumbnailPipeline';
+import type { ThumbnailPipelineEntry } from '../../../shared/lib/canvas/thumbnailPipeline';
 import type { MasonryImageItem } from '../shared';
 import type { GridViewMode } from '../runtime';
 import {

@@ -1,0 +1,28 @@
+.mediaView {
+  position: absolute;
+  inset: 0;
+  z-index: var(--z-detail-view);
+  background: var(--color-theme);
+  display: flex;
+  flex-direction: column;
+}
+
+.tileContainer {
+  flex: 1;
+}
+
+.inboxBar {
+  composes: inboxBar from '../../../shared/styles/inboxBar.module.css';
+}
+
+.inboxBtn {
+  composes: inboxBtn from '../../../shared/styles/inboxBar.module.css';
+}
+
+.inboxBtnReject {
+  composes: inboxBtnReject from '../../../shared/styles/inboxBar.module.css';
+}
+
+.inboxBtnAccept {
+  composes: inboxBtnAccept from '../../../shared/styles/inboxBar.module.css';
+}

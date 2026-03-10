@@ -1,5 +1,5 @@
-import { MediaView } from '../../grid/MediaView';
-import { QuickLook } from '../../grid/QuickLook';
+import { MediaView } from './MediaView';
+import { QuickLook } from './QuickLook';
 import { Slideshow } from './Slideshow';
 import type { ViewerHostController } from '../hooks/useViewerHost';
 

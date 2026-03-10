@@ -2,7 +2,7 @@ import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { MantineProvider } from '@mantine/core';
 import { api } from '#desktop/api';
-import { DetailWindow } from '#features/grid/DetailWindow';
+import { DetailWindow } from '#features/viewer/components/DetailWindow';
 import '@mantine/core/styles.css';
 import '../shared/styles/globals.css';
 

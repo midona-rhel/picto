@@ -29,9 +29,9 @@ import {
 import { notifications } from '@mantine/notifications';
 import type { Dispatch, MutableRefObject, ReactNode, SetStateAction } from 'react';
 import type { ContextMenuEntry } from '../ContextMenu';
-import { LayoutRow } from '../../../features/grid/LayoutRow';
-import { SortByRow } from '../../../features/grid/SortByRow';
-import { DisplayOptionsPanel } from '../../../features/grid/DisplayOptionsPanel';
+import { LayoutRow } from '../LayoutRow';
+import { SortByRow } from '../SortByRow';
+import { DisplayOptionsPanel } from '../../../features/layout/components/DisplayOptionsPanel';
 import { IconBing, IconSauceNAO, IconSogou, IconTinEye, IconYandex } from '../SearchEngineIcons';
 import type { SmartFolderPredicate } from '../../../features/smart-folders/components/types';
 import type { GridRuntimeAction, GridRuntimeState, GridViewMode } from '../../../features/grid/runtime';
