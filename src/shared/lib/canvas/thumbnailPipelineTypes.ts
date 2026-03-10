@@ -1,4 +1,5 @@
 export type ThumbnailPipelineState = 'idle' | 'queued' | 'loading' | 'shown' | 'error';
+export type ThumbnailSourceKind = 'thumbnail' | 'full';
 
 export interface ThumbnailPipelineEntry {
   thumb: ImageBitmap | null;
@@ -7,6 +8,8 @@ export interface ThumbnailPipelineEntry {
   revealStartedAt: number;
   animateIn: boolean;
   retryQueued: boolean;
+  sourceKind: ThumbnailSourceKind;
+  loadedLongEdge: number;
 }
 
 export interface ThumbnailPipelineStats {
@@ -21,7 +24,15 @@ export interface ThumbnailQueueItem {
   hash: string;
   url: string;
   y: number;
-  mime: string;
-  targetW: number;
-  targetH: number;
+  sourceKind: ThumbnailSourceKind;
+  requestedLongEdge: number;
+  resizeWidth?: number;
+  resizeHeight?: number;
+}
+
+export interface ThumbnailInFlightItem {
+  controller: AbortController;
+  y: number;
+  sourceKind: ThumbnailSourceKind;
+  requestedLongEdge: number;
 }

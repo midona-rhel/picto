@@ -41,7 +41,14 @@ interface BaseLayerArgs {
   positions: LayoutItem[];
   imgs: MasonryImageItem[];
   atlasGet: (hash: string) => ThumbnailPipelineEntry | null;
-  atlasEnsure: (hash: string, mime: string, tileWidth: number, tileHeight: number, y?: number) => void;
+  atlasEnsure: (hash: string, args?: {
+    y?: number;
+    drawWidth?: number;
+    drawHeight?: number;
+    mime?: string;
+    sourceWidth?: number | null;
+    sourceHeight?: number | null;
+  }) => void;
   now: number;
   theme: ThemeLike;
   visible: VisibleWindow;
@@ -87,7 +94,14 @@ export function drawCanvasBaseLayer({
     const imageHeight = pos.h - th;
     if (drawY + pos.h < 0 || drawY > cssH) continue;
 
-    atlasEnsure(image.hash, image.mime, pos.w, imageHeight, pos.y + pos.h / 2);
+    atlasEnsure(image.hash, {
+      y: pos.y + pos.h / 2,
+      drawWidth: pos.w * (window.devicePixelRatio || 1),
+      drawHeight: imageHeight * (window.devicePixelRatio || 1),
+      mime: image.mime,
+      sourceWidth: image.width,
+      sourceHeight: image.height,
+    });
     const entry = atlasGet(image.hash);
 
     ctx.save();
