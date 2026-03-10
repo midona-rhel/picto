@@ -81,6 +81,16 @@ impl<'a> ImportPipeline<'a> {
         Self { db, blob_store }
     }
 
+    fn cleanup_partial_blob_write(&self, hex_hash: &str, mime_string: &str) {
+        let original_ext = crate::blob_store::mime_to_extension(mime_string);
+        if let Err(err) = self.blob_store.delete_original(hex_hash, Some(original_ext)) {
+            warn!(hash = %hex_hash, error = %err, "Failed to clean up partial original blob");
+        }
+        if let Err(err) = self.blob_store.delete_thumbnail(hex_hash) {
+            warn!(hash = %hex_hash, error = %err, "Failed to clean up partial thumbnail blob");
+        }
+    }
+
     /// Import a single file from disk.
     pub async fn import_file(
         &self,
@@ -180,8 +190,13 @@ impl<'a> ImportPipeline<'a> {
             .write_original(&hex_hash, &file_data, Some(blob_ext))?;
 
         if let Some((ref thumb_bytes, ref thumb_ext)) = thumbnail_result {
-            self.blob_store
-                .write_thumbnail(&hex_hash, thumb_bytes, thumb_ext)?;
+            if let Err(err) = self
+                .blob_store
+                .write_thumbnail(&hex_hash, thumb_bytes, thumb_ext)
+            {
+                self.cleanup_partial_blob_write(&hex_hash, &mime_string);
+                return Err(ImportError::Blob(err));
+            }
         }
 
         let import_opts = sqlite_import::ImportOptions {
@@ -208,10 +223,10 @@ impl<'a> ImportPipeline<'a> {
             colors: colors_lab,
         };
 
-        self.db
-            .import_file(import_opts)
-            .await
-            .map_err(ImportError::Db)?;
+        if let Err(err) = self.db.import_file(import_opts).await {
+            self.cleanup_partial_blob_write(&hex_hash, &mime_string);
+            return Err(ImportError::Db(err));
+        }
 
         // Compute phash from thumbnail (faster than full image) for duplicate detection
         if media_processing::is_image(file_info.mime) {
