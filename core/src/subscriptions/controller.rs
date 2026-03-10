@@ -139,30 +139,12 @@ impl SubscriptionController {
 
     pub async fn delete_subscription(
         db: &SqliteDatabase,
-        blob_store: &BlobStore,
+        _blob_store: &BlobStore,
         id: String,
-        delete_files: Option<bool>,
     ) -> Result<usize, String> {
         let sub_id: i64 = id
             .parse()
             .map_err(|_| format!("Invalid subscription id: {}", id))?;
-
-        if delete_files.unwrap_or(false) {
-            let file_ids = db
-                .with_read_conn(move |conn| {
-                    crate::subscriptions::db::get_subscription_entity_ids(conn, sub_id)
-                })
-                .await?;
-
-            if !file_ids.is_empty() {
-                let resolved = db.resolve_ids_batch(&file_ids).await?;
-                let hashes: Vec<String> = resolved.into_iter().map(|(_, hash)| hash).collect();
-                for hash in &hashes {
-                    db.delete_file_by_hash(hash).await?;
-                    blob_store.delete(hash).map_err(|e| e.to_string())?;
-                }
-            }
-        }
 
         db.delete_subscription(sub_id).await?;
         Ok(1)

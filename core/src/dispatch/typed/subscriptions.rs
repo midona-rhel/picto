@@ -18,7 +18,6 @@ pub struct CreateGroupInput {
 #[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct DeleteGroupInput {
     pub id: String,
-    pub delete_files: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, TS)]
@@ -81,7 +80,6 @@ pub struct CreateSubscriptionInput {
 #[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct DeleteSubscriptionInput {
     pub id: String,
-    pub delete_files: Option<bool>,
 }
 
 #[derive(Debug, Deserialize, TS)]
@@ -180,17 +178,12 @@ pub async fn create_group(state: &AppState, input: CreateGroupInput) -> Result<s
 }
 
 pub async fn delete_group(state: &AppState, input: DeleteGroupInput) -> Result<(), String> {
-    let delete_files = input.delete_files.unwrap_or(false);
     crate::subscriptions::subscription_group_controller::SubscriptionGroupController::delete_group(
-        &state.db, &state.blob_store, input.id, input.delete_files,
+        &state.db, &state.blob_store, input.id,
     ).await?;
     crate::events::emit_mutation(
         "delete_group",
-        if delete_files {
-            crate::events::MutationImpact::subscriptions_file_status_change(&state.db)
-        } else {
-            crate::events::MutationImpact::subscriptions_sidebar()
-        },
+        crate::events::MutationImpact::subscriptions_sidebar(),
     );
     Ok(())
 }
@@ -284,17 +277,12 @@ pub async fn create_subscription(state: &AppState, input: CreateSubscriptionInpu
 }
 
 pub async fn delete_subscription(state: &AppState, input: DeleteSubscriptionInput) -> Result<serde_json::Value, String> {
-    let delete_files = input.delete_files.unwrap_or(false);
     let count = crate::subscriptions::controller::SubscriptionController::delete_subscription(
-        &state.db, &state.blob_store, input.id, input.delete_files,
+        &state.db, &state.blob_store, input.id,
     ).await?;
     crate::events::emit_mutation(
         "delete_subscription",
-        if delete_files {
-            crate::events::MutationImpact::subscriptions_file_status_change(&state.db)
-        } else {
-            crate::events::MutationImpact::subscriptions_sidebar()
-        },
+        crate::events::MutationImpact::subscriptions_sidebar(),
     );
     Ok(serde_json::to_value(&count).map_err(|e| e.to_string())?)
 }

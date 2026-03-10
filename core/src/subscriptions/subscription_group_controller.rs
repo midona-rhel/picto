@@ -129,30 +129,10 @@ impl SubscriptionGroupController {
     /// Delete a flow (CASCADE deletes subscriptions). Optionally delete associated files.
     pub async fn delete_group(
         db: &SqliteDatabase,
-        blob_store: &BlobStore,
+        _blob_store: &BlobStore,
         id: String,
-        delete_files: Option<bool>,
     ) -> Result<(), String> {
         let group_id: i64 = id.parse().map_err(|_| format!("Invalid group id: {}", id))?;
-
-        if delete_files.unwrap_or(false) {
-            let sub_ids = db.get_group_subscription_ids(group_id).await?;
-            for sub_id in sub_ids {
-                let file_ids = db
-                    .with_read_conn(move |conn| {
-                        crate::subscriptions::db::get_subscription_entity_ids(conn, sub_id)
-                    })
-                    .await?;
-                if !file_ids.is_empty() {
-                    let resolved = db.resolve_ids_batch(&file_ids).await?;
-                    let hashes: Vec<String> = resolved.into_iter().map(|(_, hash)| hash).collect();
-                    for hash in &hashes {
-                        db.delete_file_by_hash(hash).await?;
-                        blob_store.delete(hash).map_err(|e| e.to_string())?;
-                    }
-                }
-            }
-        }
 
         db.delete_group(group_id).await?;
         Ok(())
