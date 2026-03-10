@@ -43,6 +43,9 @@ export class ThumbnailPipeline {
 
   setScrolling(active: boolean): void {
     this.scrolling = active;
+    if (active) {
+      this.dropFullQualityWork();
+    }
     this.pump();
   }
 
@@ -57,7 +60,9 @@ export class ThumbnailPipeline {
     if (this.destroyed) return;
 
     const entry = this.getOrCreateEntry(hash);
-    const request = buildRequest(hash, args);
+    const request = this.scrolling
+      ? downgradeRequestForScroll(buildRequest(hash, args))
+      : buildRequest(hash, args);
     if (!request) return;
 
     if (entry.thumb) {
@@ -129,6 +134,28 @@ export class ThumbnailPipeline {
       const next = this.queue.shift();
       if (!next) break;
       void this.loadThumb(next);
+    }
+  }
+
+  private dropFullQualityWork(): void {
+    for (let i = this.queue.length - 1; i >= 0; i--) {
+      const item = this.queue[i];
+      if (item.sourceKind !== 'full') continue;
+      this.queue.splice(i, 1);
+      const entry = this.cache.get(item.hash);
+      if (entry && !entry.thumb) {
+        this.resetEntry(entry);
+      }
+    }
+
+    for (const [hash, inFlight] of this.inFlight) {
+      if (inFlight.sourceKind !== 'full') continue;
+      inFlight.controller.abort();
+      this.inFlight.delete(hash);
+      const entry = this.cache.get(hash);
+      if (entry && !entry.thumb) {
+        this.resetEntry(entry);
+      }
     }
   }
 
@@ -350,8 +377,20 @@ function needsUpgradeState(
   return false;
 }
 
+function downgradeRequestForScroll(request: ThumbnailQueueItem | null): ThumbnailQueueItem | null {
+  if (!request || request.sourceKind !== 'full') return request;
+  return {
+    hash: request.hash,
+    url: mediaThumbnailUrl(request.hash),
+    y: request.y,
+    sourceKind: 'thumbnail',
+    requestedLongEdge: THUMBNAIL_PIPELINE_SOURCE_EDGE,
+  };
+}
+
 export const __private__ = {
   buildRequest,
+  downgradeRequestForScroll,
   needsUpgradeState,
   quantizeLongEdge,
 };

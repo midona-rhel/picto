@@ -29,4 +29,19 @@ describe('thumbnailPipeline source selection', () => {
     expect(request?.sourceKind).toBe('full');
     expect(request?.resizeWidth).toBeGreaterThan(512);
   });
+
+  it('downgrades full-quality requests to thumbnails while scrolling', () => {
+    const request = __private__.buildRequest('abc', {
+      y: 0,
+      drawWidth: 900,
+      drawHeight: 700,
+      mime: 'image/jpeg',
+      sourceWidth: 4000,
+      sourceHeight: 3000,
+    });
+
+    const downgraded = __private__.downgradeRequestForScroll(request ?? null);
+    expect(downgraded?.sourceKind).toBe('thumbnail');
+    expect(downgraded?.requestedLongEdge).toBe(512);
+  });
 });
