@@ -210,7 +210,7 @@ export function useCanvasBaseDraw(args: {
       const pos = positions[i];
       const image = imgs[i];
       if (!pos || !image) continue;
-      atlas.ensure(image.hash, pos.y + pos.h / 2);
+      atlas.ensure(image.hash, { y: pos.y + pos.h / 2 });
       prefetched++;
     }
 
