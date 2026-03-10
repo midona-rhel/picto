@@ -79,13 +79,7 @@ impl ImportController {
                         "manual_import",
                         crate::events::MutationImpact::file_lifecycle(db),
                     );
-                    batch.imported.push(ImportResult {
-                        hash: surviving_hash,
-                        mime: imported.mime,
-                        size: imported.size,
-                        has_thumbnail: imported.has_thumbnail,
-                        tags_applied: imported.tags_applied,
-                    });
+                    batch.imported.push(build_import_result(db, imported, &surviving_hash).await);
                 }
                 Err(crate::import::pipeline::ImportError::AlreadyImported(hash)) => {
                     merge_existing_import_target(
@@ -247,13 +241,7 @@ impl ImportController {
                     if surviving_hash == imported.hex_hash {
                         emit_file_imported(db, &surviving_hash).await;
                     }
-                    batch.imported.push(ImportResult {
-                        hash: surviving_hash,
-                        mime: imported.mime,
-                        size: imported.size,
-                        has_thumbnail: imported.has_thumbnail,
-                        tags_applied: imported.tags_applied,
-                    });
+                    batch.imported.push(build_import_result(db, imported, &surviving_hash).await);
                 }
                 Err(crate::import::pipeline::ImportError::AlreadyImported(hash)) => {
                     merge_existing_import_target(
@@ -350,6 +338,39 @@ async fn maybe_auto_merge(
             );
             hash.to_string()
         }
+    }
+}
+
+async fn build_import_result(
+    db: &SqliteDatabase,
+    imported: crate::import::pipeline::ImportedFile,
+    surviving_hash: &str,
+) -> ImportResult {
+    if surviving_hash == imported.hex_hash {
+        return ImportResult {
+            hash: imported.hex_hash,
+            mime: imported.mime,
+            size: imported.size,
+            has_thumbnail: imported.has_thumbnail,
+            tags_applied: imported.tags_applied,
+        };
+    }
+
+    match db.get_file_by_hash(surviving_hash).await {
+        Ok(Some(record)) => ImportResult {
+            hash: surviving_hash.to_string(),
+            mime: record.mime.clone(),
+            size: record.size as u64,
+            has_thumbnail: record.mime.starts_with("image/") || record.mime.starts_with("video/"),
+            tags_applied: imported.tags_applied,
+        },
+        _ => ImportResult {
+            hash: surviving_hash.to_string(),
+            mime: imported.mime,
+            size: imported.size,
+            has_thumbnail: imported.has_thumbnail,
+            tags_applied: imported.tags_applied,
+        },
     }
 }
 
