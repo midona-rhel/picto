@@ -8,7 +8,7 @@ use std::collections::{HashMap, HashSet};
 
 use tracing::warn;
 
-use crate::events::MutationImpact;
+use crate::events::{Domain, MutationImpact};
 use crate::sqlite::SqliteDatabase;
 
 #[derive(Debug, Clone)]
@@ -32,6 +32,7 @@ pub async fn merge_existing_import_target(
     };
 
     let mut any_change = false;
+    let mut ownership_change = false;
 
     if let Some(status) = request.restore_status {
         if existing.status == 2 && status != 2 {
@@ -107,18 +108,35 @@ pub async fn merge_existing_import_target(
     }
 
     if let Some(subscription_id) = request.subscription_id {
-        if let Err(e) = db.add_subscription_entity(subscription_id, hex_hash).await {
-            warn!(error = %e, "Failed to record subscription-file mapping");
-        }
+        match db.add_subscription_entity(subscription_id, hex_hash).await {
+            Ok(changed) => ownership_change = changed,
+            Err(e) => warn!(error = %e, "Failed to record subscription-file mapping"),
+        };
     }
 
-    if any_change {
+    if any_change || ownership_change {
         db.scope_cache_invalidate_all();
+        let mut impact = if any_change {
+            MutationImpact::file_lifecycle(db).file_hashes(vec![hex_hash.to_string()])
+        } else {
+            MutationImpact::new()
+        };
+        if ownership_change {
+            for domain in [Domain::Subscriptions, Domain::Sidebar, Domain::Files] {
+                if !impact.domains.contains(&domain) {
+                    impact.domains.push(domain);
+                }
+            }
+            let hashes = impact.file_hashes.get_or_insert_with(Vec::new);
+            if !hashes.iter().any(|hash| hash == hex_hash) {
+                hashes.push(hex_hash.to_string());
+            }
+        }
         crate::events::emit_mutation(
             request.mutation_name,
-            MutationImpact::file_lifecycle(db).file_hashes(vec![hex_hash.to_string()]),
+            impact,
         );
     }
 
-    Ok(any_change)
+    Ok(any_change || ownership_change)
 }

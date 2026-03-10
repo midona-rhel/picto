@@ -294,12 +294,12 @@ pub fn add_subscription_entity(
     conn: &Connection,
     subscription_id: i64,
     entity_id: i64,
-) -> rusqlite::Result<()> {
-    conn.execute(
+) -> rusqlite::Result<bool> {
+    let changed = conn.execute(
         "INSERT OR IGNORE INTO subscription_entity (subscription_id, entity_id) VALUES (?1, ?2)",
         params![subscription_id, entity_id],
     )?;
-    Ok(())
+    Ok(changed > 0)
 }
 
 pub fn upsert_subscription_post_collection(
@@ -676,7 +676,7 @@ impl SqliteDatabase {
         &self,
         subscription_id: i64,
         hash: &str,
-    ) -> Result<(), String> {
+    ) -> Result<bool, String> {
         let entity_id = self.resolve_hash(hash).await?;
         self.with_conn(move |conn| add_subscription_entity(conn, subscription_id, entity_id))
             .await
