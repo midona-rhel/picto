@@ -32,22 +32,6 @@ describe('thumbnailPipeline source selection', () => {
     expect(request?.resizeWidth).toBeGreaterThan(512);
   });
 
-  it('downgrades full-quality requests to thumbnails while scrolling', () => {
-    const request = __private__.buildRequest('abc', {
-      y: 0,
-      drawWidth: 900,
-      drawHeight: 700,
-      mime: 'image/jpeg',
-      sourceWidth: 4000,
-      sourceHeight: 3000,
-    });
-
-    const downgraded = __private__.downgradeRequestForScroll(request ?? null);
-    expect(downgraded?.sourceKind).toBe('thumbnail');
-    expect(downgraded?.priority).toBe('visible');
-    expect(downgraded?.requestedLongEdge).toBe(512);
-  });
-
   it('marks offscreen prefetch requests separately from visible work', () => {
     const request = __private__.buildRequest('abc', {
       y: 100,
@@ -59,28 +43,28 @@ describe('thumbnailPipeline source selection', () => {
 
   it('prioritizes visible thumbnails over full-quality and prefetch work', () => {
     expect(__private__.scoreQueueItem({
+      hash: 'visible-full',
+      url: 'full://visible',
+      y: 0,
+      sourceKind: 'full',
+      priority: 'visible',
+      requestedLongEdge: 1024,
+    })).toBeGreaterThan(__private__.scoreQueueItem({
       hash: 'visible-thumb',
       url: 'thumb://visible',
       y: 0,
       sourceKind: 'thumbnail',
       priority: 'visible',
       requestedLongEdge: 512,
-    })).toBeGreaterThan(__private__.scoreQueueItem({
-      hash: 'visible-full',
-      url: 'full://visible',
-      y: 0,
-      sourceKind: 'full',
-      priority: 'visible',
-      requestedLongEdge: 1024,
     }));
 
     expect(__private__.scoreQueueItem({
-      hash: 'visible-full',
-      url: 'full://visible',
+      hash: 'visible-thumb',
+      url: 'thumb://visible',
       y: 0,
-      sourceKind: 'full',
+      sourceKind: 'thumbnail',
       priority: 'visible',
-      requestedLongEdge: 1024,
+      requestedLongEdge: 512,
     })).toBeGreaterThan(__private__.scoreQueueItem({
       hash: 'prefetch-thumb',
       url: 'thumb://prefetch',

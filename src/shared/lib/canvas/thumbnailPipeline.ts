@@ -48,9 +48,6 @@ export class ThumbnailPipeline {
 
   setScrolling(active: boolean): void {
     this.scrolling = active;
-    if (active) {
-      this.dropFullQualityWork();
-    }
     this.pump();
   }
 
@@ -65,9 +62,7 @@ export class ThumbnailPipeline {
     if (this.destroyed) return;
 
     const entry = this.getOrCreateEntry(hash);
-    const request = this.scrolling
-      ? downgradeRequestForScroll(buildRequest(hash, args))
-      : buildRequest(hash, args);
+    const request = buildRequest(hash, args);
     if (!request) return;
 
     if (entry.thumb) {
@@ -160,28 +155,6 @@ export class ThumbnailPipeline {
       }
     }
     return bestIndex;
-  }
-
-  private dropFullQualityWork(): void {
-    for (let i = this.queue.length - 1; i >= 0; i--) {
-      const item = this.queue[i];
-      if (item.sourceKind !== 'full') continue;
-      this.queue.splice(i, 1);
-      const entry = this.cache.get(item.hash);
-      if (entry && !entry.thumb) {
-        this.resetEntry(entry);
-      }
-    }
-
-    for (const [hash, inFlight] of this.inFlight) {
-      if (inFlight.sourceKind !== 'full') continue;
-      inFlight.controller.abort();
-      this.inFlight.delete(hash);
-      const entry = this.cache.get(hash);
-      if (entry && !entry.thumb) {
-        this.resetEntry(entry);
-      }
-    }
   }
 
   private async loadThumb(item: ThumbnailQueueItem): Promise<void> {
@@ -416,28 +389,15 @@ function needsUpgradeState(
   return false;
 }
 
-function downgradeRequestForScroll(request: ThumbnailQueueItem | null): ThumbnailQueueItem | null {
-  if (!request || request.sourceKind !== 'full') return request;
-  return {
-    hash: request.hash,
-    url: mediaThumbnailUrl(request.hash),
-    y: request.y,
-    sourceKind: 'thumbnail',
-    priority: request.priority,
-    requestedLongEdge: THUMBNAIL_PIPELINE_SOURCE_EDGE,
-  };
-}
-
 function scoreQueueItem(item: ThumbnailQueueItem): number {
-  if (item.priority === 'visible' && item.sourceKind === 'thumbnail') return 4;
-  if (item.priority === 'visible' && item.sourceKind === 'full') return 3;
+  if (item.priority === 'visible' && item.sourceKind === 'full') return 4;
+  if (item.priority === 'visible' && item.sourceKind === 'thumbnail') return 3;
   if (item.priority === 'prefetch' && item.sourceKind === 'thumbnail') return 2;
   return 1;
 }
 
 export const __private__ = {
   buildRequest,
-  downgradeRequestForScroll,
   needsUpgradeState,
   quantizeLongEdge,
   scoreQueueItem,
