@@ -65,7 +65,7 @@ pub async fn import_files(state: &AppState, input: ImportFilesInput) -> Result<c
     } else {
         0
     };
-    let result = crate::import::controller::ImportController::import_files(
+    crate::import::controller::ImportController::import_files(
         &state.db,
         &state.blob_store,
         input.paths,
@@ -75,15 +75,7 @@ pub async fn import_files(state: &AppState, input: ImportFilesInput) -> Result<c
         auto_merge_distance,
         input.initial_status,
     )
-    .await?;
-
-    if !result.imported.is_empty() {
-        crate::events::emit_mutation(
-            "import_files",
-            crate::events::MutationImpact::file_lifecycle(&state.db),
-        );
-    }
-    Ok(result)
+    .await
 }
 
 pub async fn import_folder(state: &AppState, input: ImportFolderInput) -> Result<crate::types::ImportBatchResult, String> {
