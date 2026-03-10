@@ -1,0 +1,124 @@
+//! Shared merge path for "ingest hit an existing file".
+//!
+//! Manual import and subscription import both converge here so that
+//! status restoration, metadata merge, source URL merge, and optional
+//! subscription ownership behave consistently.
+
+use std::collections::{HashMap, HashSet};
+
+use tracing::warn;
+
+use crate::events::MutationImpact;
+use crate::sqlite::SqliteDatabase;
+
+#[derive(Debug, Clone)]
+pub struct ExistingImportMergeRequest {
+    pub restore_status: Option<i64>,
+    pub tag_strings: Vec<String>,
+    pub source_urls: Vec<String>,
+    pub name: Option<String>,
+    pub note_entries: HashMap<String, String>,
+    pub subscription_id: Option<i64>,
+    pub mutation_name: &'static str,
+}
+
+pub async fn merge_existing_import_target(
+    db: &SqliteDatabase,
+    hex_hash: &str,
+    request: ExistingImportMergeRequest,
+) -> Result<bool, String> {
+    let Some(existing) = db.get_file_by_hash(hex_hash).await? else {
+        return Ok(false);
+    };
+
+    let mut any_change = false;
+
+    if let Some(status) = request.restore_status {
+        if existing.status == 2 && status != 2 {
+            db.update_file_status(hex_hash, status).await?;
+            any_change = true;
+        }
+    }
+
+    if !request.tag_strings.is_empty() {
+        let existing_tags = db.get_entity_tags(hex_hash).await?;
+        let existing_set: HashSet<String> = existing_tags
+            .into_iter()
+            .map(|t| crate::tags::normalize::combine_tag(&t.namespace, &t.subtag))
+            .collect();
+        let missing: Vec<String> = request
+            .tag_strings
+            .iter()
+            .filter(|tag| !existing_set.contains(*tag))
+            .cloned()
+            .collect();
+        if !missing.is_empty() {
+            db.add_tags_by_strings(hex_hash, &missing).await?;
+            any_change = true;
+        }
+    }
+
+    if let Some(ref name) = request.name {
+        let current_name = existing.name.as_deref().unwrap_or("");
+        if current_name != name {
+            db.set_file_name(hex_hash, Some(name)).await?;
+            any_change = true;
+        }
+    }
+
+    if !request.note_entries.is_empty() {
+        let current_notes: HashMap<String, String> = existing
+            .notes
+            .as_deref()
+            .and_then(|raw| serde_json::from_str(raw).ok())
+            .unwrap_or_default();
+        let mut merged_notes = current_notes.clone();
+        for (key, value) in &request.note_entries {
+            merged_notes.entry(key.clone()).or_insert_with(|| value.clone());
+        }
+        if merged_notes != current_notes {
+            let json = serde_json::to_string(&merged_notes)
+                .map_err(|e| format!("Notes serialization error: {e}"))?;
+            db.set_notes(hex_hash, Some(&json)).await?;
+            any_change = true;
+        }
+    }
+
+    if !request.source_urls.is_empty() {
+        let current_urls: Vec<String> = existing
+            .source_urls_json
+            .as_deref()
+            .and_then(|raw| serde_json::from_str(raw).ok())
+            .unwrap_or_default();
+        let original_len = current_urls.len();
+        let mut merged_urls = current_urls.clone();
+        let mut seen: HashSet<String> = current_urls.into_iter().collect();
+        for url in &request.source_urls {
+            if !url.is_empty() && seen.insert(url.clone()) {
+                merged_urls.push(url.clone());
+            }
+        }
+        if merged_urls.len() > original_len {
+            let json = serde_json::to_string(&merged_urls)
+                .map_err(|e| format!("URLs serialization error: {e}"))?;
+            db.set_source_urls(hex_hash, Some(&json)).await?;
+            any_change = true;
+        }
+    }
+
+    if let Some(subscription_id) = request.subscription_id {
+        if let Err(e) = db.add_subscription_entity(subscription_id, hex_hash).await {
+            warn!(error = %e, "Failed to record subscription-file mapping");
+        }
+    }
+
+    if any_change {
+        db.scope_cache_invalidate_all();
+        crate::events::emit_mutation(
+            request.mutation_name,
+            MutationImpact::file_lifecycle(db).file_hashes(vec![hex_hash.to_string()]),
+        );
+    }
+
+    Ok(any_change)
+}

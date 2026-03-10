@@ -11,6 +11,7 @@ use crate::blob_store::BlobStore;
 use crate::duplicates::controller::DuplicateController;
 use crate::events::{self, Domain, ManualImportProgressEvent, MutationImpact};
 use crate::folders::controller::FolderController;
+use crate::import::existing::{merge_existing_import_target, ExistingImportMergeRequest};
 use crate::import::pipeline::{ImportOptions, ImportPipeline};
 use crate::sqlite::SqliteDatabase;
 use crate::tags::normalize;
@@ -68,8 +69,11 @@ impl ImportController {
             let result = pipeline.import_file(path, &options).await;
             match result {
                 Ok(imported) => {
-                    maybe_auto_merge(db, &imported.hex_hash, auto_merge_enabled, auto_merge_distance).await;
-                    emit_file_imported(db, &imported.hex_hash).await;
+                    let surviving_hash =
+                        maybe_auto_merge(db, &imported.hex_hash, auto_merge_enabled, auto_merge_distance).await;
+                    if surviving_hash == imported.hex_hash {
+                        emit_file_imported(db, &surviving_hash).await;
+                    }
                     db.scope_cache_invalidate_all();
                     crate::events::emit_mutation(
                         "manual_import",
@@ -84,6 +88,24 @@ impl ImportController {
                     });
                 }
                 Err(crate::import::pipeline::ImportError::AlreadyImported(hash)) => {
+                    merge_existing_import_target(
+                        db,
+                        &hash,
+                        ExistingImportMergeRequest {
+                            restore_status: Some(options.initial_status),
+                            tag_strings: options
+                                .tags
+                                .iter()
+                                .map(|(ns, st)| normalize::combine_tag(ns, st))
+                                .collect(),
+                            source_urls: options.source_urls.clone(),
+                            name: options.name.clone(),
+                            note_entries: options.notes.clone().unwrap_or_default(),
+                            subscription_id: None,
+                            mutation_name: "manual_import_existing",
+                        },
+                    )
+                    .await?;
                     batch.skipped.push(hash);
                 }
                 Err(e) => {
@@ -219,9 +241,12 @@ impl ImportController {
 
             match pipeline.import_file(file_path, &options).await {
                 Ok(imported) => {
-                    maybe_auto_merge(db, &imported.hex_hash, auto_merge_enabled, auto_merge_distance).await;
-                    imported_hashes.push(imported.hex_hash.clone());
-                    emit_file_imported(db, &imported.hex_hash).await;
+                    let surviving_hash =
+                        maybe_auto_merge(db, &imported.hex_hash, auto_merge_enabled, auto_merge_distance).await;
+                    imported_hashes.push(surviving_hash.clone());
+                    if surviving_hash == imported.hex_hash {
+                        emit_file_imported(db, &surviving_hash).await;
+                    }
                     batch.imported.push(ImportResult {
                         hash: imported.hex_hash,
                         mime: imported.mime,
@@ -231,6 +256,20 @@ impl ImportController {
                     });
                 }
                 Err(crate::import::pipeline::ImportError::AlreadyImported(hash)) => {
+                    merge_existing_import_target(
+                        db,
+                        &hash,
+                        ExistingImportMergeRequest {
+                            restore_status: Some(options.initial_status),
+                            tag_strings: Vec::new(),
+                            source_urls: Vec::new(),
+                            name: None,
+                            note_entries: HashMap::new(),
+                            subscription_id: None,
+                            mutation_name: "import_folder_existing",
+                        },
+                    )
+                    .await?;
                     skipped_hashes.push(hash.clone());
                     batch.skipped.push(hash);
                 }
@@ -296,16 +335,21 @@ async fn maybe_auto_merge(
     hash: &str,
     auto_merge_enabled: bool,
     auto_merge_distance: u32,
-) {
+) -> String {
     if !auto_merge_enabled {
-        return;
+        return hash.to_string();
     }
-    if let Err(e) = DuplicateController::check_and_auto_merge(db, hash, auto_merge_distance).await {
-        warn!(
-            hash = %hash,
-            error = %e,
-            "Duplicate auto-merge during manual import failed"
-        );
+    match DuplicateController::check_and_auto_merge(db, hash, auto_merge_distance).await {
+        Ok(Some(result)) => result.winner_hash,
+        Ok(None) => hash.to_string(),
+        Err(e) => {
+            warn!(
+                hash = %hash,
+                error = %e,
+                "Duplicate auto-merge during manual import failed"
+            );
+            hash.to_string()
+        }
     }
 }
 

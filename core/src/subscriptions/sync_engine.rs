@@ -18,6 +18,7 @@ use tracing::{info, warn};
 
 use crate::blob_store::BlobStore;
 use crate::credential_store;
+use crate::import::existing::{merge_existing_import_target, ExistingImportMergeRequest};
 use crate::subscriptions::gallery_dl_runner::{self, FailureKind, GalleryDlRunner, ParsedMetadata, RunOptions};
 use crate::subscriptions::policy::resolve_query_name;
 use crate::import::pipeline::{ImportOptions, ImportPipeline};
@@ -819,17 +820,8 @@ impl<'a> SubscriptionSyncEngine<'a> {
 
         // Check if already imported
         if let Ok(Some(existing)) = self.db.get_file_by_hash(&hex_hash).await {
-            self.merge_existing_metadata(&hex_hash, &existing, metadata, gallery_url)
+            self.merge_existing_metadata(&hex_hash, &existing, metadata, gallery_url, subscription_id)
                 .await?;
-
-            // Record subscription→file mapping
-            if let Err(e) = self
-                .db
-                .add_subscription_entity(subscription_id, &hex_hash)
-                .await
-            {
-                warn!(error = %e, "Failed to record subscription-file mapping");
-            }
             return Ok(ImportOutcome {
                 hex_hash,
                 imported_new: false,
@@ -869,21 +861,7 @@ impl<'a> SubscriptionSyncEngine<'a> {
             Ok(imported) => {
                 info!(hash = %imported.hex_hash, tags = options.tags.len(), "Import success");
 
-                // Record subscription→file mapping
-                if let Err(e) = self
-                    .db
-                    .add_subscription_entity(subscription_id, &imported.hex_hash)
-                    .await
-                {
-                    warn!(error = %e, "Failed to record subscription-file mapping");
-                }
-
-                // Emit file-imported event for live grid insertion
-                if let Ok(Some(record)) = self.db.get_file_by_hash(&imported.hex_hash).await {
-                    let slim = crate::types::FileInfoSlim::from(record);
-                    crate::events::emit(crate::events::event_names::FILE_IMPORTED, &slim);
-                }
-
+                let mut surviving_hash = imported.hex_hash.clone();
                 // Auto-merge duplicate detection
                 if self.auto_merge_enabled && imported.mime.starts_with("image/") {
                     match crate::duplicates::controller::DuplicateController::check_and_auto_merge(
@@ -894,6 +872,7 @@ impl<'a> SubscriptionSyncEngine<'a> {
                     .await
                     {
                         Ok(Some(merge_result)) => {
+                            surviving_hash = merge_result.winner_hash.clone();
                             info!(
                                 winner = %merge_result.winner_hash,
                                 loser = %merge_result.loser_hash,
@@ -908,6 +887,22 @@ impl<'a> SubscriptionSyncEngine<'a> {
                     }
                 }
 
+                if let Err(e) = self
+                    .db
+                    .add_subscription_entity(subscription_id, &surviving_hash)
+                    .await
+                {
+                    warn!(error = %e, "Failed to record subscription-file mapping");
+                }
+
+                // Only emit a live insert when the imported file survived as a distinct item.
+                if surviving_hash == imported.hex_hash {
+                    if let Ok(Some(record)) = self.db.get_file_by_hash(&surviving_hash).await {
+                        let slim = crate::types::FileInfoSlim::from(record);
+                        crate::events::emit(crate::events::event_names::FILE_IMPORTED, &slim);
+                    }
+                }
+
                 // Emit state-changed for sidebar counts
                 self.db.scope_cache_invalidate_all();
                 crate::events::emit_mutation(
@@ -916,12 +911,16 @@ impl<'a> SubscriptionSyncEngine<'a> {
                 );
 
                 Ok(ImportOutcome {
-                    hex_hash: imported.hex_hash,
+                    hex_hash: surviving_hash,
                     imported_new: true,
                 })
             }
             Err(crate::import::pipeline::ImportError::AlreadyImported(hash)) => {
                 info!(hash = %hash, "Already imported (skipped)");
+                if let Ok(Some(existing)) = self.db.get_file_by_hash(&hash).await {
+                    self.merge_existing_metadata(&hash, &existing, metadata, gallery_url, subscription_id)
+                        .await?;
+                }
                 Ok(ImportOutcome {
                     hex_hash: hash,
                     imported_new: false,
@@ -945,136 +944,53 @@ impl<'a> SubscriptionSyncEngine<'a> {
         existing: &crate::sqlite::files::FileRecord,
         metadata: &ParsedMetadata,
         gallery_url: &str,
+        subscription_id: i64,
     ) -> Result<(), String> {
-        let was_trashed = existing.status == 2;
-        let mut any_change = was_trashed;
-
-        // Restore trashed files
-        if was_trashed {
-            info!(hash = %hex_hash, "Restoring trashed file");
-            self.db
-                .update_file_status(hex_hash, 1)
-                .await
-                .map_err(|e| format!("Restore status error: {e}"))?;
-        }
-
-        // Merge tags
-        if !metadata.tags.is_empty() {
-            let existing_tags = self
-                .db
-                .get_entity_tags(hex_hash)
-                .await
-                .map_err(|e| format!("Load tags error: {e}"))?;
-            let existing_set: HashSet<(String, String)> = existing_tags
-                .into_iter()
-                .map(|t| (t.namespace, t.subtag))
-                .collect();
-            let missing: Vec<(String, String)> = metadata
-                .tags
-                .iter()
-                .filter(|t| !existing_set.contains(*t))
-                .cloned()
-                .collect();
-            if !missing.is_empty() {
-                let tag_strings: Vec<String> = missing
-                    .iter()
-                    .map(|(ns, st)| normalize::combine_tag(ns, st))
-                    .collect();
-                self.db
-                    .add_tags_by_strings(hex_hash, &tag_strings)
-                    .await
-                    .map_err(|e| format!("Merge tags error: {e}"))?;
-                any_change = true;
-            }
-        }
-
-        // Merge name:
-        // - prefer real source title
-        // - replace generated fallback names, but preserve user-chosen names
         let existing_name = existing.name.as_deref().unwrap_or("").trim();
-        if let Some(title) = normalized_title(metadata) {
+        let desired_name = if let Some(title) = normalized_title(metadata) {
             if should_replace_existing_name(existing_name, metadata) {
-                self.db
-                    .set_file_name(hex_hash, Some(&title))
-                    .await
-                    .map_err(|e| format!("Merge name error: {e}"))?;
-                any_change = true;
+                Some(title)
+            } else {
+                None
             }
         } else if existing_name.is_empty() {
-            if let Some(generated) = generated_subscription_name(metadata) {
-                self.db
-                    .set_file_name(hex_hash, Some(&generated))
-                    .await
-                    .map_err(|e| format!("Merge name error: {e}"))?;
-                any_change = true;
-            }
-        }
+            generated_subscription_name(metadata)
+        } else {
+            None
+        };
 
-        // Merge notes (description)
+        let mut note_entries = HashMap::new();
         if let Some(ref description) = metadata.description {
-            let existing_notes: HashMap<String, String> = existing
-                .notes
-                .as_deref()
-                .and_then(|s| serde_json::from_str(s).ok())
-                .unwrap_or_default();
-            if !existing_notes.contains_key("description") {
-                let mut merged = existing_notes;
-                merged.insert("description".to_string(), description.clone());
-                let json = serde_json::to_string(&merged)
-                    .map_err(|e| format!("Notes serialization error: {e}"))?;
-                self.db
-                    .set_notes(hex_hash, Some(&json))
-                    .await
-                    .map_err(|e| format!("Merge notes error: {e}"))?;
-                any_change = true;
-            }
+            note_entries.insert("description".to_string(), description.clone());
         }
 
-        // Merge source URLs
-        let existing_urls: Vec<String> = existing
-            .source_urls_json
-            .as_deref()
-            .and_then(|s| serde_json::from_str(s).ok())
-            .unwrap_or_default();
-        let mut merged_urls = existing_urls.clone();
-        let mut url_set: HashSet<String> = existing_urls.into_iter().collect();
+        let mut source_urls = Vec::new();
         if let Some(ref source) = metadata.source_url {
-            if !source.is_empty() && url_set.insert(source.clone()) {
-                merged_urls.push(source.clone());
-            }
+            source_urls.push(source.clone());
         }
-        if !gallery_url.is_empty() && url_set.insert(gallery_url.to_string()) {
-            merged_urls.push(gallery_url.to_string());
-        }
-        if merged_urls.len() != url_set.len() - (if merged_urls.is_empty() { 0 } else { 0 }) {
-            // Actually just check if we added anything
-        }
-        if merged_urls.len()
-            > existing
-                .source_urls_json
-                .as_deref()
-                .and_then(|s| serde_json::from_str::<Vec<String>>(s).ok())
-                .map_or(0, |v| v.len())
-        {
-            let json = serde_json::to_string(&merged_urls)
-                .map_err(|e| format!("URLs serialization error: {e}"))?;
-            self.db
-                .set_source_urls(hex_hash, Some(&json))
-                .await
-                .map_err(|e| format!("Merge URLs error: {e}"))?;
-            any_change = true;
+        if !gallery_url.is_empty() {
+            source_urls.push(gallery_url.to_string());
         }
 
-        if any_change {
-            self.db.scope_cache_invalidate_all();
-            crate::events::emit_mutation(
-                "subscription_import",
-                crate::events::MutationImpact::file_lifecycle(self.db)
-                    .file_hashes(vec![hex_hash.to_string()]),
-            );
-        }
-
-        Ok(())
+        merge_existing_import_target(
+            self.db,
+            hex_hash,
+            ExistingImportMergeRequest {
+                restore_status: Some(1),
+                tag_strings: metadata
+                    .tags
+                    .iter()
+                    .map(|(ns, st)| normalize::combine_tag(ns, st))
+                    .collect(),
+                source_urls,
+                name: desired_name,
+                note_entries,
+                subscription_id: Some(subscription_id),
+                mutation_name: "subscription_import",
+            },
+        )
+        .await
+        .map(|_| ())
     }
 
     fn emit_progress(&mut self, subscription_id: &str, progress: &SyncProgress, status_text: &str) {
