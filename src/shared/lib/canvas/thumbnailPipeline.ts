@@ -4,6 +4,8 @@ import {
   THUMBNAIL_PIPELINE_FULL_QUALITY_THRESHOLD,
   THUMBNAIL_PIPELINE_MAX_ACTIVE_IDLE,
   THUMBNAIL_PIPELINE_MAX_ACTIVE_SCROLL,
+  THUMBNAIL_PIPELINE_MAX_FULL_ACTIVE_IDLE,
+  THUMBNAIL_PIPELINE_MAX_FULL_ACTIVE_SCROLL,
   THUMBNAIL_PIPELINE_MAX_ENTRIES,
   THUMBNAIL_PIPELINE_SOURCE_EDGE,
 } from './thumbnailPipelinePolicy';
@@ -12,6 +14,7 @@ import type {
   ThumbnailInFlightItem,
   ThumbnailPipelineStats,
   ThumbnailQueueItem,
+  ThumbnailRequestPriority,
   ThumbnailSourceKind,
 } from './thumbnailPipelineTypes';
 
@@ -33,6 +36,7 @@ export class ThumbnailPipeline {
   private cache = new Map<string, ThumbnailPipelineEntry>();
   private queue: ThumbnailQueueItem[] = [];
   private activeLoads = 0;
+  private activeFullLoads = 0;
   private accessCounter = 0;
   private scrolling = false;
   private destroyed = false;
@@ -130,11 +134,31 @@ export class ThumbnailPipeline {
     const maxActive = this.scrolling
       ? THUMBNAIL_PIPELINE_MAX_ACTIVE_SCROLL
       : THUMBNAIL_PIPELINE_MAX_ACTIVE_IDLE;
-    while (this.activeLoads < maxActive && this.queue.length > 0) {
-      const next = this.queue.shift();
+    const maxFullActive = this.scrolling
+      ? THUMBNAIL_PIPELINE_MAX_FULL_ACTIVE_SCROLL
+      : THUMBNAIL_PIPELINE_MAX_FULL_ACTIVE_IDLE;
+    while (this.activeLoads < maxActive) {
+      const nextIndex = this.selectNextQueueIndex(maxFullActive);
+      if (nextIndex < 0) break;
+      const [next] = this.queue.splice(nextIndex, 1);
       if (!next) break;
       void this.loadThumb(next);
     }
+  }
+
+  private selectNextQueueIndex(maxFullActive: number): number {
+    let bestIndex = -1;
+    let bestScore = -1;
+    for (let i = 0; i < this.queue.length; i += 1) {
+      const item = this.queue[i];
+      if (item.sourceKind === 'full' && this.activeFullLoads >= maxFullActive) continue;
+      const score = scoreQueueItem(item);
+      if (score > bestScore) {
+        bestScore = score;
+        bestIndex = i;
+      }
+    }
+    return bestIndex;
   }
 
   private dropFullQualityWork(): void {
@@ -169,9 +193,11 @@ export class ThumbnailPipeline {
       controller,
       y: item.y,
       sourceKind: item.sourceKind,
+      priority: item.priority,
       requestedLongEdge: item.requestedLongEdge,
     });
     this.activeLoads += 1;
+    if (item.sourceKind === 'full') this.activeFullLoads += 1;
     this.markLoading(entry);
     try {
       const response = await fetch(item.url, { signal: controller.signal });
@@ -191,6 +217,9 @@ export class ThumbnailPipeline {
     } finally {
       this.inFlight.delete(item.hash);
       this.activeLoads = Math.max(0, this.activeLoads - 1);
+      if (item.sourceKind === 'full') {
+        this.activeFullLoads = Math.max(0, this.activeFullLoads - 1);
+      }
       this.pump();
     }
   }
@@ -294,13 +323,14 @@ function buildRequest(hash: string, args: EnsureThumbnailArgs): ThumbnailQueueIt
     !canUseFullQuality
     || requestedDisplayLongEdge <= Math.round(THUMBNAIL_PIPELINE_SOURCE_EDGE * THUMBNAIL_PIPELINE_FULL_QUALITY_THRESHOLD)
   ) {
-    return {
-      hash,
-      url: mediaThumbnailUrl(hash),
-      y,
-      sourceKind: 'thumbnail',
-      requestedLongEdge: THUMBNAIL_PIPELINE_SOURCE_EDGE,
-    };
+      return {
+        hash,
+        url: mediaThumbnailUrl(hash),
+        y,
+        sourceKind: 'thumbnail',
+        priority: getRequestPriority(args),
+        requestedLongEdge: THUMBNAIL_PIPELINE_SOURCE_EDGE,
+      };
   }
 
   const resize = computeResize(
@@ -313,6 +343,7 @@ function buildRequest(hash: string, args: EnsureThumbnailArgs): ThumbnailQueueIt
     url: mediaFileUrl(hash, args.mime!),
     y,
     sourceKind: 'full',
+    priority: getRequestPriority(args),
     requestedLongEdge: resize.longEdge,
     resizeWidth: resize.width,
     resizeHeight: resize.height,
@@ -332,6 +363,10 @@ function isEligibleForFullQuality(args: EnsureThumbnailArgs): boolean {
 function quantizeLongEdge(value: number): number {
   const step = 128;
   return Math.max(THUMBNAIL_PIPELINE_SOURCE_EDGE, Math.ceil(value / step) * step);
+}
+
+function getRequestPriority(args: EnsureThumbnailArgs): ThumbnailRequestPriority {
+  return args.drawWidth && args.drawHeight ? 'visible' : 'prefetch';
 }
 
 function computeResize(sourceWidth: number | null, sourceHeight: number | null, longEdge: number) {
@@ -384,8 +419,16 @@ function downgradeRequestForScroll(request: ThumbnailQueueItem | null): Thumbnai
     url: mediaThumbnailUrl(request.hash),
     y: request.y,
     sourceKind: 'thumbnail',
+    priority: request.priority,
     requestedLongEdge: THUMBNAIL_PIPELINE_SOURCE_EDGE,
   };
+}
+
+function scoreQueueItem(item: ThumbnailQueueItem): number {
+  if (item.priority === 'visible' && item.sourceKind === 'thumbnail') return 4;
+  if (item.priority === 'visible' && item.sourceKind === 'full') return 3;
+  if (item.priority === 'prefetch' && item.sourceKind === 'thumbnail') return 2;
+  return 1;
 }
 
 export const __private__ = {
@@ -393,4 +436,5 @@ export const __private__ = {
   downgradeRequestForScroll,
   needsUpgradeState,
   quantizeLongEdge,
+  scoreQueueItem,
 };

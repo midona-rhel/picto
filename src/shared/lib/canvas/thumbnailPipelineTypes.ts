@@ -1,5 +1,6 @@
 export type ThumbnailPipelineState = 'idle' | 'queued' | 'loading' | 'shown' | 'error';
 export type ThumbnailSourceKind = 'thumbnail' | 'full';
+export type ThumbnailRequestPriority = 'visible' | 'prefetch';
 
 export interface ThumbnailPipelineEntry {
   thumb: ImageBitmap | null;
@@ -25,6 +26,7 @@ export interface ThumbnailQueueItem {
   url: string;
   y: number;
   sourceKind: ThumbnailSourceKind;
+  priority: ThumbnailRequestPriority;
   requestedLongEdge: number;
   resizeWidth?: number;
   resizeHeight?: number;
@@ -34,5 +36,6 @@ export interface ThumbnailInFlightItem {
   controller: AbortController;
   y: number;
   sourceKind: ThumbnailSourceKind;
+  priority: ThumbnailRequestPriority;
   requestedLongEdge: number;
 }

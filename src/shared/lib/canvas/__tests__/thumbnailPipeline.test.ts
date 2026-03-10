@@ -14,6 +14,7 @@ describe('thumbnailPipeline source selection', () => {
     });
 
     expect(request?.sourceKind).toBe('thumbnail');
+    expect(request?.priority).toBe('visible');
   });
 
   it('upgrades to full-quality source when tile exceeds thumbnail budget', () => {
@@ -27,6 +28,7 @@ describe('thumbnailPipeline source selection', () => {
     });
 
     expect(request?.sourceKind).toBe('full');
+    expect(request?.priority).toBe('visible');
     expect(request?.resizeWidth).toBeGreaterThan(512);
   });
 
@@ -42,6 +44,50 @@ describe('thumbnailPipeline source selection', () => {
 
     const downgraded = __private__.downgradeRequestForScroll(request ?? null);
     expect(downgraded?.sourceKind).toBe('thumbnail');
+    expect(downgraded?.priority).toBe('visible');
     expect(downgraded?.requestedLongEdge).toBe(512);
+  });
+
+  it('marks offscreen prefetch requests separately from visible work', () => {
+    const request = __private__.buildRequest('abc', {
+      y: 100,
+    });
+
+    expect(request?.sourceKind).toBe('thumbnail');
+    expect(request?.priority).toBe('prefetch');
+  });
+
+  it('prioritizes visible thumbnails over full-quality and prefetch work', () => {
+    expect(__private__.scoreQueueItem({
+      hash: 'visible-thumb',
+      url: 'thumb://visible',
+      y: 0,
+      sourceKind: 'thumbnail',
+      priority: 'visible',
+      requestedLongEdge: 512,
+    })).toBeGreaterThan(__private__.scoreQueueItem({
+      hash: 'visible-full',
+      url: 'full://visible',
+      y: 0,
+      sourceKind: 'full',
+      priority: 'visible',
+      requestedLongEdge: 1024,
+    }));
+
+    expect(__private__.scoreQueueItem({
+      hash: 'visible-full',
+      url: 'full://visible',
+      y: 0,
+      sourceKind: 'full',
+      priority: 'visible',
+      requestedLongEdge: 1024,
+    })).toBeGreaterThan(__private__.scoreQueueItem({
+      hash: 'prefetch-thumb',
+      url: 'thumb://prefetch',
+      y: 2000,
+      sourceKind: 'thumbnail',
+      priority: 'prefetch',
+      requestedLongEdge: 512,
+    }));
   });
 });
