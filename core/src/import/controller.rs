@@ -80,7 +80,7 @@ impl ImportController {
                         crate::events::MutationImpact::file_lifecycle(db),
                     );
                     batch.imported.push(ImportResult {
-                        hash: imported.hex_hash,
+                        hash: surviving_hash,
                         mime: imported.mime,
                         size: imported.size,
                         has_thumbnail: imported.has_thumbnail,
@@ -248,7 +248,7 @@ impl ImportController {
                         emit_file_imported(db, &surviving_hash).await;
                     }
                     batch.imported.push(ImportResult {
-                        hash: imported.hex_hash,
+                        hash: surviving_hash,
                         mime: imported.mime,
                         size: imported.size,
                         has_thumbnail: imported.has_thumbnail,
