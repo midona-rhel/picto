@@ -176,7 +176,9 @@ export function MediaView({ images, currentIndex, onNavigate, onClose, onStateCh
     navigatorRect,
     panToNormalized,
     handlers,
-  } = useImageZoom(containerRef, imageSize);
+  } = useImageZoom(containerRef, imageSize, {
+    transformTargets: [imgRef, thumbImgRef],
+  });
 
   const navigatorRef = useRef<HTMLDivElement>(null);
   const navViewportRef = useRef<HTMLDivElement>(null);

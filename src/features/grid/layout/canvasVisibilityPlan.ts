@@ -119,6 +119,10 @@ export function buildCanvasVisibilityPlan(args: {
   };
 }
 
+// Pre-allocated scratch buffers reused across frames to avoid GC pressure.
+const scratchSeen = new Set<number>();
+const scratchIndices: number[] = [];
+
 function collectBucketWindowIndices(
   positions: LayoutItem[],
   bucketIndex: Map<number, number[]>,
@@ -127,28 +131,29 @@ function collectBucketWindowIndices(
 ): number[] {
   const startBucket = Math.floor(top / BUCKET_SIZE);
   const endBucket = Math.floor(bottom / BUCKET_SIZE);
-  const seen = new Set<number>();
-  const indices: number[] = [];
+  scratchSeen.clear();
+  scratchIndices.length = 0;
 
   for (let bucket = startBucket; bucket <= endBucket; bucket += 1) {
     const bucketIndices = bucketIndex.get(bucket);
     if (!bucketIndices) continue;
     for (const index of bucketIndices) {
-      if (seen.has(index)) continue;
-      seen.add(index);
+      if (scratchSeen.has(index)) continue;
+      scratchSeen.add(index);
       const pos = positions[index];
       if (!pos) continue;
       if (pos.y + pos.h < top || pos.y > bottom) continue;
-      indices.push(index);
+      scratchIndices.push(index);
     }
   }
 
-  indices.sort((a, b) => {
+  scratchIndices.sort((a, b) => {
     const posA = positions[a];
     const posB = positions[b];
     if (posA.y !== posB.y) return posA.y - posB.y;
     if (posA.x !== posB.x) return posA.x - posB.x;
     return a - b;
   });
-  return indices;
+  // Return a snapshot — caller may hold reference across calls
+  return scratchIndices.slice();
 }

@@ -190,7 +190,9 @@ export function DetailWindow({ hash }: DetailWindowProps) {
     navigatorRect,
     panToNormalized,
     handlers,
-  } = useImageZoom(containerRef, imageSize);
+  } = useImageZoom(containerRef, imageSize, {
+    transformTargets: [imgRef, thumbImgRef],
+  });
 
   // Navigation-in-progress guard — prevents ResizeObserver and aspect-lock from firing during navigate
   const navigationInProgressRef = useRef(false);

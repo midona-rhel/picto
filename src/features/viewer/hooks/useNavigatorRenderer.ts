@@ -9,23 +9,16 @@ const DEFAULT_NAV_SIZE = 120;
  * useLayoutEffect so the image is always centered on first render.
  */
 export function useNavigatorRenderer(
-  imgRef: RefObject<HTMLImageElement | null>,
+  _imgRef: RefObject<HTMLImageElement | null>,
   navRef: RefObject<HTMLDivElement | null>,
   vpRef: RefObject<HTMLDivElement | null>,
   imageSizeRef: MutableRefObject<ImageSize | null>,
-  zoomState: ZoomState,
+  _zoomState: ZoomState,
   navigatorRect: NavigatorRect | null,
   navSize: number = DEFAULT_NAV_SIZE,
-  thumbRef?: RefObject<HTMLImageElement | null>,
+  _thumbRef?: RefObject<HTMLImageElement | null>,
 ): void {
-  // Apply transform synchronously before paint — transform is composited (no layout thrash)
   useLayoutEffect(() => {
-    const transform = `translate(calc(-50% + ${zoomState.tx}px), calc(-50% + ${zoomState.ty}px)) scale(${zoomState.scale})`;
-    const img = imgRef.current;
-    if (img) img.style.transform = transform;
-    const thumb = thumbRef?.current;
-    if (thumb) thumb.style.transform = transform;
-
     const nav = navRef.current;
     const vp = vpRef.current;
     if (!nav || !vp || !imageSizeRef.current) return;

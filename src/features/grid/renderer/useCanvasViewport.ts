@@ -65,32 +65,39 @@ export function useCanvasViewport(args: {
     onContainerWidthChange?.(containerWidth);
   }, [containerWidth, frozen, frozenLayoutWidth, onContainerWidthChange]);
 
+  // Cached scroll metrics — avoids redundant getBoundingClientRect() calls
+  // within the same frame (called 3-5× per frame from scroll handler, base
+  // draw, overlay draw, and load-more check).
+  const metricsCacheRef = useRef<{ value: { localScrollTop: number; canvasTopInScroll: number; viewportHeight: number }; time: number } | null>(null);
+
   const getScrollMetrics = useCallback(() => {
+    const now = performance.now();
+    const cached = metricsCacheRef.current;
+    if (cached && now - cached.time < 2) return cached.value;
+
     const scrollElement = scrollContainerRef?.current;
     if (!scrollElement) {
-      return { localScrollTop: 0, canvasTopInScroll: 0, viewportHeight: 0 };
+      const value = { localScrollTop: 0, canvasTopInScroll: 0, viewportHeight: 0 };
+      metricsCacheRef.current = { value, time: now };
+      return value;
     }
 
     const viewportHeight = scrollElement.clientHeight;
     const globalScrollTop = scrollElement.scrollTop;
     const containerElement = containerElRef.current;
     if (!containerElement) {
-      return {
-        localScrollTop: globalScrollTop,
-        canvasTopInScroll: 0,
-        viewportHeight,
-      };
+      const value = { localScrollTop: globalScrollTop, canvasTopInScroll: 0, viewportHeight };
+      metricsCacheRef.current = { value, time: now };
+      return value;
     }
 
     const scrollRect = scrollElement.getBoundingClientRect();
     const containerRect = containerElement.getBoundingClientRect();
     const canvasTopInScroll = globalScrollTop + (containerRect.top - scrollRect.top);
     const localScrollTop = Math.max(0, globalScrollTop - canvasTopInScroll);
-    return {
-      localScrollTop,
-      canvasTopInScroll,
-      viewportHeight,
-    };
+    const value = { localScrollTop, canvasTopInScroll, viewportHeight };
+    metricsCacheRef.current = { value, time: now };
+    return value;
   }, [scrollContainerRef]);
 
   useEffect(() => {
@@ -131,14 +138,16 @@ export function useCanvasViewport(args: {
 
     const onScroll = () => {
       isScrollingRef.current = true;
+      document.documentElement.classList.add('grid-scrolling');
       if (scrollIdleTimer) window.clearTimeout(scrollIdleTimer);
       scrollIdleTimer = window.setTimeout(() => {
         isScrollingRef.current = false;
+        document.documentElement.classList.remove('grid-scrolling');
         if (pendingAtlasDirtyRef.current) {
           pendingAtlasDirtyRef.current = false;
         }
         markDirty('both');
-      }, 120);
+      }, 60);
 
       dismissHoverPreviewRef.current();
       dismissVideoScrubRef.current();
@@ -170,6 +179,7 @@ export function useCanvasViewport(args: {
       if (rafId) cancelAnimationFrame(rafId);
       if (scrollIdleTimer) window.clearTimeout(scrollIdleTimer);
       isScrollingRef.current = false;
+      document.documentElement.classList.remove('grid-scrolling');
     };
   }, [
     dismissHoverPreviewRef,

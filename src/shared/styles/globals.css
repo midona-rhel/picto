@@ -531,3 +531,10 @@ body {
 .mantine-Select-option[data-disabled] {
   color: var(--select-option-disabled);
 }
+
+/* Disable expensive backdrop-filter on non-essential panels during grid scroll.
+   The .grid-scrolling class is toggled on <html> by useCanvasViewport. */
+:root.grid-scrolling [data-scroll-blur-opt] {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}

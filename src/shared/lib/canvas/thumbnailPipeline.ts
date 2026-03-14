@@ -35,7 +35,7 @@ interface EnsureThumbnailArgs {
 
 export class ThumbnailPipeline {
   private cache = new Map<string, ThumbnailPipelineEntry>();
-  private queue: ThumbnailQueueItem[] = [];
+  private queueMap = new Map<string, ThumbnailQueueItem>();
   private activeLoads = 0;
   private activeFullLoads = 0;
   private accessCounter = 0;
@@ -72,24 +72,22 @@ export class ThumbnailPipeline {
       if (active && !needsUpgradeState(active.sourceKind, active.requestedLongEdge, request.sourceKind, request.requestedLongEdge)) {
         return;
       }
-      const queued = this.queue.find((item) => item.hash === hash);
+      const queued = this.queueMap.get(hash);
       if (queued && !needsUpgradeState(queued.sourceKind, queued.requestedLongEdge, request.sourceKind, request.requestedLongEdge)) {
         return;
       }
     }
 
     this.markQueued(entry);
-    this.queue = this.queue.filter((item) => item.hash !== hash);
-    this.queue.push(request);
+    this.queueMap.set(hash, request);
     this.pump();
   }
 
   cancelOutsideWindow(top: number, bottom: number): void {
-    for (let i = this.queue.length - 1; i >= 0; i--) {
-      const item = this.queue[i];
+    for (const [hash, item] of this.queueMap) {
       if (item.y >= top && item.y <= bottom) continue;
-      this.queue.splice(i, 1);
-      const entry = this.cache.get(item.hash);
+      this.queueMap.delete(hash);
+      const entry = this.cache.get(hash);
       if (!entry) continue;
       if (!entry.thumb) this.resetEntry(entry);
     }
@@ -106,9 +104,9 @@ export class ThumbnailPipeline {
 
   getStats(): ThumbnailPipelineStats {
     return {
-      queueDepth: this.queue.length,
+      queueDepth: this.queueMap.size,
       activeLoads: this.activeLoads,
-      pendingThumbs: this.queue.length,
+      pendingThumbs: this.queueMap.size,
       cacheSize: this.cache.size,
       diskSpeed: 'normal',
     };
@@ -118,7 +116,7 @@ export class ThumbnailPipeline {
     this.destroyed = true;
     for (const inFlight of this.inFlight.values()) inFlight.controller.abort();
     this.inFlight.clear();
-    this.queue.length = 0;
+    this.queueMap.clear();
     for (const entry of this.cache.values()) {
       entry.thumb?.close();
     }
@@ -134,27 +132,25 @@ export class ThumbnailPipeline {
       ? THUMBNAIL_PIPELINE_MAX_FULL_ACTIVE_SCROLL
       : THUMBNAIL_PIPELINE_MAX_FULL_ACTIVE_IDLE;
     while (this.activeLoads < maxActive) {
-      const nextIndex = this.selectNextQueueIndex(maxFullActive);
-      if (nextIndex < 0) break;
-      const [next] = this.queue.splice(nextIndex, 1);
+      const next = this.selectNextQueueItem(maxFullActive);
       if (!next) break;
+      this.queueMap.delete(next.hash);
       void this.loadThumb(next);
     }
   }
 
-  private selectNextQueueIndex(maxFullActive: number): number {
-    let bestIndex = -1;
+  private selectNextQueueItem(maxFullActive: number): ThumbnailQueueItem | null {
+    let best: ThumbnailQueueItem | null = null;
     let bestScore = -1;
-    for (let i = 0; i < this.queue.length; i += 1) {
-      const item = this.queue[i];
+    for (const item of this.queueMap.values()) {
       if (item.sourceKind === 'full' && this.activeFullLoads >= maxFullActive) continue;
       const score = scoreQueueItem(item);
       if (score > bestScore) {
         bestScore = score;
-        bestIndex = i;
+        best = item;
       }
     }
-    return bestIndex;
+    return best;
   }
 
   private async loadThumb(item: ThumbnailQueueItem): Promise<void> {
@@ -219,11 +215,14 @@ export class ThumbnailPipeline {
   private pruneCache(): void {
     if (this.cache.size <= THUMBNAIL_PIPELINE_MAX_ENTRIES) return;
     const target = THUMBNAIL_PIPELINE_MAX_ENTRIES - 100;
-    const entries = Array.from(this.cache.entries());
-    entries.sort((a, b) => a[1].lastAccessed - b[1].lastAccessed);
-    for (const [hash, entry] of entries) {
+    // O(N) eviction: entries with lastAccessed below the threshold are older
+    // than we want to keep. accessCounter is monotonically increasing, so
+    // entries not touched in the last ~target accesses are eviction candidates.
+    const threshold = this.accessCounter - target;
+    for (const [hash, entry] of this.cache) {
       if (this.cache.size <= target) break;
       if (entry.state === 'queued' || entry.state === 'loading') continue;
+      if (entry.lastAccessed >= threshold) continue;
       entry.thumb?.close();
       this.cache.delete(hash);
       this.loadedHashes.delete(hash);

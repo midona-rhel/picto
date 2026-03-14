@@ -89,6 +89,11 @@ let isInitializing = false;
 const taskLingerTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const subFinishedTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
+// Mutation receipt batching — coalesce rapid-fire events (e.g. bulk import)
+// into a single store update to avoid redundant deriveStaleResources calls.
+let pendingReceipts: MutationReceipt[] = [];
+let receiptFlushTimer: ReturnType<typeof setTimeout> | null = null;
+
 const WATCHDOG_POLL_MS = 1000;
 const WATCHDOG_STALE_MS = 5000;
 
@@ -97,6 +102,11 @@ function clearTimers() {
     clearInterval(watchdogTimer);
     watchdogTimer = null;
   }
+  if (receiptFlushTimer) {
+    clearTimeout(receiptFlushTimer);
+    receiptFlushTimer = null;
+  }
+  pendingReceipts.length = 0;
   for (const timer of taskLingerTimers.values()) clearTimeout(timer);
   taskLingerTimers.clear();
   for (const timer of subFinishedTimers.values()) clearTimeout(timer);
@@ -209,20 +219,35 @@ export const useRuntimeSyncStore = create<RuntimeSyncState>((set, get) => ({
   },
 
   applyMutationReceipt: (receipt) => {
-    const state = get();
-    if (receipt.seq <= state.lastSeq) return;
-
     lastEventTs = Date.now();
-    const newStale = deriveStaleResources(receipt);
-    const merged = new Set(state.staleResources);
-    for (const key of newStale) merged.add(key);
-
-    set({
-      lastSeq: receipt.seq,
-      staleResources: merged,
-      sidebarCounts: receipt.sidebar_counts ?? state.sidebarCounts,
-      lastOriginCommand: receipt.origin_command,
-    });
+    pendingReceipts.push(receipt);
+    if (!receiptFlushTimer) {
+      receiptFlushTimer = setTimeout(() => {
+        receiptFlushTimer = null;
+        const batch = pendingReceipts.splice(0);
+        if (batch.length === 0) return;
+        const state = get();
+        const merged = new Set(state.staleResources);
+        let maxSeq = state.lastSeq;
+        let latestSidebarCounts = state.sidebarCounts;
+        let latestOriginCommand = state.lastOriginCommand;
+        for (const r of batch) {
+          if (r.seq <= maxSeq) continue;
+          maxSeq = r.seq;
+          const newStale = deriveStaleResources(r);
+          for (const key of newStale) merged.add(key);
+          if (r.sidebar_counts) latestSidebarCounts = r.sidebar_counts;
+          latestOriginCommand = r.origin_command;
+        }
+        if (maxSeq <= state.lastSeq) return;
+        set({
+          lastSeq: maxSeq,
+          staleResources: merged,
+          sidebarCounts: latestSidebarCounts,
+          lastOriginCommand: latestOriginCommand,
+        });
+      }, 50);
+    }
   },
 
   applyTaskUpsert: (task) => {

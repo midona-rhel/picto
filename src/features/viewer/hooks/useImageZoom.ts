@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState, useEffect, useLayoutEffect, useMemo } from 'react';
+import { useCallback, useRef, useState, useEffect, useLayoutEffect, useMemo, type RefObject } from 'react';
 import { useGlobalPointerDrag } from '../../../shared/hooks/useGlobalPointerDrag';
 
 export interface ZoomState {
@@ -22,6 +22,8 @@ export interface NavigatorRect {
 interface UseImageZoomOptions {
   minScale?: number;
   maxScale?: number;
+  transformTargets?: Array<RefObject<HTMLElement | null>>;
+  interactiveCommitMs?: number;
 }
 
 const MIN_SCALE = 0.05;
@@ -32,13 +34,75 @@ export function useImageZoom(
   imageSize: ImageSize | null,
   options: UseImageZoomOptions = {},
 ) {
-  const { minScale = MIN_SCALE, maxScale = MAX_SCALE } = options;
+  const {
+    minScale = MIN_SCALE,
+    maxScale = MAX_SCALE,
+    transformTargets = [],
+    interactiveCommitMs = 96,
+  } = options;
 
   const [state, setState] = useState<ZoomState>({ scale: 1, tx: 0, ty: 0 });
   const [isDragging, setIsDragging] = useState(false);
   const dragStartRef = useRef<{ x: number; y: number; tx: number; ty: number } | null>(null);
-  const stateRef = useRef(state);
-  stateRef.current = state;
+  const committedStateRef = useRef(state);
+  committedStateRef.current = state;
+  const liveStateRef = useRef(state);
+  const commitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const frameRef = useRef<number | null>(null);
+
+  const applyTransform = useCallback((next: ZoomState) => {
+    const transform = `translate(calc(-50% + ${next.tx}px), calc(-50% + ${next.ty}px)) scale(${next.scale})`;
+    for (const targetRef of transformTargets) {
+      const el = targetRef.current;
+      if (el) el.style.transform = transform;
+    }
+  }, [transformTargets]);
+
+  const flushCommittedState = useCallback((next?: ZoomState) => {
+    const resolved = next ?? liveStateRef.current;
+    if (commitTimerRef.current) {
+      clearTimeout(commitTimerRef.current);
+      commitTimerRef.current = null;
+    }
+    setState((prev) => (
+      prev.scale === resolved.scale && prev.tx === resolved.tx && prev.ty === resolved.ty
+        ? prev
+        : resolved
+    ));
+  }, []);
+
+  const scheduleInteractiveTransform = useCallback(() => {
+    if (frameRef.current != null) return;
+    frameRef.current = requestAnimationFrame(() => {
+      frameRef.current = null;
+      applyTransform(liveStateRef.current);
+    });
+  }, [applyTransform]);
+
+  const updateZoomState = useCallback((
+    nextOrUpdater: ZoomState | ((prev: ZoomState) => ZoomState),
+    interactive: boolean = false,
+  ) => {
+    const prev = liveStateRef.current;
+    const next = typeof nextOrUpdater === 'function'
+      ? nextOrUpdater(prev)
+      : nextOrUpdater;
+    liveStateRef.current = next;
+
+    if (!interactive) {
+      applyTransform(next);
+      flushCommittedState(next);
+      return;
+    }
+
+    scheduleInteractiveTransform();
+
+    if (commitTimerRef.current) clearTimeout(commitTimerRef.current);
+    commitTimerRef.current = setTimeout(() => {
+      commitTimerRef.current = null;
+      flushCommittedState(liveStateRef.current);
+    }, interactiveCommitMs);
+  }, [applyTransform, flushCommittedState, interactiveCommitMs, scheduleInteractiveTransform]);
 
   // Cache container dimensions — avoids DOM reads during zoom frames.
   // useLayoutEffect for the initial measurement so containerSize is available
@@ -71,15 +135,15 @@ export function useImageZoom(
   }, [containerSize]);
 
   const fitToWindow = useCallback(() => {
-    setState({ scale: getFitScale(), tx: 0, ty: 0 });
-  }, [getFitScale]);
+    updateZoomState({ scale: getFitScale(), tx: 0, ty: 0 });
+  }, [getFitScale, updateZoomState]);
 
   const fitActual = useCallback(() => {
-    setState({ scale: 1, tx: 0, ty: 0 });
-  }, []);
+    updateZoomState({ scale: 1, tx: 0, ty: 0 });
+  }, [updateZoomState]);
 
   const zoomTo = useCallback((targetScale: number, focalX?: number, focalY?: number) => {
-    setState(prev => {
+    updateZoomState(prev => {
       const clamped = Math.min(maxScale, Math.max(minScale, targetScale));
       if (focalX !== undefined && focalY !== undefined) {
         const ratio = clamped / prev.scale;
@@ -87,7 +151,7 @@ export function useImageZoom(
       }
       return { ...prev, scale: clamped };
     });
-  }, [minScale, maxScale]);
+  }, [maxScale, minScale, updateZoomState]);
 
   // Native non-passive wheel listener for smooth Mac trackpad zoom.
   useEffect(() => {
@@ -104,7 +168,7 @@ export function useImageZoom(
       const sensitivity = 0.004;
       const multiplier = Math.exp(-e.deltaY * sensitivity);
 
-      setState(prev => {
+      updateZoomState(prev => {
         const newScale = Math.min(maxScale, Math.max(minScale, prev.scale * multiplier));
         const ratio = newScale / prev.scale;
         return {
@@ -112,26 +176,26 @@ export function useImageZoom(
           tx: focalX - ratio * (focalX - prev.tx),
           ty: focalY - ratio * (focalY - prev.ty),
         };
-      });
+      }, true);
     };
 
     container.addEventListener('wheel', handleWheel, { passive: false });
     return () => container.removeEventListener('wheel', handleWheel);
-  }, [containerRef, minScale, maxScale]);
+  }, [containerRef, maxScale, minScale, updateZoomState]);
 
   const onMouseDown = useCallback((e: React.MouseEvent) => {
     if (e.button !== 0) return;
     e.preventDefault();
     setIsDragging(true);
-    const cur = stateRef.current;
+    const cur = liveStateRef.current;
     dragStartRef.current = { x: e.clientX, y: e.clientY, tx: cur.tx, ty: cur.ty };
   }, []);
 
   const handleDragMove = useCallback((e: MouseEvent) => {
     const start = dragStartRef.current;
     if (!start) return;
-    setState(prev => ({ ...prev, tx: start.tx + (e.clientX - start.x), ty: start.ty + (e.clientY - start.y) }));
-  }, []);
+    updateZoomState(prev => ({ ...prev, tx: start.tx + (e.clientX - start.x), ty: start.ty + (e.clientY - start.y) }), true);
+  }, [updateZoomState]);
   const handleDragEnd = useCallback(() => {
     setIsDragging(false);
     dragStartRef.current = null;
@@ -165,16 +229,28 @@ export function useImageZoom(
 
   const panToNormalized = useCallback((nx: number, ny: number) => {
     if (!imageSize || containerSize.w === 0) return;
-    setState(prev => ({
+    updateZoomState(prev => ({
       ...prev,
       tx: containerSize.w / 2 - nx * imageSize.width * prev.scale,
       ty: containerSize.h / 2 - ny * imageSize.height * prev.scale,
     }));
-  }, [containerSize, imageSize]);
+  }, [containerSize, imageSize, updateZoomState]);
+
+  useLayoutEffect(() => {
+    if (commitTimerRef.current == null) {
+      liveStateRef.current = state;
+    }
+    applyTransform(liveStateRef.current);
+  }, [applyTransform, state]);
+
+  useEffect(() => () => {
+    if (commitTimerRef.current) clearTimeout(commitTimerRef.current);
+    if (frameRef.current != null) cancelAnimationFrame(frameRef.current);
+  }, []);
 
   return {
     state,
-    setState,
+    setState: updateZoomState,
     isDragging,
     getFitScale,
     calcFitScale,
