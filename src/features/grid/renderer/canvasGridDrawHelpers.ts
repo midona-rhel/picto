@@ -16,6 +16,14 @@ import {
   mimeToExt,
   truncateText,
 } from './canvasGridPrimitives';
+import {
+  THUMBNAIL_PIPELINE_SOURCE_EDGE,
+  THUMBNAIL_PIPELINE_FULL_QUALITY_THRESHOLD,
+} from '../../../shared/lib/canvas/thumbnailPipelinePolicy';
+
+const FULL_QUALITY_THRESHOLD_PX = Math.round(
+  THUMBNAIL_PIPELINE_SOURCE_EDGE * THUMBNAIL_PIPELINE_FULL_QUALITY_THRESHOLD,
+);
 
 interface ThemeLike {
   primaryColor: string;
@@ -94,15 +102,29 @@ export function drawCanvasBaseLayer({
     const imageHeight = pos.h - th;
     if (drawY + pos.h < 0 || drawY > cssH) continue;
 
-    atlasEnsure(image.hash, {
-      y: pos.y + pos.h / 2,
-      drawWidth: pos.w * (window.devicePixelRatio || 1),
-      drawHeight: imageHeight * (window.devicePixelRatio || 1),
-      mime: image.mime,
-      sourceWidth: image.width,
-      sourceHeight: image.height,
-    });
+    // Short-circuit: skip ensure() for warm cache entries. Only call ensure()
+    // when the entry is missing, not yet shown, or needs a quality upgrade.
+    // This eliminates ~90% of per-frame buildRequest() overhead.
     const entry = atlasGet(image.hash);
+    const dprLongEdge = Math.max(
+      pos.w * (window.devicePixelRatio || 1),
+      imageHeight * (window.devicePixelRatio || 1),
+    );
+    if (
+      !entry
+      || entry.state !== 'shown'
+      || (entry.sourceKind === 'thumbnail' && dprLongEdge > FULL_QUALITY_THRESHOLD_PX)
+      || (dprLongEdge > entry.loadedLongEdge * 1.15)
+    ) {
+      atlasEnsure(image.hash, {
+        y: pos.y + pos.h / 2,
+        drawWidth: pos.w * (window.devicePixelRatio || 1),
+        drawHeight: imageHeight * (window.devicePixelRatio || 1),
+        mime: image.mime,
+        sourceWidth: image.width,
+        sourceHeight: image.height,
+      });
+    }
 
     ctx.save();
     ctx.beginPath();

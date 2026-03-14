@@ -147,7 +147,7 @@ export function useCanvasViewport(args: {
           pendingAtlasDirtyRef.current = false;
         }
         markDirty('both');
-      }, 60);
+      }, 40);
 
       dismissHoverPreviewRef.current();
       dismissVideoScrubRef.current();

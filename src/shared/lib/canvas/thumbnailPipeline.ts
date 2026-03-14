@@ -47,7 +47,24 @@ export class ThumbnailPipeline {
   constructor(private readonly onDirty: () => void) {}
 
   setScrolling(active: boolean): void {
+    const wasScrolling = this.scrolling;
     this.scrolling = active;
+
+    // Cancel in-flight full-quality loads when scroll begins — their decode
+    // completion would cause a heavy bitmap swap mid-scroll. The thumbnail
+    // fallback remains visible; full-quality re-triggers on scroll idle.
+    if (active && !wasScrolling) {
+      for (const [hash, inFlight] of this.inFlight) {
+        if (inFlight.sourceKind !== 'full') continue;
+        inFlight.controller.abort();
+        this.inFlight.delete(hash);
+        this.activeLoads = Math.max(0, this.activeLoads - 1);
+        this.activeFullLoads = Math.max(0, this.activeFullLoads - 1);
+        const entry = this.cache.get(hash);
+        if (entry && entry.state === 'loading') this.resetEntry(entry);
+      }
+    }
+
     this.pump();
   }
 
@@ -212,7 +229,20 @@ export class ThumbnailPipeline {
     this.onDirty();
   }
 
+  private static readonly MAX_LOADED_HASHES = 10_000;
+
   private pruneCache(): void {
+    // Cap loadedHashes independently — this set only controls animation.
+    // A larger budget (5× cache size) prevents re-fading recently-viewed
+    // tiles when the user scrolls back (reference application-style `.from-cache` behavior).
+    if (this.loadedHashes.size > ThumbnailPipeline.MAX_LOADED_HASHES) {
+      let toDelete = this.loadedHashes.size - ThumbnailPipeline.MAX_LOADED_HASHES + 500;
+      for (const h of this.loadedHashes) {
+        if (toDelete-- <= 0) break;
+        this.loadedHashes.delete(h);
+      }
+    }
+
     if (this.cache.size <= THUMBNAIL_PIPELINE_MAX_ENTRIES) return;
     const target = THUMBNAIL_PIPELINE_MAX_ENTRIES - 100;
     // O(N) eviction: entries with lastAccessed below the threshold are older
@@ -225,7 +255,7 @@ export class ThumbnailPipeline {
       if (entry.lastAccessed >= threshold) continue;
       entry.thumb?.close();
       this.cache.delete(hash);
-      this.loadedHashes.delete(hash);
+      // NOTE: do NOT delete from loadedHashes — keeps reveal memory intact
       this.inFlight.get(hash)?.controller.abort();
       this.inFlight.delete(hash);
     }
@@ -367,7 +397,7 @@ async function createBitmap(blob: Blob, item: ThumbnailQueueItem): Promise<Image
     return createImageBitmap(blob, {
       resizeWidth: item.resizeWidth,
       resizeHeight: item.resizeHeight,
-      resizeQuality: 'high',
+      resizeQuality: 'medium',
     });
   }
   return createImageBitmap(blob);
