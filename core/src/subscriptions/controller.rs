@@ -1,14 +1,12 @@
-//! Subscription orchestration — manages subscription/flow CRUD, execution
-//! triggers, cancellation, and runtime progress tracking.
-//!
-//! Coordinates between `SubscriptionSyncEngine` for gallery-dl execution and
-//! `RuntimeTask` for frontend progress display.
+//! Subscription CRUD and reset behavior.
 
 use rusqlite::params;
 
 use crate::blob_store::BlobStore;
 use crate::sqlite::SqliteDatabase;
-use crate::subscriptions::archive::clear_subscription_archive_entries;
+use crate::subscriptions::archive::{
+    clear_subscription_archive_entries, subscription_query_archive_prefix,
+};
 use crate::types::{RunningSubscriptions, SubscriptionInfo, SubscriptionQueryInfo};
 
 pub struct SubscriptionController;
@@ -225,9 +223,7 @@ impl SubscriptionController {
         let queries = db.get_subscription_queries(sub_id).await?;
         let mut archive_prefixes: Vec<String> = queries
             .iter()
-            .map(|q| {
-                crate::subscriptions::sync_engine::subscription_query_archive_prefix(sub_id, q.query_id)
-            })
+            .map(|q| subscription_query_archive_prefix(sub_id, q.query_id))
             .collect();
         archive_prefixes.push(format!("picto_s{sub_id}_q"));
 

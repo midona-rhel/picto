@@ -19,10 +19,19 @@ use tracing::{info, warn};
 use crate::blob_store::BlobStore;
 use crate::credential_store;
 use crate::import::existing::{merge_existing_import_target, ExistingImportMergeRequest};
-use crate::subscriptions::gallery_dl_runner::{self, FailureKind, GalleryDlRunner, ParsedMetadata, RunOptions};
-use crate::subscriptions::policy::resolve_query_name;
 use crate::import::pipeline::{ImportOptions, ImportPipeline};
 use crate::settings::store::AppSettings;
+use crate::subscriptions::archive::subscription_query_archive_prefix;
+use crate::subscriptions::gallery_dl_runner::{self, FailureKind, GalleryDlRunner, ParsedMetadata, RunOptions};
+use crate::subscriptions::import_policy::{
+    collection_group_parts, generated_subscription_name, normalized_title,
+    preferred_import_name, should_replace_existing_name, validate_metadata_for_site,
+};
+use crate::subscriptions::policy::{
+    apply_resume_to_query, default_resume_strategy_for_site, derive_resume_cursor,
+    effective_inbox_limit, resolve_query_name,
+};
+use crate::subscriptions::runtime_tasks::publish_running_progress;
 use crate::sqlite::SqliteDatabase;
 use crate::tags::normalize;
 
@@ -51,108 +60,6 @@ struct CollectionGroup {
     post_id: String,
     preferred_name: String,
     hashes: Vec<String>,
-}
-
-pub(crate) fn subscription_query_archive_prefix(subscription_id: i64, query_id: i64) -> String {
-    format!("picto_s{subscription_id}_q{query_id}_")
-}
-
-fn default_resume_strategy_for_site(site_id: &str) -> Option<&'static str> {
-    match crate::subscriptions::gallery_dl_runner::canonical_site_id(site_id) {
-        // These booru-like sources accept id:<N query clauses.
-        "danbooru" | "gelbooru" | "3dbooru" | "safebooru" | "rule34" | "yandere" | "e621"
-        | "konachan" | "lolibooru" => Some("tag_id_lt"),
-        _ => None,
-    }
-}
-
-fn apply_resume_to_query(query_text: &str, resume_cursor: &str, resume_strategy: &str) -> String {
-    match resume_strategy {
-        "tag_id_lt" => {
-            if query_text
-                .split_whitespace()
-                .any(|token| token.starts_with("id:<"))
-            {
-                return query_text.to_string();
-            }
-            let suffix = format!("id:<{resume_cursor}");
-            if query_text.trim().is_empty() {
-                suffix
-            } else {
-                format!("{} {}", query_text.trim(), suffix)
-            }
-        }
-        _ => query_text.to_string(),
-    }
-}
-
-fn derive_resume_cursor(
-    items: &[crate::subscriptions::gallery_dl_runner::DownloadedItem],
-    strategy: &str,
-) -> Option<String> {
-    match strategy {
-        "tag_id_lt" => {
-            let mut min_id: Option<u64> = None;
-            for item in items {
-                if let Some(pid) = item
-                    .metadata
-                    .post_id
-                    .as_deref()
-                    .and_then(|raw| raw.parse::<u64>().ok())
-                {
-                    min_id = Some(min_id.map_or(pid, |cur| cur.min(pid)));
-                }
-            }
-            min_id.map(|id| id.to_string())
-        }
-        _ => None,
-    }
-}
-
-/// Progress event emitted during subscription sync (for sidebar status display).
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct SubscriptionProgressEvent {
-    pub subscription_id: String,
-    pub subscription_name: String,
-    pub mode: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub query_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub query_name: Option<String>,
-    pub files_downloaded: usize,
-    pub files_skipped: usize,
-    pub pages_fetched: usize,
-    pub metadata_validated: usize,
-    pub metadata_invalid: usize,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub last_metadata_error: Option<String>,
-    pub status_text: String,
-    /// Set on finished tasks — "succeeded", "failed", "cancelled".
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub finished_status: Option<String>,
-    /// Set when failure_kind is known (e.g. "inbox_full").
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub failure_kind: Option<String>,
-    /// Error message, if any.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub error: Option<String>,
-}
-
-/// Extract subscription progress events from the centralized runtime task registry.
-///
-/// This replaces the old `SUB_RUNTIME_PROGRESS` parallel state — all subscription
-/// progress is now stored in `RuntimeTask.detail` via `runtime_state::upsert_task`.
-pub fn list_runtime_progress_from_tasks() -> Vec<SubscriptionProgressEvent> {
-    let mut events: Vec<SubscriptionProgressEvent> = crate::runtime_state::list_tasks()
-        .into_iter()
-        .filter(|t| t.kind == crate::runtime_contract::task::TaskKind::Subscription)
-        .filter_map(|t| {
-            t.detail
-                .and_then(|d| serde_json::from_value(d).ok())
-        })
-        .collect();
-    events.sort_by(|a, b| a.subscription_id.cmp(&b.subscription_id));
-    events
 }
 
 pub struct SubscriptionSyncEngine<'a> {
@@ -1018,50 +925,16 @@ impl<'a> SubscriptionSyncEngine<'a> {
             return;
         }
         self.last_progress_emit = now;
-        let event = SubscriptionProgressEvent {
-            subscription_id: subscription_id.to_string(),
-            subscription_name: self.subscription_name.clone(),
-            mode: "subscription".to_string(),
-            query_id: self.current_query_id.map(|id| id.to_string()),
-            query_name: self.current_query_name.clone(),
-            files_downloaded: progress.files_downloaded,
-            files_skipped: progress.files_skipped,
-            pages_fetched: progress.pages_fetched,
-            metadata_validated: progress.metadata_validated,
-            metadata_invalid: progress.metadata_invalid,
-            last_metadata_error: progress.last_metadata_error.clone(),
-            status_text: status_text.to_string(),
-            finished_status: None,
-            failure_kind: None,
-            error: None,
-        };
-        {
-            use crate::runtime_contract::task::{
-                RuntimeTask, TaskKind, TaskProgress, TaskStatus,
-            };
-            let now = chrono::Utc::now().to_rfc3339();
-            crate::runtime_state::upsert_task(RuntimeTask {
-                task_id: format!("sub:{}", subscription_id),
-                kind: TaskKind::Subscription,
-                status: TaskStatus::Running,
-                label: self.subscription_name.clone(),
-                parent_task_id: None,
-                progress: Some(TaskProgress {
-                    done: progress.files_downloaded as u64,
-                    total: (progress.files_downloaded + progress.files_skipped) as u64,
-                    status_text: Some(status_text.to_string()),
-                }),
-                detail: serde_json::to_value(&event).ok(),
-                started_at: now.clone(),
-                updated_at: now,
-            });
-        }
+        publish_running_progress(
+            subscription_id,
+            &self.subscription_name,
+            "subscription",
+            self.current_query_id.map(|id| id.to_string()),
+            self.current_query_name.clone(),
+            progress,
+            status_text,
+        );
     }
-}
-
-fn effective_inbox_limit(_configured: u32) -> u32 {
-    // Product decision: inbox ingest is always hard-capped to 1000 items.
-    1000
 }
 
 fn should_continue_initial_pagination(
@@ -1083,336 +956,8 @@ fn should_continue_initial_pagination(
     next_resume_cursor.is_some_and(|cursor| !cursor.trim().is_empty())
 }
 
-fn normalized_title(metadata: &ParsedMetadata) -> Option<String> {
-    metadata
-        .title
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(ToOwned::to_owned)
-}
-
-fn generated_subscription_name(metadata: &ParsedMetadata) -> Option<String> {
-    match (metadata.category.as_deref(), metadata.post_id.as_deref()) {
-        (Some(category), Some(post_id)) => {
-            let category = category.trim();
-            let post_id = post_id.trim();
-            if category.is_empty() || post_id.is_empty() {
-                None
-            } else {
-                Some(format!("{category}_{post_id}"))
-            }
-        }
-        _ => None,
-    }
-}
-
-fn preferred_import_name(metadata: &ParsedMetadata) -> Option<String> {
-    normalized_title(metadata).or_else(|| generated_subscription_name(metadata))
-}
-
-fn should_replace_existing_name(existing_name: &str, metadata: &ParsedMetadata) -> bool {
-    let trimmed = existing_name.trim();
-    trimmed.is_empty() || is_generated_subscription_name(trimmed, metadata)
-}
-
-fn collection_group_parts(
-    site_id: &str,
-    metadata: &ParsedMetadata,
-) -> Option<(String, String, String)> {
-    let post_id = metadata.post_id.as_deref()?.trim().to_string();
-    if post_id.is_empty() {
-        return None;
-    }
-
-    let category = metadata
-        .category
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .unwrap_or(site_id)
-        .to_string();
-    if category.is_empty() {
-        return None;
-    }
-
-    let preferred_name =
-        preferred_import_name(metadata).unwrap_or_else(|| format!("{category}_{post_id}"));
-    Some((category, post_id, preferred_name))
-}
-
-fn is_generated_subscription_name(name: &str, metadata: &ParsedMetadata) -> bool {
-    generated_subscription_name(metadata)
-        .as_deref()
-        .is_some_and(|generated| generated == name)
-}
-
-fn validate_metadata_for_site(site_id: &str, metadata: &ParsedMetadata) -> Result<(), String> {
-    match crate::subscriptions::gallery_dl_runner::canonical_site_id(site_id) {
-        "pixiv" | "pixivuser" => {
-            if metadata
-                .post_id
-                .as_deref()
-                .map(str::trim)
-                .map_or(true, |v| v.is_empty())
-            {
-                return Err("missing remote post id".to_string());
-            }
-            if metadata
-                .source_url
-                .as_deref()
-                .map(str::trim)
-                .map_or(true, |v| v.is_empty())
-            {
-                return Err("missing source url".to_string());
-            }
-            let has_title_or_description = metadata
-                .title
-                .as_deref()
-                .map(str::trim)
-                .is_some_and(|v| !v.is_empty())
-                || metadata
-                    .description
-                    .as_deref()
-                    .map(str::trim)
-                    .is_some_and(|v| !v.is_empty());
-            if !has_title_or_description {
-                return Err("missing title/description".to_string());
-            }
-            if metadata.tags.is_empty() {
-                return Err("missing tags".to_string());
-            }
-            let has_creator = metadata
-                .tags
-                .iter()
-                .any(|(ns, subtag)| ns == "creator" && !subtag.trim().is_empty());
-            if !has_creator {
-                return Err("missing creator".to_string());
-            }
-            Ok(())
-        }
-        "gelbooru" => {
-            if metadata
-                .post_id
-                .as_deref()
-                .map(str::trim)
-                .map_or(true, |v| v.is_empty())
-            {
-                return Err("missing remote post id".to_string());
-            }
-            if metadata
-                .source_url
-                .as_deref()
-                .map(str::trim)
-                .map_or(true, |v| v.is_empty())
-            {
-                return Err("missing source url".to_string());
-            }
-            if metadata.tags.is_empty() {
-                return Err("missing tags".to_string());
-            }
-            if metadata
-                .rating
-                .as_deref()
-                .map(str::trim)
-                .map_or(true, |v| v.is_empty())
-            {
-                return Err("missing rating".to_string());
-            }
-            Ok(())
-        }
-        "danbooru" => {
-            if metadata
-                .post_id
-                .as_deref()
-                .map(str::trim)
-                .map_or(true, |v| v.is_empty())
-            {
-                return Err("missing remote post id".to_string());
-            }
-            if metadata
-                .source_url
-                .as_deref()
-                .map(str::trim)
-                .map_or(true, |v| v.is_empty())
-            {
-                return Err("missing source url".to_string());
-            }
-            if metadata.tags.is_empty() {
-                return Err("missing tags".to_string());
-            }
-            if metadata
-                .rating
-                .as_deref()
-                .map(str::trim)
-                .map_or(true, |v| v.is_empty())
-            {
-                return Err("missing rating".to_string());
-            }
-            let has_creator = metadata
-                .tags
-                .iter()
-                .any(|(ns, subtag)| ns == "creator" && !subtag.trim().is_empty());
-            if !has_creator {
-                return Err("missing creator".to_string());
-            }
-            Ok(())
-        }
-        _ => Ok(()),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn collection_group_parts_uses_category_and_post_id() {
-        let metadata = ParsedMetadata {
-            post_id: Some("1234".to_string()),
-            category: Some("danbooru".to_string()),
-            ..Default::default()
-        };
-        let parts = collection_group_parts("ignored", &metadata).expect("group parts");
-        assert_eq!(parts.0, "danbooru");
-        assert_eq!(parts.1, "1234");
-        assert_eq!(parts.2, "danbooru_1234");
-    }
-
-    #[test]
-    fn collection_group_parts_falls_back_to_site_id_and_title() {
-        let metadata = ParsedMetadata {
-            post_id: Some("77".to_string()),
-            title: Some("  Nice title  ".to_string()),
-            ..Default::default()
-        };
-        let parts = collection_group_parts("pixiv", &metadata).expect("group parts");
-        assert_eq!(parts.0, "pixiv");
-        assert_eq!(parts.1, "77");
-        assert_eq!(parts.2, "Nice title");
-    }
-
-    #[test]
-    fn merge_policy_replaces_generated_name_with_real_title() {
-        let metadata = ParsedMetadata {
-            category: Some("danbooru".to_string()),
-            post_id: Some("42".to_string()),
-            title: Some("Real source title".to_string()),
-            ..Default::default()
-        };
-        assert!(should_replace_existing_name("danbooru_42", &metadata));
-        assert_eq!(
-            preferred_import_name(&metadata).as_deref(),
-            Some("Real source title")
-        );
-    }
-
-    #[test]
-    fn merge_policy_preserves_user_assigned_name() {
-        let metadata = ParsedMetadata {
-            category: Some("danbooru".to_string()),
-            post_id: Some("42".to_string()),
-            title: Some("Real source title".to_string()),
-            ..Default::default()
-        };
-        assert!(!should_replace_existing_name("My custom label", &metadata));
-    }
-
-    #[test]
-    fn pixiv_validation_requires_creator_and_source_url() {
-        let missing = ParsedMetadata {
-            post_id: Some("42".to_string()),
-            title: Some("Pixiv title".to_string()),
-            tags: vec![(String::new(), "tag".to_string())],
-            ..Default::default()
-        };
-        assert!(validate_metadata_for_site("pixiv", &missing).is_err());
-
-        let valid = ParsedMetadata {
-            post_id: Some("42".to_string()),
-            title: Some("Pixiv title".to_string()),
-            source_url: Some("https://www.pixiv.net/artworks/42".to_string()),
-            tags: vec![
-                (String::new(), "tag".to_string()),
-                ("creator".to_string(), "artist".to_string()),
-            ],
-            ..Default::default()
-        };
-        assert!(validate_metadata_for_site("pixiv", &valid).is_ok());
-    }
-
-    #[test]
-    fn gelbooru_validation_requires_rating_and_source_url() {
-        let missing = ParsedMetadata {
-            post_id: Some("42".to_string()),
-            tags: vec![(String::new(), "1girl".to_string())],
-            ..Default::default()
-        };
-        assert!(validate_metadata_for_site("gelbooru", &missing).is_err());
-
-        let valid = ParsedMetadata {
-            post_id: Some("42".to_string()),
-            source_url: Some("https://gelbooru.com/images/abc.jpg".to_string()),
-            rating: Some("safe".to_string()),
-            tags: vec![(String::new(), "1girl".to_string())],
-            ..Default::default()
-        };
-        assert!(validate_metadata_for_site("gelbooru", &valid).is_ok());
-    }
-
-    #[test]
-    fn danbooru_validation_requires_creator_and_rating() {
-        let missing = ParsedMetadata {
-            post_id: Some("42".to_string()),
-            source_url: Some("https://danbooru.donmai.us/posts/42".to_string()),
-            tags: vec![(String::new(), "1girl".to_string())],
-            ..Default::default()
-        };
-        assert!(validate_metadata_for_site("danbooru", &missing).is_err());
-
-        let valid = ParsedMetadata {
-            post_id: Some("42".to_string()),
-            source_url: Some("https://danbooru.donmai.us/posts/42".to_string()),
-            rating: Some("s".to_string()),
-            tags: vec![
-                (String::new(), "1girl".to_string()),
-                ("creator".to_string(), "artist_name".to_string()),
-            ],
-            ..Default::default()
-        };
-        assert!(validate_metadata_for_site("danbooru", &valid).is_ok());
-    }
-
-    #[test]
-    fn apply_resume_to_query_adds_id_lt_clause_once() {
-        let q = apply_resume_to_query("1girl solo", "12345", "tag_id_lt");
-        assert_eq!(q, "1girl solo id:<12345");
-        let q2 = apply_resume_to_query(&q, "99999", "tag_id_lt");
-        assert_eq!(q2, q);
-    }
-
-    #[test]
-    fn derive_resume_cursor_uses_min_numeric_post_id() {
-        let items = vec![
-            crate::subscriptions::gallery_dl_runner::DownloadedItem {
-                file_path: std::path::PathBuf::from("/tmp/a"),
-                metadata: ParsedMetadata {
-                    post_id: Some("100".to_string()),
-                    ..Default::default()
-                },
-            },
-            crate::subscriptions::gallery_dl_runner::DownloadedItem {
-                file_path: std::path::PathBuf::from("/tmp/b"),
-                metadata: ParsedMetadata {
-                    post_id: Some("93".to_string()),
-                    ..Default::default()
-                },
-            },
-        ];
-        assert_eq!(
-            derive_resume_cursor(&items, "tag_id_lt"),
-            Some("93".to_string())
-        );
-    }
 
 }

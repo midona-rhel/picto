@@ -11,6 +11,7 @@ use crate::blob_store::BlobStore;
 use crate::rate_limiter::RateLimiter;
 use crate::settings::store::SettingsStore;
 use crate::sqlite::SqliteDatabase;
+use crate::subscriptions::progress::{list_runtime_progress_from_tasks, SubscriptionProgressEvent};
 use crate::subscriptions::db::{get_subscription, get_subscription_query};
 use crate::subscriptions::policy::{
     effective_query_file_limit, resolve_finished_status_text, resolve_query_name,
@@ -59,8 +60,8 @@ impl SubscriptionRunOrchestrator {
         Ok(map.keys().cloned().collect())
     }
 
-    pub fn get_running_subscription_progress() -> Vec<crate::subscriptions::sync_engine::SubscriptionProgressEvent> {
-        crate::subscriptions::sync_engine::list_runtime_progress_from_tasks()
+    pub fn get_running_subscription_progress() -> Vec<SubscriptionProgressEvent> {
+        list_runtime_progress_from_tasks()
     }
 
     pub async fn run_subscription(

@@ -3,14 +3,21 @@
 ## Priority
 P1
 
-## Audit Status (2026-03-08)
-Status: **Partially Implemented**
+## Audit Status (2026-03-15)
+Status: **Implemented**
 
-Evidence:
-1. Subscription code has been folderized into `core/src/subscriptions/`, but `core/src/subscriptions/controller.rs` still mixes CRUD/config and run/reset orchestration.
-2. `core/src/subscriptions/sync_engine.rs` still owns sync orchestration, metadata merge, duplicate auto-merge behavior, resume cursors, and runtime task shaping in one engine.
-3. `core/src/subscriptions/subscription_group_controller.rs` still carries UI-facing group/run behavior close to orchestration instead of behind a narrower service boundary.
-4. Query naming, reset semantics, completion semantics, and inbox-full behavior are still spread across controller and sync-engine layers.
+Completion Notes:
+1. Subscription CRUD/reset behavior now lives in `./core/src/subscriptions/controller.rs`.
+2. Subscription run/stop/query execution orchestration is isolated in `./core/src/subscriptions/run_orchestrator.rs`.
+3. Group run/stop orchestration is isolated in `./core/src/subscriptions/group_orchestrator.rs`, and `./core/src/subscriptions/subscription_group_controller.rs` now owns CRUD/schedule state only.
+4. Runtime task publication and runtime progress views are separated into:
+   - `./core/src/subscriptions/runtime_tasks.rs`
+   - `./core/src/subscriptions/progress.rs`
+5. Sync/import policy glue that did not belong in the engine is now isolated into:
+   - `./core/src/subscriptions/policy.rs`
+   - `./core/src/subscriptions/import_policy.rs`
+   - `./core/src/subscriptions/archive.rs`
+6. `./core/src/subscriptions/sync_engine.rs` remains the query execution engine, but no longer owns group orchestration, archive-prefix ownership, or runtime-task shaping.
 
 ## Problem
 The subscription domain has no clean internal layering. Controller, engine, and runtime task behavior are mixed across large files. This makes subscription behavior hard to test, hard to evolve, and too tightly coupled to UI expectations.

@@ -6,7 +6,7 @@
 use tokio::time::{sleep, Duration};
 
 use crate::runtime_contract::task::{RuntimeTask, TaskProgress, TaskStatus};
-use crate::subscriptions::sync_engine::SubscriptionProgressEvent;
+use crate::subscriptions::progress::SubscriptionProgressEvent;
 use crate::types::RunningSubscriptions;
 
 fn make_subscription_task(
@@ -25,6 +25,21 @@ fn make_subscription_task(
         parent_task_id: None,
         progress,
         detail,
+        started_at: now.clone(),
+        updated_at: now,
+    }
+}
+
+fn make_group_task(group_id: &str, status: TaskStatus, progress: Option<TaskProgress>) -> RuntimeTask {
+    let now = chrono::Utc::now().to_rfc3339();
+    RuntimeTask {
+        task_id: format!("group:{group_id}"),
+        kind: crate::runtime_contract::task::TaskKind::SubscriptionGroup,
+        status,
+        label: format!("Group {group_id}"),
+        parent_task_id: None,
+        progress,
+        detail: None,
         started_at: now.clone(),
         updated_at: now,
     }
@@ -85,6 +100,46 @@ pub fn publish_start(
         error: None,
     };
     publish_subscription_task(subscription_id, subscription_name, TaskStatus::Running, None, &event);
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn publish_running_progress(
+    subscription_id: &str,
+    subscription_name: &str,
+    mode: &str,
+    query_id: Option<String>,
+    query_name: Option<String>,
+    progress: &crate::subscriptions::sync_engine::SyncProgress,
+    status_text: &str,
+) {
+    let event = SubscriptionProgressEvent {
+        subscription_id: subscription_id.to_string(),
+        subscription_name: subscription_name.to_string(),
+        mode: mode.to_string(),
+        query_id,
+        query_name,
+        files_downloaded: progress.files_downloaded,
+        files_skipped: progress.files_skipped,
+        pages_fetched: progress.pages_fetched,
+        metadata_validated: progress.metadata_validated,
+        metadata_invalid: progress.metadata_invalid,
+        last_metadata_error: progress.last_metadata_error.clone(),
+        status_text: status_text.to_string(),
+        finished_status: None,
+        failure_kind: None,
+        error: None,
+    };
+    publish_subscription_task(
+        subscription_id,
+        subscription_name,
+        TaskStatus::Running,
+        Some(TaskProgress {
+            done: progress.files_downloaded as u64,
+            total: (progress.files_downloaded + progress.files_skipped) as u64,
+            status_text: Some(status_text.to_string()),
+        }),
+        &event,
+    );
 }
 
 pub fn publish_cancelling(subscription_id: &str, subscription_name: &str) {
@@ -192,4 +247,40 @@ pub fn publish_panic(
         error: Some(error),
     };
     publish_subscription_task(subscription_id, subscription_name, TaskStatus::Failed, None, &event);
+}
+
+pub fn publish_group_start(group_id: &str) {
+    crate::runtime_state::upsert_task(make_group_task(group_id, TaskStatus::Running, None));
+}
+
+pub fn publish_group_progress(group_id: &str, done: u64, total: u64) {
+    crate::runtime_state::upsert_task(make_group_task(
+        group_id,
+        TaskStatus::Running,
+        Some(TaskProgress {
+            done,
+            total,
+            status_text: None,
+        }),
+    ));
+}
+
+pub fn publish_group_finished(group_id: &str, failed: bool, done: u64, total: u64) {
+    crate::runtime_state::upsert_task(make_group_task(
+        group_id,
+        if failed {
+            TaskStatus::Failed
+        } else {
+            TaskStatus::Finished
+        },
+        Some(TaskProgress {
+            done,
+            total,
+            status_text: None,
+        }),
+    ));
+}
+
+pub fn publish_group_failed(group_id: &str) {
+    crate::runtime_state::upsert_task(make_group_task(group_id, TaskStatus::Failed, None));
 }

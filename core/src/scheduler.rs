@@ -145,7 +145,7 @@ pub async fn check_scheduled_groups(
                 schedule = %group.schedule,
                 "Scheduler: running overdue group"
             );
-            if let Err(e) = crate::subscriptions::subscription_group_controller::SubscriptionGroupController::run_group(
+            if let Err(e) = crate::subscriptions::group_orchestrator::SubscriptionGroupOrchestrator::run_group(
                 db,
                 blob_store,
                 rate_limiter,

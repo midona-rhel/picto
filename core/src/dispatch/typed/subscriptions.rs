@@ -209,7 +209,7 @@ pub async fn set_group_schedule(state: &AppState, input: SetGroupScheduleInput) 
 }
 
 pub async fn run_group(state: &AppState, input: RunGroupInput) -> Result<(), String> {
-    crate::subscriptions::subscription_group_controller::SubscriptionGroupController::run_group(
+    crate::subscriptions::group_orchestrator::SubscriptionGroupOrchestrator::run_group(
         &state.db,
         &state.blob_store,
         &state.rate_limiter,
@@ -226,7 +226,7 @@ pub async fn run_group(state: &AppState, input: RunGroupInput) -> Result<(), Str
 }
 
 pub async fn stop_group(state: &AppState, input: StopGroupInput) -> Result<(), String> {
-    crate::subscriptions::subscription_group_controller::SubscriptionGroupController::stop_group(
+    crate::subscriptions::group_orchestrator::SubscriptionGroupOrchestrator::stop_group(
         &state.db, &state.running_subscriptions, input.id,
     ).await?;
     crate::events::emit_mutation(

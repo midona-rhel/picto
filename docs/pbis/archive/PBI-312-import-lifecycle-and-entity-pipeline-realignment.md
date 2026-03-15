@@ -3,14 +3,23 @@
 ## Priority
 P1
 
-## Audit Status (2026-03-07)
-Status: **Not Implemented**
+## Audit Status (2026-03-15)
+Status: **Implemented**
 
-Evidence:
-1. Import and entity lifecycle behavior is spread across `import.rs`, `import_controller.rs`, `lifecycle_controller.rs`, `metadata_controller.rs`, `sqlite/import.rs`, and parts of `subscription_sync.rs`.
-2. Subscription import, manual import, duplicate merge, and collection/entity grouping all feed the same conceptual pipeline but through different code paths.
-3. Collection/entity grouping rules from the new entity model are still partially distributed across subscription and duplicate logic.
-4. Metadata preservation, status transitions, and post-import refresh semantics are not owned by one domain service.
+Completion Notes:
+1. Import ownership now lives under `./core/src/import/` instead of being spread across legacy flat-root modules.
+2. Manual import, folder import, and subscription import share the canonical existing-file merge path in `./core/src/import/existing.rs`.
+3. Import pipeline cleanup and duplicate auto-merge follow one lifecycle order:
+   - ingest
+   - merge/resolve survivor
+   - emit downstream ownership and refresh effects from the surviving entity
+4. Existing-file lifecycle behavior now consistently handles:
+   - status restoration
+   - tag merge
+   - source URL merge
+   - note merge
+   - subscription ownership
+5. Duplicate merge now preserves folder and subscription ownership on the surviving entity instead of leaving lifecycle state attached to the loser.
 
 ## Problem
 The backend does not have one clear ingestion and entity lifecycle pipeline. Import, status transitions, metadata merge, duplicate outcomes, and collection/entity grouping rules are spread across several modules. This makes it hard to reason about what happens when new media enters the system or when entities are transformed.
