@@ -27,7 +27,7 @@ interface ExportTarget {
 
 const DEFAULT_DIALOG_STATE: ExportDialogState = {
   outputDir: '',
-  originalFormat: false,
+  originalFormat: true,
   format: 'jpg',
   quality: 82,
   width: null,
