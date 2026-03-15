@@ -189,6 +189,8 @@ export function DetailWindow({ hash }: DetailWindowProps) {
     zoomTo,
     navigatorRect,
     panToNormalized,
+    onLiveFrameRef,
+    containerSize,
     handlers,
   } = useImageZoom(containerRef, imageSize, {
     transformTargets: [imgRef, thumbImgRef],
@@ -207,7 +209,7 @@ export function DetailWindow({ hash }: DetailWindowProps) {
 
   const imageSizeRef = useRef(imageSize);
   imageSizeRef.current = imageSize;
-  useNavigatorRenderer(imgRef, minimapRef, minimapVpRef, imageSizeRef, zoomState, navigatorRect, NAV_SIZE, thumbImgRef);
+  useNavigatorRenderer(imgRef, minimapRef, minimapVpRef, imageSizeRef, zoomState, navigatorRect, NAV_SIZE, thumbImgRef, onLiveFrameRef, containerSize);
 
   const onHashChangeStart = useCallback(() => {
     navigationInProgressRef.current = true;

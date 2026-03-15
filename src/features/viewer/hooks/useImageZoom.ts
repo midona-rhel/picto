@@ -38,7 +38,7 @@ export function useImageZoom(
     minScale = MIN_SCALE,
     maxScale = MAX_SCALE,
     transformTargets = [],
-    interactiveCommitMs = 150,
+    interactiveCommitMs = 96,
   } = options;
 
   const [state, setState] = useState<ZoomState>({ scale: 1, tx: 0, ty: 0 });
@@ -50,12 +50,17 @@ export function useImageZoom(
   const commitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const frameRef = useRef<number | null>(null);
 
+  // Callback invoked on every interactive frame (RAF) with live zoom state.
+  // Used by useNavigatorRenderer to update the minimap in real-time.
+  const onLiveFrameRef = useRef<((s: ZoomState) => void) | null>(null);
+
   const applyTransform = useCallback((next: ZoomState) => {
     const transform = `translate(calc(-50% + ${next.tx}px), calc(-50% + ${next.ty}px)) scale(${next.scale})`;
     for (const targetRef of transformTargets) {
       const el = targetRef.current;
       if (el) el.style.transform = transform;
     }
+    onLiveFrameRef.current?.(next);
   }, [transformTargets]);
 
   const flushCommittedState = useCallback((next?: ZoomState) => {
@@ -260,6 +265,7 @@ export function useImageZoom(
     zoomTo,
     navigatorRect,
     panToNormalized,
+    onLiveFrameRef,
     handlers: { onMouseDown },
   };
 }

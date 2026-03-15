@@ -172,6 +172,8 @@ export function MediaView({ images, currentIndex, onNavigate, onClose, onStateCh
     zoomTo,
     navigatorRect,
     panToNormalized,
+    onLiveFrameRef,
+    containerSize,
     handlers,
   } = useImageZoom(containerRef, imageSize, {
     transformTargets: [imgRef, thumbImgRef],
@@ -295,7 +297,7 @@ export function MediaView({ images, currentIndex, onNavigate, onClose, onStateCh
   // Debounced report on scale changes (avoids parent re-render cascade during zoom)
   useEffect(() => {
     clearTimeout(scaleDebounceRef.current);
-    scaleDebounceRef.current = setTimeout(reportState, 250);
+    scaleDebounceRef.current = setTimeout(reportState, 80);
     return () => clearTimeout(scaleDebounceRef.current);
   }, [activeScale, reportState]);
 
@@ -323,7 +325,7 @@ export function MediaView({ images, currentIndex, onNavigate, onClose, onStateCh
   imageSizeRef.current = imageSize;
   const showNavigatorSetting = useSettingsStore(s => s.settings.showNavigator);
   const showNavigator = showNavigatorProp ?? showNavigatorSetting;
-  useNavigatorRenderer(imgRef, navigatorRef, navViewportRef, imageSizeRef, zoomState, showNavigator ? navigatorRect : null, NAV_SIZE, thumbImgRef);
+  useNavigatorRenderer(imgRef, navigatorRef, navViewportRef, imageSizeRef, zoomState, showNavigator ? navigatorRect : null, NAV_SIZE, thumbImgRef, onLiveFrameRef, containerSize);
 
   // Keep strip visible during collection -> image transition until thumbnail is ready.
   useLayoutEffect(() => {
