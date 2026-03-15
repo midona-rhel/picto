@@ -11,6 +11,7 @@ import type { SelectionQuerySpec } from '../metadataPrefetch';
 
 export interface ExportDialogState {
   outputDir: string;
+  originalFormat: boolean;
   format: 'png' | 'jpg' | 'webp' | 'avif';
   quality: number;
   width: number | null;
@@ -26,6 +27,7 @@ interface ExportTarget {
 
 const DEFAULT_DIALOG_STATE: ExportDialogState = {
   outputDir: '',
+  originalFormat: false,
   format: 'jpg',
   quality: 82,
   width: null,
@@ -183,12 +185,12 @@ export function useGridExportActions(args: {
     setDialogOpen(false);
     await runExport(target, {
       outputDir: dialogState.outputDir,
-      format: dialogState.format,
-      quality: dialogState.quality,
-      width: dialogState.width,
-      height: dialogState.height,
-      keepAspect: dialogState.keepAspect,
-      label: `Exporting ${dialogState.format.toUpperCase()}`,
+      format: dialogState.originalFormat ? null : dialogState.format,
+      quality: dialogState.originalFormat ? null : dialogState.quality,
+      width: dialogState.originalFormat ? null : dialogState.width,
+      height: dialogState.originalFormat ? null : dialogState.height,
+      keepAspect: dialogState.originalFormat ? true : dialogState.keepAspect,
+      label: dialogState.originalFormat ? 'Exporting originals' : `Exporting ${dialogState.format.toUpperCase()}`,
       successTitle: 'Export Complete',
     });
   }, [buildExportTarget, dialogState, runExport]);

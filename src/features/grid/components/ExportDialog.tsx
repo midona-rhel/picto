@@ -41,6 +41,14 @@ export function ExportDialog(props: {
         </Stack>
 
         <Group grow>
+          <Checkbox
+            checked={state.originalFormat}
+            onChange={(event) => onChange({ originalFormat: event.currentTarget.checked })}
+            label="Export original format"
+          />
+        </Group>
+
+        <Group grow>
           <Select
             label="Format"
             data={[
@@ -54,6 +62,7 @@ export function ExportDialog(props: {
               if (value) onChange({ format: value as ExportDialogState['format'] });
             }}
             allowDeselect={false}
+            disabled={state.originalFormat}
           />
           <NumberInput
             label="Quality"
@@ -61,7 +70,7 @@ export function ExportDialog(props: {
             max={100}
             value={state.quality}
             onChange={(value) => onChange({ quality: typeof value === 'number' ? value : 82 })}
-            disabled={state.format === 'png'}
+            disabled={state.originalFormat || state.format === 'png'}
           />
         </Group>
 
@@ -72,6 +81,7 @@ export function ExportDialog(props: {
             value={state.width ?? undefined}
             onChange={(value) => onChange({ width: typeof value === 'number' ? value : null })}
             placeholder="Keep original"
+            disabled={state.originalFormat}
           />
           <NumberInput
             label="Height"
@@ -79,6 +89,7 @@ export function ExportDialog(props: {
             value={state.height ?? undefined}
             onChange={(value) => onChange({ height: typeof value === 'number' ? value : null })}
             placeholder="Keep original"
+            disabled={state.originalFormat}
           />
         </Group>
 
@@ -86,10 +97,13 @@ export function ExportDialog(props: {
           checked={state.keepAspect}
           onChange={(event) => onChange({ keepAspect: event.currentTarget.checked })}
           label="Keep aspect ratio"
+          disabled={state.originalFormat}
         />
 
         <Text size="xs" c="dimmed">
-          Leave width or height empty to keep the original dimension on that axis.
+          {state.originalFormat
+            ? 'Original format copies the source files without conversion or resizing.'
+            : 'Leave width or height empty to keep the original dimension on that axis.'}
         </Text>
 
         <Group justify="flex-end">
