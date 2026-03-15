@@ -154,7 +154,7 @@ describe('context action registries', () => {
       setRenamingHash: () => {},
       renameCancelledRef: { current: false },
       setBatchRenameOpen: () => {},
-      requestGridReload: () => {},
+
       rightClickedHash: 'abc',
       wasAlreadySelected: false,
       hasSelection: true,
@@ -199,7 +199,7 @@ describe('context action registries', () => {
       setRenamingHash: () => {},
       renameCancelledRef: { current: false },
       setBatchRenameOpen: () => {},
-      requestGridReload: () => {},
+
       rightClickedHash: 'abc',
       wasAlreadySelected: true,
       hasSelection: true,
@@ -264,7 +264,7 @@ describe('context action registries', () => {
       setRenamingHash: () => {},
       renameCancelledRef: { current: false },
       setBatchRenameOpen: () => {},
-      requestGridReload: () => {},
+
       rightClickedHash: 'a',
       wasAlreadySelected: true,
       hasSelection: true,

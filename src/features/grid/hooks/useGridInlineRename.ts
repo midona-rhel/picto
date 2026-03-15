@@ -9,9 +9,8 @@ export function useGridInlineRename(args: {
   stateRef: React.MutableRefObject<{
     images: MediaItem[];
   }>;
-  requestGridReload: () => Promise<void>;
 }) {
-  const { singleSelectedHash, stateRef, requestGridReload } = args;
+  const { singleSelectedHash, stateRef } = args;
   const [renamingHash, setRenamingHash] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState('');
   const renameInputRef = useRef<HTMLInputElement>(null);
@@ -64,10 +63,9 @@ export function useGridInlineRename(args: {
           undo: () => api.files.setName(hash, before),
           redo: () => api.files.setName(hash, after),
         });
-        return requestGridReload();
       })
       .catch((err) => notifyError(err, 'Rename Failed'));
-  }, [renameValue, requestGridReload, stateRef]);
+  }, [renameValue, stateRef]);
 
   useEffect(() => {
     if (renamingHash && singleSelectedHash !== renamingHash) {

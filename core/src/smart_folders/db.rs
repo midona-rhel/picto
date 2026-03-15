@@ -286,9 +286,6 @@ fn compile_group(
             "duration" => {
                 compile_numeric_rule(conn, "duration", rule, &mut include_bitmaps)?;
             }
-            "view_count" => {
-                compile_numeric_rule(conn, "view_count", rule, &mut include_bitmaps)?;
-            }
             "aspect_ratio" => {
                 let expr = "CAST(width AS REAL) / CAST(height AS REAL)";
                 compile_numeric_rule_expr(conn, expr, rule, &mut include_bitmaps)?;

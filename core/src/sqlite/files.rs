@@ -198,6 +198,30 @@ pub fn count_files(conn: &Connection, status: Option<i64>) -> rusqlite::Result<i
     }
 }
 
+/// If `file_id` is the cover of a collection, return that collection's entity_id.
+pub fn find_collection_for_cover_file(conn: &Connection, file_id: i64) -> rusqlite::Result<Option<i64>> {
+    conn.query_row(
+        "SELECT entity_id FROM media_entity WHERE kind = 'collection' AND cover_file_id = ?1",
+        [file_id],
+        |row| row.get(0),
+    ).optional()
+}
+
+/// Return (file_id, hash) pairs for all member files of a collection.
+pub fn get_collection_member_files(conn: &Connection, collection_entity_id: i64) -> rusqlite::Result<Vec<(i64, String)>> {
+    let mut stmt = conn.prepare_cached(
+        "SELECT ef.file_id, f.hash
+         FROM collection_member cm
+         JOIN entity_file ef ON ef.entity_id = cm.member_entity_id
+         JOIN file f ON f.file_id = ef.file_id
+         WHERE cm.collection_entity_id = ?1"
+    )?;
+    let rows = stmt.query_map([collection_entity_id], |row| {
+        Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+    })?;
+    rows.collect()
+}
+
 pub fn update_status(conn: &Connection, file_id: i64, status: i64) -> rusqlite::Result<()> {
     conn.execute(
         "UPDATE file SET status = ?1 WHERE file_id = ?2",
@@ -211,6 +235,33 @@ pub fn update_status(conn: &Connection, file_id: i64, status: i64) -> rusqlite::
          )",
         params![status, file_id],
     )?;
+
+    // Cascade to collection members if this file is a collection's cover
+    if let Some(collection_id) = find_collection_for_cover_file(conn, file_id)? {
+        // Update the collection entity itself
+        conn.execute(
+            "UPDATE media_entity SET status = ?1, updated_at = CURRENT_TIMESTAMP WHERE entity_id = ?2",
+            params![status, collection_id],
+        )?;
+        // Update all member entities + their files
+        conn.execute(
+            "UPDATE file SET status = ?1
+             WHERE file_id IN (
+                 SELECT ef.file_id FROM collection_member cm
+                 JOIN entity_file ef ON ef.entity_id = cm.member_entity_id
+                 WHERE cm.collection_entity_id = ?2
+             )",
+            params![status, collection_id],
+        )?;
+        conn.execute(
+            "UPDATE media_entity SET status = ?1, updated_at = CURRENT_TIMESTAMP
+             WHERE entity_id IN (
+                 SELECT cm.member_entity_id FROM collection_member cm
+                 WHERE cm.collection_entity_id = ?2
+             )",
+            params![status, collection_id],
+        )?;
+    }
     Ok(())
 }
 
@@ -270,14 +321,6 @@ pub fn set_dominant_color_hex(
     Ok(())
 }
 
-pub fn increment_view_count(conn: &Connection, file_id: i64) -> rusqlite::Result<()> {
-    conn.execute(
-        "UPDATE file SET view_count = view_count + 1, last_viewed_at = datetime('now') WHERE file_id = ?1",
-        [file_id],
-    )?;
-    Ok(())
-}
-
 /// Delete ALL files and related data (bulk wipe).
 pub fn wipe_all_files(conn: &Connection) -> rusqlite::Result<()> {
     conn.execute("DELETE FROM entity_tag_implied", [])?;
@@ -296,7 +339,9 @@ pub fn wipe_all_files(conn: &Connection) -> rusqlite::Result<()> {
     Ok(())
 }
 
-pub fn delete_file(conn: &Connection, file_id: i64) -> rusqlite::Result<()> {
+/// Delete a single file and its entity. Does NOT cascade to collection members
+/// (use `delete_file_cascade` for that).
+fn delete_file_inner(conn: &Connection, file_id: i64) -> rusqlite::Result<()> {
     {
         let mut rid_stmt =
             conn.prepare_cached("SELECT rowid FROM file_color WHERE file_id = ?1")?;
@@ -324,6 +369,21 @@ pub fn delete_file(conn: &Connection, file_id: i64) -> rusqlite::Result<()> {
     }
     conn.execute("DELETE FROM file WHERE file_id = ?1", [file_id])?;
     Ok(())
+}
+
+pub fn delete_file(conn: &Connection, file_id: i64) -> rusqlite::Result<()> {
+    // If this file is a collection cover, delete all members first
+    if let Some(collection_id) = find_collection_for_cover_file(conn, file_id)? {
+        let members = get_collection_member_files(conn, collection_id)?;
+        // Delete the collection entity (this cascades collection_member rows)
+        conn.execute("DELETE FROM media_entity WHERE entity_id = ?1", [collection_id])?;
+        // Delete each member file
+        for (member_fid, _) in members {
+            delete_file_inner(conn, member_fid)?;
+        }
+    }
+    // Delete the target file itself
+    delete_file_inner(conn, file_id)
 }
 
 /// Optional filter parameters for grid queries.
@@ -1190,36 +1250,86 @@ impl SqliteDatabase {
     pub async fn update_file_status(&self, hash: &str, status: i64) -> Result<(), String> {
         let file_id = self.resolve_hash(hash).await?;
         let fid = file_id;
+
+        // Collect member file_ids BEFORE the status update (for bitmap sync)
+        let member_files = self
+            .with_read_conn(move |conn| {
+                if let Some(cid) = find_collection_for_cover_file(conn, fid)? {
+                    get_collection_member_files(conn, cid)
+                } else {
+                    Ok(vec![])
+                }
+            })
+            .await?;
+
+        let fid = file_id;
         self.with_conn(move |conn| update_status(conn, fid, status))
             .await?;
 
-        // Update status bitmaps
+        // Update status bitmaps for the target file
         let fid_u32 = file_id as u32;
         for s in 0..=2i64 {
             self.bitmaps.remove(&BitmapKey::Status(s), fid_u32);
         }
         self.bitmaps.insert(&BitmapKey::Status(status), fid_u32);
 
-        self.emit_read_model_event(ReadModelEvent::FileStatusChanged { file_id });
+        // Update bitmaps for cascaded member files
+        for (member_fid, _) in &member_files {
+            let m = *member_fid as u32;
+            for s in 0..=2i64 {
+                self.bitmaps.remove(&BitmapKey::Status(s), m);
+            }
+            self.bitmaps.insert(&BitmapKey::Status(status), m);
+        }
+
+        if member_files.is_empty() {
+            self.emit_read_model_event(ReadModelEvent::FileStatusChanged { file_id });
+        } else {
+            // Batch event is more appropriate when many files changed
+            self.emit_read_model_event(ReadModelEvent::StatusBatchChanged);
+        }
         Ok(())
     }
 
     /// Batch update status for many files at once (single transaction + bulk bitmap swap).
+    /// Automatically cascades to collection member files when the batch includes collection covers.
     pub async fn update_file_status_batch(
         &self,
         file_ids: &roaring::RoaringBitmap,
         status: i64,
     ) -> Result<usize, String> {
-        let ids: Vec<i64> = file_ids.iter().map(|id| id as i64).collect();
-        let count = ids.len();
-        if count == 0 {
+        let original_ids: Vec<i64> = file_ids.iter().map(|id| id as i64).collect();
+        if original_ids.is_empty() {
             return Ok(0);
         }
 
+        // Expand the set to include collection member files and collect collection entity_ids
+        let orig = original_ids;
+        let (expanded_ids, collection_entity_ids, extra_member_fids) = self.with_read_conn(move |conn| {
+            let mut all_ids = orig.clone();
+            let mut coll_ids: Vec<i64> = Vec::new();
+            let mut member_fids: Vec<u32> = Vec::new();
+            for &fid in &orig {
+                if let Some(cid) = find_collection_for_cover_file(conn, fid)? {
+                    coll_ids.push(cid);
+                    let members = get_collection_member_files(conn, cid)?;
+                    for (member_fid, _) in members {
+                        all_ids.push(member_fid);
+                        member_fids.push(member_fid as u32);
+                    }
+                }
+            }
+            all_ids.sort_unstable();
+            all_ids.dedup();
+            Ok((all_ids, coll_ids, member_fids))
+        }).await?;
+
+        let count = expanded_ids.len();
         let s = status;
+        let coll_ids = collection_entity_ids;
         self.with_conn_mut(move |conn| {
             let tx = conn.transaction()?;
-            for chunk in ids.chunks(999) {
+            for chunk in expanded_ids.chunks(999) {
                 let placeholders: String = std::iter::repeat("?")
                     .take(chunk.len())
                     .collect::<Vec<_>>()
@@ -1244,20 +1354,34 @@ impl SqliteDatabase {
                 );
                 tx.execute(&entity_sql, param_refs.as_slice())?;
             }
+
+            // Also update collection entities themselves (they have no entity_file link)
+            for &cid in &coll_ids {
+                tx.execute(
+                    "UPDATE media_entity SET status = ?1, updated_at = CURRENT_TIMESTAMP WHERE entity_id = ?2",
+                    params![s, cid],
+                )?;
+            }
+
             tx.commit()?;
             Ok(())
         })
         .await?;
 
-        // Bulk bitmap update
+        // Bulk bitmap update for original + expanded member files
         for fid in file_ids.iter() {
             for s in 0..=2i64 {
                 self.bitmaps.remove(&BitmapKey::Status(s), fid);
             }
             self.bitmaps.insert(&BitmapKey::Status(status), fid);
         }
+        for fid in extra_member_fids {
+            for s in 0..=2i64 {
+                self.bitmaps.remove(&BitmapKey::Status(s), fid);
+            }
+            self.bitmaps.insert(&BitmapKey::Status(status), fid);
+        }
 
-        // One compiler event for the whole batch
         self.emit_read_model_event(ReadModelEvent::StatusBatchChanged);
         Ok(count)
     }
@@ -1265,26 +1389,65 @@ impl SqliteDatabase {
     pub async fn delete_file_by_hash(&self, hash: &str) -> Result<(), String> {
         let file_id = self.resolve_hash(hash).await?;
 
-        // Query folder memberships BEFORE deletion (CASCADE will remove folder_entity rows)
+        // Collect member files + folder memberships BEFORE deletion
         let fid = file_id;
-        let folder_ids = self
-            .with_read_conn(move |conn| crate::folders::db::get_entity_folder_memberships(conn, fid))
+        let (member_files, folder_ids) = self
+            .with_read_conn(move |conn| {
+                let members = if let Some(cid) = find_collection_for_cover_file(conn, fid)? {
+                    get_collection_member_files(conn, cid)?
+                } else {
+                    vec![]
+                };
+                let folders = crate::folders::db::get_entity_folder_memberships(conn, fid)?;
+                Ok((members, folders))
+            })
             .await?;
+
+        // Also collect folder memberships for member files
+        let member_folder_ids: Vec<(i64, Vec<crate::folders::db::FolderMembership>)> = if !member_files.is_empty() {
+            let member_fids: Vec<i64> = member_files.iter().map(|(fid, _)| *fid).collect();
+            self.with_read_conn(move |conn| {
+                let mut result = Vec::new();
+                for &mfid in &member_fids {
+                    let folders = crate::folders::db::get_entity_folder_memberships(conn, mfid)?;
+                    result.push((mfid, folders));
+                }
+                Ok(result)
+            })
+            .await?
+        } else {
+            vec![]
+        };
 
         let fid = file_id;
         self.with_conn(move |conn| delete_file(conn, fid)).await?;
 
-        // Clean up caches
+        // Clean up caches for target file
         let fid_u32 = file_id as u32;
         for s in 0..=2i64 {
             self.bitmaps.remove(&BitmapKey::Status(s), fid_u32);
         }
-        // Remove from folder bitmaps (counts were stale without this)
         for membership in &folder_ids {
             self.bitmaps
                 .remove(&BitmapKey::Folder(membership.folder_id), fid_u32);
         }
         self.hash_index.remove_by_hash(hash);
+
+        // Clean up caches for cascaded member files
+        for (member_fid, member_hash) in &member_files {
+            let m = *member_fid as u32;
+            for s in 0..=2i64 {
+                self.bitmaps.remove(&BitmapKey::Status(s), m);
+            }
+            self.hash_index.remove_by_hash(member_hash);
+        }
+        for (member_fid, folders) in &member_folder_ids {
+            let m = *member_fid as u32;
+            for membership in folders {
+                self.bitmaps.remove(&BitmapKey::Folder(membership.folder_id), m);
+            }
+        }
+
         self.emit_read_model_event(ReadModelEvent::FileDeleted { file_id });
         Ok(())
     }
@@ -1371,14 +1534,6 @@ impl SqliteDatabase {
         let u = urls_json.map(|s| s.to_string());
         self.with_conn(move |conn| set_source_urls(conn, file_id, u.as_deref()))
             .await
-    }
-
-    pub async fn increment_view_count(&self, hash: &str) -> Result<(), String> {
-        let file_id = self.resolve_hash(hash).await?;
-        self.with_conn(move |conn| increment_view_count(conn, file_id))
-            .await?;
-        self.emit_read_model_event(ReadModelEvent::ViewCountChanged);
-        Ok(())
     }
 
     pub async fn set_phash(&self, hash: &str, phash: &str) -> Result<(), String> {

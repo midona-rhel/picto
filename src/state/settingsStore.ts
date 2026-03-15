@@ -17,7 +17,7 @@ export interface AppSettings {
   inspectorWidth: number;
   colorScheme: 'dark' | 'light';
   theme: Theme;
-  gridSortField: 'imported_at' | 'size' | 'rating' | 'view_count';
+  gridSortField: 'imported_at' | 'size' | 'rating';
   gridSortOrder: 'asc' | 'desc';
   showTileName: boolean;
   showResolution: boolean;

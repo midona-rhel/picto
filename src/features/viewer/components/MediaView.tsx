@@ -35,9 +35,6 @@ export interface MediaViewControls {
   fitActual: () => void;
 }
 
-// Legacy aliases — used by QuickLook and ImageGridControls
-export type DetailViewState = MediaViewState;
-export type DetailViewControls = MediaViewControls;
 
 interface MediaViewProps {
   images: MediaItem[];
@@ -298,7 +295,7 @@ export function MediaView({ images, currentIndex, onNavigate, onClose, onStateCh
   // Debounced report on scale changes (avoids parent re-render cascade during zoom)
   useEffect(() => {
     clearTimeout(scaleDebounceRef.current);
-    scaleDebounceRef.current = setTimeout(reportState, 80);
+    scaleDebounceRef.current = setTimeout(reportState, 250);
     return () => clearTimeout(scaleDebounceRef.current);
   }, [activeScale, reportState]);
 

@@ -73,7 +73,6 @@ describe('Sidebar drag-drop status targets', () => {
       uncategorizedCount: 12,
       trashCount: 5,
       untaggedCount: 10,
-      recentViewedCount: 0,
       duplicatesCount: 0,
       folderNodes: [],
       smartFolders: [],

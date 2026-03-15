@@ -21,7 +21,6 @@ export function deriveStaleResources(receipt: MutationReceipt): Set<ResourceKey>
       'system:trash',
       'system:untagged',
       'system:uncategorized',
-      'system:recently_viewed',
       'smart:all',
     );
     if (facts.folder_ids) {

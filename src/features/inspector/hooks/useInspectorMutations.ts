@@ -374,10 +374,6 @@ export function useInspectorMutations(
         },
       });
       setFileFolders((prev) => prev.filter((f) => f.folder_id !== folderId));
-      const activeScope = useGridMetadataStore.getState().activeGridScope;
-      if (activeScope === `folder:${folderId}`) {
-        useGridMetadataStore.getState().enqueueGridRemoval(hash);
-      }
     },
     [selectedImages, selectedCollection, setFileFolders],
   );

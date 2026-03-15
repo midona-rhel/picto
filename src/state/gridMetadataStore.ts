@@ -22,7 +22,6 @@ interface FileMetadataSlim {
   duration_ms: number | null;
   num_frames: number | null;
   has_audio: boolean;
-  view_count: number;
 }
 
 interface ResolvedMetadata {
@@ -54,10 +53,6 @@ interface CacheState {
   // e.g. "folder:5", "system:inbox", "system:all"
   activeGridScope: string | null;
 
-  // Pending grid removals — hashes to optimistically remove from the grid.
-  // Used by inspector actions (e.g. remove from folder) to give instant feedback.
-  pendingGridRemovals: Set<string>;
-
   // Actions
   fetchMetadataBatch: (hashes: string[]) => Promise<ResolvedMetadata[]>;
   getMetadata: (hash: string) => ResolvedMetadata | undefined;
@@ -67,8 +62,6 @@ interface CacheState {
   markHashInvalidated: (hash: string) => void;
   clearInvalidatedHashes: () => void;
   setActiveGridScope: (scope: string | null) => void;
-  enqueueGridRemoval: (hash: string) => void;
-  clearGridRemovals: () => void;
 
 }
 
@@ -77,7 +70,6 @@ export const useGridMetadataStore = create<CacheState>((set, get) => ({
   gridRefreshSeq: 0,
   metadataInvalidatedHashes: new Set(),
   activeGridScope: null,
-  pendingGridRemovals: new Set(),
 
   fetchMetadataBatch: async (hashes: string[]) => {
     if (hashes.length === 0) return [];
@@ -105,7 +97,6 @@ export const useGridMetadataStore = create<CacheState>((set, get) => ({
             duration_ms: meta.file.duration_ms,
             num_frames: meta.file.num_frames,
             has_audio: meta.file.has_audio,
-            view_count: meta.file.view_count,
           },
           tags: meta.tags.map(t => ({
             tag_id: 0,
@@ -182,16 +173,5 @@ export const useGridMetadataStore = create<CacheState>((set, get) => ({
     set({ activeGridScope: scope });
   },
 
-  enqueueGridRemoval: (hash: string) => {
-    set((s) => {
-      const next = new Set(s.pendingGridRemovals);
-      next.add(hash);
-      return { pendingGridRemovals: next };
-    });
-  },
-
-  clearGridRemovals: () => {
-    set({ pendingGridRemovals: new Set() });
-  },
 
 }));

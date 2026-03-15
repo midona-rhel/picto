@@ -5,7 +5,6 @@ import { api } from '#desktop/api';
 import { notifyError, notifySuccess } from '../../../shared/lib/notify';
 import { FolderPickerService } from '../../../shared/services/folderPickerService';
 import { bustThumbnailCache } from '../../../shared/lib/mediaUrl';
-import { useGridMetadataStore } from '../../../state/gridMetadataStore';
 import type { AppSettings } from '../../../state/settingsStore';
 import type { GridRuntimeAction, GridRuntimeState, GridViewMode } from '../runtime';
 
@@ -204,7 +203,6 @@ export function useGridHotkeys({
           .then((r) => {
             notifySuccess(`Regenerated ${r.regenerated} thumbnail(s)`, 'Thumbnails');
             bustThumbnailCache(hashes);
-            useGridMetadataStore.getState().bumpGridRefresh();
           })
           .catch((err) => notifyError(err, 'Regenerate Failed'));
       },

@@ -464,6 +464,55 @@ impl SqliteDatabase {
         Ok(results)
     }
 
+    /// Expand hashes to include collection member hashes. If any hash belongs to
+    /// a collection cover file, the member files' hashes are appended.
+    pub async fn expand_hashes_for_collections(&self, hashes: &[String]) -> Result<Vec<String>, String> {
+        if hashes.is_empty() {
+            return Ok(Vec::new());
+        }
+        let resolved = self.resolve_hashes_batch(hashes).await?;
+        let mut all_hashes: Vec<String> = hashes.to_vec();
+        for (_, fid) in &resolved {
+            let fid = *fid;
+            let members = self.with_read_conn(move |conn| {
+                if let Some(cid) = files::find_collection_for_cover_file(conn, fid)? {
+                    files::get_collection_member_files(conn, cid)
+                } else {
+                    Ok(vec![])
+                }
+            }).await?;
+            for (_, member_hash) in members {
+                all_hashes.push(member_hash);
+            }
+        }
+        all_hashes.sort_unstable();
+        all_hashes.dedup();
+        Ok(all_hashes)
+    }
+
+    /// Expand a list of file_ids (== entity_ids for singles) to include collection
+    /// member file_ids. Any file_id that is a collection cover gets its member
+    /// file_ids appended. Non-collection file_ids pass through unchanged.
+    pub async fn expand_collection_members(&self, file_ids: Vec<i64>) -> Result<Vec<i64>, String> {
+        if file_ids.is_empty() {
+            return Ok(file_ids);
+        }
+        self.with_read_conn(move |conn| {
+            let mut expanded = file_ids.clone();
+            for &fid in &file_ids {
+                if let Some(cid) = files::find_collection_for_cover_file(conn, fid)? {
+                    let members = files::get_collection_member_files(conn, cid)?;
+                    for (member_fid, _) in members {
+                        expanded.push(member_fid);
+                    }
+                }
+            }
+            expanded.sort_unstable();
+            expanded.dedup();
+            Ok(expanded)
+        }).await
+    }
+
     pub fn emit_read_model_event(&self, event: ReadModelEvent) {
         let _ = self.read_model_tx.send(event);
     }

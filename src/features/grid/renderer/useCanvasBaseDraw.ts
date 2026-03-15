@@ -1,10 +1,9 @@
-import { useCallback, type Dispatch, type SetStateAction } from 'react';
+import { useCallback } from 'react';
 import { buildCanvasVisibilityPlan } from '../layout/canvasVisibilityPlan';
 import { drawCanvasBaseLayer } from './canvasGridDrawHelpers';
 import type { GridViewMode } from '../runtime';
 import type { MasonryImageItem } from '../shared';
 import type { LayoutItem } from '../layoutMath';
-import type { GridDebugStats } from './canvasGridDebug';
 import type { ThumbnailPipeline } from '../../../shared/lib/canvas/thumbnailPipeline';
 
 interface ThemeState {
@@ -62,19 +61,6 @@ export function useCanvasBaseDraw(args: {
   renamingHashRef: { current: string | null };
   videoScrubIdxRef: { current: number | null };
   thumbnailFitMode: 'cover' | 'contain';
-  perfRef: { current: {
-    frames: number;
-    drawMsTotal: number;
-    visMsTotal: number;
-    slowFrames: number;
-    sampleStart: number;
-    lastFrameAt: number;
-    baseFrames: number;
-    overlayFrames: number;
-  } };
-  gridDebugEnabled: boolean;
-  gridDebugSampleMs: number;
-  setDebugStats: Dispatch<SetStateAction<GridDebugStats | null>>;
   markDirty: (lanes: 'base' | 'overlay' | 'both') => void;
 }) {
   const {
@@ -100,10 +86,6 @@ export function useCanvasBaseDraw(args: {
     renamingHashRef,
     videoScrubIdxRef,
     thumbnailFitMode,
-    perfRef,
-    gridDebugEnabled,
-    gridDebugSampleMs,
-    setDebugStats,
     markDirty,
   } = args;
 
@@ -142,8 +124,6 @@ export function useCanvasBaseDraw(args: {
     if (!atlas) return;
     atlas.setScrolling(isScrollingRef.current);
 
-    const t0 = import.meta.env.DEV ? performance.now() : 0;
-
     const positions = layoutRef.current.positions;
     const imgs = imagesRef.current;
     const scrollTop = scrollTopRef.current;
@@ -179,7 +159,6 @@ export function useCanvasBaseDraw(args: {
       cancelBottom,
     } = visibilityPlan;
 
-    const tVis = import.meta.env.DEV ? performance.now() : 0;
     const br = theme.borderRadius;
     const th = textHeightRef.current;
     lastVisibleRef.current = { startIdx, endIdx, visibleIndices, visibleIterEnd, scrollTop, cssH, th, br };
@@ -204,53 +183,15 @@ export function useCanvasBaseDraw(args: {
       videoScrubIdx: videoScrubIdxRef.current,
     });
 
-    let prefetched = 0;
     for (let n = 0; n < prefetchIndices.length; n++) {
       const i = prefetchIndices[n];
       const pos = positions[i];
       const image = imgs[i];
       if (!pos || !image) continue;
       atlas.ensure(image.hash, { y: pos.y + pos.h / 2 });
-      prefetched++;
     }
 
     atlas.cancelOutsideWindow(cancelTop, cancelBottom);
-
-    const tEnd = performance.now();
-    if (gridDebugEnabled) {
-      const perf = perfRef.current;
-      const sampleElapsed = Math.max(1, tEnd - perf.sampleStart);
-      perf.frames += 1;
-      perf.baseFrames += 1;
-      perf.drawMsTotal += tEnd - t0;
-      perf.visMsTotal += tVis - t0;
-      if (tEnd - t0 > 16.7) perf.slowFrames += 1;
-      if (sampleElapsed >= gridDebugSampleMs) {
-        const atlasStats = atlas.getStats();
-        setDebugStats({
-          fps: (perf.frames * 1000) / sampleElapsed,
-          drawMs: perf.drawMsTotal / perf.frames,
-          visMs: perf.visMsTotal / perf.frames,
-          visibleTiles: visibleIndices ? visibleIndices.length : Math.max(0, endIdx - startIdx),
-          prefetchedTiles: prefetched,
-          queueDepth: atlasStats.queueDepth,
-          activeLoads: atlasStats.activeLoads,
-          pendingThumbs: atlasStats.pendingThumbs,
-          cacheSize: atlasStats.cacheSize,
-          slowFrames: perf.slowFrames,
-          diskSpeed: atlasStats.diskSpeed,
-          baseRedraws: perf.baseFrames,
-          overlayRedraws: perf.overlayFrames,
-        });
-        perf.frames = 0;
-        perf.baseFrames = 0;
-        perf.overlayFrames = 0;
-        perf.drawMsTotal = 0;
-        perf.visMsTotal = 0;
-        perf.slowFrames = 0;
-        perf.sampleStart = tEnd;
-      }
-    }
 
     if (hasActiveReveal) {
       markDirty('base');
@@ -261,18 +202,14 @@ export function useCanvasBaseDraw(args: {
     ctxRef,
     frozenRef,
     getScrollMetrics,
-    gridDebugEnabled,
-    gridDebugSampleMs,
     imagesRef,
     isScrollingRef,
     lastVisibleRef,
     layoutRef,
     bucketIndexRef,
     markDirty,
-    perfRef,
     renamingHashRef,
     scrollTopRef,
-    setDebugStats,
     showExtensionLabelRef,
     showExtensionRef,
     showResolutionRef,

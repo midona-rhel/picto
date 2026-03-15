@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { IconDownload, IconLayoutSidebar, IconFolder, IconFolderQuestion, IconFolderStar, IconPhoto, IconInbox, IconTag, IconTrash, IconClock, IconCopy } from '@tabler/icons-react';
+import { IconDownload, IconLayoutSidebar, IconFolder, IconFolderQuestion, IconFolderStar, IconPhoto, IconInbox, IconTag, IconTrash, IconCopy } from '@tabler/icons-react';
 import { api, getCurrentWindow } from '#desktop/api';
 import { useNavigationStore } from '../state/navigationStore';
 import { useSettingsStore, type AppSettings } from '../state/settingsStore';
@@ -214,7 +214,6 @@ function App() {
       { id: 'go.uncategorized', label: 'Uncategorized', icon: <IconFolderQuestion size={16} />, go: () => navigateTo('images', null, null, 'uncategorized') },
       { id: 'go.untagged', label: 'Untagged', icon: <IconTag size={16} />, go: () => navigateTo('images', null, null, 'untagged') },
       { id: 'go.trash', label: 'Trash', icon: <IconTrash size={16} />, go: () => navigateTo('images', null, null, 'trash') },
-      { id: 'go.recentViewed', label: 'Recently Viewed', icon: <IconClock size={16} />, go: () => navigateTo('images', null, null, 'recently_viewed') },
       { id: 'go.duplicates', label: 'Duplicates', icon: <IconCopy size={16} />, go: () => navigateTo('duplicates') },
     ];
     for (const t of navTargets) {
@@ -248,7 +247,7 @@ function App() {
     }
 
     // Shortcut-based actions (skip nav ones we already added, and skip palette itself)
-    const skipIds = new Set(['nav.commandPalette', 'nav.goToFolder', 'nav.allActive', 'nav.inbox', 'nav.untagged', 'nav.trash', 'nav.recentViewed']);
+    const skipIds = new Set(['nav.commandPalette', 'nav.goToFolder', 'nav.allActive', 'nav.inbox', 'nav.untagged', 'nav.trash']);
     for (const def of SHORTCUT_DEFS) {
       if (skipIds.has(def.id)) continue;
       actions.push({

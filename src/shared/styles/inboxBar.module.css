@@ -19,9 +19,7 @@
   justify-content: center;
   pointer-events: auto;
   color: var(--color-white-80);
-  background: var(--color-black-50);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
+  background: var(--color-black-80);
   transition: background 150ms ease, color 150ms ease;
 }
 

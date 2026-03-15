@@ -47,7 +47,7 @@ export function useGridLiveInsertion(args: {
       if (folderId != null || collectionEntityId != null || smartFolderPredicate) return;
       if (searchTags?.length || excludedSearchTags?.length || filterFolderIds?.length || excludedFilterFolderIds?.length) return;
       if (ratingMin != null || mimePrefixes?.length || colorHex || searchText) return;
-      if (statusFilter === 'trash' || statusFilter === 'untagged' || statusFilter === 'uncategorized' || statusFilter === 'recently_viewed') return;
+      if (statusFilter === 'trash' || statusFilter === 'untagged' || statusFilter === 'uncategorized') return;
       if (statusFilter === 'inbox' && event.status !== 'inbox') return;
       if ((statusFilter == null || statusFilter === 'active') && event.status !== 'active') return;
 

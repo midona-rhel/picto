@@ -4,4 +4,4 @@
  * Unified metadata update. All fields except `hash` are optional —
  * only present fields are applied. Use `null` to clear rating/name.
  */
-export type UpdateFileMetadataInput = { hash: string, rating: number | null, name: string | null, notes: { [key in string]?: string } | null, increment_view_count: boolean | null, source_urls: Array<string> | null, };
+export type UpdateFileMetadataInput = { hash: string, rating: number | null, name: string | null, notes: { [key in string]?: string } | null, source_urls: Array<string> | null, };

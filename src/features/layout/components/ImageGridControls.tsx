@@ -20,7 +20,7 @@ import { LayoutRow } from '../../../shared/components/LayoutRow';
 import { KbdTooltip } from '../../../shared/components/KbdTooltip';
 import { ContextMenu, useContextMenu, type ContextMenuEntry } from '../../../shared/components/ContextMenu';
 import { useFilterStore, useActiveFilterCount } from '../../../state/filterStore';
-import type { MediaViewState as DetailViewState, MediaViewControls as DetailViewControls } from '../../viewer/components/MediaView';
+import type { MediaViewState, MediaViewControls } from '../../viewer/components/MediaView';
 import type { GridViewMode } from '../../grid/runtime';
 import { useGlobalKeydown } from '../../../shared/hooks/useGlobalKeydown';
 import st from './ImageGridControls.module.css';
@@ -57,8 +57,8 @@ interface ImageGridControlsProps {
   searchText?: string;
   onSearchTextChange?: (text: string) => void;
   // Detail mode props
-  detailViewState?: DetailViewState | null;
-  detailViewControls?: DetailViewControls | null;
+  detailViewState?: MediaViewState | null;
+  detailViewControls?: MediaViewControls | null;
 }
 
 export function ImageGridControls({

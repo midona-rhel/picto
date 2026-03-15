@@ -45,7 +45,6 @@ pub enum ReadModelEvent {
     SmartFolderChanged { smart_folder_id: i64 },
     FolderChanged { folder_id: i64 },
     DuplicateChanged,
-    ViewCountChanged,
     RebuildAll,
 }
 

@@ -10,7 +10,6 @@ export function useGridViewerSource(args: {
   statusFilter?: string | null;
   handleInboxAction: ((hash: string, status: 'active' | 'trash') => void) | undefined;
   onMediaViewStateChange?: ((state: MediaViewState | null, controls: MediaViewControls | null) => void) | undefined;
-  recordImageView: (hash: string) => void;
   dispatch: React.Dispatch<any>;
   scrollToIndex: (index: number) => void;
   imagesRef: React.MutableRefObject<MediaItem[]>;
@@ -22,7 +21,6 @@ export function useGridViewerSource(args: {
     statusFilter,
     handleInboxAction,
     onMediaViewStateChange,
-    recordImageView,
     dispatch,
     scrollToIndex,
     imagesRef,
@@ -34,22 +32,20 @@ export function useGridViewerSource(args: {
   registerSourceRef.current = viewer.registerSource;
 
   const handleViewerDetailImageChange = useCallback((hash: string) => {
-    recordImageView(hash);
     dispatch({ type: 'SELECT_HASHES', hashes: new Set([hash]) });
     dispatch({ type: 'SET_LAST_CLICKED', hash });
-  }, [dispatch, recordImageView]);
+  }, [dispatch]);
 
-  const handleViewerQuickLookOpen = useCallback((hash: string) => {
-    recordImageView(hash);
-  }, [recordImageView]);
+  const handleViewerQuickLookOpen = useCallback((_hash: string) => {
+    // no-op after view count removal
+  }, []);
 
   const handleViewerQuickLookImageChange = useCallback((hash: string) => {
-    recordImageView(hash);
     dispatch({ type: 'SELECT_HASHES', hashes: new Set([hash]) });
     dispatch({ type: 'SET_LAST_CLICKED', hash });
     const idx = imagesRef.current.findIndex((item) => item.hash === hash);
     if (idx >= 0) scrollToIndex(idx);
-  }, [dispatch, imagesRef, recordImageView, scrollToIndex]);
+  }, [dispatch, imagesRef, scrollToIndex]);
 
   const handleViewerCloseDetail = useCallback((exitHash: string) => {
     if (!exitHash) return;

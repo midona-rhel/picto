@@ -113,20 +113,17 @@ export const imageDrag = {
     const sessionId = _nextSessionId++;
     const timeoutId = setTimeout(() => {
       if (_nativeDragSession?.sessionId === sessionId) {
-        if (import.meta.env.DEV) console.log('[imageDrag] native_drag_cleared_timeout', sessionId);
         _nativeDragSession = null;
         _notifyNativeDragEnd();
       }
     }, NATIVE_DRAG_TIMEOUT_MS);
     _nativeDragSession = { sessionId, hashes, startedAt: Date.now(), timeoutId };
-    if (import.meta.env.DEV) console.log('[imageDrag] native_drag_started', sessionId, hashes.length);
     return sessionId;
   },
   getPendingNativeDragHashes(): string[] | null { return _nativeDragSession?.hashes ?? null; },
   clearNativeDragSession(sessionId?: number) {
     if (sessionId != null && _nativeDragSession?.sessionId !== sessionId) return; // Idempotent
     if (_nativeDragSession?.timeoutId) clearTimeout(_nativeDragSession.timeoutId);
-    if (import.meta.env.DEV && _nativeDragSession) console.log('[imageDrag] native_drag_cleared', _nativeDragSession.sessionId);
     const hadSession = _nativeDragSession != null;
     _nativeDragSession = null;
     if (hadSession) _notifyNativeDragEnd();

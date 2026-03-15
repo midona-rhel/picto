@@ -23,7 +23,6 @@ interface DomainState {
   trashCount: number;
   untaggedCount: number;
   tagsCount: number;
-  recentViewedCount: number;
   duplicatesCount: number;
 
   // Smart folders derived from sidebar tree
@@ -46,7 +45,6 @@ interface DomainState {
   fetchSidebarTree: () => Promise<void>;
   invalidate: () => void;
   applySidebarCounts: (counts: { all_active: number; inbox: number; trash: number }) => void;
-  incrementInboxCount: (delta?: number) => void;
   subscriptionRunStarted: () => void;
   subscriptionRunFinished: () => void;
   setDuplicatesCount: (count: number) => void;
@@ -91,7 +89,6 @@ export const useDomainStore = create<DomainState>((set, get) => ({
   trashCount: 0,
   untaggedCount: 0,
   tagsCount: 0,
-  recentViewedCount: 0,
   duplicatesCount: 0,
   smartFolders: [],
   smartFolderCounts: {},
@@ -142,9 +139,6 @@ export const useDomainStore = create<DomainState>((set, get) => ({
       const untaggedNode = nodes.find(
         (n) => n.id === 'system:untagged' || n.id === 'system:untagged_files',
       );
-      const recentViewedNode = nodes.find(
-        (n) => n.id === 'system:recent_viewed' || n.id === 'system:recently_viewed',
-      );
       const duplicatesNode = nodes.find((n) => n.id === 'system:duplicates');
       // Prefer the compiled sidebar node count. During subscription imports,
       // the inbox grid snapshot can intentionally stay cached for live insertion,
@@ -156,7 +150,6 @@ export const useDomainStore = create<DomainState>((set, get) => ({
         : resolvedInboxCount;
       const uncategorizedCount = uncategorizedNode?.count ?? 0;
       const untaggedCount = untaggedNode?.count ?? 0;
-      const recentViewedCount = recentViewedNode?.count ?? 0;
 
       const smartNodes = nodes.filter((n) => n.kind === 'smart_folder');
       const smartFolders: SmartFolderSummary[] = [];
@@ -190,7 +183,6 @@ export const useDomainStore = create<DomainState>((set, get) => ({
         trashCount: trashNode?.count ?? 0,
         untaggedCount,
         tagsCount,
-        recentViewedCount,
         duplicatesCount: duplicatesNode?.count ?? 0,
         smartFolders,
         smartFolderCounts,
@@ -232,18 +224,6 @@ export const useDomainStore = create<DomainState>((set, get) => ({
       trashCount: counts.trash,
       liveInboxFloor: liveInboxImportRuns > 0
         ? Math.max(liveInboxFloor ?? counts.inbox, counts.inbox)
-        : liveInboxFloor,
-    });
-  },
-
-  incrementInboxCount: (delta = 1) => {
-    if (!Number.isFinite(delta) || delta <= 0) return;
-    const nextInbox = get().inboxCount + delta;
-    const { liveInboxImportRuns, liveInboxFloor } = get();
-    set({
-      inboxCount: nextInbox,
-      liveInboxFloor: liveInboxImportRuns > 0
-        ? Math.max(liveInboxFloor ?? nextInbox, nextInbox)
         : liveInboxFloor,
     });
   },

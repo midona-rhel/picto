@@ -174,9 +174,6 @@ export function useInspectorFetch(
       return;
     }
 
-    const selectionTime = performance.now();
-    const hashPreview = selectedImages.map((i) => i.hash.slice(0, 8)).join(', ');
-    if (import.meta.env.DEV) console.log(`[props-perf] selection changed → [${hashPreview}]`);
 
     const requestId = ++requestIdRef.current;
 
@@ -197,9 +194,6 @@ export function useInspectorFetch(
           setCollectionSummary(null);
           const metadata = await api.files.getAllMetadata(selectedImages[0].hash);
           if (requestIdRef.current !== requestId) return;
-          if (import.meta.env.DEV) console.log(
-            `[props-perf] metadata applied for [${hashPreview}] — ${(performance.now() - selectionTime).toFixed(1)}ms total, ${metadata.tags.length} tags`,
-          );
           setFileMetadata(metadata);
           setFileTags(metadata.tags);
         } else {
@@ -222,9 +216,6 @@ export function useInspectorFetch(
           const firstUrls = allMetadata[0].file.source_urls ?? [];
           const firstUrlsKey = JSON.stringify(firstUrls);
           const allUrlsMatch = allMetadata.every((m) => JSON.stringify(m.file.source_urls ?? []) === firstUrlsKey);
-          if (import.meta.env.DEV) console.log(
-            `[props-perf] metadata applied for [${hashPreview}] — ${(performance.now() - selectionTime).toFixed(1)}ms total, ${shared.length} shared tags`,
-          );
           setFileMetadata(null);
           setFileTags(shared);
           setNotes(allNotesMatch ? firstNotes : '');

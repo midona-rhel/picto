@@ -15,8 +15,6 @@ function compareByField(a: MasonryImageItem, b: MasonryImageItem, sortField: str
       return a.size - b.size;
     case 'rating':
       return compareNullableNumber(a.rating, b.rating);
-    case 'view_count':
-      return a.view_count - b.view_count;
     case 'name':
       return (a.name ?? '').localeCompare(b.name ?? '');
     case 'mime':

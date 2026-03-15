@@ -53,8 +53,6 @@ export function useCanvasOverlayDraw(args: {
   reorderDragRef: { current: { started?: boolean; dropIndex: number | null; dropSide: 'left' | 'right' | null } | null };
   gap: number;
   zoomBtnSize: number;
-  perfRef: { current: { overlayFrames: number } };
-  gridDebugEnabled: boolean;
 }) {
   const {
     lastVisibleRef,
@@ -74,8 +72,6 @@ export function useCanvasOverlayDraw(args: {
     reorderDragRef,
     gap,
     zoomBtnSize,
-    perfRef,
-    gridDebugEnabled,
   } = args;
 
   return useCallback(() => {
@@ -130,10 +126,8 @@ export function useCanvasOverlayDraw(args: {
         : null,
     });
 
-    if (gridDebugEnabled) perfRef.current.overlayFrames += 1;
   }, [
     gap,
-    gridDebugEnabled,
     hoveredTileRef,
     imagesRef,
     isScrollingRef,
@@ -146,7 +140,6 @@ export function useCanvasOverlayDraw(args: {
     marqueeRectRefProp,
     overlayCanvasRef,
     overlayCtxRef,
-    perfRef,
     reorderDragRef,
     selectedHashesRef,
     themeRef,

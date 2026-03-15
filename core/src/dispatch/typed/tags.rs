@@ -165,11 +165,12 @@ pub async fn add_tags(state: &AppState, input: AddTagsInput) -> Result<(), Strin
     if input.tag_strings.is_empty() || input.hashes.is_empty() {
         return Ok(());
     }
-    let hashes_clone = input.hashes.clone();
-    state.db.add_tags_batch(&input.hashes, &input.tag_strings).await?;
+    // Expand hashes to include collection member hashes
+    let expanded = state.db.expand_hashes_for_collections(&input.hashes).await?;
+    state.db.add_tags_batch(&expanded, &input.tag_strings).await?;
     crate::events::emit_mutation(
         "add_tags",
-        crate::events::MutationImpact::batch_tags().file_hashes(hashes_clone),
+        crate::events::MutationImpact::batch_tags().file_hashes(expanded),
     );
     Ok(())
 }
@@ -178,11 +179,12 @@ pub async fn remove_tags(state: &AppState, input: RemoveTagsInput) -> Result<(),
     if input.tag_strings.is_empty() || input.hashes.is_empty() {
         return Ok(());
     }
-    let hashes_clone = input.hashes.clone();
-    state.db.remove_tags_batch(&input.hashes, &input.tag_strings).await?;
+    // Expand hashes to include collection member hashes
+    let expanded = state.db.expand_hashes_for_collections(&input.hashes).await?;
+    state.db.remove_tags_batch(&expanded, &input.tag_strings).await?;
     crate::events::emit_mutation(
         "remove_tags",
-        crate::events::MutationImpact::batch_tags().file_hashes(hashes_clone),
+        crate::events::MutationImpact::batch_tags().file_hashes(expanded),
     );
     Ok(())
 }

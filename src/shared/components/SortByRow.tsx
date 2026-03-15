@@ -29,7 +29,6 @@ export function SortByRow({ field, order, onFieldChange, onOrderChange }: {
             { value: 'imported_at', label: 'Date Added' },
             { value: 'size', label: 'File Size' },
             { value: 'rating', label: 'Rating' },
-            { value: 'view_count', label: 'Views' },
           ]}
           allowDeselect={false}
           withCheckIcon={false}

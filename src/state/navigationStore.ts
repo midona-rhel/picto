@@ -97,7 +97,6 @@ function computeTitle(state: { activeFolder?: ActiveFolder | null; activeSmartFo
   if (statusFilter === 'uncategorized') return 'Uncategorized';
   if (statusFilter === 'trash') return 'Trash';
   if (statusFilter === 'untagged') return 'Untagged';
-  if (statusFilter === 'recently_viewed') return 'Recently Viewed';
   if (statusFilter === 'random') return 'Random';
   return VIEW_LABELS[view];
 }

@@ -35,7 +35,6 @@ describe('domainStore inbox count resolution', () => {
       trashCount: 0,
       untaggedCount: 0,
       tagsCount: 0,
-      recentViewedCount: 0,
       duplicatesCount: 0,
       smartFolders: [],
       smartFolderCounts: {},

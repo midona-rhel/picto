@@ -22,7 +22,6 @@ export interface EntitySlim {
   has_audio: boolean;
   status: string;
   rating: number | null;
-  view_count: number;
   source_urls: string[] | null;
   imported_at: string;
   has_thumbnail: boolean;
@@ -92,7 +91,6 @@ export interface EntityAllMetadata {
     has_audio: boolean;
     status: string;
     rating: number | null;
-    view_count: number;
     source_urls: string[] | null;
     imported_at: string;
     has_thumbnail: boolean;

@@ -100,7 +100,7 @@ impl From<&crate::types::SelectionQuerySpec> for ScopeFilter {
 /// 1. Smart folder predicate → `compile_predicate`
 /// 2. Tag search → EffectiveTag bitmap ops (AND/OR), intersect active (status=1)
 /// 3. Folder → Folder bitmap ops (AND/OR), intersect active (status=1)
-/// 4. Status fallback: inbox, trash, untagged, uncategorized, recently_viewed, default
+/// 4. Status fallback: inbox, trash, untagged, uncategorized, default
 pub async fn resolve_scope(
     db: &SqliteDatabase,
     filter: &ScopeFilter,
@@ -254,11 +254,6 @@ async fn resolve_status(
                 uncategorized_ids.into_iter().map(|id| id as u32),
             ))
         }
-        Some("recently_viewed") => {
-            // Bitmap approximation — active only. Actual view_count check
-            // happens in the grid controller's SQL query.
-            Ok(db.bitmaps.get(&BitmapKey::Status(1)))
-        }
         // Default "All Active" = status=1 (active only).
         _ => Ok(db.bitmaps.get(&BitmapKey::Status(1))),
     }
@@ -272,7 +267,6 @@ async fn resolve_status(
 /// - `system:trash` = trash (status=2)
 /// - `system:untagged` = active (status=1) minus Tagged
 /// - `system:uncategorized` = active singles not in any folder
-/// - `system:recent_viewed` = active singles with view_count > 0
 pub fn scope_count(
     conn: &Connection,
     bitmaps: &BitmapStore,
@@ -288,18 +282,6 @@ pub fn scope_count(
             Ok(active.saturating_sub(tagged) as i64)
         }
         "system:uncategorized" => count_uncategorized_entities(conn),
-        "system:recent_viewed" => conn.query_row(
-            "SELECT COUNT(*)
-             FROM media_entity me
-             JOIN entity_file ef ON ef.entity_id = me.entity_id
-             JOIN file f ON f.file_id = ef.file_id
-             WHERE me.status = 1
-               AND me.kind = 'single'
-               AND f.view_count > 0
-               AND me.parent_collection_id IS NULL",
-            [],
-            |row| row.get(0),
-        ),
         _ => Ok(0),
     }
 }

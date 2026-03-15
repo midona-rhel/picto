@@ -93,9 +93,6 @@ impl CompilerPlan {
             ReadModelEvent::DuplicateChanged => {
                 self.rebuild_sidebar = true;
             }
-            ReadModelEvent::ViewCountChanged => {
-                self.rebuild_sidebar = true;
-            }
             ReadModelEvent::RebuildAll => {
                 self.rebuild_all = true;
             }
@@ -786,16 +783,6 @@ mod tests {
             sidebar_affected,
             "File insertion should trigger sidebar invalidation"
         );
-    }
-
-    #[test]
-    fn view_count_change_affects_sidebar_only() {
-        let mut plan = CompilerPlan::default();
-        plan.accumulate(ReadModelEvent::ViewCountChanged);
-        assert!(plan.rebuild_sidebar);
-        assert!(!plan.rebuild_status_bitmaps);
-        assert!(!plan.rebuild_all_smart_folders);
-        assert!(plan.dirty_file_ids.is_empty());
     }
 
     #[tokio::test]

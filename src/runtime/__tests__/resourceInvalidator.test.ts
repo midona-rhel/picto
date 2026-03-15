@@ -55,7 +55,6 @@ describe('deriveStaleResources', () => {
     expect(result).toContain('grid/system:trash');
     expect(result).toContain('grid/system:untagged');
     expect(result).toContain('grid/system:uncategorized');
-    expect(result).toContain('grid/system:recently_viewed');
     expect(result).toContain('grid/smart:all');
   });
 

@@ -438,6 +438,14 @@ pub fn set_collection_rating(
 }
 
 pub fn delete_collection(conn: &Connection, collection_id: i64) -> rusqlite::Result<()> {
+    // Delete all member files (and their entities) before removing the collection
+    let member_files = crate::sqlite::files::get_collection_member_files(conn, collection_id)?;
+    // Delete the collection entity first (cascades collection_member rows via FK)
+    conn.execute(
+        "DELETE FROM media_entity WHERE entity_id = ?1 AND kind = 'collection'",
+        [collection_id],
+    )?;
+    // Orphan any entities that used parent_collection_id (legacy link)
     conn.execute(
         "UPDATE media_entity
          SET parent_collection_id = NULL,
@@ -446,10 +454,10 @@ pub fn delete_collection(conn: &Connection, collection_id: i64) -> rusqlite::Res
          WHERE parent_collection_id = ?1",
         [collection_id],
     )?;
-    conn.execute(
-        "DELETE FROM media_entity WHERE entity_id = ?1 AND kind = 'collection'",
-        [collection_id],
-    )?;
+    // Delete each member file
+    for (member_fid, _) in member_files {
+        crate::sqlite::files::delete_file(conn, member_fid)?;
+    }
     Ok(())
 }
 

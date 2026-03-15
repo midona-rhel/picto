@@ -38,7 +38,7 @@ export function useImageZoom(
     minScale = MIN_SCALE,
     maxScale = MAX_SCALE,
     transformTargets = [],
-    interactiveCommitMs = 96,
+    interactiveCommitMs = 150,
   } = options;
 
   const [state, setState] = useState<ZoomState>({ scale: 1, tx: 0, ty: 0 });

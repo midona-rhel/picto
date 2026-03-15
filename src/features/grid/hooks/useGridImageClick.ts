@@ -1,5 +1,4 @@
 import { useCallback } from 'react';
-import { api } from '#desktop/api';
 import { prefetchMetadata } from '../metadataPrefetch';
 import type { MediaItem } from '../shared';
 import type { GridRuntimeAction } from '../runtime';
@@ -17,14 +16,6 @@ export function useGridImageClick(args: {
   canvasLayoutRef: { current: { x: number; y: number; w: number; h: number }[] };
 }) {
   const { dispatch, viewer, stateRef, imagesRef, lastClickedHashRef, canvasLayoutRef } = args;
-
-  const recordImageView = useCallback((hash: string) => {
-    const image = stateRef.current.images.find((img) => img.hash === hash);
-    if (!image || image.is_collection) return;
-    void api.files.incrementViewCount(hash).catch((err) => {
-      console.warn('Failed to increment view count:', err);
-    });
-  }, [stateRef]);
 
   const handleImageClick = useCallback((image: MediaItem, event: React.MouseEvent) => {
     if (event.detail === 2) {
@@ -83,7 +74,6 @@ export function useGridImageClick(args: {
   }, [canvasLayoutRef, dispatch, imagesRef, lastClickedHashRef, stateRef, viewer]);
 
   return {
-    recordImageView,
     handleImageClick,
   };
 }

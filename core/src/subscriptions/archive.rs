@@ -5,6 +5,10 @@
 
 use crate::sqlite::SqliteDatabase;
 
+pub fn subscription_query_archive_prefix(subscription_id: i64, query_id: i64) -> String {
+    format!("picto_s{subscription_id}_q{query_id}_")
+}
+
 pub async fn clear_subscription_archive_entries(
     db: &SqliteDatabase,
     archive_prefixes: &[String],

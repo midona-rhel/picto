@@ -191,13 +191,8 @@ export function createMenuManager({
             click: () => sendToFocusedWindow('menu:navigate', 'untagged'),
           },
           {
-            label: 'Recently Viewed',
-            accelerator: 'CmdOrCtrl+4',
-            click: () => sendToFocusedWindow('menu:navigate', 'recently_viewed'),
-          },
-          {
             label: 'Trash',
-            accelerator: 'CmdOrCtrl+5',
+            accelerator: 'CmdOrCtrl+4',
             click: () => sendToFocusedWindow('menu:navigate', 'trash'),
           },
           { type: 'separator' },

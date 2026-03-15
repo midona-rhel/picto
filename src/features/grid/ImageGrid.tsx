@@ -35,8 +35,7 @@ import { useGridDisplayState } from './hooks/useGridDisplayState';
 import { useGridActionHandlers } from './hooks/useGridActionHandlers';
 import { resolveGridEmptyContext } from './gridEmptyContext';
 
-// Re-export GridViewMode from runtime for backward compatibility
-export type { GridViewMode } from './runtime';
+
 
 interface ImageGridProps {
   searchTags?: string[];
@@ -194,7 +193,6 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
   } = useGridInlineRename({
     singleSelectedHash,
     stateRef,
-    requestGridReload: requestReplace,
   });
 
   const {
@@ -245,7 +243,6 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
     handleCopyTags,
     handlePasteTags,
     hasCopiedTags,
-    recordImageView,
     handleImageClick,
     isReorderScope,
     handleReorder,
@@ -307,7 +304,6 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
     handleConfirmImportFolder,
   } = useGridImportActions({
     folderIdRef,
-    requestGridReload: requestReplace,
     setDragOver: (over) => dispatch({ type: 'SET_DRAG_OVER', over }),
   });
 
@@ -361,7 +357,6 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
     statusFilter,
     handleInboxAction: statusFilter === 'inbox' ? handleInboxAction : undefined,
     onMediaViewStateChange,
-    recordImageView,
     dispatch,
     scrollToIndex,
     imagesRef,
@@ -405,7 +400,6 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
     setRenamingHash,
     renameCancelledRef,
     setBatchRenameOpen,
-    requestGridReload: () => { void requestReplace(); },
   });
 
   if (state.error) {

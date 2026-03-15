@@ -95,7 +95,7 @@ let pendingReceipts: MutationReceipt[] = [];
 let receiptFlushTimer: ReturnType<typeof setTimeout> | null = null;
 
 const WATCHDOG_POLL_MS = 1000;
-const WATCHDOG_STALE_MS = 5000;
+const WATCHDOG_STALE_MS = 30000;
 
 function clearTimers() {
   if (watchdogTimer) {

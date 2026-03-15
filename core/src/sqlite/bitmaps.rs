@@ -3,14 +3,16 @@
 //! Bitmaps are the core acceleration structure — status checks, tag membership,
 //! folder membership, and smart folder compilation all reduce to bitmap ops.
 //!
-//! Persisted to a sidecar file (`bitmaps.bin`), fully rebuildable from SQL.
+//! Persisted via a snapshot file (`bitmaps.bin`) plus an append-only WAL
+//! (`bitmaps.wal`) that captures only dirty-key deltas between snapshots.
+//! On flush, only changed bitmaps are appended to the WAL. Compaction writes
+//! a fresh full snapshot and removes the WAL.
 
 use roaring::RoaringBitmap;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::io::{self, Write as _};
+use std::io::{self, Read as _, Seek as _, Write as _};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::RwLock;
 
 /// Key identifying a specific bitmap in the store.
@@ -42,9 +44,16 @@ pub enum BitmapKey {
     Tagged,
 }
 
+/// Compaction threshold — when the WAL exceeds this size, the next flush
+/// triggers a full snapshot instead of another WAL append.
+const WAL_COMPACT_THRESHOLD: u64 = 2 * 1024 * 1024; // 2 MB
+
 pub struct BitmapStore {
     bitmaps: RwLock<HashMap<BitmapKey, RoaringBitmap>>,
-    dirty: AtomicBool,
+    dirty_keys: RwLock<HashSet<BitmapKey>>,
+    /// true when `clear()` was called — next flush must write a full snapshot
+    /// because the WAL cannot represent "delete all keys".
+    full_rewrite_needed: RwLock<bool>,
     dir: PathBuf,
     path: RwLock<PathBuf>,
 }
@@ -59,7 +68,9 @@ impl BitmapStore {
         let requested_path = active_file
             .map(|name| dir.join(name))
             .unwrap_or_else(|| dir.join("bitmaps.bin"));
-        let bitmaps = if requested_path.exists() {
+
+        // Load snapshot
+        let mut bitmaps = if requested_path.exists() {
             match Self::load_from_file(&requested_path) {
                 Ok(b) => b,
                 Err(e) => {
@@ -75,9 +86,29 @@ impl BitmapStore {
             HashMap::new()
         };
 
+        // Replay WAL on top of the snapshot
+        let wal_path = wal_path_for_snapshot(&requested_path);
+        if wal_path.exists() {
+            match Self::replay_wal(&wal_path) {
+                Ok(wal_entries) => {
+                    let count = wal_entries.len();
+                    for (key, bitmap) in wal_entries {
+                        bitmaps.insert(key, bitmap);
+                    }
+                    if count > 0 {
+                        tracing::info!("Replayed {count} WAL entries from {:?}", wal_path);
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to replay WAL {:?}: {}, ignoring", wal_path, e);
+                }
+            }
+        }
+
         Self {
             bitmaps: RwLock::new(bitmaps),
-            dirty: AtomicBool::new(false),
+            dirty_keys: RwLock::new(HashSet::new()),
+            full_rewrite_needed: RwLock::new(false),
             dir: dir.to_path_buf(),
             path: RwLock::new(requested_path),
         }
@@ -111,52 +142,101 @@ impl BitmapStore {
     }
 
     pub fn set(&self, key: BitmapKey, bitmap: RoaringBitmap) {
+        self.mark_dirty(&key);
         crate::poison::write_or_recover(&self.bitmaps, "bitmaps::set").insert(key, bitmap);
-        self.dirty.store(true, Ordering::Relaxed);
     }
 
     pub fn insert(&self, key: &BitmapKey, file_id: u32) {
         let mut map = crate::poison::write_or_recover(&self.bitmaps, "bitmaps::insert");
         map.entry(key.clone()).or_default().insert(file_id);
-        self.dirty.store(true, Ordering::Relaxed);
+        self.mark_dirty(key);
     }
 
     pub fn remove(&self, key: &BitmapKey, file_id: u32) {
         let mut map = crate::poison::write_or_recover(&self.bitmaps, "bitmaps::remove");
         if let Some(bm) = map.get_mut(key) {
             bm.remove(file_id);
-            self.dirty.store(true, Ordering::Relaxed);
+            self.mark_dirty(key);
         }
     }
 
     pub fn clear(&self) {
         crate::poison::write_or_recover(&self.bitmaps, "bitmaps::clear").clear();
-        self.dirty.store(true, Ordering::Relaxed);
+        crate::poison::write_or_recover(&self.dirty_keys, "bitmaps::dirty_keys").clear();
+        *crate::poison::write_or_recover(&self.full_rewrite_needed, "bitmaps::full_rewrite")
+            = true;
     }
 
     pub fn remove_key(&self, key: &BitmapKey) {
         crate::poison::write_or_recover(&self.bitmaps, "bitmaps::remove_key").remove(key);
-        self.dirty.store(true, Ordering::Relaxed);
+        self.mark_dirty(key);
     }
 
     pub fn is_dirty(&self) -> bool {
-        self.dirty.load(Ordering::Relaxed)
+        let has_dirty = !crate::poison::read_or_recover(&self.dirty_keys, "bitmaps::is_dirty")
+            .is_empty();
+        has_dirty || *crate::poison::read_or_recover(&self.full_rewrite_needed, "bitmaps::is_dirty_full")
     }
 
+    /// Flush dirty bitmaps. Appends only changed keys to the WAL file,
+    /// unless a compaction is warranted (WAL too large or full rewrite needed).
     pub fn flush(&self) -> io::Result<()> {
-        if !self.dirty.load(Ordering::Relaxed) {
+        let needs_full = *crate::poison::read_or_recover(
+            &self.full_rewrite_needed,
+            "bitmaps::flush_check",
+        );
+
+        let dirty: HashSet<BitmapKey> = {
+            let mut dk = crate::poison::write_or_recover(&self.dirty_keys, "bitmaps::flush_drain");
+            std::mem::take(&mut *dk)
+        };
+
+        if dirty.is_empty() && !needs_full {
             return Ok(());
         }
-        self.save_to_file()?;
-        self.dirty.store(false, Ordering::Relaxed);
+
+        if needs_full {
+            self.compact_inner(&dirty)?;
+            return Ok(());
+        }
+
+        // Check if WAL is too large → compact instead
+        let snapshot_path: PathBuf =
+            crate::poison::read_or_recover(&self.path, "bitmaps::flush_path").clone();
+        let wal = wal_path_for_snapshot(&snapshot_path);
+        let wal_size = fs::metadata(&wal).map(|m| m.len()).unwrap_or(0);
+
+        if wal_size >= WAL_COMPACT_THRESHOLD {
+            self.compact_inner(&dirty)?;
+        } else {
+            self.append_wal(&dirty)?;
+        }
+
         Ok(())
     }
 
+    /// Flush as a versioned snapshot — always compacts (produces a clean
+    /// snapshot for the manifest, no WAL).
     pub fn flush_versioned(&self, artifact_version: u64) -> io::Result<String> {
         let file_name = format!("bitmaps.v{artifact_version}.bin");
+        let old_path: PathBuf =
+            crate::poison::read_or_recover(&self.path, "bitmaps::fv_old").clone();
+
         let new_path = self.dir.join(&file_name);
         *crate::poison::write_or_recover(&self.path, "bitmaps::path") = new_path;
-        self.flush()?;
+
+        // Drain dirty keys and compact
+        let dirty: HashSet<BitmapKey> = {
+            let mut dk =
+                crate::poison::write_or_recover(&self.dirty_keys, "bitmaps::fv_drain");
+            std::mem::take(&mut *dk)
+        };
+        self.compact_inner(&dirty)?;
+
+        // Clean up the old snapshot's WAL if it exists
+        let old_wal = wal_path_for_snapshot(&old_path);
+        let _ = fs::remove_file(&old_wal);
+
         Ok(file_name)
     }
 
@@ -204,6 +284,123 @@ impl BitmapStore {
             return Err(err);
         }
         Ok(deleted)
+    }
+
+    // ── internal ────────────────────────────────────────────────────────
+
+    fn mark_dirty(&self, key: &BitmapKey) {
+        crate::poison::write_or_recover(&self.dirty_keys, "bitmaps::mark_dirty")
+            .insert(key.clone());
+    }
+
+    /// Remove empty bitmaps from the store to prevent unbounded growth.
+    /// Called during compaction.
+    fn prune_empty(&self) {
+        let mut map = crate::poison::write_or_recover(&self.bitmaps, "bitmaps::prune_empty");
+        map.retain(|_, bm| !bm.is_empty());
+    }
+
+    /// Append only the dirty keys' bitmaps to the WAL file.
+    fn append_wal(&self, dirty: &HashSet<BitmapKey>) -> io::Result<()> {
+        if dirty.is_empty() {
+            return Ok(());
+        }
+
+        let snapshot_path: PathBuf =
+            crate::poison::read_or_recover(&self.path, "bitmaps::wal_path").clone();
+        let wal = wal_path_for_snapshot(&snapshot_path);
+
+        let map = crate::poison::read_or_recover(&self.bitmaps, "bitmaps::wal_read");
+
+        // Build the WAL entry buffer
+        let mut buf = Vec::new();
+        let mut entry_count = 0u32;
+
+        for key in dirty {
+            let key_bytes = serialize_key(key);
+            let key_len = key_bytes.len() as u32;
+
+            if let Some(bitmap) = map.get(key) {
+                let bm_size = bitmap.serialized_size();
+                buf.extend_from_slice(&key_len.to_le_bytes());
+                buf.extend_from_slice(&key_bytes);
+                buf.extend_from_slice(&(bm_size as u64).to_le_bytes());
+                let start = buf.len();
+                buf.resize(start + bm_size, 0);
+                bitmap.serialize_into(&mut buf[start..]).map_err(|e| {
+                    io::Error::new(io::ErrorKind::Other, format!("bitmap serialize: {e}"))
+                })?;
+            } else {
+                // Key was removed — write an empty bitmap so replay overwrites
+                let empty = RoaringBitmap::new();
+                let bm_size = empty.serialized_size();
+                buf.extend_from_slice(&key_len.to_le_bytes());
+                buf.extend_from_slice(&key_bytes);
+                buf.extend_from_slice(&(bm_size as u64).to_le_bytes());
+                let start = buf.len();
+                buf.resize(start + bm_size, 0);
+                empty.serialize_into(&mut buf[start..]).map_err(|e| {
+                    io::Error::new(io::ErrorKind::Other, format!("bitmap serialize: {e}"))
+                })?;
+            }
+            entry_count += 1;
+        }
+
+        // Read existing entry count, append, update header
+        let file_existed = wal.exists();
+        let mut file = fs::OpenOptions::new()
+            .create(true)
+            .read(true)
+            .write(true)
+            .truncate(false)
+            .open(&wal)?;
+
+        let existing_count = if file_existed {
+            let mut header = [0u8; 4];
+            if file.read_exact(&mut header).is_ok() {
+                u32::from_le_bytes(header)
+            } else {
+                0
+            }
+        } else {
+            // Write initial header
+            file.write_all(&0u32.to_le_bytes())?;
+            0
+        };
+
+        // Append entries at the end
+        file.seek(io::SeekFrom::End(0))?;
+        file.write_all(&buf)?;
+
+        // Update entry count in the header
+        let new_count = existing_count + entry_count;
+        file.seek(io::SeekFrom::Start(0))?;
+        file.write_all(&new_count.to_le_bytes())?;
+
+        file.sync_all()?;
+
+        Ok(())
+    }
+
+    /// Write a full snapshot and delete the WAL.
+    /// Prunes empty bitmaps to prevent unbounded growth.
+    fn compact_inner(&self, _remaining_dirty: &HashSet<BitmapKey>) -> io::Result<()> {
+        self.prune_empty();
+        self.save_to_file()?;
+
+        // Clear full-rewrite flag
+        *crate::poison::write_or_recover(
+            &self.full_rewrite_needed,
+            "bitmaps::compact_clear",
+        ) = false;
+
+        // Remove WAL
+        let snapshot_path: PathBuf =
+            crate::poison::read_or_recover(&self.path, "bitmaps::compact_wal").clone();
+        let wal = wal_path_for_snapshot(&snapshot_path);
+        let _ = fs::remove_file(&wal);
+
+        Ok(())
     }
 
     fn save_to_file(&self) -> io::Result<()> {
@@ -292,10 +489,91 @@ impl BitmapStore {
 
         Ok(map)
     }
+
+    /// Parse WAL entries. Returns key→bitmap pairs in order; later entries
+    /// for the same key naturally overwrite earlier ones when inserted into
+    /// a HashMap.
+    fn replay_wal(wal_path: &Path) -> io::Result<Vec<(BitmapKey, RoaringBitmap)>> {
+        let data = fs::read(wal_path)?;
+
+        if data.len() < 4 {
+            return Ok(Vec::new());
+        }
+
+        let entry_count = u32::from_le_bytes(data[0..4].try_into().unwrap()) as usize;
+        let mut pos = 4;
+        let mut entries = Vec::with_capacity(entry_count);
+
+        for _ in 0..entry_count {
+            if pos + 4 > data.len() {
+                break;
+            }
+            let key_len = u32::from_le_bytes(data[pos..pos + 4].try_into().unwrap()) as usize;
+            pos += 4;
+
+            if pos + key_len > data.len() {
+                break;
+            }
+            let key = match deserialize_key(&data[pos..pos + key_len]) {
+                Some(k) => k,
+                None => {
+                    pos += key_len;
+                    // Skip bitmap data
+                    if pos + 8 <= data.len() {
+                        let bm_size =
+                            u64::from_le_bytes(data[pos..pos + 8].try_into().unwrap()) as usize;
+                        pos += 8 + bm_size;
+                    }
+                    continue;
+                }
+            };
+            pos += key_len;
+
+            if pos + 8 > data.len() {
+                break;
+            }
+            let bm_size = u64::from_le_bytes(data[pos..pos + 8].try_into().unwrap()) as usize;
+            pos += 8;
+
+            if pos + bm_size > data.len() {
+                break;
+            }
+            match RoaringBitmap::deserialize_from(&data[pos..pos + bm_size]) {
+                Ok(bm) => entries.push((key, bm)),
+                Err(e) => {
+                    tracing::warn!("Skipping corrupt WAL entry: {e}");
+                }
+            }
+            pos += bm_size;
+        }
+
+        Ok(entries)
+    }
+}
+
+/// Derive the WAL path from a snapshot path: `bitmaps.bin` → `bitmaps.wal`,
+/// `bitmaps.v5.bin` → `bitmaps.v5.wal`.
+fn wal_path_for_snapshot(snapshot: &Path) -> PathBuf {
+    let stem = snapshot
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("bitmaps");
+    snapshot.with_file_name(format!("{stem}.wal"))
 }
 
 fn is_bitmap_artifact_file(name: &str) -> bool {
-    name == "bitmaps.bin" || (name.starts_with("bitmaps.v") && name.ends_with(".bin"))
+    if name == "bitmaps.bin" {
+        return true;
+    }
+    if name.starts_with("bitmaps.v") && name.ends_with(".bin") {
+        return true;
+    }
+    if name.ends_with(".wal")
+        && (name == "bitmaps.wal" || name.starts_with("bitmaps.v"))
+    {
+        return true;
+    }
+    false
 }
 
 // Key serialization: tag byte + i64 payload (where applicable)
@@ -387,23 +665,190 @@ mod tests {
     }
 
     #[test]
+    fn wal_append_and_replay() {
+        let dir = tempfile::tempdir().unwrap();
+
+        // First flush: creates snapshot via WAL
+        {
+            let store = BitmapStore::open(dir.path());
+            store.insert(&BitmapKey::Tag(1), 10);
+            store.insert(&BitmapKey::Tag(1), 20);
+            store.insert(&BitmapKey::Status(1), 10);
+            store.flush().unwrap();
+        }
+
+        // WAL should exist (first flush with small data goes to WAL)
+        let wal = dir.path().join("bitmaps.wal");
+        assert!(wal.exists(), "WAL file should exist after flush");
+
+        // Second flush: appends more deltas to WAL
+        {
+            let store = BitmapStore::open(dir.path());
+            // Verify replayed state
+            assert_eq!(store.len(&BitmapKey::Tag(1)), 2);
+            assert_eq!(store.len(&BitmapKey::Status(1)), 1);
+
+            // Add more data
+            store.insert(&BitmapKey::Tag(1), 30);
+            store.insert(&BitmapKey::Tag(99), 5);
+            store.flush().unwrap();
+        }
+
+        // Reopen and verify everything is there
+        {
+            let store = BitmapStore::open(dir.path());
+            assert_eq!(store.len(&BitmapKey::Tag(1)), 3);
+            assert!(store.contains(&BitmapKey::Tag(1), 30));
+            assert_eq!(store.len(&BitmapKey::Tag(99)), 1);
+            assert_eq!(store.len(&BitmapKey::Status(1)), 1);
+        }
+    }
+
+    #[test]
+    fn compaction_produces_clean_snapshot() {
+        let dir = tempfile::tempdir().unwrap();
+
+        {
+            let store = BitmapStore::open(dir.path());
+            store.insert(&BitmapKey::Tag(1), 10);
+            store.insert(&BitmapKey::Folder(5), 20);
+            store.flush().unwrap();
+
+            // Force compaction via flush_versioned
+            store.insert(&BitmapKey::Tag(1), 30);
+            let name = store.flush_versioned(1).unwrap();
+            assert_eq!(name, "bitmaps.v1.bin");
+        }
+
+        // The versioned snapshot should exist, WAL for it should not
+        assert!(dir.path().join("bitmaps.v1.bin").exists());
+        assert!(!dir.path().join("bitmaps.v1.wal").exists());
+
+        // Reopen from the versioned snapshot
+        {
+            let store = BitmapStore::open_with_active_file(dir.path(), Some("bitmaps.v1.bin"));
+            assert_eq!(store.len(&BitmapKey::Tag(1)), 2);
+            assert!(store.contains(&BitmapKey::Tag(1), 10));
+            assert!(store.contains(&BitmapKey::Tag(1), 30));
+            assert_eq!(store.len(&BitmapKey::Folder(5)), 1);
+        }
+    }
+
+    #[test]
+    fn clear_triggers_full_rewrite() {
+        let dir = tempfile::tempdir().unwrap();
+
+        {
+            let store = BitmapStore::open(dir.path());
+            store.insert(&BitmapKey::Tag(1), 10);
+            store.flush().unwrap();
+        }
+
+        {
+            let store = BitmapStore::open(dir.path());
+            assert_eq!(store.len(&BitmapKey::Tag(1)), 1);
+
+            store.clear();
+            store.insert(&BitmapKey::Tag(2), 20);
+            store.flush().unwrap();
+        }
+
+        // The old WAL should have been cleaned up by compaction
+        let wal = dir.path().join("bitmaps.wal");
+        assert!(!wal.exists(), "WAL should be removed after clear+flush compaction");
+
+        {
+            let store = BitmapStore::open(dir.path());
+            assert_eq!(store.len(&BitmapKey::Tag(1)), 0);
+            assert_eq!(store.len(&BitmapKey::Tag(2)), 1);
+        }
+    }
+
+    #[test]
+    fn removed_key_replays_as_empty() {
+        let dir = tempfile::tempdir().unwrap();
+
+        // Create initial state with a snapshot
+        {
+            let store = BitmapStore::open(dir.path());
+            store.insert(&BitmapKey::Tag(1), 10);
+            store.insert(&BitmapKey::Tag(1), 20);
+            // Force a snapshot so we have baseline on disk
+            *crate::poison::write_or_recover(&store.full_rewrite_needed, "test") = true;
+            store.flush().unwrap();
+        }
+
+        // Remove the key, flush as WAL
+        {
+            let store = BitmapStore::open(dir.path());
+            assert_eq!(store.len(&BitmapKey::Tag(1)), 2);
+            store.remove_key(&BitmapKey::Tag(1));
+            store.flush().unwrap();
+        }
+
+        // Reopen — WAL should replay the empty bitmap over the snapshot
+        {
+            let store = BitmapStore::open(dir.path());
+            assert_eq!(store.len(&BitmapKey::Tag(1)), 0);
+        }
+    }
+
+    #[test]
+    fn compaction_prunes_empty_bitmaps() {
+        let dir = tempfile::tempdir().unwrap();
+
+        {
+            let store = BitmapStore::open(dir.path());
+            store.insert(&BitmapKey::Tag(1), 10);
+            store.insert(&BitmapKey::Tag(2), 20);
+            // Remove all values from Tag(2), leaving it empty
+            store.remove(&BitmapKey::Tag(2), 20);
+            // Force compaction via flush_versioned
+            let _ = store.flush_versioned(1).unwrap();
+        }
+
+        // Reopen — empty bitmap should have been pruned
+        {
+            let store = BitmapStore::open_with_active_file(dir.path(), Some("bitmaps.v1.bin"));
+            assert_eq!(store.len(&BitmapKey::Tag(1)), 1);
+            // Tag(2) should not exist at all (pruned during compaction)
+            let map = crate::poison::read_or_recover(&store.bitmaps, "test");
+            assert!(!map.contains_key(&BitmapKey::Tag(2)));
+        }
+    }
+
+    #[test]
     fn prune_artifacts_keeps_only_requested_files() {
         let dir = tempfile::tempdir().unwrap();
         fs::write(dir.path().join("bitmaps.bin"), b"legacy").unwrap();
         fs::write(dir.path().join("bitmaps.v1.bin"), b"v1").unwrap();
         fs::write(dir.path().join("bitmaps.v2.bin"), b"v2").unwrap();
         fs::write(dir.path().join("bitmaps.v3.bin"), b"v3").unwrap();
+        fs::write(dir.path().join("bitmaps.v1.wal"), b"wal1").unwrap();
         fs::write(dir.path().join("not-bitmaps.txt"), b"keep").unwrap();
 
         let store = BitmapStore::open(dir.path());
         let deleted = store
             .prune_artifacts(&["bitmaps.v3.bin".to_string(), "bitmaps.v2.bin".to_string()])
             .unwrap();
-        assert_eq!(deleted, 2);
+        assert_eq!(deleted, 3); // bitmaps.bin + v1.bin + v1.wal
         assert!(dir.path().join("bitmaps.v3.bin").exists());
         assert!(dir.path().join("bitmaps.v2.bin").exists());
         assert!(!dir.path().join("bitmaps.v1.bin").exists());
+        assert!(!dir.path().join("bitmaps.v1.wal").exists());
         assert!(!dir.path().join("bitmaps.bin").exists());
         assert!(dir.path().join("not-bitmaps.txt").exists());
+    }
+
+    #[test]
+    fn wal_path_derivation() {
+        assert_eq!(
+            wal_path_for_snapshot(Path::new("/lib/bitmaps.bin")),
+            PathBuf::from("/lib/bitmaps.wal")
+        );
+        assert_eq!(
+            wal_path_for_snapshot(Path::new("/lib/bitmaps.v5.bin")),
+            PathBuf::from("/lib/bitmaps.v5.wal")
+        );
     }
 }

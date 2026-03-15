@@ -344,19 +344,6 @@ impl DuplicateController {
             }
         }
 
-        let total_views = winner_file.view_count + loser_file.view_count;
-        if loser_file.view_count > 0 {
-            let w_id = db.resolve_hash(&winner_hash).await?;
-            db.with_conn(move |conn| {
-                conn.execute(
-                    "UPDATE file SET view_count = ?1 WHERE file_id = ?2",
-                    rusqlite::params![total_views, w_id],
-                )?;
-                Ok(())
-            })
-            .await?;
-        }
-
         let winner_fid = db.resolve_hash(&winner_hash).await?;
         let loser_fid = db.resolve_hash(&loser_hash).await?;
         let loser_in_collection: bool = db

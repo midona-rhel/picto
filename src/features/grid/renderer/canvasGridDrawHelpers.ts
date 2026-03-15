@@ -148,8 +148,24 @@ export function drawCanvasBaseLayer({
         drawThumb(ctx, entry.thumb, pos.x, drawY, pos.w, imageHeight);
       }
     } else {
-      ctx.fillStyle = image.dominant_color_hex || theme.placeholderBg;
-      ctx.fillRect(pos.x, drawY, pos.w, imageHeight);
+      // In contain mode, fill tile background then draw dominant color in
+      // the image's aspect ratio so the placeholder shape matches the image.
+      if (effectiveFit === 'contain' && image.aspectRatio) {
+        ctx.fillStyle = theme.placeholderBg;
+        ctx.fillRect(pos.x, drawY, pos.w, imageHeight);
+        if (image.dominant_color_hex) {
+          ctx.fillStyle = image.dominant_color_hex;
+          const scale = Math.min(pos.w / image.aspectRatio, imageHeight);
+          const iw = image.aspectRatio * scale;
+          const ih = scale;
+          ctx.beginPath();
+          ctx.roundRect(pos.x + (pos.w - iw) / 2, drawY + (imageHeight - ih) / 2, iw, ih, br);
+          ctx.fill();
+        }
+      } else {
+        ctx.fillStyle = image.dominant_color_hex || theme.placeholderBg;
+        ctx.fillRect(pos.x, drawY, pos.w, imageHeight);
+      }
     }
 
     ctx.restore();
@@ -403,3 +419,4 @@ export function drawCanvasOverlayLayer({
     }
   }
 }
+

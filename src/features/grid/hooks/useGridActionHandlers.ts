@@ -52,7 +52,6 @@ export function useGridActionHandlers(args: {
     statusFilter,
     folderId,
     collectionEntityId,
-    requestGridReload: () => { void requestReplace(); },
   });
 
   const itemActions = useGridItemActions({

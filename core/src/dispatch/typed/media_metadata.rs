@@ -30,8 +30,6 @@ pub struct UpdateFileMetadataInput {
     #[serde(default)]
     pub notes: Option<HashMap<String, String>>,
     #[serde(default)]
-    pub increment_view_count: Option<bool>,
-    #[serde(default)]
     pub source_urls: Option<Vec<String>>,
 }
 
@@ -50,7 +48,11 @@ pub async fn update_file_metadata(state: &AppState, input: UpdateFileMetadataInp
     let hash = input.hash;
 
     if let Some(rating) = input.rating {
-        state.db.update_rating(&hash, rating).await?;
+        // Cascade rating to collection members
+        let hashes = state.db.expand_hashes_for_collections(&[hash.clone()]).await?;
+        for h in &hashes {
+            state.db.update_rating(h, rating).await?;
+        }
     }
 
     if let Some(name) = input.name {
@@ -62,10 +64,6 @@ pub async fn update_file_metadata(state: &AppState, input: UpdateFileMetadataInp
         state.db.set_notes(&hash, Some(&json)).await?;
     }
 
-    if input.increment_view_count == Some(true) {
-        state.db.increment_view_count(&hash).await?;
-    }
-
     if let Some(ref urls) = input.source_urls {
         let urls_json = if urls.is_empty() {
             None
@@ -75,12 +73,7 @@ pub async fn update_file_metadata(state: &AppState, input: UpdateFileMetadataInp
         state.db.set_source_urls(&hash, urls_json.as_deref()).await?;
     }
 
-    let mut impact = crate::events::MutationImpact::file_metadata(hash);
-    if input.increment_view_count == Some(true) {
-        impact = impact
-            .domains(&[crate::events::Domain::Files, crate::events::Domain::Sidebar])
-            .extra_grid_scopes(vec!["system:recently_viewed".to_string()]);
-    }
+    let impact = crate::events::MutationImpact::file_metadata(hash);
     crate::events::emit_mutation("update_file_metadata", impact);
     Ok(())
 }

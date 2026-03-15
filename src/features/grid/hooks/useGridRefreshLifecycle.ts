@@ -55,7 +55,6 @@ export function useGridRefreshLifecycle(args: {
     scrollRef,
   } = args;
 
-  const pendingGridRemovals = useGridMetadataStore((s) => s.pendingGridRemovals);
   const metadataInvalidatedHashes = useGridMetadataStore((s) => s.metadataInvalidatedHashes);
   const gridRefreshSeq = useGridMetadataStore((s) => s.gridRefreshSeq);
 
@@ -205,18 +204,6 @@ export function useGridRefreshLifecycle(args: {
   }, [refreshTrigger, requestReplace]);
 
   // ---------------------------------------------------------------------------
-  // Optimistic grid removals
-  // ---------------------------------------------------------------------------
-
-  useEffect(() => {
-    if (pendingGridRemovals.size === 0) return;
-    const toRemove = new Set(pendingGridRemovals);
-    useGridMetadataStore.getState().clearGridRemovals();
-    dispatch({ type: 'FILTER_IMAGES', predicate: (img) => !toRemove.has(img.hash) });
-    dispatch({ type: 'REMOVE_HASHES', hashes: toRemove });
-  }, [dispatch, pendingGridRemovals]);
-
-  // ---------------------------------------------------------------------------
   // Active grid scope tracking
   // ---------------------------------------------------------------------------
 
@@ -247,11 +234,11 @@ export function useGridRefreshLifecycle(args: {
       const next = currentImages.map((img) => {
         const meta = metaMap.get(img.hash);
         if (!meta) return img;
-        if (img.name === meta.name && img.rating === meta.rating && img.view_count === meta.view_count) {
+        if (img.name === meta.name && img.rating === meta.rating) {
           return img;
         }
         changed = true;
-        return { ...img, name: meta.name, rating: meta.rating, view_count: meta.view_count };
+        return { ...img, name: meta.name, rating: meta.rating };
       });
       if (changed) dispatch({ type: 'SET_IMAGES', images: next });
     });

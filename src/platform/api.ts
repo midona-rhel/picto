@@ -109,8 +109,6 @@ const filesApi = {
     invokeTyped('update_file_metadata', { hash, source_urls: urls } as never) as unknown as Promise<void>,
   setNotes: (hash: string, notes: Record<string, string>) =>
     invokeTyped('update_file_metadata', { hash, notes } as never) as unknown as Promise<void>,
-  incrementViewCount: (hash: string) =>
-    invokeTyped('update_file_metadata', { hash, increment_view_count: true } as never) as unknown as Promise<void>,
   resolvePath: (hash: string) =>
     invokeTyped('resolve_file_path', { hash }),
   resolveThumbnailPath: (hash: string) =>

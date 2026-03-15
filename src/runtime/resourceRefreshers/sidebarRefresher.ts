@@ -24,6 +24,7 @@ export function startSidebarRefresher(): void {
 
     if (needsCountsRefresh) {
       const counts = useRuntimeSyncStore.getState().sidebarCounts;
+      console.log('[sidebar-refresher] sidebar/counts stale, applying', counts);
       if (counts) {
         useDomainStore.getState().applySidebarCounts(counts);
       }
@@ -31,6 +32,7 @@ export function startSidebarRefresher(): void {
     }
 
     if (needsTreeRefresh) {
+      console.log('[sidebar-refresher] sidebar/tree stale, scheduling refresh');
       if (debounceTimer) clearTimeout(debounceTimer);
       debounceTimer = setTimeout(() => {
         useDomainStore.getState().invalidate();

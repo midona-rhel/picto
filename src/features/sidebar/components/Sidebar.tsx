@@ -6,7 +6,6 @@ import {
   IconFolderQuestion,
   IconTrash,
   IconBookmarkQuestion,
-  IconClock,
   IconBookmark,
   IconCopy,
   IconArrowsShuffle,
@@ -28,7 +27,7 @@ interface SidebarProps {
 }
 
 export function Sidebar({ onSmartFolderUpdated }: SidebarProps) {
-  const { allActiveCount, inboxCount, uncategorizedCount, trashCount, untaggedCount, tagsCount, recentViewedCount, duplicatesCount } = useDomainStore();
+  const { allActiveCount, inboxCount, uncategorizedCount, trashCount, untaggedCount, tagsCount, duplicatesCount } = useDomainStore();
   const { currentView, activeSmartFolder, activeFolder, activeStatusFilter, navigateTo } = useNavigationStore();
 
   const isAllActiveScope = !activeSmartFolder && !activeFolder && !activeStatusFilter && currentView === 'images';
@@ -93,13 +92,6 @@ export function Sidebar({ onSmartFolderUpdated }: SidebarProps) {
           count={tagsCount}
           isActive={currentView === 'tags'}
           onClick={() => navigateTo('tags')}
-        />
-        <SidebarItem
-          icon={<IconClock size={16} />}
-          label="Recently Viewed"
-          count={recentViewedCount}
-          isActive={currentView === 'images' && activeStatusFilter === 'recently_viewed'}
-          onClick={() => navigateTo('images', null, null, 'recently_viewed')}
         />
         <SidebarItem
           icon={<IconArrowsShuffle size={16} />}

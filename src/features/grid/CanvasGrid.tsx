@@ -1,6 +1,5 @@
 import {
   useRef,
-  useState,
   useEffect,
   useMemo,
   useCallback,
@@ -25,27 +24,11 @@ import { useCanvasViewport } from './renderer/useCanvasViewport';
 import { useCanvasBaseDraw } from './renderer/useCanvasBaseDraw';
 import { useCanvasOverlayDraw } from './renderer/useCanvasOverlayDraw';
 import { hitTestCanvasTile } from './renderer/canvasHitTesting';
-import type { GridDebugStats } from './renderer/canvasGridDebug';
-import { CanvasGridDebugHud } from './renderer/CanvasGridDebugHud';
 import { HoverPreviewPortal } from './renderer/HoverPreviewPortal';
 import { CanvasGridEmptyState } from './components/CanvasGridEmptyState';
 
 const ZOOM_BTN_SIZE = 24;
 const LOAD_MORE_THRESHOLD = 500;
-const GRID_DEBUG_SAMPLE_MS = 300;
-
-function isGridDebugEnabled(): boolean {
-  if (typeof window === 'undefined') return false;
-  try {
-    const params = new URLSearchParams(window.location.search);
-    if (params.get('gridDebug') === '1') return true;
-    return window.localStorage.getItem('picto:gridDebug') === '1';
-  } catch {
-    return false;
-  }
-}
-
-const GRID_DEBUG_ENABLED = isGridDebugEnabled();
 
 interface CanvasGridProps {
   images: MasonryImageItem[];
@@ -172,27 +155,6 @@ export function CanvasGrid({
   const pendingAtlasDirtyRef = useRef(false);
   const dismissHoverPreviewRef = useRef<() => void>(() => {});
   const dismissVideoScrubRef = useRef<() => void>(() => {});
-  const [debugStats, setDebugStats] = useState<GridDebugStats | null>(null);
-  const perfRef = useRef<{
-    frames: number;
-    drawMsTotal: number;
-    visMsTotal: number;
-    slowFrames: number;
-    sampleStart: number;
-    lastFrameAt: number;
-    baseFrames: number;
-    overlayFrames: number;
-  }>({
-    frames: 0,
-    drawMsTotal: 0,
-    visMsTotal: 0,
-    slowFrames: 0,
-    sampleStart: performance.now(),
-    lastFrameAt: 0,
-    baseFrames: 0,
-    overlayFrames: 0,
-  });
-
   const themeRef = useRef<{
     primaryColor: string;
     textPrimary: string;
@@ -350,10 +312,6 @@ export function CanvasGrid({
     renamingHashRef,
     videoScrubIdxRef,
     thumbnailFitMode,
-    perfRef,
-    gridDebugEnabled: GRID_DEBUG_ENABLED,
-    gridDebugSampleMs: GRID_DEBUG_SAMPLE_MS,
-    setDebugStats,
     markDirty,
   });
 
@@ -511,8 +469,6 @@ export function CanvasGrid({
     reorderDragRef,
     gap,
     zoomBtnSize: ZOOM_BTN_SIZE,
-    perfRef,
-    gridDebugEnabled: GRID_DEBUG_ENABLED,
   });
   drawOverlayRef.current = drawOverlay;
   useEffect(() => {
@@ -623,7 +579,6 @@ export function CanvasGrid({
           />
         </div>
       </div>
-      {GRID_DEBUG_ENABLED && debugStats && <CanvasGridDebugHud debugStats={debugStats} />}
       {hoverPreview && <HoverPreviewPortal {...hoverPreview} />}
       {videoScrub && (
         <VideoScrubOverlay

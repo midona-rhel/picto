@@ -50,7 +50,6 @@ export interface FileImportedEvent {
   has_audio: boolean;
   status: string;
   rating?: number | null;
-  view_count: number;
   imported_at: string;
   has_thumbnail: boolean;
 }

@@ -42,7 +42,6 @@ import { useSettingsStore } from '../../../state/settingsStore';
 import type { MediaItem } from '../../../features/grid/shared';
 import { api, copyFileToClipboard, copyImageToClipboard, reverseImageSearch } from '#desktop/api';
 import { bustThumbnailCache } from '../../lib/mediaUrl';
-import { useGridMetadataStore } from '../../../state/gridMetadataStore';
 
 interface BuildGridImageContextMenuArgs {
   contextPoint: { x: number; y: number };
@@ -80,7 +79,6 @@ interface BuildGridImageContextMenuArgs {
   setRenamingHash: Dispatch<SetStateAction<string | null>>;
   renameCancelledRef: MutableRefObject<boolean>;
   setBatchRenameOpen: Dispatch<SetStateAction<boolean>>;
-  requestGridReload: () => void;
   rightClickedHash: string | null;
   wasAlreadySelected: boolean;
   hasSelection: boolean;
@@ -143,7 +141,7 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
     setRenamingHash,
     renameCancelledRef,
     setBatchRenameOpen,
-    requestGridReload,
+
     rightClickedHash,
     wasAlreadySelected,
     hasSelection,
@@ -262,7 +260,6 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
           const id = await api.collections.create({ name: collectionName.trim() });
           const added = await api.collections.addMembers({ id, hashes: memberHashes });
           notifySuccess(`Created collection with ${added} item${added === 1 ? '' : 's'}`, 'Collections');
-          requestGridReload();
           navigateToCollection({ id, name: collectionName.trim() });
         } catch (err) {
           notifyError(err, 'Create Collection Failed');
@@ -280,8 +277,7 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
           try {
             await api.collections.delete(singleCollectionId);
             notifySuccess('Collection split', 'Collections');
-            requestGridReload();
-          } catch (err) {
+            } catch (err) {
             notifyError(err, 'Split Collection Failed');
           }
         },
@@ -546,7 +542,6 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
             .then(r => {
               notifySuccess(`Regenerated ${r.regenerated} thumbnail(s)`, 'Thumbnails');
               bustThumbnailCache(regenHashes);
-              useGridMetadataStore.getState().bumpGridRefresh();
             })
             .catch(err => notifyError(err, 'Regenerate Failed'));
         },
@@ -650,7 +645,6 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
       shortcut: isMac ? '\u2318\u21E7\u232B' : 'Ctrl+Shift+Del',
       onClick: () => {
         if (freshHash && folderId) {
-          dispatch({ type: 'FILTER_IMAGES', predicate: i => i.hash !== freshHash });
           dispatch({ type: 'CLEAR_SELECTION' });
           api.folders.removeFiles(folderId, [freshHash])
             .then(() => {
@@ -658,12 +652,10 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
                 label: 'Remove from folder',
                 undo: async () => {
                   await api.folders.addFiles(folderId, [freshHash]);
-                  requestGridReload();
-                },
+                        },
                 redo: async () => {
                   await api.folders.removeFiles(folderId, [freshHash]);
-                  requestGridReload();
-                },
+                        },
               });
             })
             .catch(err => notifyError(err, 'Remove from Folder Failed'));
@@ -684,7 +676,6 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
       shortcut: isMac ? '\u2318\u21E7\u232B' : 'Ctrl+Shift+Del',
       onClick: () => {
         if (freshHash && collectionEntityId) {
-          dispatch({ type: 'FILTER_IMAGES', predicate: i => i.hash !== freshHash });
           dispatch({ type: 'CLEAR_SELECTION' });
           api.collections.removeMembers({ id: collectionEntityId, hashes: [freshHash] })
             .then(() => {
@@ -692,12 +683,10 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
                 label: 'Remove from collection',
                 undo: async () => {
                   await api.collections.addMembers({ id: collectionEntityId, hashes: [freshHash] });
-                  requestGridReload();
-                },
+                        },
                 redo: async () => {
                   await api.collections.removeMembers({ id: collectionEntityId, hashes: [freshHash] });
-                  requestGridReload();
-                },
+                        },
               });
             })
             .catch(err => notifyError(err, 'Remove from Collection Failed'));
@@ -717,7 +706,6 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
 
     const doRestore = () => {
       if (freshSingleHash) {
-        dispatch({ type: 'FILTER_IMAGES', predicate: i => i.hash !== freshSingleHash });
         dispatch({ type: 'CLEAR_SELECTION' });
         api.files.setStatus(freshSingleHash, 'active')
           .then(() => {
@@ -725,12 +713,10 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
               label: 'Restore image',
               undo: async () => {
                 await api.files.setStatus(freshSingleHash, 'trash');
-                requestGridReload();
-              },
+                    },
               redo: async () => {
                 await api.files.setStatus(freshSingleHash, 'active');
-                requestGridReload();
-              },
+                    },
             });
           })
           .catch(err => notifyError(err, 'Restore Failed'));
@@ -741,7 +727,6 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
 
     const doDelete = () => {
       if (freshSingleHash) {
-        dispatch({ type: 'FILTER_IMAGES', predicate: i => i.hash !== freshSingleHash });
         dispatch({ type: 'CLEAR_SELECTION' });
         if (inTrash) {
           api.files.deleteMany([freshSingleHash])
@@ -754,12 +739,10 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
                 label: 'Move image to trash',
                 undo: async () => {
                   await api.files.setStatus(freshSingleHash, previousStatus);
-                  requestGridReload();
-                },
+                        },
                 redo: async () => {
                   await api.files.setStatus(freshSingleHash, 'trash');
-                  requestGridReload();
-                },
+                        },
               });
             })
             .catch(err => notifyError(err, 'Delete Failed'));

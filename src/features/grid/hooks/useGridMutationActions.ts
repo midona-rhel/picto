@@ -17,7 +17,6 @@ interface UseGridMutationActionsArgs {
   statusFilter?: string | null;
   folderId?: number | null;
   collectionEntityId?: number | null;
-  requestGridReload: () => void;
 }
 
 interface GridMutationActions {
@@ -36,21 +35,6 @@ interface GridMutationActions {
 
 const plural = (n: number) => `${n.toLocaleString()} image${n === 1 ? '' : 's'}`;
 
-/** Optimistically remove matching images and clear selection. */
-function optimisticRemove(
-  state: GridRuntimeState,
-  dispatch: React.Dispatch<GridRuntimeAction>,
-) {
-  const { virtualAllSelection } = state;
-  if (virtualAllSelection) {
-    dispatch({ type: 'FILTER_IMAGES', predicate: (i) => virtualAllSelection.excludedHashes.has(i.hash) });
-  } else {
-    const sel = state.selectedHashes;
-    dispatch({ type: 'FILTER_IMAGES', predicate: (i) => !sel.has(i.hash) });
-  }
-  dispatch({ type: 'CLEAR_SELECTION' });
-}
-
 /** Run a status-change mutation on the current selection, with undo/redo and notification. */
 function statusMutation(
   state: GridRuntimeState,
@@ -60,17 +44,16 @@ function statusMutation(
   label: (n: number) => string,
   successTitle: string,
   errorTitle: string,
-  requestGridReload: () => void,
 ) {
   const { virtualAllSelection, selectedHashes } = state;
-
-  optimisticRemove(state, dispatch);
 
   const spec = virtualAllSelection
     ? selectVirtualSpec(state)!
     : buildExplicitSelectionSpec([...selectedHashes]);
 
   if (!virtualAllSelection && selectedHashes.size === 0) return;
+
+  dispatch({ type: 'CLEAR_SELECTION' });
 
   const specSnapshot = structuredClone(spec);
 
@@ -79,8 +62,8 @@ function statusMutation(
       const n = Number(count ?? selectedHashes.size);
       registerUndoAction({
         label: label(n),
-        undo: async () => { await api.file.setStatusSelection(specSnapshot, undoStatus); requestGridReload(); },
-        redo: async () => { await api.file.setStatusSelection(specSnapshot, targetStatus); requestGridReload(); },
+        undo: async () => { await api.file.setStatusSelection(specSnapshot, undoStatus); },
+        redo: async () => { await api.file.setStatusSelection(specSnapshot, targetStatus); },
       });
       notifyInfo(`${label(n)}`, successTitle);
     })
@@ -93,7 +76,6 @@ export function useGridMutationActions({
   statusFilter,
   folderId,
   collectionEntityId,
-  requestGridReload,
 }: UseGridMutationActionsArgs): GridMutationActions {
   const restoreStatusesByHash = useCallback(async (items: StatusSnapshot[]) => {
     const buckets = new Map<string, string[]>();
@@ -115,7 +97,7 @@ export function useGridMutationActions({
 
     // Permanent delete in trash: no undo
     if (inTrash) {
-      optimisticRemove(state, dispatch);
+      dispatch({ type: 'CLEAR_SELECTION' });
       if (virtualAllSelection) {
         const spec = selectVirtualSpec(state)!;
         api.file.deleteSelection(spec)
@@ -136,13 +118,13 @@ export function useGridMutationActions({
         status: images.find((img) => img.hash === hash)?.status ?? (statusFilter ?? 'active'),
       }));
       const explicitSpec = buildExplicitSelectionSpec(hashes);
-      optimisticRemove(state, dispatch);
+      dispatch({ type: 'CLEAR_SELECTION' });
       api.file.setStatusSelection(explicitSpec, 'trash')
         .then(() => {
           registerUndoAction({
             label: `Move ${plural(hashes.length)} to trash`,
-            undo: async () => { await restoreStatusesByHash(previousStatuses); requestGridReload(); },
-            redo: async () => { await api.file.setStatusSelection(explicitSpec, 'trash'); requestGridReload(); },
+            undo: async () => { await restoreStatusesByHash(previousStatuses); },
+            redo: async () => { await api.file.setStatusSelection(explicitSpec, 'trash'); },
           });
         })
         .catch((err) => notifyError(err, 'Delete Failed'));
@@ -154,9 +136,9 @@ export function useGridMutationActions({
     statusMutation(
       state, dispatch, 'trash', undoStatus,
       (n) => `Move ${plural(n)} to trash`,
-      'Moved to Trash', 'Delete Failed', requestGridReload,
+      'Moved to Trash', 'Delete Failed',
     );
-  }, [stateRef, statusFilter, dispatch, restoreStatusesByHash, requestGridReload]);
+  }, [stateRef, statusFilter, dispatch, restoreStatusesByHash]);
 
   const handleRateSelected = useCallback((rating: number) => {
     const { virtualAllSelection, selectedHashes } = stateRef.current;
@@ -177,23 +159,21 @@ export function useGridMutationActions({
     statusMutation(
       stateRef.current, dispatch, 'active', 'trash',
       (n) => `Restore ${plural(n)}`,
-      'Restored', 'Restore Failed', requestGridReload,
+      'Restored', 'Restore Failed',
     );
-  }, [stateRef, dispatch, requestGridReload]);
+  }, [stateRef, dispatch]);
 
   const handleInboxAction = useCallback((hash: string, status: 'active' | 'trash') => {
     api.file.setStatus(hash, status)
       .then(() => {
         registerUndoAction({
           label: status === 'active' ? 'Accept inbox image' : 'Reject inbox image',
-          undo: async () => { await api.file.setStatus(hash, 'inbox'); requestGridReload(); },
-          redo: async () => { await api.file.setStatus(hash, status); requestGridReload(); },
+          undo: async () => { await api.file.setStatus(hash, 'inbox'); },
+          redo: async () => { await api.file.setStatus(hash, status); },
         });
       })
       .catch((err) => notifyError(err, status === 'active' ? 'Accept Failed' : 'Reject Failed'));
-    dispatch({ type: 'FILTER_IMAGES', predicate: (i) => i.hash !== hash });
-    dispatch({ type: 'REMOVE_HASHES', hashes: new Set([hash]) });
-  }, [dispatch, requestGridReload]);
+  }, []);
 
   const handleInboxSelectionAction = useCallback((status: 'active' | 'trash') => {
     const verb = status === 'active' ? 'Accept' : 'Reject';
@@ -201,45 +181,43 @@ export function useGridMutationActions({
     statusMutation(
       stateRef.current, dispatch, status, 'inbox',
       (n) => `${verb} ${plural(n)}`,
-      past, `${verb} Failed`, requestGridReload,
+      past, `${verb} Failed`,
     );
-  }, [dispatch, requestGridReload, stateRef]);
+  }, [dispatch, stateRef]);
 
   const handleRemoveFromFolder = useCallback(() => {
     if (!folderId) return;
     const effective = selectEffectiveHashes(stateRef.current);
     const hashes = [...effective];
     if (hashes.length === 0) return;
-    dispatch({ type: 'FILTER_IMAGES', predicate: (i) => !effective.has(i.hash) });
     dispatch({ type: 'CLEAR_SELECTION' });
     api.folders.removeFiles(folderId, hashes)
       .then(() => {
         registerUndoAction({
           label: `Remove ${hashes.length} from folder`,
-          undo: async () => { await api.folders.addFiles(folderId, hashes); requestGridReload(); },
-          redo: async () => { await api.folders.removeFiles(folderId, hashes); requestGridReload(); },
+          undo: async () => { await api.folders.addFiles(folderId, hashes); },
+          redo: async () => { await api.folders.removeFiles(folderId, hashes); },
         });
       })
       .catch((err) => notifyError(err, 'Remove from Folder Failed'));
-  }, [folderId, stateRef, dispatch, requestGridReload]);
+  }, [folderId, stateRef, dispatch]);
 
   const handleRemoveFromCollection = useCallback(() => {
     if (!collectionEntityId) return;
     const effective = selectEffectiveHashes(stateRef.current);
     const hashes = [...effective];
     if (hashes.length === 0) return;
-    dispatch({ type: 'FILTER_IMAGES', predicate: (i) => !effective.has(i.hash) });
     dispatch({ type: 'CLEAR_SELECTION' });
     api.collections.removeMembers({ id: collectionEntityId, hashes })
       .then(() => {
         registerUndoAction({
           label: `Remove ${hashes.length} from collection`,
-          undo: async () => { await api.collections.addMembers({ id: collectionEntityId, hashes }); requestGridReload(); },
-          redo: async () => { await api.collections.removeMembers({ id: collectionEntityId, hashes }); requestGridReload(); },
+          undo: async () => { await api.collections.addMembers({ id: collectionEntityId, hashes }); },
+          redo: async () => { await api.collections.removeMembers({ id: collectionEntityId, hashes }); },
         });
       })
       .catch((err) => notifyError(err, 'Remove from Collection Failed'));
-  }, [collectionEntityId, stateRef, dispatch, requestGridReload]);
+  }, [collectionEntityId, stateRef, dispatch]);
 
   return {
     handleDeleteSelected,

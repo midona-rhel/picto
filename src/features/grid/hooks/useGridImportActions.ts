@@ -8,10 +8,9 @@ import { imageDrag } from '../../../shared/lib/imageDrag';
 
 export function useGridImportActions(args: {
   folderIdRef: React.MutableRefObject<number | null | undefined>;
-  requestGridReload: () => Promise<void>;
   setDragOver: (over: boolean) => void;
 }) {
-  const { folderIdRef, requestGridReload, setDragOver } = args;
+  const { folderIdRef, setDragOver } = args;
   const [folderImportDialog, setFolderImportDialog] = useState<{
     path: string;
     preserveStructure: boolean;
@@ -47,11 +46,10 @@ export function useGridImportActions(args: {
         skipped,
         errors,
       });
-      await requestGridReload();
     }
 
     store.finish({ imported, skipped, errors });
-  }, [folderIdRef, requestGridReload]);
+  }, [folderIdRef]);
 
   const handleImport = useCallback(async () => {
     try {
@@ -96,7 +94,6 @@ export function useGridImportActions(args: {
         pendingImport.preserveStructure,
         folderIdRef.current ?? null,
       );
-      await requestGridReload();
       store.finish({
         imported: result.imported.length,
         skipped: result.skipped.length,
@@ -106,7 +103,7 @@ export function useGridImportActions(args: {
       useManualImportStore.getState().fail();
       notifyError(err, 'Import Folder Failed');
     }
-  }, [folderIdRef, folderImportDialog, requestGridReload]);
+  }, [folderIdRef, folderImportDialog]);
 
   useEffect(() => {
     if (importRequestToken === importHandledToken) return;

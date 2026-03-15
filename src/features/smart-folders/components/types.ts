@@ -49,7 +49,6 @@ export function ruleToRust(rule: SmartRule): SmartRule {
     case 'height':
     case 'aspect_ratio':
     case 'duration':
-    case 'view_count':
       result.value = Number(value) || 0;
       result.value2 = value2 != null ? Number(value2) : null;
       break;

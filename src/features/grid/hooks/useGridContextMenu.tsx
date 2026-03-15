@@ -45,7 +45,6 @@ interface UseGridContextMenuArgs {
   setRenamingHash: React.Dispatch<React.SetStateAction<string | null>>;
   renameCancelledRef: React.MutableRefObject<boolean>;
   setBatchRenameOpen: React.Dispatch<React.SetStateAction<boolean>>;
-  requestGridReload: () => void;
 }
 
 export function useGridContextMenu({
@@ -86,7 +85,6 @@ export function useGridContextMenu({
   setRenamingHash,
   renameCancelledRef,
   setBatchRenameOpen,
-  requestGridReload,
 }: UseGridContextMenuArgs) {
   return useCallback((e: React.MouseEvent) => {
     const contextPoint = { x: e.clientX, y: e.clientY };
@@ -171,7 +169,6 @@ export function useGridContextMenu({
       setRenamingHash,
       renameCancelledRef,
       setBatchRenameOpen,
-      requestGridReload,
       rightClickedHash,
       wasAlreadySelected,
       hasSelection,
@@ -213,7 +210,6 @@ export function useGridContextMenu({
     getCanvasOffsetTop,
     dispatch,
     navigateToCollection,
-    requestGridReload,
     hasCopiedTags,
     scrollRef,
     canvasLayoutRef,
