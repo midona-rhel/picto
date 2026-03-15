@@ -3,14 +3,15 @@
 ## Priority
 P1
 
-## Audit Status (2026-03-08)
-Status: **Partially Implemented**
+## Audit Status (2026-03-15)
+Status: **Implemented**
 
 Evidence:
-1. Gallery-dl code has moved under `core/src/subscriptions/gallery_dl_runner.rs`, but it is still a monolith that combines registry, auth shaping, config generation, execution, parsing, and failure classification.
-2. Site-specific behavior is still encoded as branches and static data inside the runner rather than explicit adapters.
-3. Auth requirements and query capabilities are still represented close to process execution logic.
-4. The move improved topology, but not the internal ownership split this PBI is supposed to enforce.
+1. The runner now delegates site catalog/query shaping to `core/src/subscriptions/gallery_dl_runner/sites.rs`.
+2. Site metadata schema and validation logic are isolated in `core/src/subscriptions/gallery_dl_runner/metadata_validation.rs`.
+3. Failure classification is isolated and testable in `core/src/subscriptions/gallery_dl_runner/failure.rs`.
+4. Config/auth shaping moved out of process execution into `core/src/subscriptions/gallery_dl_runner/config.rs`.
+5. `core/src/subscriptions/gallery_dl_runner.rs` is now the process runner and parser facade instead of a single mixed-responsibility file.
 
 ## Problem
 `gallery_dl_runner.rs` is a monolith. Registry, capability description, authentication shaping, process execution, and result parsing are all coupled together. This makes adding or debugging a source unnecessarily risky and keeps subscription behavior tied to one oversized file.
