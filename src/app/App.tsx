@@ -3,6 +3,7 @@ import { IconDownload, IconLayoutSidebar, IconFolder, IconFolderQuestion, IconFo
 import { api, getCurrentWindow } from '#desktop/api';
 import { useNavigationStore } from '../state/navigationStore';
 import { useSettingsStore, type AppSettings } from '../state/settingsStore';
+import { useExportActionStore } from '../state/exportActionStore';
 import { useDomainStore } from '../state/domainStore';
 import { CommandPalette, type CommandAction } from '#features/app/components';
 import { SHORTCUT_DEFS, formatKeysDisplay, getShortcut, matchesShortcutDef } from '../shared/lib/shortcuts';
@@ -515,6 +516,7 @@ function App() {
             onAddToFolders={inspector.onAddToFolders}
             onRemoveFromFolder={inspector.onRemoveFromFolder}
             onReanalyzeColors={inspector.onReanalyzeColors}
+            onExport={() => useExportActionStore.getState().requestAdvancedExport()}
           />
         )}
       </div>

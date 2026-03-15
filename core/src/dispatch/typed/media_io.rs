@@ -1,11 +1,14 @@
 //! Handler functions for media I/O operations: path resolution,
 //! OS integration (open, reveal, export), thumbnails, and color search.
 
+use std::path::{Path, PathBuf};
+
 use serde::Deserialize;
 use ts_rs::TS;
 
 use crate::blob_store::mime_to_extension;
 use crate::state::AppState;
+use crate::types::SelectionQuerySpec;
 
 // ─── Input structs ─────────────────────────────────────────────────────────
 
@@ -25,6 +28,13 @@ pub struct OpenFileDefaultInput {
 #[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct RevealInFolderInput {
     pub hash: String,
+}
+
+#[derive(Debug, Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
+pub struct ExportFileInput {
+    pub hash: String,
+    pub dest_path: String,
 }
 
 #[derive(Debug, Deserialize, TS)]
@@ -65,6 +75,29 @@ pub struct ReanalyzeFileColorsInput {
     pub hash: String,
 }
 
+#[derive(Debug, Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
+pub struct ExportMediaInput {
+    pub hashes: Option<Vec<String>>,
+    pub selection: Option<SelectionQuerySpec>,
+    pub output_dir: String,
+    pub format: Option<String>,
+    pub quality: Option<u8>,
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+    #[serde(default = "default_keep_aspect")]
+    pub keep_aspect: bool,
+}
+
+#[derive(Debug, serde::Serialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
+pub struct ExportMediaResult {
+    pub total: usize,
+    pub exported: usize,
+    pub skipped: usize,
+    pub errors: usize,
+}
+
 // ─── Private result structs ────────────────────────────────────────────────
 
 #[derive(Debug, serde::Serialize)]
@@ -77,6 +110,19 @@ struct EnsureThumbnailResult {
 struct ReanalyzeFileColorsResult {
     colors_extracted: usize,
     dominant_color_hex: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ExportFormat {
+    Original,
+    Png,
+    Jpeg,
+    Webp,
+    Avif,
+}
+
+fn default_keep_aspect() -> bool {
+    true
 }
 
 // ─── Helper functions ──────────────────────────────────────────────────────
@@ -132,6 +178,272 @@ fn reveal_in_folder_os(path: &str) -> Result<(), String> {
     }
 
     Ok(())
+}
+
+fn sanitize_file_stem(name: &str, fallback: &str) -> String {
+    let trimmed = name.trim();
+    let raw = if trimmed.is_empty() { fallback } else { trimmed };
+    let cleaned_raw = raw
+        .chars()
+        .map(|ch| match ch {
+            '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => '_',
+            c if c.is_control() => '_',
+            c => c,
+        })
+        .collect::<String>();
+    let cleaned = cleaned_raw
+        .trim()
+        .trim_matches('.');
+    if cleaned.is_empty() {
+        fallback.to_string()
+    } else {
+        cleaned.to_string()
+    }
+}
+
+fn ensure_unique_dest_path(dir: &Path, stem: &str, ext: &str) -> PathBuf {
+    let mut candidate = dir.join(format!("{stem}.{ext}"));
+    if !candidate.exists() {
+        return candidate;
+    }
+    let mut suffix = 2usize;
+    loop {
+        candidate = dir.join(format!("{stem} ({suffix}).{ext}"));
+        if !candidate.exists() {
+            return candidate;
+        }
+        suffix += 1;
+    }
+}
+
+fn parse_export_format(value: Option<&str>) -> Result<ExportFormat, String> {
+    match value.unwrap_or("original").to_ascii_lowercase().as_str() {
+        "original" => Ok(ExportFormat::Original),
+        "png" => Ok(ExportFormat::Png),
+        "jpg" | "jpeg" => Ok(ExportFormat::Jpeg),
+        "webp" => Ok(ExportFormat::Webp),
+        "avif" => Ok(ExportFormat::Avif),
+        other => Err(format!("Unsupported export format: {other}")),
+    }
+}
+
+fn resize_for_export(
+    image: image::DynamicImage,
+    width: Option<u32>,
+    height: Option<u32>,
+    keep_aspect: bool,
+) -> image::DynamicImage {
+    let target_w = width.unwrap_or(0);
+    let target_h = height.unwrap_or(0);
+    if target_w == 0 && target_h == 0 {
+        return image;
+    }
+    if keep_aspect {
+        if target_w > 0 && target_h > 0 {
+            image.resize(target_w, target_h, image::imageops::FilterType::Lanczos3)
+        } else if target_w > 0 {
+            image.resize(target_w, u32::MAX, image::imageops::FilterType::Lanczos3)
+        } else {
+            image.resize(u32::MAX, target_h, image::imageops::FilterType::Lanczos3)
+        }
+    } else {
+        image.resize_exact(
+            width.unwrap_or_else(|| image.width()),
+            height.unwrap_or_else(|| image.height()),
+            image::imageops::FilterType::Lanczos3,
+        )
+    }
+}
+
+fn encode_export_image(
+    image: &image::DynamicImage,
+    format: ExportFormat,
+    quality: u8,
+) -> Result<Vec<u8>, String> {
+    let mut out = Vec::new();
+    match format {
+        ExportFormat::Original => unreachable!("original format should bypass re-encode"),
+        ExportFormat::Png => {
+            use image::ImageEncoder;
+            let rgba = image.to_rgba8();
+            let encoder = image::codecs::png::PngEncoder::new(&mut out);
+            encoder
+                .write_image(
+                    rgba.as_raw(),
+                    rgba.width(),
+                    rgba.height(),
+                    image::ExtendedColorType::Rgba8,
+                )
+                .map_err(|e| format!("PNG encode failed: {e}"))?;
+        }
+        ExportFormat::Jpeg => {
+            let rgb = image.to_rgb8();
+            let mut encoder =
+                image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, quality.clamp(1, 100));
+            encoder
+                .encode_image(&image::DynamicImage::ImageRgb8(rgb))
+                .map_err(|e| format!("JPEG encode failed: {e}"))?;
+        }
+        ExportFormat::Webp => {
+            let rgba = image.to_rgba8();
+            let encoder = webp::Encoder::from_rgba(rgba.as_raw(), rgba.width(), rgba.height());
+            let encoded = encoder.encode(quality.clamp(1, 100) as f32);
+            out.extend_from_slice(encoded.as_ref());
+        }
+        ExportFormat::Avif => {
+            let mut cursor = std::io::Cursor::new(&mut out);
+            image
+                .write_to(&mut cursor, image::ImageFormat::Avif)
+                .map_err(|e| format!("AVIF encode failed: {e}"))?;
+        }
+    }
+    Ok(out)
+}
+
+fn extension_for_export_format(format: ExportFormat, original_mime: &str) -> &'static str {
+    match format {
+        ExportFormat::Original => mime_to_extension(original_mime),
+        ExportFormat::Png => "png",
+        ExportFormat::Jpeg => "jpg",
+        ExportFormat::Webp => "webp",
+        ExportFormat::Avif => "avif",
+    }
+}
+
+async fn resolve_export_hashes(
+    state: &AppState,
+    hashes: Option<Vec<String>>,
+    selection: Option<SelectionQuerySpec>,
+) -> Result<Vec<String>, String> {
+    if let Some(hashes) = hashes {
+        return Ok(hashes);
+    }
+    if let Some(selection) = selection {
+        let bitmap = crate::dispatch::typed::media_lifecycle::resolve_selection_bitmap(state, &selection).await?;
+        let file_ids: Vec<i64> = bitmap.iter().map(|id| id as i64).collect();
+        let pairs = state.db.resolve_ids_batch(&file_ids).await?;
+        return Ok(pairs.into_iter().map(|(_, hash)| hash).collect());
+    }
+    Err("Either hashes or selection must be provided".into())
+}
+
+fn file_name_for_progress(path: &Path) -> String {
+    path.file_name()
+        .and_then(|value| value.to_str())
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| path.to_string_lossy().into_owned())
+}
+
+async fn export_media_inner(state: &AppState, input: ExportMediaInput) -> Result<ExportMediaResult, String> {
+    let hashes = resolve_export_hashes(state, input.hashes, input.selection).await?;
+    let total = hashes.len();
+    let output_dir = PathBuf::from(&input.output_dir);
+    let format = parse_export_format(input.format.as_deref())?;
+    let quality = input.quality.unwrap_or(82).clamp(1, 100);
+
+    tokio::fs::create_dir_all(&output_dir)
+        .await
+        .map_err(|e| format!("Failed to create export directory: {e}"))?;
+
+    let mut exported = 0usize;
+    let skipped = 0usize;
+    let mut errors = 0usize;
+
+    for (index, hash) in hashes.iter().enumerate() {
+        let export_result = async {
+            let record = state
+                .db
+                .get_file_by_hash(hash)
+                .await?
+                .ok_or_else(|| format!("File not found in database: {hash}"))?;
+
+            let original_ext = mime_to_extension(&record.mime).to_string();
+            let blob_store = state.blob_store.clone();
+            let hash_owned = hash.clone();
+            let original_data = tokio::task::spawn_blocking(move || {
+                blob_store.read_original(&hash_owned, Some(&original_ext))
+            })
+            .await
+            .map_err(|e| format!("Export read task failed: {e}"))?
+            .map_err(|e| format!("Export read failed: {e}"))?;
+
+            let display_name = record.name.as_deref().unwrap_or("");
+            let stem = sanitize_file_stem(display_name, &hash[..12]);
+            let dest_ext = extension_for_export_format(format, &record.mime);
+            let dest_path = ensure_unique_dest_path(&output_dir, &stem, dest_ext);
+
+            if format == ExportFormat::Original {
+                tokio::fs::write(&dest_path, &original_data)
+                    .await
+                    .map_err(|e| format!("Failed to write export: {e}"))?;
+                return Ok(dest_path);
+            }
+
+            if !record.mime.starts_with("image/") {
+                return Err(format!(
+                    "Format conversion is only supported for image files: {}",
+                    record.name.as_deref().unwrap_or(hash)
+                ));
+            }
+
+            let width = input.width;
+            let height = input.height;
+            let keep_aspect = input.keep_aspect;
+            let bytes = tokio::task::spawn_blocking(move || -> Result<Vec<u8>, String> {
+                let image = image::load_from_memory(&original_data)
+                    .map_err(|e| format!("Image decode failed: {e}"))?;
+                let resized = resize_for_export(image, width, height, keep_aspect);
+                encode_export_image(&resized, format, quality)
+            })
+            .await
+            .map_err(|e| format!("Export transform task failed: {e}"))??;
+
+            tokio::fs::write(&dest_path, bytes)
+                .await
+                .map_err(|e| format!("Failed to write export: {e}"))?;
+            Ok(dest_path)
+        }
+        .await;
+
+        match export_result {
+            Ok(dest_path) => {
+                exported += 1;
+                crate::events::emit(
+                    crate::events::event_names::MEDIA_EXPORT_PROGRESS,
+                    &crate::events::MediaExportProgressEvent {
+                        done: index + 1,
+                        total,
+                        current_file: file_name_for_progress(&dest_path),
+                        exported,
+                        skipped,
+                        errors,
+                    },
+                );
+            }
+            Err(err) => {
+                errors += 1;
+                tracing::warn!(hash = %hash, error = %err, "export item failed");
+                crate::events::emit(
+                    crate::events::event_names::MEDIA_EXPORT_PROGRESS,
+                    &crate::events::MediaExportProgressEvent {
+                        done: index + 1,
+                        total,
+                        current_file: hash.clone(),
+                        exported,
+                        skipped,
+                        errors,
+                    },
+                );
+            }
+        }
+    }
+
+    Ok(ExportMediaResult {
+        total,
+        exported,
+        skipped,
+        errors,
+    })
 }
 
 async fn ensure_thumbnail_inner(
@@ -279,6 +591,19 @@ pub async fn reveal_in_folder(state: &AppState, input: RevealInFolderInput) -> R
     let path = resolve_file_path_inner(&state.db, &state.blob_store, &input.hash).await?;
     reveal_in_folder_os(&path)?;
     Ok(())
+}
+
+pub async fn export_file(state: &AppState, input: ExportFileInput) -> Result<(), String> {
+    crate::import::pipeline::ImportPipeline::new(&state.db, &state.blob_store)
+        .export_file(&input.hash, Path::new(&input.dest_path))
+        .await
+        .map_err(|e| format!("Export failed: {e}"))?;
+    Ok(())
+}
+
+pub async fn export_media(state: &AppState, input: ExportMediaInput) -> Result<serde_json::Value, String> {
+    let result = export_media_inner(state, input).await?;
+    serde_json::to_value(result).map_err(|e| e.to_string())
 }
 
 pub async fn open_in_new_window(_state: &AppState, input: OpenInNewWindowInput) -> Result<(), String> {

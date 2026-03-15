@@ -198,6 +198,7 @@ interface InspectorPanelProps {
   onAddToFolders: (folderIds: number[]) => Promise<void>;
   onRemoveFromFolder: (folderId: number) => Promise<void>;
   onReanalyzeColors: () => Promise<void>;
+  onExport: () => void;
 }
 
 export function InspectorPanel({
@@ -227,6 +228,7 @@ export function InspectorPanel({
   onAddToFolders,
   onRemoveFromFolder,
   onReanalyzeColors,
+  onExport,
 }: InspectorPanelProps) {
   const [sectionState, setSectionState] = useState<SectionCollapseState>(loadSectionState);
   const addTagBtnRef = useRef<HTMLButtonElement>(null);
@@ -553,7 +555,7 @@ export function InspectorPanel({
                 </div>
               </InspectorSection>
 
-              <button className={styles.exportButton}>Export</button>
+              <button className={styles.exportButton} onClick={onExport}>Export</button>
             </>
           ) : selectedImages.length === 0 ? (
             <div style={{ height: 400, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -593,7 +595,7 @@ export function InspectorPanel({
                 ? renderCollectionProperties()
                 : renderProperties(fileMetadata?.file.rating ?? selectedImage.rating ?? 0)}
 
-              <button className={styles.exportButton}>Export</button>
+              <button className={styles.exportButton} onClick={onExport}>Export</button>
             </>
           ) : (
             /* Multi-selection view */
@@ -623,7 +625,7 @@ export function InspectorPanel({
                 </div>
               </InspectorSection>
 
-              <button className={styles.exportButton}>Export</button>
+              <button className={styles.exportButton} onClick={onExport}>Export</button>
             </>
           )}
         </div>

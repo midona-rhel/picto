@@ -76,6 +76,7 @@ export type { ResolveFilePathInput } from './ResolveFilePathInput';
 export type { OpenFileDefaultInput } from './OpenFileDefaultInput';
 export type { RevealInFolderInput } from './RevealInFolderInput';
 export type { ExportFileInput } from './ExportFileInput';
+export type { ExportMediaInput } from './ExportMediaInput';
 export type { OpenInNewWindowInput } from './OpenInNewWindowInput';
 export type { ResolveThumbnailPathInput } from './ResolveThumbnailPathInput';
 export type { EnsureThumbnailInput } from './EnsureThumbnailInput';
@@ -133,6 +134,7 @@ export type { CountSmartFolderInput } from './CountSmartFolderInput';
 // Re-export generated output/shared types
 export type { ImportResult } from './ImportResult';
 export type { ImportBatchResult } from './ImportBatchResult';
+export type { ExportMediaResult } from './ExportMediaResult';
 export type { FolderReorderMove } from './FolderReorderMove';
 export type { SelectionQuerySpec } from './SelectionQuerySpec';
 export type { SelectionMode } from './SelectionMode';
@@ -202,6 +204,7 @@ import type { ResolveFilePathInput } from './ResolveFilePathInput';
 import type { OpenFileDefaultInput } from './OpenFileDefaultInput';
 import type { RevealInFolderInput } from './RevealInFolderInput';
 import type { ExportFileInput } from './ExportFileInput';
+import type { ExportMediaInput } from './ExportMediaInput';
 import type { OpenInNewWindowInput } from './OpenInNewWindowInput';
 import type { ResolveThumbnailPathInput } from './ResolveThumbnailPathInput';
 import type { EnsureThumbnailInput } from './EnsureThumbnailInput';
@@ -247,6 +250,7 @@ import type { UpdateSmartFolderInput } from './UpdateSmartFolderInput';
 import type { DeleteSmartFolderInput } from './DeleteSmartFolderInput';
 import type { QuerySmartFolderInput } from './QuerySmartFolderInput';
 import type { CountSmartFolderInput } from './CountSmartFolderInput';
+import type { ExportMediaResult } from './ExportMediaResult';
 
 export interface TypedCommandMap {
   // files_lifecycle
@@ -323,6 +327,7 @@ export interface TypedCommandMap {
   open_file_default: { input: OpenFileDefaultInput; output: null };
   reveal_in_folder: { input: RevealInFolderInput; output: null };
   export_file: { input: ExportFileInput; output: null };
+  export_media: { input: ExportMediaInput; output: ExportMediaResult };
   open_in_new_window: { input: OpenInNewWindowInput; output: null };
   resolve_thumbnail_path: { input: ResolveThumbnailPathInput; output: string };
   ensure_thumbnail: { input: EnsureThumbnailInput; output: unknown };

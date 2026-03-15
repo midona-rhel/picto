@@ -1,10 +1,13 @@
 import { useMemo } from 'react';
 
+import { useExportProgressStore } from '../../../state/exportProgressStore';
 import { useManualImportStore } from '../../../state/manualImportStore';
 import styles from './MainViewProgressBar.module.css';
 
 export function MainViewProgressBar() {
-  const { visible, status, label, done, total } = useManualImportStore();
+  const exportProgress = useExportProgressStore();
+  const importProgress = useManualImportStore();
+  const { visible, status, label, done, total } = exportProgress.visible ? exportProgress : importProgress;
 
   const progress = useMemo(() => {
     if (total <= 0) return 0;

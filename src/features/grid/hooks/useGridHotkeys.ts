@@ -17,6 +17,8 @@ interface UseGridHotkeysArgs {
   handleOpenWithDefaultApp: () => void;
   handleRevealInFolder: () => void;
   handleOpenInNewWindow: () => void;
+  handleBasicExport: () => void | Promise<void>;
+  handleAdvancedExport: () => void | Promise<void>;
   handleDeleteSelected: () => void;
   handleCopyFilePath: () => void;
   handleCopyTags: () => void;
@@ -47,6 +49,8 @@ export function useGridHotkeys({
   handleOpenWithDefaultApp,
   handleRevealInFolder,
   handleOpenInNewWindow,
+  handleBasicExport,
+  handleAdvancedExport,
   handleDeleteSelected,
   handleCopyFilePath,
   handleCopyTags,
@@ -80,6 +84,8 @@ export function useGridHotkeys({
     ['shift+Enter', handleOpenWithDefaultApp],
     ['mod+Enter', handleRevealInFolder],
     ['mod+o', handleOpenInNewWindow],
+    ['mod+e', () => { void handleBasicExport(); }],
+    ['mod+shift+e', () => { void handleAdvancedExport(); }],
     [
       'escape',
       () => {

@@ -56,6 +56,7 @@ export function listenRuntimeEvent<K extends keyof CoreRuntimeEventPayloadMap>(
 
 import type { TypedCommandMap } from '../shared/types/generated/commands';
 import type { ImportBatchResult } from '../shared/types/generated/commands';
+import type { ExportMediaInput, ExportMediaResult } from '../shared/types/generated/commands';
 
 type HasInput<K extends keyof TypedCommandMap> =
   TypedCommandMap[K]['input'] extends Record<string, never> ? false : true;
@@ -156,6 +157,13 @@ export const api = {
         parent_folder_id: parentFolderId ?? null,
         initial_status: initialStatus,
       } as never) as unknown as Promise<ImportBatchResult>,
+  },
+
+  export: {
+    file: (hash: string, destPath: string) =>
+      invokeTyped('export_file', { hash, dest_path: destPath }) as Promise<null>,
+    run: (input: ExportMediaInput) =>
+      invokeTyped('export_media', input) as Promise<ExportMediaResult>,
   },
 
   tags: {

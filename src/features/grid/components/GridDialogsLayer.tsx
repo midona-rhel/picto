@@ -1,6 +1,8 @@
 import { ConfirmModal } from '../../../shared/components/ConfirmModal';
 import { ContextMenu } from '../../../shared/components/ContextMenu';
 import { BatchRenameDialog } from '../../../shared/components/BatchRenameDialog';
+import type { ExportDialogState } from '../hooks/useGridExportActions';
+import { ExportDialog } from './ExportDialog';
 import { GridDropOverlay } from './GridDropOverlay';
 import type { MasonryImageItem } from '../shared';
 
@@ -17,6 +19,13 @@ export function GridDialogsLayer(props: {
   folderImportDialog: { path: string; preserveStructure: boolean } | null;
   setFolderImportDialog: React.Dispatch<React.SetStateAction<{ path: string; preserveStructure: boolean } | null>>;
   onConfirmImportFolder: () => void | Promise<void>;
+  exportDialogOpen: boolean;
+  exportDialogState: ExportDialogState;
+  onCloseExportDialog: () => void;
+  onExportDialogChange: (patch: Partial<ExportDialogState>) => void;
+  onChooseExportDir: () => Promise<string | null>;
+  onConfirmExport: () => void | Promise<void>;
+  canConfirmExport: boolean;
 }) {
   const {
     contextMenuState,
@@ -28,6 +37,13 @@ export function GridDialogsLayer(props: {
     folderImportDialog,
     setFolderImportDialog,
     onConfirmImportFolder,
+    exportDialogOpen,
+    exportDialogState,
+    onCloseExportDialog,
+    onExportDialogChange,
+    onChooseExportDir,
+    onConfirmExport,
+    canConfirmExport,
   } = props;
 
   return (
@@ -74,6 +90,16 @@ export function GridDialogsLayer(props: {
           </label>
         </div>
       </ConfirmModal>
+
+      <ExportDialog
+        opened={exportDialogOpen}
+        state={exportDialogState}
+        onClose={onCloseExportDialog}
+        onChange={onExportDialogChange}
+        onChooseOutputDir={onChooseExportDir}
+        onConfirm={onConfirmExport}
+        canConfirm={canConfirmExport}
+      />
     </>
   );
 }

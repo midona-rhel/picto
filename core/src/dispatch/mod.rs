@@ -134,6 +134,8 @@ pub async fn dispatch(command: &str, args_json: &str) -> Result<String, String> 
         "resolve_file_path" => call!(typed::media_io::resolve_file_path, &state, args),
         "open_file_default" => call!(typed::media_io::open_file_default, &state, args),
         "reveal_in_folder" => call!(typed::media_io::reveal_in_folder, &state, args),
+        "export_file" => call!(typed::media_io::export_file, &state, args),
+        "export_media" => call!(typed::media_io::export_media, &state, args),
         "open_in_new_window" => call!(typed::media_io::open_in_new_window, &state, args),
         "resolve_thumbnail_path" => call!(typed::media_io::resolve_thumbnail_path, &state, args),
         "ensure_thumbnail" => call!(typed::media_io::ensure_thumbnail, &state, args),

@@ -63,6 +63,15 @@ export interface ManualImportProgressEvent {
   errors: number;
 }
 
+export interface MediaExportProgressEvent {
+  done: number;
+  total: number;
+  current_file: string;
+  exported: number;
+  skipped: number;
+  errors: number;
+}
+
 /**
  * Core runtime event contract.
  * Keep in sync with `core/src/events.rs::event_names`.
@@ -76,6 +85,7 @@ export interface CoreRuntimeEventPayloadMap {
   'zoom-factor-changed': ZoomFactorChangedEvent;
   'file-imported': FileImportedEvent;
   'manual-import-progress': ManualImportProgressEvent;
+  'media-export-progress': MediaExportProgressEvent;
   'open-detail-window': OpenDetailWindowEvent;
   'duplicate-auto-merge-finished': DuplicateAutoMergeFinishedEvent;
 

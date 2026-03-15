@@ -25,6 +25,8 @@ export const SHORTCUT_DEFS: ShortcutDef[] = [
 
   // File
   { id: 'file.import',       label: 'Import Files',         group: 'File', keys: 'Mod+I' },
+  { id: 'file.export',       label: 'Export Originals',     group: 'File', keys: 'Mod+E' },
+  { id: 'file.exportAs',     label: 'Export As...',         group: 'File', keys: 'Mod+Shift+E' },
   { id: 'file.delete',       label: 'Delete',               group: 'File', keys: 'Mod+Backspace' },
   { id: 'file.openDefault',  label: 'Open with Default App', group: 'File', keys: 'Shift+Enter' },
   { id: 'file.newWindow',    label: 'Open in New Window',   group: 'File', keys: 'Mod+O' },

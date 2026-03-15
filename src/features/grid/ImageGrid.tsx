@@ -27,6 +27,7 @@ import { useGridContextMenu } from './hooks/useGridContextMenu';
 import { useGridSelection } from './hooks/useGridSelection';
 import { useGridMarqueeSelection } from './hooks/useGridMarqueeSelection';
 import { useGridInlineRename } from './hooks/useGridInlineRename';
+import { useGridExportActions } from './hooks/useGridExportActions';
 import { useGridImportActions } from './hooks/useGridImportActions';
 import { useGridViewerSource } from './hooks/useGridViewerSource';
 import { useGridLiveInsertion } from './hooks/useGridLiveInsertion';
@@ -264,6 +265,21 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
     displayFolderId: state.displayFolderId,
   });
 
+  const {
+    dialogOpen: exportDialogOpen,
+    setDialogOpen: setExportDialogOpen,
+    dialogState: exportDialogState,
+    setDialogState: setExportDialogState,
+    canConfirmAdvancedExport,
+    selectOutputDir,
+    handleBasicExport,
+    openAdvancedExport,
+    handleConfirmAdvancedExport,
+  } = useGridExportActions({
+    stateRef,
+    selectedScopeCount,
+  });
+
   useGridHotkeys({
     stateRef,
     dispatch,
@@ -271,6 +287,8 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
     handleOpenWithDefaultApp,
     handleRevealInFolder,
     handleOpenInNewWindow,
+    handleBasicExport,
+    handleAdvancedExport: openAdvancedExport,
     handleDeleteSelected,
     handleCopyFilePath,
     handleCopyTags,
@@ -508,6 +526,13 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
         folderImportDialog={folderImportDialog}
         setFolderImportDialog={setFolderImportDialog}
         onConfirmImportFolder={handleConfirmImportFolder}
+        exportDialogOpen={exportDialogOpen}
+        exportDialogState={exportDialogState}
+        onCloseExportDialog={() => setExportDialogOpen(false)}
+        onExportDialogChange={(patch) => setExportDialogState((current) => ({ ...current, ...patch }))}
+        onChooseExportDir={selectOutputDir}
+        onConfirmExport={handleConfirmAdvancedExport}
+        canConfirmExport={canConfirmAdvancedExport}
       />
     </div>
   );

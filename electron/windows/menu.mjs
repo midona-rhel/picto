@@ -141,6 +141,17 @@ export function createMenuManager({
             click: () => sendToFocusedWindow('menu:import-folder'),
           },
           { type: 'separator' },
+          {
+            label: 'Export Originals…',
+            accelerator: 'CmdOrCtrl+E',
+            click: () => sendToMainWindow('menu:export-basic'),
+          },
+          {
+            label: 'Export As…',
+            accelerator: 'Shift+CmdOrCtrl+E',
+            click: () => sendToMainWindow('menu:export-advanced'),
+          },
+          { type: 'separator' },
           isMac ? { role: 'close' } : { role: 'quit' },
         ],
       },
