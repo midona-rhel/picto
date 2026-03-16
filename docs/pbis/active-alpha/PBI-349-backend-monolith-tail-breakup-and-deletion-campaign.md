@@ -11,19 +11,14 @@ Several backend monoliths are too large to remain canonical even after ownership
 
 ## Scope
 - `core/src/subscriptions/gallery_dl_runner.rs`
-- `core/src/subscriptions/controller.rs`
-- `core/src/subscriptions/sync_engine.rs`
 - `core/src/grid/query.rs`
-- `core/src/grid/metadata.rs`
-- `core/src/media_processing/mod.rs`
-- `core/src/sqlite/schema.rs`
 - `core/src/sqlite/mod.rs`
-- `core/src/runtime_state.rs`
-- `core/src/runtime_contract/mod.rs`
 
 Evidence:
 1. The original flat-root monolith file names from the audit are mostly gone, which means the PBI scope needs to track current canonical paths instead of old ones.
-2. `subscriptions/gallery_dl_runner.rs`, `subscriptions/controller.rs`, `subscriptions/sync_engine.rs`, `sqlite/schema.rs`, `sqlite/mod.rs`, and `runtime_state.rs` are still large enough to justify further breakup.
+2. `subscriptions/sync_engine.rs` has now been reduced into a smaller orchestration module plus focused helpers, so it no longer belongs in the active monolith tail list.
+3. `media_processing/mod.rs`, `sqlite/schema.rs`, `runtime_contract/mod.rs`, `grid/metadata.rs`, and `subscriptions/controller.rs` are already materially reduced and should not remain in scope.
+4. The remaining active monolith tail targets are `subscriptions/gallery_dl_runner.rs`, `grid/query.rs`, and `sqlite/mod.rs`.
 
 ## Implementation
 1. Split each monolith by actual ownership.
