@@ -33,11 +33,15 @@ pub async fn merge_existing_import_target(
 
     let mut any_change = false;
     let mut ownership_change = false;
+    let mut status_restored = false;
+    let mut tags_changed = false;
+    let mut metadata_changed = false;
 
     if let Some(status) = request.restore_status {
         if existing.status == 2 && status != 2 {
             db.update_file_status(hex_hash, status).await?;
             any_change = true;
+            status_restored = true;
         }
     }
 
@@ -56,6 +60,7 @@ pub async fn merge_existing_import_target(
         if !missing.is_empty() {
             db.add_tags_by_strings(hex_hash, &missing).await?;
             any_change = true;
+            tags_changed = true;
         }
     }
 
@@ -64,6 +69,7 @@ pub async fn merge_existing_import_target(
         if current_name != name {
             db.set_file_name(hex_hash, Some(name)).await?;
             any_change = true;
+            metadata_changed = true;
         }
     }
 
@@ -82,6 +88,7 @@ pub async fn merge_existing_import_target(
                 .map_err(|e| format!("Notes serialization error: {e}"))?;
             db.set_notes(hex_hash, Some(&json)).await?;
             any_change = true;
+            metadata_changed = true;
         }
     }
 
@@ -104,6 +111,7 @@ pub async fn merge_existing_import_target(
                 .map_err(|e| format!("URLs serialization error: {e}"))?;
             db.set_source_urls(hex_hash, Some(&json)).await?;
             any_change = true;
+            metadata_changed = true;
         }
     }
 
@@ -116,26 +124,29 @@ pub async fn merge_existing_import_target(
 
     if any_change || ownership_change {
         db.scope_cache_invalidate_all();
-        let mut impact = if any_change {
-            MutationImpact::file_lifecycle(db).file_hashes(vec![hex_hash.to_string()])
+        let hash = hex_hash.to_string();
+        let mut impact = if status_restored {
+            MutationImpact::file_lifecycle(db).file_hashes(vec![hash.clone()])
+        } else if tags_changed {
+            MutationImpact::file_tags(hash.clone())
+        } else if metadata_changed {
+            MutationImpact::file_metadata(hash.clone())
         } else {
-            MutationImpact::new()
+            MutationImpact::new().file_hashes(vec![hash.clone()])
         };
+
+        if status_restored && tags_changed {
+            impact = impact.tags_changed();
+        }
+
         if ownership_change {
-            for domain in [Domain::Subscriptions, Domain::Sidebar, Domain::Files] {
-                if !impact.domains.contains(&domain) {
-                    impact.domains.push(domain);
-                }
-            }
+            impact = impact.add_domains(&[Domain::Subscriptions, Domain::Sidebar]);
             let hashes = impact.file_hashes.get_or_insert_with(Vec::new);
             if !hashes.iter().any(|hash| hash == hex_hash) {
-                hashes.push(hex_hash.to_string());
+                hashes.push(hash);
             }
         }
-        crate::events::emit_mutation(
-            request.mutation_name,
-            impact,
-        );
+        crate::events::emit_mutation(request.mutation_name, impact);
     }
 
     Ok(any_change || ownership_change)

@@ -85,6 +85,20 @@ impl MutationImpact {
         self.domains = domains;
         self
     }
+    pub fn add_domain(mut self, domain: Domain) -> Self {
+        if !self.domains.contains(&domain) {
+            self.domains.push(domain);
+        }
+        self
+    }
+    pub fn add_domains(mut self, domains: &[Domain]) -> Self {
+        for domain in domains {
+            if !self.domains.contains(domain) {
+                self.domains.push(domain.clone());
+            }
+        }
+        self
+    }
     pub fn file_hashes(mut self, h: Vec<String>) -> Self {
         self.file_hashes = Some(h);
         self
