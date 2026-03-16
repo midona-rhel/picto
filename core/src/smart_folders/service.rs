@@ -37,9 +37,9 @@ fn build_smart_folder_sidebar_node(sf: &SmartFolder, count: i64) -> crate::sideb
     }
 }
 
-pub struct SmartFolderController;
+pub struct SmartFolderService;
 
-impl SmartFolderController {
+impl SmartFolderService {
     pub async fn create_smart_folder(
         db: &SqliteDatabase,
         folder: SmartFolder,

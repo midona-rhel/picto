@@ -8,7 +8,7 @@ use chrono::Utc;
 
 use crate::sqlite::projections::ResolvedMetadataFull;
 use crate::sqlite::SqliteDatabase;
-use crate::metadata::controller::file_tag_to_resolved_info;
+use crate::metadata::query::file_tag_to_resolved_info;
 use crate::types::{
     DominantColorDto, FileAllMetadata,
     EntityDetails, EntityMetadataBatchResponse,

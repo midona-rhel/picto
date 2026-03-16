@@ -772,7 +772,7 @@ impl<'a> SubscriptionSyncEngine<'a> {
                 let mut surviving_hash = imported.hex_hash.clone();
                 // Auto-merge duplicate detection
                 if self.auto_merge_enabled && imported.mime.starts_with("image/") {
-                    match crate::duplicates::controller::DuplicateController::check_and_auto_merge(
+                    match crate::duplicates::orchestrator::DuplicateOrchestrator::check_and_auto_merge(
                         self.db,
                         &imported.hex_hash,
                         self.auto_merge_distance,

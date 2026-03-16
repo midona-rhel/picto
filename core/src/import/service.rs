@@ -8,7 +8,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::blob_store::BlobStore;
-use crate::duplicates::controller::DuplicateController;
+use crate::duplicates::orchestrator::DuplicateOrchestrator;
 use crate::events::{self, Domain, ManualImportProgressEvent, MutationImpact};
 use crate::folders::controller::FolderController;
 use crate::import::existing::{merge_existing_import_target, ExistingImportMergeRequest};
@@ -18,9 +18,9 @@ use crate::tags::normalize;
 use crate::types::{ImportBatchResult, ImportResult};
 use tracing::warn;
 
-pub struct ImportController;
+pub struct ImportService;
 
-impl ImportController {
+impl ImportService {
     pub async fn import_files(
         db: &SqliteDatabase,
         blob_store: &BlobStore,
@@ -327,7 +327,7 @@ async fn maybe_auto_merge(
     if !auto_merge_enabled {
         return hash.to_string();
     }
-    match DuplicateController::check_and_auto_merge(db, hash, auto_merge_distance).await {
+    match DuplicateOrchestrator::check_and_auto_merge(db, hash, auto_merge_distance).await {
         Ok(Some(result)) => result.winner_hash,
         Ok(None) => hash.to_string(),
         Err(e) => {

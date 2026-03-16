@@ -7,7 +7,7 @@
 use crate::sqlite::SqliteDatabase;
 use crate::types::{ViewPrefsDto, ViewPrefsPatch};
 
-pub struct ViewPrefsController;
+pub struct ViewPrefsService;
 
 fn dto_from_pref(p: crate::settings::db::ViewPref) -> ViewPrefsDto {
     ViewPrefsDto {
@@ -24,7 +24,7 @@ fn dto_from_pref(p: crate::settings::db::ViewPref) -> ViewPrefsDto {
     }
 }
 
-impl ViewPrefsController {
+impl ViewPrefsService {
     pub async fn get_view_prefs(
         db: &SqliteDatabase,
         scope_key: String,

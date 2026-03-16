@@ -72,7 +72,7 @@ pub async fn scan_duplicates(state: &AppState, input: ScanDuplicatesInput) -> Re
             s.duplicate_review_similarity_pct,
         ))
     };
-    let result = crate::duplicates::controller::DuplicateController::scan_duplicates(
+    let result = crate::duplicates::orchestrator::DuplicateOrchestrator::scan_duplicates(
         &state.db,
         effective_threshold,
         review_threshold,
@@ -91,7 +91,7 @@ pub async fn get_duplicate_pairs(state: &AppState, input: GetDuplicatePairsInput
         }
         _ => None,
     };
-    let result = crate::duplicates::controller::DuplicateController::get_duplicate_pairs(
+    let result = crate::duplicates::orchestrator::DuplicateOrchestrator::get_duplicate_pairs(
         &state.db,
         input.cursor,
         input.limit,
@@ -103,7 +103,7 @@ pub async fn get_duplicate_pairs(state: &AppState, input: GetDuplicatePairsInput
 }
 
 pub async fn resolve_duplicate_pair(state: &AppState, input: ResolveDuplicatePairInput) -> Result<serde_json::Value, String> {
-    let result = crate::duplicates::controller::DuplicateController::resolve_duplicate_pair(
+    let result = crate::duplicates::orchestrator::DuplicateOrchestrator::resolve_duplicate_pair(
         &state.db,
         &input.action,
         input.hash_a,
@@ -115,7 +115,7 @@ pub async fn resolve_duplicate_pair(state: &AppState, input: ResolveDuplicatePai
 
 pub async fn get_duplicate_count(state: &AppState, _input: serde_json::Value) -> Result<serde_json::Value, String> {
     let count =
-        crate::duplicates::controller::DuplicateController::get_duplicate_count(&state.db)
+        crate::duplicates::orchestrator::DuplicateOrchestrator::get_duplicate_count(&state.db)
             .await?;
     Ok(serde_json::json!({ "count": count }))
 }

@@ -50,7 +50,7 @@ pub async fn list_smart_folders(state: &AppState, _input: serde_json::Value) -> 
 
 pub async fn create_smart_folder(state: &AppState, input: CreateSmartFolderInput) -> Result<serde_json::Value, String> {
     let result =
-        crate::smart_folders::controller::SmartFolderController::create_smart_folder(
+        crate::smart_folders::service::SmartFolderService::create_smart_folder(
             &state.db,
             input.folder,
         )
@@ -64,7 +64,7 @@ pub async fn create_smart_folder(state: &AppState, input: CreateSmartFolderInput
 
 pub async fn update_smart_folder(state: &AppState, input: UpdateSmartFolderInput) -> Result<serde_json::Value, String> {
     let (result, predicate_changed) =
-        crate::smart_folders::controller::SmartFolderController::update_smart_folder(
+        crate::smart_folders::service::SmartFolderService::update_smart_folder(
             &state.db,
             input.id.clone(),
             input.folder,
@@ -82,7 +82,7 @@ pub async fn update_smart_folder(state: &AppState, input: UpdateSmartFolderInput
 
 pub async fn delete_smart_folder(state: &AppState, input: DeleteSmartFolderInput) -> Result<(), String> {
     let sf_id: i64 = input.id.parse().map_err(|_| format!("Invalid smart folder id: {}", input.id))?;
-    crate::smart_folders::controller::SmartFolderController::delete_smart_folder(
+    crate::smart_folders::service::SmartFolderService::delete_smart_folder(
         &state.db,
         input.id,
     )
@@ -97,7 +97,7 @@ pub async fn delete_smart_folder(state: &AppState, input: DeleteSmartFolderInput
 
 pub async fn count_smart_folder(state: &AppState, input: CountSmartFolderInput) -> Result<serde_json::Value, String> {
     let count =
-        crate::smart_folders::controller::SmartFolderController::count_smart_folder(
+        crate::smart_folders::service::SmartFolderService::count_smart_folder(
             &state.db,
             input.predicate,
         )

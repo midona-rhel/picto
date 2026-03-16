@@ -65,7 +65,7 @@ pub async fn import_files(state: &AppState, input: ImportFilesInput) -> Result<c
     } else {
         0
     };
-    crate::import::controller::ImportController::import_files(
+    crate::import::service::ImportService::import_files(
         &state.db,
         &state.blob_store,
         input.paths,
@@ -89,7 +89,7 @@ pub async fn import_folder(state: &AppState, input: ImportFolderInput) -> Result
     } else {
         0
     };
-    crate::import::controller::ImportController::import_folder(
+    crate::import::service::ImportService::import_folder(
         &state.db,
         &state.blob_store,
         input.path,

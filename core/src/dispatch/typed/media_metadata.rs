@@ -38,7 +38,7 @@ use super::super::common::deserialize_some;
 // ─── Handlers ──────────────────────────────────────────────────────────────
 
 pub async fn get_file_all_metadata(state: &AppState, input: GetFileAllMetadataInput) -> Result<serde_json::Value, String> {
-    let result = crate::metadata::controller::MetadataController::get_file_all_metadata(
+    let result = crate::metadata::query::MetadataQuery::get_file_all_metadata(
         &state.db, input.hash,
     ).await?;
     serde_json::to_value(&result).map_err(|e| e.to_string())

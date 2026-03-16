@@ -53,9 +53,9 @@ fn get_implied_tags(conn: &rusqlite::Connection, entity_id: i64) -> rusqlite::Re
     rows.collect()
 }
 
-pub struct MetadataController;
+pub struct MetadataQuery;
 
-impl MetadataController {
+impl MetadataQuery {
     pub async fn get_file_all_metadata(
         db: &SqliteDatabase,
         hash: String,

@@ -137,7 +137,7 @@ pub async fn reorder_sidebar_nodes(state: &AppState, input: ReorderSidebarNodesI
 
 pub async fn get_view_prefs(state: &AppState, input: GetViewPrefsInput) -> Result<serde_json::Value, String> {
     let scope_key = input.scope_key.unwrap_or_default();
-    let result = crate::settings::controller::ViewPrefsController::get_view_prefs(
+    let result = crate::settings::view_prefs::ViewPrefsService::get_view_prefs(
         &state.db, scope_key,
     ).await?;
     Ok(serde_json::to_value(&result).map_err(|e| e.to_string())?)
@@ -145,7 +145,7 @@ pub async fn get_view_prefs(state: &AppState, input: GetViewPrefsInput) -> Resul
 
 pub async fn set_view_prefs(state: &AppState, input: SetViewPrefsInput) -> Result<serde_json::Value, String> {
     let scope_key = input.scope_key.unwrap_or_default();
-    let result = crate::settings::controller::ViewPrefsController::set_view_prefs(
+    let result = crate::settings::view_prefs::ViewPrefsService::set_view_prefs(
         &state.db, scope_key, input.patch,
     ).await?;
     crate::events::emit_mutation(

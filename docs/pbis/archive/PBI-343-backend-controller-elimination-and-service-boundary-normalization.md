@@ -3,13 +3,21 @@
 ## Priority
 P1
 
-## Audit Status (2026-03-08)
-Status: **Partially Implemented**
+## Audit Status (2026-03-15)
+Status: **Implemented**
 
 Evidence:
-1. Controller naming is no longer a flat-root problem, but many domain folders still use `controller.rs` for modules that are really orchestration or service boundaries.
-2. Examples include `core/src/subscriptions/controller.rs`, `core/src/metadata/controller.rs`, `core/src/duplicates/controller.rs`, and `core/src/smart_folders/controller.rs`.
-3. The term `controller` still obscures whether a file is a thin domain entry point, a query service, or an orchestrator.
+1. Misleading catch-all controller modules were renamed by responsibility:
+   - `core/src/duplicates/orchestrator.rs`
+   - `core/src/metadata/query.rs`
+   - `core/src/smart_folders/service.rs`
+   - `core/src/settings/view_prefs.rs`
+   - `core/src/import/service.rs`
+2. Remaining `controller.rs` files are the thin public domain entry points:
+   - `core/src/folders/controller.rs`
+   - `core/src/subscriptions/controller.rs`
+   - `core/src/tags/controller.rs`
+3. Dispatch and cross-domain imports now reference role-specific module names instead of vague controller catch-alls.
 
 ## Problem
 Even after moving files into folders, the backend will remain confusing if service boundaries are still expressed as vague `controller` modules. Physical structure and naming need to align.

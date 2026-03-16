@@ -16,7 +16,7 @@ use crate::types::{
     ScanDuplicatesResponse, SmartMergeResult,
 };
 
-pub struct DuplicateController;
+pub struct DuplicateOrchestrator;
 
 /// Format priority for smart merge winner selection (higher = preferred).
 fn format_priority(mime: &str) -> u32 {
@@ -31,7 +31,7 @@ fn format_priority(mime: &str) -> u32 {
     }
 }
 
-impl DuplicateController {
+impl DuplicateOrchestrator {
     fn repoint_entity_relationships(
         conn: &rusqlite::Connection,
         winner_id: i64,
