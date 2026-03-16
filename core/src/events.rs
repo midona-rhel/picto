@@ -231,20 +231,6 @@ impl MutationImpact {
             .folder_ids(vec![folder_id])
     }
 
-    /// All domains changed (subscription import with collections). Fact: status_changed.
-    pub fn all_domains_change(db: &crate::sqlite::SqliteDatabase) -> Self {
-        Self::new()
-            .domains(&[
-                Domain::Files,
-                Domain::Folders,
-                Domain::Tags,
-                Domain::Sidebar,
-                Domain::SmartFolders,
-            ])
-            .status_changed()
-            .sidebar_counts_from(db)
-    }
-
     /// Batch tag change on a selection. Fact: tags_changed.
     pub fn selection_batch_tags() -> Self {
         Self::new()

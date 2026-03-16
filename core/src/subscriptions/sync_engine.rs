@@ -676,7 +676,8 @@ impl<'a> SubscriptionSyncEngine<'a> {
         );
         crate::events::emit_mutation(
             "subscription_import_collections",
-            crate::events::MutationImpact::all_domains_change(self.db)
+            crate::events::MutationImpact::new()
+                .folder_membership_changed(changed_collection_ids)
                 .extra_grid_scopes(scopes),
         );
     }
