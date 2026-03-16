@@ -3,27 +3,26 @@
 ## Priority
 P2
 
-## Audit Status (2026-03-07)
-Status: **Not Implemented**
+## Audit Status (2026-03-15)
+Status: **Implemented**
 
 Evidence:
-1. `core/src/files/mod.rs` is 1000+ lines and mixes MIME detection, hashing, thumbnail generation, file analysis, and format routing.
-2. Format-specific modules (`office.rs`, `pdf.rs`, `specialty.rs`, `svg.rs`, `ffmpeg.rs`) behave like helpers rather than clearly defined adapters.
-3. The module is already important enough that `PBI-237` exists just to rename the folder away from the overloaded `files/` name.
-4. As more formats are added, the current helper-centric structure will keep growing in one place.
+1. The current media-processing entrypoint is `core/src/media_processing/mod.rs`, and it now acts as facade/orchestration glue instead of a 1000-line mixed-responsibility file.
+2. Core pipeline stages are split into `core/src/media_processing/detection.rs`, `core/src/media_processing/analysis.rs`, `core/src/media_processing/hashing.rs`, and `core/src/media_processing/thumbnail.rs`.
+3. Format routing is isolated in `core/src/media_processing/adapters.rs`, so archive/document/specialty handling is no longer smeared across the facade.
+4. Existing public API remains stable while adding a new format is now localized to the adapter registry plus the format-specific module.
 
 ## Problem
 Media processing is now effectively a format capability platform, but it is still organized as a large utility module with helper submodules. That makes ownership of format support, analysis capabilities, and thumbnail/metadata extraction harder to extend cleanly.
 
 ## Scope
-- `core/src/files/mod.rs`
-- `core/src/files/archive.rs`
-- `core/src/files/ffmpeg.rs`
-- `core/src/files/image_metadata.rs`
-- `core/src/files/office.rs`
-- `core/src/files/pdf.rs`
-- `core/src/files/specialty.rs`
-- `core/src/files/svg.rs`
+- `core/src/media_processing/mod.rs`
+- `core/src/media_processing/archive.rs`
+- `core/src/media_processing/ffmpeg.rs`
+- `core/src/media_processing/office.rs`
+- `core/src/media_processing/pdf.rs`
+- `core/src/media_processing/specialty.rs`
+- `core/src/media_processing/svg.rs`
 - related imports after `PBI-237`
 
 ## Implementation
