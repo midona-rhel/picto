@@ -78,6 +78,10 @@ interface CanvasGridProps {
   thumbnailFitMode?: 'cover' | 'contain';
   /** Hash of the file currently being renamed inline — suppresses canvas name text for that tile */
   renamingHash?: string | null;
+  /** Scope identity for navigation; changes here must disable scroll-anchor preservation. */
+  scrollAnchorScopeKey?: string;
+  /** Whether same-scope scroll preservation and auto-scroll behaviors are allowed. */
+  preserveScrollBehaviors?: boolean;
 }
 
 export interface CanvasGridHandle {
@@ -125,6 +129,8 @@ export function CanvasGrid({
   dragDisabled = false,
   thumbnailFitMode = 'cover',
   renamingHash = null,
+  scrollAnchorScopeKey = 'default',
+  preserveScrollBehaviors = true,
 }: CanvasGridProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const ctxRef = useRef<CanvasRenderingContext2D | null>(null);
@@ -335,9 +341,22 @@ export function CanvasGrid({
 
   useEffect(() => { markDirty('both'); }, [layout, markDirty]);
   // -- scroll anchor preservation (inlined from useCanvasScrollAnchor) --
+  // Only fires on layout changes caused by resize (same images, different positions).
+  // Skips when frozen (transition in progress) or when the images array changed
+  // (scope transition — lifecycle hook handles scroll position).
+  const prevAnchorImagesRef = useRef(renderImages);
+  const prevScrollAnchorScopeKeyRef = useRef(scrollAnchorScopeKey);
   useEffect(() => {
     const prev = prevLayoutRef.current;
+    const prevImages = prevAnchorImagesRef.current;
+    const prevScopeKey = prevScrollAnchorScopeKeyRef.current;
     prevLayoutRef.current = layout;
+    prevAnchorImagesRef.current = renderImages;
+    prevScrollAnchorScopeKeyRef.current = scrollAnchorScopeKey;
+    if (!preserveScrollBehaviors) return;
+    if (prevScopeKey !== scrollAnchorScopeKey) return;
+    if (frozenRef.current) return;
+    if (prevImages !== renderImages) return;
     if (!prev || prev.positions === layout.positions) return;
     if (prev.positions.length !== layout.positions.length) return;
 
@@ -367,7 +386,7 @@ export function CanvasGrid({
     const newTileCenter = layout.positions[anchorIdx].y + layout.positions[anchorIdx].h / 2;
     const newScrollTop = newTileCenter - offsetInViewport;
     scrollEl.scrollTop = Math.max(0, metrics.canvasTopInScroll + newScrollTop);
-  }, [getScrollMetrics, layout, prevLayoutRef, scrollContainerRef]);
+  }, [getScrollMetrics, layout, preserveScrollBehaviors, prevLayoutRef, scrollAnchorScopeKey, scrollContainerRef]);
 
   useEffect(() => { markDirty('overlay'); }, [selectedHashes, markDirty]);
   useEffect(() => { markDirty('base'); }, [thumbnailFitMode, showExtension, showExtensionLabel, markDirty]);
@@ -492,6 +511,7 @@ export function CanvasGrid({
 
   // -- pop animation / scroll-into-view (inlined from useCanvasPopAnimation) --
   useEffect(() => {
+    if (!preserveScrollBehaviors) return;
     if (!popHash) return;
     const scrollEl = scrollContainerRef?.current;
     if (!scrollEl) {
@@ -517,7 +537,7 @@ export function CanvasGrid({
       scrollEl.scrollTop = Math.max(0, metrics.canvasTopInScroll + targetLocalScroll);
     }
     onPopComplete?.();
-  }, [getScrollMetrics, imagesRef, layoutRef, onPopComplete, popHash, scrollContainerRef]);
+  }, [getScrollMetrics, imagesRef, layoutRef, onPopComplete, popHash, preserveScrollBehaviors, scrollContainerRef]);
 
   // Not yet measured
   if (containerWidth === 0) {

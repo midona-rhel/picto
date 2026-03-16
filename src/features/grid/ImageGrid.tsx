@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useMemo, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useMemo, useState } from 'react';
 import { useGridRuntime } from './runtime';
 import { effectiveSelectedHashes as selectEffectiveHashes } from './runtime';
 import {
@@ -18,6 +18,7 @@ import { transitionOpacity, transitionCss, isTransitionFrozen } from './runtime/
 import { GridDialogsLayer } from './components/GridDialogsLayer';
 import { GridErrorState } from './components/GridErrorState';
 import { useNavigationStore } from '../../state/navigationStore';
+import { useDomainStore } from '../../state/domainStore';
 import type { MediaViewState, MediaViewControls } from '../../features/viewer/hooks/useViewerHost';
 import type { ViewerHostController } from '../../features/viewer/hooks/useViewerHost';
 import { useGridData } from './hooks/useGridData';
@@ -32,9 +33,91 @@ import { useGridImportActions } from './hooks/useGridImportActions';
 import { useGridViewerSource } from './hooks/useGridViewerSource';
 import { useGridLiveInsertion } from './hooks/useGridLiveInsertion';
 import { useGridRefreshLifecycle } from './hooks/useGridRefreshLifecycle';
+import { useGridSwapController } from './hooks/useGridSwapController';
 import { useGridDisplayState } from './hooks/useGridDisplayState';
 import { useGridActionHandlers } from './hooks/useGridActionHandlers';
 import { resolveGridEmptyContext } from './gridEmptyContext';
+import { buildGridSurfaceModel } from './gridSurfaceModel';
+
+interface GridScrollShellProps {
+  scrollRef: React.MutableRefObject<HTMLDivElement | null>;
+  initialScrollTop: number | null;
+  initialScrollToken: number | null;
+  onContextMenu: React.MouseEventHandler<HTMLDivElement>;
+  onPointerDown: React.PointerEventHandler<HTMLDivElement>;
+  grayscalePreview: boolean;
+  transitionStage: 'idle' | 'fading_out' | 'fading_in';
+  gridFreezeActive: boolean;
+  children: React.ReactNode;
+}
+
+function GridScrollShell({
+  scrollRef,
+  initialScrollTop,
+  initialScrollToken,
+  onContextMenu,
+  onPointerDown,
+  grayscalePreview,
+  transitionStage,
+  gridFreezeActive,
+  children,
+}: GridScrollShellProps) {
+  const localRef = useRef<HTMLDivElement | null>(null);
+  const appliedInitialScrollTokenRef = useRef<number | null>(null);
+  const handleShellRef = useCallback((node: HTMLDivElement | null) => {
+    localRef.current = node;
+    scrollRef.current = node;
+  }, [scrollRef]);
+
+  useLayoutEffect(() => {
+    const node = localRef.current;
+    if (!node) return;
+    if (initialScrollToken == null || initialScrollTop == null) return;
+    if (appliedInitialScrollTokenRef.current === initialScrollToken) return;
+
+    appliedInitialScrollTokenRef.current = initialScrollToken;
+    node.scrollTop = initialScrollTop;
+    requestAnimationFrame(() => {
+      if (localRef.current === node) {
+        node.scrollTop = initialScrollTop;
+      }
+    });
+  }, [initialScrollToken, initialScrollTop]);
+
+  return (
+    <div
+      ref={handleShellRef}
+      data-grid-container
+      onContextMenu={onContextMenu}
+      onPointerDown={onPointerDown}
+      style={{
+        flex: 1,
+        overflowY: 'auto',
+        scrollbarGutter: 'stable both-edges',
+        overflowX: 'hidden',
+        userSelect: 'none',
+        WebkitUserSelect: 'none',
+        position: 'relative',
+        pointerEvents: gridFreezeActive ? 'none' : 'auto',
+        filter: grayscalePreview ? 'grayscale(1)' : undefined,
+        opacity: transitionOpacity(transitionStage),
+        transition: transitionCss(transitionStage),
+      } as React.CSSProperties}
+    >
+      {children}
+    </div>
+  );
+}
+
+function hasVisibleSubfoldersForFolder(
+  folderNodes: Array<{ parent_id: string | null }>,
+  folderId: number | null,
+  showSubfolders: boolean,
+): boolean {
+  if (!folderId || !showSubfolders) return false;
+  const parentNodeId = `folder:${folderId}`;
+  return folderNodes.some((n) => n.parent_id === parentNodeId);
+}
 
 
 
@@ -94,6 +177,9 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
   const contextMenu = useContextMenu();
   const navigateToFolder = useNavigationStore(s => s.navigateToFolder);
   const navigateToCollection = useNavigationStore(s => s.navigateToCollection);
+  const saveScrollTop = useNavigationStore(s => s.saveScrollTop);
+  const historyIndex = useNavigationStore(s => s.historyIndex);
+  const consumeScrollRestore = useNavigationStore(s => s.consumeScrollRestore);
   const {
     displaySettings,
     displaySettingsRef,
@@ -102,12 +188,19 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
   } = useGridDisplayState({
     displayFolderId: state.displayFolderId,
   });
+  const folderNodes = useDomainStore((s) => s.folderNodes);
   // Track whether the first load has completed so we don't show "No images"
   // while the DB query is still in flight.
   const initialLoadDone = useRef(false);
   const displayViewModeRef = useRef(state.displayViewMode);
   displayViewModeRef.current = state.displayViewMode;
-  const { queryKey, requestReplace, requestAppend } = useGridData({
+  const {
+    queryKey,
+    fetchReplace,
+    commitReplace,
+    requestReplace,
+    requestAppend,
+  } = useGridData({
     queryInput: {
       folderId: folderId ?? null,
       collectionEntityId: collectionEntityId ?? null,
@@ -136,7 +229,29 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
 
   const gap = 8;
   const activeGridImages = state.images;
-  const resolvedGridTotalCount = state.responseTotalCount ?? selectedScopeCount ?? activeGridImages.length;
+  const navigationScopeKey = useMemo(() => JSON.stringify({
+    collectionEntityId: collectionEntityId ?? null,
+    folderId: folderId ?? null,
+    searchTags: searchTags ?? [],
+    excludedSearchTags: excludedSearchTags ?? [],
+    tagMatchMode: tagMatchMode ?? null,
+    smartFolderPredicate: smartFolderPredicate ? JSON.stringify(smartFolderPredicate) : null,
+    filterFolderIds: filterFolderIds ?? [],
+    excludedFilterFolderIds: excludedFilterFolderIds ?? [],
+    folderMatchMode: folderMatchMode ?? null,
+    statusFilter: statusFilter ?? null,
+  }), [
+    collectionEntityId,
+    excludedFilterFolderIds,
+    excludedSearchTags,
+    filterFolderIds,
+    folderId,
+    folderMatchMode,
+    searchTags,
+    smartFolderPredicate,
+    statusFilter,
+    tagMatchMode,
+  ]);
   // Refs for values that change frequently but shouldn't invalidate handleImageClick
   const imagesRef = useRef(activeGridImages);
   imagesRef.current = activeGridImages;
@@ -343,11 +458,99 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
     searchText,
     statusFilter,
   });
-  const gridFreezeActive = externalFreeze;
-  useGridRefreshLifecycle({
-    dispatch,
+  const liveSurface = useMemo(() => buildGridSurfaceModel({
+    scopeKey: navigationScopeKey,
+    images: activeGridImages,
+    responseTotalCount: state.responseTotalCount,
+    totalCount: state.responseTotalCount ?? selectedScopeCount ?? activeGridImages.length,
+    hasMore: state.hasMore,
+    displayViewMode: state.displayViewMode,
+    displayTargetSize: state.displayTargetSize,
+    displayFolderId: state.displayFolderId,
+    displaySearchTags: state.displaySearchTags,
+    displayEmptyContext: state.displayEmptyContext,
+    selectedSubfolderId: state.selectedSubfolderId,
+    showEmptyState: initialLoadDone.current && !hasVisibleSubfolders,
+  }), [
+    activeGridImages,
+    hasVisibleSubfolders,
+    navigationScopeKey,
+    selectedScopeCount,
+    state.displayEmptyContext,
+    state.displayFolderId,
+    state.displaySearchTags,
+    state.displayTargetSize,
+    state.displayViewMode,
+    state.hasMore,
+    state.responseTotalCount,
+    state.selectedSubfolderId,
+  ]);
+
+  const buildCommittedSurface = useCallback((payload: Awaited<ReturnType<typeof fetchReplace>>, scopeChanged: boolean) => {
+    const nextFolderId = folderId ?? null;
+    const nextHasVisibleSubfolders = hasVisibleSubfoldersForFolder(
+      folderNodes,
+      nextFolderId,
+      displaySettings.showSubfolders,
+    );
+    return buildGridSurfaceModel({
+      scopeKey: navigationScopeKey,
+      images: payload.images,
+      responseTotalCount: payload.responseTotalCount,
+      totalCount: payload.responseTotalCount ?? selectedScopeCount ?? payload.images.length,
+      hasMore: payload.hasMore,
+      displayViewMode: viewMode,
+      displayTargetSize: targetSize,
+      displayFolderId: nextFolderId,
+      displaySearchTags: searchTags,
+      displayEmptyContext: resolveGridEmptyContext(smartFolderPredicate, folderId, statusFilter),
+      selectedSubfolderId: scopeChanged ? null : stateRef.current.selectedSubfolderId,
+      showEmptyState: !payload.error && payload.images.length === 0 && !nextHasVisibleSubfolders,
+    });
+  }, [
+    displaySettings.showSubfolders,
+    folderId,
+    folderNodes,
+    navigationScopeKey,
+    searchTags,
+    selectedScopeCount,
+    smartFolderPredicate,
+    stateRef,
+    statusFilter,
+    targetSize,
+    viewMode,
+  ]);
+
+  const {
+    renderedScopeKey,
+    renderedSurface,
+    shellInitialScroll,
+    preserveScrollBehaviors,
+    visibleTransitionStage,
+  } = useGridSwapController({
+    incomingScopeKey: navigationScopeKey,
+    queryKey,
+    liveSurface,
     viewMode,
     targetSize,
+    folderId,
+    searchTags,
+    smartFolderPredicate,
+    statusFilter,
+    fetchReplace,
+    commitReplace,
+    buildCommittedSurface,
+    initialLoadDone,
+    viewer,
+    dispatch,
+    onMediaViewStateChange,
+    consumeScrollRestore,
+  });
+  imagesRef.current = renderedSurface.images;
+  displayViewModeRef.current = renderedSurface.displayViewMode;
+
+  useGridRefreshLifecycle({
+    dispatch,
     folderId,
     collectionEntityId,
     searchTags,
@@ -358,20 +561,41 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
     excludedFilterFolderIds,
     folderMatchMode,
     statusFilter,
-    queryKey,
-    requestReplace,
     refreshTrigger,
     stateRef,
-    initialLoadDone,
-    viewer,
-    onMediaViewStateChange,
-    scrollRef,
+    requestReplace,
   });
+  const gridFreezeActive = externalFreeze;
+
+  // Continuously save scroll position to navigation history (debounced).
+  // This ensures the position is always current when back/forward triggers.
+  useEffect(() => {
+    const scrollEl = scrollRef.current;
+    if (!scrollEl) return;
+    let timer: ReturnType<typeof setTimeout>;
+    const onScroll = () => {
+      if (visibleTransitionStage !== 'idle') {
+        clearTimeout(timer);
+        return;
+      }
+      const currentHistoryIndex = historyIndex;
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        if (visibleTransitionStage !== 'idle') return;
+        saveScrollTop(scrollEl.scrollTop, currentHistoryIndex);
+      }, 150);
+    };
+    scrollEl.addEventListener('scroll', onScroll, { passive: true });
+    return () => {
+      scrollEl.removeEventListener('scroll', onScroll);
+      clearTimeout(timer);
+    };
+  }, [historyIndex, renderedScopeKey, saveScrollTop, scrollRef, visibleTransitionStage]);
 
   useGridViewerSource({
     viewer,
-    images: activeGridImages,
-    totalCount: resolvedGridTotalCount,
+    images: renderedSurface.images,
+    totalCount: renderedSurface.totalCount,
     statusFilter,
     handleInboxAction: statusFilter === 'inbox' ? handleInboxAction : undefined,
     onMediaViewStateChange,
@@ -426,34 +650,26 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
 
   return (
     <div style={{ height: '100%', display: 'flex', position: 'relative' }}>
-      <div
-        ref={scrollRef as React.RefObject<HTMLDivElement>}
-        data-grid-container
+      <GridScrollShell
+        key={renderedScopeKey}
+        scrollRef={scrollRef}
+        initialScrollTop={shellInitialScroll?.top ?? null}
+        initialScrollToken={shellInitialScroll?.token ?? null}
         onContextMenu={handleContextMenu}
         onPointerDown={handleBoxPointerDown}
-        style={{
-          flex: 1,
-          overflowY: 'auto',
-          scrollbarGutter: 'stable both-edges',
-          overflowX: 'hidden',
-          userSelect: 'none',
-          WebkitUserSelect: 'none',
-          position: 'relative',
-          pointerEvents: gridFreezeActive ? 'none' : 'auto',
-          filter: displaySettings.grayscalePreview ? 'grayscale(1)' : undefined,
-          opacity: transitionOpacity(state.transitionStage),
-          transition: transitionCss(state.transitionStage),
-        } as React.CSSProperties}
+        grayscalePreview={displaySettings.grayscalePreview}
+        transitionStage={visibleTransitionStage}
+        gridFreezeActive={gridFreezeActive}
       >
         <div style={{ height: 8 }} />
         <div style={{ position: 'relative' }}>
-          {state.displayFolderId != null && displaySettings.showSubfolders && (
+          {renderedSurface.displayFolderId != null && displaySettings.showSubfolders && (
             <SubfolderGrid
-              folderId={state.displayFolderId}
-              targetSize={state.displayTargetSize}
-              totalImageCount={activeGridImages.length}
+              folderId={renderedSurface.displayFolderId}
+              targetSize={renderedSurface.displayTargetSize}
+              totalImageCount={renderedSurface.images.length}
               onOpenFolder={(id, name) => navigateToFolder({ folder_id: id, name })}
-              selectedSubfolderId={state.selectedSubfolderId}
+              selectedSubfolderId={renderedSurface.selectedSubfolderId}
               paused={gridFreezeActive}
               onSelectedSubfolderChange={(id) => {
                 dispatch({ type: 'SET_SELECTED_SUBFOLDER', id });
@@ -462,22 +678,22 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
             />
           )}
           <CanvasGrid
-            images={activeGridImages}
-            targetSize={state.displayTargetSize}
+            images={renderedSurface.images}
+            targetSize={renderedSurface.displayTargetSize}
             gap={gap}
-            viewMode={state.displayViewMode}
+            viewMode={renderedSurface.displayViewMode}
             selectedHashes={effectiveSelectedHashes}
-            searchTags={state.displaySearchTags}
+            searchTags={renderedSurface.displaySearchTags}
             onImageClick={handleImageClick}
             onImport={handleImport}
             onImportFolder={handleImportFolderRequest}
             onContainerWidthChange={handleContainerWidthChange}
-            showEmptyState={initialLoadDone.current && !hasVisibleSubfolders}
-            emptyContext={state.displayEmptyContext}
+            showEmptyState={renderedSurface.showEmptyState}
+            emptyContext={renderedSurface.displayEmptyContext}
             scrollContainerRef={scrollRef}
             popHash={state.popHash}
             onPopComplete={() => dispatch({ type: 'SET_POP_HASH', hash: null })}
-            frozen={gridFreezeActive || isTransitionFrozen(state.transitionStage)}
+            frozen={gridFreezeActive || isTransitionFrozen(visibleTransitionStage)}
             marqueeActive={state.boxActive}
             showTileName={displaySettings.showTileName}
             showResolution={displaySettings.showResolution}
@@ -490,9 +706,11 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
             onLayoutChange={(positions) => { canvasLayoutRef.current = positions; }}
             reorderMode={isReorderScope}
             onReorder={isReorderScope ? handleReorder : undefined}
-            onLoadMore={state.hasMore ? loadMore : undefined}
-            totalCount={resolvedGridTotalCount}
+            onLoadMore={renderedSurface.hasMore ? loadMore : undefined}
+            totalCount={renderedSurface.totalCount}
             renamingHash={renamingHash}
+            scrollAnchorScopeKey={renderedScopeKey}
+            preserveScrollBehaviors={preserveScrollBehaviors}
           />
           {renamingHash && (
             <GridInlineRenameOverlay
@@ -510,7 +728,7 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
             />
           )}
         </div>
-      </div>
+      </GridScrollShell>
 
       <GridDialogsLayer
         contextMenuState={contextMenu.state}

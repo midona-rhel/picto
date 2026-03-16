@@ -15,6 +15,14 @@ import {
 export const PAGE_SIZE = 100;
 export const MAX_LOADED_ITEMS = 10_000;
 
+export interface GridReplacePayload {
+  images: ReturnType<typeof toMasonryItem>[];
+  responseTotalCount: number | null;
+  hasMore: boolean;
+  cursor: string | null;
+  error: string | null;
+}
+
 interface UseGridDataArgs {
   queryInput: Omit<GridQueryInput, 'randomSeed'>;
   dispatch: React.Dispatch<GridRuntimeAction>;
@@ -25,6 +33,8 @@ interface UseGridDataArgs {
 interface UseGridDataResult {
   query: GridQuery;
   queryKey: string;
+  fetchReplace: () => Promise<GridReplacePayload>;
+  commitReplace: (payload: GridReplacePayload) => void;
   requestReplace: () => Promise<void>;
   requestAppend: () => Promise<void>;
 }
@@ -85,33 +95,61 @@ export function useGridData({
 
   const queryKey = useMemo(() => serializeGridQuery(query), [query]);
 
-  const runReplace = useCallback(async () => {
-    const generation = ++generationRef.current;
-    dispatch({ type: 'SET_ERROR', error: null });
-
+  const fetchReplace = useCallback(async (): Promise<GridReplacePayload> => {
     try {
       const page = await api.grid.getPageSlim(toFetchGridPageArgs(query, null, PAGE_SIZE));
-      if (generation !== generationRef.current) return;
-
-      const items = page.items.map(toMasonryItem);
-      const safeHasMore = page.has_more && !!page.next_cursor;
-      dispatch({ type: 'SET_CURSOR', cursor: page.next_cursor, hasMore: safeHasMore });
-      dispatch({ type: 'SET_RESPONSE_TOTAL_COUNT', count: page.total_count ?? null });
-      dispatch({ type: 'SET_IMAGES', images: items });
-
-      if (items.length > 0) {
-void prefetchMetadataBatch(items.map((item) => item.hash));
-      }
+      const images = page.items.map(toMasonryItem);
+      const hasMore = page.has_more && !!page.next_cursor;
+      return {
+        images,
+        responseTotalCount: page.total_count ?? null,
+        hasMore,
+        cursor: page.next_cursor,
+        error: null,
+      };
     } catch (err) {
-      if (generation !== generationRef.current) return;
-      dispatch({ type: 'SET_ERROR', error: String(err) });
-    } finally {
+      return {
+        images: [],
+        responseTotalCount: null,
+        hasMore: false,
+        cursor: null,
+        error: String(err),
+      };
+    }
+  }, [query]);
+
+  const commitReplace = useCallback((payload: GridReplacePayload) => {
+    dispatch({ type: 'SET_ERROR', error: payload.error });
+    if (payload.error) {
       if (!firstCommitDoneRef.current) {
         firstCommitDoneRef.current = true;
         onFirstCommitRef.current?.();
       }
+      return;
     }
-  }, [dispatch, query]);
+
+    dispatch({ type: 'SET_CURSOR', cursor: payload.cursor, hasMore: payload.hasMore });
+    dispatch({ type: 'SET_RESPONSE_TOTAL_COUNT', count: payload.responseTotalCount });
+    dispatch({ type: 'SET_IMAGES', images: payload.images });
+
+    if (payload.images.length > 0) {
+      void prefetchMetadataBatch(payload.images.map((item) => item.hash));
+    }
+
+    if (!firstCommitDoneRef.current) {
+      firstCommitDoneRef.current = true;
+      onFirstCommitRef.current?.();
+    }
+  }, [dispatch]);
+
+  const runReplace = useCallback(async () => {
+    const generation = ++generationRef.current;
+    dispatch({ type: 'SET_ERROR', error: null });
+
+    const payload = await fetchReplace();
+    if (generation !== generationRef.current) return;
+    commitReplace(payload);
+  }, [commitReplace, dispatch, fetchReplace]);
 
   const requestReplace = useCallback(() => {
     if (inFlightReplaceRef.current && inFlightReplaceKeyRef.current === queryKey) {
@@ -172,5 +210,5 @@ void prefetchMetadataBatch(items.map((item) => item.hash));
     firstCommitDoneRef.current = false;
   }, [queryKey]);
 
-  return { query, queryKey, requestReplace, requestAppend };
+  return { query, queryKey, fetchReplace, commitReplace, requestReplace, requestAppend };
 }

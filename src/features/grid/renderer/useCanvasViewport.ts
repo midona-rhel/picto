@@ -114,6 +114,7 @@ export function useCanvasViewport(args: {
       dismissVideoScrubRef.current();
     } else if (!frozen && wasFrozenRef.current) {
       setFrozenCanvasWidth(null);
+      markDirty('both');
       unfreezeSettleTimerRef.current = setTimeout(() => {
         setFrozenLayoutWidth(null);
         unfreezeSettleTimerRef.current = null;
@@ -121,7 +122,7 @@ export function useCanvasViewport(args: {
     }
 
     wasFrozenRef.current = frozen;
-  }, [containerWidth, dismissVideoScrubRef, frozen]);
+  }, [containerWidth, dismissVideoScrubRef, frozen, markDirty]);
 
   useEffect(() => {
     const scrollElement = scrollContainerRef?.current;

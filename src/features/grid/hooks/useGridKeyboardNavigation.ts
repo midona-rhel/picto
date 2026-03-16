@@ -16,7 +16,7 @@ interface UseGridKeyboardNavigationArgs {
 }
 
 interface GridKeyboardNavigationResult {
-  scrollRef: React.RefObject<HTMLDivElement>;
+  scrollRef: React.MutableRefObject<HTMLDivElement | null>;
   getCanvasOffsetTop: () => number;
   handleContainerWidthChange: (width: number) => void;
   scrollToIndex: (index: number) => void;

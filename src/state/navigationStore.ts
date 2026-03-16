@@ -41,6 +41,7 @@ interface HistoryEntry {
   subscriptionGroup: ActiveSubscriptionGroup | null;
   statusFilter: string | null;
   filterTags: string[] | null;
+  scrollTop: number;
 }
 
 interface NavigationState {
@@ -59,10 +60,17 @@ interface NavigationState {
   canGoBack: boolean;
   canGoForward: boolean;
 
+  // Scroll restore for back/forward navigation
+  pendingScrollRestore: number | null;
+
   // Actions
   navigateTo: (view: ViewType, smartFolder?: SmartFolder | null, folder?: ActiveFolder | null, statusFilter?: string | null) => void;
   goBack: () => void;
   goForward: () => void;
+  /** Save current scroll position to the current history entry */
+  saveScrollTop: (scrollTop: number, expectedHistoryIndex?: number) => void;
+  /** Consume the pending scroll restore value (returns it and clears it) */
+  consumeScrollRestore: () => number | null;
   setActiveFolder: (folder: ActiveFolder | null) => void;
   setActiveSmartFolder: (folder: SmartFolder | null) => void;
   /** Navigate to a folder (sets view to 'images', clears smart folder) */
@@ -110,17 +118,18 @@ export const useNavigationStore = create<NavigationState>((set, get) => ({
   activeStatusFilter: null,
   filterTags: null,
 
-  history: [{ view: 'images', smartFolder: null, folder: null, collection: null, subscriptionGroup: null, statusFilter: null, filterTags: null }],
+  history: [{ view: 'images', smartFolder: null, folder: null, collection: null, subscriptionGroup: null, statusFilter: null, filterTags: null, scrollTop: 0 }],
   historyIndex: 0,
   canGoBack: false,
   canGoForward: false,
+  pendingScrollRestore: null,
 
   titlebarTitle: VIEW_LABELS.images,
 
   navigateTo: (view, smartFolder = null, folder = null, statusFilter = null) => {
     const state = get();
     const trimmed = state.history.slice(0, state.historyIndex + 1);
-    const entry: HistoryEntry = { view, smartFolder, folder, collection: null, subscriptionGroup: null, statusFilter, filterTags: null };
+    const entry: HistoryEntry = { view, smartFolder, folder, collection: null, subscriptionGroup: null, statusFilter, filterTags: null, scrollTop: 0 };
     const newHistory = [...trimmed, entry];
     const newIndex = newHistory.length - 1;
 
@@ -132,6 +141,7 @@ export const useNavigationStore = create<NavigationState>((set, get) => ({
       activeSubscriptionGroup: null,
       activeStatusFilter: statusFilter,
       filterTags: null,
+      pendingScrollRestore: null,
       history: newHistory,
       historyIndex: newIndex,
       canGoBack: newIndex > 0,
@@ -157,6 +167,7 @@ export const useNavigationStore = create<NavigationState>((set, get) => ({
       historyIndex: newIndex,
       canGoBack: newIndex > 0,
       canGoForward: true,
+      pendingScrollRestore: entry.scrollTop,
       titlebarTitle: computeTitle(entry),
     });
   },
@@ -178,8 +189,31 @@ export const useNavigationStore = create<NavigationState>((set, get) => ({
       historyIndex: newIndex,
       canGoBack: true,
       canGoForward: newIndex < state.history.length - 1,
+      pendingScrollRestore: entry.scrollTop,
       titlebarTitle: computeTitle(entry),
     });
+  },
+
+  saveScrollTop: (scrollTop, expectedHistoryIndex) => {
+    set((state) => {
+      if (
+        expectedHistoryIndex != null
+        && state.historyIndex !== expectedHistoryIndex
+      ) {
+        return state;
+      }
+      const history = [...state.history];
+      if (history[state.historyIndex]) {
+        history[state.historyIndex] = { ...history[state.historyIndex], scrollTop };
+      }
+      return { history };
+    });
+  },
+
+  consumeScrollRestore: () => {
+    const value = get().pendingScrollRestore;
+    if (value != null) set({ pendingScrollRestore: null });
+    return value;
   },
 
   setActiveFolder: (folder) => {
@@ -219,6 +253,7 @@ export const useNavigationStore = create<NavigationState>((set, get) => ({
       subscriptionGroup: null,
       statusFilter: null,
       filterTags: null,
+      scrollTop: 0,
     };
     const newHistory = [...trimmed, entry];
     const newIndex = newHistory.length - 1;
@@ -231,6 +266,7 @@ export const useNavigationStore = create<NavigationState>((set, get) => ({
       activeSubscriptionGroup: null,
       activeStatusFilter: null,
       filterTags: null,
+      pendingScrollRestore: null,
       history: newHistory,
       historyIndex: newIndex,
       canGoBack: newIndex > 0,
@@ -242,7 +278,7 @@ export const useNavigationStore = create<NavigationState>((set, get) => ({
   navigateToSubscriptionGroup: (subscriptionGroup) => {
     const state = get();
     const trimmed = state.history.slice(0, state.historyIndex + 1);
-    const entry: HistoryEntry = { view: 'subscriptions', smartFolder: null, folder: null, collection: null, subscriptionGroup, statusFilter: null, filterTags: null };
+    const entry: HistoryEntry = { view: 'subscriptions', smartFolder: null, folder: null, collection: null, subscriptionGroup, statusFilter: null, filterTags: null, scrollTop: 0 };
     const newHistory = [...trimmed, entry];
     const newIndex = newHistory.length - 1;
 
@@ -254,6 +290,7 @@ export const useNavigationStore = create<NavigationState>((set, get) => ({
       activeSubscriptionGroup: subscriptionGroup,
       activeStatusFilter: null,
       filterTags: null,
+      pendingScrollRestore: null,
       history: newHistory,
       historyIndex: newIndex,
       canGoBack: newIndex > 0,
@@ -265,7 +302,7 @@ export const useNavigationStore = create<NavigationState>((set, get) => ({
   navigateToFilterTags: (tags) => {
     const state = get();
     const trimmed = state.history.slice(0, state.historyIndex + 1);
-    const entry: HistoryEntry = { view: 'images', smartFolder: null, folder: null, collection: null, subscriptionGroup: null, statusFilter: null, filterTags: tags };
+    const entry: HistoryEntry = { view: 'images', smartFolder: null, folder: null, collection: null, subscriptionGroup: null, statusFilter: null, filterTags: tags, scrollTop: 0 };
     const newHistory = [...trimmed, entry];
     const newIndex = newHistory.length - 1;
 
@@ -277,6 +314,7 @@ export const useNavigationStore = create<NavigationState>((set, get) => ({
       activeSubscriptionGroup: null,
       activeStatusFilter: null,
       filterTags: tags,
+      pendingScrollRestore: null,
       history: newHistory,
       historyIndex: newIndex,
       canGoBack: newIndex > 0,
