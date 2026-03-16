@@ -110,10 +110,6 @@ pub async fn resolve_duplicate_pair(state: &AppState, input: ResolveDuplicatePai
         input.hash_b,
     )
     .await?;
-    crate::events::emit_mutation(
-        "resolve_duplicate_pair",
-        crate::events::MutationImpact::domain_only(crate::events::Domain::Files),
-    );
     Ok(serde_json::to_value(&result).map_err(|e| e.to_string())?)
 }
 

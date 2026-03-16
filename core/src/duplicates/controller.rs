@@ -8,6 +8,7 @@ use std::collections::HashMap;
 
 use rusqlite::OptionalExtension;
 
+use crate::events::MutationImpact;
 use crate::sqlite::ReadModelEvent;
 use crate::sqlite::SqliteDatabase;
 use crate::types::{
@@ -398,10 +399,20 @@ impl DuplicateController {
         db.emit_read_model_event(ReadModelEvent::FileTagsChanged {
             file_id: db.resolve_hash(&winner_hash).await?,
         });
-        for folder_id in affected_folder_ids {
+        for &folder_id in &affected_folder_ids {
             db.emit_read_model_event(ReadModelEvent::FolderChanged { folder_id });
         }
         db.emit_read_model_event(ReadModelEvent::DuplicateChanged);
+
+        let mut impact = MutationImpact::file_status_change(db)
+            .file_hashes(vec![winner_hash.clone(), loser_hash.clone()]);
+        if !affected_folder_ids.is_empty() {
+            impact = impact.folder_membership_changed(affected_folder_ids.clone());
+        }
+        if tags_merged > 0 {
+            impact = impact.tags_changed();
+        }
+        crate::events::emit_mutation("resolve_duplicate_pair", impact);
 
         Ok(SmartMergeResult {
             winner_hash,
@@ -475,10 +486,17 @@ impl DuplicateController {
         })
         .await?;
 
-        for folder_id in affected_folder_ids {
+        for &folder_id in &affected_folder_ids {
             db.emit_read_model_event(ReadModelEvent::FolderChanged { folder_id });
         }
         db.emit_read_model_event(ReadModelEvent::DuplicateChanged);
+
+        let mut impact = MutationImpact::file_status_change(db)
+            .file_hashes(vec![keep_hash.to_string(), trash_hash.to_string()]);
+        if !affected_folder_ids.is_empty() {
+            impact = impact.folder_membership_changed(affected_folder_ids);
+        }
+        crate::events::emit_mutation("resolve_duplicate_pair", impact);
         Ok(())
     }
 
