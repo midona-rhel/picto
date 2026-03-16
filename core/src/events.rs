@@ -255,9 +255,29 @@ impl MutationImpact {
     /// Collection metadata update (rating, source URLs). Sidebar + grid invalidation.
     pub fn collection_update(collection_id: i64) -> Self {
         Self::new()
-            .domains(&[Domain::Folders, Domain::Sidebar, Domain::Selection])
-            .folder_ids(vec![collection_id])
-            .extra_grid_scopes(vec!["system:all".into()])
+            .extra_grid_scopes(vec![
+                format!("collection:{collection_id}"),
+                "system:all".into(),
+            ])
+    }
+
+    /// Collection member added/removed. Fact: folder_membership_changed.
+    pub fn collection_membership_change(collection_id: i64) -> Self {
+        Self::new()
+            .folder_membership_changed(vec![collection_id])
+            .extra_grid_scopes(vec![
+                format!("collection:{collection_id}"),
+                "folder:all".into(),
+            ])
+    }
+
+    /// Collection member reorder. Only grid scopes change.
+    pub fn collection_members_reordered(collection_id: i64) -> Self {
+        Self::new()
+            .extra_grid_scopes(vec![
+                format!("collection:{collection_id}"),
+                "system:all".into(),
+            ])
     }
 
     /// Single domain change with no invalidation. Used for minimal mutations.

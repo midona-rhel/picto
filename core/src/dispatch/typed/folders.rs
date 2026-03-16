@@ -419,8 +419,7 @@ pub async fn reorder_collection_members(state: &AppState, input: ReorderCollecti
     state.db.scope_cache_invalidate_scope("collection");
     crate::events::emit_mutation(
         "reorder_collection_members",
-        crate::events::MutationImpact::domain_only(crate::events::Domain::Files)
-            .extra_grid_scopes(vec!["system:all".into()]),
+        crate::events::MutationImpact::collection_members_reordered(input.id),
     );
     Ok(())
 }
@@ -450,8 +449,7 @@ pub async fn add_collection_members(state: &AppState, input: AddCollectionMember
     let added = state.db.add_collection_members_by_hashes(input.id, &input.hashes).await?;
     state.db.scope_cache_invalidate_scope("collection");
     let cover_hash = collection_cover_hash(&state.db, input.id).await;
-    let mut impact = crate::events::MutationImpact::all_domains_change(&state.db)
-        .extra_grid_scopes(vec![format!("collection:{}", input.id), "folder:all".into()]);
+    let mut impact = crate::events::MutationImpact::collection_membership_change(input.id);
     if let Some(h) = cover_hash {
         impact = impact.file_hashes(vec![h]);
     }
@@ -463,8 +461,7 @@ pub async fn remove_collection_members(state: &AppState, input: RemoveCollection
     let removed = state.db.remove_collection_members_by_hashes(input.id, &input.hashes).await?;
     state.db.scope_cache_invalidate_scope("collection");
     let cover_hash = collection_cover_hash(&state.db, input.id).await;
-    let mut impact = crate::events::MutationImpact::all_domains_change(&state.db)
-        .extra_grid_scopes(vec![format!("collection:{}", input.id), "folder:all".into()]);
+    let mut impact = crate::events::MutationImpact::collection_membership_change(input.id);
     if let Some(h) = cover_hash {
         impact = impact.file_hashes(vec![h]);
     }
