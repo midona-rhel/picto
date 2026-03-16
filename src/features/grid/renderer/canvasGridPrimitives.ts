@@ -99,6 +99,25 @@ export function drawImageContain(
   ctx.drawImage(bitmap, 0, 0, bitmap.width, bitmap.height, ox, oy, sw, sh);
 }
 
+export function getContainRect(
+  aspectRatio: number,
+  dx: number,
+  dy: number,
+  dw: number,
+  dh: number,
+): { x: number; y: number; w: number; h: number } {
+  const safeAspectRatio = Number.isFinite(aspectRatio) && aspectRatio > 0 ? aspectRatio : 1;
+  const scale = Math.min(dw / safeAspectRatio, dh);
+  const w = safeAspectRatio * scale;
+  const h = scale;
+  return {
+    x: dx + (dw - w) / 2,
+    y: dy + (dh - h) / 2,
+    w,
+    h,
+  };
+}
+
 export function drawBadge(
   ctx: CanvasRenderingContext2D,
   text: string,

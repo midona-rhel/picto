@@ -10,6 +10,7 @@ import {
   INFO_FONT,
   NAME_FONT,
   drawBadge,
+  getContainRect,
   drawImageContain,
   drawImageCover,
   isHiddenBadgeType,
@@ -68,6 +69,41 @@ interface BaseLayerArgs {
   showExtensionLabel: boolean;
   videoScrubIdx: number | null;
   viewMode: GridViewMode;
+}
+
+function fillPlaceholder(
+  ctx: CanvasRenderingContext2D,
+  image: MasonryImageItem,
+  theme: ThemeLike,
+  fit: 'cover' | 'contain',
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  alpha = 1,
+): void {
+  const hasContainShape = fit === 'contain' && !!image.aspectRatio;
+  const previousAlpha = ctx.globalAlpha;
+
+  if (hasContainShape) {
+    ctx.globalAlpha = previousAlpha * alpha;
+    ctx.fillStyle = theme.placeholderBg;
+    ctx.fillRect(x, y, w, h);
+    if (image.dominant_color_hex) {
+      const rect = getContainRect(image.aspectRatio, x, y, w, h);
+      ctx.fillStyle = image.dominant_color_hex;
+      ctx.beginPath();
+      ctx.roundRect(rect.x, rect.y, rect.w, rect.h, theme.borderRadius);
+      ctx.fill();
+    }
+    ctx.globalAlpha = previousAlpha;
+    return;
+  }
+
+  ctx.globalAlpha = previousAlpha * alpha;
+  ctx.fillStyle = image.dominant_color_hex || theme.placeholderBg;
+  ctx.fillRect(x, y, w, h);
+  ctx.globalAlpha = previousAlpha;
 }
 
 export function drawCanvasBaseLayer({
@@ -139,8 +175,7 @@ export function drawCanvasBaseLayer({
         : 1;
       if (progress < 1) {
         hasActiveReveal = true;
-        ctx.fillStyle = image.dominant_color_hex || theme.placeholderBg;
-        ctx.fillRect(pos.x, drawY, pos.w, imageHeight);
+        fillPlaceholder(ctx, image, theme, effectiveFit, pos.x, drawY, pos.w, imageHeight, 1 - progress);
         ctx.globalAlpha = progress;
         drawThumb(ctx, entry.thumb, pos.x, drawY, pos.w, imageHeight);
         ctx.globalAlpha = 1;
@@ -148,24 +183,7 @@ export function drawCanvasBaseLayer({
         drawThumb(ctx, entry.thumb, pos.x, drawY, pos.w, imageHeight);
       }
     } else {
-      // In contain mode, fill tile background then draw dominant color in
-      // the image's aspect ratio so the placeholder shape matches the image.
-      if (effectiveFit === 'contain' && image.aspectRatio) {
-        ctx.fillStyle = theme.placeholderBg;
-        ctx.fillRect(pos.x, drawY, pos.w, imageHeight);
-        if (image.dominant_color_hex) {
-          ctx.fillStyle = image.dominant_color_hex;
-          const scale = Math.min(pos.w / image.aspectRatio, imageHeight);
-          const iw = image.aspectRatio * scale;
-          const ih = scale;
-          ctx.beginPath();
-          ctx.roundRect(pos.x + (pos.w - iw) / 2, drawY + (imageHeight - ih) / 2, iw, ih, br);
-          ctx.fill();
-        }
-      } else {
-        ctx.fillStyle = image.dominant_color_hex || theme.placeholderBg;
-        ctx.fillRect(pos.x, drawY, pos.w, imageHeight);
-      }
+      fillPlaceholder(ctx, image, theme, effectiveFit, pos.x, drawY, pos.w, imageHeight);
     }
 
     ctx.restore();
@@ -182,11 +200,7 @@ export function drawCanvasBaseLayer({
     const imageHeight = pos.h - th;
     if (drawY + pos.h < 0 || drawY > cssH) continue;
     if (effectiveFit === 'contain' && image?.aspectRatio) {
-      const scale = Math.min(pos.w / image.aspectRatio, imageHeight);
-      const iw = image.aspectRatio * scale;
-      const ih = scale;
-      const ix = pos.x + (pos.w - iw) / 2;
-      const iy = drawY + (imageHeight - ih) / 2;
+      const { x: ix, y: iy, w: iw, h: ih } = getContainRect(image.aspectRatio, pos.x, drawY, pos.w, imageHeight);
       ctx.roundRect(ix + 0.5, iy + 0.5, iw - 1, ih - 1, br);
     } else {
       ctx.roundRect(pos.x + 0.5, drawY + 0.5, pos.w - 1, imageHeight - 1, br);
@@ -208,12 +222,10 @@ export function drawCanvasBaseLayer({
     let by = drawY;
     let bw = pos.w;
     if (isContain && !image.is_collection && image.aspectRatio) {
-      const scale = Math.min(pos.w / image.aspectRatio, imgH);
-      const iw = image.aspectRatio * scale;
-      const ih = scale;
-      bx = pos.x + (pos.w - iw) / 2;
-      by = drawY + (imgH - ih) / 2;
-      bw = iw;
+      const rect = getContainRect(image.aspectRatio, pos.x, drawY, pos.w, imgH);
+      bx = rect.x;
+      by = rect.y;
+      bw = rect.w;
     }
 
     const ext = mimeToExt(image.mime);
@@ -419,4 +431,3 @@ export function drawCanvasOverlayLayer({
     }
   }
 }
-
