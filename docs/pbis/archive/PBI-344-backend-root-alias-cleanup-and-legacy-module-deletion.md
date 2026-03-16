@@ -3,13 +3,13 @@
 ## Priority
 P1
 
-## Audit Status (2026-03-07)
-Status: **Not Implemented**
+## Audit Status (2026-03-15)
+Status: **Implemented**
 
 Evidence:
-1. Large restructures typically leave temporary aliases and re-exports behind.
-2. In this backend, legacy root modules are likely to survive unless deletion is an explicit task.
-3. Keeping both the old flat paths and the new domain paths would negate much of the navigation benefit.
+1. `core/src/lib.rs` now exposes canonical top-level modules directly without old flat root aliases.
+2. The root no longer contains legacy domain files like the pre-folderization controller/module layout.
+3. Grepping for old flat backend module paths no longer finds stale imports or compatibility aliases.
 
 ## Problem
 A backend reorganization is not complete until the old root-level aliases are removed. Otherwise the codebase will end up supporting both the old and new architecture simultaneously.
