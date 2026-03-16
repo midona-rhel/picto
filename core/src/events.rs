@@ -280,11 +280,6 @@ impl MutationImpact {
             ])
     }
 
-    /// Single domain change with no invalidation. Used for minimal mutations.
-    pub fn domain_only(domain: Domain) -> Self {
-        Self::new().domains(&[domain])
-    }
-
     /// Selection-scoped file metadata change. Invalidates selection summary only.
     pub fn selection_metadata() -> Self {
         Self::new()
@@ -309,15 +304,10 @@ impl MutationImpact {
     /// Compiler publish completion. Transitional compatibility shape until
     /// compiler-side publication facts are fully explicit.
     pub fn compiler_publish(sidebar_affected: bool, smart_folders_rebuilt: bool) -> Self {
-        let mut domains = Vec::new();
+        let mut impact = Self::new();
         if sidebar_affected {
-            domains.push(Domain::Sidebar);
+            impact = impact.add_domain(Domain::Sidebar);
         }
-        if smart_folders_rebuilt {
-            domains.push(Domain::SmartFolders);
-        }
-
-        let mut impact = Self::new().domains(&domains);
         impact.compiler_batch_done = Some(true);
         if smart_folders_rebuilt {
             impact = impact.extra_grid_scopes(vec!["system:all".into()]);

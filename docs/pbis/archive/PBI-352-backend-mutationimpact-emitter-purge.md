@@ -3,8 +3,18 @@
 ## Priority
 P1
 
+## Audit Status (2026-03-15)
+Status: **Implemented**
+
 ## Problem
 The backend still emits many runtime mutations through `MutationImpact` presets that lean on `domains` fallback semantics. That keeps the old compatibility shape alive even after the runtime contract became fact-first.
+
+Evidence:
+1. Broad fallback presets `all_domains_change()` and `domain_only()` were removed from active use and deleted from `core/src/events.rs`.
+2. Collection membership and reorder emitters now publish explicit `folder_membership_changed`, `file_hashes`, and `extra_grid_scopes` facts instead of pretending to be `status_changed` or `Domain::Files` only.
+3. Duplicate resolution now emits from `core/src/duplicates/controller.rs`, which has the winner/loser/folder facts, instead of a generic dispatch-layer placeholder.
+4. Existing-file merge receipts in `core/src/import/existing.rs` now distinguish status restoration, tag changes, metadata changes, and subscription ownership changes instead of collapsing them into `file_lifecycle`.
+5. `compiler_publish()` remains only as a minimal transitional builder for sidebar tree publication, not as a broad semantic preset.
 
 ## Scope
 - `core/src/events.rs`
