@@ -5,22 +5,6 @@ use ts_rs::TS;
 
 use crate::state::AppState;
 
-// ─── Serde helper: null → Some(""), absent → None ─────────────────────────
-
-fn deserialize_nullable_string<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let val: serde_json::Value = serde::Deserialize::deserialize(deserializer)?;
-    if val.is_null() {
-        Ok(Some(String::new()))
-    } else if let Some(s) = val.as_str() {
-        Ok(Some(s.to_string()))
-    } else {
-        Err(serde::de::Error::custom("expected string or null"))
-    }
-}
-
 // ─── Input structs ─────────────────────────────────────────────────────────
 
 #[derive(Debug, Deserialize, TS)]
@@ -177,11 +161,6 @@ pub struct GetCollectionSummaryInput {
 #[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct CreateCollectionInput {
     pub name: String,
-    #[serde(default, deserialize_with = "deserialize_nullable_string")]
-    #[ts(type = "string | null")]
-    pub description: Option<String>,
-    #[serde(default)]
-    pub tags: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize, TS)]
@@ -190,30 +169,8 @@ pub struct UpdateCollectionInput {
     #[ts(type = "number")]
     pub id: i64,
     pub name: Option<String>,
-    #[serde(default, deserialize_with = "deserialize_nullable_string")]
-    #[ts(type = "string | null")]
-    pub description: Option<String>,
+    #[serde(default)]
     pub tags: Option<Vec<String>>,
-    #[serde(alias = "sourceUrls")]
-    pub source_urls: Option<Vec<String>>,
-}
-
-#[derive(Debug, Deserialize, TS)]
-#[ts(export_to = "../../src/shared/types/generated/commands/")]
-pub struct SetCollectionRatingInput {
-    #[ts(type = "number")]
-    pub id: i64,
-    #[ts(type = "number | null")]
-    pub rating: Option<i64>,
-}
-
-#[derive(Debug, Deserialize, TS)]
-#[ts(export_to = "../../src/shared/types/generated/commands/")]
-pub struct SetCollectionSourceUrlsInput {
-    #[ts(type = "number")]
-    pub id: i64,
-    #[serde(alias = "sourceUrls")]
-    pub source_urls: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, TS)]
@@ -554,10 +511,9 @@ pub async fn create_collection(
     state: &AppState,
     input: CreateCollectionInput,
 ) -> Result<i64, String> {
-    let tags = input.tags.unwrap_or_default();
     let collection_id = state
         .db
-        .create_collection(&input.name, input.description.as_deref(), &tags)
+        .create_collection(&input.name, None, &[])
         .await?;
     crate::events::emit_mutation(
         "create_collection",
@@ -578,54 +534,17 @@ pub async fn update_collection(
 ) -> Result<(), String> {
     state
         .db
-        .update_collection(
-            input.id,
-            input.name.as_deref(),
-            input.description.as_deref(),
-            input.tags.as_deref(),
-            input.source_urls.as_deref(),
-        )
+        .update_collection(input.id, input.name.as_deref(), input.tags.as_deref())
         .await?;
+    let mut impact = crate::runtime_contract::mutation_builder::MutationImpact::collection_update(
+        input.id,
+    );
+    if input.tags.is_some() {
+        impact = impact.tags_changed();
+    }
     crate::events::emit_mutation(
         "update_collection",
-        crate::runtime_contract::mutation_builder::MutationImpact::sidebar(
-            crate::runtime_contract::mutation::Domain::Folders,
-        )
-        .folder_ids(vec![input.id]),
-    );
-    crate::events::emit_mutation(
-        "update_collection_grid",
-        crate::runtime_contract::mutation_builder::MutationImpact::selection_metadata_grid(),
-    );
-    Ok(())
-}
-
-pub async fn set_collection_rating(
-    state: &AppState,
-    input: SetCollectionRatingInput,
-) -> Result<(), String> {
-    state
-        .db
-        .set_collection_rating(input.id, input.rating)
-        .await?;
-    crate::events::emit_mutation(
-        "set_collection_rating",
-        crate::runtime_contract::mutation_builder::MutationImpact::collection_update(input.id),
-    );
-    Ok(())
-}
-
-pub async fn set_collection_source_urls(
-    state: &AppState,
-    input: SetCollectionSourceUrlsInput,
-) -> Result<(), String> {
-    state
-        .db
-        .set_collection_source_urls(input.id, &input.source_urls)
-        .await?;
-    crate::events::emit_mutation(
-        "set_collection_source_urls",
-        crate::runtime_contract::mutation_builder::MutationImpact::collection_update(input.id),
+        impact,
     );
     Ok(())
 }

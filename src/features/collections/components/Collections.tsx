@@ -9,7 +9,6 @@ import {
   TextInput,
   Badge,
   Modal,
-  Textarea,
   TagsInput,
   Loader,
   Center,
@@ -49,7 +48,6 @@ import {
 interface Collection {
   id: number;
   name: string;
-  description?: string;
   tags: string[];
   image_count: number;
   created_at: string | null;
@@ -59,7 +57,6 @@ interface Collection {
 
 interface CreateCollectionData {
   name: string;
-  description?: string;
   tags: string[];
 }
 
@@ -103,7 +100,6 @@ export function Collections() {
   // Form state
   const [formData, setFormData] = useState<CreateCollectionData>({
     name: "",
-    description: "",
     tags: [],
   });
 
@@ -175,8 +171,6 @@ export function Collections() {
     try {
       await api.collections.create({
         name: formData.name.trim(),
-        description: formData.description?.trim() || null,
-        tags: formData.tags,
       });
 
       notifySuccess('Collection created successfully');
@@ -199,7 +193,6 @@ export function Collections() {
       await api.collections.update({
         id: editingCollection.id,
         name: formData.name.trim(),
-        description: formData.description?.trim() || null,
         tags: formData.tags,
       });
 
@@ -234,7 +227,6 @@ export function Collections() {
   const resetForm = () => {
     setFormData({
       name: "",
-      description: "",
       tags: [],
     });
     setEditingCollection(null);
@@ -244,7 +236,6 @@ export function Collections() {
     setEditingCollection(collection);
     setFormData({
       name: collection.name,
-      description: collection.description || "",
       tags: collection.tags,
     });
     openEditModal();
@@ -253,8 +244,7 @@ export function Collections() {
   // Filter collections based on search and tags
   const filteredCollections = collections.filter((collection) => {
     const matchesSearch = !searchQuery ||
-      collection.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      collection.description?.toLowerCase().includes(searchQuery.toLowerCase());
+      collection.name.toLowerCase().includes(searchQuery.toLowerCase());
 
     const matchesTags = selectedTags.length === 0 ||
       selectedTags.some(tag => collection.tags.includes(tag));
@@ -615,16 +605,9 @@ export function Collections() {
                 onChange={(event) => setFormData({ ...formData, name: event.currentTarget.value })}
                 required
               />
-              <Textarea
-                label="Description"
-                placeholder="Enter collection description (optional)"
-                value={formData.description}
-                onChange={(event) => setFormData({ ...formData, description: event.currentTarget.value })}
-                rows={3}
-              />
               <TagsInput
                 label="Tags"
-                placeholder="Enter tags to categorize this collection"
+                placeholder="Bulk apply tags to collection members"
                 value={formData.tags}
                 onChange={(tags) => setFormData({ ...formData, tags })}
                 data={allTags}

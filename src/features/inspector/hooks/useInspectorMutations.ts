@@ -47,7 +47,6 @@ export function useInspectorMutations(
         await api.collections.update({
           id: selectedCollection.id,
           name: current.name,
-          description: current.description,
           tags: merged,
         });
         registerUndoAction({
@@ -56,7 +55,6 @@ export function useInspectorMutations(
             await api.collections.update({
               id: selectedCollection.id,
               name: current.name,
-              description: current.description,
               tags: current.tags,
             });
             refreshMetadata();
@@ -65,7 +63,6 @@ export function useInspectorMutations(
             await api.collections.update({
               id: selectedCollection.id,
               name: current.name,
-              description: current.description,
               tags: merged,
             });
             refreshMetadata();
@@ -120,7 +117,6 @@ export function useInspectorMutations(
         await api.collections.update({
           id: selectedCollection.id,
           name: current.name,
-          description: current.description,
           tags: nextTags,
         });
         registerUndoAction({
@@ -129,7 +125,6 @@ export function useInspectorMutations(
             await api.collections.update({
               id: selectedCollection.id,
               name: current.name,
-              description: current.description,
               tags: current.tags,
             });
             refreshMetadata();
@@ -138,7 +133,6 @@ export function useInspectorMutations(
             await api.collections.update({
               id: selectedCollection.id,
               name: current.name,
-              description: current.description,
               tags: nextTags,
             });
             refreshMetadata();
@@ -175,21 +169,7 @@ export function useInspectorMutations(
         await api.selection.updateRating(selectionSummarySpec, normalizedRating);
         refreshVirtualSelectionSummary();
       } else if (selectedCollection) {
-        const current = collectionSummary ?? await api.collections.getSummary(selectedCollection.id);
-        const previousRating = current.rating ?? null;
-        await api.collections.setRating(selectedCollection.id, normalizedRating);
-        registerUndoAction({
-          label: 'Update collection rating',
-          undo: async () => {
-            await api.collections.setRating(selectedCollection.id, previousRating);
-            refreshMetadata();
-          },
-          redo: async () => {
-            await api.collections.setRating(selectedCollection.id, normalizedRating);
-            refreshMetadata();
-          },
-        });
-        setCollectionSummary({ ...current, rating: normalizedRating });
+        return;
       } else {
         const hashes = selectedImages.map((img) => img.hash);
         if (hashes.length === 0) return;
@@ -227,21 +207,6 @@ export function useInspectorMutations(
     async (urls: string[]) => {
       setSourceUrls(urls);
       if (selectedCollection) {
-        const current = collectionSummary ?? await api.collections.getSummary(selectedCollection.id);
-        const previousUrls = [...(current.source_urls ?? [])];
-        await api.collections.setSourceUrls(selectedCollection.id, urls);
-        registerUndoAction({
-          label: 'Update collection source URLs',
-          undo: async () => {
-            await api.collections.setSourceUrls(selectedCollection.id, previousUrls);
-            refreshMetadata();
-          },
-          redo: async () => {
-            await api.collections.setSourceUrls(selectedCollection.id, urls);
-            refreshMetadata();
-          },
-        });
-        setCollectionSummary({ ...current, source_urls: [...urls] });
         return;
       }
       if (selectionSummarySpec) {
@@ -286,15 +251,6 @@ export function useInspectorMutations(
       if (saveNotesTimer.current) clearTimeout(saveNotesTimer.current);
       saveNotesTimer.current = setTimeout(() => {
         if (selectedCollection) {
-          const current = collectionSummary;
-          api.collections.update({
-            id: selectedCollection.id,
-            name: current?.name ?? selectedCollection.name,
-            description: text,
-            tags: current?.tags,
-          }).then(() => {
-            if (current) setCollectionSummary({ ...current, description: text });
-          }).catch((e) => console.error('Failed to save collection description:', e));
           return;
         }
         const notesObj: Record<string, string> = {};

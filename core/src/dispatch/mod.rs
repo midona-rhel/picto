@@ -126,8 +126,6 @@ pub async fn dispatch(command: &str, args_json: &str) -> Result<String, String> 
         "get_collection_summary" => call!(typed::folders::get_collection_summary, &state, args),
         "create_collection" => call!(typed::folders::create_collection, &state, args),
         "update_collection" => call!(typed::folders::update_collection, &state, args),
-        "set_collection_rating" => call!(typed::folders::set_collection_rating, &state, args),
-        "set_collection_source_urls" => call!(typed::folders::set_collection_source_urls, &state, args),
         "reorder_collection_members" => call!(typed::folders::reorder_collection_members, &state, args),
         "add_collection_members" => call!(typed::folders::add_collection_members, &state, args),
         "remove_collection_members" => call!(typed::folders::remove_collection_members, &state, args),

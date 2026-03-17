@@ -452,25 +452,19 @@ export const api = {
       invokeTyped('get_collections') as Promise<CollectionInfo[]>,
     getSummary: (id: number) =>
       invokeTyped('get_collection_summary', { id }) as Promise<CollectionSummary>,
-    setRating: (id: number, rating: number | null) =>
-      invokeTyped('set_collection_rating', { id, rating }) as unknown as Promise<void>,
-    setSourceUrls: (id: number, sourceUrls: string[]) =>
-      invokeTyped('set_collection_source_urls', { id, source_urls: sourceUrls }) as unknown as Promise<void>,
     reorderMembers: (id: number, hashes: string[]) =>
       invokeTyped('reorder_collection_members', { id, hashes }) as unknown as Promise<void>,
-    create: (params: { name: string; description?: string | null; tags?: string[] }) =>
+    create: (params: { name: string }) =>
       invokeTyped('create_collection', params as never),
     addMembers: (params: { id: number; hashes: string[] }) =>
       invokeTyped('add_collection_members', params),
     removeMembers: (params: { id: number; hashes: string[] }) =>
       invokeTyped('remove_collection_members', params),
-    update: (params: { id: number; name?: string; description?: string | null; tags?: string[]; sourceUrls?: string[] }) =>
+    update: (params: { id: number; name?: string; tags?: string[] }) =>
       invokeTyped('update_collection', {
         id: params.id,
         name: params.name,
-        description: params.description,
         tags: params.tags,
-        source_urls: params.sourceUrls,
       } as never) as unknown as Promise<void>,
     delete: (id: number) =>
       invokeTyped('delete_collection', { id }) as unknown as Promise<void>,

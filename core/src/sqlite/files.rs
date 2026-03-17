@@ -211,8 +211,11 @@ pub fn update_status(conn: &Connection, file_id: i64, status: i64) -> rusqlite::
          )",
         params![status, file_id],
     )?;
-
-    crate::folders::collections_db::update_cover_collection_status(conn, file_id, status)?;
+    for collection_id in
+        crate::folders::collections_db::get_parent_collection_ids_for_file_ids(conn, &[file_id])?
+    {
+        crate::folders::collections_db::sync_collection_aggregate_metadata(conn, collection_id)?;
+    }
     Ok(())
 }
 
@@ -1230,7 +1233,6 @@ impl SqliteDatabase {
     }
 
     /// Batch update status for many files at once (single transaction + bulk bitmap swap).
-    /// Automatically cascades to collection member files when the batch includes collection covers.
     pub async fn update_file_status_batch(
         &self,
         file_ids: &roaring::RoaringBitmap,
@@ -1241,22 +1243,24 @@ impl SqliteDatabase {
             return Ok(0);
         }
 
-        // Expand the set to include collection member files and collect collection entity_ids
-        let orig = original_ids;
-        let (expanded_ids, collection_entity_ids, extra_member_fids) = self
-            .with_read_conn(move |conn| {
-                crate::folders::collections_db::expand_status_batch_for_cover_collections(
-                    conn, &orig,
-                )
+        let parent_collection_ids = self
+            .with_read_conn({
+                let file_ids = original_ids.clone();
+                move |conn| {
+                    crate::folders::collections_db::get_parent_collection_ids_for_file_ids(
+                        conn, &file_ids,
+                    )
+                }
             })
             .await?;
 
-        let count = expanded_ids.len();
+        let count = original_ids.len();
         let s = status;
-        let coll_ids = collection_entity_ids;
+        let ids_for_update = original_ids.clone();
+        let coll_ids = parent_collection_ids;
         self.with_conn_mut(move |conn| {
             let tx = conn.transaction()?;
-            for chunk in expanded_ids.chunks(999) {
+            for chunk in ids_for_update.chunks(999) {
                 let placeholders: String = std::iter::repeat("?")
                     .take(chunk.len())
                     .collect::<Vec<_>>()
@@ -1282,27 +1286,19 @@ impl SqliteDatabase {
                 tx.execute(&entity_sql, param_refs.as_slice())?;
             }
 
-            // Also update collection entities themselves (they have no entity_file link)
-            for &cid in &coll_ids {
-                tx.execute(
-                    "UPDATE media_entity SET status = ?1, updated_at = CURRENT_TIMESTAMP WHERE entity_id = ?2",
-                    params![s, cid],
+            tx.commit()?;
+
+            for &collection_id in &coll_ids {
+                crate::folders::collections_db::sync_collection_aggregate_metadata(
+                    conn,
+                    collection_id,
                 )?;
             }
-
-            tx.commit()?;
             Ok(())
         })
         .await?;
 
-        // Bulk bitmap update for original + expanded member files
         for fid in file_ids.iter() {
-            for s in 0..=2i64 {
-                self.bitmaps.remove(&BitmapKey::Status(s), fid);
-            }
-            self.bitmaps.insert(&BitmapKey::Status(status), fid);
-        }
-        for fid in extra_member_fids {
             for s in 0..=2i64 {
                 self.bitmaps.remove(&BitmapKey::Status(s), fid);
             }

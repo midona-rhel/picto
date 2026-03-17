@@ -59,19 +59,57 @@ fn normalize_tags(tags: &[String]) -> Vec<String> {
     out
 }
 
-fn normalize_urls(urls: &[String]) -> Vec<String> {
-    let mut seen = HashSet::new();
-    let mut out = Vec::new();
-    for raw in urls {
-        let u = raw.trim();
-        if u.is_empty() {
-            continue;
-        }
-        if seen.insert(u.to_string()) {
-            out.push(u.to_string());
-        }
+fn get_collection_member_entity_ids(
+    conn: &Connection,
+    collection_id: i64,
+) -> rusqlite::Result<Vec<i64>> {
+    let mut stmt = conn.prepare_cached(
+        "SELECT entity_id
+         FROM media_entity
+         WHERE kind = 'single'
+           AND parent_collection_id = ?1
+         ORDER BY COALESCE(collection_ordinal, 9223372036854775807) ASC, entity_id ASC",
+    )?;
+    let rows = stmt.query_map([collection_id], |row| row.get::<_, i64>(0))?;
+    rows.collect()
+}
+
+fn get_collection_cached_tags(
+    conn: &Connection,
+    collection_id: i64,
+) -> rusqlite::Result<Vec<String>> {
+    let mut stmt = conn.prepare_cached(
+        "SELECT tag FROM collection_tag
+         WHERE collection_entity_id = ?1
+         ORDER BY tag COLLATE NOCASE",
+    )?;
+    let rows = stmt.query_map([collection_id], |row| row.get::<_, String>(0))?;
+    rows.collect()
+}
+
+pub fn get_parent_collection_ids_for_file_ids(
+    conn: &Connection,
+    file_ids: &[i64],
+) -> rusqlite::Result<Vec<i64>> {
+    if file_ids.is_empty() {
+        return Ok(Vec::new());
     }
-    out
+
+    let placeholders = std::iter::repeat_n("?", file_ids.len())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let sql = format!(
+        "SELECT DISTINCT me.parent_collection_id
+         FROM entity_file ef
+         JOIN media_entity me ON me.entity_id = ef.entity_id
+         WHERE ef.file_id IN ({placeholders})
+           AND me.parent_collection_id IS NOT NULL"
+    );
+    let mut stmt = conn.prepare_cached(&sql)?;
+    let rows = stmt.query_map(rusqlite::params_from_iter(file_ids.iter()), |row| {
+        row.get::<_, i64>(0)
+    })?;
+    rows.collect()
 }
 
 fn parse_source_urls_json(raw: &str) -> Vec<String> {
@@ -135,70 +173,6 @@ pub fn get_cover_collection_member_files(
     } else {
         Ok(Vec::new())
     }
-}
-
-pub fn update_cover_collection_status(
-    conn: &Connection,
-    file_id: i64,
-    status: i64,
-) -> rusqlite::Result<Vec<(i64, String)>> {
-    let Some(collection_id) = find_collection_for_cover_file(conn, file_id)? else {
-        return Ok(Vec::new());
-    };
-
-    let member_files = get_collection_member_files(conn, collection_id)?;
-    conn.execute(
-        "UPDATE media_entity SET status = ?1, updated_at = CURRENT_TIMESTAMP WHERE entity_id = ?2",
-        params![status, collection_id],
-    )?;
-    conn.execute(
-        "UPDATE file SET status = ?1
-         WHERE file_id IN (
-             SELECT ef.file_id FROM collection_member cm
-             JOIN entity_file ef ON ef.entity_id = cm.member_entity_id
-             WHERE cm.collection_entity_id = ?2
-         )",
-        params![status, collection_id],
-    )?;
-    conn.execute(
-        "UPDATE media_entity SET status = ?1, updated_at = CURRENT_TIMESTAMP
-         WHERE entity_id IN (
-             SELECT cm.member_entity_id FROM collection_member cm
-             WHERE cm.collection_entity_id = ?2
-         )",
-        params![status, collection_id],
-    )?;
-
-    Ok(member_files)
-}
-
-pub fn expand_status_batch_for_cover_collections(
-    conn: &Connection,
-    file_ids: &[i64],
-) -> rusqlite::Result<(Vec<i64>, Vec<i64>, Vec<u32>)> {
-    let mut expanded_ids = file_ids.to_vec();
-    let mut collection_ids = Vec::new();
-    let mut member_file_ids = Vec::new();
-
-    for &file_id in file_ids {
-        if let Some(collection_id) = find_collection_for_cover_file(conn, file_id)? {
-            collection_ids.push(collection_id);
-            let members = get_collection_member_files(conn, collection_id)?;
-            for (member_file_id, _) in members {
-                expanded_ids.push(member_file_id);
-                member_file_ids.push(member_file_id as u32);
-            }
-        }
-    }
-
-    expanded_ids.sort_unstable();
-    expanded_ids.dedup();
-    collection_ids.sort_unstable();
-    collection_ids.dedup();
-    member_file_ids.sort_unstable();
-    member_file_ids.dedup();
-
-    Ok((expanded_ids, collection_ids, member_file_ids))
 }
 
 fn ensure_collection_folder_replacements(
@@ -284,7 +258,9 @@ pub(crate) fn sync_collection_aggregate_metadata(
     conn: &Connection,
     collection_id: i64,
 ) -> rusqlite::Result<()> {
-    // 1) Mirror member tags to collection-level entity tags.
+    // 1) Mirror member tags into collection-level caches so collection reads
+    // can present aggregate tags without making the collection the authoring
+    // owner of those tags.
     conn.execute(
         "DELETE FROM entity_tag_raw WHERE entity_id = ?1",
         [collection_id],
@@ -322,7 +298,7 @@ pub(crate) fn sync_collection_aggregate_metadata(
         [collection_id],
     )?;
 
-    // 3) Merge source URLs from all member files.
+    // 3) Merge source URLs from all member files into a derived cache.
     let mut url_stmt = conn.prepare_cached(
         "SELECT f.source_urls_json
          FROM media_entity me_member
@@ -354,7 +330,7 @@ pub(crate) fn sync_collection_aggregate_metadata(
         }
     }
 
-    // 4) Rating = max member rating (if any rating exists).
+    // 4) Rating and status are derived from members.
     let merged_rating: Option<i64> = conn.query_row(
         "SELECT MAX(f.rating)
          FROM media_entity me_member
@@ -366,19 +342,43 @@ pub(crate) fn sync_collection_aggregate_metadata(
         |row| row.get(0),
     )?;
 
+    let derived_status: i64 = conn.query_row(
+        "SELECT CASE
+             WHEN EXISTS(
+                 SELECT 1
+                 FROM media_entity me_member
+                 WHERE me_member.kind = 'single'
+                   AND me_member.parent_collection_id = ?1
+                   AND me_member.status = 1
+             ) THEN 1
+             WHEN EXISTS(
+                 SELECT 1
+                 FROM media_entity me_member
+                 WHERE me_member.kind = 'single'
+                   AND me_member.parent_collection_id = ?1
+                   AND me_member.status = 0
+             ) THEN 0
+             WHEN EXISTS(
+                 SELECT 1
+                 FROM media_entity me_member
+                 WHERE me_member.kind = 'single'
+                   AND me_member.parent_collection_id = ?1
+                   AND me_member.status = 2
+             ) THEN 2
+             ELSE 1
+         END",
+        [collection_id],
+        |row| row.get(0),
+    )?;
+
     let now = chrono::Utc::now().to_rfc3339();
     conn.execute(
         "UPDATE media_entity
          SET rating = ?1,
-             status = COALESCE((
-                 SELECT MIN(me_member.status)
-                 FROM media_entity me_member
-                 WHERE me_member.kind = 'single'
-                   AND me_member.parent_collection_id = ?3
-             ), status),
-             updated_at = ?2
-         WHERE entity_id = ?3 AND kind = 'collection'",
-        params![merged_rating, now, collection_id],
+             status = ?2,
+             updated_at = ?3
+         WHERE entity_id = ?4 AND kind = 'collection'",
+        params![merged_rating, derived_status, now, collection_id],
     )?;
 
     // 5) Ensure collection appears anywhere its members already lived (folder replacement semantics).
@@ -428,35 +428,20 @@ pub fn create_collection(
     tags: &[String],
 ) -> rusqlite::Result<i64> {
     let now = chrono::Utc::now().to_rfc3339();
-    let description = description.unwrap_or("");
     conn.execute(
         "INSERT INTO media_entity (kind, name, description, status, created_at, updated_at)
          VALUES ('collection', ?1, ?2, 1, ?3, ?3)",
-        params![name, description, now],
+        params![name, "", now],
     )?;
-    let collection_id = conn.last_insert_rowid();
-
-    let tags = normalize_tags(tags);
-    if !tags.is_empty() {
-        let mut stmt = conn.prepare_cached(
-            "INSERT OR IGNORE INTO collection_tag (collection_entity_id, tag)
-             VALUES (?1, ?2)",
-        )?;
-        for tag in tags {
-            stmt.execute(params![collection_id, tag])?;
-        }
-    }
-
-    Ok(collection_id)
+    let _ = description;
+    let _ = tags;
+    Ok(conn.last_insert_rowid())
 }
 
-pub fn update_collection(
+pub fn update_collection_name(
     conn: &Connection,
     collection_id: i64,
     name: Option<&str>,
-    description: Option<&str>,
-    tags: Option<&[String]>,
-    source_urls: Option<&[String]>,
 ) -> rusqlite::Result<()> {
     let exists: bool = conn.query_row(
         "SELECT COUNT(*) > 0 FROM media_entity
@@ -472,72 +457,11 @@ pub fn update_collection(
     conn.execute(
         "UPDATE media_entity
          SET name = COALESCE(?1, name),
-             description = COALESCE(?2, description),
-             updated_at = ?3
-         WHERE entity_id = ?4 AND kind = 'collection'",
-        params![name, description, now, collection_id],
-    )?;
-
-    if let Some(tags) = tags {
-        conn.execute(
-            "DELETE FROM collection_tag WHERE collection_entity_id = ?1",
-            [collection_id],
-        )?;
-        let tags = normalize_tags(tags);
-        if !tags.is_empty() {
-            let mut stmt = conn.prepare_cached(
-                "INSERT OR IGNORE INTO collection_tag (collection_entity_id, tag)
-                 VALUES (?1, ?2)",
-            )?;
-            for tag in tags {
-                stmt.execute(params![collection_id, tag])?;
-            }
-        }
-    }
-
-    if let Some(source_urls) = source_urls {
-        conn.execute(
-            "DELETE FROM collection_source_url WHERE collection_entity_id = ?1",
-            [collection_id],
-        )?;
-        let urls = normalize_urls(source_urls);
-        if !urls.is_empty() {
-            let mut stmt = conn.prepare_cached(
-                "INSERT OR IGNORE INTO collection_source_url (collection_entity_id, url)
-                 VALUES (?1, ?2)",
-            )?;
-            for url in urls {
-                stmt.execute(params![collection_id, url])?;
-            }
-        }
-    }
-
-    Ok(())
-}
-
-pub fn set_collection_rating(
-    conn: &Connection,
-    collection_id: i64,
-    rating: Option<i64>,
-) -> rusqlite::Result<()> {
-    let exists: bool = conn.query_row(
-        "SELECT COUNT(*) > 0 FROM media_entity
-         WHERE entity_id = ?1 AND kind = 'collection'",
-        [collection_id],
-        |row| row.get(0),
-    )?;
-    if !exists {
-        return Err(rusqlite::Error::QueryReturnedNoRows);
-    }
-
-    let now = chrono::Utc::now().to_rfc3339();
-    conn.execute(
-        "UPDATE media_entity
-         SET rating = ?1,
              updated_at = ?2
          WHERE entity_id = ?3 AND kind = 'collection'",
-        params![rating, now, collection_id],
+        params![name, now, collection_id],
     )?;
+
     Ok(())
 }
 
@@ -606,7 +530,7 @@ pub fn list_collections(conn: &Connection) -> rusqlite::Result<Vec<CollectionRec
         Ok(CollectionRecord {
             id,
             name: row.get(1)?,
-            description: row.get(2)?,
+            description: String::new(),
             tags: Vec::new(),
             image_count: row.get(5)?,
             created_at: row.get(3)?,
@@ -653,18 +577,11 @@ pub fn get_collection_summary(
     conn: &Connection,
     collection_id: i64,
 ) -> rusqlite::Result<CollectionSummary> {
-    let (id, name, description, image_count, total_size_bytes, rating): (
-        i64,
-        String,
-        String,
-        i64,
-        i64,
-        Option<i64>,
-    ) = conn.query_row(
+    let (id, name, image_count, total_size_bytes, rating): (i64, String, i64, i64, Option<i64>) =
+        conn.query_row(
         "SELECT
              me.entity_id,
              COALESCE(me.name, ''),
-             COALESCE(me.description, ''),
              me.cached_item_count,
              me.cached_total_size_bytes,
              me.rating
@@ -679,7 +596,6 @@ pub fn get_collection_summary(
                 row.get(2)?,
                 row.get(3)?,
                 row.get(4)?,
-                row.get(5)?,
             ))
         },
     )?;
@@ -724,7 +640,7 @@ pub fn get_collection_summary(
     Ok(CollectionSummary {
         id,
         name,
-        description,
+        description: String::new(),
         tags,
         image_count,
         total_size_bytes,
@@ -965,45 +881,6 @@ pub fn repoint_entity_to_file(
     Ok(old_file_id)
 }
 
-pub fn set_collection_source_urls(
-    conn: &Connection,
-    collection_id: i64,
-    source_urls: &[String],
-) -> rusqlite::Result<()> {
-    let exists: bool = conn.query_row(
-        "SELECT COUNT(*) > 0 FROM media_entity
-         WHERE entity_id = ?1 AND kind = 'collection'",
-        [collection_id],
-        |row| row.get(0),
-    )?;
-    if !exists {
-        return Err(rusqlite::Error::QueryReturnedNoRows);
-    }
-
-    conn.execute(
-        "DELETE FROM collection_source_url WHERE collection_entity_id = ?1",
-        [collection_id],
-    )?;
-    let urls = normalize_urls(source_urls);
-    if !urls.is_empty() {
-        let mut stmt = conn.prepare_cached(
-            "INSERT OR IGNORE INTO collection_source_url (collection_entity_id, url)
-             VALUES (?1, ?2)",
-        )?;
-        for url in urls {
-            stmt.execute(params![collection_id, url])?;
-        }
-    }
-
-    let now = chrono::Utc::now().to_rfc3339();
-    conn.execute(
-        "UPDATE media_entity SET updated_at = ?1
-         WHERE entity_id = ?2 AND kind = 'collection'",
-        params![now, collection_id],
-    )?;
-    Ok(())
-}
-
 pub fn reorder_collection_members_by_hashes(
     conn: &Connection,
     collection_id: i64,
@@ -1106,38 +983,59 @@ impl SqliteDatabase {
         &self,
         collection_id: i64,
         name: Option<&str>,
-        description: Option<&str>,
         tags: Option<&[String]>,
-        source_urls: Option<&[String]>,
     ) -> Result<(), String> {
         let n = name.map(|v| v.to_string());
-        let d = description.map(|v| v.to_string());
-        let t = tags.map(|v| v.to_vec());
-        let s = source_urls.map(|v| v.to_vec());
-        self.with_conn(move |conn| {
-            update_collection(
-                conn,
-                collection_id,
-                n.as_deref(),
-                d.as_deref(),
-                t.as_deref(),
-                s.as_deref(),
-            )
-        })
-        .await
+        let desired_tags = tags.map(normalize_tags);
+
+        if n.is_some() {
+            let name_update = n.clone();
+            self.with_conn(move |conn| {
+                update_collection_name(conn, collection_id, name_update.as_deref())
+            })
+            .await?;
+        }
+
+        if let Some(desired_tags) = desired_tags {
+            let desired_for_diff = desired_tags.clone();
+            let (member_entity_ids, current_tags) = self
+                .with_read_conn(move |conn| {
+                    Ok((
+                        get_collection_member_entity_ids(conn, collection_id)?,
+                        get_collection_cached_tags(conn, collection_id)?,
+                    ))
+                })
+                .await?;
+
+            let current: HashSet<String> = current_tags.into_iter().collect();
+            let desired: HashSet<String> = desired_for_diff.into_iter().collect();
+            let to_add: Vec<String> = desired.difference(&current).cloned().collect();
+            let to_remove: Vec<String> = current.difference(&desired).cloned().collect();
+
+            if !member_entity_ids.is_empty() {
+                if !to_add.is_empty() {
+                    self.add_tags_batch_by_entity_ids(
+                        member_entity_ids.clone(),
+                        to_add,
+                        "local".to_string(),
+                    )
+                    .await?;
+                }
+                if !to_remove.is_empty() {
+                    self.remove_tags_batch_by_entity_ids(member_entity_ids.clone(), to_remove)
+                        .await?;
+                }
+            }
+
+            self.with_conn(move |conn| sync_collection_aggregate_metadata(conn, collection_id))
+                .await?;
+        }
+
+        Ok(())
     }
 
     pub async fn delete_collection(&self, collection_id: i64) -> Result<(), String> {
         self.with_conn(move |conn| delete_collection(conn, collection_id))
-            .await
-    }
-
-    pub async fn set_collection_rating(
-        &self,
-        collection_id: i64,
-        rating: Option<i64>,
-    ) -> Result<(), String> {
-        self.with_conn(move |conn| set_collection_rating(conn, collection_id, rating))
             .await
     }
 
@@ -1205,16 +1103,6 @@ impl SqliteDatabase {
         Ok(removed)
     }
 
-    pub async fn set_collection_source_urls(
-        &self,
-        collection_id: i64,
-        source_urls: &[String],
-    ) -> Result<(), String> {
-        let urls = source_urls.to_vec();
-        self.with_conn(move |conn| set_collection_source_urls(conn, collection_id, &urls))
-            .await
-    }
-
     pub async fn reorder_collection_members_by_hashes(
         &self,
         collection_id: i64,
@@ -1267,32 +1155,16 @@ mod tests {
         let rows = list_collections(&conn).unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].name, "My Collection");
-        assert_eq!(rows[0].description, "desc");
-        assert_eq!(rows[0].tags, vec!["tag1".to_string(), "tag2".to_string()]);
+        assert_eq!(rows[0].description, "");
+        assert!(rows[0].tags.is_empty());
         assert_eq!(rows[0].image_count, 0);
         assert!(rows[0].thumbnail_url.is_none());
 
-        update_collection(
-            &conn,
-            id,
-            Some("Renamed"),
-            Some("updated"),
-            Some(&["tag3".into(), "tag4".into()]),
-            None,
-        )
-        .unwrap();
+        update_collection_name(&conn, id, Some("Renamed")).unwrap();
         let rows = list_collections(&conn).unwrap();
         assert_eq!(rows[0].name, "Renamed");
-        assert_eq!(rows[0].description, "updated");
-        assert_eq!(rows[0].tags, vec!["tag3".to_string(), "tag4".to_string()]);
-
-        set_collection_rating(&conn, id, Some(4)).unwrap();
-        let summary = get_collection_summary(&conn, id).unwrap();
-        assert_eq!(summary.rating, Some(4));
-
-        set_collection_rating(&conn, id, None).unwrap();
-        let summary = get_collection_summary(&conn, id).unwrap();
-        assert_eq!(summary.rating, None);
+        assert_eq!(rows[0].description, "");
+        assert!(rows[0].tags.is_empty());
 
         delete_collection(&conn, id).unwrap();
         let rows = list_collections(&conn).unwrap();
@@ -1405,7 +1277,7 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(collection_status, 0);
+        assert_eq!(collection_status, 1);
         let has_collection_in_folder: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM folder_entity WHERE folder_id = ?1 AND entity_id = ?2",
@@ -1415,21 +1287,6 @@ mod tests {
             .unwrap();
         assert_eq!(has_collection_in_folder, 1);
 
-        set_collection_source_urls(
-            &conn,
-            collection_id,
-            &[
-                "https://example.com/a".to_string(),
-                "https://example.com/b".to_string(),
-                "https://example.com/a".to_string(),
-            ],
-        )
-        .unwrap();
-        let summary = get_collection_summary(&conn, collection_id).unwrap();
-        assert_eq!(summary.source_urls.len(), 2);
-        assert_eq!(summary.source_urls[0], "https://example.com/a");
-        assert_eq!(summary.source_urls[1], "https://example.com/b");
-
         reorder_collection_members_by_hashes(
             &conn,
             collection_id,
@@ -1438,5 +1295,104 @@ mod tests {
         .unwrap();
         let ordered_file_ids = list_collection_member_file_ids(&conn, collection_id).unwrap();
         assert_eq!(ordered_file_ids.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn update_collection_tags_fans_out_to_members() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = SqliteDatabase::open(dir.path()).await.unwrap();
+
+        let now = chrono::Utc::now().to_rfc3339();
+        let collection_id = db
+            .with_conn(move |conn| {
+            let mk_file = |hash: &str| NewFile {
+                hash: hash.to_string(),
+                name: Some(hash.to_string()),
+                size: 1234,
+                mime: "image/jpeg".to_string(),
+                width: Some(100),
+                height: Some(80),
+                duration_ms: None,
+                num_frames: None,
+                has_audio: false,
+                status: 1,
+                imported_at: now.clone(),
+                notes: None,
+                source_urls_json: None,
+                dominant_color_hex: None,
+                dominant_palette_blob: None,
+            };
+
+            let file_a_id = insert_file(conn, &mk_file("hash_a"))?;
+            let _file_b_id = insert_file(conn, &mk_file("hash_b"))?;
+            let keep_tag = crate::tags::db::get_or_create_tag(conn, "", "keep")?;
+            crate::tags::db::tag_entity(conn, file_a_id, keep_tag, "local")?;
+
+            let collection_id = create_collection(conn, "C", None, &[])?;
+            add_collection_members_by_hashes(
+                conn,
+                collection_id,
+                &["hash_a".to_string(), "hash_b".to_string()],
+            )?;
+            Ok(collection_id)
+        })
+        .await
+        .unwrap();
+        db.update_collection(
+            collection_id,
+            None,
+            Some(&[
+                "artist:alice".to_string(),
+                "keep".to_string(),
+                "landscape".to_string(),
+            ]),
+        )
+        .await
+        .unwrap();
+
+        let summary = db.get_collection_summary(collection_id).await.unwrap();
+        assert_eq!(
+            summary.tags,
+            vec!["artist:alice".to_string(), "keep".to_string(), "landscape".to_string()]
+        );
+
+        let tags_a = db
+            .get_entity_tags("hash_a")
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|tag| crate::tags::normalize::combine_tag(&tag.namespace, &tag.subtag))
+            .collect::<Vec<_>>();
+        let mut tags_a = tags_a;
+        tags_a.sort();
+        assert_eq!(
+            tags_a,
+            vec![
+                "artist:alice".to_string(),
+                "keep".to_string(),
+                "landscape".to_string()
+            ]
+        );
+
+        let tags_b = db
+            .get_entity_tags("hash_b")
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|tag| crate::tags::normalize::combine_tag(&tag.namespace, &tag.subtag))
+            .collect::<Vec<_>>();
+        let mut tags_b = tags_b;
+        tags_b.sort();
+        assert_eq!(
+            tags_b,
+            vec!["artist:alice".to_string(), "landscape".to_string()]
+        );
+
+        db.update_collection(collection_id, None, Some(&["artist:alice".to_string()]))
+            .await
+            .unwrap();
+
+        let summary = db.get_collection_summary(collection_id).await.unwrap();
+        assert_eq!(summary.tags, vec!["artist:alice".to_string()]);
     }
 }

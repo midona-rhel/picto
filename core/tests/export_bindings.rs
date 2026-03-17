@@ -31,8 +31,6 @@ fn export_all_bindings() {
     picto_core::dispatch::typed::folders::GetCollectionSummaryInput::export().unwrap();
     picto_core::dispatch::typed::folders::CreateCollectionInput::export().unwrap();
     picto_core::dispatch::typed::folders::UpdateCollectionInput::export().unwrap();
-    picto_core::dispatch::typed::folders::SetCollectionRatingInput::export().unwrap();
-    picto_core::dispatch::typed::folders::SetCollectionSourceUrlsInput::export().unwrap();
     picto_core::dispatch::typed::folders::ReorderCollectionMembersInput::export().unwrap();
     picto_core::dispatch::typed::folders::AddCollectionMembersInput::export().unwrap();
     picto_core::dispatch::typed::folders::RemoveCollectionMembersInput::export().unwrap();

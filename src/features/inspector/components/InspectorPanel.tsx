@@ -486,7 +486,7 @@ export function InspectorPanel({
         onToggle={() => toggleSection('properties')}
       >
         <div className={styles.propsStack}>
-          <StarRating value={selectedCollection?.rating ?? 0} onChange={handleRatingClick} />
+          <StarRating value={selectedCollection?.rating ?? 0} />
           <PropertyRow label="Items" mono value={itemCount.toLocaleString()} />
           <PropertyRow label="Total size" mono value={typeof totalSize === 'number' ? formatFileSize(totalSize) : '...'} />
           <PropertyRow label="Types" value={mimeSummary} />
@@ -585,8 +585,14 @@ export function InspectorPanel({
                   onChange={(e) => onImageNameChange(e.target.value)}
                   placeholder="Name"
                 />
-                <NotesField value={notes} onChange={onUpdateNotes} />
-                <UrlListEditor urls={sourceUrls} onChange={handleUrlChange} />
+                {!selectedImage.is_collection && (
+                  <NotesField value={notes} onChange={onUpdateNotes} />
+                )}
+                <UrlListEditor
+                  urls={sourceUrls}
+                  onChange={handleUrlChange}
+                  readOnly={selectedImage.is_collection}
+                />
               </div>
 
               {renderTags()}
