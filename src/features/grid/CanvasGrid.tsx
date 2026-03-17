@@ -20,12 +20,14 @@ import { hasSameLayoutGeometry } from './renderer/canvasGridPrimitives';
 import { useCanvasRedrawScheduler } from './renderer/useCanvasRedrawScheduler';
 import { useCanvasPointerInteractions } from './renderer/useCanvasPointerInteractions';
 import { useThumbnailPipelineLifecycle } from '../../shared/lib/canvas/useThumbnailPipelineLifecycle';
+import type { ThumbnailPipeline } from '../../shared/lib/canvas/thumbnailPipeline';
 import { useCanvasViewport } from './renderer/useCanvasViewport';
 import { useCanvasBaseDraw } from './renderer/useCanvasBaseDraw';
 import { useCanvasOverlayDraw } from './renderer/useCanvasOverlayDraw';
 import { hitTestCanvasTile } from './renderer/canvasHitTesting';
 import { HoverPreviewPortal } from './renderer/HoverPreviewPortal';
 import { CanvasGridEmptyState } from './components/CanvasGridEmptyState';
+import { createIdleCanvasScrollState } from '../../shared/lib/canvas/scrollState';
 
 const ZOOM_BTN_SIZE = 24;
 const LOAD_MORE_THRESHOLD = 500;
@@ -82,6 +84,10 @@ interface CanvasGridProps {
   scrollAnchorScopeKey?: string;
   /** Whether same-scope scroll preservation and auto-scroll behaviors are allowed. */
   preserveScrollBehaviors?: boolean;
+  /** Visual inset above the grid content without shifting the scroll shell origin. */
+  topInset?: number;
+  /** Shared thumbnail atlas that can survive shell remounts. */
+  atlasRef?: React.MutableRefObject<ThumbnailPipeline | null>;
 }
 
 export interface CanvasGridHandle {
@@ -131,13 +137,19 @@ export function CanvasGrid({
   renamingHash = null,
   scrollAnchorScopeKey = 'default',
   preserveScrollBehaviors = true,
+  topInset = 0,
+  atlasRef: sharedAtlasRef,
 }: CanvasGridProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const ctxRef = useRef<CanvasRenderingContext2D | null>(null);
   const overlayCanvasRef = useRef<HTMLCanvasElement>(null);
   const overlayCtxRef = useRef<CanvasRenderingContext2D | null>(null);
   const hoveredTileRef = useRef<number | null>(null);
+  const idleScrollState = createIdleCanvasScrollState();
   const isScrollingRef = useRef(false);
+  const scrollPhaseRef = useRef(idleScrollState.phase);
+  const scrollDirectionRef = useRef(idleScrollState.direction);
+  const scrollVelocityRef = useRef(idleScrollState.velocityPxPerSec);
   const reorderModeRef = useRef(reorderMode);
   reorderModeRef.current = reorderMode;
   const dragDisabledRef = useRef(dragDisabled);
@@ -194,6 +206,9 @@ export function CanvasGrid({
     frozen,
     markDirty,
     isScrollingRef,
+    scrollPhaseRef,
+    scrollDirectionRef,
+    scrollVelocityRef,
     pendingAtlasDirtyRef,
     dismissHoverPreviewRef,
     dismissVideoScrubRef,
@@ -292,8 +307,10 @@ export function CanvasGrid({
 
   const atlasRef = useThumbnailPipelineLifecycle({
     markDirty,
-    isScrollingRef,
+    scrollPhaseRef,
     pendingAtlasDirtyRef,
+    sharedAtlasRef,
+    destroyOnUnmount: !sharedAtlasRef,
   });
   const drawBase = useCanvasBaseDraw({
     frozenRef,
@@ -305,6 +322,9 @@ export function CanvasGrid({
     viewportHeightRef,
     scrollTopRef,
     isScrollingRef,
+    scrollPhaseRef,
+    scrollDirectionRef,
+    scrollVelocityRef,
     viewModeRef,
     layoutRef,
     bucketIndexRef,
@@ -369,14 +389,29 @@ export function CanvasGrid({
 
     const viewportCenter = st + vh / 2;
     let anchorIdx = -1;
-    let bestDist = Infinity;
-    for (let i = 0; i < prev.positions.length; i++) {
-      const p = prev.positions[i];
-      const tileCenter = p.y + p.h / 2;
-      const dist = Math.abs(tileCenter - viewportCenter);
-      if (dist < bestDist) {
-        bestDist = dist;
-        anchorIdx = i;
+    const selectedHashes = selectedHashesRef.current;
+    if (selectedHashes.size === 1) {
+      const selectedHash = [...selectedHashes][0];
+      const selectedIdx = prevImages.findIndex((img) => img.hash === selectedHash);
+      if (selectedIdx >= 0 && selectedIdx < prev.positions.length) {
+        const selectedPos = prev.positions[selectedIdx];
+        const isSelectedVisible = selectedPos.y + selectedPos.h >= st && selectedPos.y <= st + vh;
+        if (isSelectedVisible) {
+          anchorIdx = selectedIdx;
+        }
+      }
+    }
+
+    if (anchorIdx < 0) {
+      let bestDist = Infinity;
+      for (let i = 0; i < prev.positions.length; i++) {
+        const p = prev.positions[i];
+        const tileCenter = p.y + p.h / 2;
+        const dist = Math.abs(tileCenter - viewportCenter);
+        if (dist < bestDist) {
+          bestDist = dist;
+          anchorIdx = i;
+        }
       }
     }
     if (anchorIdx < 0 || anchorIdx >= layout.positions.length) return;
@@ -563,11 +598,11 @@ export function CanvasGrid({
 
   const lockedCanvasWidth = frozen && frozenCanvasWidth ? `${frozenCanvasWidth}px` : '100%';
 
-  const canvasSize = Math.min(canvasHeight, layout.totalHeight) || '100%';
+  const canvasSize = Math.min(canvasHeight, layout.totalHeight + topInset) || '100%';
 
   return (
     <div ref={containerRef} data-canvas-grid-root>
-      <div style={{ position: 'relative', height: estimatedTotalHeight, width: '100%' }}>
+      <div style={{ position: 'relative', height: estimatedTotalHeight + topInset, width: '100%', paddingTop: topInset }}>
         <div style={{ position: 'sticky', top: 0 }}>
           <canvas
             ref={canvasRef}

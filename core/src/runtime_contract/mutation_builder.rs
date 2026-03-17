@@ -105,15 +105,12 @@ impl MutationImpact {
 
     pub fn file_lifecycle(db: &crate::sqlite::SqliteDatabase) -> Self {
         Self::new()
-            .domains(&[Domain::Files, Domain::Sidebar, Domain::SmartFolders])
             .status_changed()
             .sidebar_counts_from(db)
     }
 
     pub fn file_metadata(hash: String) -> Self {
-        Self::new()
-            .domains(&[Domain::Files])
-            .file_hashes(vec![hash])
+        Self::new().file_hashes(vec![hash])
     }
 
     pub fn file_tags(hash: String) -> Self {
@@ -124,9 +121,7 @@ impl MutationImpact {
     }
 
     pub fn batch_tags() -> Self {
-        Self::new()
-            .domains(&[Domain::Tags, Domain::Files])
-            .tags_changed()
+        Self::new().tags_changed()
     }
 
     pub fn sidebar(domain: Domain) -> Self {
@@ -139,59 +134,32 @@ impl MutationImpact {
 
     pub fn file_status_change(db: &crate::sqlite::SqliteDatabase) -> Self {
         Self::new()
-            .domains(&[
-                Domain::Files,
-                Domain::Sidebar,
-                Domain::Folders,
-                Domain::SmartFolders,
-                Domain::Selection,
-            ])
             .status_changed()
             .sidebar_counts_from(db)
     }
 
     pub fn subscriptions_file_status_change(db: &crate::sqlite::SqliteDatabase) -> Self {
         Self::new()
-            .domains(&[
-                Domain::Subscriptions,
-                Domain::Files,
-                Domain::Sidebar,
-                Domain::Folders,
-                Domain::SmartFolders,
-                Domain::Selection,
-            ])
             .status_changed()
             .sidebar_counts_from(db)
     }
 
     pub fn folder_file_change(folder_id: i64) -> Self {
         Self::new()
-            .domains(&[
-                Domain::Folders,
-                Domain::Files,
-                Domain::Selection,
-                Domain::Sidebar,
-            ])
             .folder_ids(vec![folder_id])
             .folder_membership_changed(vec![folder_id])
     }
 
     pub fn tag_structure_change() -> Self {
-        Self::new()
-            .domains(&[Domain::Tags, Domain::Sidebar, Domain::SmartFolders])
-            .tag_structure_changed_fact()
+        Self::new().tag_structure_changed_fact()
     }
 
     pub fn folder_item_reorder(folder_id: i64) -> Self {
-        Self::new()
-            .domains(&[Domain::Folders])
-            .folder_ids(vec![folder_id])
+        Self::new().folder_ids(vec![folder_id])
     }
 
     pub fn selection_batch_tags() -> Self {
-        Self::new()
-            .domains(&[Domain::Tags, Domain::Files, Domain::Selection])
-            .tags_changed()
+        Self::new().tags_changed()
     }
 
     pub fn collection_update(collection_id: i64) -> Self {
@@ -222,21 +190,17 @@ impl MutationImpact {
     }
 
     pub fn selection_metadata_grid() -> Self {
-        Self::new().domains(&[Domain::Files]).tags_changed()
+        Self::new().tags_changed()
     }
 
     pub fn view_prefs_change() -> Self {
-        Self::new()
-            .domains(&[Domain::ViewPrefs])
-            .view_prefs_changed()
+        Self::new().view_prefs_changed()
     }
 
     pub fn compiler_publish(sidebar_affected: bool, smart_folders_rebuilt: bool) -> Self {
         let mut impact = Self::new();
-        if sidebar_affected {
-            impact = impact.add_domain(Domain::Sidebar);
-        }
         impact.compiler_batch_done = Some(true);
+        let _ = sidebar_affected;
         if smart_folders_rebuilt {
             impact = impact.extra_grid_scopes(vec!["system:all".into()]);
         }

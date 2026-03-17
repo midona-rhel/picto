@@ -113,13 +113,17 @@ export function useGridSwapController(args: {
 
   useEffect(() => {
     if (transitionPhase !== 'idle' || navigationMode !== 'steady') return;
+    const hasPendingInputChange =
+      prevIncomingScopeKeyRef.current !== incomingScopeKey
+      || prevQueryKeyRef.current !== queryKey;
+    if (hasPendingInputChange) return;
     if (renderedScopeKey !== liveSurface.scopeKey) {
       setRenderedScopeKey(liveSurface.scopeKey);
     }
     if (!equalGridSurfaceModel(renderedSurfaceRef.current, liveSurface)) {
       setRenderedSurface(liveSurface);
     }
-  }, [liveSurface, navigationMode, renderedScopeKey, transitionPhase]);
+  }, [incomingScopeKey, liveSurface, navigationMode, queryKey, renderedScopeKey, transitionPhase]);
 
   useEffect(() => {
     if (isFirstRenderRef.current) {

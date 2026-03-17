@@ -1,37 +1,8 @@
 import { useEffect, useLayoutEffect, type RefObject, type MutableRefObject } from 'react';
 import type { ImageSize, ZoomState, NavigatorRect } from './useImageZoom';
+import { computeNavigatorRect } from './navigatorMath';
 
 const DEFAULT_NAV_SIZE = 120;
-
-/**
- * Computes navigator viewport rect from zoom state — pure math, no DOM reads.
- */
-function computeNavRect(
-  zoomState: ZoomState,
-  imageSize: ImageSize,
-  containerSize: { w: number; h: number },
-): NavigatorRect | null {
-  const cw = containerSize.w;
-  const ch = containerSize.h;
-  if (imageSize.width * zoomState.scale < cw + 1 && imageSize.height * zoomState.scale < ch + 1) return null;
-
-  const viewW = cw / zoomState.scale;
-  const viewH = ch / zoomState.scale;
-  const cx = (cw / 2 - zoomState.tx) / zoomState.scale;
-  const cy = (ch / 2 - zoomState.ty) / zoomState.scale;
-
-  const x = (cx - viewW / 2) / imageSize.width;
-  const y = (cy - viewH / 2) / imageSize.height;
-  const w = viewW / imageSize.width;
-  const h = viewH / imageSize.height;
-
-  return {
-    x: Math.max(0, Math.min(1 - w, x)),
-    y: Math.max(0, Math.min(1 - h, y)),
-    w: Math.min(1, w),
-    h: Math.min(1, h),
-  };
-}
 
 /**
  * Applies a NavigatorRect to the minimap DOM elements.
@@ -96,7 +67,7 @@ export function useNavigatorRenderer(
       const vp = vpRef.current;
       const imgSize = imageSizeRef.current;
       if (!nav || !vp || !imgSize || !containerSize || containerSize.w === 0) return;
-      const rect = computeNavRect(liveState, imgSize, containerSize);
+      const rect = computeNavigatorRect(liveState, imgSize, containerSize);
       applyNavRect(nav, vp, rect, imgSize, navSize);
     };
     return () => {

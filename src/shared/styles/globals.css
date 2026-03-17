@@ -136,7 +136,7 @@
 
   --timing-function-super: cubic-bezier(0.4, 0, 0.22, 1);
   --timing-function-ease: cubic-bezier(0.4, 0, 0.2, 1);
-  --transition-fast: 100ms var(--timing-function-ease);
+  --transition-fast: 250ms var(--timing-function-ease);
 
   --folder-red: #ff4757;
   --folder-orange: #ff6348;

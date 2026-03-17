@@ -6,7 +6,13 @@
  * codec caps, cancellation, and queued task upgrades.
  */
 
-export type MediaQosLane = 'critical' | 'visible' | 'prefetch';
+export type MediaQosLane =
+  | 'critical'
+  | 'visible'
+  | 'prefetch'
+  | 'grid_visible_thumb'
+  | 'grid_visible_full'
+  | 'grid_prefetch_thumb';
 
 export interface MediaQosTaskHandle {
   id: number;
@@ -40,9 +46,19 @@ export interface MediaQosStats {
 
 const MAX_ACTIVE_TOTAL = 8;
 const MAX_ACTIVE_HEAVY = 2;
-const LANE_ORDER: MediaQosLane[] = ['critical', 'visible', 'prefetch'];
+const LANE_ORDER: MediaQosLane[] = [
+  'critical',
+  'grid_visible_thumb',
+  'visible',
+  'grid_visible_full',
+  'prefetch',
+  'grid_prefetch_thumb',
+];
 const LANE_BUDGETS: Record<MediaQosLane, LaneBudget> = {
   critical: { maxActive: 4 },
+  grid_visible_thumb: { maxActive: 4 },
+  grid_visible_full: { maxActive: 1 },
+  grid_prefetch_thumb: { maxActive: 1 },
   visible: { maxActive: 6 },
   prefetch: { maxActive: 3 },
 };
@@ -50,12 +66,18 @@ const LANE_BUDGETS: Record<MediaQosLane, LaneBudget> = {
 let nextTaskId = 1;
 const queuedByLane: Record<MediaQosLane, TaskRecord[]> = {
   critical: [],
+  grid_visible_thumb: [],
+  grid_visible_full: [],
+  grid_prefetch_thumb: [],
   visible: [],
   prefetch: [],
 };
 const activeTasks = new Map<number, TaskRecord>();
 const activeByLane: Record<MediaQosLane, number> = {
   critical: 0,
+  grid_visible_thumb: 0,
+  grid_visible_full: 0,
+  grid_prefetch_thumb: 0,
   visible: 0,
   prefetch: 0,
 };
@@ -193,15 +215,24 @@ export function getMediaQosStats(): MediaQosStats {
     activeHeavy,
     queuedTotal:
       queuedByLane.critical.length
+      + queuedByLane.grid_visible_thumb.length
+      + queuedByLane.grid_visible_full.length
+      + queuedByLane.grid_prefetch_thumb.length
       + queuedByLane.visible.length
       + queuedByLane.prefetch.length,
     activeByLane: {
       critical: activeByLane.critical,
+      grid_visible_thumb: activeByLane.grid_visible_thumb,
+      grid_visible_full: activeByLane.grid_visible_full,
+      grid_prefetch_thumb: activeByLane.grid_prefetch_thumb,
       visible: activeByLane.visible,
       prefetch: activeByLane.prefetch,
     },
     queuedByLane: {
       critical: queuedByLane.critical.length,
+      grid_visible_thumb: queuedByLane.grid_visible_thumb.length,
+      grid_visible_full: queuedByLane.grid_visible_full.length,
+      grid_prefetch_thumb: queuedByLane.grid_prefetch_thumb.length,
       visible: queuedByLane.visible.length,
       prefetch: queuedByLane.prefetch.length,
     },
@@ -215,9 +246,15 @@ export function resetMediaQosSchedulerForTests(): void {
   }
   activeTasks.clear();
   queuedByLane.critical.length = 0;
+  queuedByLane.grid_visible_thumb.length = 0;
+  queuedByLane.grid_visible_full.length = 0;
+  queuedByLane.grid_prefetch_thumb.length = 0;
   queuedByLane.visible.length = 0;
   queuedByLane.prefetch.length = 0;
   activeByLane.critical = 0;
+  activeByLane.grid_visible_thumb = 0;
+  activeByLane.grid_visible_full = 0;
+  activeByLane.grid_prefetch_thumb = 0;
   activeByLane.visible = 0;
   activeByLane.prefetch = 0;
   activeTotal = 0;

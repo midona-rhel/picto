@@ -1,3 +1,5 @@
+import type { CanvasScrollDirection, CanvasScrollPhase } from './scrollState';
+
 export type ThumbnailPipelineState = 'idle' | 'queued' | 'loading' | 'shown' | 'error';
 export type ThumbnailSourceKind = 'thumbnail' | 'full';
 export type ThumbnailRequestPriority = 'visible' | 'prefetch';
@@ -19,6 +21,28 @@ export interface ThumbnailPipelineStats {
   pendingThumbs: number;
   cacheSize: number;
   diskSpeed: 'normal' | 'fast';
+  activeByClass: {
+    visibleThumb: number;
+    prefetchThumb: number;
+    visibleFull: number;
+  };
+  queuedByClass: {
+    visibleThumb: number;
+    prefetchThumb: number;
+    visibleFull: number;
+  };
+  cancelCountByClass: {
+    visibleThumb: number;
+    prefetchThumb: number;
+    visibleFull: number;
+  };
+  visibleThumbWaitMsAvg: number;
+  decodeMsAvg: number;
+  cacheHitRate: number;
+  droppedLateWorkerResults: number;
+  scrollPhase: CanvasScrollPhase;
+  scrollDirection: CanvasScrollDirection;
+  scrollVelocityPxPerSec: number;
 }
 
 export interface ThumbnailQueueItem {
@@ -28,14 +52,16 @@ export interface ThumbnailQueueItem {
   sourceKind: ThumbnailSourceKind;
   priority: ThumbnailRequestPriority;
   requestedLongEdge: number;
+  queuedAt: number;
   resizeWidth?: number;
   resizeHeight?: number;
 }
 
 export interface ThumbnailInFlightItem {
-  controller: AbortController;
+  cancel: () => void;
   y: number;
   sourceKind: ThumbnailSourceKind;
   priority: ThumbnailRequestPriority;
   requestedLongEdge: number;
+  queuedAt: number;
 }

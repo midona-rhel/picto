@@ -38,6 +38,7 @@ import { useGridDisplayState } from './hooks/useGridDisplayState';
 import { useGridActionHandlers } from './hooks/useGridActionHandlers';
 import { resolveGridEmptyContext } from './gridEmptyContext';
 import { buildGridSurfaceModel } from './gridSurfaceModel';
+import { ThumbnailPipeline } from '../../shared/lib/canvas/thumbnailPipeline';
 
 interface GridScrollShellProps {
   scrollRef: React.MutableRefObject<HTMLDivElement | null>;
@@ -95,6 +96,7 @@ function GridScrollShell({
         overflowY: 'auto',
         scrollbarGutter: 'stable both-edges',
         overflowX: 'hidden',
+        overflowAnchor: 'none',
         userSelect: 'none',
         WebkitUserSelect: 'none',
         position: 'relative',
@@ -173,6 +175,10 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
   // Stable ref to latest state for use in callbacks (avoids stale closures)
   const stateRef = useRef(state);
   stateRef.current = state;
+  const sharedThumbnailAtlasRef = useRef<ThumbnailPipeline | null>(null);
+  if (!sharedThumbnailAtlasRef.current) {
+    sharedThumbnailAtlasRef.current = new ThumbnailPipeline();
+  }
 
   const contextMenu = useContextMenu();
   const navigateToFolder = useNavigationStore(s => s.navigateToFolder);
@@ -194,6 +200,16 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
   const initialLoadDone = useRef(false);
   const displayViewModeRef = useRef(state.displayViewMode);
   displayViewModeRef.current = state.displayViewMode;
+  useEffect(() => {
+    dispatch({
+      type: 'COMMIT_GEOMETRY',
+      viewMode,
+      targetSize,
+      folderId: folderId ?? null,
+      searchTags,
+      emptyContext: resolveGridEmptyContext(smartFolderPredicate, folderId, statusFilter),
+    });
+  }, [dispatch, folderId, searchTags, smartFolderPredicate, statusFilter, targetSize, viewMode]);
   const {
     queryKey,
     fetchReplace,
@@ -567,6 +583,13 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
   });
   const gridFreezeActive = externalFreeze;
 
+  useEffect(() => {
+    return () => {
+      sharedThumbnailAtlasRef.current?.destroy();
+      sharedThumbnailAtlasRef.current = null;
+    };
+  }, []);
+
   // Continuously save scroll position to navigation history (debounced).
   // This ensures the position is always current when back/forward triggers.
   useEffect(() => {
@@ -661,57 +684,98 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
         transitionStage={visibleTransitionStage}
         gridFreezeActive={gridFreezeActive}
       >
-        <div style={{ height: 8 }} />
         <div style={{ position: 'relative' }}>
-          {renderedSurface.displayFolderId != null && displaySettings.showSubfolders && (
-            <SubfolderGrid
-              folderId={renderedSurface.displayFolderId}
+          {renderedSurface.displayFolderId != null && displaySettings.showSubfolders ? (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <SubfolderGrid
+                folderId={renderedSurface.displayFolderId}
+                targetSize={renderedSurface.displayTargetSize}
+                totalImageCount={renderedSurface.images.length}
+                onOpenFolder={(id, name) => navigateToFolder({ folder_id: id, name })}
+                selectedSubfolderId={renderedSurface.selectedSubfolderId}
+                paused={gridFreezeActive}
+                onSelectedSubfolderChange={(id) => {
+                  dispatch({ type: 'SET_SELECTED_SUBFOLDER', id });
+                  dispatch({ type: 'SELECT_HASHES', hashes: new Set() });
+                }}
+              />
+              <CanvasGrid
+                images={renderedSurface.images}
+                targetSize={renderedSurface.displayTargetSize}
+                gap={gap}
+                viewMode={renderedSurface.displayViewMode}
+                selectedHashes={effectiveSelectedHashes}
+                searchTags={renderedSurface.displaySearchTags}
+                onImageClick={handleImageClick}
+                onImport={handleImport}
+                onImportFolder={handleImportFolderRequest}
+                onContainerWidthChange={handleContainerWidthChange}
+                showEmptyState={renderedSurface.showEmptyState}
+                emptyContext={renderedSurface.displayEmptyContext}
+                scrollContainerRef={scrollRef}
+                popHash={state.popHash}
+                onPopComplete={() => dispatch({ type: 'SET_POP_HASH', hash: null })}
+                frozen={gridFreezeActive || isTransitionFrozen(visibleTransitionStage)}
+                marqueeActive={state.boxActive}
+                showTileName={displaySettings.showTileName}
+                showResolution={displaySettings.showResolution}
+                showExtension={displaySettings.showExtension}
+                showExtensionLabel={displaySettings.showExtensionLabel}
+                thumbnailFitMode={displaySettings.thumbnailFitMode}
+                marqueeRectRef={marqueeRectRef}
+                marqueeHitHashesRef={marqueeHitHashesRef}
+                scheduleRedrawRef={scheduleRedrawRef}
+                onLayoutChange={(positions) => { canvasLayoutRef.current = positions; }}
+                reorderMode={isReorderScope}
+                onReorder={isReorderScope ? handleReorder : undefined}
+                onLoadMore={renderedSurface.hasMore ? loadMore : undefined}
+                totalCount={renderedSurface.totalCount}
+                renamingHash={renamingHash}
+                scrollAnchorScopeKey={renderedScopeKey}
+                preserveScrollBehaviors={preserveScrollBehaviors}
+                topInset={0}
+                atlasRef={sharedThumbnailAtlasRef}
+              />
+            </div>
+          ) : (
+            <CanvasGrid
+              images={renderedSurface.images}
               targetSize={renderedSurface.displayTargetSize}
-              totalImageCount={renderedSurface.images.length}
-              onOpenFolder={(id, name) => navigateToFolder({ folder_id: id, name })}
-              selectedSubfolderId={renderedSurface.selectedSubfolderId}
-              paused={gridFreezeActive}
-              onSelectedSubfolderChange={(id) => {
-                dispatch({ type: 'SET_SELECTED_SUBFOLDER', id });
-                dispatch({ type: 'SELECT_HASHES', hashes: new Set() });
-              }}
+              gap={gap}
+              viewMode={renderedSurface.displayViewMode}
+              selectedHashes={effectiveSelectedHashes}
+              searchTags={renderedSurface.displaySearchTags}
+              onImageClick={handleImageClick}
+              onImport={handleImport}
+              onImportFolder={handleImportFolderRequest}
+              onContainerWidthChange={handleContainerWidthChange}
+              showEmptyState={renderedSurface.showEmptyState}
+              emptyContext={renderedSurface.displayEmptyContext}
+              scrollContainerRef={scrollRef}
+              popHash={state.popHash}
+              onPopComplete={() => dispatch({ type: 'SET_POP_HASH', hash: null })}
+              frozen={gridFreezeActive || isTransitionFrozen(visibleTransitionStage)}
+              marqueeActive={state.boxActive}
+              showTileName={displaySettings.showTileName}
+              showResolution={displaySettings.showResolution}
+              showExtension={displaySettings.showExtension}
+              showExtensionLabel={displaySettings.showExtensionLabel}
+              thumbnailFitMode={displaySettings.thumbnailFitMode}
+              marqueeRectRef={marqueeRectRef}
+              marqueeHitHashesRef={marqueeHitHashesRef}
+              scheduleRedrawRef={scheduleRedrawRef}
+              onLayoutChange={(positions) => { canvasLayoutRef.current = positions; }}
+              reorderMode={isReorderScope}
+              onReorder={isReorderScope ? handleReorder : undefined}
+              onLoadMore={renderedSurface.hasMore ? loadMore : undefined}
+              totalCount={renderedSurface.totalCount}
+              renamingHash={renamingHash}
+              scrollAnchorScopeKey={renderedScopeKey}
+              preserveScrollBehaviors={preserveScrollBehaviors}
+              topInset={8}
+              atlasRef={sharedThumbnailAtlasRef}
             />
           )}
-          <CanvasGrid
-            images={renderedSurface.images}
-            targetSize={renderedSurface.displayTargetSize}
-            gap={gap}
-            viewMode={renderedSurface.displayViewMode}
-            selectedHashes={effectiveSelectedHashes}
-            searchTags={renderedSurface.displaySearchTags}
-            onImageClick={handleImageClick}
-            onImport={handleImport}
-            onImportFolder={handleImportFolderRequest}
-            onContainerWidthChange={handleContainerWidthChange}
-            showEmptyState={renderedSurface.showEmptyState}
-            emptyContext={renderedSurface.displayEmptyContext}
-            scrollContainerRef={scrollRef}
-            popHash={state.popHash}
-            onPopComplete={() => dispatch({ type: 'SET_POP_HASH', hash: null })}
-            frozen={gridFreezeActive || isTransitionFrozen(visibleTransitionStage)}
-            marqueeActive={state.boxActive}
-            showTileName={displaySettings.showTileName}
-            showResolution={displaySettings.showResolution}
-            showExtension={displaySettings.showExtension}
-            showExtensionLabel={displaySettings.showExtensionLabel}
-            thumbnailFitMode={displaySettings.thumbnailFitMode}
-            marqueeRectRef={marqueeRectRef}
-            marqueeHitHashesRef={marqueeHitHashesRef}
-            scheduleRedrawRef={scheduleRedrawRef}
-            onLayoutChange={(positions) => { canvasLayoutRef.current = positions; }}
-            reorderMode={isReorderScope}
-            onReorder={isReorderScope ? handleReorder : undefined}
-            onLoadMore={renderedSurface.hasMore ? loadMore : undefined}
-            totalCount={renderedSurface.totalCount}
-            renamingHash={renamingHash}
-            scrollAnchorScopeKey={renderedScopeKey}
-            preserveScrollBehaviors={preserveScrollBehaviors}
-          />
           {renamingHash && (
             <GridInlineRenameOverlay
               renamingHash={renamingHash}

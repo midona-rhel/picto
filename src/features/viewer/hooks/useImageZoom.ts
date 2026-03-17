@@ -1,5 +1,6 @@
 import { useCallback, useRef, useState, useEffect, useLayoutEffect, useMemo, type RefObject } from 'react';
 import { useGlobalPointerDrag } from '../../../shared/hooks/useGlobalPointerDrag';
+import { computeNavigatorRect } from './navigatorMath';
 
 export interface ZoomState {
   scale: number;
@@ -210,26 +211,7 @@ export function useImageZoom(
   // Navigator rect: pure computation from cached dimensions — no DOM reads
   const navigatorRect: NavigatorRect | null = useMemo(() => {
     if (!imageSize || containerSize.w === 0) return null;
-    const cw = containerSize.w;
-    const ch = containerSize.h;
-    if (imageSize.width * state.scale < cw + 1 && imageSize.height * state.scale < ch + 1) return null;
-
-    const viewW = cw / state.scale;
-    const viewH = ch / state.scale;
-    const cx = (cw / 2 - state.tx) / state.scale;
-    const cy = (ch / 2 - state.ty) / state.scale;
-
-    const x = (cx - viewW / 2) / imageSize.width;
-    const y = (cy - viewH / 2) / imageSize.height;
-    const w = viewW / imageSize.width;
-    const h = viewH / imageSize.height;
-
-    return {
-      x: Math.max(0, Math.min(1 - w, x)),
-      y: Math.max(0, Math.min(1 - h, y)),
-      w: Math.min(1, w),
-      h: Math.min(1, h),
-    };
+    return computeNavigatorRect(state, imageSize, containerSize);
   }, [imageSize, containerSize, state.scale, state.tx, state.ty]);
 
   const panToNormalized = useCallback((nx: number, ny: number) => {

@@ -1,12 +1,19 @@
 import { api } from '#desktop/api';
 import { mediaFileUrl, mediaThumbnailUrl } from '../mediaUrl';
+import { decodeThumbnailInWorker, getThumbnailDecodeWorkerStats } from './thumbnailDecodeClient';
+import { enqueueMediaQosTask, type MediaQosLane, type MediaQosTaskHandle } from '../mediaQosScheduler';
 import {
   THUMBNAIL_PIPELINE_FULL_QUALITY_THRESHOLD,
-  THUMBNAIL_PIPELINE_MAX_ACTIVE_IDLE,
-  THUMBNAIL_PIPELINE_MAX_ACTIVE_SCROLL,
+  THUMBNAIL_PIPELINE_MAX_VISIBLE_ACTIVE_FAST,
+  THUMBNAIL_PIPELINE_MAX_VISIBLE_ACTIVE_SLOW,
+  THUMBNAIL_PIPELINE_MAX_VISIBLE_ACTIVE_IDLE,
+  THUMBNAIL_PIPELINE_MAX_PREFETCH_ACTIVE_FAST,
+  THUMBNAIL_PIPELINE_MAX_PREFETCH_ACTIVE_SLOW,
+  THUMBNAIL_PIPELINE_MAX_PREFETCH_ACTIVE_IDLE,
+  THUMBNAIL_PIPELINE_MAX_FULL_ACTIVE_FAST,
+  THUMBNAIL_PIPELINE_MAX_FULL_ACTIVE_SLOW,
   THUMBNAIL_PIPELINE_MAX_FULL_ACTIVE_IDLE,
   THUMBNAIL_PIPELINE_MAX_FULL_LONG_EDGE,
-  THUMBNAIL_PIPELINE_MAX_FULL_ACTIVE_SCROLL,
   THUMBNAIL_PIPELINE_MAX_ENTRIES,
   THUMBNAIL_PIPELINE_SOURCE_EDGE,
 } from './thumbnailPipelinePolicy';
@@ -18,6 +25,11 @@ import type {
   ThumbnailRequestPriority,
   ThumbnailSourceKind,
 } from './thumbnailPipelineTypes';
+import {
+  type CanvasScrollPhase,
+  type CanvasScrollState,
+  createIdleCanvasScrollState,
+} from './scrollState';
 
 export type {
   ThumbnailPipelineEntry,
@@ -37,35 +49,67 @@ export class ThumbnailPipeline {
   private cache = new Map<string, ThumbnailPipelineEntry>();
   private queueMap = new Map<string, ThumbnailQueueItem>();
   private activeLoads = 0;
+  private activeVisibleThumbLoads = 0;
+  private activePrefetchThumbLoads = 0;
   private activeFullLoads = 0;
   private accessCounter = 0;
-  private scrolling = false;
+  private scrollState: CanvasScrollState = createIdleCanvasScrollState();
   private destroyed = false;
   private loadedHashes = new Set<string>();
   private inFlight = new Map<string, ThumbnailInFlightItem>();
+  private cacheHitCount = 0;
+  private cacheMissCount = 0;
+  private visibleThumbWaitTotalMs = 0;
+  private visibleThumbWaitSamples = 0;
+  private decodeTotalMs = 0;
+  private decodeSamples = 0;
+  private cancelCountByClass = {
+    visibleThumb: 0,
+    prefetchThumb: 0,
+    visibleFull: 0,
+  };
 
-  constructor(private readonly onDirty: () => void) {}
+  private onDirty: () => void;
 
-  setScrolling(active: boolean): void {
-    const wasScrolling = this.scrolling;
-    this.scrolling = active;
+  constructor(onDirty: () => void = () => {}) {
+    this.onDirty = onDirty;
+  }
 
-    // Cancel in-flight full-quality loads when scroll begins — their decode
-    // completion would cause a heavy bitmap swap mid-scroll. The thumbnail
-    // fallback remains visible; full-quality re-triggers on scroll idle.
-    if (active && !wasScrolling) {
+  setOnDirty(onDirty: () => void): void {
+    this.onDirty = onDirty;
+  }
+
+  setScrollState(nextState: CanvasScrollState): void {
+    const prevPhase = this.scrollState.phase;
+    this.scrollState = nextState;
+
+    if (nextState.phase === 'fast' && prevPhase !== 'fast') {
+      for (const [hash, item] of this.queueMap) {
+        if (!isNonVisibleWork(item)) continue;
+        this.queueMap.delete(hash);
+        this.recordCancellation(item.sourceKind, item.priority);
+        const entry = this.cache.get(hash);
+        if (entry && !entry.thumb) this.resetEntry(entry);
+      }
+
       for (const [hash, inFlight] of this.inFlight) {
-        if (inFlight.sourceKind !== 'full') continue;
-        inFlight.controller.abort();
-        this.inFlight.delete(hash);
-        this.activeLoads = Math.max(0, this.activeLoads - 1);
-        this.activeFullLoads = Math.max(0, this.activeFullLoads - 1);
+        if (!isNonVisibleWork(inFlight)) continue;
+        this.recordCancellation(inFlight.sourceKind, inFlight.priority);
+        inFlight.cancel();
         const entry = this.cache.get(hash);
         if (entry && entry.state === 'loading') this.resetEntry(entry);
       }
     }
 
     this.pump();
+  }
+
+  setScrolling(active: boolean): void {
+    this.setScrollState({
+      phase: active ? 'slow' : 'idle',
+      direction: this.scrollState.direction,
+      velocityPxPerSec: active ? Math.max(this.scrollState.velocityPxPerSec, 1) : 0,
+    });
   }
 
   get(hash: string): ThumbnailPipelineEntry | null {
@@ -83,7 +127,10 @@ export class ThumbnailPipeline {
     if (!request) return;
 
     if (entry.thumb) {
-      if (!needsUpgrade(entry, request)) return;
+      if (!needsUpgrade(entry, request)) {
+        this.cacheHitCount += 1;
+        return;
+      }
     } else if (entry.state === 'queued' || entry.state === 'loading') {
       const active = this.inFlight.get(hash);
       if (active && !needsUpgradeState(active.sourceKind, active.requestedLongEdge, request.sourceKind, request.requestedLongEdge)) {
@@ -95,6 +142,7 @@ export class ThumbnailPipeline {
       }
     }
 
+    this.cacheMissCount += 1;
     this.markQueued(entry);
     this.queueMap.set(hash, request);
     this.pump();
@@ -104,6 +152,7 @@ export class ThumbnailPipeline {
     for (const [hash, item] of this.queueMap) {
       if (item.y >= top && item.y <= bottom) continue;
       this.queueMap.delete(hash);
+      this.recordCancellation(item.sourceKind, item.priority);
       const entry = this.cache.get(hash);
       if (!entry) continue;
       if (!entry.thumb) this.resetEntry(entry);
@@ -113,25 +162,44 @@ export class ThumbnailPipeline {
       const entry = this.cache.get(hash);
       if (!entry || entry.state !== 'loading') continue;
       if (inFlight.y >= top && inFlight.y <= bottom) continue;
-      inFlight.controller.abort();
-      this.inFlight.delete(hash);
+      this.recordCancellation(inFlight.sourceKind, inFlight.priority);
+      inFlight.cancel();
       this.resetEntry(entry);
     }
   }
 
   getStats(): ThumbnailPipelineStats {
+    const queuedByClass = countQueuedByClass(this.queueMap.values());
+    const cacheAccessCount = this.cacheHitCount + this.cacheMissCount;
+    const workerStats = getThumbnailDecodeWorkerStats();
     return {
       queueDepth: this.queueMap.size,
       activeLoads: this.activeLoads,
       pendingThumbs: this.queueMap.size,
       cacheSize: this.cache.size,
       diskSpeed: 'normal',
+      activeByClass: {
+        visibleThumb: this.activeVisibleThumbLoads,
+        prefetchThumb: this.activePrefetchThumbLoads,
+        visibleFull: this.activeFullLoads,
+      },
+      queuedByClass,
+      cancelCountByClass: { ...this.cancelCountByClass },
+      visibleThumbWaitMsAvg: this.visibleThumbWaitSamples > 0
+        ? this.visibleThumbWaitTotalMs / this.visibleThumbWaitSamples
+        : 0,
+      decodeMsAvg: this.decodeSamples > 0 ? this.decodeTotalMs / this.decodeSamples : 0,
+      cacheHitRate: cacheAccessCount > 0 ? this.cacheHitCount / cacheAccessCount : 0,
+      droppedLateWorkerResults: workerStats.droppedLateResponses,
+      scrollPhase: this.scrollState.phase,
+      scrollDirection: this.scrollState.direction,
+      scrollVelocityPxPerSec: this.scrollState.velocityPxPerSec,
     };
   }
 
   destroy(): void {
     this.destroyed = true;
-    for (const inFlight of this.inFlight.values()) inFlight.controller.abort();
+    for (const inFlight of this.inFlight.values()) inFlight.cancel();
     this.inFlight.clear();
     this.queueMap.clear();
     for (const entry of this.cache.values()) {
@@ -142,25 +210,31 @@ export class ThumbnailPipeline {
 
   private pump(): void {
     if (this.destroyed) return;
-    const maxActive = this.scrolling
-      ? THUMBNAIL_PIPELINE_MAX_ACTIVE_SCROLL
-      : THUMBNAIL_PIPELINE_MAX_ACTIVE_IDLE;
-    const maxFullActive = this.scrolling
-      ? THUMBNAIL_PIPELINE_MAX_FULL_ACTIVE_SCROLL
-      : THUMBNAIL_PIPELINE_MAX_FULL_ACTIVE_IDLE;
-    while (this.activeLoads < maxActive) {
-      const next = this.selectNextQueueItem(maxFullActive);
+    while (true) {
+      const next = this.selectNextQueueItem();
       if (!next) break;
       this.queueMap.delete(next.hash);
-      void this.loadThumb(next);
+      this.startLoad(next);
     }
   }
 
-  private selectNextQueueItem(maxFullActive: number): ThumbnailQueueItem | null {
+  private selectNextQueueItem(): ThumbnailQueueItem | null {
+    const budgets = getActiveBudgets(this.scrollState.phase);
+    const hasVisibleThumbnailQueued = [...this.queueMap.values()].some(
+      (item) => item.priority === 'visible' && item.sourceKind === 'thumbnail',
+    );
     let best: ThumbnailQueueItem | null = null;
     let bestScore = -1;
     for (const item of this.queueMap.values()) {
-      if (item.sourceKind === 'full' && this.activeFullLoads >= maxFullActive) continue;
+      if (!canStartQueueItem({
+        item,
+        budgets,
+        scrollPhase: this.scrollState.phase,
+        activeVisibleThumbLoads: this.activeVisibleThumbLoads,
+        activePrefetchThumbLoads: this.activePrefetchThumbLoads,
+        activeFullLoads: this.activeFullLoads,
+        hasVisibleThumbnailQueued,
+      })) continue;
       const score = scoreQueueItem(item);
       if (score > bestScore) {
         bestScore = score;
@@ -170,52 +244,93 @@ export class ThumbnailPipeline {
     return best;
   }
 
-  private async loadThumb(item: ThumbnailQueueItem): Promise<void> {
+  private startLoad(item: ThumbnailQueueItem): void {
     const entry = this.cache.get(item.hash);
     if (!entry) return;
     if (entry.thumb && !needsUpgrade(entry, item)) return;
 
-    const controller = new AbortController();
-    this.inFlight.set(item.hash, {
-      controller,
-      y: item.y,
-      sourceKind: item.sourceKind,
-      priority: item.priority,
-      requestedLongEdge: item.requestedLongEdge,
-    });
-    this.activeLoads += 1;
-    if (item.sourceKind === 'full') this.activeFullLoads += 1;
-    this.markLoading(entry);
-    try {
-      const response = await fetch(item.url, { signal: controller.signal });
-      if (!response.ok) throw new Error(`thumbnail fetch failed: ${response.status}`);
-      const blob = await response.blob();
-      const bitmap = await createBitmap(blob, item);
-      this.applyBitmap(item.hash, bitmap, item.sourceKind, item.requestedLongEdge);
-    } catch {
-      if (controller.signal.aborted) return;
-      const current = this.cache.get(item.hash);
-      if (current && item.sourceKind === 'thumbnail' && !current.retryQueued) {
-        this.queueRepairRetry(current, item);
-      } else if (current) {
-        this.markError(current);
-        this.onDirty();
-      }
-    } finally {
+    let finished = false;
+    let handle: MediaQosTaskHandle | null = null;
+    const finish = () => {
+      if (finished) return;
+      finished = true;
       this.inFlight.delete(item.hash);
       this.activeLoads = Math.max(0, this.activeLoads - 1);
       if (item.sourceKind === 'full') {
         this.activeFullLoads = Math.max(0, this.activeFullLoads - 1);
+      } else if (item.priority === 'visible') {
+        this.activeVisibleThumbLoads = Math.max(0, this.activeVisibleThumbLoads - 1);
+      } else {
+        this.activePrefetchThumbLoads = Math.max(0, this.activePrefetchThumbLoads - 1);
       }
       this.pump();
+    };
+
+    this.inFlight.set(item.hash, {
+      cancel: () => {
+        handle?.cancel();
+        finish();
+      },
+      y: item.y,
+      sourceKind: item.sourceKind,
+      priority: item.priority,
+      requestedLongEdge: item.requestedLongEdge,
+      queuedAt: item.queuedAt,
+    });
+    this.activeLoads += 1;
+    if (item.sourceKind === 'full') {
+      this.activeFullLoads += 1;
+    } else if (item.priority === 'visible') {
+      this.activeVisibleThumbLoads += 1;
+    } else {
+      this.activePrefetchThumbLoads += 1;
     }
+    this.markLoading(entry);
+    handle = enqueueMediaQosTask({
+      lane: getQosLane(item),
+      priority: getQosPriority(item),
+      heavy: item.sourceKind === 'full',
+      run: async (signal) => {
+        try {
+          const { bitmap, decodeDurationMs } = await loadBitmap(item, signal);
+          if (signal.aborted) {
+            bitmap?.close();
+            return;
+          }
+          this.decodeTotalMs += decodeDurationMs;
+          this.decodeSamples += 1;
+          this.applyBitmap(item.hash, bitmap, item.sourceKind, item.requestedLongEdge, item);
+        } catch {
+          if (signal.aborted) return;
+          const current = this.cache.get(item.hash);
+          if (current && item.sourceKind === 'thumbnail' && !current.retryQueued) {
+            this.queueRepairRetry(current, item);
+          } else if (current) {
+            this.markError(current);
+            this.onDirty();
+          }
+        } finally {
+          finish();
+        }
+      },
+    });
   }
 
-  private applyBitmap(hash: string, bitmap: ImageBitmap, sourceKind: ThumbnailSourceKind, loadedLongEdge: number): void {
+  private applyBitmap(
+    hash: string,
+    bitmap: ImageBitmap,
+    sourceKind: ThumbnailSourceKind,
+    loadedLongEdge: number,
+    item: ThumbnailQueueItem,
+  ): void {
     const entry = this.cache.get(hash);
     if (!entry) {
       bitmap.close();
       return;
+    }
+    if (item.priority === 'visible' && item.sourceKind === 'thumbnail') {
+      this.visibleThumbWaitTotalMs += Math.max(0, performance.now() - item.queuedAt);
+      this.visibleThumbWaitSamples += 1;
     }
     entry.thumb?.close();
     entry.thumb = bitmap;
@@ -256,7 +371,7 @@ export class ThumbnailPipeline {
       entry.thumb?.close();
       this.cache.delete(hash);
       // NOTE: do NOT delete from loadedHashes — keeps reveal memory intact
-      this.inFlight.get(hash)?.controller.abort();
+      this.inFlight.get(hash)?.cancel();
       this.inFlight.delete(hash);
     }
   }
@@ -303,6 +418,18 @@ export class ThumbnailPipeline {
     entry.state = 'idle';
   }
 
+  private recordCancellation(sourceKind: ThumbnailSourceKind, priority: ThumbnailRequestPriority): void {
+    if (sourceKind === 'full') {
+      this.cancelCountByClass.visibleFull += 1;
+      return;
+    }
+    if (priority === 'prefetch') {
+      this.cancelCountByClass.prefetchThumb += 1;
+      return;
+    }
+    this.cancelCountByClass.visibleThumb += 1;
+  }
+
   private queueRepairRetry(entry: ThumbnailPipelineEntry, item: ThumbnailQueueItem): void {
     entry.retryQueued = true;
     void api.file.ensureThumbnail(item.hash)
@@ -321,6 +448,7 @@ function buildRequest(hash: string, args: EnsureThumbnailArgs): ThumbnailQueueIt
   const y = args.y ?? 0;
   const requestedDisplayLongEdge = Math.max(1, Math.round(Math.max(args.drawWidth ?? 0, args.drawHeight ?? 0)));
   const canUseFullQuality = isEligibleForFullQuality(args);
+  const queuedAt = performance.now();
 
   if (
     !canUseFullQuality
@@ -333,6 +461,7 @@ function buildRequest(hash: string, args: EnsureThumbnailArgs): ThumbnailQueueIt
         sourceKind: 'thumbnail',
         priority: getRequestPriority(args),
         requestedLongEdge: THUMBNAIL_PIPELINE_SOURCE_EDGE,
+        queuedAt,
       };
   }
 
@@ -348,6 +477,7 @@ function buildRequest(hash: string, args: EnsureThumbnailArgs): ThumbnailQueueIt
     sourceKind: 'full',
     priority: getRequestPriority(args),
     requestedLongEdge: resize.longEdge,
+    queuedAt,
     resizeWidth: resize.width,
     resizeHeight: resize.height,
   };
@@ -403,6 +533,30 @@ async function createBitmap(blob: Blob, item: ThumbnailQueueItem): Promise<Image
   return createImageBitmap(blob);
 }
 
+async function loadBitmap(
+  item: ThumbnailQueueItem,
+  signal: AbortSignal,
+): Promise<{ bitmap: ImageBitmap; decodeDurationMs: number }> {
+  const mainThreadStartedAt = performance.now();
+  const workerResult = decodeThumbnailInWorker(item, signal);
+  if (workerResult) {
+    try {
+      const { bitmap, durationMs } = await workerResult;
+      return { bitmap, decodeDurationMs: durationMs };
+    } catch (error) {
+      if (signal.aborted) throw error;
+    }
+  }
+
+  const response = await fetch(item.url, { signal });
+  if (!response.ok) throw new Error(`thumbnail fetch failed: ${response.status}`);
+  const blob = await response.blob();
+  return {
+    bitmap: await createBitmap(blob, item),
+    decodeDurationMs: performance.now() - mainThreadStartedAt,
+  };
+}
+
 function needsUpgrade(entry: ThumbnailPipelineEntry, request: { sourceKind: ThumbnailSourceKind; requestedLongEdge: number }): boolean {
   return needsUpgradeState(entry.sourceKind, entry.loadedLongEdge, request.sourceKind, request.requestedLongEdge);
 }
@@ -419,10 +573,92 @@ function needsUpgradeState(
 }
 
 function scoreQueueItem(item: ThumbnailQueueItem): number {
-  if (item.priority === 'visible' && item.sourceKind === 'full') return 4;
   if (item.priority === 'visible' && item.sourceKind === 'thumbnail') return 3;
-  if (item.priority === 'prefetch' && item.sourceKind === 'thumbnail') return 2;
+  if (item.priority === 'visible' && item.sourceKind === 'full') return 2;
+  if (item.priority === 'prefetch' && item.sourceKind === 'thumbnail') return 1;
   return 1;
+}
+
+function getQosLane(item: ThumbnailQueueItem): MediaQosLane {
+  if (item.sourceKind === 'full') return 'grid_visible_full';
+  return item.priority === 'visible' ? 'grid_visible_thumb' : 'grid_prefetch_thumb';
+}
+
+function getQosPriority(item: ThumbnailQueueItem): number {
+  if (item.sourceKind === 'full') return 20;
+  return item.priority === 'visible' ? 0 : 50;
+}
+
+function getActiveBudgets(scrollPhase: CanvasScrollPhase) {
+  return {
+    maxVisibleThumbs: scrollPhase === 'fast'
+      ? THUMBNAIL_PIPELINE_MAX_VISIBLE_ACTIVE_FAST
+      : scrollPhase === 'slow'
+        ? THUMBNAIL_PIPELINE_MAX_VISIBLE_ACTIVE_SLOW
+        : THUMBNAIL_PIPELINE_MAX_VISIBLE_ACTIVE_IDLE,
+    maxPrefetchThumbs: scrollPhase === 'fast'
+      ? THUMBNAIL_PIPELINE_MAX_PREFETCH_ACTIVE_FAST
+      : scrollPhase === 'slow'
+        ? THUMBNAIL_PIPELINE_MAX_PREFETCH_ACTIVE_SLOW
+        : THUMBNAIL_PIPELINE_MAX_PREFETCH_ACTIVE_IDLE,
+    maxFull: scrollPhase === 'fast'
+      ? THUMBNAIL_PIPELINE_MAX_FULL_ACTIVE_FAST
+      : scrollPhase === 'slow'
+        ? THUMBNAIL_PIPELINE_MAX_FULL_ACTIVE_SLOW
+        : THUMBNAIL_PIPELINE_MAX_FULL_ACTIVE_IDLE,
+  };
+}
+
+function canStartQueueItem(args: {
+  item: ThumbnailQueueItem;
+  budgets: ReturnType<typeof getActiveBudgets>;
+  scrollPhase: CanvasScrollPhase;
+  activeVisibleThumbLoads: number;
+  activePrefetchThumbLoads: number;
+  activeFullLoads: number;
+  hasVisibleThumbnailQueued: boolean;
+}): boolean {
+  const {
+    item,
+    budgets,
+    scrollPhase,
+    activeVisibleThumbLoads,
+    activePrefetchThumbLoads,
+    activeFullLoads,
+    hasVisibleThumbnailQueued,
+  } = args;
+
+  if (item.sourceKind === 'full') {
+    if (scrollPhase === 'fast') return false;
+    if (hasVisibleThumbnailQueued) return false;
+    return activeFullLoads < budgets.maxFull;
+  }
+
+  if (item.priority === 'prefetch') {
+    if (scrollPhase === 'fast') return false;
+    if (hasVisibleThumbnailQueued) return false;
+    return activePrefetchThumbLoads < budgets.maxPrefetchThumbs;
+  }
+
+  return activeVisibleThumbLoads < budgets.maxVisibleThumbs;
+}
+
+function isNonVisibleWork(item: Pick<ThumbnailQueueItem, 'sourceKind' | 'priority'> | Pick<ThumbnailInFlightItem, 'sourceKind' | 'priority'>): boolean {
+  return item.sourceKind === 'full' || item.priority === 'prefetch';
+}
+
+function countQueuedByClass(items: Iterable<ThumbnailQueueItem>) {
+  const queuedByClass = {
+    visibleThumb: 0,
+    prefetchThumb: 0,
+    visibleFull: 0,
+  };
+  for (const item of items) {
+    if (item.sourceKind === 'full') queuedByClass.visibleFull += 1;
+    else if (item.priority === 'prefetch') queuedByClass.prefetchThumb += 1;
+    else queuedByClass.visibleThumb += 1;
+  }
+  return queuedByClass;
 }
 
 export const __private__ = {
@@ -430,4 +666,6 @@ export const __private__ = {
   needsUpgradeState,
   quantizeLongEdge,
   scoreQueueItem,
+  getActiveBudgets,
+  canStartQueueItem,
 };

@@ -1,4 +1,12 @@
 import { useCallback, useEffect, useRef, useState, type RefObject } from 'react';
+import {
+  CANVAS_SCROLL_IDLE_DELAY_MS,
+  classifyCanvasScrollPhase,
+  createIdleCanvasScrollState,
+  resolveCanvasScrollDirection,
+  type CanvasScrollDirection,
+  type CanvasScrollPhase,
+} from '../../../shared/lib/canvas/scrollState';
 
 function useMeasuredContainerWidth() {
   const [width, setWidth] = useState(0);
@@ -9,7 +17,15 @@ function useMeasuredContainerWidth() {
       roRef.current.disconnect();
       roRef.current = null;
     }
-    if (!element) return;
+    if (!element) {
+      setWidth(0);
+      return;
+    }
+
+    const initialWidth = Math.round(element.clientWidth);
+    if (initialWidth > 0) {
+      setWidth(initialWidth);
+    }
 
     const observer = new ResizeObserver(([entry]) => {
       setWidth(Math.round(entry.contentRect.width));
@@ -28,6 +44,9 @@ export function useCanvasViewport(args: {
   frozen: boolean;
   markDirty: (lanes: 'base' | 'overlay' | 'both') => void;
   isScrollingRef: { current: boolean };
+  scrollPhaseRef: { current: CanvasScrollPhase };
+  scrollDirectionRef: { current: CanvasScrollDirection };
+  scrollVelocityRef: { current: number };
   pendingAtlasDirtyRef: { current: boolean };
   dismissHoverPreviewRef: { current: () => void };
   dismissVideoScrubRef: { current: () => void };
@@ -38,6 +57,9 @@ export function useCanvasViewport(args: {
     frozen,
     markDirty,
     isScrollingRef,
+    scrollPhaseRef,
+    scrollDirectionRef,
+    scrollVelocityRef,
     pendingAtlasDirtyRef,
     dismissHoverPreviewRef,
     dismissVideoScrubRef,
@@ -136,19 +158,25 @@ export function useCanvasViewport(args: {
 
     let rafId = 0;
     let scrollIdleTimer = 0;
+    let lastMeasuredScrollTop = initialMetrics.localScrollTop;
+    let lastMeasuredAt = performance.now();
 
     const onScroll = () => {
       isScrollingRef.current = true;
       document.documentElement.classList.add('grid-scrolling');
       if (scrollIdleTimer) window.clearTimeout(scrollIdleTimer);
       scrollIdleTimer = window.setTimeout(() => {
+        const idleState = createIdleCanvasScrollState();
         isScrollingRef.current = false;
+        scrollPhaseRef.current = idleState.phase;
+        scrollDirectionRef.current = idleState.direction;
+        scrollVelocityRef.current = idleState.velocityPxPerSec;
         document.documentElement.classList.remove('grid-scrolling');
         if (pendingAtlasDirtyRef.current) {
           pendingAtlasDirtyRef.current = false;
         }
         markDirty('both');
-      }, 40);
+      }, CANVAS_SCROLL_IDLE_DELAY_MS);
 
       dismissHoverPreviewRef.current();
       dismissVideoScrubRef.current();
@@ -157,8 +185,21 @@ export function useCanvasViewport(args: {
       rafId = requestAnimationFrame(() => {
         rafId = 0;
         const metrics = getScrollMetrics();
+        const now = performance.now();
+        const deltaPx = metrics.localScrollTop - lastMeasuredScrollTop;
+        const deltaMs = Math.max(1, now - lastMeasuredAt);
+        const velocityPxPerSec = Math.abs(deltaPx) * (1000 / deltaMs);
+        const direction = resolveCanvasScrollDirection(deltaPx);
+        const phase = classifyCanvasScrollPhase(velocityPxPerSec);
+
         scrollTopRef.current = metrics.localScrollTop;
         viewportHeightRef.current = metrics.viewportHeight;
+        scrollPhaseRef.current = phase;
+        scrollDirectionRef.current = direction;
+        scrollVelocityRef.current = velocityPxPerSec;
+        isScrollingRef.current = phase !== 'idle';
+        lastMeasuredScrollTop = metrics.localScrollTop;
+        lastMeasuredAt = now;
         markDirty('both');
       });
     };
@@ -179,7 +220,11 @@ export function useCanvasViewport(args: {
       observer.disconnect();
       if (rafId) cancelAnimationFrame(rafId);
       if (scrollIdleTimer) window.clearTimeout(scrollIdleTimer);
+      const idleState = createIdleCanvasScrollState();
       isScrollingRef.current = false;
+      scrollPhaseRef.current = idleState.phase;
+      scrollDirectionRef.current = idleState.direction;
+      scrollVelocityRef.current = idleState.velocityPxPerSec;
       document.documentElement.classList.remove('grid-scrolling');
     };
   }, [
@@ -189,7 +234,10 @@ export function useCanvasViewport(args: {
     isScrollingRef,
     markDirty,
     pendingAtlasDirtyRef,
+    scrollDirectionRef,
+    scrollPhaseRef,
     scrollContainerRef,
+    scrollVelocityRef,
   ]);
 
   useEffect(() => {
