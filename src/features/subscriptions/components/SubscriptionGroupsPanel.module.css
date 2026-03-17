@@ -254,6 +254,10 @@
   background: var(--color-black-10);
 }
 
+.expandedBody {
+  --query-columns: minmax(72px, 0.8fr) minmax(0, 2.8fr) minmax(88px, 1fr) minmax(60px, auto) minmax(96px, auto) 52px;
+}
+
 .sectionLabel {
   font-size: 11px;
   font-weight: 600;
@@ -270,9 +274,11 @@
 .queryHeaderRow,
 .queryRow {
   display: grid;
-  grid-template-columns: minmax(72px, 0.8fr) minmax(0, 2.8fr) minmax(88px, 1fr) minmax(60px, auto) minmax(96px, auto) auto;
+  grid-template-columns: var(--query-columns);
   align-items: center;
   gap: 8px;
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .queryHeaderRow {
@@ -288,6 +294,12 @@
   color: var(--color-text-tertiary);
   text-transform: uppercase;
   letter-spacing: 0.04em;
+}
+
+.queryHeaderCell:nth-child(4),
+.queryHeaderCell:nth-child(5),
+.queryHeaderCell:nth-child(6) {
+  text-align: right;
 }
 
 .queryRow {
@@ -345,6 +357,7 @@
   color: var(--color-text-tertiary);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
+  justify-self: end;
   text-align: right;
 }
 
@@ -352,6 +365,7 @@
   font-size: 11px;
   color: var(--color-text-tertiary);
   white-space: nowrap;
+  justify-self: end;
   text-align: right;
 }
 
@@ -359,6 +373,7 @@
   display: inline-flex;
   align-items: center;
   justify-content: flex-end;
+  justify-self: end;
   gap: 4px;
 }
 
