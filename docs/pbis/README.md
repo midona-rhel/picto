@@ -26,7 +26,6 @@
 - PBI-223-site-metadata-validation-instagram.md
 - PBI-224-site-metadata-validation-framework-and-api-contract.md
 - PBI-227-first-run-onboarding-and-library-creation-guidance.md
-- PBI-228-local-folder-import-workflow.md
 - PBI-229-subscription-panel-ux-clarity.md
 - PBI-231-windows-collection-and-reorder-fixes.md
 - PBI-232-theme-selector-single-click.md
