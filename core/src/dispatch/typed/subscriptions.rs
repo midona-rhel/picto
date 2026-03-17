@@ -161,49 +161,64 @@ pub struct DeleteCredentialInput {
 
 // ─── Handlers ──────────────────────────────────────────────────────────────
 
-pub async fn get_groups(state: &AppState, _input: serde_json::Value) -> Result<serde_json::Value, String> {
+pub async fn get_groups(
+    state: &AppState,
+    _input: serde_json::Value,
+) -> Result<serde_json::Value, String> {
     let result = crate::subscriptions::subscription_group_controller::SubscriptionGroupController::get_groups(&state.db).await?;
     Ok(serde_json::to_value(&result).map_err(|e| e.to_string())?)
 }
 
-pub async fn create_group(state: &AppState, input: CreateGroupInput) -> Result<serde_json::Value, String> {
+pub async fn create_group(
+    state: &AppState,
+    input: CreateGroupInput,
+) -> Result<serde_json::Value, String> {
     let group = crate::subscriptions::subscription_group_controller::SubscriptionGroupController::create_group(
         &state.db, input.name, input.schedule,
     ).await?;
     crate::events::emit_mutation(
         "create_group",
-        crate::events::MutationImpact::subscriptions_sidebar(),
+        crate::runtime_contract::mutation_builder::MutationImpact::subscriptions_sidebar(),
     );
     Ok(serde_json::to_value(&group).map_err(|e| e.to_string())?)
 }
 
 pub async fn delete_group(state: &AppState, input: DeleteGroupInput) -> Result<(), String> {
     crate::subscriptions::subscription_group_controller::SubscriptionGroupController::delete_group(
-        &state.db, &state.blob_store, input.id,
-    ).await?;
+        &state.db,
+        &state.blob_store,
+        input.id,
+    )
+    .await?;
     crate::events::emit_mutation(
         "delete_group",
-        crate::events::MutationImpact::subscriptions_sidebar(),
+        crate::runtime_contract::mutation_builder::MutationImpact::subscriptions_sidebar(),
     );
     Ok(())
 }
 
 pub async fn rename_group(state: &AppState, input: RenameGroupInput) -> Result<(), String> {
-    crate::subscriptions::subscription_group_controller::SubscriptionGroupController::rename_group(&state.db, input.id, input.name).await?;
+    crate::subscriptions::subscription_group_controller::SubscriptionGroupController::rename_group(
+        &state.db, input.id, input.name,
+    )
+    .await?;
     crate::events::emit_mutation(
         "rename_group",
-        crate::events::MutationImpact::subscriptions_sidebar(),
+        crate::runtime_contract::mutation_builder::MutationImpact::subscriptions_sidebar(),
     );
     Ok(())
 }
 
-pub async fn set_group_schedule(state: &AppState, input: SetGroupScheduleInput) -> Result<(), String> {
+pub async fn set_group_schedule(
+    state: &AppState,
+    input: SetGroupScheduleInput,
+) -> Result<(), String> {
     crate::subscriptions::subscription_group_controller::SubscriptionGroupController::set_group_schedule(
         &state.db, input.id, input.schedule,
     ).await?;
     crate::events::emit_mutation(
         "set_group_schedule",
-        crate::events::MutationImpact::subscriptions_sidebar(),
+        crate::runtime_contract::mutation_builder::MutationImpact::subscriptions_sidebar(),
     );
     Ok(())
 }
@@ -217,49 +232,75 @@ pub async fn run_group(state: &AppState, input: RunGroupInput) -> Result<(), Str
         &state.sub_terminal_statuses,
         input.id,
         &state.settings,
-    ).await?;
+    )
+    .await?;
     crate::events::emit_mutation(
         "run_group",
-        crate::events::MutationImpact::subscriptions_sidebar(),
+        crate::runtime_contract::mutation_builder::MutationImpact::subscriptions_sidebar(),
     );
     Ok(())
 }
 
 pub async fn stop_group(state: &AppState, input: StopGroupInput) -> Result<(), String> {
     crate::subscriptions::group_orchestrator::SubscriptionGroupOrchestrator::stop_group(
-        &state.db, &state.running_subscriptions, input.id,
-    ).await?;
+        &state.db,
+        &state.running_subscriptions,
+        input.id,
+    )
+    .await?;
     crate::events::emit_mutation(
         "stop_group",
-        crate::events::MutationImpact::subscriptions_sidebar(),
+        crate::runtime_contract::mutation_builder::MutationImpact::subscriptions_sidebar(),
     );
     Ok(())
 }
 
-pub async fn get_sites(_state: &AppState, _input: serde_json::Value) -> Result<serde_json::Value, String> {
-    Ok(serde_json::to_value(&crate::subscriptions::gallery_dl_runner::SITES).map_err(|e| e.to_string())?)
+pub async fn get_sites(
+    _state: &AppState,
+    _input: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    Ok(
+        serde_json::to_value(&crate::subscriptions::gallery_dl_runner::SITES)
+            .map_err(|e| e.to_string())?,
+    )
 }
 
-pub async fn get_site_metadata_schema(_state: &AppState, input: GetSiteMetadataSchemaInput) -> Result<serde_json::Value, String> {
+pub async fn get_site_metadata_schema(
+    _state: &AppState,
+    input: GetSiteMetadataSchemaInput,
+) -> Result<serde_json::Value, String> {
     let schema = crate::subscriptions::gallery_dl_runner::get_site_metadata_schema(&input.site_id)
         .ok_or_else(|| format!("Unsupported site for metadata schema: {}", input.site_id))?;
     Ok(serde_json::to_value(&schema).map_err(|e| e.to_string())?)
 }
 
-pub async fn validate_site_metadata(_state: &AppState, input: ValidateSiteMetadataInput) -> Result<serde_json::Value, String> {
+pub async fn validate_site_metadata(
+    _state: &AppState,
+    input: ValidateSiteMetadataInput,
+) -> Result<serde_json::Value, String> {
     let sample_url = input.sample_url.unwrap_or_default();
     let result = crate::subscriptions::gallery_dl_runner::validate_site_metadata(
-        &input.site_id, &sample_url, input.sample_metadata_json.as_ref(),
+        &input.site_id,
+        &sample_url,
+        input.sample_metadata_json.as_ref(),
     );
     Ok(serde_json::to_value(&result).map_err(|e| e.to_string())?)
 }
 
-pub async fn get_subscriptions(state: &AppState, _input: serde_json::Value) -> Result<serde_json::Value, String> {
-    let result = crate::subscriptions::controller::SubscriptionController::get_subscriptions(&state.db).await?;
+pub async fn get_subscriptions(
+    state: &AppState,
+    _input: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let result =
+        crate::subscriptions::controller::SubscriptionController::get_subscriptions(&state.db)
+            .await?;
     Ok(serde_json::to_value(&result).map_err(|e| e.to_string())?)
 }
 
-pub async fn create_subscription(state: &AppState, input: CreateSubscriptionInput) -> Result<serde_json::Value, String> {
+pub async fn create_subscription(
+    state: &AppState,
+    input: CreateSubscriptionInput,
+) -> Result<serde_json::Value, String> {
     let sub = crate::subscriptions::controller::SubscriptionController::create_subscription(
         &state.db,
         input.name,
@@ -268,65 +309,94 @@ pub async fn create_subscription(state: &AppState, input: CreateSubscriptionInpu
         input.group_id,
         input.initial_file_limit,
         input.periodic_file_limit,
-    ).await?;
+    )
+    .await?;
     crate::events::emit_mutation(
         "create_subscription",
-        crate::events::MutationImpact::subscriptions_sidebar(),
+        crate::runtime_contract::mutation_builder::MutationImpact::subscriptions_sidebar(),
     );
     Ok(serde_json::to_value(&sub).map_err(|e| e.to_string())?)
 }
 
-pub async fn delete_subscription(state: &AppState, input: DeleteSubscriptionInput) -> Result<serde_json::Value, String> {
+pub async fn delete_subscription(
+    state: &AppState,
+    input: DeleteSubscriptionInput,
+) -> Result<serde_json::Value, String> {
     let count = crate::subscriptions::controller::SubscriptionController::delete_subscription(
-        &state.db, &state.blob_store, input.id,
-    ).await?;
+        &state.db,
+        &state.blob_store,
+        input.id,
+    )
+    .await?;
     crate::events::emit_mutation(
         "delete_subscription",
-        crate::events::MutationImpact::subscriptions_sidebar(),
+        crate::runtime_contract::mutation_builder::MutationImpact::subscriptions_sidebar(),
     );
     Ok(serde_json::to_value(&count).map_err(|e| e.to_string())?)
 }
 
-pub async fn pause_subscription(state: &AppState, input: PauseSubscriptionInput) -> Result<(), String> {
+pub async fn pause_subscription(
+    state: &AppState,
+    input: PauseSubscriptionInput,
+) -> Result<(), String> {
     crate::subscriptions::controller::SubscriptionController::pause_subscription(
-        &state.db, input.id, input.paused,
-    ).await?;
+        &state.db,
+        input.id,
+        input.paused,
+    )
+    .await?;
     crate::events::emit_mutation(
         "pause_subscription",
-        crate::events::MutationImpact::subscriptions_sidebar(),
+        crate::runtime_contract::mutation_builder::MutationImpact::subscriptions_sidebar(),
     );
     Ok(())
 }
 
-pub async fn add_subscription_query(state: &AppState, input: AddSubscriptionQueryInput) -> Result<serde_json::Value, String> {
+pub async fn add_subscription_query(
+    state: &AppState,
+    input: AddSubscriptionQueryInput,
+) -> Result<serde_json::Value, String> {
     let query = crate::subscriptions::controller::SubscriptionController::add_subscription_query(
-        &state.db, input.subscription_id, input.query_text,
-    ).await?;
+        &state.db,
+        input.subscription_id,
+        input.query_text,
+    )
+    .await?;
     crate::events::emit_mutation(
         "add_subscription_query",
-        crate::events::MutationImpact::subscriptions_sidebar(),
+        crate::runtime_contract::mutation_builder::MutationImpact::subscriptions_sidebar(),
     );
     Ok(serde_json::to_value(&query).map_err(|e| e.to_string())?)
 }
 
-pub async fn delete_subscription_query(state: &AppState, input: DeleteSubscriptionQueryInput) -> Result<(), String> {
+pub async fn delete_subscription_query(
+    state: &AppState,
+    input: DeleteSubscriptionQueryInput,
+) -> Result<(), String> {
     crate::subscriptions::controller::SubscriptionController::delete_subscription_query(
         &state.db, input.id,
-    ).await?;
+    )
+    .await?;
     crate::events::emit_mutation(
         "delete_subscription_query",
-        crate::events::MutationImpact::subscriptions_sidebar(),
+        crate::runtime_contract::mutation_builder::MutationImpact::subscriptions_sidebar(),
     );
     Ok(())
 }
 
-pub async fn pause_subscription_query(state: &AppState, input: PauseSubscriptionQueryInput) -> Result<(), String> {
+pub async fn pause_subscription_query(
+    state: &AppState,
+    input: PauseSubscriptionQueryInput,
+) -> Result<(), String> {
     crate::subscriptions::controller::SubscriptionController::pause_subscription_query(
-        &state.db, input.id, input.paused,
-    ).await?;
+        &state.db,
+        input.id,
+        input.paused,
+    )
+    .await?;
     crate::events::emit_mutation(
         "pause_subscription_query",
-        crate::events::MutationImpact::subscriptions_sidebar(),
+        crate::runtime_contract::mutation_builder::MutationImpact::subscriptions_sidebar(),
     );
     Ok(())
 }
@@ -340,52 +410,78 @@ pub async fn run_subscription(state: &AppState, input: RunSubscriptionInput) -> 
         input.id,
         Some(state.sub_terminal_statuses.clone()),
         &state.settings,
-    ).await?;
+    )
+    .await?;
     Ok(())
 }
 
-pub async fn stop_subscription(state: &AppState, input: StopSubscriptionInput) -> Result<(), String> {
+pub async fn stop_subscription(
+    state: &AppState,
+    input: StopSubscriptionInput,
+) -> Result<(), String> {
     crate::subscriptions::run_orchestrator::SubscriptionRunOrchestrator::stop_subscription(
-        &state.db, &state.running_subscriptions, input.id,
-    ).await?;
+        &state.db,
+        &state.running_subscriptions,
+        input.id,
+    )
+    .await?;
     Ok(())
 }
 
-pub async fn reset_subscription(state: &AppState, input: ResetSubscriptionInput) -> Result<(), String> {
+pub async fn reset_subscription(
+    state: &AppState,
+    input: ResetSubscriptionInput,
+) -> Result<(), String> {
     crate::subscriptions::controller::SubscriptionController::reset_subscription_checked(
-        &state.db, &state.running_subscriptions, input.id,
-    ).await?;
+        &state.db,
+        &state.running_subscriptions,
+        input.id,
+    )
+    .await?;
     crate::events::emit_mutation(
         "reset_subscription",
-        crate::events::MutationImpact::subscriptions_sidebar(),
+        crate::runtime_contract::mutation_builder::MutationImpact::subscriptions_sidebar(),
     );
     Ok(())
 }
 
-pub async fn get_running_subscriptions(state: &AppState, _input: serde_json::Value) -> Result<serde_json::Value, String> {
+pub async fn get_running_subscriptions(
+    state: &AppState,
+    _input: serde_json::Value,
+) -> Result<serde_json::Value, String> {
     let result = crate::subscriptions::run_orchestrator::SubscriptionRunOrchestrator::get_running_subscriptions(
         &state.running_subscriptions,
     ).await?;
     Ok(serde_json::to_value(&result).map_err(|e| e.to_string())?)
 }
 
-pub async fn get_running_subscription_progress(_state: &AppState, _input: serde_json::Value) -> Result<serde_json::Value, String> {
+pub async fn get_running_subscription_progress(
+    _state: &AppState,
+    _input: serde_json::Value,
+) -> Result<serde_json::Value, String> {
     let result = crate::subscriptions::run_orchestrator::SubscriptionRunOrchestrator::get_running_subscription_progress();
     Ok(serde_json::to_value(&result).map_err(|e| e.to_string())?)
 }
 
-pub async fn rename_subscription(state: &AppState, input: RenameSubscriptionInput) -> Result<(), String> {
+pub async fn rename_subscription(
+    state: &AppState,
+    input: RenameSubscriptionInput,
+) -> Result<(), String> {
     crate::subscriptions::controller::SubscriptionController::rename_subscription(
         &state.db, input.id, input.name,
-    ).await?;
+    )
+    .await?;
     crate::events::emit_mutation(
         "rename_subscription",
-        crate::events::MutationImpact::subscriptions_sidebar(),
+        crate::runtime_contract::mutation_builder::MutationImpact::subscriptions_sidebar(),
     );
     Ok(())
 }
 
-pub async fn run_subscription_query(state: &AppState, input: RunSubscriptionQueryInput) -> Result<(), String> {
+pub async fn run_subscription_query(
+    state: &AppState,
+    input: RunSubscriptionQueryInput,
+) -> Result<(), String> {
     crate::subscriptions::run_orchestrator::SubscriptionRunOrchestrator::run_subscription_query(
         &state.db,
         &state.blob_store,
@@ -394,34 +490,42 @@ pub async fn run_subscription_query(state: &AppState, input: RunSubscriptionQuer
         input.subscription_id,
         input.query_id,
         &state.settings,
-    ).await?;
+    )
+    .await?;
     Ok(())
 }
 
-pub async fn list_credentials(state: &AppState, _input: serde_json::Value) -> Result<serde_json::Value, String> {
+pub async fn list_credentials(
+    state: &AppState,
+    _input: serde_json::Value,
+) -> Result<serde_json::Value, String> {
     let result = state.db.list_credential_domains().await?;
     Ok(serde_json::to_value(&result).map_err(|e| e.to_string())?)
 }
 
-pub async fn list_credential_health(state: &AppState, _input: serde_json::Value) -> Result<serde_json::Value, String> {
+pub async fn list_credential_health(
+    state: &AppState,
+    _input: serde_json::Value,
+) -> Result<serde_json::Value, String> {
     let result = state.db.list_credential_health().await?;
     Ok(serde_json::to_value(&result).map_err(|e| e.to_string())?)
 }
 
 pub async fn set_credential(state: &AppState, input: SetCredentialInput) -> Result<(), String> {
     let site_category =
-        crate::subscriptions::gallery_dl_runner::canonical_site_id(input.site_category.trim()).to_string();
+        crate::subscriptions::gallery_dl_runner::canonical_site_id(input.site_category.trim())
+            .to_string();
 
-    let cred_type =
-        match crate::credential_store::CredentialType::from_str(&input.credential_type) {
-            Some(ct) => ct,
-            None => {
-                return Err(format!(
-                    "Invalid credential_type: {}",
-                    input.credential_type
-                ))
-            }
-        };
+    let cred_type = match crate::credential_store::CredentialType::from_str(&input.credential_type)
+    {
+        Some(ct) => ct,
+        None => {
+            return Err(format!(
+                "Invalid credential_type: {}",
+                input.credential_type
+            ));
+        }
+    };
 
     if site_category == "rule34" {
         if cred_type != crate::credential_store::CredentialType::ApiKey {
@@ -475,9 +579,13 @@ pub async fn set_credential(state: &AppState, input: SetCredentialInput) -> Resu
     Ok(())
 }
 
-pub async fn delete_credential(state: &AppState, input: DeleteCredentialInput) -> Result<(), String> {
+pub async fn delete_credential(
+    state: &AppState,
+    input: DeleteCredentialInput,
+) -> Result<(), String> {
     let canonical =
-        crate::subscriptions::gallery_dl_runner::canonical_site_id(input.site_category.trim()).to_string();
+        crate::subscriptions::gallery_dl_runner::canonical_site_id(input.site_category.trim())
+            .to_string();
     let mut categories = vec![input.site_category.clone(), canonical.clone()];
     if canonical == "rule34" {
         categories.push("rule34xxx".to_string());

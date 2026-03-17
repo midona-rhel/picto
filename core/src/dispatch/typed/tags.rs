@@ -125,27 +125,41 @@ pub struct CompanionGetFilesByTagInput {
 
 // ─── Handlers ──────────────────────────────────────────────────────────────
 
-pub async fn search_tags(state: &AppState, input: SearchTagsInput) -> Result<serde_json::Value, String> {
+pub async fn search_tags(
+    state: &AppState,
+    input: SearchTagsInput,
+) -> Result<serde_json::Value, String> {
     let query = input.query.unwrap_or_default();
     if input.offset.is_some() {
         let result = crate::tags::controller::TagController::search_tags_paged(
-            &state.db, query, input.limit, input.offset,
-        ).await?;
+            &state.db,
+            query,
+            input.limit,
+            input.offset,
+        )
+        .await?;
         serde_json::to_value(&result).map_err(|e| e.to_string())
     } else {
-        let result = crate::tags::controller::TagController::search_tags(
-            &state.db, query, input.limit,
-        ).await?;
+        let result =
+            crate::tags::controller::TagController::search_tags(&state.db, query, input.limit)
+                .await?;
         serde_json::to_value(&result).map_err(|e| e.to_string())
     }
 }
 
-pub async fn get_all_tags_with_counts(state: &AppState, _input: serde_json::Value) -> Result<serde_json::Value, String> {
-    let result = crate::tags::controller::TagController::get_all_tags_with_counts(&state.db).await?;
+pub async fn get_all_tags_with_counts(
+    state: &AppState,
+    _input: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let result =
+        crate::tags::controller::TagController::get_all_tags_with_counts(&state.db).await?;
     serde_json::to_value(&result).map_err(|e| e.to_string())
 }
 
-pub async fn get_file_tags(state: &AppState, input: GetFileTagsInput) -> Result<serde_json::Value, String> {
+pub async fn get_file_tags(
+    state: &AppState,
+    input: GetFileTagsInput,
+) -> Result<serde_json::Value, String> {
     let tags = state.db.get_entity_tags(&input.hash).await?;
     let result: Vec<crate::types::TagInfo> = tags
         .iter()
@@ -166,11 +180,18 @@ pub async fn add_tags(state: &AppState, input: AddTagsInput) -> Result<(), Strin
         return Ok(());
     }
     // Expand hashes to include collection member hashes
-    let expanded = state.db.expand_hashes_for_collections(&input.hashes).await?;
-    state.db.add_tags_batch(&expanded, &input.tag_strings).await?;
+    let expanded = state
+        .db
+        .expand_hashes_for_collections(&input.hashes)
+        .await?;
+    state
+        .db
+        .add_tags_batch(&expanded, &input.tag_strings)
+        .await?;
     crate::events::emit_mutation(
         "add_tags",
-        crate::events::MutationImpact::batch_tags().file_hashes(expanded),
+        crate::runtime_contract::mutation_builder::MutationImpact::batch_tags()
+            .file_hashes(expanded),
     );
     Ok(())
 }
@@ -180,19 +201,33 @@ pub async fn remove_tags(state: &AppState, input: RemoveTagsInput) -> Result<(),
         return Ok(());
     }
     // Expand hashes to include collection member hashes
-    let expanded = state.db.expand_hashes_for_collections(&input.hashes).await?;
-    state.db.remove_tags_batch(&expanded, &input.tag_strings).await?;
+    let expanded = state
+        .db
+        .expand_hashes_for_collections(&input.hashes)
+        .await?;
+    state
+        .db
+        .remove_tags_batch(&expanded, &input.tag_strings)
+        .await?;
     crate::events::emit_mutation(
         "remove_tags",
-        crate::events::MutationImpact::batch_tags().file_hashes(expanded),
+        crate::runtime_contract::mutation_builder::MutationImpact::batch_tags()
+            .file_hashes(expanded),
     );
     Ok(())
 }
 
-pub async fn find_files_by_tags(state: &AppState, input: FindFilesByTagsInput) -> Result<serde_json::Value, String> {
+pub async fn find_files_by_tags(
+    state: &AppState,
+    input: FindFilesByTagsInput,
+) -> Result<serde_json::Value, String> {
     let result = crate::tags::controller::TagController::find_files_by_tags(
-        &state.db, input.tag_strings, input.limit, input.offset,
-    ).await?;
+        &state.db,
+        input.tag_strings,
+        input.limit,
+        input.offset,
+    )
+    .await?;
     serde_json::to_value(&result).map_err(|e| e.to_string())
 }
 
@@ -206,7 +241,10 @@ pub async fn manage_tag_alias(state: &AppState, input: ManageTagAliasInput) -> R
         } else {
             let (to_ns, to_st) = crate::tags::normalize::parse_tag(to)
                 .ok_or_else(|| format!("Invalid tag: {}", to))?;
-            state.db.add_alias(&from_ns, &from_st, &to_ns, &to_st, "local").await?;
+            state
+                .db
+                .add_alias(&from_ns, &from_st, &to_ns, &to_st, "local")
+                .await?;
         }
     } else {
         state.db.remove_alias(&from_ns, &from_st, "local").await?;
@@ -214,12 +252,15 @@ pub async fn manage_tag_alias(state: &AppState, input: ManageTagAliasInput) -> R
 
     crate::events::emit_mutation(
         "manage_tag_alias",
-        crate::events::MutationImpact::tag_structure_change(),
+        crate::runtime_contract::mutation_builder::MutationImpact::tag_structure_change(),
     );
     Ok(())
 }
 
-pub async fn get_tag_relations(state: &AppState, input: GetTagRelationsInput) -> Result<serde_json::Value, String> {
+pub async fn get_tag_relations(
+    state: &AppState,
+    input: GetTagRelationsInput,
+) -> Result<serde_json::Value, String> {
     let result = match input.relation_type.as_str() {
         "aliases" => state.db.get_aliases_for_tag(input.tag_id).await?,
         "implications" => state.db.get_implications_for_tag(input.tag_id).await?,
@@ -228,21 +269,34 @@ pub async fn get_tag_relations(state: &AppState, input: GetTagRelationsInput) ->
     serde_json::to_value(&result).map_err(|e| e.to_string())
 }
 
-pub async fn manage_tag_implication(state: &AppState, input: ManageTagImplicationInput) -> Result<(), String> {
+pub async fn manage_tag_implication(
+    state: &AppState,
+    input: ManageTagImplicationInput,
+) -> Result<(), String> {
     let (cns, cst) = crate::tags::normalize::parse_tag(&input.child)
         .ok_or_else(|| format!("Invalid tag: {}", input.child))?;
     let (pns, pst) = crate::tags::normalize::parse_tag(&input.parent)
         .ok_or_else(|| format!("Invalid tag: {}", input.parent))?;
 
     match input.action.as_str() {
-        "add" => state.db.add_implication(&cns, &cst, &pns, &pst, "local").await?,
-        "remove" => state.db.remove_implication(&cns, &cst, &pns, &pst, "local").await?,
+        "add" => {
+            state
+                .db
+                .add_implication(&cns, &cst, &pns, &pst, "local")
+                .await?
+        }
+        "remove" => {
+            state
+                .db
+                .remove_implication(&cns, &cst, &pns, &pst, "local")
+                .await?
+        }
         _ => return Err(format!("Invalid action: {}", input.action)),
     }
 
     crate::events::emit_mutation(
         "manage_tag_implication",
-        crate::events::MutationImpact::tag_structure_change(),
+        crate::runtime_contract::mutation_builder::MutationImpact::tag_structure_change(),
     );
     Ok(())
 }
@@ -252,45 +306,62 @@ pub async fn merge_tags(state: &AppState, input: MergeTagsInput) -> Result<(), S
         .ok_or_else(|| format!("Invalid tag: {}", input.from_tag))?;
     let (to_ns, to_st) = crate::tags::normalize::parse_tag(&input.to_tag)
         .ok_or_else(|| format!("Invalid tag: {}", input.to_tag))?;
-    let (from_id, to_id, affected_file_ids) = state.db.with_conn(move |conn| {
-        let from_id = crate::tags::db::get_or_create_tag(conn, &from_ns, &from_st)?;
-        let to_id = crate::tags::db::get_or_create_tag(conn, &to_ns, &to_st)?;
-        let mut stmt = conn.prepare("SELECT entity_id FROM entity_tag_raw WHERE tag_id = ?1")?;
-        let file_ids: Vec<i64> = stmt
-            .query_map(rusqlite::params![from_id], |row| row.get(0))?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
-        conn.execute(
-            "UPDATE OR IGNORE entity_tag_raw SET tag_id = ?1 WHERE tag_id = ?2",
-            rusqlite::params![to_id, from_id],
-        )?;
-        conn.execute(
-            "DELETE FROM entity_tag_raw WHERE tag_id = ?1",
-            rusqlite::params![from_id],
-        )?;
-        Ok((from_id, to_id, file_ids))
-    }).await?;
+    let (from_id, to_id, affected_file_ids) = state
+        .db
+        .with_conn(move |conn| {
+            let from_id = crate::tags::db::get_or_create_tag(conn, &from_ns, &from_st)?;
+            let to_id = crate::tags::db::get_or_create_tag(conn, &to_ns, &to_st)?;
+            let mut stmt =
+                conn.prepare("SELECT entity_id FROM entity_tag_raw WHERE tag_id = ?1")?;
+            let file_ids: Vec<i64> = stmt
+                .query_map(rusqlite::params![from_id], |row| row.get(0))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            conn.execute(
+                "UPDATE OR IGNORE entity_tag_raw SET tag_id = ?1 WHERE tag_id = ?2",
+                rusqlite::params![to_id, from_id],
+            )?;
+            conn.execute(
+                "DELETE FROM entity_tag_raw WHERE tag_id = ?1",
+                rusqlite::params![from_id],
+            )?;
+            Ok((from_id, to_id, file_ids))
+        })
+        .await?;
 
     use crate::sqlite::ReadModelEvent;
-    state.db.emit_read_model_event(ReadModelEvent::TagChanged { tag_id: from_id });
-    state.db.emit_read_model_event(ReadModelEvent::TagChanged { tag_id: to_id });
+    state
+        .db
+        .emit_read_model_event(ReadModelEvent::TagChanged { tag_id: from_id });
+    state
+        .db
+        .emit_read_model_event(ReadModelEvent::TagChanged { tag_id: to_id });
     for file_id in affected_file_ids {
-        state.db.emit_read_model_event(ReadModelEvent::FileTagsChanged { file_id });
+        state
+            .db
+            .emit_read_model_event(ReadModelEvent::FileTagsChanged { file_id });
     }
     crate::events::emit_mutation(
         "merge_tags",
-        crate::events::MutationImpact::tag_structure_change(),
+        crate::runtime_contract::mutation_builder::MutationImpact::tag_structure_change(),
     );
     Ok(())
 }
 
-pub async fn get_tags_paginated(state: &AppState, input: GetTagsPaginatedInput) -> Result<serde_json::Value, String> {
-    let result = state.db.get_tags_paginated(
-        input.namespace, input.search, input.cursor, input.limit,
-    ).await?;
+pub async fn get_tags_paginated(
+    state: &AppState,
+    input: GetTagsPaginatedInput,
+) -> Result<serde_json::Value, String> {
+    let result = state
+        .db
+        .get_tags_paginated(input.namespace, input.search, input.cursor, input.limit)
+        .await?;
     serde_json::to_value(&result).map_err(|e| e.to_string())
 }
 
-pub async fn get_namespace_summary(state: &AppState, _input: serde_json::Value) -> Result<serde_json::Value, String> {
+pub async fn get_namespace_summary(
+    state: &AppState,
+    _input: serde_json::Value,
+) -> Result<serde_json::Value, String> {
     let data = state.db.get_namespace_summary().await?;
     let json_result: Vec<serde_json::Value> = data
         .iter()
@@ -299,11 +370,17 @@ pub async fn get_namespace_summary(state: &AppState, _input: serde_json::Value) 
     serde_json::to_value(&json_result).map_err(|e| e.to_string())
 }
 
-pub async fn rename_tag(state: &AppState, input: RenameTagInput) -> Result<serde_json::Value, String> {
-    let (affected_file_ids, merged_into) = state.db.rename_tag_by_id(input.tag_id, &input.new_name).await?;
+pub async fn rename_tag(
+    state: &AppState,
+    input: RenameTagInput,
+) -> Result<serde_json::Value, String> {
+    let (affected_file_ids, merged_into) = state
+        .db
+        .rename_tag_by_id(input.tag_id, &input.new_name)
+        .await?;
     crate::events::emit_mutation(
         "rename_tag",
-        crate::events::MutationImpact::tag_structure_change(),
+        crate::runtime_contract::mutation_builder::MutationImpact::tag_structure_change(),
     );
     Ok(serde_json::json!({
         "affected_files": affected_file_ids.len(),
@@ -311,44 +388,60 @@ pub async fn rename_tag(state: &AppState, input: RenameTagInput) -> Result<serde
     }))
 }
 
-pub async fn delete_tag(state: &AppState, input: DeleteTagInput) -> Result<serde_json::Value, String> {
+pub async fn delete_tag(
+    state: &AppState,
+    input: DeleteTagInput,
+) -> Result<serde_json::Value, String> {
     let affected_file_ids = state.db.delete_tag_by_id(input.tag_id).await?;
     crate::events::emit_mutation(
         "delete_tag",
-        crate::events::MutationImpact::tag_structure_change(),
+        crate::runtime_contract::mutation_builder::MutationImpact::tag_structure_change(),
     );
     Ok(serde_json::json!({
         "affected_files": affected_file_ids.len(),
     }))
 }
 
-pub async fn companion_get_namespace_values(state: &AppState, input: CompanionGetNamespaceValuesInput) -> Result<serde_json::Value, String> {
-    let values = state.db.with_read_conn(move |conn| {
-        let mut stmt = conn.prepare(
-            "SELECT subtag, file_count FROM tag
+pub async fn companion_get_namespace_values(
+    state: &AppState,
+    input: CompanionGetNamespaceValuesInput,
+) -> Result<serde_json::Value, String> {
+    let values = state
+        .db
+        .with_read_conn(move |conn| {
+            let mut stmt = conn.prepare(
+                "SELECT subtag, file_count FROM tag
              WHERE namespace = ?1 AND file_count > 0
              ORDER BY file_count DESC",
-        )?;
-        let rows = stmt.query_map([&input.namespace], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
-        })?;
-        let mut result = Vec::new();
-        for row in rows {
-            let (subtag, count) = row?;
-            result.push(serde_json::json!({
-                "value": subtag,
-                "count": count,
-                "thumbnail_hash": null,
-            }));
-        }
-        Ok(result)
-    }).await?;
+            )?;
+            let rows = stmt.query_map([&input.namespace], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+            })?;
+            let mut result = Vec::new();
+            for row in rows {
+                let (subtag, count) = row?;
+                result.push(serde_json::json!({
+                    "value": subtag,
+                    "count": count,
+                    "thumbnail_hash": null,
+                }));
+            }
+            Ok(result)
+        })
+        .await?;
     serde_json::to_value(&values).map_err(|e| e.to_string())
 }
 
-pub async fn companion_get_files_by_tag(state: &AppState, input: CompanionGetFilesByTagInput) -> Result<serde_json::Value, String> {
+pub async fn companion_get_files_by_tag(
+    state: &AppState,
+    input: CompanionGetFilesByTagInput,
+) -> Result<serde_json::Value, String> {
     let result = crate::tags::controller::TagController::find_files_by_tags(
-        &state.db, vec![input.tag], None, None,
-    ).await?;
+        &state.db,
+        vec![input.tag],
+        None,
+        None,
+    )
+    .await?;
     serde_json::to_value(&result).map_err(|e| e.to_string())
 }

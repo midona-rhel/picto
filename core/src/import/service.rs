@@ -9,10 +9,12 @@ use std::path::{Path, PathBuf};
 
 use crate::blob_store::BlobStore;
 use crate::duplicates::orchestrator::DuplicateOrchestrator;
-use crate::events::{self, Domain, ManualImportProgressEvent, MutationImpact};
+use crate::events::{self, ManualImportProgressEvent};
 use crate::folders::controller::FolderController;
-use crate::import::existing::{merge_existing_import_target, ExistingImportMergeRequest};
+use crate::import::existing::{ExistingImportMergeRequest, merge_existing_import_target};
 use crate::import::pipeline::{ImportOptions, ImportPipeline};
+use crate::runtime_contract::mutation::Domain;
+use crate::runtime_contract::mutation_builder::MutationImpact;
 use crate::sqlite::SqliteDatabase;
 use crate::tags::normalize;
 use crate::types::{ImportBatchResult, ImportResult};
@@ -69,17 +71,26 @@ impl ImportService {
             let result = pipeline.import_file(path, &options).await;
             match result {
                 Ok(imported) => {
-                    let surviving_hash =
-                        maybe_auto_merge(db, &imported.hex_hash, auto_merge_enabled, auto_merge_distance).await;
+                    let surviving_hash = maybe_auto_merge(
+                        db,
+                        &imported.hex_hash,
+                        auto_merge_enabled,
+                        auto_merge_distance,
+                    )
+                    .await;
                     if surviving_hash == imported.hex_hash {
                         emit_file_imported(db, &surviving_hash).await;
                     }
                     db.scope_cache_invalidate_all();
                     crate::events::emit_mutation(
                         "manual_import",
-                        crate::events::MutationImpact::file_lifecycle(db),
+                        crate::runtime_contract::mutation_builder::MutationImpact::file_lifecycle(
+                            db,
+                        ),
                     );
-                    batch.imported.push(build_import_result(db, imported, &surviving_hash).await);
+                    batch
+                        .imported
+                        .push(build_import_result(db, imported, &surviving_hash).await);
                 }
                 Err(crate::import::pipeline::ImportError::AlreadyImported(hash)) => {
                     merge_existing_import_target(
@@ -167,14 +178,9 @@ impl ImportService {
                 .filter(|name| !name.is_empty())
                 .unwrap_or("Imported Folder")
                 .to_string();
-            let root_folder = FolderController::create_folder(
-                db,
-                root_name,
-                parent_folder_id,
-                None,
-                None,
-            )
-            .await?;
+            let root_folder =
+                FolderController::create_folder(db, root_name, parent_folder_id, None, None)
+                    .await?;
             folder_cache.insert(PathBuf::new(), root_folder.folder_id);
             created_folder_ids.push(root_folder.folder_id);
             touched_folder_ids.insert(root_folder.folder_id);
@@ -197,14 +203,19 @@ impl ImportService {
                     .filter(|entry| !entry.is_empty())
                     .unwrap_or("Imported Folder")
                     .to_string();
-                let folder = FolderController::create_folder(db, name, Some(parent_id), None, None).await?;
+                let folder =
+                    FolderController::create_folder(db, name, Some(parent_id), None, None).await?;
                 folder_cache.insert(relative, folder.folder_id);
                 created_folder_ids.push(folder.folder_id);
                 touched_folder_ids.insert(folder.folder_id);
             }
 
             if !created_folder_ids.is_empty() {
-                FolderController::refresh_sidebar_projection_for_folder_ids(db, &created_folder_ids).await?;
+                FolderController::refresh_sidebar_projection_for_folder_ids(
+                    db,
+                    &created_folder_ids,
+                )
+                .await?;
                 crate::events::emit_mutation(
                     "import_folder_structure",
                     MutationImpact::sidebar(Domain::Folders).folder_ids(created_folder_ids.clone()),
@@ -235,13 +246,20 @@ impl ImportService {
 
             match pipeline.import_file(file_path, &options).await {
                 Ok(imported) => {
-                    let surviving_hash =
-                        maybe_auto_merge(db, &imported.hex_hash, auto_merge_enabled, auto_merge_distance).await;
+                    let surviving_hash = maybe_auto_merge(
+                        db,
+                        &imported.hex_hash,
+                        auto_merge_enabled,
+                        auto_merge_distance,
+                    )
+                    .await;
                     imported_hashes.push(surviving_hash.clone());
                     if surviving_hash == imported.hex_hash {
                         emit_file_imported(db, &surviving_hash).await;
                     }
-                    batch.imported.push(build_import_result(db, imported, &surviving_hash).await);
+                    batch
+                        .imported
+                        .push(build_import_result(db, imported, &surviving_hash).await);
                 }
                 Err(crate::import::pipeline::ImportError::AlreadyImported(hash)) => {
                     merge_existing_import_target(
@@ -273,7 +291,8 @@ impl ImportService {
                     .chain(skipped_hashes.iter().cloned())
                     .collect();
                 if !membership_hashes.is_empty() {
-                    db.add_entities_to_folder_batch(folder_id, &membership_hashes).await?;
+                    db.add_entities_to_folder_batch(folder_id, &membership_hashes)
+                        .await?;
                     touched_folder_ids.insert(folder_id);
                 }
             }
@@ -311,7 +330,8 @@ impl ImportService {
 
         if !touched_folder_ids.is_empty() {
             let touched_folder_ids: Vec<i64> = touched_folder_ids.into_iter().collect();
-            FolderController::refresh_sidebar_projection_for_folder_ids(db, &touched_folder_ids).await?;
+            FolderController::refresh_sidebar_projection_for_folder_ids(db, &touched_folder_ids)
+                .await?;
         }
 
         Ok(batch)
@@ -412,7 +432,8 @@ fn collect_import_paths(root: &Path) -> Result<(Vec<PathBuf>, Vec<PathBuf>), Str
             .map_err(|err| format!("Failed to read {}: {err}", directory.display()))?;
         let mut child_paths = Vec::<PathBuf>::new();
         for entry in entries {
-            let entry = entry.map_err(|err| format!("Failed to read entry in {}: {err}", directory.display()))?;
+            let entry = entry
+                .map_err(|err| format!("Failed to read entry in {}: {err}", directory.display()))?;
             child_paths.push(entry.path());
         }
         child_paths.sort();

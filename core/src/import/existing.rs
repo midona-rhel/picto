@@ -8,7 +8,8 @@ use std::collections::{HashMap, HashSet};
 
 use tracing::warn;
 
-use crate::events::{Domain, MutationImpact};
+use crate::runtime_contract::mutation::Domain;
+use crate::runtime_contract::mutation_builder::MutationImpact;
 use crate::sqlite::SqliteDatabase;
 
 #[derive(Debug, Clone)]
@@ -81,7 +82,9 @@ pub async fn merge_existing_import_target(
             .unwrap_or_default();
         let mut merged_notes = current_notes.clone();
         for (key, value) in &request.note_entries {
-            merged_notes.entry(key.clone()).or_insert_with(|| value.clone());
+            merged_notes
+                .entry(key.clone())
+                .or_insert_with(|| value.clone());
         }
         if merged_notes != current_notes {
             let json = serde_json::to_string(&merged_notes)

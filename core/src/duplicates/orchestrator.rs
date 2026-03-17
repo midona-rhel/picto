@@ -8,12 +8,11 @@ use std::collections::HashMap;
 
 use rusqlite::OptionalExtension;
 
-use crate::events::MutationImpact;
+use crate::runtime_contract::mutation_builder::MutationImpact;
 use crate::sqlite::ReadModelEvent;
 use crate::sqlite::SqliteDatabase;
 use crate::types::{
-    DuplicatePairDto, DuplicatePairsResponse,
-    ScanDuplicatesResponse, SmartMergeResult,
+    DuplicatePairDto, DuplicatePairsResponse, ScanDuplicatesResponse, SmartMergeResult,
 };
 
 pub struct DuplicateOrchestrator;
@@ -734,12 +733,8 @@ impl DuplicateOrchestrator {
                 .with_conn(move |conn| {
                     let mut inserted = 0usize;
                     for (a, b, dist) in pairs {
-                        if crate::duplicates::db::insert_duplicate_counted(
-                            conn,
-                            a,
-                            b,
-                            dist as f64,
-                        )? {
+                        if crate::duplicates::db::insert_duplicate_counted(conn, a, b, dist as f64)?
+                        {
                             inserted += 1;
                         }
                     }

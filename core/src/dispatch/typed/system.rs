@@ -47,7 +47,10 @@ pub struct SetZoomFactorInput {
 
 // ─── Handlers ──────────────────────────────────────────────────────────────
 
-pub async fn get_settings(state: &AppState, _input: serde_json::Value) -> Result<serde_json::Value, String> {
+pub async fn get_settings(
+    state: &AppState,
+    _input: serde_json::Value,
+) -> Result<serde_json::Value, String> {
     let result = state.settings.get();
     Ok(serde_json::to_value(&result).map_err(|e| e.to_string())?)
 }
@@ -59,7 +62,10 @@ pub async fn save_settings(state: &AppState, input: serde_json::Value) -> Result
     Ok(())
 }
 
-pub async fn get_library_info(state: &AppState, _input: serde_json::Value) -> Result<serde_json::Value, String> {
+pub async fn get_library_info(
+    state: &AppState,
+    _input: serde_json::Value,
+) -> Result<serde_json::Value, String> {
     let path_str = state.library_root.to_string_lossy().to_string();
     let name = state
         .library_root
@@ -75,23 +81,35 @@ pub async fn get_library_info(state: &AppState, _input: serde_json::Value) -> Re
     }))
 }
 
-pub async fn get_perf_snapshot(_state: &AppState, _input: serde_json::Value) -> Result<serde_json::Value, String> {
+pub async fn get_perf_snapshot(
+    _state: &AppState,
+    _input: serde_json::Value,
+) -> Result<serde_json::Value, String> {
     let perf = serde_json::to_value(crate::perf::get_snapshot())
         .map_err(|e| format!("Failed to serialize perf snapshot: {e}"))?;
     Ok(perf)
 }
 
-pub async fn check_perf_slo(_state: &AppState, _input: serde_json::Value) -> Result<serde_json::Value, String> {
+pub async fn check_perf_slo(
+    _state: &AppState,
+    _input: serde_json::Value,
+) -> Result<serde_json::Value, String> {
     let result = crate::perf::check_default_slo();
     Ok(serde_json::to_value(&result).map_err(|e| e.to_string())?)
 }
 
-pub async fn open_external_url(_state: &AppState, input: OpenExternalUrlInput) -> Result<(), String> {
+pub async fn open_external_url(
+    _state: &AppState,
+    input: OpenExternalUrlInput,
+) -> Result<(), String> {
     open::that(&input.url).map_err(|e| format!("Failed to open URL: {}", e))?;
     Ok(())
 }
 
-pub async fn get_sidebar_tree(state: &AppState, _input: serde_json::Value) -> Result<serde_json::Value, String> {
+pub async fn get_sidebar_tree(
+    state: &AppState,
+    _input: serde_json::Value,
+) -> Result<serde_json::Value, String> {
     let started = Instant::now();
     let nodes = state.db.get_sidebar_tree().await?;
     let tree_epoch = state.db.manifest.published_epoch();
@@ -126,31 +144,44 @@ pub async fn get_sidebar_tree(state: &AppState, _input: serde_json::Value) -> Re
     Ok(serde_json::to_value(&result).map_err(|e| e.to_string())?)
 }
 
-pub async fn reorder_sidebar_nodes(state: &AppState, input: ReorderSidebarNodesInput) -> Result<(), String> {
+pub async fn reorder_sidebar_nodes(
+    state: &AppState,
+    input: ReorderSidebarNodesInput,
+) -> Result<(), String> {
     state.db.reorder_sidebar_nodes(input.moves).await?;
     crate::events::emit_mutation(
         "reorder_sidebar_nodes",
-        crate::events::MutationImpact::sidebar(crate::events::Domain::Sidebar),
+        crate::runtime_contract::mutation_builder::MutationImpact::sidebar(
+            crate::runtime_contract::mutation::Domain::Sidebar,
+        ),
     );
     Ok(())
 }
 
-pub async fn get_view_prefs(state: &AppState, input: GetViewPrefsInput) -> Result<serde_json::Value, String> {
+pub async fn get_view_prefs(
+    state: &AppState,
+    input: GetViewPrefsInput,
+) -> Result<serde_json::Value, String> {
     let scope_key = input.scope_key.unwrap_or_default();
-    let result = crate::settings::view_prefs::ViewPrefsService::get_view_prefs(
-        &state.db, scope_key,
-    ).await?;
+    let result =
+        crate::settings::view_prefs::ViewPrefsService::get_view_prefs(&state.db, scope_key).await?;
     Ok(serde_json::to_value(&result).map_err(|e| e.to_string())?)
 }
 
-pub async fn set_view_prefs(state: &AppState, input: SetViewPrefsInput) -> Result<serde_json::Value, String> {
+pub async fn set_view_prefs(
+    state: &AppState,
+    input: SetViewPrefsInput,
+) -> Result<serde_json::Value, String> {
     let scope_key = input.scope_key.unwrap_or_default();
     let result = crate::settings::view_prefs::ViewPrefsService::set_view_prefs(
-        &state.db, scope_key, input.patch,
-    ).await?;
+        &state.db,
+        scope_key,
+        input.patch,
+    )
+    .await?;
     crate::events::emit_mutation(
         "set_view_prefs",
-        crate::events::MutationImpact::view_prefs_change(),
+        crate::runtime_contract::mutation_builder::MutationImpact::view_prefs_change(),
     );
     Ok(serde_json::to_value(&result).map_err(|e| e.to_string())?)
 }
@@ -168,7 +199,10 @@ pub async fn set_zoom_factor(state: &AppState, input: SetZoomFactorInput) -> Res
     Ok(())
 }
 
-pub async fn get_zoom_factor(state: &AppState, _input: serde_json::Value) -> Result<serde_json::Value, String> {
+pub async fn get_zoom_factor(
+    state: &AppState,
+    _input: serde_json::Value,
+) -> Result<serde_json::Value, String> {
     let factor = state.settings.get().zoom_factor.unwrap_or(1.0);
     Ok(serde_json::to_value(&factor).map_err(|e| e.to_string())?)
 }

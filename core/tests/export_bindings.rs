@@ -114,9 +114,8 @@ fn export_all_bindings() {
     picto_core::dispatch::typed::tags::CompanionGetFilesByTagInput::export().unwrap();
 
     // events
-    picto_core::events::Domain::export().unwrap();
-
     // runtime_contract
+    picto_core::runtime_contract::mutation::Domain::export().unwrap();
     picto_core::runtime_contract::mutation::MutationReceipt::export().unwrap();
     picto_core::runtime_contract::mutation::MutationFacts::export().unwrap();
     picto_core::runtime_contract::mutation::SidebarCounts::export().unwrap();

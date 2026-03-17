@@ -8,9 +8,9 @@ use std::sync::{Arc, Mutex};
 use tempfile::TempDir;
 
 use picto_core::events;
+use picto_core::sqlite::SqliteDatabase;
 use picto_core::sqlite::bitmaps::BitmapKey;
 use picto_core::sqlite::files::NewFile;
-use picto_core::sqlite::SqliteDatabase;
 
 // ---------------------------------------------------------------------------
 // Test Harness
@@ -97,7 +97,11 @@ impl TestHarness {
     }
 
     /// Add members (by hash) to a collection.
-    pub async fn add_collection_members_by_hashes(&self, collection_id: i64, hashes: &[&str]) -> usize {
+    pub async fn add_collection_members_by_hashes(
+        &self,
+        collection_id: i64,
+        hashes: &[&str],
+    ) -> usize {
         let hs = hashes.iter().map(|h| h.to_string()).collect::<Vec<_>>();
         self.db
             .add_collection_members_by_hashes(collection_id, &hs)
@@ -165,9 +169,7 @@ impl TestHarness {
 
     /// Seed the Tagged bitmap for an entity.
     pub fn bitmaps_mark_tagged(&self, entity_id: i64) {
-        self.db
-            .bitmaps
-            .insert(&BitmapKey::Tagged, entity_id as u32);
+        self.db.bitmaps.insert(&BitmapKey::Tagged, entity_id as u32);
     }
 
     /// Drain collected events.

@@ -4,6 +4,8 @@
 mod common;
 
 use picto_core::events;
+use picto_core::runtime_contract::mutation::Domain;
+use picto_core::runtime_contract::mutation_builder::MutationImpact;
 
 #[tokio::test]
 async fn mutation_receipt_emits_sequence_numbers() {
@@ -12,15 +14,15 @@ async fn mutation_receipt_emits_sequence_numbers() {
 
     events::emit_mutation(
         "test_origin",
-        events::MutationImpact {
-            domains: vec![events::Domain::Files],
+        MutationImpact {
+            domains: vec![Domain::Files],
             ..Default::default()
         },
     );
     events::emit_mutation(
         "test_origin_2",
-        events::MutationImpact {
-            domains: vec![events::Domain::Tags],
+        MutationImpact {
+            domains: vec![Domain::Tags],
             ..Default::default()
         },
     );
@@ -45,8 +47,8 @@ async fn mutation_receipt_includes_sidebar_tree_invalidation() {
 
     events::emit_mutation(
         "test_sidebar",
-        events::MutationImpact {
-            domains: vec![events::Domain::Sidebar],
+        MutationImpact {
+            domains: vec![Domain::Sidebar],
             ..Default::default()
         },
     );
@@ -55,7 +57,9 @@ async fn mutation_receipt_includes_sidebar_tree_invalidation() {
     assert!(!evts.is_empty());
     let payload: serde_json::Value = serde_json::from_str(&evts.last().unwrap().1).unwrap();
     assert_eq!(payload["origin_command"], "test_sidebar");
-    let domains = payload["facts"]["domains"].as_array().expect("domains array");
+    let domains = payload["facts"]["domains"]
+        .as_array()
+        .expect("domains array");
     assert!(domains.iter().any(|d| d.as_str() == Some("sidebar")));
 }
 
@@ -66,8 +70,8 @@ async fn mutation_receipt_includes_grid_scopes() {
 
     events::emit_mutation(
         "test_grid",
-        events::MutationImpact {
-            domains: vec![events::Domain::Files],
+        MutationImpact {
+            domains: vec![Domain::Files],
             extra_grid_scopes: Some(vec!["scope:a".to_string(), "scope:b".to_string()]),
             ..Default::default()
         },
@@ -86,7 +90,6 @@ async fn mutation_receipt_includes_grid_scopes() {
 
 #[test]
 fn mutation_receipt_event_contract() {
-    use picto_core::events::Domain;
     use picto_core::runtime_contract::mutation::{MutationFacts, MutationReceipt};
     let receipt = MutationReceipt {
         seq: 1,
@@ -127,7 +130,7 @@ async fn file_lifecycle_preset_emits_mutation_receipt() {
     let harness = common::TestHarness::new().await;
     harness.drain_events();
 
-    let impact = events::MutationImpact::file_lifecycle(&harness.db);
+    let impact = MutationImpact::file_lifecycle(&harness.db);
     events::emit_mutation("test_file_lifecycle", impact);
 
     let evts = harness.find_events("runtime/mutation_committed");
@@ -151,7 +154,7 @@ async fn folder_sidebar_preset_emits_sidebar_receipt() {
     let harness = common::TestHarness::new().await;
     harness.drain_events();
 
-    let impact = events::MutationImpact::sidebar(events::Domain::Folders);
+    let impact = MutationImpact::sidebar(Domain::Folders);
     events::emit_mutation("test_folder_sidebar", impact);
 
     let evts = harness.find_events("runtime/mutation_committed");
@@ -177,7 +180,7 @@ async fn batch_tags_preset_emits_single_receipt() {
     let harness = common::TestHarness::new().await;
     harness.drain_events();
 
-    let impact = events::MutationImpact::batch_tags();
+    let impact = MutationImpact::batch_tags();
     events::emit_mutation("test_batch_tags", impact);
 
     let evts = harness.find_events("runtime/mutation_committed");

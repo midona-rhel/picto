@@ -6,5 +6,6 @@
 //! and tasks (background operation progress).
 
 pub mod mutation;
+pub mod mutation_builder;
 pub mod snapshot;
 pub mod task;

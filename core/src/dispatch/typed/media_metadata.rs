@@ -37,19 +37,27 @@ use super::super::common::deserialize_some;
 
 // ─── Handlers ──────────────────────────────────────────────────────────────
 
-pub async fn get_file_all_metadata(state: &AppState, input: GetFileAllMetadataInput) -> Result<serde_json::Value, String> {
-    let result = crate::metadata::query::MetadataQuery::get_file_all_metadata(
-        &state.db, input.hash,
-    ).await?;
+pub async fn get_file_all_metadata(
+    state: &AppState,
+    input: GetFileAllMetadataInput,
+) -> Result<serde_json::Value, String> {
+    let result =
+        crate::metadata::query::MetadataQuery::get_file_all_metadata(&state.db, input.hash).await?;
     serde_json::to_value(&result).map_err(|e| e.to_string())
 }
 
-pub async fn update_file_metadata(state: &AppState, input: UpdateFileMetadataInput) -> Result<(), String> {
+pub async fn update_file_metadata(
+    state: &AppState,
+    input: UpdateFileMetadataInput,
+) -> Result<(), String> {
     let hash = input.hash;
 
     if let Some(rating) = input.rating {
         // Cascade rating to collection members
-        let hashes = state.db.expand_hashes_for_collections(&[hash.clone()]).await?;
+        let hashes = state
+            .db
+            .expand_hashes_for_collections(&[hash.clone()])
+            .await?;
         for h in &hashes {
             state.db.update_rating(h, rating).await?;
         }
@@ -70,15 +78,21 @@ pub async fn update_file_metadata(state: &AppState, input: UpdateFileMetadataInp
         } else {
             Some(serde_json::to_string(urls).map_err(|e| e.to_string())?)
         };
-        state.db.set_source_urls(&hash, urls_json.as_deref()).await?;
+        state
+            .db
+            .set_source_urls(&hash, urls_json.as_deref())
+            .await?;
     }
 
-    let impact = crate::events::MutationImpact::file_metadata(hash);
+    let impact = crate::runtime_contract::mutation_builder::MutationImpact::file_metadata(hash);
     crate::events::emit_mutation("update_file_metadata", impact);
     Ok(())
 }
 
-pub async fn get_storage_stats(state: &AppState, _input: serde_json::Value) -> Result<serde_json::Value, String> {
+pub async fn get_storage_stats(
+    state: &AppState,
+    _input: serde_json::Value,
+) -> Result<serde_json::Value, String> {
     let stats = state.db.aggregate_file_stats().await?;
     serde_json::to_value(&stats).map_err(|e| e.to_string())
 }

@@ -4,7 +4,7 @@ use std::path::Path;
 use sha2::{Digest, Sha256};
 use tracing::{info, warn};
 
-use crate::import::existing::{merge_existing_import_target, ExistingImportMergeRequest};
+use crate::import::existing::{ExistingImportMergeRequest, merge_existing_import_target};
 use crate::import::pipeline::{ImportError, ImportOptions, ImportPipeline};
 use crate::subscriptions::gallery_dl_runner::ParsedMetadata;
 use crate::subscriptions::import_policy::{
@@ -39,8 +39,14 @@ impl<'a> SubscriptionSyncEngine<'a> {
         };
 
         if let Ok(Some(existing)) = self.db.get_file_by_hash(&hex_hash).await {
-            self.merge_existing_metadata(&hex_hash, &existing, metadata, gallery_url, subscription_id)
-                .await?;
+            self.merge_existing_metadata(
+                &hex_hash,
+                &existing,
+                metadata,
+                gallery_url,
+                subscription_id,
+            )
+            .await?;
             return Ok(ImportOutcome {
                 hex_hash,
                 imported_new: false,
@@ -119,7 +125,9 @@ impl<'a> SubscriptionSyncEngine<'a> {
                 self.db.scope_cache_invalidate_all();
                 crate::events::emit_mutation(
                     "subscription_import",
-                    crate::events::MutationImpact::file_lifecycle(self.db),
+                    crate::runtime_contract::mutation_builder::MutationImpact::file_lifecycle(
+                        self.db,
+                    ),
                 );
 
                 Ok(ImportOutcome {
@@ -130,8 +138,14 @@ impl<'a> SubscriptionSyncEngine<'a> {
             Err(ImportError::AlreadyImported(hash)) => {
                 info!(hash = %hash, "Already imported (skipped)");
                 if let Ok(Some(existing)) = self.db.get_file_by_hash(&hash).await {
-                    self.merge_existing_metadata(&hash, &existing, metadata, gallery_url, subscription_id)
-                        .await?;
+                    self.merge_existing_metadata(
+                        &hash,
+                        &existing,
+                        metadata,
+                        gallery_url,
+                        subscription_id,
+                    )
+                    .await?;
                 }
                 Ok(ImportOutcome {
                     hex_hash: hash,

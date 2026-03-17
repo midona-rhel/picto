@@ -10,10 +10,11 @@ use tokio_util::sync::CancellationToken;
 
 use crate::blob_store::BlobStore;
 use crate::duplicates::orchestrator::DuplicateOrchestrator;
-use crate::events::{self, ManualImportProgressEvent, MutationImpact};
+use crate::events::{self, ManualImportProgressEvent};
 use crate::folders::controller::FolderController;
-use crate::import::existing::{merge_existing_import_target, ExistingImportMergeRequest};
+use crate::import::existing::{ExistingImportMergeRequest, merge_existing_import_target};
 use crate::import::pipeline::{ImportError, ImportOptions, ImportPipeline};
+use crate::runtime_contract::mutation_builder::MutationImpact;
 use crate::sqlite::SqliteDatabase;
 
 const WATCH_DEBOUNCE: Duration = Duration::from_millis(700);
@@ -276,11 +277,7 @@ impl FolderWatchRuntime {
 }
 
 fn should_handle_event(kind: &EventKind) -> bool {
-    matches!(
-        kind,
-        EventKind::Create(_)
-            | EventKind::Modify(_)
-    )
+    matches!(kind, EventKind::Create(_) | EventKind::Modify(_))
 }
 
 fn should_ignore_path(path: &Path) -> bool {
@@ -290,15 +287,9 @@ fn should_ignore_path(path: &Path) -> bool {
     if name.starts_with('.') {
         return true;
     }
-    [
-        ".part",
-        ".crdownload",
-        ".tmp",
-        ".download",
-        ".ds_store",
-    ]
-    .iter()
-    .any(|suffix| name.to_ascii_lowercase().ends_with(suffix))
+    [".part", ".crdownload", ".tmp", ".download", ".ds_store"]
+        .iter()
+        .any(|suffix| name.to_ascii_lowercase().ends_with(suffix))
 }
 
 async fn wait_for_file_stable(path: &Path) -> bool {
@@ -333,7 +324,8 @@ fn collect_existing_paths(root_path: &Path, recursive: bool) -> Result<Vec<PathB
         let entries = fs::read_dir(root_path)
             .map_err(|err| format!("Failed to read {}: {err}", root_path.display()))?;
         for entry in entries {
-            let entry = entry.map_err(|err| format!("Failed to read entry in {}: {err}", root_path.display()))?;
+            let entry = entry
+                .map_err(|err| format!("Failed to read entry in {}: {err}", root_path.display()))?;
             let path = entry.path();
             if path.is_file() && !should_ignore_path(&path) {
                 files.push(path);
@@ -350,7 +342,8 @@ fn collect_existing_paths(root_path: &Path, recursive: bool) -> Result<Vec<PathB
             .map_err(|err| format!("Failed to read {}: {err}", directory.display()))?;
         let mut children = Vec::new();
         for entry in entries {
-            let entry = entry.map_err(|err| format!("Failed to read entry in {}: {err}", directory.display()))?;
+            let entry = entry
+                .map_err(|err| format!("Failed to read entry in {}: {err}", directory.display()))?;
             children.push(entry.path());
         }
         children.sort();
@@ -461,9 +454,13 @@ async fn import_file_into_folder(
 
     match pipeline.import_file(path, &options).await {
         Ok(imported) => {
-            let surviving_hash =
-                maybe_auto_merge(db, &imported.hex_hash, auto_merge_enabled, auto_merge_distance)
-                    .await;
+            let surviving_hash = maybe_auto_merge(
+                db,
+                &imported.hex_hash,
+                auto_merge_enabled,
+                auto_merge_distance,
+            )
+            .await;
             if surviving_hash == imported.hex_hash {
                 emit_file_imported(db, &surviving_hash).await;
             }
@@ -495,7 +492,8 @@ async fn import_file_into_folder(
         .chain(skipped_hashes.iter().cloned())
         .collect();
     if !membership_hashes.is_empty() {
-        db.add_entities_to_folder_batch(folder_id, &membership_hashes).await?;
+        db.add_entities_to_folder_batch(folder_id, &membership_hashes)
+            .await?;
         FolderController::refresh_sidebar_projection_for_folder_ids(db, &[folder_id]).await?;
     }
 

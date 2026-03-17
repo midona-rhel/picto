@@ -54,7 +54,10 @@ pub struct DeleteFilesInput {
 
 // ─── Handlers ──────────────────────────────────────────────────────────────
 
-pub async fn import_files(state: &AppState, input: ImportFilesInput) -> Result<crate::types::ImportBatchResult, String> {
+pub async fn import_files(
+    state: &AppState,
+    input: ImportFilesInput,
+) -> Result<crate::types::ImportBatchResult, String> {
     let app_settings = state.settings.get();
     let auto_merge_enabled = app_settings.duplicate_auto_merge_enabled
         && !app_settings.duplicate_auto_merge_subscriptions_only;
@@ -78,7 +81,10 @@ pub async fn import_files(state: &AppState, input: ImportFilesInput) -> Result<c
     .await
 }
 
-pub async fn import_folder(state: &AppState, input: ImportFolderInput) -> Result<crate::types::ImportBatchResult, String> {
+pub async fn import_folder(
+    state: &AppState,
+    input: ImportFolderInput,
+) -> Result<crate::types::ImportBatchResult, String> {
     let app_settings = state.settings.get();
     let auto_merge_enabled = app_settings.duplicate_auto_merge_enabled
         && !app_settings.duplicate_auto_merge_subscriptions_only;
@@ -102,19 +108,29 @@ pub async fn import_folder(state: &AppState, input: ImportFolderInput) -> Result
     .await
 }
 
-pub async fn update_file_status(state: &AppState, input: UpdateFileStatusInput) -> Result<usize, String> {
+pub async fn update_file_status(
+    state: &AppState,
+    input: UpdateFileStatusInput,
+) -> Result<usize, String> {
     let file_status = crate::types::parse_file_status(&input.status)?;
 
     if let Some(hash) = input.hash {
         // Single file mode
         state.db.update_file_status(&hash, file_status).await?;
         let folder_ids = collect_folder_ids_for_hashes(state, &[hash.clone()], 1).await;
-        if let Err(err) = crate::folders::controller::FolderController::
-            refresh_sidebar_projection_for_folder_ids(&state.db, &folder_ids).await
+        if let Err(err) =
+            crate::folders::controller::FolderController::refresh_sidebar_projection_for_folder_ids(
+                &state.db,
+                &folder_ids,
+            )
+            .await
         {
             tracing::warn!(error = %err, "failed to refresh folder sidebar projection after status update");
         }
-        let mut impact = crate::events::MutationImpact::file_status_change(&state.db)
+        let mut impact =
+            crate::runtime_contract::mutation_builder::MutationImpact::file_status_change(
+                &state.db,
+            )
             .file_hashes(vec![hash]);
         if !folder_ids.is_empty() {
             impact = impact.folder_ids(folder_ids);
@@ -135,13 +151,19 @@ pub async fn update_file_status(state: &AppState, input: UpdateFileStatusInput) 
                 folder_ids.sort_unstable();
                 folder_ids.dedup();
             }
-            state.db.update_file_status_batch(&bitmap, file_status).await?;
+            state
+                .db
+                .update_file_status_batch(&bitmap, file_status)
+                .await?;
             if let Err(err) = crate::folders::controller::FolderController::
                 refresh_sidebar_projection_for_folder_ids(&state.db, &folder_ids).await
             {
                 tracing::warn!(error = %err, "failed to refresh folder sidebar projection after status batch update");
             }
-            let mut impact = crate::events::MutationImpact::file_status_change(&state.db);
+            let mut impact =
+                crate::runtime_contract::mutation_builder::MutationImpact::file_status_change(
+                    &state.db,
+                );
             if !folder_ids.is_empty() {
                 impact = impact.folder_ids(folder_ids);
             }
@@ -173,12 +195,19 @@ pub async fn delete_files(state: &AppState, input: DeleteFilesInput) -> Result<u
     }
 
     if count > 0 {
-        if let Err(err) = crate::folders::controller::FolderController::
-            refresh_sidebar_projection_for_folder_ids(&state.db, &folder_ids).await
+        if let Err(err) =
+            crate::folders::controller::FolderController::refresh_sidebar_projection_for_folder_ids(
+                &state.db,
+                &folder_ids,
+            )
+            .await
         {
             tracing::warn!(error = %err, "failed to refresh folder sidebar projection after delete_files");
         }
-        let mut impact = crate::events::MutationImpact::file_status_change(&state.db)
+        let mut impact =
+            crate::runtime_contract::mutation_builder::MutationImpact::file_status_change(
+                &state.db,
+            )
             .file_hashes(hashes);
         if !folder_ids.is_empty() {
             impact = impact.folder_ids(folder_ids);
@@ -193,7 +222,7 @@ pub async fn wipe_image_data(state: &AppState, _input: serde_json::Value) -> Res
     state.blob_store.wipe().map_err(|e| e.to_string())?;
     crate::events::emit_mutation(
         "wipe_image_data",
-        crate::events::MutationImpact::file_status_change(&state.db),
+        crate::runtime_contract::mutation_builder::MutationImpact::file_status_change(&state.db),
     );
     Ok(())
 }
@@ -236,7 +265,10 @@ pub(crate) async fn collect_folder_ids_for_hashes(
         Ok(v) => v,
         Err(_) => return Vec::new(),
     };
-    let entity_ids: Vec<i64> = resolved.into_iter().map(|(_, entity_id)| entity_id).collect();
+    let entity_ids: Vec<i64> = resolved
+        .into_iter()
+        .map(|(_, entity_id)| entity_id)
+        .collect();
     if entity_ids.is_empty() {
         return Vec::new();
     }

@@ -44,7 +44,7 @@ pub async fn start_workers(
                     crate::events::emit("runtime/read_model_published", &result.published);
                     crate::events::emit_mutation(
                         "compiler_batch_done",
-                        crate::events::MutationImpact::compiler_publish(
+                        crate::runtime_contract::mutation_builder::MutationImpact::compiler_publish(
                             result.sidebar_affected,
                             result.smart_folders_rebuilt,
                         ),
@@ -140,9 +140,7 @@ pub async fn start_workers(
 }
 
 /// Join all background worker handles with a timeout for clean shutdown.
-pub async fn stop_workers(
-    handles: Vec<(&'static str, tokio::task::JoinHandle<()>)>,
-) {
+pub async fn stop_workers(handles: Vec<(&'static str, tokio::task::JoinHandle<()>)>) {
     if handles.is_empty() {
         return;
     }
