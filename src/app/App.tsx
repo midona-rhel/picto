@@ -71,7 +71,15 @@ function App() {
   const { settings, updateSetting, loaded: settingsLoaded } = useSettingsStore();
 
   // --- Sidebar data ---
-  const { allActiveCount, inboxCount, uncategorizedCount, trashCount, smartFolderCounts, folderNodes } = useDomainStore();
+  const {
+    allActiveCount,
+    inboxCount,
+    uncategorizedCount,
+    trashCount,
+    untaggedCount,
+    smartFolderCounts,
+    folderNodes,
+  } = useDomainStore();
 
   // --- Bootstrap (init, theme, events, menu, hotkeys, titlebar drag) ---
   const { handleTitlebarMouseDown, displayedTitle, handleScopeTransitionMidpoint } =
@@ -90,6 +98,7 @@ function App() {
     currentView,
     isDetailMode: inspector.isDetailMode,
     activeFolder,
+    activeCollection,
     activeSmartFolder,
     setActiveSmartFolder,
     filterTags,
@@ -97,6 +106,7 @@ function App() {
     activeStatusFilter,
     inboxCount,
     uncategorizedCount,
+    untaggedCount,
     trashCount,
     smartFolderCounts,
     folderNodes,

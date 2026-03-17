@@ -15,6 +15,7 @@ export interface GridFeatureParams {
   currentView: string;
   isDetailMode: boolean;
   activeFolder: { folder_id: number } | null;
+  activeCollection: { id: number } | null;
   activeSmartFolder: SmartFolder | null;
   setActiveSmartFolder: (sf: SmartFolder) => void;
   filterTags: string[] | null;
@@ -22,6 +23,7 @@ export interface GridFeatureParams {
   activeStatusFilter: string | null;
   inboxCount: number | null;
   uncategorizedCount: number | null;
+  untaggedCount: number | null;
   trashCount: number | null;
   smartFolderCounts: Record<string, number>;
   folderNodes: Array<{ id: string; count?: number | null }>;
@@ -65,6 +67,7 @@ export function useGridFeatureState({
   currentView,
   isDetailMode,
   activeFolder,
+  activeCollection,
   activeSmartFolder,
   setActiveSmartFolder,
   filterTags,
@@ -72,6 +75,7 @@ export function useGridFeatureState({
   activeStatusFilter,
   inboxCount,
   uncategorizedCount,
+  untaggedCount,
   trashCount,
   smartFolderCounts,
   folderNodes,
@@ -199,10 +203,13 @@ export function useGridFeatureState({
   const statusFilterCount =
     activeStatusFilter === 'inbox' ? inboxCount
     : activeStatusFilter === 'uncategorized' ? uncategorizedCount
+    : activeStatusFilter === 'untagged' ? untaggedCount
     : activeStatusFilter === 'trash' ? trashCount
     : null;
   const activeGridScopeCount = activeFolder
     ? activeFolderCount
+    : activeCollection
+      ? null
     : activeSmartFolder?.id
       ? (smartFolderCounts[activeSmartFolder.id] ?? null)
       : statusFilterCount ?? allImagesCount;
