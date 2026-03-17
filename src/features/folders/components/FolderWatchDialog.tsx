@@ -134,18 +134,20 @@ export function FolderWatchDialog() {
           Attach a disk folder to <strong>{folderName}</strong>. New files dropped there will be imported into Picto automatically.
         </Text>
 
-        <TextInput
-          label="Watched disk folder"
-          value={watchPath}
-          readOnly
-          placeholder="No folder selected"
-          rightSection={
-            <Button size="xs" variant="subtle" onClick={handleBrowse}>
+        <Stack gap={6}>
+          <Text size="sm" fw={500}>Watched disk folder</Text>
+          <Group gap="sm" align="end" wrap="nowrap">
+            <TextInput
+              value={watchPath}
+              readOnly
+              placeholder="No folder selected"
+              style={{ flex: 1 }}
+            />
+            <Button variant="default" onClick={handleBrowse}>
               Browse
             </Button>
-          }
-          rightSectionWidth={72}
-        />
+          </Group>
+        </Stack>
 
         <Switch
           label="Enable watch"
