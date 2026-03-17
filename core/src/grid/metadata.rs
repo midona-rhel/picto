@@ -6,13 +6,11 @@ use std::time::Instant;
 
 use chrono::Utc;
 
-use crate::sqlite::projections::ResolvedMetadataFull;
-use crate::sqlite::SqliteDatabase;
+use crate::metadata::db::ResolvedMetadataFull;
 use crate::metadata::query::file_tag_to_resolved_info;
+use crate::sqlite::SqliteDatabase;
 use crate::types::{
-    DominantColorDto, FileAllMetadata,
-    EntityDetails, EntityMetadataBatchResponse,
-    ResolvedTagInfo,
+    DominantColorDto, EntityDetails, EntityMetadataBatchResponse, FileAllMetadata, ResolvedTagInfo,
 };
 
 static METADATA_BATCH_PREFETCH_SEMAPHORE: OnceLock<tokio::sync::Semaphore> = OnceLock::new();
@@ -83,8 +81,7 @@ pub async fn get_files_metadata_batch(
             };
 
             let slim = full.resolved.file;
-            let has_thumbnail =
-                slim.mime.starts_with("image/") || slim.mime.starts_with("video/");
+            let has_thumbnail = slim.mime.starts_with("image/") || slim.mime.starts_with("video/");
             items.insert(
                 hash.clone(),
                 FileAllMetadata {
