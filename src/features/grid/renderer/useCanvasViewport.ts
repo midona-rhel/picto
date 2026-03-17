@@ -161,7 +161,8 @@ export function useCanvasViewport(args: {
     let scrollIdleTimer = 0;
     let lastMeasuredScrollTop = initialMetrics.localScrollTop;
     let lastMeasuredAt = performance.now();
-    const isWindows = typeof navigator !== 'undefined' && /Windows/i.test(navigator.userAgent);
+    const enableCoarseWheelSmoothing =
+      typeof navigator !== 'undefined' && !/Mac/i.test(navigator.userAgent);
     let wheelTargetScrollTop = scrollElement.scrollTop;
 
     const onScroll = () => {
@@ -228,7 +229,7 @@ export function useCanvasViewport(args: {
     };
 
     const onWheel = (event: WheelEvent) => {
-      if (!isWindows || frozen || event.ctrlKey || Math.abs(event.deltaX) > Math.abs(event.deltaY)) {
+      if (!enableCoarseWheelSmoothing || frozen || event.ctrlKey || Math.abs(event.deltaX) > Math.abs(event.deltaY)) {
         return;
       }
 
