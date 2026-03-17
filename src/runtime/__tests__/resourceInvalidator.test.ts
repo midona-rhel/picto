@@ -263,10 +263,12 @@ describe('gridResourceMatchesScope', () => {
     expect(gridResourceMatchesScope('grid/folder:5', 'folder:10')).toBe(false);
   });
 
-  it('system:all is a wildcard for any scope', () => {
-    expect(gridResourceMatchesScope('grid/system:all', 'folder:5')).toBe(true);
-    expect(gridResourceMatchesScope('grid/system:all', 'smart:3')).toBe(true);
+  it('system:all is a wildcard only for system scopes', () => {
     expect(gridResourceMatchesScope('grid/system:all', 'system:inbox')).toBe(true);
+    expect(gridResourceMatchesScope('grid/system:all', 'system:uncategorized')).toBe(true);
+    expect(gridResourceMatchesScope('grid/system:all', 'folder:5')).toBe(false);
+    expect(gridResourceMatchesScope('grid/system:all', 'smart:3')).toBe(false);
+    expect(gridResourceMatchesScope('grid/system:all', 'collection:7')).toBe(false);
   });
 
   it('folder:all matches any folder:N scope', () => {

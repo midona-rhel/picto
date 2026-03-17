@@ -136,8 +136,7 @@ export function gridResourceMatchesScope(
   if (scope === activeScope) return true;
   if (activeScope.startsWith('folder:') && scope === 'folder:all') return true;
   if (activeScope.startsWith('smart:') && scope === 'smart:all') return true;
-  // system:all is a wildcard for non-specific scopes
-  if (scope === 'system:all') return true;
+  if (activeScope.startsWith('system:') && scope === 'system:all') return true;
 
   return false;
 }

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, type Dispatch } from 'react';
 import { useGridMetadataStore } from '../../../state/gridMetadataStore';
+import { useNavigationStore } from '../../../state/navigationStore';
 import type { GridRuntimeAction } from '../runtime';
 import type { MasonryImageItem } from '../shared';
 import type { SmartFolderPredicate } from '../../smart-folders/components/types';
@@ -39,6 +40,7 @@ export function useGridRefreshLifecycle(args: {
 
   const metadataInvalidatedHashes = useGridMetadataStore((s) => s.metadataInvalidatedHashes);
   const gridRefreshSeq = useGridMetadataStore((s) => s.gridRefreshSeq);
+  const activeSmartFolderId = useNavigationStore((s) => s.activeSmartFolder?.id ?? null);
 
   const scopeKey = useMemo(() => JSON.stringify({
     searchTags: searchTags ?? [],
@@ -68,11 +70,18 @@ export function useGridRefreshLifecycle(args: {
     let scope: string;
     if (collectionEntityId != null) scope = `collection:${collectionEntityId}`;
     else if (folderId != null) scope = `folder:${folderId}`;
-    else if (statusFilter === 'inbox') scope = 'system:inbox';
-    else if (statusFilter === 'trash') scope = 'system:trash';
+    else if (smartFolderPredicate && activeSmartFolderId) scope = `smart:${activeSmartFolderId}`;
+    else if (statusFilter) scope = `system:${statusFilter}`;
     else scope = 'system:all';
     useGridMetadataStore.getState().setActiveGridScope(scope);
-  }, [collectionEntityId, folderId, statusFilter, scopeKey]);
+  }, [
+    activeSmartFolderId,
+    collectionEntityId,
+    folderId,
+    smartFolderPredicate,
+    statusFilter,
+    scopeKey,
+  ]);
 
   useEffect(() => {
     if (metadataInvalidatedHashes.size === 0) return;
