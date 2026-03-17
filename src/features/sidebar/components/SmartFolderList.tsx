@@ -35,7 +35,7 @@ import {
 import styles from './Sidebar.module.css';
 
 interface SmartFolderListProps {
-  onFolderUpdated?: () => void;
+  onFolderUpdated?: () => void | Promise<void>;
 }
 
 function SortableSmartFolderRow({
@@ -166,6 +166,11 @@ export function SmartFolderList({ onFolderUpdated }: SmartFolderListProps) {
   const contextMenu = useContextMenu();
   const [contextMenuFolderId, setContextMenuFolderId] = useState<string | null>(null);
 
+  const refreshSidebarAndGrid = useCallback(async () => {
+    await useDomainStore.getState().fetchSidebarTree();
+    await onFolderUpdated?.();
+  }, [onFolderUpdated]);
+
   const updateFolder = useCallback(async (
     folder: SmartFolder,
     updates: Partial<SmartFolder>,
@@ -187,12 +192,11 @@ export function SmartFolderList({ onFolderUpdated }: SmartFolderListProps) {
           },
         });
       }
-      useDomainStore.getState().fetchSidebarTree();
-      onFolderUpdated?.();
+      await refreshSidebarAndGrid();
     } catch (e) {
       console.error('Update failed:', e);
     }
-  }, [onFolderUpdated]);
+  }, [refreshSidebarAndGrid]);
 
   const handleRenameCommit = useCallback(async (id: string, newName: string) => {
     const folder = folders.find((item) => item.id === id);
@@ -335,24 +339,21 @@ export function SmartFolderList({ onFolderUpdated }: SmartFolderListProps) {
       }
 
       registerUndoAction({
-        label: 'Move smart folder',
-        undo: async () => {
-          await api.smartFolders.move(draggedId, oldParentId, oldSiblingMoves);
-          await useDomainStore.getState().fetchSidebarTree();
-          onFolderUpdated?.();
-        },
-        redo: async () => {
-          await api.smartFolders.move(draggedId, redoParentId, redoSiblingMoves);
-          await useDomainStore.getState().fetchSidebarTree();
-          onFolderUpdated?.();
-        },
-      });
-      await useDomainStore.getState().fetchSidebarTree();
-      onFolderUpdated?.();
+          label: 'Move smart folder',
+          undo: async () => {
+            await api.smartFolders.move(draggedId, oldParentId, oldSiblingMoves);
+            await refreshSidebarAndGrid();
+          },
+          redo: async () => {
+            await api.smartFolders.move(draggedId, redoParentId, redoSiblingMoves);
+            await refreshSidebarAndGrid();
+          },
+        });
+      await refreshSidebarAndGrid();
     } catch (error) {
       console.error('Smart folder DnD failed:', error);
     }
-  }, [buildSiblingMovesForParent, dropIndicator, folders, nodeMap, onFolderUpdated]);
+  }, [buildSiblingMovesForParent, dropIndicator, folders, nodeMap, refreshSidebarAndGrid]);
 
   const handleDragCancel = useCallback(() => {
     setActiveId(null);
@@ -406,8 +407,7 @@ export function SmartFolderList({ onFolderUpdated }: SmartFolderListProps) {
             label: 'Duplicate smart folder',
             undo: async () => {
               if (created?.id) await api.smartFolders.delete(created.id);
-              useDomainStore.getState().fetchSidebarTree();
-              onFolderUpdated?.();
+              await refreshSidebarAndGrid();
             },
             redo: async () => {
               created = await api.smartFolders.create(folderToRust({
@@ -415,12 +415,10 @@ export function SmartFolderList({ onFolderUpdated }: SmartFolderListProps) {
                 id: undefined,
                 name: `${smartFolder.name} (copy)`,
               }));
-              useDomainStore.getState().fetchSidebarTree();
-              onFolderUpdated?.();
+              await refreshSidebarAndGrid();
             },
           });
-          useDomainStore.getState().fetchSidebarTree();
-          onFolderUpdated?.();
+          await refreshSidebarAndGrid();
         } catch (error) {
           console.error('Duplicate failed:', error);
         }
@@ -448,18 +446,15 @@ export function SmartFolderList({ onFolderUpdated }: SmartFolderListProps) {
                 const newParentId = parseInt(recreated.id, 10);
                 await api.smartFolders.move(childMoves[0][0], newParentId, childMoves);
               }
-              useDomainStore.getState().fetchSidebarTree();
-              onFolderUpdated?.();
+              await refreshSidebarAndGrid();
             },
             redo: async () => {
               const id = recreated?.id ?? snapshot.id;
               if (id) await api.smartFolders.delete(id);
-              useDomainStore.getState().fetchSidebarTree();
-              onFolderUpdated?.();
+              await refreshSidebarAndGrid();
             },
           });
-          useDomainStore.getState().fetchSidebarTree();
-          onFolderUpdated?.();
+          await refreshSidebarAndGrid();
           if (activeSmartFolder?.id === folder.id) navigateTo('images');
         } catch (error) {
           console.error('Delete failed:', error);
@@ -488,7 +483,8 @@ export function SmartFolderList({ onFolderUpdated }: SmartFolderListProps) {
               const isActive = activeSmartFolder?.id === node.id && node.hasEffectiveRules;
               const isRenaming = renamingFolderId === node.id;
               const count = node.hasEffectiveRules ? (counts[node.id] ?? node.count) : null;
-              const iconName = node.icon ?? DEFAULT_FOLDER_ICON;
+              const isExpanded = !collapsedNodes.has(node.id);
+              const iconName = node.icon ?? (isExpanded ? 'IconFolderOpen' : DEFAULT_FOLDER_ICON);
               const folderColor = node.color ?? 'currentColor';
               const hasChildren = node.children.length > 0;
 
@@ -501,8 +497,7 @@ export function SmartFolderList({ onFolderUpdated }: SmartFolderListProps) {
               return (
                 <SortableSmartFolderRow key={node.id} node={node} dropIndicator={dropIndicator}>
                   {hasChildren && (
-                    <button
-                      type="button"
+                    <span
                       className={styles.folderArrow}
                       onClick={(e) => {
                         e.stopPropagation();
@@ -512,10 +507,10 @@ export function SmartFolderList({ onFolderUpdated }: SmartFolderListProps) {
                       <span
                         className={[
                           styles.folderTriangle,
-                          collapsedNodes.has(node.id) ? styles.folderTriangleCollapsed : styles.folderTriangleExpanded,
+                          !isExpanded ? styles.folderTriangleCollapsed : styles.folderTriangleExpanded,
                         ].join(' ')}
                       />
-                    </button>
+                    </span>
                   )}
                   <SidebarItem
                     icon={<DynamicIcon name={iconName} size={18} color={folderColor} />}
@@ -596,7 +591,9 @@ export function SmartFolderList({ onFolderUpdated }: SmartFolderListProps) {
         }}
         folder={editingFolder}
         initialParentId={initialParentId}
-        onSaved={() => onFolderUpdated?.()}
+        onSaved={async () => {
+          await onFolderUpdated?.();
+        }}
       />
     </>
   );

@@ -18,7 +18,7 @@ interface SmartFolderModalProps {
   onClose: () => void;
   folder?: SmartFolder | null;
   initialParentId?: number | null;
-  onSaved: () => void;
+  onSaved: () => void | Promise<void>;
 }
 
 function hasRules(predicate: SmartFolderPredicate): boolean {
@@ -156,11 +156,11 @@ export function SmartFolderModal({ opened, onClose, folder, initialParentId = nu
           label: 'Update smart folder',
           undo: async () => {
             await api.smartFolders.update(folder.id!, beforeData);
-            useDomainStore.getState().fetchSidebarTree();
+            await useDomainStore.getState().fetchSidebarTree();
           },
           redo: async () => {
             await api.smartFolders.update(folder.id!, folderData);
-            useDomainStore.getState().fetchSidebarTree();
+            await useDomainStore.getState().fetchSidebarTree();
           },
         });
       } else {
@@ -169,17 +169,17 @@ export function SmartFolderModal({ opened, onClose, folder, initialParentId = nu
           label: 'Create smart folder',
           undo: async () => {
             if (created?.id) await api.smartFolders.delete(created.id);
-            useDomainStore.getState().fetchSidebarTree();
+            await useDomainStore.getState().fetchSidebarTree();
           },
           redo: async () => {
             created = await api.smartFolders.create(folderData);
-            useDomainStore.getState().fetchSidebarTree();
+            await useDomainStore.getState().fetchSidebarTree();
           },
         });
       }
-      useDomainStore.getState().fetchSidebarTree();
+      await useDomainStore.getState().fetchSidebarTree();
 
-      onSaved();
+      await onSaved();
       onClose();
     } catch (e) {
       console.error('Save failed:', e);
