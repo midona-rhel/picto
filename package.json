@@ -9,7 +9,7 @@
   "scripts": {
     "dev": "vite",
     "dev:electron": "concurrently -k -n vite,rust,electron -c cyan,red,green \"vite --host 127.0.0.1 --port 8080\" \"cargo watch -w core/src -w native/picto-node/src -s 'cd native/picto-node && ./node_modules/.bin/napi build' -d 1\" \"wait-on tcp:8080 && nodemon --watch native/picto-node/index.node --delay 1 --exec 'electron electron/main.mjs'\"",
-    "start:electron": "electron electron/main.mjs",
+    "start:electron": "npm run rebuild:native && electron electron/main.mjs",
     "rebuild:native": "cd native/picto-node && ./node_modules/.bin/napi build",
     "build": "tsc && vite build",
     "build:electron": "tsc && vite build",
