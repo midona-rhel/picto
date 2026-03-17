@@ -449,6 +449,8 @@ async fn import_file_into_folder(
     } else {
         0
     };
+    let auto_merge_require_matching_dimensions =
+        app_settings.duplicate_auto_merge_require_matching_dimensions;
 
     let pipeline = ImportPipeline::new(db, blob_store);
     let options = ImportOptions {
@@ -466,6 +468,7 @@ async fn import_file_into_folder(
                 &imported.hex_hash,
                 auto_merge_enabled,
                 auto_merge_distance,
+                auto_merge_require_matching_dimensions,
             )
             .await;
             if surviving_hash == imported.hex_hash {
@@ -526,11 +529,19 @@ async fn maybe_auto_merge(
     hash: &str,
     auto_merge_enabled: bool,
     auto_merge_distance: u32,
+    auto_merge_require_matching_dimensions: bool,
 ) -> String {
     if !auto_merge_enabled {
         return hash.to_string();
     }
-    match DuplicateOrchestrator::check_and_auto_merge(db, hash, auto_merge_distance).await {
+    match DuplicateOrchestrator::check_and_auto_merge(
+        db,
+        hash,
+        auto_merge_distance,
+        auto_merge_require_matching_dimensions,
+    )
+    .await
+    {
         Ok(Some(result)) => result.winner_hash,
         Ok(None) => hash.to_string(),
         Err(err) => {

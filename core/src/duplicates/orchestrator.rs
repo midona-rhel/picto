@@ -508,6 +508,7 @@ impl DuplicateOrchestrator {
         db: &SqliteDatabase,
         imported_hash: &str,
         distance_threshold: u32,
+        require_matching_dimensions: bool,
     ) -> Result<Option<SmartMergeResult>, String> {
         use crate::duplicates::phash::BkTree;
         use img_hash::ImageHash;
@@ -604,6 +605,33 @@ impl DuplicateOrchestrator {
                 "Auto-merge skipped: only exact (distance=0) matches are merged"
             );
             return Ok(None);
+        }
+
+        if require_matching_dimensions {
+            let imported_id = db.resolve_hash(imported_hash).await?;
+            let closest_id = db.resolve_hash(closest_hash).await?;
+            let ((imported_width, imported_height), (closest_width, closest_height)) = db
+                .with_read_conn(move |conn| {
+                    let imported = crate::sqlite::files::get_file_by_id(conn, imported_id)?
+                        .ok_or_else(|| rusqlite::Error::QueryReturnedNoRows)?;
+                    let closest = crate::sqlite::files::get_file_by_id(conn, closest_id)?
+                        .ok_or_else(|| rusqlite::Error::QueryReturnedNoRows)?;
+                    Ok(((imported.width, imported.height), (closest.width, closest.height)))
+                })
+                .await?;
+
+            if imported_width != closest_width || imported_height != closest_height {
+                tracing::info!(
+                    imported = %imported_hash,
+                    closest = %closest_hash,
+                    imported_width = ?imported_width,
+                    imported_height = ?imported_height,
+                    closest_width = ?closest_width,
+                    closest_height = ?closest_height,
+                    "Auto-merge skipped: matching dimensions required"
+                );
+                return Ok(None);
+            }
         }
 
         tracing::info!(

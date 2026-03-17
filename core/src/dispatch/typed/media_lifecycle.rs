@@ -68,6 +68,8 @@ pub async fn import_files(
     } else {
         0
     };
+    let auto_merge_require_matching_dimensions =
+        app_settings.duplicate_auto_merge_require_matching_dimensions;
     crate::import::service::ImportService::import_files(
         &state.db,
         &state.blob_store,
@@ -76,6 +78,7 @@ pub async fn import_files(
         input.source_urls,
         auto_merge_enabled,
         auto_merge_distance,
+        auto_merge_require_matching_dimensions,
         input.initial_status,
     )
     .await
@@ -95,6 +98,8 @@ pub async fn import_folder(
     } else {
         0
     };
+    let auto_merge_require_matching_dimensions =
+        app_settings.duplicate_auto_merge_require_matching_dimensions;
     crate::import::service::ImportService::import_folder(
         &state.db,
         &state.blob_store,
@@ -103,6 +108,7 @@ pub async fn import_folder(
         input.parent_folder_id,
         auto_merge_enabled,
         auto_merge_distance,
+        auto_merge_require_matching_dimensions,
         input.initial_status,
     )
     .await

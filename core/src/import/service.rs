@@ -31,6 +31,7 @@ impl ImportService {
         source_urls: Option<Vec<String>>,
         auto_merge_enabled: bool,
         auto_merge_distance: u32,
+        auto_merge_require_matching_dimensions: bool,
         initial_status: i64,
     ) -> Result<ImportBatchResult, String> {
         let pipeline = ImportPipeline::new(db, blob_store);
@@ -76,6 +77,7 @@ impl ImportService {
                         &imported.hex_hash,
                         auto_merge_enabled,
                         auto_merge_distance,
+                        auto_merge_require_matching_dimensions,
                     )
                     .await;
                     if surviving_hash == imported.hex_hash {
@@ -153,6 +155,7 @@ impl ImportService {
         parent_folder_id: Option<i64>,
         auto_merge_enabled: bool,
         auto_merge_distance: u32,
+        auto_merge_require_matching_dimensions: bool,
         initial_status: i64,
     ) -> Result<ImportBatchResult, String> {
         let root_path = {
@@ -253,6 +256,7 @@ impl ImportService {
                         &imported.hex_hash,
                         auto_merge_enabled,
                         auto_merge_distance,
+                        auto_merge_require_matching_dimensions,
                     )
                     .await;
                     imported_hashes.push(surviving_hash.clone());
@@ -353,11 +357,19 @@ async fn maybe_auto_merge(
     hash: &str,
     auto_merge_enabled: bool,
     auto_merge_distance: u32,
+    auto_merge_require_matching_dimensions: bool,
 ) -> String {
     if !auto_merge_enabled {
         return hash.to_string();
     }
-    match DuplicateOrchestrator::check_and_auto_merge(db, hash, auto_merge_distance).await {
+    match DuplicateOrchestrator::check_and_auto_merge(
+        db,
+        hash,
+        auto_merge_distance,
+        auto_merge_require_matching_dimensions,
+    )
+    .await
+    {
         Ok(Some(result)) => result.winner_hash,
         Ok(None) => hash.to_string(),
         Err(e) => {

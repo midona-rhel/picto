@@ -132,6 +132,8 @@ impl SubscriptionRunOrchestrator {
         } else {
             0
         };
+        let auto_merge_require_matching_dimensions =
+            app_settings.duplicate_auto_merge_require_matching_dimensions;
 
         let running_subs_guard = running_subs.clone();
         let sub_id_guard = sub_id_str.clone();
@@ -155,7 +157,11 @@ impl SubscriptionRunOrchestrator {
                     Ok(engine) => {
                         let mut engine = engine
                             .with_name(sub_name.clone())
-                            .with_auto_merge(auto_merge_enabled, auto_merge_distance);
+                            .with_auto_merge(
+                                auto_merge_enabled,
+                                auto_merge_distance,
+                                auto_merge_require_matching_dimensions,
+                            );
                         for query in &queries {
                             if cancel.is_cancelled() {
                                 was_cancelled = true;
@@ -378,6 +384,8 @@ impl SubscriptionRunOrchestrator {
         } else {
             0
         };
+        let auto_merge_require_matching_dimensions =
+            app_settings.duplicate_auto_merge_require_matching_dimensions;
         let subscription_limit = if completed_initial_run {
             sub.periodic_file_limit as u32
         } else {
@@ -412,7 +420,11 @@ impl SubscriptionRunOrchestrator {
                         Ok(engine) => {
                             let mut engine = engine
                                 .with_name(sub_name.clone())
-                                .with_auto_merge(auto_merge_enabled, auto_merge_distance);
+                                .with_auto_merge(
+                                    auto_merge_enabled,
+                                    auto_merge_distance,
+                                    auto_merge_require_matching_dimensions,
+                                );
                             let result = engine
                                 .sync_query(
                                     sub_id,

@@ -135,6 +135,7 @@ export interface AppSettings {
   duplicateDetectSimilarityPct: number;
   duplicateReviewSimilarityPct: number;
   duplicateAutoMergeSimilarityPct: number;
+  duplicateAutoMergeRequireMatchingDimensions: boolean;
   duplicateAutoMergeSubscriptionsOnly: boolean;
   duplicateAutoMergeEnabled: boolean;
   subAbortThreshold: number;

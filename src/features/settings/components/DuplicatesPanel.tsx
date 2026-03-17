@@ -109,7 +109,7 @@ export function DuplicatesPanel() {
 
       <SettingsBlock
         title="Auto Merge"
-        description="Auto-merge combines metadata and keeps the higher quality file."
+        description="Auto-merge combines metadata and keeps the higher quality file when an exact perceptual-hash match is found."
         dimmed={saving}
       >
         <SettingsRow label="Enable auto-merge">
@@ -140,6 +140,17 @@ export function DuplicatesPanel() {
           />
         </SettingsRow>
 
+        <SettingsRow label="Require matching dimensions" separator>
+          <Switch
+            size="xs"
+            checked={settings.duplicateAutoMergeRequireMatchingDimensions}
+            disabled={!settings.duplicateAutoMergeEnabled}
+            onChange={(e) => {
+              void update({ duplicateAutoMergeRequireMatchingDimensions: e.currentTarget.checked });
+            }}
+          />
+        </SettingsRow>
+
         <SettingsRow label="Subscriptions only" separator>
           <Switch
             size="xs"
@@ -156,6 +167,9 @@ export function DuplicatesPanel() {
             Manual imports will also run duplicate auto-merge.
           </Text>
         )}
+        <Text size="xs" c="dimmed" mt={8}>
+          Auto-merge already requires an exact pHash match. Enable matching dimensions for a stricter safety check.
+        </Text>
       </SettingsBlock>
     </>
   );

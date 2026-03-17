@@ -537,6 +537,7 @@ export interface DuplicateSettings {
   duplicateDetectSimilarityPct: number;
   duplicateReviewSimilarityPct: number;
   duplicateAutoMergeSimilarityPct: number;
+  duplicateAutoMergeRequireMatchingDimensions: boolean;
   duplicateAutoMergeSubscriptionsOnly: boolean;
   duplicateAutoMergeEnabled: boolean;
 }

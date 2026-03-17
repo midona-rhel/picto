@@ -63,6 +63,7 @@ pub struct SubscriptionSyncEngine<'a> {
     last_progress_emit: std::time::Instant,
     auto_merge_enabled: bool,
     auto_merge_distance: u32,
+    auto_merge_require_matching_dimensions: bool,
 }
 
 impl<'a> SubscriptionSyncEngine<'a> {
@@ -85,6 +86,7 @@ impl<'a> SubscriptionSyncEngine<'a> {
             last_progress_emit: std::time::Instant::now(),
             auto_merge_enabled: false,
             auto_merge_distance: crate::duplicates::phash::DEFAULT_DISTANCE_THRESHOLD,
+            auto_merge_require_matching_dimensions: false,
         })
     }
 
@@ -93,9 +95,15 @@ impl<'a> SubscriptionSyncEngine<'a> {
         self
     }
 
-    pub fn with_auto_merge(mut self, enabled: bool, distance: u32) -> Self {
+    pub fn with_auto_merge(
+        mut self,
+        enabled: bool,
+        distance: u32,
+        require_matching_dimensions: bool,
+    ) -> Self {
         self.auto_merge_enabled = enabled;
         self.auto_merge_distance = distance;
+        self.auto_merge_require_matching_dimensions = require_matching_dimensions;
         self
     }
 

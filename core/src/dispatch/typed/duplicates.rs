@@ -51,6 +51,8 @@ pub struct UpdateDuplicateSettingsInput {
     #[serde(default, rename = "duplicateAutoMergeSimilarityPct")]
     #[ts(type = "number | null")]
     pub duplicate_auto_merge_similarity_pct: Option<u32>,
+    #[serde(default, rename = "duplicateAutoMergeRequireMatchingDimensions")]
+    pub duplicate_auto_merge_require_matching_dimensions: Option<bool>,
     #[serde(default, rename = "duplicateAutoMergeSubscriptionsOnly")]
     pub duplicate_auto_merge_subscriptions_only: Option<bool>,
     #[serde(default, rename = "duplicateAutoMergeEnabled")]
@@ -126,6 +128,7 @@ pub async fn get_duplicate_settings(state: &AppState, _input: serde_json::Value)
         "duplicateDetectSimilarityPct": s.duplicate_detect_similarity_pct,
         "duplicateReviewSimilarityPct": s.duplicate_review_similarity_pct,
         "duplicateAutoMergeSimilarityPct": s.duplicate_auto_merge_similarity_pct,
+        "duplicateAutoMergeRequireMatchingDimensions": s.duplicate_auto_merge_require_matching_dimensions,
         "duplicateAutoMergeSubscriptionsOnly": s.duplicate_auto_merge_subscriptions_only,
         "duplicateAutoMergeEnabled": s.duplicate_auto_merge_enabled,
     }))
@@ -141,6 +144,9 @@ pub async fn update_duplicate_settings(state: &AppState, input: UpdateDuplicateS
     }
     if let Some(v) = input.duplicate_auto_merge_similarity_pct {
         s.duplicate_auto_merge_similarity_pct = v.clamp(95, 100);
+    }
+    if let Some(v) = input.duplicate_auto_merge_require_matching_dimensions {
+        s.duplicate_auto_merge_require_matching_dimensions = v;
     }
     if let Some(v) = input.duplicate_auto_merge_subscriptions_only {
         s.duplicate_auto_merge_subscriptions_only = v;

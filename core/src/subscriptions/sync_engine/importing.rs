@@ -91,6 +91,7 @@ impl<'a> SubscriptionSyncEngine<'a> {
                         self.db,
                         &imported.hex_hash,
                         self.auto_merge_distance,
+                        self.auto_merge_require_matching_dimensions,
                     )
                     .await
                     {

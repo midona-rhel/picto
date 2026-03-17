@@ -42,6 +42,8 @@ pub struct AppSettings {
     pub duplicate_review_similarity_pct: u32,
     #[serde(default = "default_duplicate_auto_merge_similarity_pct")]
     pub duplicate_auto_merge_similarity_pct: u32,
+    #[serde(default)]
+    pub duplicate_auto_merge_require_matching_dimensions: bool,
     #[serde(default = "default_true")]
     pub duplicate_auto_merge_subscriptions_only: bool,
     #[serde(default = "default_true")]
@@ -141,6 +143,7 @@ impl Default for AppSettings {
             duplicate_detect_similarity_pct: default_duplicate_detect_similarity_pct(),
             duplicate_review_similarity_pct: default_duplicate_review_similarity_pct(),
             duplicate_auto_merge_similarity_pct: default_duplicate_auto_merge_similarity_pct(),
+            duplicate_auto_merge_require_matching_dimensions: false,
             duplicate_auto_merge_subscriptions_only: true,
             duplicate_auto_merge_enabled: true,
             sub_abort_threshold: default_sub_abort_threshold(),
