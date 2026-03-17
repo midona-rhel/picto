@@ -122,6 +122,7 @@ function App() {
   } = useScopedGridPreferences({
     currentView,
     activeFolderId: activeFolder?.folder_id ?? null,
+    activeCollectionId: activeCollection?.id ?? null,
     activeSmartFolderId: activeSmartFolder?.id ?? null,
     activeStatusFilter,
     settingsLoaded,

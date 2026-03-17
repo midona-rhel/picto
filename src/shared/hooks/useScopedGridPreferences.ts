@@ -18,6 +18,7 @@ export interface DisplayOptions {
 type UseScopedGridPreferencesParams = {
   currentView: string;
   activeFolderId: number | null;
+  activeCollectionId: number | null;
   activeSmartFolderId: string | null;
   activeStatusFilter: string | null;
   settingsLoaded: boolean;
@@ -47,6 +48,7 @@ const VALID_VIEW_MODES = new Set<string>(['grid', 'waterfall', 'justified']);
 export function useScopedGridPreferences({
   currentView,
   activeFolderId,
+  activeCollectionId,
   activeSmartFolderId,
   activeStatusFilter,
   settingsLoaded,
@@ -82,13 +84,12 @@ export function useScopedGridPreferences({
 
   const gridScopeKey = useMemo(() => {
     if (currentView !== 'images') return null;
+    if (activeCollectionId != null) return `collection:${activeCollectionId}`;
     if (activeFolderId) return `folder:${activeFolderId}`;
     if (activeSmartFolderId) return `smart:${activeSmartFolderId}`;
-    if (activeStatusFilter === 'inbox') return 'system:inbox';
-    if (activeStatusFilter === 'uncategorized') return 'system:uncategorized';
-    if (activeStatusFilter === 'trash') return 'system:trash';
+    if (activeStatusFilter) return `system:${activeStatusFilter}`;
     return 'system:all';
-  }, [currentView, activeFolderId, activeSmartFolderId, activeStatusFilter]);
+  }, [currentView, activeCollectionId, activeFolderId, activeSmartFolderId, activeStatusFilter]);
 
   const effectiveGridViewMode = scopedGridViewMode ?? scopeFallback.viewMode;
   const effectiveGridTargetSize = scopedGridTargetSize ?? scopeFallback.targetSize;
