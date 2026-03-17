@@ -27,8 +27,11 @@ use std::sync::RwLock;
 pub enum BitmapKey {
     /// Files with a given status (0=inbox, 1=active, 2=trash)
     Status(i64),
-    /// No longer written by new code paths. Kept for backward-compatible
-    /// deserialization of legacy bitmaps.bin files (tag byte = 1).
+    /// Backward-compat alias for the default visible library bitmap.
+    ///
+    /// Historically this meant "inbox + active". The canonical product
+    /// behavior is now "active only", but we keep the key to avoid rewriting
+    /// the bitmap snapshot format.
     AllActive,
     /// Files directly tagged with tag_id
     Tag(i64),

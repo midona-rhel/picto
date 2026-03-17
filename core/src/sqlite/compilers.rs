@@ -40,7 +40,8 @@ impl CompilerPlan {
     ///
     /// Dependency rules:
     /// - File insert/delete/status → rebuild status bitmaps + ALL smart folders + sidebar.
-    ///   Status changes affect AllActive membership which every smart folder scope depends on.
+    ///   Status changes affect the default visible-library bitmap which every
+    ///   smart folder scope depends on.
     /// - FileTagsChanged → rebuild ALL smart folders (any tag predicate could match) + sidebar.
     ///   We can't cheaply determine which smart folders use the changed tag, so rebuild all.
     /// - TagChanged → rebuild only that tag's bitmap + sidebar. Smart folders use EffectiveTag
@@ -449,8 +450,8 @@ mod tests {
         assert_eq!(db.bitmaps.len(&BitmapKey::Status(1)), 1);
         // Trash (status=2) should have 1 file
         assert_eq!(db.bitmaps.len(&BitmapKey::Status(2)), 1);
-        // AllActive = inbox + active = 3
-        assert_eq!(db.bitmaps.len(&BitmapKey::AllActive), 3);
+        // Default visible library = active only.
+        assert_eq!(db.bitmaps.len(&BitmapKey::AllActive), 1);
     }
 
     #[tokio::test]
@@ -539,9 +540,9 @@ mod tests {
                     [fid],
                 )?;
             }
-            // Create a smart folder with valid predicate (no tag rules = all active files)
-            conn.execute(
-                "INSERT INTO smart_folder (name, predicate_json) VALUES ('All',
+        // Create a smart folder with an empty predicate.
+        conn.execute(
+            "INSERT INTO smart_folder (name, predicate_json) VALUES ('All',
                  '{\"groups\":[]}')",
                 [],
             )?;
@@ -553,21 +554,17 @@ mod tests {
         // Build status bitmaps first (smart folders depend on them)
         compile_status_bitmaps(&db).await.unwrap();
 
-        // Empty smart folder predicates compile against the active bitmap only.
-        // Inbox membership is intentionally excluded.
-        assert_eq!(db.bitmaps.len(&BitmapKey::AllActive), 10);
+        // Default visible library stays active-only.
+        assert_eq!(db.bitmaps.len(&BitmapKey::AllActive), 3);
         assert_eq!(db.bitmaps.len(&BitmapKey::Status(1)), 3);
 
         // Compile smart folder
         compile_all_smart_folders(&db).await.unwrap();
 
-        // Empty smart folder predicate should match the active count.
+        // Empty smart folder predicates have no local rules, so they compile to
+        // an empty effective predicate and therefore an empty result.
         let sf_len = db.bitmaps.len(&BitmapKey::SmartFolder(1));
-        let active_len = db.bitmaps.len(&BitmapKey::Status(1));
-        assert_eq!(
-            sf_len, active_len,
-            "Smart folder bitmap ({sf_len}) should match active ({active_len})"
-        );
+        assert_eq!(sf_len, 0, "Smart folder bitmap ({sf_len}) should be empty");
     }
 
     #[tokio::test]
@@ -607,7 +604,7 @@ mod tests {
             // Verify before flush
             assert_eq!(db.bitmaps.len(&BitmapKey::Status(0)), 1);
             assert_eq!(db.bitmaps.len(&BitmapKey::Status(1)), 1);
-            assert_eq!(db.bitmaps.len(&BitmapKey::AllActive), 2);
+            assert_eq!(db.bitmaps.len(&BitmapKey::AllActive), 1);
 
             db.bitmaps.flush().unwrap();
         }
@@ -627,8 +624,8 @@ mod tests {
             );
             assert_eq!(
                 db.bitmaps.len(&BitmapKey::AllActive),
-                2,
-                "AllActive bitmap should survive restart"
+                1,
+                "Default visible-library bitmap should survive restart"
             );
         }
     }

@@ -26,9 +26,7 @@ pub(crate) async fn compile_status_bitmaps(db: &Arc<SqliteDatabase>) -> Result<(
             bitmaps.set(BitmapKey::Status(status), bitmap);
         }
 
-        let mut all_active = bitmaps.get(&BitmapKey::Status(0));
-        all_active |= &bitmaps.get(&BitmapKey::Status(1));
-        bitmaps.set(BitmapKey::AllActive, all_active);
+        bitmaps.set(BitmapKey::AllActive, bitmaps.get(&BitmapKey::Status(1)));
 
         Ok(())
     })
