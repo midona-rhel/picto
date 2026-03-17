@@ -165,7 +165,7 @@ pub async fn get_groups(
     state: &AppState,
     _input: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
-    let result = crate::subscriptions::subscription_group_controller::SubscriptionGroupController::get_groups(&state.db).await?;
+    let result = crate::subscriptions::group_service::get_groups(&state.db).await?;
     Ok(serde_json::to_value(&result).map_err(|e| e.to_string())?)
 }
 
@@ -173,9 +173,9 @@ pub async fn create_group(
     state: &AppState,
     input: CreateGroupInput,
 ) -> Result<serde_json::Value, String> {
-    let group = crate::subscriptions::subscription_group_controller::SubscriptionGroupController::create_group(
-        &state.db, input.name, input.schedule,
-    ).await?;
+    let group =
+        crate::subscriptions::group_service::create_group(&state.db, input.name, input.schedule)
+            .await?;
     crate::events::emit_mutation(
         "create_group",
         crate::runtime_contract::mutation_builder::MutationImpact::subscriptions_sidebar(),
@@ -184,12 +184,8 @@ pub async fn create_group(
 }
 
 pub async fn delete_group(state: &AppState, input: DeleteGroupInput) -> Result<(), String> {
-    crate::subscriptions::subscription_group_controller::SubscriptionGroupController::delete_group(
-        &state.db,
-        &state.blob_store,
-        input.id,
-    )
-    .await?;
+    crate::subscriptions::group_service::delete_group(&state.db, &state.blob_store, input.id)
+        .await?;
     crate::events::emit_mutation(
         "delete_group",
         crate::runtime_contract::mutation_builder::MutationImpact::subscriptions_sidebar(),
@@ -198,10 +194,7 @@ pub async fn delete_group(state: &AppState, input: DeleteGroupInput) -> Result<(
 }
 
 pub async fn rename_group(state: &AppState, input: RenameGroupInput) -> Result<(), String> {
-    crate::subscriptions::subscription_group_controller::SubscriptionGroupController::rename_group(
-        &state.db, input.id, input.name,
-    )
-    .await?;
+    crate::subscriptions::group_service::rename_group(&state.db, input.id, input.name).await?;
     crate::events::emit_mutation(
         "rename_group",
         crate::runtime_contract::mutation_builder::MutationImpact::subscriptions_sidebar(),
@@ -213,9 +206,8 @@ pub async fn set_group_schedule(
     state: &AppState,
     input: SetGroupScheduleInput,
 ) -> Result<(), String> {
-    crate::subscriptions::subscription_group_controller::SubscriptionGroupController::set_group_schedule(
-        &state.db, input.id, input.schedule,
-    ).await?;
+    crate::subscriptions::group_service::set_group_schedule(&state.db, input.id, input.schedule)
+        .await?;
     crate::events::emit_mutation(
         "set_group_schedule",
         crate::runtime_contract::mutation_builder::MutationImpact::subscriptions_sidebar(),
@@ -291,9 +283,7 @@ pub async fn get_subscriptions(
     state: &AppState,
     _input: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
-    let result =
-        crate::subscriptions::controller::SubscriptionController::get_subscriptions(&state.db)
-            .await?;
+    let result = crate::subscriptions::service::get_subscriptions(&state.db).await?;
     Ok(serde_json::to_value(&result).map_err(|e| e.to_string())?)
 }
 
@@ -301,7 +291,7 @@ pub async fn create_subscription(
     state: &AppState,
     input: CreateSubscriptionInput,
 ) -> Result<serde_json::Value, String> {
-    let sub = crate::subscriptions::controller::SubscriptionController::create_subscription(
+    let sub = crate::subscriptions::service::create_subscription(
         &state.db,
         input.name,
         input.site_id,
@@ -322,12 +312,9 @@ pub async fn delete_subscription(
     state: &AppState,
     input: DeleteSubscriptionInput,
 ) -> Result<serde_json::Value, String> {
-    let count = crate::subscriptions::controller::SubscriptionController::delete_subscription(
-        &state.db,
-        &state.blob_store,
-        input.id,
-    )
-    .await?;
+    let count =
+        crate::subscriptions::service::delete_subscription(&state.db, &state.blob_store, input.id)
+            .await?;
     crate::events::emit_mutation(
         "delete_subscription",
         crate::runtime_contract::mutation_builder::MutationImpact::subscriptions_sidebar(),
@@ -339,12 +326,7 @@ pub async fn pause_subscription(
     state: &AppState,
     input: PauseSubscriptionInput,
 ) -> Result<(), String> {
-    crate::subscriptions::controller::SubscriptionController::pause_subscription(
-        &state.db,
-        input.id,
-        input.paused,
-    )
-    .await?;
+    crate::subscriptions::service::pause_subscription(&state.db, input.id, input.paused).await?;
     crate::events::emit_mutation(
         "pause_subscription",
         crate::runtime_contract::mutation_builder::MutationImpact::subscriptions_sidebar(),
@@ -356,7 +338,7 @@ pub async fn add_subscription_query(
     state: &AppState,
     input: AddSubscriptionQueryInput,
 ) -> Result<serde_json::Value, String> {
-    let query = crate::subscriptions::controller::SubscriptionController::add_subscription_query(
+    let query = crate::subscriptions::service::add_subscription_query(
         &state.db,
         input.subscription_id,
         input.query_text,
@@ -373,10 +355,7 @@ pub async fn delete_subscription_query(
     state: &AppState,
     input: DeleteSubscriptionQueryInput,
 ) -> Result<(), String> {
-    crate::subscriptions::controller::SubscriptionController::delete_subscription_query(
-        &state.db, input.id,
-    )
-    .await?;
+    crate::subscriptions::service::delete_subscription_query(&state.db, input.id).await?;
     crate::events::emit_mutation(
         "delete_subscription_query",
         crate::runtime_contract::mutation_builder::MutationImpact::subscriptions_sidebar(),
@@ -388,12 +367,8 @@ pub async fn pause_subscription_query(
     state: &AppState,
     input: PauseSubscriptionQueryInput,
 ) -> Result<(), String> {
-    crate::subscriptions::controller::SubscriptionController::pause_subscription_query(
-        &state.db,
-        input.id,
-        input.paused,
-    )
-    .await?;
+    crate::subscriptions::service::pause_subscription_query(&state.db, input.id, input.paused)
+        .await?;
     crate::events::emit_mutation(
         "pause_subscription_query",
         crate::runtime_contract::mutation_builder::MutationImpact::subscriptions_sidebar(),
@@ -432,7 +407,7 @@ pub async fn reset_subscription(
     state: &AppState,
     input: ResetSubscriptionInput,
 ) -> Result<(), String> {
-    crate::subscriptions::controller::SubscriptionController::reset_subscription_checked(
+    crate::subscriptions::service::reset_subscription_checked(
         &state.db,
         &state.running_subscriptions,
         input.id,
@@ -467,10 +442,7 @@ pub async fn rename_subscription(
     state: &AppState,
     input: RenameSubscriptionInput,
 ) -> Result<(), String> {
-    crate::subscriptions::controller::SubscriptionController::rename_subscription(
-        &state.db, input.id, input.name,
-    )
-    .await?;
+    crate::subscriptions::service::rename_subscription(&state.db, input.id, input.name).await?;
     crate::events::emit_mutation(
         "rename_subscription",
         crate::runtime_contract::mutation_builder::MutationImpact::subscriptions_sidebar(),

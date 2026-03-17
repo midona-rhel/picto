@@ -306,7 +306,7 @@ pub async fn create_folder(
     state: &AppState,
     input: CreateFolderInput,
 ) -> Result<crate::folders::db::Folder, String> {
-    let folder = crate::folders::controller::FolderController::create_folder(
+    let folder = crate::folders::service::create_folder(
         &state.db,
         input.name,
         input.parent_id,
@@ -324,7 +324,7 @@ pub async fn create_folder(
 }
 
 pub async fn update_folder(state: &AppState, input: UpdateFolderInput) -> Result<(), String> {
-    crate::folders::controller::FolderController::update_folder(
+    crate::folders::service::update_folder(
         &state.db,
         input.folder_id,
         input.name,
@@ -363,7 +363,7 @@ pub async fn set_folder_watch_config(
     }
     let canonical_path = canonical_path.to_string_lossy().to_string();
 
-    crate::folders::controller::FolderController::set_folder_watch_config(
+    crate::folders::service::set_folder_watch_config(
         &state.db,
         input.folder_id,
         canonical_path.clone(),
@@ -403,11 +403,7 @@ pub async fn clear_folder_watch_config(
     state: &AppState,
     input: ClearFolderWatchConfigInput,
 ) -> Result<(), String> {
-    crate::folders::controller::FolderController::clear_folder_watch_config(
-        &state.db,
-        input.folder_id,
-    )
-    .await?;
+    crate::folders::service::clear_folder_watch_config(&state.db, input.folder_id).await?;
     let _ = state
         .folder_watch_commands
         .send(crate::folders::watch::FolderWatchCommand::Reload);
@@ -422,7 +418,7 @@ pub async fn clear_folder_watch_config(
 }
 
 pub async fn delete_folder(state: &AppState, input: DeleteFolderInput) -> Result<(), String> {
-    crate::folders::controller::FolderController::delete_folder(&state.db, input.folder_id).await?;
+    crate::folders::service::delete_folder(&state.db, input.folder_id).await?;
     crate::events::emit_mutation(
         "delete_folder",
         crate::runtime_contract::mutation_builder::MutationImpact::new()
@@ -440,12 +436,8 @@ pub async fn update_folder_parent(
     state: &AppState,
     input: UpdateFolderParentInput,
 ) -> Result<(), String> {
-    crate::folders::controller::FolderController::update_folder_parent(
-        &state.db,
-        input.folder_id,
-        input.new_parent_id,
-    )
-    .await?;
+    crate::folders::service::update_folder_parent(&state.db, input.folder_id, input.new_parent_id)
+        .await?;
     crate::events::emit_mutation(
         "update_folder_parent",
         crate::runtime_contract::mutation_builder::MutationImpact::sidebar(
@@ -520,12 +512,7 @@ pub async fn reorder_folder_items(
     input: ReorderFolderItemsInput,
 ) -> Result<(), String> {
     if let Some(moves) = input.moves {
-        crate::folders::controller::FolderController::reorder_folder_items(
-            &state.db,
-            input.folder_id,
-            moves,
-        )
-        .await?;
+        crate::folders::service::reorder_folder_items(&state.db, input.folder_id, moves).await?;
     } else if let Some(sort_by) = input.sort_by {
         let direction = input.direction.unwrap_or_else(|| "asc".to_string());
         state

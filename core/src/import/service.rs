@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use crate::blob_store::BlobStore;
 use crate::duplicates::orchestrator::DuplicateOrchestrator;
 use crate::events::{self, ManualImportProgressEvent};
-use crate::folders::controller::FolderController;
+use crate::folders::service;
 use crate::import::existing::{ExistingImportMergeRequest, merge_existing_import_target};
 use crate::import::pipeline::{ImportOptions, ImportPipeline};
 use crate::runtime_contract::mutation::Domain;
@@ -179,8 +179,7 @@ impl ImportService {
                 .unwrap_or("Imported Folder")
                 .to_string();
             let root_folder =
-                FolderController::create_folder(db, root_name, parent_folder_id, None, None)
-                    .await?;
+                service::create_folder(db, root_name, parent_folder_id, None, None).await?;
             folder_cache.insert(PathBuf::new(), root_folder.folder_id);
             created_folder_ids.push(root_folder.folder_id);
             touched_folder_ids.insert(root_folder.folder_id);
@@ -203,19 +202,14 @@ impl ImportService {
                     .filter(|entry| !entry.is_empty())
                     .unwrap_or("Imported Folder")
                     .to_string();
-                let folder =
-                    FolderController::create_folder(db, name, Some(parent_id), None, None).await?;
+                let folder = service::create_folder(db, name, Some(parent_id), None, None).await?;
                 folder_cache.insert(relative, folder.folder_id);
                 created_folder_ids.push(folder.folder_id);
                 touched_folder_ids.insert(folder.folder_id);
             }
 
             if !created_folder_ids.is_empty() {
-                FolderController::refresh_sidebar_projection_for_folder_ids(
-                    db,
-                    &created_folder_ids,
-                )
-                .await?;
+                service::refresh_sidebar_projection_for_folder_ids(db, &created_folder_ids).await?;
                 crate::events::emit_mutation(
                     "import_folder_structure",
                     MutationImpact::sidebar(Domain::Folders).folder_ids(created_folder_ids.clone()),
@@ -330,8 +324,7 @@ impl ImportService {
 
         if !touched_folder_ids.is_empty() {
             let touched_folder_ids: Vec<i64> = touched_folder_ids.into_iter().collect();
-            FolderController::refresh_sidebar_projection_for_folder_ids(db, &touched_folder_ids)
-                .await?;
+            service::refresh_sidebar_projection_for_folder_ids(db, &touched_folder_ids).await?;
         }
 
         Ok(batch)

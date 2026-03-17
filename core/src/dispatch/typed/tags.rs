@@ -131,18 +131,12 @@ pub async fn search_tags(
 ) -> Result<serde_json::Value, String> {
     let query = input.query.unwrap_or_default();
     if input.offset.is_some() {
-        let result = crate::tags::controller::TagController::search_tags_paged(
-            &state.db,
-            query,
-            input.limit,
-            input.offset,
-        )
-        .await?;
+        let result =
+            crate::tags::service::search_tags_paged(&state.db, query, input.limit, input.offset)
+                .await?;
         serde_json::to_value(&result).map_err(|e| e.to_string())
     } else {
-        let result =
-            crate::tags::controller::TagController::search_tags(&state.db, query, input.limit)
-                .await?;
+        let result = crate::tags::service::search_tags(&state.db, query, input.limit).await?;
         serde_json::to_value(&result).map_err(|e| e.to_string())
     }
 }
@@ -151,8 +145,7 @@ pub async fn get_all_tags_with_counts(
     state: &AppState,
     _input: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
-    let result =
-        crate::tags::controller::TagController::get_all_tags_with_counts(&state.db).await?;
+    let result = crate::tags::service::get_all_tags_with_counts(&state.db).await?;
     serde_json::to_value(&result).map_err(|e| e.to_string())
 }
 
@@ -221,7 +214,7 @@ pub async fn find_files_by_tags(
     state: &AppState,
     input: FindFilesByTagsInput,
 ) -> Result<serde_json::Value, String> {
-    let result = crate::tags::controller::TagController::find_files_by_tags(
+    let result = crate::tags::service::find_files_by_tags(
         &state.db,
         input.tag_strings,
         input.limit,
@@ -436,12 +429,7 @@ pub async fn companion_get_files_by_tag(
     state: &AppState,
     input: CompanionGetFilesByTagInput,
 ) -> Result<serde_json::Value, String> {
-    let result = crate::tags::controller::TagController::find_files_by_tags(
-        &state.db,
-        vec![input.tag],
-        None,
-        None,
-    )
-    .await?;
+    let result =
+        crate::tags::service::find_files_by_tags(&state.db, vec![input.tag], None, None).await?;
     serde_json::to_value(&result).map_err(|e| e.to_string())
 }

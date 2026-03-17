@@ -11,7 +11,7 @@ use tokio_util::sync::CancellationToken;
 use crate::blob_store::BlobStore;
 use crate::duplicates::orchestrator::DuplicateOrchestrator;
 use crate::events::{self, ManualImportProgressEvent};
-use crate::folders::controller::FolderController;
+use crate::folders::service;
 use crate::import::existing::{ExistingImportMergeRequest, merge_existing_import_target};
 use crate::import::pipeline::{ImportError, ImportOptions, ImportPipeline};
 use crate::runtime_contract::mutation_builder::MutationImpact;
@@ -403,7 +403,7 @@ async fn ensure_relative_folder_path(
         let Some(name) = name.to_str() else {
             continue;
         };
-        let child = FolderController::ensure_child_folder(db, current_folder_id, name).await?;
+        let child = service::ensure_child_folder(db, current_folder_id, name).await?;
         current_folder_id = child.folder_id;
     }
     Ok(current_folder_id)
@@ -494,7 +494,7 @@ async fn import_file_into_folder(
     if !membership_hashes.is_empty() {
         db.add_entities_to_folder_batch(folder_id, &membership_hashes)
             .await?;
-        FolderController::refresh_sidebar_projection_for_folder_ids(db, &[folder_id]).await?;
+        service::refresh_sidebar_projection_for_folder_ids(db, &[folder_id]).await?;
     }
 
     if !imported_hashes.is_empty() {

@@ -112,9 +112,10 @@ async fn tag_table_query_returns_seeded_tags() {
         .await
         .expect("get_all_tags_with_counts");
     assert!(!tags.is_empty(), "should return seeded tag");
-    assert!(tags
-        .iter()
-        .any(|t| t.subtag == "alice" && t.namespace == "character"));
+    assert!(
+        tags.iter()
+            .any(|t| t.subtag == "alice" && t.namespace == "character")
+    );
 }
 
 #[tokio::test]
@@ -239,7 +240,7 @@ async fn remove_files_from_folder_batch_correctness() {
 async fn folder_controller_updates_sidebar_projection_immediately() {
     let harness = common::TestHarness::new().await;
 
-    let parent = picto_core::folders::controller::FolderController::create_folder(
+    let parent = picto_core::folders::service::create_folder(
         &harness.db,
         "Parent".to_string(),
         None,
@@ -249,7 +250,7 @@ async fn folder_controller_updates_sidebar_projection_immediately() {
     .await
     .expect("create parent folder");
 
-    let child = picto_core::folders::controller::FolderController::create_folder(
+    let child = picto_core::folders::service::create_folder(
         &harness.db,
         "Child".to_string(),
         Some(parent.folder_id),
@@ -280,7 +281,7 @@ async fn folder_controller_updates_sidebar_projection_immediately() {
     assert_eq!(child_node.2, Some("IconPhoto".to_string()));
     assert_eq!(child_node.3, Some("#ff0000".to_string()));
 
-    picto_core::folders::controller::FolderController::update_folder(
+    picto_core::folders::service::update_folder(
         &harness.db,
         child.folder_id,
         Some("Child Renamed".to_string()),
@@ -310,7 +311,7 @@ async fn folder_controller_updates_sidebar_projection_immediately() {
     assert_eq!(updated_node.2, Some("IconStar".to_string()));
     assert_eq!(updated_node.3, Some("#00ff00".to_string()));
 
-    picto_core::folders::controller::FolderController::update_folder(
+    picto_core::folders::service::update_folder(
         &harness.db,
         child.folder_id,
         None,
@@ -340,13 +341,9 @@ async fn folder_controller_updates_sidebar_projection_immediately() {
     assert_eq!(cleared_node.2, None);
     assert_eq!(cleared_node.3, None);
 
-    picto_core::folders::controller::FolderController::update_folder_parent(
-        &harness.db,
-        child.folder_id,
-        None,
-    )
-    .await
-    .expect("move child to root");
+    picto_core::folders::service::update_folder_parent(&harness.db, child.folder_id, None)
+        .await
+        .expect("move child to root");
 
     let reparents_node_parent: Option<String> = harness
         .db

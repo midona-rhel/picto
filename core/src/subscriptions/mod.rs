@@ -1,13 +1,13 @@
 pub mod archive;
-pub mod controller;
 pub mod db;
-pub mod subscription_groups_db;
 pub mod gallery_dl_runner;
 pub mod group_orchestrator;
+pub mod group_service;
 pub mod import_policy;
 pub mod policy;
 pub mod progress;
 pub mod run_orchestrator;
 pub mod runtime_tasks;
-pub mod subscription_group_controller;
+pub mod service;
+pub mod subscription_groups_db;
 pub mod sync_engine;

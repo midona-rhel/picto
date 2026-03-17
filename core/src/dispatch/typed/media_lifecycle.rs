@@ -118,12 +118,11 @@ pub async fn update_file_status(
         // Single file mode
         state.db.update_file_status(&hash, file_status).await?;
         let folder_ids = collect_folder_ids_for_hashes(state, &[hash.clone()], 1).await;
-        if let Err(err) =
-            crate::folders::controller::FolderController::refresh_sidebar_projection_for_folder_ids(
-                &state.db,
-                &folder_ids,
-            )
-            .await
+        if let Err(err) = crate::folders::service::refresh_sidebar_projection_for_folder_ids(
+            &state.db,
+            &folder_ids,
+        )
+        .await
         {
             tracing::warn!(error = %err, "failed to refresh folder sidebar projection after status update");
         }
@@ -155,8 +154,11 @@ pub async fn update_file_status(
                 .db
                 .update_file_status_batch(&bitmap, file_status)
                 .await?;
-            if let Err(err) = crate::folders::controller::FolderController::
-                refresh_sidebar_projection_for_folder_ids(&state.db, &folder_ids).await
+            if let Err(err) = crate::folders::service::refresh_sidebar_projection_for_folder_ids(
+                &state.db,
+                &folder_ids,
+            )
+            .await
             {
                 tracing::warn!(error = %err, "failed to refresh folder sidebar projection after status batch update");
             }
@@ -195,12 +197,11 @@ pub async fn delete_files(state: &AppState, input: DeleteFilesInput) -> Result<u
     }
 
     if count > 0 {
-        if let Err(err) =
-            crate::folders::controller::FolderController::refresh_sidebar_projection_for_folder_ids(
-                &state.db,
-                &folder_ids,
-            )
-            .await
+        if let Err(err) = crate::folders::service::refresh_sidebar_projection_for_folder_ids(
+            &state.db,
+            &folder_ids,
+        )
+        .await
         {
             tracing::warn!(error = %err, "failed to refresh folder sidebar projection after delete_files");
         }
