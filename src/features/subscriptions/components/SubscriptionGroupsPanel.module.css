@@ -65,9 +65,9 @@
 .subscriptionGroupCard {
   border-radius: 8px;
   border: 1px solid var(--color-border-secondary);
-  background: var(--color-bg-secondary);
+  background: var(--color-white-10);
   overflow: hidden;
-  transition: border-color 150ms ease;
+  transition: border-color 150ms ease, background-color 150ms ease;
 }
 
 [data-mantine-color-scheme="light"] .subscriptionGroupCard {
@@ -75,7 +75,8 @@
 }
 
 .subscriptionGroupCard:hover {
-  border-color: var(--color-border-primary);
+  border-color: var(--color-white-20);
+  background: var(--color-white-15);
 }
 
 [data-mantine-color-scheme="light"] .subscriptionGroupCard:hover {
@@ -229,6 +230,7 @@
   gap: 6px;
   padding: 6px 12px;
   border-top: 1px solid var(--color-border-secondary);
+  background: var(--color-black-10);
   white-space: nowrap;
   overflow-x: auto;
   scrollbar-width: none;
@@ -249,6 +251,7 @@
 .expandedBody {
   padding: 8px 12px 10px;
   border-top: 1px solid var(--color-border-secondary);
+  background: var(--color-black-10);
 }
 
 .sectionLabel {
@@ -264,18 +267,43 @@
    Query rows
    -------------------------------------------------------------------------- */
 
+.queryHeaderRow,
 .queryRow {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(72px, 0.8fr) minmax(0, 2.8fr) minmax(88px, 1fr) minmax(60px, auto) minmax(96px, auto) auto;
   align-items: center;
-  min-height: 24px;
   gap: 8px;
+}
+
+.queryHeaderRow {
+  min-height: 24px;
+  padding: 0 10px 4px;
+  border-bottom: 1px solid var(--color-border-secondary);
+  margin-bottom: 4px;
+}
+
+.queryHeaderCell {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--color-text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.queryRow {
+  min-height: 32px;
+  padding: 0 10px;
+  border-radius: 6px;
+  background: var(--color-white-05);
+}
+
+.queryRow + .queryRow {
+  margin-top: 4px;
 }
 
 .querySite {
   font-size: 11px;
   color: var(--color-text-tertiary);
-  min-width: 56px;
-  flex-shrink: 0;
 }
 
 .queryText {
@@ -283,7 +311,12 @@
   font-size: 12px;
   font-family: var(--font-family-mono, "SF Mono", "Cascadia Code", "Fira Code", ui-monospace, monospace);
   color: var(--color-text-primary);
-  flex: 1;
+  min-width: 0;
+}
+
+.queryStatus {
+  display: inline-flex;
+  align-items: center;
   min-width: 0;
 }
 
@@ -297,17 +330,36 @@
   white-space: nowrap;
 }
 
+.queryStatusOk {
+  font-size: 10px;
+  color: var(--color-text-secondary);
+  border: 1px solid var(--color-border-secondary);
+  border-radius: 999px;
+  padding: 0 6px;
+  line-height: 16px;
+  white-space: nowrap;
+}
+
 .queryFiles {
   font-size: 11px;
   color: var(--color-text-tertiary);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
+  text-align: right;
 }
 
 .queryTime {
   font-size: 11px;
   color: var(--color-text-tertiary);
   white-space: nowrap;
+  text-align: right;
+}
+
+.queryActions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
 }
 
 /* --------------------------------------------------------------------------

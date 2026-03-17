@@ -83,7 +83,7 @@
 .section {
   border: 1px solid var(--color-border-secondary);
   border-radius: 8px;
-  background: var(--color-black-20);
+  background: var(--color-white-10);
   padding: 12px;
 }
 
@@ -131,7 +131,7 @@
 .cardsContainer {
   border: 1px solid var(--color-border-secondary);
   border-radius: 8px;
-  background-color: var(--color-black-30);
+  background-color: var(--color-black-20);
   padding: 8px;
 }
 

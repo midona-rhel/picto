@@ -480,28 +480,44 @@ export function SubscriptionGroupsPanel({
               <Collapse in={isExpanded}>
                 <div className={st.expandedBody}>
                   <div className={st.sectionLabel}>Queries ({queries.length})</div>
+                  {queries.length > 0 && (
+                    <div className={st.queryHeaderRow}>
+                      <span className={st.queryHeaderCell}>Site</span>
+                      <span className={st.queryHeaderCell}>Query</span>
+                      <span className={st.queryHeaderCell}>Status</span>
+                      <span className={st.queryHeaderCell}>Files</span>
+                      <span className={st.queryHeaderCell}>Last check</span>
+                      <span className={st.queryHeaderCell}>Actions</span>
+                    </div>
+                  )}
                   {queries.map((q) => (
                     <div key={q.queryId} className={st.queryRow}>
                       <span className={st.querySite}>{q.siteName}</span>
                       <span className={st.queryText}>{q.queryText}</span>
-                      {q.missingAuth && (
-                        <span className={st.queryAuthWarning}>Missing auth</span>
-                      )}
+                      <span className={st.queryStatus}>
+                        {q.missingAuth ? (
+                          <span className={st.queryAuthWarning}>Missing auth</span>
+                        ) : (
+                          <span className={st.queryStatusOk}>Ready</span>
+                        )}
+                      </span>
                       <span className={st.queryFiles}>{q.filesFound}</span>
                       <span className={st.queryTime}>{q.lastCheck ? formatRelativeTime(q.lastCheck) : ''}</span>
-                      <ActionIcon
-                        variant="subtle"
-                        color="gray"
-                        size="xs"
-                        onClick={() => handleRunQuery(q.backendSubId, q.queryId, q.queryText, q.missingAuth)}
-                        disabled={q.paused || runningQueryIds.has(q.queryId)}
-                        title={q.paused ? 'Query is paused' : 'Run query'}
-                      >
-                        <IconPlayerPlay size={12} />
-                      </ActionIcon>
-                      <ActionIcon variant="subtle" color="gray" size="xs" onClick={() => handleDeleteQuery(q.queryId)}>
-                        <IconTrash size={12} />
-                      </ActionIcon>
+                      <div className={st.queryActions}>
+                        <ActionIcon
+                          variant="subtle"
+                          color="gray"
+                          size="xs"
+                          onClick={() => handleRunQuery(q.backendSubId, q.queryId, q.queryText, q.missingAuth)}
+                          disabled={q.paused || runningQueryIds.has(q.queryId)}
+                          title={q.paused ? 'Query is paused' : 'Run query'}
+                        >
+                          <IconPlayerPlay size={12} />
+                        </ActionIcon>
+                        <ActionIcon variant="subtle" color="gray" size="xs" onClick={() => handleDeleteQuery(q.queryId)}>
+                          <IconTrash size={12} />
+                        </ActionIcon>
+                      </div>
                     </div>
                   ))}
 
