@@ -4,19 +4,21 @@
 //! Delegates to `sqlite::smart_folders` for storage and bitmap compilation.
 
 use crate::smart_folders::db::{
-    SmartFolder, SmartFolderPredicate, build_effective_predicate_for_smart_folder, compile_predicate,
-    get_smart_folder, get_smart_folder_chain, has_local_rules,
+    SmartFolder, SmartFolderPredicate, build_effective_predicate_for_smart_folder,
+    collect_descendant_smart_folder_ids, compile_predicate, get_smart_folder,
+    get_smart_folder_chain, has_local_rules,
 };
 use crate::sqlite::SqliteDatabase;
+use crate::sqlite::bitmaps::BitmapKey;
 
 async fn build_smart_folder_sidebar_node(
     db: &SqliteDatabase,
     sf: &SmartFolder,
-    count: i64,
 ) -> Result<crate::sidebar::db::SidebarNode, String> {
     let smart_folder_id = sf.smart_folder_id;
     let predicate_json = sf.predicate_json.clone();
-    let (effective_predicate, inherited_predicates, has_effective_rules, has_local_predicate_rules) = db
+    let bitmaps = db.bitmaps.clone();
+    let (effective_predicate, inherited_predicates, has_effective_rules, has_local_predicate_rules, count) = db
         .with_read_conn(move |conn| {
             let effective = build_effective_predicate_for_smart_folder(conn, smart_folder_id)?;
             let chain = get_smart_folder_chain(conn, smart_folder_id)?;
@@ -30,11 +32,15 @@ async fn build_smart_folder_sidebar_node(
             };
             let local = serde_json::from_str::<crate::smart_folders::db::SmartFolderPredicate>(&predicate_json)
                 .unwrap_or(crate::smart_folders::db::SmartFolderPredicate { groups: Vec::new() });
+            let compiled = compile_predicate(conn, &effective, &bitmaps)?;
+            let count = compiled.len() as i64;
+            bitmaps.set(BitmapKey::SmartFolder(smart_folder_id), compiled);
             Ok::<_, rusqlite::Error>((
                 serde_json::to_value(&effective).unwrap_or_else(|_| serde_json::json!({ "groups": [] })),
                 inherited,
                 has_local_rules(&effective),
                 has_local_rules(&local),
+                count,
             ))
         })
         .await
@@ -76,6 +82,29 @@ async fn build_smart_folder_sidebar_node(
     })
 }
 
+async fn refresh_smart_folder_sidebar_nodes(
+    db: &SqliteDatabase,
+    smart_folder_ids: impl IntoIterator<Item = i64>,
+) -> Result<(), String> {
+    let mut unique_ids = std::collections::BTreeSet::new();
+    unique_ids.extend(smart_folder_ids);
+
+    let mut nodes = Vec::new();
+    for smart_folder_id in unique_ids {
+        let Some(folder) = db
+            .with_read_conn(move |conn| get_smart_folder(conn, smart_folder_id))
+            .await?
+        else {
+            continue;
+        };
+        nodes.push(build_smart_folder_sidebar_node(db, &folder).await?);
+    }
+
+    db.with_conn(move |conn| crate::sidebar::db::upsert_sidebar_nodes_batch(conn, &nodes))
+        .await?;
+    Ok(())
+}
+
 pub struct SmartFolderService;
 
 impl SmartFolderService {
@@ -95,7 +124,7 @@ impl SmartFolderService {
             )
             .await?;
 
-        let node = build_smart_folder_sidebar_node(db, &created, 0).await?;
+        let node = build_smart_folder_sidebar_node(db, &created).await?;
         db.with_conn(move |conn| crate::sidebar::db::upsert_sidebar_node(conn, &node))
             .await?;
 
@@ -130,16 +159,42 @@ impl SmartFolderService {
             .await?
             .ok_or_else(|| "Smart folder not found after update".to_string())?;
 
-        let existing_count = db
-            .bitmaps
-            .len(&crate::sqlite::bitmaps::BitmapKey::SmartFolder(
-                updated.smart_folder_id,
-            ));
-        let node = build_smart_folder_sidebar_node(db, &updated, existing_count as i64).await?;
+        let node = build_smart_folder_sidebar_node(db, &updated).await?;
         db.with_conn(move |conn| crate::sidebar::db::upsert_sidebar_node(conn, &node))
             .await?;
 
         Ok((updated, predicate_changed))
+    }
+
+    pub async fn move_smart_folder(
+        db: &SqliteDatabase,
+        smart_folder_id: i64,
+        new_parent_id: Option<i64>,
+        sibling_order: Vec<(i64, i64)>,
+    ) -> Result<(), String> {
+        let descendant_ids = db
+            .with_read_conn(move |conn| collect_descendant_smart_folder_ids(conn, smart_folder_id))
+            .await?;
+
+        db.move_smart_folder(smart_folder_id, new_parent_id, sibling_order.clone())
+            .await?;
+
+        let mut affected_ids: Vec<i64> = sibling_order.into_iter().map(|(id, _)| id).collect();
+        affected_ids.push(smart_folder_id);
+        affected_ids.extend(descendant_ids);
+        refresh_smart_folder_sidebar_nodes(db, affected_ids).await?;
+        Ok(())
+    }
+
+    pub async fn reorder_smart_folders(
+        db: &SqliteDatabase,
+        parent_id: Option<i64>,
+        moves: Vec<(i64, i64)>,
+    ) -> Result<(), String> {
+        let affected_ids: Vec<i64> = moves.iter().map(|(id, _)| *id).collect();
+        db.reorder_smart_folders(parent_id, moves).await?;
+        refresh_smart_folder_sidebar_nodes(db, affected_ids).await?;
+        Ok(())
     }
 
     pub async fn delete_smart_folder(db: &SqliteDatabase, id: String) -> Result<(), String> {

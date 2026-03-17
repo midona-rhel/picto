@@ -156,14 +156,13 @@ pub async fn move_smart_folder(
             return Err("A smart folder cannot be moved under one of its descendants".to_string());
         }
     }
-    state
-        .db
-        .move_smart_folder(
-            input.smart_folder_id,
-            input.new_parent_id,
-            input.sibling_order,
-        )
-        .await?;
+    crate::smart_folders::service::SmartFolderService::move_smart_folder(
+        &state.db,
+        input.smart_folder_id,
+        input.new_parent_id,
+        input.sibling_order,
+    )
+    .await?;
     crate::events::emit_mutation(
         "move_smart_folder",
         crate::runtime_contract::mutation_builder::MutationImpact::sidebar(
@@ -210,10 +209,12 @@ pub async fn reorder_smart_folders(
     state: &AppState,
     input: ReorderSmartFoldersInput,
 ) -> Result<(), String> {
-    state
-        .db
-        .reorder_smart_folders(input.parent_id, input.moves)
-        .await?;
+    crate::smart_folders::service::SmartFolderService::reorder_smart_folders(
+        &state.db,
+        input.parent_id,
+        input.moves,
+    )
+    .await?;
     crate::events::emit_mutation(
         "reorder_smart_folders",
         crate::runtime_contract::mutation_builder::MutationImpact::sidebar(
