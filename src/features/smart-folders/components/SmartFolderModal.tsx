@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { Modal, Stack, Group, TextInput, Text, Loader, ActionIcon, Select } from '@mantine/core';
+import { Modal, Stack, Group, TextInput, Text, Loader, ActionIcon } from '@mantine/core';
 import { glassModalStyles } from '../../../shared/styles/glassModal';
 import { api } from '#desktop/api';
 import { TextButton } from '../../../shared/components/TextButton';
@@ -34,7 +34,6 @@ function combinePredicates(predicates: SmartFolderPredicate[]): SmartFolderPredi
 export function SmartFolderModal({ opened, onClose, folder, initialParentId = null, onSaved }: SmartFolderModalProps) {
   const smartFolders = useDomainStore((state) => state.smartFolders);
   const [name, setName] = useState('');
-  const [parentId, setParentId] = useState<string | null>(null);
   const [icon, setIcon] = useState<string | null>(null);
   const [color, setColor] = useState<string | null>(null);
   const [predicate, setPredicate] = useState<SmartFolderPredicate>({ groups: [createDefaultGroup()] });
@@ -47,13 +46,11 @@ export function SmartFolderModal({ opened, onClose, folder, initialParentId = nu
     if (opened) {
       if (folder) {
         setName(folder.name);
-        setParentId(folder.parent_id != null ? String(folder.parent_id) : null);
         setIcon(folder.icon ?? null);
         setColor(folder.color ?? null);
         setPredicate(folder.predicate);
       } else {
         setName('');
-        setParentId(initialParentId != null ? String(initialParentId) : null);
         setIcon(null);
         setColor(null);
         setPredicate({ groups: [createDefaultGroup()] });
@@ -68,47 +65,16 @@ export function SmartFolderModal({ opened, onClose, folder, initialParentId = nu
     return map;
   }, [smartFolders]);
 
-  const excludedIds = useMemo(() => {
-    const ids = new Set<string>();
-    if (!folder?.id) return ids;
-    ids.add(folder.id);
-    const walk = (id: string) => {
-      for (const smartFolder of smartFolders) {
-        if (smartFolder.parent_id === id) {
-          ids.add(smartFolder.id);
-          walk(smartFolder.id);
-        }
-      }
-    };
-    walk(folder.id);
-    return ids;
-  }, [folder?.id, smartFolders]);
-
-  const parentOptions = useMemo(() => {
-    const buildLabel = (smartFolderId: string) => {
-      const chain: string[] = [];
-      let currentId: string | null = smartFolderId;
-      while (currentId) {
-        const current = nodeMap.get(currentId);
-        if (!current) break;
-        chain.unshift(current.name);
-        currentId = current.parent_id;
-      }
-      return chain.join(' / ');
-    };
-    const options = smartFolders
-      .filter((smartFolder) => !excludedIds.has(smartFolder.id))
-      .map((smartFolder) => ({
-        value: smartFolder.id,
-        label: buildLabel(smartFolder.id),
-      }));
-    return [{ value: '', label: 'Root' }, ...options];
-  }, [excludedIds, nodeMap, smartFolders]);
+  const resolvedParentId = folder?.parent_id != null
+    ? String(folder.parent_id)
+    : initialParentId != null
+      ? String(initialParentId)
+      : null;
 
   const inheritedChain = useMemo(() => {
-    if (!parentId) return [];
+    if (!resolvedParentId) return [];
     const chain: typeof smartFolders = [];
-    let currentId: string | null = parentId;
+    let currentId: string | null = resolvedParentId;
     const visited = new Set<string>();
     while (currentId && !visited.has(currentId)) {
       visited.add(currentId);
@@ -118,7 +84,7 @@ export function SmartFolderModal({ opened, onClose, folder, initialParentId = nu
       currentId = current.parent_id;
     }
     return chain;
-  }, [nodeMap, parentId, smartFolders]);
+  }, [nodeMap, resolvedParentId, smartFolders]);
 
   const effectivePredicate = useMemo(() => combinePredicates([
     ...inheritedChain.map((item) => item.localPredicate ?? item.predicate ?? { groups: [] }),
@@ -169,7 +135,7 @@ export function SmartFolderModal({ opened, onClose, folder, initialParentId = nu
     try {
       const folderData = folderToRust({
         name: name.trim(),
-        parent_id: parentId ? parseInt(parentId, 10) : null,
+        parent_id: resolvedParentId ? parseInt(resolvedParentId, 10) : null,
         icon,
         color,
         predicate,
@@ -247,16 +213,14 @@ export function SmartFolderModal({ opened, onClose, folder, initialParentId = nu
           />
         </div>
 
-        <div>
-          <Text size="sm" fw={500} mb={6}>Parent</Text>
-          <Select
-            data={parentOptions}
-            value={parentId ?? ''}
-            onChange={(value) => setParentId(value ? value : null)}
-            size="sm"
-            searchable
-          />
-        </div>
+        {inheritedChain.length > 0 && (
+          <div>
+            <Text size="sm" fw={500} mb={6}>Parent</Text>
+            <Text size="sm" c="dimmed">
+              {inheritedChain.map((item) => item.name).join(' / ')}
+            </Text>
+          </div>
+        )}
 
         {/* Icon & Color */}
         <Group gap="xl">

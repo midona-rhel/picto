@@ -338,13 +338,16 @@ export function SmartFolderList({ onFolderUpdated }: SmartFolderListProps) {
         label: 'Move smart folder',
         undo: async () => {
           await api.smartFolders.move(draggedId, oldParentId, oldSiblingMoves);
+          await useDomainStore.getState().fetchSidebarTree();
           onFolderUpdated?.();
         },
         redo: async () => {
           await api.smartFolders.move(draggedId, redoParentId, redoSiblingMoves);
+          await useDomainStore.getState().fetchSidebarTree();
           onFolderUpdated?.();
         },
       });
+      await useDomainStore.getState().fetchSidebarTree();
       onFolderUpdated?.();
     } catch (error) {
       console.error('Smart folder DnD failed:', error);
