@@ -31,4 +31,14 @@ describe('buildVirtualSelectAllBaseSpec', () => {
     expect(spec.excluded_folder_ids).toEqual([9]);
     expect(spec.folder_match_mode).toBe('exact');
   });
+
+  it('preserves collection scope in the selection query spec', () => {
+    const spec = buildVirtualSelectAllBaseSpec({
+      collectionEntityId: 77,
+      statusFilter: 'active',
+    });
+
+    expect(spec.collection_entity_id).toBe(77);
+    expect(spec.folder_ids).toBeNull();
+  });
 });

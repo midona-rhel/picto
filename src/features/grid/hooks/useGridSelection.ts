@@ -16,6 +16,7 @@ export interface VirtualSelectionScopeInput {
   sortField?: string;
   sortOrder?: string;
   statusFilter?: string | null;
+  collectionEntityId?: number | null;
   folderId?: number | null;
   filterFolderIds?: number[] | null;
   excludedFilterFolderIds?: number[] | null;
@@ -48,6 +49,7 @@ export function buildVirtualSelectAllBaseSpec(
     sortField,
     sortOrder,
     statusFilter,
+    collectionEntityId,
     folderId,
     filterFolderIds,
     excludedFilterFolderIds,
@@ -68,6 +70,7 @@ export function buildVirtualSelectAllBaseSpec(
     included_hashes: null,
     hashes: null,
     status: statusFilter ?? null,
+    collection_entity_id: collectionEntityId ?? null,
     folder_ids:
       folderId != null
         ? [folderId]

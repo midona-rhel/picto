@@ -25,6 +25,7 @@ use super::{parse_include_match_mode, IncludeMatchMode};
 #[derive(Debug, Clone, Default)]
 pub struct ScopeFilter {
     pub status: Option<String>,
+    pub collection_entity_id: Option<i64>,
     pub smart_folder_predicate: Option<SmartFolderPredicate>,
     pub search_tags: Option<Vec<String>>,
     pub search_excluded_tags: Option<Vec<String>>,
@@ -35,6 +36,10 @@ pub struct ScopeFilter {
 }
 
 impl ScopeFilter {
+    pub fn has_collection(&self) -> bool {
+        self.collection_entity_id.is_some()
+    }
+
     pub fn has_smart_folder(&self) -> bool {
         self.smart_folder_predicate.is_some()
     }
@@ -68,6 +73,7 @@ impl From<&crate::types::GridPageSlimQuery> for ScopeFilter {
     fn from(q: &crate::types::GridPageSlimQuery) -> Self {
         ScopeFilter {
             status: q.status.clone(),
+            collection_entity_id: q.collection_entity_id,
             smart_folder_predicate: q.smart_folder_predicate.clone(),
             search_tags: q.search_tags.clone(),
             search_excluded_tags: q.search_excluded_tags.clone(),
@@ -83,6 +89,7 @@ impl From<&crate::types::SelectionQuerySpec> for ScopeFilter {
     fn from(s: &crate::types::SelectionQuerySpec) -> Self {
         ScopeFilter {
             status: s.status.clone(),
+            collection_entity_id: s.collection_entity_id,
             smart_folder_predicate: s.smart_folder_predicate.clone(),
             search_tags: s.search_tags.clone(),
             search_excluded_tags: s.search_excluded_tags.clone(),
@@ -105,7 +112,9 @@ pub async fn resolve_scope(
     db: &SqliteDatabase,
     filter: &ScopeFilter,
 ) -> Result<RoaringBitmap, String> {
-    if filter.has_smart_folder() {
+    if filter.has_collection() {
+        resolve_collection(db, filter).await
+    } else if filter.has_smart_folder() {
         resolve_smart_folder(db, filter).await
     } else if filter.has_search_tags() {
         resolve_tag_search(db, filter).await
@@ -114,6 +123,17 @@ pub async fn resolve_scope(
     } else {
         resolve_status(db, filter).await
     }
+}
+
+async fn resolve_collection(
+    db: &SqliteDatabase,
+    filter: &ScopeFilter,
+) -> Result<RoaringBitmap, String> {
+    let collection_id = filter.collection_entity_id.expect("collection id required");
+    let file_ids = db.list_collection_member_file_ids(collection_id).await?;
+    Ok(RoaringBitmap::from_iter(
+        file_ids.into_iter().map(|id| id as u32),
+    ))
 }
 
 async fn resolve_smart_folder(

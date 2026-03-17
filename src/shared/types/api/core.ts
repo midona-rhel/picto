@@ -196,6 +196,7 @@ export interface SelectionQuerySpec {
   excluded_hashes?: string[] | null;
   included_hashes?: string[] | null;
   status?: string | null;
+  collection_entity_id?: number | null;
   folder_ids?: number[] | null;
   excluded_folder_ids?: number[] | null;
   folder_match_mode?: 'all' | 'any' | 'exact' | null;

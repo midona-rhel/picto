@@ -384,6 +384,8 @@ pub struct SelectionQuerySpec {
     pub excluded_hashes: Option<Vec<String>>,
     pub included_hashes: Option<Vec<String>>,
     pub status: Option<String>,
+    #[ts(type = "number | null")]
+    pub collection_entity_id: Option<i64>,
     #[ts(type = "number[] | null")]
     pub folder_ids: Option<Vec<i64>>,
     #[ts(type = "number[] | null")]

@@ -318,6 +318,7 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
     startInlineRename,
     commitRename,
     cancelRename,
+      collectionEntityId,
   } = useGridInlineRename({
     singleSelectedHash,
     stateRef,

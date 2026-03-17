@@ -111,15 +111,16 @@ pub async fn selection_bitmap_for_all_results(
     selection: &SelectionQuerySpec,
 ) -> Result<(RoaringBitmap, RoaringBitmap), String> {
     let scope_filter = ScopeFilter::from(selection);
-    let base_ids = db
-        .filter_visible_entity_ids(
-            &resolve_scope(db, &scope_filter)
-                .await?
-                .iter()
-                .map(|id| id as i64)
-                .collect::<Vec<_>>(),
-        )
-        .await?;
+    let resolved_ids = resolve_scope(db, &scope_filter)
+        .await?
+        .iter()
+        .map(|id| id as i64)
+        .collect::<Vec<_>>();
+    let base_ids = if selection.collection_entity_id.is_some() {
+        resolved_ids
+    } else {
+        db.filter_visible_entity_ids(&resolved_ids).await?
+    };
     let base = RoaringBitmap::from_iter(base_ids.into_iter().map(|id| id as u32));
 
     let mut filtered = base.clone();
