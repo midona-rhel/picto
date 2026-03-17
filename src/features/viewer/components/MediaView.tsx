@@ -164,7 +164,11 @@ export function MediaView({ images, currentIndex, onNavigate, onClose, onStateCh
   const currentHash = currentImage?.hash ?? null;
   const currentAdjustment = useNavigationImageAdjustmentsStore(
     useCallback(
-      (store) => (currentHash ? store.byHash[currentHash] : undefined) ?? DEFAULT_NAVIGATION_IMAGE_ADJUSTMENT,
+      (store) => ({
+        ...DEFAULT_NAVIGATION_IMAGE_ADJUSTMENT,
+        ...(currentHash ? store.byHash[currentHash] : undefined),
+        grayscale: store.grayscaleEnabled,
+      }),
       [currentHash],
     ),
   );
@@ -404,9 +408,9 @@ export function MediaView({ images, currentIndex, onNavigate, onClose, onStateCh
   }, []);
 
   const handleToggleCurrentGrayscale = useCallback(() => {
-    if (!currentHash || isVideo) return;
-    toggleNavigationGrayscale([currentHash]);
-  }, [currentHash, isVideo, toggleNavigationGrayscale]);
+    if (isVideo) return;
+    toggleNavigationGrayscale();
+  }, [isVideo, toggleNavigationGrayscale]);
 
   const handleRotateCurrentImage = useCallback(() => {
     if (!currentHash || isVideo) return;

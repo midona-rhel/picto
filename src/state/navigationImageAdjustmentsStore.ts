@@ -15,8 +15,9 @@ export const DEFAULT_NAVIGATION_IMAGE_ADJUSTMENT: NavigationImageAdjustment = Ob
 });
 
 interface NavigationImageAdjustmentsState {
+  grayscaleEnabled: boolean;
   byHash: Record<string, NavigationImageAdjustment>;
-  toggleGrayscale: (hashes: string[]) => void;
+  toggleGrayscale: () => void;
   rotateClockwise: (hash: string) => void;
   toggleMirrored: (hash: string) => void;
 }
@@ -36,19 +37,11 @@ function getNextAdjustment(
 }
 
 export const useNavigationImageAdjustmentsStore = create<NavigationImageAdjustmentsState>((set) => ({
+  grayscaleEnabled: false,
   byHash: {},
-  toggleGrayscale: (hashes) => set((state) => {
-    const uniqueHashes = Array.from(new Set(hashes.filter(Boolean)));
-    if (uniqueHashes.length === 0) return state;
-    const shouldEnable = uniqueHashes.some((hash) => !(state.byHash[hash]?.grayscale ?? false));
-    const nextByHash = { ...state.byHash };
-    for (const hash of uniqueHashes) {
-      const next = getNextAdjustment(nextByHash[hash], { grayscale: shouldEnable });
-      if (next) nextByHash[hash] = next;
-      else delete nextByHash[hash];
-    }
-    return { byHash: nextByHash };
-  }),
+  toggleGrayscale: () => set((state) => ({
+    grayscaleEnabled: !state.grayscaleEnabled,
+  })),
   rotateClockwise: (hash) => set((state) => {
     if (!hash) return state;
     const current = state.byHash[hash];
@@ -72,6 +65,16 @@ export const useNavigationImageAdjustmentsStore = create<NavigationImageAdjustme
 }));
 
 export function getNavigationImageAdjustment(hash: string | null | undefined): NavigationImageAdjustment {
-  if (!hash) return DEFAULT_NAVIGATION_IMAGE_ADJUSTMENT;
-  return useNavigationImageAdjustmentsStore.getState().byHash[hash] ?? DEFAULT_NAVIGATION_IMAGE_ADJUSTMENT;
+  const state = useNavigationImageAdjustmentsStore.getState();
+  if (!hash) {
+    return {
+      ...DEFAULT_NAVIGATION_IMAGE_ADJUSTMENT,
+      grayscale: state.grayscaleEnabled,
+    };
+  }
+  return {
+    ...DEFAULT_NAVIGATION_IMAGE_ADJUSTMENT,
+    ...(state.byHash[hash] ?? {}),
+    grayscale: state.grayscaleEnabled,
+  };
 }
