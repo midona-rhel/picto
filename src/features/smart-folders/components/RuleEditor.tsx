@@ -1,5 +1,6 @@
 import { Group, ActionIcon, Select } from '@mantine/core';
 import { IconMinus, IconPlus } from '@tabler/icons-react';
+import { cmComboboxProps } from '../../../shared/components/cmSelectStyles';
 import { FIELD_CONFIGS, getFieldConfig } from './fieldConfig';
 import { ValuePicker } from './ValuePicker';
 import type { SmartRule } from './types';
@@ -57,7 +58,7 @@ export function RuleEditor({ rule, onChange, onRemove, onAddRule, canRemove }: R
         value={rule.field}
         onChange={handleFieldChange}
         style={{ width: 130 }}
-        comboboxProps={{ withinPortal: true }}
+        comboboxProps={cmComboboxProps}
       />
 
       {config && (
@@ -67,7 +68,7 @@ export function RuleEditor({ rule, onChange, onRemove, onAddRule, canRemove }: R
           value={rule.op}
           onChange={handleOpChange}
           style={{ width: 140 }}
-          comboboxProps={{ withinPortal: true }}
+          comboboxProps={cmComboboxProps}
         />
       )}
 
