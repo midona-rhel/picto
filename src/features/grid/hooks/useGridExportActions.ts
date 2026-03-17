@@ -54,6 +54,7 @@ function normalizeSelection(selection: SelectionQuerySpec): ExportMediaInput['se
     excluded_hashes: selection.excluded_hashes ?? null,
     included_hashes: selection.included_hashes ?? null,
     status: selection.status ?? null,
+    collection_entity_id: selection.collection_entity_id ?? null,
     folder_ids: selection.folder_ids ?? null,
     excluded_folder_ids: selection.excluded_folder_ids ?? null,
     folder_match_mode: selection.folder_match_mode ?? null,
