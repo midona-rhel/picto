@@ -3,7 +3,7 @@
 //! The sidebar tree is a pre-compiled projection — counts maintained by the
 //! compiler system (O(1) via bitmap .len()), never computed on the read path.
 
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
 
 use crate::sqlite::SqliteDatabase;

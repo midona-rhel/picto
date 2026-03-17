@@ -1,12 +1,12 @@
 //! Tag CRUD, file tagging, search (FTS5), alias/implication operations.
 
-use rusqlite::{params, params_from_iter, Connection, OptionalExtension};
+use rusqlite::{Connection, OptionalExtension, params, params_from_iter};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
-use crate::sqlite::bitmaps::BitmapKey;
 use crate::sqlite::ReadModelEvent;
 use crate::sqlite::SqliteDatabase;
+use crate::sqlite::bitmaps::BitmapKey;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TagRecord {
@@ -367,7 +367,10 @@ pub fn get_aliases_for_tag(conn: &Connection, tag_id: i64) -> rusqlite::Result<V
 }
 
 /// Get all parents and children for a given tag.
-pub fn get_implications_for_tag(conn: &Connection, tag_id: i64) -> rusqlite::Result<Vec<TagRelation>> {
+pub fn get_implications_for_tag(
+    conn: &Connection,
+    tag_id: i64,
+) -> rusqlite::Result<Vec<TagRelation>> {
     let mut stmt = conn.prepare(
         "SELECT t.tag_id, t.namespace, t.subtag, 'parent' as relation
            FROM tag_implication tp JOIN tag t ON tp.parent_tag_id = t.tag_id
@@ -563,8 +566,9 @@ pub fn rename_tag(
     tag_id: i64,
     new_tag_str: &str,
 ) -> rusqlite::Result<(Vec<i64>, Option<i64>)> {
-    let (new_ns, new_st) = crate::tags::normalize::parse_tag(new_tag_str)
-        .ok_or_else(|| rusqlite::Error::InvalidParameterName(format!("Invalid tag: {new_tag_str}")))?;
+    let (new_ns, new_st) = crate::tags::normalize::parse_tag(new_tag_str).ok_or_else(|| {
+        rusqlite::Error::InvalidParameterName(format!("Invalid tag: {new_tag_str}"))
+    })?;
 
     // Check if target already exists
     let existing: Option<i64> = conn
@@ -866,7 +870,9 @@ impl SqliteDatabase {
         // Resolve tag strings to tag_ids
         let mut tag_ids = Vec::new();
         for ts in tag_strings {
-            let Some((ns, st)) = crate::tags::normalize::parse_tag(ts) else { continue };
+            let Some((ns, st)) = crate::tags::normalize::parse_tag(ts) else {
+                continue;
+            };
             let ns_c = ns.clone();
             let st_c = st.clone();
             if let Some(tid) = self
@@ -1092,8 +1098,10 @@ impl SqliteDatabase {
         }
 
         // Parse tag strings upfront
-        let parsed: Vec<(String, String)> =
-            tag_strings.iter().filter_map(|s| crate::tags::normalize::parse_tag(s)).collect();
+        let parsed: Vec<(String, String)> = tag_strings
+            .iter()
+            .filter_map(|s| crate::tags::normalize::parse_tag(s))
+            .collect();
 
         let bitmaps = self.bitmaps.clone();
         let read_model_tx = self.read_model_tx.clone();
@@ -1156,8 +1164,10 @@ impl SqliteDatabase {
             return Ok(());
         }
 
-        let parsed: Vec<(String, String)> =
-            tag_strings.iter().filter_map(|s| crate::tags::normalize::parse_tag(s)).collect();
+        let parsed: Vec<(String, String)> = tag_strings
+            .iter()
+            .filter_map(|s| crate::tags::normalize::parse_tag(s))
+            .collect();
 
         let bitmaps = self.bitmaps.clone();
         let read_model_tx = self.read_model_tx.clone();

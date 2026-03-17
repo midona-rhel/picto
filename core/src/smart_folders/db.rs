@@ -1,13 +1,13 @@
 //! Smart folder CRUD + predicate → bitmap compilation.
 
 use roaring::RoaringBitmap;
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-use crate::sqlite::bitmaps::{BitmapKey, BitmapStore};
 use crate::sqlite::ReadModelEvent;
 use crate::sqlite::SqliteDatabase;
+use crate::sqlite::bitmaps::{BitmapKey, BitmapStore};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SmartFolder {
@@ -236,7 +236,8 @@ fn compile_group(
                         for tag_str in tag_values {
                             if let Some(key) = crate::tags::normalize::parse_tag(tag_str) {
                                 if let Some(&tag_id) = tag_id_map.get(&key) {
-                                    include_bitmaps.push(bitmaps.get(&BitmapKey::EffectiveTag(tag_id)));
+                                    include_bitmaps
+                                        .push(bitmaps.get(&BitmapKey::EffectiveTag(tag_id)));
                                 } else {
                                     include_bitmaps.push(RoaringBitmap::new());
                                 }
@@ -260,7 +261,8 @@ fn compile_group(
                         for tag_str in tag_values {
                             if let Some(key) = crate::tags::normalize::parse_tag(tag_str) {
                                 if let Some(&tag_id) = tag_id_map.get(&key) {
-                                    exclude_bitmaps.push(bitmaps.get(&BitmapKey::EffectiveTag(tag_id)));
+                                    exclude_bitmaps
+                                        .push(bitmaps.get(&BitmapKey::EffectiveTag(tag_id)));
                                 }
                             }
                         }

@@ -4,11 +4,14 @@
 //! Delegates to `sqlite::smart_folders` for storage and bitmap compilation.
 
 use crate::smart_folders::db::{
-    compile_predicate, get_smart_folder, SmartFolder, SmartFolderPredicate,
+    SmartFolder, SmartFolderPredicate, compile_predicate, get_smart_folder,
 };
 use crate::sqlite::SqliteDatabase;
 
-fn build_smart_folder_sidebar_node(sf: &SmartFolder, count: i64) -> crate::sidebar::db::SidebarNode {
+fn build_smart_folder_sidebar_node(
+    sf: &SmartFolder,
+    count: i64,
+) -> crate::sidebar::db::SidebarNode {
     let mut meta = serde_json::json!({ "smart_folder_id": sf.smart_folder_id });
     if let Ok(pred) = serde_json::from_str::<serde_json::Value>(&sf.predicate_json) {
         meta["predicate"] = pred;

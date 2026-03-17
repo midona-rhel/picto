@@ -1,11 +1,11 @@
 //! File metadata orchestration — resolves full file details including tags,
 //! dominant colors, and display-resolved tag info.
 
-use crate::tags::db::FileTagInfo;
 use crate::sqlite::SqliteDatabase;
+use crate::tags::db::FileTagInfo;
 use crate::tags::normalize;
 use crate::types::{
-    tag_display_key, DominantColorDto, FileAllMetadata, FileInfo, ResolvedTagInfo, TagInfo,
+    DominantColorDto, FileAllMetadata, FileInfo, ResolvedTagInfo, TagInfo, tag_display_key,
 };
 
 pub fn file_tag_to_resolved_info(t: FileTagInfo) -> ResolvedTagInfo {
@@ -96,5 +96,4 @@ impl MetadataQuery {
             parent_tags,
         })
     }
-
 }

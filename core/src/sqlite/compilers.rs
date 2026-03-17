@@ -4,20 +4,23 @@
 //! This loop debounces those events, rebuilds affected read models, and hands
 //! publication off to the explicit publish boundary.
 
-use roaring::RoaringBitmap;
 use std::collections::{BTreeSet, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
 
+use super::SqliteDatabase;
+#[cfg(test)]
 use super::bitmaps::BitmapKey;
 use super::publish;
 use super::read_model::{DerivedArtifact, ReadModelBatchResult, ReadModelEvent};
-use super::projections;
-use crate::scope::resolver::scope_count;
-use crate::sidebar::db as sidebar;
-use crate::smart_folders::db as smart_folders;
-use super::SqliteDatabase;
+use crate::metadata::compiler::compile_metadata_projections;
+use crate::sidebar::compiler::compile_sidebar;
+use crate::smart_folders::compiler::{compile_all_smart_folders, compile_smart_folder};
+use crate::tags::compiler::{
+    compile_all_tag_bitmaps, compile_effective_tags, compile_status_bitmaps, compile_tag_bitmap,
+    compile_tag_graph, compile_tagged_bitmap,
+};
 
 /// Which compilers need to run based on accumulated events.
 #[derive(Default)]
@@ -293,444 +296,6 @@ async fn run_compilers(
     Ok(dirty_artifacts)
 }
 
-
-async fn compile_status_bitmaps(db: &Arc<SqliteDatabase>) -> Result<(), String> {
-    let bitmaps = db.bitmaps.clone();
-    db.with_read_conn(move |conn| {
-        for status in 0..=2i64 {
-            let mut bm = RoaringBitmap::new();
-            let mut stmt = conn.prepare_cached(
-                "SELECT me.entity_id
-                 FROM media_entity me
-                 WHERE me.status = ?1
-                   AND (
-                       me.kind = 'collection'
-                       OR me.parent_collection_id IS NULL
-                   )",
-            )?;
-            let rows = stmt.query_map([status], |row| row.get::<_, i64>(0))?;
-            for row in rows {
-                bm.insert(row? as u32);
-            }
-            bitmaps.set(BitmapKey::Status(status), bm);
-        }
-
-        // AllActive = inbox + active (status 0 + 1), excludes trash
-        let mut all_active = bitmaps.get(&BitmapKey::Status(0));
-        all_active |= &bitmaps.get(&BitmapKey::Status(1));
-        bitmaps.set(BitmapKey::AllActive, all_active);
-
-        Ok(())
-    })
-    .await?;
-    Ok(())
-}
-
-async fn compile_tag_bitmap(db: &Arc<SqliteDatabase>, tag_id: i64) -> Result<(), String> {
-    let bitmaps = db.bitmaps.clone();
-    db.with_read_conn(move |conn| {
-        let mut bm = RoaringBitmap::new();
-        let mut stmt =
-            conn.prepare_cached("SELECT entity_id FROM entity_tag_raw WHERE tag_id = ?1")?;
-        let rows = stmt.query_map([tag_id], |row| row.get::<_, i64>(0))?;
-        for row in rows {
-            bm.insert(row? as u32);
-        }
-        bitmaps.set(BitmapKey::Tag(tag_id), bm);
-        Ok(())
-    })
-    .await?;
-    Ok(())
-}
-
-async fn compile_all_tag_bitmaps(db: &Arc<SqliteDatabase>) -> Result<(), String> {
-    let bitmaps = db.bitmaps.clone();
-    db.with_read_conn(move |conn| {
-        let mut stmt =
-            conn.prepare_cached("SELECT tag_id, entity_id FROM entity_tag_raw ORDER BY tag_id")?;
-        let mut current_tag: Option<i64> = None;
-        let mut current_bm = RoaringBitmap::new();
-
-        let rows = stmt.query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)))?;
-
-        for row in rows {
-            let (tag_id, entity_id) = row?;
-            if current_tag != Some(tag_id) {
-                if let Some(prev_tag) = current_tag {
-                    bitmaps.set(BitmapKey::Tag(prev_tag), std::mem::take(&mut current_bm));
-                }
-                current_tag = Some(tag_id);
-            }
-            current_bm.insert(entity_id as u32);
-        }
-
-        if let Some(last_tag) = current_tag {
-            bitmaps.set(BitmapKey::Tag(last_tag), current_bm);
-        }
-
-        Ok(())
-    })
-    .await?;
-    Ok(())
-}
-
-async fn compile_tag_graph(db: &Arc<SqliteDatabase>) -> Result<(), String> {
-    let bitmaps = db.bitmaps.clone();
-    db.with_conn(move |conn| {
-        // Rebuild tag_ancestor using WITH RECURSIVE CTE (single-pass)
-        conn.execute("DELETE FROM tag_ancestor", [])?;
-        conn.execute_batch(
-            "INSERT OR IGNORE INTO tag_ancestor (tag_id, ancestor_id, depth)
-             WITH RECURSIVE ancestors(tag_id, ancestor_id, depth) AS (
-                 SELECT child_tag_id, parent_tag_id, 1
-                 FROM tag_implication
-                 UNION ALL
-                 SELECT a.tag_id, tp.parent_tag_id, a.depth + 1
-                 FROM ancestors a
-                 JOIN tag_implication tp ON tp.child_tag_id = a.ancestor_id
-                 WHERE a.depth < 50
-             )
-             SELECT tag_id, ancestor_id, depth FROM ancestors",
-        )?;
-
-        // Rebuild tag_display from aliases
-        conn.execute("DELETE FROM tag_display", [])?;
-        conn.execute_batch(
-            "INSERT OR REPLACE INTO tag_display (tag_id, display_ns, display_st)
-             SELECT t.tag_id,
-                    COALESCE(st.display_ns, t.namespace),
-                    COALESCE(st.display_st, t.subtag)
-             FROM tag t
-             LEFT JOIN (
-                 SELECT ts.from_tag_id,
-                        t2.namespace AS display_ns,
-                        t2.subtag AS display_st
-                 FROM tag_alias ts
-                 JOIN tag t2 ON t2.tag_id = ts.to_tag_id
-             ) st ON st.from_tag_id = t.tag_id",
-        )?;
-
-        // Rebuild entity_tag_implied
-        conn.execute("DELETE FROM entity_tag_implied", [])?;
-        conn.execute_batch(
-            "INSERT OR IGNORE INTO entity_tag_implied (entity_id, tag_id)
-             SELECT etr.entity_id, ta.ancestor_id
-             FROM entity_tag_raw etr
-             JOIN tag_ancestor ta ON ta.tag_id = etr.tag_id",
-        )?;
-
-        // Rebuild ImpliedTag bitmaps
-        let mut stmt = conn
-            .prepare_cached("SELECT tag_id, entity_id FROM entity_tag_implied ORDER BY tag_id")?;
-        let mut current_tag: Option<i64> = None;
-        let mut current_bm = RoaringBitmap::new();
-
-        let rows = stmt.query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)))?;
-
-        for row in rows {
-            let (tag_id, entity_id) = row?;
-            if current_tag != Some(tag_id) {
-                if let Some(prev_tag) = current_tag {
-                    bitmaps.set(
-                        BitmapKey::ImpliedTag(prev_tag),
-                        std::mem::take(&mut current_bm),
-                    );
-                }
-                current_tag = Some(tag_id);
-            }
-            current_bm.insert(entity_id as u32);
-        }
-
-        if let Some(last_tag) = current_tag {
-            bitmaps.set(BitmapKey::ImpliedTag(last_tag), current_bm);
-        }
-
-        Ok(())
-    })
-    .await?;
-    Ok(())
-}
-
-async fn compile_effective_tags(
-    db: &Arc<SqliteDatabase>,
-    dirty_tag_ids: &HashSet<i64>,
-    rebuild_all: bool,
-) -> Result<(), String> {
-    let bitmaps = db.bitmaps.clone();
-
-    if rebuild_all {
-        // Rebuild all effective tags
-        let tag_ids: Vec<i64> = db
-            .with_read_conn(|conn| {
-                let mut stmt = conn.prepare_cached("SELECT tag_id FROM tag")?;
-                let rows = stmt.query_map([], |row| row.get::<_, i64>(0))?;
-                rows.collect()
-            })
-            .await?;
-
-        for tag_id in tag_ids {
-            let direct = bitmaps.get(&BitmapKey::Tag(tag_id));
-            let implied = bitmaps.get(&BitmapKey::ImpliedTag(tag_id));
-            bitmaps.set(BitmapKey::EffectiveTag(tag_id), &direct | &implied);
-        }
-    } else {
-        for &tag_id in dirty_tag_ids {
-            let direct = bitmaps.get(&BitmapKey::Tag(tag_id));
-            let implied = bitmaps.get(&BitmapKey::ImpliedTag(tag_id));
-            bitmaps.set(BitmapKey::EffectiveTag(tag_id), &direct | &implied);
-        }
-    }
-    Ok(())
-}
-
-async fn compile_tagged_bitmap(db: &Arc<SqliteDatabase>) -> Result<(), String> {
-    let bitmaps = db.bitmaps.clone();
-    db.with_read_conn(move |conn| {
-        let mut tagged = RoaringBitmap::new();
-        // OR all entity_ids that appear in entity_tag_raw (direct tags)
-        let mut stmt = conn.prepare_cached("SELECT DISTINCT entity_id FROM entity_tag_raw")?;
-        let rows = stmt.query_map([], |row| row.get::<_, i64>(0))?;
-        for row in rows {
-            tagged.insert(row? as u32);
-        }
-        // Also include implied tags
-        let mut stmt2 = conn.prepare_cached("SELECT DISTINCT entity_id FROM entity_tag_implied")?;
-        let rows2 = stmt2.query_map([], |row| row.get::<_, i64>(0))?;
-        for row in rows2 {
-            tagged.insert(row? as u32);
-        }
-        // Keep tagged in the same visibility domain as status bitmaps (collection members hidden).
-        tagged &= &bitmaps.get(&BitmapKey::AllActive);
-        bitmaps.set(BitmapKey::Tagged, tagged);
-        Ok(())
-    })
-    .await?;
-    Ok(())
-}
-
-async fn compile_metadata_projections(
-    db: &Arc<SqliteDatabase>,
-    dirty_file_ids: &HashSet<i64>,
-    rebuild_all: bool,
-) -> Result<(), String> {
-    // Read the current working version (without bumping yet) to use as epoch
-    // for the projection rows. We bump AFTER writes succeed to avoid stale
-    // version on failure.
-    let pre_version = db
-        .manifest
-        .published_artifact_version("metadata_projection") as i64;
-    let projection_version = pre_version + 1;
-
-    if rebuild_all {
-        db.with_conn(move |conn| {
-            let mut stmt = conn.prepare_cached("SELECT file_id FROM file")?;
-            let rows = stmt.query_map([], |row| row.get::<_, i64>(0))?;
-            let file_ids: rusqlite::Result<Vec<i64>> = rows.collect();
-            let file_ids = file_ids?;
-            projections::build_projections_batch(conn, &file_ids, projection_version)
-        })
-        .await?;
-    } else if !dirty_file_ids.is_empty() {
-        let file_ids: Vec<i64> = dirty_file_ids.iter().copied().collect();
-        db.with_conn(move |conn| {
-            projections::build_projections_batch(conn, &file_ids, projection_version)
-        })
-        .await?;
-    } else {
-        return Ok(());
-    }
-
-    // Bump version AFTER writes succeed
-    Ok(())
-}
-
-async fn compile_all_smart_folders(db: &Arc<SqliteDatabase>) -> Result<(), String> {
-    let bitmaps = db.bitmaps.clone();
-    db.with_read_conn(move |conn| {
-        let sfs = smart_folders::list_smart_folders(conn)?;
-        for sf in sfs {
-            let pred: smart_folders::SmartFolderPredicate =
-                match serde_json::from_str(&sf.predicate_json) {
-                    Ok(p) => p,
-                    Err(e) => {
-                        tracing::warn!(
-                            "Failed to parse smart folder {} predicate: {e}",
-                            sf.smart_folder_id
-                        );
-                        continue;
-                    }
-                };
-            match smart_folders::compile_predicate(conn, &pred, &bitmaps) {
-                Ok(bm) => {
-                    bitmaps.set(BitmapKey::SmartFolder(sf.smart_folder_id), bm);
-                }
-                Err(e) => {
-                    tracing::warn!("Failed to compile smart folder {}: {e}", sf.smart_folder_id);
-                }
-            }
-        }
-        Ok(())
-    })
-    .await?;
-    Ok(())
-}
-
-async fn compile_smart_folder(
-    db: &Arc<SqliteDatabase>,
-    smart_folder_id: i64,
-) -> Result<(), String> {
-    let bitmaps = db.bitmaps.clone();
-    db.with_read_conn(move |conn| {
-        let sf = smart_folders::get_smart_folder(conn, smart_folder_id)?
-            .ok_or(rusqlite::Error::QueryReturnedNoRows)?;
-        let pred: smart_folders::SmartFolderPredicate = serde_json::from_str(&sf.predicate_json)
-            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
-        let bm = smart_folders::compile_predicate(conn, &pred, &bitmaps)?;
-        bitmaps.set(BitmapKey::SmartFolder(smart_folder_id), bm);
-        Ok(())
-    })
-    .await?;
-    Ok(())
-}
-
-async fn compile_sidebar(db: &Arc<SqliteDatabase>) -> Result<(), String> {
-    let bitmaps = db.bitmaps.clone();
-    // Use a pre-computed epoch value for the rows; bump AFTER writes succeed.
-    let pre_epoch = db.manifest.published_artifact_version("sidebar");
-    let epoch = pre_epoch + 1;
-
-    db.with_conn(move |conn| {
-        // Ensure sidebar is seeded
-        sidebar::seed_sidebar_if_empty(conn)?;
-
-        // System scope counts — delegated to the canonical scope engine.
-        for key in &[
-            "system:all_files",
-            "system:inbox",
-            "system:trash",
-            "system:untagged",
-            "system:uncategorized",
-            "system:recent_viewed",
-        ] {
-            let count = scope_count(conn, &bitmaps, key)?;
-            sidebar::update_sidebar_count(conn, key, count, epoch as i64)?;
-        }
-
-        // Duplicate count: unresolved detected pairs
-        // (not a scope — duplicates have their own semantics)
-        let dup_count: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM duplicate WHERE status = 'detected'",
-            [],
-            |row| row.get(0),
-        )?;
-        sidebar::update_sidebar_count(conn, "system:duplicates", dup_count, epoch as i64)?;
-
-        // Collect all nodes to batch-write
-        let mut nodes: Vec<sidebar::SidebarNode> = Vec::new();
-
-        // Smart folder nodes
-        let sfs = smart_folders::list_smart_folders(conn)?;
-        for sf in sfs {
-            let node_id = format!("smart:{}", sf.smart_folder_id);
-            let count = bitmaps.len(&BitmapKey::SmartFolder(sf.smart_folder_id));
-            nodes.push(sidebar::SidebarNode {
-                node_id,
-                kind: "smart_folder".into(),
-                parent_id: Some("section:smart_folders".into()),
-                name: sf.name.clone(),
-                icon: sf.icon.clone(),
-                color: sf.color.clone(),
-                sort_order: sf.display_order.or(Some(sf.smart_folder_id)),
-                count: Some(count as i64),
-                freshness: "fresh".into(),
-                epoch: epoch as i64,
-                selectable: true,
-                expanded_by_default: false,
-                meta_json: {
-                    // Include the predicate + sort fields so the frontend can
-                    // filter the grid without a round-trip back to the DB.
-                    let mut meta = serde_json::json!({
-                        "smart_folder_id": sf.smart_folder_id,
-                    });
-                    // Parse predicate_json back to a JSON value for embedding
-                    if let Ok(pred) = serde_json::from_str::<serde_json::Value>(&sf.predicate_json)
-                    {
-                        meta["predicate"] = pred;
-                    }
-                    if let Some(ref sf_field) = sf.sort_field {
-                        meta["sort_field"] = serde_json::Value::String(sf_field.clone());
-                    }
-                    if let Some(ref sf_order) = sf.sort_order {
-                        meta["sort_order"] = serde_json::Value::String(sf_order.clone());
-                    }
-                    Some(meta.to_string())
-                },
-                updated_at: Some(chrono::Utc::now().to_rfc3339()),
-            });
-        }
-
-        // Folder nodes — count only non-trashed files (inbox + active)
-        let active_bm = bitmaps.get(&BitmapKey::AllActive);
-        let folders = crate::folders::db::list_folders(conn)?;
-        for folder in folders {
-            let node_id = format!("folder:{}", folder.folder_id);
-            let count = (bitmaps.get(&BitmapKey::Folder(folder.folder_id)) & &active_bm).len();
-            let parent_id = folder
-                .parent_id
-                .map(|pid| format!("folder:{pid}"))
-                .unwrap_or_else(|| "section:folders".into());
-            nodes.push(sidebar::SidebarNode {
-                node_id,
-                kind: "folder".into(),
-                parent_id: Some(parent_id),
-                name: folder.name,
-                icon: folder.icon,
-                color: folder.color,
-                sort_order: folder.sort_order,
-                count: Some(count as i64),
-                freshness: "fresh".into(),
-                epoch: epoch as i64,
-                selectable: true,
-                expanded_by_default: false,
-                meta_json: Some(
-                    serde_json::json!({
-                        "folder_id": folder.folder_id,
-                        "auto_tags": folder.auto_tags,
-                    })
-                    .to_string(),
-                ),
-                updated_at: Some(chrono::Utc::now().to_rfc3339()),
-            });
-        }
-
-        // Clean up orphaned smart_folder / folder sidebar_node rows that no
-        // longer have a backing record (e.g. after deletion).
-        let live_ids: std::collections::HashSet<String> =
-            nodes.iter().map(|n| n.node_id.clone()).collect();
-        let existing: Vec<(String, String)> = conn
-            .prepare_cached(
-                "SELECT node_id, kind FROM sidebar_node WHERE kind IN ('smart_folder', 'folder')",
-            )?
-            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
-            .filter_map(|r| r.ok())
-            .collect();
-        for (existing_id, _kind) in &existing {
-            if !live_ids.contains(existing_id) {
-                sidebar::delete_sidebar_node(conn, existing_id)?;
-            }
-        }
-
-        // Batch write all nodes
-        sidebar::upsert_sidebar_nodes_batch(conn, &nodes)?;
-
-        Ok(())
-    })
-    .await?;
-
-    // Bump version AFTER all writes succeed
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -998,18 +563,20 @@ mod tests {
         // Build status bitmaps first (smart folders depend on them)
         compile_status_bitmaps(&db).await.unwrap();
 
-        // AllActive = inbox + active = 10
+        // Empty smart folder predicates compile against the active bitmap only.
+        // Inbox membership is intentionally excluded.
         assert_eq!(db.bitmaps.len(&BitmapKey::AllActive), 10);
+        assert_eq!(db.bitmaps.len(&BitmapKey::Status(1)), 3);
 
         // Compile smart folder
         compile_all_smart_folders(&db).await.unwrap();
 
-        // Smart folder should match AllActive count
+        // Empty smart folder predicate should match the active count.
         let sf_len = db.bitmaps.len(&BitmapKey::SmartFolder(1));
-        let all_active_len = db.bitmaps.len(&BitmapKey::AllActive);
+        let active_len = db.bitmaps.len(&BitmapKey::Status(1));
         assert_eq!(
-            sf_len, all_active_len,
-            "Smart folder bitmap ({sf_len}) should match AllActive ({all_active_len})"
+            sf_len, active_len,
+            "Smart folder bitmap ({sf_len}) should match active ({active_len})"
         );
     }
 
