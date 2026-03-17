@@ -49,6 +49,7 @@ pub struct ImportedFile {
 pub struct ImportOptions {
     pub tags: Vec<(String, String)>, // (namespace, subtag)
     pub source_urls: Vec<String>,
+    pub created_at: Option<String>,
     pub thumbnail_dimensions: (u32, u32),
     /// Override the default file-stem name.
     pub name: Option<String>,
@@ -63,6 +64,7 @@ impl Default for ImportOptions {
         Self {
             tags: Vec::new(),
             source_urls: Vec::new(),
+            created_at: None,
             thumbnail_dimensions: media_processing::DEFAULT_THUMBNAIL_DIMENSIONS,
             name: None,
             notes: None,
@@ -213,6 +215,7 @@ impl<'a> ImportPipeline<'a> {
             } else {
                 Some(options.source_urls.clone())
             },
+            created_at: options.created_at.clone(),
             dominant_color_hex,
             dominant_palette_blob: None,
             tags: tag_tuples,

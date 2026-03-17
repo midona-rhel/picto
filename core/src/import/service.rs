@@ -104,6 +104,7 @@ impl ImportService {
                                 .map(|(ns, st)| normalize::combine_tag(ns, st))
                                 .collect(),
                             source_urls: options.source_urls.clone(),
+                            created_at: options.created_at.clone(),
                             name: options.name.clone(),
                             note_entries: options.notes.clone().unwrap_or_default(),
                             subscription_id: None,
@@ -270,6 +271,7 @@ impl ImportService {
                             restore_status: Some(options.initial_status),
                             tag_strings: Vec::new(),
                             source_urls: Vec::new(),
+                            created_at: options.created_at.clone(),
                             name: None,
                             note_entries: HashMap::new(),
                             subscription_id: None,

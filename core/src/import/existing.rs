@@ -17,6 +17,7 @@ pub struct ExistingImportMergeRequest {
     pub restore_status: Option<i64>,
     pub tag_strings: Vec<String>,
     pub source_urls: Vec<String>,
+    pub created_at: Option<String>,
     pub name: Option<String>,
     pub note_entries: HashMap<String, String>,
     pub subscription_id: Option<i64>,
@@ -69,6 +70,14 @@ pub async fn merge_existing_import_target(
         let current_name = existing.name.as_deref().unwrap_or("");
         if current_name != name {
             db.set_file_name(hex_hash, Some(name)).await?;
+            any_change = true;
+            metadata_changed = true;
+        }
+    }
+
+    if let Some(ref created_at) = request.created_at {
+        if !created_at.is_empty() && existing.imported_at != *created_at {
+            db.set_media_entity_created_at(hex_hash, created_at).await?;
             any_change = true;
             metadata_changed = true;
         }

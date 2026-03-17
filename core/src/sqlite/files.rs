@@ -76,6 +76,7 @@ pub struct NewFile {
     pub has_audio: bool,
     pub status: i64,
     pub imported_at: String,
+    pub entity_created_at: Option<String>,
     pub notes: Option<String>,
     pub source_urls_json: Option<String>,
     pub dominant_color_hex: Option<String>,
@@ -104,6 +105,8 @@ pub fn insert_file(conn: &Connection, f: &NewFile) -> rusqlite::Result<i64> {
         }
         file_id += 1;
     }
+
+    let entity_created_at = f.entity_created_at.as_deref().unwrap_or(&f.imported_at);
 
     conn.execute(
         "INSERT INTO file (file_id, hash, name, size, mime, width, height, duration_ms, num_frames,
@@ -140,7 +143,7 @@ pub fn insert_file(conn: &Connection, f: &NewFile) -> rusqlite::Result<i64> {
         "INSERT OR IGNORE INTO media_entity
             (entity_id, kind, name, description, status, rating, created_at, updated_at)
          VALUES (?1, 'single', ?2, '', ?3, NULL, ?4, ?4)",
-        params![file_id, f.name, f.status, f.imported_at],
+        params![file_id, f.name, f.status, entity_created_at],
     )?;
     conn.execute(
         "INSERT OR IGNORE INTO entity_file (entity_id, file_id) VALUES (?1, ?2)",
@@ -275,6 +278,20 @@ pub fn set_source_urls(
     conn.execute(
         "UPDATE file SET source_urls_json = ?1 WHERE file_id = ?2",
         params![urls_json, file_id],
+    )?;
+    Ok(())
+}
+
+pub fn set_media_entity_created_at(
+    conn: &Connection,
+    file_id: i64,
+    created_at: &str,
+) -> rusqlite::Result<()> {
+    conn.execute(
+        "UPDATE media_entity
+         SET created_at = ?1, updated_at = CURRENT_TIMESTAMP
+         WHERE entity_id = ?2 AND kind = 'single'",
+        params![created_at, file_id],
     )?;
     Ok(())
 }
@@ -1505,6 +1522,17 @@ impl SqliteDatabase {
             .await
     }
 
+    pub async fn set_media_entity_created_at(
+        &self,
+        hash: &str,
+        created_at: &str,
+    ) -> Result<(), String> {
+        let file_id = self.resolve_hash(hash).await?;
+        let created_at = created_at.to_string();
+        self.with_conn(move |conn| set_media_entity_created_at(conn, file_id, &created_at))
+            .await
+    }
+
     pub async fn set_phash(&self, hash: &str, phash: &str) -> Result<(), String> {
         let file_id = self.resolve_hash(hash).await?;
         let p = phash.to_string();
@@ -1558,6 +1586,7 @@ mod tests {
                 has_audio: false,
                 status: 0,
                 imported_at: now,
+                entity_created_at: None,
                 notes: None,
                 source_urls_json: None,
                 dominant_color_hex: None,
@@ -1582,5 +1611,53 @@ mod tests {
             })
             .unwrap();
         assert_eq!(rtree_rows, 1);
+    }
+
+    #[test]
+    fn insert_file_uses_entity_created_at_when_present() {
+        let conn = Connection::open_in_memory().unwrap();
+        crate::sqlite::schema::apply_pragmas(&conn).unwrap();
+        crate::sqlite::schema::init_schema(&conn).unwrap();
+
+        let imported_at = "2026-03-18T12:00:00+00:00".to_string();
+        let entity_created_at = "2024-03-10T03:34:56+00:00".to_string();
+        let file_id = insert_file(
+            &conn,
+            &NewFile {
+                hash: "hash_created_at".to_string(),
+                name: Some("created-at".to_string()),
+                size: 1024,
+                mime: "image/png".to_string(),
+                width: Some(128),
+                height: Some(128),
+                duration_ms: None,
+                num_frames: None,
+                has_audio: false,
+                status: 0,
+                imported_at: imported_at.clone(),
+                entity_created_at: Some(entity_created_at.clone()),
+                notes: None,
+                source_urls_json: None,
+                dominant_color_hex: None,
+                dominant_palette_blob: None,
+            },
+        )
+        .unwrap();
+
+        let stored_created_at: String = conn
+            .query_row(
+                "SELECT created_at FROM media_entity WHERE entity_id = ?1 AND kind = 'single'",
+                [file_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(stored_created_at, entity_created_at);
+
+        let stored_imported_at: String = conn
+            .query_row("SELECT imported_at FROM file WHERE file_id = ?1", [file_id], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(stored_imported_at, imported_at);
     }
 }

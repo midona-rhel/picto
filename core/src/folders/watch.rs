@@ -481,6 +481,7 @@ async fn import_file_into_folder(
                     restore_status: Some(initial_status),
                     tag_strings: Vec::new(),
                     source_urls: Vec::new(),
+                    created_at: None,
                     name: None,
                     note_entries: Default::default(),
                     subscription_id: None,

@@ -79,6 +79,7 @@ impl TestHarness {
                 has_audio: false,
                 status,
                 imported_at: now,
+                entity_created_at: None,
                 notes: None,
                 source_urls_json: None,
                 dominant_color_hex: None,

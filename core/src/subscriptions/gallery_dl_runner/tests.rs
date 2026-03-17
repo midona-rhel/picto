@@ -104,6 +104,32 @@ fn test_parse_metadata_artist_commentary_empty_falls_back() {
 }
 
 #[test]
+fn test_parse_metadata_collects_all_source_urls_and_created_at() {
+    let json = serde_json::json!({
+        "id": 100,
+        "title": "Pixiv work",
+        "file_url": "https://i.pximg.net/img-original/img/2024/03/10/00/00/00/100_p0.png",
+        "url": "https://www.pixiv.net/artworks/100",
+        "source": "https://example.com/original-source",
+        "date": "2024-03-10T12:34:56+09:00",
+        "category": "pixiv"
+    });
+    let meta = parse_metadata(&json);
+    assert_eq!(
+        meta.source_urls,
+        vec![
+            "https://i.pximg.net/img-original/img/2024/03/10/00/00/00/100_p0.png".to_string(),
+            "https://www.pixiv.net/artworks/100".to_string(),
+            "https://example.com/original-source".to_string(),
+        ]
+    );
+    assert_eq!(
+        meta.created_at.as_deref(),
+        Some("2024-03-10T03:34:56+00:00")
+    );
+}
+
+#[test]
 fn test_substitute_query() {
     assert_eq!(
         substitute_query(

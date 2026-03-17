@@ -84,9 +84,11 @@ pub struct ParsedMetadata {
     pub tags: Vec<(String, String)>,
     pub description: Option<String>,
     pub source_url: Option<String>,
+    pub source_urls: Vec<String>,
     pub rating: Option<String>,
     pub title: Option<String>,
     pub post_id: Option<String>,
+    pub created_at: Option<String>,
     /// Gallery-dl extractor category (e.g. "danbooru", "pixiv").
     pub category: Option<String>,
 }

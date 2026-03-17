@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use sha2::{Digest, Sha256};
@@ -55,13 +55,16 @@ impl<'a> SubscriptionSyncEngine<'a> {
 
         let mut options = ImportOptions::default();
         options.tags = metadata.tags.clone();
-
-        if let Some(ref source) = metadata.source_url {
-            options.source_urls.push(source.clone());
-        }
+        options.source_urls = metadata.source_urls.clone();
+        options.created_at = metadata.created_at.clone();
         if !gallery_url.is_empty() {
             options.source_urls.push(gallery_url.to_string());
         }
+        let mut seen_urls = HashSet::new();
+        options.source_urls.retain(|url| {
+            let trimmed = url.trim();
+            !trimmed.is_empty() && seen_urls.insert(trimmed.to_string())
+        });
 
         options.name = preferred_import_name(metadata);
 
@@ -189,12 +192,16 @@ impl<'a> SubscriptionSyncEngine<'a> {
             note_entries.insert("description".to_string(), description.clone());
         }
 
-        let mut source_urls = Vec::new();
-        if let Some(ref source) = metadata.source_url {
-            source_urls.push(source.clone());
-        }
+        let mut source_urls = metadata.source_urls.clone();
         if !gallery_url.is_empty() {
             source_urls.push(gallery_url.to_string());
+        }
+        source_urls.retain(|url| !url.trim().is_empty());
+        let mut deduped = Vec::with_capacity(source_urls.len());
+        for url in source_urls {
+            if !deduped.iter().any(|existing| existing == &url) {
+                deduped.push(url);
+            }
         }
 
         merge_existing_import_target(
@@ -207,7 +214,8 @@ impl<'a> SubscriptionSyncEngine<'a> {
                     .iter()
                     .map(|(ns, st)| normalize::combine_tag(ns, st))
                     .collect(),
-                source_urls,
+                source_urls: deduped,
+                created_at: metadata.created_at.clone(),
                 name: desired_name,
                 note_entries,
                 subscription_id: Some(subscription_id),

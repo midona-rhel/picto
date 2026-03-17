@@ -174,7 +174,7 @@ fn collect_source_urls(
         source_urls.push(trimmed.to_string());
     };
 
-    if let Some(url) = parsed.source_url.as_deref() {
+    for url in &parsed.source_urls {
         push_unique(url);
     }
     if let Some(url) = raw.get("file_url").and_then(|v| v.as_str()) {

@@ -1,5 +1,72 @@
 use super::ParsedMetadata;
 use super::adapters::adapter_for_json;
+use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
+
+fn push_unique_url(urls: &mut Vec<String>, value: Option<&str>) {
+    let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) else {
+        return;
+    };
+    if !urls.iter().any(|existing| existing == value) {
+        urls.push(value.to_string());
+    }
+}
+
+fn collect_source_urls(json: &serde_json::Value) -> Vec<String> {
+    let mut source_urls = Vec::new();
+    push_unique_url(
+        &mut source_urls,
+        json.get("file_url").and_then(|v| v.as_str()),
+    );
+    push_unique_url(&mut source_urls, json.get("url").and_then(|v| v.as_str()));
+    push_unique_url(&mut source_urls, json.get("source").and_then(|v| v.as_str()));
+    source_urls
+}
+
+fn normalize_created_at(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    if let Ok(parsed) = DateTime::parse_from_rfc3339(trimmed) {
+        return Some(parsed.with_timezone(&Utc).to_rfc3339());
+    }
+
+    for fmt in ["%Y-%m-%d %H:%M:%S%:z", "%Y-%m-%d %H:%M:%S%.f%:z"] {
+        if let Ok(parsed) = DateTime::parse_from_str(trimmed, fmt) {
+            return Some(parsed.with_timezone(&Utc).to_rfc3339());
+        }
+    }
+
+    for fmt in ["%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S"] {
+        if let Ok(parsed) = NaiveDateTime::parse_from_str(trimmed, fmt) {
+            return Some(DateTime::<Utc>::from_naive_utc_and_offset(parsed, Utc).to_rfc3339());
+        }
+    }
+
+    if let Ok(parsed) = NaiveDate::parse_from_str(trimmed, "%Y-%m-%d") {
+        let parsed = parsed.and_hms_opt(0, 0, 0)?;
+        return Some(DateTime::<Utc>::from_naive_utc_and_offset(parsed, Utc).to_rfc3339());
+    }
+
+    if let Ok(parsed) = NaiveDate::parse_from_str(trimmed, "%Y%m%d") {
+        let parsed = parsed.and_hms_opt(0, 0, 0)?;
+        return Some(DateTime::<Utc>::from_naive_utc_and_offset(parsed, Utc).to_rfc3339());
+    }
+
+    Some(trimmed.to_string())
+}
+
+fn parse_created_at(json: &serde_json::Value) -> Option<String> {
+    for key in ["created_at", "date", "published_at", "published", "upload_date"] {
+        if let Some(value) = json.get(key).and_then(|v| v.as_str()) {
+            if let Some(normalized) = normalize_created_at(value) {
+                return Some(normalized);
+            }
+        }
+    }
+    None
+}
 
 /// Parse a gallery-dl metadata sidecar JSON into normalized metadata.
 ///
@@ -50,13 +117,8 @@ pub fn parse_metadata(json: &serde_json::Value) -> ParsedMetadata {
         })
         .map(String::from);
 
-    let source_url = json
-        .get("file_url")
-        .or_else(|| json.get("url"))
-        .or_else(|| json.get("source"))
-        .and_then(|v| v.as_str())
-        .filter(|s| !s.is_empty())
-        .map(String::from);
+    let source_urls = collect_source_urls(json);
+    let source_url = source_urls.first().cloned();
 
     let rating = json.get("rating").and_then(|v| {
         v.as_str()
@@ -96,14 +158,17 @@ pub fn parse_metadata(json: &serde_json::Value) -> ParsedMetadata {
         .and_then(|v| v.as_str())
         .filter(|s| !s.is_empty())
         .map(String::from);
+    let created_at = parse_created_at(json);
 
     ParsedMetadata {
         tags,
         description,
         source_url,
+        source_urls,
         rating,
         title,
         post_id,
+        created_at,
         category,
     }
 }

@@ -22,6 +22,7 @@ pub struct ImportOptions {
     pub status: i64,
     pub notes: Option<String>,
     pub source_urls: Option<Vec<String>>,
+    pub created_at: Option<String>,
     pub dominant_color_hex: Option<String>,
     pub dominant_palette_blob: Option<Vec<u8>>,
     pub tags: Vec<(String, String)>, // (namespace, subtag)
@@ -73,6 +74,7 @@ pub fn import_file_with_tags(
         has_audio: opts.has_audio,
         status: opts.status,
         imported_at: now,
+        entity_created_at: opts.created_at.clone(),
         notes: opts.notes.clone(),
         source_urls_json: urls_json,
         dominant_color_hex: opts.dominant_color_hex.clone(),
