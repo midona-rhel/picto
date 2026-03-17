@@ -324,7 +324,7 @@ export function ImageGridControls({
                   className={`${st.icBtn} ${ds.mirrored ? st.icBtnActive : ''}`}
                   onClick={dc.toggleMirror}
                 >
-                  <IconFlipHorizontal size={14} />
+                  <IconFlipHorizontal size={14} style={{ transform: 'rotate(-90deg)' }} />
                 </button>
               </KbdTooltip>
               <div className={st.separator} />
