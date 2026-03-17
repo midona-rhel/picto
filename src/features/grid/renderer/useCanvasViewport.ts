@@ -157,9 +157,12 @@ export function useCanvasViewport(args: {
     markDirty('both');
 
     let rafId = 0;
+    let wheelRafId = 0;
     let scrollIdleTimer = 0;
     let lastMeasuredScrollTop = initialMetrics.localScrollTop;
     let lastMeasuredAt = performance.now();
+    const isWindows = typeof navigator !== 'undefined' && /Windows/i.test(navigator.userAgent);
+    let wheelTargetScrollTop = scrollElement.scrollTop;
 
     const onScroll = () => {
       isScrollingRef.current = true;
@@ -211,14 +214,55 @@ export function useCanvasViewport(args: {
       markDirty('both');
     };
 
+    const stepWheelAnimation = () => {
+      wheelRafId = 0;
+      const current = scrollElement.scrollTop;
+      const diff = wheelTargetScrollTop - current;
+      if (Math.abs(diff) < 0.5) {
+        scrollElement.scrollTop = wheelTargetScrollTop;
+        return;
+      }
+      const next = current + diff * 0.22;
+      scrollElement.scrollTop = next;
+      wheelRafId = requestAnimationFrame(stepWheelAnimation);
+    };
+
+    const onWheel = (event: WheelEvent) => {
+      if (!isWindows || frozen || event.ctrlKey || Math.abs(event.deltaX) > Math.abs(event.deltaY)) {
+        return;
+      }
+
+      const coarseWheel = event.deltaMode !== 0 || Math.abs(event.deltaY) >= 40;
+      if (!coarseWheel) return;
+
+      event.preventDefault();
+      const delta =
+        event.deltaMode === 1
+          ? event.deltaY * 40
+          : event.deltaMode === 2
+            ? event.deltaY * scrollElement.clientHeight
+            : event.deltaY;
+      const maxScrollTop = Math.max(0, scrollElement.scrollHeight - scrollElement.clientHeight);
+      wheelTargetScrollTop = Math.max(
+        0,
+        Math.min(maxScrollTop, (wheelRafId ? wheelTargetScrollTop : scrollElement.scrollTop) + delta),
+      );
+      if (!wheelRafId) {
+        wheelRafId = requestAnimationFrame(stepWheelAnimation);
+      }
+    };
+
     scrollElement.addEventListener('scroll', onScroll, { passive: true });
+    scrollElement.addEventListener('wheel', onWheel, { passive: false });
     const observer = new ResizeObserver(onResize);
     observer.observe(scrollElement);
 
     return () => {
       scrollElement.removeEventListener('scroll', onScroll);
+      scrollElement.removeEventListener('wheel', onWheel);
       observer.disconnect();
       if (rafId) cancelAnimationFrame(rafId);
+      if (wheelRafId) cancelAnimationFrame(wheelRafId);
       if (scrollIdleTimer) window.clearTimeout(scrollIdleTimer);
       const idleState = createIdleCanvasScrollState();
       isScrollingRef.current = false;
