@@ -17,7 +17,6 @@ use crate::sqlite::bitmaps::BitmapKey;
 pub struct CollectionRecord {
     pub id: i64,
     pub name: String,
-    pub description: String,
     pub tags: Vec<String>,
     pub image_count: i64,
     pub created_at: Option<String>,
@@ -35,7 +34,6 @@ pub struct CollectionMimeCount {
 pub struct CollectionSummary {
     pub id: i64,
     pub name: String,
-    pub description: String,
     pub tags: Vec<String>,
     pub image_count: i64,
     pub total_size_bytes: i64,
@@ -421,20 +419,13 @@ pub(crate) fn sync_collection_aggregate_metadata(
     Ok(())
 }
 
-pub fn create_collection(
-    conn: &Connection,
-    name: &str,
-    description: Option<&str>,
-    tags: &[String],
-) -> rusqlite::Result<i64> {
+pub fn create_collection(conn: &Connection, name: &str) -> rusqlite::Result<i64> {
     let now = chrono::Utc::now().to_rfc3339();
     conn.execute(
         "INSERT INTO media_entity (kind, name, description, status, created_at, updated_at)
          VALUES ('collection', ?1, ?2, 1, ?3, ?3)",
         params![name, "", now],
     )?;
-    let _ = description;
-    let _ = tags;
     Ok(conn.last_insert_rowid())
 }
 
@@ -514,7 +505,6 @@ pub fn list_collections(conn: &Connection) -> rusqlite::Result<Vec<CollectionRec
         "SELECT
              me.entity_id,
              COALESCE(me.name, ''),
-             COALESCE(me.description, ''),
              me.created_at,
              me.updated_at,
              me.cached_item_count,
@@ -526,15 +516,14 @@ pub fn list_collections(conn: &Connection) -> rusqlite::Result<Vec<CollectionRec
 
     let rows = stmt.query_map([], |row| {
         let id: i64 = row.get(0)?;
-        let cover_hash: Option<String> = row.get(6)?;
+        let cover_hash: Option<String> = row.get(5)?;
         Ok(CollectionRecord {
             id,
             name: row.get(1)?,
-            description: String::new(),
             tags: Vec::new(),
-            image_count: row.get(5)?,
-            created_at: row.get(3)?,
-            updated_at: row.get(4)?,
+            image_count: row.get(4)?,
+            created_at: row.get(2)?,
+            updated_at: row.get(3)?,
             thumbnail_url: cover_hash.map(|h| format!("media://localhost/thumb/{h}.jpg")),
         })
     })?;
@@ -640,7 +629,6 @@ pub fn get_collection_summary(
     Ok(CollectionSummary {
         id,
         name,
-        description: String::new(),
         tags,
         image_count,
         total_size_bytes,
@@ -648,6 +636,24 @@ pub fn get_collection_summary(
         source_urls,
         rating,
     })
+}
+
+pub fn list_collection_member_hashes(
+    conn: &Connection,
+    collection_id: i64,
+) -> rusqlite::Result<Vec<String>> {
+    let mut stmt = conn.prepare_cached(
+        "SELECT f.hash
+         FROM media_entity me_member
+         JOIN entity_file ef ON ef.entity_id = me_member.entity_id
+         JOIN file f ON f.file_id = ef.file_id
+         WHERE me_member.kind = 'single'
+           AND me_member.parent_collection_id = ?1
+         ORDER BY COALESCE(me_member.collection_ordinal, 9223372036854775807) ASC,
+                  me_member.entity_id ASC",
+    )?;
+    let rows = stmt.query_map([collection_id], |row| row.get::<_, String>(0))?;
+    rows.collect()
 }
 
 pub fn add_collection_member(
@@ -969,13 +975,9 @@ impl SqliteDatabase {
     pub async fn create_collection(
         &self,
         name: &str,
-        description: Option<&str>,
-        tags: &[String],
     ) -> Result<i64, String> {
         let n = name.to_string();
-        let d = description.map(|v| v.to_string());
-        let t = tags.to_vec();
-        self.with_conn(move |conn| create_collection(conn, &n, d.as_deref(), &t))
+        self.with_conn(move |conn| create_collection(conn, &n))
             .await
     }
 
@@ -1036,6 +1038,14 @@ impl SqliteDatabase {
 
     pub async fn delete_collection(&self, collection_id: i64) -> Result<(), String> {
         self.with_conn(move |conn| delete_collection(conn, collection_id))
+            .await
+    }
+
+    pub async fn list_collection_member_hashes(
+        &self,
+        collection_id: i64,
+    ) -> Result<Vec<String>, String> {
+        self.with_read_conn(move |conn| list_collection_member_hashes(conn, collection_id))
             .await
     }
 
@@ -1143,19 +1153,12 @@ mod tests {
         crate::sqlite::schema::apply_pragmas(&conn).unwrap();
         crate::sqlite::schema::init_schema(&conn).unwrap();
 
-        let id = create_collection(
-            &conn,
-            "My Collection",
-            Some("desc"),
-            &["tag1".into(), "tag2".into(), "tag1".into()],
-        )
-        .unwrap();
+        let id = create_collection(&conn, "My Collection").unwrap();
         assert!(id > 0);
 
         let rows = list_collections(&conn).unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].name, "My Collection");
-        assert_eq!(rows[0].description, "");
         assert!(rows[0].tags.is_empty());
         assert_eq!(rows[0].image_count, 0);
         assert!(rows[0].thumbnail_url.is_none());
@@ -1163,7 +1166,6 @@ mod tests {
         update_collection_name(&conn, id, Some("Renamed")).unwrap();
         let rows = list_collections(&conn).unwrap();
         assert_eq!(rows[0].name, "Renamed");
-        assert_eq!(rows[0].description, "");
         assert!(rows[0].tags.is_empty());
 
         delete_collection(&conn, id).unwrap();
@@ -1229,7 +1231,7 @@ mod tests {
         .unwrap();
         crate::folders::db::add_entity_to_folder(&conn, folder_id, file_a_id).unwrap();
 
-        let collection_id = create_collection(&conn, "C", None, &[]).unwrap();
+        let collection_id = create_collection(&conn, "C").unwrap();
         let added = add_collection_members_by_hashes(
             &conn,
             collection_id,
@@ -1328,7 +1330,7 @@ mod tests {
             let keep_tag = crate::tags::db::get_or_create_tag(conn, "", "keep")?;
             crate::tags::db::tag_entity(conn, file_a_id, keep_tag, "local")?;
 
-            let collection_id = create_collection(conn, "C", None, &[])?;
+            let collection_id = create_collection(conn, "C")?;
             add_collection_members_by_hashes(
                 conn,
                 collection_id,

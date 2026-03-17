@@ -76,7 +76,7 @@ impl<'a> SubscriptionSyncEngine<'a> {
                 Some(id) => id,
                 None => match self
                     .db
-                    .create_collection(&group.preferred_name, None, &[])
+                    .create_collection(&group.preferred_name)
                     .await
                 {
                     Ok(id) => id,

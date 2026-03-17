@@ -91,7 +91,7 @@ impl TestHarness {
     /// Create a collection media entity and return collection ID.
     pub async fn create_collection(&self, name: &str) -> i64 {
         self.db
-            .create_collection(name, None, &[])
+            .create_collection(name)
             .await
             .expect("create collection")
     }

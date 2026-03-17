@@ -6,7 +6,7 @@ This folder tracks the current active alpha backlog.
 1. `active-alpha/`: PBIs that are currently active
 2. `archive/`: PBIs kept for history or deferred work
 
-## Active Alpha PBIs (62)
+## Active Alpha PBIs (61)
 
 1. [PBI-141](./active-alpha/PBI-141-smart-folder-nesting.md)
 2. [PBI-144](./active-alpha/PBI-144-folder-password-protection.md)
@@ -59,17 +59,16 @@ This folder tracks the current active alpha backlog.
 49. [PBI-502](./active-alpha/PBI-502-renderer-boundary-collapse.md)
 50. [PBI-503](./active-alpha/PBI-503-runtime-contract-purge.md)
 51. [PBI-504](./active-alpha/PBI-504-frontend-state-topology-reset.md)
-52. [PBI-505](./active-alpha/PBI-505-media-entity-and-lifecycle-realignment.md)
-53. [PBI-506](./active-alpha/PBI-506-collections-as-aggregate-projection.md)
-54. [PBI-507](./active-alpha/PBI-507-tags-domain-rewrite.md)
-55. [PBI-508](./active-alpha/PBI-508-folders-and-smart-folders-simplification.md)
-56. [PBI-509](./active-alpha/PBI-509-grid-and-scope-model-unification.md)
-57. [PBI-510](./active-alpha/PBI-510-sidebar-and-navigation-read-model.md)
-58. [PBI-511](./active-alpha/PBI-511-inspector-and-metadata-consolidation.md)
-59. [PBI-512](./active-alpha/PBI-512-subscriptions-and-gallery-dl-simplification.md)
-60. [PBI-514](./active-alpha/PBI-514-app-shell-and-shared-layer-deletion.md)
-61. [PBI-515](./active-alpha/PBI-515-css-and-ui-primitive-consolidation.md)
-62. [PBI-516](./active-alpha/PBI-516-test-strategy-rewrite.md)
+52. [PBI-506](./active-alpha/PBI-506-collections-as-aggregate-projection.md)
+53. [PBI-507](./active-alpha/PBI-507-tags-domain-rewrite.md)
+54. [PBI-508](./active-alpha/PBI-508-folders-and-smart-folders-simplification.md)
+55. [PBI-509](./active-alpha/PBI-509-grid-and-scope-model-unification.md)
+56. [PBI-510](./active-alpha/PBI-510-sidebar-and-navigation-read-model.md)
+57. [PBI-511](./active-alpha/PBI-511-inspector-and-metadata-consolidation.md)
+58. [PBI-512](./active-alpha/PBI-512-subscriptions-and-gallery-dl-simplification.md)
+59. [PBI-514](./active-alpha/PBI-514-app-shell-and-shared-layer-deletion.md)
+60. [PBI-515](./active-alpha/PBI-515-css-and-ui-primitive-consolidation.md)
+61. [PBI-516](./active-alpha/PBI-516-test-strategy-rewrite.md)
 
 ## Archived PBIs
 

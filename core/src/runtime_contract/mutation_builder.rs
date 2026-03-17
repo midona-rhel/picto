@@ -168,6 +168,7 @@ impl MutationImpact {
             .folder_membership_changed(vec![collection_id])
             .extra_grid_scopes(vec![
                 format!("collection:{collection_id}"),
+                "system:all".into(),
                 "folder:all".into(),
             ])
     }
@@ -177,6 +178,17 @@ impl MutationImpact {
             format!("collection:{collection_id}"),
             "system:all".into(),
         ])
+    }
+
+    pub fn collection_delete(collection_id: i64, folder_ids: Vec<i64>) -> Self {
+        let mut impact = Self::new().extra_grid_scopes(vec![
+            format!("collection:{collection_id}"),
+            "system:all".into(),
+        ]);
+        if !folder_ids.is_empty() {
+            impact = impact.folder_membership_changed(folder_ids);
+        }
+        impact
     }
 
     pub fn selection_metadata() -> Self {

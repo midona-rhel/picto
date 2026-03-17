@@ -207,3 +207,56 @@ async fn batch_tags_preset_emits_single_receipt() {
         "batch_tags should NOT set extra_grid_scopes"
     );
 }
+
+#[tokio::test]
+async fn collection_membership_preset_refreshes_collection_and_system_scopes() {
+    let harness = common::TestHarness::new().await;
+    harness.drain_events();
+
+    let impact = MutationImpact::collection_membership_change(42);
+    events::emit_mutation("test_collection_membership", impact);
+
+    let evts = harness.find_events("runtime/mutation_committed");
+    assert!(!evts.is_empty());
+    let payload: serde_json::Value = serde_json::from_str(&evts.last().unwrap().1).unwrap();
+
+    let scopes: Vec<String> = payload["facts"]["extra_grid_scopes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap().to_string())
+        .collect();
+    assert!(scopes.contains(&"collection:42".to_string()));
+    assert!(scopes.contains(&"system:all".to_string()));
+    assert!(scopes.contains(&"folder:all".to_string()));
+}
+
+#[tokio::test]
+async fn collection_delete_preset_marks_affected_folder_membership() {
+    let harness = common::TestHarness::new().await;
+    harness.drain_events();
+
+    let impact = MutationImpact::collection_delete(42, vec![5, 9]);
+    events::emit_mutation("test_collection_delete", impact);
+
+    let evts = harness.find_events("runtime/mutation_committed");
+    assert!(!evts.is_empty());
+    let payload: serde_json::Value = serde_json::from_str(&evts.last().unwrap().1).unwrap();
+
+    let folder_ids: Vec<i64> = payload["facts"]["folder_membership_changed"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_i64().unwrap())
+        .collect();
+    assert_eq!(folder_ids, vec![5, 9]);
+
+    let scopes: Vec<String> = payload["facts"]["extra_grid_scopes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_str().unwrap().to_string())
+        .collect();
+    assert!(scopes.contains(&"collection:42".to_string()));
+    assert!(scopes.contains(&"system:all".to_string()));
+}

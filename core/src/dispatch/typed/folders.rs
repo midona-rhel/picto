@@ -511,10 +511,7 @@ pub async fn create_collection(
     state: &AppState,
     input: CreateCollectionInput,
 ) -> Result<i64, String> {
-    let collection_id = state
-        .db
-        .create_collection(&input.name, None, &[])
-        .await?;
+    let collection_id = state.db.create_collection(&input.name).await?;
     crate::events::emit_mutation(
         "create_collection",
         crate::runtime_contract::mutation_builder::MutationImpact::new()
@@ -532,6 +529,11 @@ pub async fn update_collection(
     state: &AppState,
     input: UpdateCollectionInput,
 ) -> Result<(), String> {
+    let member_hashes = if input.tags.is_some() {
+        state.db.list_collection_member_hashes(input.id).await?
+    } else {
+        Vec::new()
+    };
     state
         .db
         .update_collection(input.id, input.name.as_deref(), input.tags.as_deref())
@@ -541,11 +543,11 @@ pub async fn update_collection(
     );
     if input.tags.is_some() {
         impact = impact.tags_changed();
+        if !member_hashes.is_empty() {
+            impact = impact.file_hashes(member_hashes);
+        }
     }
-    crate::events::emit_mutation(
-        "update_collection",
-        impact,
-    );
+    crate::events::emit_mutation("update_collection", impact);
     Ok(())
 }
 
@@ -567,27 +569,6 @@ pub async fn reorder_collection_members(
     Ok(())
 }
 
-/// Look up the cover-file hash for a collection entity (best-effort, returns None on error).
-async fn collection_cover_hash(
-    db: &crate::sqlite::SqliteDatabase,
-    entity_id: i64,
-) -> Option<String> {
-    db.with_read_conn(move |conn| {
-        use rusqlite::OptionalExtension;
-        conn.query_row(
-            "SELECT f.hash FROM media_entity me \
-             JOIN file f ON f.file_id = me.cover_file_id \
-             WHERE me.entity_id = ?1",
-            [entity_id],
-            |row| row.get::<_, String>(0),
-        )
-        .optional()
-    })
-    .await
-    .ok()
-    .flatten()
-}
-
 pub async fn add_collection_members(
     state: &AppState,
     input: AddCollectionMembersInput,
@@ -596,16 +577,15 @@ pub async fn add_collection_members(
         .db
         .add_collection_members_by_hashes(input.id, &input.hashes)
         .await?;
-    state.db.scope_cache_invalidate_scope("collection");
-    let cover_hash = collection_cover_hash(&state.db, input.id).await;
-    let mut impact =
-        crate::runtime_contract::mutation_builder::MutationImpact::collection_membership_change(
-            input.id,
+    if added > 0 {
+        state.db.scope_cache_invalidate_scope("collection");
+        crate::events::emit_mutation(
+            "add_collection_members",
+            crate::runtime_contract::mutation_builder::MutationImpact::collection_membership_change(
+                input.id,
+            ),
         );
-    if let Some(h) = cover_hash {
-        impact = impact.file_hashes(vec![h]);
     }
-    crate::events::emit_mutation("add_collection_members", impact);
     Ok(added)
 }
 
@@ -617,16 +597,15 @@ pub async fn remove_collection_members(
         .db
         .remove_collection_members_by_hashes(input.id, &input.hashes)
         .await?;
-    state.db.scope_cache_invalidate_scope("collection");
-    let cover_hash = collection_cover_hash(&state.db, input.id).await;
-    let mut impact =
-        crate::runtime_contract::mutation_builder::MutationImpact::collection_membership_change(
-            input.id,
+    if removed > 0 {
+        state.db.scope_cache_invalidate_scope("collection");
+        crate::events::emit_mutation(
+            "remove_collection_members",
+            crate::runtime_contract::mutation_builder::MutationImpact::collection_membership_change(
+                input.id,
+            ),
         );
-    if let Some(h) = cover_hash {
-        impact = impact.file_hashes(vec![h]);
     }
-    crate::events::emit_mutation("remove_collection_members", impact);
     Ok(removed)
 }
 
@@ -634,18 +613,27 @@ pub async fn delete_collection(
     state: &AppState,
     input: DeleteCollectionInput,
 ) -> Result<(), String> {
+    let member_hashes = state.db.list_collection_member_hashes(input.id).await?;
+    let affected_folder_ids = state
+        .db
+        .get_entity_folder_memberships_by_entity_id(input.id)
+        .await?
+        .into_iter()
+        .map(|folder| folder.folder_id)
+        .collect::<Vec<_>>();
     state.db.delete_collection(input.id).await?;
     state.db.scope_cache_invalidate_scope("collection");
+    let mut impact =
+        crate::runtime_contract::mutation_builder::MutationImpact::collection_delete(
+            input.id,
+            affected_folder_ids,
+        );
+    if !member_hashes.is_empty() {
+        impact = impact.file_hashes(member_hashes);
+    }
     crate::events::emit_mutation(
         "delete_collection",
-        crate::runtime_contract::mutation_builder::MutationImpact::new()
-            .domains(&[
-                crate::runtime_contract::mutation::Domain::Folders,
-                crate::runtime_contract::mutation::Domain::Sidebar,
-                crate::runtime_contract::mutation::Domain::Selection,
-            ])
-            .folder_ids(vec![input.id])
-            .extra_grid_scopes(vec!["system:all".into()]),
+        impact,
     );
     Ok(())
 }

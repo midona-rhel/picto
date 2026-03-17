@@ -169,7 +169,6 @@ export interface DuplicateInfo {
 export interface CollectionInfo {
   id: number;
   name: string;
-  description: string;
   tags: string[];
   image_count: number;
   created_at: string | null;
@@ -185,7 +184,6 @@ export interface CollectionMimeCount {
 export interface CollectionSummary {
   id: number;
   name: string;
-  description: string;
   tags: string[];
   image_count: number;
   total_size_bytes: number;
