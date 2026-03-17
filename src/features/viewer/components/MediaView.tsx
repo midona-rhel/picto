@@ -167,16 +167,15 @@ export function MediaView({ images, currentIndex, onNavigate, onClose, onStateCh
     ? { width: currentImage.width, height: currentImage.height }
     : null;
   const currentHash = currentImage?.hash ?? null;
-  const currentAdjustment = useNavigationImageAdjustmentsStore(
-    useCallback(
-      (store) => ({
-        ...DEFAULT_NAVIGATION_IMAGE_ADJUSTMENT,
-        ...(currentHash ? store.byHash[currentHash] : undefined),
-        grayscale: store.grayscaleEnabled,
-      }),
-      [currentHash],
-    ),
+  const grayscaleEnabled = useNavigationImageAdjustmentsStore((store) => store.grayscaleEnabled);
+  const currentImageAdjustment = useNavigationImageAdjustmentsStore(
+    useCallback((store) => (currentHash ? store.byHash[currentHash] : undefined), [currentHash]),
   );
+  const currentAdjustment = useMemo(() => ({
+    ...DEFAULT_NAVIGATION_IMAGE_ADJUSTMENT,
+    ...(currentImageAdjustment ?? undefined),
+    grayscale: grayscaleEnabled,
+  }), [currentImageAdjustment, grayscaleEnabled]);
   const rotateNavigationImage = useNavigationImageAdjustmentsStore((store) => store.rotateClockwise);
   const toggleNavigationMirror = useNavigationImageAdjustmentsStore((store) => store.toggleMirrored);
 
@@ -591,6 +590,7 @@ export function MediaView({ images, currentIndex, onNavigate, onClose, onStateCh
             objectFit: 'contain',
             pointerEvents: 'none',
             zIndex: 0,
+            filter: currentAdjustment.grayscale ? 'grayscale(1)' : undefined,
           }}
         />
       )}
