@@ -42,6 +42,40 @@ async fn projection_corruption_is_tracked() {
 }
 
 #[tokio::test]
+async fn seed_sidebar_normalizes_legacy_all_files_node() {
+    let harness = common::TestHarness::new().await;
+
+    harness
+        .db
+        .with_conn(move |conn| {
+            conn.execute("DELETE FROM sidebar_node", [])?;
+            conn.execute(
+                "INSERT INTO sidebar_node
+                 (node_id, kind, parent_id, name, icon, color, sort_order, count,
+                  freshness, epoch, selectable, expanded_by_default, meta_json, updated_at)
+                 VALUES
+                 ('system:all_files', 'system', 'system:library', 'All Files', 'IconPhoto', NULL,
+                  1, 7, 'stale', 0, 1, 0, NULL, datetime('now'))",
+                [],
+            )?;
+            picto_core::sidebar::db::seed_sidebar_if_empty(conn)?;
+            Ok(())
+        })
+        .await
+        .expect("normalize legacy sidebar node");
+
+    let nodes = harness.db.get_sidebar_tree().await.expect("get sidebar tree");
+    assert!(
+        nodes.iter().any(|node| node.node_id == "system:all" && node.name == "All Active"),
+        "canonical all-active node should exist after normalization",
+    );
+    assert!(
+        !nodes.iter().any(|node| node.node_id == "system:all_files"),
+        "legacy all-files alias should be removed after normalization",
+    );
+}
+
+#[tokio::test]
 async fn resolve_hashes_batch_returns_file_ids() {
     let harness = common::TestHarness::new().await;
 

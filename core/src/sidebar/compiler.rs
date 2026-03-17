@@ -18,7 +18,7 @@ pub(crate) async fn compile_sidebar(db: &Arc<SqliteDatabase>) -> Result<(), Stri
         seed_sidebar_if_empty(conn)?;
 
         for key in &[
-            "system:all_files",
+            "system:all",
             "system:inbox",
             "system:trash",
             "system:untagged",

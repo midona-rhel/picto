@@ -433,6 +433,7 @@ async fn scope_contract_grid_and_selection_same_scope() {
         excluded_hashes: None,
         included_hashes: None,
         status: None,
+        collection_entity_id: None,
         folder_ids: None,
         excluded_folder_ids: None,
         folder_match_mode: None,
@@ -477,6 +478,10 @@ async fn scope_contract_scope_count_agrees_with_resolve_scope() {
     harness.db.add_entities_to_folder_batch(folder.folder_id, &["cnt_2".to_string()]).await.unwrap();
 
     let cases: Vec<(&str, ScopeFilter)> = vec![
+        (
+            "system:all",
+            ScopeFilter::default(),
+        ),
         (
             "system:all_files",
             ScopeFilter::default(),
