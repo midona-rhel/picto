@@ -137,14 +137,11 @@ async fn file_lifecycle_preset_emits_mutation_receipt() {
     assert!(!evts.is_empty(), "should emit runtime/mutation_committed");
     let payload: serde_json::Value = serde_json::from_str(&evts.last().unwrap().1).unwrap();
 
-    let domains: Vec<String> = payload["facts"]["domains"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|v| v.as_str().unwrap().to_string())
-        .collect();
-    assert!(domains.contains(&"files".to_string()));
-    assert!(domains.iter().any(|d| d == "sidebar"));
+    let domains = payload["facts"]["domains"].as_array().unwrap();
+    assert!(
+        domains.is_empty(),
+        "file_lifecycle should rely on explicit facts instead of domain fallbacks"
+    );
     assert!(payload["facts"]["status_changed"].as_bool() == Some(true));
     assert!(payload.get("sidebar_counts").is_some());
 }

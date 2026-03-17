@@ -104,9 +104,7 @@ impl MutationImpact {
     }
 
     pub fn file_lifecycle(db: &crate::sqlite::SqliteDatabase) -> Self {
-        Self::new()
-            .status_changed()
-            .sidebar_counts_from(db)
+        Self::new().status_changed().sidebar_counts_from(db)
     }
 
     pub fn file_metadata(hash: String) -> Self {
@@ -133,15 +131,11 @@ impl MutationImpact {
     }
 
     pub fn file_status_change(db: &crate::sqlite::SqliteDatabase) -> Self {
-        Self::new()
-            .status_changed()
-            .sidebar_counts_from(db)
+        Self::new().status_changed().sidebar_counts_from(db)
     }
 
     pub fn subscriptions_file_status_change(db: &crate::sqlite::SqliteDatabase) -> Self {
-        Self::new()
-            .status_changed()
-            .sidebar_counts_from(db)
+        Self::new().status_changed().sidebar_counts_from(db)
     }
 
     pub fn folder_file_change(folder_id: i64) -> Self {
