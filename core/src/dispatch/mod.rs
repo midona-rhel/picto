@@ -84,6 +84,7 @@ pub async fn dispatch(command: &str, args_json: &str) -> Result<String, String> 
         "update_smart_folder" => call!(typed::smart_folders::update_smart_folder, &state, args),
         "delete_smart_folder" => call!(typed::smart_folders::delete_smart_folder, &state, args),
         "count_smart_folder" => call!(typed::smart_folders::count_smart_folder, &state, args),
+        "move_smart_folder" => call!(typed::smart_folders::move_smart_folder, &state, args),
         "reorder_smart_folders" => call!(typed::smart_folders::reorder_smart_folders, &state, args),
 
         // ── Media Metadata ────────────────────────────────────

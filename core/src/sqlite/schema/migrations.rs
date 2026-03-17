@@ -667,6 +667,17 @@ pub fn run_migrations(conn: &Connection, from_version: i64) -> rusqlite::Result<
              WHERE watch_path IS NOT NULL",
         )?;
     }
+    if from_version < 29 {
+        if !has_column(conn, "smart_folder", "parent_id")? {
+            conn.execute_batch(
+                "ALTER TABLE smart_folder ADD COLUMN parent_id INTEGER REFERENCES smart_folder(smart_folder_id) ON DELETE SET NULL",
+            )?;
+        }
+        conn.execute_batch(
+            "CREATE INDEX IF NOT EXISTS idx_smart_folder_parent_order
+             ON smart_folder(parent_id, COALESCE(display_order, smart_folder_id), smart_folder_id)",
+        )?;
+    }
     conn.execute("UPDATE schema_version SET version = ?1", [CURRENT_VERSION])?;
     Ok(())
 }

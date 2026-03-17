@@ -273,6 +273,7 @@ export interface SmartFolderPredicate {
 export interface SmartFolder {
   id?: string;
   name: string;
+  parent_id?: number | null;
   icon?: string | null;
   color?: string | null;
   predicate: SmartFolderPredicate;
@@ -286,6 +287,7 @@ export interface SmartFolder {
 export interface SmartFolderIpcInput {
   smart_folder_id: number;
   name: string;
+  parent_id: number | null;
   icon: string | null;
   color: string | null;
   predicate_json: string;
@@ -293,6 +295,12 @@ export interface SmartFolderIpcInput {
   sort_order: string | null;
   created_at: string | null;
   updated_at: string | null;
+}
+
+export interface SmartFolderMove {
+  smart_folder_id: number;
+  new_parent_id: number | null;
+  sibling_order: [number, number][];
 }
 
 // ─── Drag & Drop ────────────────────────────────────────────────────────────

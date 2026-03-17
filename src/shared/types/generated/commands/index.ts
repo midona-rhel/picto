@@ -127,6 +127,7 @@ export type { UpdateDuplicateSettingsInput } from './UpdateDuplicateSettingsInpu
 
 // Re-export generated input types — smart_folders
 export type { ReorderSmartFoldersInput } from './ReorderSmartFoldersInput';
+export type { MoveSmartFolderInput } from './MoveSmartFolderInput';
 export type { CreateSmartFolderInput } from './CreateSmartFolderInput';
 export type { UpdateSmartFolderInput } from './UpdateSmartFolderInput';
 export type { DeleteSmartFolderInput } from './DeleteSmartFolderInput';
@@ -249,6 +250,7 @@ import type { GetDuplicatePairsInput } from './GetDuplicatePairsInput';
 import type { ResolveDuplicatePairInput } from './ResolveDuplicatePairInput';
 import type { UpdateDuplicateSettingsInput } from './UpdateDuplicateSettingsInput';
 import type { ReorderSmartFoldersInput } from './ReorderSmartFoldersInput';
+import type { MoveSmartFolderInput } from './MoveSmartFolderInput';
 import type { CreateSmartFolderInput } from './CreateSmartFolderInput';
 import type { UpdateSmartFolderInput } from './UpdateSmartFolderInput';
 import type { DeleteSmartFolderInput } from './DeleteSmartFolderInput';
@@ -394,6 +396,7 @@ export interface TypedCommandMap {
   update_duplicate_settings: { input: UpdateDuplicateSettingsInput; output: unknown };
   // smart_folders
   reorder_smart_folders: { input: ReorderSmartFoldersInput; output: null };
+  move_smart_folder: { input: MoveSmartFolderInput; output: null };
   create_smart_folder: { input: CreateSmartFolderInput; output: unknown };
   update_smart_folder: { input: UpdateSmartFolderInput; output: unknown };
   delete_smart_folder: { input: DeleteSmartFolderInput; output: null };

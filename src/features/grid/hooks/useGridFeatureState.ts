@@ -7,6 +7,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { api } from '#desktop/api';
 import { useFilterStore, mimeFilterToPrefixes, type FilterLogicMode } from '../../../state/filterStore';
+import { useDomainStore } from '../../../state/domainStore';
 import type { SmartFolder } from '#features/smart-folders/types';
 import type { TagFilterLogicMode } from '#features/tags/types';
 import type { MediaItem } from '#features/grid/types';
@@ -95,10 +96,19 @@ export function useGridFeatureState({
   const handleSmartFolderUpdated = useCallback(async () => {
     if (!activeSmartFolder?.id) return;
     try {
-      const folders = await api.smartFolders.list();
-      const updated = folders.find((f) => f.id === activeSmartFolder.id);
+      await useDomainStore.getState().fetchSidebarTree();
+      const updated = useDomainStore.getState().smartFolders.find((f) => f.id === activeSmartFolder.id);
       if (updated) {
-        setActiveSmartFolder(updated);
+        setActiveSmartFolder({
+          id: updated.id,
+          name: updated.name,
+          parent_id: updated.parent_id ? parseInt(updated.parent_id, 10) : null,
+          icon: updated.icon ?? null,
+          color: updated.color ?? null,
+          predicate: updated.predicate ?? { groups: [] },
+          sort_field: updated.sort_field ?? null,
+          sort_order: updated.sort_order ?? null,
+        });
         setSmartFolderRefresh((c) => c + 1);
       }
     } catch (e) {

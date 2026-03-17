@@ -10,8 +10,18 @@ use crate::state::AppState;
 #[derive(Debug, Deserialize, TS)]
 #[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct ReorderSmartFoldersInput {
+    pub parent_id: Option<i64>,
     #[ts(type = "[number, number][]")]
     pub moves: Vec<(i64, i64)>,
+}
+
+#[derive(Debug, Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
+pub struct MoveSmartFolderInput {
+    pub smart_folder_id: i64,
+    pub new_parent_id: Option<i64>,
+    #[ts(type = "[number, number][]")]
+    pub sibling_order: Vec<(i64, i64)>,
 }
 
 #[derive(Debug, Deserialize, TS)]
@@ -55,6 +65,18 @@ pub async fn create_smart_folder(
     state: &AppState,
     input: CreateSmartFolderInput,
 ) -> Result<serde_json::Value, String> {
+    let parent_id = input.folder.parent_id;
+    if let Some(target_parent_id) = parent_id {
+        let exists = state
+            .db
+            .with_read_conn(move |conn| {
+                Ok(crate::smart_folders::db::get_smart_folder(conn, target_parent_id)?.is_some())
+            })
+            .await?;
+        if !exists {
+            return Err(format!("Invalid smart folder parent id: {target_parent_id}"));
+        }
+    }
     let result = crate::smart_folders::service::SmartFolderService::create_smart_folder(
         &state.db,
         input.folder,
@@ -73,6 +95,26 @@ pub async fn update_smart_folder(
     state: &AppState,
     input: UpdateSmartFolderInput,
 ) -> Result<serde_json::Value, String> {
+    let sf_id: i64 = input
+        .id
+        .parse()
+        .map_err(|_| format!("Invalid smart folder id: {}", input.id))?;
+    if input.folder.parent_id == Some(sf_id) {
+        return Err("A smart folder cannot be its own parent".to_string());
+    }
+    if let Some(parent_id) = input.folder.parent_id {
+        let blocked = state
+            .db
+            .with_read_conn(move |conn| {
+                let descendants =
+                    crate::smart_folders::db::collect_descendant_smart_folder_ids(conn, sf_id)?;
+                Ok(descendants.into_iter().any(|id| id == parent_id))
+            })
+            .await?;
+        if blocked {
+            return Err("A smart folder cannot be moved under one of its descendants".to_string());
+        }
+    }
     let (result, predicate_changed) =
         crate::smart_folders::service::SmartFolderService::update_smart_folder(
             &state.db,
@@ -80,10 +122,6 @@ pub async fn update_smart_folder(
             input.folder,
         )
         .await?;
-    let sf_id: i64 = input
-        .id
-        .parse()
-        .map_err(|_| format!("Invalid smart folder id: {}", input.id))?;
     let mut impact = crate::runtime_contract::mutation_builder::MutationImpact::sidebar(
         crate::runtime_contract::mutation::Domain::SmartFolders,
     );
@@ -92,6 +130,46 @@ pub async fn update_smart_folder(
     }
     crate::events::emit_mutation("update_smart_folder", impact);
     Ok(serde_json::to_value(&result).map_err(|e| e.to_string())?)
+}
+
+pub async fn move_smart_folder(
+    state: &AppState,
+    input: MoveSmartFolderInput,
+) -> Result<(), String> {
+    if input.new_parent_id == Some(input.smart_folder_id) {
+        return Err("A smart folder cannot be its own parent".to_string());
+    }
+    if let Some(new_parent_id) = input.new_parent_id {
+        let blocked = state
+            .db
+            .with_read_conn(move |conn| {
+                let descendants = crate::smart_folders::db::collect_descendant_smart_folder_ids(
+                    conn,
+                    input.smart_folder_id,
+                )?;
+                Ok(descendants.into_iter().any(|id| id == new_parent_id))
+            })
+            .await?;
+        if blocked {
+            return Err("A smart folder cannot be moved under one of its descendants".to_string());
+        }
+    }
+    state
+        .db
+        .move_smart_folder(
+            input.smart_folder_id,
+            input.new_parent_id,
+            input.sibling_order,
+        )
+        .await?;
+    crate::events::emit_mutation(
+        "move_smart_folder",
+        crate::runtime_contract::mutation_builder::MutationImpact::sidebar(
+            crate::runtime_contract::mutation::Domain::SmartFolders,
+        )
+        .smart_folder_ids(vec![input.smart_folder_id]),
+    );
+    Ok(())
 }
 
 pub async fn delete_smart_folder(
@@ -130,7 +208,10 @@ pub async fn reorder_smart_folders(
     state: &AppState,
     input: ReorderSmartFoldersInput,
 ) -> Result<(), String> {
-    state.db.reorder_smart_folders(input.moves).await?;
+    state
+        .db
+        .reorder_smart_folders(input.parent_id, input.moves)
+        .await?;
     crate::events::emit_mutation(
         "reorder_smart_folders",
         crate::runtime_contract::mutation_builder::MutationImpact::sidebar(

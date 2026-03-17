@@ -73,6 +73,7 @@ describe('context action registries', () => {
   it('builds smart-folder menu with expected core actions', () => {
     const items = buildSmartFolderItemMenu({
       editSmartFolder: () => {},
+      createChildSmartFolder: () => {},
       renameSmartFolder: () => {},
       setSortField: () => {},
       setSortOrder: () => {},
@@ -87,6 +88,7 @@ describe('context action registries', () => {
     });
     const menuLabels = labels(items);
     expect(menuLabels).toContain('Edit Smart Folder...');
+    expect(menuLabels).toContain('New Child Smart Folder');
     expect(menuLabels).toContain('Sort By');
     expect(menuLabels).toContain('Duplicate');
     expect(menuLabels).toContain('Remove Smart Folder');

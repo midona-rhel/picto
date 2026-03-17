@@ -19,6 +19,7 @@ export interface SmartFolderPredicate {
 export interface SmartFolder {
   id?: string;
   name: string;
+  parent_id?: number | null;
   icon?: string | null;
   color?: string | null;
   predicate: SmartFolderPredicate;
@@ -83,6 +84,7 @@ export function folderToRust(folder: SmartFolder): SmartFolderIpcInput {
   return {
     smart_folder_id: folder.id ? parseInt(folder.id, 10) : 0,
     name: folder.name,
+    parent_id: folder.parent_id ?? null,
     icon: folder.icon ?? null,
     color: folder.color ?? null,
     predicate_json: JSON.stringify(predicateToRust(folder.predicate)),

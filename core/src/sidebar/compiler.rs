@@ -42,10 +42,28 @@ pub(crate) async fn compile_sidebar(db: &Arc<SqliteDatabase>) -> Result<(), Stri
         for smart_folder in smart_folders {
             let node_id = format!("smart:{}", smart_folder.smart_folder_id);
             let count = bitmaps.len(&BitmapKey::SmartFolder(smart_folder.smart_folder_id));
+            let effective_predicate =
+                crate::smart_folders::db::build_effective_predicate_for_smart_folder(
+                    conn,
+                    smart_folder.smart_folder_id,
+                )?;
+            let local_predicate =
+                serde_json::from_str::<serde_json::Value>(&smart_folder.predicate_json)
+                    .unwrap_or_else(|_| serde_json::json!({ "groups": [] }));
+            let has_effective_rules = crate::smart_folders::db::has_local_rules(&effective_predicate);
+            let local_rules = serde_json::from_value::<crate::smart_folders::db::SmartFolderPredicate>(
+                local_predicate.clone(),
+            )
+            .unwrap_or(crate::smart_folders::db::SmartFolderPredicate { groups: Vec::new() });
             nodes.push(SidebarNode {
                 node_id,
                 kind: "smart_folder".into(),
-                parent_id: Some("section:smart_folders".into()),
+                parent_id: Some(
+                    smart_folder
+                        .parent_id
+                        .map(|parent_id| format!("smart:{parent_id}"))
+                        .unwrap_or_else(|| "section:smart_folders".into()),
+                ),
                 name: smart_folder.name.clone(),
                 icon: smart_folder.icon.clone(),
                 color: smart_folder.color.clone(),
@@ -60,12 +78,13 @@ pub(crate) async fn compile_sidebar(db: &Arc<SqliteDatabase>) -> Result<(), Stri
                 meta_json: {
                     let mut meta = serde_json::json!({
                         "smart_folder_id": smart_folder.smart_folder_id,
+                        "parent_id": smart_folder.parent_id,
+                        "predicate": serde_json::to_value(&effective_predicate)
+                            .unwrap_or_else(|_| serde_json::json!({ "groups": [] })),
+                        "local_predicate": local_predicate,
+                        "has_effective_rules": has_effective_rules,
+                        "has_local_rules": crate::smart_folders::db::has_local_rules(&local_rules),
                     });
-                    if let Ok(predicate) =
-                        serde_json::from_str::<serde_json::Value>(&smart_folder.predicate_json)
-                    {
-                        meta["predicate"] = predicate;
-                    }
                     if let Some(ref sort_field) = smart_folder.sort_field {
                         meta["sort_field"] = serde_json::Value::String(sort_field.clone());
                     }

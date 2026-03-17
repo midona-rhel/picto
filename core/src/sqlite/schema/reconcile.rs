@@ -306,6 +306,18 @@ pub fn reconcile_schema(conn: &Connection) -> rusqlite::Result<()> {
              WHERE watch_path IS NOT NULL",
         )?;
     }
+    if table_exists(conn, "smart_folder")? && !has_column(conn, "smart_folder", "parent_id")? {
+        conn.execute_batch(
+            "ALTER TABLE smart_folder ADD COLUMN parent_id INTEGER REFERENCES smart_folder(smart_folder_id) ON DELETE SET NULL",
+        )?;
+        tracing::warn!("Reconciled smart_folder schema: added parent_id");
+    }
+    if table_exists(conn, "smart_folder")? {
+        conn.execute_batch(
+            "CREATE INDEX IF NOT EXISTS idx_smart_folder_parent_order
+             ON smart_folder(parent_id, COALESCE(display_order, smart_folder_id), smart_folder_id)",
+        )?;
+    }
 
     // Data reconciliation: some upgraded builds may have illegal collection rows
     // still linked through entity_file, which corrupts collection tile rendering.

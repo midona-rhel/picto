@@ -275,6 +275,7 @@ CREATE INDEX IF NOT EXISTS idx_fe_rank ON folder_entity(folder_id, position_rank
 CREATE TABLE IF NOT EXISTS smart_folder (
     smart_folder_id INTEGER PRIMARY KEY,
     name            TEXT NOT NULL,
+    parent_id       INTEGER REFERENCES smart_folder(smart_folder_id) ON DELETE SET NULL,
     icon            TEXT,
     color           TEXT,
     predicate_json  TEXT NOT NULL,
@@ -284,6 +285,8 @@ CREATE TABLE IF NOT EXISTS smart_folder (
     created_at      TEXT,
     updated_at      TEXT
 );
+CREATE INDEX IF NOT EXISTS idx_smart_folder_parent_order
+    ON smart_folder(parent_id, COALESCE(display_order, smart_folder_id), smart_folder_id);
 
 -- ═══════════════════════════════════════════════════
 -- SUBSCRIPTION GROUPS

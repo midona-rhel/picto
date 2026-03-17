@@ -4,6 +4,7 @@ import { compactMenu, iconAndColorEntries, invoke, type MenuAction } from './men
 
 export interface SmartFolderMenuOptions {
   editSmartFolder: MenuAction;
+  createChildSmartFolder: MenuAction;
   renameSmartFolder: MenuAction;
   setSortField: (field: string) => void;
   setSortOrder: (order: 'asc' | 'desc') => void;
@@ -40,6 +41,12 @@ export function buildSmartFolderItemMenu(opts: SmartFolderMenuOptions): ContextM
       label: 'Rename',
       icon: <IconCursorText size={14} />,
       onClick: () => invoke(opts.renameSmartFolder),
+    },
+    {
+      type: 'item',
+      label: 'New Child Smart Folder',
+      icon: <IconCopy size={14} />,
+      onClick: () => invoke(opts.createChildSmartFolder),
     },
     { type: 'separator' },
     {

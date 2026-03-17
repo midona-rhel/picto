@@ -77,6 +77,7 @@ function normalizeSmartFolder(r: Record<string, unknown>): SmartFolder {
   return {
     id: String(r.smart_folder_id ?? r.id ?? ''),
     name: String(r.name ?? ''),
+    parent_id: typeof r.parent_id === 'number' ? r.parent_id : r.parent_id == null ? null : Number(r.parent_id),
     icon: (r.icon as string | null) ?? undefined,
     color: (r.color as string | null) ?? undefined,
     predicate: r.predicate_json
@@ -278,8 +279,14 @@ export const api = {
       invokeTyped('delete_smart_folder', { id }) as unknown as Promise<void>,
     count: (predicate: SmartFolderPredicate) =>
       invokeTyped('count_smart_folder', { predicate } as never) as Promise<number>,
-    reorder: (moves: [number, number][]) =>
-      invokeTyped('reorder_smart_folders', { moves }) as unknown as Promise<void>,
+    reorder: (parentId: number | null, moves: [number, number][]) =>
+      invokeTyped('reorder_smart_folders', { parent_id: parentId, moves } as never) as unknown as Promise<void>,
+    move: (smartFolderId: number, newParentId: number | null, siblingOrder: [number, number][]) =>
+      invokeTyped('move_smart_folder', {
+        smart_folder_id: smartFolderId,
+        new_parent_id: newParentId,
+        sibling_order: siblingOrder,
+      } as never) as unknown as Promise<void>,
   },
 
   sidebar: {
