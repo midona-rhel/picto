@@ -198,6 +198,7 @@ async fn get_scoped_snapshot(
     if let Some(ref color_ids) = inputs.color_file_ids {
         ids.retain(|id| color_ids.contains(id));
     }
+    ids = db.filter_visible_entity_ids(&ids).await?;
 
     let total_count = ids.len() as i64;
     db.scope_cache_put(

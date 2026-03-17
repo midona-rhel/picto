@@ -167,6 +167,69 @@ async fn grid_page_slim_collection_scope_returns_only_collection_members() {
 }
 
 #[tokio::test]
+async fn folder_scope_total_count_excludes_hidden_collection_members() {
+    let harness = common::TestHarness::new().await;
+
+    let member_entity_id = harness.insert_test_file("folder_member", "member.png", 1).await;
+
+    let folder = harness
+        .db
+        .create_folder(NewFolder {
+            name: "Scoped".to_string(),
+            parent_id: None,
+            icon: None,
+            color: None,
+            auto_tags: Vec::new(),
+        })
+        .await
+        .unwrap();
+
+    harness
+        .db
+        .add_entities_to_folder_batch(folder.folder_id, &["folder_member".to_string()])
+        .await
+        .unwrap();
+
+    let collection_id = harness.create_collection("Folder Collection").await;
+    let added = harness
+        .add_collection_members_by_hashes(collection_id, &["folder_member"])
+        .await;
+    assert_eq!(added, 1);
+    harness.bitmaps_mark_active(member_entity_id);
+    harness.bitmaps_mark_active(collection_id);
+
+    let query = picto_core::types::GridPageSlimQuery {
+        limit: Some(10),
+        cursor: None,
+        status: None,
+        sort_field: Some("imported_at".to_string()),
+        sort_order: Some("desc".to_string()),
+        smart_folder_predicate: None,
+        search_tags: None,
+        search_excluded_tags: None,
+        tag_match_mode: None,
+        folder_ids: Some(vec![folder.folder_id]),
+        excluded_folder_ids: None,
+        folder_match_mode: None,
+        collection_entity_id: None,
+        rating_min: None,
+        mime_prefixes: None,
+        color_hex: None,
+        color_accuracy: None,
+        search_text: None,
+        random_seed: None,
+    };
+    let result = picto_core::grid::query::get_grid_page_slim(&harness.db, query)
+        .await
+        .expect("folder grid page");
+
+    assert_eq!(result.items.len(), 1);
+    assert_eq!(result.total_count, Some(1));
+    assert!(result.items[0].is_collection);
+    assert_eq!(result.items[0].hash, "folder_member");
+}
+
+#[tokio::test]
 async fn grid_page_slim_tag_filters_support_any_all_and_reject() {
     let harness = common::TestHarness::new().await;
 

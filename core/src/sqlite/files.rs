@@ -198,6 +198,30 @@ pub fn count_files(conn: &Connection, status: Option<i64>) -> rusqlite::Result<i
     }
 }
 
+pub fn filter_visible_entity_ids(
+    conn: &Connection,
+    entity_ids: &[i64],
+) -> rusqlite::Result<Vec<i64>> {
+    if entity_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let placeholders = std::iter::repeat_n("?", entity_ids.len())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let sql = format!(
+        "SELECT me.entity_id
+         FROM media_entity me
+         WHERE me.entity_id IN ({placeholders})
+           AND (me.kind = 'collection' OR me.parent_collection_id IS NULL)"
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map(rusqlite::params_from_iter(entity_ids.iter()), |row| {
+        row.get::<_, i64>(0)
+    })?;
+    rows.collect()
+}
+
 pub fn update_status(conn: &Connection, file_id: i64, status: i64) -> rusqlite::Result<()> {
     conn.execute(
         "UPDATE file SET status = ?1 WHERE file_id = ?2",
@@ -1254,6 +1278,15 @@ impl SqliteDatabase {
             self.emit_read_model_event(ReadModelEvent::StatusBatchChanged);
         }
         Ok(())
+    }
+
+    pub async fn filter_visible_entity_ids(
+        &self,
+        entity_ids: &[i64],
+    ) -> Result<Vec<i64>, String> {
+        let ids = entity_ids.to_vec();
+        self.with_read_conn(move |conn| filter_visible_entity_ids(conn, &ids))
+            .await
     }
 
     /// Batch update status for many files at once (single transaction + bulk bitmap swap).
