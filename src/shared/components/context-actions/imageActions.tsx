@@ -39,6 +39,7 @@ import { FolderPickerService } from '../../services/folderPickerService';
 import { registerUndoAction } from '../../controllers/undoRedoController';
 import { notifyError, notifySuccess } from '../../lib/notify';
 import { useSettingsStore } from '../../../state/settingsStore';
+import { useNavigationImageAdjustmentsStore } from '../../../state/navigationImageAdjustmentsStore';
 import type { MediaItem } from '../../../features/grid/shared';
 import { api, copyFileToClipboard, copyImageToClipboard, reverseImageSearch } from '#desktop/api';
 import { bustThumbnailCache } from '../../lib/mediaUrl';
@@ -156,6 +157,21 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
   const activeSortField = smartFolderPredicate ? (smartFolderSortField ?? 'imported_at') : sortField;
   const activeSortOrder = smartFolderPredicate ? (smartFolderSortOrder ?? 'desc') : sortOrder;
   const items: ContextMenuEntry[] = [];
+  const imageLookup = imagesRef.current.length > 0 ? imagesRef.current : state.images;
+  const grayscaleTargetHashes = (!effectiveVirtual
+    ? (effectiveSize === 1 && singleHash
+      ? [singleHash]
+      : [...effectiveSelectedHashes])
+    : []
+  ).filter((hash) => {
+    const image = imageLookup.find((entry) => entry.hash === hash);
+    return !!image && image.is_collection !== true && !image.mime.startsWith('video/');
+  });
+  const grayscaleChecked = grayscaleTargetHashes.length > 0
+    && grayscaleTargetHashes.every((hash) => {
+      const adjustment = useNavigationImageAdjustmentsStore.getState().byHash[hash];
+      return adjustment?.grayscale === true;
+    });
 
   if (singleHash) {
     items.push({
@@ -613,6 +629,17 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
     icon: <IconAdjustments size={16} />,
     children: [{ type: 'custom', key: 'display-panel', render: () => <DisplayOptionsPanel /> }],
   });
+  if (grayscaleTargetHashes.length > 0) {
+    items.push({
+      type: 'check',
+      label: 'Show in Grayscale',
+      icon: <IconAdjustments size={16} />,
+      checked: grayscaleChecked,
+      onClick: () => {
+        useNavigationImageAdjustmentsStore.getState().toggleGrayscale(grayscaleTargetHashes);
+      },
+    });
+  }
 
   items.push({ type: 'separator' });
   items.push({

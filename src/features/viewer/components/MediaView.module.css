@@ -11,6 +11,31 @@
   flex: 1;
 }
 
+.adjustBar {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  z-index: var(--z-toolbar);
+  display: flex;
+  gap: 6px;
+  padding: 6px;
+  border: 1px solid var(--color-border-secondary);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--color-theme) 88%, transparent);
+  backdrop-filter: blur(10px);
+}
+
+.adjustBtn {
+  composes: icBtn from '../../../shared/styles/iconButton.module.css';
+  width: 30px;
+  height: 30px;
+  color: var(--color-text-primary);
+}
+
+.adjustBtnActive {
+  background: var(--ig-bg-hover);
+}
+
 .inboxBar {
   composes: inboxBar from '../../../shared/styles/inboxBar.module.css';
 }

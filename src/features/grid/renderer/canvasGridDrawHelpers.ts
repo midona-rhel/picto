@@ -20,7 +20,9 @@ import {
 import {
   THUMBNAIL_PIPELINE_SOURCE_EDGE,
   THUMBNAIL_PIPELINE_FULL_QUALITY_THRESHOLD,
+  THUMBNAIL_PIPELINE_REVEAL_MS,
 } from '../../../shared/lib/canvas/thumbnailPipelinePolicy';
+import { getNavigationImageAdjustment } from '../../../state/navigationImageAdjustmentsStore';
 
 const FULL_QUALITY_THRESHOLD_PX = Math.round(
   THUMBNAIL_PIPELINE_SOURCE_EDGE * THUMBNAIL_PIPELINE_FULL_QUALITY_THRESHOLD,
@@ -163,6 +165,10 @@ export function drawCanvasBaseLayer({
     }
 
     ctx.save();
+    const adjustment = getNavigationImageAdjustment(image.hash);
+    if (adjustment.grayscale) {
+      ctx.filter = 'grayscale(1)';
+    }
     ctx.beginPath();
     ctx.roundRect(pos.x, drawY, pos.w, imageHeight, br);
     ctx.clip();
@@ -170,13 +176,25 @@ export function drawCanvasBaseLayer({
     const isVideo = image.mime.startsWith('video/');
     const drawThumb = (effectiveFit === 'contain' || isVideo) ? drawImageContain : drawImageCover;
     if (entry?.thumb) {
-      const progress = entry.animateIn
-        ? Math.min(1, Math.max(0, (now - entry.revealStartedAt) / 200))
-        : 1;
-      if (progress < 1) {
+      const revealElapsedMs = entry.animateIn
+        ? Math.max(0, now - entry.revealStartedAt)
+        : THUMBNAIL_PIPELINE_REVEAL_MS * 2;
+      const imageProgress = Math.min(1, revealElapsedMs / THUMBNAIL_PIPELINE_REVEAL_MS);
+      const placeholderFadeElapsedMs = Math.max(0, revealElapsedMs - THUMBNAIL_PIPELINE_REVEAL_MS);
+      const placeholderAlpha = imageProgress < 1
+        ? 1
+        : Math.max(0, 1 - (placeholderFadeElapsedMs / THUMBNAIL_PIPELINE_REVEAL_MS));
+
+      if (imageProgress < 1 || placeholderAlpha > 0) {
         hasActiveReveal = true;
-        fillPlaceholder(ctx, image, theme, effectiveFit, pos.x, drawY, pos.w, imageHeight, 1 - progress);
-        ctx.globalAlpha = progress;
+      }
+
+      if (placeholderAlpha > 0) {
+        fillPlaceholder(ctx, image, theme, effectiveFit, pos.x, drawY, pos.w, imageHeight, placeholderAlpha);
+      }
+
+      if (imageProgress < 1) {
+        ctx.globalAlpha = imageProgress;
         drawThumb(ctx, entry.thumb, pos.x, drawY, pos.w, imageHeight);
         ctx.globalAlpha = 1;
       } else {

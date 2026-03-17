@@ -1,10 +1,12 @@
-import { useCallback } from 'react';
+import { useCallback, useEffect } from 'react';
 import { buildCanvasVisibilityPlan } from '../layout/canvasVisibilityPlan';
 import { drawCanvasBaseLayer } from './canvasGridDrawHelpers';
 import type { GridViewMode } from '../runtime';
 import type { MasonryImageItem } from '../shared';
 import type { LayoutItem } from '../layoutMath';
 import type { ThumbnailPipeline } from '../../../shared/lib/canvas/thumbnailPipeline';
+import type { CanvasScrollDirection, CanvasScrollPhase } from '../../../shared/lib/canvas/scrollState';
+import { useNavigationImageAdjustmentsStore } from '../../../state/navigationImageAdjustmentsStore';
 
 interface ThemeState {
   primaryColor: string;
@@ -48,6 +50,9 @@ export function useCanvasBaseDraw(args: {
   viewportHeightRef: { current: number };
   scrollTopRef: { current: number };
   isScrollingRef: { current: boolean };
+  scrollPhaseRef: { current: CanvasScrollPhase };
+  scrollDirectionRef: { current: CanvasScrollDirection };
+  scrollVelocityRef: { current: number };
   viewModeRef: { current: GridViewMode };
   layoutRef: { current: { positions: LayoutItem[] } };
   bucketIndexRef: { current: Map<number, number[]> | null };
@@ -73,6 +78,9 @@ export function useCanvasBaseDraw(args: {
     viewportHeightRef,
     scrollTopRef,
     isScrollingRef,
+    scrollPhaseRef,
+    scrollDirectionRef,
+    scrollVelocityRef,
     viewModeRef,
     layoutRef,
     bucketIndexRef,
@@ -88,6 +96,16 @@ export function useCanvasBaseDraw(args: {
     thumbnailFitMode,
     markDirty,
   } = args;
+
+  useEffect(() => {
+    return useNavigationImageAdjustmentsStore.subscribe(
+      (state, prevState) => {
+        if (state.byHash !== prevState.byHash) {
+          markDirty('base');
+        }
+      },
+    );
+  }, [markDirty]);
 
   return useCallback(() => {
     if (frozenRef.current) return;
@@ -122,13 +140,18 @@ export function useCanvasBaseDraw(args: {
 
     const atlas = atlasRef.current;
     if (!atlas) return;
-    atlas.setScrolling(isScrollingRef.current);
+    atlas.setScrollState({
+      phase: scrollPhaseRef.current,
+      direction: scrollDirectionRef.current,
+      velocityPxPerSec: scrollVelocityRef.current,
+    });
 
     const positions = layoutRef.current.positions;
     const imgs = imagesRef.current;
     const scrollTop = scrollTopRef.current;
     const vh = viewportHeightRef.current;
-    const isScrolling = isScrollingRef.current;
+    const scrollPhase = scrollPhaseRef.current;
+    const scrollDirection = scrollDirectionRef.current;
 
     const dpr = window.devicePixelRatio || 1;
     const [cssW, cssH] = ensureCanvasSize(canvas, dpr);
@@ -145,7 +168,8 @@ export function useCanvasBaseDraw(args: {
       positions,
       scrollTop,
       viewportHeight: vh,
-      isScrolling,
+      scrollPhase,
+      scrollDirection,
       queueDepth: atlas.getStats().queueDepth,
       bucketIndex: bucketIndexRef.current,
     });
@@ -204,6 +228,9 @@ export function useCanvasBaseDraw(args: {
     getScrollMetrics,
     imagesRef,
     isScrollingRef,
+    scrollDirectionRef,
+    scrollPhaseRef,
+    scrollVelocityRef,
     lastVisibleRef,
     layoutRef,
     bucketIndexRef,

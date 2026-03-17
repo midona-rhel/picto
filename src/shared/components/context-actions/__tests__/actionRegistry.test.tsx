@@ -129,10 +129,10 @@ describe('context action registries', () => {
         selectedHashes: new Set<string>(),
         virtualAllSelection: null,
         virtualAllSelectedCount: null,
-        images: [],
+        images: [{ hash: 'abc', name: 'x', mime: 'image/jpeg' }],
       } as never,
-      stateRef: { current: { selectedHashes: new Set<string>(), virtualAllSelection: null, images: [] } } as never,
-      imagesRef: { current: [] } as never,
+      stateRef: { current: { selectedHashes: new Set<string>(), virtualAllSelection: null, images: [{ hash: 'abc', name: 'x', mime: 'image/jpeg' }] } } as never,
+      imagesRef: { current: [{ hash: 'abc', name: 'x', mime: 'image/jpeg' }] } as never,
       dispatch,
       viewMode: 'waterfall',
       sortField: 'imported_at',
@@ -214,6 +214,7 @@ describe('context action registries', () => {
     const singleLabels = labels(itemsSingle);
     const collectionLabels = labels(itemsCollection);
     expect(singleLabels).toContain('Open');
+    expect(singleLabels).toContain('Show in Grayscale');
     expect(singleLabels).toContain('Open With Default App');
     expect(collectionLabels).toContain('Edit Collection');
   });

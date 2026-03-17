@@ -1,10 +1,14 @@
 import { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo } from 'react';
 import { api } from '#desktop/api';
-import { IconCheck, IconX } from '@tabler/icons-react';
+import { IconAdjustments, IconCheck, IconFlipHorizontal, IconRotateClockwise, IconX } from '@tabler/icons-react';
 import { KbdTooltip } from '../../../shared/components/KbdTooltip';
 import { MediaItem, isVideoMime, toMasonryItem } from '../../grid/shared';
 import { VideoPlayer } from './VideoPlayer';
 import { StripView } from './StripView';
+import {
+  DEFAULT_NAVIGATION_IMAGE_ADJUSTMENT,
+  useNavigationImageAdjustmentsStore,
+} from '../../../state/navigationImageAdjustmentsStore';
 import { useSettingsStore } from '../../../state/settingsStore';
 import { mediaFileUrl, mediaThumbnailUrl } from '../../../shared/lib/mediaUrl';
 import { useImageZoom, type ImageSize, type ZoomState } from '../hooks/useImageZoom';
@@ -157,8 +161,20 @@ export function MediaView({ images, currentIndex, onNavigate, onClose, onStateCh
   const imageSize: ImageSize | null = currentImage?.width && currentImage?.height
     ? { width: currentImage.width, height: currentImage.height }
     : null;
+  const currentHash = currentImage?.hash ?? null;
+  const currentAdjustment = useNavigationImageAdjustmentsStore(
+    useCallback(
+      (store) => (currentHash ? store.byHash[currentHash] : undefined) ?? DEFAULT_NAVIGATION_IMAGE_ADJUSTMENT,
+      [currentHash],
+    ),
+  );
+  const toggleNavigationGrayscale = useNavigationImageAdjustmentsStore((store) => store.toggleGrayscale);
+  const rotateNavigationImage = useNavigationImageAdjustmentsStore((store) => store.rotateClockwise);
+  const toggleNavigationMirror = useNavigationImageAdjustmentsStore((store) => store.toggleMirrored);
 
   const containerRef = useRef<HTMLDivElement>(null);
+  const imgFrameRef = useRef<HTMLDivElement>(null);
+  const thumbFrameRef = useRef<HTMLDivElement>(null);
   const imgRef = useRef<HTMLImageElement>(null);
   const thumbImgRef = useRef<HTMLImageElement>(null);
   const {
@@ -176,7 +192,7 @@ export function MediaView({ images, currentIndex, onNavigate, onClose, onStateCh
     containerSize,
     handlers,
   } = useImageZoom(containerRef, imageSize, {
-    transformTargets: [imgRef, thumbImgRef],
+    transformTargets: [imgFrameRef, thumbFrameRef],
   });
 
   const navigatorRef = useRef<HTMLDivElement>(null);
@@ -387,6 +403,21 @@ export function MediaView({ images, currentIndex, onNavigate, onClose, onStateCh
     // (or be out of bounds if it was the last). We don't change index here — the parent handles removal.
   }, []);
 
+  const handleToggleCurrentGrayscale = useCallback(() => {
+    if (!currentHash || isVideo) return;
+    toggleNavigationGrayscale([currentHash]);
+  }, [currentHash, isVideo, toggleNavigationGrayscale]);
+
+  const handleRotateCurrentImage = useCallback(() => {
+    if (!currentHash || isVideo) return;
+    rotateNavigationImage(currentHash);
+  }, [currentHash, isVideo, rotateNavigationImage]);
+
+  const handleToggleCurrentMirror = useCallback(() => {
+    if (!currentHash || isVideo) return;
+    toggleNavigationMirror(currentHash);
+  }, [currentHash, isVideo, toggleNavigationMirror]);
+
   // Keyboard — mount once, read everything from refs to avoid stale closures.
   // All bindings go through the central shortcuts registry so they appear in
   // Settings → Shortcuts and can be customised by the user.
@@ -529,6 +560,10 @@ export function MediaView({ images, currentIndex, onNavigate, onClose, onStateCh
   if (!currentImage) return null;
 
   const thumbUrl = mediaThumbnailUrl(currentImage.hash);
+  const mediaElementTransform = [
+    currentAdjustment.rotation !== 0 ? `rotate(${currentAdjustment.rotation}deg)` : '',
+    currentAdjustment.mirrored ? 'scaleX(-1)' : '',
+  ].filter(Boolean).join(' ') || undefined;
 
   // Keep strip visible during collection→image transition until thumbnail loads.
   // prevStripRef.current covers the first render (before layoutEffect sets holdingStrip).
@@ -573,33 +608,43 @@ export function MediaView({ images, currentIndex, onNavigate, onClose, onStateCh
         >
           {!isVideo ? (
             <>
-              <img
-                ref={thumbImgRef}
-                src={displayThumbUrl || thumbUrl}
-                alt=""
-                draggable={false}
-                onLoad={handleThumbLoad}
-                style={{
-                  left: '50%',
-                  top: '50%',
-                  width: imageSize ? imageSize.width : undefined,
-                  height: imageSize ? imageSize.height : undefined,
-                  opacity: thumbLoaded ? 1 : 0,
-                }}
-              />
-              <img
-                ref={imgRef}
-                src={allowFullQuality ? decodedSrc : ''}
-                alt=""
-                decoding="async"
-                onLoad={handleFullLoad}
-                style={{
-                  left: '50%',
-                  top: '50%',
-                  opacity: fullImageVisible ? 1 : 0,
-                  transition: 'opacity 130ms ease',
-                }}
-              />
+              <div ref={thumbFrameRef} style={{ position: 'absolute', left: '50%', top: '50%' }}>
+                <img
+                  ref={thumbImgRef}
+                  src={displayThumbUrl || thumbUrl}
+                  alt=""
+                  draggable={false}
+                  onLoad={handleThumbLoad}
+                  style={{
+                    left: 0,
+                    top: 0,
+                    width: imageSize ? imageSize.width : undefined,
+                    height: imageSize ? imageSize.height : undefined,
+                    opacity: thumbLoaded ? 1 : 0,
+                    filter: currentAdjustment.grayscale ? 'grayscale(1)' : undefined,
+                    transform: mediaElementTransform,
+                    transformOrigin: 'center center',
+                  }}
+                />
+              </div>
+              <div ref={imgFrameRef} style={{ position: 'absolute', left: '50%', top: '50%' }}>
+                <img
+                  ref={imgRef}
+                  src={allowFullQuality ? decodedSrc : ''}
+                  alt=""
+                  decoding="async"
+                  onLoad={handleFullLoad}
+                  style={{
+                    left: 0,
+                    top: 0,
+                    opacity: fullImageVisible ? 1 : 0,
+                    transition: 'opacity 130ms ease',
+                    filter: currentAdjustment.grayscale ? 'grayscale(1)' : undefined,
+                    transform: mediaElementTransform,
+                    transformOrigin: 'center center',
+                  }}
+                />
+              </div>
             </>
           ) : (
             <VideoPlayer
@@ -635,6 +680,31 @@ export function MediaView({ images, currentIndex, onNavigate, onClose, onStateCh
               <div ref={navViewportRef} className={shared.navigatorViewport} />
             </div>
           )}
+        </div>
+      )}
+      {!stripMode && !isVideo && currentHash && (
+        <div className={styles.adjustBar}>
+          <button
+            className={`${styles.adjustBtn} ${currentAdjustment.grayscale ? styles.adjustBtnActive : ''}`}
+            onClick={handleToggleCurrentGrayscale}
+            title={currentAdjustment.grayscale ? 'Show in grayscale (on)' : 'Show in grayscale'}
+          >
+            <IconAdjustments size={16} />
+          </button>
+          <button
+            className={`${styles.adjustBtn} ${currentAdjustment.rotation !== 0 ? styles.adjustBtnActive : ''}`}
+            onClick={handleRotateCurrentImage}
+            title={`Rotate (${currentAdjustment.rotation}°)`}
+          >
+            <IconRotateClockwise size={16} />
+          </button>
+          <button
+            className={`${styles.adjustBtn} ${currentAdjustment.mirrored ? styles.adjustBtnActive : ''}`}
+            onClick={handleToggleCurrentMirror}
+            title={currentAdjustment.mirrored ? 'Mirror image (on)' : 'Mirror image'}
+          >
+            <IconFlipHorizontal size={16} />
+          </button>
         </div>
       )}
       {/* Inbox accept/reject buttons */}
