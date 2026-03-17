@@ -277,6 +277,35 @@ pub fn reconcile_schema(conn: &Connection) -> rusqlite::Result<()> {
         )?;
         tracing::warn!("Reconciled folder schema: added auto_tags");
     }
+    if table_exists(conn, "folder")? && !has_column(conn, "folder", "watch_path")? {
+        conn.execute_batch("ALTER TABLE folder ADD COLUMN watch_path TEXT")?;
+        tracing::warn!("Reconciled folder schema: added watch_path");
+    }
+    if table_exists(conn, "folder")? && !has_column(conn, "folder", "watch_enabled")? {
+        conn.execute_batch(
+            "ALTER TABLE folder ADD COLUMN watch_enabled INTEGER NOT NULL DEFAULT 0",
+        )?;
+        tracing::warn!("Reconciled folder schema: added watch_enabled");
+    }
+    if table_exists(conn, "folder")? && !has_column(conn, "folder", "watch_subfolders")? {
+        conn.execute_batch(
+            "ALTER TABLE folder ADD COLUMN watch_subfolders INTEGER NOT NULL DEFAULT 0",
+        )?;
+        tracing::warn!("Reconciled folder schema: added watch_subfolders");
+    }
+    if table_exists(conn, "folder")? && !has_column(conn, "folder", "watch_import_status_mode")? {
+        conn.execute_batch(
+            "ALTER TABLE folder ADD COLUMN watch_import_status_mode TEXT NOT NULL DEFAULT 'inherit'",
+        )?;
+        tracing::warn!("Reconciled folder schema: added watch_import_status_mode");
+    }
+    if table_exists(conn, "folder")? {
+        conn.execute_batch(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_folder_watch_path
+             ON folder(watch_path)
+             WHERE watch_path IS NOT NULL",
+        )?;
+    }
 
     // Data reconciliation: some upgraded builds may have illegal collection rows
     // still linked through entity_file, which corrupts collection tile rendering.

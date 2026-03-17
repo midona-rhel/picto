@@ -11,6 +11,7 @@ use std::sync::{Arc, OnceLock, RwLock};
 use tokio_util::sync::CancellationToken;
 
 use crate::blob_store::BlobStore;
+use crate::folders::watch::FolderWatchCommand;
 use crate::rate_limiter::RateLimiter;
 use crate::settings::store::SettingsStore;
 use crate::sqlite::SqliteDatabase;
@@ -26,6 +27,7 @@ pub struct AppState {
     pub sub_terminal_statuses: SubTerminalStatuses,
     pub library_root: PathBuf,
     pub cancel: CancellationToken,
+    pub folder_watch_commands: tokio::sync::mpsc::UnboundedSender<FolderWatchCommand>,
     /// Join handles for long-running background workers (bitmap flush, scheduler, etc.)
     /// Used by shutdown to deterministically await completion instead of sleeping.
     pub worker_handles: tokio::sync::Mutex<Vec<(&'static str, tokio::task::JoinHandle<()>)>>,
@@ -79,6 +81,7 @@ pub async fn open_library(library_root: PathBuf) -> Result<Arc<AppState>, String
         Arc::new(tokio::sync::Mutex::new(HashMap::new()));
 
     let cancel = CancellationToken::new();
+    let (folder_watch_commands, folder_watch_rx) = crate::folders::watch::channel();
 
     let worker_handles = crate::workers::start_workers(
         &library_db,
@@ -86,6 +89,7 @@ pub async fn open_library(library_root: PathBuf) -> Result<Arc<AppState>, String
         &rate_limiter,
         &running_subscriptions,
         &sub_terminal_statuses,
+        folder_watch_rx,
         &cancel,
     )
     .await;
@@ -99,6 +103,7 @@ pub async fn open_library(library_root: PathBuf) -> Result<Arc<AppState>, String
         sub_terminal_statuses,
         library_root,
         cancel,
+        folder_watch_commands,
         worker_handles: tokio::sync::Mutex::new(worker_handles),
     });
 

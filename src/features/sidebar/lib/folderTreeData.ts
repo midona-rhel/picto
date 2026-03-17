@@ -43,6 +43,25 @@ export function getFolderAutoTags(node: SidebarNodeDto): string[] {
   return Array.isArray(raw) ? raw.filter((value): value is string => typeof value === 'string') : [];
 }
 
+export interface FolderWatchMeta {
+  watchPath: string | null;
+  watchEnabled: boolean;
+  watchSubfolders: boolean;
+  watchImportStatusMode: 'inherit' | 'inbox' | 'active';
+}
+
+export function getFolderWatchMeta(node: SidebarNodeDto): FolderWatchMeta {
+  const meta = node.meta as Record<string, unknown> | null | undefined;
+  const mode = meta?.watch_import_status_mode;
+  return {
+    watchPath: typeof meta?.watch_path === 'string' ? meta.watch_path : null,
+    watchEnabled: meta?.watch_enabled === true,
+    watchSubfolders: meta?.watch_subfolders === true,
+    watchImportStatusMode:
+      mode === 'inbox' || mode === 'active' ? mode : 'inherit',
+  };
+}
+
 /** Collect all descendant node IDs (to prevent dropping a folder into its own subtree) */
 export function collectDescendantIds(node: TreeNode): Set<string> {
   const ids = new Set<string>();

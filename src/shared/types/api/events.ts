@@ -141,6 +141,7 @@ export interface AppSettings {
   subInboxPauseLimit: number;
   subRateLimitSecs: number;
   subBatchSize: number;
+  watchFolderDefaultStatus: 'inbox' | 'active';
   [key: string]: unknown;
 }
 

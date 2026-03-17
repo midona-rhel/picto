@@ -15,6 +15,7 @@ import { useViewerHost } from '#features/viewer/hooks/useViewerHost';
 import { TagPickerPortal } from '../shared/services/TagPickerPortal';
 import { TagSelectPortal } from '#features/tags/components';
 import { FolderPickerPortal } from '../shared/services/FolderPickerPortal';
+import { FolderWatchDialog } from '#features/folders/components/FolderWatchDialog';
 import { KbdTooltip } from '../shared/components/KbdTooltip';
 import { useScopedGridPreferences } from '../shared/hooks/useScopedGridPreferences';
 import { ScopedDisplayProvider } from '../shared/contexts/ScopedDisplayContext';
@@ -524,6 +525,7 @@ function App() {
       <TagPickerPortal />
       <TagSelectPortal />
       <FolderPickerPortal />
+      <FolderWatchDialog />
       <DragGhost />
       <CreateSubscriptionGroupModal
         opened={grid.createSubscriptionGroupModalOpen}

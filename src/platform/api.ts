@@ -221,6 +221,17 @@ export const api = {
       invokeTyped('create_folder', params as never) as Promise<Folder>,
     update: (params: { folder_id: number; name?: string; icon?: string; color?: string; auto_tags?: string[] }) =>
       invokeTyped('update_folder', params as never) as unknown as Promise<void>,
+    setWatchConfig: (params: {
+      folder_id: number;
+      watch_path: string;
+      watch_enabled?: boolean;
+      watch_subfolders: boolean;
+      watch_import_status_mode: 'inherit' | 'inbox' | 'active';
+      import_existing_now: boolean;
+    }) =>
+      invokeTyped('set_folder_watch_config', params as never) as unknown as Promise<void>,
+    clearWatchConfig: (folderId: number) =>
+      invokeTyped('clear_folder_watch_config', { folder_id: folderId } as never) as unknown as Promise<void>,
     delete: (folderId: number) =>
       invokeTyped('delete_folder', { folder_id: folderId }) as unknown as Promise<void>,
     updateParent: (folderId: number, newParentId?: number | null) =>

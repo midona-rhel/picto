@@ -249,10 +249,17 @@ CREATE TABLE IF NOT EXISTS folder (
     icon       TEXT,
     color      TEXT,
     auto_tags  TEXT NOT NULL DEFAULT '[]',
+    watch_path TEXT,
+    watch_enabled INTEGER NOT NULL DEFAULT 0,
+    watch_subfolders INTEGER NOT NULL DEFAULT 0,
+    watch_import_status_mode TEXT NOT NULL DEFAULT 'inherit',
     sort_order INTEGER,
     created_at TEXT,
     updated_at TEXT
 );
+CREATE UNIQUE INDEX IF NOT EXISTS idx_folder_watch_path
+    ON folder(watch_path)
+    WHERE watch_path IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS folder_entity (
     folder_id     INTEGER NOT NULL REFERENCES folder(folder_id) ON DELETE CASCADE,

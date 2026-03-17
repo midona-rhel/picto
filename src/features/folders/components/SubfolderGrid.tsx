@@ -1,9 +1,11 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
-import { IconFolder, IconChevronRight } from '@tabler/icons-react';
+import { IconAntennaBars5, IconFolder, IconChevronRight } from '@tabler/icons-react';
 import { mediaThumbnailUrl } from '../../../shared/lib/mediaUrl';
 import { api } from '#desktop/api';
 import { notifyError, notifySuccess } from '../../../shared/lib/notify';
 import { useDomainStore } from '../../../state/domainStore';
+import { useImportActionStore } from '../../../state/importActionStore';
+import { useFolderWatchActionStore } from '../../../state/folderWatchActionStore';
 import type { SidebarNodeDto } from '../../../shared/types/sidebar';
 import { ContextMenu, ContextMenuEntry, useContextMenu } from '../../../shared/components/ContextMenu';
 import {
@@ -31,6 +33,7 @@ interface ChildFolder {
   icon: string | null;
   color: string | null;
   autoTags: string[];
+  watchPath: string | null;
   count: number;
   sortOrder: number;
 }
@@ -58,6 +61,9 @@ function deriveChildFolders(folderNodes: SidebarNodeDto[], parentFolderId: numbe
       icon: n.icon ?? null,
       color: n.color ?? null,
       autoTags: extractFolderAutoTags(n),
+      watchPath: typeof (n.meta as Record<string, unknown> | null | undefined)?.watch_path === 'string'
+        ? (n.meta as Record<string, unknown>).watch_path as string
+        : null,
       count: n.count ?? 0,
       sortOrder: n.sort_order ?? 0,
     }))
@@ -394,6 +400,12 @@ export function SubfolderGrid({ folderId, targetSize, totalImageCount, onOpenFol
         openFolder: () => onOpenFolder(folder.folderId, folder.name),
         renameFolder: () => startRenameFolder(folder),
         setAutoTags: () => openAutoTagsEditor(folder),
+        importFolderHere: () => useImportActionStore.getState().requestImportFolderDialog(folder.folderId),
+        watchActions: {
+          attachOrEdit: () => useFolderWatchActionStore.getState().requestOpen(folder.folderId),
+          remove: folder.watchPath ? () => api.folders.clearWatchConfig(folder.folderId) : undefined,
+          attached: !!folder.watchPath,
+        },
         iconAndColor: {
           iconValue: folder.icon,
           colorValue: folder.color,
@@ -517,7 +529,14 @@ export function SubfolderGrid({ folderId, targetSize, totalImageCount, onOpenFol
                   {folder.autoTags.length > 0
                     ? ` · ${folder.autoTags.length} auto-tag${folder.autoTags.length === 1 ? '' : 's'}`
                     : ''}
+                  {folder.watchPath ? ' · watched' : ''}
                 </div>
+                {folder.watchPath ? (
+                  <div className={styles.metas} title={folder.watchPath}>
+                    <IconAntennaBars5 size={11} style={{ marginRight: 4, verticalAlign: 'text-bottom' }} />
+                    {folder.watchPath}
+                  </div>
+                ) : null}
               </div>
             );
           })}

@@ -230,6 +230,10 @@ export interface Folder {
   icon: string | null;
   color: string | null;
   auto_tags: string[];
+  watch_path: string | null;
+  watch_enabled: boolean;
+  watch_subfolders: boolean;
+  watch_import_status_mode: 'inherit' | 'inbox' | 'active';
   sort_order: number | null;
   created_at: string | null;
   updated_at: string | null;

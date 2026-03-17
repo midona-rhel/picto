@@ -34,6 +34,10 @@ fn build_folder_sidebar_node(
             serde_json::json!({
                 "folder_id": folder.folder_id,
                 "auto_tags": folder.auto_tags,
+                "watch_path": folder.watch_path,
+                "watch_enabled": folder.watch_enabled,
+                "watch_subfolders": folder.watch_subfolders,
+                "watch_import_status_mode": folder.watch_import_status_mode,
             })
             .to_string(),
         ),
@@ -138,6 +142,68 @@ impl FolderController {
         // Keep sidebar projection in sync for immediate name/icon/color refresh.
         upsert_folder_sidebar_node(db, updated).await?;
         Ok(())
+    }
+
+    pub async fn set_folder_watch_config(
+        db: &SqliteDatabase,
+        folder_id: i64,
+        watch_path: String,
+        watch_enabled: bool,
+        watch_subfolders: bool,
+        watch_import_status_mode: String,
+    ) -> Result<(), String> {
+        let existing = db
+            .get_folder_by_watch_path(watch_path.clone())
+            .await?;
+        if let Some(existing) = existing {
+            if existing.folder_id != folder_id {
+                return Err(format!(
+                    "That disk folder is already attached to \"{}\"",
+                    existing.name
+                ));
+            }
+        }
+        db.update_folder_watch_config(
+            folder_id,
+            watch_path,
+            watch_enabled,
+            watch_subfolders,
+            watch_import_status_mode,
+        )
+        .await?;
+        let updated = db
+            .with_read_conn(move |conn| crate::folders::db::get_folder(conn, folder_id))
+            .await?
+            .ok_or_else(|| format!("Folder {} not found after watch update", folder_id))?;
+        upsert_folder_sidebar_node(db, updated).await?;
+        Ok(())
+    }
+
+    pub async fn clear_folder_watch_config(
+        db: &SqliteDatabase,
+        folder_id: i64,
+    ) -> Result<(), String> {
+        db.clear_folder_watch_config(folder_id).await?;
+        let updated = db
+            .with_read_conn(move |conn| crate::folders::db::get_folder(conn, folder_id))
+            .await?
+            .ok_or_else(|| format!("Folder {} not found after watch clear", folder_id))?;
+        upsert_folder_sidebar_node(db, updated).await?;
+        Ok(())
+    }
+
+    pub async fn ensure_child_folder(
+        db: &SqliteDatabase,
+        parent_id: i64,
+        name: &str,
+    ) -> Result<crate::folders::db::Folder, String> {
+        if let Some(existing) = db
+            .find_child_folder_by_name(Some(parent_id), name.to_string())
+            .await?
+        {
+            return Ok(existing);
+        }
+        Self::create_folder(db, name.to_string(), Some(parent_id), None, None).await
     }
 
     pub async fn delete_folder(db: &SqliteDatabase, folder_id: i64) -> Result<(), String> {

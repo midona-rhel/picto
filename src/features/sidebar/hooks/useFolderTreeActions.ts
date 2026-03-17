@@ -4,6 +4,9 @@ import { registerUndoAction } from '../../../shared/controllers/undoRedoControll
 import { notifyWarning } from '../../../shared/lib/notify';
 import { useInlineRename } from '../../../shared/hooks/useInlineRename';
 import { imageDrag } from '../../../shared/lib/imageDrag';
+import { useImportActionStore } from '../../../state/importActionStore';
+import { useFolderWatchActionStore } from '../../../state/folderWatchActionStore';
+import { useNavigationStore } from '../../../state/navigationStore';
 import type { SidebarNodeDto } from '../../../shared/types/sidebar';
 import { TagSelectService } from '../../tags/components/tagSelectService';
 import { type TreeNode, parseFolderId, getFolderAutoTags } from '../lib/folderTreeData';
@@ -323,6 +326,19 @@ export function useFolderTreeActions({
     });
   }, [handleFilesDropOnFolder]);
 
+  const handleImportFolderHere = useCallback((folderId: number, folderName: string) => {
+    useNavigationStore.getState().navigateToFolder({ folder_id: folderId, name: folderName });
+    useImportActionStore.getState().requestImportFolderDialog(folderId);
+  }, []);
+
+  const handleOpenFolderWatchDialog = useCallback((folderId: number) => {
+    useFolderWatchActionStore.getState().requestOpen(folderId);
+  }, []);
+
+  const handleClearFolderWatchConfig = useCallback(async (folderId: number) => {
+    await api.folders.clearWatchConfig(folderId);
+  }, []);
+
   return {
     // Rename state
     renamingId,
@@ -344,6 +360,9 @@ export function useFolderTreeActions({
     applyColorToFolders,
     openFolderAutoTagsEditor,
     handleFilesDropOnFolder,
+    handleImportFolderHere,
+    handleOpenFolderWatchDialog,
+    handleClearFolderWatchConfig,
     // Re-export for context menu
     getFolderAutoTags,
   };

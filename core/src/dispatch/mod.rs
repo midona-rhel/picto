@@ -113,6 +113,8 @@ pub async fn dispatch(command: &str, args_json: &str) -> Result<String, String> 
         "move_folder" => call!(typed::folders::move_folder, &state, args),
         "create_folder" => call!(typed::folders::create_folder, &state, args),
         "update_folder" => call!(typed::folders::update_folder, &state, args),
+        "set_folder_watch_config" => call!(typed::folders::set_folder_watch_config, &state, args),
+        "clear_folder_watch_config" => call!(typed::folders::clear_folder_watch_config, &state, args),
         "delete_folder" => call!(typed::folders::delete_folder, &state, args),
         "update_folder_parent" => call!(typed::folders::update_folder_parent, &state, args),
         "add_files_to_folder" => call!(typed::folders::add_files_to_folder, &state, args),

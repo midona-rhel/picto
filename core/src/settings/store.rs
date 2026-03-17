@@ -60,6 +60,9 @@ pub struct AppSettings {
     /// Max files per gallery-dl invocation (`--range 1-N`).
     #[serde(default = "default_sub_batch_size")]
     pub sub_batch_size: u32,
+    /// Default status for watched-folder imports when a folder uses inherited mode.
+    #[serde(default = "default_watch_folder_default_status")]
+    pub watch_folder_default_status: String,
 }
 
 fn default_grid_target_size() -> f64 {
@@ -110,6 +113,9 @@ fn default_sub_rate_limit_secs() -> f64 {
 fn default_sub_batch_size() -> u32 {
     100
 }
+fn default_watch_folder_default_status() -> String {
+    "inbox".into()
+}
 
 /// Convert similarity percentage (0-100) to Hamming distance (0-64).
 /// `similarity_pct_to_distance(97)` → 1 (distance = floor((100-97)*64/100))
@@ -141,6 +147,7 @@ impl Default for AppSettings {
             sub_inbox_pause_limit: default_sub_inbox_pause_limit(),
             sub_rate_limit_secs: default_sub_rate_limit_secs(),
             sub_batch_size: default_sub_batch_size(),
+            watch_folder_default_status: default_watch_folder_default_status(),
         }
     }
 }

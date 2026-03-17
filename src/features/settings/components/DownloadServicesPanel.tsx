@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { NumberInput, Switch, Text, Loader } from '@mantine/core';
+import { NumberInput, Switch, Text, Loader, Select } from '@mantine/core';
 import { api } from '#desktop/api';
 import { SettingsBlock, SettingsRow } from './ui';
 
@@ -8,6 +8,7 @@ interface AppSettings {
   subInboxPauseLimit: number;
   subRateLimitSecs: number;
   subBatchSize: number;
+  watchFolderDefaultStatus: 'inbox' | 'active';
   [key: string]: unknown;
 }
 
@@ -107,6 +108,27 @@ export function DownloadServicesPanel() {
         <SettingsRow label="Max inbox items">
           <Text size="sm">1000</Text>
         </SettingsRow>
+      </SettingsBlock>
+
+      <SettingsBlock title="Watch Folder Defaults" description="Defaults for folders that auto-import from disk.">
+        <SettingsRow label="Default import status">
+          <Select
+            size="xs"
+            w={150}
+            data={[
+              { value: 'inbox', label: 'Inbox' },
+              { value: 'active', label: 'Active' },
+            ]}
+            value={settings.watchFolderDefaultStatus}
+            onChange={(value) => saveSetting({
+              watchFolderDefaultStatus: (value as AppSettings['watchFolderDefaultStatus'] | null) ?? 'inbox',
+            })}
+            allowDeselect={false}
+          />
+        </SettingsRow>
+        <Text size="xs" c="dimmed" mt={4}>
+          Applies when a watched folder uses the per-folder setting “Use global default”.
+        </Text>
       </SettingsBlock>
     </>
   );

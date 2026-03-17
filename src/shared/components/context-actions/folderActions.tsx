@@ -1,8 +1,10 @@
 import {
+  IconAntennaBars5,
   IconChevronRight,
   IconCopy,
   IconCursorText,
   IconFolderMinus,
+  IconFolderOpen,
   IconFolderPlus,
   IconFolders,
   IconTag,
@@ -37,6 +39,12 @@ export interface FolderSingleMenuOptions {
   };
   deleteFolder?: MenuAction;
   deleteLabel?: string;
+  importFolderHere?: MenuAction;
+  watchActions?: {
+    attachOrEdit?: MenuAction;
+    remove?: MenuAction;
+    attached?: boolean;
+  };
   showDuplicate?: boolean;
   showExport?: boolean;
 }
@@ -85,6 +93,39 @@ export function buildFolderSingleMenu(opts: FolderSingleMenuOptions): ContextMen
       label: 'Set Auto-Tags...',
       icon: <IconTag size={14} />,
       onClick: () => invoke(opts.setAutoTags),
+    });
+  }
+  if (opts.importFolderHere) {
+    if (opts.createFolder || opts.createSubfolder || opts.renameFolder || opts.setAutoTags) {
+      items.push({ type: 'separator' });
+    }
+    items.push({
+      type: 'item',
+      label: 'Import Folder Here…',
+      icon: <IconFolderOpen size={14} />,
+      onClick: () => invoke(opts.importFolderHere),
+    });
+  }
+  if (opts.watchActions) {
+    items.push({
+      type: 'submenu',
+      label: 'Auto-Import…',
+      icon: <IconAntennaBars5 size={14} />,
+      children: compactMenu([
+        {
+          type: 'item',
+          label: opts.watchActions.attached ? 'Edit Watched Folder…' : 'Attach Watched Folder…',
+          onClick: () => invoke(opts.watchActions?.attachOrEdit),
+        },
+        opts.watchActions.attached && opts.watchActions.remove
+          ? {
+              type: 'item',
+              label: 'Remove Watched Folder',
+              danger: true,
+              onClick: () => invoke(opts.watchActions?.remove),
+            }
+          : null,
+      ].filter(Boolean) as ContextMenuEntry[]),
     });
   }
 

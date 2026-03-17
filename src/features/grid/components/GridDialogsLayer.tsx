@@ -16,8 +16,8 @@ export function GridDialogsLayer(props: {
   batchRenameOpen: boolean;
   onCloseBatchRename: () => void;
   batchRenameImages: MasonryImageItem[];
-  folderImportDialog: { path: string; preserveStructure: boolean } | null;
-  setFolderImportDialog: React.Dispatch<React.SetStateAction<{ path: string; preserveStructure: boolean } | null>>;
+  folderImportDialog: { path: string; preserveStructure: boolean; targetFolderId: number | null } | null;
+  setFolderImportDialog: React.Dispatch<React.SetStateAction<{ path: string; preserveStructure: boolean; targetFolderId: number | null } | null>>;
   onConfirmImportFolder: () => void | Promise<void>;
   exportDialogOpen: boolean;
   exportDialogState: ExportDialogState;

@@ -14,11 +14,13 @@ export function useGridImportActions(args: {
   const [folderImportDialog, setFolderImportDialog] = useState<{
     path: string;
     preserveStructure: boolean;
+    targetFolderId: number | null;
   } | null>(null);
 
   const importRequestToken = useImportActionStore((s) => s.requestToken);
   const importHandledToken = useImportActionStore((s) => s.handledToken);
   const importRequestKind = useImportActionStore((s) => s.requestKind);
+  const importTargetFolderId = useImportActionStore((s) => s.targetFolderId);
   const markImportHandled = useImportActionStore((s) => s.markHandled);
 
   const importPaths = useCallback(async (paths: string[]) => {
@@ -69,7 +71,7 @@ export function useGridImportActions(args: {
     }
   }, [importPaths]);
 
-  const handleImportFolderRequest = useCallback(async () => {
+  const handleImportFolderRequest = useCallback(async (targetFolderId?: number | null) => {
     const selected = await open({
       properties: ['openDirectory'],
       message: 'Select a folder to import',
@@ -79,6 +81,7 @@ export function useGridImportActions(args: {
     setFolderImportDialog({
       path: pickedPath,
       preserveStructure: true,
+      targetFolderId: targetFolderId ?? null,
     });
   }, []);
 
@@ -92,7 +95,7 @@ export function useGridImportActions(args: {
       const result = await api.import.folder(
         pendingImport.path,
         pendingImport.preserveStructure,
-        folderIdRef.current ?? null,
+        pendingImport.targetFolderId ?? folderIdRef.current ?? null,
       );
       store.finish({
         imported: result.imported.length,
@@ -109,7 +112,7 @@ export function useGridImportActions(args: {
     if (importRequestToken === importHandledToken) return;
     markImportHandled(importRequestToken);
     if (importRequestKind === 'folder') {
-      void handleImportFolderRequest();
+      void handleImportFolderRequest(importTargetFolderId);
       return;
     }
     void handleImport();
@@ -119,6 +122,7 @@ export function useGridImportActions(args: {
     importHandledToken,
     importRequestKind,
     importRequestToken,
+    importTargetFolderId,
     markImportHandled,
   ]);
 

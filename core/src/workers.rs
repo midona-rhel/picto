@@ -10,6 +10,7 @@ use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
 use crate::blob_store::BlobStore;
+use crate::folders::watch::FolderWatchCommand;
 use crate::rate_limiter::RateLimiter;
 use crate::sqlite::SqliteDatabase;
 use crate::types::{RunningSubscriptions, SubTerminalStatuses};
@@ -27,6 +28,7 @@ pub async fn start_workers(
     rate_limiter: &RateLimiter,
     running_subscriptions: &RunningSubscriptions,
     sub_terminal_statuses: &SubTerminalStatuses,
+    folder_watch_rx: tokio::sync::mpsc::UnboundedReceiver<FolderWatchCommand>,
     cancel: &CancellationToken,
 ) -> Vec<(&'static str, tokio::task::JoinHandle<()>)> {
     let mut handles: Vec<(&'static str, tokio::task::JoinHandle<()>)> = Vec::new();
@@ -118,6 +120,20 @@ pub async fn start_workers(
             }
         });
         handles.push(("group_scheduler", handle));
+    }
+
+    // ── Folder watch worker ────────────────────────────
+    {
+        let watch_db = db.clone();
+        let watch_blob = blob_store.clone();
+        let watch_cancel = cancel.clone();
+        let handle = crate::folders::watch::spawn_worker(
+            watch_db,
+            watch_blob,
+            folder_watch_rx,
+            watch_cancel,
+        );
+        handles.push(("folder_watch", handle));
     }
 
     handles

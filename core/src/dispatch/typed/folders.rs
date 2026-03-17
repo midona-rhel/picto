@@ -84,9 +84,35 @@ pub struct UpdateFolderInput {
 
 #[derive(Debug, Deserialize, TS)]
 #[ts(export_to = "../../src/shared/types/generated/commands/")]
+pub struct SetFolderWatchConfigInput {
+    #[ts(type = "number")]
+    pub folder_id: i64,
+    pub watch_path: String,
+    #[serde(default = "default_true")]
+    pub watch_enabled: bool,
+    #[serde(default)]
+    pub watch_subfolders: bool,
+    pub watch_import_status_mode: String,
+    #[serde(default)]
+    pub import_existing_now: bool,
+}
+
+#[derive(Debug, Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
+pub struct ClearFolderWatchConfigInput {
+    #[ts(type = "number")]
+    pub folder_id: i64,
+}
+
+#[derive(Debug, Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct DeleteFolderInput {
     #[ts(type = "number")]
     pub folder_id: i64,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Debug, Deserialize, TS)]
@@ -270,6 +296,77 @@ pub async fn update_folder(state: &AppState, input: UpdateFolderInput) -> Result
     ).await?;
     crate::events::emit_mutation(
         "update_folder",
+        crate::events::MutationImpact::sidebar(crate::events::Domain::Folders)
+            .folder_ids(vec![input.folder_id]),
+    );
+    Ok(())
+}
+
+pub async fn set_folder_watch_config(
+    state: &AppState,
+    input: SetFolderWatchConfigInput,
+) -> Result<(), String> {
+    if !matches!(
+        input.watch_import_status_mode.as_str(),
+        "inherit" | "inbox" | "active"
+    ) {
+        return Err("watch_import_status_mode must be inherit, inbox, or active".into());
+    }
+    let canonical_path = std::fs::canonicalize(&input.watch_path)
+        .map_err(|err| format!("Failed to resolve watch path: {err}"))?;
+    if !canonical_path.is_dir() {
+        return Err(format!("Watch path is not a directory: {}", canonical_path.display()));
+    }
+    let canonical_path = canonical_path.to_string_lossy().to_string();
+
+    crate::folders::controller::FolderController::set_folder_watch_config(
+        &state.db,
+        input.folder_id,
+        canonical_path.clone(),
+        input.watch_enabled,
+        input.watch_subfolders,
+        input.watch_import_status_mode.clone(),
+    )
+    .await?;
+
+    if input.import_existing_now {
+        crate::folders::watch::import_existing_for_folder_watch(
+            &state.db,
+            &state.blob_store,
+            input.folder_id,
+            &canonical_path,
+            input.watch_subfolders,
+            &input.watch_import_status_mode,
+        )
+        .await?;
+    }
+
+    let _ = state
+        .folder_watch_commands
+        .send(crate::folders::watch::FolderWatchCommand::Reload);
+
+    crate::events::emit_mutation(
+        "set_folder_watch_config",
+        crate::events::MutationImpact::sidebar(crate::events::Domain::Folders)
+            .folder_ids(vec![input.folder_id]),
+    );
+    Ok(())
+}
+
+pub async fn clear_folder_watch_config(
+    state: &AppState,
+    input: ClearFolderWatchConfigInput,
+) -> Result<(), String> {
+    crate::folders::controller::FolderController::clear_folder_watch_config(
+        &state.db,
+        input.folder_id,
+    )
+    .await?;
+    let _ = state
+        .folder_watch_commands
+        .send(crate::folders::watch::FolderWatchCommand::Reload);
+    crate::events::emit_mutation(
+        "clear_folder_watch_config",
         crate::events::MutationImpact::sidebar(crate::events::Domain::Folders)
             .folder_ids(vec![input.folder_id]),
     );
