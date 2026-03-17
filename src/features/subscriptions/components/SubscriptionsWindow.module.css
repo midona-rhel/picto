@@ -47,6 +47,37 @@
   gap: 12px;
 }
 
+.panelSwitchRow {
+  display: inline-flex;
+  align-items: center;
+  gap: 0;
+  width: fit-content;
+  border: 1px solid var(--color-border-secondary);
+  border-radius: 8px;
+  background: var(--color-black-20);
+  overflow: hidden;
+}
+
+.panelSwitchButton {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--color-text-secondary);
+  padding: 8px 14px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.panelSwitchButton + .panelSwitchButton {
+  border-left: 1px solid var(--color-border-secondary);
+}
+
+.panelSwitchButtonActive {
+  background: var(--color-white-10);
+  color: var(--color-text-primary);
+}
+
 .section {
   border: 1px solid var(--color-border-secondary);
   border-radius: 8px;
