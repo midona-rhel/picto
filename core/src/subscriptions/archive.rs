@@ -34,7 +34,8 @@ pub async fn clear_subscription_archive_entries(
             conn.execute_batch("PRAGMA busy_timeout = 5000;")
                 .map_err(|e| format!("Failed to configure gallery-dl archive connection: {e}"))?;
             let mut deleted = 0usize;
-            let mut stmt = match conn.prepare("DELETE FROM archive WHERE entry LIKE ?1 ESCAPE '\\'") {
+            let mut stmt = match conn.prepare("DELETE FROM archive WHERE entry LIKE ?1 ESCAPE '\\'")
+            {
                 Ok(stmt) => stmt,
                 Err(e) => {
                     if e.to_string().contains("no such table: archive") {
@@ -43,16 +44,17 @@ pub async fn clear_subscription_archive_entries(
                     return Err(format!("Failed to prepare gallery-dl archive delete: {e}"));
                 }
             };
-            let mut count_stmt =
-                match conn.prepare("SELECT COUNT(*) FROM archive WHERE entry LIKE ?1 ESCAPE '\\'") {
-                    Ok(stmt) => stmt,
-                    Err(e) => {
-                        if e.to_string().contains("no such table: archive") {
-                            return Ok((0, 0));
-                        }
-                        return Err(format!("Failed to prepare gallery-dl archive count: {e}"));
+            let mut count_stmt = match conn
+                .prepare("SELECT COUNT(*) FROM archive WHERE entry LIKE ?1 ESCAPE '\\'")
+            {
+                Ok(stmt) => stmt,
+                Err(e) => {
+                    if e.to_string().contains("no such table: archive") {
+                        return Ok((0, 0));
                     }
-                };
+                    return Err(format!("Failed to prepare gallery-dl archive count: {e}"));
+                }
+            };
 
             let mut remaining = 0usize;
             for prefix in prefixes {
@@ -66,11 +68,12 @@ pub async fn clear_subscription_archive_entries(
                     .map_err(|e| format!("Failed to clear gallery-dl archive entries: {e}"))?;
                 deleted += removed;
 
-                let still: i64 = count_stmt
-                    .query_row([pattern], |row| row.get(0))
-                    .map_err(|e| {
-                        format!("Failed to count remaining gallery-dl archive entries: {e}")
-                    })?;
+                let still: i64 =
+                    count_stmt
+                        .query_row([pattern], |row| row.get(0))
+                        .map_err(|e| {
+                            format!("Failed to count remaining gallery-dl archive entries: {e}")
+                        })?;
                 if still > 0 {
                     remaining += still as usize;
                 }

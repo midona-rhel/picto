@@ -34,15 +34,15 @@ use crate::credential_store::SiteCredential;
 use self::config::build_config;
 use self::filesystem::scan_output_dir;
 
-pub use failure::{classify_failure, FailureKind};
+pub use failure::{FailureKind, classify_failure};
 pub use filesystem::cleanup_temp_dir;
 pub use metadata::{extract_creator_identifier, parse_metadata, parse_tags};
 pub use metadata_validation::{
-    get_site_metadata_schema, validate_site_metadata, SiteMetadataSchema,
-    SiteMetadataValidationResult,
+    SiteMetadataSchema, SiteMetadataValidationResult, get_site_metadata_schema,
+    validate_site_metadata,
 };
 pub use sites::{
-    build_url, canonical_site_id, extract_domain, site_by_id, substitute_query, SiteEntry, SITES,
+    SITES, SiteEntry, build_url, canonical_site_id, extract_domain, site_by_id, substitute_query,
 };
 
 pub struct RunOptions {

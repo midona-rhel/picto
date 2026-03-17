@@ -1,5 +1,5 @@
-use super::adapters::adapter_for_json;
 use super::ParsedMetadata;
+use super::adapters::adapter_for_json;
 
 /// Parse a gallery-dl metadata sidecar JSON into normalized metadata.
 ///
@@ -123,4 +123,3 @@ pub fn parse_tags(json: &serde_json::Value) -> Vec<(String, String)> {
 pub fn extract_creator_identifier(json: &serde_json::Value) -> Option<String> {
     adapter_for_json(json).extract_creator_identifier(json)
 }
-

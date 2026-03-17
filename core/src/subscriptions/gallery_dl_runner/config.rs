@@ -48,4 +48,3 @@ fn apply_credential_auth(
     let auth = crate::credential_store::build_extractor_auth(cred);
     extractor.insert(cred.site_category.clone(), auth);
 }
-

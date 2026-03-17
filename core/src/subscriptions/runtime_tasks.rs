@@ -3,7 +3,7 @@
 //! The subscription domain should publish progress through one adapter instead
 //! of duplicating `RuntimeTask` shaping in every controller and monitor loop.
 
-use tokio::time::{sleep, Duration};
+use tokio::time::{Duration, sleep};
 
 use crate::runtime_contract::task::{RuntimeTask, TaskProgress, TaskStatus};
 use crate::subscriptions::progress::SubscriptionProgressEvent;
@@ -30,7 +30,11 @@ fn make_subscription_task(
     }
 }
 
-fn make_group_task(group_id: &str, status: TaskStatus, progress: Option<TaskProgress>) -> RuntimeTask {
+fn make_group_task(
+    group_id: &str,
+    status: TaskStatus,
+    progress: Option<TaskProgress>,
+) -> RuntimeTask {
     let now = chrono::Utc::now().to_rfc3339();
     RuntimeTask {
         task_id: format!("group:{group_id}"),
@@ -45,7 +49,10 @@ fn make_group_task(group_id: &str, status: TaskStatus, progress: Option<TaskProg
     }
 }
 
-pub fn schedule_progress_snapshot_clear(running_subs: RunningSubscriptions, subscription_id: String) {
+pub fn schedule_progress_snapshot_clear(
+    running_subs: RunningSubscriptions,
+    subscription_id: String,
+) {
     let task_id = format!("sub:{subscription_id}");
     tokio::spawn(async move {
         sleep(Duration::from_millis(3000)).await;
@@ -99,7 +106,13 @@ pub fn publish_start(
         failure_kind: None,
         error: None,
     };
-    publish_subscription_task(subscription_id, subscription_name, TaskStatus::Running, None, &event);
+    publish_subscription_task(
+        subscription_id,
+        subscription_name,
+        TaskStatus::Running,
+        None,
+        &event,
+    );
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -246,7 +259,13 @@ pub fn publish_panic(
         failure_kind: Some("panic".to_string()),
         error: Some(error),
     };
-    publish_subscription_task(subscription_id, subscription_name, TaskStatus::Failed, None, &event);
+    publish_subscription_task(
+        subscription_id,
+        subscription_name,
+        TaskStatus::Failed,
+        None,
+        &event,
+    );
 }
 
 pub fn publish_group_start(group_id: &str) {

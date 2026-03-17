@@ -53,7 +53,11 @@ pub fn default_resume_strategy_for_site(site_id: &str) -> Option<&'static str> {
     }
 }
 
-pub fn apply_resume_to_query(query_text: &str, resume_cursor: &str, resume_strategy: &str) -> String {
+pub fn apply_resume_to_query(
+    query_text: &str,
+    resume_cursor: &str,
+    resume_strategy: &str,
+) -> String {
     match resume_strategy {
         "tag_id_lt" => {
             if query_text
@@ -120,10 +124,7 @@ mod tests {
             resolve_finished_status_text("cancelled", Some("unknown")),
             "Cancelled"
         );
-        assert_eq!(
-            resolve_finished_status_text("succeeded", None),
-            "Completed"
-        );
+        assert_eq!(resolve_finished_status_text("succeeded", None), "Completed");
     }
 
     #[test]
@@ -158,6 +159,9 @@ mod tests {
                 },
             },
         ];
-        assert_eq!(derive_resume_cursor(&items, "tag_id_lt"), Some("93".to_string()));
+        assert_eq!(
+            derive_resume_cursor(&items, "tag_id_lt"),
+            Some("93".to_string())
+        );
     }
 }

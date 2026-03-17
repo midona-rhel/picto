@@ -36,9 +36,15 @@ pub(super) fn adapter_for_json(json: &Value) -> &'static dyn SiteAdapter {
 
 impl SiteAdapter for DanbooruAdapter {
     fn matches(&self, json: &Value) -> bool {
-        matches!(category(json).as_deref(), Some("danbooru" | "gelbooru" | "rule34" | "3dbooru" | "sankaku" | "idolcomplex"))
-            || DANBOORU_CATEGORIES.iter().any(|(key, _)| json.get(*key).is_some())
-            || DANBOORU_TAG_STRINGS.iter().any(|(key, _)| json.get(*key).is_some())
+        matches!(
+            category(json).as_deref(),
+            Some("danbooru" | "gelbooru" | "rule34" | "3dbooru" | "sankaku" | "idolcomplex")
+        ) || DANBOORU_CATEGORIES
+            .iter()
+            .any(|(key, _)| json.get(*key).is_some())
+            || DANBOORU_TAG_STRINGS
+                .iter()
+                .any(|(key, _)| json.get(*key).is_some())
     }
 
     fn parse_tags(&self, json: &Value) -> Vec<(String, String)> {

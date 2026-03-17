@@ -1,6 +1,6 @@
 //! Subscription + query + file + credential-domain CRUD.
 
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 
 use crate::sqlite::SqliteDatabase;
@@ -739,9 +739,7 @@ impl SqliteDatabase {
             .await
     }
 
-    pub async fn list_all_subscription_queries(
-        &self,
-    ) -> Result<Vec<SubscriptionQuery>, String> {
+    pub async fn list_all_subscription_queries(&self) -> Result<Vec<SubscriptionQuery>, String> {
         self.with_read_conn(list_all_subscription_queries).await
     }
 
@@ -749,8 +747,10 @@ impl SqliteDatabase {
         &self,
         group_id: i64,
     ) -> Result<Vec<(Subscription, i64)>, String> {
-        self.with_read_conn(move |conn| list_subscriptions_for_group_with_file_counts(conn, group_id))
-            .await
+        self.with_read_conn(move |conn| {
+            list_subscriptions_for_group_with_file_counts(conn, group_id)
+        })
+        .await
     }
 
     pub async fn list_subscription_queries_for_group(

@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use tracing::{debug, warn};
 
-use super::{parse_metadata, DownloadedItem, ParsedMetadata};
+use super::{DownloadedItem, ParsedMetadata, parse_metadata};
 
 /// After import, call this to remove the temp download directory.
 pub async fn cleanup_temp_dir(temp_dir: &Path) {

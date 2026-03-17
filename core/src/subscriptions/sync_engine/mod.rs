@@ -22,6 +22,7 @@ use tracing::{info, warn};
 
 use crate::blob_store::BlobStore;
 use crate::settings::store::AppSettings;
+use crate::sqlite::SqliteDatabase;
 use crate::subscriptions::archive::subscription_query_archive_prefix;
 use crate::subscriptions::gallery_dl_runner::{self, FailureKind, GalleryDlRunner, RunOptions};
 use crate::subscriptions::import_policy::{collection_group_parts, validate_metadata_for_site};
@@ -29,7 +30,6 @@ use crate::subscriptions::policy::{
     apply_resume_to_query, default_resume_strategy_for_site, derive_resume_cursor,
     effective_inbox_limit, resolve_query_name,
 };
-use crate::sqlite::SqliteDatabase;
 
 #[derive(Debug, Clone, Default)]
 pub struct SyncProgress {
@@ -156,7 +156,9 @@ impl<'a> SubscriptionSyncEngine<'a> {
             }
         };
 
-        let credential = self.load_run_credential(site_id, &url, &sub_id_str, &progress).await;
+        let credential = self
+            .load_run_credential(site_id, &url, &sub_id_str, &progress)
+            .await;
         let has_credential = credential.is_some();
 
         let archive_path = self
@@ -195,7 +197,8 @@ impl<'a> SubscriptionSyncEngine<'a> {
             Err(e) => {
                 progress.errors.push(format!("gallery-dl failed: {e}"));
                 progress.failure_kind = Some("unknown".to_string());
-                self.update_credential_health(site_id, "error", Some(&e)).await;
+                self.update_credential_health(site_id, "error", Some(&e))
+                    .await;
                 return progress;
             }
         };
@@ -424,7 +427,11 @@ impl<'a> SubscriptionSyncEngine<'a> {
         }
 
         if !completed_initial_run && completed_cleanly && !continue_initial_pagination {
-            if let Err(e) = self.db.set_query_completed_initial_run(query_id, true).await {
+            if let Err(e) = self
+                .db
+                .set_query_completed_initial_run(query_id, true)
+                .await
+            {
                 progress
                     .errors
                     .push(format!("Failed to mark initial run complete: {e}"));

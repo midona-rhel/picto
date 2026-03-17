@@ -29,7 +29,10 @@ pub fn list_runtime_progress_from_tasks() -> Vec<SubscriptionProgressEvent> {
     let mut events: Vec<SubscriptionProgressEvent> = crate::runtime_state::list_tasks()
         .into_iter()
         .filter(|task| task.kind == crate::runtime_contract::task::TaskKind::Subscription)
-        .filter_map(|task| task.detail.and_then(|detail| serde_json::from_value(detail).ok()))
+        .filter_map(|task| {
+            task.detail
+                .and_then(|detail| serde_json::from_value(detail).ok())
+        })
         .collect();
     events.sort_by(|a, b| a.subscription_id.cmp(&b.subscription_id));
     events

@@ -1,6 +1,6 @@
 //! Subscription group CRUD — parent entity that groups subscriptions with a shared schedule.
 
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 
 use crate::sqlite::SqliteDatabase;
@@ -39,8 +39,9 @@ pub fn get_group(conn: &Connection, group_id: i64) -> rusqlite::Result<Option<Su
 }
 
 pub fn list_groups(conn: &Connection) -> rusqlite::Result<Vec<SubscriptionGroup>> {
-    let mut stmt =
-        conn.prepare_cached("SELECT group_id, name, schedule, created_at FROM subscription_group ORDER BY name")?;
+    let mut stmt = conn.prepare_cached(
+        "SELECT group_id, name, schedule, created_at FROM subscription_group ORDER BY name",
+    )?;
     let rows = stmt.query_map([], |row| {
         Ok(SubscriptionGroup {
             group_id: row.get(0)?,
@@ -53,7 +54,10 @@ pub fn list_groups(conn: &Connection) -> rusqlite::Result<Vec<SubscriptionGroup>
 }
 
 pub fn delete_group(conn: &Connection, group_id: i64) -> rusqlite::Result<()> {
-    conn.execute("DELETE FROM subscription_group WHERE group_id = ?1", [group_id])?;
+    conn.execute(
+        "DELETE FROM subscription_group WHERE group_id = ?1",
+        [group_id],
+    )?;
     Ok(())
 }
 
@@ -65,7 +69,11 @@ pub fn rename_group(conn: &Connection, group_id: i64, name: &str) -> rusqlite::R
     Ok(())
 }
 
-pub fn set_group_schedule(conn: &Connection, group_id: i64, schedule: &str) -> rusqlite::Result<()> {
+pub fn set_group_schedule(
+    conn: &Connection,
+    group_id: i64,
+    schedule: &str,
+) -> rusqlite::Result<()> {
     conn.execute(
         "UPDATE subscription_group SET schedule = ?1 WHERE group_id = ?2",
         params![schedule, group_id],
@@ -100,7 +108,8 @@ impl SqliteDatabase {
     }
 
     pub async fn delete_group(&self, group_id: i64) -> Result<(), String> {
-        self.with_conn(move |conn| delete_group(conn, group_id)).await
+        self.with_conn(move |conn| delete_group(conn, group_id))
+            .await
     }
 
     pub async fn rename_group(&self, group_id: i64, name: &str) -> Result<(), String> {

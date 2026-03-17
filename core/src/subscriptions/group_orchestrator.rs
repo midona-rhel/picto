@@ -25,7 +25,9 @@ impl SubscriptionGroupOrchestrator {
         id: String,
         settings: &SettingsStore,
     ) -> Result<(), String> {
-        let group_id: i64 = id.parse().map_err(|_| format!("Invalid group id: {}", id))?;
+        let group_id: i64 = id
+            .parse()
+            .map_err(|_| format!("Invalid group id: {}", id))?;
 
         let subs = db.list_subscriptions_for_group(group_id).await?;
         if subs.is_empty() {
@@ -113,9 +115,12 @@ impl SubscriptionGroupOrchestrator {
                 }
 
                 let statuses = terminal_statuses_clone.lock().await;
-                let has_failed = started_sub_ids
-                    .iter()
-                    .any(|sub_id| statuses.get(sub_id).map(|status| status == "failed").unwrap_or(false));
+                let has_failed = started_sub_ids.iter().any(|sub_id| {
+                    statuses
+                        .get(sub_id)
+                        .map(|status| status == "failed")
+                        .unwrap_or(false)
+                });
                 publish_group_finished(&group_id_str, has_failed, started as u64, started as u64);
             });
 
@@ -133,7 +138,9 @@ impl SubscriptionGroupOrchestrator {
         running_subs: &RunningSubscriptions,
         id: String,
     ) -> Result<(), String> {
-        let group_id: i64 = id.parse().map_err(|_| format!("Invalid group id: {}", id))?;
+        let group_id: i64 = id
+            .parse()
+            .map_err(|_| format!("Invalid group id: {}", id))?;
 
         let subscriptions = db.list_subscriptions_for_group(group_id).await?;
         let mut names_by_id = std::collections::HashMap::new();

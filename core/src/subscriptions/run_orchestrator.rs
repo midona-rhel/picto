@@ -11,11 +11,11 @@ use crate::blob_store::BlobStore;
 use crate::rate_limiter::RateLimiter;
 use crate::settings::store::SettingsStore;
 use crate::sqlite::SqliteDatabase;
-use crate::subscriptions::progress::{list_runtime_progress_from_tasks, SubscriptionProgressEvent};
 use crate::subscriptions::db::{get_subscription, get_subscription_query};
 use crate::subscriptions::policy::{
     effective_query_file_limit, resolve_finished_status_text, resolve_query_name,
 };
+use crate::subscriptions::progress::{SubscriptionProgressEvent, list_runtime_progress_from_tasks};
 use crate::subscriptions::runtime_tasks::{
     publish_cancelling, publish_finished, publish_panic, publish_start,
     schedule_progress_snapshot_clear,
@@ -73,7 +73,9 @@ impl SubscriptionRunOrchestrator {
         sub_terminal_statuses: Option<SubTerminalStatuses>,
         settings: &SettingsStore,
     ) -> Result<(), String> {
-        let sub_id: i64 = id.parse().map_err(|_| format!("Invalid subscription id: {}", id))?;
+        let sub_id: i64 = id
+            .parse()
+            .map_err(|_| format!("Invalid subscription id: {}", id))?;
 
         {
             let map = running_subs.lock().await;
@@ -248,7 +250,10 @@ impl SubscriptionRunOrchestrator {
                     last_failure_kind.clone(),
                     last_error.clone(),
                 );
-                schedule_progress_snapshot_clear(running_subs.clone(), sub_id_for_inner_clear.clone());
+                schedule_progress_snapshot_clear(
+                    running_subs.clone(),
+                    sub_id_for_inner_clear.clone(),
+                );
             });
 
             if let Err(e) = inner.await {
@@ -292,7 +297,10 @@ impl SubscriptionRunOrchestrator {
         {
             let map = running_subs.lock().await;
             if map.contains_key(&subscription_id) {
-                return Err(format!("Subscription {} is already running", subscription_id));
+                return Err(format!(
+                    "Subscription {} is already running",
+                    subscription_id
+                ));
             }
         }
 
@@ -365,7 +373,8 @@ impl SubscriptionRunOrchestrator {
         } else {
             sub.initial_file_limit as u32
         };
-        let file_limit = effective_query_file_limit(app_settings.sub_batch_size, subscription_limit);
+        let file_limit =
+            effective_query_file_limit(app_settings.sub_batch_size, subscription_limit);
 
         let running_subs_guard = running_subs.clone();
         let sub_id_guard = sub_id_str.clone();
@@ -387,7 +396,8 @@ impl SubscriptionRunOrchestrator {
                     metadata_invalid,
                     last_metadata_error,
                 ) = {
-                    let engine_result = SubscriptionSyncEngine::new(&db, &blob_store, &app_settings);
+                    let engine_result =
+                        SubscriptionSyncEngine::new(&db, &blob_store, &app_settings);
                     match engine_result {
                         Ok(engine) => {
                             let mut engine = engine
@@ -464,7 +474,10 @@ impl SubscriptionRunOrchestrator {
                     failure_kind.clone(),
                     last_error.clone(),
                 );
-                schedule_progress_snapshot_clear(running_subs.clone(), sub_id_for_inner_clear.clone());
+                schedule_progress_snapshot_clear(
+                    running_subs.clone(),
+                    sub_id_for_inner_clear.clone(),
+                );
             });
 
             if let Err(e) = inner.await {
