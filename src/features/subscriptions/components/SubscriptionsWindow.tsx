@@ -8,7 +8,7 @@ import {
   TextInput,
   Textarea,
 } from '@mantine/core';
-import { IconCheck, IconKey, IconPlus, IconTrash, IconX } from '@tabler/icons-react';
+import { IconCheck, IconChevronDown, IconChevronRight, IconKey, IconPlus, IconTrash, IconX } from '@tabler/icons-react';
 import { api, getCurrentWindow } from '#desktop/api';
 import { notifyError, notifySuccess } from '../../../shared/lib/notify';
 import { SubscriptionGroupsPanel } from './SubscriptionGroupsPanel';
@@ -138,6 +138,7 @@ export function SubscriptionsWindow() {
   const [credentialHealth, setCredentialHealth] = useState<CredentialHealth[]>([]);
   const [credentialModalOpen, setCredentialModalOpen] = useState(false);
   const [savingCredential, setSavingCredential] = useState(false);
+  const [credentialsExpanded, setCredentialsExpanded] = useState(true);
   const [credentialForm, setCredentialForm] = useState<CredentialFormState>({
     siteCategory: '',
     credentialType: 'username_password',
@@ -194,6 +195,22 @@ export function SubscriptionsWindow() {
       : CREDENTIAL_TYPE_OPTIONS),
     [isRule34Credential],
   );
+  const missingRequiredAuthSites = useMemo(
+    () => authSites.filter((site) => site.auth_required_for_full_access && !credentialMap.get(site.id)),
+    [authSites, credentialMap],
+  );
+  const credentialsSummary = useMemo(() => {
+    if (authSites.length === 0) return 'No credential-capable sites enabled.';
+    if (missingRequiredAuthSites.length > 0) {
+      return `${missingRequiredAuthSites.length} site${missingRequiredAuthSites.length === 1 ? '' : 's'} still need credentials for full access.`;
+    }
+    return `${credentials.filter((row) => authSites.some((site) => site.id === row.site_category)).length} credential${credentials.length === 1 ? '' : 's'} saved.`;
+  }, [authSites, credentials, missingRequiredAuthSites]);
+
+  useEffect(() => {
+    if (authSites.length === 0) return;
+    setCredentialsExpanded(missingRequiredAuthSites.length > 0);
+  }, [authSites.length, missingRequiredAuthSites.length]);
 
   const openCredentialModal = (site: SubscriptionSiteInfo) => {
     const existing = credentialMap.get(site.id);
@@ -283,91 +300,99 @@ export function SubscriptionsWindow() {
       </div>
 
       <div className={styles.body}>
-        <section className={`${styles.section} ${styles.credentialsSection}`}>
-          <div className={styles.sectionTitle}>Site Credentials</div>
-          <div className={styles.sectionHelp}>
-            Configure optional site login credentials in OS secure storage. Some sites require auth for full access.
-          </div>
-          <div className={`${styles.siteGrid} ${styles.cardsContainer}`}>
-            {authSites.map((site) => {
-              const cred = credentialMap.get(site.id);
-              const health = healthMap.get(site.id);
-              const missingAuth = site.auth_supported && site.auth_required_for_full_access && !cred;
-              const verified = isConfirmedWorkingSite(site.id);
-              const healthStatus = site.auth_supported
-                ? (missingAuth ? 'missing' : (health?.health_status ?? 'unknown'))
-                : 'unknown';
-              const healthLabel = healthStatus.replace('_', ' ');
-              return (
-                <div key={site.id} className={styles.siteRow}>
-                  <div>
-                    <div className={styles.siteName}>{site.name}</div>
-                    <div className={styles.siteDomain}>{site.domain}</div>
-                  </div>
-                  <div className={styles.capabilityList}>
-                    <span className={site.supports_query ? styles.capabilityOn : styles.capabilityOff}>
-                      {site.supports_query ? <IconCheck size={11} /> : <IconX size={11} />}
-                      Query
-                    </span>
-                    <span className={site.supports_account ? styles.capabilityOn : styles.capabilityOff}>
-                      {site.supports_account ? <IconCheck size={11} /> : <IconX size={11} />}
-                      Account
-                    </span>
-                    <span className={site.auth_supported ? styles.capabilityOn : styles.capabilityOff}>
-                      {site.auth_supported ? <IconCheck size={11} /> : <IconX size={11} />}
-                      Auth
-                    </span>
-                    <span className={verified ? styles.capabilityOn : styles.capabilityOff}>
-                      {verified ? <IconCheck size={11} /> : <IconX size={11} />}
-                      Verified
-                    </span>
-                  </div>
-                  <Text size="xs" c={cred ? 'green' : 'dimmed'}>
-                    {site.auth_supported
-                      ? (cred ? `Saved (${cred.credential_type})` : 'No credential')
-                      : 'Auth not supported'}
-                  </Text>
-                  <Text
-                    size="xs"
-                    className={
-                      healthStatus === 'valid'
-                        ? styles.healthGood
-                        : healthStatus === 'unauthorized' || healthStatus === 'expired' || healthStatus === 'missing'
-                          ? styles.healthWarn
-                          : healthStatus === 'error'
-                            ? styles.healthBad
-                            : styles.healthUnknown
-                    }
-                  >
-                    {site.auth_supported ? healthLabel : 'n/a'}
-                  </Text>
-                  <div style={{ display: 'inline-flex', gap: 6 }}>
-                    {site.auth_supported && (
-                      <ActionIcon variant="subtle" color="gray" onClick={() => openCredentialModal(site)}>
-                        <IconKey size={14} />
-                      </ActionIcon>
-                    )}
-                    {site.auth_supported && cred && (
-                      <ActionIcon variant="subtle" color="red" onClick={() => deleteCredential(site.id)}>
-                        <IconTrash size={14} />
-                      </ActionIcon>
-                    )}
-                  </div>
-                  {site.auth_supported && health?.last_error && (
-                    <Text size="xs" c="dimmed" style={{ gridColumn: '1 / -1' }}>
-                      Last auth error: {health.last_error}
-                    </Text>
-                  )}
-                </div>
-              );
-            })}
-            {authSites.length === 0 && (
-              <Text size="xs" c="dimmed">
-                No credential-capable sites are currently enabled.
-              </Text>
+        {authSites.length > 0 && (
+          <section className={`${styles.section} ${styles.credentialsSection}`}>
+            <div className={styles.sectionHeaderRow}>
+              <div>
+                <div className={styles.sectionTitle}>Site Credentials</div>
+                <div className={styles.sectionSummary}>{credentialsSummary}</div>
+              </div>
+              <TextButton compact onClick={() => setCredentialsExpanded((value) => !value)}>
+                {credentialsExpanded ? <IconChevronDown size={12} /> : <IconChevronRight size={12} />}
+                {credentialsExpanded ? 'Hide' : 'Show'}
+              </TextButton>
+            </div>
+            <div className={styles.sectionHelp}>
+              Configure optional site login credentials in OS secure storage. Some sites require auth for full access.
+            </div>
+            {credentialsExpanded && (
+              <div className={`${styles.siteGrid} ${styles.cardsContainer}`}>
+                {authSites.map((site) => {
+                  const cred = credentialMap.get(site.id);
+                  const health = healthMap.get(site.id);
+                  const missingAuth = site.auth_supported && site.auth_required_for_full_access && !cred;
+                  const verified = isConfirmedWorkingSite(site.id);
+                  const healthStatus = site.auth_supported
+                    ? (missingAuth ? 'missing' : (health?.health_status ?? 'unknown'))
+                    : 'unknown';
+                  const healthLabel = healthStatus.replace('_', ' ');
+                  return (
+                    <div key={site.id} className={styles.siteRow}>
+                      <div>
+                        <div className={styles.siteName}>{site.name}</div>
+                        <div className={styles.siteDomain}>{site.domain}</div>
+                      </div>
+                      <div className={styles.capabilityList}>
+                        <span className={site.supports_query ? styles.capabilityOn : styles.capabilityOff}>
+                          {site.supports_query ? <IconCheck size={11} /> : <IconX size={11} />}
+                          Query
+                        </span>
+                        <span className={site.supports_account ? styles.capabilityOn : styles.capabilityOff}>
+                          {site.supports_account ? <IconCheck size={11} /> : <IconX size={11} />}
+                          Account
+                        </span>
+                        <span className={site.auth_supported ? styles.capabilityOn : styles.capabilityOff}>
+                          {site.auth_supported ? <IconCheck size={11} /> : <IconX size={11} />}
+                          Auth
+                        </span>
+                        <span className={verified ? styles.capabilityOn : styles.capabilityOff}>
+                          {verified ? <IconCheck size={11} /> : <IconX size={11} />}
+                          Verified
+                        </span>
+                      </div>
+                      <Text size="xs" c={cred ? 'green' : 'dimmed'}>
+                        {site.auth_supported
+                          ? (cred ? `Saved (${cred.credential_type})` : 'No credential')
+                          : 'Auth not supported'}
+                      </Text>
+                      <Text
+                        size="xs"
+                        className={
+                          healthStatus === 'valid'
+                            ? styles.healthGood
+                            : healthStatus === 'unauthorized' || healthStatus === 'expired' || healthStatus === 'missing'
+                              ? styles.healthWarn
+                              : healthStatus === 'error'
+                                ? styles.healthBad
+                                : styles.healthUnknown
+                        }
+                      >
+                        {site.auth_supported ? healthLabel : 'n/a'}
+                      </Text>
+                      <div style={{ display: 'inline-flex', gap: 6 }}>
+                        {site.auth_supported && (
+                          <ActionIcon variant="subtle" color="gray" onClick={() => openCredentialModal(site)}>
+                            <IconKey size={14} />
+                          </ActionIcon>
+                        )}
+                        {site.auth_supported && cred && (
+                          <ActionIcon variant="subtle" color="red" onClick={() => deleteCredential(site.id)}>
+                            <IconTrash size={14} />
+                          </ActionIcon>
+                        )}
+                      </div>
+                      {site.auth_supported && health?.last_error && (
+                        <Text size="xs" c="dimmed" style={{ gridColumn: '1 / -1' }}>
+                          Last auth error: {health.last_error}
+                        </Text>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
             )}
-          </div>
-        </section>
+          </section>
+        )}
 
         <section className={`${styles.section} ${styles.subscriptionsSection}`}>
           <div className={styles.sectionHeaderRow}>
@@ -376,6 +401,9 @@ export function SubscriptionsWindow() {
               <IconPlus size={12} />
               New
             </TextButton>
+          </div>
+          <div className={styles.sectionHelp}>
+            Create a subscription, then add one or more site queries below. This is the main download workflow.
           </div>
           <div className={`${styles.groupsWrap} ${styles.cardsContainer}`}>
             <SubscriptionGroupsPanel

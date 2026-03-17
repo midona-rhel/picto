@@ -26,7 +26,6 @@
 - PBI-223-site-metadata-validation-instagram.md
 - PBI-224-site-metadata-validation-framework-and-api-contract.md
 - PBI-227-first-run-onboarding-and-library-creation-guidance.md
-- PBI-229-subscription-panel-ux-clarity.md
 - PBI-231-windows-collection-and-reorder-fixes.md
 - PBI-232-theme-selector-single-click.md
 - PBI-233-rust-core-domain-folder-realignment.md
@@ -53,4 +52,3 @@
 - PBI-514-app-shell-and-shared-layer-deletion.md
 - PBI-515-css-and-ui-primitive-consolidation.md
 - PBI-516-test-strategy-rewrite.md
-

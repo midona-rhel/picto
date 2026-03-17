@@ -78,6 +78,11 @@
   margin-bottom: 8px;
 }
 
+.sectionSummary {
+  font-size: 11px;
+  color: var(--color-text-secondary);
+}
+
 .siteGrid {
   composes: scrollYStable from '../../../shared/styles/scrollArea.module.css';
   display: grid;
