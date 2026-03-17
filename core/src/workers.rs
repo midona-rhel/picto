@@ -45,7 +45,6 @@ pub async fn start_workers(
                     crate::events::emit_mutation(
                         "compiler_batch_done",
                         crate::runtime_contract::mutation_builder::MutationImpact::compiler_publish(
-                            result.sidebar_affected,
                             result.smart_folders_rebuilt,
                         ),
                     );

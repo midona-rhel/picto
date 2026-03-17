@@ -3,8 +3,8 @@
 //! Domain writes enqueue `ReadModelEvent`s without knowing compiler internals.
 //! The compiler/publish subsystem turns those events into derived artifact updates.
 
-use std::collections::BTreeMap;
 use serde::Serialize;
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum DerivedArtifact {
@@ -56,7 +56,6 @@ pub struct PublishedArtifacts {
 
 #[derive(Debug, Clone, Default)]
 pub struct ReadModelBatchResult {
-    pub sidebar_affected: bool,
     pub smart_folders_rebuilt: bool,
     pub scope_affected: bool,
     pub published: PublishedArtifacts,

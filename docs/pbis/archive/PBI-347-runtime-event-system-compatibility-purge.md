@@ -4,7 +4,7 @@
 P1
 
 ## Status
-Partially Implemented
+Implemented
 
 ## Problem
 The backend still carries compatibility scaffolding from the old invalidation/event model even though the runtime contract and task registry now exist. The remaining issue is no longer “build the runtime bus”; it is “purge backend compatibility layers without mixing that work into frontend resource-derivation changes.”
@@ -38,7 +38,14 @@ Explicitly out of scope here:
 4. Keep one authoritative runtime snapshot/task registry path on the backend.
 
 ## Acceptance Criteria
-1. `events.rs` owns only event transport/emitter behavior plus temporary compatibility helpers still awaiting purge.
+1. `events.rs` owns only event transport/emitter behavior.
 2. Runtime contract types are no longer owned by `events.rs`.
 3. Backend background jobs publish through one task-registry path.
-4. Remaining backend compatibility work is narrowed to explicit follow-up slices, not hidden in one umbrella ticket.
+4. Remaining compatibility fallbacks are explicitly frontend-bound follow-up work, not hidden backend scaffolding in this ticket.
+
+## Completion Notes
+1. `MutationImpact` and its helpers now live under `core/src/runtime_contract/`.
+2. `events.rs` is transport-only.
+3. Redundant backend `facts.domains` fallbacks were pruned where explicit facts already drive invalidation.
+4. Compiler publish no longer carries the dead backend-only `sidebar_affected` compatibility flag.
+5. Renderer-side `facts.domains` fallback remains out of scope for this ticket and belongs to the frontend/runtime-contract cleanup PBIs.

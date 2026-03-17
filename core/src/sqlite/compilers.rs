@@ -159,15 +159,6 @@ pub async fn start_compiler_loop(
             || plan.rebuild_all
             || !plan.dirty_smart_folder_ids.is_empty();
 
-        // Determine which invalidations are needed from the plan,
-        // so we don't emit sidebar refreshes for metadata-only batches.
-        let sidebar_affected = plan.rebuild_sidebar
-            || plan.rebuild_tag_graph
-            || plan.rebuild_all
-            || plan.rebuild_all_smart_folders
-            || !plan.dirty_smart_folder_ids.is_empty()
-            || plan.rebuild_status_bitmaps;
-
         let dirty_artifacts = match run_compilers(&db_ref, &plan).await {
             Ok(dirty_artifacts) => dirty_artifacts,
             Err(e) => {
@@ -203,7 +194,6 @@ pub async fn start_compiler_loop(
         }
 
         on_batch_done(ReadModelBatchResult {
-            sidebar_affected,
             smart_folders_rebuilt,
             scope_affected,
             published,

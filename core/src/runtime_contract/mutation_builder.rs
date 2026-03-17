@@ -191,10 +191,9 @@ impl MutationImpact {
         Self::new().view_prefs_changed()
     }
 
-    pub fn compiler_publish(sidebar_affected: bool, smart_folders_rebuilt: bool) -> Self {
+    pub fn compiler_publish(smart_folders_rebuilt: bool) -> Self {
         let mut impact = Self::new();
         impact.compiler_batch_done = Some(true);
-        let _ = sidebar_affected;
         if smart_folders_rebuilt {
             impact = impact.extra_grid_scopes(vec!["system:all".into()]);
         }
