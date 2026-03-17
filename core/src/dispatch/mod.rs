@@ -18,11 +18,53 @@ macro_rules! call {
     }};
 }
 
+/// Commands that mutate state. Logged at `info!` level; everything else is `debug!`.
+const WRITE_COMMANDS: &[&str] = &[
+    "import_files", "import_folder", "update_file_status", "delete_files", "wipe_image_data",
+    "add_tags", "remove_tags", "manage_tag_alias", "manage_tag_implication", "merge_tags",
+    "rename_tag", "delete_tag",
+    "add_tags_selection", "remove_tags_selection", "update_selection_metadata",
+    "scan_duplicates", "resolve_duplicate_pair", "update_duplicate_settings",
+    "create_smart_folder", "update_smart_folder", "delete_smart_folder", "move_smart_folder",
+    "reorder_smart_folders",
+    "create_folder", "update_folder", "delete_folder", "move_folder", "update_folder_parent",
+    "add_files_to_folder", "remove_files_from_folder", "reorder_folders", "reorder_folder_items",
+    "set_folder_watch_config", "clear_folder_watch_config",
+    "create_collection", "update_collection", "delete_collection",
+    "add_collection_members", "remove_collection_members", "reorder_collection_members",
+    "save_settings", "reorder_sidebar_nodes", "set_view_prefs", "set_zoom_factor",
+    "update_media_entity_metadata",
+    "create_group", "delete_group", "rename_group", "set_group_schedule", "run_group", "stop_group",
+    "create_subscription", "delete_subscription", "pause_subscription",
+    "add_subscription_query", "delete_subscription_query", "pause_subscription_query",
+    "run_subscription", "stop_subscription", "reset_subscription", "rename_subscription",
+    "run_subscription_query",
+    "set_credential", "delete_credential",
+    "export_file", "export_media", "regenerate_thumbnail", "regenerate_thumbnails_batch",
+    "reanalyze_file_colors",
+    "close_library",
+];
+
 /// Dispatch a command by name with JSON arguments. Returns JSON result.
 pub async fn dispatch(command: &str, args_json: &str) -> Result<String, String> {
+    let start = std::time::Instant::now();
     let args: serde_json::Value =
         serde_json::from_str(args_json).map_err(|e| format!("Invalid JSON args: {}", e))?;
 
+    let result = dispatch_inner(command, args).await;
+    let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
+    let is_write = WRITE_COMMANDS.contains(&command);
+
+    match &result {
+        Ok(_) if is_write => tracing::info!(command, elapsed_ms, "dispatch ok"),
+        Ok(_) => tracing::debug!(command, elapsed_ms, "dispatch ok"),
+        Err(e) => tracing::warn!(command, elapsed_ms, error = %e, "dispatch error"),
+    }
+
+    result
+}
+
+async fn dispatch_inner(command: &str, args: serde_json::Value) -> Result<String, String> {
     // ─── Pre-state commands ──────────────────────────────────
     match command {
         "close_library" => {

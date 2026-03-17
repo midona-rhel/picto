@@ -412,6 +412,27 @@ fn append_filter_clauses(
     }
 }
 
+/// Returns true when a sort field produces numeric (INTEGER/REAL) values in SQL.
+/// Cursor values for these fields must be bound as i64, not text, to avoid
+/// SQLite type-affinity mismatches that break keyset pagination comparisons.
+fn is_numeric_sort(sort_field: &str) -> bool {
+    matches!(sort_field, "size" | "rating" | "view_count" | "random")
+}
+
+/// Bind a cursor sort value with the correct type for the sort field.
+fn push_cursor_sort_param(
+    params: &mut Vec<Box<dyn rusqlite::types::ToSql>>,
+    raw: &str,
+    sort_field: &str,
+) {
+    if is_numeric_sort(sort_field) {
+        let v: i64 = raw.parse().unwrap_or(0);
+        params.push(Box::new(v));
+    } else {
+        params.push(Box::new(raw.to_string()));
+    }
+}
+
 /// Map a sort field name to the SQL expression for entity-aware queries.
 /// Returns a COALESCE expression that works for both singles (f.* populated) and collections (f.* NULL).
 fn entity_sort_expr(sort_field: &str) -> &'static str {
@@ -640,7 +661,7 @@ pub fn list_files_slim(
             sql.push_str(&format!(
                 " AND ({sort_expr}, me.entity_id) {op} (?{p1}, ?{p2})",
             ));
-            param_values.push(Box::new(parts[0].to_string()));
+            push_cursor_sort_param(&mut param_values, parts[0], sort_field);
             param_values.push(Box::new(cursor_entity_id));
         } else {
             // Legacy single-value cursor fallback
@@ -650,7 +671,7 @@ pub fn list_files_slim(
                 op,
                 param_values.len() + 1
             ));
-            param_values.push(Box::new(c.to_string()));
+            push_cursor_sort_param(&mut param_values, c, sort_field);
         }
     }
 
@@ -795,14 +816,7 @@ pub fn list_files_slim_by_ids(
             sql.push_str(&format!(
                 " AND ({sort_expr}, me.entity_id) {op} (?{p1}, ?{p2})",
             ));
-            // Random sort expression produces integer values — bind cursor as i64
-            // to match SQLite type affinity (TEXT vs INTEGER would always fail).
-            if is_random {
-                let cursor_sort_val: i64 = parts[0].parse().unwrap_or(0);
-                param_values.push(Box::new(cursor_sort_val));
-            } else {
-                param_values.push(Box::new(parts[0].to_string()));
-            }
+            push_cursor_sort_param(&mut param_values, parts[0], sort_field);
             param_values.push(Box::new(cursor_entity_id));
         } else {
             // Legacy single-value cursor fallback
@@ -812,7 +826,7 @@ pub fn list_files_slim_by_ids(
                 op,
                 param_values.len() + 1
             ));
-            param_values.push(Box::new(c.to_string()));
+            push_cursor_sort_param(&mut param_values, c, sort_field);
         }
     }
 

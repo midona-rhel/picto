@@ -221,7 +221,16 @@ export function useGridSwapController(args: {
           setTransitionPhase('loading_new_data');
         }
 
-        beginFadeIn();
+        // Set 'preparing': invisible (opacity 0, no transition) but NOT
+        // frozen. The canvas unfreezes, draws, scroll position applies.
+        setVisibleTransitionStage('preparing');
+
+        // Give the canvas time to draw and scroll to settle before fading in.
+        // setTimeout ensures we're past React commit + layout + paint.
+        setTimeout(() => {
+          if (swapSequenceRef.current !== sequence) return;
+          beginFadeIn();
+        }, 50);
       });
     }, FADE_SETTLE_MS);
   }, [

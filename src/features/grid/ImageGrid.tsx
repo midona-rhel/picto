@@ -47,7 +47,6 @@ interface GridScrollShellProps {
   onContextMenu: React.MouseEventHandler<HTMLDivElement>;
   onPointerDown: React.PointerEventHandler<HTMLDivElement>;
   grayscalePreview: boolean;
-  transitionStage: 'idle' | 'fading_out' | 'fading_in';
   gridFreezeActive: boolean;
   children: React.ReactNode;
 }
@@ -59,7 +58,6 @@ function GridScrollShell({
   onContextMenu,
   onPointerDown,
   grayscalePreview,
-  transitionStage,
   gridFreezeActive,
   children,
 }: GridScrollShellProps) {
@@ -102,8 +100,6 @@ function GridScrollShell({
         position: 'relative',
         pointerEvents: gridFreezeActive ? 'none' : 'auto',
         filter: grayscalePreview ? 'grayscale(1)' : undefined,
-        opacity: transitionOpacity(transitionStage),
-        transition: transitionCss(transitionStage),
       } as React.CSSProperties}
     >
       {children}
@@ -672,7 +668,16 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
   }
 
   return (
-    <div style={{ height: '100%', display: 'flex', position: 'relative' }}>
+    <div style={{
+      height: '100%',
+      display: 'flex',
+      position: 'relative',
+      opacity: transitionOpacity(visibleTransitionStage),
+      transition: transitionCss(visibleTransitionStage),
+      // Hide completely during preparing phase so scrollbar is invisible
+      // while layout settles. Visibility:hidden hides scrollbar, opacity doesn't.
+      visibility: visibleTransitionStage === 'preparing' ? 'hidden' : 'visible',
+    }}>
       <GridScrollShell
         key={renderedScopeKey}
         scrollRef={scrollRef}
@@ -681,7 +686,6 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
         onContextMenu={handleContextMenu}
         onPointerDown={handleBoxPointerDown}
         grayscalePreview={displaySettings.grayscalePreview}
-        transitionStage={visibleTransitionStage}
         gridFreezeActive={gridFreezeActive}
       >
         <div style={{ position: 'relative' }}>

@@ -52,7 +52,11 @@ pub(crate) async fn compile_smart_folder(
 ) -> Result<(), String> {
     let bitmaps = db.bitmaps.clone();
     db.with_read_conn(move |conn| {
-        get_smart_folder(conn, smart_folder_id)?.ok_or(rusqlite::Error::QueryReturnedNoRows)?;
+        if get_smart_folder(conn, smart_folder_id)?.is_none() {
+            tracing::debug!(smart_folder_id, "Smart folder no longer exists, skipping compilation");
+            bitmaps.remove_key(&BitmapKey::SmartFolder(smart_folder_id));
+            return Ok(());
+        }
         let predicate = build_effective_predicate_for_smart_folder(conn, smart_folder_id)?;
         let bitmap = compile_predicate(conn, &predicate, &bitmaps)?;
         bitmaps.set(BitmapKey::SmartFolder(smart_folder_id), bitmap);

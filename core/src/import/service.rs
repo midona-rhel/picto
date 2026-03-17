@@ -134,6 +134,13 @@ impl ImportService {
             );
         }
 
+        tracing::info!(
+            imported = batch.imported.len(),
+            skipped = batch.skipped.len(),
+            errors = batch.errors.len(),
+            "import batch complete"
+        );
+
         Ok(batch)
     }
 
@@ -326,6 +333,14 @@ impl ImportService {
             let touched_folder_ids: Vec<i64> = touched_folder_ids.into_iter().collect();
             service::refresh_sidebar_projection_for_folder_ids(db, &touched_folder_ids).await?;
         }
+
+        tracing::info!(
+            imported = batch.imported.len(),
+            skipped = batch.skipped.len(),
+            errors = batch.errors.len(),
+            folders = created_folder_ids.len(),
+            "folder import batch complete"
+        );
 
         Ok(batch)
     }

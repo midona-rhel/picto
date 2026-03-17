@@ -72,7 +72,7 @@ pub async fn start_workers(
                     }
                 }
                 if let Err(e) = flush_db.flush().await {
-                    tracing::warn!("Periodic flush failed: {e}");
+                    tracing::warn!(error = %e, "Periodic bitmap flush failed");
                 }
             }
         });

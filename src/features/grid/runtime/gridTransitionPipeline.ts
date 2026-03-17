@@ -8,7 +8,7 @@
 // Flow:  idle → fading_out → fading_in → idle
 //
 
-export type TransitionStage = 'idle' | 'fading_out' | 'fading_in';
+export type TransitionStage = 'idle' | 'fading_out' | 'preparing' | 'fading_in';
 
 // ---------------------------------------------------------------------------
 // Timing constants — single source of truth for all transition durations
@@ -26,12 +26,13 @@ export const FADE_SETTLE_MS = 160;
 
 /** CSS opacity value for the grid container. */
 export function transitionOpacity(stage: TransitionStage): number {
-  return stage === 'fading_out' ? 0 : 1;
+  return stage === 'fading_out' || stage === 'preparing' ? 0 : 1;
 }
 
 /** CSS transition property for the grid container. */
 export function transitionCss(stage: TransitionStage): string {
-  return stage === 'idle' ? 'none' : `opacity ${FADE_DURATION_MS}ms ease`;
+  if (stage === 'idle' || stage === 'preparing') return 'none';
+  return `opacity ${FADE_DURATION_MS}ms ease`;
 }
 
 /**

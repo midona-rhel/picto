@@ -219,6 +219,8 @@ impl FolderWatchRuntime {
             );
             self.watchers.insert(root_path, watcher);
         }
+
+        tracing::info!(folders = self.configs.len(), "folder watch: reload complete");
     }
 
     fn enqueue(&mut self, raw: RawWatchEvent) {
@@ -259,7 +261,7 @@ impl FolderWatchRuntime {
             if !wait_for_file_stable(&pending.path).await {
                 continue;
             }
-            if let Err(err) = process_import_path(
+            match process_import_path(
                 &self.db,
                 &self.blob_store,
                 config.folder_id,
@@ -270,7 +272,12 @@ impl FolderWatchRuntime {
             )
             .await
             {
-                tracing::warn!(error = %err, path = %pending.path.display(), "Watched folder import failed");
+                Ok(()) => {
+                    tracing::info!(path = %pending.path.display(), folder_id = config.folder_id, "folder watch: file imported");
+                }
+                Err(err) => {
+                    tracing::warn!(error = %err, path = %pending.path.display(), "folder watch: import failed");
+                }
             }
         }
     }

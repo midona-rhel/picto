@@ -672,6 +672,8 @@ impl DuplicateOrchestrator {
             .await?;
 
         let phash_count = files_with_phash.len();
+        tracing::info!(threshold = distance_threshold, total_files, "duplicate scan starting");
+
         if phash_count < 2 {
             return Ok(ScanDuplicatesResponse {
                 candidates_found: 0,
@@ -758,6 +760,8 @@ impl DuplicateOrchestrator {
         if pairs_inserted > 0 {
             db.emit_read_model_event(ReadModelEvent::DuplicateChanged);
         }
+
+        tracing::info!(candidates_found, pairs_inserted, files_with_phash = phash_count, "duplicate scan complete");
 
         Ok(ScanDuplicatesResponse {
             candidates_found,

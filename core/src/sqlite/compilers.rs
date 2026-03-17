@@ -154,6 +154,15 @@ pub async fn start_compiler_loop(
             continue;
         }
 
+        tracing::debug!(
+            rebuild_status = plan.rebuild_status_bitmaps,
+            dirty_tags = plan.dirty_tag_ids.len(),
+            dirty_smart_folders = plan.dirty_smart_folder_ids.len(),
+            dirty_files = plan.dirty_file_ids.len(),
+            rebuild_all = plan.rebuild_all,
+            "compiler batch starting"
+        );
+
         let db_ref = db.clone();
 
         let smart_folders_rebuilt = plan.rebuild_all_smart_folders
@@ -163,7 +172,14 @@ pub async fn start_compiler_loop(
         let dirty_artifacts = match run_compilers(&db_ref, &plan).await {
             Ok(dirty_artifacts) => dirty_artifacts,
             Err(e) => {
-                tracing::error!("Compiler error: {e}");
+                tracing::error!(
+                    rebuild_status = plan.rebuild_status_bitmaps,
+                    dirty_tags = plan.dirty_tag_ids.len(),
+                    dirty_smart_folders = plan.dirty_smart_folder_ids.len(),
+                    dirty_files = plan.dirty_file_ids.len(),
+                    rebuild_all = plan.rebuild_all,
+                    "Compiler batch failed: {e}"
+                );
                 continue;
             }
         };
@@ -176,7 +192,14 @@ pub async fn start_compiler_loop(
         {
             Ok(published) => published,
             Err(e) => {
-                tracing::error!("Publish error after compilation: {e}");
+                tracing::error!(
+                    rebuild_status = plan.rebuild_status_bitmaps,
+                    dirty_tags = plan.dirty_tag_ids.len(),
+                    dirty_smart_folders = plan.dirty_smart_folder_ids.len(),
+                    dirty_files = plan.dirty_file_ids.len(),
+                    rebuild_all = plan.rebuild_all,
+                    "Publish failed after compilation: {e}"
+                );
                 continue;
             }
         };
@@ -211,35 +234,45 @@ async fn run_compilers(
 
     // 1. Status bitmap compiler
     if plan.rebuild_status_bitmaps || plan.rebuild_all {
+        let t = std::time::Instant::now();
         compile_status_bitmaps(db).await?;
+        tracing::debug!(elapsed_ms = t.elapsed().as_secs_f64() * 1000.0, "compiled status bitmaps");
         dirty_artifacts.insert(DerivedArtifact::Files);
     }
 
     // 2. Tag bitmap compiler (incremental)
     if plan.rebuild_all {
+        let t = std::time::Instant::now();
         compile_all_tag_bitmaps(db).await?;
+        tracing::debug!(elapsed_ms = t.elapsed().as_secs_f64() * 1000.0, "compiled all tag bitmaps");
         dirty_artifacts.insert(DerivedArtifact::Tags);
     } else if !plan.dirty_tag_ids.is_empty() {
+        let t = std::time::Instant::now();
         for &tag_id in &plan.dirty_tag_ids {
             compile_tag_bitmap(db, tag_id).await?;
         }
+        tracing::debug!(elapsed_ms = t.elapsed().as_secs_f64() * 1000.0, count = plan.dirty_tag_ids.len(), "compiled dirty tag bitmaps");
         dirty_artifacts.insert(DerivedArtifact::Tags);
     }
 
     // 3. Tag graph compiler (siblings, ancestors, implied tags)
     if plan.rebuild_tag_graph || plan.rebuild_all {
+        let t = std::time::Instant::now();
         compile_tag_graph(db).await?;
+        tracing::debug!(elapsed_ms = t.elapsed().as_secs_f64() * 1000.0, "compiled tag graph");
         dirty_artifacts.insert(DerivedArtifact::TagGraph);
     }
 
     // 4. Effective tag compiler
     if plan.rebuild_tag_graph || plan.rebuild_all || !plan.dirty_tag_ids.is_empty() {
+        let t = std::time::Instant::now();
         compile_effective_tags(
             db,
             &plan.dirty_tag_ids,
             plan.rebuild_all || plan.rebuild_tag_graph,
         )
         .await?;
+        tracing::debug!(elapsed_ms = t.elapsed().as_secs_f64() * 1000.0, "compiled effective tags");
         dirty_artifacts.insert(DerivedArtifact::EffectiveTags);
     }
 
@@ -249,40 +282,53 @@ async fn run_compilers(
         || !plan.dirty_tag_ids.is_empty()
         || plan.rebuild_status_bitmaps
     {
+        let t = std::time::Instant::now();
         compile_tagged_bitmap(db).await?;
+        tracing::debug!(elapsed_ms = t.elapsed().as_secs_f64() * 1000.0, "compiled tagged bitmap");
         dirty_artifacts.insert(DerivedArtifact::Tags);
     }
 
     // 5. Metadata projection compiler
     if plan.rebuild_all || plan.rebuild_tag_graph || !plan.dirty_file_ids.is_empty() {
+        let t = std::time::Instant::now();
         compile_metadata_projections(
             db,
             &plan.dirty_file_ids,
             plan.rebuild_all || plan.rebuild_tag_graph,
         )
         .await?;
+        tracing::debug!(elapsed_ms = t.elapsed().as_secs_f64() * 1000.0, "compiled metadata projections");
         dirty_artifacts.insert(DerivedArtifact::MetadataProjection);
     }
 
     // 6. Smart folder compiler
     if plan.rebuild_all_smart_folders || plan.rebuild_all {
+        let t = std::time::Instant::now();
         compile_all_smart_folders(db).await?;
+        tracing::debug!(elapsed_ms = t.elapsed().as_secs_f64() * 1000.0, "compiled all smart folders");
         dirty_artifacts.insert(DerivedArtifact::SmartFolders);
     } else if !plan.dirty_smart_folder_ids.is_empty() {
+        let t = std::time::Instant::now();
         for &sf_id in &plan.dirty_smart_folder_ids {
             compile_smart_folder(db, sf_id).await?;
         }
+        tracing::debug!(elapsed_ms = t.elapsed().as_secs_f64() * 1000.0, count = plan.dirty_smart_folder_ids.len(), "compiled dirty smart folders");
         dirty_artifacts.insert(DerivedArtifact::SmartFolders);
     }
 
     // 7. Sidebar compiler
     if plan.rebuild_sidebar || plan.rebuild_all {
+        let t = std::time::Instant::now();
         compile_sidebar(db).await?;
+        tracing::debug!(elapsed_ms = t.elapsed().as_secs_f64() * 1000.0, "compiled sidebar");
         dirty_artifacts.insert(DerivedArtifact::Sidebar);
     }
 
-    let elapsed = start.elapsed();
-    tracing::debug!("Compiler batch completed in {elapsed:?}");
+    tracing::debug!(
+        elapsed_ms = start.elapsed().as_secs_f64() * 1000.0,
+        artifacts = ?dirty_artifacts,
+        "compiler batch complete"
+    );
 
     Ok(dirty_artifacts)
 }

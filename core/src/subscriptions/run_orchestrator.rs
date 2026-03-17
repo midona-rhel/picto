@@ -112,6 +112,7 @@ impl SubscriptionRunOrchestrator {
         }
 
         publish_start(&id, &sub.name, "subscription", None, None);
+        tracing::info!(subscription_id = %id, name = %sub.name, queries = queries.len(), "subscription run starting");
 
         let db = db.clone();
         let blob_store = blob_store.clone();
@@ -224,6 +225,15 @@ impl SubscriptionRunOrchestrator {
                 } else {
                     "succeeded"
                 };
+
+                tracing::info!(
+                    subscription_id = %sub_id_str,
+                    status,
+                    downloaded = total_downloaded,
+                    skipped = total_skipped,
+                    errors = total_errors,
+                    "subscription run finished"
+                );
 
                 if let Some(ref statuses) = terminal_statuses {
                     statuses
