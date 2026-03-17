@@ -10,7 +10,10 @@ pub(super) async fn get_collection_outline(
     query: &GridPageSlimQuery,
     inputs: &QueryInputs,
 ) -> Result<GridOutlineResponse, String> {
-    let collection_id = query.collection_entity_id.expect("collection id required");
+    let collection_id = query
+        .scope
+        .collection_entity_id
+        .expect("collection id required");
     let member_file_ids = collection_member_ids(db, query, inputs).await?;
     if member_file_ids.is_empty() {
         return Ok(GridOutlineResponse {
@@ -44,7 +47,10 @@ pub(super) async fn get_collection_page(
     query: &GridPageSlimQuery,
     inputs: &QueryInputs,
 ) -> Result<GridPageSlimResponse, String> {
-    let collection_id = query.collection_entity_id.expect("collection id required");
+    let collection_id = query
+        .scope
+        .collection_entity_id
+        .expect("collection id required");
     let (member_file_ids, total_count) = collection_member_snapshot(db, query, inputs).await?;
 
     if member_file_ids.is_empty() {
@@ -105,7 +111,10 @@ async fn collection_member_snapshot(
     query: &GridPageSlimQuery,
     inputs: &QueryInputs,
 ) -> Result<(Vec<i64>, Option<i64>), String> {
-    let collection_id = query.collection_entity_id.expect("collection id required");
+    let collection_id = query
+        .scope
+        .collection_entity_id
+        .expect("collection id required");
     let cache_key = ScopeSnapshotKey {
         scope: "collection".to_string(),
         predicate_hash: collection_id as u64,

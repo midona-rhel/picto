@@ -214,18 +214,51 @@ impl From<crate::sqlite::files::FileRecord> for EntitySlim {
     }
 }
 
-#[derive(Debug, Deserialize, TS)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export_to = "../../src/shared/types/generated/commands/")]
-pub struct GridPageSlimQuery {
-    pub limit: Option<usize>,
-    pub cursor: Option<String>,
-    pub status: Option<String>,
-    #[serde(alias = "sortField")]
-    pub sort_field: Option<String>,
-    #[serde(alias = "sortOrder")]
-    pub sort_order: Option<String>,
+#[serde(rename_all = "snake_case")]
+pub enum GridScopeKind {
+    System,
+    Folder,
+    Collection,
+    Smart,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
+#[serde(rename_all = "snake_case")]
+pub enum GridSystemScopeKey {
+    All,
+    Inbox,
+    Trash,
+    Untagged,
+    Uncategorized,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS, Default)]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
+pub struct GridScopeSpec {
+    pub kind: GridScopeKind,
+    pub system_key: Option<GridSystemScopeKey>,
+    #[serde(alias = "folderId")]
+    #[ts(type = "number | null")]
+    pub folder_id: Option<i64>,
+    #[serde(alias = "collectionEntityId")]
+    #[ts(type = "number | null")]
+    pub collection_entity_id: Option<i64>,
     #[serde(alias = "smartFolderPredicate")]
     pub smart_folder_predicate: Option<SmartFolderPredicate>,
+}
+
+impl Default for GridScopeKind {
+    fn default() -> Self {
+        Self::System
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS, Default)]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
+pub struct GridFilterSpec {
     #[serde(alias = "searchTags")]
     pub search_tags: Option<Vec<String>>,
     #[serde(alias = "searchExcludedTags")]
@@ -240,31 +273,42 @@ pub struct GridPageSlimQuery {
     pub excluded_folder_ids: Option<Vec<i64>>,
     #[serde(alias = "folderMatchMode")]
     pub folder_match_mode: Option<String>,
-    /// Collection entity scope filter — restricts grid to members of this collection.
-    #[serde(alias = "collectionEntityId")]
-    #[ts(type = "number | null")]
-    pub collection_entity_id: Option<i64>,
-    /// Minimum rating filter (1-5)
     #[serde(alias = "ratingMin")]
     #[ts(type = "number | null")]
     pub rating_min: Option<i64>,
-    /// MIME prefix filters (e.g. ["image/", "video/"])
     #[serde(alias = "mimePrefixes")]
     pub mime_prefixes: Option<Vec<String>>,
-    /// Dominant color hex filter
     #[serde(alias = "colorHex")]
     pub color_hex: Option<String>,
-    /// Color tolerance / max distance (1-30, lower = stricter). Default 20.
     #[serde(alias = "colorAccuracy")]
     #[ts(type = "number | null")]
     pub color_accuracy: Option<f64>,
-    /// Free-text search query (FTS5 on name + notes)
     #[serde(alias = "searchText")]
     pub search_text: Option<String>,
-    /// Seed for deterministic random ordering (Random view)
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS, Default)]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
+pub struct GridSortSpec {
+    #[serde(alias = "field")]
+    pub field: Option<String>,
+    #[serde(alias = "order")]
+    pub order: Option<String>,
     #[serde(alias = "randomSeed")]
     #[ts(type = "number | null")]
     pub random_seed: Option<i64>,
+}
+
+#[derive(Debug, Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
+pub struct GridPageSlimQuery {
+    pub limit: Option<usize>,
+    pub cursor: Option<String>,
+    pub scope: GridScopeSpec,
+    #[serde(default)]
+    pub filters: GridFilterSpec,
+    #[serde(default)]
+    pub sort: GridSortSpec,
 }
 
 #[derive(Debug, Serialize)]
@@ -286,37 +330,50 @@ mod grid_query_tests {
         let raw = serde_json::json!({
             "limit": 100,
             "cursor": null,
-            "sortField": "imported_at",
-            "sortOrder": "desc",
-            "smartFolderPredicate": { "groups": [] },
-            "searchTags": ["series:test"],
-            "searchExcludedTags": ["artist:foo"],
-            "tagMatchMode": "any",
-            "folderIds": [42],
-            "excludedFolderIds": [99],
-            "folderMatchMode": "all",
-            "collectionEntityId": 7,
-            "ratingMin": 3,
-            "mimePrefixes": ["image/"],
-            "colorHex": "#ffffff",
-            "colorAccuracy": 12.0,
-            "searchText": "cat"
+            "scope": {
+                "kind": "collection",
+                "collectionEntityId": 7
+            },
+            "filters": {
+                "searchTags": ["series:test"],
+                "searchExcludedTags": ["artist:foo"],
+                "tagMatchMode": "any",
+                "folderIds": [42],
+                "excludedFolderIds": [99],
+                "folderMatchMode": "all",
+                "ratingMin": 3,
+                "mimePrefixes": ["image/"],
+                "colorHex": "#ffffff",
+                "colorAccuracy": 12.0,
+                "searchText": "cat"
+            },
+            "sort": {
+                "field": "imported_at",
+                "order": "desc"
+            }
         });
         let parsed: GridPageSlimQuery =
             serde_json::from_value(raw).expect("query should deserialize");
-        assert_eq!(parsed.sort_field.as_deref(), Some("imported_at"));
-        assert_eq!(parsed.sort_order.as_deref(), Some("desc"));
-        assert_eq!(parsed.folder_ids, Some(vec![42]));
-        assert_eq!(parsed.excluded_folder_ids, Some(vec![99]));
-        assert_eq!(parsed.folder_match_mode.as_deref(), Some("all"));
-        assert_eq!(parsed.collection_entity_id, Some(7));
-        assert_eq!(parsed.search_tags, Some(vec!["series:test".to_string()]));
+        assert_eq!(parsed.sort.field.as_deref(), Some("imported_at"));
+        assert_eq!(parsed.sort.order.as_deref(), Some("desc"));
+        assert_eq!(parsed.filters.folder_ids, Some(vec![42]));
+        assert_eq!(parsed.filters.excluded_folder_ids, Some(vec![99]));
+        assert_eq!(parsed.filters.folder_match_mode.as_deref(), Some("all"));
+        assert_eq!(parsed.scope.collection_entity_id, Some(7));
         assert_eq!(
-            parsed.search_excluded_tags,
+            parsed.scope.kind,
+            super::GridScopeKind::Collection,
+        );
+        assert_eq!(
+            parsed.filters.search_tags,
+            Some(vec!["series:test".to_string()])
+        );
+        assert_eq!(
+            parsed.filters.search_excluded_tags,
             Some(vec!["artist:foo".to_string()])
         );
-        assert_eq!(parsed.tag_match_mode.as_deref(), Some("any"));
-        assert_eq!(parsed.search_text.as_deref(), Some("cat"));
+        assert_eq!(parsed.filters.tag_match_mode.as_deref(), Some("any"));
+        assert_eq!(parsed.filters.search_text.as_deref(), Some("cat"));
     }
 }
 
@@ -373,24 +430,13 @@ pub enum SelectionMode {
 pub struct SelectionQuerySpec {
     pub mode: SelectionMode,
     pub hashes: Option<Vec<String>>,
-    pub search_tags: Option<Vec<String>>,
-    pub search_excluded_tags: Option<Vec<String>>,
-    pub tag_match_mode: Option<String>,
-    pub smart_folder_predicate: Option<SmartFolderPredicate>,
-    pub smart_folder_sort_field: Option<String>,
-    pub smart_folder_sort_order: Option<String>,
-    pub sort_field: Option<String>,
-    pub sort_order: Option<String>,
+    pub scope: GridScopeSpec,
+    #[serde(default)]
+    pub filters: GridFilterSpec,
+    #[serde(default)]
+    pub sort: GridSortSpec,
     pub excluded_hashes: Option<Vec<String>>,
     pub included_hashes: Option<Vec<String>>,
-    pub status: Option<String>,
-    #[ts(type = "number | null")]
-    pub collection_entity_id: Option<i64>,
-    #[ts(type = "number[] | null")]
-    pub folder_ids: Option<Vec<i64>>,
-    #[ts(type = "number[] | null")]
-    pub excluded_folder_ids: Option<Vec<i64>>,
-    pub folder_match_mode: Option<String>,
 }
 
 #[derive(Debug, Serialize)]

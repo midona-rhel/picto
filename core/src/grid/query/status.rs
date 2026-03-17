@@ -1,6 +1,8 @@
 use crate::sqlite::bitmaps::BitmapKey;
 use crate::sqlite::SqliteDatabase;
-use crate::types::{parse_file_status, EntitySlim, GridPageSlimQuery, GridPageSlimResponse};
+use crate::types::{
+    parse_file_status, EntitySlim, GridPageSlimQuery, GridPageSlimResponse, GridSystemScopeKey,
+};
 
 use super::common::{GridOutlineResponse, QueryInputs};
 use super::cursor::slim_cursor_value_for_sort;
@@ -10,8 +12,8 @@ pub(super) async fn get_status_outline(
     query: &GridPageSlimQuery,
     inputs: &QueryInputs,
 ) -> Result<GridOutlineResponse, String> {
-    let rows = if query.status.as_deref() == Some("random") {
-        random_rows(db, inputs, None, query.random_seed.unwrap_or(0)).await?
+    let rows = if query.sort.field.as_deref() == Some("random") {
+        random_rows(db, inputs, None, query.sort.random_seed.unwrap_or(0)).await?
     } else {
         status_rows_with_total(db, query, inputs, None).await?.0
     };
@@ -27,8 +29,8 @@ pub(super) async fn get_status_page(
     query: &GridPageSlimQuery,
     inputs: &QueryInputs,
 ) -> Result<GridPageSlimResponse, String> {
-    if query.status.as_deref() == Some("random") {
-        let random_seed = query.random_seed.unwrap_or(0);
+    if query.sort.field.as_deref() == Some("random") {
+        let random_seed = query.sort.random_seed.unwrap_or(0);
         let mut rows = random_rows(db, inputs, query.cursor.clone(), random_seed).await?;
         let has_more = rows.len() as i64 > inputs.limit;
         if has_more {
@@ -159,8 +161,9 @@ fn status_bitmap(
 }
 
 fn status_int(query: &GridPageSlimQuery) -> Result<Option<i64>, String> {
-    match query.status.as_deref() {
-        Some(s) => Ok(Some(parse_file_status(s)?)),
-        None => Ok(None),
+    match query.scope.system_key {
+        Some(GridSystemScopeKey::Inbox) => Ok(Some(parse_file_status("inbox")?)),
+        Some(GridSystemScopeKey::Trash) => Ok(Some(parse_file_status("trash")?)),
+        Some(_) | None => Ok(None),
     }
 }

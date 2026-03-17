@@ -11,7 +11,7 @@ mod status;
 use common::QueryInputs;
 
 use crate::sqlite::SqliteDatabase;
-use crate::types::{GridPageSlimQuery, GridPageSlimResponse};
+use crate::types::{GridPageSlimQuery, GridPageSlimResponse, GridScopeKind};
 
 pub use common::GridOutlineResponse;
 
@@ -21,7 +21,7 @@ pub async fn get_grid_outline(
 ) -> Result<GridOutlineResponse, String> {
     let inputs = QueryInputs::build(db, &query).await?;
 
-    if query.collection_entity_id.is_some() {
+    if query.scope.kind == GridScopeKind::Collection {
         return collection::get_collection_outline(db, &query, &inputs).await;
     }
 
@@ -38,7 +38,7 @@ pub async fn get_grid_page_slim(
 ) -> Result<GridPageSlimResponse, String> {
     let inputs = QueryInputs::build(db, &query).await?;
 
-    if query.collection_entity_id.is_some() {
+    if query.scope.kind == GridScopeKind::Collection {
         return collection::get_collection_page(db, &query, &inputs).await;
     }
 

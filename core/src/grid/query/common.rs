@@ -27,11 +27,13 @@ impl QueryInputs {
         query: &GridPageSlimQuery,
     ) -> Result<Self, String> {
         let sort_field = query
-            .sort_field
+            .sort
+            .field
             .clone()
             .unwrap_or_else(|| "imported_at".to_string());
         let sort_dir = query
-            .sort_order
+            .sort
+            .order
             .clone()
             .unwrap_or_else(|| "desc".to_string());
         let grid_filters = build_grid_filters(query);
@@ -48,13 +50,15 @@ impl QueryInputs {
 }
 
 fn build_grid_filters(query: &GridPageSlimQuery) -> Option<GridFilters> {
-    let has_any = query.rating_min.is_some()
+    let has_any = query.filters.rating_min.is_some()
         || query
+            .filters
             .mime_prefixes
             .as_ref()
             .map(|v| !v.is_empty())
             .unwrap_or(false)
         || query
+            .filters
             .search_text
             .as_ref()
             .map(|s| !s.is_empty())
@@ -65,9 +69,9 @@ fn build_grid_filters(query: &GridPageSlimQuery) -> Option<GridFilters> {
     }
 
     Some(GridFilters {
-        rating_min: query.rating_min,
-        mime_prefixes: query.mime_prefixes.clone(),
-        search_text: query.search_text.clone(),
+        rating_min: query.filters.rating_min,
+        mime_prefixes: query.filters.mime_prefixes.clone(),
+        search_text: query.filters.search_text.clone(),
     })
 }
 
@@ -75,12 +79,16 @@ async fn color_file_ids(
     db: &SqliteDatabase,
     query: &GridPageSlimQuery,
 ) -> Result<Option<HashSet<i64>>, String> {
-    let Some(ref hex) = query.color_hex else {
+    let Some(ref hex) = query.filters.color_hex else {
         return Ok(None);
     };
 
     let hex = hex.clone();
-    let tolerance = query.color_accuracy.unwrap_or(20.0).clamp(1.0, 30.0);
+    let tolerance = query
+        .filters
+        .color_accuracy
+        .unwrap_or(20.0)
+        .clamp(1.0, 30.0);
     let ids: Vec<i64> = db
         .with_read_conn(move |conn| color_filter_ids(conn, &hex, tolerance))
         .await?;

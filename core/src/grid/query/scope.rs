@@ -4,7 +4,9 @@ use std::time::Instant;
 use crate::scope::resolver::{resolve_scope, ScopeFilter};
 use crate::sqlite::files::FileMetadataSlim;
 use crate::sqlite::{ScopeSnapshot, ScopeSnapshotKey, SqliteDatabase};
-use crate::types::{EntitySlim, GridPageSlimQuery, GridPageSlimResponse};
+use crate::types::{
+    EntitySlim, GridPageSlimQuery, GridPageSlimResponse, GridScopeKind, GridSystemScopeKey,
+};
 
 use super::common::{GridOutlineResponse, QueryInputs};
 use super::cursor::slim_cursor_value_for_sort;
@@ -15,8 +17,8 @@ pub(super) fn needs_scope(query: &GridPageSlimQuery) -> bool {
         || scope_filter.has_search_tags()
         || scope_filter.has_folder()
         || matches!(
-            scope_filter.status.as_deref(),
-            Some("untagged") | Some("uncategorized")
+            scope_filter.system_key(),
+            Some(GridSystemScopeKey::Untagged) | Some(GridSystemScopeKey::Uncategorized)
         )
 }
 
@@ -97,16 +99,18 @@ fn build_scope_cache_key(
 ) -> ScopeSnapshotKey {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
 
-    let scope = if query.collection_entity_id.is_some() {
+    let scope = if query.scope.kind == GridScopeKind::Collection {
         "collection".to_string()
-    } else if query.smart_folder_predicate.is_some() {
+    } else if query.scope.kind == GridScopeKind::Smart {
         "smart_folder".to_string()
     } else if query
+        .filters
         .search_tags
         .as_ref()
         .map(|t| !t.is_empty())
         .unwrap_or(false)
         || query
+            .filters
             .search_excluded_tags
             .as_ref()
             .map(|t| !t.is_empty())
@@ -114,55 +118,67 @@ fn build_scope_cache_key(
     {
         "search_tags".to_string()
     } else if query
+        .filters
         .folder_ids
         .as_ref()
         .map(|v| !v.is_empty())
         .unwrap_or(false)
         || query
+            .filters
             .excluded_folder_ids
             .as_ref()
             .map(|v| !v.is_empty())
             .unwrap_or(false)
+        || query.scope.kind == GridScopeKind::Folder
     {
         "folder".to_string()
-    } else if query.status.as_deref() == Some("uncategorized") {
+    } else if query.scope.system_key == Some(GridSystemScopeKey::Uncategorized) {
         "uncategorized".to_string()
-    } else if query.status.as_deref() == Some("untagged") {
+    } else if query.scope.system_key == Some(GridSystemScopeKey::Untagged) {
         "untagged".to_string()
     } else {
-        format!("status:{}", query.status.as_deref().unwrap_or("active"))
+        format!(
+            "status:{}",
+            match query.scope.system_key.unwrap_or(GridSystemScopeKey::All) {
+                GridSystemScopeKey::All => "active",
+                GridSystemScopeKey::Inbox => "inbox",
+                GridSystemScopeKey::Trash => "trash",
+                GridSystemScopeKey::Untagged => "untagged",
+                GridSystemScopeKey::Uncategorized => "uncategorized",
+            }
+        )
     };
 
-    if let Some(cid) = query.collection_entity_id {
+    if let Some(cid) = query.scope.collection_entity_id {
         cid.hash(&mut hasher);
     }
-    if let Some(ref pred) = query.smart_folder_predicate {
+    if let Some(ref pred) = query.scope.smart_folder_predicate {
         if let Ok(json) = serde_json::to_string(pred) {
             json.hash(&mut hasher);
         }
     }
-    if let Some(ref tags) = query.search_tags {
+    if let Some(ref tags) = query.filters.search_tags {
         tags.hash(&mut hasher);
     }
-    if let Some(ref tags) = query.search_excluded_tags {
+    if let Some(ref tags) = query.filters.search_excluded_tags {
         tags.hash(&mut hasher);
     }
-    if let Some(ref mode) = query.tag_match_mode {
+    if let Some(ref mode) = query.filters.tag_match_mode {
         mode.hash(&mut hasher);
     }
-    if let Some(ref fids) = query.folder_ids {
+    if let Some(ref fids) = query.filters.folder_ids {
         fids.hash(&mut hasher);
     }
-    if let Some(ref fids) = query.excluded_folder_ids {
+    if let Some(ref fids) = query.filters.excluded_folder_ids {
         fids.hash(&mut hasher);
     }
-    if let Some(ref mode) = query.folder_match_mode {
+    if let Some(ref mode) = query.filters.folder_match_mode {
         mode.hash(&mut hasher);
     }
-    if let Some(ref hex) = query.color_hex {
+    if let Some(ref hex) = query.filters.color_hex {
         hex.hash(&mut hasher);
     }
-    if let Some(acc) = query.color_accuracy {
+    if let Some(acc) = query.filters.color_accuracy {
         acc.to_bits().hash(&mut hasher);
     }
 
@@ -198,7 +214,9 @@ async fn get_scoped_snapshot(
     if let Some(ref color_ids) = inputs.color_file_ids {
         ids.retain(|id| color_ids.contains(id));
     }
-    ids = db.filter_visible_entity_ids(&ids).await?;
+    if query.scope.kind != GridScopeKind::Collection {
+        ids = db.filter_visible_entity_ids(&ids).await?;
+    }
 
     let total_count = ids.len() as i64;
     db.scope_cache_put(
@@ -222,7 +240,11 @@ async fn list_scoped_rows(
 ) -> Result<Vec<FileMetadataSlim>, String> {
     let gf = inputs.grid_filters.clone();
     if is_single_folder(query) {
-        let fid = query.folder_ids.as_ref().unwrap()[0];
+        let fid = query
+            .scope
+            .folder_id
+            .or_else(|| query.filters.folder_ids.as_ref().and_then(|ids| ids.first().copied()))
+            .expect("single folder id required");
         db.with_read_conn(move |conn| {
             crate::sqlite::files::list_files_slim_by_folder_rank(
                 conn,
@@ -256,17 +278,25 @@ async fn list_scoped_rows(
 
 fn is_single_folder(query: &GridPageSlimQuery) -> bool {
     let has_excluded_folders = query
+        .filters
         .excluded_folder_ids
         .as_ref()
         .map(|v| !v.is_empty())
         .unwrap_or(false);
-    query
-        .folder_ids
-        .as_ref()
-        .map(|v| v.len() == 1)
-        .unwrap_or(false)
+    let single_folder = if query.scope.kind == GridScopeKind::Folder {
+        query.scope.folder_id.is_some()
+    } else {
+        query
+            .filters
+            .folder_ids
+            .as_ref()
+            .map(|v| v.len() == 1)
+            .unwrap_or(false)
+    };
+    single_folder
         && !has_excluded_folders
         && query
+            .filters
             .folder_match_mode
             .as_deref()
             .map(|m| m == "all" || m == "exact")

@@ -116,7 +116,7 @@ pub async fn selection_bitmap_for_all_results(
         .iter()
         .map(|id| id as i64)
         .collect::<Vec<_>>();
-    let base_ids = if selection.collection_entity_id.is_some() {
+    let base_ids = if selection.scope.collection_entity_id.is_some() {
         resolved_ids
     } else {
         db.filter_visible_entity_ids(&resolved_ids).await?

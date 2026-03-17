@@ -147,7 +147,7 @@ pub async fn update_file_status(
         let bitmap = resolve_selection_bitmap(state, &selection).await?;
         let count = bitmap.len() as usize;
         if count > 0 {
-            let mut folder_ids = selection.folder_ids.clone().unwrap_or_default();
+            let mut folder_ids = selection.filters.folder_ids.clone().unwrap_or_default();
             if matches!(selection.mode, SelectionMode::ExplicitHashes) {
                 let explicit_hashes = selection.hashes.clone().unwrap_or_default();
                 let mut from_hashes =
