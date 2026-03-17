@@ -88,8 +88,8 @@ export function useInspectorFetch(
       setNotes('');
       return;
     }
-    setSourceUrls(fileMetadata?.file.source_urls ?? []);
-    setNotes(fileMetadata?.file.notes?.description ?? '');
+    setSourceUrls(fileMetadata?.entity.source_urls ?? []);
+    setNotes(fileMetadata?.entity.notes?.description ?? '');
   }, [fileMetadata, collectionSummary, selectedCollection]);
 
   useEffect(() => {
@@ -211,11 +211,11 @@ export function useInspectorFetch(
           const shared = first.filter((tag) =>
             allMetadata.every((m) => m.tags.some((t) => t.raw_tag === tag.raw_tag)),
           );
-          const firstNotes = allMetadata[0].file.notes?.description ?? '';
-          const allNotesMatch = allMetadata.every((m) => (m.file.notes?.description ?? '') === firstNotes);
-          const firstUrls = allMetadata[0].file.source_urls ?? [];
+          const firstNotes = allMetadata[0].entity.notes?.description ?? '';
+          const allNotesMatch = allMetadata.every((m) => (m.entity.notes?.description ?? '') === firstNotes);
+          const firstUrls = allMetadata[0].entity.source_urls ?? [];
           const firstUrlsKey = JSON.stringify(firstUrls);
-          const allUrlsMatch = allMetadata.every((m) => JSON.stringify(m.file.source_urls ?? []) === firstUrlsKey);
+          const allUrlsMatch = allMetadata.every((m) => JSON.stringify(m.entity.source_urls ?? []) === firstUrlsKey);
           setFileMetadata(null);
           setFileTags(shared);
           setNotes(allNotesMatch ? firstNotes : '');

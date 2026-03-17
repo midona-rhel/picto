@@ -81,22 +81,22 @@ export const useGridMetadataStore = create<CacheState>((set, get) => ({
 
     if (missing.length > 0) {
       try {
-        const resp = await api.grid.getFilesMetadataBatch(missing);
+        const resp = await api.grid.getEntitiesMetadataBatch(missing);
         const results: ResolvedMetadata[] = Object.values(resp.items ?? {}).map(meta => ({
           file: {
-            hash: meta.file.hash,
-            name: meta.file.name,
-            mime: meta.file.mime,
-            width: meta.file.width,
-            height: meta.file.height,
-            size: meta.file.size,
-            status: typeof meta.file.status === 'string' ? parseInt(meta.file.status) || 0 : meta.file.status as unknown as number,
-            rating: meta.file.rating,
-            imported_at: meta.file.imported_at,
-            dominant_color_hex: meta.file.dominant_colors?.[0]?.hex ?? null as string | null,
-            duration_ms: meta.file.duration_ms,
-            num_frames: meta.file.num_frames,
-            has_audio: meta.file.has_audio,
+            hash: meta.entity.hash,
+            name: meta.entity.name,
+            mime: meta.entity.mime,
+            width: meta.entity.width,
+            height: meta.entity.height,
+            size: meta.entity.size,
+            status: typeof meta.entity.status === 'string' ? parseInt(meta.entity.status) || 0 : meta.entity.status as unknown as number,
+            rating: meta.entity.rating,
+            imported_at: meta.entity.imported_at,
+            dominant_color_hex: meta.entity.dominant_colors?.[0]?.hex ?? null as string | null,
+            duration_ms: meta.entity.duration_ms,
+            num_frames: meta.entity.num_frames,
+            has_audio: meta.entity.has_audio,
           },
           tags: meta.tags.map(t => ({
             tag_id: 0,

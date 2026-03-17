@@ -37,7 +37,7 @@ export async function prefetchMetadataBatch(hashes: string[]): Promise<void> {
   if (unique.length === 0) return;
   const MAX_BATCH = 200;
   for (let i = 0; i < unique.length; i += MAX_BATCH) {
-    await api.grid.getFilesMetadataBatch(unique.slice(i, i + MAX_BATCH));
+    await api.grid.getEntitiesMetadataBatch(unique.slice(i, i + MAX_BATCH));
   }
 }
 

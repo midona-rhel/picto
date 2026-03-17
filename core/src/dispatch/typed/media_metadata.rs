@@ -11,7 +11,7 @@ use crate::state::AppState;
 
 #[derive(Debug, Deserialize, TS)]
 #[ts(export_to = "../../src/shared/types/generated/commands/")]
-pub struct GetFileAllMetadataInput {
+pub struct GetMediaEntityMetadataInput {
     pub hash: String,
 }
 
@@ -19,7 +19,7 @@ pub struct GetFileAllMetadataInput {
 /// only present fields are applied. Use `null` to clear rating/name.
 #[derive(Debug, Deserialize, TS)]
 #[ts(export_to = "../../src/shared/types/generated/commands/")]
-pub struct UpdateFileMetadataInput {
+pub struct UpdateMediaEntityMetadataInput {
     pub hash: String,
     #[serde(default, deserialize_with = "deserialize_some")]
     #[ts(type = "number | null")]
@@ -37,18 +37,21 @@ use super::super::common::deserialize_some;
 
 // ─── Handlers ──────────────────────────────────────────────────────────────
 
-pub async fn get_file_all_metadata(
+pub async fn get_media_entity_metadata(
     state: &AppState,
-    input: GetFileAllMetadataInput,
+    input: GetMediaEntityMetadataInput,
 ) -> Result<serde_json::Value, String> {
-    let result =
-        crate::metadata::query::MetadataQuery::get_file_all_metadata(&state.db, input.hash).await?;
+    let result = crate::metadata::query::MetadataQuery::get_entity_all_metadata(
+        &state.db,
+        input.hash,
+    )
+    .await?;
     serde_json::to_value(&result).map_err(|e| e.to_string())
 }
 
-pub async fn update_file_metadata(
+pub async fn update_media_entity_metadata(
     state: &AppState,
-    input: UpdateFileMetadataInput,
+    input: UpdateMediaEntityMetadataInput,
 ) -> Result<(), String> {
     let hash = input.hash;
 
@@ -85,7 +88,7 @@ pub async fn update_file_metadata(
     }
 
     let impact = crate::runtime_contract::mutation_builder::MutationImpact::file_metadata(hash);
-    crate::events::emit_mutation("update_file_metadata", impact);
+    crate::events::emit_mutation("update_media_entity_metadata", impact);
     Ok(())
 }
 

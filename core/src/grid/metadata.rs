@@ -10,7 +10,8 @@ use crate::metadata::db::ResolvedMetadataFull;
 use crate::metadata::query::file_tag_to_resolved_info;
 use crate::sqlite::SqliteDatabase;
 use crate::types::{
-    DominantColorDto, EntityDetails, EntityMetadataBatchResponse, FileAllMetadata, ResolvedTagInfo,
+    DominantColorDto, EntityAllMetadata, EntityDetails, EntityMetadataBatchResponse,
+    ResolvedTagInfo,
 };
 
 static METADATA_BATCH_PREFETCH_SEMAPHORE: OnceLock<tokio::sync::Semaphore> = OnceLock::new();
@@ -19,7 +20,7 @@ fn metadata_batch_prefetch_semaphore() -> &'static tokio::sync::Semaphore {
     METADATA_BATCH_PREFETCH_SEMAPHORE.get_or_init(|| tokio::sync::Semaphore::new(2))
 }
 
-pub async fn get_files_metadata_batch(
+pub async fn get_entities_metadata_batch(
     db: &SqliteDatabase,
     hashes: Vec<String>,
 ) -> Result<EntityMetadataBatchResponse, String> {
@@ -39,7 +40,7 @@ pub async fn get_files_metadata_batch(
         .filter(|h| seen.insert(h.clone()))
         .take(MAX_BATCH)
         .collect();
-    let mut items: HashMap<String, FileAllMetadata> = HashMap::with_capacity(hashes.len());
+    let mut items: HashMap<String, EntityAllMetadata> = HashMap::with_capacity(hashes.len());
     let mut missing = Vec::new();
 
     let local_started = Instant::now();
@@ -84,8 +85,8 @@ pub async fn get_files_metadata_batch(
             let has_thumbnail = slim.mime.starts_with("image/") || slim.mime.starts_with("video/");
             items.insert(
                 hash.clone(),
-                FileAllMetadata {
-                    file: EntityDetails {
+                EntityAllMetadata {
+                    entity: EntityDetails {
                         hash: slim.hash,
                         name: slim.name,
                         size: slim.size,
@@ -122,7 +123,7 @@ pub async fn get_files_metadata_batch(
     {
         tracing::warn!(
             target: "picto::core::grid_controller",
-            "slow get_files_metadata_batch total_ms={:.2} local_ms={:.2} merge_ms={:.2} req_hashes={} missing={}",
+            "slow get_entities_metadata_batch total_ms={:.2} local_ms={:.2} merge_ms={:.2} req_hashes={} missing={}",
             total_ms,
             local_ms,
             merge_ms,

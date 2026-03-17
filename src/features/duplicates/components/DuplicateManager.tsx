@@ -132,24 +132,24 @@ export function DuplicateManager() {
 
     const loadFileInfo = async () => {
       try {
-        const batch = await api.grid.getFilesMetadataBatch([
+        const batch = await api.grid.getEntitiesMetadataBatch([
           currentPair.hash_a,
           currentPair.hash_b,
         ]);
 
         const buildInfo = (hash: string): PairFileInfo => {
           const meta = batch.items[hash];
-          const mime = meta?.file.mime ?? 'image/jpeg';
+          const mime = meta?.entity.mime ?? 'image/jpeg';
           return {
             hash,
-            name: meta?.file.name ?? `${hash.slice(0, 12)}...`,
-            size: meta?.file.size ?? 0,
+            name: meta?.entity.name ?? `${hash.slice(0, 12)}...`,
+            size: meta?.entity.size ?? 0,
             mime,
-            width: meta?.file.width ?? 0,
-            height: meta?.file.height ?? 0,
-            rating: meta?.file.rating ?? null,
+            width: meta?.entity.width ?? 0,
+            height: meta?.entity.height ?? 0,
+            rating: meta?.entity.rating ?? null,
             tags: meta?.tags.map((t) => t.display_tag) ?? [],
-            sourceUrls: meta?.file.source_urls ?? [],
+            sourceUrls: meta?.entity.source_urls ?? [],
             imageUrl: mediaFileUrl(hash, mime),
             thumbUrl: mediaThumbnailUrl(hash),
           };

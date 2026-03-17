@@ -92,9 +92,9 @@ function normalizeSmartFolder(r: Record<string, unknown>): SmartFolder {
 
 const filesApi = {
   get: (hash: string) =>
-    invokeTyped('get_file', { hash }) as Promise<EntityDetails | null>,
+    invokeTyped('get_entity', { hash }) as Promise<EntityDetails | null>,
   getAllMetadata: (hash: string) =>
-    invokeTyped('get_file_all_metadata', { hash }) as Promise<EntityAllMetadata>,
+    invokeTyped('get_media_entity_metadata', { hash }) as Promise<EntityAllMetadata>,
   setStatus: (hash: string, status: string) =>
     invokeTyped('update_file_status', { hash, status } as never) as unknown as Promise<void>,
   setStatusSelection: (selection: SelectionQuerySpec, status: string) =>
@@ -104,13 +104,13 @@ const filesApi = {
   deleteSelection: (selection: SelectionQuerySpec) =>
     invokeTyped('delete_files', { selection } as never),
   updateRating: (hash: string, rating: number | null) =>
-    invokeTyped('update_file_metadata', { hash, rating } as never) as unknown as Promise<void>,
+    invokeTyped('update_media_entity_metadata', { hash, rating } as never) as unknown as Promise<void>,
   setName: (hash: string, name: string | null) =>
-    invokeTyped('update_file_metadata', { hash, name } as never) as unknown as Promise<void>,
+    invokeTyped('update_media_entity_metadata', { hash, name } as never) as unknown as Promise<void>,
   setSourceUrls: (hash: string, urls: string[]) =>
-    invokeTyped('update_file_metadata', { hash, source_urls: urls } as never) as unknown as Promise<void>,
+    invokeTyped('update_media_entity_metadata', { hash, source_urls: urls } as never) as unknown as Promise<void>,
   setNotes: (hash: string, notes: Record<string, string>) =>
-    invokeTyped('update_file_metadata', { hash, notes } as never) as unknown as Promise<void>,
+    invokeTyped('update_media_entity_metadata', { hash, notes } as never) as unknown as Promise<void>,
   resolvePath: (hash: string) =>
     invokeTyped('resolve_file_path', { hash }),
   resolveThumbnailPath: (hash: string) =>
@@ -141,8 +141,8 @@ export const api = {
       invokeTyped('get_grid_page_slim', { query } as never) as Promise<GridPageSlimResponse>,
     getOutline: (query: GridPageSlimQuery) =>
       invoke('get_grid_outline', { query }) as Promise<GridOutlineResponse>,
-    getFilesMetadataBatch: (hashes: string[]) =>
-      invokeTyped('get_files_metadata_batch', { hashes }) as Promise<EntityMetadataBatchResponse>,
+    getEntitiesMetadataBatch: (hashes: string[]) =>
+      invokeTyped('get_entities_metadata_batch', { hashes }) as Promise<EntityMetadataBatchResponse>,
   },
 
   files: filesApi,

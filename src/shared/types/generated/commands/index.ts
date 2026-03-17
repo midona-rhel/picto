@@ -61,15 +61,15 @@ export type { UpdateSelectionMetadataInput } from './UpdateSelectionMetadataInpu
 
 // Re-export generated input types — grid
 export type { GetGridPageSlimInput } from './GetGridPageSlimInput';
-export type { GetFileInput } from './GetFileInput';
-export type { GetFilesMetadataBatchInput } from './GetFilesMetadataBatchInput';
+export type { GetEntityInput } from './GetEntityInput';
+export type { GetEntitiesMetadataBatchInput } from './GetEntitiesMetadataBatchInput';
 
 // Re-export generated input types — files_metadata
-export type { GetFileAllMetadataInput } from './GetFileAllMetadataInput';
+export type { GetMediaEntityMetadataInput } from './GetMediaEntityMetadataInput';
 export type { GetFileTagsDisplayInput } from './GetFileTagsDisplayInput';
 export type { GetFileParentsInput } from './GetFileParentsInput';
 export type { GetFileNotesInput } from './GetFileNotesInput';
-export type { UpdateFileMetadataInput } from './UpdateFileMetadataInput';
+export type { UpdateMediaEntityMetadataInput } from './UpdateMediaEntityMetadataInput';
 
 // Re-export generated input types — files_media
 export type { ResolveFilePathInput } from './ResolveFilePathInput';
@@ -194,13 +194,13 @@ import type { RemoveTagsSelectionInput } from './RemoveTagsSelectionInput';
 import type { GetSelectionSummaryInput } from './GetSelectionSummaryInput';
 import type { UpdateSelectionMetadataInput } from './UpdateSelectionMetadataInput';
 import type { GetGridPageSlimInput } from './GetGridPageSlimInput';
-import type { GetFileInput } from './GetFileInput';
-import type { GetFilesMetadataBatchInput } from './GetFilesMetadataBatchInput';
-import type { GetFileAllMetadataInput } from './GetFileAllMetadataInput';
+import type { GetEntityInput } from './GetEntityInput';
+import type { GetEntitiesMetadataBatchInput } from './GetEntitiesMetadataBatchInput';
+import type { GetMediaEntityMetadataInput } from './GetMediaEntityMetadataInput';
 import type { GetFileTagsDisplayInput } from './GetFileTagsDisplayInput';
 import type { GetFileParentsInput } from './GetFileParentsInput';
 import type { GetFileNotesInput } from './GetFileNotesInput';
-import type { UpdateFileMetadataInput } from './UpdateFileMetadataInput';
+import type { UpdateMediaEntityMetadataInput } from './UpdateMediaEntityMetadataInput';
 import type { ResolveFilePathInput } from './ResolveFilePathInput';
 import type { OpenFileDefaultInput } from './OpenFileDefaultInput';
 import type { RevealInFolderInput } from './RevealInFolderInput';
@@ -314,14 +314,14 @@ export interface TypedCommandMap {
   update_selection_metadata: { input: UpdateSelectionMetadataInput; output: number };
   // grid
   get_grid_page_slim: { input: GetGridPageSlimInput; output: unknown };
-  get_file: { input: GetFileInput; output: unknown };
-  get_files_metadata_batch: { input: GetFilesMetadataBatchInput; output: unknown };
+  get_entity: { input: GetEntityInput; output: unknown };
+  get_entities_metadata_batch: { input: GetEntitiesMetadataBatchInput; output: unknown };
   get_file_count: { input: Record<string, never>; output: unknown };
   // files_metadata
-  get_file_all_metadata: { input: GetFileAllMetadataInput; output: unknown };
+  get_media_entity_metadata: { input: GetMediaEntityMetadataInput; output: unknown };
   get_file_tags_display: { input: GetFileTagsDisplayInput; output: unknown };
   get_file_parents: { input: GetFileParentsInput; output: unknown };
-  update_file_metadata: { input: UpdateFileMetadataInput; output: null };
+  update_media_entity_metadata: { input: UpdateMediaEntityMetadataInput; output: null };
   get_file_notes: { input: GetFileNotesInput; output: unknown };
   get_storage_stats: { input: Record<string, never>; output: unknown };
   // files_media

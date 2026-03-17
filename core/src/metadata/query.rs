@@ -5,7 +5,7 @@ use crate::sqlite::SqliteDatabase;
 use crate::tags::db::FileTagInfo;
 use crate::tags::normalize;
 use crate::types::{
-    DominantColorDto, FileAllMetadata, FileInfo, ResolvedTagInfo, TagInfo, tag_display_key,
+    DominantColorDto, EntityAllMetadata, EntityDetails, ResolvedTagInfo, TagInfo, tag_display_key,
 };
 
 pub fn file_tag_to_resolved_info(t: FileTagInfo) -> ResolvedTagInfo {
@@ -56,14 +56,14 @@ fn get_implied_tags(conn: &rusqlite::Connection, entity_id: i64) -> rusqlite::Re
 pub struct MetadataQuery;
 
 impl MetadataQuery {
-    pub async fn get_file_all_metadata(
+    pub async fn get_entity_all_metadata(
         db: &SqliteDatabase,
         hash: String,
-    ) -> Result<FileAllMetadata, String> {
-        let file = db
-            .get_file_by_hash(&hash)
+    ) -> Result<EntityAllMetadata, String> {
+        let entity = db
+            .get_entity_details_by_hash(&hash)
             .await?
-            .ok_or_else(|| format!("File not found: {}", hash))?;
+            .ok_or_else(|| format!("Entity not found: {}", hash))?;
         let local_tags = db.get_entity_tags(&hash).await?;
 
         let tags: Vec<ResolvedTagInfo> = local_tags
@@ -82,16 +82,16 @@ impl MetadataQuery {
             .with_read_conn(move |conn| get_implied_tags(conn, file_id))
             .await?;
 
-        let mut file_info = FileInfo::from(file);
-        file_info.dominant_colors = Some(
+        let mut entity_info: EntityDetails = entity;
+        entity_info.dominant_colors = Some(
             colors
                 .into_iter()
                 .map(|(hex, l, a, b)| DominantColorDto { hex, l, a, b })
                 .collect(),
         );
 
-        Ok(FileAllMetadata {
-            file: file_info,
+        Ok(EntityAllMetadata {
+            entity: entity_info,
             tags,
             parent_tags,
         })

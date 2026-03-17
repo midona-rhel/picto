@@ -341,21 +341,24 @@ pub struct ResolvedTagInfo {
 }
 
 #[derive(Debug, Serialize)]
-pub struct FileAllMetadata {
-    pub file: EntityDetails,
+pub struct EntityAllMetadata {
+    pub entity: EntityDetails,
     pub tags: Vec<ResolvedTagInfo>,
     pub parent_tags: Vec<TagInfo>,
 }
 
 #[derive(Debug, Serialize)]
 pub struct EntityMetadataBatchResponse {
-    pub items: HashMap<String, FileAllMetadata>,
+    pub items: HashMap<String, EntityAllMetadata>,
     pub missing: Vec<String>,
     pub generated_at: String,
 }
 
-pub type FileInfo = EntityDetails;
-pub type FileInfoSlim = EntitySlim;
+pub type EntityInfo = EntityDetails;
+pub type EntityInfoSlim = EntitySlim;
+pub type FileAllMetadata = EntityAllMetadata;
+pub type FileInfo = EntityInfo;
+pub type FileInfoSlim = EntityInfoSlim;
 
 #[derive(Debug, Clone, Deserialize, TS)]
 #[ts(export_to = "../../src/shared/types/generated/commands/")]

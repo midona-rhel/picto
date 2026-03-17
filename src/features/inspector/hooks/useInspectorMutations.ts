@@ -176,7 +176,7 @@ export function useInspectorMutations(
         const previousRatings = await Promise.all(
           hashes.map(async (hash) => ({
             hash,
-            rating: (await getMetadata(hash)).file.rating ?? null,
+            rating: (await getMetadata(hash)).entity.rating ?? null,
           })),
         );
         await Promise.all(hashes.map((hash) => api.files.updateRating(hash, rating)));
@@ -218,7 +218,7 @@ export function useInspectorMutations(
         const previousUrls = await Promise.all(
           hashes.map(async (hash) => ({
             hash,
-            urls: [...((await getMetadata(hash)).file.source_urls ?? [])],
+            urls: [...((await getMetadata(hash)).entity.source_urls ?? [])],
           })),
         );
         await Promise.all(hashes.map((hash) => {
@@ -345,8 +345,8 @@ export function useInspectorMutations(
       const metadata = await getMetadata(hash);
       setFileMetadata(metadata);
       setFileTags(metadata.tags);
-      setSourceUrls(metadata.file.source_urls ?? []);
-      setNotes(metadata.file.notes?.description ?? '');
+      setSourceUrls(metadata.entity.source_urls ?? []);
+      setNotes(metadata.entity.notes?.description ?? '');
       useGridMetadataStore.getState().invalidateHash(hash);
     },
     [selectedImages, selectedCollection, selectionSummarySpec, setFileMetadata, setFileTags, setSourceUrls, setNotes],

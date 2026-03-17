@@ -79,7 +79,7 @@ export interface ResolvedTagInfo {
 }
 
 export interface EntityAllMetadata {
-  file: {
+  entity: {
     hash: string;
     name: string | null;
     size: number;

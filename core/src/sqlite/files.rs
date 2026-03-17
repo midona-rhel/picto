@@ -1168,6 +1168,16 @@ impl SqliteDatabase {
             .await
     }
 
+    pub async fn get_entity_details_by_hash(
+        &self,
+        hash: &str,
+    ) -> Result<Option<crate::types::EntityDetails>, String> {
+        Ok(self
+            .get_file_by_hash(hash)
+            .await?
+            .map(crate::types::EntityDetails::from))
+    }
+
     pub async fn file_exists(&self, hash: &str) -> Result<bool, String> {
         let h = hash.to_string();
         self.with_read_conn(move |conn| file_exists(conn, &h)).await

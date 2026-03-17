@@ -43,8 +43,8 @@ pub async fn dispatch(command: &str, args_json: &str) -> Result<String, String> 
         // ── Grid ──────────────────────────────────────────────
         "get_grid_page_slim" => call!(typed::grid::get_grid_page_slim, &state, args),
         "get_grid_outline" => call!(typed::grid::get_grid_outline, &state, args),
-        "get_file" => call!(typed::grid::get_file, &state, args),
-        "get_files_metadata_batch" => call!(typed::grid::get_files_metadata_batch, &state, args),
+        "get_entity" => call!(typed::grid::get_entity, &state, args),
+        "get_entities_metadata_batch" => call!(typed::grid::get_entities_metadata_batch, &state, args),
 
         // ── Tags ──────────────────────────────────────────────
         "search_tags" => call!(typed::tags::search_tags, &state, args),
@@ -88,8 +88,8 @@ pub async fn dispatch(command: &str, args_json: &str) -> Result<String, String> 
         "reorder_smart_folders" => call!(typed::smart_folders::reorder_smart_folders, &state, args),
 
         // ── Media Metadata ────────────────────────────────────
-        "get_file_all_metadata" => call!(typed::media_metadata::get_file_all_metadata, &state, args),
-        "update_file_metadata" => call!(typed::media_metadata::update_file_metadata, &state, args),
+        "get_media_entity_metadata" => call!(typed::media_metadata::get_media_entity_metadata, &state, args),
+        "update_media_entity_metadata" => call!(typed::media_metadata::update_media_entity_metadata, &state, args),
         "get_storage_stats" => call!(typed::media_metadata::get_storage_stats, &state, args),
 
         // ── System ────────────────────────────────────────────

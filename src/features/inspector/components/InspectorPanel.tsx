@@ -572,7 +572,7 @@ export function InspectorPanel({
               {/* Reserve space to prevent layout shift */}
               {!selectedImage.is_collection && (
                 <ColorPalette
-                  colors={fileMetadata?.file.dominant_colors ?? []}
+                  colors={fileMetadata?.entity.dominant_colors ?? []}
                   onFindSimilarColor={handleFindSimilarColor}
                   onReanalyzeColors={onReanalyzeColors}
                 />
@@ -599,7 +599,7 @@ export function InspectorPanel({
               {renderFolders(!selectedImage.is_collection)}
               {selectedImage.is_collection
                 ? renderCollectionProperties()
-                : renderProperties(fileMetadata?.file.rating ?? selectedImage.rating ?? 0)}
+                : renderProperties(fileMetadata?.entity.rating ?? selectedImage.rating ?? 0)}
 
               <button className={styles.exportButton} onClick={onExport}>Export</button>
             </>
