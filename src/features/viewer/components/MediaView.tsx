@@ -1,6 +1,6 @@
 import { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo } from 'react';
 import { api } from '#desktop/api';
-import { IconAdjustments, IconCheck, IconFlipHorizontal, IconRotateClockwise, IconX } from '@tabler/icons-react';
+import { IconCheck, IconX } from '@tabler/icons-react';
 import { KbdTooltip } from '../../../shared/components/KbdTooltip';
 import { MediaItem, isVideoMime, toMasonryItem } from '../../grid/shared';
 import { VideoPlayer } from './VideoPlayer';
@@ -29,6 +29,9 @@ export interface MediaViewState {
   zoomScale: number;
   fitScale: number;
   isStripMode: boolean;
+  canAdjustImage: boolean;
+  rotation: 0 | 90 | 180 | 270;
+  mirrored: boolean;
 }
 
 export interface MediaViewControls {
@@ -37,6 +40,8 @@ export interface MediaViewControls {
   setZoomScale: (scale: number) => void;
   fitToWindow: () => void;
   fitActual: () => void;
+  rotateClockwise: () => void;
+  toggleMirror: () => void;
 }
 
 
@@ -172,7 +177,6 @@ export function MediaView({ images, currentIndex, onNavigate, onClose, onStateCh
       [currentHash],
     ),
   );
-  const toggleNavigationGrayscale = useNavigationImageAdjustmentsStore((store) => store.toggleGrayscale);
   const rotateNavigationImage = useNavigationImageAdjustmentsStore((store) => store.rotateClockwise);
   const toggleNavigationMirror = useNavigationImageAdjustmentsStore((store) => store.toggleMirrored);
 
@@ -282,6 +286,16 @@ export function MediaView({ images, currentIndex, onNavigate, onClose, onStateCh
         }
         fitActualRef.current();
       },
+      rotateClockwise: () => {
+        const hash = currentHashRef.current;
+        if (!hash || isVideoRef.current) return;
+        rotateNavigationImage(hash);
+      },
+      toggleMirror: () => {
+        const hash = currentHashRef.current;
+        if (!hash || isVideoRef.current) return;
+        toggleNavigationMirror(hash);
+      },
     };
   }
 
@@ -308,8 +322,11 @@ export function MediaView({ images, currentIndex, onNavigate, onClose, onStateCh
       zoomScale: scale,
       fitScale,
       isStripMode: stripMode,
+      canAdjustImage: !stripMode && !isVideo,
+      rotation: currentAdjustment.rotation,
+      mirrored: currentAdjustment.mirrored,
     }, controlsRef.current!);
-  }, [currentIndex, images.length, stripMode, totalCount]);
+  }, [currentAdjustment.mirrored, currentAdjustment.rotation, currentIndex, images.length, isVideo, stripMode, totalCount]);
 
   // Immediate report on navigation/mode changes
   useEffect(() => { reportState(); }, [reportState]);
@@ -406,21 +423,6 @@ export function MediaView({ images, currentIndex, onNavigate, onClose, onStateCh
     // The parent will remove the hash from images, so currentIndex may now point to the next image
     // (or be out of bounds if it was the last). We don't change index here — the parent handles removal.
   }, []);
-
-  const handleToggleCurrentGrayscale = useCallback(() => {
-    if (isVideo) return;
-    toggleNavigationGrayscale();
-  }, [isVideo, toggleNavigationGrayscale]);
-
-  const handleRotateCurrentImage = useCallback(() => {
-    if (!currentHash || isVideo) return;
-    rotateNavigationImage(currentHash);
-  }, [currentHash, isVideo, rotateNavigationImage]);
-
-  const handleToggleCurrentMirror = useCallback(() => {
-    if (!currentHash || isVideo) return;
-    toggleNavigationMirror(currentHash);
-  }, [currentHash, isVideo, toggleNavigationMirror]);
 
   // Keyboard — mount once, read everything from refs to avoid stale closures.
   // All bindings go through the central shortcuts registry so they appear in
@@ -622,14 +624,14 @@ export function MediaView({ images, currentIndex, onNavigate, onClose, onStateCh
                   style={{
                     left: 0,
                     top: 0,
-                    width: imageSize ? imageSize.width : undefined,
-                    height: imageSize ? imageSize.height : undefined,
-                    opacity: thumbLoaded ? 1 : 0,
-                    filter: currentAdjustment.grayscale ? 'grayscale(1)' : undefined,
-                    transform: mediaElementTransform,
-                    transformOrigin: 'center center',
-                  }}
-                />
+                  width: imageSize ? imageSize.width : undefined,
+                  height: imageSize ? imageSize.height : undefined,
+                  opacity: thumbLoaded ? 1 : 0,
+                  filter: currentAdjustment.grayscale ? 'grayscale(1)' : undefined,
+                  transform: `translate(-50%, -50%)${mediaElementTransform ? ` ${mediaElementTransform}` : ''}`,
+                  transformOrigin: 'center center',
+                }}
+              />
               </div>
               <div ref={imgFrameRef} style={{ position: 'absolute', left: '50%', top: '50%' }}>
                 <img
@@ -644,8 +646,8 @@ export function MediaView({ images, currentIndex, onNavigate, onClose, onStateCh
                     opacity: fullImageVisible ? 1 : 0,
                     transition: 'opacity 130ms ease',
                     filter: currentAdjustment.grayscale ? 'grayscale(1)' : undefined,
-                    transform: mediaElementTransform,
-                    transformOrigin: 'center center',
+                  transform: `translate(-50%, -50%)${mediaElementTransform ? ` ${mediaElementTransform}` : ''}`,
+                  transformOrigin: 'center center',
                   }}
                 />
               </div>
@@ -684,31 +686,6 @@ export function MediaView({ images, currentIndex, onNavigate, onClose, onStateCh
               <div ref={navViewportRef} className={shared.navigatorViewport} />
             </div>
           )}
-        </div>
-      )}
-      {!stripMode && !isVideo && currentHash && (
-        <div className={styles.adjustBar}>
-          <button
-            className={`${styles.adjustBtn} ${currentAdjustment.grayscale ? styles.adjustBtnActive : ''}`}
-            onClick={handleToggleCurrentGrayscale}
-            title={currentAdjustment.grayscale ? 'Show in grayscale (on)' : 'Show in grayscale'}
-          >
-            <IconAdjustments size={16} />
-          </button>
-          <button
-            className={`${styles.adjustBtn} ${currentAdjustment.rotation !== 0 ? styles.adjustBtnActive : ''}`}
-            onClick={handleRotateCurrentImage}
-            title={`Rotate (${currentAdjustment.rotation}°)`}
-          >
-            <IconRotateClockwise size={16} />
-          </button>
-          <button
-            className={`${styles.adjustBtn} ${currentAdjustment.mirrored ? styles.adjustBtnActive : ''}`}
-            onClick={handleToggleCurrentMirror}
-            title={currentAdjustment.mirrored ? 'Mirror image (on)' : 'Mirror image'}
-          >
-            <IconFlipHorizontal size={16} />
-          </button>
         </div>
       )}
       {/* Inbox accept/reject buttons */}

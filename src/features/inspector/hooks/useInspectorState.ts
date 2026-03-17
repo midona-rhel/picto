@@ -42,7 +42,10 @@ function isSameMediaViewState(a: MediaViewState | null, b: MediaViewState | null
     a.zoomPercent === b.zoomPercent &&
     Math.abs(a.zoomScale - b.zoomScale) <= EPSILON &&
     Math.abs(a.fitScale - b.fitScale) <= EPSILON &&
-    a.isStripMode === b.isStripMode
+    a.isStripMode === b.isStripMode &&
+    a.canAdjustImage === b.canAdjustImage &&
+    a.rotation === b.rotation &&
+    a.mirrored === b.mirrored
   );
 }
 
@@ -54,7 +57,9 @@ function isSameMediaViewControls(a: MediaViewControls | null, b: MediaViewContro
     a.navigate === b.navigate &&
     a.setZoomScale === b.setZoomScale &&
     a.fitToWindow === b.fitToWindow &&
-    a.fitActual === b.fitActual
+    a.fitActual === b.fitActual &&
+    a.rotateClockwise === b.rotateClockwise &&
+    a.toggleMirror === b.toggleMirror
   );
 }
 

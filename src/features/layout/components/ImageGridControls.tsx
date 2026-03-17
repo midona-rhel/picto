@@ -9,10 +9,12 @@ import {
   IconPlus,
   IconArrowLeft,
   IconArrowsMaximize,
+  IconFlipHorizontal,
   IconMaximize,
   IconFilter,
   IconFilterFilled,
   IconAdjustments,
+  IconRotateClockwise,
 } from '@tabler/icons-react';
 import { DisplayOptionsPanel } from './DisplayOptionsPanel';
 import { SortByRow } from '../../../shared/components/SortByRow';
@@ -307,6 +309,27 @@ export function ImageGridControls({
 
         {/* Right: fit/actual + gallery navigation */}
         <div className={`${st.rightSection}`}>
+          {ds.canAdjustImage && (
+            <>
+              <KbdTooltip label={`Rotate (${ds.rotation}°)`}>
+                <button
+                  className={`${st.icBtn} ${ds.rotation !== 0 ? st.icBtnActive : ''}`}
+                  onClick={dc.rotateClockwise}
+                >
+                  <IconRotateClockwise size={14} />
+                </button>
+              </KbdTooltip>
+              <KbdTooltip label={ds.mirrored ? 'Mirror image (on)' : 'Mirror image'}>
+                <button
+                  className={`${st.icBtn} ${ds.mirrored ? st.icBtnActive : ''}`}
+                  onClick={dc.toggleMirror}
+                >
+                  <IconFlipHorizontal size={14} />
+                </button>
+              </KbdTooltip>
+              <div className={st.separator} />
+            </>
+          )}
           <KbdTooltip label="Fit to window" shortcut="`">
             <button
               className={st.icBtn}
