@@ -44,7 +44,7 @@ export function buildSmartFolderItemMenu(opts: SmartFolderMenuOptions): ContextM
     },
     {
       type: 'item',
-      label: 'New Child Smart Folder',
+      label: 'New Subfolder',
       icon: <IconCopy size={14} />,
       onClick: () => invoke(opts.createChildSmartFolder),
     },

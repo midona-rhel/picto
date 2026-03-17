@@ -88,7 +88,7 @@ describe('context action registries', () => {
     });
     const menuLabels = labels(items);
     expect(menuLabels).toContain('Edit Smart Folder...');
-    expect(menuLabels).toContain('New Child Smart Folder');
+    expect(menuLabels).toContain('New Subfolder');
     expect(menuLabels).toContain('Sort By');
     expect(menuLabels).toContain('Duplicate');
     expect(menuLabels).toContain('Remove Smart Folder');
