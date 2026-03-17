@@ -167,15 +167,14 @@ export function MediaView({ images, currentIndex, onNavigate, onClose, onStateCh
     ? { width: currentImage.width, height: currentImage.height }
     : null;
   const currentHash = currentImage?.hash ?? null;
-  const grayscaleEnabled = useNavigationImageAdjustmentsStore((store) => store.grayscaleEnabled);
   const currentImageAdjustment = useNavigationImageAdjustmentsStore(
     useCallback((store) => (currentHash ? store.byHash[currentHash] : undefined), [currentHash]),
   );
   const currentAdjustment = useMemo(() => ({
     ...DEFAULT_NAVIGATION_IMAGE_ADJUSTMENT,
     ...(currentImageAdjustment ?? undefined),
-    grayscale: grayscaleEnabled,
-  }), [currentImageAdjustment, grayscaleEnabled]);
+    grayscale: false,
+  }), [currentImageAdjustment]);
   const rotateNavigationImage = useNavigationImageAdjustmentsStore((store) => store.rotateClockwise);
   const toggleNavigationMirror = useNavigationImageAdjustmentsStore((store) => store.toggleMirrored);
 

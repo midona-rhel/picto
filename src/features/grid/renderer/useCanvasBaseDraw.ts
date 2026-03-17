@@ -100,7 +100,10 @@ export function useCanvasBaseDraw(args: {
   useEffect(() => {
     return useNavigationImageAdjustmentsStore.subscribe(
       (state, prevState) => {
-        if (state.byHash !== prevState.byHash) {
+        if (
+          state.byHash !== prevState.byHash
+          || state.grayscaleEnabled !== prevState.grayscaleEnabled
+        ) {
           markDirty('base');
         }
       },
