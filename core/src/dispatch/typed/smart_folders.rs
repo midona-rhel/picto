@@ -10,6 +10,7 @@ use crate::state::AppState;
 #[derive(Debug, Deserialize, TS)]
 #[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct ReorderSmartFoldersInput {
+    #[ts(type = "number | null")]
     pub parent_id: Option<i64>,
     #[ts(type = "[number, number][]")]
     pub moves: Vec<(i64, i64)>,
@@ -19,6 +20,7 @@ pub struct ReorderSmartFoldersInput {
 #[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct MoveSmartFolderInput {
     pub smart_folder_id: i64,
+    #[ts(type = "number | null")]
     pub new_parent_id: Option<i64>,
     #[ts(type = "[number, number][]")]
     pub sibling_order: Vec<(i64, i64)>,

@@ -6,11 +6,16 @@ import type { SmartFolderPredicate } from '../shared/types/api';
 interface SmartFolderSummary {
   id: string;
   name: string;
+  parent_id: string | null;
+  display_order?: number | null;
   icon?: string | null;
   color?: string | null;
   count: number;
   freshness: SidebarFreshness | string;
   predicate?: SmartFolderPredicate;
+  localPredicate?: SmartFolderPredicate;
+  hasEffectiveRules: boolean;
+  hasLocalRules: boolean;
   sort_field?: string | null;
   sort_order?: string | null;
 }
@@ -161,11 +166,19 @@ export const useDomainStore = create<DomainState>((set, get) => ({
         smartFolders.push({
           id,
           name: node.name,
+          parent_id:
+            typeof meta?.parent_id === 'number'
+              ? String(meta.parent_id)
+              : null,
+          display_order: node.sort_order ?? null,
           icon: node.icon,
           color: node.color,
           count: node.count ?? 0,
           freshness: node.freshness,
           predicate: meta?.predicate as SmartFolderPredicate | undefined,
+          localPredicate: meta?.local_predicate as SmartFolderPredicate | undefined,
+          hasEffectiveRules: meta?.has_effective_rules === true,
+          hasLocalRules: meta?.has_local_rules === true,
           sort_field: meta?.sort_field as string | null | undefined,
           sort_order: meta?.sort_order as string | null | undefined,
         });
