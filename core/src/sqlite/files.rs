@@ -1,11 +1,11 @@
 //! File CRUD operations.
 
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 
-use super::bitmaps::BitmapKey;
 use super::ReadModelEvent;
 use super::SqliteDatabase;
+use super::bitmaps::BitmapKey;
 
 /// Default visibility clause: active (1) only, excludes inbox (0) and trash (2).
 const DEFAULT_VISIBILITY_CLAUSE: &str = "status = 1";
@@ -198,30 +198,6 @@ pub fn count_files(conn: &Connection, status: Option<i64>) -> rusqlite::Result<i
     }
 }
 
-/// If `file_id` is the cover of a collection, return that collection's entity_id.
-pub fn find_collection_for_cover_file(conn: &Connection, file_id: i64) -> rusqlite::Result<Option<i64>> {
-    conn.query_row(
-        "SELECT entity_id FROM media_entity WHERE kind = 'collection' AND cover_file_id = ?1",
-        [file_id],
-        |row| row.get(0),
-    ).optional()
-}
-
-/// Return (file_id, hash) pairs for all member files of a collection.
-pub fn get_collection_member_files(conn: &Connection, collection_entity_id: i64) -> rusqlite::Result<Vec<(i64, String)>> {
-    let mut stmt = conn.prepare_cached(
-        "SELECT ef.file_id, f.hash
-         FROM collection_member cm
-         JOIN entity_file ef ON ef.entity_id = cm.member_entity_id
-         JOIN file f ON f.file_id = ef.file_id
-         WHERE cm.collection_entity_id = ?1"
-    )?;
-    let rows = stmt.query_map([collection_entity_id], |row| {
-        Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
-    })?;
-    rows.collect()
-}
-
 pub fn update_status(conn: &Connection, file_id: i64, status: i64) -> rusqlite::Result<()> {
     conn.execute(
         "UPDATE file SET status = ?1 WHERE file_id = ?2",
@@ -236,32 +212,7 @@ pub fn update_status(conn: &Connection, file_id: i64, status: i64) -> rusqlite::
         params![status, file_id],
     )?;
 
-    // Cascade to collection members if this file is a collection's cover
-    if let Some(collection_id) = find_collection_for_cover_file(conn, file_id)? {
-        // Update the collection entity itself
-        conn.execute(
-            "UPDATE media_entity SET status = ?1, updated_at = CURRENT_TIMESTAMP WHERE entity_id = ?2",
-            params![status, collection_id],
-        )?;
-        // Update all member entities + their files
-        conn.execute(
-            "UPDATE file SET status = ?1
-             WHERE file_id IN (
-                 SELECT ef.file_id FROM collection_member cm
-                 JOIN entity_file ef ON ef.entity_id = cm.member_entity_id
-                 WHERE cm.collection_entity_id = ?2
-             )",
-            params![status, collection_id],
-        )?;
-        conn.execute(
-            "UPDATE media_entity SET status = ?1, updated_at = CURRENT_TIMESTAMP
-             WHERE entity_id IN (
-                 SELECT cm.member_entity_id FROM collection_member cm
-                 WHERE cm.collection_entity_id = ?2
-             )",
-            params![status, collection_id],
-        )?;
-    }
+    crate::folders::collections_db::update_cover_collection_status(conn, file_id, status)?;
     Ok(())
 }
 
@@ -341,7 +292,7 @@ pub fn wipe_all_files(conn: &Connection) -> rusqlite::Result<()> {
 
 /// Delete a single file and its entity. Does NOT cascade to collection members
 /// (use `delete_file_cascade` for that).
-fn delete_file_inner(conn: &Connection, file_id: i64) -> rusqlite::Result<()> {
+pub(crate) fn delete_file_inner(conn: &Connection, file_id: i64) -> rusqlite::Result<()> {
     {
         let mut rid_stmt =
             conn.prepare_cached("SELECT rowid FROM file_color WHERE file_id = ?1")?;
@@ -372,16 +323,7 @@ fn delete_file_inner(conn: &Connection, file_id: i64) -> rusqlite::Result<()> {
 }
 
 pub fn delete_file(conn: &Connection, file_id: i64) -> rusqlite::Result<()> {
-    // If this file is a collection cover, delete all members first
-    if let Some(collection_id) = find_collection_for_cover_file(conn, file_id)? {
-        let members = get_collection_member_files(conn, collection_id)?;
-        // Delete the collection entity (this cascades collection_member rows)
-        conn.execute("DELETE FROM media_entity WHERE entity_id = ?1", [collection_id])?;
-        // Delete each member file
-        for (member_fid, _) in members {
-            delete_file_inner(conn, member_fid)?;
-        }
-    }
+    crate::folders::collections_db::delete_cover_collection(conn, file_id)?;
     // Delete the target file itself
     delete_file_inner(conn, file_id)
 }
@@ -1254,11 +1196,7 @@ impl SqliteDatabase {
         // Collect member file_ids BEFORE the status update (for bitmap sync)
         let member_files = self
             .with_read_conn(move |conn| {
-                if let Some(cid) = find_collection_for_cover_file(conn, fid)? {
-                    get_collection_member_files(conn, cid)
-                } else {
-                    Ok(vec![])
-                }
+                crate::folders::collections_db::get_cover_collection_member_files(conn, fid)
             })
             .await?;
 
@@ -1305,24 +1243,13 @@ impl SqliteDatabase {
 
         // Expand the set to include collection member files and collect collection entity_ids
         let orig = original_ids;
-        let (expanded_ids, collection_entity_ids, extra_member_fids) = self.with_read_conn(move |conn| {
-            let mut all_ids = orig.clone();
-            let mut coll_ids: Vec<i64> = Vec::new();
-            let mut member_fids: Vec<u32> = Vec::new();
-            for &fid in &orig {
-                if let Some(cid) = find_collection_for_cover_file(conn, fid)? {
-                    coll_ids.push(cid);
-                    let members = get_collection_member_files(conn, cid)?;
-                    for (member_fid, _) in members {
-                        all_ids.push(member_fid);
-                        member_fids.push(member_fid as u32);
-                    }
-                }
-            }
-            all_ids.sort_unstable();
-            all_ids.dedup();
-            Ok((all_ids, coll_ids, member_fids))
-        }).await?;
+        let (expanded_ids, collection_entity_ids, extra_member_fids) = self
+            .with_read_conn(move |conn| {
+                crate::folders::collections_db::expand_status_batch_for_cover_collections(
+                    conn, &orig,
+                )
+            })
+            .await?;
 
         let count = expanded_ids.len();
         let s = status;
@@ -1391,33 +1318,21 @@ impl SqliteDatabase {
 
         // Collect member files + folder memberships BEFORE deletion
         let fid = file_id;
-        let (member_files, folder_ids) = self
+        let (member_files, folder_ids, member_folder_ids) = self
             .with_read_conn(move |conn| {
-                let members = if let Some(cid) = find_collection_for_cover_file(conn, fid)? {
-                    get_collection_member_files(conn, cid)?
-                } else {
-                    vec![]
-                };
-                let folders = crate::folders::db::get_entity_folder_memberships(conn, fid)?;
-                Ok((members, folders))
+                let members =
+                    crate::folders::collections_db::get_cover_collection_member_files(conn, fid)?;
+                let member_file_ids: Vec<i64> =
+                    members.iter().map(|(member_fid, _)| *member_fid).collect();
+                let (folders, member_folders) =
+                    crate::folders::db::collect_file_delete_folder_memberships(
+                        conn,
+                        fid,
+                        &member_file_ids,
+                    )?;
+                Ok((members, folders, member_folders))
             })
             .await?;
-
-        // Also collect folder memberships for member files
-        let member_folder_ids: Vec<(i64, Vec<crate::folders::db::FolderMembership>)> = if !member_files.is_empty() {
-            let member_fids: Vec<i64> = member_files.iter().map(|(fid, _)| *fid).collect();
-            self.with_read_conn(move |conn| {
-                let mut result = Vec::new();
-                for &mfid in &member_fids {
-                    let folders = crate::folders::db::get_entity_folder_memberships(conn, mfid)?;
-                    result.push((mfid, folders));
-                }
-                Ok(result)
-            })
-            .await?
-        } else {
-            vec![]
-        };
 
         let fid = file_id;
         self.with_conn(move |conn| delete_file(conn, fid)).await?;
@@ -1444,7 +1359,8 @@ impl SqliteDatabase {
         for (member_fid, folders) in &member_folder_ids {
             let m = *member_fid as u32;
             for membership in folders {
-                self.bitmaps.remove(&BitmapKey::Folder(membership.folder_id), m);
+                self.bitmaps
+                    .remove(&BitmapKey::Folder(membership.folder_id), m);
             }
         }
 
@@ -1565,7 +1481,7 @@ impl SqliteDatabase {
 
 #[cfg(test)]
 mod tests {
-    use super::{insert_file, save_file_colors, NewFile};
+    use super::{NewFile, insert_file, save_file_colors};
     use rusqlite::Connection;
 
     #[test]
@@ -1605,15 +1521,12 @@ mod tests {
         )
         .unwrap();
 
-        save_file_colors(
-            &conn,
-            file_id,
-            &[("#ffffff".to_string(), 100.0, 0.0, 0.0)],
-        )
-        .unwrap();
+        save_file_colors(&conn, file_id, &[("#ffffff".to_string(), 100.0, 0.0, 0.0)]).unwrap();
 
         let rtree_rows: i64 = conn
-            .query_row("SELECT COUNT(*) FROM file_color_rtree", [], |row| row.get(0))
+            .query_row("SELECT COUNT(*) FROM file_color_rtree", [], |row| {
+                row.get(0)
+            })
             .unwrap();
         assert_eq!(rtree_rows, 1);
     }

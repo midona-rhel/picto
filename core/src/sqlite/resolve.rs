@@ -1,4 +1,4 @@
-use super::{files, SqliteDatabase};
+use super::SqliteDatabase;
 
 impl SqliteDatabase {
     /// Resolve a hex hash to file_id, checking cache first, then DB.
@@ -133,7 +133,10 @@ impl SqliteDatabase {
 
     /// Expand hashes to include collection member hashes. If any hash belongs to
     /// a collection cover file, the member files' hashes are appended.
-    pub async fn expand_hashes_for_collections(&self, hashes: &[String]) -> Result<Vec<String>, String> {
+    pub async fn expand_hashes_for_collections(
+        &self,
+        hashes: &[String],
+    ) -> Result<Vec<String>, String> {
         if hashes.is_empty() {
             return Ok(Vec::new());
         }
@@ -143,11 +146,7 @@ impl SqliteDatabase {
             let fid = *fid;
             let members = self
                 .with_read_conn(move |conn| {
-                    if let Some(cid) = files::find_collection_for_cover_file(conn, fid)? {
-                        files::get_collection_member_files(conn, cid)
-                    } else {
-                        Ok(vec![])
-                    }
+                    crate::folders::collections_db::get_cover_collection_member_files(conn, fid)
                 })
                 .await?;
             for (_, member_hash) in members {
@@ -169,11 +168,10 @@ impl SqliteDatabase {
         self.with_read_conn(move |conn| {
             let mut expanded = file_ids.clone();
             for &fid in &file_ids {
-                if let Some(cid) = files::find_collection_for_cover_file(conn, fid)? {
-                    let members = files::get_collection_member_files(conn, cid)?;
-                    for (member_fid, _) in members {
-                        expanded.push(member_fid);
-                    }
+                let members =
+                    crate::folders::collections_db::get_cover_collection_member_files(conn, fid)?;
+                for (member_fid, _) in members {
+                    expanded.push(member_fid);
                 }
             }
             expanded.sort_unstable();

@@ -5,13 +5,13 @@
 
 use std::collections::{BTreeSet, HashSet};
 
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 
-use crate::sqlite::bitmaps::BitmapKey;
 use crate::sqlite::ReadModelEvent;
 use crate::sqlite::SqliteDatabase;
+use crate::sqlite::bitmaps::BitmapKey;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CollectionRecord {
@@ -95,6 +95,110 @@ fn parse_source_urls_json(raw: &str) -> Vec<String> {
         }
         _ => Vec::new(),
     }
+}
+
+pub fn find_collection_for_cover_file(
+    conn: &Connection,
+    file_id: i64,
+) -> rusqlite::Result<Option<i64>> {
+    conn.query_row(
+        "SELECT entity_id FROM media_entity WHERE kind = 'collection' AND cover_file_id = ?1",
+        [file_id],
+        |row| row.get(0),
+    )
+    .optional()
+}
+
+pub fn get_collection_member_files(
+    conn: &Connection,
+    collection_id: i64,
+) -> rusqlite::Result<Vec<(i64, String)>> {
+    let mut stmt = conn.prepare_cached(
+        "SELECT ef.file_id, f.hash
+         FROM collection_member cm
+         JOIN entity_file ef ON ef.entity_id = cm.member_entity_id
+         JOIN file f ON f.file_id = ef.file_id
+         WHERE cm.collection_entity_id = ?1",
+    )?;
+    let rows = stmt.query_map([collection_id], |row| {
+        Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+    })?;
+    rows.collect()
+}
+
+pub fn get_cover_collection_member_files(
+    conn: &Connection,
+    file_id: i64,
+) -> rusqlite::Result<Vec<(i64, String)>> {
+    if let Some(collection_id) = find_collection_for_cover_file(conn, file_id)? {
+        get_collection_member_files(conn, collection_id)
+    } else {
+        Ok(Vec::new())
+    }
+}
+
+pub fn update_cover_collection_status(
+    conn: &Connection,
+    file_id: i64,
+    status: i64,
+) -> rusqlite::Result<Vec<(i64, String)>> {
+    let Some(collection_id) = find_collection_for_cover_file(conn, file_id)? else {
+        return Ok(Vec::new());
+    };
+
+    let member_files = get_collection_member_files(conn, collection_id)?;
+    conn.execute(
+        "UPDATE media_entity SET status = ?1, updated_at = CURRENT_TIMESTAMP WHERE entity_id = ?2",
+        params![status, collection_id],
+    )?;
+    conn.execute(
+        "UPDATE file SET status = ?1
+         WHERE file_id IN (
+             SELECT ef.file_id FROM collection_member cm
+             JOIN entity_file ef ON ef.entity_id = cm.member_entity_id
+             WHERE cm.collection_entity_id = ?2
+         )",
+        params![status, collection_id],
+    )?;
+    conn.execute(
+        "UPDATE media_entity SET status = ?1, updated_at = CURRENT_TIMESTAMP
+         WHERE entity_id IN (
+             SELECT cm.member_entity_id FROM collection_member cm
+             WHERE cm.collection_entity_id = ?2
+         )",
+        params![status, collection_id],
+    )?;
+
+    Ok(member_files)
+}
+
+pub fn expand_status_batch_for_cover_collections(
+    conn: &Connection,
+    file_ids: &[i64],
+) -> rusqlite::Result<(Vec<i64>, Vec<i64>, Vec<u32>)> {
+    let mut expanded_ids = file_ids.to_vec();
+    let mut collection_ids = Vec::new();
+    let mut member_file_ids = Vec::new();
+
+    for &file_id in file_ids {
+        if let Some(collection_id) = find_collection_for_cover_file(conn, file_id)? {
+            collection_ids.push(collection_id);
+            let members = get_collection_member_files(conn, collection_id)?;
+            for (member_file_id, _) in members {
+                expanded_ids.push(member_file_id);
+                member_file_ids.push(member_file_id as u32);
+            }
+        }
+    }
+
+    expanded_ids.sort_unstable();
+    expanded_ids.dedup();
+    collection_ids.sort_unstable();
+    collection_ids.dedup();
+    member_file_ids.sort_unstable();
+    member_file_ids.dedup();
+
+    Ok((expanded_ids, collection_ids, member_file_ids))
 }
 
 fn ensure_collection_folder_replacements(
@@ -439,7 +543,7 @@ pub fn set_collection_rating(
 
 pub fn delete_collection(conn: &Connection, collection_id: i64) -> rusqlite::Result<()> {
     // Delete all member files (and their entities) before removing the collection
-    let member_files = crate::sqlite::files::get_collection_member_files(conn, collection_id)?;
+    let member_files = get_collection_member_files(conn, collection_id)?;
     // Delete the collection entity first (cascades collection_member rows via FK)
     conn.execute(
         "DELETE FROM media_entity WHERE entity_id = ?1 AND kind = 'collection'",
@@ -459,6 +563,26 @@ pub fn delete_collection(conn: &Connection, collection_id: i64) -> rusqlite::Res
         crate::sqlite::files::delete_file(conn, member_fid)?;
     }
     Ok(())
+}
+
+pub fn delete_cover_collection(
+    conn: &Connection,
+    file_id: i64,
+) -> rusqlite::Result<Vec<(i64, String)>> {
+    let Some(collection_id) = find_collection_for_cover_file(conn, file_id)? else {
+        return Ok(Vec::new());
+    };
+
+    let member_files = get_collection_member_files(conn, collection_id)?;
+    conn.execute(
+        "DELETE FROM media_entity WHERE entity_id = ?1",
+        [collection_id],
+    )?;
+    for (member_file_id, _) in &member_files {
+        crate::sqlite::files::delete_file_inner(conn, *member_file_id)?;
+    }
+
+    Ok(member_files)
 }
 
 pub fn list_collections(conn: &Connection) -> rusqlite::Result<Vec<CollectionRecord>> {
@@ -1123,7 +1247,7 @@ impl SqliteDatabase {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sqlite::files::{insert_file, NewFile};
+    use crate::sqlite::files::{NewFile, insert_file};
 
     #[test]
     fn collection_crud_roundtrip() {

@@ -1,12 +1,12 @@
 //! Folder CRUD + manual ordering with gap-based ranking.
 
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use crate::sqlite::bitmaps::BitmapKey;
 use crate::sqlite::ReadModelEvent;
 use crate::sqlite::SqliteDatabase;
+use crate::sqlite::bitmaps::BitmapKey;
 
 /// Gap between position_rank values for folder file ordering.
 const RANK_GAP: i64 = 1 << 20; // ~1M
@@ -137,7 +137,14 @@ pub fn update_folder(
     conn.execute(
         "UPDATE folder SET name = ?1, icon = ?2, color = ?3, auto_tags = ?4, updated_at = ?5
          WHERE folder_id = ?6",
-        params![name, icon, color, encode_auto_tags(auto_tags), now, folder_id],
+        params![
+            name,
+            icon,
+            color,
+            encode_auto_tags(auto_tags),
+            now,
+            folder_id
+        ],
     )?;
     Ok(())
 }
@@ -439,6 +446,22 @@ pub fn get_entity_folder_memberships(
         })
     })?;
     rows.collect()
+}
+
+pub fn collect_file_delete_folder_memberships(
+    conn: &Connection,
+    file_id: i64,
+    member_file_ids: &[i64],
+) -> rusqlite::Result<(Vec<FolderMembership>, Vec<(i64, Vec<FolderMembership>)>)> {
+    let target_memberships = get_entity_folder_memberships(conn, file_id)?;
+    let mut member_memberships = Vec::with_capacity(member_file_ids.len());
+    for &member_file_id in member_file_ids {
+        member_memberships.push((
+            member_file_id,
+            get_entity_folder_memberships(conn, member_file_id)?,
+        ));
+    }
+    Ok((target_memberships, member_memberships))
 }
 
 /// Get the hash of the first file in a folder (by position_rank) for cover preview.
@@ -895,7 +918,7 @@ impl SqliteDatabase {
         self.with_conn(move |conn| {
             update_folder(conn, folder_id, &n, i.as_deref(), c.as_deref(), &tags)
         })
-            .await?;
+        .await?;
         self.emit_read_model_event(ReadModelEvent::FolderChanged { folder_id });
         Ok(())
     }
