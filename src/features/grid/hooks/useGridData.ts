@@ -3,7 +3,7 @@ import { api } from '#desktop/api';
 import { prefetchMetadataBatch } from '#features/grid/data';
 import type { GridRuntimeAction } from '../runtime/gridRuntimeReducer';
 import type { GridRuntimeState } from '../runtime/gridRuntimeState';
-import { toMasonryItem } from '../shared';
+import { toMasonryItem, type MasonryImageItem } from '../shared';
 import {
   buildGridQuery,
   serializeGridQuery,
@@ -28,15 +28,17 @@ interface UseGridDataArgs {
   dispatch: React.Dispatch<GridRuntimeAction>;
   stateRef: { current: GridRuntimeState };
   onFirstCommit?: () => void;
+  restoredRandomSeed?: number | null;
 }
 
 interface UseGridDataResult {
   query: GridQuery;
   queryKey: string;
-  fetchReplace: () => Promise<GridReplacePayload>;
+  fetchReplace: (minItems?: number) => Promise<GridReplacePayload>;
   commitReplace: (payload: GridReplacePayload) => void;
   requestReplace: () => Promise<void>;
   requestAppend: () => Promise<void>;
+  randomSeed: number | null;
 }
 
 export function useGridData({
@@ -44,6 +46,7 @@ export function useGridData({
   dispatch,
   stateRef,
   onFirstCommit,
+  restoredRandomSeed,
 }: UseGridDataArgs): UseGridDataResult {
   const generationRef = useRef(0);
   const firstCommitDoneRef = useRef(false);
@@ -56,7 +59,7 @@ export function useGridData({
   onFirstCommitRef.current = onFirstCommit;
 
   if (queryInput.statusFilter === 'random' && randomSeedRef.current === null) {
-    randomSeedRef.current = Math.floor(Math.random() * 0x7fffffff);
+    randomSeedRef.current = restoredRandomSeed ?? Math.floor(Math.random() * 0x7fffffff);
   } else if (queryInput.statusFilter !== 'random') {
     randomSeedRef.current = null;
   }
@@ -95,16 +98,27 @@ export function useGridData({
 
   const queryKey = useMemo(() => serializeGridQuery(query), [query]);
 
-  const fetchReplace = useCallback(async (): Promise<GridReplacePayload> => {
+  const fetchReplace = useCallback(async (minItems = 0): Promise<GridReplacePayload> => {
     try {
-      const page = await api.grid.getPageSlim(toFetchGridPageArgs(query, null, PAGE_SIZE));
-      const images = page.items.map(toMasonryItem);
-      const hasMore = page.has_more && !!page.next_cursor;
+      const allImages: MasonryImageItem[] = [];
+      let cursor: string | null = null;
+      let hasMore = true;
+      let totalCount: number | null = null;
+
+      // Fetch pages until we have at least minItems (or no more pages).
+      while (hasMore && allImages.length < Math.max(PAGE_SIZE, minItems)) {
+        const page = await api.grid.getPageSlim(toFetchGridPageArgs(query, cursor, PAGE_SIZE));
+        allImages.push(...page.items.map(toMasonryItem));
+        totalCount = page.total_count ?? totalCount;
+        cursor = page.next_cursor;
+        hasMore = page.has_more && !!cursor;
+      }
+
       return {
-        images,
-        responseTotalCount: page.total_count ?? null,
+        images: allImages,
+        responseTotalCount: totalCount,
         hasMore,
-        cursor: page.next_cursor,
+        cursor,
         error: null,
       };
     } catch (err) {
@@ -153,6 +167,7 @@ export function useGridData({
 
   const requestReplace = useCallback(() => {
     if (inFlightReplaceRef.current && inFlightReplaceKeyRef.current === queryKey) {
+      generationRef.current += 1;
       queuedReplaceKeyRef.current = queryKey;
       return inFlightReplaceRef.current;
     }
@@ -210,5 +225,5 @@ void prefetchMetadataBatch(items.map((item) => item.hash));
     firstCommitDoneRef.current = false;
   }, [queryKey]);
 
-  return { query, queryKey, fetchReplace, commitReplace, requestReplace, requestAppend };
+  return { query, queryKey, fetchReplace, commitReplace, requestReplace, requestAppend, randomSeed: randomSeedRef.current };
 }
