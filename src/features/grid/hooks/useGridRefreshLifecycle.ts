@@ -4,6 +4,7 @@ import { useNavigationStore } from '../../../state/navigationStore';
 import type { GridRuntimeAction } from '../runtime';
 import type { MasonryImageItem } from '../shared';
 import type { SmartFolderPredicate } from '../../smart-folders/components/types';
+import { deriveGridScopeKey } from '../scopeModel';
 
 export function useGridRefreshLifecycle(args: {
   dispatch: Dispatch<GridRuntimeAction>;
@@ -25,13 +26,7 @@ export function useGridRefreshLifecycle(args: {
     dispatch,
     folderId,
     collectionEntityId,
-    searchTags,
-    excludedSearchTags,
-    tagMatchMode,
     smartFolderPredicate,
-    filterFolderIds,
-    excludedFilterFolderIds,
-    folderMatchMode,
     statusFilter,
     requestReplace,
     refreshTrigger,
@@ -42,46 +37,17 @@ export function useGridRefreshLifecycle(args: {
   const gridRefreshSeq = useGridMetadataStore((s) => s.gridRefreshSeq);
   const activeSmartFolderId = useNavigationStore((s) => s.activeSmartFolder?.id ?? null);
 
-  const scopeKey = useMemo(() => JSON.stringify({
-    searchTags: searchTags ?? [],
-    excludedSearchTags: excludedSearchTags ?? [],
-    tagMatchMode: tagMatchMode ?? null,
-    smartFolderPredicate: smartFolderPredicate ? JSON.stringify(smartFolderPredicate) : null,
-    folderId: folderId ?? null,
-    collectionEntityId: collectionEntityId ?? null,
-    filterFolderIds: filterFolderIds ?? [],
-    excludedFilterFolderIds: excludedFilterFolderIds ?? [],
-    folderMatchMode: folderMatchMode ?? null,
-    statusFilter: statusFilter ?? null,
-  }), [
-    collectionEntityId,
-    excludedFilterFolderIds,
-    excludedSearchTags,
-    filterFolderIds,
-    folderId,
-    folderMatchMode,
-    searchTags,
-    smartFolderPredicate,
-    statusFilter,
-    tagMatchMode,
-  ]);
+  const activeGridScope = useMemo(() => deriveGridScopeKey({
+    currentView: 'images',
+    activeFolderId: folderId ?? null,
+    activeCollectionId: collectionEntityId ?? null,
+    activeSmartFolderId: smartFolderPredicate ? activeSmartFolderId : null,
+    activeStatusFilter: statusFilter ?? null,
+  }), [activeSmartFolderId, collectionEntityId, folderId, smartFolderPredicate, statusFilter]);
 
   useEffect(() => {
-    let scope: string;
-    if (collectionEntityId != null) scope = `collection:${collectionEntityId}`;
-    else if (folderId != null) scope = `folder:${folderId}`;
-    else if (smartFolderPredicate && activeSmartFolderId) scope = `smart:${activeSmartFolderId}`;
-    else if (statusFilter) scope = `system:${statusFilter}`;
-    else scope = 'system:all';
-    useGridMetadataStore.getState().setActiveGridScope(scope);
-  }, [
-    activeSmartFolderId,
-    collectionEntityId,
-    folderId,
-    smartFolderPredicate,
-    statusFilter,
-    scopeKey,
-  ]);
+    useGridMetadataStore.getState().setActiveGridScope(activeGridScope);
+  }, [activeGridScope]);
 
   useEffect(() => {
     if (metadataInvalidatedHashes.size === 0) return;
