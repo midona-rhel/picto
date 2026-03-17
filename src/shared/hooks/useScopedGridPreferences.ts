@@ -4,6 +4,7 @@ import { api } from '#desktop/api';
 import type { ViewPrefsPatch } from '../types/api';
 import type { AppSettings } from '../../state/settingsStore';
 import type { GridViewMode } from '#features/grid/types';
+import { deriveGridScopeKey } from '#features/grid/scopeModel';
 
 export type ThumbnailFitMode = 'contain' | 'cover';
 
@@ -82,14 +83,13 @@ export function useScopedGridPreferences({
   const pendingViewPrefsPatch = useRef<ViewPrefsPatch>({});
   const prevScopeKeyRef = useRef<string | null>(null);
 
-  const gridScopeKey = useMemo(() => {
-    if (currentView !== 'images') return null;
-    if (activeCollectionId != null) return `collection:${activeCollectionId}`;
-    if (activeFolderId) return `folder:${activeFolderId}`;
-    if (activeSmartFolderId) return `smart:${activeSmartFolderId}`;
-    if (activeStatusFilter) return `system:${activeStatusFilter}`;
-    return 'system:all';
-  }, [currentView, activeCollectionId, activeFolderId, activeSmartFolderId, activeStatusFilter]);
+  const gridScopeKey = useMemo(() => deriveGridScopeKey({
+    currentView,
+    activeFolderId,
+    activeCollectionId,
+    activeSmartFolderId,
+    activeStatusFilter,
+  }), [currentView, activeCollectionId, activeFolderId, activeSmartFolderId, activeStatusFilter]);
 
   const effectiveGridViewMode = scopedGridViewMode ?? scopeFallback.viewMode;
   const effectiveGridTargetSize = scopedGridTargetSize ?? scopeFallback.targetSize;

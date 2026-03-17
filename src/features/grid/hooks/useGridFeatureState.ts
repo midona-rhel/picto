@@ -11,6 +11,7 @@ import { useDomainStore } from '../../../state/domainStore';
 import type { SmartFolder } from '#features/smart-folders/types';
 import type { TagFilterLogicMode } from '#features/tags/types';
 import type { MediaItem } from '#features/grid/types';
+import { deriveActiveGridScopeCount } from '../scopeModel';
 export interface GridFeatureParams {
   currentView: string;
   isDetailMode: boolean;
@@ -200,19 +201,19 @@ export function useGridFeatureState({
   const activeFolderCount = activeFolder
     ? (folderNodes.find((n) => n.id === `folder:${activeFolder.folder_id}`)?.count ?? null)
     : null;
-  const statusFilterCount =
-    activeStatusFilter === 'inbox' ? inboxCount
-    : activeStatusFilter === 'uncategorized' ? uncategorizedCount
-    : activeStatusFilter === 'untagged' ? untaggedCount
-    : activeStatusFilter === 'trash' ? trashCount
-    : null;
-  const activeGridScopeCount = activeFolder
-    ? activeFolderCount
-    : activeCollection
-      ? null
-    : activeSmartFolder?.id
-      ? (smartFolderCounts[activeSmartFolder.id] ?? null)
-      : statusFilterCount ?? allImagesCount;
+  const activeGridScopeCount = deriveActiveGridScopeCount({
+    activeFolderId: activeFolder?.folder_id ?? null,
+    activeCollectionId: activeCollection?.id ?? null,
+    activeSmartFolderId: activeSmartFolder?.id ?? null,
+    activeStatusFilter,
+    activeFolderCount,
+    allImagesCount,
+    inboxCount,
+    uncategorizedCount,
+    untaggedCount,
+    trashCount,
+    smartFolderCounts,
+  });
 
   return {
     searchTags, setSearchTags,
