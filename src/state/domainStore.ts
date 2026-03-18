@@ -40,6 +40,7 @@ interface DomainState {
   // Raw sidebar tree for custom consumers
   sidebarNodes: SidebarNodeDto[];
   treeEpoch: number;
+  collectionTitles: Record<number, string>;
   liveInboxImportRuns: number;
   liveInboxFloor: number | null;
 
@@ -53,6 +54,7 @@ interface DomainState {
   subscriptionRunStarted: () => void;
   subscriptionRunFinished: () => void;
   setDuplicatesCount: (count: number) => void;
+  rememberCollectionTitle: (id: number, title: string) => void;
 }
 
 const SIDEBAR_REFRESH_DEBOUNCE_MS = 120;
@@ -100,6 +102,7 @@ export const useDomainStore = create<DomainState>((set, get) => ({
   folderNodes: [],
   sidebarNodes: [],
   treeEpoch: 0,
+  collectionTitles: {},
   liveInboxImportRuns: 0,
   liveInboxFloor: null,
   loading: false,
@@ -258,4 +261,12 @@ export const useDomainStore = create<DomainState>((set, get) => ({
   },
 
   setDuplicatesCount: (count) => set({ duplicatesCount: count }),
+  rememberCollectionTitle: (id, title) => {
+    set((state) => ({
+      collectionTitles:
+        state.collectionTitles[id] === title
+          ? state.collectionTitles
+          : { ...state.collectionTitles, [id]: title },
+    }));
+  },
 }));

@@ -21,13 +21,19 @@ export interface AppBootstrap {
 }
 
 export function useAppBootstrap(): AppBootstrap {
-  const activeCollection = useNavigationStore((state) => state.activeCollection);
-  const activeFolder = useNavigationStore((state) => state.activeFolder);
+  const activeCollectionId = useNavigationStore((state) => state.activeCollectionId);
+  const activeFolderId = useNavigationStore((state) => state.activeFolderId);
   const activeSmartFolderId = useNavigationStore((state) => state.activeSmartFolderId);
   const activeStatusFilter = useNavigationStore((state) => state.activeStatusFilter);
   const currentView = useNavigationStore((state) => state.currentView);
   const filterTags = useNavigationStore((state) => state.filterTags);
   const smartFolders = useDomainStore((state) => state.smartFolders);
+  const folderNodes = useDomainStore((state) => state.folderNodes);
+  const collectionTitles = useDomainStore((state) => state.collectionTitles);
+  const activeFolderLabel = useMemo(
+    () => (activeFolderId != null ? folderNodes.find((node) => node.id === `folder:${activeFolderId}`)?.name ?? null : null),
+    [activeFolderId, folderNodes],
+  );
   const activeSmartFolder = useMemo(() => {
     if (!activeSmartFolderId) return null;
     const active = smartFolders.find((folder) => folder.id === activeSmartFolderId);
@@ -43,14 +49,18 @@ export function useAppBootstrap(): AppBootstrap {
       sort_order: active.sort_order ?? null,
     };
   }, [activeSmartFolderId, smartFolders]);
+  const activeCollectionLabel = activeCollectionId != null
+    ? collectionTitles[activeCollectionId] ?? `Collection ${activeCollectionId}`
+    : null;
   const titlebarTitle = useMemo(() => deriveNavigationTitle({
-    activeCollection,
-    activeFolder,
-    activeSmartFolder,
+    activeCollectionId,
+    activeCollectionLabel,
+    activeFolderLabel,
+    activeSmartFolderLabel: activeSmartFolder?.name ?? null,
     activeStatusFilter,
     currentView,
     filterTags,
-  }), [activeCollection, activeFolder, activeSmartFolder, activeStatusFilter, currentView, filterTags]);
+  }), [activeCollectionId, activeCollectionLabel, activeFolderId, activeFolderLabel, activeSmartFolder?.name, activeStatusFilter, currentView, filterTags]);
   const { colorScheme } = useMantineColorScheme();
   const appWindow = useMemo(() => getCurrentWindow(), []);
   const isSystemDark = colorScheme === 'dark';
@@ -64,19 +74,20 @@ export function useAppBootstrap(): AppBootstrap {
   const [displayedTitle, setDisplayedTitle] = useState(titlebarTitle);
   const handleScopeTransitionMidpoint = useCallback(() => {
     const state = useNavigationStore.getState();
-    const activeSmartFolder = useDomainStore.getState().smartFolders.find((folder) => folder.id === state.activeSmartFolderId);
+    const domainState = useDomainStore.getState();
+    const activeSmartFolder = domainState.smartFolders.find((folder) => folder.id === state.activeSmartFolderId);
     setDisplayedTitle(deriveNavigationTitle({
-      ...state,
-      activeSmartFolder: activeSmartFolder ? {
-        id: activeSmartFolder.id,
-        name: activeSmartFolder.name,
-        parent_id: activeSmartFolder.parent_id != null ? Number(activeSmartFolder.parent_id) : null,
-        icon: activeSmartFolder.icon ?? null,
-        color: activeSmartFolder.color ?? null,
-        predicate: activeSmartFolder.localPredicate ?? activeSmartFolder.predicate ?? { groups: [] },
-        sort_field: activeSmartFolder.sort_field ?? null,
-        sort_order: activeSmartFolder.sort_order ?? null,
-      } : null,
+      activeCollectionId: state.activeCollectionId,
+      activeCollectionLabel: state.activeCollectionId != null
+        ? domainState.collectionTitles[state.activeCollectionId] ?? `Collection ${state.activeCollectionId}`
+        : null,
+      activeFolderLabel: state.activeFolderId != null
+        ? domainState.folderNodes.find((node) => node.id === `folder:${state.activeFolderId}`)?.name ?? null
+        : null,
+      activeSmartFolderLabel: activeSmartFolder?.name ?? null,
+      activeStatusFilter: state.activeStatusFilter,
+      currentView: state.currentView,
+      filterTags: state.filterTags,
     }));
   }, []);
   useEffect(() => {

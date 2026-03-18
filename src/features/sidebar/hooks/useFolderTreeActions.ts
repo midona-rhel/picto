@@ -14,8 +14,8 @@ import { type TreeNode, parseFolderId, getFolderAutoTags } from '../lib/folderTr
 interface UseFolderTreeActionsOptions {
   folderNodes: SidebarNodeDto[];
   nodeMap: Map<string, TreeNode>;
-  activeFolder: { folder_id: number; name: string } | null;
-  setActiveFolder: (folder: { folder_id: number; name: string } | null) => void;
+  activeFolderId: number | null;
+  setActiveFolderId: (folderId: number | null) => void;
   expandFolder: (nodeId: string) => void;
   setCollapsedNodes: React.Dispatch<React.SetStateAction<Set<string>>>;
 }
@@ -23,8 +23,8 @@ interface UseFolderTreeActionsOptions {
 export function useFolderTreeActions({
   folderNodes,
   nodeMap,
-  activeFolder,
-  setActiveFolder,
+  activeFolderId,
+  setActiveFolderId,
   expandFolder,
   setCollapsedNodes,
 }: UseFolderTreeActionsOptions) {
@@ -127,9 +127,9 @@ export function useFolderTreeActions({
       } else {
         notifyWarning('Undo for deleting folders with subfolders is not supported yet.', 'Limited Undo');
       }
-      if (activeFolder?.folder_id === folderId) setActiveFolder(null);
+      if (activeFolderId === folderId) setActiveFolderId(null);
     } catch (e) { console.error('Delete failed:', e); }
-  }, [activeFolder, setActiveFolder, nodeMap]);
+  }, [activeFolderId, setActiveFolderId, nodeMap]);
 
   const handleBatchDelete = useCallback(async (ids: Set<string>) => {
     const folderIds = [...ids].map(parseFolderId).filter((id): id is number => id != null);
@@ -137,9 +137,9 @@ export function useFolderTreeActions({
     try {
       await Promise.all(folderIds.map((id) => api.folders.delete(id)));
       notifyWarning('Batch folder delete cannot be undone yet.', 'Limited Undo');
-      if (activeFolder && folderIds.includes(activeFolder.folder_id)) setActiveFolder(null);
+      if (activeFolderId != null && folderIds.includes(activeFolderId)) setActiveFolderId(null);
     } catch (e) { console.error('Batch delete failed:', e); }
-  }, [activeFolder, setActiveFolder]);
+  }, [activeFolderId, setActiveFolderId]);
 
   const handleSortFolders = useCallback(async (parentId: string | null, direction: 'asc' | 'desc') => {
     const siblings = folderNodes

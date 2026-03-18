@@ -84,8 +84,8 @@ describe('Sidebar drag-drop status targets', () => {
     useNavigationStore.setState({
       currentView: 'images',
       activeSmartFolderId: null,
-      activeFolder: null,
-      activeCollection: null,
+      activeFolderId: null,
+      activeCollectionId: null,
       activeStatusFilter: null,
       filterTags: null,
     });

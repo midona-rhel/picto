@@ -15,8 +15,8 @@ import { deriveActiveGridScopeCount } from '../scopeModel';
 export interface GridFeatureParams {
   currentView: string;
   isDetailMode: boolean;
-  activeFolder: { folder_id: number } | null;
-  activeCollection: { id: number } | null;
+  activeFolderId: number | null;
+  activeCollectionId: number | null;
   activeSmartFolder: SmartFolder | null;
   filterTags: string[] | null;
   allImagesCount: number | null;
@@ -66,8 +66,8 @@ export interface GridFeatureState {
 export function useGridFeatureState({
   currentView,
   isDetailMode,
-  activeFolder,
-  activeCollection,
+  activeFolderId,
+  activeCollectionId,
   activeSmartFolder,
   filterTags,
   allImagesCount,
@@ -108,27 +108,27 @@ export function useGridFeatureState({
 
   // --- Folder sort actions ---
   const handleSortFolderAction = useCallback((sortBy: string, direction: string) => {
-    const fid = activeFolder?.folder_id;
+    const fid = activeFolderId;
     if (!fid) return;
     api.folders.sortItems(fid, sortBy, direction)
       .catch((e) => console.error('Failed to sort folder items:', e));
-  }, [activeFolder?.folder_id]);
+  }, [activeFolderId]);
 
   const handleReverseFolderAction = useCallback(() => {
-    const fid = activeFolder?.folder_id;
+    const fid = activeFolderId;
     if (!fid) return;
     api.folders.reverseItems(fid)
       .catch((e) => console.error('Failed to reverse folder items:', e));
-  }, [activeFolder?.folder_id]);
+  }, [activeFolderId]);
 
   const handleReverseSelectedAction = useCallback(() => {
-    const fid = activeFolder?.folder_id;
+    const fid = activeFolderId;
     if (!fid) return;
     const hashes = selectedImages.map((img) => img.hash);
     if (hashes.length === 0) return;
     api.folders.reverseItems(fid, hashes)
       .catch((e) => console.error('Failed to reverse selected folder items:', e));
-  }, [activeFolder?.folder_id, selectedImages]);
+  }, [activeFolderId, selectedImages]);
 
   // --- Filter bar ---
   const filterBarOpen = useFilterStore((s) => s.filterBarOpen);
@@ -183,12 +183,12 @@ export function useGridFeatureState({
   }, [showFilterBar]);
 
   // --- Scope count ---
-  const activeFolderCount = activeFolder
-    ? (folderNodes.find((n) => n.id === `folder:${activeFolder.folder_id}`)?.count ?? null)
+  const activeFolderCount = activeFolderId != null
+    ? (folderNodes.find((n) => n.id === `folder:${activeFolderId}`)?.count ?? null)
     : null;
   const activeGridScopeCount = deriveActiveGridScopeCount({
-    activeFolderId: activeFolder?.folder_id ?? null,
-    activeCollectionId: activeCollection?.id ?? null,
+    activeFolderId,
+    activeCollectionId,
     activeSmartFolderId: activeSmartFolder?.id ?? null,
     activeStatusFilter,
     activeFolderCount,

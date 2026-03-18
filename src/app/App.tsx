@@ -61,7 +61,7 @@ function App() {
 
   // --- Navigation ---
   const {
-    currentView, activeSmartFolderId, activeFolder, activeCollection, activeStatusFilter, filterTags,
+    currentView, activeSmartFolderId, activeFolderId, activeCollectionId, activeStatusFilter, filterTags,
     canGoBack, canGoForward,
     goBack, goForward,
   } = useNavigationStore();
@@ -113,8 +113,8 @@ function App() {
   const grid = useGridFeatureState({
     currentView,
     isDetailMode: inspector.isDetailMode,
-    activeFolder,
-    activeCollection,
+    activeFolderId,
+    activeCollectionId,
     activeSmartFolder,
     filterTags,
     allImagesCount: allActiveCount,
@@ -146,8 +146,8 @@ function App() {
     handleDisplayOptionChange,
   } = useScopedGridPreferences({
     currentView,
-    activeFolderId: activeFolder?.folder_id ?? null,
-    activeCollectionId: activeCollection?.id ?? null,
+    activeFolderId,
+    activeCollectionId,
     activeSmartFolderId,
     activeStatusFilter,
     settingsLoaded,
@@ -305,7 +305,7 @@ function App() {
   }, [folderNodes, smartFolders, navigateTo, navigateToFolder, navigateToSmartFolder]);
 
   const [displayControlsFolderId, setDisplayControlsFolderId] = useState<number | null>(
-    activeFolder?.folder_id ?? null,
+    activeFolderId,
   );
 
   // Hide startup churn (title/filter/control relayout + first grid pass) behind a short reveal.
@@ -320,14 +320,14 @@ function App() {
   // Outside images transitions, keep controls scope in sync immediately.
   useEffect(() => {
     if (currentView !== 'images') {
-      setDisplayControlsFolderId(activeFolder?.folder_id ?? null);
+      setDisplayControlsFolderId(activeFolderId);
     }
-  }, [currentView, activeFolder?.folder_id]);
+  }, [currentView, activeFolderId]);
 
   const handleGridScopeTransitionMidpoint = useCallback(() => {
     handleScopeTransitionMidpoint();
     const nav = useNavigationStore.getState();
-    setDisplayControlsFolderId(nav.activeFolder?.folder_id ?? null);
+    setDisplayControlsFolderId(nav.activeFolderId);
   }, [handleScopeTransitionMidpoint]);
 
   const mainViewModel = useMemo(
@@ -337,8 +337,8 @@ function App() {
         activeSmartFolderPredicate: activeSmartFolder?.predicate,
         activeSmartFolderSortField: activeSmartFolder?.sort_field ?? undefined,
         activeSmartFolderSortOrder: activeSmartFolder?.sort_order ?? undefined,
-        activeFolderId: activeFolder?.folder_id ?? null,
-        activeCollectionId: activeCollection?.id ?? null,
+        activeFolderId,
+        activeCollectionId,
         activeStatusFilter,
       },
       grid: {
@@ -384,8 +384,8 @@ function App() {
       activeSmartFolder?.predicate,
       activeSmartFolder?.sort_field,
       activeSmartFolder?.sort_order,
-      activeFolder?.folder_id,
-      activeCollection?.id,
+      activeFolderId,
+      activeCollectionId,
       activeStatusFilter,
       gridViewMode,
       gridTargetSize,

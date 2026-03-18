@@ -6,6 +6,7 @@
  */
 
 import { create } from 'zustand';
+import { useDomainStore } from './domainStore';
 import type { SmartFolder } from '#features/smart-folders/types';
 
 export type ViewType = 'images' | 'collections' | 'subscriptions' | 'duplicates' | 'tags';
@@ -18,21 +19,11 @@ export const VIEW_LABELS: Record<ViewType, string> = {
   tags: 'Tags',
 };
 
-export interface ActiveFolder {
-  folder_id: number;
-  name: string;
-}
-
-export interface ActiveCollection {
-  id: number;
-  name: string;
-}
-
 interface HistoryEntry {
   view: ViewType;
   smartFolderId: string | null;
-  folder: ActiveFolder | null;
-  collection: ActiveCollection | null;
+  folderId: number | null;
+  collectionId: number | null;
   statusFilter: string | null;
   filterTags: string[] | null;
   scrollTop: number;
@@ -42,8 +33,8 @@ interface NavigationState {
   // Current state
   currentView: ViewType;
   activeSmartFolderId: string | null;
-  activeFolder: ActiveFolder | null;
-  activeCollection: ActiveCollection | null;
+  activeFolderId: number | null;
+  activeCollectionId: number | null;
   activeStatusFilter: string | null;
   filterTags: string[] | null;
 
@@ -57,36 +48,37 @@ interface NavigationState {
   pendingScrollRestore: number | null;
 
   // Actions
-  navigateTo: (view: ViewType, smartFolderId?: string | null, folder?: ActiveFolder | null, statusFilter?: string | null) => void;
+  navigateTo: (view: ViewType, smartFolderId?: string | null, folderId?: number | null, statusFilter?: string | null) => void;
   goBack: () => void;
   goForward: () => void;
   /** Save current scroll position to the current history entry */
   saveScrollTop: (scrollTop: number, expectedHistoryIndex?: number) => void;
   /** Consume the pending scroll restore value (returns it and clears it) */
   consumeScrollRestore: () => number | null;
-  setActiveFolder: (folder: ActiveFolder | null) => void;
+  setActiveFolderId: (folderId: number | null) => void;
   /** Navigate to a folder (sets view to 'images', clears smart folder) */
-  navigateToFolder: (folder: ActiveFolder) => void;
+  navigateToFolder: (folder: number | { folder_id: number; name?: string }) => void;
   /** Navigate to a smart folder (sets view to 'images', clears folder) */
   navigateToSmartFolder: (folder: SmartFolder) => void;
   /** Navigate to a collection drill-down session (images view scoped to collection members). */
-  navigateToCollection: (collection: ActiveCollection) => void;
+  navigateToCollection: (collection: number | { id: number; name?: string }) => void;
   /** Navigate to images view filtered by specific tags */
   navigateToFilterTags: (tags: string[]) => void;
-
 }
 
-export function deriveNavigationTitle(state: { activeFolder?: ActiveFolder | null; activeSmartFolder?: SmartFolder | null; activeCollection?: ActiveCollection | null; activeStatusFilter?: string | null; filterTags?: string[] | null; currentView?: ViewType; folder?: ActiveFolder | null; smartFolder?: SmartFolder | null; collection?: ActiveCollection | null; statusFilter?: string | null; view?: ViewType }): string {
-  const folder = state.activeFolder ?? state.folder;
-  const smartFolder = state.activeSmartFolder ?? state.smartFolder;
-  const collection = state.activeCollection ?? state.collection;
+export function deriveNavigationTitle(state: { activeFolderLabel?: string | null; activeSmartFolderLabel?: string | null; activeCollectionLabel?: string | null; activeCollectionId?: number | null; activeStatusFilter?: string | null; filterTags?: string[] | null; currentView?: ViewType; folderLabel?: string | null; smartFolderLabel?: string | null; collectionLabel?: string | null; collectionId?: number | null; statusFilter?: string | null; view?: ViewType }): string {
+  const folderLabel = state.activeFolderLabel ?? state.folderLabel;
+  const smartFolderLabel = state.activeSmartFolderLabel ?? state.smartFolderLabel;
+  const collectionLabel = state.activeCollectionLabel ?? state.collectionLabel;
+  const collectionId = state.activeCollectionId ?? state.collectionId;
   const statusFilter = state.activeStatusFilter ?? state.statusFilter;
   const filterTags = state.filterTags;
   const view = state.currentView ?? state.view ?? 'images';
   if (filterTags && filterTags.length > 0) return filterTags.join(', ');
-  if (folder) return folder.name;
-  if (smartFolder) return smartFolder.name;
-  if (collection) return collection.name;
+  if (folderLabel) return folderLabel;
+  if (smartFolderLabel) return smartFolderLabel;
+  if (collectionLabel) return collectionLabel;
+  if (collectionId != null) return `Collection ${collectionId}`;
   if (statusFilter === 'inbox') return 'Inbox';
   if (statusFilter === 'uncategorized') return 'Uncategorized';
   if (statusFilter === 'trash') return 'Trash';
@@ -98,30 +90,29 @@ export function deriveNavigationTitle(state: { activeFolder?: ActiveFolder | nul
 export const useNavigationStore = create<NavigationState>((set, get) => ({
   currentView: 'images',
   activeSmartFolderId: null,
-  activeFolder: null,
-  activeCollection: null,
+  activeFolderId: null,
+  activeCollectionId: null,
   activeStatusFilter: null,
   filterTags: null,
 
-  history: [{ view: 'images', smartFolderId: null, folder: null, collection: null, statusFilter: null, filterTags: null, scrollTop: 0 }],
+  history: [{ view: 'images', smartFolderId: null, folderId: null, collectionId: null, statusFilter: null, filterTags: null, scrollTop: 0 }],
   historyIndex: 0,
   canGoBack: false,
   canGoForward: false,
   pendingScrollRestore: null,
 
-
-  navigateTo: (view, smartFolderId = null, folder = null, statusFilter = null) => {
+  navigateTo: (view, smartFolderId = null, folderId = null, statusFilter = null) => {
     const state = get();
     const trimmed = state.history.slice(0, state.historyIndex + 1);
-    const entry: HistoryEntry = { view, smartFolderId, folder, collection: null, statusFilter, filterTags: null, scrollTop: 0 };
+    const entry: HistoryEntry = { view, smartFolderId, folderId, collectionId: null, statusFilter, filterTags: null, scrollTop: 0 };
     const newHistory = [...trimmed, entry];
     const newIndex = newHistory.length - 1;
 
     set({
       currentView: view,
       activeSmartFolderId: smartFolderId,
-      activeFolder: folder,
-      activeCollection: null,
+      activeFolderId: folderId,
+      activeCollectionId: null,
       activeStatusFilter: statusFilter,
       filterTags: null,
       pendingScrollRestore: null,
@@ -141,8 +132,8 @@ export const useNavigationStore = create<NavigationState>((set, get) => ({
     set({
       currentView: entry.view,
       activeSmartFolderId: entry.smartFolderId,
-      activeFolder: entry.folder,
-      activeCollection: entry.collection,
+      activeFolderId: entry.folderId,
+      activeCollectionId: entry.collectionId,
       activeStatusFilter: entry.statusFilter,
       filterTags: entry.filterTags,
       historyIndex: newIndex,
@@ -161,8 +152,8 @@ export const useNavigationStore = create<NavigationState>((set, get) => ({
     set({
       currentView: entry.view,
       activeSmartFolderId: entry.smartFolderId,
-      activeFolder: entry.folder,
-      activeCollection: entry.collection,
+      activeFolderId: entry.folderId,
+      activeCollectionId: entry.collectionId,
       activeStatusFilter: entry.statusFilter,
       filterTags: entry.filterTags,
       historyIndex: newIndex,
@@ -188,21 +179,23 @@ export const useNavigationStore = create<NavigationState>((set, get) => ({
     });
   },
 
+
   consumeScrollRestore: () => {
     const value = get().pendingScrollRestore;
     if (value != null) set({ pendingScrollRestore: null });
     return value;
   },
 
-  setActiveFolder: (folder) => {
+  setActiveFolderId: (folderId) => {
     set(() => ({
-      activeFolder: folder,
-      activeCollection: null,
+      activeFolderId: folderId,
+      activeCollectionId: null,
     }));
   },
 
   navigateToFolder: (folder) => {
-    get().navigateTo('images', null, folder);
+    const folderId = typeof folder === 'number' ? folder : folder.folder_id;
+    get().navigateTo('images', null, folderId);
   },
 
   navigateToSmartFolder: (folder) => {
@@ -210,14 +203,17 @@ export const useNavigationStore = create<NavigationState>((set, get) => ({
   },
 
   navigateToCollection: (collection) => {
+    const collectionId = typeof collection === 'number' ? collection : collection.id;
+    if (typeof collection !== 'number' && collection.name) {
+      useDomainStore.getState().rememberCollectionTitle(collection.id, collection.name);
+    }
     const state = get();
     const trimmed = state.history.slice(0, state.historyIndex + 1);
     const entry: HistoryEntry = {
       view: 'images',
       smartFolderId: null,
-      folder: null,
-      collection,
-      subscriptionGroup: null,
+      folderId: null,
+      collectionId,
       statusFilter: null,
       filterTags: null,
       scrollTop: 0,
@@ -228,8 +224,8 @@ export const useNavigationStore = create<NavigationState>((set, get) => ({
     set({
       currentView: 'images',
       activeSmartFolderId: null,
-      activeFolder: null,
-      activeCollection: collection,
+      activeFolderId: null,
+      activeCollectionId: collectionId,
       activeStatusFilter: null,
       filterTags: null,
       pendingScrollRestore: null,
@@ -243,15 +239,15 @@ export const useNavigationStore = create<NavigationState>((set, get) => ({
   navigateToFilterTags: (tags) => {
     const state = get();
     const trimmed = state.history.slice(0, state.historyIndex + 1);
-    const entry: HistoryEntry = { view: 'images', smartFolderId: null, folder: null, collection: null, statusFilter: null, filterTags: tags, scrollTop: 0 };
+    const entry: HistoryEntry = { view: 'images', smartFolderId: null, folderId: null, collectionId: null, statusFilter: null, filterTags: tags, scrollTop: 0 };
     const newHistory = [...trimmed, entry];
     const newIndex = newHistory.length - 1;
 
     set({
       currentView: 'images',
       activeSmartFolderId: null,
-      activeFolder: null,
-      activeCollection: null,
+      activeFolderId: null,
+      activeCollectionId: null,
       activeStatusFilter: null,
       filterTags: tags,
       pendingScrollRestore: null,

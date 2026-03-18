@@ -70,7 +70,7 @@ function SortableFolderRow({
 
 export function FolderTree() {
   const folderNodes = useDomainStore((s) => s.folderNodes);
-  const { activeFolder, navigateToFolder, setActiveFolder } = useNavigationStore();
+  const { activeFolderId, navigateToFolder, setActiveFolderId } = useNavigationStore();
 
   const tree = buildFolderTree(folderNodes);
 
@@ -111,8 +111,8 @@ export function FolderTree() {
   const actions = useFolderTreeActions({
     folderNodes,
     nodeMap,
-    activeFolder,
-    setActiveFolder,
+    activeFolderId,
+    setActiveFolderId,
     expandFolder,
     setCollapsedNodes,
   });
@@ -281,7 +281,7 @@ export function FolderTree() {
           <SortableContext items={sortableIds} strategy={verticalListSortingStrategy}>
             {flat.map((node) => {
               const folderId = parseFolderId(node.id);
-              const isActive = folderId != null && activeFolder?.folder_id === folderId;
+              const isActive = folderId != null && activeFolderId === folderId;
               const isRenaming = actions.renamingId === node.id;
               const hasChildren = node.children.length > 0;
               const isExpanded = !collapsedNodes.has(node.id);
