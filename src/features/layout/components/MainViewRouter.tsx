@@ -41,7 +41,6 @@ export function MainViewRouter() {
             refreshTrigger={grid.filterRefreshTrigger}
             onSelectedImagesChange={selection.onSelectedImagesChange}
             onSelectionSummarySpecChange={selection.onSelectionSummarySpecChange}
-            selectedScopeCount={grid.selectedScopeCount}
             onMediaViewStateChange={selection.onMediaViewStateChange}
             ratingMin={grid.ratingFilter}
             mimePrefixes={grid.mimePrefixes}

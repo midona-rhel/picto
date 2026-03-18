@@ -32,7 +32,6 @@ type MainViewGridState = {
   colorHex: string | null;
   colorAccuracy: number;
   filterRefreshTrigger: number;
-  selectedScopeCount: number | null;
 };
 
 type MainViewGridActions = {

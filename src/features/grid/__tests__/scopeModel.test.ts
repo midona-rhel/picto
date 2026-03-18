@@ -59,6 +59,16 @@ describe('deriveGridScopeKey', () => {
       activeStatusFilter: null,
     })).toBe('system:all');
   });
+
+  it('treats random as the canonical all-scope with random ordering', () => {
+    expect(deriveGridScopeKey({
+      currentView: 'images',
+      activeFolderId: null,
+      activeCollectionId: null,
+      activeSmartFolderId: null,
+      activeStatusFilter: 'random',
+    })).toBe('system:all');
+  });
 });
 
 describe('deriveActiveGridScopeCount', () => {

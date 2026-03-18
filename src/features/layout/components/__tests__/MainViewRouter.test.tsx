@@ -65,7 +65,6 @@ function createMainViewModel(overrides?: Partial<MainViewModel['navigation']>): 
       colorHex: null,
       colorAccuracy: 95,
       filterRefreshTrigger: 0,
-      selectedScopeCount: null,
     },
     gridActions: {
       onContainerWidthChange: () => {},

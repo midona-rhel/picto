@@ -345,7 +345,6 @@ function App() {
         colorHex: grid.debouncedColorHex,
         colorAccuracy: grid.debouncedColorAccuracy,
         filterRefreshTrigger: grid.smartFolderRefresh,
-        selectedScopeCount: grid.activeGridScopeCount,
       },
       gridActions: {
         onContainerWidthChange: setGridContainerWidth,
@@ -390,7 +389,6 @@ function App() {
       grid.debouncedColorHex,
       grid.debouncedColorAccuracy,
       grid.smartFolderRefresh,
-      grid.activeGridScopeCount,
       handleGridViewModeChange,
       handleGridSortFieldChange,
       handleGridSortOrderChange,
