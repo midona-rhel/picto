@@ -36,7 +36,7 @@ export function useGridItemActions({
   imagesRef,
   singleSelectedHash,
   viewer,
-  selectedScopeCount,
+  selectedScopeCount: _selectedScopeCount,
 }: UseGridItemActionsArgs): GridItemActionsResult {
   const handleOpenDetail = useCallback(() => {
     if (!singleSelectedHash) return;
@@ -63,9 +63,6 @@ export function useGridItemActions({
     });
   }, [singleSelectedHash, state.images]);
 
-  const selectedScopeCountRef = useRef(selectedScopeCount);
-  selectedScopeCountRef.current = selectedScopeCount;
-
   const detailWindowLabelsRef = useRef<Set<string>>(new Set());
   useEffect(() => {
     const unlisten = listen<{ hash: string }>('detail-window-ready', (event) => {
@@ -79,7 +76,7 @@ export function useGridItemActions({
         width: i.width,
         height: i.height,
       }));
-      const totalCount = stateRef.current.responseTotalCount ?? selectedScopeCountRef.current ?? null;
+      const totalCount = stateRef.current.responseTotalCount ?? null;
       runBestEffort(`grid.emitDetailImages.${label}`, emitTo(label, 'detail-images', { images: lightImages, totalCount }));
     });
     return () => {
@@ -97,7 +94,7 @@ export function useGridItemActions({
       width: i.width,
       height: i.height,
     }));
-    const totalCount = state.responseTotalCount ?? selectedScopeCountRef.current ?? null;
+    const totalCount = state.responseTotalCount ?? null;
     for (const label of labels) {
       emitTo(label, 'detail-images', { images: lightImages, totalCount }).catch(() => {
         logBestEffortError(`grid.emitDetailImages.refresh.${label}`, 'detail window unavailable');

@@ -47,7 +47,7 @@ export function useGridExportActions(args: {
   stateRef: React.MutableRefObject<GridRuntimeState>;
   selectedScopeCount: number | null;
 }) {
-  const { stateRef, selectedScopeCount } = args;
+  const { stateRef } = args;
   const [dialogOpen, setDialogOpen] = useState(false);
   const [dialogState, setDialogState] = useState<ExportDialogState>(DEFAULT_DIALOG_STATE);
   const [lastOutputDir, setLastOutputDir] = useState('');
@@ -60,8 +60,8 @@ export function useGridExportActions(args: {
   const buildExportTarget = useCallback((): ExportTarget | null => {
     const virtualSpec = virtualSelectionSpec(stateRef.current);
     if (virtualSpec) {
-      const total = selectedScopeCount ?? stateRef.current.images.length;
-      return total > 0
+      const total = stateRef.current.responseTotalCount;
+      return total != null && total > 0
         ? { hashes: null, selection: normalizeSelection(virtualSpec), total }
         : null;
     }
@@ -73,7 +73,7 @@ export function useGridExportActions(args: {
     });
     if (hashes.length === 0) return null;
     return { hashes, selection: null, total: hashes.length };
-  }, [selectedScopeCount, stateRef]);
+  }, [stateRef]);
 
   const selectOutputDir = useCallback(async (): Promise<string | null> => {
     const selected = await open({
@@ -124,7 +124,11 @@ export function useGridExportActions(args: {
   const handleBasicExport = useCallback(async () => {
     const target = buildExportTarget();
     if (!target) {
-      notifyWarning('Select at least one file to export.', 'Nothing Selected');
+      const title = stateRef.current.virtualAllSelection ? 'Count Unavailable' : 'Nothing Selected';
+      const message = stateRef.current.virtualAllSelection
+        ? 'Wait for the grid total to load before exporting all results.'
+        : 'Select at least one file to export.';
+      notifyWarning(message, title);
       return;
     }
     const outputDir = await selectOutputDir();
@@ -144,7 +148,11 @@ export function useGridExportActions(args: {
   const openAdvancedExport = useCallback(() => {
     const target = buildExportTarget();
     if (!target) {
-      notifyWarning('Select at least one file to export.', 'Nothing Selected');
+      const title = stateRef.current.virtualAllSelection ? 'Count Unavailable' : 'Nothing Selected';
+      const message = stateRef.current.virtualAllSelection
+        ? 'Wait for the grid total to load before exporting all results.'
+        : 'Select at least one file to export.';
+      notifyWarning(message, title);
       return;
     }
     setDialogState((current) => ({

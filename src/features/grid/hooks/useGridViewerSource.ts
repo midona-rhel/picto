@@ -6,7 +6,7 @@ import type { MediaItem } from '../shared';
 export function useGridViewerSource(args: {
   viewer: ViewerHostController;
   images: MediaItem[];
-  totalCount: number;
+  totalCount: number | null;
   statusFilter?: string | null;
   handleInboxAction: ((hash: string, status: 'active' | 'trash') => void) | undefined;
   onMediaViewStateChange?: ((state: MediaViewState | null, controls: MediaViewControls | null) => void) | undefined;

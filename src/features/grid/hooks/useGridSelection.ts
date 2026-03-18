@@ -66,7 +66,7 @@ export function buildVirtualSelectAllBaseSpec(
 export function useGridSelection({
   state,
   dispatch,
-  selectedScopeCount = null,
+  selectedScopeCount: _selectedScopeCount = null,
   onSelectedImagesChange,
   onSelectionSummarySpecChange,
   scope,
@@ -98,12 +98,6 @@ export function useGridSelection({
       }
       return;
     }
-    if (
-      selectedScopeCount != null &&
-      state.virtualAllSelectedCount !== selectedScopeCount
-    ) {
-      dispatch({ type: 'SET_VIRTUAL_ALL_COUNT', count: selectedScopeCount });
-    }
     const spec = selectVirtualSpec(state);
     if (!spec) return;
     void getOrStartSelectionSummary(spec)
@@ -123,7 +117,6 @@ export function useGridSelection({
   }, [
     state.virtualAllSelection,
     state.virtualAllSelectedCount,
-    selectedScopeCount,
     dispatch,
   ]);
 

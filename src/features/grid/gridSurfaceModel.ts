@@ -5,7 +5,7 @@ export interface GridSurfaceModel {
   scopeKey: string;
   images: MasonryImageItem[];
   responseTotalCount: number | null;
-  totalCount: number;
+  totalCount: number | null;
   hasMore: boolean;
   displayViewMode: GridViewMode;
   displayTargetSize: number;
@@ -20,7 +20,7 @@ export function buildGridSurfaceModel(args: {
   scopeKey: string;
   images: MasonryImageItem[];
   responseTotalCount: number | null;
-  totalCount: number;
+  totalCount: number | null;
   hasMore: boolean;
   displayViewMode: GridViewMode;
   displayTargetSize: number;
