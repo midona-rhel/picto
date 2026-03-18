@@ -21,18 +21,16 @@ export interface AppBootstrap {
 }
 
 export function useAppBootstrap(): AppBootstrap {
-  const navigationState = useNavigationStore((state) => ({
-    activeCollection: state.activeCollection,
-    activeFolder: state.activeFolder,
-    activeSmartFolderId: state.activeSmartFolderId,
-    activeStatusFilter: state.activeStatusFilter,
-    currentView: state.currentView,
-    filterTags: state.filterTags,
-  }));
+  const activeCollection = useNavigationStore((state) => state.activeCollection);
+  const activeFolder = useNavigationStore((state) => state.activeFolder);
+  const activeSmartFolderId = useNavigationStore((state) => state.activeSmartFolderId);
+  const activeStatusFilter = useNavigationStore((state) => state.activeStatusFilter);
+  const currentView = useNavigationStore((state) => state.currentView);
+  const filterTags = useNavigationStore((state) => state.filterTags);
   const smartFolders = useDomainStore((state) => state.smartFolders);
   const activeSmartFolder = useMemo(() => {
-    if (!navigationState.activeSmartFolderId) return null;
-    const active = smartFolders.find((folder) => folder.id === navigationState.activeSmartFolderId);
+    if (!activeSmartFolderId) return null;
+    const active = smartFolders.find((folder) => folder.id === activeSmartFolderId);
     if (!active) return null;
     return {
       id: active.id,
@@ -44,11 +42,15 @@ export function useAppBootstrap(): AppBootstrap {
       sort_field: active.sort_field ?? null,
       sort_order: active.sort_order ?? null,
     };
-  }, [navigationState.activeSmartFolderId, smartFolders]);
+  }, [activeSmartFolderId, smartFolders]);
   const titlebarTitle = useMemo(() => deriveNavigationTitle({
-    ...navigationState,
+    activeCollection,
+    activeFolder,
     activeSmartFolder,
-  }), [activeSmartFolder, navigationState]);
+    activeStatusFilter,
+    currentView,
+    filterTags,
+  }), [activeCollection, activeFolder, activeSmartFolder, activeStatusFilter, currentView, filterTags]);
   const { colorScheme } = useMantineColorScheme();
   const appWindow = useMemo(() => getCurrentWindow(), []);
   const isSystemDark = colorScheme === 'dark';
@@ -62,18 +64,18 @@ export function useAppBootstrap(): AppBootstrap {
   const [displayedTitle, setDisplayedTitle] = useState(titlebarTitle);
   const handleScopeTransitionMidpoint = useCallback(() => {
     const state = useNavigationStore.getState();
-    const activeFolder = useDomainStore.getState().smartFolders.find((folder) => folder.id === state.activeSmartFolderId);
+    const activeSmartFolder = useDomainStore.getState().smartFolders.find((folder) => folder.id === state.activeSmartFolderId);
     setDisplayedTitle(deriveNavigationTitle({
       ...state,
-      activeSmartFolder: activeFolder ? {
-        id: activeFolder.id,
-        name: activeFolder.name,
-        parent_id: activeFolder.parent_id != null ? Number(activeFolder.parent_id) : null,
-        icon: activeFolder.icon ?? null,
-        color: activeFolder.color ?? null,
-        predicate: activeFolder.localPredicate ?? activeFolder.predicate ?? { groups: [] },
-        sort_field: activeFolder.sort_field ?? null,
-        sort_order: activeFolder.sort_order ?? null,
+      activeSmartFolder: activeSmartFolder ? {
+        id: activeSmartFolder.id,
+        name: activeSmartFolder.name,
+        parent_id: activeSmartFolder.parent_id != null ? Number(activeSmartFolder.parent_id) : null,
+        icon: activeSmartFolder.icon ?? null,
+        color: activeSmartFolder.color ?? null,
+        predicate: activeSmartFolder.localPredicate ?? activeSmartFolder.predicate ?? { groups: [] },
+        sort_field: activeSmartFolder.sort_field ?? null,
+        sort_order: activeSmartFolder.sort_order ?? null,
       } : null,
     }));
   }, []);
