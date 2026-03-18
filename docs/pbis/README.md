@@ -45,7 +45,6 @@
 - PBI-504-frontend-state-topology-reset.md
 - PBI-507-tags-domain-rewrite.md
 - PBI-508-folders-and-smart-folders-simplification.md
-- PBI-510-sidebar-and-navigation-read-model.md
 - PBI-511-inspector-and-metadata-consolidation.md
 - PBI-512-subscriptions-and-gallery-dl-simplification.md
 - PBI-514-app-shell-and-shared-layer-deletion.md
