@@ -91,7 +91,7 @@ function App() {
       parent_id: active.parent_id ? parseInt(active.parent_id, 10) : null,
       icon: active.icon ?? null,
       color: active.color ?? null,
-      predicate: active.localPredicate ?? active.predicate ?? { groups: [] },
+      predicate: active.predicate ?? active.localPredicate ?? { groups: [] },
       sort_field: active.sort_field ?? null,
       sort_order: active.sort_order ?? null,
     };

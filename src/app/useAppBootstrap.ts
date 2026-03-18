@@ -44,7 +44,7 @@ export function useAppBootstrap(): AppBootstrap {
       parent_id: active.parent_id != null ? Number(active.parent_id) : null,
       icon: active.icon ?? null,
       color: active.color ?? null,
-      predicate: active.localPredicate ?? active.predicate ?? { groups: [] },
+      predicate: active.predicate ?? active.localPredicate ?? { groups: [] },
       sort_field: active.sort_field ?? null,
       sort_order: active.sort_order ?? null,
     };
