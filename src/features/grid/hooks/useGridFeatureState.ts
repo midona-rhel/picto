@@ -99,7 +99,7 @@ export function useGridFeatureState({
   const handleSmartFolderUpdated = useCallback(async () => {
     if (!activeSmartFolder?.id) return;
     try {
-      await useDomainStore.getState().fetchSidebarTree();
+      useDomainStore.getState().invalidate();
       setSmartFolderRefresh((c) => c + 1);
     } catch (e) {
       console.error('Failed to refresh active smart folder:', e);

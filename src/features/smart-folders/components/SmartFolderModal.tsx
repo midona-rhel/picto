@@ -156,11 +156,11 @@ export function SmartFolderModal({ opened, onClose, folder, initialParentId = nu
           label: 'Update smart folder',
           undo: async () => {
             await api.smartFolders.update(folder.id!, beforeData);
-            await useDomainStore.getState().fetchSidebarTree();
+            useDomainStore.getState().invalidate();
           },
           redo: async () => {
             await api.smartFolders.update(folder.id!, folderData);
-            await useDomainStore.getState().fetchSidebarTree();
+            useDomainStore.getState().invalidate();
           },
         });
       } else {
@@ -169,15 +169,15 @@ export function SmartFolderModal({ opened, onClose, folder, initialParentId = nu
           label: 'Create smart folder',
           undo: async () => {
             if (created?.id) await api.smartFolders.delete(created.id);
-            await useDomainStore.getState().fetchSidebarTree();
+            useDomainStore.getState().invalidate();
           },
           redo: async () => {
             created = await api.smartFolders.create(folderData);
-            await useDomainStore.getState().fetchSidebarTree();
+            useDomainStore.getState().invalidate();
           },
         });
       }
-      await useDomainStore.getState().fetchSidebarTree();
+      useDomainStore.getState().invalidate();
 
       await onSaved();
       onClose();

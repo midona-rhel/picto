@@ -167,7 +167,7 @@ export function SmartFolderList({ onFolderUpdated }: SmartFolderListProps) {
   const [contextMenuFolderId, setContextMenuFolderId] = useState<string | null>(null);
 
   const refreshSidebarAndGrid = useCallback(async () => {
-    await useDomainStore.getState().fetchSidebarTree();
+    useDomainStore.getState().invalidate();
     await onFolderUpdated?.();
   }, [onFolderUpdated]);
 
