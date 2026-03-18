@@ -26,7 +26,6 @@ export function useAppBootstrap(): AppBootstrap {
     activeFolder: state.activeFolder,
     activeSmartFolderId: state.activeSmartFolderId,
     activeStatusFilter: state.activeStatusFilter,
-    activeSubscriptionGroup: state.activeSubscriptionGroup,
     currentView: state.currentView,
     filterTags: state.filterTags,
   }));
