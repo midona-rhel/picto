@@ -45,7 +45,6 @@
 - PBI-504-frontend-state-topology-reset.md
 - PBI-507-tags-domain-rewrite.md
 - PBI-508-folders-and-smart-folders-simplification.md
-- PBI-509-grid-and-scope-model-unification.md
 - PBI-510-sidebar-and-navigation-read-model.md
 - PBI-511-inspector-and-metadata-consolidation.md
 - PBI-512-subscriptions-and-gallery-dl-simplification.md
