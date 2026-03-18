@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import { listenRuntimeEvent } from '#desktop/api';
+import { listen } from '#desktop/api';
 import { sortLiveImages } from '../liveSort';
 import { toMasonryItem, type MasonryImageItem } from '../shared';
 import type { SmartFolderPredicate } from '../../../features/smart-folders/components/types';
@@ -43,7 +43,8 @@ export function useGridLiveInsertion(args: {
   } = args;
 
   useEffect(() => {
-    const unlisten = listenRuntimeEvent('file-imported', (event: FileImportedEvent) => {
+    const unlisten = listen<FileImportedEvent>('file-imported', (wrapper) => {
+      const event = wrapper.payload;
       if (folderId != null || collectionEntityId != null || smartFolderPredicate) return;
       if (searchTags?.length || excludedSearchTags?.length || filterFolderIds?.length || excludedFilterFolderIds?.length) return;
       if (ratingMin != null || mimePrefixes?.length || colorHex || searchText) return;

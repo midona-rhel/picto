@@ -27,4 +27,5 @@ export type ResourceKey =
   | `grid/${string}`
   | `metadata/hash:${string}`
   | 'selection/current'
-  | 'view-prefs/current';
+  | 'view-prefs/current'
+  | 'subscriptions/list';

@@ -18,7 +18,8 @@ import {
   IconRefresh,
 } from '@tabler/icons-react';
 import { useRuntimeSyncStore } from '../../../state/runtimeSyncStore';
-import { api, listenRuntimeEvent } from '#desktop/api';
+import { useSubscriptionProgressStore } from '../subscriptionProgressStore';
+import { api } from '#desktop/api';
 import type { SubscriptionGroupInfo, SubscriptionGroupsPanelProps, SitePluginInfo, SubProgress } from '../types';
 import { SCHEDULE_OPTIONS } from '../types';
 import {
@@ -40,12 +41,12 @@ export function SubscriptionGroupsPanel({
   refreshToken,
 }: SubscriptionGroupsPanelProps) {
   const ensureInitialized = useRuntimeSyncStore((s) => s.ensureInitialized);
-  const subscriptionProgressById = useRuntimeSyncStore((s) => s.subscriptionProgressById);
-  const subscriptionGroupProgress = useRuntimeSyncStore((s) => s.groupProgressById);
-  const lastSubscriptionFinished = useRuntimeSyncStore((s) => s.lastSubscriptionFinished);
-  const lastSubscriptionGroupFinished = useRuntimeSyncStore((s) => s.lastGroupFinished);
-  const subscriptionEventSeq = useRuntimeSyncStore((s) => s.subscriptionEventSeq);
-  const subscriptionGroupEventSeq = useRuntimeSyncStore((s) => s.groupEventSeq);
+  const subscriptionProgressById = useSubscriptionProgressStore((s) => s.subscriptionProgressById);
+  const subscriptionGroupProgress = useSubscriptionProgressStore((s) => s.groupProgressById);
+  const lastSubscriptionFinished = useSubscriptionProgressStore((s) => s.lastSubscriptionFinished);
+  const lastSubscriptionGroupFinished = useSubscriptionProgressStore((s) => s.lastGroupFinished);
+  const subscriptionEventSeq = useSubscriptionProgressStore((s) => s.subscriptionEventSeq);
+  const subscriptionGroupEventSeq = useSubscriptionProgressStore((s) => s.groupEventSeq);
 
   const [subscriptionGroups, setSubscriptionGroups] = useState<SubscriptionGroupInfo[]>([]);
   const [sites, setSites] = useState<SitePluginInfo[]>([]);
@@ -127,16 +128,18 @@ export function SubscriptionGroupsPanel({
     }
   }, []);
 
+  const staleResources = useRuntimeSyncStore((s) => s.staleResources);
+
   useEffect(() => {
     void ensureInitialized();
     loadData();
-    const unlisten = listenRuntimeEvent('runtime/mutation_committed', (receipt) => {
-      if (receipt.facts.domains?.includes('subscriptions')) loadData();
-    });
-    return () => {
-      unlisten.then((fn) => fn());
-    };
   }, [ensureInitialized, loadData]);
+
+  useEffect(() => {
+    if (!staleResources.has('subscriptions/list')) return;
+    void loadData();
+    useRuntimeSyncStore.getState().markResourceFresh('subscriptions/list');
+  }, [staleResources, loadData]);
 
   useEffect(() => {
     if (refreshToken == null) return;

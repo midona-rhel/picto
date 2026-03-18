@@ -289,6 +289,15 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
     statusFilter,
     tagMatchMode,
   ]);
+
+  // Reset grayscale preview when navigating to a different scope
+  useEffect(() => {
+    if (displaySettings.grayscalePreview) {
+      updateSetting('grayscalePreview', false);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [navigationScopeKey]);
+
   // Refs for values that change frequently but shouldn't invalidate handleImageClick
   const imagesRef = useRef(activeGridImages);
   imagesRef.current = activeGridImages;

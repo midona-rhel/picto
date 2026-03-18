@@ -122,7 +122,7 @@ export function useGridContextMenu({
     // After right-click hit-test, compute selection state accounting for the
     // just-applied selection (state updates are async, so selectedHashes is stale).
     const wasAlreadySelected = !!(rightClickedHash && effectiveSelectedHashes.has(rightClickedHash));
-    const effectiveSize = rightClickedHash && !wasAlreadySelected ? 1 : state.selectedHashes.size;
+    const effectiveSize = rightClickedHash && !wasAlreadySelected ? 1 : effectiveSelectedHashes.size;
     const effectiveVirtual = rightClickedHash && !wasAlreadySelected ? null : state.virtualAllSelection;
     const hasSingleSelection = !effectiveVirtual && effectiveSize === 1;
     const hasSelection = !!effectiveVirtual || effectiveSize > 0 || !!rightClickedHash;

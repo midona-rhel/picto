@@ -40,9 +40,6 @@ interface DomainState {
   // Raw sidebar tree for custom consumers
   sidebarNodes: SidebarNodeDto[];
   treeEpoch: number;
-  collectionTitles: Record<number, string>;
-  liveInboxImportRuns: number;
-  liveInboxFloor: number | null;
 
   // Loading state
   loading: boolean;
@@ -51,10 +48,7 @@ interface DomainState {
   fetchSidebarTree: () => Promise<void>;
   invalidate: () => void;
   applySidebarCounts: (counts: { all_active: number; inbox: number; trash: number }) => void;
-  subscriptionRunStarted: () => void;
-  subscriptionRunFinished: () => void;
   setDuplicatesCount: (count: number) => void;
-  rememberCollectionTitle: (id: number, title: string) => void;
 }
 
 const SIDEBAR_REFRESH_DEBOUNCE_MS = 120;
@@ -102,9 +96,6 @@ export const useDomainStore = create<DomainState>((set, get) => ({
   folderNodes: [],
   sidebarNodes: [],
   treeEpoch: 0,
-  collectionTitles: {},
-  liveInboxImportRuns: 0,
-  liveInboxFloor: null,
   loading: false,
 
   fetchSidebarTree: async () => {
@@ -148,14 +139,7 @@ export const useDomainStore = create<DomainState>((set, get) => ({
         (n) => n.id === 'system:untagged' || n.id === 'system:untagged_files',
       );
       const duplicatesNode = nodes.find((n) => n.id === 'system:duplicates');
-      // Prefer the compiled sidebar node count. During subscription imports,
-      // the inbox grid snapshot can intentionally stay cached for live insertion,
-      // which would otherwise overwrite a fresher sidebar count.
-      const resolvedInboxCount = inboxNode?.count ?? get().inboxCount;
-      const liveInboxFloor = get().liveInboxFloor;
-      const inboxCount = get().liveInboxImportRuns > 0
-        ? Math.max(resolvedInboxCount, liveInboxFloor ?? resolvedInboxCount)
-        : resolvedInboxCount;
+      const inboxCount = inboxNode?.count ?? get().inboxCount;
       const uncategorizedCount = uncategorizedNode?.count ?? 0;
       const untaggedCount = untaggedNode?.count ?? 0;
 
@@ -233,40 +217,12 @@ export const useDomainStore = create<DomainState>((set, get) => ({
   },
 
   applySidebarCounts: (counts) => {
-    const { liveInboxImportRuns, liveInboxFloor } = get();
     set({
       allActiveCount: counts.all_active,
       inboxCount: counts.inbox,
       trashCount: counts.trash,
-      liveInboxFloor: liveInboxImportRuns > 0
-        ? Math.max(liveInboxFloor ?? counts.inbox, counts.inbox)
-        : liveInboxFloor,
-    });
-  },
-
-  subscriptionRunStarted: () => {
-    const { liveInboxImportRuns, liveInboxFloor, inboxCount } = get();
-    set({
-      liveInboxImportRuns: liveInboxImportRuns + 1,
-      liveInboxFloor: liveInboxFloor ?? inboxCount,
-    });
-  },
-
-  subscriptionRunFinished: () => {
-    const nextRuns = Math.max(0, get().liveInboxImportRuns - 1);
-    set({
-      liveInboxImportRuns: nextRuns,
-      liveInboxFloor: nextRuns > 0 ? get().liveInboxFloor : null,
     });
   },
 
   setDuplicatesCount: (count) => set({ duplicatesCount: count }),
-  rememberCollectionTitle: (id, title) => {
-    set((state) => ({
-      collectionTitles:
-        state.collectionTitles[id] === title
-          ? state.collectionTitles
-          : { ...state.collectionTitles, [id]: title },
-    }));
-  },
 }));

@@ -12,31 +12,6 @@ import type {
 } from '../shared/types/generated/runtime-contract';
 import { deriveStaleResources } from '../runtime/resourceInvalidator';
 import { logBestEffortError } from '../shared/lib/asyncOps';
-import type {
-  GroupFinishedEvent,
-  GroupProgressEvent,
-  SubscriptionFinishedEvent,
-} from '../shared/types/api';
-import { projectRuntimeTasks } from './runtimeTaskProjection';
-
-// ---------------------------------------------------------------------------
-// Derived types
-// ---------------------------------------------------------------------------
-
-export interface RuntimeSubscriptionProgress {
-  subscription_id: string;
-  subscription_name: string;
-  query_id?: string;
-  query_name?: string;
-  files_downloaded: number;
-  files_skipped: number;
-  pages_fetched: number;
-  status_text: string;
-  status: 'running' | 'finished';
-  finished_status?: 'succeeded' | 'failed' | 'cancelled';
-  failure_kind?: string | null;
-  error?: string | null;
-}
 
 // ---------------------------------------------------------------------------
 // State shape
@@ -52,16 +27,6 @@ export interface RuntimeSyncState {
   sidebarCounts: SidebarCounts | null;
   lastOriginCommand: string | null;
 
-  // --- Subscription progress (legacy events) ---
-  subscriptionProgressById: Map<string, RuntimeSubscriptionProgress>;
-  lastSubscriptionFinished: SubscriptionFinishedEvent | null;
-  subscriptionEventSeq: number;
-
-  // --- Group progress (legacy events) ---
-  groupProgressById: Map<string, GroupProgressEvent>;
-  lastGroupFinished: GroupFinishedEvent | null;
-  groupEventSeq: number;
-
   // Actions
   ensureInitialized: () => Promise<void>;
   teardown: () => void;
@@ -69,7 +34,6 @@ export interface RuntimeSyncState {
   applyTaskUpsert: (task: RuntimeTask) => void;
   applyTaskRemoved: (taskId: string) => void;
   refreshSnapshot: () => Promise<void>;
-  refreshTaskSnapshots: () => Promise<void>;
   markResourceFresh: (key: ResourceKey) => void;
   markResourcesStale: (keys: Iterable<ResourceKey>) => void;
 
@@ -87,7 +51,6 @@ let watchdogTimer: ReturnType<typeof setInterval> | null = null;
 let lastEventTs = 0;
 let isInitializing = false;
 const taskLingerTimers = new Map<string, ReturnType<typeof setTimeout>>();
-const subFinishedTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
 // Mutation receipt batching — coalesce rapid-fire events (e.g. bulk import)
 // into a single store update to avoid redundant deriveStaleResources calls.
@@ -109,8 +72,6 @@ function clearTimers() {
   pendingReceipts.length = 0;
   for (const timer of taskLingerTimers.values()) clearTimeout(timer);
   taskLingerTimers.clear();
-  for (const timer of subFinishedTimers.values()) clearTimeout(timer);
-  subFinishedTimers.clear();
 }
 
 function lingerMs(task: RuntimeTask): number {
@@ -119,13 +80,6 @@ function lingerMs(task: RuntimeTask): number {
   if (failureKind === 'inbox_full') return 6000;
   if (task.status === 'failed') return 4500;
   return 2200;
-}
-
-function resolveFinishedSubStatusText(event: SubscriptionFinishedEvent): string {
-  if (event.status === 'cancelled' && event.failure_kind === 'inbox_full') return 'Paused (Inbox full)';
-  if (event.status === 'succeeded') return 'Completed';
-  if (event.status === 'cancelled') return 'Cancelled';
-  return 'Failed';
 }
 
 // ---------------------------------------------------------------------------
@@ -140,27 +94,15 @@ export const useRuntimeSyncStore = create<RuntimeSyncState>((set, get) => ({
   sidebarCounts: null,
   lastOriginCommand: null,
 
-  subscriptionProgressById: new Map<string, RuntimeSubscriptionProgress>(),
-  lastSubscriptionFinished: null,
-  subscriptionEventSeq: 0,
-
-  groupProgressById: new Map<string, GroupProgressEvent>(),
-  lastGroupFinished: null,
-  groupEventSeq: 0,
-
   ensureInitialized: async () => {
     if (get().initialized || isInitializing) return;
     isInitializing = true;
     try {
-      // 1. Seed from snapshots
-      await Promise.all([
-        get().refreshSnapshot(),
-        get().refreshTaskSnapshots(),
-      ]);
+      // 1. Seed from snapshot
+      await get().refreshSnapshot();
 
-      // 2. Subscribe to all events
+      // 2. Subscribe to runtime events
       const listeners = await Promise.all([
-        // --- Runtime events ---
         listenRuntimeEvent('runtime/mutation_committed', (receipt) => {
           get().applyMutationReceipt(receipt);
         }),
@@ -170,9 +112,6 @@ export const useRuntimeSyncStore = create<RuntimeSyncState>((set, get) => ({
         listenRuntimeEvent('runtime/task_removed', (event: TaskRemovedEvent) => {
           get().applyTaskRemoved(event.task_id);
         }),
-
-        // Active runtime task state is derived from runtime/task_upserted in
-        // applyTaskUpsert plus snapshot recovery in refreshTaskSnapshots.
       ]);
       unlisteners = listeners;
 
@@ -180,10 +119,7 @@ export const useRuntimeSyncStore = create<RuntimeSyncState>((set, get) => ({
       watchdogTimer = setInterval(() => {
         const staleMs = Date.now() - lastEventTs;
         if (staleMs < WATCHDOG_STALE_MS) return;
-        void Promise.all([
-          get().refreshSnapshot(),
-          get().refreshTaskSnapshots(),
-        ]);
+        void get().refreshSnapshot();
       }, WATCHDOG_POLL_MS);
 
       set({ initialized: true });
@@ -209,12 +145,6 @@ export const useRuntimeSyncStore = create<RuntimeSyncState>((set, get) => ({
       staleResources: new Set(),
       sidebarCounts: null,
       lastOriginCommand: null,
-      subscriptionProgressById: new Map<string, RuntimeSubscriptionProgress>(),
-      lastSubscriptionFinished: null,
-      subscriptionEventSeq: 0,
-      groupProgressById: new Map<string, GroupProgressEvent>(),
-      lastGroupFinished: null,
-      groupEventSeq: 0,
     });
   },
 
@@ -252,96 +182,11 @@ export const useRuntimeSyncStore = create<RuntimeSyncState>((set, get) => ({
 
   applyTaskUpsert: (task) => {
     lastEventTs = Date.now();
-    const isRunning = task.status === 'running' || task.status === 'cancelling';
-    const isTerminal = task.status === 'finished' || task.status === 'failed';
 
     set((state) => {
       const tasksById = new Map(state.tasksById);
       tasksById.set(task.task_id, task);
-      const taskProjection = projectRuntimeTasks(tasksById.values());
-      const patch: Partial<RuntimeSyncState> = {
-        tasksById,
-        groupProgressById: taskProjection.groupProgressById,
-      };
-
-      if (task.kind === 'subscription_group') {
-        patch.groupEventSeq = state.groupEventSeq + 1;
-        if (isTerminal) {
-          patch.lastGroupFinished = {
-            group_id: task.task_id.replace(/^group:/, ''),
-            status: task.status === 'finished' ? 'succeeded' : 'failed',
-          } as GroupFinishedEvent;
-        }
-      }
-
-      // --- Derive subscription state from task events ---
-      if (task.kind === 'subscription') {
-        const detail = task.detail as Record<string, unknown> | undefined;
-        if (detail) {
-          const subId = (detail.subscription_id as string) ?? task.task_id.replace(/^sub:/, '');
-          const timer = subFinishedTimers.get(subId);
-          if (timer && isRunning) {
-            clearTimeout(timer);
-            subFinishedTimers.delete(subId);
-          }
-          const subscriptionProgressById = new Map(state.subscriptionProgressById);
-          const existing = subscriptionProgressById.get(subId);
-
-          if (isRunning) {
-            subscriptionProgressById.set(subId, {
-              subscription_id: subId,
-              subscription_name:
-                ((detail.subscription_name as string) ?? '').trim()
-                || existing?.subscription_name
-                || `Subscription ${subId}`,
-              query_id: detail.query_id as string | undefined,
-              query_name: (detail.query_name as string | undefined) ?? existing?.query_name,
-              files_downloaded: (detail.files_downloaded as number) ?? 0,
-              files_skipped: (detail.files_skipped as number) ?? 0,
-              pages_fetched: (detail.pages_fetched as number) ?? 0,
-              status_text: (detail.status_text as string) ?? 'Running...',
-              status: 'running',
-            });
-          } else if (isTerminal) {
-            const finishedStatus =
-              (detail.finished_status as string)
-              ?? (task.status === 'finished' ? 'succeeded' : 'failed');
-            subscriptionProgressById.set(subId, {
-              subscription_id: subId,
-              subscription_name:
-                ((detail.subscription_name as string) ?? '').trim()
-                || existing?.subscription_name
-                || `Subscription ${subId}`,
-              query_id: detail.query_id as string | undefined,
-              query_name: (detail.query_name as string | undefined) ?? existing?.query_name,
-              files_downloaded: (detail.files_downloaded as number) ?? 0,
-              files_skipped: (detail.files_skipped as number) ?? 0,
-              pages_fetched: (detail.pages_fetched as number) ?? existing?.pages_fetched ?? 0,
-              status_text: (detail.status_text as string) ?? resolveFinishedSubStatusText({
-                status: finishedStatus as 'succeeded' | 'failed' | 'cancelled',
-                failure_kind: detail.failure_kind as string | undefined,
-              } as SubscriptionFinishedEvent),
-              status: 'finished',
-              finished_status: finishedStatus as 'succeeded' | 'failed' | 'cancelled',
-              failure_kind: detail.failure_kind as string | undefined,
-              error: detail.error as string | undefined,
-            });
-            patch.lastSubscriptionFinished = {
-              subscription_id: subId,
-              subscription_name: (detail.subscription_name as string) ?? '',
-              status: finishedStatus,
-              files_downloaded: (detail.files_downloaded as number) ?? 0,
-              files_skipped: (detail.files_skipped as number) ?? 0,
-              failure_kind: detail.failure_kind as string | undefined,
-              error: detail.error as string | undefined,
-            } as SubscriptionFinishedEvent;
-          }
-          patch.subscriptionProgressById = subscriptionProgressById;
-          patch.subscriptionEventSeq = state.subscriptionEventSeq + 1;
-        }
-      }
-
-      return patch;
+      return { tasksById };
     });
 
     // Schedule linger removal for finished/failed tasks
@@ -360,25 +205,6 @@ export const useRuntimeSyncStore = create<RuntimeSyncState>((set, get) => ({
         taskLingerTimers.delete(task.task_id);
       }, lingerMs(task));
       taskLingerTimers.set(task.task_id, timer);
-
-      // Schedule subscription progress cleanup (linger then remove)
-      if (task.kind === 'subscription') {
-        const detail = task.detail as Record<string, unknown> | undefined;
-        const subId = (detail?.subscription_id as string) ?? task.task_id.replace(/^sub:/, '');
-        const existingSub = subFinishedTimers.get(subId);
-        if (existingSub) clearTimeout(existingSub);
-        const subTimer = setTimeout(() => {
-          set((state) => {
-            const current = state.subscriptionProgressById.get(subId);
-            if (!current || current.status !== 'finished') return {};
-            const subscriptionProgressById = new Map(state.subscriptionProgressById);
-            subscriptionProgressById.delete(subId);
-            return { subscriptionProgressById };
-          });
-          subFinishedTimers.delete(subId);
-        }, lingerMs(task));
-        subFinishedTimers.set(subId, subTimer);
-      }
     }
   },
 
@@ -392,11 +218,7 @@ export const useRuntimeSyncStore = create<RuntimeSyncState>((set, get) => ({
     set((state) => {
       const tasksById = new Map(state.tasksById);
       tasksById.delete(taskId);
-      const taskProjection = projectRuntimeTasks(tasksById.values());
-      return {
-        tasksById,
-        groupProgressById: taskProjection.groupProgressById,
-      };
+      return { tasksById };
     });
   },
 
@@ -416,62 +238,6 @@ export const useRuntimeSyncStore = create<RuntimeSyncState>((set, get) => ({
       });
     } catch (error) {
       logBestEffortError('runtimeSyncStore.refreshSnapshot', error);
-    }
-  },
-
-  refreshTaskSnapshots: async () => {
-    try {
-      const [
-        runningSubscriptionIdsRaw,
-        runningProgress,
-      ] = await Promise.all([
-        api.subscriptions.getRunning(),
-        api.subscriptions.getRunningProgress().catch((error) => {
-          logBestEffortError('runtimeSyncStore.runningProgress', error);
-          return [];
-        }),
-      ]);
-
-      set((state) => {
-        const runningSubscriptionIds = new Set<string>([
-          ...runningSubscriptionIdsRaw,
-          ...runningProgress.map((p) => p.subscription_id),
-        ]);
-        const subscriptionProgressById = new Map(state.subscriptionProgressById);
-
-        for (const [subId, progress] of subscriptionProgressById.entries()) {
-          if (progress.status === 'running' && !runningSubscriptionIds.has(subId)) {
-            subscriptionProgressById.delete(subId);
-          }
-        }
-
-        for (const progress of runningProgress) {
-          const existing = subscriptionProgressById.get(progress.subscription_id);
-          subscriptionProgressById.set(progress.subscription_id, {
-            subscription_id: progress.subscription_id,
-            subscription_name:
-              (progress.subscription_name ?? '').trim()
-              || existing?.subscription_name
-              || `Subscription ${progress.subscription_id}`,
-            query_id: progress.query_id,
-            query_name: progress.query_name ?? existing?.query_name,
-            files_downloaded: progress.files_downloaded,
-            files_skipped: progress.files_skipped,
-            pages_fetched: progress.pages_fetched,
-            status_text: progress.status_text,
-            status: 'running',
-          });
-        }
-
-        const taskProjection = projectRuntimeTasks(state.tasksById.values());
-
-        return {
-          subscriptionProgressById,
-          groupProgressById: taskProjection.groupProgressById,
-        };
-      });
-    } catch (error) {
-      logBestEffortError('runtimeSyncStore.refreshTaskSnapshots', error);
     }
   },
 

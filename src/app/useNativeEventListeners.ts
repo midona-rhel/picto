@@ -9,6 +9,7 @@ import { useExportActionStore } from '../state/exportActionStore';
 import { useExportProgressStore } from '../state/exportProgressStore';
 import { useNavigationStore, type ViewType } from '../state/navigationStore';
 import { startAllRefreshers, stopAllRefreshers } from '../runtime/refresherOrchestrator';
+import { useSubscriptionProgressStore } from '../features/subscriptions/subscriptionProgressStore';
 import { performUndo, performRedo } from '../shared/controllers/undoRedoController';
 import { runBestEffort } from '../shared/lib/asyncOps';
 import type { ResourceKey } from '../shared/types/generated/runtime-contract';
@@ -27,6 +28,7 @@ export function useNativeEventListeners(): void {
   useEffect(() => {
     void useDomainStore.getState().fetchSidebarTree();
     void useRuntimeSyncStore.getState().ensureInitialized();
+    useSubscriptionProgressStore.getState().start();
     startAllRefreshers();
 
     // Library lifecycle listeners (previously in eventBridge)
@@ -47,6 +49,7 @@ export function useNativeEventListeners(): void {
     ]);
     return () => {
       stopAllRefreshers();
+      useSubscriptionProgressStore.getState().stop();
       useRuntimeSyncStore.getState().teardown();
       runBestEffort('cleanup.libraryListeners', libraryListeners.then((fns) => { for (const fn of fns) fn(); }));
     };

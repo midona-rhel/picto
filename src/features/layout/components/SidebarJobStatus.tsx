@@ -1,11 +1,11 @@
 import { useMemo } from 'react';
 import { IconDownload } from '@tabler/icons-react';
 
-import { useRuntimeSyncStore } from '../../../state/runtimeSyncStore';
+import { useSubscriptionProgressStore } from '../../subscriptions/subscriptionProgressStore';
 import st from './SidebarJobStatus.module.css';
 
 export function SidebarJobStatus() {
-  const subscriptionProgressById = useRuntimeSyncStore((s) => s.subscriptionProgressById);
+  const subscriptionProgressById = useSubscriptionProgressStore((s) => s.subscriptionProgressById);
 
   const subs = useMemo(() => {
     return [...subscriptionProgressById.values()].sort((a, b) =>

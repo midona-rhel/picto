@@ -67,6 +67,10 @@ export function deriveStaleResources(receipt: MutationReceipt): Set<ResourceKey>
     keys.add('selection/current');
   }
 
+  if (hasDomain(facts, 'subscriptions')) {
+    keys.add('subscriptions/list');
+  }
+
   // compiler_batch_done refreshes sidebar tree only if Domain::Sidebar is present
   // (handled by the domain-driven rule above).
   if (facts.compiler_batch_done) {

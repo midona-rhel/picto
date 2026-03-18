@@ -6,7 +6,6 @@
  */
 
 import { create } from 'zustand';
-import { useDomainStore } from './domainStore';
 import type { SmartFolder } from '#features/smart-folders/types';
 
 export type ViewType = 'images' | 'collections' | 'subscriptions' | 'duplicates' | 'tags';
@@ -46,6 +45,9 @@ interface NavigationState {
   canGoBack: boolean;
   canGoForward: boolean;
 
+  // Collection display name cache (UI label state)
+  collectionTitles: Record<number, string>;
+
   // Scroll restore for back/forward navigation
   pendingScrollRestore: number | null;
   pendingLoadedItemCount: number;
@@ -72,6 +74,8 @@ interface NavigationState {
   navigateToCollection: (collection: number | { id: number; name?: string }) => void;
   /** Navigate to images view filtered by specific tags */
   navigateToFilterTags: (tags: string[]) => void;
+  /** Cache a user-provided collection display name */
+  rememberCollectionTitle: (id: number, title: string) => void;
 }
 
 export function deriveNavigationTitle(state: { activeFolderLabel?: string | null; activeSmartFolderLabel?: string | null; activeCollectionLabel?: string | null; activeCollectionId?: number | null; activeStatusFilter?: string | null; filterTags?: string[] | null; currentView?: ViewType; folderLabel?: string | null; smartFolderLabel?: string | null; collectionLabel?: string | null; collectionId?: number | null; statusFilter?: string | null; view?: ViewType }): string {
@@ -107,6 +111,7 @@ export const useNavigationStore = create<NavigationState>((set, get) => ({
   historyIndex: 0,
   canGoBack: false,
   canGoForward: false,
+  collectionTitles: {},
   pendingScrollRestore: null, pendingLoadedItemCount: 0, pendingRandomSeed: null,
 
   navigateTo: (view, smartFolderId = null, folderId = null, statusFilter = null) => {
@@ -232,7 +237,7 @@ export const useNavigationStore = create<NavigationState>((set, get) => ({
   navigateToCollection: (collection) => {
     const collectionId = typeof collection === 'number' ? collection : collection.id;
     if (typeof collection !== 'number' && collection.name) {
-      useDomainStore.getState().rememberCollectionTitle(collection.id, collection.name);
+      get().rememberCollectionTitle(collection.id, collection.name);
     }
     const state = get();
     const trimmed = state.history.slice(0, state.historyIndex + 1);
@@ -263,6 +268,15 @@ export const useNavigationStore = create<NavigationState>((set, get) => ({
       canGoBack: newIndex > 0,
       canGoForward: false,
     });
+  },
+
+  rememberCollectionTitle: (id, title) => {
+    set((state) => ({
+      collectionTitles:
+        state.collectionTitles[id] === title
+          ? state.collectionTitles
+          : { ...state.collectionTitles, [id]: title },
+    }));
   },
 
   navigateToFilterTags: (tags) => {

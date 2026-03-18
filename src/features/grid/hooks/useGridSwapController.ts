@@ -203,12 +203,10 @@ export function useGridSwapController(args: {
       void pendingReplace.then((payload) => {
         if (swapSequenceRef.current !== sequence) return;
 
-        if (scopeChanged) {
-          viewerRef.current.close('');
-          onMediaViewStateChangeRef.current?.(null, null);
-          dispatch({ type: 'CLEAR_SELECTION' });
-          dispatch({ type: 'SET_SELECTED_SUBFOLDER', id: null });
-        }
+        viewerRef.current.close('');
+        onMediaViewStateChangeRef.current?.(null, null);
+        dispatch({ type: 'CLEAR_SELECTION' });
+        dispatch({ type: 'SET_SELECTED_SUBFOLDER', id: null });
 
         dispatch({
           type: 'COMMIT_GEOMETRY',
@@ -220,6 +218,9 @@ export function useGridSwapController(args: {
         });
 
         initialLoadDone.current = false;
+        if (payload.images.length === 0 && (payload.responseTotalCount ?? 0) > 0) {
+          console.error('[swap] BUG: backend says', payload.responseTotalCount, 'items but returned 0 images');
+        }
         commitReplaceRef.current(payload);
         setRenderedSurface(buildCommittedSurfaceRef.current(payload, scopeChanged));
 

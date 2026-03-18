@@ -29,7 +29,7 @@ export function useAppBootstrap(): AppBootstrap {
   const filterTags = useNavigationStore((state) => state.filterTags);
   const smartFolders = useDomainStore((state) => state.smartFolders);
   const folderNodes = useDomainStore((state) => state.folderNodes);
-  const collectionTitles = useDomainStore((state) => state.collectionTitles);
+  const collectionTitles = useNavigationStore((state) => state.collectionTitles);
   const activeFolderLabel = useMemo(
     () => (activeFolderId != null ? folderNodes.find((node) => node.id === `folder:${activeFolderId}`)?.name ?? null : null),
     [activeFolderId, folderNodes],
@@ -79,7 +79,7 @@ export function useAppBootstrap(): AppBootstrap {
     setDisplayedTitle(deriveNavigationTitle({
       activeCollectionId: state.activeCollectionId,
       activeCollectionLabel: state.activeCollectionId != null
-        ? domainState.collectionTitles[state.activeCollectionId] ?? `Collection ${state.activeCollectionId}`
+        ? state.collectionTitles[state.activeCollectionId] ?? `Collection ${state.activeCollectionId}`
         : null,
       activeFolderLabel: state.activeFolderId != null
         ? domainState.folderNodes.find((node) => node.id === `folder:${state.activeFolderId}`)?.name ?? null
