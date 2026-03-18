@@ -509,7 +509,6 @@ async fn import_file_into_folder(
     }
 
     if !imported_hashes.is_empty() {
-        db.scope_cache_invalidate_all();
         crate::events::emit_mutation(
             "watch_folder_import",
             MutationImpact::file_lifecycle(db).folder_ids(vec![folder_id]),

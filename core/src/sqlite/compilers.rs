@@ -214,7 +214,6 @@ pub async fn start_compiler_loop(
             || plan.rebuild_all
             || !plan.dirty_file_ids.is_empty();
         if scope_affected {
-            db_ref.scope_cache_invalidate_all();
         }
 
         on_batch_done(ReadModelBatchResult {

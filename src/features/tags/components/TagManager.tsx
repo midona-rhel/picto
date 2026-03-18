@@ -19,7 +19,6 @@ import { api } from '#desktop/api';
 import { writeText } from '#desktop/api';
 import { notifySuccess, notifyError, notifyWarning } from '../../../shared/lib/notify';
 import { getNamespaceColor } from '../../../shared/lib/namespaceColors';
-import { parseTagString } from '../../../shared/lib/tagParsing';
 import { useInlineRename } from '../../../shared/hooks/useInlineRename';
 import { useNavigationStore } from '../../../state/navigationStore';
 import { ContextMenu, useContextMenu, type ContextMenuEntry } from '../../../shared/components/ContextMenu';
@@ -44,29 +43,6 @@ import type { TagRelation, TagSearchResult } from '../../../shared/types/api';
 
 function formatTagDisplay(ns: string, subtag: string): string {
   return ns ? `${ns}:${subtag}` : subtag;
-}
-
-function normalizeTagRecord(tag: TagRecord): TagRecord {
-  const parsed = parseTagString(formatTagDisplay(tag.namespace, tag.subtag));
-  return {
-    ...tag,
-    namespace: parsed.namespace,
-    subtag: parsed.subtag,
-  };
-}
-
-function normalizeNamespaceSummaries(input: NamespaceSummary[]): NamespaceSummary[] {
-  const counts = new Map<string, number>();
-  for (const entry of input) {
-    const parsed = parseTagString(
-      entry.namespace ? `${entry.namespace}:x` : 'x',
-    );
-    const ns = parsed.namespace;
-    counts.set(ns, (counts.get(ns) ?? 0) + entry.count);
-  }
-  return [...counts.entries()]
-    .map(([namespace, count]) => ({ namespace, count }))
-    .sort((a, b) => b.count - a.count || a.namespace.localeCompare(b.namespace));
 }
 
 function nsDotColor(ns: string): string {
@@ -164,9 +140,8 @@ export function TagManager() {
   const fetchNamespaces = useCallback(async () => {
     try {
       const result = await api.tags.getNamespaceSummary();
-      const normalized = normalizeNamespaceSummaries(result);
-      setNamespaces(normalized);
-      setTotalTagCount(normalized.reduce((sum, ns) => sum + ns.count, 0));
+      setNamespaces(result);
+      setTotalTagCount(result.reduce((sum: number, ns: NamespaceSummary) => sum + ns.count, 0));
     } catch (err) {
       console.error('Failed to load namespace summary:', err);
     }
@@ -181,8 +156,7 @@ export function TagManager() {
           cursor: cursor ?? undefined,
           limit: 500,
         };
-        const resultRaw = await api.tags.getPaginated(params);
-        const result = resultRaw.map(normalizeTagRecord);
+        const result = await api.tags.getPaginated(params);
         if (cursor) {
           setTags((prev) => [...prev, ...result]);
         } else {

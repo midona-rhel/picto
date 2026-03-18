@@ -559,7 +559,6 @@ pub async fn reorder_collection_members(
         .db
         .reorder_collection_members_by_hashes(input.id, &input.hashes)
         .await?;
-    state.db.scope_cache_invalidate_scope("collection");
     crate::events::emit_mutation(
         "reorder_collection_members",
         crate::runtime_contract::mutation_builder::MutationImpact::collection_members_reordered(
@@ -578,7 +577,6 @@ pub async fn add_collection_members(
         .add_collection_members_by_hashes(input.id, &input.hashes)
         .await?;
     if added > 0 {
-        state.db.scope_cache_invalidate_scope("collection");
         crate::events::emit_mutation(
             "add_collection_members",
             crate::runtime_contract::mutation_builder::MutationImpact::collection_membership_change(
@@ -598,7 +596,6 @@ pub async fn remove_collection_members(
         .remove_collection_members_by_hashes(input.id, &input.hashes)
         .await?;
     if removed > 0 {
-        state.db.scope_cache_invalidate_scope("collection");
         crate::events::emit_mutation(
             "remove_collection_members",
             crate::runtime_contract::mutation_builder::MutationImpact::collection_membership_change(
@@ -622,7 +619,6 @@ pub async fn delete_collection(
         .map(|folder| folder.folder_id)
         .collect::<Vec<_>>();
     state.db.delete_collection(input.id).await?;
-    state.db.scope_cache_invalidate_scope("collection");
     let mut impact =
         crate::runtime_contract::mutation_builder::MutationImpact::collection_delete(
             input.id,

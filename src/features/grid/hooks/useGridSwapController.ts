@@ -218,9 +218,6 @@ export function useGridSwapController(args: {
         });
 
         initialLoadDone.current = false;
-        if (payload.images.length === 0 && (payload.responseTotalCount ?? 0) > 0) {
-          console.error('[swap] BUG: backend says', payload.responseTotalCount, 'items but returned 0 images');
-        }
         commitReplaceRef.current(payload);
         setRenderedSurface(buildCommittedSurfaceRef.current(payload, scopeChanged));
 

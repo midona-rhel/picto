@@ -129,7 +129,6 @@ impl<'a> SubscriptionSyncEngine<'a> {
         changed_collection_ids.sort_unstable();
         changed_collection_ids.dedup();
 
-        self.db.scope_cache_invalidate_all();
         let mut scopes: Vec<String> = vec!["system:all".to_string()];
         scopes.extend(
             changed_collection_ids

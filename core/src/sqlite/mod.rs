@@ -12,7 +12,6 @@ pub mod projections;
 pub mod read_model;
 pub mod schema;
 
-mod cache;
 mod diagnostics;
 mod open;
 mod resolve;
@@ -27,7 +26,6 @@ use std::sync::atomic::AtomicUsize;
 use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex};
 
-pub use cache::{ScopeSnapshot, ScopeSnapshotKey};
 pub use read_model::{DerivedArtifact, PublishedArtifacts, ReadModelBatchResult, ReadModelEvent};
 
 /// Main library database handle.
@@ -43,9 +41,4 @@ pub struct SqliteDatabase {
     pub read_model_tx: mpsc::UnboundedSender<ReadModelEvent>,
     read_model_rx: Arc<Mutex<Option<mpsc::UnboundedReceiver<ReadModelEvent>>>>,
     db_path: PathBuf,
-    /// Scope snapshot cache for grid paging (avoids repeated temp-table rebuilds).
-    /// Key: scope+predicate+sort. Value: stable ordered id list.
-    /// Invalidated on relevant mutations.
-    pub scope_cache:
-        Arc<std::sync::RwLock<std::collections::HashMap<ScopeSnapshotKey, ScopeSnapshot>>>,
 }

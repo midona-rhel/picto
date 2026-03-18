@@ -1,6 +1,4 @@
-use std::time::Instant;
-
-use crate::sqlite::{ScopeSnapshot, ScopeSnapshotKey, SqliteDatabase};
+use crate::sqlite::SqliteDatabase;
 use crate::types::{EntitySlim, GridPageSlimQuery, GridPageSlimResponse};
 
 use super::common::{GridOutlineResponse, QueryInputs};
@@ -115,28 +113,11 @@ async fn collection_member_snapshot(
         .scope
         .collection_entity_id
         .expect("collection id required");
-    let cache_key = ScopeSnapshotKey {
-        scope: "collection".to_string(),
-        predicate_hash: collection_id as u64,
-        sort_field: inputs.sort_field.clone(),
-        sort_dir: inputs.sort_dir.clone(),
-    };
-    if let Some(snap) = db.scope_cache_get(&cache_key) {
-        return Ok((snap.ids, Some(snap.total_count)));
-    }
 
     let mut ids = db.list_collection_member_file_ids(collection_id).await?;
     if let Some(ref color_ids) = inputs.color_file_ids {
         ids.retain(|id| color_ids.contains(id));
     }
     let total_count = ids.len() as i64;
-    db.scope_cache_put(
-        cache_key,
-        ScopeSnapshot {
-            ids: ids.clone(),
-            total_count,
-            created_at: Instant::now(),
-        },
-    );
     Ok((ids, Some(total_count)))
 }

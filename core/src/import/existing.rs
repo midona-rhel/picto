@@ -135,7 +135,6 @@ pub async fn merge_existing_import_target(
     }
 
     if any_change || ownership_change {
-        db.scope_cache_invalidate_all();
         let hash = hex_hash.to_string();
         let mut impact = if status_restored {
             MutationImpact::file_lifecycle(db).file_hashes(vec![hash.clone()])

@@ -100,7 +100,6 @@ impl SqliteDatabase {
             read_model_tx,
             read_model_rx: Arc::new(Mutex::new(Some(read_model_rx))),
             db_path,
-            scope_cache: Arc::new(std::sync::RwLock::new(std::collections::HashMap::new())),
         }))
     }
 
@@ -137,7 +136,6 @@ impl SqliteDatabase {
             read_model_tx: self.read_model_tx.clone(),
             read_model_rx: self.read_model_rx.clone(),
             db_path: self.db_path.clone(),
-            scope_cache: self.scope_cache.clone(),
         }
     }
 }

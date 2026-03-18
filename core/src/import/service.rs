@@ -83,7 +83,6 @@ impl ImportService {
                     if surviving_hash == imported.hex_hash {
                         emit_file_imported(db, &surviving_hash).await;
                     }
-                    db.scope_cache_invalidate_all();
                     crate::events::emit_mutation(
                         "manual_import",
                         crate::runtime_contract::mutation_builder::MutationImpact::file_lifecycle(
@@ -305,7 +304,6 @@ impl ImportService {
             }
 
             if !imported_hashes.is_empty() {
-                db.scope_cache_invalidate_all();
                 let mut impact = MutationImpact::file_lifecycle(db);
                 if let Some(folder_id) = target_folder_id {
                     impact = impact.folder_ids(vec![folder_id]);

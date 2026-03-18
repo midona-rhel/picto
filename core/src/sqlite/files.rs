@@ -908,10 +908,10 @@ pub fn list_files_slim_by_folder_rank(
     populate_grid_filter(conn, file_ids)?;
 
     let mut sql = format!(
-        "SELECT {}, fe.position_rank
+        "SELECT {}, COALESCE(fe.position_rank, 2147483647) AS position_rank
          FROM media_entity me
          INNER JOIN _grid_filter gf ON gf.file_id = me.entity_id
-         INNER JOIN folder_entity fe ON fe.entity_id = me.entity_id AND fe.folder_id = ?1
+         LEFT JOIN folder_entity fe ON fe.entity_id = me.entity_id AND fe.folder_id = ?1
          LEFT JOIN entity_file ef ON ef.entity_id = me.entity_id
          LEFT JOIN file f ON f.file_id = ef.file_id
          LEFT JOIN file cover_f ON cover_f.file_id = me.cover_file_id
@@ -934,7 +934,7 @@ pub fn list_files_slim_by_folder_rank(
             let p1 = param_values.len() + 1;
             let p2 = param_values.len() + 2;
             sql.push_str(&format!(
-                " AND (fe.position_rank, me.entity_id) {op} (?{p1}, ?{p2})",
+                " AND (COALESCE(fe.position_rank, 2147483647), me.entity_id) {op} (?{p1}, ?{p2})",
             ));
             param_values.push(Box::new(cursor_rank));
             param_values.push(Box::new(cursor_entity_id));
@@ -942,7 +942,7 @@ pub fn list_files_slim_by_folder_rank(
     }
 
     sql.push_str(&format!(
-        " ORDER BY fe.position_rank {}, me.entity_id {} LIMIT ?{}",
+        " ORDER BY COALESCE(fe.position_rank, 2147483647) {}, me.entity_id {} LIMIT ?{}",
         dir,
         dir,
         param_values.len() + 1

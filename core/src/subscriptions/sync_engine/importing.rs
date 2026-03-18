@@ -126,7 +126,6 @@ impl<'a> SubscriptionSyncEngine<'a> {
                     }
                 }
 
-                self.db.scope_cache_invalidate_all();
                 crate::events::emit_mutation(
                     "subscription_import",
                     crate::runtime_contract::mutation_builder::MutationImpact::file_lifecycle(
