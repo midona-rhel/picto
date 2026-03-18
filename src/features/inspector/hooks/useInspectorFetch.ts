@@ -112,16 +112,8 @@ export function useInspectorFetch(
         .then(setFileFolders)
         .catch(() => setFileFolders([]));
     } else {
-      Promise.all(selectedImages.map((img) => api.folders.getFileFolders(img.hash)))
-        .then((allFolders) => {
-          if (allFolders.length === 0) { setFileFolders([]); return; }
-          const first = allFolders[0];
-          const shared = first.filter((f) =>
-            allFolders.every((folders) => folders.some((ff) => ff.folder_id === f.folder_id)),
-          );
-          setFileFolders(shared);
-        })
-        .catch(() => setFileFolders([]));
+      // Multi-file: folders not shown (consistent with virtual selection)
+      setFileFolders([]);
     }
   }, [selectedHashesKey, selectionSummarySpec, selectedCollection]);
 
@@ -197,29 +189,36 @@ export function useInspectorFetch(
           setFileMetadata(metadata);
           setFileTags(metadata.tags);
         } else {
+          // Multi-file: use backend SelectionSummary instead of N individual fetches
           setCollectionSummary(null);
-          const allMetadata = await Promise.all(selectedImages.map((img) => api.files.getAllMetadata(img.hash)));
-          if (requestIdRef.current !== requestId) return;
-          if (allMetadata.length === 0) {
-            setFileTags([]);
-            setFileMetadata(null);
-            setNotes('');
-            setSourceUrls([]);
-            return;
-          }
-          const first = allMetadata[0].tags;
-          const shared = first.filter((tag) =>
-            allMetadata.every((m) => m.tags.some((t) => t.raw_tag === tag.raw_tag)),
-          );
-          const firstNotes = allMetadata[0].entity.notes?.description ?? '';
-          const allNotesMatch = allMetadata.every((m) => (m.entity.notes?.description ?? '') === firstNotes);
-          const firstUrls = allMetadata[0].entity.source_urls ?? [];
-          const firstUrlsKey = JSON.stringify(firstUrls);
-          const allUrlsMatch = allMetadata.every((m) => JSON.stringify(m.entity.source_urls ?? []) === firstUrlsKey);
           setFileMetadata(null);
-          setFileTags(shared);
-          setNotes(allNotesMatch ? firstNotes : '');
-          setSourceUrls(allUrlsMatch ? firstUrls : []);
+          setNotes('');
+          setSourceUrls([]);
+          const spec: SelectionQuerySpec = {
+            mode: 'explicit_hashes',
+            hashes: selectedImages.map((i) => i.hash),
+            scope: { kind: 'system', system_key: 'all' },
+            filters: {},
+            sort: {},
+            excluded_hashes: null,
+            included_hashes: null,
+          };
+          const summary = await getOrStartSelectionSummary(spec);
+          if (requestIdRef.current !== requestId) return;
+          setSelectionSummary(summary);
+          setFileTags(
+            (summary.shared_tags ?? []).map((t) => {
+              const parsed = parseTagString(t.tag);
+              return {
+                raw_tag: t.tag,
+                display_tag: t.tag,
+                namespace: parsed.namespace,
+                subtag: parsed.subtag,
+                source: 'selection_summary',
+                read_only: false,
+              } satisfies ResolvedTagInfo;
+            }),
+          );
         }
       } catch (err) {
         if (requestIdRef.current === requestId) {
@@ -257,17 +256,28 @@ export function useInspectorFetch(
         })
         .catch(() => {});
     } else if (selectedImages.length > 1) {
-      Promise.all(selectedImages.map((img) => api.files.getAllMetadata(img.hash)))
-        .then((allMetadata) => {
-          if (allMetadata.length === 0) {
-            setFileTags([]);
-            return;
-          }
-          const first = allMetadata[0].tags;
-          const shared = first.filter((tag) =>
-            allMetadata.every((m) => m.tags.some((t) => t.raw_tag === tag.raw_tag)),
+      const spec: SelectionQuerySpec = {
+        mode: 'explicit_hashes',
+        hashes: selectedImages.map((i) => i.hash),
+        scope: { kind: 'system', system_key: 'all' },
+        filters: {},
+        sort: {},
+        excluded_hashes: null,
+        included_hashes: null,
+      };
+      getOrStartSelectionSummary(spec)
+        .then((summary) => {
+          setSelectionSummary(summary);
+          setFileTags(
+            (summary.shared_tags ?? []).map((t) => {
+              const parsed = parseTagString(t.tag);
+              return {
+                raw_tag: t.tag, display_tag: t.tag,
+                namespace: parsed.namespace, subtag: parsed.subtag,
+                source: 'selection_summary', read_only: false,
+              } satisfies ResolvedTagInfo;
+            }),
           );
-          setFileTags(shared);
         })
         .catch(() => {});
     }

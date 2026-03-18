@@ -246,7 +246,7 @@ export function InspectorPanel({
 
   const selectedImage = selectedImages.length === 1 ? selectedImages[0] : null;
   const selectedCollection = selectedImage?.is_collection ? collectionSummary : null;
-  const isMulti = selectedImages.length > 1;
+
   const isVirtualSelectionSummary = !!selectionSummarySpec;
 
   const toggleSection = useCallback((key: keyof SectionCollapseState) => {
@@ -368,21 +368,10 @@ export function InspectorPanel({
     setFilterBarOpen(true);
   }, [setColorFilter, setFilterBarOpen]);
 
-  // Compute multi-selection aggregated values
-  const commonRating = isMulti
-    ? (selectedImages.every(i => (i.rating ?? 0) === (selectedImages[0].rating ?? 0))
-      ? (selectedImages[0].rating ?? 0)
-      : 0)
-    : 0;
-  const totalSize = isMulti ? selectedImages.reduce((sum, i) => sum + i.size, 0) : 0;
-
-  const displayedTotalSize = isVirtualSelectionSummary
-    ? (selectionSummary?.stats?.total_size_bytes ?? null)
-    : totalSize;
-  const virtualSharedRating = selectionSummary?.stats?.rating_stats?.shared ?? null;
-  const displayedRating = isVirtualSelectionSummary
-    ? (typeof virtualSharedRating === 'number' ? virtualSharedRating : 0)
-    : commonRating;
+  // Multi-selection values from backend SelectionSummary (used for both multi-file and virtual)
+  const displayedTotalSize = selectionSummary?.stats?.total_size_bytes ?? null;
+  const sharedRating = selectionSummary?.stats?.rating_stats?.shared ?? null;
+  const displayedRating = typeof sharedRating === 'number' ? sharedRating : 0;
 
   const renderTags = () => (
     <InspectorSection
@@ -626,8 +615,8 @@ export function InspectorPanel({
                 onToggle={() => toggleSection('properties')}
               >
                 <div className={styles.propsStack}>
-                  <StarRating value={commonRating} onChange={handleRatingClick} />
-                  <PropertyRow label="Total size" mono value={formatFileSize(totalSize)} />
+                  <StarRating value={displayedRating} onChange={handleRatingClick} />
+                  <PropertyRow label="Total size" mono value={displayedTotalSize != null ? formatFileSize(displayedTotalSize) : '—'} />
                 </div>
               </InspectorSection>
 

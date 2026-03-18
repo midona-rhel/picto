@@ -108,25 +108,19 @@ export function buildFolderSingleMenu(opts: FolderSingleMenuOptions): ContextMen
   }
   if (opts.watchActions) {
     items.push({
-      type: 'submenu',
-      label: 'Auto-Import…',
+      type: 'item',
+      label: opts.watchActions.attached ? 'Edit Watched Folder…' : 'Attach Watched Folder…',
       icon: <IconAntennaBars5 size={14} />,
-      children: compactMenu([
-        {
-          type: 'item',
-          label: opts.watchActions.attached ? 'Edit Watched Folder…' : 'Attach Watched Folder…',
-          onClick: () => invoke(opts.watchActions?.attachOrEdit),
-        },
-        opts.watchActions.attached && opts.watchActions.remove
-          ? {
-              type: 'item',
-              label: 'Remove Watched Folder',
-              danger: true,
-              onClick: () => invoke(opts.watchActions?.remove),
-            }
-          : null,
-      ].filter(Boolean) as ContextMenuEntry[]),
+      onClick: () => invoke(opts.watchActions?.attachOrEdit),
     });
+    if (opts.watchActions.attached && opts.watchActions.remove) {
+      items.push({
+        type: 'item',
+        label: 'Remove Watched Folder',
+        danger: true,
+        onClick: () => invoke(opts.watchActions?.remove),
+      });
+    }
   }
 
   const sort = sortSubmenu(opts.sortBy);

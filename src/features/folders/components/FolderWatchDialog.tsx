@@ -6,6 +6,7 @@ import { useDomainStore } from '../../../state/domainStore';
 import { useFolderWatchActionStore } from '../../../state/folderWatchActionStore';
 import { useManualImportStore } from '../../../state/manualImportStore';
 import { getFolderWatchMeta, parseFolderId } from '../../sidebar/lib/folderTreeData';
+import { glassModalStyles } from '../../../shared/styles/glassModal';
 
 type WatchImportStatusMode = 'inherit' | 'inbox' | 'active';
 
@@ -128,6 +129,7 @@ export function FolderWatchDialog() {
       title="Auto-Import Folder"
       centered
       size="md"
+      styles={glassModalStyles}
     >
       <Stack gap="md">
         <Text size="sm" c="dimmed">

@@ -175,6 +175,22 @@ pub struct UpdateCollectionInput {
 
 #[derive(Debug, Deserialize, TS)]
 #[ts(export_to = "../../src/shared/types/generated/commands/")]
+pub struct AddCollectionTagsInput {
+    #[ts(type = "number")]
+    pub id: i64,
+    pub tags: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
+pub struct RemoveCollectionTagsInput {
+    #[ts(type = "number")]
+    pub id: i64,
+    pub tags: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct ReorderCollectionMembersInput {
     #[ts(type = "number")]
     pub id: i64,
@@ -548,6 +564,61 @@ pub async fn update_collection(
         }
     }
     crate::events::emit_mutation("update_collection", impact);
+    Ok(())
+}
+
+pub async fn add_collection_tags(
+    state: &AppState,
+    input: AddCollectionTagsInput,
+) -> Result<(), String> {
+    let summary = state.db.get_collection_summary(input.id).await?;
+    let current_tags: Vec<String> = summary.tags;
+    let current_set: std::collections::HashSet<&str> =
+        current_tags.iter().map(|s| s.as_str()).collect();
+    let merged: Vec<String> = current_tags
+        .iter()
+        .cloned()
+        .chain(input.tags.iter().filter(|t| !current_set.contains(t.as_str())).cloned())
+        .collect();
+    let member_hashes = state.db.list_collection_member_hashes(input.id).await?;
+    state
+        .db
+        .update_collection(input.id, None, Some(&merged))
+        .await?;
+    let mut impact =
+        crate::runtime_contract::mutation_builder::MutationImpact::collection_update(input.id)
+            .tags_changed();
+    if !member_hashes.is_empty() {
+        impact = impact.file_hashes(member_hashes);
+    }
+    crate::events::emit_mutation("add_collection_tags", impact);
+    Ok(())
+}
+
+pub async fn remove_collection_tags(
+    state: &AppState,
+    input: RemoveCollectionTagsInput,
+) -> Result<(), String> {
+    let summary = state.db.get_collection_summary(input.id).await?;
+    let remove_set: std::collections::HashSet<&str> =
+        input.tags.iter().map(|s| s.as_str()).collect();
+    let remaining: Vec<String> = summary
+        .tags
+        .into_iter()
+        .filter(|t| !remove_set.contains(t.as_str()))
+        .collect();
+    let member_hashes = state.db.list_collection_member_hashes(input.id).await?;
+    state
+        .db
+        .update_collection(input.id, None, Some(&remaining))
+        .await?;
+    let mut impact =
+        crate::runtime_contract::mutation_builder::MutationImpact::collection_update(input.id)
+            .tags_changed();
+    if !member_hashes.is_empty() {
+        impact = impact.file_hashes(member_hashes);
+    }
+    crate::events::emit_mutation("remove_collection_tags", impact);
     Ok(())
 }
 

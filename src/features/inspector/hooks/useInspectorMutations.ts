@@ -42,34 +42,19 @@ export function useInspectorMutations(
         });
         refreshVirtualSelectionSummary();
       } else if (selectedCollection) {
-        const current = collectionSummary ?? await api.collections.getSummary(selectedCollection.id);
-        const merged = Array.from(new Set([...current.tags, ...tagsSnapshot]));
-        await api.collections.update({
-          id: selectedCollection.id,
-          name: current.name,
-          tags: merged,
-        });
+        await api.collections.addTags(selectedCollection.id, tagsSnapshot);
         registerUndoAction({
           label: `Add ${tagsSnapshot.length} tag${tagsSnapshot.length === 1 ? '' : 's'}`,
           undo: async () => {
-            await api.collections.update({
-              id: selectedCollection.id,
-              name: current.name,
-              tags: current.tags,
-            });
+            await api.collections.removeTags(selectedCollection.id, tagsSnapshot);
             refreshMetadata();
           },
           redo: async () => {
-            await api.collections.update({
-              id: selectedCollection.id,
-              name: current.name,
-              tags: merged,
-            });
+            await api.collections.addTags(selectedCollection.id, tagsSnapshot);
             refreshMetadata();
           },
         });
-        setCollectionSummary({ ...current, tags: merged });
-        setFileTags(mapCollectionTags(merged));
+        refreshMetadata();
       } else {
         const hashes = selectedImages.map((img) => img.hash);
         if (hashes.length === 0) return;
@@ -88,7 +73,7 @@ export function useInspectorMutations(
         refreshMetadata();
       }
     },
-    [selectedImages, selectionSummarySpec, selectedCollection, collectionSummary, refreshMetadata, refreshVirtualSelectionSummary, mapCollectionTags, setCollectionSummary, setFileTags],
+    [selectedImages, selectionSummarySpec, selectedCollection, refreshMetadata, refreshVirtualSelectionSummary, mapCollectionTags, setFileTags],
   );
 
   const onRemoveTags = useCallback(
@@ -111,35 +96,19 @@ export function useInspectorMutations(
         });
         refreshVirtualSelectionSummary();
       } else if (selectedCollection) {
-        const current = collectionSummary ?? await api.collections.getSummary(selectedCollection.id);
-        const removeSet = new Set(tagsSnapshot);
-        const nextTags = current.tags.filter((t) => !removeSet.has(t));
-        await api.collections.update({
-          id: selectedCollection.id,
-          name: current.name,
-          tags: nextTags,
-        });
+        await api.collections.removeTags(selectedCollection.id, tagsSnapshot);
         registerUndoAction({
           label: `Remove ${tagsSnapshot.length} tag${tagsSnapshot.length === 1 ? '' : 's'}`,
           undo: async () => {
-            await api.collections.update({
-              id: selectedCollection.id,
-              name: current.name,
-              tags: current.tags,
-            });
+            await api.collections.addTags(selectedCollection.id, tagsSnapshot);
             refreshMetadata();
           },
           redo: async () => {
-            await api.collections.update({
-              id: selectedCollection.id,
-              name: current.name,
-              tags: nextTags,
-            });
+            await api.collections.removeTags(selectedCollection.id, tagsSnapshot);
             refreshMetadata();
           },
         });
-        setCollectionSummary({ ...current, tags: nextTags });
-        setFileTags(mapCollectionTags(nextTags));
+        refreshMetadata();
       } else {
         const hashes = selectedImages.map((img) => img.hash);
         if (hashes.length === 0) return;
@@ -159,7 +128,7 @@ export function useInspectorMutations(
         setFileTags((prev) => prev.filter((t) => !tags.includes(t.raw_tag)));
       }
     },
-    [selectedImages, selectionSummarySpec, selectedCollection, collectionSummary, refreshMetadata, refreshVirtualSelectionSummary, mapCollectionTags, setCollectionSummary, setFileTags],
+    [selectedImages, selectionSummarySpec, selectedCollection, refreshMetadata, refreshVirtualSelectionSummary, mapCollectionTags, setFileTags],
   );
 
   const onUpdateRating = useCallback(

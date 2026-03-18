@@ -43,6 +43,7 @@ export function IconPicker({ value, onChange, children }: IconPickerProps) {
       position="bottom-start"
       shadow="lg"
       withArrow
+      zIndex={2100}
     >
       <Popover.Target>
         <div style={{ display: 'inline-flex', cursor: 'pointer' }} onClick={() => setOpened((o) => !o)}>

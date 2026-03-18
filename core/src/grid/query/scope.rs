@@ -2,7 +2,7 @@ use crate::scope::resolver::{resolve_scope, ScopeFilter};
 use crate::sqlite::files::FileMetadataSlim;
 use crate::sqlite::SqliteDatabase;
 use crate::types::{
-    EntitySlim, GridPageSlimQuery, GridPageSlimResponse, GridScopeKind,
+    EntitySlim, GridPageSlimQuery, GridPageSlimResponse, GridScopeKind, GridSystemScopeKey,
 };
 
 use super::common::{GridOutlineResponse, QueryInputs};

@@ -36,6 +36,8 @@ export type { ReorderCollectionMembersInput } from './ReorderCollectionMembersIn
 export type { AddCollectionMembersInput } from './AddCollectionMembersInput';
 export type { RemoveCollectionMembersInput } from './RemoveCollectionMembersInput';
 export type { DeleteCollectionInput } from './DeleteCollectionInput';
+export type { AddCollectionTagsInput } from './AddCollectionTagsInput';
+export type { RemoveCollectionTagsInput } from './RemoveCollectionTagsInput';
 
 // Re-export generated input types — tags
 export type { SearchTagsInput } from './SearchTagsInput';
@@ -180,6 +182,8 @@ import type { ReorderCollectionMembersInput } from './ReorderCollectionMembersIn
 import type { AddCollectionMembersInput } from './AddCollectionMembersInput';
 import type { RemoveCollectionMembersInput } from './RemoveCollectionMembersInput';
 import type { DeleteCollectionInput } from './DeleteCollectionInput';
+import type { AddCollectionTagsInput } from './AddCollectionTagsInput';
+import type { RemoveCollectionTagsInput } from './RemoveCollectionTagsInput';
 import type { SearchTagsInput } from './SearchTagsInput';
 import type { GetFileTagsInput } from './GetFileTagsInput';
 import type { AddTagsInput } from './AddTagsInput';
@@ -291,6 +295,8 @@ export interface TypedCommandMap {
   reorder_collection_members: { input: ReorderCollectionMembersInput; output: null };
   add_collection_members: { input: AddCollectionMembersInput; output: number };
   remove_collection_members: { input: RemoveCollectionMembersInput; output: number };
+  add_collection_tags: { input: AddCollectionTagsInput; output: null };
+  remove_collection_tags: { input: RemoveCollectionTagsInput; output: null };
   delete_collection: { input: DeleteCollectionInput; output: null };
   // tags
   search_tags: { input: SearchTagsInput; output: unknown };

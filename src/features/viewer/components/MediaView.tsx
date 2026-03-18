@@ -450,8 +450,8 @@ export function MediaView({ images, currentIndex, onNavigate, onClose, onStateCh
 
       // Inbox accept / reject — checked first so they take priority in inbox mode
       if (inboxModeRef.current) {
-        // Accept: Enter always works; Space only for non-video (VideoPlayer handles Space for play/pause)
-        if (matchesShortcut(e, acceptKeys) || (!isViewingVideo && e.key === ' ' && !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey)) {
+        // Accept: only via the registered shortcut key (e.g. Enter)
+        if (matchesShortcut(e, acceptKeys)) {
           e.preventDefault();
           handleInboxAction('active');
           return;

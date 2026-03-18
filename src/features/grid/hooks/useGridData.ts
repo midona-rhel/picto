@@ -109,18 +109,13 @@ export function useGridData({
       // For small collections (≤500 items), this fetches everything upfront
       // so layout computes exact height — no estimation, no scrollbar flicker.
       const prefetchCap = Math.max(500, minItems);
-      const queryArgs = toFetchGridPageArgs(query, null, PAGE_SIZE);
-      console.log('[fetchReplace] query:', JSON.stringify({ scope: queryArgs.scope, limit: queryArgs.limit, cursor: null }));
       while (hasMore && allImages.length < prefetchCap) {
         const page = await api.grid.getPageSlim(toFetchGridPageArgs(query, cursor, PAGE_SIZE));
-        console.log('[fetchReplace] page:', { items: page.items.length, totalCount: page.total_count, hasMore: page.has_more, cursor: page.next_cursor?.slice(0, 20) });
         allImages.push(...page.items.map(toMasonryItem));
         totalCount = page.total_count ?? totalCount;
         cursor = page.next_cursor;
         hasMore = page.has_more && !!cursor;
       }
-
-      console.log('[fetchReplace] result:', { totalImages: allImages.length, totalCount, hasMore });
       return {
         images: allImages,
         responseTotalCount: totalCount,

@@ -227,7 +227,7 @@ export function CanvasGrid({
   }, [images]);
 
   // Horizontal padding prevents clipping of edge drop indicators
-  const paddingX = 16;
+  const paddingX = 4;
   const textHeight = computeTextHeight(showTileName, showResolution);
   const { renderImages, layout, bucketIndex } = useWaterfallLayoutWorker({
     images: layoutImages,
