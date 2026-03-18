@@ -59,20 +59,14 @@ export function buildExplicitSelectionSpec(hashes: string[]): SelectionQuerySpec
   return {
     mode: 'explicit_hashes',
     hashes,
-    search_tags: null,
-    search_excluded_tags: null,
-    tag_match_mode: null,
-    smart_folder_predicate: null,
-    smart_folder_sort_field: null,
-    smart_folder_sort_order: null,
-    sort_field: null,
-    sort_order: null,
+    scope: {
+      kind: 'system',
+      system_key: 'all',
+    },
+    filters: {},
+    sort: {},
     excluded_hashes: null,
     included_hashes: null,
-    status: null,
-    folder_ids: null,
-    excluded_folder_ids: null,
-    folder_match_mode: null,
   };
 }
 

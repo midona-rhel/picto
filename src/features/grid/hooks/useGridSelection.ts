@@ -1,27 +1,41 @@
 import { useCallback, useEffect, useRef } from 'react';
 
 import type { SelectionQuerySpec } from '../metadataPrefetch';
+import {
+  buildGridFilterSpec,
+  buildGridScopeSpec,
+  buildGridSortSpec,
+  type GridQueryInput,
+} from '../gridQuery';
 import { getOrStartSelectionSummary, pinMetadata, unpinMetadata } from '../metadataPrefetch';
 import { selectedImagesPreview as selectImagesPreview, virtualSelectionSpec as selectVirtualSpec } from '../runtime';
 import type { GridRuntimeAction, GridRuntimeState } from '../runtime';
 import type { MasonryImageItem } from '../shared';
 
-export interface VirtualSelectionScopeInput {
-  searchTags?: string[];
-  excludedSearchTags?: string[];
-  tagMatchMode?: 'all' | 'any' | 'exact' | null;
-  smartFolderPredicate?: unknown;
-  smartFolderSortField?: string;
-  smartFolderSortOrder?: string;
-  sortField?: string;
-  sortOrder?: string;
-  statusFilter?: string | null;
-  collectionEntityId?: number | null;
-  folderId?: number | null;
-  filterFolderIds?: number[] | null;
-  excludedFilterFolderIds?: number[] | null;
-  folderMatchMode?: 'all' | 'any' | 'exact' | null;
-}
+export type VirtualSelectionScopeInput = Partial<Pick<
+  GridQueryInput,
+  | 'searchTags'
+  | 'excludedSearchTags'
+  | 'tagMatchMode'
+  | 'smartFolderPredicate'
+  | 'smartFolderSortField'
+  | 'smartFolderSortOrder'
+  | 'sortField'
+  | 'sortOrder'
+  | 'statusFilter'
+  | 'collectionEntityId'
+  | 'folderId'
+  | 'filterFolderIds'
+  | 'excludedFilterFolderIds'
+  | 'folderMatchMode'
+  | 'randomSeed'
+>> & {
+  ratingMin?: number | null;
+  mimePrefixes?: string[] | null;
+  colorHex?: string | null;
+  colorAccuracy?: number | null;
+  searchText?: string | null;
+};
 
 export interface UseGridSelectionArgs {
   state: GridRuntimeState;
@@ -39,51 +53,13 @@ export interface UseGridSelectionResult {
 export function buildVirtualSelectAllBaseSpec(
   scope: VirtualSelectionScopeInput,
 ): Omit<SelectionQuerySpec, 'excluded_hashes'> {
-  const {
-    searchTags,
-    excludedSearchTags,
-    tagMatchMode,
-    smartFolderPredicate,
-    smartFolderSortField,
-    smartFolderSortOrder,
-    sortField,
-    sortOrder,
-    statusFilter,
-    collectionEntityId,
-    folderId,
-    filterFolderIds,
-    excludedFilterFolderIds,
-    folderMatchMode,
-  } = scope;
-
   return {
     mode: 'all_results',
-    search_tags: searchTags && searchTags.length > 0 ? [...searchTags] : null,
-    search_excluded_tags:
-      excludedSearchTags && excludedSearchTags.length > 0 ? [...excludedSearchTags] : null,
-    tag_match_mode: tagMatchMode ?? null,
-    smart_folder_predicate: (smartFolderPredicate as SelectionQuerySpec['smart_folder_predicate']) ?? null,
-    smart_folder_sort_field: smartFolderSortField ?? null,
-    smart_folder_sort_order: smartFolderSortOrder ?? null,
-    sort_field: sortField ?? null,
-    sort_order: sortOrder ?? null,
+    scope: buildGridScopeSpec(scope),
+    filters: buildGridFilterSpec(scope),
+    sort: buildGridSortSpec(scope),
     included_hashes: null,
     hashes: null,
-    status: statusFilter ?? null,
-    collection_entity_id: collectionEntityId ?? null,
-    folder_ids:
-      folderId != null
-        ? [folderId]
-        : filterFolderIds && filterFolderIds.length > 0
-          ? filterFolderIds
-          : null,
-    excluded_folder_ids:
-      folderId != null
-        ? null
-        : excludedFilterFolderIds && excludedFilterFolderIds.length > 0
-          ? excludedFilterFolderIds
-          : null,
-    folder_match_mode: folderId != null ? null : folderMatchMode ?? null,
   };
 }
 

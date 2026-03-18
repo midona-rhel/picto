@@ -36,7 +36,18 @@ export function Sidebar({ onSmartFolderUpdated }: SidebarProps) {
     runCriticalAction(
       'Move Failed',
       `sidebar status drop (${status})`,
-      api.files.setStatusSelection({ mode: 'explicit_hashes', hashes }, status),
+      api.files.setStatusSelection({
+        mode: 'explicit_hashes',
+        hashes,
+        scope: {
+          kind: 'system',
+          system_key: 'all',
+        },
+        filters: {},
+        sort: {},
+        excluded_hashes: null,
+        included_hashes: null,
+      }, status),
     );
   }, []);
 

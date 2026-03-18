@@ -40,25 +40,7 @@ function summarize(result: { exported: number; skipped: number; errors: number }
 }
 
 function normalizeSelection(selection: SelectionQuerySpec): ExportMediaInput['selection'] {
-  return {
-    mode: selection.mode,
-    hashes: selection.hashes ?? null,
-    search_tags: selection.search_tags ?? null,
-    search_excluded_tags: selection.search_excluded_tags ?? null,
-    tag_match_mode: selection.tag_match_mode ?? null,
-    smart_folder_predicate: (selection.smart_folder_predicate ?? null) as ExportSelectionQuerySpec['smart_folder_predicate'],
-    smart_folder_sort_field: selection.smart_folder_sort_field ?? null,
-    smart_folder_sort_order: selection.smart_folder_sort_order ?? null,
-    sort_field: selection.sort_field ?? null,
-    sort_order: selection.sort_order ?? null,
-    excluded_hashes: selection.excluded_hashes ?? null,
-    included_hashes: selection.included_hashes ?? null,
-    status: selection.status ?? null,
-    collection_entity_id: selection.collection_entity_id ?? null,
-    folder_ids: selection.folder_ids ?? null,
-    excluded_folder_ids: selection.excluded_folder_ids ?? null,
-    folder_match_mode: selection.folder_match_mode ?? null,
-  };
+  return selection as ExportSelectionQuerySpec;
 }
 
 export function useGridExportActions(args: {

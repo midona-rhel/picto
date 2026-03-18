@@ -134,6 +134,11 @@ fn export_all_bindings() {
     // types
     picto_core::types::ImportResult::export().unwrap();
     picto_core::types::ImportBatchResult::export().unwrap();
+    picto_core::types::GridScopeKind::export().unwrap();
+    picto_core::types::GridSystemScopeKey::export().unwrap();
+    picto_core::types::GridScopeSpec::export().unwrap();
+    picto_core::types::GridFilterSpec::export().unwrap();
+    picto_core::types::GridSortSpec::export().unwrap();
     picto_core::types::GridPageSlimQuery::export().unwrap();
     picto_core::types::SelectionMode::export().unwrap();
     picto_core::types::SelectionQuerySpec::export().unwrap();

@@ -98,9 +98,15 @@ export function MediaView({ images, currentIndex, onNavigate, onClose, onStateCh
       const resp = await api.grid.getPageSlim({
         limit: COLLECTION_PAGE_SIZE,
         cursor,
-        sortField: 'ordinal',
-        sortOrder: 'asc',
-        collectionEntityId: entityId,
+        scope: {
+          kind: 'collection',
+          collection_entity_id: entityId,
+        },
+        filters: {},
+        sort: {
+          field: 'ordinal',
+          order: 'asc',
+        },
       });
       const items = resp.items.map(toMasonryItem);
       setCollectionImages((prev) => (cursor ? [...prev, ...items] : items));

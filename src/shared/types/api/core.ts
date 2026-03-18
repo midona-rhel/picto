@@ -45,26 +45,43 @@ export interface GridOutlineResponse {
   total_count: number | null;
 }
 
+export type GridScopeKind = 'system' | 'folder' | 'collection' | 'smart';
+export type GridSystemScopeKey = 'all' | 'inbox' | 'trash' | 'untagged' | 'uncategorized';
+
+export interface GridScopeSpec {
+  kind: GridScopeKind;
+  system_key?: GridSystemScopeKey | null;
+  folder_id?: number | null;
+  collection_entity_id?: number | null;
+  smart_folder_predicate?: unknown | null;
+}
+
+export interface GridFilterSpec {
+  search_tags?: string[] | null;
+  search_excluded_tags?: string[] | null;
+  tag_match_mode?: 'all' | 'any' | 'exact' | null;
+  folder_ids?: number[] | null;
+  excluded_folder_ids?: number[] | null;
+  folder_match_mode?: 'all' | 'any' | 'exact' | null;
+  rating_min?: number | null;
+  mime_prefixes?: string[] | null;
+  color_hex?: string | null;
+  color_accuracy?: number | null;
+  search_text?: string | null;
+}
+
+export interface GridSortSpec {
+  field?: string | null;
+  order?: string | null;
+  random_seed?: number | null;
+}
+
 export interface GridPageSlimQuery {
   limit: number;
   cursor: string | null;
-  sortField: string;
-  sortOrder: string;
-  smartFolderPredicate?: unknown | null;
-  searchTags?: string[] | null;
-  searchExcludedTags?: string[] | null;
-  tagMatchMode?: 'all' | 'any' | 'exact' | null;
-  status?: string | null;
-  folderIds?: number[] | null;
-  excludedFolderIds?: number[] | null;
-  folderMatchMode?: 'all' | 'any' | 'exact' | null;
-  collectionEntityId?: number | null;
-  ratingMin?: number | null;
-  mimePrefixes?: string[] | null;
-  colorHex?: string | null;
-  colorAccuracy?: number | null;
-  searchText?: string | null;
-  randomSeed?: number | null;
+  scope: GridScopeSpec;
+  filters: GridFilterSpec;
+  sort: GridSortSpec;
 }
 
 // ─── File Metadata ───────────────────────────────────────────────────────────
@@ -185,21 +202,11 @@ export type SelectionMode = 'explicit_hashes' | 'all_results';
 export interface SelectionQuerySpec {
   mode: SelectionMode;
   hashes?: string[] | null;
-  search_tags?: string[] | null;
-  search_excluded_tags?: string[] | null;
-  tag_match_mode?: 'all' | 'any' | 'exact' | null;
-  smart_folder_predicate?: SmartFolderPredicate | null;
-  smart_folder_sort_field?: string | null;
-  smart_folder_sort_order?: string | null;
-  sort_field?: string | null;
-  sort_order?: string | null;
+  scope: GridScopeSpec;
+  filters: GridFilterSpec;
+  sort: GridSortSpec;
   excluded_hashes?: string[] | null;
   included_hashes?: string[] | null;
-  status?: string | null;
-  collection_entity_id?: number | null;
-  folder_ids?: number[] | null;
-  excluded_folder_ids?: number[] | null;
-  folder_match_mode?: 'all' | 'any' | 'exact' | null;
 }
 
 export interface SelectionTagCount {

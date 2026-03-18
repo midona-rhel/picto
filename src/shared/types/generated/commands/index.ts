@@ -143,6 +143,11 @@ export type { SmartFolderPredicate } from './SmartFolderPredicate';
 export type { SmartRuleGroup } from './SmartRuleGroup';
 export type { MatchMode } from './MatchMode';
 export type { PredicateRule } from './PredicateRule';
+export type { GridScopeKind } from './GridScopeKind';
+export type { GridSystemScopeKey } from './GridSystemScopeKey';
+export type { GridScopeSpec } from './GridScopeSpec';
+export type { GridFilterSpec } from './GridFilterSpec';
+export type { GridSortSpec } from './GridSortSpec';
 export type { GridPageSlimQuery } from './GridPageSlimQuery';
 export type { ViewPrefsPatch } from './ViewPrefsPatch';
 
