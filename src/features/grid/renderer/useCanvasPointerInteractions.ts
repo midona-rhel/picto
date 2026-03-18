@@ -429,8 +429,10 @@ export function useCanvasPointerInteractions(args: {
     autoScrollRef.current.armed = false;
 
     if (reorderModeRef.current) {
-      const target = computeReorderTarget(event.clientX, event.clientY, draggedSet);
       const state = reorderDragRef.current;
+      const target = state?.dropIndex != null && state.dropSide != null
+        ? { index: state.dropIndex, side: state.dropSide }
+        : computeReorderTarget(event.clientX, event.clientY, draggedSet);
       if (target && state) {
         const targetIndex = target.side === 'right' ? target.index + 1 : target.index;
         onReorderRef.current?.(state.draggedHashes, targetIndex);
@@ -443,12 +445,7 @@ export function useCanvasPointerInteractions(args: {
 
   const handleCanvasDragLeave = useCallback(() => {
     stopAutoScroll();
-    const state = reorderDragRef.current;
-    if (!state) return;
-    state.dropIndex = null;
-    state.dropSide = null;
-    markDirty('overlay');
-  }, [markDirty, stopAutoScroll]);
+  }, [stopAutoScroll]);
 
   // ── Cleanup ──────────────────────────────────────────────────────────
   useEffect(() => {

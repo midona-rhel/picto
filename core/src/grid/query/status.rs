@@ -135,6 +135,11 @@ async fn status_rows_with_total(
         return Ok((rows, total_count));
     }
 
+    let total_count = if inputs.grid_filters.is_none() {
+        Some(status_bitmap(db, query)?.len() as i64)
+    } else {
+        None
+    };
     let rows = db
         .list_files_slim(
             inputs.limit + 1,
@@ -145,7 +150,7 @@ async fn status_rows_with_total(
             inputs.grid_filters.clone(),
         )
         .await?;
-    Ok((rows, None))
+    Ok((rows, total_count))
 }
 
 fn status_bitmap(

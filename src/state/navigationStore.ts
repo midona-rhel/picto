@@ -27,6 +27,8 @@ interface HistoryEntry {
   statusFilter: string | null;
   filterTags: string[] | null;
   scrollTop: number;
+  loadedItemCount: number;
+  randomSeed: number | null;
 }
 
 interface NavigationState {
@@ -46,6 +48,8 @@ interface NavigationState {
 
   // Scroll restore for back/forward navigation
   pendingScrollRestore: number | null;
+  pendingLoadedItemCount: number;
+  pendingRandomSeed: number | null;
 
   // Actions
   navigateTo: (view: ViewType, smartFolderId?: string | null, folderId?: number | null, statusFilter?: string | null) => void;
@@ -53,6 +57,10 @@ interface NavigationState {
   goForward: () => void;
   /** Save current scroll position to the current history entry */
   saveScrollTop: (scrollTop: number, expectedHistoryIndex?: number) => void;
+  /** Save loaded item count to the current history entry */
+  saveLoadedItemCount: (count: number) => void;
+  /** Save random seed to the current history entry */
+  saveRandomSeed: (seed: number | null) => void;
   /** Consume the pending scroll restore value (returns it and clears it) */
   consumeScrollRestore: () => number | null;
   setActiveFolderId: (folderId: number | null) => void;
@@ -95,16 +103,16 @@ export const useNavigationStore = create<NavigationState>((set, get) => ({
   activeStatusFilter: null,
   filterTags: null,
 
-  history: [{ view: 'images', smartFolderId: null, folderId: null, collectionId: null, statusFilter: null, filterTags: null, scrollTop: 0 }],
+  history: [{ view: 'images', smartFolderId: null, folderId: null, collectionId: null, statusFilter: null, filterTags: null, scrollTop: 0, loadedItemCount: 0, randomSeed: null }],
   historyIndex: 0,
   canGoBack: false,
   canGoForward: false,
-  pendingScrollRestore: null,
+  pendingScrollRestore: null, pendingLoadedItemCount: 0, pendingRandomSeed: null,
 
   navigateTo: (view, smartFolderId = null, folderId = null, statusFilter = null) => {
     const state = get();
     const trimmed = state.history.slice(0, state.historyIndex + 1);
-    const entry: HistoryEntry = { view, smartFolderId, folderId, collectionId: null, statusFilter, filterTags: null, scrollTop: 0 };
+    const entry: HistoryEntry = { view, smartFolderId, folderId, collectionId: null, statusFilter, filterTags: null, scrollTop: 0, loadedItemCount: 0, randomSeed: null };
     const newHistory = [...trimmed, entry];
     const newIndex = newHistory.length - 1;
 
@@ -115,7 +123,7 @@ export const useNavigationStore = create<NavigationState>((set, get) => ({
       activeCollectionId: null,
       activeStatusFilter: statusFilter,
       filterTags: null,
-      pendingScrollRestore: null,
+      pendingScrollRestore: null, pendingLoadedItemCount: 0, pendingRandomSeed: null,
       history: newHistory,
       historyIndex: newIndex,
       canGoBack: newIndex > 0,
@@ -139,7 +147,7 @@ export const useNavigationStore = create<NavigationState>((set, get) => ({
       historyIndex: newIndex,
       canGoBack: newIndex > 0,
       canGoForward: true,
-      pendingScrollRestore: entry.scrollTop,
+      pendingScrollRestore: entry.scrollTop, pendingLoadedItemCount: entry.loadedItemCount, pendingRandomSeed: entry.randomSeed,
     });
   },
 
@@ -159,7 +167,7 @@ export const useNavigationStore = create<NavigationState>((set, get) => ({
       historyIndex: newIndex,
       canGoBack: true,
       canGoForward: newIndex < state.history.length - 1,
-      pendingScrollRestore: entry.scrollTop,
+      pendingScrollRestore: entry.scrollTop, pendingLoadedItemCount: entry.loadedItemCount, pendingRandomSeed: entry.randomSeed,
     });
   },
 
@@ -179,6 +187,25 @@ export const useNavigationStore = create<NavigationState>((set, get) => ({
     });
   },
 
+  saveLoadedItemCount: (count: number) => {
+    set((state) => {
+      const history = [...state.history];
+      if (history[state.historyIndex]) {
+        history[state.historyIndex] = { ...history[state.historyIndex], loadedItemCount: count };
+      }
+      return { history };
+    });
+  },
+
+  saveRandomSeed: (seed) => {
+    set((state) => {
+      const history = [...state.history];
+      if (history[state.historyIndex]) {
+        history[state.historyIndex] = { ...history[state.historyIndex], randomSeed: seed };
+      }
+      return { history };
+    });
+  },
 
   consumeScrollRestore: () => {
     const value = get().pendingScrollRestore;
@@ -217,6 +244,8 @@ export const useNavigationStore = create<NavigationState>((set, get) => ({
       statusFilter: null,
       filterTags: null,
       scrollTop: 0,
+      loadedItemCount: 0,
+      randomSeed: null,
     };
     const newHistory = [...trimmed, entry];
     const newIndex = newHistory.length - 1;
@@ -228,7 +257,7 @@ export const useNavigationStore = create<NavigationState>((set, get) => ({
       activeCollectionId: collectionId,
       activeStatusFilter: null,
       filterTags: null,
-      pendingScrollRestore: null,
+      pendingScrollRestore: null, pendingLoadedItemCount: 0, pendingRandomSeed: null,
       history: newHistory,
       historyIndex: newIndex,
       canGoBack: newIndex > 0,
@@ -239,7 +268,7 @@ export const useNavigationStore = create<NavigationState>((set, get) => ({
   navigateToFilterTags: (tags) => {
     const state = get();
     const trimmed = state.history.slice(0, state.historyIndex + 1);
-    const entry: HistoryEntry = { view: 'images', smartFolderId: null, folderId: null, collectionId: null, statusFilter: null, filterTags: tags, scrollTop: 0 };
+    const entry: HistoryEntry = { view: 'images', smartFolderId: null, folderId: null, collectionId: null, statusFilter: null, filterTags: tags, scrollTop: 0, loadedItemCount: 0, randomSeed: null };
     const newHistory = [...trimmed, entry];
     const newIndex = newHistory.length - 1;
 
@@ -250,7 +279,7 @@ export const useNavigationStore = create<NavigationState>((set, get) => ({
       activeCollectionId: null,
       activeStatusFilter: null,
       filterTags: tags,
-      pendingScrollRestore: null,
+      pendingScrollRestore: null, pendingLoadedItemCount: 0, pendingRandomSeed: null,
       history: newHistory,
       historyIndex: newIndex,
       canGoBack: newIndex > 0,

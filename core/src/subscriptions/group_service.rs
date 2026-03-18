@@ -6,7 +6,7 @@ use crate::blob_store::BlobStore;
 use crate::sqlite::SqliteDatabase;
 use crate::types::{SubscriptionGroupInfo, SubscriptionInfo, SubscriptionQueryInfo};
 
-// Bulk read — constant query count per flow instead of O(N) per subscription.
+// Bulk read — constant query count per group instead of O(N) per subscription.
 pub async fn get_groups(db: &SqliteDatabase) -> Result<Vec<SubscriptionGroupInfo>, String> {
     let start = std::time::Instant::now();
     let groups = db.list_groups().await?;
@@ -81,7 +81,7 @@ pub async fn get_groups(db: &SqliteDatabase) -> Result<Vec<SubscriptionGroupInfo
     Ok(result)
 }
 
-/// Create a new flow with optional schedule.
+/// Create a new group with optional schedule.
 pub async fn create_group(
     db: &SqliteDatabase,
     name: String,
@@ -114,7 +114,7 @@ pub async fn create_group(
     })
 }
 
-/// Delete a flow (CASCADE deletes subscriptions).
+/// Delete a group (CASCADE deletes subscriptions).
 pub async fn delete_group(
     db: &SqliteDatabase,
     _blob_store: &BlobStore,
@@ -128,7 +128,7 @@ pub async fn delete_group(
     Ok(())
 }
 
-/// Rename a flow.
+/// Rename a group.
 pub async fn rename_group(db: &SqliteDatabase, id: String, name: String) -> Result<(), String> {
     let group_id: i64 = id
         .parse()
@@ -140,7 +140,7 @@ pub async fn rename_group(db: &SqliteDatabase, id: String, name: String) -> Resu
     db.rename_group(group_id, &trimmed).await
 }
 
-/// Set a flow's schedule.
+/// Set a group's schedule.
 pub async fn set_group_schedule(
     db: &SqliteDatabase,
     id: String,

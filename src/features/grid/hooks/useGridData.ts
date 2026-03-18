@@ -105,8 +105,11 @@ export function useGridData({
       let hasMore = true;
       let totalCount: number | null = null;
 
-      // Fetch pages until we have at least minItems (or no more pages).
-      while (hasMore && allImages.length < Math.max(PAGE_SIZE, minItems)) {
+      // Fetch pages until we run out or hit the threshold.
+      // For small collections (≤500 items), this fetches everything upfront
+      // so layout computes exact height — no estimation, no scrollbar flicker.
+      const prefetchCap = Math.max(500, minItems);
+      while (hasMore && allImages.length < prefetchCap) {
         const page = await api.grid.getPageSlim(toFetchGridPageArgs(query, cursor, PAGE_SIZE));
         allImages.push(...page.items.map(toMasonryItem));
         totalCount = page.total_count ?? totalCount;

@@ -220,9 +220,6 @@ export class ThumbnailPipeline {
 
   private selectNextQueueItem(): ThumbnailQueueItem | null {
     const budgets = getActiveBudgets(this.scrollState.phase);
-    const hasVisibleThumbnailQueued = [...this.queueMap.values()].some(
-      (item) => item.priority === 'visible' && item.sourceKind === 'thumbnail',
-    );
     let best: ThumbnailQueueItem | null = null;
     let bestScore = -1;
     for (const item of this.queueMap.values()) {
@@ -233,7 +230,6 @@ export class ThumbnailPipeline {
         activeVisibleThumbLoads: this.activeVisibleThumbLoads,
         activePrefetchThumbLoads: this.activePrefetchThumbLoads,
         activeFullLoads: this.activeFullLoads,
-        hasVisibleThumbnailQueued,
       })) continue;
       const score = scoreQueueItem(item);
       if (score > bestScore) {
@@ -616,7 +612,6 @@ function canStartQueueItem(args: {
   activeVisibleThumbLoads: number;
   activePrefetchThumbLoads: number;
   activeFullLoads: number;
-  hasVisibleThumbnailQueued: boolean;
 }): boolean {
   const {
     item,
@@ -625,21 +620,13 @@ function canStartQueueItem(args: {
     activeVisibleThumbLoads,
     activePrefetchThumbLoads,
     activeFullLoads,
-    hasVisibleThumbnailQueued,
   } = args;
 
-  if (item.sourceKind === 'full') {
-    if (scrollPhase === 'fast') return false;
-    if (hasVisibleThumbnailQueued) return false;
-    return activeFullLoads < budgets.maxFull;
-  }
-
+  if (item.sourceKind === 'full') return activeFullLoads < budgets.maxFull;
   if (item.priority === 'prefetch') {
     if (scrollPhase === 'fast') return false;
-    if (hasVisibleThumbnailQueued) return false;
     return activePrefetchThumbLoads < budgets.maxPrefetchThumbs;
   }
-
   return activeVisibleThumbLoads < budgets.maxVisibleThumbs;
 }
 

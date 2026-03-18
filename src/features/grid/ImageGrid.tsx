@@ -42,8 +42,6 @@ import { ThumbnailPipeline } from '../../shared/lib/canvas/thumbnailPipeline';
 
 interface GridScrollShellProps {
   scrollRef: React.MutableRefObject<HTMLDivElement | null>;
-  initialScrollTop: number | null;
-  initialScrollToken: number | null;
   onContextMenu: React.MouseEventHandler<HTMLDivElement>;
   onPointerDown: React.PointerEventHandler<HTMLDivElement>;
   grayscalePreview: boolean;
@@ -53,35 +51,15 @@ interface GridScrollShellProps {
 
 function GridScrollShell({
   scrollRef,
-  initialScrollTop,
-  initialScrollToken,
   onContextMenu,
   onPointerDown,
   grayscalePreview,
   gridFreezeActive,
   children,
 }: GridScrollShellProps) {
-  const localRef = useRef<HTMLDivElement | null>(null);
-  const appliedInitialScrollTokenRef = useRef<number | null>(null);
   const handleShellRef = useCallback((node: HTMLDivElement | null) => {
-    localRef.current = node;
     scrollRef.current = node;
   }, [scrollRef]);
-
-  useLayoutEffect(() => {
-    const node = localRef.current;
-    if (!node) return;
-    if (initialScrollToken == null || initialScrollTop == null) return;
-    if (appliedInitialScrollTokenRef.current === initialScrollToken) return;
-
-    appliedInitialScrollTokenRef.current = initialScrollToken;
-    node.scrollTop = initialScrollTop;
-    requestAnimationFrame(() => {
-      if (localRef.current === node) {
-        node.scrollTop = initialScrollTop;
-      }
-    });
-  }, [initialScrollToken, initialScrollTop]);
 
   return (
     <div
@@ -115,6 +93,10 @@ function hasVisibleSubfoldersForFolder(
   if (!folderId || !showSubfolders) return false;
   const parentNodeId = `folder:${folderId}`;
   return folderNodes.some((n) => n.parent_id === parentNodeId);
+}
+
+function easeOutCubic(t: number): number {
+  return 1 - Math.pow(1 - t, 3);
 }
 
 
@@ -180,6 +162,8 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
   const navigateToFolder = useNavigationStore(s => s.navigateToFolder);
   const navigateToCollection = useNavigationStore(s => s.navigateToCollection);
   const saveScrollTop = useNavigationStore(s => s.saveScrollTop);
+  const saveLoadedItemCount = useNavigationStore(s => s.saveLoadedItemCount);
+  const saveRandomSeed = useNavigationStore(s => s.saveRandomSeed);
   const historyIndex = useNavigationStore(s => s.historyIndex);
   const consumeScrollRestore = useNavigationStore(s => s.consumeScrollRestore);
   const {
@@ -196,22 +180,62 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
   const initialLoadDone = useRef(false);
   const displayViewModeRef = useRef(state.displayViewMode);
   displayViewModeRef.current = state.displayViewMode;
+  const animatedTargetSizeRef = useRef(targetSize);
+  const [animatedTargetSize, setAnimatedTargetSize] = useState(targetSize);
+
+  useEffect(() => {
+    const start = animatedTargetSizeRef.current;
+    const end = targetSize;
+    const delta = end - start;
+    if (Math.abs(delta) < 1) {
+      animatedTargetSizeRef.current = end;
+      setAnimatedTargetSize(end);
+      return;
+    }
+
+    if (Math.abs(delta) < 16) {
+      animatedTargetSizeRef.current = end;
+      setAnimatedTargetSize(end);
+      return;
+    }
+
+    const durationMs = Math.min(180, Math.max(110, Math.abs(delta) * 0.9));
+    let rafId = 0;
+    let animationStart = 0;
+
+    const tick = (ts: number) => {
+      if (!animationStart) animationStart = ts;
+      const elapsed = ts - animationStart;
+      const progress = Math.min(1, elapsed / durationMs);
+      const next = start + delta * easeOutCubic(progress);
+      animatedTargetSizeRef.current = next;
+      setAnimatedTargetSize(next);
+      if (progress < 1) {
+        rafId = requestAnimationFrame(tick);
+      }
+    };
+
+    rafId = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(rafId);
+  }, [targetSize]);
+
   useEffect(() => {
     dispatch({
       type: 'COMMIT_GEOMETRY',
       viewMode,
-      targetSize,
+      targetSize: animatedTargetSize,
       folderId: folderId ?? null,
       searchTags,
       emptyContext: resolveGridEmptyContext(smartFolderPredicate, folderId, statusFilter),
     });
-  }, [dispatch, folderId, searchTags, smartFolderPredicate, statusFilter, targetSize, viewMode]);
+  }, [animatedTargetSize, dispatch, folderId, searchTags, smartFolderPredicate, statusFilter, viewMode]);
   const {
     queryKey,
     fetchReplace,
     commitReplace,
     requestReplace,
     requestAppend,
+    randomSeed,
   } = useGridData({
     queryInput: {
       folderId: folderId ?? null,
@@ -237,6 +261,7 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
     dispatch,
     stateRef,
     onFirstCommit: () => { initialLoadDone.current = true; },
+    restoredRandomSeed: useNavigationStore.getState().pendingRandomSeed,
   });
 
   const gap = 8;
@@ -320,7 +345,6 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
     startInlineRename,
     commitRename,
     cancelRename,
-      collectionEntityId,
   } = useGridInlineRename({
     singleSelectedHash,
     stateRef,
@@ -515,7 +539,7 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
       totalCount: payload.responseTotalCount,
       hasMore: payload.hasMore,
       displayViewMode: viewMode,
-      displayTargetSize: targetSize,
+      displayTargetSize: animatedTargetSizeRef.current,
       displayFolderId: nextFolderId,
       displaySearchTags: searchTags,
       displayEmptyContext: resolveGridEmptyContext(smartFolderPredicate, folderId, statusFilter),
@@ -528,7 +552,6 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
     folderNodes,
     navigationScopeKey,
     searchTags,
-    selectedScopeCount,
     smartFolderPredicate,
     stateRef,
     statusFilter,
@@ -539,7 +562,6 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
   const {
     renderedScopeKey,
     renderedSurface,
-    shellInitialScroll,
     preserveScrollBehaviors,
     visibleTransitionStage,
   } = useGridSwapController({
@@ -560,6 +582,7 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
     dispatch,
     onMediaViewStateChange,
     consumeScrollRestore,
+    scrollRef,
   });
   imagesRef.current = renderedSurface.images;
   displayViewModeRef.current = renderedSurface.displayViewMode;
@@ -605,6 +628,8 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
       timer = setTimeout(() => {
         if (visibleTransitionStage !== 'idle') return;
         saveScrollTop(scrollEl.scrollTop, currentHistoryIndex);
+        saveLoadedItemCount(imagesRef.current.length);
+        if (randomSeed != null) saveRandomSeed(randomSeed);
       }, 150);
     };
     scrollEl.addEventListener('scroll', onScroll, { passive: true });
@@ -612,7 +637,7 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
       scrollEl.removeEventListener('scroll', onScroll);
       clearTimeout(timer);
     };
-  }, [historyIndex, renderedScopeKey, saveScrollTop, scrollRef, visibleTransitionStage]);
+  }, [historyIndex, imagesRef, randomSeed, renderedScopeKey, saveLoadedItemCount, saveRandomSeed, saveScrollTop, scrollRef, visibleTransitionStage]);
 
   useGridViewerSource({
     viewer,
@@ -671,21 +696,19 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
   }
 
   return (
-    <div style={{
-      height: '100%',
-      display: 'flex',
-      position: 'relative',
-      opacity: transitionOpacity(visibleTransitionStage),
-      transition: transitionCss(visibleTransitionStage),
-      // Hide completely during preparing phase so scrollbar is invisible
-      // while layout settles. Visibility:hidden hides scrollbar, opacity doesn't.
-      visibility: visibleTransitionStage === 'preparing' ? 'hidden' : 'visible',
-    }}>
+    <div
+      key={renderedScopeKey}
+      style={{
+        height: '100%',
+        display: 'flex',
+        position: 'relative',
+        opacity: transitionOpacity(visibleTransitionStage),
+        transition: transitionCss(visibleTransitionStage),
+        visibility: visibleTransitionStage === 'preparing' ? 'hidden' : 'visible',
+      }}
+    >
       <GridScrollShell
-        key={renderedScopeKey}
         scrollRef={scrollRef}
-        initialScrollTop={shellInitialScroll?.top ?? null}
-        initialScrollToken={shellInitialScroll?.token ?? null}
         onContextMenu={handleContextMenu}
         onPointerDown={handleBoxPointerDown}
         grayscalePreview={displaySettings.grayscalePreview}

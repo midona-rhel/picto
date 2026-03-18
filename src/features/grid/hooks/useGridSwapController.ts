@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type Dispatch } from 'react';
+import { useNavigationStore } from '../../../state/navigationStore';
 import { resolveGridEmptyContext } from '../gridEmptyContext';
 import type { GridReplacePayload } from './useGridData';
 import type { ViewerHostController } from '../../viewer/hooks/useViewerHost';
@@ -26,11 +27,6 @@ export type GridSwapTransitionPhase =
   | 'loading_new_data'
   | 'fading_in_new';
 
-export interface GridShellInitialScroll {
-  top: number;
-  token: number;
-}
-
 export function useGridSwapController(args: {
   incomingScopeKey: string;
   queryKey: string;
@@ -41,7 +37,7 @@ export function useGridSwapController(args: {
   searchTags?: string[];
   smartFolderPredicate?: SmartFolderPredicate;
   statusFilter?: string | null;
-  fetchReplace: () => Promise<GridReplacePayload>;
+  fetchReplace: (minItems?: number) => Promise<GridReplacePayload>;
   commitReplace: (payload: GridReplacePayload) => void;
   buildCommittedSurface: (payload: GridReplacePayload, scopeChanged: boolean) => GridSurfaceModel;
   initialLoadDone: { current: boolean };
@@ -49,6 +45,7 @@ export function useGridSwapController(args: {
   dispatch: Dispatch<GridRuntimeAction>;
   onMediaViewStateChange?: (state: MediaViewState | null, controls: MediaViewControls | null) => void;
   consumeScrollRestore: () => number | null;
+  scrollRef: React.MutableRefObject<HTMLDivElement | null>;
 }) {
   const {
     incomingScopeKey,
@@ -68,14 +65,15 @@ export function useGridSwapController(args: {
     dispatch,
     onMediaViewStateChange,
     consumeScrollRestore,
+    scrollRef,
   } = args;
+  void scrollRef;
 
   const [renderedScopeKey, setRenderedScopeKey] = useState(incomingScopeKey);
   const [renderedSurface, setRenderedSurface] = useState(liveSurface);
   const [transitionPhase, setTransitionPhase] = useState<GridSwapTransitionPhase>('idle');
   const [navigationMode, setNavigationMode] = useState<GridSwapNavigationMode>('steady');
   const [visibleTransitionStage, setVisibleTransitionStage] = useState<TransitionStage>('idle');
-  const [shellInitialScroll, setShellInitialScroll] = useState<GridShellInitialScroll | null>(null);
 
   const requestReplaceRef = useRef(fetchReplace);
   requestReplaceRef.current = fetchReplace;
@@ -89,12 +87,23 @@ export function useGridSwapController(args: {
   onMediaViewStateChangeRef.current = onMediaViewStateChange;
   const renderedSurfaceRef = useRef(renderedSurface);
   renderedSurfaceRef.current = renderedSurface;
+  const viewModeRef = useRef(viewMode);
+  viewModeRef.current = viewMode;
+  const targetSizeRef = useRef(targetSize);
+  targetSizeRef.current = targetSize;
+  const folderIdRef = useRef(folderId);
+  folderIdRef.current = folderId;
+  const searchTagsRef = useRef(searchTags);
+  searchTagsRef.current = searchTags;
+  const smartFolderPredicateRef = useRef(smartFolderPredicate);
+  smartFolderPredicateRef.current = smartFolderPredicate;
+  const statusFilterRef = useRef(statusFilter);
+  statusFilterRef.current = statusFilter;
 
   const prevIncomingScopeKeyRef = useRef(incomingScopeKey);
   const prevQueryKeyRef = useRef(queryKey);
   const isFirstRenderRef = useRef(true);
   const swapSequenceRef = useRef(0);
-  const shellSwapTokenRef = useRef(0);
   const fadeOutTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const fadeInTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -160,12 +169,15 @@ export function useGridSwapController(args: {
     fadeOutTimerRef.current = null;
     fadeInTimerRef.current = null;
 
-    const restoreScroll = scopeChanged ? consumeScrollRestore() : null;
-    const targetScrollTop = restoreScroll ?? 0;
+    // Read but don't consume yet — the effect may re-run and we need the value to survive.
+    const navState = useNavigationStore.getState();
+    const pendingRestore = navState.pendingScrollRestore;
+    const pendingItemCount = navState.pendingLoadedItemCount;
+    const targetScrollTop = pendingRestore ?? 0;
     const nextNavigationMode: GridSwapNavigationMode = scopeChanged
-      ? (restoreScroll != null ? 'history_restore' : 'fresh_scope_nav')
+      ? (pendingRestore != null ? 'history_restore' : 'fresh_scope_nav')
       : 'same_scope_query_change';
-    const pendingReplace = requestReplaceRef.current();
+    const pendingReplace = requestReplaceRef.current(pendingItemCount > 0 ? pendingItemCount : undefined);
 
     const beginFadeIn = () => {
       if (swapSequenceRef.current !== sequence) return;
@@ -177,7 +189,6 @@ export function useGridSwapController(args: {
         setTransitionPhase('idle');
         setNavigationMode('steady');
         setVisibleTransitionStage('idle');
-        setShellInitialScroll(null);
       }, FADE_SETTLE_MS);
     };
 
@@ -201,35 +212,35 @@ export function useGridSwapController(args: {
 
         dispatch({
           type: 'COMMIT_GEOMETRY',
-          viewMode,
-          targetSize,
-          folderId: folderId ?? null,
-          searchTags,
-          emptyContext: resolveGridEmptyContext(smartFolderPredicate, folderId, statusFilter),
+          viewMode: viewModeRef.current,
+          targetSize: targetSizeRef.current,
+          folderId: folderIdRef.current ?? null,
+          searchTags: searchTagsRef.current,
+          emptyContext: resolveGridEmptyContext(smartFolderPredicateRef.current, folderIdRef.current, statusFilterRef.current),
         });
 
         initialLoadDone.current = false;
         commitReplaceRef.current(payload);
         setRenderedSurface(buildCommittedSurfaceRef.current(payload, scopeChanged));
 
-        if (scopeChanged) {
-          const token = ++shellSwapTokenRef.current;
-          setRenderedScopeKey(incomingScopeKey);
-          setShellInitialScroll({ top: targetScrollTop, token });
-          setTransitionPhase('shell_swapped_hidden');
-        } else {
-          setTransitionPhase('loading_new_data');
-        }
+        setRenderedScopeKey(incomingScopeKey);
 
-        // Set 'preparing': invisible (opacity 0, no transition) but NOT
-        // frozen. The canvas unfreezes, draws, scroll position applies.
         setVisibleTransitionStage('preparing');
 
-        // Give the canvas time to draw and scroll to settle before fading in.
-        // setTimeout ensures we're past React commit + layout + paint.
         setTimeout(() => {
           if (swapSequenceRef.current !== sequence) return;
-          beginFadeIn();
+          const el = scrollRef.current;
+          consumeScrollRestore();
+          if (el) {
+            el.scrollTop = targetScrollTop;
+            // Force a scroll event so the canvas redraws at the new position.
+            el.dispatchEvent(new Event('scroll'));
+          }
+          // One more frame for the canvas to draw at the restored position.
+          requestAnimationFrame(() => {
+            if (swapSequenceRef.current !== sequence) return;
+            beginFadeIn();
+          });
         }, 50);
       });
     }, FADE_SETTLE_MS);
@@ -252,7 +263,6 @@ export function useGridSwapController(args: {
     renderedSurface,
     transitionPhase,
     navigationMode,
-    shellInitialScroll,
     preserveScrollBehaviors,
     visibleTransitionStage,
   };

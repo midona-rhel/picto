@@ -20,7 +20,7 @@ export interface TagMenuTagLike {
 
 export interface BuildTagMenuArgs {
   tag: TagMenuTagLike;
-  siblings: TagMenuTagLike[];
+  aliases: TagMenuTagLike[];
   parents: TagMenuTagLike[];
   children: TagMenuTagLike[];
   formatTagDisplay: (ns: string, subtag: string) => string;
@@ -30,7 +30,7 @@ export interface BuildTagMenuArgs {
   onCopy: () => void | Promise<void>;
   onViewRelations: () => void;
   onNavigateTag: (ns: string, subtag: string) => void;
-  onAddSibling: () => void;
+  onAddAlias: () => void;
   onAddParent: () => void;
   onAddChild: () => void;
   onDelete: () => void | Promise<void>;
@@ -101,10 +101,10 @@ export function buildTagContextMenu(args: BuildTagMenuArgs): ContextMenuEntry[] 
       label: 'Aliases',
       icon: <IconArrowsExchange size={16} />,
       children: buildRelationChildren(
-        args.siblings,
+        args.aliases,
         args.onNavigateTag,
         'Add alias…',
-        args.onAddSibling,
+        args.onAddAlias,
         args.formatTagDisplay,
       ),
     },

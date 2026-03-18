@@ -44,8 +44,8 @@ export interface MediaQosStats {
   queuedByLane: Record<MediaQosLane, number>;
 }
 
-const MAX_ACTIVE_TOTAL = 8;
-const MAX_ACTIVE_HEAVY = 2;
+const MAX_ACTIVE_TOTAL = 14;
+const MAX_ACTIVE_HEAVY = 5;
 const LANE_ORDER: MediaQosLane[] = [
   'critical',
   'grid_visible_thumb',
@@ -56,9 +56,9 @@ const LANE_ORDER: MediaQosLane[] = [
 ];
 const LANE_BUDGETS: Record<MediaQosLane, LaneBudget> = {
   critical: { maxActive: 4 },
-  grid_visible_thumb: { maxActive: 4 },
-  grid_visible_full: { maxActive: 1 },
-  grid_prefetch_thumb: { maxActive: 1 },
+  grid_visible_thumb: { maxActive: 6 },
+  grid_visible_full: { maxActive: 5 },
+  grid_prefetch_thumb: { maxActive: 3 },
   visible: { maxActive: 6 },
   prefetch: { maxActive: 3 },
 };

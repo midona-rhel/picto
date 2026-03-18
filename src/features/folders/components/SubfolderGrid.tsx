@@ -432,7 +432,8 @@ export function SubfolderGrid({ folderId, targetSize, totalImageCount, onOpenFol
     }));
   }, [contextMenu, createSubfolderInCurrentFolder, onSelectedSubfolderChange]);
 
-  const gridColumns = `repeat(auto-fill, minmax(${Math.max(80, targetSize)}px, 1fr))`;
+  const clampedSize = Math.max(200, Math.min(400, targetSize));
+  const gridColumns = `repeat(auto-fill, minmax(${clampedSize}px, 1fr))`;
 
   if (childFolders.length === 0) return null;
 
@@ -485,7 +486,7 @@ export function SubfolderGrid({ folderId, targetSize, totalImageCount, onOpenFol
                     ) : (
                       <div className={styles.folderPlaceholder}>
                         <IconFolder
-                          size={Math.max(24, Math.round(targetSize * 0.25))}
+                          size={Math.max(24, Math.round(clampedSize * 0.25))}
                           color={folder.color ?? 'currentColor'}
                         />
                       </div>

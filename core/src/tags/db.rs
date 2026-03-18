@@ -289,7 +289,7 @@ pub fn find_tag(conn: &Connection, namespace: &str, subtag: &str) -> rusqlite::R
     .optional()
 }
 
-/// Add a tag sibling relationship.
+/// Add a tag alias relationship.
 pub fn add_alias(
     conn: &Connection,
     from_tag_id: i64,
@@ -304,7 +304,7 @@ pub fn add_alias(
     Ok(())
 }
 
-/// Remove a tag sibling relationship.
+/// Remove a tag alias relationship.
 pub fn remove_alias(conn: &Connection, from_tag_id: i64, source: &str) -> rusqlite::Result<()> {
     conn.execute(
         "DELETE FROM tag_alias WHERE from_tag_id = ?1 AND source = ?2",

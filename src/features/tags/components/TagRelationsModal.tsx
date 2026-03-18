@@ -120,15 +120,15 @@ function buildHierarchy(parents: TagInfo[], current: TagInfo, childTags: TagInfo
   return computeLayout(rawNodes, rawEdges);
 }
 
-// ── Build siblings graph ──
+// ── Build aliases graph ──
 // ideal/superior at top → current → subordinates at bottom
 
-function buildAliases(current: TagInfo, siblings: TagRelation[]) {
+function buildAliases(current: TagInfo, aliases: TagRelation[]) {
   const rawNodes: { id: string; label: string; ns: string; isCurrent: boolean }[] = [];
   const rawEdges: LayoutEdge[] = [];
 
-  const superiors = siblings.filter((s) => s.relation === 'to');
-  const subordinates = siblings.filter((s) => s.relation === 'from');
+  const superiors = aliases.filter((s) => s.relation === 'to');
+  const subordinates = aliases.filter((s) => s.relation === 'from');
 
   // Superior nodes first (ideal direction, goes at top)
   for (const sup of superiors) {
@@ -208,7 +208,7 @@ export function TagRelationsModal({ opened, onClose, tag }: TagRelationsModalPro
   const [loading, setLoading] = useState(false);
   const [parents, setParents] = useState<TagInfo[]>([]);
   const [children, setChildren] = useState<TagInfo[]>([]);
-  const [siblings, setSiblings] = useState<TagRelation[]>([]);
+  const [aliases, setAliases] = useState<TagRelation[]>([]);
   const [view, setView] = useState<ViewMode>('hierarchy');
   const { colorScheme } = useMantineColorScheme();
   const isDark = colorScheme === 'dark';
@@ -218,7 +218,7 @@ export function TagRelationsModal({ opened, onClose, tag }: TagRelationsModalPro
     setLoading(true);
     setParents([]);
     setChildren([]);
-    setSiblings([]);
+    setAliases([]);
 
     Promise.all([
       api.tags.getRelations(tag.tag_id, 'aliases').catch(() => []),
@@ -226,7 +226,7 @@ export function TagRelationsModal({ opened, onClose, tag }: TagRelationsModalPro
     ]).then(([sibs, rels]) => {
       const p = rels.filter((r) => r.relation === 'parent');
       const c = rels.filter((r) => r.relation === 'child');
-      setSiblings(sibs);
+      setAliases(sibs);
       setParents(p);
       setChildren(c);
       if (c.length > 0 || p.length > 0) setView('hierarchy');
@@ -250,13 +250,13 @@ export function TagRelationsModal({ opened, onClose, tag }: TagRelationsModalPro
 
   const aliasGraph = useMemo(() => {
     if (!tag) return null;
-    return buildAliases(tag, siblings);
-  }, [tag, siblings]);
+    return buildAliases(tag, aliases);
+  }, [tag, aliases]);
 
   if (!tag) return null;
 
   const display = formatTag(tag.namespace, tag.subtag);
-  const hasAny = parents.length > 0 || children.length > 0 || siblings.length > 0;
+  const hasAny = parents.length > 0 || children.length > 0 || aliases.length > 0;
   const graph = view === 'hierarchy' ? hierarchy : aliasGraph;
 
   return (
@@ -290,8 +290,8 @@ export function TagRelationsModal({ opened, onClose, tag }: TagRelationsModalPro
                 onClick={() => setView('aliases')}
               >
                 Aliases
-                {siblings.length > 0 && (
-                  <span className={classes.tabBadge}>{siblings.length}</span>
+                {aliases.length > 0 && (
+                  <span className={classes.tabBadge}>{aliases.length}</span>
                 )}
               </button>
             </div>

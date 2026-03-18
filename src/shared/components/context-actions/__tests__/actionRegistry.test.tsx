@@ -98,7 +98,7 @@ describe('context action registries', () => {
   it('tag context menu includes all expected actions', () => {
     const baseArgs = {
       tag: { tag_id: 1, namespace: 'artist', subtag: 'alice' },
-      siblings: [],
+      aliases: [],
       parents: [],
       children: [],
       formatTagDisplay: (ns: string, subtag: string) => (ns ? `${ns}:${subtag}` : subtag),
@@ -108,7 +108,7 @@ describe('context action registries', () => {
       onCopy: () => {},
       onViewRelations: () => {},
       onNavigateTag: () => {},
-      onAddSibling: () => {},
+      onAddAlias: () => {},
       onAddParent: () => {},
       onAddChild: () => {},
       onDelete: () => {},

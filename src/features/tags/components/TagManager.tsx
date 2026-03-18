@@ -278,7 +278,7 @@ export function TagManager() {
       const pos = { x: e.clientX, y: e.clientY };
       const display = formatTagDisplay(tag.namespace, tag.subtag);
 
-      const [siblings, relations] = await Promise.all([
+      const [aliases, relations] = await Promise.all([
         api.tags.getRelations(tag.tag_id, 'aliases').catch(() => [] as TagRelation[]),
         api.tags.getRelations(tag.tag_id, 'implications').catch(() => [] as TagRelation[]),
       ]);
@@ -290,7 +290,7 @@ export function TagManager() {
         useNavigationStore.getState().navigateToFilterTags([formatTagDisplay(ns, st)]);
       const items: ContextMenuEntry[] = buildTagContextMenu({
         tag,
-        siblings,
+        aliases,
         parents: parentTags,
         children: childTags,
         formatTagDisplay,
@@ -305,7 +305,7 @@ export function TagManager() {
         onCopy: () => writeText(display),
         onViewRelations: () => setRelationsTag(tag),
         onNavigateTag: navToTag,
-        onAddSibling: () => setRelationModal({ type: 'alias', source: tag }),
+        onAddAlias: () => setRelationModal({ type: 'alias', source: tag }),
         onAddParent: () => setRelationModal({ type: 'implication', source: tag }),
         onAddChild: () => setRelationModal({ type: 'reverse_implication', source: tag }),
         onDelete: async () => {
