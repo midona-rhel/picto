@@ -5,6 +5,7 @@ import { useHotkeys } from '@mantine/hooks';
 import { getCurrentWindow, setTheme as setAppTheme } from '#desktop/api';
 
 import { deriveNavigationTitle, useNavigationStore } from '../state/navigationStore';
+import { useDomainStore } from '../state/domainStore';
 import { useSettingsStore } from '../state/settingsStore';
 import { performRedo, performUndo } from '../shared/controllers/undoRedoController';
 import { runBestEffort } from '../shared/lib/asyncOps';
@@ -20,7 +21,35 @@ export interface AppBootstrap {
 }
 
 export function useAppBootstrap(): AppBootstrap {
-  const titlebarTitle = useNavigationStore(deriveNavigationTitle);
+  const navigationState = useNavigationStore((state) => ({
+    activeCollection: state.activeCollection,
+    activeFolder: state.activeFolder,
+    activeSmartFolderId: state.activeSmartFolderId,
+    activeStatusFilter: state.activeStatusFilter,
+    activeSubscriptionGroup: state.activeSubscriptionGroup,
+    currentView: state.currentView,
+    filterTags: state.filterTags,
+  }));
+  const smartFolders = useDomainStore((state) => state.smartFolders);
+  const activeSmartFolder = useMemo(() => {
+    if (!navigationState.activeSmartFolderId) return null;
+    const active = smartFolders.find((folder) => folder.id === navigationState.activeSmartFolderId);
+    if (!active) return null;
+    return {
+      id: active.id,
+      name: active.name,
+      parent_id: active.parent_id != null ? Number(active.parent_id) : null,
+      icon: active.icon ?? null,
+      color: active.color ?? null,
+      predicate: active.localPredicate ?? active.predicate ?? { groups: [] },
+      sort_field: active.sort_field ?? null,
+      sort_order: active.sort_order ?? null,
+    };
+  }, [navigationState.activeSmartFolderId, smartFolders]);
+  const titlebarTitle = useMemo(() => deriveNavigationTitle({
+    ...navigationState,
+    activeSmartFolder,
+  }), [activeSmartFolder, navigationState]);
   const { colorScheme } = useMantineColorScheme();
   const appWindow = useMemo(() => getCurrentWindow(), []);
   const isSystemDark = colorScheme === 'dark';
@@ -33,7 +62,21 @@ export function useAppBootstrap(): AppBootstrap {
 
   const [displayedTitle, setDisplayedTitle] = useState(titlebarTitle);
   const handleScopeTransitionMidpoint = useCallback(() => {
-    setDisplayedTitle(deriveNavigationTitle(useNavigationStore.getState()));
+    const state = useNavigationStore.getState();
+    const activeFolder = useDomainStore.getState().smartFolders.find((folder) => folder.id === state.activeSmartFolderId);
+    setDisplayedTitle(deriveNavigationTitle({
+      ...state,
+      activeSmartFolder: activeFolder ? {
+        id: activeFolder.id,
+        name: activeFolder.name,
+        parent_id: activeFolder.parent_id != null ? Number(activeFolder.parent_id) : null,
+        icon: activeFolder.icon ?? null,
+        color: activeFolder.color ?? null,
+        predicate: activeFolder.localPredicate ?? activeFolder.predicate ?? { groups: [] },
+        sort_field: activeFolder.sort_field ?? null,
+        sort_order: activeFolder.sort_order ?? null,
+      } : null,
+    }));
   }, []);
   useEffect(() => {
     setDisplayedTitle(titlebarTitle);

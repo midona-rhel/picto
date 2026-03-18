@@ -18,7 +18,6 @@ export interface GridFeatureParams {
   activeFolder: { folder_id: number } | null;
   activeCollection: { id: number } | null;
   activeSmartFolder: SmartFolder | null;
-  setActiveSmartFolder: (sf: SmartFolder) => void;
   filterTags: string[] | null;
   allImagesCount: number | null;
   activeStatusFilter: string | null;
@@ -70,7 +69,6 @@ export function useGridFeatureState({
   activeFolder,
   activeCollection,
   activeSmartFolder,
-  setActiveSmartFolder,
   filterTags,
   allImagesCount,
   activeStatusFilter,
@@ -102,24 +100,11 @@ export function useGridFeatureState({
     if (!activeSmartFolder?.id) return;
     try {
       await useDomainStore.getState().fetchSidebarTree();
-      const updated = useDomainStore.getState().smartFolders.find((f) => f.id === activeSmartFolder.id);
-      if (updated) {
-        setActiveSmartFolder({
-          id: updated.id,
-          name: updated.name,
-          parent_id: updated.parent_id ? parseInt(updated.parent_id, 10) : null,
-          icon: updated.icon ?? null,
-          color: updated.color ?? null,
-          predicate: updated.predicate ?? { groups: [] },
-          sort_field: updated.sort_field ?? null,
-          sort_order: updated.sort_order ?? null,
-        });
-        setSmartFolderRefresh((c) => c + 1);
-      }
+      setSmartFolderRefresh((c) => c + 1);
     } catch (e) {
       console.error('Failed to refresh active smart folder:', e);
     }
-  }, [activeSmartFolder?.id, setActiveSmartFolder]);
+  }, [activeSmartFolder?.id]);
 
   // --- Folder sort actions ---
   const handleSortFolderAction = useCallback((sortBy: string, direction: string) => {

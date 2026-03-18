@@ -83,7 +83,7 @@ function parseSmartFolderId(id: string | null | undefined): number | null {
 
 export function SmartFolderList({ onFolderUpdated }: SmartFolderListProps) {
   const { smartFolders: domainFolders, smartFolderCounts: counts } = useDomainStore();
-  const { activeSmartFolder, navigateToSmartFolder, navigateTo } = useNavigationStore();
+  const { activeSmartFolderId, navigateToSmartFolder, navigateTo } = useNavigationStore();
 
   const folders = useMemo(() => domainFolders.map((sf) => ({
     id: sf.id,
@@ -455,14 +455,14 @@ export function SmartFolderList({ onFolderUpdated }: SmartFolderListProps) {
             },
           });
           await refreshSidebarAndGrid();
-          if (activeSmartFolder?.id === folder.id) navigateTo('images');
+          if (activeSmartFolderId === folder.id) navigateTo('images');
         } catch (error) {
           console.error('Delete failed:', error);
         }
       },
     });
     contextMenu.open(e, items);
-  }, [activeSmartFolder?.id, contextMenu, folders, navigateTo, onFolderUpdated, openCreateChild, openModal, startRename, updateFolder]);
+  }, [activeSmartFolderId, contextMenu, folders, navigateTo, onFolderUpdated, openCreateChild, openModal, startRename, updateFolder]);
 
   const activeFolder = activeId ? flatNodes.find((node) => node.id === activeId) : null;
   const sortableIds = flatNodes.map((node) => node.id);
@@ -480,7 +480,7 @@ export function SmartFolderList({ onFolderUpdated }: SmartFolderListProps) {
           <SortableContext items={sortableIds} strategy={verticalListSortingStrategy}>
             {flatNodes.map((node) => {
               const folder = folders.find((item) => item.id === node.id)!;
-              const isActive = activeSmartFolder?.id === node.id && node.hasEffectiveRules;
+              const isActive = activeSmartFolderId === node.id && node.hasEffectiveRules;
               const isRenaming = renamingFolderId === node.id;
               const count = node.hasEffectiveRules ? (counts[node.id] ?? node.count) : null;
               const isExpanded = !collapsedNodes.has(node.id);

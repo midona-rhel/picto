@@ -35,7 +35,7 @@ export interface ActiveCollection {
 
 interface HistoryEntry {
   view: ViewType;
-  smartFolder: SmartFolder | null;
+  smartFolderId: string | null;
   folder: ActiveFolder | null;
   collection: ActiveCollection | null;
   subscriptionGroup: ActiveSubscriptionGroup | null;
@@ -47,7 +47,7 @@ interface HistoryEntry {
 interface NavigationState {
   // Current state
   currentView: ViewType;
-  activeSmartFolder: SmartFolder | null;
+  activeSmartFolderId: string | null;
   activeFolder: ActiveFolder | null;
   activeCollection: ActiveCollection | null;
   activeSubscriptionGroup: ActiveSubscriptionGroup | null;
@@ -64,7 +64,7 @@ interface NavigationState {
   pendingScrollRestore: number | null;
 
   // Actions
-  navigateTo: (view: ViewType, smartFolder?: SmartFolder | null, folder?: ActiveFolder | null, statusFilter?: string | null) => void;
+  navigateTo: (view: ViewType, smartFolderId?: string | null, folder?: ActiveFolder | null, statusFilter?: string | null) => void;
   goBack: () => void;
   goForward: () => void;
   /** Save current scroll position to the current history entry */
@@ -72,7 +72,6 @@ interface NavigationState {
   /** Consume the pending scroll restore value (returns it and clears it) */
   consumeScrollRestore: () => number | null;
   setActiveFolder: (folder: ActiveFolder | null) => void;
-  setActiveSmartFolder: (folder: SmartFolder | null) => void;
   /** Navigate to a folder (sets view to 'images', clears smart folder) */
   navigateToFolder: (folder: ActiveFolder) => void;
   /** Navigate to a smart folder (sets view to 'images', clears folder) */
@@ -109,30 +108,30 @@ export function deriveNavigationTitle(state: { activeFolder?: ActiveFolder | nul
 
 export const useNavigationStore = create<NavigationState>((set, get) => ({
   currentView: 'images',
-  activeSmartFolder: null,
+  activeSmartFolderId: null,
   activeFolder: null,
   activeCollection: null,
   activeSubscriptionGroup: null,
   activeStatusFilter: null,
   filterTags: null,
 
-  history: [{ view: 'images', smartFolder: null, folder: null, collection: null, subscriptionGroup: null, statusFilter: null, filterTags: null, scrollTop: 0 }],
+  history: [{ view: 'images', smartFolderId: null, folder: null, collection: null, subscriptionGroup: null, statusFilter: null, filterTags: null, scrollTop: 0 }],
   historyIndex: 0,
   canGoBack: false,
   canGoForward: false,
   pendingScrollRestore: null,
 
 
-  navigateTo: (view, smartFolder = null, folder = null, statusFilter = null) => {
+  navigateTo: (view, smartFolderId = null, folder = null, statusFilter = null) => {
     const state = get();
     const trimmed = state.history.slice(0, state.historyIndex + 1);
-    const entry: HistoryEntry = { view, smartFolder, folder, collection: null, subscriptionGroup: null, statusFilter, filterTags: null, scrollTop: 0 };
+    const entry: HistoryEntry = { view, smartFolderId, folder, collection: null, subscriptionGroup: null, statusFilter, filterTags: null, scrollTop: 0 };
     const newHistory = [...trimmed, entry];
     const newIndex = newHistory.length - 1;
 
     set({
       currentView: view,
-      activeSmartFolder: smartFolder,
+      activeSmartFolderId: smartFolderId,
       activeFolder: folder,
       activeCollection: null,
       activeSubscriptionGroup: null,
@@ -154,7 +153,7 @@ export const useNavigationStore = create<NavigationState>((set, get) => ({
 
     set({
       currentView: entry.view,
-      activeSmartFolder: entry.smartFolder,
+      activeSmartFolderId: entry.smartFolderId,
       activeFolder: entry.folder,
       activeCollection: entry.collection,
       activeSubscriptionGroup: entry.subscriptionGroup,
@@ -175,7 +174,7 @@ export const useNavigationStore = create<NavigationState>((set, get) => ({
 
     set({
       currentView: entry.view,
-      activeSmartFolder: entry.smartFolder,
+      activeSmartFolderId: entry.smartFolderId,
       activeFolder: entry.folder,
       activeCollection: entry.collection,
       activeSubscriptionGroup: entry.subscriptionGroup,
@@ -218,20 +217,12 @@ export const useNavigationStore = create<NavigationState>((set, get) => ({
     }));
   },
 
-  setActiveSmartFolder: (folder) => {
-    set(() => ({
-      activeSmartFolder: folder,
-      activeCollection: null,
-      activeSubscriptionGroup: null,
-    }));
-  },
-
   navigateToFolder: (folder) => {
     get().navigateTo('images', null, folder);
   },
 
   navigateToSmartFolder: (folder) => {
-    get().navigateTo('images', folder, null);
+    get().navigateTo('images', folder.id ?? null, null);
   },
 
   navigateToCollection: (collection) => {
@@ -239,7 +230,7 @@ export const useNavigationStore = create<NavigationState>((set, get) => ({
     const trimmed = state.history.slice(0, state.historyIndex + 1);
     const entry: HistoryEntry = {
       view: 'images',
-      smartFolder: null,
+      smartFolderId: null,
       folder: null,
       collection,
       subscriptionGroup: null,
@@ -252,7 +243,7 @@ export const useNavigationStore = create<NavigationState>((set, get) => ({
 
     set({
       currentView: 'images',
-      activeSmartFolder: null,
+      activeSmartFolderId: null,
       activeFolder: null,
       activeCollection: collection,
       activeSubscriptionGroup: null,
@@ -269,13 +260,13 @@ export const useNavigationStore = create<NavigationState>((set, get) => ({
   navigateToSubscriptionGroup: (subscriptionGroup) => {
     const state = get();
     const trimmed = state.history.slice(0, state.historyIndex + 1);
-    const entry: HistoryEntry = { view: 'subscriptions', smartFolder: null, folder: null, collection: null, subscriptionGroup, statusFilter: null, filterTags: null, scrollTop: 0 };
+    const entry: HistoryEntry = { view: 'subscriptions', smartFolderId: null, folder: null, collection: null, subscriptionGroup, statusFilter: null, filterTags: null, scrollTop: 0 };
     const newHistory = [...trimmed, entry];
     const newIndex = newHistory.length - 1;
 
     set({
       currentView: 'subscriptions',
-      activeSmartFolder: null,
+      activeSmartFolderId: null,
       activeFolder: null,
       activeCollection: null,
       activeSubscriptionGroup: subscriptionGroup,
@@ -292,13 +283,13 @@ export const useNavigationStore = create<NavigationState>((set, get) => ({
   navigateToFilterTags: (tags) => {
     const state = get();
     const trimmed = state.history.slice(0, state.historyIndex + 1);
-    const entry: HistoryEntry = { view: 'images', smartFolder: null, folder: null, collection: null, subscriptionGroup: null, statusFilter: null, filterTags: tags, scrollTop: 0 };
+    const entry: HistoryEntry = { view: 'images', smartFolderId: null, folder: null, collection: null, subscriptionGroup: null, statusFilter: null, filterTags: tags, scrollTop: 0 };
     const newHistory = [...trimmed, entry];
     const newIndex = newHistory.length - 1;
 
     set({
       currentView: 'images',
-      activeSmartFolder: null,
+      activeSmartFolderId: null,
       activeFolder: null,
       activeCollection: null,
       activeSubscriptionGroup: null,

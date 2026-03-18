@@ -35,7 +35,7 @@ export function useGridRefreshLifecycle(args: {
 
   const metadataInvalidatedHashes = useGridMetadataStore((s) => s.metadataInvalidatedHashes);
   const gridRefreshSeq = useGridMetadataStore((s) => s.gridRefreshSeq);
-  const activeSmartFolderId = useNavigationStore((s) => s.activeSmartFolder?.id ?? null);
+  const activeSmartFolderId = useNavigationStore((s) => s.activeSmartFolderId);
 
   const activeGridScope = useMemo(() => deriveGridScopeKey({
     currentView: 'images',

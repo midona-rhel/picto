@@ -28,9 +28,9 @@ interface SidebarProps {
 
 export function Sidebar({ onSmartFolderUpdated }: SidebarProps) {
   const { allActiveCount, inboxCount, uncategorizedCount, trashCount, untaggedCount, tagsCount, duplicatesCount } = useDomainStore();
-  const { currentView, activeSmartFolder, activeFolder, activeStatusFilter, navigateTo } = useNavigationStore();
+  const { currentView, activeSmartFolderId, activeFolder, activeStatusFilter, navigateTo } = useNavigationStore();
 
-  const isAllActiveScope = !activeSmartFolder && !activeFolder && !activeStatusFilter && currentView === 'images';
+  const isAllActiveScope = !activeSmartFolderId && !activeFolder && !activeStatusFilter && currentView === 'images';
 
   const handleStatusDrop = useCallback((hashes: string[], status: 'active' | 'inbox' | 'trash') => {
     runCriticalAction(

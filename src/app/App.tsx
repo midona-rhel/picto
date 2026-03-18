@@ -61,10 +61,9 @@ function App() {
 
   // --- Navigation ---
   const {
-    currentView, activeSmartFolder, activeFolder, activeCollection, activeStatusFilter, filterTags,
+    currentView, activeSmartFolderId, activeFolder, activeCollection, activeStatusFilter, filterTags,
     canGoBack, canGoForward,
     goBack, goForward,
-    setActiveSmartFolder,
   } = useNavigationStore();
 
   // --- Settings ---
@@ -77,9 +76,26 @@ function App() {
     uncategorizedCount,
     trashCount,
     untaggedCount,
+    smartFolders,
     smartFolderCounts,
     folderNodes,
   } = useDomainStore();
+
+  const activeSmartFolder = useMemo(() => {
+    if (!activeSmartFolderId) return null;
+    const active = smartFolders.find((sf) => sf.id === activeSmartFolderId);
+    if (!active) return null;
+    return {
+      id: active.id,
+      name: active.name,
+      parent_id: active.parent_id ? parseInt(active.parent_id, 10) : null,
+      icon: active.icon ?? null,
+      color: active.color ?? null,
+      predicate: active.localPredicate ?? active.predicate ?? { groups: [] },
+      sort_field: active.sort_field ?? null,
+      sort_order: active.sort_order ?? null,
+    };
+  }, [activeSmartFolderId, smartFolders]);
 
   // --- Bootstrap (init, theme, events, menu, hotkeys, titlebar drag) ---
   const { handleTitlebarMouseDown, displayedTitle, handleScopeTransitionMidpoint } =
@@ -100,7 +116,6 @@ function App() {
     activeFolder,
     activeCollection,
     activeSmartFolder,
-    setActiveSmartFolder,
     filterTags,
     allImagesCount: allActiveCount,
     activeStatusFilter,
@@ -133,7 +148,7 @@ function App() {
     currentView,
     activeFolderId: activeFolder?.folder_id ?? null,
     activeCollectionId: activeCollection?.id ?? null,
-    activeSmartFolderId: activeSmartFolder?.id ?? null,
+    activeSmartFolderId,
     activeStatusFilter,
     settingsLoaded,
     defaultGridViewMode,
@@ -175,7 +190,6 @@ function App() {
   // ── Command Palette ─────────────────────────────────────────────
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [paletteMode, setPaletteMode] = useState<'all' | 'navigation'>('all');
-  const { smartFolders } = useDomainStore();
   const { navigateToFolder, navigateToSmartFolder, navigateTo } = useNavigationStore();
 
   useEffect(() => {
@@ -366,6 +380,7 @@ function App() {
     }),
     [
       currentView,
+      activeSmartFolderId,
       activeSmartFolder?.predicate,
       activeSmartFolder?.sort_field,
       activeSmartFolder?.sort_order,
