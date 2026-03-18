@@ -84,11 +84,9 @@ interface NavigationState {
   /** Navigate to images view filtered by specific tags */
   navigateToFilterTags: (tags: string[]) => void;
 
-  /** Title computed from current navigation state */
-  titlebarTitle: string;
 }
 
-function computeTitle(state: { activeFolder?: ActiveFolder | null; activeSmartFolder?: SmartFolder | null; activeCollection?: ActiveCollection | null; activeSubscriptionGroup?: ActiveSubscriptionGroup | null; activeStatusFilter?: string | null; filterTags?: string[] | null; currentView?: ViewType; folder?: ActiveFolder | null; smartFolder?: SmartFolder | null; collection?: ActiveCollection | null; subscriptionGroup?: ActiveSubscriptionGroup | null; statusFilter?: string | null; view?: ViewType }): string {
+export function deriveNavigationTitle(state: { activeFolder?: ActiveFolder | null; activeSmartFolder?: SmartFolder | null; activeCollection?: ActiveCollection | null; activeSubscriptionGroup?: ActiveSubscriptionGroup | null; activeStatusFilter?: string | null; filterTags?: string[] | null; currentView?: ViewType; folder?: ActiveFolder | null; smartFolder?: SmartFolder | null; collection?: ActiveCollection | null; subscriptionGroup?: ActiveSubscriptionGroup | null; statusFilter?: string | null; view?: ViewType }): string {
   const folder = state.activeFolder ?? state.folder;
   const smartFolder = state.activeSmartFolder ?? state.smartFolder;
   const collection = state.activeCollection ?? state.collection;
@@ -124,7 +122,6 @@ export const useNavigationStore = create<NavigationState>((set, get) => ({
   canGoForward: false,
   pendingScrollRestore: null,
 
-  titlebarTitle: VIEW_LABELS.images,
 
   navigateTo: (view, smartFolder = null, folder = null, statusFilter = null) => {
     const state = get();
@@ -146,7 +143,6 @@ export const useNavigationStore = create<NavigationState>((set, get) => ({
       historyIndex: newIndex,
       canGoBack: newIndex > 0,
       canGoForward: false,
-      titlebarTitle: computeTitle({ activeFolder: folder, activeSmartFolder: smartFolder, activeCollection: null, activeSubscriptionGroup: null, activeStatusFilter: statusFilter, currentView: view }),
     });
   },
 
@@ -168,7 +164,6 @@ export const useNavigationStore = create<NavigationState>((set, get) => ({
       canGoBack: newIndex > 0,
       canGoForward: true,
       pendingScrollRestore: entry.scrollTop,
-      titlebarTitle: computeTitle(entry),
     });
   },
 
@@ -190,7 +185,6 @@ export const useNavigationStore = create<NavigationState>((set, get) => ({
       canGoBack: true,
       canGoForward: newIndex < state.history.length - 1,
       pendingScrollRestore: entry.scrollTop,
-      titlebarTitle: computeTitle(entry),
     });
   },
 
@@ -217,20 +211,18 @@ export const useNavigationStore = create<NavigationState>((set, get) => ({
   },
 
   setActiveFolder: (folder) => {
-    set((state) => ({
+    set(() => ({
       activeFolder: folder,
       activeCollection: null,
       activeSubscriptionGroup: null,
-      titlebarTitle: computeTitle({ ...state, activeFolder: folder }),
     }));
   },
 
   setActiveSmartFolder: (folder) => {
-    set((state) => ({
+    set(() => ({
       activeSmartFolder: folder,
       activeCollection: null,
       activeSubscriptionGroup: null,
-      titlebarTitle: computeTitle({ ...state, activeSmartFolder: folder }),
     }));
   },
 
@@ -271,7 +263,6 @@ export const useNavigationStore = create<NavigationState>((set, get) => ({
       historyIndex: newIndex,
       canGoBack: newIndex > 0,
       canGoForward: false,
-      titlebarTitle: computeTitle({ activeCollection: collection, currentView: 'images' }),
     });
   },
 
@@ -295,7 +286,6 @@ export const useNavigationStore = create<NavigationState>((set, get) => ({
       historyIndex: newIndex,
       canGoBack: newIndex > 0,
       canGoForward: false,
-      titlebarTitle: computeTitle({ activeSubscriptionGroup: subscriptionGroup, currentView: 'subscriptions' }),
     });
   },
 
@@ -319,7 +309,6 @@ export const useNavigationStore = create<NavigationState>((set, get) => ({
       historyIndex: newIndex,
       canGoBack: newIndex > 0,
       canGoForward: false,
-      titlebarTitle: computeTitle({ filterTags: tags, currentView: 'images' }),
     });
   },
 }));

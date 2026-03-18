@@ -4,7 +4,7 @@ import { useMantineColorScheme } from '@mantine/core';
 import { useHotkeys } from '@mantine/hooks';
 import { getCurrentWindow, setTheme as setAppTheme } from '#desktop/api';
 
-import { useNavigationStore } from '../state/navigationStore';
+import { deriveNavigationTitle, useNavigationStore } from '../state/navigationStore';
 import { useSettingsStore } from '../state/settingsStore';
 import { performRedo, performUndo } from '../shared/controllers/undoRedoController';
 import { runBestEffort } from '../shared/lib/asyncOps';
@@ -20,7 +20,7 @@ export interface AppBootstrap {
 }
 
 export function useAppBootstrap(): AppBootstrap {
-  const { titlebarTitle } = useNavigationStore();
+  const titlebarTitle = useNavigationStore(deriveNavigationTitle);
   const { colorScheme } = useMantineColorScheme();
   const appWindow = useMemo(() => getCurrentWindow(), []);
   const isSystemDark = colorScheme === 'dark';
@@ -33,7 +33,7 @@ export function useAppBootstrap(): AppBootstrap {
 
   const [displayedTitle, setDisplayedTitle] = useState(titlebarTitle);
   const handleScopeTransitionMidpoint = useCallback(() => {
-    setDisplayedTitle(useNavigationStore.getState().titlebarTitle);
+    setDisplayedTitle(deriveNavigationTitle(useNavigationStore.getState()));
   }, []);
   useEffect(() => {
     setDisplayedTitle(titlebarTitle);
