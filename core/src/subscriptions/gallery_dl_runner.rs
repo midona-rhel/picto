@@ -220,7 +220,7 @@ impl GalleryDlRunner {
                 &mut items,
                 &site_id,
                 opts.credential.as_ref(),
-                std::time::Duration::from_secs(1),
+                std::time::Duration::from_secs_f64(opts.sleep_request),
             )
             .await;
         }
