@@ -286,19 +286,25 @@ export function useInspectorMutations(
       if (selectedImages.length !== 1) return;
       if (selectedCollection) return;
       const hash = selectedImages[0].hash;
-      await api.folders.removeFiles(folderId, [hash]);
-      registerUndoAction({
-        label: 'Remove from folder',
-        undo: async () => {
-          await api.folders.addFiles(folderId, [hash]);
-          api.folders.getFileFolders(hash).then(setFileFolders).catch(() => {});
-        },
-        redo: async () => {
-          await api.folders.removeFiles(folderId, [hash]);
-          api.folders.getFileFolders(hash).then(setFileFolders).catch(() => {});
-        },
-      });
+      // Optimistic: update UI immediately
       setFileFolders((prev) => prev.filter((f) => f.folder_id !== folderId));
+      try {
+        await api.folders.removeFiles(folderId, [hash]);
+        registerUndoAction({
+          label: 'Remove from folder',
+          undo: async () => {
+            await api.folders.addFiles(folderId, [hash]);
+            api.folders.getFileFolders(hash).then(setFileFolders).catch(() => {});
+          },
+          redo: async () => {
+            await api.folders.removeFiles(folderId, [hash]);
+            api.folders.getFileFolders(hash).then(setFileFolders).catch(() => {});
+          },
+        });
+      } catch {
+        // Revert on failure
+        api.folders.getFileFolders(hash).then(setFileFolders).catch(() => {});
+      }
     },
     [selectedImages, selectedCollection, setFileFolders],
   );

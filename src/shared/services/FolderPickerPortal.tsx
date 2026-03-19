@@ -1,15 +1,67 @@
 import { useState, useEffect, useRef, useLayoutEffect, useCallback, useMemo } from 'react';
 import { createPortal } from 'react-dom';
-import { IconCheck, IconEqual, IconLayersIntersect, IconLayersUnion, IconMinus, IconPin, IconPinFilled } from '@tabler/icons-react';
-import { api } from '#desktop/api';
-import type { Folder } from '../types/api';
+import { IconCheck, IconChevronDown, IconChevronRight, IconEqual, IconLayersIntersect, IconLayersUnion, IconMinus, IconPin, IconPinFilled } from '@tabler/icons-react';
 import { useDomainStore } from '../../state/domainStore';
 import type { FilterLogicMode } from '../../state/filterStore';
 import { DynamicIcon } from '#features/smart-folders/components/iconRegistry';
+import { buildFolderTree, parseFolderId, type TreeNode } from '#features/sidebar/lib/folderTreeData';
 import { registerFolderPickerOpenHandler, type FolderPickerRequest } from './folderPickerService';
 import st from './FolderPicker.module.css';
 
 type LogicMode = FilterLogicMode;
+type FilterTab = 'all' | 'selected';
+
+/** Flatten a tree into a list respecting expand/collapse state. */
+function flattenTree(
+  roots: TreeNode[],
+  expanded: Set<string>,
+  filter: (node: TreeNode) => boolean,
+): TreeNode[] {
+  const result: TreeNode[] = [];
+  const walk = (nodes: TreeNode[]) => {
+    for (const node of nodes) {
+      if (!filter(node)) continue;
+      result.push(node);
+      if (node.children.length > 0 && expanded.has(node.id)) {
+        walk(node.children);
+      }
+    }
+  };
+  walk(roots);
+  return result;
+}
+
+/** Check if a node or any descendant matches the search. */
+function matchesSearch(node: TreeNode, lowerSearch: string): boolean {
+  if (node.name.toLowerCase().includes(lowerSearch)) return true;
+  return node.children.some((child) => matchesSearch(child, lowerSearch));
+}
+
+/** Collect all node IDs that should be expanded to show search matches. */
+function expandedForSearch(roots: TreeNode[], lowerSearch: string): Set<string> {
+  const ids = new Set<string>();
+  const walk = (nodes: TreeNode[]): boolean => {
+    let anyMatch = false;
+    for (const node of nodes) {
+      const childMatch = walk(node.children);
+      const selfMatch = node.name.toLowerCase().includes(lowerSearch);
+      if (selfMatch || childMatch) {
+        ids.add(node.id);
+        anyMatch = true;
+      }
+    }
+    return anyMatch;
+  };
+  walk(roots);
+  return ids;
+}
+
+/** Check if a node or any descendant is selected. */
+function hasSelectedDescendant(node: TreeNode, selected: Set<number>): boolean {
+  const fid = parseFolderId(node.id);
+  if (fid != null && selected.has(fid)) return true;
+  return node.children.some((child) => hasSelectedDescendant(child, selected));
+}
 
 export function FolderPickerPortal() {
   const [request, setRequest] = useState<FolderPickerRequest | null>(null);
@@ -67,42 +119,62 @@ function FolderPickerPanel({
   const menuRef = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   const [search, setSearch] = useState('');
-  const [folders, setFolders] = useState<Folder[]>([]);
   const [selected, setSelected] = useState<Set<number>>(() => new Set(initialSelected));
   const [excluded, setExcluded] = useState<Set<number>>(() => new Set(initialExcluded ?? []));
   const [logic, setLogic] = useState<LogicMode>(initialLogicMode ?? 'OR');
   const [pos, setPos] = useState({ x: 0, y: 0 });
-
   const [dragging, setDragging] = useState(false);
   const [pinned, setPinned] = useState(false);
   const [focusIndex, setFocusIndex] = useState(-1);
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [filterTab, setFilterTab] = useState<FilterTab>('all');
 
   const folderNodes = useDomainStore((s) => s.folderNodes);
   const countMap = useMemo(() => {
     const m = new Map<number, number>();
     for (const node of folderNodes) {
-      const fid = parseInt(node.id.replace('folder:', ''), 10);
-      if (!isNaN(fid) && node.count != null) m.set(fid, node.count);
+      const fid = parseFolderId(node.id);
+      if (fid != null && node.count != null) m.set(fid, node.count);
     }
     return m;
   }, [folderNodes]);
 
+  // Build folder tree from sidebar data
+  const tree = useMemo(() => buildFolderTree(folderNodes), [folderNodes]);
+
+  // Auto-expand all on first render so tree is visible
   useEffect(() => {
-    api.folders.list()
-      .then(setFolders)
-      .catch((e) => console.error('Failed to fetch folders:', e));
-  }, []);
+    const allIds = new Set<string>();
+    const walk = (nodes: TreeNode[]) => {
+      for (const node of nodes) {
+        if (node.children.length > 0) allIds.add(node.id);
+        walk(node.children);
+      }
+    };
+    walk(tree);
+    setExpanded(allIds);
+  }, [tree]);
 
-  const flatFolders = useMemo(() => {
+  // Flatten tree based on search, expand state, and filter tab
+  const flatList = useMemo(() => {
     const lowerSearch = search.toLowerCase();
-    let list = [...folders];
-    if (lowerSearch) {
-      list = list.filter((f) => f.name.toLowerCase().includes(lowerSearch));
-    }
-    list.sort((a, b) => a.name.localeCompare(b.name));
-    return list;
-  }, [folders, search]);
+    const searchExpanded = lowerSearch ? expandedForSearch(tree, lowerSearch) : null;
+    const effectiveExpanded = searchExpanded ?? expanded;
 
+    const filter = (node: TreeNode): boolean => {
+      if (lowerSearch && !matchesSearch(node, lowerSearch)) return false;
+      if (filterTab === 'selected') {
+        return hasSelectedDescendant(node, selected);
+      }
+      return true;
+    };
+
+    return flattenTree(tree, effectiveExpanded, filter);
+  }, [tree, search, expanded, filterTab, selected]);
+
+  const selectedCount = selected.size;
+
+  // Position panel
   useLayoutEffect(() => {
     const el = menuRef.current;
     if (!el) return;
@@ -137,16 +209,17 @@ function FolderPickerPanel({
       if (y < 8) y = 8;
       setPos({ x, y });
     }
-  }, [anchorEl, anchorPoint, folders.length, isFilterMode]);
+  }, [anchorEl, anchorPoint, folderNodes.length, isFilterMode]);
 
   useEffect(() => { searchRef.current?.focus(); }, []);
 
+  // Dragging
   const dragStart = useRef<{ mx: number; my: number; anchor: number; y: number } | null>(null);
   const isFilterModeRef = useRef(isFilterMode);
   isFilterModeRef.current = isFilterMode;
 
   const onHeaderMouseDown = useCallback((e: React.MouseEvent) => {
-    if ((e.target as HTMLElement).closest('input, button, [class*="logicTab"]')) return;
+    if ((e.target as HTMLElement).closest('input, button, [class*="logicTab"], [class*="filterTab"]')) return;
     const el = menuRef.current;
     const rect = el?.getBoundingClientRect();
     const anchor = isFilterModeRef.current
@@ -181,10 +254,18 @@ function FolderPickerPanel({
     return () => { document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp); };
   }, []);
 
-  useEffect(() => { setFocusIndex(-1); }, [search]);
+  useEffect(() => { setFocusIndex(-1); }, [search, filterTab]);
 
-  const flatFoldersRef = useRef(flatFolders);
-  flatFoldersRef.current = flatFolders;
+  const flatListRef = useRef(flatList);
+  flatListRef.current = flatList;
+
+  const toggleExpand = useCallback((nodeId: string) => {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(nodeId)) next.delete(nodeId); else next.add(nodeId);
+      return next;
+    });
+  }, []);
 
   const handleLeftClick = useCallback((folderId: number, folderName: string) => {
     if (isFilterMode) {
@@ -208,65 +289,55 @@ function FolderPickerPanel({
     e.preventDefault();
     e.stopPropagation();
     if (!onExclude) return;
-    // Remove from included
-    setSelected((prev) => {
-      const next = new Set(prev);
-      next.delete(folderId);
-      return next;
-    });
-    // Toggle excluded
+    setSelected((prev) => { const next = new Set(prev); next.delete(folderId); return next; });
     const wasExcluded = excluded.has(folderId);
     setExcluded((prev) => {
       const next = new Set(prev);
-      if (wasExcluded) next.delete(folderId);
-      else next.add(folderId);
+      if (wasExcluded) next.delete(folderId); else next.add(folderId);
       return next;
     });
     onExclude(folderId, folderName);
   }, [onExclude, excluded]);
 
-  // Capture phase so it fires before Mantine useHotkeys / ImageGrid handlers.
+  // Keyboard
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
-      // Escape always closes, regardless of focus
-      if (e.key === 'Escape') {
-        e.preventDefault();
-        e.stopPropagation();
-        onClose();
-        return;
-      }
-
-      // When typing in search, only intercept ArrowDown (to move into list)
+      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); onClose(); return; }
       if (e.target === searchRef.current) {
-        if (e.key === 'ArrowDown') {
-          e.preventDefault();
-          e.stopPropagation();
-          setFocusIndex(0);
-          searchRef.current?.blur();
-        }
+        if (e.key === 'ArrowDown') { e.preventDefault(); e.stopPropagation(); setFocusIndex(0); searchRef.current?.blur(); }
         return;
       }
-
-      // Navigation keys when focus is not in search
       if (e.key === 'ArrowDown') {
-        e.preventDefault();
-        e.stopPropagation();
-        setFocusIndex((i) => Math.min(i + 1, flatFoldersRef.current.length - 1));
+        e.preventDefault(); e.stopPropagation();
+        setFocusIndex((i) => Math.min(i + 1, flatListRef.current.length - 1));
       } else if (e.key === 'ArrowUp') {
-        e.preventDefault();
-        e.stopPropagation();
-        setFocusIndex((i) => {
-          const next = i - 1;
-          if (next < 0) { searchRef.current?.focus(); return -1; }
-          return next;
-        });
+        e.preventDefault(); e.stopPropagation();
+        setFocusIndex((i) => { const next = i - 1; if (next < 0) { searchRef.current?.focus(); return -1; } return next; });
       } else if (e.key === 'Enter') {
-        e.preventDefault();
-        e.stopPropagation();
+        e.preventDefault(); e.stopPropagation();
         setFocusIndex((i) => {
-          if (i >= 0 && i < flatFoldersRef.current.length) {
-            const f = flatFoldersRef.current[i];
-            handleLeftClick(f.folder_id, f.name);
+          if (i >= 0 && i < flatListRef.current.length) {
+            const node = flatListRef.current[i];
+            const fid = parseFolderId(node.id);
+            if (fid != null) handleLeftClick(fid, node.name);
+          }
+          return i;
+        });
+      } else if (e.key === 'ArrowRight') {
+        e.preventDefault(); e.stopPropagation();
+        setFocusIndex((i) => {
+          if (i >= 0 && i < flatListRef.current.length) {
+            const node = flatListRef.current[i];
+            if (node.children.length > 0 && !expanded.has(node.id)) toggleExpand(node.id);
+          }
+          return i;
+        });
+      } else if (e.key === 'ArrowLeft') {
+        e.preventDefault(); e.stopPropagation();
+        setFocusIndex((i) => {
+          if (i >= 0 && i < flatListRef.current.length) {
+            const node = flatListRef.current[i];
+            if (node.children.length > 0 && expanded.has(node.id)) toggleExpand(node.id);
           }
           return i;
         });
@@ -274,7 +345,7 @@ function FolderPickerPanel({
     };
     document.addEventListener('keydown', onKeyDown, true);
     return () => document.removeEventListener('keydown', onKeyDown, true);
-  }, [onClose, handleLeftClick]);
+  }, [onClose, handleLeftClick, expanded, toggleExpand]);
 
   const contentRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -282,8 +353,6 @@ function FolderPickerPanel({
     const items = contentRef.current.querySelectorAll('[data-folder-item]');
     items[focusIndex]?.scrollIntoView({ block: 'nearest' });
   }, [focusIndex]);
-
-  const panelClass = st.panel;
 
   return createPortal(
     <>
@@ -296,7 +365,7 @@ function FolderPickerPanel({
       )}
       <div
         ref={menuRef}
-        className={`${panelClass}${dragging ? ` ${st.panelDragging}` : ''}`}
+        className={`${st.panel}${dragging ? ` ${st.panelDragging}` : ''}`}
         style={isFilterMode ? { left: pos.x, top: pos.y } : { right: pos.x, top: pos.y }}
         onContextMenu={(e) => e.preventDefault()}
       >
@@ -310,7 +379,7 @@ function FolderPickerPanel({
               ref={searchRef}
               className={st.searchInput}
               type="search"
-              placeholder="Search..."
+              placeholder="Search folders..."
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               onKeyDown={(e) => e.stopPropagation()}
@@ -328,10 +397,7 @@ function FolderPickerPanel({
                   <div
                     key={mode}
                     className={`${st.logicTab}${logic === mode ? ` ${st.logicTabActive}` : ''}`}
-                    onClick={() => {
-                      setLogic(mode);
-                      onLogicChange?.(mode);
-                    }}
+                    onClick={() => { setLogic(mode); onLogicChange?.(mode); }}
                     title={title}
                   >
                     {icon}
@@ -349,15 +415,36 @@ function FolderPickerPanel({
           </button>
         </div>
 
-        {/* Content */}
+        {/* Filter tabs */}
+        <div className={st.filterTabs}>
+          <button
+            className={`${st.filterTab}${filterTab === 'all' ? ` ${st.filterTabActive}` : ''}`}
+            onClick={() => setFilterTab('all')}
+          >
+            All
+          </button>
+          <button
+            className={`${st.filterTab}${filterTab === 'selected' ? ` ${st.filterTabActive}` : ''}`}
+            onClick={() => setFilterTab('selected')}
+          >
+            Selected
+            {selectedCount > 0 && <span className={st.filterTabBadge}>{selectedCount}</span>}
+          </button>
+        </div>
+
+        {/* Content — tree view */}
         <div ref={contentRef} className={st.content}>
-          {flatFolders.map((folder, idx) => {
-            const isChecked = selected.has(folder.folder_id);
-            const isExcludedItem = excluded.has(folder.folder_id);
+          {flatList.map((node, idx) => {
+            const fid = parseFolderId(node.id);
+            if (fid == null) return null;
+            const isChecked = selected.has(fid);
+            const isExcludedItem = excluded.has(fid);
             const isFocused = idx === focusIndex;
-            const count = countMap.get(folder.folder_id);
-            const folderColor = folder.color ?? 'currentColor';
-            const iconName = folder.icon ?? 'IconFolder';
+            const count = countMap.get(fid);
+            const folderColor = node.color ?? 'currentColor';
+            const iconName = node.icon ?? 'IconFolder';
+            const hasChildren = node.children.length > 0;
+            const isExpanded = expanded.has(node.id);
 
             const itemClass = [
               st.checkItem,
@@ -374,29 +461,32 @@ function FolderPickerPanel({
 
             return (
               <div
-                key={folder.folder_id}
+                key={node.id}
                 data-folder-item
                 className={itemClass}
-                onClick={() => handleLeftClick(folder.folder_id, folder.name)}
-                onContextMenu={(e) => handleRightClick(e, folder.folder_id, folder.name)}
+                style={{ paddingLeft: 8 + node.depth * 16 }}
+                onClick={() => handleLeftClick(fid, node.name)}
+                onContextMenu={(e) => handleRightClick(e, fid, node.name)}
               >
+                {hasChildren ? (
+                  <button
+                    className={st.expandBtn}
+                    onClick={(e) => { e.stopPropagation(); toggleExpand(node.id); }}
+                  >
+                    {isExpanded ? <IconChevronDown size={12} /> : <IconChevronRight size={12} />}
+                  </button>
+                ) : (
+                  <span className={st.expandBtnPlaceholder} />
+                )}
                 <span className={checkClass}>
-                  {isChecked && (
-                    <span className={st.checkMark}>
-                      <IconCheck size={10} strokeWidth={3} />
-                    </span>
-                  )}
-                  {isExcludedItem && (
-                    <span className={st.checkMark}>
-                      <IconMinus size={8} strokeWidth={3} />
-                    </span>
-                  )}
+                  {isChecked && <span className={st.checkMark}><IconCheck size={10} strokeWidth={3} /></span>}
+                  {isExcludedItem && <span className={st.checkMark}><IconMinus size={8} strokeWidth={3} /></span>}
                 </span>
                 <span className={st.folderIcon}>
                   <DynamicIcon name={iconName} size={16} color={folderColor} />
                 </span>
                 <span className={st.itemName}>
-                  {search ? highlightMatch(folder.name, search) : folder.name}
+                  {search ? highlightMatch(node.name, search) : node.name}
                 </span>
                 {count != null && (
                   <span className={st.itemBadge}>{count.toLocaleString()}</span>
@@ -404,8 +494,10 @@ function FolderPickerPanel({
               </div>
             );
           })}
-          {flatFolders.length === 0 && (
-            <div className={st.empty}>No folders found</div>
+          {flatList.length === 0 && (
+            <div className={st.empty}>
+              {filterTab === 'selected' ? 'No folders selected' : 'No folders found'}
+            </div>
           )}
         </div>
 
@@ -414,24 +506,19 @@ function FolderPickerPanel({
           <div className={st.footerLeft}>
             {isFilterMode ? (
               <>
-                <span className={st.shortcutTip}>
-                  Select <span className={st.kbd}>L-click</span>
-                </span>
-                <span className={st.shortcutTip}>
-                  Exclude <span className={st.kbd}>R-click</span>
-                </span>
+                <span className={st.shortcutTip}>Select <span className={st.kbd}>L-click</span></span>
+                <span className={st.shortcutTip}>Exclude <span className={st.kbd}>R-click</span></span>
               </>
             ) : (
               <>
                 <span className={st.shortcutTip}><span className={st.kbd}>&uarr;&darr;</span></span>
                 <span className={st.shortcutTip}><span className={st.kbd}>&crarr;</span> Select</span>
+                <span className={st.shortcutTip}><span className={st.kbd}>&larr;&rarr;</span> Expand</span>
               </>
             )}
           </div>
           <div className={st.footerRight}>
-            <span className={st.shortcutTip}>
-              <span className={st.kbd}>ESC</span>
-            </span>
+            <span className={st.shortcutTip}><span className={st.kbd}>ESC</span></span>
           </div>
         </div>
       </div>
