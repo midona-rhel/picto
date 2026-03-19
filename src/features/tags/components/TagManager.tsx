@@ -127,8 +127,6 @@ export function TagManager() {
             await refreshAll();
           },
         });
-      } else if (result.merged_into) {
-        notifyWarning('Rename merged into an existing tag; undo is not available for this rename.', 'Rename Merged');
       }
       notifySuccess(`Renamed to "${newName}"`, 'Tag Renamed');
       await refreshAll();

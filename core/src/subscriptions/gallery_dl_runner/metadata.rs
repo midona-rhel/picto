@@ -2,40 +2,6 @@ use super::ParsedMetadata;
 use super::adapters::adapter_for_json;
 use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
 
-fn push_unique_url(urls: &mut Vec<String>, value: Option<&str>) {
-    let Some(value) = value.map(str::trim).filter(|value| !value.is_empty()) else {
-        return;
-    };
-    if !urls.iter().any(|existing| existing == value) {
-        urls.push(value.to_string());
-    }
-}
-
-fn collect_source_urls(json: &serde_json::Value) -> Vec<String> {
-    let mut source_urls = Vec::new();
-    // Danbooru-style: top-level file_url
-    push_unique_url(
-        &mut source_urls,
-        json.get("file_url").and_then(|v| v.as_str()),
-    );
-    // e621-style: nested file.url
-    push_unique_url(
-        &mut source_urls,
-        json.get("file")
-            .and_then(|f| f.get("url"))
-            .and_then(|v| v.as_str()),
-    );
-    push_unique_url(&mut source_urls, json.get("url").and_then(|v| v.as_str()));
-    // Single source string (Danbooru)
-    push_unique_url(&mut source_urls, json.get("source").and_then(|v| v.as_str()));
-    // Sources array (e621)
-    if let Some(arr) = json.get("sources").and_then(|v| v.as_array()) {
-        for val in arr {
-            push_unique_url(&mut source_urls, val.as_str());
-        }
-    }
-    source_urls
-}
 
 fn normalize_created_at(raw: &str) -> Option<String> {
     let trimmed = raw.trim();
@@ -132,7 +98,7 @@ pub fn parse_metadata(json: &serde_json::Value) -> ParsedMetadata {
         })
         .map(String::from);
 
-    let source_urls = collect_source_urls(json);
+    let source_urls = adapter.collect_source_urls(json);
     let source_url = source_urls.first().cloned();
 
     let rating = json.get("rating").and_then(|v| {

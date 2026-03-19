@@ -25,8 +25,9 @@ import {
   IconTags,
   IconTrash,
   IconX,
+  IconGitMerge,
 } from '@tabler/icons-react';
-import { notifications } from '@mantine/notifications';
+import { notifyInfo } from '../../lib/notify';
 import type { Dispatch, MutableRefObject, ReactNode, SetStateAction } from 'react';
 import type { ContextMenuEntry } from '../ContextMenu';
 import { LayoutRow } from '../LayoutRow';
@@ -194,82 +195,145 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
           notifyError(err, 'Open Failed');
         }),
       });
+      items.push({
+        type: 'item',
+        label: isMac ? 'Reveal in Finder' : 'Reveal in Explorer',
+        icon: <IconFolderOpen />,
+        shortcut: isMac ? '\u2318Enter' : 'Ctrl+Enter',
+        onClick: () => api.files.revealInFolder(singleHash).catch(err => {
+          notifyError(err, 'Reveal Failed');
+        }),
+      });
+      items.push({
+        type: 'item',
+        label: 'Open in New Window',
+        icon: <IconAppWindow />,
+        shortcut: isMac ? '\u2318O' : 'Ctrl+O',
+        onClick: async () => {
+          const img = stateRef.current.images.find(i => i.hash === singleHash);
+          api.files.openInNewWindow(singleHash, img?.width, img?.height).catch(err => {
+            notifyError(err, 'New Window Failed');
+          });
+        },
+      });
     }
-    items.push({
-      type: 'item',
-      label: isMac ? 'Reveal in Finder' : 'Reveal in Explorer',
-      icon: <IconFolderOpen />,
-      shortcut: isMac ? '\u2318Enter' : 'Ctrl+Enter',
-      disabled: singleIsCollection,
-      onClick: () => api.files.revealInFolder(singleHash).catch(err => {
-        notifyError(err, 'Reveal Failed');
-      }),
-    });
-    items.push({
-      type: 'item',
-      label: 'Open in New Window',
-      icon: <IconAppWindow />,
-      shortcut: isMac ? '\u2318O' : 'Ctrl+O',
-      disabled: singleIsCollection,
-      onClick: async () => {
-        const img = stateRef.current.images.find(i => i.hash === singleHash);
-        api.files.openInNewWindow(singleHash, img?.width, img?.height).catch(err => {
-          notifyError(err, 'New Window Failed');
-        });
-      },
-    });
     items.push({ type: 'separator' });
   }
 
   if (hasSelection && !effectiveVirtual) {
-    items.push({
-      type: 'item',
-      label: 'Create Collection from Selection',
-      icon: <IconFolderPlus />,
-      onClick: async () => {
-        const selectedHashSet = (() => {
-          if (rightClickedHash && !wasAlreadySelected) return new Set([rightClickedHash]);
-          return new Set(stateRef.current.selectedHashes);
-        })();
-        const selectedImages = stateRef.current.images.filter((img) => selectedHashSet.has(img.hash));
-        const memberHashes = selectedImages
-          .filter((img) => !img.is_collection)
-          .map((img) => img.hash);
-        if (memberHashes.length === 0) return;
-        const now = new Date();
-        const fallbackName = `Collection ${now.toLocaleDateString()} ${now.toLocaleTimeString()}`;
-        const memberNames = selectedImages
-          .filter((img) => !img.is_collection)
-          .map((img) => (img.name ?? '').trim())
-          .filter((n) => n.length > 0);
-        const allGenerated = memberNames.length > 0 && memberNames.every(isGeneratedName);
-        const normalizedBases = memberNames.map(normalizeNameBase).filter(Boolean);
-        const uniqueBases = new Set(normalizedBases);
-        const sharedBaseName = uniqueBases.size === 1 && normalizedBases.length > 0
-          ? memberNames.find((n) => normalizeNameBase(n) === normalizedBases[0]) ?? fallbackName
-          : null;
+    const selectedHashSet = (() => {
+      if (rightClickedHash && !wasAlreadySelected) return new Set([rightClickedHash]);
+      return new Set(stateRef.current.selectedHashes);
+    })();
+    const selectedImages = stateRef.current.images.filter((img) => selectedHashSet.has(img.hash));
+    const selCollections = selectedImages.filter((img) => img.is_collection);
+    const selSingles = selectedImages.filter((img) => !img.is_collection);
 
-        let collectionName = fallbackName;
-        if (sharedBaseName) {
-          collectionName = sharedBaseName;
-        } else if (!allGenerated && memberNames.length > 0) {
-          const suggested = memberNames[0];
-          const entered = window.prompt('Collection name:', suggested);
-          if (entered == null) return;
-          const trimmed = entered.trim();
-          if (!trimmed) return;
-          collectionName = trimmed;
-        }
-        try {
-          const id = await api.collections.create({ name: collectionName.trim() });
-          const added = await api.collections.addMembers({ id, hashes: memberHashes });
-          notifySuccess(`Created collection with ${added} item${added === 1 ? '' : 's'}`, 'Collections');
-          navigateToCollection({ id, name: collectionName.trim() });
-        } catch (err) {
-          notifyError(err, 'Create Collection Failed');
-        }
-      },
-    });
+    if (selCollections.length === 0 && selSingles.length >= 2) {
+      // Only images selected → Create Collection
+      items.push({
+        type: 'item',
+        label: 'Create Collection',
+        icon: <IconFolderPlus />,
+        onClick: async () => {
+          const memberHashes = selSingles.map((img) => img.hash);
+          if (memberHashes.length === 0) return;
+          const now = new Date();
+          const fallbackName = `Collection ${now.toLocaleDateString()} ${now.toLocaleTimeString()}`;
+          const memberNames = selSingles
+            .map((img) => (img.name ?? '').trim())
+            .filter((n) => n.length > 0);
+          const allGenerated = memberNames.length > 0 && memberNames.every(isGeneratedName);
+          const normalizedBases = memberNames.map(normalizeNameBase).filter(Boolean);
+          const uniqueBases = new Set(normalizedBases);
+          const sharedBaseName = uniqueBases.size === 1 && normalizedBases.length > 0
+            ? memberNames.find((n) => normalizeNameBase(n) === normalizedBases[0]) ?? fallbackName
+            : null;
+
+          let collectionName = fallbackName;
+          if (sharedBaseName) {
+            collectionName = sharedBaseName;
+          } else if (!allGenerated && memberNames.length > 0) {
+            const suggested = memberNames[0];
+            const entered = window.prompt('Collection name:', suggested);
+            if (entered == null) return;
+            const trimmed = entered.trim();
+            if (!trimmed) return;
+            collectionName = trimmed;
+          }
+          try {
+            const id = await api.collections.create({ name: collectionName.trim() });
+            const added = await api.collections.addMembers({ id, hashes: memberHashes });
+            notifySuccess(`Created collection with ${added} item${added === 1 ? '' : 's'}`, 'Collections');
+            navigateToCollection({ id, name: collectionName.trim() });
+          } catch (err) {
+            notifyError(err, 'Create Collection Failed');
+          }
+        },
+      });
+    } else if (selCollections.length === 1 && selSingles.length > 0) {
+      // 1 collection + images → Merge into Collection
+      items.push({
+        type: 'item',
+        label: 'Merge into Collection',
+        icon: <IconGitMerge />,
+        onClick: async () => {
+          const targetId = selCollections[0].entity_id;
+          if (targetId == null) return;
+          const hashes = selSingles.map((img) => img.hash);
+          try {
+            const added = await api.collections.addMembers({ id: targetId, hashes });
+            notifySuccess(`Added ${added} item${added === 1 ? '' : 's'} to collection`, 'Collections');
+          } catch (err) {
+            notifyError(err, 'Merge Failed');
+          }
+        },
+      });
+    } else if (selCollections.length >= 2) {
+      // 2+ collections → Merge Collections
+      items.push({
+        type: 'item',
+        label: 'Merge Collections',
+        icon: <IconGitMerge />,
+        onClick: async () => {
+          const names = selCollections.map((c, i) => `${i + 1}. ${c.name ?? 'Untitled'}`).join('\n');
+          const choice = window.prompt(
+            `Which collection should survive?\n\n${names}\n\nEnter number:`,
+            '1',
+          );
+          if (choice == null) return;
+          const idx = parseInt(choice.trim(), 10) - 1;
+          if (idx < 0 || idx >= selCollections.length || !Number.isFinite(idx)) {
+            notifyError('Invalid selection', 'Merge Failed');
+            return;
+          }
+          const target = selCollections[idx];
+          const targetId = target.entity_id;
+          if (targetId == null) return;
+          const others = selCollections.filter((_, i) => i !== idx);
+          try {
+            // Move members from each non-target collection into target
+            for (const other of others) {
+              if (other.entity_id == null) continue;
+              const memberHashes = await api.collections.listMemberHashes(other.entity_id);
+              if (memberHashes.length > 0) {
+                await api.collections.addMembers({ id: targetId, hashes: memberHashes });
+              }
+              await api.collections.delete(other.entity_id);
+            }
+            // Also add any loose singles
+            if (selSingles.length > 0) {
+              await api.collections.addMembers({ id: targetId, hashes: selSingles.map((img) => img.hash) });
+            }
+            notifySuccess(`Merged ${others.length + 1} collections into "${target.name ?? 'Untitled'}"`, 'Collections');
+            navigateToCollection({ id: targetId, name: target.name ?? 'Untitled' });
+          } catch (err) {
+            notifyError(err, 'Merge Collections Failed');
+          }
+        },
+      });
+    }
+
     if (singleIsCollection) {
       items.push({
         type: 'item',
@@ -281,7 +345,7 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
           try {
             await api.collections.delete(singleCollectionId);
             notifySuccess('Collection split', 'Collections');
-            } catch (err) {
+          } catch (err) {
             notifyError(err, 'Split Collection Failed');
           }
         },
@@ -290,7 +354,7 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
     items.push({ type: 'separator' });
   }
 
-  if (singleHash && folderId) {
+  if (singleHash && folderId && !singleIsCollection) {
     items.push({ type: 'item', label: 'Pin to Top', icon: <IconPin />, disabled: true, onClick: () => {} });
     items.push({ type: 'item', label: 'Set as Folder Cover', icon: <IconSetCover />, disabled: true, onClick: () => {} });
     items.push({ type: 'separator' });
@@ -334,9 +398,11 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
           onToggle: (fId, _name, added) => {
             if (!added) return;
             const s = stateRef.current;
-            const hashes = s.virtualAllSelection
-              ? s.images.filter(i => !s.virtualAllSelection!.excludedHashes.has(i.hash)).map(i => i.hash)
-              : [...s.selectedHashes];
+            const hashes = (s.virtualAllSelection
+              ? s.images.filter(i => !s.virtualAllSelection!.excludedHashes.has(i.hash))
+              : s.images.filter(i => s.selectedHashes.has(i.hash))
+            ).filter(i => !i.is_collection).map(i => i.hash);
+            if (hashes.length === 0) return;
             api.folders.addFiles(fId, hashes)
               .then(() => {
                 notifySuccess(`${hashes.length} file(s) added to folder`, 'Added');
@@ -377,7 +443,7 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
     });
   }
 
-  if (singleHash) {
+  if (singleHash && !singleIsCollection) {
     items.push({
       type: 'item',
       label: 'Copy',
@@ -460,7 +526,7 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
     });
   }
 
-  if (singleHash) {
+  if (singleHash && !singleIsCollection) {
     const { enabledSearchEngines } = useSettingsStore.getState().settings;
     const engineDefs: { key: typeof enabledSearchEngines[number]; label: string; icon: ReactNode }[] = [
       { key: 'tineye', label: 'TinEye', icon: <IconTinEye /> },
@@ -476,7 +542,7 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
         label: e.label,
         icon: e.icon,
         onClick: () => {
-          notifications.show({ title: 'Searching...', message: `Uploading image to ${e.label}`, autoClose: 3000, loading: true });
+          notifyInfo(`Uploading image to ${e.label}`);
           api.files.resolvePath(singleHash).then(path => reverseImageSearch(path, e.key))
             .catch(err => notifyError(err, 'Search Failed'));
         },
@@ -512,9 +578,10 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
       label: 'New Folder from Selection',
       icon: <IconFolderSymlink />,
       onClick: async () => {
-        const hashes = effectiveVirtual
-          ? state.images.filter(i => !effectiveVirtual.excludedHashes.has(i.hash)).map(i => i.hash)
-          : [...state.selectedHashes];
+        const hashes = (effectiveVirtual
+          ? state.images.filter(i => !effectiveVirtual.excludedHashes.has(i.hash))
+          : state.images.filter(i => state.selectedHashes.has(i.hash))
+        ).filter(i => !i.is_collection).map(i => i.hash);
         if (hashes.length === 0) return;
         try {
           const folder = await api.folders.create({ name: 'New Folder' });
@@ -528,11 +595,12 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
   }
 
   if (hasSelection) {
-    const regenHashes: string[] = effectiveVirtual
-      ? state.images.filter(i => !effectiveVirtual.excludedHashes.has(i.hash)).map(i => i.hash)
+    const regenHashes: string[] = (effectiveVirtual
+      ? state.images.filter(i => !effectiveVirtual.excludedHashes.has(i.hash))
       : effectiveSize === 1 && singleHash
-        ? [singleHash]
-        : [...state.selectedHashes];
+        ? state.images.filter(i => i.hash === singleHash)
+        : state.images.filter(i => state.selectedHashes.has(i.hash))
+    ).filter(i => !i.is_collection).map(i => i.hash);
     if (regenHashes.length > 0) {
       items.push({ type: 'separator' });
       items.push({
@@ -541,7 +609,7 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
         icon: <IconRefresh />,
         shortcut: isMac ? '\u2318\u21E7T' : 'Ctrl+Shift+T',
         onClick: () => {
-          notifications.show({ title: 'Regenerating...', message: `Regenerating ${regenHashes.length} thumbnail(s)`, autoClose: 3000, loading: true });
+          notifyInfo(`Regenerating ${regenHashes.length} thumbnail(s)`);
           api.files.regenerateThumbnailsBatch(regenHashes)
             .then(r => {
               notifySuccess(`Regenerated ${r.regenerated} thumbnail(s)`, 'Thumbnails');
@@ -779,24 +847,26 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
         onClick: doRestore,
       });
     }
-    items.push({
-      type: 'item',
-      label: inTrash
-        ? (effectiveVirtual
-          ? (virtualCount != null
-            ? `Permanently Delete ${virtualCount.toLocaleString()} Image${virtualCount === 1 ? '' : 's'}`
-            : 'Permanently Delete All')
-          : `Permanently Delete ${count} Image${count > 1 ? 's' : ''}`)
-        : (effectiveVirtual
-          ? (virtualCount != null
-            ? `Move ${virtualCount.toLocaleString()} Image${virtualCount === 1 ? '' : 's'} to Trash`
-            : 'Move All Matching Images to Trash')
-          : `Move ${count} Image${count > 1 ? 's' : ''} to Trash`),
-      icon: <IconTrash />,
-      shortcut: isMac ? '\u2318\u232B' : 'Del',
-      danger: inTrash,
-      onClick: doDelete,
-    });
+    if (statusFilter !== 'inbox') {
+      items.push({
+        type: 'item',
+        label: inTrash
+          ? (effectiveVirtual
+            ? (virtualCount != null
+              ? `Permanently Delete ${virtualCount.toLocaleString()} Image${virtualCount === 1 ? '' : 's'}`
+              : 'Permanently Delete All')
+            : `Permanently Delete ${count} Image${count > 1 ? 's' : ''}`)
+          : (effectiveVirtual
+            ? (virtualCount != null
+              ? `Move ${virtualCount.toLocaleString()} Image${virtualCount === 1 ? '' : 's'} to Trash`
+              : 'Move All Matching Images to Trash')
+            : `Move ${count} Image${count > 1 ? 's' : ''} to Trash`),
+        icon: <IconTrash />,
+        shortcut: isMac ? '\u2318\u232B' : 'Del',
+        danger: inTrash,
+        onClick: doDelete,
+      });
+    }
   }
 
   return items;

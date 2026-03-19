@@ -8,7 +8,7 @@ import {
   TextInput,
   Textarea,
 } from '@mantine/core';
-import { IconCheck, IconKey, IconPlus, IconTrash, IconX } from '@tabler/icons-react';
+import { IconPlus, IconX } from '@tabler/icons-react';
 import { api, getCurrentWindow } from '#desktop/api';
 import { notifyError, notifySuccess } from '../../../shared/lib/notify';
 import { SubscriptionGroupsPanel } from './SubscriptionGroupsPanel';
@@ -45,22 +45,7 @@ function isRule34Category(siteCategory: string): boolean {
   return normalized === 'rule34' || normalized === 'rule34xxx' || normalized === 'rule34.xxx';
 }
 
-function canonicalSiteForVerification(siteId: string): string {
-  const normalized = siteId.trim().toLowerCase();
-  if (normalized === 'rule34xxx' || normalized === 'rule34.xxx') return 'rule34';
-  if (normalized === 'e621.net') return 'e621';
-  return normalized;
-}
 
-function isConfirmedWorkingSite(siteId: string): boolean {
-  const canonical = canonicalSiteForVerification(siteId);
-  return (
-    canonical === 'danbooru'
-    || canonical === 'e621'
-    || canonical === 'rule34'
-    || canonical === 'safebooru'
-  );
-}
 
 function parseRule34Credential(raw: string): { userId: string; apiKey: string } | null {
   const input = raw.trim();
@@ -135,7 +120,7 @@ export function SubscriptionsWindow() {
   const [subscriptionRefreshToken, setSubscriptionRefreshToken] = useState(0);
   const [sites, setSites] = useState<SubscriptionSiteInfo[]>([]);
   const [credentials, setCredentials] = useState<CredentialDomain[]>([]);
-  const [credentialHealth, setCredentialHealth] = useState<CredentialHealth[]>([]);
+  const [, setCredentialHealth] = useState<CredentialHealth[]>([]);
   const [credentialModalOpen, setCredentialModalOpen] = useState(false);
   const [savingCredential, setSavingCredential] = useState(false);
   const [activePanel, setActivePanel] = useState<'subscriptions' | 'credentials'>('subscriptions');
@@ -175,11 +160,6 @@ export function SubscriptionsWindow() {
     return map;
   }, [credentials]);
 
-  const healthMap = useMemo(() => {
-    const map = new Map<string, CredentialHealth>();
-    for (const row of credentialHealth) map.set(row.site_category, row);
-    return map;
-  }, [credentialHealth]);
 
   const authSites = useMemo(
     () => sites.filter((site) => site.auth_supported),
@@ -345,82 +325,32 @@ export function SubscriptionsWindow() {
             <div className={styles.sectionHelp}>
               Configure optional site login credentials in OS secure storage. Some sites require auth for full access.
             </div>
-            <div className={`${styles.siteGrid} ${styles.cardsContainer}`}>
+            <div className={`${styles.credentialList} ${styles.cardsContainer}`}>
               {authSites.map((site) => {
                 const cred = credentialMap.get(site.id);
-                const health = healthMap.get(site.id);
-                const missingAuth = site.auth_supported && site.auth_required_for_full_access && !cred;
-                const verified = isConfirmedWorkingSite(site.id);
-                const healthStatus = site.auth_supported
-                  ? (missingAuth ? 'missing' : (health?.health_status ?? 'unknown'))
-                  : 'unknown';
-                const healthLabel = healthStatus.replace('_', ' ');
+                const required = site.auth_required_for_full_access;
                 return (
-                  <div key={site.id} className={styles.siteRow}>
-                    <div>
-                      <div className={styles.siteName}>{site.name}</div>
-                      <div className={styles.siteDomain}>{site.domain}</div>
-                    </div>
-                    <div className={styles.capabilityList}>
-                      <span className={site.supports_query ? styles.capabilityOn : styles.capabilityOff}>
-                        {site.supports_query ? <IconCheck size={11} /> : <IconX size={11} />}
-                        Query
-                      </span>
-                      <span className={site.supports_account ? styles.capabilityOn : styles.capabilityOff}>
-                        {site.supports_account ? <IconCheck size={11} /> : <IconX size={11} />}
-                        Account
-                      </span>
-                      <span className={site.auth_supported ? styles.capabilityOn : styles.capabilityOff}>
-                        {site.auth_supported ? <IconCheck size={11} /> : <IconX size={11} />}
-                        Auth
-                      </span>
-                      <span className={verified ? styles.capabilityOn : styles.capabilityOff}>
-                        {verified ? <IconCheck size={11} /> : <IconX size={11} />}
-                        Verified
-                      </span>
-                    </div>
-                    <Text size="xs" c={cred ? 'green' : 'dimmed'}>
-                      {site.auth_supported
-                        ? (cred ? `Saved (${cred.credential_type})` : 'No credential')
-                        : 'Auth not supported'}
-                    </Text>
-                    <Text
-                      size="xs"
-                      className={
-                        healthStatus === 'valid'
-                          ? styles.healthGood
-                          : healthStatus === 'unauthorized' || healthStatus === 'expired' || healthStatus === 'missing'
-                            ? styles.healthWarn
-                            : healthStatus === 'error'
-                              ? styles.healthBad
-                              : styles.healthUnknown
-                      }
-                    >
-                      {site.auth_supported ? healthLabel : 'n/a'}
-                    </Text>
-                    <div style={{ display: 'inline-flex', gap: 6 }}>
-                      {site.auth_supported && (
-                        <ActionIcon variant="subtle" color="gray" onClick={() => openCredentialModal(site)}>
-                          <IconKey size={14} />
-                        </ActionIcon>
-                      )}
-                      {site.auth_supported && cred && (
-                        <ActionIcon variant="subtle" color="red" onClick={() => deleteCredential(site.id)}>
-                          <IconTrash size={14} />
-                        </ActionIcon>
-                      )}
-                    </div>
-                    {site.auth_supported && health?.last_error && (
-                      <Text size="xs" c="dimmed" style={{ gridColumn: '1 / -1' }}>
-                        Last auth error: {health.last_error}
+                  <div key={site.id} className={styles.credentialRow}>
+                    <div className={styles.credentialInfo}>
+                      <span className={styles.siteName}>{site.name}</span>
+                      <Text size="xs" c={cred ? 'green' : required ? 'yellow' : 'dimmed'}>
+                        {cred ? 'Saved' : required ? 'Required' : 'Optional'}
                       </Text>
-                    )}
+                    </div>
+                    <div className={styles.credentialActions}>
+                      <TextButton compact onClick={() => openCredentialModal(site)}>
+                        {cred ? 'Edit' : 'Add'}
+                      </TextButton>
+                      <TextButton compact disabled={!cred} onClick={() => cred && deleteCredential(site.id)}>
+                        Remove
+                      </TextButton>
+                    </div>
                   </div>
                 );
               })}
               {authSites.length === 0 && (
                 <Text size="xs" c="dimmed">
-                  No credential-capable sites are currently enabled.
+                  No sites require credentials.
                 </Text>
               )}
             </div>

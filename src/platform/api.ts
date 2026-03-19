@@ -472,6 +472,8 @@ export const api = {
       invokeTyped('remove_collection_tags', { id, tags } as never) as unknown as Promise<void>,
     delete: (id: number) =>
       invokeTyped('delete_collection', { id }) as unknown as Promise<void>,
+    listMemberHashes: (id: number) =>
+      invokeTyped('list_collection_member_hashes', { id }) as unknown as Promise<string[]>,
   },
 
   companion: {

@@ -32,6 +32,7 @@ const WRITE_COMMANDS: &[&str] = &[
     "set_folder_watch_config", "clear_folder_watch_config",
     "create_collection", "update_collection", "delete_collection",
     "add_collection_members", "remove_collection_members", "reorder_collection_members",
+    "list_collection_member_hashes",
     "save_settings", "reorder_sidebar_nodes", "set_view_prefs", "set_zoom_factor",
     "update_media_entity_metadata",
     "create_group", "delete_group", "rename_group", "set_group_schedule", "run_group", "stop_group",
@@ -174,6 +175,7 @@ async fn dispatch_inner(command: &str, args: serde_json::Value) -> Result<String
         "add_collection_members" => call!(typed::folders::add_collection_members, &state, args),
         "remove_collection_members" => call!(typed::folders::remove_collection_members, &state, args),
         "delete_collection" => call!(typed::folders::delete_collection, &state, args),
+        "list_collection_member_hashes" => call!(typed::folders::list_collection_member_hashes, &state, args),
 
         // ── Media I/O ─────────────────────────────────────────
         "resolve_file_path" => call!(typed::media_io::resolve_file_path, &state, args),

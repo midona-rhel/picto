@@ -1,12 +1,11 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import { MantineProvider, createTheme, rem } from "@mantine/core";
-import { Notifications } from "@mantine/notifications";
+import { ToastStack } from '../shared/components/ToastStack';
 import App from "../app/App";
 import { AppErrorBoundary } from '#features/layout/components';
 import { useDerivedColorScheme } from '../shared/hooks/useThemeSync';
 import "@mantine/core/styles.css";
-import "@mantine/notifications/styles.css";
 import "../shared/styles/globals.css";
 
 // Compact theme matching the sidebar aesthetic — small text, tight spacing, subtle radii.
@@ -100,7 +99,7 @@ function MainApp() {
   const colorScheme = useDerivedColorScheme();
   return (
     <MantineProvider theme={theme} forceColorScheme={colorScheme} cssVariablesSelector=":root:root">
-      <Notifications />
+      <ToastStack />
       <AppErrorBoundary>
         <App />
       </AppErrorBoundary>

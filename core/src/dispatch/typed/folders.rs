@@ -704,3 +704,10 @@ pub async fn delete_collection(
     );
     Ok(())
 }
+
+pub async fn list_collection_member_hashes(
+    state: &AppState,
+    input: DeleteCollectionInput,
+) -> Result<Vec<String>, String> {
+    state.db.list_collection_member_hashes(input.id).await
+}

@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useRef } from 'react';
 import { api } from '#desktop/api';
 import { registerUndoAction } from '../../../shared/controllers/undoRedoController';
-import { notifyWarning } from '../../../shared/lib/notify';
 import { useInlineRename } from '../../../shared/hooks/useInlineRename';
 import { imageDrag } from '../../../shared/lib/imageDrag';
 import { useImportActionStore } from '../../../state/importActionStore';
@@ -124,8 +123,6 @@ export function useFolderTreeActions({
             await api.folders.delete(id);
           },
         });
-      } else {
-        notifyWarning('Undo for deleting folders with subfolders is not supported yet.', 'Limited Undo');
       }
       if (activeFolderId === folderId) setActiveFolderId(null);
     } catch (e) { console.error('Delete failed:', e); }
@@ -136,7 +133,6 @@ export function useFolderTreeActions({
     if (folderIds.length === 0) return;
     try {
       await Promise.all(folderIds.map((id) => api.folders.delete(id)));
-      notifyWarning('Batch folder delete cannot be undone yet.', 'Limited Undo');
       if (activeFolderId != null && folderIds.includes(activeFolderId)) setActiveFolderId(null);
     } catch (e) { console.error('Batch delete failed:', e); }
   }, [activeFolderId, setActiveFolderId]);

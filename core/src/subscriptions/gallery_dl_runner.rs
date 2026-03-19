@@ -19,6 +19,7 @@ mod filesystem;
 mod metadata;
 mod metadata_validation;
 mod sites;
+mod tag_enrichment;
 #[cfg(test)]
 mod tests;
 
@@ -206,9 +207,25 @@ impl GalleryDlRunner {
         info!(exit_code, "gallery-dl finished");
 
         // 6. Scan output directory for downloaded files + metadata sidecars
-        let items = scan_output_dir(&temp_dir).await?;
+        let mut items = scan_output_dir(&temp_dir).await?;
 
-        // 7. Clean up temp config (leave downloaded files for caller to import)
+        // 7. Rule34: enrich flat tags with categories from the tag API
+        let site_id = items
+            .first()
+            .and_then(|i| i.metadata.category.as_deref())
+            .unwrap_or("")
+            .to_string();
+        if sites::canonical_site_id(&site_id) == "rule34" {
+            tag_enrichment::enrich_gelbooru_tags(
+                &mut items,
+                &site_id,
+                opts.credential.as_ref(),
+                std::time::Duration::from_secs(1),
+            )
+            .await;
+        }
+
+        // 8. Clean up temp config (leave downloaded files for caller to import)
         let _ = tokio::fs::remove_file(&config_path).await;
 
         Ok(RunResult {

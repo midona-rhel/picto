@@ -168,6 +168,7 @@ export function registerIpcHandlers({
   buildBlobPath,
   windowManager,
   libraryService,
+  updaterService,
 }) {
   ipcMain.handle('picto:invoke', async (_event, payload) => {
     const { command, args } = payload || {};
@@ -384,4 +385,20 @@ export function registerIpcHandlers({
   ipcMain.handle('picto:library:rename', async (_event, { path, newName }) => libraryService.renameLibrary(path, newName));
   ipcMain.handle('picto:library:relocate', async (_event, { oldPath }) => libraryService.relocateLibrary(oldPath));
   ipcMain.handle('picto:library:getConfig', async () => libraryService.getLibraryConfig());
+
+  // Auto-updater
+  ipcMain.handle('picto:updater:check', async () => {
+    try {
+      const result = await updaterService.checkForUpdates();
+      return result?.updateInfo ?? null;
+    } catch (err) {
+      return { error: err?.message ?? String(err) };
+    }
+  });
+  ipcMain.handle('picto:updater:download', async () => {
+    await updaterService.downloadUpdate();
+  });
+  ipcMain.handle('picto:updater:install', () => {
+    updaterService.quitAndInstall();
+  });
 }

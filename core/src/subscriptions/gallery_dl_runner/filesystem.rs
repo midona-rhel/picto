@@ -66,5 +66,13 @@ pub(super) async fn scan_output_dir(dir: &Path) -> Result<Vec<DownloadedItem>, S
         }
     }
 
+    // Sort by post_id descending (newest first) so import order matches
+    // the source site's default ordering. Filesystem read_dir order is arbitrary.
+    items.sort_by(|a, b| {
+        let id_a = a.metadata.post_id.as_deref().and_then(|s| s.parse::<i64>().ok()).unwrap_or(0);
+        let id_b = b.metadata.post_id.as_deref().and_then(|s| s.parse::<i64>().ok()).unwrap_or(0);
+        id_b.cmp(&id_a)
+    });
+
     Ok(items)
 }

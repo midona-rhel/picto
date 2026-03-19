@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { useHotkeys } from '@mantine/hooks';
-import { notifications } from '@mantine/notifications';
+import { notifyInfo } from '../../../shared/lib/notify';
 import { api } from '#desktop/api';
 import { notifyError, notifySuccess } from '../../../shared/lib/notify';
 import { FolderPickerService } from '../../../shared/services/folderPickerService';
@@ -199,12 +199,7 @@ export function useGridHotkeys({
               .map((i) => i.hash)
           : [...s.selectedHashes];
         if (hashes.length === 0) return;
-        notifications.show({
-          title: 'Regenerating...',
-          message: `Regenerating ${hashes.length} thumbnail(s)`,
-          autoClose: 3000,
-          loading: true,
-        });
+        notifyInfo(`Regenerating ${hashes.length} thumbnail(s)`);
         api.file.regenerateThumbnailsBatch(hashes)
           .then((r) => {
             notifySuccess(`Regenerated ${r.regenerated} thumbnail(s)`, 'Thumbnails');

@@ -51,6 +51,13 @@ const monitor = {
   current: () => ipcRenderer.invoke('picto:monitor:current'),
 };
 
+const updater = {
+  check: () => ipcRenderer.invoke('picto:updater:check'),
+  download: () => ipcRenderer.invoke('picto:updater:download'),
+  install: () => ipcRenderer.invoke('picto:updater:install'),
+  onStatus: (handler) => on('updater:status', handler),
+};
+
 const webview = {
   startNativeDrag: (hashes, iconDataUrl) => ipcRenderer.invoke('picto:drag:start', { hashes, iconDataUrl }),
   onDragDropEvent: (handler) => {
@@ -108,4 +115,5 @@ contextBridge.exposeInMainWorld('picto', {
   webview,
   search,
   library,
+  updater,
 });

@@ -123,18 +123,6 @@
   color: var(--color-text-secondary);
 }
 
-.siteGrid {
-  composes: scrollYStable from '../../../shared/styles/scrollArea.module.css';
-  display: grid;
-  grid-template-columns: 1fr;
-  align-content: start;
-  gap: 6px;
-  flex: 1 1 auto;
-  min-height: 0;
-  max-height: none;
-  padding-right: 4px;
-}
-
 .cardsContainer {
   border: 1px solid var(--color-border-secondary);
   border-radius: 8px;
@@ -142,71 +130,42 @@
   padding: 8px;
 }
 
-.siteRow {
-  display: grid;
-  grid-template-columns: minmax(220px, 1fr) minmax(220px, 1fr) auto auto auto;
+.credentialList {
+  composes: scrollYStable from '../../../shared/styles/scrollArea.module.css';
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.credentialRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 8px;
+  border-radius: 6px;
+}
+
+.credentialRow:hover {
+  background: var(--color-white-05);
+}
+
+.credentialInfo {
+  display: flex;
   align-items: center;
   gap: 8px;
-  padding: 8px;
-  border-radius: 6px;
-  background: var(--color-white-10);
+}
+
+.credentialActions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
 }
 
 .siteName {
   font-size: 12px;
   font-weight: 600;
-}
-
-.siteDomain {
-  font-size: 11px;
-  color: var(--color-text-secondary);
-}
-
-.capabilityList {
-  display: inline-flex;
-  gap: 6px;
-  flex-wrap: wrap;
-}
-
-.capabilityOn,
-.capabilityOff {
-  font-size: 10px;
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
-  border: 1px solid var(--color-border-secondary);
-  border-radius: 999px;
-  padding: 2px 6px;
-}
-
-.capabilityOn {
-  color: #43c17a;
-  border-color: color-mix(in srgb, #43c17a 30%, var(--color-border-secondary));
-}
-
-.capabilityOff {
-  color: #d35a5a;
-  border-color: color-mix(in srgb, #d35a5a 30%, var(--color-border-secondary));
-}
-
-.healthGood {
-  color: #43c17a;
-  text-transform: capitalize;
-}
-
-.healthWarn {
-  color: #d8a73d;
-  text-transform: capitalize;
-}
-
-.healthBad {
-  color: #d35a5a;
-  text-transform: capitalize;
-}
-
-.healthUnknown {
-  color: var(--color-text-secondary);
-  text-transform: capitalize;
 }
 
 .groupsWrap {

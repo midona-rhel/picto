@@ -1,12 +1,13 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import ReactDOM from 'react-dom/client';
 import { MantineProvider, createTheme, rem } from '@mantine/core';
-import { Notifications } from '@mantine/notifications';
+import { ToastStack } from '../shared/components/ToastStack';
 import { api } from '#desktop/api';
 import { SubscriptionsWindow } from '#features/subscriptions/components';
 import { useThemeSync, useDerivedColorScheme } from '../shared/hooks/useThemeSync';
+import { useRuntimeSyncStore } from '../state/runtimeSyncStore';
+import { useSubscriptionProgressStore } from '../features/subscriptions/subscriptionProgressStore';
 import '@mantine/core/styles.css';
-import '@mantine/notifications/styles.css';
 import '../shared/styles/globals.css';
 
 const theme = createTheme({
@@ -94,9 +95,21 @@ const theme = createTheme({
 function SubscriptionsApp() {
   useThemeSync();
   const colorScheme = useDerivedColorScheme();
+
+  // Initialize runtime event chain so subscription progress updates in real-time.
+  // The main window does this via useNativeEventListeners; this window needs its own.
+  useEffect(() => {
+    void useRuntimeSyncStore.getState().ensureInitialized();
+    useSubscriptionProgressStore.getState().start();
+    return () => {
+      useSubscriptionProgressStore.getState().stop();
+      useRuntimeSyncStore.getState().teardown();
+    };
+  }, []);
+
   return (
     <MantineProvider theme={theme} forceColorScheme={colorScheme} cssVariablesSelector=":root:root">
-      <Notifications />
+      <ToastStack />
       <SubscriptionsWindow />
     </MantineProvider>
   );

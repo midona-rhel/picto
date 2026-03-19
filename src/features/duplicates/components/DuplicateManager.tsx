@@ -327,8 +327,6 @@ export function DuplicateManager() {
               await loadPairs();
             },
           });
-        } else {
-          notifyWarning('Smart merge changes metadata and file state; undo is not supported yet.', 'Not Undoable');
         }
 
         setPairs((prev) => {
