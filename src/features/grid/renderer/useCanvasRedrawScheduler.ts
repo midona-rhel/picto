@@ -10,7 +10,6 @@ export function useCanvasRedrawScheduler(args: {
   const rafScheduledRef = useRef(false);
 
   const markDirty = useCallback((lanes: 'base' | 'overlay' | 'both') => {
-    if (frozenRef.current) return;
     const dirty = dirtyRef.current;
     if (lanes === 'base' || lanes === 'both') dirty.base = true;
     if (lanes === 'overlay' || lanes === 'both') dirty.overlay = true;

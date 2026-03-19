@@ -45,6 +45,11 @@ function isRule34Category(siteCategory: string): boolean {
   return normalized === 'rule34' || normalized === 'rule34xxx' || normalized === 'rule34.xxx';
 }
 
+function isTwitterCategory(siteCategory: string): boolean {
+  const normalized = siteCategory.trim().toLowerCase();
+  return normalized === 'twitter' || normalized === 'x.com';
+}
+
 
 
 function parseRule34Credential(raw: string): { userId: string; apiKey: string } | null {
@@ -84,8 +89,12 @@ function parseCookies(raw: string): Record<string, string> {
 function validateCredentialForm(form: CredentialFormState): string | null {
   if (!form.siteCategory) return 'No site selected for credential.';
   const isRule34 = isRule34Category(form.siteCategory);
+  const isTwitter = isTwitterCategory(form.siteCategory);
   if (isRule34 && form.credentialType !== 'api_key') {
     return 'rule34.xxx requires API key credentials (user-id + api-key).';
+  }
+  if (isTwitter && form.credentialType !== 'cookies') {
+    return 'Twitter/X requires browser cookies (auth_token + ct0).';
   }
   if (form.credentialType === 'username_password') {
     if (!form.username.trim() || !form.password.trim()) {
@@ -108,7 +117,11 @@ function validateCredentialForm(form: CredentialFormState): string | null {
   }
   if (form.credentialType === 'cookies') {
     const parsed = parseCookies(form.cookiesRaw);
-    if (Object.keys(parsed).length === 0) {
+    if (isTwitter) {
+      if (!parsed['auth_token'] || !parsed['ct0']) {
+        return 'Twitter/X requires both auth_token and ct0 cookies.';
+      }
+    } else if (Object.keys(parsed).length === 0) {
       return 'At least one cookie entry (key=value) is required.';
     }
   }
@@ -120,7 +133,7 @@ export function SubscriptionsWindow() {
   const [subscriptionRefreshToken, setSubscriptionRefreshToken] = useState(0);
   const [sites, setSites] = useState<SubscriptionSiteInfo[]>([]);
   const [credentials, setCredentials] = useState<CredentialDomain[]>([]);
-  const [, setCredentialHealth] = useState<CredentialHealth[]>([]);
+  const [credentialHealth, setCredentialHealth] = useState<CredentialHealth[]>([]);
   const [credentialModalOpen, setCredentialModalOpen] = useState(false);
   const [savingCredential, setSavingCredential] = useState(false);
   const [activePanel, setActivePanel] = useState<'subscriptions' | 'credentials'>('subscriptions');
@@ -160,6 +173,11 @@ export function SubscriptionsWindow() {
     return map;
   }, [credentials]);
 
+  const healthMap = useMemo(() => {
+    const map = new Map<string, CredentialHealth>();
+    for (const row of credentialHealth) map.set(row.site_category, row);
+    return map;
+  }, [credentialHealth]);
 
   const authSites = useMemo(
     () => sites.filter((site) => site.auth_supported),
@@ -169,11 +187,17 @@ export function SubscriptionsWindow() {
     () => isRule34Category(credentialForm.siteCategory),
     [credentialForm.siteCategory],
   );
+  const isTwitterCredential = useMemo(
+    () => isTwitterCategory(credentialForm.siteCategory),
+    [credentialForm.siteCategory],
+  );
   const credentialTypeOptions = useMemo(
-    () => (isRule34Credential
-      ? [{ value: 'api_key', label: 'API Key (rule34 user-id + api-key)' }]
-      : CREDENTIAL_TYPE_OPTIONS),
-    [isRule34Credential],
+    () => {
+      if (isRule34Credential) return [{ value: 'api_key', label: 'API Key (rule34 user-id + api-key)' }];
+      if (isTwitterCredential) return [{ value: 'cookies', label: 'Browser Cookies (auth_token + ct0)' }];
+      return CREDENTIAL_TYPE_OPTIONS;
+    },
+    [isRule34Credential, isTwitterCredential],
   );
   const missingRequiredAuthSites = useMemo(
     () => authSites.filter((site) => site.auth_required_for_full_access && !credentialMap.get(site.id)),
@@ -191,7 +215,9 @@ export function SubscriptionsWindow() {
     const existing = credentialMap.get(site.id);
     const defaultType: CredentialType = isRule34Category(site.id)
       ? 'api_key'
-      : (existing?.credential_type ?? 'username_password');
+      : isTwitterCategory(site.id)
+        ? 'cookies'
+        : (existing?.credential_type ?? 'username_password');
     setCredentialForm({
       siteCategory: site.id,
       credentialType: defaultType,
@@ -328,13 +354,15 @@ export function SubscriptionsWindow() {
             <div className={`${styles.credentialList} ${styles.cardsContainer}`}>
               {authSites.map((site) => {
                 const cred = credentialMap.get(site.id);
+                const health = healthMap.get(site.id);
                 const required = site.auth_required_for_full_access;
+                const hasError = cred && health && (health.health_status === 'unauthorized' || health.health_status === 'expired' || health.health_status === 'error');
                 return (
                   <div key={site.id} className={styles.credentialRow}>
                     <div className={styles.credentialInfo}>
                       <span className={styles.siteName}>{site.name}</span>
-                      <Text size="xs" c={cred ? 'green' : required ? 'yellow' : 'dimmed'}>
-                        {cred ? 'Saved' : required ? 'Required' : 'Optional'}
+                      <Text size="xs" c={hasError ? 'red' : cred ? 'green' : required ? 'yellow' : 'dimmed'}>
+                        {hasError ? (health.health_status === 'unauthorized' ? 'Expired' : 'Error') : cred ? 'Saved' : required ? 'Required' : 'Optional'}
                       </Text>
                     </div>
                     <div className={styles.credentialActions}>
@@ -367,82 +395,116 @@ export function SubscriptionsWindow() {
       <Modal
         opened={credentialModalOpen}
         onClose={() => setCredentialModalOpen(false)}
-        title="Configure Site Credential"
+        title={`${credentialForm.displayName || 'Site'} — Credentials`}
         size="md"
       >
         <Stack gap="sm">
-          {!isRule34Credential && (
-            <Select
-              label="Credential Type"
-              value={credentialForm.credentialType}
-              data={credentialTypeOptions}
-              onChange={(value) => {
-                if (!value) return;
-                setCredentialForm((prev) => ({ ...prev, credentialType: value as CredentialType }));
-              }}
-              allowDeselect={false}
-            />
-          )}
-          {isRule34Credential && (
-            <div className={styles.rule34Hint}>
-              <Text size="xs" c="dimmed">
-                rule34.xxx requires both <code>user-id</code> and <code>api-key</code>.
-              </Text>
-              <Text size="xs" c="dimmed">
-                Get both values from: <code>https://api.rule34.xxx</code>
-              </Text>
-              <Text size="xs" c="dimmed">
-                gallery-dl/API format: <code>&amp;api_key=&lt;YOUR_API_KEY&gt;&amp;user_id=&lt;YOUR_USER_ID&gt;</code>
-              </Text>
-            </div>
-          )}
-          <TextInput
-            label="Display Name"
-            value={credentialForm.displayName}
-            onChange={(e) => setCredentialForm((prev) => ({ ...prev, displayName: e.currentTarget.value }))}
-          />
-          {isRule34Credential && (
-            <TextInput
-              label="Rule34 API Credential String"
-              placeholder="&api_key=<YOUR_API_KEY>&user_id=<YOUR_USER_ID>"
-              value={credentialForm.rule34Raw}
-              onChange={(e) => setCredentialForm((prev) => ({ ...prev, rule34Raw: e.currentTarget.value }))}
-            />
-          )}
-          {!isRule34Credential && (credentialForm.credentialType === 'username_password' || credentialForm.credentialType === 'api_key') && (
+          {/* ── Twitter/X ── */}
+          {isTwitterCredential && (
             <>
+              <Text size="xs" c="dimmed">
+                Twitter/X requires two browser cookies. To get them:
+              </Text>
+              <Text size="xs" c="dimmed" component="ol" style={{ margin: 0, paddingLeft: 16 }}>
+                <li>Log into <span role="button" style={{ color: 'var(--color-primary)', cursor: 'pointer' }} onClick={() => api.os.openExternalUrl('https://x.com')}>x.com</span> in your browser</li>
+                <li>Open DevTools (F12) → Application → Cookies → x.com</li>
+                <li>Copy the values for <code>auth_token</code> and <code>ct0</code></li>
+              </Text>
               <TextInput
-                label={credentialForm.credentialType === 'api_key'
-                  ? 'API Key Label (optional username field)'
-                  : 'Username / Email'}
+                label="auth_token"
+                placeholder="Paste auth_token cookie value"
                 value={credentialForm.username}
-                onChange={(e) => setCredentialForm((prev) => ({ ...prev, username: e.currentTarget.value }))}
+                onChange={(e) => {
+                  const val = e.currentTarget.value;
+                  setCredentialForm((prev) => ({
+                    ...prev,
+                    username: val,
+                    cookiesRaw: `auth_token=${val}\nct0=${prev.password}`,
+                  }));
+                }}
               />
               <TextInput
-                label={credentialForm.credentialType === 'api_key'
-                  ? 'API Key / Password'
-                  : 'Password / API Key'}
-                type="password"
+                label="ct0"
+                placeholder="Paste ct0 cookie value"
                 value={credentialForm.password}
-                onChange={(e) => setCredentialForm((prev) => ({ ...prev, password: e.currentTarget.value }))}
+                onChange={(e) => {
+                  const val = e.currentTarget.value;
+                  setCredentialForm((prev) => ({
+                    ...prev,
+                    password: val,
+                    cookiesRaw: `auth_token=${prev.username}\nct0=${val}`,
+                  }));
+                }}
               />
             </>
           )}
-          {credentialForm.credentialType === 'oauth_token' && (
-            <TextInput
-              label="Refresh/OAuth Token"
-              value={credentialForm.oauthToken}
-              onChange={(e) => setCredentialForm((prev) => ({ ...prev, oauthToken: e.currentTarget.value }))}
-            />
+
+          {/* ── Rule34 ── */}
+          {isRule34Credential && (
+            <>
+              <Text size="xs" c="dimmed">
+                rule34.xxx requires an API key. To get one:
+              </Text>
+              <Text size="xs" c="dimmed" component="ol" style={{ margin: 0, paddingLeft: 16 }}>
+                <li>Go to <span role="button" style={{ color: 'var(--color-primary)', cursor: 'pointer' }} onClick={() => api.os.openExternalUrl('https://api.rule34.xxx')}>api.rule34.xxx</span></li>
+                <li>Log in and copy your API credentials</li>
+                <li>Paste the full string containing <code>api_key</code> and <code>user_id</code></li>
+              </Text>
+              <TextInput
+                label="API Credential String"
+                placeholder="&api_key=<YOUR_API_KEY>&user_id=<YOUR_USER_ID>"
+                value={credentialForm.rule34Raw}
+                onChange={(e) => setCredentialForm((prev) => ({ ...prev, rule34Raw: e.currentTarget.value }))}
+              />
+            </>
           )}
-          {credentialForm.credentialType === 'cookies' && (
-            <Textarea
-              label="Cookies (one key=value per line)"
-              minRows={5}
-              value={credentialForm.cookiesRaw}
-              onChange={(e) => setCredentialForm((prev) => ({ ...prev, cookiesRaw: e.currentTarget.value }))}
-            />
+
+          {/* ── Generic sites ── */}
+          {!isTwitterCredential && !isRule34Credential && (
+            <>
+              <Select
+                label="Credential Type"
+                value={credentialForm.credentialType}
+                data={credentialTypeOptions}
+                onChange={(value) => {
+                  if (!value) return;
+                  setCredentialForm((prev) => ({ ...prev, credentialType: value as CredentialType }));
+                }}
+                allowDeselect={false}
+              />
+              {(credentialForm.credentialType === 'username_password' || credentialForm.credentialType === 'api_key') && (
+                <>
+                  <TextInput
+                    label={credentialForm.credentialType === 'api_key' ? 'Label (optional)' : 'Username / Email'}
+                    value={credentialForm.username}
+                    onChange={(e) => setCredentialForm((prev) => ({ ...prev, username: e.currentTarget.value }))}
+                  />
+                  <TextInput
+                    label={credentialForm.credentialType === 'api_key' ? 'API Key' : 'Password'}
+                    type="password"
+                    value={credentialForm.password}
+                    onChange={(e) => setCredentialForm((prev) => ({ ...prev, password: e.currentTarget.value }))}
+                  />
+                </>
+              )}
+              {credentialForm.credentialType === 'oauth_token' && (
+                <TextInput
+                  label="Refresh/OAuth Token"
+                  value={credentialForm.oauthToken}
+                  onChange={(e) => setCredentialForm((prev) => ({ ...prev, oauthToken: e.currentTarget.value }))}
+                />
+              )}
+              {credentialForm.credentialType === 'cookies' && (
+                <Textarea
+                  label="Cookies (one key=value per line)"
+                  minRows={5}
+                  value={credentialForm.cookiesRaw}
+                  onChange={(e) => setCredentialForm((prev) => ({ ...prev, cookiesRaw: e.currentTarget.value }))}
+                />
+              )}
+            </>
           )}
+
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
             <TextButton compact onClick={() => setCredentialModalOpen(false)} disabled={savingCredential}>
               Cancel

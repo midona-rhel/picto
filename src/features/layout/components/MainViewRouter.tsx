@@ -49,7 +49,7 @@ export function MainViewRouter() {
             searchText={grid.searchText || grid.filterSearchText}
             excludedSearchTags={grid.excludedSearchTags}
             tagMatchMode={grid.tagMatchMode}
-            externalFreeze={false}
+            externalFreeze={grid.externalFreeze}
             viewer={viewer}
           />
           <MainViewProgressBar />

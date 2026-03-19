@@ -32,6 +32,7 @@ type MainViewGridState = {
   colorHex: string | null;
   colorAccuracy: number;
   filterRefreshTrigger: number;
+  externalFreeze: boolean;
 };
 
 type MainViewGridActions = {

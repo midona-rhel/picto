@@ -81,6 +81,37 @@ function App() {
   });
   const viewer = useViewerHost();
 
+  // --- Window horizontal resize tracking (freezes grid layout) ---
+  const [windowHResizing, setWindowHResizing] = useState(false);
+  const windowWidthAnchorRef = useRef(typeof window !== 'undefined' ? window.innerWidth : 0);
+  const windowResizingRef = useRef(false);
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const onResize = () => {
+      const newWidth = window.innerWidth;
+      if (!windowResizingRef.current) {
+        // Not yet resizing — check if width moved enough to start freezing
+        if (Math.abs(newWidth - windowWidthAnchorRef.current) > 2) {
+          windowResizingRef.current = true;
+          setWindowHResizing(true);
+        }
+      }
+      if (windowResizingRef.current) {
+        if (timer) clearTimeout(timer);
+        timer = setTimeout(() => {
+          windowResizingRef.current = false;
+          windowWidthAnchorRef.current = window.innerWidth;
+          setWindowHResizing(false);
+        }, 200);
+      }
+    };
+    window.addEventListener('resize', onResize);
+    return () => {
+      window.removeEventListener('resize', onResize);
+      if (timer) clearTimeout(timer);
+    };
+  }, []);
+
   // --- Grid feature state (search, filters, subscriptions, folder sort) ---
   const grid = useGridFeatureState({
     currentView,
@@ -217,6 +248,7 @@ function App() {
         colorHex: grid.debouncedColorHex,
         colorAccuracy: grid.debouncedColorAccuracy,
         filterRefreshTrigger: grid.smartFolderRefresh,
+        externalFreeze: inspector.inspectorResizeDragging || windowHResizing,
       },
       gridActions: {
         onContainerWidthChange: setGridContainerWidth,
@@ -262,6 +294,8 @@ function App() {
       grid.debouncedColorHex,
       grid.debouncedColorAccuracy,
       grid.smartFolderRefresh,
+      inspector.inspectorResizeDragging,
+      windowHResizing,
       handleGridViewModeChange,
       handleGridSortFieldChange,
       handleGridSortOrderChange,

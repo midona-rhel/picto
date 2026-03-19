@@ -8,6 +8,7 @@
 
 import { create } from 'zustand';
 import { useRuntimeSyncStore } from '../../state/runtimeSyncStore';
+import { notifyError } from '../../shared/lib/notify';
 import { projectRuntimeTasks } from '../../state/runtimeTaskProjection';
 import { api } from '#desktop/api';
 import { logBestEffortError } from '../../shared/lib/asyncOps';
@@ -294,6 +295,18 @@ function applyTaskChange(
       patch.subscriptionProgressById = subscriptionProgressById;
       return patch;
     });
+
+    // Notify on auth failure
+    if (isTerminal) {
+      const fk = (detail?.failure_kind as string) ?? '';
+      if (fk === 'unauthorized' || fk === 'expired') {
+        const subName = (detail?.subscription_name as string) ?? 'Subscription';
+        notifyError(
+          `${subName}: credentials expired or invalid. Update them in Subscriptions → Credentials.`,
+          'Authentication Failed',
+        );
+      }
+    }
 
     // Schedule subscription progress cleanup linger
     if (isTerminal) {

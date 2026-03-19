@@ -306,12 +306,17 @@ export function CanvasGrid({
     }
   }, [markDirty, scheduleRedrawRef]);
 
+  const frozenCanvasHeightRef = useRef<number | null>(null);
   useEffect(() => {
     if (frozen) {
+      // Capture canvas height at freeze time to prevent vertical stretching
+      const canvas = canvasRef.current;
+      frozenCanvasHeightRef.current = canvas ? canvas.clientHeight : null;
       // Dismiss hover preview and video scrub when grid freezes (e.g. viewer opens)
       dismissHoverPreviewRef.current();
       dismissVideoScrubRef.current();
     } else {
+      frozenCanvasHeightRef.current = null;
       markDirty('both');
     }
   }, [frozen, markDirty]);
@@ -620,7 +625,9 @@ export function CanvasGrid({
   const contentHeight = layout.totalHeight + topInset;
   const availableHeight = Math.max(0, canvasHeight - canvasTopOffset);
   // Subtract topInset so the canvas fits inside the border-box container's content area
-  const canvasSize = (contentHeight > availableHeight ? canvasHeight : Math.max(0, availableHeight - topInset)) || '100%';
+  const computedCanvasHeight = (contentHeight > availableHeight ? canvasHeight : Math.max(0, availableHeight - topInset)) || '100%';
+  // Lock canvas height during freeze to prevent vertical stretching from diagonal window resize
+  const canvasSize = (frozen && frozenCanvasHeightRef.current != null) ? frozenCanvasHeightRef.current : computedCanvasHeight;
 
   return (
     <div ref={containerRef} data-canvas-grid-root data-grid-surface-root>
