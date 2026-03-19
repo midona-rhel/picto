@@ -4,7 +4,7 @@ import { MantineProvider, createTheme, rem } from '@mantine/core';
 import { Notifications } from '@mantine/notifications';
 import { api } from '#desktop/api';
 import { SubscriptionsWindow } from '#features/subscriptions/components';
-import { useThemeSync } from '../shared/hooks/useThemeSync';
+import { useThemeSync, useDerivedColorScheme } from '../shared/hooks/useThemeSync';
 import '@mantine/core/styles.css';
 import '@mantine/notifications/styles.css';
 import '../shared/styles/globals.css';
@@ -93,14 +93,17 @@ const theme = createTheme({
 
 function SubscriptionsApp() {
   useThemeSync();
-  return <SubscriptionsWindow />;
+  const colorScheme = useDerivedColorScheme();
+  return (
+    <MantineProvider theme={theme} forceColorScheme={colorScheme} cssVariablesSelector=":root:root">
+      <Notifications />
+      <SubscriptionsWindow />
+    </MantineProvider>
+  );
 }
 
 ReactDOM.createRoot(document.getElementById('root') as HTMLElement).render(
   <React.StrictMode>
-    <MantineProvider theme={theme} defaultColorScheme="dark" cssVariablesSelector=":root:root">
-      <Notifications />
-      <SubscriptionsApp />
-    </MantineProvider>
+    <SubscriptionsApp />
   </React.StrictMode>,
 );

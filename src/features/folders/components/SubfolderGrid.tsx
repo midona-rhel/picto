@@ -94,12 +94,28 @@ export function SubfolderGrid({ folderId, targetSize, totalImageCount, onOpenFol
     [folderNodes, folderId],
   );
 
-  // Keep existing covers stable and fetch only missing covers.
+  // Keep existing covers stable, fetch missing covers, and re-fetch when counts change.
+  const prevCountsRef = useRef<Map<number, number>>(new Map());
   useEffect(() => {
-    // Prune removed folders without clearing existing visible covers.
+    const prevCounts = prevCountsRef.current;
+
+    // Detect folders whose count changed (membership changed → cover may be stale)
+    const staleIds = new Set<number>();
+    for (const f of childFolders) {
+      const prev = prevCounts.get(f.folderId);
+      if (prev !== undefined && prev !== f.count) staleIds.add(f.folderId);
+    }
+
+    // Update stored counts
+    const nextCounts = new Map<number, number>();
+    for (const f of childFolders) nextCounts.set(f.folderId, f.count);
+    prevCountsRef.current = nextCounts;
+
+    // Prune removed folders, clear stale covers so they get re-fetched
     setCoverHashes(prev => {
       const next = new Map<number, string | null>();
       for (const f of childFolders) {
+        if (staleIds.has(f.folderId)) continue; // drop stale → will be re-fetched
         if (prev.has(f.folderId)) next.set(f.folderId, prev.get(f.folderId) ?? null);
       }
       return next;
@@ -107,11 +123,13 @@ export function SubfolderGrid({ folderId, targetSize, totalImageCount, onOpenFol
 
     if (paused || childFolders.length === 0) return;
     let cancelled = false;
-    const missing = childFolders.filter(f => !coverHashesRef.current.has(f.folderId));
-    if (missing.length === 0) return;
+    const toFetch = childFolders.filter(f =>
+      !coverHashesRef.current.has(f.folderId) || staleIds.has(f.folderId),
+    );
+    if (toFetch.length === 0) return;
 
     Promise.all(
-      missing.map(async (f) => {
+      toFetch.map(async (f) => {
         try {
           const hash = await api.folders.getCoverHash(f.folderId);
           return [f.folderId, hash] as [number, string | null];

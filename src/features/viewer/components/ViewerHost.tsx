@@ -38,7 +38,10 @@ export function ViewerHost({ viewer }: ViewerHostProps) {
     <div
       style={{
         position: 'absolute',
-        inset: 0,
+        top: 'calc(var(--titlebar-height) + var(--filter-bar-height, 0px))',
+        left: 0,
+        right: 0,
+        bottom: 0,
         zIndex: 30,
         background: 'var(--color-background)',
       }}

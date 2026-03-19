@@ -218,6 +218,7 @@
   box-sizing: border-box;
   background-color: var(--color-black-10);
   flex-shrink: 0;
+  cursor: grab;
 }
 
 .footerLeft {

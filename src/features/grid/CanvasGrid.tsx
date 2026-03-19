@@ -88,6 +88,10 @@ interface CanvasGridProps {
   topInset?: number;
   /** Shared thumbnail atlas that can survive shell remounts. */
   atlasRef?: React.MutableRefObject<ThumbnailPipeline | null>;
+  /** External ref updated with the dismiss-hover-preview function (for parent dismiss triggers). */
+  dismissHoverPreviewRef?: React.MutableRefObject<() => void>;
+  /** External ref updated with the dismiss-video-scrub function (for parent dismiss triggers). */
+  dismissVideoScrubRef?: React.MutableRefObject<() => void>;
 }
 
 export interface CanvasGridHandle {
@@ -139,6 +143,8 @@ export function CanvasGrid({
   preserveScrollBehaviors = true,
   topInset = 0,
   atlasRef: sharedAtlasRef,
+  dismissHoverPreviewRef: externalDismissRef,
+  dismissVideoScrubRef: externalVideoScrubDismissRef,
 }: CanvasGridProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const ctxRef = useRef<CanvasRenderingContext2D | null>(null);
@@ -301,7 +307,13 @@ export function CanvasGrid({
   }, [markDirty, scheduleRedrawRef]);
 
   useEffect(() => {
-    if (!frozen) markDirty('both');
+    if (frozen) {
+      // Dismiss hover preview and video scrub when grid freezes (e.g. viewer opens)
+      dismissHoverPreviewRef.current();
+      dismissVideoScrubRef.current();
+    } else {
+      markDirty('both');
+    }
   }, [frozen, markDirty]);
 
   useEffect(() => { markDirty('base'); }, [renamingHash, markDirty]);
@@ -493,7 +505,7 @@ export function CanvasGrid({
     markDirty,
     videoScrubIdxRef,
   });
-  dismissHoverPreviewRef.current = () => {
+  const dismissFn = () => {
     clearPendingHoverTimers();
     if (hoveredTileRef.current != null) {
       hoveredTileRef.current = null;
@@ -501,11 +513,15 @@ export function CanvasGrid({
     setHoverPreview((prev) => (prev ? null : prev));
     markDirty('overlay');
   };
-  dismissVideoScrubRef.current = () => {
+  dismissHoverPreviewRef.current = dismissFn;
+  if (externalDismissRef) externalDismissRef.current = dismissFn;
+  const dismissVideoScrubFn = () => {
     clearPendingVideoScrubTimer();
     clearVideoScrubIndex();
     setVideoScrub((prev) => (prev ? null : prev));
   };
+  dismissVideoScrubRef.current = dismissVideoScrubFn;
+  if (externalVideoScrubDismissRef) externalVideoScrubDismissRef.current = dismissVideoScrubFn;
   const drawOverlay = useCanvasOverlayDraw({
     lastVisibleRef,
     overlayCanvasRef,
@@ -599,15 +615,16 @@ export function CanvasGrid({
 
   const lockedCanvasWidth = frozen && frozenCanvasWidth ? `${frozenCanvasWidth}px` : '100%';
 
-  // When content + subfolders exceed the viewport, use full viewport for sticky scrolling.
-  // Otherwise, fill only the available space (viewport minus subfolder height) to avoid false scrollbars.
+  // When content exceeds available space, use full viewport for sticky scrolling.
+  // Otherwise, fill available space so marquee can extend below images.
   const contentHeight = layout.totalHeight + topInset;
   const availableHeight = Math.max(0, canvasHeight - canvasTopOffset);
-  const canvasSize = (contentHeight > availableHeight ? canvasHeight : availableHeight) || '100%';
+  // Subtract topInset so the canvas fits inside the border-box container's content area
+  const canvasSize = (contentHeight > availableHeight ? canvasHeight : Math.max(0, availableHeight - topInset)) || '100%';
 
   return (
     <div ref={containerRef} data-canvas-grid-root data-grid-surface-root>
-      <div style={{ position: 'relative', height: estimatedTotalHeight + topInset, width: '100%', paddingTop: topInset }}>
+      <div style={{ position: 'relative', height: Math.max(estimatedTotalHeight + topInset, typeof canvasSize === 'number' ? canvasSize : 0), width: '100%', paddingTop: topInset, boxSizing: 'border-box' }}>
         <div style={{ position: 'sticky', top: 0 }}>
           <canvas
             ref={canvasRef}

@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useLayoutEffect, useCallback, useMemo } from 'react';
-import { createPortal } from 'react-dom';
+import { OverlayShell } from '../components/OverlayShell';
 import { IconCheck, IconChevronDown, IconChevronRight, IconEqual, IconLayersIntersect, IconLayersUnion, IconMinus, IconPin, IconPinFilled } from '@tabler/icons-react';
 import { useDomainStore } from '../../state/domainStore';
 import type { FilterLogicMode } from '../../state/filterStore';
@@ -219,7 +219,7 @@ function FolderPickerPanel({
   isFilterModeRef.current = isFilterMode;
 
   const onHeaderMouseDown = useCallback((e: React.MouseEvent) => {
-    if ((e.target as HTMLElement).closest('input, button, [class*="logicTab"], [class*="filterTab"]')) return;
+    if ((e.target as HTMLElement).closest('input, button, [class*="logicTab"], [class*="segTab"]')) return;
     const el = menuRef.current;
     const rect = el?.getBoundingClientRect();
     const anchor = isFilterModeRef.current
@@ -354,15 +354,8 @@ function FolderPickerPanel({
     items[focusIndex]?.scrollIntoView({ block: 'nearest' });
   }, [focusIndex]);
 
-  return createPortal(
-    <>
-      {!pinned && (
-        <div
-          className={st.backdrop}
-          onClick={onClose}
-          onContextMenu={(e) => { e.preventDefault(); onClose(); }}
-        />
-      )}
+  return (
+    <OverlayShell open onClose={onClose} pinned={pinned}>
       <div
         ref={menuRef}
         className={`${st.panel}${dragging ? ` ${st.panelDragging}` : ''}`}
@@ -406,29 +399,26 @@ function FolderPickerPanel({
               </div>
             </>
           )}
+          <div className={st.logicTabs}>
+            <div
+              className={`${st.segTab}${filterTab === 'all' ? ` ${st.segTabActive}` : ''}`}
+              onClick={() => setFilterTab('all')}
+            >
+              All
+            </div>
+            <div
+              className={`${st.segTab}${filterTab === 'selected' ? ` ${st.segTabActive}` : ''}`}
+              onClick={() => setFilterTab('selected')}
+            >
+              Selected{selectedCount > 0 ? ` ${selectedCount}` : ''}
+            </div>
+          </div>
           <button
             className={st.pinBtn}
             onClick={() => setPinned((p) => !p)}
             title={pinned ? 'Unpin' : 'Pin'}
           >
             {pinned ? <IconPinFilled size={14} /> : <IconPin size={14} />}
-          </button>
-        </div>
-
-        {/* Filter tabs */}
-        <div className={st.filterTabs}>
-          <button
-            className={`${st.filterTab}${filterTab === 'all' ? ` ${st.filterTabActive}` : ''}`}
-            onClick={() => setFilterTab('all')}
-          >
-            All
-          </button>
-          <button
-            className={`${st.filterTab}${filterTab === 'selected' ? ` ${st.filterTabActive}` : ''}`}
-            onClick={() => setFilterTab('selected')}
-          >
-            Selected
-            {selectedCount > 0 && <span className={st.filterTabBadge}>{selectedCount}</span>}
           </button>
         </div>
 
@@ -501,8 +491,8 @@ function FolderPickerPanel({
           )}
         </div>
 
-        {/* Footer */}
-        <div className={st.footer}>
+        {/* Footer (also draggable) */}
+        <div className={st.footer} onMouseDown={onHeaderMouseDown}>
           <div className={st.footerLeft}>
             {isFilterMode ? (
               <>
@@ -522,8 +512,7 @@ function FolderPickerPanel({
           </div>
         </div>
       </div>
-    </>,
-    document.body,
+    </OverlayShell>
   );
 }
 

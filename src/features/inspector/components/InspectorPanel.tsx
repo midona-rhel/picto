@@ -319,8 +319,11 @@ export function InspectorPanel({
       anchorEl: addFolderBtnRef.current,
       selectedFolderIds: fileFolders.map((f) => f.folder_id),
       onToggle: (folderId, _folderName, added) => {
-        if (!added) return;
-        onAddToFolders([folderId]).catch((err) => console.error('Failed to add to folder:', err));
+        if (added) {
+          onAddToFolders([folderId]).catch((err) => console.error('Failed to add to folder:', err));
+        } else {
+          onRemoveFromFolder(folderId).catch((err) => console.error('Failed to remove from folder:', err));
+        }
       },
     });
   }, [fileFolders, onAddToFolders]);

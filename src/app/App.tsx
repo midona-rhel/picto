@@ -175,6 +175,13 @@ function App() {
     }
   }, [currentView, activeFolderId]);
 
+  // Close media view when navigating away from images view
+  useEffect(() => {
+    if (currentView !== 'images' && viewer.mode) {
+      viewer.close();
+    }
+  }, [currentView, viewer]);
+
   const handleGridScopeTransitionMidpoint = useCallback(() => {
     handleScopeTransitionMidpoint();
     const nav = useNavigationStore.getState();

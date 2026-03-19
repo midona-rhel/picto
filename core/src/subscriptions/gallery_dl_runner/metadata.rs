@@ -13,12 +13,27 @@ fn push_unique_url(urls: &mut Vec<String>, value: Option<&str>) {
 
 fn collect_source_urls(json: &serde_json::Value) -> Vec<String> {
     let mut source_urls = Vec::new();
+    // Danbooru-style: top-level file_url
     push_unique_url(
         &mut source_urls,
         json.get("file_url").and_then(|v| v.as_str()),
     );
+    // e621-style: nested file.url
+    push_unique_url(
+        &mut source_urls,
+        json.get("file")
+            .and_then(|f| f.get("url"))
+            .and_then(|v| v.as_str()),
+    );
     push_unique_url(&mut source_urls, json.get("url").and_then(|v| v.as_str()));
+    // Single source string (Danbooru)
     push_unique_url(&mut source_urls, json.get("source").and_then(|v| v.as_str()));
+    // Sources array (e621)
+    if let Some(arr) = json.get("sources").and_then(|v| v.as_array()) {
+        for val in arr {
+            push_unique_url(&mut source_urls, val.as_str());
+        }
+    }
     source_urls
 }
 

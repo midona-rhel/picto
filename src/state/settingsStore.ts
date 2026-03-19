@@ -75,6 +75,8 @@ interface SettingsState {
   loaded: boolean;
   /** Update a single key and persist to the store. */
   updateSetting: <K extends keyof AppSettings>(key: K, value: AppSettings[K]) => void;
+  /** Update multiple keys atomically (single state update + single save). */
+  updateSettings: (updates: Partial<AppSettings>) => void;
 }
 
 // Module-level store instance so we don't create multiple
@@ -92,6 +94,17 @@ export const useSettingsStore = create<SettingsState>((set, _get) => ({
     // Persist async — fire and forget
     if (storeInstance && storeReady) {
       void storeInstance.set(key, value).then(() => storeInstance!.save());
+    }
+  },
+
+  updateSettings: (updates) => {
+    set((state) => ({
+      settings: { ...state.settings, ...updates },
+    }));
+    if (storeInstance && storeReady) {
+      const entries = Object.entries(updates);
+      void Promise.all(entries.map(([k, v]) => storeInstance!.set(k, v)))
+        .then(() => storeInstance!.save());
     }
   },
 }));
@@ -123,6 +136,8 @@ export async function initSettingsStore(): Promise<void> {
     for (const key of Object.keys(DEFAULTS) as (keyof AppSettings)[]) {
       void storeInstance.onKeyChange(key, (val) => {
         if (val !== null && val !== undefined) {
+          const current = useSettingsStore.getState().settings[key];
+          console.log('[settings] onKeyChange:', key, '| new:', val, '| current:', current);
           useSettingsStore.setState((state) => ({
             settings: { ...state.settings, [key]: val },
           }));

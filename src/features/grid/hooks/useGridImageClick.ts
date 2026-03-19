@@ -14,11 +14,15 @@ export function useGridImageClick(args: {
   imagesRef: { current: MediaItem[] };
   lastClickedHashRef: { current: string | null };
   canvasLayoutRef: { current: { x: number; y: number; w: number; h: number }[] };
+  dismissHoverPreviewRef: { current: () => void };
+  dismissVideoScrubRef: { current: () => void };
 }) {
-  const { dispatch, viewer, stateRef, imagesRef, lastClickedHashRef, canvasLayoutRef } = args;
+  const { dispatch, viewer, stateRef, imagesRef, lastClickedHashRef, canvasLayoutRef, dismissHoverPreviewRef, dismissVideoScrubRef } = args;
 
   const handleImageClick = useCallback((image: MediaItem, event: React.MouseEvent) => {
     if (event.detail === 2) {
+      dismissHoverPreviewRef.current();
+      dismissVideoScrubRef.current();
       viewer.openDetail(image.hash);
       return;
     }
@@ -71,7 +75,7 @@ export function useGridImageClick(args: {
       dispatch({ type: 'SELECT_HASHES', hashes: new Set([image.hash]) });
     }
     dispatch({ type: 'SET_LAST_CLICKED', hash: image.hash });
-  }, [canvasLayoutRef, dispatch, imagesRef, lastClickedHashRef, stateRef, viewer]);
+  }, [canvasLayoutRef, dismissHoverPreviewRef, dismissVideoScrubRef, dispatch, imagesRef, lastClickedHashRef, stateRef, viewer]);
 
   return {
     handleImageClick,

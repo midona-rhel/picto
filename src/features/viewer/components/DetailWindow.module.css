@@ -72,7 +72,7 @@
 }
 
 .icBtn {
-  composes: icBtn28 from '../../shared/styles/iconButton.module.css';
+  composes: icBtn28 from '../../../shared/styles/iconButton.module.css';
 }
 
 .zoomRatio {

@@ -41,6 +41,97 @@ fn test_parse_e621_tags() {
 }
 
 #[test]
+fn test_e621_twokinds_full_metadata() {
+    // Real gallery-dl sidecar JSON for e621 post 6272695 (verbatim format)
+    let json = serde_json::json!({
+        "id": 6272695,
+        "created_at": "2026-03-19T16:14:56.278-04:00",
+        "file": {
+            "width": 2166,
+            "height": 1280,
+            "ext": "png",
+            "size": 2170623,
+            "md5": "0399b981a2667b630b2fc769516d654c",
+            "url": "https://static1.e621.net/data/03/99/0399b981a2667b630b2fc769516d654c.png"
+        },
+        "rating": "s",
+        "sources": [
+            "https://www.patreon.com/posts/basitins-from-153456971",
+            "https://c10.patreonusercontent.com/4/patreon-media/p/post/153456971/e62e01a6fe214259aff87db11a07ef67/eyJxIjoxMDAsIndlYnAiOjB9/1.png?token-hash=example"
+        ],
+        "description": "",
+        "date": "2026-03-19 20:14:56",
+        "category": "e621",
+        "subcategory": "tag",
+        "tags": {
+            "general": [
+                "anthro", "biped", "bottomwear", "clothed", "clothed_anthro",
+                "clothed_male", "clothing", "fingers", "front_view", "fully_clothed",
+                "fully_clothed_anthro", "fully_clothed_male", "fur", "group", "hair",
+                "male", "standing", "tail", "teeth", "text", "tongue", "topwear", "trio"
+            ],
+            "artist": ["conditional_dnp", "tom_fischbach"],
+            "contributor": [],
+            "copyright": ["twokinds"],
+            "character": ["keith_keiser", "nickolai_alaric"],
+            "species": ["basitin", "mammal"],
+            "invalid": [],
+            "meta": ["english_text", "hi_res"],
+            "lore": []
+        }
+    });
+
+    let meta = parse_metadata(&json);
+
+    // Post ID
+    assert_eq!(meta.post_id.as_deref(), Some("6272695"));
+
+    // Rating
+    assert_eq!(meta.rating.as_deref(), Some("s"));
+
+    // Source URLs — file.url (nested) + sources array
+    assert!(meta.source_urls.contains(&"https://static1.e621.net/data/03/99/0399b981a2667b630b2fc769516d654c.png".to_string()),
+        "file.url should be collected; got: {:?}", meta.source_urls);
+    assert!(meta.source_urls.contains(&"https://www.patreon.com/posts/basitins-from-153456971".to_string()),
+        "sources[0] should be collected; got: {:?}", meta.source_urls);
+    assert_eq!(meta.source_urls.len(), 3, "file.url + 2 sources entries; got: {:?}", meta.source_urls);
+
+    // Created at (normalized to UTC)
+    assert!(meta.created_at.is_some(), "created_at should be parsed");
+
+    // Tags — verify namespace mapping
+    let tags = &meta.tags;
+
+    // creator (from artist)
+    assert!(tags.contains(&("creator".to_string(), "tom_fischbach".to_string())));
+    assert!(tags.contains(&("creator".to_string(), "conditional_dnp".to_string())));
+
+    // character
+    assert!(tags.contains(&("character".to_string(), "keith_keiser".to_string())));
+    assert!(tags.contains(&("character".to_string(), "nickolai_alaric".to_string())));
+
+    // series (from copyright)
+    assert!(tags.contains(&("series".to_string(), "twokinds".to_string())));
+
+    // species (e621-specific)
+    assert!(tags.contains(&("species".to_string(), "basitin".to_string())));
+    assert!(tags.contains(&("species".to_string(), "mammal".to_string())));
+
+    // meta
+    assert!(tags.contains(&("meta".to_string(), "english_text".to_string())));
+    assert!(tags.contains(&("meta".to_string(), "hi_res".to_string())));
+
+    // general (no namespace)
+    assert!(tags.contains(&(String::new(), "anthro".to_string())));
+    assert!(tags.contains(&(String::new(), "trio".to_string())));
+    assert!(tags.contains(&(String::new(), "fur".to_string())));
+
+    // Total: 23 general + 2 artist + 2 character + 1 copyright + 2 species + 2 meta = 32
+    // (empty arrays contributor/invalid/lore add nothing)
+    assert_eq!(tags.len(), 32, "expected 32 tags total, got {}", tags.len());
+}
+
+#[test]
 fn test_parse_pixiv_tags() {
     let json = serde_json::json!({
         "id": 99999,

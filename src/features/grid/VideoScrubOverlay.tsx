@@ -69,9 +69,16 @@ export function VideoScrubOverlay({ tileRect, src, duration, onDismiss }: VideoS
       }
     };
 
+    // Dismiss on any click (double-click to open detail) or keydown (Enter/Space)
+    const onDismissEvent = () => onDismissRef.current();
+
     window.addEventListener('mousemove', onMove);
+    window.addEventListener('mousedown', onDismissEvent);
+    window.addEventListener('keydown', onDismissEvent);
     return () => {
       window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mousedown', onDismissEvent);
+      window.removeEventListener('keydown', onDismissEvent);
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
     };
   }, [duration]);

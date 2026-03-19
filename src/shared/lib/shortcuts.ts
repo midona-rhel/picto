@@ -114,6 +114,15 @@ export const SHORTCUT_DEFS: ShortcutDef[] = [
   { id: 'video.rateIncrease',    label: 'Speed Up',                group: 'Video', keys: ']',                 description: 'Increase playback speed' },
   { id: 'video.rateDecrease',    label: 'Slow Down',               group: 'Video', keys: '[',                 description: 'Decrease playback speed' },
   { id: 'video.rateReset',       label: 'Reset Speed',             group: 'Video', keys: 'Backspace',         description: 'Reset playback speed to 1x' },
+
+  // Duplicates
+  { id: 'dup.smartMerge',   label: 'Smart Merge',       group: 'Duplicates', keys: 'S',          description: 'Auto-merge keeping the better file' },
+  { id: 'dup.keepLeft',     label: 'Keep Left',         group: 'Duplicates', keys: 'L',          description: 'Keep the left file, delete right' },
+  { id: 'dup.keepRight',    label: 'Keep Right',        group: 'Duplicates', keys: 'R',          description: 'Keep the right file, delete left' },
+  { id: 'dup.notDuplicate', label: 'Not Duplicate',     group: 'Duplicates', keys: 'N',          description: 'Mark pair as not duplicate' },
+  { id: 'dup.fitToWindow',  label: 'Fit to Window',     group: 'Duplicates', keys: 'F',          description: 'Reset zoom to fit images in view' },
+  { id: 'dup.prevPair',     label: 'Previous Pair',     group: 'Duplicates', keys: 'ArrowLeft',  description: 'Go to previous duplicate pair' },
+  { id: 'dup.nextPair',     label: 'Next Pair',         group: 'Duplicates', keys: 'ArrowRight', description: 'Go to next duplicate pair' },
 ];
 
 export interface ShortcutGroup {
@@ -128,7 +137,7 @@ export function getShortcutGroups(): ShortcutGroup[] {
     if (!list) { list = []; map.set(def.group, list); }
     list.push(def);
   }
-  const order = ['Navigation', 'File', 'Edit', 'Rating', 'View', 'Inbox', 'Video'];
+  const order = ['Navigation', 'File', 'Edit', 'Rating', 'View', 'Inbox', 'Video', 'Duplicates'];
   return order
     .filter((g) => map.has(g))
     .map((g) => ({ name: g, items: map.get(g)! }));

@@ -60,119 +60,11 @@ pub fn collection_group_parts(
     Some((category, post_id, preferred_name))
 }
 
-pub fn validate_metadata_for_site(site_id: &str, metadata: &ParsedMetadata) -> Result<(), String> {
-    match crate::subscriptions::gallery_dl_runner::canonical_site_id(site_id) {
-        "pixiv" | "pixivuser" => {
-            if metadata
-                .post_id
-                .as_deref()
-                .map(str::trim)
-                .map_or(true, |v| v.is_empty())
-            {
-                return Err("missing remote post id".to_string());
-            }
-            if metadata
-                .source_url
-                .as_deref()
-                .map(str::trim)
-                .map_or(true, |v| v.is_empty())
-            {
-                return Err("missing source url".to_string());
-            }
-            let has_title_or_description = metadata
-                .title
-                .as_deref()
-                .map(str::trim)
-                .is_some_and(|v| !v.is_empty())
-                || metadata
-                    .description
-                    .as_deref()
-                    .map(str::trim)
-                    .is_some_and(|v| !v.is_empty());
-            if !has_title_or_description {
-                return Err("missing title/description".to_string());
-            }
-            if metadata.tags.is_empty() {
-                return Err("missing tags".to_string());
-            }
-            let has_creator = metadata
-                .tags
-                .iter()
-                .any(|(ns, subtag)| ns == "creator" && !subtag.trim().is_empty());
-            if !has_creator {
-                return Err("missing creator".to_string());
-            }
-            Ok(())
-        }
-        "gelbooru" => {
-            if metadata
-                .post_id
-                .as_deref()
-                .map(str::trim)
-                .map_or(true, |v| v.is_empty())
-            {
-                return Err("missing remote post id".to_string());
-            }
-            if metadata
-                .source_url
-                .as_deref()
-                .map(str::trim)
-                .map_or(true, |v| v.is_empty())
-            {
-                return Err("missing source url".to_string());
-            }
-            if metadata.tags.is_empty() {
-                return Err("missing tags".to_string());
-            }
-            if metadata
-                .rating
-                .as_deref()
-                .map(str::trim)
-                .map_or(true, |v| v.is_empty())
-            {
-                return Err("missing rating".to_string());
-            }
-            Ok(())
-        }
-        "danbooru" => {
-            if metadata
-                .post_id
-                .as_deref()
-                .map(str::trim)
-                .map_or(true, |v| v.is_empty())
-            {
-                return Err("missing remote post id".to_string());
-            }
-            if metadata
-                .source_url
-                .as_deref()
-                .map(str::trim)
-                .map_or(true, |v| v.is_empty())
-            {
-                return Err("missing source url".to_string());
-            }
-            if metadata.tags.is_empty() {
-                return Err("missing tags".to_string());
-            }
-            if metadata
-                .rating
-                .as_deref()
-                .map(str::trim)
-                .map_or(true, |v| v.is_empty())
-            {
-                return Err("missing rating".to_string());
-            }
-            let has_creator = metadata
-                .tags
-                .iter()
-                .any(|(ns, subtag)| ns == "creator" && !subtag.trim().is_empty());
-            if !has_creator {
-                return Err("missing creator".to_string());
-            }
-            Ok(())
-        }
-        _ => Ok(()),
-    }
+pub fn validate_metadata_for_site(_site_id: &str, _metadata: &ParsedMetadata) -> Result<(), String> {
+    // Import policy accepts all metadata — the job of the importer is to
+    // correctly extract whatever tags/fields the source provides, not to
+    // reject posts for missing optional fields like creator or rating.
+    Ok(())
 }
 
 fn is_generated_subscription_name(name: &str, metadata: &ParsedMetadata) -> bool {
@@ -238,67 +130,15 @@ mod tests {
     }
 
     #[test]
-    fn pixiv_validation_requires_creator_and_source_url() {
-        let missing = ParsedMetadata {
-            post_id: Some("42".to_string()),
-            title: Some("Pixiv title".to_string()),
-            tags: vec![(String::new(), "tag".to_string())],
-            ..Default::default()
-        };
-        assert!(validate_metadata_for_site("pixiv", &missing).is_err());
-
-        let valid = ParsedMetadata {
-            post_id: Some("42".to_string()),
-            title: Some("Pixiv title".to_string()),
-            source_url: Some("https://www.pixiv.net/artworks/42".to_string()),
-            tags: vec![
-                (String::new(), "tag".to_string()),
-                ("creator".to_string(), "artist".to_string()),
-            ],
-            ..Default::default()
-        };
-        assert!(validate_metadata_for_site("pixiv", &valid).is_ok());
-    }
-
-    #[test]
-    fn gelbooru_validation_requires_rating_and_source_url() {
-        let missing = ParsedMetadata {
+    fn validate_metadata_accepts_all_sites() {
+        let minimal = ParsedMetadata {
             post_id: Some("42".to_string()),
             tags: vec![(String::new(), "1girl".to_string())],
             ..Default::default()
         };
-        assert!(validate_metadata_for_site("gelbooru", &missing).is_err());
-
-        let valid = ParsedMetadata {
-            post_id: Some("42".to_string()),
-            source_url: Some("https://gelbooru.com/images/abc.jpg".to_string()),
-            rating: Some("safe".to_string()),
-            tags: vec![(String::new(), "1girl".to_string())],
-            ..Default::default()
-        };
-        assert!(validate_metadata_for_site("gelbooru", &valid).is_ok());
-    }
-
-    #[test]
-    fn danbooru_validation_requires_creator_and_rating() {
-        let missing = ParsedMetadata {
-            post_id: Some("42".to_string()),
-            source_url: Some("https://danbooru.donmai.us/posts/42".to_string()),
-            tags: vec![(String::new(), "1girl".to_string())],
-            ..Default::default()
-        };
-        assert!(validate_metadata_for_site("danbooru", &missing).is_err());
-
-        let valid = ParsedMetadata {
-            post_id: Some("42".to_string()),
-            source_url: Some("https://danbooru.donmai.us/posts/42".to_string()),
-            rating: Some("s".to_string()),
-            tags: vec![
-                (String::new(), "1girl".to_string()),
-                ("creator".to_string(), "artist_name".to_string()),
-            ],
-            ..Default::default()
-        };
-        assert!(validate_metadata_for_site("danbooru", &valid).is_ok());
+        assert!(validate_metadata_for_site("pixiv", &minimal).is_ok());
+        assert!(validate_metadata_for_site("danbooru", &minimal).is_ok());
+        assert!(validate_metadata_for_site("gelbooru", &minimal).is_ok());
+        assert!(validate_metadata_for_site("unknown_site", &minimal).is_ok());
     }
 }

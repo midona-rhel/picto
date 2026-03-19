@@ -53,8 +53,8 @@ pub static SITES: &[SiteEntry] = &[
         url_template: "https://danbooru.donmai.us/posts?tags={query}",
         example_query: "1girl solo blue_eyes",
         supports_query: true,
-        supports_account: true,
-        auth_supported: true,
+        supports_account: false,
+        auth_supported: false,
         auth_required_for_full_access: false,
     },
     SiteEntry {

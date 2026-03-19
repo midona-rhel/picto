@@ -8,7 +8,7 @@
   position: fixed;
   z-index: var(--z-context-menu);
   width: 360px;
-  max-height: calc(100vh - 200px);
+  height: 480px;
   overflow: hidden;
   display: flex;
   flex-direction: column;
@@ -125,43 +125,37 @@
 /* FolderPicker-specific */
 .content {
   flex: 1;
-  height: 340px;
+  min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
   padding: 4px 0;
   margin: 0;
 }
 
-.filterTabs {
+.segTab {
   display: flex;
-  gap: 0;
-  padding: 0 8px 6px;
-  border-bottom: 1px solid var(--color-border-secondary);
-}
-
-.filterTab {
-  composes: btnReset from '../styles/buttonReset.module.css';
-  font-size: 11px;
-  padding: 3px 8px;
+  align-items: center;
+  justify-content: center;
+  height: 24px;
+  padding: 0 10px;
   border-radius: 4px;
-  color: var(--color-text-secondary);
   cursor: pointer;
-}
-
-.filterTab:hover {
-  color: var(--color-text-primary);
-  background: var(--color-white-05);
-}
-
-.filterTabActive {
-  color: var(--color-text-primary);
-  background: var(--color-white-10);
-}
-
-.filterTabBadge {
-  margin-left: 4px;
-  font-size: 10px;
+  color: var(--color-text-tertiary);
+  font-size: 11px;
+  font-weight: 600;
   opacity: 0.5;
+  transition: opacity 120ms, background-color 120ms;
+  white-space: nowrap;
+}
+
+.segTab:hover {
+  opacity: 0.8;
+}
+
+.segTabActive {
+  opacity: 1;
+  background-color: var(--color-white-10);
+  color: var(--color-text-primary);
 }
 
 .expandBtn {

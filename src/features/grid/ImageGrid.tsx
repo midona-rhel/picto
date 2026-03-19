@@ -155,6 +155,8 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
   stateRef.current = state;
   const selectedHashesRef = useRef(state.selectedHashes);
   selectedHashesRef.current = state.selectedHashes;
+  const dismissHoverPreviewRef = useRef<() => void>(() => {});
+  const dismissVideoScrubRef = useRef<() => void>(() => {});
   const sharedThumbnailAtlasRef = useRef<ThumbnailPipeline | null>(null);
   if (!sharedThumbnailAtlasRef.current) {
     sharedThumbnailAtlasRef.current = new ThumbnailPipeline();
@@ -429,6 +431,8 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
     requestReplace,
     requestAppend,
     displayFolderId: state.displayFolderId,
+    dismissHoverPreviewRef,
+    dismissVideoScrubRef,
   });
 
   const {
@@ -777,6 +781,8 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
                 preserveScrollBehaviors={preserveScrollBehaviors}
                 topInset={0}
                 atlasRef={sharedThumbnailAtlasRef}
+                dismissHoverPreviewRef={dismissHoverPreviewRef}
+                dismissVideoScrubRef={dismissVideoScrubRef}
               />
             </div>
           ) : (

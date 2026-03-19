@@ -478,7 +478,7 @@ pub fn get_folder_cover_hash(
     conn.query_row(
         "SELECT f.hash FROM folder_entity fe
          JOIN file f ON f.file_id = fe.entity_id
-         WHERE fe.folder_id = ?1 AND f.status != 2
+         WHERE fe.folder_id = ?1 AND f.status = 1
          ORDER BY fe.position_rank
          LIMIT 1",
         [folder_id],

@@ -8,7 +8,7 @@
 import { describe, it, expect } from 'vitest';
 import { deriveStaleResources, gridResourceMatchesScope } from '../resourceInvalidator';
 import type { MutationReceipt, MutationFacts, ResourceKey } from '../../shared/types/generated/runtime-contract';
-import type { Domain } from '../../shared/types/generated/runtime-contract/Domain';
+
 
 // ---------------------------------------------------------------------------
 // Helpers

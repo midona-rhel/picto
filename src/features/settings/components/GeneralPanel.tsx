@@ -1,8 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Text, Loader, Select, NumberInput, Switch } from '@mantine/core';
-import { useMantineColorScheme } from '@mantine/core';
 import { api } from '#desktop/api';
-import { useSettingsStore, themeToColorScheme, type ReverseSearchEngine, type Theme } from '../../../state/settingsStore';
+import { useSettingsStore, themeToColorScheme, type ReverseSearchEngine } from '../../../state/settingsStore';
 import { formatFileSize } from '../../../shared/lib/formatters';
 import { runCriticalAction } from '../../../shared/lib/asyncOps';
 import { TextButton } from '../../../shared/components/TextButton';
@@ -31,24 +30,21 @@ const ZOOM_OPTIONS = [
 ];
 
 export function GeneralPanel() {
-  const { settings, updateSetting } = useSettingsStore();
-  const { setColorScheme } = useMantineColorScheme();
+  const { settings, updateSetting, updateSettings } = useSettingsStore();
 
   const activeTheme = settings.theme ?? 'dark';
   const [zoom, setZoom] = useState('100');
 
-  useEffect(() => {
-    const t = settings.theme ?? 'dark';
-    document.documentElement.dataset.theme = t === 'auto' ? '' : t;
-  }, [settings.theme]);
-
   const handleThemeChange = (css: string) => {
-    const newTheme = css as Theme;
-    updateSetting('theme', newTheme);
+    const newTheme = css as typeof settings.theme;
     const scheme = themeToColorScheme(newTheme);
-    setColorScheme(scheme);
-    updateSetting('colorScheme', scheme === 'auto' ? 'dark' : scheme);
+    // Set data-theme synchronously (useThemeSync effect runs after render)
     document.documentElement.dataset.theme = newTheme === 'auto' ? '' : newTheme;
+    // Atomic store update — Mantine picks up the new scheme via forceColorScheme
+    updateSettings({
+      theme: newTheme,
+      colorScheme: scheme === 'auto' ? 'dark' : scheme,
+    });
   };
 
   const handleZoomChange = (value: string | null) => {

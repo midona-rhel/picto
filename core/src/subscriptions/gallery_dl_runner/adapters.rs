@@ -9,6 +9,23 @@ pub(super) trait SiteAdapter: Sync {
         let _ = json;
         None
     }
+    fn collect_source_urls(&self, json: &Value) -> Vec<String> {
+        // Default: try common top-level fields
+        let mut urls = Vec::new();
+        push_unique_url(&mut urls, json.get("file_url").and_then(|v| v.as_str()));
+        push_unique_url(&mut urls, json.get("url").and_then(|v| v.as_str()));
+        push_unique_url(&mut urls, json.get("source").and_then(|v| v.as_str()));
+        urls
+    }
+}
+
+fn push_unique_url(urls: &mut Vec<String>, value: Option<&str>) {
+    let Some(value) = value.map(str::trim).filter(|v| !v.is_empty()) else {
+        return;
+    };
+    if !urls.iter().any(|existing| existing == value) {
+        urls.push(value.to_string());
+    }
 }
 
 struct DanbooruAdapter;
@@ -45,6 +62,14 @@ impl SiteAdapter for DanbooruAdapter {
             || DANBOORU_TAG_STRINGS
                 .iter()
                 .any(|(key, _)| json.get(*key).is_some())
+    }
+
+    fn collect_source_urls(&self, json: &Value) -> Vec<String> {
+        let mut urls = Vec::new();
+        push_unique_url(&mut urls, json.get("file_url").and_then(|v| v.as_str()));
+        push_unique_url(&mut urls, json.get("url").and_then(|v| v.as_str()));
+        push_unique_url(&mut urls, json.get("source").and_then(|v| v.as_str()));
+        urls
     }
 
     fn parse_tags(&self, json: &Value) -> Vec<(String, String)> {
@@ -99,6 +124,24 @@ impl SiteAdapter for E621Adapter {
         obj.values().any(|v| v.is_array())
             && obj.contains_key("general")
             && (obj.contains_key("artist") || obj.contains_key("character"))
+    }
+
+    fn collect_source_urls(&self, json: &Value) -> Vec<String> {
+        let mut urls = Vec::new();
+        // e621: file URL is nested under file.url
+        push_unique_url(
+            &mut urls,
+            json.get("file")
+                .and_then(|f| f.get("url"))
+                .and_then(|v| v.as_str()),
+        );
+        // e621: external sources are in a "sources" array
+        if let Some(arr) = json.get("sources").and_then(|v| v.as_array()) {
+            for val in arr {
+                push_unique_url(&mut urls, val.as_str());
+            }
+        }
+        urls
     }
 
     fn parse_tags(&self, json: &Value) -> Vec<(String, String)> {

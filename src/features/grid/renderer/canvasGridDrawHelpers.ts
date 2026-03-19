@@ -2,7 +2,7 @@ import { formatDuration } from '../../../shared/lib/formatters';
 import { TEXT_NAME_ROW_H } from '../gridLayout';
 import type { LayoutItem } from '../layoutMath';
 import type { ThumbnailPipelineEntry } from '../../../shared/lib/canvas/thumbnailPipeline';
-import type { MasonryImageItem } from '../shared';
+import { isVideoMime, type MasonryImageItem } from '../shared';
 import type { GridViewMode } from '../runtime';
 import {
   BADGE_FONT,
@@ -356,7 +356,7 @@ export function drawCanvasOverlayLayer({
   const { startIdx, visibleIndices, visibleIterEnd, scrollTop, cssH, th, br } = visible;
 
   const hoveredImg = hoveredIdx != null ? imgs[hoveredIdx] : null;
-  if (hoveredIdx != null && !isScrolling && hoveredImg && !hoveredImg.is_collection) {
+  if (hoveredIdx != null && !isScrolling && hoveredImg && !hoveredImg.is_collection && !isVideoMime(hoveredImg.mime)) {
     const pos = positions[hoveredIdx];
     if (pos) {
       const drawY = pos.y - scrollTop;

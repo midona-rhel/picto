@@ -4,6 +4,7 @@ import { MantineProvider, createTheme, rem } from "@mantine/core";
 import { Notifications } from "@mantine/notifications";
 import App from "../app/App";
 import { AppErrorBoundary } from '#features/layout/components';
+import { useDerivedColorScheme } from '../shared/hooks/useThemeSync';
 import "@mantine/core/styles.css";
 import "@mantine/notifications/styles.css";
 import "../shared/styles/globals.css";
@@ -95,13 +96,20 @@ const theme = createTheme({
   },
 });
 
-ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
-  <React.StrictMode>
-    <MantineProvider theme={theme} defaultColorScheme="dark" cssVariablesSelector=":root:root">
+function MainApp() {
+  const colorScheme = useDerivedColorScheme();
+  return (
+    <MantineProvider theme={theme} forceColorScheme={colorScheme} cssVariablesSelector=":root:root">
       <Notifications />
       <AppErrorBoundary>
         <App />
       </AppErrorBoundary>
     </MantineProvider>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
+  <React.StrictMode>
+    <MainApp />
   </React.StrictMode>
 );

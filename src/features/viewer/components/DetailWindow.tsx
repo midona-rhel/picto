@@ -10,8 +10,6 @@ import {
   IconPin,
   IconPinFilled,
   IconX,
-  IconRotateClockwise,
-  IconFlipHorizontal,
 } from '@tabler/icons-react';
 import { toMasonryItem, isVideoMime, type MasonryImageItem } from '../../grid/shared';
 import { VideoPlayer } from './VideoPlayer';
@@ -78,29 +76,7 @@ export function DetailWindow({ hash }: DetailWindowProps) {
 
   const isVideo = currentImage ? isVideoMime(currentImage.mime) : false;
 
-  const [rotation, setRotation] = useState<0 | 90 | 180 | 270>(0);
-  const [flippedH, setFlippedH] = useState(false);
-
-  // Reset rotation/flip when navigating to a different file
-  useEffect(() => {
-    setRotation(0);
-    setFlippedH(false);
-  }, [currentIndex]);
-
-  const handleRotateCW = useCallback(() => {
-    setRotation(prev => ((prev + 90) % 360) as 0 | 90 | 180 | 270);
-  }, []);
-
-  const handleFlipH = useCallback(() => {
-    setFlippedH(prev => !prev);
-  }, []);
-
-  const contentTransform = useMemo(() => {
-    const parts: string[] = [];
-    if (rotation !== 0) parts.push(`rotate(${rotation}deg)`);
-    if (flippedH) parts.push('scaleX(-1)');
-    return parts.length > 0 ? parts.join(' ') : undefined;
-  }, [rotation, flippedH]);
+  const contentTransform = undefined;
 
   // Shows on mouse move, hides after 1s of no movement
   const resetToolbarTimer = useCallback(() => {
@@ -179,6 +155,7 @@ export function DetailWindow({ hash }: DetailWindowProps) {
     ? { width: currentImage.width, height: currentImage.height }
     : null;
 
+  const transformTargets = useMemo(() => [imgRef, thumbImgRef], []);
   const {
     state: zoomState,
     setState: setZoomState,
@@ -192,9 +169,7 @@ export function DetailWindow({ hash }: DetailWindowProps) {
     onLiveFrameRef,
     containerSize,
     handlers,
-  } = useImageZoom(containerRef, imageSize, {
-    transformTargets: [imgRef, thumbImgRef],
-  });
+  } = useImageZoom(containerRef, imageSize, { transformTargets });
 
   // Navigation-in-progress guard — prevents ResizeObserver and aspect-lock from firing during navigate
   const navigationInProgressRef = useRef(false);
@@ -465,22 +440,6 @@ export function DetailWindow({ hash }: DetailWindowProps) {
                 </KbdTooltip>
               </>
             )}
-
-            <button
-              className={`${styles.icBtn} ${rotation !== 0 ? styles.active : ''}`}
-              onClick={handleRotateCW}
-              title={`Rotate (${rotation}°)`}
-            >
-              <IconRotateClockwise size={16} />
-            </button>
-
-            <button
-              className={`${styles.icBtn} ${flippedH ? styles.active : ''}`}
-              onClick={handleFlipH}
-              title={flippedH ? 'Flip horizontal (on)' : 'Flip horizontal'}
-            >
-              <IconFlipHorizontal size={16} />
-            </button>
 
             <KbdTooltip label={alwaysOnTop ? 'Unpin' : 'Always on top'} shortcut="T">
               <button

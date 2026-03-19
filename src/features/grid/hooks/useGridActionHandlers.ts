@@ -24,6 +24,8 @@ export function useGridActionHandlers(args: {
   requestReplace: () => Promise<void>;
   requestAppend: () => Promise<void>;
   displayFolderId: number | null;
+  dismissHoverPreviewRef: MutableRefObject<() => void>;
+  dismissVideoScrubRef: MutableRefObject<() => void>;
 }) {
   const {
     state,
@@ -40,6 +42,8 @@ export function useGridActionHandlers(args: {
     requestReplace,
     requestAppend,
     displayFolderId,
+    dismissHoverPreviewRef,
+    dismissVideoScrubRef,
   } = args;
 
   const singleSelectedHash = !state.virtualAllSelection && state.selectedHashes.size === 1
@@ -70,6 +74,8 @@ export function useGridActionHandlers(args: {
     imagesRef,
     lastClickedHashRef,
     canvasLayoutRef,
+    dismissHoverPreviewRef,
+    dismissVideoScrubRef,
   });
 
   const reorder = useGridReorder({

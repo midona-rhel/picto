@@ -189,6 +189,7 @@ export function MediaView({ images, currentIndex, onNavigate, onClose, onStateCh
   const thumbFrameRef = useRef<HTMLDivElement>(null);
   const imgRef = useRef<HTMLImageElement>(null);
   const thumbImgRef = useRef<HTMLImageElement>(null);
+  const transformTargets = useMemo(() => [imgFrameRef, thumbFrameRef], []);
   const {
     state: zoomState,
     setState: setZoomState,
@@ -203,9 +204,7 @@ export function MediaView({ images, currentIndex, onNavigate, onClose, onStateCh
     onLiveFrameRef,
     containerSize,
     handlers,
-  } = useImageZoom(containerRef, imageSize, {
-    transformTargets: [imgFrameRef, thumbFrameRef],
-  });
+  } = useImageZoom(containerRef, imageSize, { transformTargets });
 
   const navigatorRef = useRef<HTMLDivElement>(null);
   const navViewportRef = useRef<HTMLDivElement>(null);
