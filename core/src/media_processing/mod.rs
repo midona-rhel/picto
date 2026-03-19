@@ -20,7 +20,7 @@ pub mod svg;
 use std::path::Path;
 
 pub use analysis::get_file_info;
-pub use detection::{get_mime, is_allowed_mime, is_image};
+pub use detection::{get_mime, has_supported_extension, is_allowed_mime, is_image};
 pub use hashing::get_hash_from_bytes;
 pub use thumbnail::{
     encode_thumbnail, encode_thumbnail_jpeg, generate_thumbnail_bytes, get_thumbnail_resolution,

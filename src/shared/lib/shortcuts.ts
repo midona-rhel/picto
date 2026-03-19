@@ -197,6 +197,34 @@ export function formatKeysAsArray(keys: string): string[] {
   return parts.map((p) => lookup[p] ?? p);
 }
 
+/** Parse a shortcut key string (e.g. "Mod+Shift+T") into KeyboardEvent init values. */
+export function parseShortcutKeys(keys: string): { key: string; code: string; meta: boolean; ctrl: boolean; alt: boolean; shift: boolean } | null {
+  const parts = keys.split('+');
+  let key = '';
+  let meta = false;
+  let ctrl = false;
+  let alt = false;
+  let shift = false;
+  for (const p of parts) {
+    const lower = p.toLowerCase();
+    if (lower === 'mod') { if (isMac) meta = true; else ctrl = true; }
+    else if (lower === 'ctrl') ctrl = true;
+    else if (lower === 'alt') alt = true;
+    else if (lower === 'shift') shift = true;
+    else key = p;
+  }
+  if (!key) return null;
+  // Normalize key name to what KeyboardEvent expects
+  const keyMap: Record<string, string> = {
+    'Backspace': 'Backspace', 'Delete': 'Delete', 'Enter': 'Enter', 'Escape': 'Escape',
+    'ArrowLeft': 'ArrowLeft', 'ArrowRight': 'ArrowRight', 'ArrowUp': 'ArrowUp', 'ArrowDown': 'ArrowDown',
+    'Tab': 'Tab', 'Space': ' ', 'F2': 'F2',
+  };
+  const resolvedKey = keyMap[key] ?? key.toLowerCase();
+  const code = resolvedKey.length === 1 ? `Key${resolvedKey.toUpperCase()}` : resolvedKey;
+  return { key: resolvedKey, code, meta, ctrl, alt, shift };
+}
+
 /** Look up a shortcut def by id */
 export function getShortcut(id: string): ShortcutDef | undefined {
   return SHORTCUT_DEFS.find((d) => d.id === id);

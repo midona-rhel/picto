@@ -51,7 +51,7 @@ impl ImportService {
                 let path = PathBuf::from(&p);
                 path.canonicalize().unwrap_or(path)
             })
-            .filter(|p| p.is_file())
+            .filter(|p| p.is_file() && crate::media_processing::has_supported_extension(p))
             .collect();
         if file_paths.is_empty() {
             return Ok(ImportBatchResult {
@@ -462,7 +462,7 @@ fn collect_import_paths(root: &Path) -> Result<(Vec<PathBuf>, Vec<PathBuf>), Str
             if path.is_dir() {
                 directories.push(path.clone());
                 stack.push(path);
-            } else if path.is_file() {
+            } else if path.is_file() && crate::media_processing::has_supported_extension(&path) {
                 files.push(path.canonicalize().unwrap_or(path));
             }
         }

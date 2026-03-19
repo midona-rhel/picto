@@ -413,6 +413,12 @@ fn reorder_entity(
         (None, None) => RANK_GAP,
     };
 
+    // Ensure the folder_entity row exists (for files added via bitmap but missing the row)
+    conn.execute(
+        "INSERT OR IGNORE INTO folder_entity (folder_id, entity_id, position_rank)
+         VALUES (?1, ?2, ?3)",
+        params![folder_id, entity_id, new_rank],
+    )?;
     conn.execute(
         "UPDATE folder_entity SET position_rank = ?1 WHERE folder_id = ?2 AND entity_id = ?3",
         params![new_rank, folder_id, entity_id],
@@ -531,6 +537,48 @@ fn get_entity_rank_in_folder(
     conn.query_row(
         "SELECT position_rank FROM folder_entity WHERE folder_id = ?1 AND entity_id = ?2",
         params![folder_id, entity_id],
+        |row| row.get(0),
+    )
+    .optional()
+}
+
+/// Get the rank of the next entity after (anchor_rank, anchor_eid) in folder order,
+/// excluding the entity being moved.
+fn get_next_rank_in_folder(
+    conn: &Connection,
+    folder_id: i64,
+    anchor_rank: i64,
+    anchor_eid: i64,
+    exclude_eid: i64,
+) -> rusqlite::Result<Option<i64>> {
+    conn.query_row(
+        "SELECT position_rank FROM folder_entity
+         WHERE folder_id = ?1 AND entity_id != ?4 AND entity_id != ?5
+           AND (position_rank > ?2 OR (position_rank = ?2 AND entity_id > ?3))
+         ORDER BY position_rank ASC, entity_id ASC
+         LIMIT 1",
+        params![folder_id, anchor_rank, anchor_eid, exclude_eid, anchor_eid],
+        |row| row.get(0),
+    )
+    .optional()
+}
+
+/// Get the rank of the previous entity before (anchor_rank, anchor_eid) in folder order,
+/// excluding the entity being moved.
+fn get_prev_rank_in_folder(
+    conn: &Connection,
+    folder_id: i64,
+    anchor_rank: i64,
+    anchor_eid: i64,
+    exclude_eid: i64,
+) -> rusqlite::Result<Option<i64>> {
+    conn.query_row(
+        "SELECT position_rank FROM folder_entity
+         WHERE folder_id = ?1 AND entity_id != ?4 AND entity_id != ?5
+           AND (position_rank < ?2 OR (position_rank = ?2 AND entity_id < ?3))
+         ORDER BY position_rank DESC, entity_id DESC
+         LIMIT 1",
+        params![folder_id, anchor_rank, anchor_eid, exclude_eid, anchor_eid],
         |row| row.get(0),
     )
     .optional()
@@ -1050,13 +1098,37 @@ impl SqliteDatabase {
         self.with_conn(move |conn| {
             for rm in &resolved_moves {
                 let prev_rank = match rm.after_id {
-                    Some(eid) => get_entity_rank_in_folder(conn, folder_id, eid)?,
+                    Some(eid) => get_entity_rank_in_folder(conn, folder_id, eid)?
+                        .or(Some(2_147_483_647)),
                     None => None,
                 };
                 let next_rank = match rm.before_id {
-                    Some(eid) => get_entity_rank_in_folder(conn, folder_id, eid)?,
+                    Some(eid) => get_entity_rank_in_folder(conn, folder_id, eid)?
+                        .or(Some(2_147_483_647)),
                     None => None,
                 };
+
+                // Auto-fill the missing anchor by looking up the neighbor in rank order.
+                // Without this, (Some(p), None) falls to p + RANK_GAP which collides with
+                // the next item when items are spaced exactly RANK_GAP apart.
+                let (prev_rank, next_rank) = match (prev_rank, next_rank) {
+                    (Some(pr), None) => {
+                        let after_eid = rm.after_id.unwrap();
+                        let nr = get_next_rank_in_folder(
+                            conn, folder_id, pr, after_eid, rm.entity_id,
+                        )?;
+                        (Some(pr), nr)
+                    }
+                    (None, Some(nr)) => {
+                        let before_eid = rm.before_id.unwrap();
+                        let pr = get_prev_rank_in_folder(
+                            conn, folder_id, nr, before_eid, rm.entity_id,
+                        )?;
+                        (pr, Some(nr))
+                    }
+                    other => other,
+                };
+
                 reorder_entity(conn, folder_id, rm.entity_id, prev_rank, next_rank)?;
             }
             Ok(())

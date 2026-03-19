@@ -17,6 +17,7 @@ export interface UseGridMarqueeSelectionArgs {
   scrollRef: React.RefObject<HTMLDivElement | null>;
   getCanvasOffsetTop: () => number;
   imagesRef: React.MutableRefObject<MasonryImageItem[]>;
+  selectedHashesRef: React.MutableRefObject<Set<string>>;
 }
 
 export interface UseGridMarqueeSelectionResult {
@@ -36,12 +37,14 @@ export function useGridMarqueeSelection({
   scrollRef,
   getCanvasOffsetTop,
   imagesRef,
+  selectedHashesRef,
 }: UseGridMarqueeSelectionArgs): UseGridMarqueeSelectionResult {
   const boxStateRef = useRef<{ startX: number; startY: number; x: number; y: number } | null>(null);
   const rafRef = useRef(0);
   const scrollRafRef = useRef(0);
   const pointerIdRef = useRef<number | null>(null);
   const pointerClientRef = useRef<{ clientX: number; clientY: number } | null>(null);
+  const priorSelectionRef = useRef<Set<string> | null>(null);
 
   const marqueeRectRef = useRef<MarqueeRect | null>(null);
   const marqueeHitHashesRef = useRef<Set<string> | null>(null);
@@ -99,14 +102,19 @@ export function useGridMarqueeSelection({
       pointerIdRef.current = null;
     }
 
-    dispatch({ type: 'CLEAR_SELECTION' });
+    if (e.metaKey || e.ctrlKey) {
+      priorSelectionRef.current = new Set(selectedHashesRef.current);
+    } else {
+      priorSelectionRef.current = null;
+      dispatch({ type: 'CLEAR_SELECTION' });
+    }
 
     const x = e.clientX - cr.left + container.scrollLeft;
     const y = e.clientY - cr.top + container.scrollTop - offsetTop;
     pointerClientRef.current = { clientX: e.clientX, clientY: e.clientY };
     boxStateRef.current = { startX: x, startY: y, x, y };
     dispatch({ type: 'SET_BOX_ACTIVE', active: true });
-  }, [dispatch, getCanvasOffsetTop, scrollRef]);
+  }, [dispatch, getCanvasOffsetTop, scrollRef, selectedHashesRef]);
 
   /* ---- effect: wire move / up / auto-scroll while active ---- */
   useEffect(() => {

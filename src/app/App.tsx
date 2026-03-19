@@ -1,18 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { IconDownload, IconLayoutSidebar, IconFolder, IconFolderQuestion, IconFolderStar, IconPhoto, IconInbox, IconTag, IconTrash, IconCopy } from '@tabler/icons-react';
-import { api, getCurrentWindow } from '#desktop/api';
+import { IconDownload, IconLayoutSidebar } from '@tabler/icons-react';
+import { api } from '#desktop/api';
 import { useNavigationStore } from '../state/navigationStore';
 import { useSettingsStore, type AppSettings } from '../state/settingsStore';
 import { useExportActionStore } from '../state/exportActionStore';
 import { useDomainStore } from '../state/domainStore';
-import { CommandPalette, type CommandAction } from '#features/app/components';
-import { SHORTCUT_DEFS, formatKeysDisplay, getShortcut, matchesShortcutDef } from '../shared/lib/shortcuts';
+import { CommandPalette } from '#features/app/components';
 import { GridViewMode, ImageGridControls, FilterBar, InspectorPanel, DragGhost } from '#features/grid/components';
 import { MainViewModelProvider, MainViewRouter, CreateSubscriptionGroupModal, WindowControls } from '#features/layout/components';
 import { Sidebar, SidebarMenuButton } from '#features/sidebar/components';
 import { ViewerHost } from '#features/viewer/components';
 import { useViewerHost } from '#features/viewer/hooks/useViewerHost';
-import { TagPickerPortal } from '../shared/services/TagPickerPortal';
 import { TagSelectPortal } from '#features/tags/components';
 import { FolderPickerPortal } from '../shared/services/FolderPickerPortal';
 import { FolderWatchDialog } from '#features/folders/components/FolderWatchDialog';
@@ -20,39 +18,13 @@ import { KbdTooltip } from '../shared/components/KbdTooltip';
 import { useScopedGridPreferences } from '../shared/hooks/useScopedGridPreferences';
 import { ScopedDisplayProvider } from '../shared/contexts/ScopedDisplayContext';
 import { useAppBootstrap } from './useAppBootstrap';
+import { useAlwaysOnTop } from './useAlwaysOnTop';
+import { useCommandPalette } from './useCommandPalette';
 import { useInspectorState } from '../features/inspector/hooks/useInspectorState';
 import { useGridFeatureState } from '../features/grid/hooks/useGridFeatureState';
 import styles from './App.module.css';
 
 const isMac = navigator.platform.includes('Mac');
-
-/** Parse a shortcut key string (e.g. "Mod+Shift+T") into KeyboardEvent init values. */
-function parseShortcutKeys(keys: string): { key: string; code: string; meta: boolean; ctrl: boolean; alt: boolean; shift: boolean } | null {
-  const parts = keys.split('+');
-  let key = '';
-  let meta = false;
-  let ctrl = false;
-  let alt = false;
-  let shift = false;
-  for (const p of parts) {
-    const lower = p.toLowerCase();
-    if (lower === 'mod') { if (isMac) meta = true; else ctrl = true; }
-    else if (lower === 'ctrl') ctrl = true;
-    else if (lower === 'alt') alt = true;
-    else if (lower === 'shift') shift = true;
-    else key = p;
-  }
-  if (!key) return null;
-  // Normalize key name to what KeyboardEvent expects
-  const keyMap: Record<string, string> = {
-    'Backspace': 'Backspace', 'Delete': 'Delete', 'Enter': 'Enter', 'Escape': 'Escape',
-    'ArrowLeft': 'ArrowLeft', 'ArrowRight': 'ArrowRight', 'ArrowUp': 'ArrowUp', 'ArrowDown': 'ArrowDown',
-    'Tab': 'Tab', 'Space': ' ', 'F2': 'F2',
-  };
-  const resolvedKey = keyMap[key] ?? key.toLowerCase();
-  const code = resolvedKey.length === 1 ? `Key${resolvedKey.toUpperCase()}` : resolvedKey;
-  return { key: resolvedKey, code, meta, ctrl, alt, shift };
-}
 
 function App() {
   const startupTsRef = useRef<number>(performance.now());
@@ -179,130 +151,9 @@ function App() {
     api.os.openSubscriptionsWindow().catch(() => {});
   }, []);
 
-  // ── Always on top ──────────────────────────────────────────────
-  const [alwaysOnTop, setAlwaysOnTop] = useState(false);
-  const toggleAlwaysOnTop = useCallback(() => {
-    const next = !alwaysOnTop;
-    setAlwaysOnTop(next);
-    getCurrentWindow().setAlwaysOnTop(next).catch(() => {});
-  }, [alwaysOnTop]);
-
-  // ── Command Palette ─────────────────────────────────────────────
-  const [paletteOpen, setPaletteOpen] = useState(false);
-  const [paletteMode, setPaletteMode] = useState<'all' | 'navigation'>('all');
-  const { navigateToFolder, navigateToSmartFolder, navigateTo } = useNavigationStore();
-
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      const cmdPalette = getShortcut('nav.commandPalette');
-      if (cmdPalette && matchesShortcutDef(e, cmdPalette)) {
-        e.preventDefault();
-        setPaletteMode('all');
-        setPaletteOpen(true);
-        return;
-      }
-      const goToFolder = getShortcut('nav.goToFolder');
-      if (goToFolder && matchesShortcutDef(e, goToFolder)) {
-        e.preventDefault();
-        setPaletteMode('navigation');
-        setPaletteOpen(true);
-        return;
-      }
-      const back = getShortcut('nav.back');
-      if (back && matchesShortcutDef(e, back)) {
-        e.preventDefault();
-        if (canGoBack) goBack();
-        return;
-      }
-      const forward = getShortcut('nav.forward');
-      if (forward && matchesShortcutDef(e, forward)) {
-        e.preventDefault();
-        if (canGoForward) goForward();
-        return;
-      }
-      const aot = getShortcut('view.alwaysOnTop');
-      if (aot && matchesShortcutDef(e, aot)) {
-        e.preventDefault();
-        toggleAlwaysOnTop();
-        return;
-      }
-    };
-    window.addEventListener('keydown', handler);
-    return () => window.removeEventListener('keydown', handler);
-  }, [canGoBack, canGoForward, goBack, goForward, toggleAlwaysOnTop]);
-
-  const paletteActions = useMemo((): CommandAction[] => {
-    const actions: CommandAction[] = [];
-
-    // System navigation targets
-    const navTargets: { id: string; label: string; icon: React.ReactNode; go: () => void }[] = [
-      { id: 'go.allActive', label: 'All Active', icon: <IconPhoto size={16} />, go: () => navigateTo('images', null, null, null) },
-      { id: 'go.inbox', label: 'Inbox', icon: <IconInbox size={16} />, go: () => navigateTo('images', null, null, 'inbox') },
-      { id: 'go.uncategorized', label: 'Uncategorized', icon: <IconFolderQuestion size={16} />, go: () => navigateTo('images', null, null, 'uncategorized') },
-      { id: 'go.untagged', label: 'Untagged', icon: <IconTag size={16} />, go: () => navigateTo('images', null, null, 'untagged') },
-      { id: 'go.trash', label: 'Trash', icon: <IconTrash size={16} />, go: () => navigateTo('images', null, null, 'trash') },
-      { id: 'go.duplicates', label: 'Duplicates', icon: <IconCopy size={16} />, go: () => navigateTo('duplicates') },
-    ];
-    for (const t of navTargets) {
-      actions.push({ id: t.id, label: t.label, group: 'Navigation', icon: t.icon, execute: t.go });
-    }
-
-    // Dynamic folders
-    for (const node of folderNodes) {
-      if (node.kind === 'folder') {
-        const folderId = parseInt(node.id.replace('folder:', ''), 10);
-        if (isNaN(folderId)) continue;
-        actions.push({
-          id: `go.folder.${folderId}`,
-          label: node.name,
-          group: 'Navigation',
-          icon: <IconFolder size={16} />,
-          execute: () => navigateToFolder({ folder_id: folderId, name: node.name }),
-        });
-      }
-    }
-
-    // Dynamic smart folders
-    for (const sf of smartFolders) {
-      actions.push({
-        id: `go.sf.${sf.id}`,
-        label: sf.name,
-        group: 'Navigation',
-        icon: <IconFolderStar size={16} />,
-        execute: () => navigateToSmartFolder({ id: sf.id, name: sf.name, predicate: sf.predicate ?? { groups: [] } }),
-      });
-    }
-
-    // Shortcut-based actions (skip nav ones we already added, and skip palette itself)
-    const skipIds = new Set(['nav.commandPalette', 'nav.goToFolder', 'nav.allActive', 'nav.inbox', 'nav.untagged', 'nav.trash']);
-    for (const def of SHORTCUT_DEFS) {
-      if (skipIds.has(def.id)) continue;
-      actions.push({
-        id: `shortcut.${def.id}`,
-        label: def.label,
-        description: def.description,
-        group: def.group,
-        shortcut: formatKeysDisplay(def.keys),
-        execute: () => {
-          // Dispatch a synthetic keyboard event to trigger the existing handler
-          const parsed = parseShortcutKeys(def.keys);
-          if (parsed) {
-            window.dispatchEvent(new KeyboardEvent('keydown', {
-              key: parsed.key,
-              code: parsed.code,
-              metaKey: parsed.meta,
-              ctrlKey: parsed.ctrl,
-              altKey: parsed.alt,
-              shiftKey: parsed.shift,
-              bubbles: true,
-            }));
-          }
-        },
-      });
-    }
-
-    return actions;
-  }, [folderNodes, smartFolders, navigateTo, navigateToFolder, navigateToSmartFolder]);
+  // ── Always on top + Command Palette (extracted hooks) ──────────
+  const { toggleAlwaysOnTop } = useAlwaysOnTop();
+  const { paletteOpen, closePalette, paletteMode, paletteActions } = useCommandPalette({ toggleAlwaysOnTop });
 
   const [displayControlsFolderId, setDisplayControlsFolderId] = useState<number | null>(
     activeFolderId,
@@ -546,7 +397,6 @@ function App() {
         )}
       </div>
 
-      <TagPickerPortal />
       <TagSelectPortal />
       <FolderPickerPortal />
       <FolderWatchDialog />
@@ -556,7 +406,7 @@ function App() {
         onClose={() => grid.setCreateSubscriptionGroupModalOpen(false)}
         onCreated={() => setSubscriptionRefreshToken((v) => v + 1)}
       />
-      <CommandPalette open={paletteOpen} onClose={() => setPaletteOpen(false)} mode={paletteMode} actions={paletteActions} />
+      <CommandPalette open={paletteOpen} onClose={closePalette} mode={paletteMode} actions={paletteActions} />
     </div>
   );
 }

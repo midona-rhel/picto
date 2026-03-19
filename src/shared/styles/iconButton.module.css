@@ -28,3 +28,10 @@
   cursor: default;
   pointer-events: none;
 }
+
+.icBtn28 {
+  composes: icBtn;
+  width: 28px;
+  height: 28px;
+  min-width: 28px;
+}

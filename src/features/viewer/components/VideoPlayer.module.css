@@ -157,17 +157,11 @@
    -------------------------------------------------------------------------- */
 
 .icBtn {
-  composes: btnReset from '../../../shared/styles/buttonReset.module.css';
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 5px;
+  composes: icBtn from '../../../shared/styles/iconButton.module.css';
   color: var(--color-white-80);
   width: 32px;
   height: 32px;
   min-width: 32px;
-  flex-shrink: 0;
-  transition: all 150ms ease;
   font-size: 11px;
   font-family: 'SF Mono', 'Menlo', 'Consolas', monospace;
 }

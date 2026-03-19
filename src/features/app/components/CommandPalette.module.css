@@ -130,8 +130,7 @@
 }
 
 .empty {
+  composes: emptyState from '../../../shared/styles/pickerPanel.module.css';
   padding: 20px 14px;
-  text-align: center;
-  color: var(--color-text-tertiary);
   font-size: var(--font-size-sm);
 }

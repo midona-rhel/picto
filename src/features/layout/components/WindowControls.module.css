@@ -6,10 +6,7 @@
 }
 
 .btn {
-  composes: icBtn from '../../../shared/styles/iconButton.module.css';
-  width: 28px;
-  height: 28px;
-  min-width: 28px;
+  composes: icBtn28 from '../../../shared/styles/iconButton.module.css';
   -webkit-app-region: no-drag;
 }
 

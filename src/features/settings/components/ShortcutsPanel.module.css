@@ -158,8 +158,7 @@
 }
 
 .emptyState {
+  composes: emptyState from '../../../shared/styles/pickerPanel.module.css';
   padding: 24px;
-  text-align: center;
-  color: var(--color-text-tertiary);
   font-size: 13px;
 }

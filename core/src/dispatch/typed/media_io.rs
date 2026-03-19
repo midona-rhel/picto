@@ -494,17 +494,27 @@ async fn generate_thumbnail_inner(
                 }
             }
 
-            let info = crate::media_processing::get_file_info(&original.0, None)
-                .map_err(|e| format!("File info failed: {}", e))?;
-            let (thumb_bytes, thumb_ext) = crate::media_processing::generate_thumbnail_bytes(
+            let info = match crate::media_processing::get_file_info(&original.0, None) {
+                Ok(info) => info,
+                Err(e) => {
+                    tracing::debug!(hash = %h, error = %e, "thumbnail skipped: file info failed");
+                    return Ok((false, false));
+                }
+            };
+            let (thumb_bytes, thumb_ext) = match crate::media_processing::generate_thumbnail_bytes(
                 &original.0,
                 crate::media_processing::DEFAULT_THUMBNAIL_DIMENSIONS,
                 info.mime,
                 info.duration_ms,
                 info.num_frames,
                 35,
-            )
-            .map_err(|e| format!("Thumbnail generation failed: {}", e))?;
+            ) {
+                Ok(result) => result,
+                Err(e) => {
+                    tracing::debug!(hash = %h, mime = ?info.mime, error = %e, "thumbnail skipped: no adapter");
+                    return Ok((false, false));
+                }
+            };
 
             bs.write_thumbnail(&h, &thumb_bytes, &thumb_ext)
                 .map_err(|e| format!("Thumbnail write failed: {}", e))?;

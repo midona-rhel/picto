@@ -228,7 +228,7 @@ impl FolderWatchRuntime {
             return;
         }
         for path in &raw.event.paths {
-            if should_ignore_path(path) {
+            if should_ignore_path(path) || !crate::media_processing::has_supported_extension(path) {
                 continue;
             }
             self.pending.insert(
@@ -334,7 +334,7 @@ fn collect_existing_paths(root_path: &Path, recursive: bool) -> Result<Vec<PathB
             let entry = entry
                 .map_err(|err| format!("Failed to read entry in {}: {err}", root_path.display()))?;
             let path = entry.path();
-            if path.is_file() && !should_ignore_path(&path) {
+            if path.is_file() && !should_ignore_path(&path) && crate::media_processing::has_supported_extension(&path) {
                 files.push(path);
             }
         }
@@ -360,7 +360,7 @@ fn collect_existing_paths(root_path: &Path, recursive: bool) -> Result<Vec<PathB
             }
             if child.is_dir() {
                 stack.push(child);
-            } else if child.is_file() {
+            } else if child.is_file() && crate::media_processing::has_supported_extension(&child) {
                 files.push(child);
             }
         }

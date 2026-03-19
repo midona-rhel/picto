@@ -601,7 +601,7 @@ export function CanvasGrid({
   const canvasSize = Math.min(canvasHeight, layout.totalHeight + topInset) || '100%';
 
   return (
-    <div ref={containerRef} data-canvas-grid-root>
+    <div ref={containerRef} data-canvas-grid-root data-grid-surface-root>
       <div style={{ position: 'relative', height: estimatedTotalHeight + topInset, width: '100%', paddingTop: topInset }}>
         <div style={{ position: 'sticky', top: 0 }}>
           <canvas

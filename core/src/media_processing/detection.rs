@@ -303,6 +303,74 @@ pub fn is_image(mime: MimeType) -> bool {
     mime.is_image()
 }
 
+/// Quick extension-based pre-filter for import paths.
+///
+/// Rejects files whose extension can never map to an allowed MIME type,
+/// avoiding the cost of reading and sniffing bytes for obviously unsupported
+/// files (e.g. .txt, .html, .exe) during folder or drag-and-drop imports.
+pub fn has_supported_extension(path: &std::path::Path) -> bool {
+    let ext = match path.extension().and_then(|e| e.to_str()) {
+        Some(e) => e.to_ascii_lowercase(),
+        None => return false,
+    };
+    matches!(
+        ext.as_str(),
+        // Images
+        "jpg" | "jpeg" | "jpe" | "jfif"
+        | "png" | "apng"
+        | "gif"
+        | "webp"
+        | "bmp" | "dib"
+        | "tiff" | "tif"
+        | "svg" | "svgz"
+        | "ico" | "cur"
+        | "heif" | "heifs" | "heic" | "heics"
+        | "avif" | "avifs"
+        | "qoi"
+        | "jxl"
+        // Video
+        | "mp4" | "m4v"
+        | "webm"
+        | "mkv"
+        | "mov" | "qt"
+        | "avi"
+        | "flv"
+        | "wmv"
+        | "ogv"
+        | "mpeg" | "mpg" | "mpe"
+        | "rm" | "rmvb"
+        | "3gp" | "3g2"
+        // Audio
+        | "mp3"
+        | "ogg" | "oga" | "opus"
+        | "flac"
+        | "wav" | "wave"
+        | "m4a" | "aac"
+        | "wma"
+        | "mka"
+        | "wv"
+        | "tta"
+        // Creative / project
+        | "psd"
+        | "clip"
+        | "sai2"
+        | "kra"
+        | "xcf"
+        | "procreate"
+        | "pdn"
+        | "swf"
+        // Documents
+        | "pdf"
+        | "epub"
+        | "djvu" | "djv"
+        | "cbz"
+        | "rtf"
+        | "docx" | "doc"
+        | "xlsx" | "xls"
+        | "pptx" | "ppt"
+    )
+}
+
 pub fn is_allowed_mime(mime: MimeType) -> bool {
     matches!(
         mime,
@@ -367,9 +435,5 @@ pub fn is_allowed_mime(mime: MimeType) -> bool {
             | MimeType::ApplicationDjvu
             | MimeType::ApplicationPaintDotNet
             | MimeType::ApplicationRtf
-            | MimeType::ApplicationZip
-            | MimeType::ApplicationRar
-            | MimeType::Application7z
-            | MimeType::ApplicationGzip
     )
 }

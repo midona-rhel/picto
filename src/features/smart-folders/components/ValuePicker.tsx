@@ -5,7 +5,7 @@ import { IconPlus } from '@tabler/icons-react';
 import { NamespaceTagChip } from '../../../shared/components/NamespaceTagChip';
 import type { FieldConfig } from './fieldConfig';
 import type { SmartRule } from './types';
-import { TagPickerMenu } from './TagPickerMenu';
+import { TagSelectService } from '../../tags/components/tagSelectService';
 
 interface ValuePickerProps {
   config: FieldConfig;
@@ -145,9 +145,26 @@ export function ValuePicker({ config, rule, onChange }: ValuePickerProps) {
 }
 
 function TagValuePicker({ rule, onChange }: { rule: SmartRule; onChange: (p: Partial<SmartRule>) => void }) {
-  const [open, setOpen] = useState(false);
   const btnRef = useRef<HTMLDivElement>(null);
   const selected = rule.values ?? [];
+  const selectedRef = useRef(selected);
+  selectedRef.current = selected;
+
+  const handleOpen = () => {
+    const anchor = btnRef.current;
+    if (!anchor) return;
+    TagSelectService.open({
+      anchorEl: anchor,
+      mode: 'anchored',
+      selectedTags: selectedRef.current,
+      onToggle: (tag, added) => {
+        const cur = selectedRef.current;
+        const next = added ? [...cur, tag] : cur.filter((t) => t !== tag);
+        onChange({ values: next });
+      },
+      onClose: () => {},
+    });
+  };
 
   return (
     <div style={{ flex: 1, display: 'flex', flexWrap: 'wrap', gap: 4, alignItems: 'center' }}>
@@ -160,18 +177,10 @@ function TagValuePicker({ rule, onChange }: { rule: SmartRule; onChange: (p: Par
         />
       ))}
       <div ref={btnRef}>
-        <ActionIcon size="xs" variant="subtle" color="dimmed" onClick={() => setOpen(true)}>
+        <ActionIcon size="xs" variant="subtle" color="dimmed" onClick={handleOpen}>
           <IconPlus size={12} />
         </ActionIcon>
       </div>
-      {open && (
-        <TagPickerMenu
-          selected={selected}
-          onChange={(tags) => onChange({ values: tags })}
-          anchorRef={btnRef}
-          onClose={() => setOpen(false)}
-        />
-      )}
     </div>
   );
 }
