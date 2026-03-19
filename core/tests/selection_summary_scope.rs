@@ -3,7 +3,7 @@ mod common;
 use picto_core::folders::db::NewFolder;
 use picto_core::selection::summary::get_selection_summary;
 use picto_core::sqlite::bitmaps::BitmapKey;
-use picto_core::types::{SelectionMode, SelectionQuerySpec};
+use picto_core::types::*;
 
 #[tokio::test]
 async fn folder_filtered_selection_summary_uses_entity_aggregate_stats() {
@@ -43,34 +43,21 @@ async fn folder_filtered_selection_summary_uses_entity_aggregate_stats() {
         .db
         .bitmaps
         .insert(&BitmapKey::Status(1), solo_entity_id as u32);
-    harness
-        .db
-        .bitmaps
-        .insert(&BitmapKey::AllActive, collection_id as u32);
-    harness
-        .db
-        .bitmaps
-        .insert(&BitmapKey::AllActive, solo_entity_id as u32);
 
     let summary = get_selection_summary(
         &harness.db,
         SelectionQuerySpec {
             mode: SelectionMode::AllResults,
             hashes: None,
-            search_tags: None,
-            search_excluded_tags: None,
-            tag_match_mode: None,
-            smart_folder_predicate: None,
-            smart_folder_sort_field: None,
-            smart_folder_sort_order: None,
-            sort_field: None,
-            sort_order: None,
+            scope: GridScopeSpec {
+                kind: GridScopeKind::Folder,
+                folder_id: Some(folder.folder_id),
+                ..Default::default()
+            },
+            filters: GridFilterSpec::default(),
+            sort: GridSortSpec::default(),
             excluded_hashes: None,
             included_hashes: None,
-            status: None,
-            folder_ids: Some(vec![folder.folder_id]),
-            excluded_folder_ids: None,
-            folder_match_mode: None,
         },
     )
     .await

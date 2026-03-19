@@ -119,10 +119,10 @@ fn default_watch_folder_default_status() -> String {
     "inbox".into()
 }
 
-/// Convert similarity percentage (0-100) to Hamming distance (0-64).
-/// `similarity_pct_to_distance(97)` → 1 (distance = floor((100-97)*64/100))
+/// Convert similarity percentage (0-100) to Hamming distance (0-256).
+/// At 16x16 hash size (256-bit): `similarity_pct_to_distance(97)` → 7.
 pub fn similarity_pct_to_distance(pct: u32) -> u32 {
-    ((100u32.saturating_sub(pct)) * 64) / 100
+    ((100u32.saturating_sub(pct)) * 256) / 100
 }
 
 impl Default for AppSettings {

@@ -8,6 +8,7 @@ mod common;
 
 use picto_core::folders::db::NewFolder;
 use picto_core::scope::resolver::{resolve_scope, scope_count, ScopeFilter};
+use picto_core::types::*;
 
 /// Business rule: `system:all` = active only (status=1).
 /// Inbox and trash are excluded.
@@ -42,8 +43,12 @@ async fn scope_contract_inbox_only_inbox() {
     harness.bitmaps_mark_trash(f_trash);
 
     let filter = ScopeFilter {
-        status: Some("inbox".to_string()),
-        ..Default::default()
+        scope: GridScopeSpec {
+            kind: GridScopeKind::System,
+            system_key: Some(GridSystemScopeKey::Inbox),
+            ..Default::default()
+        },
+        filters: GridFilterSpec::default(),
     };
     let bm = resolve_scope(&harness.db, &filter).await.unwrap();
 
@@ -63,8 +68,12 @@ async fn scope_contract_trash_only_trash() {
     harness.bitmaps_mark_trash(f_trash);
 
     let filter = ScopeFilter {
-        status: Some("trash".to_string()),
-        ..Default::default()
+        scope: GridScopeSpec {
+            kind: GridScopeKind::System,
+            system_key: Some(GridSystemScopeKey::Trash),
+            ..Default::default()
+        },
+        filters: GridFilterSpec::default(),
     };
     let bm = resolve_scope(&harness.db, &filter).await.unwrap();
 
@@ -88,8 +97,12 @@ async fn scope_contract_untagged_means_active_without_tags() {
     harness.bitmaps_mark_tagged(f1);
 
     let filter = ScopeFilter {
-        status: Some("untagged".to_string()),
-        ..Default::default()
+        scope: GridScopeSpec {
+            kind: GridScopeKind::System,
+            system_key: Some(GridSystemScopeKey::Untagged),
+            ..Default::default()
+        },
+        filters: GridFilterSpec::default(),
     };
     let bm = resolve_scope(&harness.db, &filter).await.unwrap();
 
@@ -132,8 +145,12 @@ async fn scope_contract_uncategorized_means_active_without_folder() {
         .expect("add to folder");
 
     let filter = ScopeFilter {
-        status: Some("uncategorized".to_string()),
-        ..Default::default()
+        scope: GridScopeSpec {
+            kind: GridScopeKind::System,
+            system_key: Some(GridSystemScopeKey::Uncategorized),
+            ..Default::default()
+        },
+        filters: GridFilterSpec::default(),
     };
     let bm = resolve_scope(&harness.db, &filter).await.unwrap();
 
@@ -166,9 +183,12 @@ async fn scope_contract_tag_search_default_intersection() {
     harness.bitmaps_insert_effective_tag(blue, f3);
 
     let filter = ScopeFilter {
-        search_tags: Some(vec!["red".to_string(), "blue".to_string()]),
-        tag_match_mode: None,
-        ..Default::default()
+        scope: GridScopeSpec::default(),
+        filters: GridFilterSpec {
+            search_tags: Some(vec!["red".to_string(), "blue".to_string()]),
+            tag_match_mode: None,
+            ..Default::default()
+        },
     };
     let bm = resolve_scope(&harness.db, &filter).await.unwrap();
 
@@ -198,9 +218,12 @@ async fn scope_contract_tag_search_union() {
     harness.bitmaps_insert_effective_tag(blue, f3);
 
     let filter = ScopeFilter {
-        search_tags: Some(vec!["red".to_string(), "blue".to_string()]),
-        tag_match_mode: Some("any".to_string()),
-        ..Default::default()
+        scope: GridScopeSpec::default(),
+        filters: GridFilterSpec {
+            search_tags: Some(vec!["red".to_string(), "blue".to_string()]),
+            tag_match_mode: Some("any".to_string()),
+            ..Default::default()
+        },
     };
     let bm = resolve_scope(&harness.db, &filter).await.unwrap();
 
@@ -232,9 +255,12 @@ async fn scope_contract_tag_search_exclusion() {
     harness.bitmaps_insert_effective_tag(blue, f3);
 
     let filter = ScopeFilter {
-        search_tags: Some(vec!["red".to_string()]),
-        search_excluded_tags: Some(vec!["blue".to_string()]),
-        ..Default::default()
+        scope: GridScopeSpec::default(),
+        filters: GridFilterSpec {
+            search_tags: Some(vec!["red".to_string()]),
+            search_excluded_tags: Some(vec!["blue".to_string()]),
+            ..Default::default()
+        },
     };
     let bm = resolve_scope(&harness.db, &filter).await.unwrap();
 
@@ -278,9 +304,12 @@ async fn scope_contract_folder_default_union() {
     harness.db.add_entities_to_folder_batch(fb.folder_id, &["fu_2".to_string(), "fu_3".to_string()]).await.unwrap();
 
     let filter = ScopeFilter {
-        folder_ids: Some(vec![fa.folder_id, fb.folder_id]),
-        folder_match_mode: None,
-        ..Default::default()
+        scope: GridScopeSpec::default(),
+        filters: GridFilterSpec {
+            folder_ids: Some(vec![fa.folder_id, fb.folder_id]),
+            folder_match_mode: None,
+            ..Default::default()
+        },
     };
     let bm = resolve_scope(&harness.db, &filter).await.unwrap();
 
@@ -326,9 +355,12 @@ async fn scope_contract_folder_intersection() {
     harness.db.add_entities_to_folder_batch(fb.folder_id, &["fint_2".to_string(), "fint_3".to_string()]).await.unwrap();
 
     let filter = ScopeFilter {
-        folder_ids: Some(vec![fa.folder_id, fb.folder_id]),
-        folder_match_mode: Some("all".to_string()),
-        ..Default::default()
+        scope: GridScopeSpec::default(),
+        filters: GridFilterSpec {
+            folder_ids: Some(vec![fa.folder_id, fb.folder_id]),
+            folder_match_mode: Some("all".to_string()),
+            ..Default::default()
+        },
     };
     let bm = resolve_scope(&harness.db, &filter).await.unwrap();
 
@@ -372,9 +404,12 @@ async fn scope_contract_folder_exclusion() {
     harness.db.add_entities_to_folder_batch(fb.folder_id, &["fex_2".to_string(), "fex_3".to_string()]).await.unwrap();
 
     let filter = ScopeFilter {
-        folder_ids: Some(vec![fa.folder_id]),
-        excluded_folder_ids: Some(vec![fb.folder_id]),
-        ..Default::default()
+        scope: GridScopeSpec::default(),
+        filters: GridFilterSpec {
+            folder_ids: Some(vec![fa.folder_id]),
+            excluded_folder_ids: Some(vec![fb.folder_id]),
+            ..Default::default()
+        },
     };
     let bm = resolve_scope(&harness.db, &filter).await.unwrap();
 
@@ -398,45 +433,27 @@ async fn scope_contract_grid_and_selection_same_scope() {
     harness.bitmaps_insert_effective_tag(red, f1);
     harness.bitmaps_insert_effective_tag(red, f3);
 
-    let grid_query = picto_core::types::GridPageSlimQuery {
+    let grid_query = GridPageSlimQuery {
         limit: Some(20),
         cursor: None,
-        status: None,
-        sort_field: None,
-        sort_order: None,
-        smart_folder_predicate: None,
-        search_tags: Some(vec!["red".to_string()]),
-        search_excluded_tags: None,
-        tag_match_mode: None,
-        folder_ids: None,
-        excluded_folder_ids: None,
-        folder_match_mode: None,
-        collection_entity_id: None,
-        rating_min: None,
-        mime_prefixes: None,
-        color_hex: None,
-        color_accuracy: None,
-        search_text: None,
-        random_seed: None,
+        scope: GridScopeSpec::default(),
+        filters: GridFilterSpec {
+            search_tags: Some(vec!["red".to_string()]),
+            ..Default::default()
+        },
+        sort: GridSortSpec::default(),
     };
-    let selection_query = picto_core::types::SelectionQuerySpec {
-        mode: picto_core::types::SelectionMode::AllResults,
+    let selection_query = SelectionQuerySpec {
+        mode: SelectionMode::AllResults,
         hashes: None,
-        search_tags: Some(vec!["red".to_string()]),
-        search_excluded_tags: None,
-        tag_match_mode: None,
-        smart_folder_predicate: None,
-        smart_folder_sort_field: None,
-        smart_folder_sort_order: None,
-        sort_field: None,
-        sort_order: None,
+        scope: GridScopeSpec::default(),
+        filters: GridFilterSpec {
+            search_tags: Some(vec!["red".to_string()]),
+            ..Default::default()
+        },
+        sort: GridSortSpec::default(),
         excluded_hashes: None,
         included_hashes: None,
-        status: None,
-        collection_entity_id: None,
-        folder_ids: None,
-        excluded_folder_ids: None,
-        folder_match_mode: None,
     };
 
     let grid_filter = ScopeFilter::from(&grid_query);
@@ -489,29 +506,45 @@ async fn scope_contract_scope_count_agrees_with_resolve_scope() {
         (
             "system:inbox",
             ScopeFilter {
-                status: Some("inbox".to_string()),
-                ..Default::default()
+                scope: GridScopeSpec {
+                    kind: GridScopeKind::System,
+                    system_key: Some(GridSystemScopeKey::Inbox),
+                    ..Default::default()
+                },
+                filters: GridFilterSpec::default(),
             },
         ),
         (
             "system:trash",
             ScopeFilter {
-                status: Some("trash".to_string()),
-                ..Default::default()
+                scope: GridScopeSpec {
+                    kind: GridScopeKind::System,
+                    system_key: Some(GridSystemScopeKey::Trash),
+                    ..Default::default()
+                },
+                filters: GridFilterSpec::default(),
             },
         ),
         (
             "system:untagged",
             ScopeFilter {
-                status: Some("untagged".to_string()),
-                ..Default::default()
+                scope: GridScopeSpec {
+                    kind: GridScopeKind::System,
+                    system_key: Some(GridSystemScopeKey::Untagged),
+                    ..Default::default()
+                },
+                filters: GridFilterSpec::default(),
             },
         ),
         (
             "system:uncategorized",
             ScopeFilter {
-                status: Some("uncategorized".to_string()),
-                ..Default::default()
+                scope: GridScopeSpec {
+                    kind: GridScopeKind::System,
+                    system_key: Some(GridSystemScopeKey::Uncategorized),
+                    ..Default::default()
+                },
+                filters: GridFilterSpec::default(),
             },
         ),
     ];

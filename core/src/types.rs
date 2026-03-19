@@ -532,6 +532,7 @@ pub struct ScanDuplicatesResponse {
     pub reviewable_detected_new: usize,
     pub total_files: usize,
     pub files_with_phash: usize,
+    pub files_scanned: usize,
     pub closest_distance: Option<u32>,
 }
 

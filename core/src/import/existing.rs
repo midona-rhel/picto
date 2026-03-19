@@ -41,9 +41,19 @@ pub async fn merge_existing_import_target(
 
     if let Some(status) = request.restore_status {
         if existing.status == 2 && status != 2 {
-            db.update_file_status(hex_hash, status).await?;
-            any_change = true;
-            status_restored = true;
+            let file_id = existing.file_id;
+            let is_merge_loser = db
+                .with_read_conn(move |conn| {
+                    crate::duplicates::db::is_confirmed_merge_loser(conn, file_id)
+                })
+                .await?;
+            if is_merge_loser {
+                tracing::info!(hash = %hex_hash, "skipping status restore: file is loser in confirmed duplicate merge");
+            } else {
+                db.update_file_status(hex_hash, status).await?;
+                any_change = true;
+                status_restored = true;
+            }
         }
     }
 

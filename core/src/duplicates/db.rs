@@ -225,6 +225,65 @@ pub fn resolve_pair_with_decision(
     Ok(())
 }
 
+/// Returns true if the given file_id is the loser in any confirmed merge.
+pub fn is_confirmed_merge_loser(conn: &Connection, file_id: i64) -> rusqlite::Result<bool> {
+    conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM duplicate WHERE loser_file_id = ?1 AND status = 'confirmed_merged')",
+        [file_id],
+        |row| row.get(0),
+    )
+}
+
+/// Reset confirmed_merged pairs back to detected if the loser file is still active.
+pub fn reset_stale_merged_pairs(conn: &Connection) -> rusqlite::Result<usize> {
+    conn.execute(
+        "UPDATE duplicate
+         SET status = 'detected', decision_at = NULL, decision_source = NULL,
+             decision_reason = NULL, winner_file_id = NULL, loser_file_id = NULL
+         WHERE status = 'confirmed_merged'
+           AND loser_file_id IS NOT NULL
+           AND EXISTS (SELECT 1 FROM file WHERE file_id = duplicate.loser_file_id AND status IN (0, 1))",
+        [],
+    )
+}
+
+const KV_LAST_DUP_SCAN_AT: &str = "last_duplicate_scan_at";
+const KV_LAST_DUP_SCAN_THRESHOLD: &str = "last_duplicate_scan_threshold";
+
+pub fn get_last_duplicate_scan(conn: &Connection) -> rusqlite::Result<(Option<String>, Option<u32>)> {
+    use rusqlite::OptionalExtension;
+    let ts: Option<String> = conn
+        .query_row(
+            "SELECT value FROM kv_settings WHERE key = ?1",
+            [KV_LAST_DUP_SCAN_AT],
+            |row| row.get(0),
+        )
+        .optional()?;
+    let threshold: Option<u32> = conn
+        .query_row(
+            "SELECT value FROM kv_settings WHERE key = ?1",
+            [KV_LAST_DUP_SCAN_THRESHOLD],
+            |row| {
+                let s: String = row.get(0)?;
+                Ok(s.parse::<u32>().unwrap_or(0))
+            },
+        )
+        .optional()?;
+    Ok((ts, threshold))
+}
+
+pub fn set_last_duplicate_scan(conn: &Connection, threshold: u32) -> rusqlite::Result<()> {
+    conn.execute(
+        "INSERT OR REPLACE INTO kv_settings (key, value) VALUES (?1, datetime('now'))",
+        [KV_LAST_DUP_SCAN_AT],
+    )?;
+    conn.execute(
+        "INSERT OR REPLACE INTO kv_settings (key, value) VALUES (?1, ?2)",
+        params![KV_LAST_DUP_SCAN_THRESHOLD, threshold.to_string()],
+    )?;
+    Ok(())
+}
+
 impl SqliteDatabase {
     pub async fn insert_duplicate(
         &self,

@@ -196,6 +196,7 @@ export function CanvasGrid({
     containerWidth,
     layoutWidth,
     canvasHeight,
+    canvasTopOffset,
     frozenCanvasWidth,
     getScrollMetrics,
     scrollTopRef,
@@ -598,7 +599,11 @@ export function CanvasGrid({
 
   const lockedCanvasWidth = frozen && frozenCanvasWidth ? `${frozenCanvasWidth}px` : '100%';
 
-  const canvasSize = Math.min(canvasHeight, layout.totalHeight + topInset) || '100%';
+  // When content + subfolders exceed the viewport, use full viewport for sticky scrolling.
+  // Otherwise, fill only the available space (viewport minus subfolder height) to avoid false scrollbars.
+  const contentHeight = layout.totalHeight + topInset;
+  const availableHeight = Math.max(0, canvasHeight - canvasTopOffset);
+  const canvasSize = (contentHeight > availableHeight ? canvasHeight : availableHeight) || '100%';
 
   return (
     <div ref={containerRef} data-canvas-grid-root data-grid-surface-root>

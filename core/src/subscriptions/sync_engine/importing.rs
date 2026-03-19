@@ -89,6 +89,7 @@ impl<'a> SubscriptionSyncEngine<'a> {
                 if self.auto_merge_enabled && imported.mime.starts_with("image/") {
                     match crate::duplicates::orchestrator::DuplicateOrchestrator::check_and_auto_merge(
                         self.db,
+                        self.blob_store,
                         &imported.hex_hash,
                         self.auto_merge_distance,
                         self.auto_merge_require_matching_dimensions,

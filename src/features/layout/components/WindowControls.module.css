@@ -7,7 +7,6 @@
 
 .btn {
   composes: icBtn28 from '../../../shared/styles/iconButton.module.css';
-  -webkit-app-region: no-drag;
 }
 
 .btn:hover {

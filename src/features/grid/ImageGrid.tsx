@@ -153,6 +153,8 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
   // Stable ref to latest state for use in callbacks (avoids stale closures)
   const stateRef = useRef(state);
   stateRef.current = state;
+  const selectedHashesRef = useRef(state.selectedHashes);
+  selectedHashesRef.current = state.selectedHashes;
   const sharedThumbnailAtlasRef = useRef<ThumbnailPipeline | null>(null);
   if (!sharedThumbnailAtlasRef.current) {
     sharedThumbnailAtlasRef.current = new ThumbnailPipeline();
@@ -388,6 +390,7 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
     scrollRef,
     getCanvasOffsetTop,
     imagesRef,
+    selectedHashesRef,
   });
 
   const {

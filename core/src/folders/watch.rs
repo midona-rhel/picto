@@ -465,6 +465,7 @@ async fn import_file_into_folder(
         Ok(imported) => {
             let surviving_hash = maybe_auto_merge(
                 db,
+                blob_store,
                 &imported.hex_hash,
                 auto_merge_enabled,
                 auto_merge_distance,
@@ -525,6 +526,7 @@ async fn import_file_into_folder(
 
 async fn maybe_auto_merge(
     db: &SqliteDatabase,
+    blob_store: &BlobStore,
     hash: &str,
     auto_merge_enabled: bool,
     auto_merge_distance: u32,
@@ -535,6 +537,7 @@ async fn maybe_auto_merge(
     }
     match DuplicateOrchestrator::check_and_auto_merge(
         db,
+        blob_store,
         hash,
         auto_merge_distance,
         auto_merge_require_matching_dimensions,

@@ -70,6 +70,7 @@ export function useCanvasViewport(args: {
   const scrollTopRef = useRef(0);
   const viewportHeightRef = useRef(0);
   const [canvasHeight, setCanvasHeight] = useState(0);
+  const [canvasTopOffset, setCanvasTopOffset] = useState(0);
   const [frozenCanvasWidth, setFrozenCanvasWidth] = useState<number | null>(null);
   const [frozenLayoutWidth, setFrozenLayoutWidth] = useState<number | null>(null);
   const wasFrozenRef = useRef(false);
@@ -154,6 +155,7 @@ export function useCanvasViewport(args: {
     viewportHeightRef.current = initialMetrics.viewportHeight;
     scrollTopRef.current = initialMetrics.localScrollTop;
     setCanvasHeight(initialMetrics.viewportHeight);
+    setCanvasTopOffset(initialMetrics.canvasTopInScroll);
     markDirty('both');
 
     let rafId = 0;
@@ -212,6 +214,7 @@ export function useCanvasViewport(args: {
       const metrics = getScrollMetrics();
       viewportHeightRef.current = metrics.viewportHeight;
       setCanvasHeight(metrics.viewportHeight);
+      setCanvasTopOffset(metrics.canvasTopInScroll);
       markDirty('both');
     };
 
@@ -299,6 +302,7 @@ export function useCanvasViewport(args: {
     containerWidth,
     layoutWidth,
     canvasHeight,
+    canvasTopOffset,
     frozenCanvasWidth,
     getScrollMetrics,
     scrollTopRef,

@@ -1,8 +1,9 @@
-//! Grid paging, collection scoping, filter combinations, and scope cache tests.
+//! Grid paging, collection scoping, and filter combination tests.
 
 mod common;
 
 use picto_core::folders::db::NewFolder;
+use picto_core::types::*;
 
 #[tokio::test]
 async fn grid_page_slim_returns_inserted_files() {
@@ -12,27 +13,7 @@ async fn grid_page_slim_returns_inserted_files() {
     harness.insert_test_file("bbb222", "file2.png", 1).await;
     harness.insert_test_file("ccc333", "file3.png", 1).await;
 
-    let query = picto_core::types::GridPageSlimQuery {
-        limit: Some(10),
-        cursor: None,
-        status: Some("active".to_string()),
-        sort_field: None,
-        sort_order: None,
-        smart_folder_predicate: None,
-        search_tags: None,
-        search_excluded_tags: None,
-        tag_match_mode: None,
-        folder_ids: None,
-        excluded_folder_ids: None,
-        folder_match_mode: None,
-        collection_entity_id: None,
-        rating_min: None,
-        mime_prefixes: None,
-        color_hex: None,
-        color_accuracy: None,
-        search_text: None,
-        random_seed: None,
-    };
+    let query = common::system_query(GridSystemScopeKey::All, 10);
     let result = picto_core::grid::query::get_grid_page_slim(&harness.db, query)
         .await
         .expect("grid page");
@@ -50,27 +31,7 @@ async fn grid_page_slim_pagination_has_more() {
         harness.insert_test_file(&hash, &name, 1).await;
     }
 
-    let query = picto_core::types::GridPageSlimQuery {
-        limit: Some(2),
-        cursor: None,
-        status: Some("active".to_string()),
-        sort_field: None,
-        sort_order: None,
-        smart_folder_predicate: None,
-        search_tags: None,
-        search_excluded_tags: None,
-        tag_match_mode: None,
-        folder_ids: None,
-        excluded_folder_ids: None,
-        folder_match_mode: None,
-        collection_entity_id: None,
-        rating_min: None,
-        mime_prefixes: None,
-        color_hex: None,
-        color_accuracy: None,
-        search_text: None,
-        random_seed: None,
-    };
+    let query = common::system_query(GridSystemScopeKey::All, 2);
     let result = picto_core::grid::query::get_grid_page_slim(&harness.db, query)
         .await
         .expect("grid page");
@@ -93,26 +54,16 @@ async fn grid_page_slim_collection_scope_returns_only_collection_members() {
         .await;
     assert_eq!(added, 2);
 
-    let query = picto_core::types::GridPageSlimQuery {
+    let query = GridPageSlimQuery {
         limit: Some(10),
         cursor: None,
-        status: Some("active".to_string()),
-        sort_field: None,
-        sort_order: None,
-        smart_folder_predicate: None,
-        search_tags: None,
-        search_excluded_tags: None,
-        tag_match_mode: None,
-        folder_ids: None,
-        excluded_folder_ids: None,
-        folder_match_mode: None,
-        collection_entity_id: Some(collection_id),
-        rating_min: None,
-        mime_prefixes: None,
-        color_hex: None,
-        color_accuracy: None,
-        search_text: None,
-        random_seed: None,
+        scope: GridScopeSpec {
+            kind: GridScopeKind::Collection,
+            collection_entity_id: Some(collection_id),
+            ..Default::default()
+        },
+        filters: GridFilterSpec::default(),
+        sort: GridSortSpec::default(),
     };
     let result = picto_core::grid::query::get_grid_page_slim(&harness.db, query)
         .await
@@ -133,26 +84,20 @@ async fn grid_page_slim_collection_scope_returns_only_collection_members() {
         .await
         .expect("reorder collection members");
 
-    let reordered_query = picto_core::types::GridPageSlimQuery {
+    let reordered_query = GridPageSlimQuery {
         limit: Some(10),
         cursor: None,
-        status: Some("active".to_string()),
-        sort_field: Some("imported_at".to_string()),
-        sort_order: Some("desc".to_string()),
-        smart_folder_predicate: None,
-        search_tags: None,
-        search_excluded_tags: None,
-        tag_match_mode: None,
-        folder_ids: None,
-        excluded_folder_ids: None,
-        folder_match_mode: None,
-        collection_entity_id: Some(collection_id),
-        rating_min: None,
-        mime_prefixes: None,
-        color_hex: None,
-        color_accuracy: None,
-        search_text: None,
-        random_seed: None,
+        scope: GridScopeSpec {
+            kind: GridScopeKind::Collection,
+            collection_entity_id: Some(collection_id),
+            ..Default::default()
+        },
+        filters: GridFilterSpec::default(),
+        sort: GridSortSpec {
+            field: Some("imported_at".to_string()),
+            order: Some("desc".to_string()),
+            ..Default::default()
+        },
     };
     let reordered = picto_core::grid::query::get_grid_page_slim(
         &harness.db,
@@ -198,26 +143,20 @@ async fn folder_scope_total_count_excludes_hidden_collection_members() {
     harness.bitmaps_mark_active(member_entity_id);
     harness.bitmaps_mark_active(collection_id);
 
-    let query = picto_core::types::GridPageSlimQuery {
+    let query = GridPageSlimQuery {
         limit: Some(10),
         cursor: None,
-        status: None,
-        sort_field: Some("imported_at".to_string()),
-        sort_order: Some("desc".to_string()),
-        smart_folder_predicate: None,
-        search_tags: None,
-        search_excluded_tags: None,
-        tag_match_mode: None,
-        folder_ids: Some(vec![folder.folder_id]),
-        excluded_folder_ids: None,
-        folder_match_mode: None,
-        collection_entity_id: None,
-        rating_min: None,
-        mime_prefixes: None,
-        color_hex: None,
-        color_accuracy: None,
-        search_text: None,
-        random_seed: None,
+        scope: GridScopeSpec {
+            kind: GridScopeKind::Folder,
+            folder_id: Some(folder.folder_id),
+            ..Default::default()
+        },
+        filters: GridFilterSpec::default(),
+        sort: GridSortSpec {
+            field: Some("imported_at".to_string()),
+            order: Some("desc".to_string()),
+            ..Default::default()
+        },
     };
     let result = picto_core::grid::query::get_grid_page_slim(&harness.db, query)
         .await
@@ -250,52 +189,41 @@ async fn grid_page_slim_tag_filters_support_any_all_and_reject() {
     harness.bitmaps_insert_effective_tag(blue, f2);
     harness.bitmaps_insert_effective_tag(blue, f3);
 
-    let any_query = picto_core::types::GridPageSlimQuery {
+    let any_query = GridPageSlimQuery {
         limit: Some(20),
         cursor: None,
-        status: None,
-        sort_field: Some("name".to_string()),
-        sort_order: Some("asc".to_string()),
-        smart_folder_predicate: None,
-        search_tags: Some(vec!["red".to_string(), "blue".to_string()]),
-        search_excluded_tags: None,
-        tag_match_mode: Some("any".to_string()),
-        folder_ids: None,
-        excluded_folder_ids: None,
-        folder_match_mode: None,
-        collection_entity_id: None,
-        rating_min: None,
-        mime_prefixes: None,
-        color_hex: None,
-        color_accuracy: None,
-        search_text: None,
-        random_seed: None,
+        scope: GridScopeSpec::default(),
+        filters: GridFilterSpec {
+            search_tags: Some(vec!["red".to_string(), "blue".to_string()]),
+            tag_match_mode: Some("any".to_string()),
+            ..Default::default()
+        },
+        sort: GridSortSpec {
+            field: Some("name".to_string()),
+            order: Some("asc".to_string()),
+            ..Default::default()
+        },
     };
     let any_res = picto_core::grid::query::get_grid_page_slim(&harness.db, any_query)
         .await
         .expect("any filter");
     assert_eq!(any_res.items.len(), 3);
 
-    let all_query = picto_core::types::GridPageSlimQuery {
+    let all_query = GridPageSlimQuery {
         limit: Some(20),
         cursor: None,
-        status: None,
-        sort_field: Some("name".to_string()),
-        sort_order: Some("asc".to_string()),
-        smart_folder_predicate: None,
-        search_tags: Some(vec!["red".to_string(), "blue".to_string()]),
-        search_excluded_tags: Some(vec!["blue".to_string()]),
-        tag_match_mode: Some("all".to_string()),
-        folder_ids: None,
-        excluded_folder_ids: None,
-        folder_match_mode: None,
-        collection_entity_id: None,
-        rating_min: None,
-        mime_prefixes: None,
-        color_hex: None,
-        color_accuracy: None,
-        search_text: None,
-        random_seed: None,
+        scope: GridScopeSpec::default(),
+        filters: GridFilterSpec {
+            search_tags: Some(vec!["red".to_string(), "blue".to_string()]),
+            search_excluded_tags: Some(vec!["blue".to_string()]),
+            tag_match_mode: Some("all".to_string()),
+            ..Default::default()
+        },
+        sort: GridSortSpec {
+            field: Some("name".to_string()),
+            order: Some("asc".to_string()),
+            ..Default::default()
+        },
     };
     let all_res = picto_core::grid::query::get_grid_page_slim(&harness.db, all_query)
         .await
@@ -339,26 +267,21 @@ async fn grid_page_slim_folder_filters_support_any_all_and_reject() {
     harness.db.add_entities_to_folder_batch(fa.folder_id, &["f_any_1".to_string(), "f_any_3".to_string()]).await.expect("add f1,f3->A");
     harness.db.add_entities_to_folder_batch(fb.folder_id, &["f_any_2".to_string(), "f_any_3".to_string()]).await.expect("add f2,f3->B");
 
-    let any_query = picto_core::types::GridPageSlimQuery {
+    let any_query = GridPageSlimQuery {
         limit: Some(20),
         cursor: None,
-        status: None,
-        sort_field: Some("name".to_string()),
-        sort_order: Some("asc".to_string()),
-        smart_folder_predicate: None,
-        search_tags: None,
-        search_excluded_tags: None,
-        tag_match_mode: None,
-        folder_ids: Some(vec![fa.folder_id, fb.folder_id]),
-        excluded_folder_ids: Some(vec![fb.folder_id]),
-        folder_match_mode: Some("any".to_string()),
-        collection_entity_id: None,
-        rating_min: None,
-        mime_prefixes: None,
-        color_hex: None,
-        color_accuracy: None,
-        search_text: None,
-        random_seed: None,
+        scope: GridScopeSpec::default(),
+        filters: GridFilterSpec {
+            folder_ids: Some(vec![fa.folder_id, fb.folder_id]),
+            excluded_folder_ids: Some(vec![fb.folder_id]),
+            folder_match_mode: Some("any".to_string()),
+            ..Default::default()
+        },
+        sort: GridSortSpec {
+            field: Some("name".to_string()),
+            order: Some("asc".to_string()),
+            ..Default::default()
+        },
     };
     let any_res = picto_core::grid::query::get_grid_page_slim(&harness.db, any_query)
         .await
@@ -366,58 +289,24 @@ async fn grid_page_slim_folder_filters_support_any_all_and_reject() {
     let any_hashes: Vec<String> = any_res.items.iter().map(|i| i.hash.clone()).collect();
     assert_eq!(any_hashes, vec!["f_any_1".to_string()]);
 
-    let all_query = picto_core::types::GridPageSlimQuery {
+    let all_query = GridPageSlimQuery {
         limit: Some(20),
         cursor: None,
-        status: None,
-        sort_field: Some("name".to_string()),
-        sort_order: Some("asc".to_string()),
-        smart_folder_predicate: None,
-        search_tags: None,
-        search_excluded_tags: None,
-        tag_match_mode: None,
-        folder_ids: Some(vec![fa.folder_id, fb.folder_id]),
-        excluded_folder_ids: None,
-        folder_match_mode: Some("all".to_string()),
-        collection_entity_id: None,
-        rating_min: None,
-        mime_prefixes: None,
-        color_hex: None,
-        color_accuracy: None,
-        search_text: None,
-        random_seed: None,
+        scope: GridScopeSpec::default(),
+        filters: GridFilterSpec {
+            folder_ids: Some(vec![fa.folder_id, fb.folder_id]),
+            folder_match_mode: Some("all".to_string()),
+            ..Default::default()
+        },
+        sort: GridSortSpec {
+            field: Some("name".to_string()),
+            order: Some("asc".to_string()),
+            ..Default::default()
+        },
     };
     let all_res = picto_core::grid::query::get_grid_page_slim(&harness.db, all_query)
         .await
         .expect("folder all");
     let all_hashes: Vec<String> = all_res.items.iter().map(|i| i.hash.clone()).collect();
     assert_eq!(all_hashes, vec!["f_any_3".to_string()]);
-}
-
-#[tokio::test]
-async fn scope_cache_invalidate_scope_prefix() {
-    let harness = common::TestHarness::new().await;
-    let key_a = picto_core::sqlite::ScopeSnapshotKey {
-        scope: "folder".to_string(),
-        predicate_hash: 1,
-        sort_field: "imported_at".to_string(),
-        sort_dir: "desc".to_string(),
-    };
-    let key_b = picto_core::sqlite::ScopeSnapshotKey {
-        scope: "smart_folder".to_string(),
-        predicate_hash: 2,
-        sort_field: "imported_at".to_string(),
-        sort_dir: "desc".to_string(),
-    };
-    let snap = || picto_core::sqlite::ScopeSnapshot {
-        ids: vec![1],
-        total_count: 1,
-        created_at: std::time::Instant::now(),
-    };
-    harness.db.scope_cache_put(key_a.clone(), snap());
-    harness.db.scope_cache_put(key_b.clone(), snap());
-
-    harness.db.scope_cache_invalidate_scope("folder");
-    assert!(harness.db.scope_cache_get(&key_a).is_none());
-    assert!(harness.db.scope_cache_get(&key_b).is_some());
 }

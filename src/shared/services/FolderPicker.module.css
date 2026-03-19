@@ -201,4 +201,7 @@
 
 .empty {
   composes: emptyState from '../styles/pickerPanel.module.css';
+  height: 20px;
+  line-height: 20px;
+  padding: 16px 0;
 }

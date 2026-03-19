@@ -189,3 +189,27 @@ impl TestHarness {
             .collect()
     }
 }
+
+// ---------------------------------------------------------------------------
+// Query helpers
+// ---------------------------------------------------------------------------
+
+use picto_core::types::{
+    GridFilterSpec, GridPageSlimQuery, GridScopeKind, GridScopeSpec, GridSortSpec,
+    GridSystemScopeKey,
+};
+
+/// Build a `GridPageSlimQuery` for a system scope.
+pub fn system_query(key: GridSystemScopeKey, limit: usize) -> GridPageSlimQuery {
+    GridPageSlimQuery {
+        limit: Some(limit),
+        cursor: None,
+        scope: GridScopeSpec {
+            kind: GridScopeKind::System,
+            system_key: Some(key),
+            ..Default::default()
+        },
+        filters: GridFilterSpec::default(),
+        sort: GridSortSpec::default(),
+    }
+}

@@ -8,11 +8,11 @@ use img_hash::{HasherConfig, ImageHash};
 // --- Perceptual hash ---
 
 /// Default Hamming distance threshold for "likely duplicate" (0 = identical, lower = more similar).
-/// 8 is a good default — matches images with minor compression artifacts or resizes.
-pub const DEFAULT_DISTANCE_THRESHOLD: u32 = 8;
+/// 32 at 16x16 (256-bit hash) is proportional to the old 8 at 8x8 (64-bit hash).
+pub const DEFAULT_DISTANCE_THRESHOLD: u32 = 32;
 
-/// Hash size in bits (64 = 8x8, good balance of speed and accuracy).
-const HASH_SIZE: u32 = 8;
+/// Hash size per dimension (16x16 = 256-bit hash).
+const HASH_SIZE: u32 = 16;
 
 /// Generate a perceptual hash for an image from raw bytes.
 pub fn compute_phash(image_data: &[u8]) -> Result<ImageHash, image::ImageError> {
@@ -134,7 +134,7 @@ mod tests {
         let hasher = HasherConfig::new()
             .hash_size(HASH_SIZE, HASH_SIZE)
             .to_hasher();
-        let img = img_hash::image::RgbaImage::from_pixel(8, 8, img_hash::image::Rgba(pixel));
+        let img = img_hash::image::RgbaImage::from_pixel(HASH_SIZE, HASH_SIZE, img_hash::image::Rgba(pixel));
         let hash = hasher.hash_image(&img);
         let b64 = hash.to_base64();
         ImageHash::<Vec<u8>>::from_base64(&b64).unwrap()
@@ -148,7 +148,7 @@ mod tests {
 
         let mut img_a = img_hash::image::RgbaImage::new(64, 64);
         for (x, y, pixel) in img_a.enumerate_pixels_mut() {
-            let val = if (x / 8 + y / 8) % 2 == 0 { 255 } else { 0 };
+            let val = if (x / HASH_SIZE + y / HASH_SIZE) % 2 == 0 { 255 } else { 0 };
             *pixel = img_hash::image::Rgba([val as u8, val as u8, val as u8, 255]);
         }
         let hash_a: ImageHash<Vec<u8>> = {

@@ -186,11 +186,19 @@ export function useGridMarqueeSelection({
 
       const hits = marqueeHitHashesRef.current;
       if (hits && hits.size > 0) {
-        dispatch({ type: 'SELECT_HASHES', hashes: hits });
+        const prior = priorSelectionRef.current;
+        if (prior && prior.size > 0) {
+          const merged = new Set(prior);
+          for (const h of hits) merged.add(h);
+          dispatch({ type: 'SELECT_HASHES', hashes: merged });
+        } else {
+          dispatch({ type: 'SELECT_HASHES', hashes: hits });
+        }
       }
 
       boxStateRef.current = null;
       pointerClientRef.current = null;
+      priorSelectionRef.current = null;
       marqueeRectRef.current = null;
       marqueeHitHashesRef.current = null;
       scheduleRedrawRef.current?.();

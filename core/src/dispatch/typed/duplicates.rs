@@ -76,6 +76,7 @@ pub async fn scan_duplicates(state: &AppState, input: ScanDuplicatesInput) -> Re
     };
     let result = crate::duplicates::orchestrator::DuplicateOrchestrator::scan_duplicates(
         &state.db,
+        &state.blob_store,
         effective_threshold,
         review_threshold,
     )
@@ -107,6 +108,7 @@ pub async fn get_duplicate_pairs(state: &AppState, input: GetDuplicatePairsInput
 pub async fn resolve_duplicate_pair(state: &AppState, input: ResolveDuplicatePairInput) -> Result<serde_json::Value, String> {
     let result = crate::duplicates::orchestrator::DuplicateOrchestrator::resolve_duplicate_pair(
         &state.db,
+        &state.blob_store,
         &input.action,
         input.hash_a,
         input.hash_b,
