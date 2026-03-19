@@ -244,6 +244,14 @@
   background-color: var(--sidebar-item-hover-bg);
 }
 
+.tagSelected {
+  background-color: var(--sidebar-item-active-bg);
+}
+
+.tagSelected:hover {
+  background-color: var(--sidebar-item-active-bg);
+}
+
 .tag:hover .tagIcon .tagDot,
 .tag:hover .tagName {
   opacity: 1;

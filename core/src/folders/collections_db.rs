@@ -459,18 +459,20 @@ pub fn update_collection_name(
 pub fn delete_collection(conn: &Connection, collection_id: i64) -> rusqlite::Result<()> {
     // Delete all member files (and their entities) before removing the collection
     let member_files = get_collection_member_files(conn, collection_id)?;
-    // Delete the collection entity first (cascades collection_member rows via FK)
-    conn.execute(
-        "DELETE FROM media_entity WHERE entity_id = ?1 AND kind = 'collection'",
-        [collection_id],
-    )?;
-    // Orphan any entities that used parent_collection_id (legacy link)
+    // Orphan any entities that used parent_collection_id BEFORE deleting the collection
+    // (must happen before DELETE to avoid FK ON DELETE SET NULL triggering the
+    // collection_ordinal check trigger with a stale ordinal value)
     conn.execute(
         "UPDATE media_entity
          SET parent_collection_id = NULL,
              collection_ordinal = NULL,
              updated_at = CURRENT_TIMESTAMP
          WHERE parent_collection_id = ?1",
+        [collection_id],
+    )?;
+    // Delete the collection entity (cascades collection_member rows via FK)
+    conn.execute(
+        "DELETE FROM media_entity WHERE entity_id = ?1 AND kind = 'collection'",
         [collection_id],
     )?;
     // Delete each member file
@@ -843,6 +845,19 @@ pub fn remove_collection_members_by_hashes(
 
     if removed > 0 {
         sync_collection_aggregate_metadata(conn, collection_id)?;
+
+        // Auto-delete the collection if no members remain
+        let remaining: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM media_entity WHERE parent_collection_id = ?1",
+            [collection_id],
+            |row| row.get(0),
+        )?;
+        if remaining == 0 {
+            conn.execute(
+                "DELETE FROM media_entity WHERE entity_id = ?1 AND kind = 'collection'",
+                [collection_id],
+            )?;
+        }
     }
 
     Ok(removed)

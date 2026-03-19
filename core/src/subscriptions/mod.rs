@@ -10,4 +10,5 @@ pub mod run_orchestrator;
 pub mod runtime_tasks;
 pub mod service;
 pub mod subscription_groups_db;
+pub mod pixiv_oauth;
 pub mod sync_engine;

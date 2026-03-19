@@ -220,7 +220,38 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
     items.push({ type: 'separator' });
   }
 
-  if (hasSelection && !effectiveVirtual) {
+  if (hasSelection && collectionEntityId) {
+    const freshHash = rightClickedHash && !wasAlreadySelected ? rightClickedHash : null;
+    items.push({
+      type: 'item',
+      label: 'Remove from Collection',
+      icon: <IconFolderMinus size={16} />,
+      shortcut: isMac ? '\u2318\u21E7\u232B' : 'Ctrl+Shift+Del',
+      onClick: () => {
+        if (freshHash && collectionEntityId) {
+          dispatch({ type: 'CLEAR_SELECTION' });
+          api.collections.removeMembers({ id: collectionEntityId, hashes: [freshHash] })
+            .then(() => {
+              registerUndoAction({
+                label: 'Remove from collection',
+                undo: async () => {
+                  await api.collections.addMembers({ id: collectionEntityId, hashes: [freshHash] });
+                },
+                redo: async () => {
+                  await api.collections.removeMembers({ id: collectionEntityId, hashes: [freshHash] });
+                },
+              });
+            })
+            .catch(err => notifyError(err, 'Remove from Collection Failed'));
+        } else {
+          handleRemoveFromCollection();
+        }
+      },
+    });
+    items.push({ type: 'separator' });
+  }
+
+  if (hasSelection && !effectiveVirtual && !collectionEntityId) {
     const selectedHashSet = (() => {
       if (rightClickedHash && !wasAlreadySelected) return new Set([rightClickedHash]);
       return new Set(stateRef.current.selectedHashes);
@@ -749,37 +780,6 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
     });
   }
 
-  if (hasSelection && collectionEntityId) {
-    items.push({ type: 'separator' });
-    const freshHash = rightClickedHash && !wasAlreadySelected ? rightClickedHash : null;
-    items.push({
-      type: 'item',
-      label: 'Remove from Collection',
-      icon: <IconFolderMinus size={16} />,
-      shortcut: isMac ? '\u2318\u21E7\u232B' : 'Ctrl+Shift+Del',
-      onClick: () => {
-        if (freshHash && collectionEntityId) {
-          dispatch({ type: 'CLEAR_SELECTION' });
-          api.collections.removeMembers({ id: collectionEntityId, hashes: [freshHash] })
-            .then(() => {
-              registerUndoAction({
-                label: 'Remove from collection',
-                undo: async () => {
-                  await api.collections.addMembers({ id: collectionEntityId, hashes: [freshHash] });
-                        },
-                redo: async () => {
-                  await api.collections.removeMembers({ id: collectionEntityId, hashes: [freshHash] });
-                        },
-              });
-            })
-            .catch(err => notifyError(err, 'Remove from Collection Failed'));
-        } else {
-          handleRemoveFromCollection();
-        }
-      },
-    });
-  }
-
   if (hasSelection) {
     items.push({ type: 'separator' });
     const count = effectiveSize;
@@ -815,7 +815,7 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
           api.files.deleteMany([freshSingleHash])
             .catch(err => notifyError(err, 'Delete Failed'));
         } else {
-          const previousStatus = imagesRef.current.find((img) => img.hash === freshSingleHash)?.status ?? (statusFilter ?? 'active');
+          const previousStatus = freshImage?.status ?? (statusFilter ?? 'active');
           api.files.setStatus(freshSingleHash, 'trash')
             .then(() => {
               registerUndoAction({

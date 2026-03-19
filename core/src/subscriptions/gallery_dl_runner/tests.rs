@@ -41,6 +41,32 @@ fn test_parse_e621_tags() {
 }
 
 #[test]
+fn test_twitter_metadata() {
+    let json = serde_json::json!({
+        "tweet_id": 1234567890u64,
+        "date": "2025-01-15 12:00:00",
+        "content": "Hello world",
+        "author": { "id": 99u64, "name": "testuser", "nick": "Test" },
+        "user": { "id": 99u64, "name": "testuser", "nick": "Test" },
+        "category": "twitter",
+        "subcategory": "timeline",
+        "type": "photo"
+    });
+
+    let meta = parse_metadata(&json);
+
+    assert_eq!(meta.post_id.as_deref(), Some("1234567890"));
+    assert_eq!(meta.description.as_deref(), Some("Hello world"));
+    assert_eq!(meta.source_urls, vec!["https://x.com/testuser/status/1234567890"]);
+    assert_eq!(meta.source_url.as_deref(), Some("https://x.com/testuser/status/1234567890"));
+    assert!(meta.tags.contains(&("creator".to_string(), "testuser".to_string())));
+    assert_eq!(meta.tags.len(), 1);
+    assert!(meta.rating.is_none());
+    assert!(meta.created_at.is_some());
+    assert_eq!(meta.category.as_deref(), Some("twitter"));
+}
+
+#[test]
 fn test_e621_twokinds_full_metadata() {
     // Real gallery-dl sidecar JSON for e621 post 6272695 (verbatim format)
     let json = serde_json::json!({

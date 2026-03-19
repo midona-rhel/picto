@@ -381,6 +381,12 @@ export const api = {
       invokeTyped('set_credential', params as never) as unknown as Promise<void>,
     deleteCredential: (siteCategory: string) =>
       invokeTyped('delete_credential', { site_category: siteCategory }) as unknown as Promise<void>,
+    pixivOAuthStart: () =>
+      invoke<{ login_url: string; code_verifier: string }>('pixiv_oauth_start'),
+    pixivOAuthPopup: (loginUrl: string) =>
+      invoke<{ code: string; phpsessid: string | null }>('pixiv_oauth_popup', { login_url: loginUrl }),
+    pixivOAuthExchange: (code: string, codeVerifier: string, phpsessid?: string | null) =>
+      invoke<{ ok: boolean }>('pixiv_oauth_exchange', { code, code_verifier: codeVerifier, phpsessid: phpsessid ?? null }),
   },
 
   groups: {

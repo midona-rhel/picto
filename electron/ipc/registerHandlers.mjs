@@ -180,6 +180,10 @@ export function registerIpcHandlers({
       windowManager.openSettingsWindow();
       return null;
     }
+    if (command === 'pixiv_oauth_popup') {
+      const result = await windowManager.openPixivOAuthPopup(args?.login_url);
+      return result; // { code, phpsessid }
+    }
     if (command === 'open_subscriptions_window') {
       windowManager.openSubscriptionsWindow();
       return null;

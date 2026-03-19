@@ -71,6 +71,10 @@ export function TagManager() {
   const [listMode, setListMode] = useState(false);
   const [hasMore, setHasMore] = useState(true);
 
+  const [selectedTagIds, setSelectedTagIds] = useState<Set<number>>(new Set());
+  const [selectAll, setSelectAll] = useState(false);
+  const lastClickedTagIdRef = useRef<number | null>(null);
+
   const [containerWidth, setContainerWidth] = useState(800);
 
   const [mergeSource, setMergeSource] = useState<TagRecord | null>(null);
@@ -243,6 +247,40 @@ export function TagManager() {
     }
   }, [virtualItems, loadedRows, hasMore, loadMore]);
 
+  const handleDeleteSelected = useCallback(async () => {
+    if (!selectAll && selectedTagIds.size === 0) return;
+    try {
+      if (selectAll) {
+        let deleted = 0;
+        // eslint-disable-next-line no-constant-condition
+        while (true) {
+          const batch = await api.tags.getPaginated({
+            namespace: selectedNs ?? undefined,
+            search: searchQuery || undefined,
+            limit: 500,
+          });
+          if (batch.length === 0) break;
+          for (const tag of batch) {
+            await api.tags.delete(tag.tag_id);
+          }
+          deleted += batch.length;
+        }
+        notifySuccess(`Deleted ${deleted} tag${deleted !== 1 ? 's' : ''}`);
+      } else {
+        const toDelete = tags.filter(t => selectedTagIds.has(t.tag_id));
+        for (const tag of toDelete) {
+          await api.tags.delete(tag.tag_id);
+        }
+        notifySuccess(`Deleted ${toDelete.length} tag${toDelete.length !== 1 ? 's' : ''}`);
+      }
+      setSelectAll(false);
+      setSelectedTagIds(new Set());
+      await refreshAll();
+    } catch (err) {
+      notifyError(err);
+    }
+  }, [selectAll, selectedTagIds, tags, refreshAll, selectedNs, searchQuery]);
+
   const handleTagContextMenu = useCallback(
     async (e: React.MouseEvent, tag: TagRecord) => {
       e.preventDefault();
@@ -281,34 +319,78 @@ export function TagManager() {
         onAddParent: () => setRelationModal({ type: 'implication', source: tag }),
         onAddChild: () => setRelationModal({ type: 'reverse_implication', source: tag }),
         onDelete: async () => {
-          try {
-            const snapshotHashes = await fetchAllHashesForTag(display);
-            await api.tags.delete(tag.tag_id);
-            registerUndoAction({
-              label: `Delete tag "${display}"`,
-              undo: async () => {
-                if (snapshotHashes.length > 0) {
-                  await api.tags.add(snapshotHashes, [display]);
-                }
-                await refreshAll();
-              },
-              redo: async () => {
-                await deleteTagByDisplay(display);
-                await refreshAll();
-              },
-            });
-            notifySuccess(`"${display}" deleted`, 'Tag Deleted');
-            await refreshAll();
-          } catch (err) {
-            notifyError(err);
+          // If select-all or multi-selection includes this tag, use batch delete
+          if (selectAll || (selectedTagIds.size > 1 && selectedTagIds.has(tag.tag_id))) {
+            await handleDeleteSelected();
+          } else {
+            try {
+              await api.tags.delete(tag.tag_id);
+              notifySuccess(`"${display}" deleted`);
+              setSelectedTagIds(new Set());
+              await refreshAll();
+            } catch (err) {
+              notifyError(err);
+            }
           }
         },
       });
 
       ctxMenu.openAt(pos, items);
     },
-    [rename, refreshAll, ctxMenu, fetchAllHashesForTag, deleteTagByDisplay],
+    [rename, refreshAll, ctxMenu, fetchAllHashesForTag, deleteTagByDisplay, selectedTagIds, selectAll, tags, handleDeleteSelected],
   );
+
+  // ── Multi-select ──────────────────────────────────────────────────────
+
+  const handleTagClick = useCallback((e: React.MouseEvent, tag: TagRecord) => {
+    setSelectAll(false);
+    if (e.metaKey || e.ctrlKey) {
+      setSelectedTagIds(prev => {
+        const next = new Set(prev);
+        if (next.has(tag.tag_id)) next.delete(tag.tag_id); else next.add(tag.tag_id);
+        return next;
+      });
+    } else if (e.shiftKey && lastClickedTagIdRef.current != null) {
+      const startIdx = tags.findIndex(t => t.tag_id === lastClickedTagIdRef.current);
+      const endIdx = tags.findIndex(t => t.tag_id === tag.tag_id);
+      if (startIdx !== -1 && endIdx !== -1) {
+        const [lo, hi] = [Math.min(startIdx, endIdx), Math.max(startIdx, endIdx)];
+        setSelectedTagIds(prev => {
+          const next = new Set(prev);
+          for (let i = lo; i <= hi; i++) next.add(tags[i].tag_id);
+          return next;
+        });
+      }
+    } else {
+      setSelectedTagIds(new Set([tag.tag_id]));
+    }
+    lastClickedTagIdRef.current = tag.tag_id;
+  }, [tags]);
+
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      // Don't handle keys while renaming or in modals
+      if (document.activeElement?.tagName === 'INPUT') return;
+      if ((e.metaKey || e.ctrlKey) && e.key === 'a') {
+        e.preventDefault();
+        setSelectAll(true);
+        setSelectedTagIds(new Set(tags.map(t => t.tag_id)));
+      }
+      if ((e.key === 'Delete' || e.key === 'Backspace') && selectedTagIds.size > 0) {
+        e.preventDefault();
+        handleDeleteSelected();
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [tags, selectedTagIds, handleDeleteSelected]);
+
+  // Clear selection on namespace/search change
+  useEffect(() => {
+    setSelectedTagIds(new Set());
+    setSelectAll(false);
+    lastClickedTagIdRef.current = null;
+  }, [selectedNs, searchQuery]);
 
   useEffect(() => {
     if (!mergeSource) return;
@@ -437,7 +519,8 @@ export function TagManager() {
       return (
         <div
           key={tag.tag_id}
-          className={classes.tag}
+          className={`${classes.tag} ${selectAll || selectedTagIds.has(tag.tag_id) ? classes.tagSelected : ''}`}
+          onClick={(e) => handleTagClick(e, tag)}
           onContextMenu={(e) => handleTagContextMenu(e, tag)}
           onDoubleClick={() => rename.startRename(String(tag.tag_id), display)}
         >
@@ -465,7 +548,7 @@ export function TagManager() {
         </div>
       );
     },
-    [rename, handleTagContextMenu],
+    [rename, handleTagContextMenu, handleTagClick, selectedTagIds],
   );
 
   const sidebarContent = useMemo(

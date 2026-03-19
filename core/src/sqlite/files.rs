@@ -238,6 +238,27 @@ pub fn update_status(conn: &Connection, file_id: i64, status: i64) -> rusqlite::
          )",
         params![status, file_id],
     )?;
+
+    // If this file is the cover of a collection, cascade status to the collection
+    // entity and all its member files.
+    if let Some(collection_id) =
+        crate::folders::collections_db::find_collection_for_cover_file(conn, file_id)?
+    {
+        conn.execute(
+            "UPDATE media_entity SET status = ?1, updated_at = CURRENT_TIMESTAMP WHERE entity_id = ?2",
+            params![status, collection_id],
+        )?;
+        let members = crate::folders::collections_db::get_collection_member_files(conn, collection_id)?;
+        for (member_fid, _) in &members {
+            conn.execute("UPDATE file SET status = ?1 WHERE file_id = ?2", params![status, member_fid])?;
+            conn.execute(
+                "UPDATE media_entity SET status = ?1, updated_at = CURRENT_TIMESTAMP
+                 WHERE entity_id IN (SELECT entity_id FROM entity_file WHERE file_id = ?2)",
+                params![status, member_fid],
+            )?;
+        }
+    }
+
     for collection_id in
         crate::folders::collections_db::get_parent_collection_ids_for_file_ids(conn, &[file_id])?
     {
@@ -1312,18 +1333,33 @@ impl SqliteDatabase {
         file_ids: &roaring::RoaringBitmap,
         status: i64,
     ) -> Result<usize, String> {
-        let original_ids: Vec<i64> = file_ids.iter().map(|id| id as i64).collect();
+        // Expand file_ids to include collection member files (if any selected file is a cover)
+        let input_ids: Vec<i64> = file_ids.iter().map(|id| id as i64).collect();
+        tracing::info!(input_count = input_ids.len(), ?input_ids, status, "update_file_status_batch: input");
+        let expanded_ids = self.expand_collection_members(input_ids).await?;
+        tracing::info!(expanded_count = expanded_ids.len(), ?expanded_ids, "update_file_status_batch: after expand");
+        let original_ids = expanded_ids;
         if original_ids.is_empty() {
             return Ok(0);
         }
 
-        let parent_collection_ids = self
+        let (parent_collection_ids, cover_collection_ids) = self
             .with_read_conn({
                 let file_ids = original_ids.clone();
                 move |conn| {
-                    crate::folders::collections_db::get_parent_collection_ids_for_file_ids(
+                    let parents = crate::folders::collections_db::get_parent_collection_ids_for_file_ids(
                         conn, &file_ids,
-                    )
+                    )?;
+                    let mut covers = Vec::new();
+                    for &fid in &file_ids {
+                        if let Some(cid) = crate::folders::collections_db::find_collection_for_cover_file(conn, fid)? {
+                            covers.push(cid);
+                        }
+                    }
+                    covers.sort_unstable();
+                    covers.dedup();
+                    tracing::info!(?parents, ?covers, "update_file_status_batch: collection IDs");
+                    Ok((parents, covers))
                 }
             })
             .await?;
@@ -1331,7 +1367,11 @@ impl SqliteDatabase {
         let count = original_ids.len();
         let s = status;
         let ids_for_update = original_ids.clone();
-        let coll_ids = parent_collection_ids;
+        let mut all_coll_ids = parent_collection_ids;
+        all_coll_ids.extend(&cover_collection_ids);
+        all_coll_ids.sort_unstable();
+        all_coll_ids.dedup();
+        let coll_ids = all_coll_ids;
         self.with_conn_mut(move |conn| {
             let tx = conn.transaction()?;
             for chunk in ids_for_update.chunks(999) {
@@ -1360,6 +1400,15 @@ impl SqliteDatabase {
                 tx.execute(&entity_sql, param_refs.as_slice())?;
             }
 
+            // Also update collection entities whose cover_file_id is in the batch
+            for &collection_id in &coll_ids {
+                tx.execute(
+                    "UPDATE media_entity SET status = ?1, updated_at = CURRENT_TIMESTAMP
+                     WHERE entity_id = ?2 AND kind = 'collection'",
+                    rusqlite::params![s, collection_id],
+                )?;
+            }
+
             tx.commit()?;
 
             for &collection_id in &coll_ids {
@@ -1372,11 +1421,12 @@ impl SqliteDatabase {
         })
         .await?;
 
-        for fid in file_ids.iter() {
+        for &fid in &original_ids {
+            let f = fid as u32;
             for s in 0..=2i64 {
-                self.bitmaps.remove(&BitmapKey::Status(s), fid);
+                self.bitmaps.remove(&BitmapKey::Status(s), f);
             }
-            self.bitmaps.insert(&BitmapKey::Status(status), fid);
+            self.bitmaps.insert(&BitmapKey::Status(status), f);
         }
 
         self.emit_read_model_event(ReadModelEvent::StatusBatchChanged);

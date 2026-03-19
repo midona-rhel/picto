@@ -50,6 +50,11 @@ function isTwitterCategory(siteCategory: string): boolean {
   return normalized === 'twitter' || normalized === 'x.com';
 }
 
+function isPixivCategory(siteCategory: string): boolean {
+  const normalized = siteCategory.trim().toLowerCase();
+  return normalized === 'pixiv' || normalized === 'pixivuser';
+}
+
 
 
 function parseRule34Credential(raw: string): { userId: string; apiKey: string } | null {
@@ -136,6 +141,7 @@ export function SubscriptionsWindow() {
   const [credentialHealth, setCredentialHealth] = useState<CredentialHealth[]>([]);
   const [credentialModalOpen, setCredentialModalOpen] = useState(false);
   const [savingCredential, setSavingCredential] = useState(false);
+  const [pixivOAuthBusy, setPixivOAuthBusy] = useState(false);
   const [activePanel, setActivePanel] = useState<'subscriptions' | 'credentials'>('subscriptions');
   const [credentialForm, setCredentialForm] = useState<CredentialFormState>({
     siteCategory: '',
@@ -191,13 +197,18 @@ export function SubscriptionsWindow() {
     () => isTwitterCategory(credentialForm.siteCategory),
     [credentialForm.siteCategory],
   );
+  const isPixivCredential = useMemo(
+    () => isPixivCategory(credentialForm.siteCategory),
+    [credentialForm.siteCategory],
+  );
   const credentialTypeOptions = useMemo(
     () => {
       if (isRule34Credential) return [{ value: 'api_key', label: 'API Key (rule34 user-id + api-key)' }];
       if (isTwitterCredential) return [{ value: 'cookies', label: 'Browser Cookies (auth_token + ct0)' }];
+      if (isPixivCredential) return [{ value: 'oauth_token', label: 'OAuth (Pixiv login)' }];
       return CREDENTIAL_TYPE_OPTIONS;
     },
-    [isRule34Credential, isTwitterCredential],
+    [isRule34Credential, isTwitterCredential, isPixivCredential],
   );
   const missingRequiredAuthSites = useMemo(
     () => authSites.filter((site) => site.auth_required_for_full_access && !credentialMap.get(site.id)),
@@ -217,7 +228,9 @@ export function SubscriptionsWindow() {
       ? 'api_key'
       : isTwitterCategory(site.id)
         ? 'cookies'
-        : (existing?.credential_type ?? 'username_password');
+        : isPixivCategory(site.id)
+          ? 'oauth_token'
+          : (existing?.credential_type ?? 'username_password');
     setCredentialForm({
       siteCategory: site.id,
       credentialType: defaultType,
@@ -459,8 +472,41 @@ export function SubscriptionsWindow() {
             </>
           )}
 
+          {/* ── Pixiv ── */}
+          {isPixivCredential && (
+            <>
+              <Text size="xs" c="dimmed">
+                Pixiv requires you to log in. A login window will open — sign in with your Pixiv account and the authorization will complete automatically.
+              </Text>
+              <TextButton
+                compact
+                disabled={pixivOAuthBusy}
+                onClick={async () => {
+                  try {
+                    setPixivOAuthBusy(true);
+                    const challenge = await api.subscriptions.pixivOAuthStart();
+                    const { code, phpsessid } = await api.subscriptions.pixivOAuthPopup(challenge.login_url);
+                    await api.subscriptions.pixivOAuthExchange(code, challenge.code_verifier, phpsessid);
+                    notifySuccess('Pixiv authorized successfully');
+                    setCredentialModalOpen(false);
+                    await loadCredentialData();
+                  } catch (err) {
+                    const msg = String(err);
+                    if (!msg.includes('cancelled')) {
+                      notifyError(`Pixiv authorization failed: ${msg}`);
+                    }
+                  } finally {
+                    setPixivOAuthBusy(false);
+                  }
+                }}
+              >
+                {pixivOAuthBusy ? 'Waiting for login...' : 'Log in with Pixiv'}
+              </TextButton>
+            </>
+          )}
+
           {/* ── Generic sites ── */}
-          {!isTwitterCredential && !isRule34Credential && (
+          {!isTwitterCredential && !isRule34Credential && !isPixivCredential && (
             <>
               <Select
                 label="Credential Type"
@@ -506,12 +552,14 @@ export function SubscriptionsWindow() {
           )}
 
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
-            <TextButton compact onClick={() => setCredentialModalOpen(false)} disabled={savingCredential}>
-              Cancel
+            <TextButton compact onClick={() => setCredentialModalOpen(false)} disabled={savingCredential || pixivOAuthBusy}>
+              {isPixivCredential ? 'Close' : 'Cancel'}
             </TextButton>
-            <TextButton compact onClick={saveCredential} disabled={savingCredential}>
-              Save
-            </TextButton>
+            {!isPixivCredential && (
+              <TextButton compact onClick={saveCredential} disabled={savingCredential}>
+                Save
+              </TextButton>
+            )}
           </div>
         </Stack>
       </Modal>

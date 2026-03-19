@@ -196,6 +196,19 @@ pub fn delete_subscription_query(conn: &Connection, query_id: i64) -> rusqlite::
     Ok(())
 }
 
+pub fn update_subscription_query(
+    conn: &Connection,
+    query_id: i64,
+    query_text: &str,
+    display_name: Option<&str>,
+) -> rusqlite::Result<()> {
+    conn.execute(
+        "UPDATE subscription_query SET query_text = ?1, display_name = ?2 WHERE query_id = ?3",
+        params![query_text, display_name, query_id],
+    )?;
+    Ok(())
+}
+
 pub fn set_query_paused(conn: &Connection, query_id: i64, paused: bool) -> rusqlite::Result<()> {
     conn.execute(
         "UPDATE subscription_query SET paused = ?1 WHERE query_id = ?2",
@@ -615,6 +628,18 @@ impl SqliteDatabase {
     pub async fn delete_subscription_query(&self, query_id: i64) -> Result<(), String> {
         self.with_conn(move |conn| delete_subscription_query(conn, query_id))
             .await
+    }
+
+    pub async fn update_subscription_query(
+        &self,
+        query_id: i64,
+        query_text: String,
+        display_name: Option<String>,
+    ) -> Result<(), String> {
+        self.with_conn(move |conn| {
+            update_subscription_query(conn, query_id, &query_text, display_name.as_deref())
+        })
+        .await
     }
 
     pub async fn set_query_paused(&self, query_id: i64, paused: bool) -> Result<(), String> {

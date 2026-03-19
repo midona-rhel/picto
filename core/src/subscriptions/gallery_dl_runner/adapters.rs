@@ -30,16 +30,19 @@ fn push_unique_url(urls: &mut Vec<String>, value: Option<&str>) {
 
 struct DanbooruAdapter;
 struct E621Adapter;
+struct TwitterAdapter;
 struct PixivAdapter;
 struct FallbackAdapter;
 
 static DANBOORU_ADAPTER: DanbooruAdapter = DanbooruAdapter;
 static E621_ADAPTER: E621Adapter = E621Adapter;
+static TWITTER_ADAPTER: TwitterAdapter = TwitterAdapter;
 static PIXIV_ADAPTER: PixivAdapter = PixivAdapter;
 static FALLBACK_ADAPTER: FallbackAdapter = FallbackAdapter;
-static ADAPTERS: [&dyn SiteAdapter; 4] = [
+static ADAPTERS: [&dyn SiteAdapter; 5] = [
     &DANBOORU_ADAPTER,
     &E621_ADAPTER,
+    &TWITTER_ADAPTER,
     &PIXIV_ADAPTER,
     &FALLBACK_ADAPTER,
 ];
@@ -177,6 +180,43 @@ impl SiteAdapter for E621Adapter {
         }
 
         tags
+    }
+}
+
+impl SiteAdapter for TwitterAdapter {
+    fn matches(&self, json: &Value) -> bool {
+        matches!(category(json).as_deref(), Some("twitter"))
+    }
+
+    fn collect_source_urls(&self, json: &Value) -> Vec<String> {
+        // Construct the tweet URL from author + tweet_id
+        let author = json.get("author")
+            .and_then(|a| a.get("name"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let tweet_id = json.get("tweet_id")
+            .and_then(|v| v.as_u64())
+            .map(|n| n.to_string())
+            .unwrap_or_default();
+        if !author.is_empty() && !tweet_id.is_empty() {
+            vec![format!("https://x.com/{}/status/{}", author, tweet_id)]
+        } else {
+            Vec::new()
+        }
+    }
+
+    fn parse_tags(&self, _json: &Value) -> Vec<(String, String)> {
+        // Twitter has no tag system — creator is handled by extract_creator_identifier
+        Vec::new()
+    }
+
+    fn extract_creator_identifier(&self, json: &Value) -> Option<String> {
+        json.get("author")
+            .and_then(|a| a.get("name"))
+            .and_then(|v| v.as_str())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(ToOwned::to_owned)
     }
 }
 

@@ -125,8 +125,11 @@ pub fn parse_metadata(json: &serde_json::Value) -> ParsedMetadata {
 
     let post_id = json
         .get("id")
+        .or_else(|| json.get("tweet_id"))
         .map(|v| {
             if let Some(n) = v.as_i64() {
+                n.to_string()
+            } else if let Some(n) = v.as_u64() {
                 n.to_string()
             } else {
                 v.as_str().unwrap_or("").to_string()

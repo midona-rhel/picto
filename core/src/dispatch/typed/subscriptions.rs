@@ -573,3 +573,60 @@ pub async fn delete_credential(
     }
     Ok(())
 }
+
+// ─── Pixiv OAuth ──────────────────────────────────────────────────────────
+
+pub async fn pixiv_oauth_start(
+    _state: &AppState,
+    _args: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let challenge = crate::subscriptions::pixiv_oauth::generate_challenge();
+    serde_json::to_value(&challenge).map_err(|e| format!("Serialize error: {e}"))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PixivOAuthExchangeInput {
+    pub code: String,
+    pub code_verifier: String,
+    pub phpsessid: Option<String>,
+}
+
+pub async fn pixiv_oauth_exchange(
+    state: &AppState,
+    args: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let input: PixivOAuthExchangeInput =
+        serde_json::from_value(args).map_err(|e| format!("Invalid args: {e}"))?;
+
+    let refresh_token =
+        crate::subscriptions::pixiv_oauth::exchange_code(&input.code, &input.code_verifier).await?;
+
+    // Build cookies map if PHPSESSID was captured from the login session
+    let cookies = input
+        .phpsessid
+        .filter(|s| !s.trim().is_empty())
+        .map(|sessid| {
+            let mut map = std::collections::HashMap::new();
+            map.insert("PHPSESSID".to_string(), sessid);
+            map
+        });
+
+    // Auto-save the refresh token (+ optional PHPSESSID) as a credential
+    let cred = crate::credential_store::SiteCredential {
+        site_category: "pixiv".to_string(),
+        credential_type: crate::credential_store::CredentialType::OAuthToken,
+        username: None,
+        password: None,
+        cookies,
+        oauth_token: Some(refresh_token),
+    };
+    crate::credential_store::set_credential(&cred)?;
+
+    // Register in DB so the credential shows up in the UI
+    state
+        .db
+        .upsert_credential_domain("pixiv", "oauth_token", Some("Pixiv"))
+        .await?;
+
+    Ok(serde_json::json!({ "ok": true }))
+}

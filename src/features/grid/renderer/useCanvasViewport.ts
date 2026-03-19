@@ -74,7 +74,6 @@ export function useCanvasViewport(args: {
   const [frozenCanvasWidth, setFrozenCanvasWidth] = useState<number | null>(null);
   const [frozenLayoutWidth, setFrozenLayoutWidth] = useState<number | null>(null);
   const wasFrozenRef = useRef(false);
-  const unfreezeSettleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const containerRef = useCallback((element: HTMLDivElement | null) => {
     containerElRef.current = element;
@@ -124,11 +123,6 @@ export function useCanvasViewport(args: {
   }, [scrollContainerRef]);
 
   useEffect(() => {
-    if (unfreezeSettleTimerRef.current) {
-      clearTimeout(unfreezeSettleTimerRef.current);
-      unfreezeSettleTimerRef.current = null;
-    }
-
     if (frozen && !wasFrozenRef.current) {
       const resolvedWidth = containerElRef.current?.clientWidth ?? containerWidth;
       const nextFrozenWidth = resolvedWidth > 0 ? resolvedWidth : null;
@@ -137,11 +131,8 @@ export function useCanvasViewport(args: {
       dismissVideoScrubRef.current();
     } else if (!frozen && wasFrozenRef.current) {
       setFrozenCanvasWidth(null);
+      setFrozenLayoutWidth(null);
       markDirty('both');
-      unfreezeSettleTimerRef.current = setTimeout(() => {
-        setFrozenLayoutWidth(null);
-        unfreezeSettleTimerRef.current = null;
-      }, 140);
     }
 
     wasFrozenRef.current = frozen;
@@ -288,13 +279,6 @@ export function useCanvasViewport(args: {
     scrollVelocityRef,
   ]);
 
-  useEffect(() => {
-    return () => {
-      if (unfreezeSettleTimerRef.current) {
-        clearTimeout(unfreezeSettleTimerRef.current);
-      }
-    };
-  }, []);
 
   return {
     containerRef,

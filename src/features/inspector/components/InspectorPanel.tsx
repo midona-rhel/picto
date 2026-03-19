@@ -266,6 +266,7 @@ export function InspectorPanel({
     panelRef.current?.classList.add(styles.panelDragging);
 
     let idleTimer: ReturnType<typeof setTimeout> | null = null;
+    let froze = false;
     const onMove = (ev: MouseEvent) => {
       if (!isDragging.current) return;
       const delta = startX.current - ev.clientX;
@@ -275,16 +276,16 @@ export function InspectorPanel({
         panelRef.current.style.width = next + 'px';
       }
       document.documentElement.style.setProperty('--inspector-width', next + 'px');
-      // Unfreeze grid when mouse stops moving, re-freeze when it moves again
-      onResizeDragChange?.(true);
+      // Freeze once on first move, unfreeze after 200ms idle
+      if (!froze) { froze = true; onResizeDragChange?.(true); }
       if (idleTimer) clearTimeout(idleTimer);
-      idleTimer = setTimeout(() => { onResizeDragChange?.(false); }, 200);
+      idleTimer = setTimeout(() => { froze = false; onResizeDragChange?.(false); }, 200);
     };
     const onUp = () => {
       if (!isDragging.current) return;
       isDragging.current = false;
       if (idleTimer) clearTimeout(idleTimer);
-      onResizeDragChange?.(false);
+      if (froze) { froze = false; onResizeDragChange?.(false); }
       panelRef.current?.classList.remove(styles.panelDragging);
       document.removeEventListener('mousemove', onMove);
       document.removeEventListener('mouseup', onUp);

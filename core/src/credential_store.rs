@@ -148,6 +148,14 @@ pub fn build_extractor_auth(cred: &SiteCredential) -> serde_json::Value {
                     serde_json::Value::String(token.clone()),
                 );
             }
+            // Some OAuth sites (Pixiv) also need cookies (PHPSESSID)
+            if let Some(ref cookies) = cred.cookies {
+                let cookie_obj: serde_json::Map<String, serde_json::Value> = cookies
+                    .iter()
+                    .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
+                    .collect();
+                obj.insert("cookies".into(), serde_json::Value::Object(cookie_obj));
+            }
         }
     }
 
