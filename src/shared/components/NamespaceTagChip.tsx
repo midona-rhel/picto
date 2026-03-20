@@ -1,7 +1,7 @@
 import { type ReactNode } from 'react';
 import { Text, ActionIcon } from '@mantine/core';
 import { IconX } from '@tabler/icons-react';
-import { useMantineColorScheme } from '@mantine/core';
+import { useComputedColorScheme } from '@mantine/core';
 import { namespaceChipStyle, chipStyleFromRgb } from '../lib/namespaceColors';
 import { extractNamespace as extractNamespaceFromTag } from '../lib/tagParsing';
 import { KbdTooltip } from './KbdTooltip';
@@ -17,7 +17,7 @@ interface NamespaceTagChipProps {
 }
 
 export function NamespaceTagChip({ tag, namespace, onRemove, onLabelClick, icon, colorRgb, size = 'md' }: NamespaceTagChipProps) {
-  const { colorScheme } = useMantineColorScheme();
+  const colorScheme = useComputedColorScheme('dark');
   const isDark = colorScheme === 'dark';
   const ns = namespace ?? extractNamespaceFromTag(tag);
   const chipStyle = colorRgb

@@ -70,7 +70,7 @@ pub async fn import_files(
     };
     let auto_merge_require_matching_dimensions =
         app_settings.duplicate_auto_merge_require_matching_dimensions;
-    crate::import::service::ImportService::import_files(
+    let result = crate::import::service::ImportService::import_files(
         &state.db,
         &state.blob_store,
         input.paths,
@@ -81,7 +81,13 @@ pub async fn import_files(
         auto_merge_require_matching_dimensions,
         input.initial_status,
     )
-    .await
+    .await?;
+
+    // Auto-tag imported files if enabled
+    let imported_hashes: Vec<String> = result.imported.iter().map(|r| r.hash.clone()).collect();
+    crate::dispatch::typed::ai_tagger::auto_tag_imported(state, &imported_hashes).await;
+
+    Ok(result)
 }
 
 pub async fn import_folder(
@@ -100,7 +106,7 @@ pub async fn import_folder(
     };
     let auto_merge_require_matching_dimensions =
         app_settings.duplicate_auto_merge_require_matching_dimensions;
-    crate::import::service::ImportService::import_folder(
+    let result = crate::import::service::ImportService::import_folder(
         &state.db,
         &state.blob_store,
         input.path,
@@ -111,7 +117,13 @@ pub async fn import_folder(
         auto_merge_require_matching_dimensions,
         input.initial_status,
     )
-    .await
+    .await?;
+
+    // Auto-tag imported files if enabled
+    let imported_hashes: Vec<String> = result.imported.iter().map(|r| r.hash.clone()).collect();
+    crate::dispatch::typed::ai_tagger::auto_tag_imported(state, &imported_hashes).await;
+
+    Ok(result)
 }
 
 // ─── Entity-level lifecycle commands ──────────────────────────────────────────

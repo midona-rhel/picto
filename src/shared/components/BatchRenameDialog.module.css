@@ -27,7 +27,7 @@
 
 .modeBtnActive {
   background: var(--color-primary);
-  color: #fff;
+  color: #fff; /* White on primary blue is always readable */
 }
 
 /* --------------------------------------------------------------------------

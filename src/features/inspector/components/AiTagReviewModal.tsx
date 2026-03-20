@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Button, Checkbox, Collapse, Group, Loader, Modal, Text, UnstyledButton } from '@mantine/core';
-import { IconChevronDown, IconChevronRight } from '@tabler/icons-react';
+import { Button, Checkbox, Group, Loader, Modal, Text } from '@mantine/core';
 import { api } from '#desktop/api';
+import { glassModalStyles } from '../../../shared/styles/glassModal';
+import { NamespaceTagChip } from '../../../shared/components/NamespaceTagChip';
 import type { AiFilePrediction, AiTagPrediction } from '../../../shared/types/api';
 
 interface AiTagReviewModalProps {
@@ -9,10 +10,6 @@ interface AiTagReviewModalProps {
   onClose: () => void;
   hashes: string[];
   onApply: (tags: string[]) => Promise<void>;
-}
-
-interface GroupState {
-  expanded: boolean;
 }
 
 const NAMESPACE_ORDER = ['general', 'character', 'copyright', 'artist', 'species', 'rating'];
@@ -30,7 +27,6 @@ export function AiTagReviewModal({ opened, onClose, hashes, onApply }: AiTagRevi
   const [applying, setApplying] = useState(false);
   const [predictions, setPredictions] = useState<AiFilePrediction[]>([]);
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [groups, setGroups] = useState<Record<string, GroupState>>({});
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -49,7 +45,6 @@ export function AiTagReviewModal({ opened, onClose, hashes, onApply }: AiTagRevi
       const result = await api.aiTagger.predict(hashes);
       setPredictions(result.predictions);
 
-      // Select all predicted tags by default
       const allTags = new Set<string>();
       for (const pred of result.predictions) {
         for (const tag of pred.tags) {
@@ -57,13 +52,6 @@ export function AiTagReviewModal({ opened, onClose, hashes, onApply }: AiTagRevi
         }
       }
       setSelected(allTags);
-
-      // Expand all groups by default
-      const gs: Record<string, GroupState> = {};
-      for (const ns of NAMESPACE_ORDER) {
-        gs[ns] = { expanded: true };
-      }
-      setGroups(gs);
     } catch (err) {
       setError(String(err));
     } finally {
@@ -71,7 +59,6 @@ export function AiTagReviewModal({ opened, onClose, hashes, onApply }: AiTagRevi
     }
   };
 
-  // Merge tags from all predictions, deduplicating and keeping highest confidence
   const mergedTags = useMemo(() => {
     const tagMap = new Map<string, AiTagPrediction>();
     for (const pred of predictions) {
@@ -86,7 +73,6 @@ export function AiTagReviewModal({ opened, onClose, hashes, onApply }: AiTagRevi
     return Array.from(tagMap.values());
   }, [predictions]);
 
-  // Group by namespace
   const grouped = useMemo(() => {
     const map = new Map<string, AiTagPrediction[]>();
     for (const tag of mergedTags) {
@@ -94,7 +80,6 @@ export function AiTagReviewModal({ opened, onClose, hashes, onApply }: AiTagRevi
       list.push(tag);
       map.set(tag.namespace, list);
     }
-    // Sort each group by confidence descending
     for (const list of map.values()) {
       list.sort((a, b) => b.confidence - a.confidence);
     }
@@ -108,27 +93,6 @@ export function AiTagReviewModal({ opened, onClose, hashes, onApply }: AiTagRevi
       else next.add(key);
       return next;
     });
-  };
-
-  const toggleGroup = (ns: string) => {
-    const tags = grouped.get(ns) ?? [];
-    const keys = tags.map((t) => `${t.namespace}:${t.tag}`);
-    const allSelected = keys.every((k) => selected.has(k));
-    setSelected((prev) => {
-      const next = new Set(prev);
-      for (const k of keys) {
-        if (allSelected) next.delete(k);
-        else next.add(k);
-      }
-      return next;
-    });
-  };
-
-  const toggleGroupExpand = (ns: string) => {
-    setGroups((prev) => ({
-      ...prev,
-      [ns]: { expanded: !(prev[ns]?.expanded ?? true) },
-    }));
   };
 
   const handleApply = async () => {
@@ -152,63 +116,73 @@ export function AiTagReviewModal({ opened, onClose, hashes, onApply }: AiTagRevi
       title="AI Tag Predictions"
       size="lg"
       centered
+      styles={glassModalStyles}
     >
       {loading ? (
-        <div style={{ display: 'flex', justifyContent: 'center', padding: 40 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 40 }}>
           <Loader size="sm" />
-          <Text ml="sm" size="sm" c="dimmed">Analyzing {hashes.length} {hashes.length === 1 ? 'image' : 'images'}...</Text>
+          <Text ml="sm" size="sm" style={{ color: 'var(--color-text-secondary)' }}>
+            Analyzing {hashes.length} {hashes.length === 1 ? 'image' : 'images'}...
+          </Text>
         </div>
       ) : error ? (
         <Text c="red" size="sm">{error}</Text>
       ) : mergedTags.length === 0 ? (
-        <Text c="dimmed" size="sm" ta="center" py={40}>No tags predicted above threshold.</Text>
+        <Text size="sm" ta="center" py={40} style={{ color: 'var(--color-text-tertiary)' }}>
+          No tags predicted above threshold.
+        </Text>
       ) : (
         <>
           <div style={{ maxHeight: 400, overflowY: 'auto' }}>
-            {orderedNamespaces.map((ns) => {
+            {orderedNamespaces.map((ns, i) => {
               const tags = grouped.get(ns) ?? [];
-              const keys = tags.map((t) => `${t.namespace}:${t.tag}`);
-              const selectedCount = keys.filter((k) => selected.has(k)).length;
-              const allSelected = selectedCount === keys.length;
-              const expanded = groups[ns]?.expanded ?? true;
-
               return (
-                <div key={ns} style={{ marginBottom: 8 }}>
-                  <Group gap={4} style={{ cursor: 'pointer', userSelect: 'none' }}>
-                    <UnstyledButton onClick={() => toggleGroupExpand(ns)} style={{ display: 'flex', alignItems: 'center' }}>
-                      {expanded ? <IconChevronDown size={14} /> : <IconChevronRight size={14} />}
-                    </UnstyledButton>
-                    <Checkbox
-                      checked={allSelected}
-                      indeterminate={selectedCount > 0 && !allSelected}
-                      onChange={() => toggleGroup(ns)}
-                      size="xs"
-                    />
-                    <Text size="sm" fw={600} onClick={() => toggleGroupExpand(ns)} style={{ cursor: 'pointer' }}>
-                      {NAMESPACE_LABELS[ns] ?? ns} ({tags.length})
+                <div key={ns}>
+                  {/* Section header */}
+                  <div style={{
+                    padding: '8px 0 4px',
+                    marginTop: i > 0 ? 8 : 0,
+                    borderBottom: '1px solid var(--color-border-primary)',
+                  }}>
+                    <Text size="xs" fw={600} style={{ color: 'var(--color-text-secondary)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                      {NAMESPACE_LABELS[ns] ?? ns}
                     </Text>
-                  </Group>
+                  </div>
 
-                  <Collapse in={expanded}>
-                    <div style={{ paddingLeft: 36, paddingTop: 4 }}>
-                      {tags.map((tag) => {
-                        const key = `${tag.namespace}:${tag.tag}`;
-                        return (
-                          <Group key={key} gap={8} py={2} wrap="nowrap">
-                            <Checkbox
-                              checked={selected.has(key)}
-                              onChange={() => toggleTag(key)}
-                              size="xs"
-                            />
-                            <Text size="xs" style={{ flex: 1 }}>{tag.tag}</Text>
-                            <Text size="xs" c="dimmed" style={{ fontVariantNumeric: 'tabular-nums' }}>
-                              {Math.round(tag.confidence * 100)}%
-                            </Text>
-                          </Group>
-                        );
-                      })}
-                    </div>
-                  </Collapse>
+                  {/* Tag rows */}
+                  {tags.map((tag) => {
+                    const key = `${tag.namespace}:${tag.tag}`;
+                    return (
+                      <div
+                        key={key}
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: 8,
+                          padding: '4px 0',
+                        }}
+                      >
+                        <NamespaceTagChip tag={tag.tag} namespace={tag.namespace} size="sm" />
+                        <Text
+                          size="xs"
+                          style={{
+                            marginLeft: 'auto',
+                            fontVariantNumeric: 'tabular-nums',
+                            color: 'var(--color-text-tertiary)',
+                            flexShrink: 0,
+                          }}
+                        >
+                          {Math.round(tag.confidence * 100)}%
+                        </Text>
+                        <Checkbox
+                          checked={selected.has(key)}
+                          onChange={() => toggleTag(key)}
+                          size="xs"
+                          style={{ flexShrink: 0 }}
+                        />
+                      </div>
+                    );
+                  })}
                 </div>
               );
             })}

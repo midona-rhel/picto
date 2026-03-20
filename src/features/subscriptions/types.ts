@@ -2,6 +2,7 @@ export interface SitePluginInfo {
   id: string;
   name: string;
   domain: string;
+  example_query: string;
   auth_supported?: boolean;
   auth_required_for_full_access?: boolean;
 }

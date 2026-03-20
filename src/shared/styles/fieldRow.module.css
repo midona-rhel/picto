@@ -55,8 +55,8 @@
 }
 
 [data-mantine-color-scheme="light"] .fieldRow {
-  background: var(--color-white-50);
-  border-color: var(--color-border-secondary);
+  background: rgba(0, 0, 0, 0.04);
+  border-color: rgba(0, 0, 0, 0.12);
 }
 
 [data-mantine-color-scheme="light"] .fieldRowIcon:hover {

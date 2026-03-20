@@ -4,10 +4,12 @@ import {
   IconPhoto,
   IconPlus,
   IconFolder,
-  IconAlignLeft,
   IconPin,
   IconPinFilled,
   IconSparkles,
+  IconPencil,
+  IconCheck,
+  IconX,
 } from '@tabler/icons-react';
 import { TagSelectService } from '../../tags/components/tagSelectService';
 import { FolderPickerService } from '../../../shared/services/folderPickerService';
@@ -16,13 +18,13 @@ import { KbdTooltip } from '../../../shared/components/KbdTooltip';
 import { useNavigationStore } from '../../../state/navigationStore';
 import { useFilterStore } from '../../../state/filterStore';
 import { formatFileSize, formatDuration, formatDateTime, getFileExtension } from '../../../shared/lib/formatters';
-import { MediaItem } from '../../grid/shared';
+import type { MediaItem } from '../../grid/shared';
 import { GlassImagePreview } from '../../../shared/components/GlassImagePreview';
 import { NamespaceTagChip } from '../../../shared/components/NamespaceTagChip';
 import { StarRating } from '../../../shared/components/StarRating';
 import { InspectorSection } from '../../../shared/components/InspectorSection';
 import { PropertyRow } from '../../../shared/components/PropertyRow';
-import { UrlListEditor } from '../../../shared/components/UrlListEditor';
+
 import { ColorPalette } from '../../../shared/components/ColorPalette';
 import { EmptyState } from '../../../shared/components/EmptyState';
 import type {
@@ -35,89 +37,216 @@ import type { CollectionSummary } from '../../../shared/types/api';
 import type { FolderMembership } from '../hooks/useInspectorData';
 import { AiTagReviewModal } from './AiTagReviewModal';
 import { api } from '#desktop/api';
+import { registerUndoAction } from '../../../shared/controllers/undoRedoController';
 import styles from './InspectorPanel.module.css';
 
 const isMac = navigator.platform.includes('Mac');
 
-/** Compact notes field — icon | separator | single-line display, hover shows editable textarea below */
-function NotesField({ value, onChange, readOnly }: { value: string; onChange: (v: string) => void; readOnly?: boolean }) {
-  const [showEditor, setShowEditor] = useState(false);
-  const displayRef = useRef<HTMLDivElement>(null);
-  const editorTimerRef = useRef<ReturnType<typeof setTimeout>>();
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
+/** View-first editable text field — single row pill, hover popover for content. */
+function EditableTextField({ value, onChange, placeholder, readOnly, multiline, fieldId, activePopover, onPopover }: {
+  value: string; onChange: (v: string) => void; placeholder: string; readOnly?: boolean; multiline?: boolean;
+  fieldId: string; activePopover: string | null; onPopover: (id: string | null) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const inputRef = useRef<HTMLInputElement | HTMLTextAreaElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
+  const hoverTimer = useRef<ReturnType<typeof setTimeout>>();
 
-  const openEditor = () => {
-    if (readOnly) return;
-    clearTimeout(editorTimerRef.current);
-    setShowEditor(true);
+  const isTruncated = () => {
+    const el = contentRef.current;
+    return el ? el.scrollWidth > el.clientWidth : false;
   };
 
-  const scheduleClose = () => {
-    editorTimerRef.current = setTimeout(() => setShowEditor(false), 200);
+  const showPopover = activePopover === fieldId && !editing && !!value;
+
+  useEffect(() => {
+    if (editing && inputRef.current) inputRef.current.focus();
+  }, [editing]);
+
+  const handleDone = () => setEditing(false);
+
+  const handleMouseEnter = () => {
+    if (editing) return;
+    clearTimeout(hoverTimer.current);
+    // Only show popover if content is actually truncated
+    if (value && isTruncated()) onPopover(fieldId);
   };
 
-  const handleRowMouseEnter = () => {
-    if (readOnly) return;
-    clearTimeout(editorTimerRef.current);
-    if (value) setShowEditor(true);
-  };
-
-  const handleRowMouseLeave = () => {
-    scheduleClose();
-  };
-
-  const handleEditorMouseEnter = () => {
-    clearTimeout(editorTimerRef.current);
-  };
-
-  const handleEditorMouseLeave = () => {
-    // Only close if textarea is not focused
-    if (document.activeElement !== textareaRef.current) {
-      scheduleClose();
-    }
-  };
-
-  const handleBlur = () => {
-    scheduleClose();
+  const handleMouseLeave = () => {
+    hoverTimer.current = setTimeout(() => onPopover(null), 400);
   };
 
   return (
-    <div className={styles.fieldRow} style={{ position: 'relative' }}>
-      <KbdTooltip label="Notes">
-        <button
-          className={styles.fieldRowIcon}
-          onClick={openEditor}
-          tabIndex={-1}
-        >
-          <IconAlignLeft size={14} />
+    <div
+      className={styles.editableField}
+      onMouseEnter={handleMouseEnter}
+      onMouseLeave={handleMouseLeave}
+    >
+      {editing && !readOnly ? (
+        <>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            {multiline ? (
+              <textarea
+                ref={inputRef as React.RefObject<HTMLTextAreaElement>}
+                className={styles.ghostInput}
+                value={value}
+                onChange={(e) => onChange(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Escape') handleDone(); }}
+                placeholder={placeholder}
+                rows={1}
+              />
+            ) : (
+              <input
+                ref={inputRef as React.RefObject<HTMLInputElement>}
+                className={styles.ghostInput}
+                value={value}
+                onChange={(e) => onChange(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Escape') handleDone(); if (e.key === 'Enter') handleDone(); }}
+                placeholder={placeholder}
+              />
+            )}
+          </div>
+          <button className={styles.editToggleBtn} onClick={handleDone} tabIndex={-1}>
+            <IconCheck size={13} />
+          </button>
+        </>
+      ) : (
+        <>
+          <div ref={contentRef} className={styles.editableFieldContent}>
+            {value || <span className={styles.editableFieldPlaceholder}>{placeholder}</span>}
+          </div>
+          {!readOnly && (
+            <button className={styles.editToggleBtn} onClick={() => { onPopover(null); setEditing(true); }} tabIndex={-1}>
+              <IconPencil size={13} />
+            </button>
+          )}
+        </>
+      )}
+      {showPopover && (
+        <div className={styles.fieldHoverPopover}>
+          {value}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function isValidUrl(text: string): boolean {
+  try { new URL(text); return true; } catch { return false; }
+}
+
+function extractDomain(url: string): string {
+  try { return new URL(url).hostname.replace(/^www\./, ''); } catch { return url; }
+}
+
+/** View-first URL list — single row pill shows domain summary, hover shows full URLs. */
+function EditableUrlList({ urls, onChange, readOnly, fieldId, activePopover, onPopover }: {
+  urls: string[]; onChange: (urls: string[]) => void; readOnly?: boolean;
+  fieldId: string; activePopover: string | null; onPopover: (id: string | null) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const hoverTimer = useRef<ReturnType<typeof setTimeout>>();
+  const showPopover = activePopover === fieldId && !editing && urls.length > 0;
+
+  const handleUrlChange = (index: number, value: string) => {
+    const next = [...urls];
+    next[index] = value;
+    onChange(next);
+  };
+
+  const handleRemove = (index: number) => {
+    onChange(urls.filter((_, i) => i !== index));
+  };
+
+  const handleAdd = () => {
+    onChange([...urls, '']);
+  };
+
+  const handleDone = () => {
+    onChange(urls.filter((u) => u.trim()));
+    setEditing(false);
+  };
+
+  const handleMouseEnter = () => {
+    if (editing) return;
+    clearTimeout(hoverTimer.current);
+    if (urls.length > 0) onPopover(fieldId);
+  };
+
+  const handleMouseLeave = () => {
+    hoverTimer.current = setTimeout(() => onPopover(null), 400);
+  };
+
+  if (editing && !readOnly) {
+    return (
+      <div className={styles.editableFieldColumn}>
+        <div style={{ display: 'flex', alignItems: 'center' }}>
+          <span className={styles.editableFieldPlaceholder} style={{ flex: 1, fontSize: 'var(--font-size-xs)' }}>Source URLs</span>
+          <button className={styles.editToggleBtn} onClick={handleDone} tabIndex={-1}>
+            <IconCheck size={13} />
+          </button>
+        </div>
+        {urls.map((url, idx) => (
+          <div key={idx} className={styles.urlEditRow}>
+            <input
+              className={styles.ghostInput}
+              value={url}
+              onChange={(e) => handleUrlChange(idx, e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Escape') handleDone(); }}
+              placeholder="https://..."
+              autoFocus={idx === urls.length - 1 && !url}
+            />
+            <button className={styles.urlRemoveBtn} onClick={() => handleRemove(idx)} tabIndex={-1}>
+              <IconX size={11} />
+            </button>
+          </div>
+        ))}
+        <button className={styles.inspectorAddUrlBtn} onClick={handleAdd}>
+          <IconPlus size={11} />
+          <span>Add URL</span>
         </button>
-      </KbdTooltip>
-      <div className={styles.fieldRowSep} />
-      <div
-        ref={displayRef}
-        className={styles.fieldRowContent}
-        onClick={!value && !readOnly ? openEditor : undefined}
-        onMouseEnter={handleRowMouseEnter}
-        onMouseLeave={handleRowMouseLeave}
-      >
-        {value || <span className={styles.fieldRowPlaceholder}>Notes</span>}
       </div>
-      {showEditor && !readOnly && (
-        <div
-          className={styles.fieldRowPopover}
-          onMouseEnter={handleEditorMouseEnter}
-          onMouseLeave={handleEditorMouseLeave}
-        >
-          <textarea
-            ref={textareaRef}
-            className={styles.fieldRowPopoverTextarea}
-            value={value}
-            onChange={(e) => onChange(e.target.value)}
-            onFocus={() => clearTimeout(editorTimerRef.current)}
-            onBlur={handleBlur}
-            onKeyDown={(e) => { if (e.key === 'Escape') { e.preventDefault(); setShowEditor(false); } }}
-            placeholder="Notes"
-          />
+    );
+  }
+
+  const domainSummary = urls.length > 0
+    ? urls.map(extractDomain).join(', ')
+    : '';
+
+  return (
+    <div
+      className={styles.editableField}
+      onMouseEnter={handleMouseEnter}
+      onMouseLeave={handleMouseLeave}
+    >
+      <div className={styles.editableFieldContent}>
+        {domainSummary || <span className={styles.editableFieldPlaceholder}>Source</span>}
+      </div>
+      {!readOnly && (
+        <button className={styles.editToggleBtn} onClick={() => {
+          onPopover(null);
+          if (urls.length === 0) onChange(['']);
+          setEditing(true);
+        }} tabIndex={-1}>
+          <IconPencil size={13} />
+        </button>
+      )}
+      {showPopover && (
+        <div className={styles.fieldHoverPopover}>
+          {urls.map((url, idx) => {
+            const valid = isValidUrl(url);
+            return valid ? (
+              <span
+                key={idx}
+                className={styles.hoverPopoverLink}
+                onClick={() => api.os.openExternalUrl(url)}
+              >
+                {url}
+              </span>
+            ) : (
+              <div key={idx} style={{ padding: '2px 0', color: 'var(--color-text-tertiary)' }}>{url}</div>
+            );
+          })}
         </div>
       )}
     </div>
@@ -237,6 +366,7 @@ export function InspectorPanel({
 }: InspectorPanelProps) {
   const [sectionState, setSectionState] = useState<SectionCollapseState>(loadSectionState);
   const [aiTagModalOpen, setAiTagModalOpen] = useState(false);
+  const [activePopover, setActivePopover] = useState<string | null>(null);
   const addTagBtnRef = useRef<HTMLButtonElement>(null);
   const addFolderBtnRef = useRef<HTMLButtonElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
@@ -562,8 +692,8 @@ export function InspectorPanel({
               </div>
 
               <div className={styles.fieldStack}>
-                <NotesField value={notes} onChange={onUpdateNotes} />
-                <UrlListEditor urls={sourceUrls} onChange={handleUrlChange} />
+                <EditableTextField value={notes} onChange={onUpdateNotes} placeholder="Notes" multiline fieldId="vs-notes" activePopover={activePopover} onPopover={setActivePopover} />
+                <EditableUrlList urls={sourceUrls} onChange={handleUrlChange} fieldId="vs-urls" activePopover={activePopover} onPopover={setActivePopover} />
               </div>
 
               {renderTags()}
@@ -605,18 +735,9 @@ export function InspectorPanel({
               />
 
               <div className={styles.fieldStack}>
-                <input
-                  className={styles.fieldInput}
-                  value={imageName}
-                  onChange={(e) => onImageNameChange(e.target.value)}
-                  placeholder="Name"
-                />
-                <NotesField value={notes} onChange={onUpdateNotes} readOnly={selectedImage.is_collection} />
-                <UrlListEditor
-                  urls={sourceUrls}
-                  onChange={handleUrlChange}
-                  readOnly={selectedImage.is_collection}
-                />
+                <EditableTextField value={imageName} onChange={onImageNameChange} placeholder="Name" readOnly={selectedImage.is_collection} fieldId="name" activePopover={activePopover} onPopover={setActivePopover} />
+                <EditableTextField value={notes} onChange={onUpdateNotes} placeholder="Notes" readOnly={selectedImage.is_collection} multiline fieldId="notes" activePopover={activePopover} onPopover={setActivePopover} />
+                <EditableUrlList urls={sourceUrls} onChange={handleUrlChange} readOnly={selectedImage.is_collection} fieldId="urls" activePopover={activePopover} onPopover={setActivePopover} />
               </div>
 
               {renderTags()}
@@ -638,8 +759,8 @@ export function InspectorPanel({
               </div>
 
               <div className={styles.fieldStack}>
-                <NotesField value={notes} onChange={onUpdateNotes} />
-                <UrlListEditor urls={sourceUrls} onChange={handleUrlChange} />
+                <EditableTextField value={notes} onChange={onUpdateNotes} placeholder="Notes" multiline fieldId="ms-notes" activePopover={activePopover} onPopover={setActivePopover} />
+                <EditableUrlList urls={sourceUrls} onChange={handleUrlChange} fieldId="ms-urls" activePopover={activePopover} onPopover={setActivePopover} />
               </div>
 
               {renderTags()}
@@ -671,7 +792,18 @@ export function InspectorPanel({
         hashes={selectedImages.map((img) => img.hash)}
         onApply={async (tags) => {
           const hashes = selectedImages.map((img) => img.hash);
-          await api.aiTagger.apply(hashes, tags);
+          const tagsSnapshot = [...tags];
+          const hashesSnapshot = [...hashes];
+          await api.aiTagger.apply(hashesSnapshot, tagsSnapshot);
+          registerUndoAction({
+            label: `Auto-tag ${hashesSnapshot.length} file${hashesSnapshot.length === 1 ? '' : 's'}`,
+            undo: async () => {
+              await api.tags.remove(hashesSnapshot, tagsSnapshot);
+            },
+            redo: async () => {
+              await api.aiTagger.apply(hashesSnapshot, tagsSnapshot);
+            },
+          });
           await onAddTags([]); // trigger metadata refresh
         }}
       />

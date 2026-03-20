@@ -5,6 +5,7 @@ import {
   Select,
   ActionIcon,
   Collapse,
+  Tooltip,
 } from '@mantine/core';
 import { TextButton } from '../../../shared/components/TextButton';
 import { EmptyState } from '../../../shared/components/EmptyState';
@@ -569,21 +570,29 @@ export function SubscriptionGroupsPanel({
                         <Select
                           placeholder="Site"
                           size="xs"
+                          searchable
                           data={sites.map((si) => ({ value: si.id, label: si.name }))}
                           value={addSite}
                           onChange={(v) => setAddSite(v || '')}
                           disabled={addLoading}
                           style={{ flex: 1 }}
                         />
-                        <TextInput
-                          placeholder="Query"
-                          size="xs"
-                          value={addQuery}
-                          onChange={(e) => setAddQuery(e.target.value)}
-                          onKeyDown={(e) => { if (e.key === 'Enter') handleAddQuery(subscriptionGroup.id); }}
-                          disabled={addLoading}
-                          style={{ flex: 2 }}
-                        />
+                        <Tooltip
+                          label={`e.g. ${sites.find((s) => s.id === addSite)?.example_query ?? '...'}`}
+                          position="top"
+                          withArrow
+                          disabled={!addSite}
+                        >
+                          <TextInput
+                            placeholder={sites.find((s) => s.id === addSite)?.example_query || 'Query'}
+                            size="xs"
+                            value={addQuery}
+                            onChange={(e) => setAddQuery(e.target.value)}
+                            onKeyDown={(e) => { if (e.key === 'Enter') handleAddQuery(subscriptionGroup.id); }}
+                            disabled={addLoading}
+                            style={{ flex: 2 }}
+                          />
+                        </Tooltip>
                       </div>
                       <div className={st.addQueryActions}>
                         <TextButton compact onClick={() => setAddingTo(null)} disabled={addLoading}>Cancel</TextButton>

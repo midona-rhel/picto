@@ -298,6 +298,96 @@ async fn ensure_session(state: &AppState, slug: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Auto-tag a batch of newly imported files if the setting is enabled and
+/// at least one model is downloaded. Called from import dispatch handlers.
+/// Silently skips if disabled, no models enabled, or models not downloaded.
+pub async fn auto_tag_imported(state: &AppState, hashes: &[String]) {
+    if hashes.is_empty() {
+        return;
+    }
+    let settings = state.settings.get();
+    if !settings.ai_tagger_auto_on_import {
+        return;
+    }
+
+    let mut slugs = Vec::new();
+    if settings.ai_tagger_wd14_enabled {
+        slugs.push(WD14_SLUG);
+    }
+    if settings.ai_tagger_e621_enabled {
+        slugs.push(E621_SLUG);
+    }
+    if slugs.is_empty() {
+        return;
+    }
+
+    // Ensure sessions are loaded — skip silently if model not downloaded
+    for slug in &slugs {
+        if let Err(e) = ensure_session(state, slug).await {
+            tracing::debug!(slug, error = %e, "auto_tag_imported: skipping (session not available)");
+            return;
+        }
+    }
+
+    let thresholds = thresholds_from_settings(&settings);
+
+    for hash in hashes {
+        let image_bytes = match read_original_image(state, hash).await {
+            Ok(bytes) => bytes,
+            Err(e) => {
+                tracing::debug!(hash, error = %e, "auto_tag_imported: skipping file");
+                continue;
+            }
+        };
+
+        let mut all_tags: Vec<crate::ai_tagger::inference::TagPrediction> = Vec::new();
+        {
+            let mut guard = state.ai_taggers.lock().await;
+            for slug in &slugs {
+                if let Some(session) = guard.get_mut(*slug) {
+                    match session.predict(&image_bytes, &thresholds) {
+                        Ok(tags) => all_tags.extend(tags),
+                        Err(e) => {
+                            tracing::warn!(slug, hash, error = %e, "auto_tag_imported: inference failed");
+                        }
+                    }
+                }
+            }
+        }
+
+        // Deduplicate (keep highest confidence)
+        all_tags.sort_by(|a, b| {
+            a.namespace
+                .cmp(&b.namespace)
+                .then(a.tag.cmp(&b.tag))
+                .then(
+                    b.confidence
+                        .partial_cmp(&a.confidence)
+                        .unwrap_or(std::cmp::Ordering::Equal),
+                )
+        });
+        all_tags.dedup_by(|a, b| a.namespace == b.namespace && a.tag == b.tag);
+
+        // Apply tags
+        for pred in &all_tags {
+            let tag_str = if pred.namespace.is_empty() {
+                pred.tag.clone()
+            } else {
+                format!("{}:{}", pred.namespace, pred.tag)
+            };
+            if let Some((ns, st)) = crate::tags::normalize::parse_tag(&tag_str) {
+                if let Err(e) = state.db.tag_entity(hash, &ns, &st, "ai").await {
+                    tracing::warn!(hash, tag = tag_str, error = %e, "auto_tag_imported: tag failed");
+                }
+            }
+        }
+
+        if !all_tags.is_empty() {
+            tracing::info!(hash, tags = all_tags.len(), "auto_tag_imported: applied");
+        }
+    }
+}
+
 fn thresholds_from_settings(settings: &crate::settings::store::AppSettings) -> Thresholds {
     Thresholds {
         general: settings.ai_threshold_general,

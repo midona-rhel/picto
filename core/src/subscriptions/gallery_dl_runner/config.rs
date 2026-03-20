@@ -34,6 +34,20 @@ pub fn build_config(opts: &RunOptions, _temp_dir: &Path) -> serde_json::Value {
         apply_credential_auth(&mut extractor, cred);
     }
 
+    // Sites using dispatch URLs: include gallery + scraps, exclude favorites/stories.
+    let gallery_scraps = serde_json::Value::Array(vec![
+        serde_json::Value::String("gallery".into()),
+        serde_json::Value::String("scraps".into()),
+    ]);
+    for site_key in ["furaffinity", "hentaifoundry"] {
+        let site_obj = extractor
+            .entry(site_key)
+            .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()));
+        if let serde_json::Value::Object(ref mut m) = site_obj {
+            m.insert("include".into(), gallery_scraps.clone());
+        }
+    }
+
     // Ugoira postprocessor: convert Pixiv animation ZIPs to WebM via ffmpeg.
     let mut postprocessors = Vec::new();
     if let Ok(ffmpeg) = crate::media_processing::ffmpeg_path::ffmpeg_path() {

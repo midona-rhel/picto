@@ -256,15 +256,220 @@
   height: 120px;
 }
 
+/* Editable field — pill container, view-first pattern */
+
+.editableField {
+  display: flex;
+  align-items: center;
+  height: 32px;
+  padding: 4px 8px;
+  gap: 6px;
+  border-radius: 6px;
+  background: var(--color-white-05);
+  border: 1px solid var(--color-border-secondary);
+  margin-bottom: 8px;
+  position: relative;
+}
+
+.editableFieldColumn {
+  composes: editableField;
+  flex-direction: column;
+  align-items: stretch;
+  height: auto;
+}
+
+.editableFieldContent {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-family);
+  font-size: var(--font-size-md);
+  line-height: 20px;
+  color: var(--color-text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.editableFieldPlaceholder {
+  color: var(--color-text-tertiary);
+}
+
+/* Hover popover for truncated content */
+@keyframes popoverFadeIn {
+  from { opacity: 0; transform: translateY(-2px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.fieldHoverPopover {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  z-index: 10;
+  background: var(--color-white-05);
+  border: 1px solid var(--color-border-secondary);
+  border-radius: 6px;
+  box-shadow: var(--box-border-shadow-small);
+  padding: 10px 10px;
+  margin-top: 6px;
+  max-height: 220px;
+  overflow-y: auto;
+  font-family: var(--font-family);
+  font-size: var(--font-size-md);
+  line-height: var(--line-height-relaxed);
+  color: var(--color-text-primary);
+  white-space: pre-wrap;
+  word-break: break-word;
+  animation: popoverFadeIn 120ms ease-out;
+  backdrop-filter: blur(16px) saturate(1.2);
+  -webkit-backdrop-filter: blur(16px) saturate(1.2);
+  user-select: text;
+  -webkit-user-select: text;
+  cursor: text;
+}
+
+[data-mantine-color-scheme="light"] .fieldHoverPopover {
+  background: rgba(255, 255, 255, 0.92);
+  border-color: rgba(0, 0, 0, 0.10);
+}
+
+.editableFieldLink {
+  color: var(--color-text-primary);
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.editableFieldLink:hover {
+  text-decoration: underline;
+}
+
+/* URL link in hover popover — subtle glow */
+.hoverPopoverLink {
+  display: block;
+  padding: 2px 0;
+  color: var(--color-text-primary);
+  text-shadow: 0 0 12px rgba(255, 255, 255, 0.15);
+  cursor: pointer;
+  text-decoration: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hoverPopoverLink:hover {
+  text-decoration: underline;
+  text-shadow: 0 0 16px rgba(255, 255, 255, 0.25);
+}
+
+[data-mantine-color-scheme="light"] .hoverPopoverLink {
+  text-shadow: 0 0 8px rgba(0, 0, 0, 0.06);
+}
+
+[data-mantine-color-scheme="light"] .hoverPopoverLink:hover {
+  text-shadow: 0 0 12px rgba(0, 0, 0, 0.1);
+}
+
+.ghostInput {
+  background: none;
+  border: none;
+  outline: none;
+  color: var(--color-text-primary);
+  font-family: var(--font-family);
+  font-size: var(--font-size-md);
+  line-height: 20px;
+  width: 100%;
+  min-width: 0;
+  padding: 0;
+  resize: none;
+  field-sizing: content;
+}
+
+.ghostInput::placeholder {
+  color: var(--color-text-tertiary);
+}
+
+.editToggleBtn {
+  composes: btnReset from '../../../shared/styles/buttonReset.module.css';
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  border-radius: 4px;
+  color: var(--color-text-primary);
+  opacity: 0.35;
+  transition: opacity 150ms ease;
+}
+
+.editToggleBtn:hover {
+  opacity: 1;
+}
+
+.urlViewRow {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 20px;
+  overflow: hidden;
+}
+
+.urlEditRow {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 24px;
+  width: 100%;
+}
+
+.urlRemoveBtn {
+  composes: btnReset from '../../../shared/styles/buttonReset.module.css';
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 4px;
+  color: var(--color-text-primary);
+  opacity: 0.3;
+  flex-shrink: 0;
+}
+
+.urlRemoveBtn:hover {
+  opacity: 1;
+}
+
+.inspectorAddUrlBtn {
+  composes: btnReset from '../../../shared/styles/buttonReset.module.css';
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 24px;
+  color: var(--color-text-tertiary);
+  font-family: var(--font-family);
+  font-size: var(--font-size-xs);
+  margin-top: 2px;
+}
+
+.inspectorAddUrlBtn:hover {
+  color: var(--color-text-primary);
+}
+
+[data-mantine-color-scheme="light"] .editableField,
+[data-mantine-color-scheme="light"] .editableFieldColumn {
+  background: rgba(0, 0, 0, 0.04);
+  border-color: rgba(0, 0, 0, 0.10);
+}
+
 /* Light theme overrides */
 
 [data-mantine-color-scheme="light"] .fieldInput {
-  background: var(--color-white-50);
-  border-color: var(--color-border-secondary);
+  background: rgba(0, 0, 0, 0.04);
+  border-color: rgba(0, 0, 0, 0.12);
 }
 
 [data-mantine-color-scheme="light"] .fieldInput:focus {
-  background: var(--color-white-80);
+  background: #fff;
   border-color: var(--color-primary);
 }
 

@@ -57,3 +57,12 @@
   background: rgba(255, 255, 255, 0.85);
   transition: width 50ms linear;
 }
+
+/* Progress bar sits over image thumbnails — use dark track in light mode */
+[data-mantine-color-scheme="light"] .progressTrack {
+  background: rgba(0, 0, 0, 0.15);
+}
+
+[data-mantine-color-scheme="light"] .progressFill {
+  background: var(--color-primary);
+}

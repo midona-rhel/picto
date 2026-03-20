@@ -7,7 +7,7 @@ pub(super) struct FallbackAdapter;
 
 impl SiteAdapter for FallbackAdapter {
     fn extract_creator_identifier(&self, json: &Value) -> Option<String> {
-        for key in ["artist", "user", "uploader"] {
+        for key in ["artist", "username", "user", "uploader", "blog_name"] {
             if let Some(name) = json
                 .get(key)
                 .and_then(|v| v.as_str())

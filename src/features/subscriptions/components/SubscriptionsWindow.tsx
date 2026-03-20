@@ -93,12 +93,13 @@ function parseBooruApiCredential(raw: string): { userId: string; apiKey: string 
 
 function parseCookies(raw: string): Record<string, string> {
   const out: Record<string, string> = {};
-  const lines = raw.split('\n').map((s) => s.trim()).filter(Boolean);
-  for (const line of lines) {
-    const idx = line.indexOf('=');
+  // Split on newlines or semicolons to handle both "a=x; b=y" and "a=x\nb=y"
+  const entries = raw.split(/[\n;]/).map((s) => s.trim()).filter(Boolean);
+  for (const entry of entries) {
+    const idx = entry.indexOf('=');
     if (idx <= 0) continue;
-    const key = line.slice(0, idx).trim();
-    const value = line.slice(idx + 1).trim();
+    const key = entry.slice(0, idx).trim();
+    const value = entry.slice(idx + 1).trim();
     if (!key || !value) continue;
     out[key] = value;
   }
@@ -141,6 +142,10 @@ function validateCredentialForm(form: CredentialFormState): string | null {
     if (isTwitter) {
       if (!parsed['auth_token'] || !parsed['ct0']) {
         return 'Twitter/X requires both auth_token and ct0 cookies.';
+      }
+    } else if (isFuraffinityCategory(form.siteCategory)) {
+      if (!parsed['a'] || !parsed['b']) {
+        return 'FurAffinity requires both "a" and "b" cookies.';
       }
     } else if (Object.keys(parsed).length === 0) {
       return 'At least one cookie entry (key=value) is required.';
@@ -213,6 +218,10 @@ export function SubscriptionsWindow() {
     () => isTwitterCategory(credentialForm.siteCategory),
     [credentialForm.siteCategory],
   );
+  const isFuraffinityCredential = useMemo(
+    () => isFuraffinityCategory(credentialForm.siteCategory),
+    [credentialForm.siteCategory],
+  );
   const isPixivCredential = useMemo(
     () => isPixivCategory(credentialForm.siteCategory),
     [credentialForm.siteCategory],
@@ -221,10 +230,11 @@ export function SubscriptionsWindow() {
     () => {
       if (isBooruApiCredential) return [{ value: 'api_key', label: 'API Key (user-id + api-key)' }];
       if (isTwitterCredential) return [{ value: 'cookies', label: 'Browser Cookies (auth_token + ct0)' }];
+      if (isFuraffinityCredential) return [{ value: 'cookies', label: 'Browser Cookies (a + b)' }];
       if (isPixivCredential) return [{ value: 'oauth_token', label: 'OAuth (Pixiv login)' }];
       return CREDENTIAL_TYPE_OPTIONS;
     },
-    [isBooruApiCredential, isTwitterCredential, isPixivCredential],
+    [isBooruApiCredential, isTwitterCredential, isFuraffinityCredential, isPixivCredential],
   );
   const missingRequiredAuthSites = useMemo(
     () => authSites.filter((site) => site.auth_required_for_full_access && !credentialMap.get(site.id)),
@@ -242,7 +252,7 @@ export function SubscriptionsWindow() {
     const existing = credentialMap.get(site.id);
     const defaultType: CredentialType = isBooruApiKeyCategory(site.id)
       ? 'api_key'
-      : isTwitterCategory(site.id)
+      : (isTwitterCategory(site.id) || isFuraffinityCategory(site.id))
         ? 'cookies'
         : isPixivCategory(site.id)
           ? 'oauth_token'
@@ -464,6 +474,26 @@ export function SubscriptionsWindow() {
                     cookiesRaw: `auth_token=${prev.username}\nct0=${val}`,
                   }));
                 }}
+              />
+            </>
+          )}
+
+          {/* ── FurAffinity ── */}
+          {isFuraffinityCredential && (
+            <>
+              <Text size="xs" c="dimmed">
+                FurAffinity requires browser cookies. To get them:
+              </Text>
+              <Text size="xs" c="dimmed" component="ol" style={{ margin: 0, paddingLeft: 16 }}>
+                <li>Log into <span role="button" style={{ color: 'var(--color-primary)', cursor: 'pointer' }} onClick={() => api.os.openExternalUrl('https://www.furaffinity.net')}>furaffinity.net</span> in your browser</li>
+                <li>Open DevTools (F12) → Application → Cookies → furaffinity.net</li>
+                <li>Copy cookies <code>a</code> and <code>b</code> and paste below</li>
+              </Text>
+              <TextInput
+                label="Cookies"
+                placeholder="a=VALUE; b=VALUE"
+                value={credentialForm.cookiesRaw}
+                onChange={(e) => setCredentialForm((prev) => ({ ...prev, cookiesRaw: e.currentTarget.value }))}
               />
             </>
           )}

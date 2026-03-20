@@ -58,9 +58,6 @@ impl<'a> SubscriptionSyncEngine<'a> {
         options.tags = metadata.tags.clone();
         options.source_urls = metadata.source_urls.clone();
         options.created_at = metadata.created_at.clone();
-        if !gallery_url.is_empty() {
-            options.source_urls.push(gallery_url.to_string());
-        }
         let mut seen_urls = HashSet::new();
         options.source_urls.retain(|url| {
             let trimmed = url.trim();
@@ -199,9 +196,6 @@ impl<'a> SubscriptionSyncEngine<'a> {
         }
 
         let mut source_urls = metadata.source_urls.clone();
-        if !gallery_url.is_empty() {
-            source_urls.push(gallery_url.to_string());
-        }
         source_urls.retain(|url| !url.trim().is_empty());
         let mut deduped = Vec::with_capacity(source_urls.len());
         for url in source_urls {

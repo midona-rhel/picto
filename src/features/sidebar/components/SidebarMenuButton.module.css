@@ -6,12 +6,12 @@
   width: 28px;
   height: 28px;
   border-radius: 6px;
-  color: #fff;
+  color: var(--color-text-primary);
   -webkit-app-region: no-drag;
   transition: color 150ms ease, background 150ms ease;
 }
 
 .button:hover {
-  color: #fff;
+  color: var(--color-text-primary);
   background: var(--ig-bg-hover);
 }

@@ -175,57 +175,50 @@ function FolderPickerPanel({
   const selectedCount = selected.size;
 
   // Position panel
+  const MARGIN = 12;
   useLayoutEffect(() => {
     const el = menuRef.current;
     if (!el) return;
     const anchorRect = anchorEl.getBoundingClientRect();
     const elRect = el.getBoundingClientRect();
-    const pointX = anchorPoint?.x ?? anchorRect.left;
-    const pointY = anchorPoint?.y ?? anchorRect.top;
 
-    if (isFilterMode) {
-      let x = anchorPoint ? pointX : anchorRect.left;
-      let y = anchorPoint ? pointY + 4 : anchorRect.bottom + 4;
-      if (x + elRect.width > window.innerWidth - 8) x = window.innerWidth - elRect.width - 8;
-      if (x < 8) x = 8;
-      if (y + elRect.height > window.innerHeight - 8) y = window.innerHeight - elRect.height - 8;
-      if (y < 8) y = 8;
-      setPos({ x, y });
+    let x: number;
+    let y: number;
+
+    if (anchorPoint) {
+      // Context menu: spawn at mouse position, left-anchored
+      x = anchorPoint.x;
+      y = anchorPoint.y + 4;
+    } else if (isFilterMode) {
+      // Filter bar: spawn below the anchor element
+      x = anchorRect.left;
+      y = anchorRect.bottom + 4;
     } else {
-      let x: number;
-      let y: number;
-      if (anchorPoint) {
-        x = pointX + 6;
-        y = pointY + 4;
-      } else {
-        const inspectorEl = anchorEl.closest('[class*="panel"]') as HTMLElement | null;
-        const inspectorLeft = inspectorEl ? inspectorEl.getBoundingClientRect().left : anchorRect.left;
-        x = window.innerWidth - inspectorLeft + 4;
-        y = anchorRect.top;
-      }
-      if (x < 8) x = 8;
-      if (x + elRect.width > window.innerWidth - 8) x = window.innerWidth - elRect.width - 8;
-      if (y + elRect.height > window.innerHeight - 8) y = window.innerHeight - elRect.height - 8;
-      if (y < 8) y = 8;
-      setPos({ x, y });
+      // Inspector button: spawn to the left of the inspector panel
+      const inspectorEl = anchorEl.closest('[class*="panel"]') as HTMLElement | null;
+      const inspectorLeft = inspectorEl ? inspectorEl.getBoundingClientRect().left : anchorRect.left;
+      x = inspectorLeft - elRect.width - 4;
+      y = anchorRect.top;
     }
+
+    // Clamp to viewport with margin
+    const maxX = window.innerWidth - elRect.width - MARGIN;
+    const maxY = window.innerHeight - elRect.height - MARGIN;
+    x = Math.max(MARGIN, Math.min(x, maxX));
+    y = Math.max(MARGIN, Math.min(y, maxY));
+
+    setPos({ x, y });
   }, [anchorEl, anchorPoint, folderNodes.length, isFilterMode]);
 
   useEffect(() => { searchRef.current?.focus(); }, []);
 
   // Dragging
   const dragStart = useRef<{ mx: number; my: number; anchor: number; y: number } | null>(null);
-  const isFilterModeRef = useRef(isFilterMode);
-  isFilterModeRef.current = isFilterMode;
-
   const onHeaderMouseDown = useCallback((e: React.MouseEvent) => {
     if ((e.target as HTMLElement).closest('input, button, [class*="logicTab"], [class*="segTab"]')) return;
     const el = menuRef.current;
     const rect = el?.getBoundingClientRect();
-    const anchor = isFilterModeRef.current
-      ? (rect ? rect.left : pos.x)
-      : (rect ? window.innerWidth - rect.right : pos.x);
-    dragStart.current = { mx: e.clientX, my: e.clientY, anchor, y: pos.y };
+    dragStart.current = { mx: e.clientX, my: e.clientY, anchor: rect ? rect.left : pos.x, y: pos.y };
   }, [pos.x, pos.y]);
 
   const draggingRef = useRef(false);
@@ -240,12 +233,8 @@ function FolderPickerPanel({
       const el = menuRef.current;
       const w = el?.offsetWidth ?? 0, h = el?.offsetHeight ?? 0;
       let x: number, y: number;
-      if (isFilterModeRef.current) {
-        x = Math.max(8, Math.min(ds.anchor + dx, window.innerWidth - w - 8));
-      } else {
-        x = Math.max(8, Math.min(ds.anchor - dx, window.innerWidth - w - 8));
-      }
-      y = Math.max(8, Math.min(ds.y + dy, window.innerHeight - h - 8));
+      x = Math.max(MARGIN, Math.min(ds.anchor + dx, window.innerWidth - w - MARGIN));
+      y = Math.max(MARGIN, Math.min(ds.y + dy, window.innerHeight - h - MARGIN));
       setPos({ x, y });
     };
     const onUp = () => { dragStart.current = null; draggingRef.current = false; setDragging(false); };
@@ -359,7 +348,7 @@ function FolderPickerPanel({
       <div
         ref={menuRef}
         className={`${st.panel}${dragging ? ` ${st.panelDragging}` : ''}`}
-        style={isFilterMode ? { left: pos.x, top: pos.y } : { right: pos.x, top: pos.y }}
+        style={{ left: pos.x, top: pos.y }}
         onContextMenu={(e) => e.preventDefault()}
       >
         {/* Header */}

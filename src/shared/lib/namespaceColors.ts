@@ -35,7 +35,7 @@ export function chipStyleFromRgb(
       : `rgba(${r}, ${g}, ${b}, 0.10)`,
     color: isDark
       ? 'rgba(255, 255, 255, 0.85)'
-      : `rgb(${r}, ${g}, ${b})`,
+      : 'rgba(0, 0, 0, 0.78)',
     border: `1px solid rgba(${r}, ${g}, ${b}, 0.25)`,
   };
 }
@@ -44,14 +44,6 @@ export function namespaceChipStyle(
   namespace: string,
   isDark: boolean,
 ): { background: string; color: string; border: string } {
-  const [r, g, b] = getNamespaceColor(namespace, isDark);
-  return {
-    background: isDark
-      ? `rgba(${r}, ${g}, ${b}, 0.12)`
-      : `rgba(${r}, ${g}, ${b}, 0.10)`,
-    color: isDark
-      ? 'rgba(255, 255, 255, 0.85)'
-      : `rgb(${r}, ${g}, ${b})`,
-    border: `1px solid rgba(${r}, ${g}, ${b}, 0.25)`,
-  };
+  const rgb = getNamespaceColor(namespace, isDark);
+  return chipStyleFromRgb(rgb, isDark);
 }
