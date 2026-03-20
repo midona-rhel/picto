@@ -26,6 +26,7 @@ export interface InspectorData {
   onAddToFolders: (folderIds: number[]) => Promise<void>;
   onRemoveFromFolder: (folderId: number) => Promise<void>;
   onReanalyzeColors: () => Promise<void>;
+  refreshMetadata: () => void;
 }
 
 export function useInspectorData(
@@ -43,6 +44,7 @@ export function useInspectorData(
     fileFolders: fetch.fileFolders,
     sourceUrls: fetch.sourceUrls,
     notes: fetch.notes,
+    refreshMetadata: fetch.refreshMetadata,
     ...mutations,
   };
 }

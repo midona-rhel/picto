@@ -474,6 +474,8 @@ body {
   opacity: 0.4;
   cursor: default;
   pointer-events: none;
+  background-color: transparent;
+  border-color: transparent;
 }
 
 .textBtnCompact {

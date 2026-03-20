@@ -500,7 +500,14 @@ fn entity_sort_expr(sort_field: &str) -> &'static str {
     match sort_field {
         "imported_at" => {
             "CASE WHEN me.kind = 'collection'
-                  THEN COALESCE(me.created_at, '')
+                  THEN COALESCE(
+                    (SELECT MIN(f_m.imported_at)
+                     FROM media_entity me_m
+                     JOIN entity_file ef_m ON ef_m.entity_id = me_m.entity_id
+                     JOIN file f_m ON f_m.file_id = ef_m.file_id
+                     WHERE me_m.kind = 'single'
+                       AND me_m.parent_collection_id = me.entity_id),
+                    me.created_at, '')
                   ELSE COALESCE(f.imported_at, me.created_at, '')
              END"
         }
@@ -529,7 +536,16 @@ fn entity_sort_expr(sort_field: &str) -> &'static str {
              END"
         }
         "created_at" => {
-            "COALESCE(me.created_at, '')"
+            "CASE WHEN me.kind = 'collection'
+                  THEN COALESCE(
+                    (SELECT MIN(me_m.created_at)
+                     FROM media_entity me_m
+                     WHERE me_m.kind = 'single'
+                       AND me_m.parent_collection_id = me.entity_id
+                       AND me_m.created_at IS NOT NULL),
+                    me.created_at, '')
+                  ELSE COALESCE(me.created_at, '')
+             END"
         }
         "updated_at" => {
             "COALESCE(me.updated_at, '')"
@@ -585,7 +601,14 @@ const ENTITY_SLIM_SELECT: &str =
          ELSE COALESCE(f.rating, me.rating)
      END AS rating,
      CASE
-         WHEN me.kind = 'collection' THEN COALESCE(me.created_at, '')
+         WHEN me.kind = 'collection' THEN COALESCE(
+             (SELECT MIN(f_m.imported_at)
+              FROM media_entity me_m
+              JOIN entity_file ef_m ON ef_m.entity_id = me_m.entity_id
+              JOIN file f_m ON f_m.file_id = ef_m.file_id
+              WHERE me_m.kind = 'single'
+                AND me_m.parent_collection_id = me.entity_id),
+             me.created_at, '')
          ELSE COALESCE(f.imported_at, me.created_at, '')
      END AS imported_at,
      CASE

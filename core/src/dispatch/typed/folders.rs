@@ -334,6 +334,10 @@ pub async fn set_folder_watch_config(
             canonical_path.display()
         ));
     }
+    // Prevent watching paths inside the library directory (would cause circular imports)
+    if canonical_path.starts_with(&state.library_root) {
+        return Err("Cannot watch a folder inside the current library directory.".into());
+    }
     let canonical_path = canonical_path.to_string_lossy().to_string();
 
     crate::folders::service::set_folder_watch_config(

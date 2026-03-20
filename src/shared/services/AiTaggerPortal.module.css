@@ -1,0 +1,97 @@
+/* Composed from shared primitives — same pattern as FolderPicker */
+
+.panel {
+  composes: panelGlass from '../styles/pickerPanel.module.css';
+  position: fixed;
+  z-index: var(--z-context-menu);
+  width: 360px;
+  height: 480px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  user-select: none;
+  -webkit-user-select: none;
+  font-size: 13px;
+  color: var(--color-text-primary);
+}
+
+.panelDragging {
+  composes: panelDragging from '../styles/pickerPanel.module.css';
+}
+
+/* Header — model buttons + pin */
+.header {
+  composes: panelHeader from '../styles/pickerPanel.module.css';
+  gap: 4px;
+  padding: 0 4px;
+}
+
+.modelButtons {
+  display: flex;
+  flex: 1;
+  gap: 4px;
+  padding: 4px 0;
+}
+
+.pinBtn {
+  composes: pinBtn from '../styles/pickerPanel.module.css';
+}
+
+/* Content — scrollable tag list */
+.content {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 4px 0;
+}
+
+.empty {
+  composes: emptyState from '../styles/pickerPanel.module.css';
+  height: 20px;
+  line-height: 20px;
+  padding: 16px 0;
+}
+
+.sectionHeader {
+  padding: 6px 12px 4px;
+  color: var(--color-text-tertiary);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.tagRow {
+  composes: checkItem from '../styles/pickerPanel.module.css';
+}
+
+.tagRow:hover {
+  background-color: var(--color-white-10);
+}
+
+.confidence {
+  composes: itemBadge from '../styles/pickerPanel.module.css';
+}
+
+/* Footer — shortcuts + apply (draggable) */
+.footer {
+  composes: panelFooter from '../styles/pickerPanel.module.css';
+}
+
+.footerLeft {
+  composes: footerLeft from '../styles/pickerPanel.module.css';
+}
+
+.footerRight {
+  composes: footerRight from '../styles/pickerPanel.module.css';
+}
+
+.shortcutTip {
+  composes: shortcutTip from '../styles/pickerPanel.module.css';
+}
+
+.kbd {
+  composes: kbd from '../styles/pickerPanel.module.css';
+}
+

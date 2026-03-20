@@ -47,6 +47,10 @@ pub struct AiTaggerDownloadModelInput {
 #[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct AiTagPredictInput {
     pub hashes: Vec<String>,
+    /// If provided, only run these specific model slugs (ignoring settings toggles).
+    /// If absent/empty, use the enabled models from settings.
+    #[serde(default)]
+    pub models: Option<Vec<String>>,
 }
 
 #[derive(Debug, Serialize, TS)]
@@ -135,13 +139,25 @@ pub async fn ai_tag_predict(
     let settings = state.settings.get();
     let thresholds = thresholds_from_settings(&settings);
 
-    // Collect which models to run
-    let mut slugs = Vec::new();
-    if settings.ai_tagger_wd14_enabled { slugs.push(WD14_SLUG); }
-    if settings.ai_tagger_e621_enabled { slugs.push(E621_SLUG); }
+    // Collect which models to run — explicit list overrides settings
+    let slugs: Vec<&str> = if let Some(ref models) = input.models {
+        if !models.is_empty() {
+            models.iter().map(|s| s.as_str()).collect()
+        } else {
+            let mut s = Vec::new();
+            if settings.ai_tagger_wd14_enabled { s.push(WD14_SLUG); }
+            if settings.ai_tagger_e621_enabled { s.push(E621_SLUG); }
+            s
+        }
+    } else {
+        let mut s = Vec::new();
+        if settings.ai_tagger_wd14_enabled { s.push(WD14_SLUG); }
+        if settings.ai_tagger_e621_enabled { s.push(E621_SLUG); }
+        s
+    };
 
     if slugs.is_empty() {
-        return Err("No AI tagger models are enabled. Enable WD14 or E621 in settings.".into());
+        return Err("No AI tagger models specified or enabled.".into());
     }
 
     tracing::info!(models = ?slugs, hashes = input.hashes.len(), "ai_tag_predict: starting");

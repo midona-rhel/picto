@@ -429,8 +429,8 @@ export const api = {
       invoke<AiTaggerStatus>('ai_tagger_status', {}),
     downloadModel: (model: string) =>
       invoke<void>('ai_tagger_download_model', { model }),
-    predict: (hashes: string[]) =>
-      invoke<AiTagPredictOutput>('ai_tag_predict', { hashes }),
+    predict: (hashes: string[], models?: string[]) =>
+      invoke<AiTagPredictOutput>('ai_tag_predict', { hashes, models: models ?? null }),
     apply: (hashes: string[], tags: string[]) =>
       invoke<number>('ai_tag_apply', { hashes, tags }),
   },

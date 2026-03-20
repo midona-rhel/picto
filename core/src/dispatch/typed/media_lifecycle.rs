@@ -58,6 +58,19 @@ pub async fn import_files(
     state: &AppState,
     input: ImportFilesInput,
 ) -> Result<crate::types::ImportBatchResult, String> {
+    // Reject paths inside the library directory to prevent circular imports
+    let library_root = &state.library_root;
+    for p in &input.paths {
+        if let Ok(canonical) = std::fs::canonicalize(p) {
+            if canonical.starts_with(library_root) {
+                return Err(format!(
+                    "Cannot import files from inside the library directory: {}",
+                    canonical.display()
+                ));
+            }
+        }
+    }
+
     let app_settings = state.settings.get();
     let auto_merge_enabled = app_settings.duplicate_auto_merge_enabled
         && !app_settings.duplicate_auto_merge_subscriptions_only;
@@ -94,6 +107,16 @@ pub async fn import_folder(
     state: &AppState,
     input: ImportFolderInput,
 ) -> Result<crate::types::ImportBatchResult, String> {
+    // Reject paths inside the library directory to prevent circular imports
+    if let Ok(canonical) = std::fs::canonicalize(&input.path) {
+        if canonical.starts_with(&state.library_root) {
+            return Err(format!(
+                "Cannot import a folder inside the library directory: {}",
+                canonical.display()
+            ));
+        }
+    }
+
     let app_settings = state.settings.get();
     let auto_merge_enabled = app_settings.duplicate_auto_merge_enabled
         && !app_settings.duplicate_auto_merge_subscriptions_only;

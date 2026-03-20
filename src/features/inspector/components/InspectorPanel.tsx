@@ -35,7 +35,7 @@ import type {
 } from '../../grid/metadataPrefetch';
 import type { CollectionSummary } from '../../../shared/types/api';
 import type { FolderMembership } from '../hooks/useInspectorData';
-import { AiTagReviewModal } from './AiTagReviewModal';
+import { AiTaggerService } from '../../../shared/services/aiTaggerService';
 import { api } from '#desktop/api';
 import { registerUndoAction } from '../../../shared/controllers/undoRedoController';
 import styles from './InspectorPanel.module.css';
@@ -333,6 +333,7 @@ interface InspectorPanelProps {
   onRemoveFromFolder: (folderId: number) => Promise<void>;
   onReanalyzeColors: () => Promise<void>;
   onExport: () => void;
+  refreshMetadata: () => void;
 }
 
 export function InspectorPanel({
@@ -363,10 +364,11 @@ export function InspectorPanel({
   onRemoveFromFolder,
   onReanalyzeColors,
   onExport,
+  refreshMetadata,
 }: InspectorPanelProps) {
   const [sectionState, setSectionState] = useState<SectionCollapseState>(loadSectionState);
-  const [aiTagModalOpen, setAiTagModalOpen] = useState(false);
   const [activePopover, setActivePopover] = useState<string | null>(null);
+  const autoTagBtnRef = useRef<HTMLButtonElement>(null);
   const addTagBtnRef = useRef<HTMLButtonElement>(null);
   const addFolderBtnRef = useRef<HTMLButtonElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
@@ -380,8 +382,33 @@ export function InspectorPanel({
   const setColorFilter = useFilterStore((s) => s.setColorFilter);
   const setFilterBarOpen = useFilterStore((s) => s.setFilterBarOpen);
 
-  const selectedImage = selectedImages.length === 1 ? selectedImages[0] : null;
-  const selectedCollection = selectedImage?.is_collection ? collectionSummary : null;
+  const rawSelectedImage = selectedImages.length === 1 ? selectedImages[0] : null;
+  const rawSelectedCollection = rawSelectedImage?.is_collection ? collectionSummary : null;
+
+  // Detect whether data has loaded for the current selection to avoid flicker.
+  // When switching between file ↔ collection, selectedImage changes immediately
+  // but fileMetadata/collectionSummary lag behind the async fetch.
+  const dataReady = rawSelectedImage
+    ? rawSelectedImage.is_collection
+      ? !!rawSelectedCollection
+      : !!fileMetadata
+    : true; // no selection = always "ready" (empty state)
+
+  // Keep showing previous selection until new data arrives
+  const prevSnapshotRef = useRef<{
+    selectedImage: typeof rawSelectedImage;
+    selectedCollection: typeof rawSelectedCollection;
+  }>({ selectedImage: null, selectedCollection: null });
+
+  if (dataReady) {
+    prevSnapshotRef.current = {
+      selectedImage: rawSelectedImage,
+      selectedCollection: rawSelectedCollection,
+    };
+  }
+
+  const selectedImage = dataReady ? rawSelectedImage : prevSnapshotRef.current.selectedImage;
+  const selectedCollection = dataReady ? rawSelectedCollection : prevSnapshotRef.current.selectedCollection;
 
   const isVirtualSelectionSummary = !!selectionSummarySpec;
 
@@ -469,6 +496,24 @@ export function InspectorPanel({
       },
     });
   }, [fileFolders, onAddToFolders]);
+
+  const handleAutoTag = useCallback(() => {
+    if (!autoTagBtnRef.current || selectedImages.length === 0) return;
+    const hashes = selectedImages.map((img) => img.hash);
+    AiTaggerService.open({
+      anchorEl: autoTagBtnRef.current,
+      hashes,
+      onApply: async (tags) => {
+        await api.aiTagger.apply(hashes, tags);
+        registerUndoAction({
+          label: `Auto-tag ${hashes.length} file${hashes.length === 1 ? '' : 's'}`,
+          undo: async () => { await api.tags.remove(hashes, tags); refreshMetadata(); },
+          redo: async () => { await api.aiTagger.apply(hashes, tags); refreshMetadata(); },
+        });
+        refreshMetadata();
+      },
+    });
+  }, [selectedImages, refreshMetadata]);
 
   // Keyboard shortcuts: T = open tag picker, F = open folder picker
   const handleOpenTagPickerRef = useRef(handleOpenTagPicker);
@@ -586,10 +631,8 @@ export function InspectorPanel({
       ? (selectedCollection?.rating ?? 0)
       : (fileMetadata?.entity.rating ?? selectedImage?.rating ?? 0);
 
-    // For collections: "Date added" = when the collection was created (created_at on media_entity)
-    //                  "Date created" = earliest member import (imported_at aggregate)
-    // For files:       "Date added" = imported_at, "Date created" = created_at from media_entity
-    const createdAt = isCollection ? selectedCollection?.imported_at : fileMetadata?.entity.created_at;
+    // created_at = content origin date (for collections: oldest member's content date)
+    const createdAt = isCollection ? selectedCollection?.created_at : fileMetadata?.entity.created_at;
     const updatedAt = isCollection ? selectedCollection?.updated_at : fileMetadata?.entity.updated_at;
 
     return (
@@ -636,8 +679,8 @@ export function InspectorPanel({
           {selectedImage && !isCollection && (
             <PropertyRow label="Date added" mono value={formatDateTime(selectedImage.imported_at)} />
           )}
-          {isCollection && selectedCollection?.created_at && (
-            <PropertyRow label="Date added" mono value={formatDateTime(selectedCollection.created_at)} />
+          {isCollection && updatedAt && (
+            <PropertyRow label="Date added" mono value={formatDateTime(updatedAt)} />
           )}
           {createdAt && (
             <PropertyRow label="Date created" mono value={formatDateTime(createdAt)} />
@@ -710,7 +753,7 @@ export function InspectorPanel({
                 </div>
               </InspectorSection>
 
-              <button className={styles.exportButton} onClick={() => setAiTagModalOpen(true)}>
+              <button ref={autoTagBtnRef} className={styles.exportButton} onClick={handleAutoTag}>
                 <IconSparkles size={12} style={{ marginRight: 4 }} />Auto-Tag
               </button>
               <button className={styles.exportButton} onClick={onExport}>Export</button>
@@ -744,7 +787,7 @@ export function InspectorPanel({
               {renderFolders(!selectedImage.is_collection)}
               {renderProperties()}
 
-              <button className={styles.exportButton} onClick={() => setAiTagModalOpen(true)}>
+              <button ref={autoTagBtnRef} className={styles.exportButton} onClick={handleAutoTag}>
                 <IconSparkles size={12} style={{ marginRight: 4 }} />Auto-Tag
               </button>
               <button className={styles.exportButton} onClick={onExport}>Export</button>
@@ -777,7 +820,7 @@ export function InspectorPanel({
                 </div>
               </InspectorSection>
 
-              <button className={styles.exportButton} onClick={() => setAiTagModalOpen(true)}>
+              <button ref={autoTagBtnRef} className={styles.exportButton} onClick={handleAutoTag}>
                 <IconSparkles size={12} style={{ marginRight: 4 }} />Auto-Tag
               </button>
               <button className={styles.exportButton} onClick={onExport}>Export</button>
@@ -786,27 +829,6 @@ export function InspectorPanel({
         </div>
       </div>
 
-      <AiTagReviewModal
-        opened={aiTagModalOpen}
-        onClose={() => setAiTagModalOpen(false)}
-        hashes={selectedImages.map((img) => img.hash)}
-        onApply={async (tags) => {
-          const hashes = selectedImages.map((img) => img.hash);
-          const tagsSnapshot = [...tags];
-          const hashesSnapshot = [...hashes];
-          await api.aiTagger.apply(hashesSnapshot, tagsSnapshot);
-          registerUndoAction({
-            label: `Auto-tag ${hashesSnapshot.length} file${hashesSnapshot.length === 1 ? '' : 's'}`,
-            undo: async () => {
-              await api.tags.remove(hashesSnapshot, tagsSnapshot);
-            },
-            redo: async () => {
-              await api.aiTagger.apply(hashesSnapshot, tagsSnapshot);
-            },
-          });
-          await onAddTags([]); // trigger metadata refresh
-        }}
-      />
     </div>
   );
 }

@@ -17,6 +17,7 @@ import {
   IconPlayerStop,
   IconPencil,
   IconRefresh,
+  IconInfoCircle,
 } from '@tabler/icons-react';
 import { useRuntimeSyncStore } from '../../../state/runtimeSyncStore';
 import { useSubscriptionProgressStore } from '../subscriptionProgressStore';
@@ -577,22 +578,50 @@ export function SubscriptionGroupsPanel({
                           disabled={addLoading}
                           style={{ flex: 1 }}
                         />
-                        <Tooltip
-                          label={`e.g. ${sites.find((s) => s.id === addSite)?.example_query ?? '...'}`}
-                          position="top"
-                          withArrow
-                          disabled={!addSite}
-                        >
-                          <TextInput
-                            placeholder={sites.find((s) => s.id === addSite)?.example_query || 'Query'}
-                            size="xs"
-                            value={addQuery}
-                            onChange={(e) => setAddQuery(e.target.value)}
-                            onKeyDown={(e) => { if (e.key === 'Enter') handleAddQuery(subscriptionGroup.id); }}
-                            disabled={addLoading}
-                            style={{ flex: 2 }}
-                          />
-                        </Tooltip>
+                        {addSite && (() => {
+                          const si = sites.find((s) => s.id === addSite);
+                          if (!si) return null;
+                          let description = '';
+                          if (si.supports_query && si.supports_account) {
+                            description = 'Enter search tags or a username.';
+                          } else if (si.supports_query) {
+                            description = 'Enter search tags.';
+                          } else if (si.supports_account) {
+                            description = 'Enter a username or account ID.';
+                          }
+                          return (
+                            <Tooltip
+                              label={
+                                <div style={{ fontSize: 11, lineHeight: 1.4 }}>
+                                  <div>{description}</div>
+                                  <div style={{ marginTop: 4, opacity: 0.7 }}>Example: {si.example_query}</div>
+                                  {si.auth_required_for_full_access && (
+                                    <div style={{ marginTop: 6, borderTop: '1px solid rgba(255,255,255,0.15)', paddingTop: 4, opacity: 0.7 }}>
+                                      Credentials recommended for full access.
+                                    </div>
+                                  )}
+                                </div>
+                              }
+                              position="top"
+                              withArrow
+                              multiline
+                              w={230}
+                            >
+                              <ActionIcon variant="transparent" size="xs" style={{ flexShrink: 0, color: 'var(--color-text-tertiary)' }}>
+                                <IconInfoCircle size={14} />
+                              </ActionIcon>
+                            </Tooltip>
+                          );
+                        })()}
+                        <TextInput
+                          placeholder={sites.find((s) => s.id === addSite)?.example_query || 'Query'}
+                          size="xs"
+                          value={addQuery}
+                          onChange={(e) => setAddQuery(e.target.value)}
+                          onKeyDown={(e) => { if (e.key === 'Enter') handleAddQuery(subscriptionGroup.id); }}
+                          disabled={addLoading}
+                          style={{ flex: 2 }}
+                        />
                       </div>
                       <div className={st.addQueryActions}>
                         <TextButton compact onClick={() => setAddingTo(null)} disabled={addLoading}>Cancel</TextButton>

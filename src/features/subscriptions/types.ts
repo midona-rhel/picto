@@ -3,6 +3,8 @@ export interface SitePluginInfo {
   name: string;
   domain: string;
   example_query: string;
+  supports_query: boolean;
+  supports_account: boolean;
   auth_supported?: boolean;
   auth_required_for_full_access?: boolean;
 }

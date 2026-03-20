@@ -390,30 +390,16 @@ pub(crate) fn sync_collection_aggregate_metadata(
         |row| row.get(0),
     )?;
 
-    // Inherit created_at from the oldest member so the collection sorts by
-    // the original content date rather than the time it was grouped.
-    let oldest_created_at: Option<String> = conn
-        .query_row(
-            "SELECT MIN(me_member.created_at)
-             FROM media_entity me_member
-             WHERE me_member.kind = 'single'
-               AND me_member.parent_collection_id = ?1
-               AND me_member.created_at IS NOT NULL",
-            [collection_id],
-            |row| row.get(0),
-        )
-        .optional()?
-        .flatten();
-
+    // Keep created_at as the collection's original creation timestamp (= "Date added").
+    // Don't overwrite it with member dates — that broke sort-by-date-added for collections.
     let now = chrono::Utc::now().to_rfc3339();
     conn.execute(
         "UPDATE media_entity
          SET rating = ?1,
              status = ?2,
-             created_at = COALESCE(?3, created_at),
-             updated_at = ?4
-         WHERE entity_id = ?5 AND kind = 'collection'",
-        params![merged_rating, derived_status, oldest_created_at, now, collection_id],
+             updated_at = ?3
+         WHERE entity_id = ?4 AND kind = 'collection'",
+        params![merged_rating, derived_status, now, collection_id],
     )?;
 
     // 5) Ensure collection appears anywhere its members already lived (folder replacement semantics).

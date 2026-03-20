@@ -13,6 +13,7 @@ import { ViewerHost } from '#features/viewer/components';
 import { useViewerHost } from '#features/viewer/hooks/useViewerHost';
 import { TagSelectPortal } from '#features/tags/components';
 import { FolderPickerPortal } from '../shared/services/FolderPickerPortal';
+import { AiTaggerPortal } from '../shared/services/AiTaggerPortal';
 import { FolderWatchDialog } from '#features/folders/components/FolderWatchDialog';
 import { KbdTooltip } from '../shared/components/KbdTooltip';
 import { useScopedGridPreferences } from '../shared/hooks/useScopedGridPreferences';
@@ -432,12 +433,14 @@ function App() {
             onRemoveFromFolder={inspector.onRemoveFromFolder}
             onReanalyzeColors={inspector.onReanalyzeColors}
             onExport={() => useExportActionStore.getState().requestAdvancedExport()}
+            refreshMetadata={inspector.refreshMetadata}
           />
         )}
       </div>
 
       <TagSelectPortal />
       <FolderPickerPortal />
+      <AiTaggerPortal />
       <FolderWatchDialog />
       <DragGhost />
       <CreateSubscriptionGroupModal

@@ -205,6 +205,7 @@
   height: 36px;
   margin-top: 12px;
   background: var(--color-white-05);
+  border: 1px solid var(--color-border-primary) !important;
   border-radius: 6px;
   color: var(--color-text-primary);
   font-family: var(--font-family);
@@ -266,7 +267,7 @@
   gap: 6px;
   border-radius: 6px;
   background: var(--color-white-05);
-  border: 1px solid var(--color-border-secondary);
+  border: 1px solid var(--color-border-primary) !important;
   margin-bottom: 8px;
   position: relative;
 }
@@ -457,15 +458,15 @@
 
 [data-mantine-color-scheme="light"] .editableField,
 [data-mantine-color-scheme="light"] .editableFieldColumn {
-  background: rgba(0, 0, 0, 0.04);
-  border-color: rgba(0, 0, 0, 0.10);
+  background: var(--color-bg-secondary, rgba(0, 0, 0, 0.03));
+  border-color: var(--color-border-primary);
 }
 
 /* Light theme overrides */
 
 [data-mantine-color-scheme="light"] .fieldInput {
-  background: rgba(0, 0, 0, 0.04);
-  border-color: rgba(0, 0, 0, 0.12);
+  background: var(--color-bg-secondary, rgba(0, 0, 0, 0.03));
+  border-color: var(--color-border-primary);
 }
 
 [data-mantine-color-scheme="light"] .fieldInput:focus {
@@ -474,9 +475,10 @@
 }
 
 [data-mantine-color-scheme="light"] .exportButton {
-  background: var(--color-black-10);
+  background: var(--color-bg-secondary, rgba(0, 0, 0, 0.03));
+  border-color: var(--color-border-primary);
 }
 
 [data-mantine-color-scheme="light"] .exportButton:hover {
-  background: var(--color-black-10);
+  background: var(--color-bg-tertiary, rgba(0, 0, 0, 0.06));
 }

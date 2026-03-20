@@ -174,6 +174,7 @@ export function useInspectorFetch(
         if (selectedCollection) {
           const summary = await api.collections.getSummary(selectedCollection.id);
           if (requestIdRef.current !== requestId) return;
+          // Set new data and clear old atomically — avoids flicker frame
           setCollectionSummary(summary);
           setFileMetadata(null);
           setFileTags(mapCollectionTags(summary.tags));
@@ -183,17 +184,14 @@ export function useInspectorFetch(
         }
 
         if (selectedImages.length === 1) {
-          setCollectionSummary(null);
           const metadata = await api.files.getAllMetadata(selectedImages[0].hash);
           if (requestIdRef.current !== requestId) return;
+          // Set new data and clear old atomically — avoids flicker frame
           setFileMetadata(metadata);
+          setCollectionSummary(null);
           setFileTags(metadata.tags);
         } else {
           // Multi-file: use backend SelectionSummary instead of N individual fetches
-          setCollectionSummary(null);
-          setFileMetadata(null);
-          setNotes('');
-          setSourceUrls([]);
           const spec: SelectionQuerySpec = {
             mode: 'explicit_hashes',
             hashes: selectedImages.map((i) => i.hash),
@@ -205,6 +203,11 @@ export function useInspectorFetch(
           };
           const summary = await getOrStartSelectionSummary(spec);
           if (requestIdRef.current !== requestId) return;
+          // Clear single/collection data atomically with new multi-selection data
+          setCollectionSummary(null);
+          setFileMetadata(null);
+          setNotes('');
+          setSourceUrls([]);
           setSelectionSummary(summary);
           setFileTags(
             (summary.shared_tags ?? []).map((t) => {
