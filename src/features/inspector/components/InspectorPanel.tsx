@@ -7,6 +7,7 @@ import {
   IconAlignLeft,
   IconPin,
   IconPinFilled,
+  IconSparkles,
 } from '@tabler/icons-react';
 import { TagSelectService } from '../../tags/components/tagSelectService';
 import { FolderPickerService } from '../../../shared/services/folderPickerService';
@@ -32,18 +33,21 @@ import type {
 } from '../../grid/metadataPrefetch';
 import type { CollectionSummary } from '../../../shared/types/api';
 import type { FolderMembership } from '../hooks/useInspectorData';
+import { AiTagReviewModal } from './AiTagReviewModal';
+import { api } from '#desktop/api';
 import styles from './InspectorPanel.module.css';
 
 const isMac = navigator.platform.includes('Mac');
 
 /** Compact notes field — icon | separator | single-line display, hover shows editable textarea below */
-function NotesField({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+function NotesField({ value, onChange, readOnly }: { value: string; onChange: (v: string) => void; readOnly?: boolean }) {
   const [showEditor, setShowEditor] = useState(false);
   const displayRef = useRef<HTMLDivElement>(null);
   const editorTimerRef = useRef<ReturnType<typeof setTimeout>>();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const openEditor = () => {
+    if (readOnly) return;
     clearTimeout(editorTimerRef.current);
     setShowEditor(true);
   };
@@ -53,6 +57,7 @@ function NotesField({ value, onChange }: { value: string; onChange: (v: string) 
   };
 
   const handleRowMouseEnter = () => {
+    if (readOnly) return;
     clearTimeout(editorTimerRef.current);
     if (value) setShowEditor(true);
   };
@@ -91,13 +96,13 @@ function NotesField({ value, onChange }: { value: string; onChange: (v: string) 
       <div
         ref={displayRef}
         className={styles.fieldRowContent}
-        onClick={!value ? openEditor : undefined}
+        onClick={!value && !readOnly ? openEditor : undefined}
         onMouseEnter={handleRowMouseEnter}
         onMouseLeave={handleRowMouseLeave}
       >
         {value || <span className={styles.fieldRowPlaceholder}>Notes</span>}
       </div>
-      {showEditor && (
+      {showEditor && !readOnly && (
         <div
           className={styles.fieldRowPopover}
           onMouseEnter={handleEditorMouseEnter}
@@ -231,6 +236,7 @@ export function InspectorPanel({
   onExport,
 }: InspectorPanelProps) {
   const [sectionState, setSectionState] = useState<SectionCollapseState>(loadSectionState);
+  const [aiTagModalOpen, setAiTagModalOpen] = useState(false);
   const addTagBtnRef = useRef<HTMLButtonElement>(null);
   const addFolderBtnRef = useRef<HTMLButtonElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
@@ -444,44 +450,17 @@ export function InspectorPanel({
     </InspectorSection>
   );
 
-  const renderProperties = (rating: number) => (
-    <InspectorSection
-      title="Properties"
-      collapsed={sectionState.properties}
-      onToggle={() => toggleSection('properties')}
-    >
-      <div className={styles.propsStack}>
-        <StarRating value={rating} onChange={handleRatingClick} />
-        {selectedImage && (
-          <>
-            <PropertyRow label="Dimensions" mono value={`${selectedImage.width ?? '?'} × ${selectedImage.height ?? '?'}`} />
-            <PropertyRow label="Size" mono value={formatFileSize(selectedImage.size)} />
-            <PropertyRow label="Type" title={selectedImage.mime || undefined} value={getFileExtension(selectedImage.name, selectedImage.mime)} />
-            {selectedImage.duration_ms != null && selectedImage.duration_ms > 0 && (
-              <PropertyRow label="Duration" mono value={formatDuration(selectedImage.duration_ms)} />
-            )}
-            <PropertyRow label="Date added" mono value={formatDateTime(selectedImage.imported_at)} />
-            {fileMetadata?.entity.created_at && (
-              <PropertyRow label="Date created" mono value={formatDateTime(fileMetadata.entity.created_at)} />
-            )}
-            {fileMetadata?.entity.updated_at && (
-              <PropertyRow label="Date modified" mono value={formatDateTime(fileMetadata.entity.updated_at)} />
-            )}
-          </>
-        )}
-      </div>
-    </InspectorSection>
-  );
+  const renderProperties = () => {
+    const isCollection = !!selectedImage?.is_collection;
+    const rating = isCollection
+      ? (selectedCollection?.rating ?? 0)
+      : (fileMetadata?.entity.rating ?? selectedImage?.rating ?? 0);
 
-  const renderCollectionProperties = () => {
-    const itemCount = selectedCollection?.image_count ?? selectedImage?.collection_item_count ?? 0;
-    const totalSize = selectedCollection?.total_size_bytes;
-    const mimeSummary = selectedCollection?.mime_breakdown?.length
-      ? selectedCollection.mime_breakdown
-        .slice(0, 3)
-        .map((m) => `${getFileExtension(`x.${m.mime.split('/')[1] ?? 'bin'}`, m.mime)} (${m.count})`)
-        .join(', ')
-      : '...';
+    // For collections: "Date added" = when the collection was created (created_at on media_entity)
+    //                  "Date created" = earliest member import (imported_at aggregate)
+    // For files:       "Date added" = imported_at, "Date created" = created_at from media_entity
+    const createdAt = isCollection ? selectedCollection?.imported_at : fileMetadata?.entity.created_at;
+    const updatedAt = isCollection ? selectedCollection?.updated_at : fileMetadata?.entity.updated_at;
 
     return (
       <InspectorSection
@@ -490,15 +469,51 @@ export function InspectorPanel({
         onToggle={() => toggleSection('properties')}
       >
         <div className={styles.propsStack}>
-          <StarRating value={selectedCollection?.rating ?? 0} />
-          <PropertyRow label="Items" mono value={itemCount.toLocaleString()} />
-          <PropertyRow label="Total size" mono value={typeof totalSize === 'number' ? formatFileSize(totalSize) : '...'} />
-          <PropertyRow label="Types" value={mimeSummary} />
-          {selectedCollection?.created_at && (
-            <PropertyRow label="Date created" mono value={formatDateTime(selectedCollection.created_at)} />
+          <StarRating value={rating} onChange={handleRatingClick} />
+
+          {/* File-specific: dimensions, size, type, duration */}
+          {selectedImage && !isCollection && (
+            <>
+              <PropertyRow label="Dimensions" mono value={`${selectedImage.width ?? '?'} × ${selectedImage.height ?? '?'}`} />
+              <PropertyRow label="Size" mono value={formatFileSize(selectedImage.size)} />
+              <PropertyRow label="Type" title={selectedImage.mime || undefined} value={getFileExtension(selectedImage.name, selectedImage.mime)} />
+              {selectedImage.duration_ms != null && selectedImage.duration_ms > 0 && (
+                <PropertyRow label="Duration" mono value={formatDuration(selectedImage.duration_ms)} />
+              )}
+            </>
           )}
-          {selectedCollection?.updated_at && (
-            <PropertyRow label="Date modified" mono value={formatDateTime(selectedCollection.updated_at)} />
+
+          {/* Collection-specific: items, total size, types */}
+          {isCollection && selectedCollection && (() => {
+            const itemCount = selectedCollection.image_count ?? selectedImage?.collection_item_count ?? 0;
+            const totalSize = selectedCollection.total_size_bytes;
+            const mimeSummary = selectedCollection.mime_breakdown?.length
+              ? selectedCollection.mime_breakdown
+                .slice(0, 3)
+                .map((m) => `${getFileExtension(`x.${m.mime.split('/')[1] ?? 'bin'}`, m.mime)} (${m.count})`)
+                .join(', ')
+              : '...';
+            return (
+              <>
+                <PropertyRow label="Items" mono value={itemCount.toLocaleString()} />
+                <PropertyRow label="Total size" mono value={typeof totalSize === 'number' ? formatFileSize(totalSize) : '...'} />
+                <PropertyRow label="Types" value={mimeSummary} />
+              </>
+            );
+          })()}
+
+          {/* Shared: dates */}
+          {selectedImage && !isCollection && (
+            <PropertyRow label="Date added" mono value={formatDateTime(selectedImage.imported_at)} />
+          )}
+          {isCollection && selectedCollection?.created_at && (
+            <PropertyRow label="Date added" mono value={formatDateTime(selectedCollection.created_at)} />
+          )}
+          {createdAt && (
+            <PropertyRow label="Date created" mono value={formatDateTime(createdAt)} />
+          )}
+          {updatedAt && (
+            <PropertyRow label="Date modified" mono value={formatDateTime(updatedAt)} />
           )}
         </div>
       </InspectorSection>
@@ -565,13 +580,16 @@ export function InspectorPanel({
                 </div>
               </InspectorSection>
 
+              <button className={styles.exportButton} onClick={() => setAiTagModalOpen(true)}>
+                <IconSparkles size={12} style={{ marginRight: 4 }} />Auto-Tag
+              </button>
               <button className={styles.exportButton} onClick={onExport}>Export</button>
             </>
           ) : selectedImages.length === 0 ? (
             <div style={{ height: 400, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
               <EmptyState
                 icon={IconPhoto}
-                description="Select an image to view properties"
+                description="Select an item to view properties"
               />
             </div>
           ) : selectedImage ? (
@@ -579,14 +597,12 @@ export function InspectorPanel({
             <>
               <GlassImagePreview images={[selectedImage]} />
 
-              {/* Reserve space to prevent layout shift */}
-              {!selectedImage.is_collection && (
-                <ColorPalette
-                  colors={fileMetadata?.entity.dominant_colors ?? []}
-                  onFindSimilarColor={handleFindSimilarColor}
-                  onReanalyzeColors={onReanalyzeColors}
-                />
-              )}
+              {/* Always reserve space for color palette */}
+              <ColorPalette
+                colors={(!selectedImage.is_collection ? fileMetadata?.entity.dominant_colors : null) ?? []}
+                onFindSimilarColor={!selectedImage.is_collection ? handleFindSimilarColor : undefined}
+                onReanalyzeColors={!selectedImage.is_collection ? onReanalyzeColors : undefined}
+              />
 
               <div className={styles.fieldStack}>
                 <input
@@ -595,9 +611,7 @@ export function InspectorPanel({
                   onChange={(e) => onImageNameChange(e.target.value)}
                   placeholder="Name"
                 />
-                {!selectedImage.is_collection && (
-                  <NotesField value={notes} onChange={onUpdateNotes} />
-                )}
+                <NotesField value={notes} onChange={onUpdateNotes} readOnly={selectedImage.is_collection} />
                 <UrlListEditor
                   urls={sourceUrls}
                   onChange={handleUrlChange}
@@ -607,10 +621,11 @@ export function InspectorPanel({
 
               {renderTags()}
               {renderFolders(!selectedImage.is_collection)}
-              {selectedImage.is_collection
-                ? renderCollectionProperties()
-                : renderProperties(fileMetadata?.entity.rating ?? selectedImage.rating ?? 0)}
+              {renderProperties()}
 
+              <button className={styles.exportButton} onClick={() => setAiTagModalOpen(true)}>
+                <IconSparkles size={12} style={{ marginRight: 4 }} />Auto-Tag
+              </button>
               <button className={styles.exportButton} onClick={onExport}>Export</button>
             </>
           ) : (
@@ -641,11 +656,25 @@ export function InspectorPanel({
                 </div>
               </InspectorSection>
 
+              <button className={styles.exportButton} onClick={() => setAiTagModalOpen(true)}>
+                <IconSparkles size={12} style={{ marginRight: 4 }} />Auto-Tag
+              </button>
               <button className={styles.exportButton} onClick={onExport}>Export</button>
             </>
           )}
         </div>
       </div>
+
+      <AiTagReviewModal
+        opened={aiTagModalOpen}
+        onClose={() => setAiTagModalOpen(false)}
+        hashes={selectedImages.map((img) => img.hash)}
+        onApply={async (tags) => {
+          const hashes = selectedImages.map((img) => img.hash);
+          await api.aiTagger.apply(hashes, tags);
+          await onAddTags([]); // trigger metadata refresh
+        }}
+      />
     </div>
   );
 }

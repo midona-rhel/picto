@@ -325,7 +325,7 @@ export function DetailWindow({ hash }: DetailWindowProps) {
   }, [alwaysOnTop]);
 
   const handleCopyPath = useCallback(async () => {
-    if (!currentImage) return;
+    if (!currentImage || currentImage.is_collection) return;
     try {
       const path = await api.file.resolvePath(currentImage.hash);
       await writeText(path);

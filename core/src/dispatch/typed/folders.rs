@@ -425,14 +425,9 @@ pub async fn add_files_to_folder(
     state: &AppState,
     input: AddFilesToFolderInput,
 ) -> Result<usize, String> {
-    // Expand to include collection member hashes
-    let expanded = state
-        .db
-        .expand_hashes_for_collections(&input.hashes)
-        .await?;
     let count = state
         .db
-        .add_entities_to_folder_batch(input.folder_id, &expanded)
+        .add_entities_to_folder_batch(input.folder_id, &input.hashes)
         .await?;
     if count > 0 {
         crate::events::emit_mutation(
@@ -449,14 +444,9 @@ pub async fn remove_files_from_folder(
     state: &AppState,
     input: RemoveFilesFromFolderInput,
 ) -> Result<usize, String> {
-    // Expand to include collection member hashes
-    let expanded = state
-        .db
-        .expand_hashes_for_collections(&input.hashes)
-        .await?;
     let count = state
         .db
-        .remove_entities_from_folder_batch(input.folder_id, &expanded)
+        .remove_entities_from_folder_batch(input.folder_id, &input.hashes)
         .await?;
     if count > 0 {
         crate::events::emit_mutation(

@@ -42,6 +42,10 @@ pub struct CollectionSummary {
     pub rating: Option<i64>,
     pub created_at: Option<String>,
     pub updated_at: Option<String>,
+    /// Aggregated notes from member files (merged description texts).
+    pub notes: Option<String>,
+    /// Earliest imported_at among member files.
+    pub imported_at: Option<String>,
 }
 
 fn normalize_tags(tags: &[String]) -> Vec<String> {
@@ -709,6 +713,54 @@ pub fn get_collection_summary(
         .query_map([collection_id], |row| row.get::<_, String>(0))?
         .collect::<rusqlite::Result<Vec<_>>>()?;
 
+    // Aggregate notes from member files — merge all non-empty description values
+    let notes = {
+        let mut notes_stmt = conn.prepare_cached(
+            "SELECT f.notes
+             FROM media_entity me_member
+             JOIN entity_file ef ON ef.entity_id = me_member.entity_id
+             JOIN file f ON f.file_id = ef.file_id
+             WHERE me_member.kind = 'single'
+               AND me_member.parent_collection_id = ?1
+               AND f.notes IS NOT NULL AND f.notes != '{}'",
+        )?;
+        let mut seen = HashSet::new();
+        let mut descriptions = Vec::new();
+        let rows = notes_stmt.query_map([collection_id], |row| row.get::<_, String>(0))?;
+        for row in rows {
+            if let Ok(notes_json) = row {
+                if let Ok(map) = serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(&notes_json) {
+                    if let Some(desc) = map.get("description").and_then(|v| v.as_str()) {
+                        let trimmed = desc.trim();
+                        if !trimmed.is_empty() && seen.insert(trimmed.to_string()) {
+                            descriptions.push(trimmed.to_string());
+                        }
+                    }
+                }
+            }
+        }
+        if descriptions.is_empty() {
+            None
+        } else {
+            Some(descriptions.join("\n\n"))
+        }
+    };
+
+    // Earliest imported_at among member files
+    let imported_at: Option<String> = conn
+        .query_row(
+            "SELECT MIN(f.imported_at)
+             FROM media_entity me_member
+             JOIN entity_file ef ON ef.entity_id = me_member.entity_id
+             JOIN file f ON f.file_id = ef.file_id
+             WHERE me_member.kind = 'single'
+               AND me_member.parent_collection_id = ?1",
+            [collection_id],
+            |row| row.get(0),
+        )
+        .optional()?
+        .flatten();
+
     Ok(CollectionSummary {
         id,
         name,
@@ -720,6 +772,8 @@ pub fn get_collection_summary(
         rating,
         created_at,
         updated_at,
+        notes,
+        imported_at,
     })
 }
 

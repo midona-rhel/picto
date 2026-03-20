@@ -6,6 +6,20 @@ pub(super) static ADAPTER: FallbackAdapter = FallbackAdapter;
 pub(super) struct FallbackAdapter;
 
 impl SiteAdapter for FallbackAdapter {
+    fn extract_creator_identifier(&self, json: &Value) -> Option<String> {
+        for key in ["artist", "user", "uploader"] {
+            if let Some(name) = json
+                .get(key)
+                .and_then(|v| v.as_str())
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+            {
+                return Some(name.to_string());
+            }
+        }
+        None
+    }
+
     fn parse_tags(&self, json: &Value) -> Vec<(String, String)> {
         let mut tags = Vec::new();
         let Some(tags_val) = json.get("tags") else {

@@ -51,6 +51,8 @@ struct CollectionGroup {
     preferred_name: String,
     /// (hash, page_num) pairs — page_num preserves original page order.
     members: Vec<(String, u32)>,
+    /// Expected total pages from metadata (gallery-dl `count` field).
+    expected_count: u32,
 }
 
 pub struct SubscriptionSyncEngine<'a> {
@@ -204,8 +206,10 @@ impl<'a> SubscriptionSyncEngine<'a> {
             abort_threshold,
             sleep_request: self.settings.sub_rate_limit_secs,
             credential,
-            archive_path,
-            archive_prefix: Some(archive_prefix),
+            // Initial runs: skip archive so stale entries from previous runs
+            // don't prevent downloads. Import pipeline deduplicates by hash.
+            archive_path: if completed_initial_run { archive_path } else { PathBuf::new() },
+            archive_prefix: if completed_initial_run { Some(archive_prefix) } else { None },
             cancel: cancel.clone(),
         };
 
@@ -273,9 +277,54 @@ impl<'a> SubscriptionSyncEngine<'a> {
             .first()
             .and_then(|item| item.file_path.parent())
             .map(|p| p.to_path_buf());
-        let mut collection_groups: HashMap<String, CollectionGroup> = HashMap::new();
+
+        // ── Phase 1: Group items by post ──────────────────────────────────
+        // Multi-image posts must be imported atomically as a collection.
+        // Single-image posts are imported and shown immediately.
+        struct PostGroup<'b> {
+            items: Vec<&'b gallery_dl_runner::DownloadedItem>,
+            collection_parts: Option<(String, String, String)>,
+        }
+        let mut post_groups: Vec<PostGroup<'_>> = Vec::new();
+        let mut post_index: HashMap<String, usize> = HashMap::new();
 
         for item in &run_result.items {
+            if let Err(_) = validate_metadata_for_site(site_id, &item.metadata) {
+                progress.metadata_invalid += 1;
+                continue;
+            }
+            progress.metadata_validated += 1;
+
+            let parts = collection_group_parts(site_id, &item.metadata);
+            let is_multi = item.metadata.page_count.map_or(false, |c| c > 1);
+
+            if is_multi {
+                if let Some(ref p) = parts {
+                    let key = format!("{}:{}", p.0, p.1);
+                    if let Some(&idx) = post_index.get(&key) {
+                        post_groups[idx].items.push(item);
+                        continue;
+                    }
+                    let idx = post_groups.len();
+                    post_index.insert(key, idx);
+                    post_groups.push(PostGroup {
+                        items: vec![item],
+                        collection_parts: parts,
+                    });
+                    continue;
+                }
+            }
+            // Single-image post (or no collection parts)
+            post_groups.push(PostGroup {
+                items: vec![item],
+                collection_parts: None,
+            });
+        }
+
+        // ── Phase 2: Import each post group atomically ────────────────────
+        let mut changed_collection_ids: Vec<i64> = Vec::new();
+
+        for group in &post_groups {
             if cancel.is_cancelled() {
                 progress.cancelled = true;
                 break;
@@ -294,100 +343,162 @@ impl<'a> SubscriptionSyncEngine<'a> {
                 progress.cancelled = true;
                 break;
             }
+
+            let is_collection = group.collection_parts.is_some();
+            let post_id_display = group.items.first()
+                .and_then(|i| i.metadata.post_id.as_deref())
+                .unwrap_or("unknown");
+
             progress.pages_fetched += 1;
-            let post_id = item.metadata.post_id.as_deref().unwrap_or("unknown");
             self.emit_progress(
                 &sub_id_str,
                 &progress,
-                &format!("Importing post {post_id}..."),
+                &format!("Importing post {post_id_display}{}...",
+                    if is_collection { format!(" ({} pages)", group.items.len()) } else { String::new() }),
             );
 
-            if let Err(metadata_error) = validate_metadata_for_site(site_id, &item.metadata) {
-                progress.metadata_invalid += 1;
-                progress.last_metadata_error = Some(metadata_error.clone());
+            // For collections: hold DB events until collection is fully formed.
+            // This prevents individual files from appearing in the UI before
+            // they have parent_collection_id set.
+            if is_collection {
+                self.db.hold_events();
+            }
+
+            let mut post_hashes: Vec<(String, u32)> = Vec::new();
+            let mut any_new = false;
+            for item in &group.items {
+                match self
+                    .import_item(
+                        &item.file_path,
+                        &item.metadata,
+                        subscription_id,
+                        &url,
+                        is_collection,
+                    )
+                    .await
+                {
+                    Ok(outcome) => {
+                        if outcome.imported_new {
+                            progress.files_downloaded += 1;
+                            any_new = true;
+                        } else {
+                            progress.files_skipped += 1;
+                        }
+                        if is_collection {
+                            let page_num = item.metadata.page_num.unwrap_or(u32::MAX);
+                            if !post_hashes.iter().any(|(h, _)| h == &outcome.hex_hash) {
+                                post_hashes.push((outcome.hex_hash.clone(), page_num));
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        warn!(
+                            post_id = %post_id_display,
+                            path = %item.file_path.display(),
+                            error = %e,
+                            "Subscription item import failed"
+                        );
+                        progress
+                            .errors
+                            .push(format!("Import error for post {post_id_display}: {e}"));
+                    }
+                }
+            }
+
+            // For collections: create the collection and add members BEFORE
+            // releasing held events. By the time the compiler sees FileInserted,
+            // parent_collection_id is already set — files never appear solo.
+            if let Some((ref category, ref post_id, ref preferred_name)) = group.collection_parts {
+                if post_hashes.len() >= 2 {
+                    post_hashes.sort_by_key(|(_, num)| *num);
+                    let ordered_hashes: Vec<String> =
+                        post_hashes.iter().map(|(h, _)| h.clone()).collect();
+
+                    let key = format!("{category}:{post_id}");
+                    // Check if a collection already exists for this post
+                    let existing_id = self
+                        .db
+                        .get_subscription_post_collection(
+                            subscription_id, category, post_id,
+                        )
+                        .await
+                        .ok()
+                        .flatten();
+                    let collection_id = match existing_id {
+                        Some(id) => id,
+                        None => match self.db.create_collection(preferred_name).await {
+                            Ok(id) => id,
+                            Err(e) => {
+                                progress.errors.push(format!(
+                                    "Collection create failed for {key}: {e}"
+                                ));
+                                self.db.release_events();
+                                continue;
+                            }
+                        },
+                    };
+
+                    if let Err(e) = self
+                        .db
+                        .add_collection_members_by_hashes(collection_id, &ordered_hashes)
+                        .await
+                    {
+                        progress.errors.push(format!(
+                            "Collection member add failed for {key}: {e}"
+                        ));
+                    }
+
+                    let _ = self
+                        .db
+                        .upsert_subscription_post_collection(
+                            subscription_id, category, post_id, collection_id,
+                        )
+                        .await;
+
+                    changed_collection_ids.push(collection_id);
+                }
+            }
+
+            // Release held events — compiler fires AFTER parent_collection_id is set
+            if is_collection {
+                self.db.release_events();
+            }
+
+            if any_new {
                 self.emit_progress(
                     &sub_id_str,
                     &progress,
-                    &format!("Skipping invalid metadata: {metadata_error}"),
+                    &format!("Downloaded {} files", progress.files_downloaded),
                 );
-                continue;
-            }
-            progress.metadata_validated += 1;
-
-            let collection_parts = collection_group_parts(site_id, &item.metadata);
-            let is_collection_member = collection_parts.is_some();
-
-            match self
-                .import_item(
-                    &item.file_path,
-                    &item.metadata,
-                    subscription_id,
-                    &url,
-                    is_collection_member,
-                )
-                .await
-            {
-                Ok(outcome) => {
-                    if outcome.imported_new {
-                        progress.files_downloaded += 1;
-                    } else {
-                        progress.files_skipped += 1;
-                    }
-
-                    if let Some((category, post_id, preferred_name)) = collection_parts {
-                        let key = format!("{category}:{post_id}");
-                        let page_num = item.metadata.page_num.unwrap_or(u32::MAX);
-                        let group =
-                            collection_groups
-                                .entry(key)
-                                .or_insert_with(|| CollectionGroup {
-                                    category,
-                                    post_id,
-                                    preferred_name,
-                                    members: Vec::new(),
-                                });
-                        if !group.members.iter().any(|(h, _)| h == &outcome.hex_hash) {
-                            group.members.push((outcome.hex_hash.clone(), page_num));
-                        }
-                    }
-
-                    if outcome.imported_new {
-                        self.emit_progress(
-                            &sub_id_str,
-                            &progress,
-                            &format!("Downloaded {} files", progress.files_downloaded),
-                        );
-                    } else {
-                        self.emit_progress(
-                            &sub_id_str,
-                            &progress,
-                            &format!("Checking... ({} existing)", progress.files_skipped),
-                        );
-                    }
-                }
-                Err(e) => {
-                    warn!(
-                        post_id = %post_id,
-                        path = %item.file_path.display(),
-                        error = %e,
-                        "Subscription item import failed"
-                    );
-                    progress
-                        .errors
-                        .push(format!("Import error for post {post_id}: {e}"));
-                }
             }
         }
 
-        if !collection_groups.is_empty() {
-            self.materialize_collection_groups(
-                subscription_id,
-                &sub_id_str,
-                &cancel,
-                &mut progress,
-                collection_groups,
-            )
-            .await;
+        // Emit collection mutation events
+        if !changed_collection_ids.is_empty() {
+            changed_collection_ids.sort_unstable();
+            changed_collection_ids.dedup();
+            let mut scopes: Vec<String> = vec!["system:all".to_string()];
+            scopes.extend(
+                changed_collection_ids
+                    .iter()
+                    .map(|id| format!("collection:{id}")),
+            );
+            crate::events::emit_mutation(
+                "subscription_import_collections",
+                crate::runtime_contract::mutation_builder::MutationImpact::new()
+                    .folder_membership_changed(changed_collection_ids)
+                    .extra_grid_scopes(scopes),
+            );
+        }
+
+        // Final mutation so frontend sees everything
+        if progress.files_downloaded > 0 {
+            crate::events::emit_mutation(
+                "subscription_import",
+                crate::runtime_contract::mutation_builder::MutationImpact::file_lifecycle(
+                    self.db,
+                ),
+            );
         }
 
         if let Some(ref dir) = temp_dir {

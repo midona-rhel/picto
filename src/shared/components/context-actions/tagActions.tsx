@@ -65,7 +65,7 @@ export function buildTagContextMenu(args: BuildTagMenuArgs): ContextMenuEntry[] 
   const items: ContextMenuEntry[] = [
     {
       type: 'item',
-      label: 'Show Images',
+      label: 'Show Items',
       icon: <IconFilter size={16} />,
       onClick: args.onShowImages,
     },

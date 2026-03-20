@@ -19,7 +19,6 @@ mod filesystem;
 mod metadata;
 mod metadata_validation;
 mod sites;
-mod tag_enrichment;
 #[cfg(test)]
 mod tests;
 
@@ -96,6 +95,8 @@ pub struct ParsedMetadata {
     pub category: Option<String>,
     /// 0-based page index within a multi-image post (gallery-dl `num` field).
     pub page_num: Option<u32>,
+    /// Total pages in the post (gallery-dl `count` field). >1 means multi-image.
+    pub page_count: Option<u32>,
 }
 
 /// The gallery-dl subprocess runner.
@@ -217,25 +218,12 @@ impl GalleryDlRunner {
         info!(exit_code, "gallery-dl finished");
 
         // 6. Scan output directory for downloaded files + metadata sidecars
-        let mut items = scan_output_dir(&temp_dir).await?;
+        let items = scan_output_dir(&temp_dir).await?;
 
-        // 7. Rule34: enrich flat tags with categories from the tag API
-        let site_id = items
-            .first()
-            .and_then(|i| i.metadata.category.as_deref())
-            .unwrap_or("")
-            .to_string();
-        if sites::canonical_site_id(&site_id) == "rule34" {
-            tag_enrichment::enrich_gelbooru_tags(
-                &mut items,
-                &site_id,
-                opts.credential.as_ref(),
-                std::time::Duration::from_secs_f64(opts.sleep_request),
-            )
-            .await;
-        }
+        // Note: Rule34 tag enrichment (category lookup via API) is deferred
+        // to AFTER import so files appear quickly. The sync engine handles it.
 
-        // 8. Clean up temp config (leave downloaded files for caller to import)
+        // 7. Clean up temp config (leave downloaded files for caller to import)
         let _ = tokio::fs::remove_file(&config_path).await;
 
         Ok(RunResult {
@@ -246,6 +234,11 @@ impl GalleryDlRunner {
     }
 
     async fn ensure_runtime_dependencies(&self) -> Result<(), String> {
+        static DEPS_CHECKED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+        if DEPS_CHECKED.get().is_some() {
+            return Ok(());
+        }
+
         #[cfg(target_os = "macos")]
         {
             let vendor_marker = format!(
@@ -281,6 +274,7 @@ impl GalleryDlRunner {
                 .await
                 .map_err(|e| format!("Failed to validate gallery-dl python deps: {e}"))?;
             if check_status.success() {
+                DEPS_CHECKED.set(()).ok();
                 return Ok(());
             }
 
@@ -323,6 +317,7 @@ impl GalleryDlRunner {
             }
         }
 
+        DEPS_CHECKED.set(()).ok();
         Ok(())
     }
 }

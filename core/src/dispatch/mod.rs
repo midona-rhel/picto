@@ -20,8 +20,7 @@ macro_rules! call {
 
 /// Commands that mutate state. Logged at `info!` level; everything else is `debug!`.
 const WRITE_COMMANDS: &[&str] = &[
-    "import_files", "import_folder", "update_file_status", "delete_files", "wipe_image_data",
-    "set_entity_status", "delete_entities",
+    "import_files", "import_folder", "set_entity_status", "delete_entities", "wipe_image_data",
     "add_tags", "remove_tags", "manage_tag_alias", "manage_tag_implication", "merge_tags",
     "rename_tag", "delete_tag",
     "add_tags_selection", "remove_tags_selection", "update_selection_metadata",
@@ -29,7 +28,7 @@ const WRITE_COMMANDS: &[&str] = &[
     "create_smart_folder", "update_smart_folder", "delete_smart_folder", "move_smart_folder",
     "reorder_smart_folders",
     "create_folder", "update_folder", "delete_folder", "move_folder", "update_folder_parent",
-    "add_files_to_folder", "remove_files_from_folder", "reorder_folders", "reorder_folder_items",
+    "add_entities_to_folder", "remove_entities_from_folder", "reorder_folders", "reorder_folder_items",
     "set_folder_watch_config", "clear_folder_watch_config",
     "create_collection", "update_collection", "delete_collection",
     "add_collection_members", "remove_collection_members", "reorder_collection_members",
@@ -45,6 +44,7 @@ const WRITE_COMMANDS: &[&str] = &[
     "pixiv_oauth_start", "pixiv_oauth_exchange",
     "export_file", "export_media", "regenerate_thumbnail", "regenerate_thumbnails_batch",
     "reanalyze_file_colors",
+    "ai_tag_apply", "ai_tagger_download_model",
     "close_library",
 ];
 
@@ -94,7 +94,7 @@ async fn dispatch_inner(command: &str, args: serde_json::Value) -> Result<String
         // ── Tags ──────────────────────────────────────────────
         "search_tags" => call!(typed::tags::search_tags, &state, args),
         "get_all_tags_with_counts" => call!(typed::tags::get_all_tags_with_counts, &state, args),
-        "get_file_tags" => call!(typed::tags::get_file_tags, &state, args),
+        "get_entity_tags" => call!(typed::tags::get_file_tags, &state, args),
         "add_tags" => call!(typed::tags::add_tags, &state, args),
         "remove_tags" => call!(typed::tags::remove_tags, &state, args),
         "find_files_by_tags" => call!(typed::tags::find_files_by_tags, &state, args),
@@ -154,8 +154,8 @@ async fn dispatch_inner(command: &str, args: serde_json::Value) -> Result<String
         "list_folders" => call!(typed::folders::list_folders, &state, args),
         "get_folder_files" => call!(typed::folders::get_folder_files, &state, args),
         "get_folder_cover_hash" => call!(typed::folders::get_folder_cover_hash, &state, args),
-        "get_file_folders" => call!(typed::folders::get_file_folders, &state, args),
         "get_entity_folders" => call!(typed::folders::get_entity_folders, &state, args),
+        "get_entity_folders_by_hash" => call!(typed::folders::get_file_folders, &state, args),
         "move_folder" => call!(typed::folders::move_folder, &state, args),
         "create_folder" => call!(typed::folders::create_folder, &state, args),
         "update_folder" => call!(typed::folders::update_folder, &state, args),
@@ -163,8 +163,8 @@ async fn dispatch_inner(command: &str, args: serde_json::Value) -> Result<String
         "clear_folder_watch_config" => call!(typed::folders::clear_folder_watch_config, &state, args),
         "delete_folder" => call!(typed::folders::delete_folder, &state, args),
         "update_folder_parent" => call!(typed::folders::update_folder_parent, &state, args),
-        "add_files_to_folder" => call!(typed::folders::add_files_to_folder, &state, args),
-        "remove_files_from_folder" => call!(typed::folders::remove_files_from_folder, &state, args),
+        "add_entities_to_folder" => call!(typed::folders::add_files_to_folder, &state, args),
+        "remove_entities_from_folder" => call!(typed::folders::remove_files_from_folder, &state, args),
         "reorder_folders" => call!(typed::folders::reorder_folders, &state, args),
         "reorder_folder_items" => call!(typed::folders::reorder_folder_items, &state, args),
         "get_collections" => call!(typed::folders::get_collections, &state, args),
@@ -194,11 +194,9 @@ async fn dispatch_inner(command: &str, args: serde_json::Value) -> Result<String
         // ── Media Lifecycle ───────────────────────────────────
         "import_files" => call!(typed::media_lifecycle::import_files, &state, args),
         "import_folder" => call!(typed::media_lifecycle::import_folder, &state, args),
-        "update_file_status" => call!(typed::media_lifecycle::update_file_status, &state, args),
-        "delete_files" => call!(typed::media_lifecycle::delete_files, &state, args),
-        "wipe_image_data" => call!(typed::media_lifecycle::wipe_image_data, &state, args),
         "set_entity_status" => call!(typed::media_lifecycle::set_entity_status, &state, args),
         "delete_entities" => call!(typed::media_lifecycle::delete_entities, &state, args),
+        "wipe_image_data" => call!(typed::media_lifecycle::wipe_image_data, &state, args),
 
         // ── Subscriptions ─────────────────────────────────────
         "get_groups" => call!(typed::subscriptions::get_groups, &state, args),
@@ -232,6 +230,12 @@ async fn dispatch_inner(command: &str, args: serde_json::Value) -> Result<String
         "delete_credential" => call!(typed::subscriptions::delete_credential, &state, args),
         "pixiv_oauth_start" => call!(typed::subscriptions::pixiv_oauth_start, &state, args),
         "pixiv_oauth_exchange" => call!(typed::subscriptions::pixiv_oauth_exchange, &state, args),
+
+        // ── AI Tagger ──────────────────────────────────────
+        "ai_tagger_status" => call!(typed::ai_tagger::ai_tagger_status, &state, args),
+        "ai_tagger_download_model" => call!(typed::ai_tagger::ai_tagger_download_model, &state, args),
+        "ai_tag_predict" => call!(typed::ai_tagger::ai_tag_predict, &state, args),
+        "ai_tag_apply" => call!(typed::ai_tagger::ai_tag_apply, &state, args),
 
         _ => Err(format!("Unknown command: {}", command)),
     }

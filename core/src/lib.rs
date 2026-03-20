@@ -4,6 +4,7 @@
 //! and media processing logic. It is consumed by the napi-rs addon (Electron).
 
 // ── Domain modules ──────────────────────────────────
+pub mod ai_tagger;
 pub mod duplicates;
 pub mod folders;
 pub mod grid;

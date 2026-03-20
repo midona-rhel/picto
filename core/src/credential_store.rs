@@ -127,18 +127,16 @@ pub fn build_extractor_auth(cred: &SiteCredential) -> serde_json::Value {
             if let Some(ref key) = cred.password {
                 obj.insert("api-key".into(), serde_json::Value::String(key.clone()));
             }
-            if is_rule34 {
-                let user_id = cred
-                    .username
-                    .as_deref()
-                    .map(str::trim)
-                    .filter(|s| !s.is_empty());
-                if let Some(user_id) = user_id {
-                    obj.insert(
-                        "user-id".into(),
-                        serde_json::Value::String(user_id.to_string()),
-                    );
-                }
+            if let Some(user_id) = cred
+                .username
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+            {
+                obj.insert(
+                    "user-id".into(),
+                    serde_json::Value::String(user_id.to_string()),
+                );
             }
         }
         CredentialType::OAuthToken => {

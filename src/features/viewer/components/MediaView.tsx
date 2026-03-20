@@ -508,24 +508,24 @@ export function MediaView({ images, currentIndex, onNavigate, onClose, onStateCh
       }
       if (matchesShortcut(e, openDefaultKeys)) {
         e.preventDefault();
-        const hash = currentHashRef.current;
-        if (hash) {
-          runCriticalAction('Open Failed', 'detail.openDefaultFromShortcut', api.files.openDefault(hash));
+        const img = currentImageRef.current;
+        if (img && !img.is_collection) {
+          runCriticalAction('Open Failed', 'detail.openDefaultFromShortcut', api.files.openDefault(img.hash));
         }
         return;
       }
       if (matchesShortcut(e, revealKeys)) {
         e.preventDefault();
-        const hash = currentHashRef.current;
-        if (hash) {
-          runCriticalAction('Reveal Failed', 'detail.revealFromShortcut', api.files.revealInFolder(hash));
+        const img = currentImageRef.current;
+        if (img && !img.is_collection) {
+          runCriticalAction('Reveal Failed', 'detail.revealFromShortcut', api.files.revealInFolder(img.hash));
         }
         return;
       }
       if (matchesShortcut(e, newWindowKeys)) {
         e.preventDefault();
         const img = currentImageRef.current;
-        if (img) {
+        if (img && !img.is_collection) {
           runCriticalAction(
             'New Window Failed',
             'detail.openInNewWindowFromShortcut',

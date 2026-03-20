@@ -126,9 +126,13 @@ export function StripView({
       const idx = Math.min(initialIndex, images.length - 1);
       const el = scrollRef.current;
       if (el && layout[idx]) {
-        const entry = layout[idx];
-        const target = entry.offsetY - (el.clientHeight - entry.height) / 2;
-        el.scrollTop = Math.max(0, target);
+        if (idx === 0) {
+          el.scrollTop = 0;
+        } else {
+          const entry = layout[idx];
+          const target = entry.offsetY - (el.clientHeight - entry.height) / 2;
+          el.scrollTop = Math.max(0, target);
+        }
       }
       initialScrollDone.current = true;
     }

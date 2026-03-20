@@ -85,7 +85,7 @@ export function useInspectorFetch(
   useEffect(() => {
     if (selectedCollection) {
       setSourceUrls(collectionSummary?.source_urls ?? []);
-      setNotes('');
+      setNotes(collectionSummary?.notes ?? '');
       return;
     }
     setSourceUrls(fileMetadata?.entity.source_urls ?? []);
@@ -178,7 +178,7 @@ export function useInspectorFetch(
           setFileMetadata(null);
           setFileTags(mapCollectionTags(summary.tags));
           setSourceUrls(summary.source_urls ?? []);
-          setNotes('');
+          setNotes(summary.notes ?? '');
           return;
         }
 
@@ -241,7 +241,7 @@ export function useInspectorFetch(
           setFileMetadata(null);
           setFileTags(mapCollectionTags(summary.tags));
           setSourceUrls(summary.source_urls ?? []);
-          setNotes('');
+          setNotes(summary.notes ?? '');
         })
         .catch(() => {});
       return;

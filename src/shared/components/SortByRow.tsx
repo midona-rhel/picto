@@ -27,6 +27,8 @@ export function SortByRow({ field, order, onFieldChange, onOrderChange }: {
           onChange={handleFieldChange}
           data={[
             { value: 'imported_at', label: 'Date Added' },
+            { value: 'created_at', label: 'Date Created' },
+            { value: 'updated_at', label: 'Date Modified' },
             { value: 'size', label: 'File Size' },
             { value: 'rating', label: 'Rating' },
           ]}

@@ -39,10 +39,17 @@ fn normalize_created_at(raw: &str) -> Option<String> {
 }
 
 fn parse_created_at(json: &serde_json::Value) -> Option<String> {
-    for key in ["created_at", "date", "published_at", "published", "upload_date"] {
-        if let Some(value) = json.get(key).and_then(|v| v.as_str()) {
-            if let Some(normalized) = normalize_created_at(value) {
+    for key in ["created_at", "date", "create_date", "published_at", "published", "upload_date"] {
+        let Some(val) = json.get(key) else { continue };
+        if let Some(s) = val.as_str() {
+            if let Some(normalized) = normalize_created_at(s) {
                 return Some(normalized);
+            }
+        }
+        // Handle numeric Unix timestamps
+        if let Some(ts) = val.as_i64().or_else(|| val.as_f64().map(|f| f as i64)) {
+            if let Some(dt) = DateTime::from_timestamp(ts, 0) {
+                return Some(dt.to_rfc3339());
             }
         }
     }
@@ -124,8 +131,9 @@ pub fn parse_metadata(json: &serde_json::Value) -> ParsedMetadata {
         .map(String::from);
 
     let post_id = json
-        .get("id")
-        .or_else(|| json.get("tweet_id"))
+        .get("tweet_id")
+        .or_else(|| json.get("id"))
+        .or_else(|| json.get("index"))
         .map(|v| {
             if let Some(n) = v.as_i64() {
                 n.to_string()
@@ -147,6 +155,11 @@ pub fn parse_metadata(json: &serde_json::Value) -> ParsedMetadata {
         .get("num")
         .and_then(|v| v.as_u64())
         .and_then(|n| u32::try_from(n).ok());
+    let page_count = json
+        .get("count")
+        .or_else(|| json.get("page_count"))
+        .and_then(|v| v.as_u64())
+        .and_then(|n| u32::try_from(n).ok());
 
     ParsedMetadata {
         tags,
@@ -159,6 +172,7 @@ pub fn parse_metadata(json: &serde_json::Value) -> ParsedMetadata {
         created_at,
         category,
         page_num,
+        page_count,
     }
 }
 

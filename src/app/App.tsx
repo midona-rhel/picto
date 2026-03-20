@@ -18,7 +18,6 @@ import { KbdTooltip } from '../shared/components/KbdTooltip';
 import { useScopedGridPreferences } from '../shared/hooks/useScopedGridPreferences';
 import { ScopedDisplayProvider } from '../shared/contexts/ScopedDisplayContext';
 import { useAppBootstrap } from './useAppBootstrap';
-import { useAlwaysOnTop } from './useAlwaysOnTop';
 import { useCommandPalette } from './useCommandPalette';
 import { useInspectorState } from '../features/inspector/hooks/useInspectorState';
 import { useGridFeatureState } from '../features/grid/hooks/useGridFeatureState';
@@ -182,9 +181,8 @@ function App() {
     api.os.openSubscriptionsWindow().catch(() => {});
   }, []);
 
-  // ── Always on top + Command Palette (extracted hooks) ──────────
-  const { toggleAlwaysOnTop } = useAlwaysOnTop();
-  const { paletteOpen, closePalette, paletteMode, paletteActions } = useCommandPalette({ toggleAlwaysOnTop });
+  // ── Command Palette ──────────
+  const { paletteOpen, closePalette, paletteMode, paletteActions } = useCommandPalette();
 
   const [displayControlsFolderId, setDisplayControlsFolderId] = useState<number | null>(
     activeFolderId,

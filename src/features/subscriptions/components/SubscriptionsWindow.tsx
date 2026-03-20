@@ -26,7 +26,7 @@ type CredentialFormState = {
   siteCategory: string;
   credentialType: CredentialType;
   displayName: string;
-  rule34Raw: string;
+  booruApiRaw: string;
   username: string;
   password: string;
   oauthToken: string;
@@ -45,6 +45,15 @@ function isRule34Category(siteCategory: string): boolean {
   return normalized === 'rule34' || normalized === 'rule34xxx' || normalized === 'rule34.xxx';
 }
 
+function isGelbooruCategory(siteCategory: string): boolean {
+  const normalized = siteCategory.trim().toLowerCase();
+  return normalized === 'gelbooru';
+}
+
+function isBooruApiKeyCategory(siteCategory: string): boolean {
+  return isRule34Category(siteCategory) || isGelbooruCategory(siteCategory);
+}
+
 function isTwitterCategory(siteCategory: string): boolean {
   const normalized = siteCategory.trim().toLowerCase();
   return normalized === 'twitter' || normalized === 'x.com';
@@ -57,7 +66,7 @@ function isPixivCategory(siteCategory: string): boolean {
 
 
 
-function parseRule34Credential(raw: string): { userId: string; apiKey: string } | null {
+function parseBooruApiCredential(raw: string): { userId: string; apiKey: string } | null {
   const input = raw.trim();
   if (!input) return null;
 
@@ -94,9 +103,11 @@ function parseCookies(raw: string): Record<string, string> {
 function validateCredentialForm(form: CredentialFormState): string | null {
   if (!form.siteCategory) return 'No site selected for credential.';
   const isRule34 = isRule34Category(form.siteCategory);
+  const isGelbooru = isGelbooruCategory(form.siteCategory);
+  const isBooruApi = isRule34 || isGelbooru;
   const isTwitter = isTwitterCategory(form.siteCategory);
-  if (isRule34 && form.credentialType !== 'api_key') {
-    return 'rule34.xxx requires API key credentials (user-id + api-key).';
+  if (isBooruApi && form.credentialType !== 'api_key') {
+    return 'This site requires API key credentials (user-id + api-key).';
   }
   if (isTwitter && form.credentialType !== 'cookies') {
     return 'Twitter/X requires browser cookies (auth_token + ct0).';
@@ -107,9 +118,9 @@ function validateCredentialForm(form: CredentialFormState): string | null {
     }
   }
   if (form.credentialType === 'api_key') {
-    if (isRule34) {
-      if (!parseRule34Credential(form.rule34Raw)) {
-        return 'Paste rule34 credentials containing both api_key and user_id.';
+    if (isBooruApi) {
+      if (!parseBooruApiCredential(form.booruApiRaw)) {
+        return 'Paste the credential string containing both api_key and user_id.';
       }
     } else if (!form.password.trim()) {
       return 'API key value is required.';
@@ -147,7 +158,7 @@ export function SubscriptionsWindow() {
     siteCategory: '',
     credentialType: 'username_password',
     displayName: '',
-    rule34Raw: '',
+    booruApiRaw: '',
     username: '',
     password: '',
     oauthToken: '',
@@ -189,8 +200,8 @@ export function SubscriptionsWindow() {
     () => sites.filter((site) => site.auth_supported),
     [sites],
   );
-  const isRule34Credential = useMemo(
-    () => isRule34Category(credentialForm.siteCategory),
+  const isBooruApiCredential = useMemo(
+    () => isBooruApiKeyCategory(credentialForm.siteCategory),
     [credentialForm.siteCategory],
   );
   const isTwitterCredential = useMemo(
@@ -203,12 +214,12 @@ export function SubscriptionsWindow() {
   );
   const credentialTypeOptions = useMemo(
     () => {
-      if (isRule34Credential) return [{ value: 'api_key', label: 'API Key (rule34 user-id + api-key)' }];
+      if (isBooruApiCredential) return [{ value: 'api_key', label: 'API Key (user-id + api-key)' }];
       if (isTwitterCredential) return [{ value: 'cookies', label: 'Browser Cookies (auth_token + ct0)' }];
       if (isPixivCredential) return [{ value: 'oauth_token', label: 'OAuth (Pixiv login)' }];
       return CREDENTIAL_TYPE_OPTIONS;
     },
-    [isRule34Credential, isTwitterCredential, isPixivCredential],
+    [isBooruApiCredential, isTwitterCredential, isPixivCredential],
   );
   const missingRequiredAuthSites = useMemo(
     () => authSites.filter((site) => site.auth_required_for_full_access && !credentialMap.get(site.id)),
@@ -224,7 +235,7 @@ export function SubscriptionsWindow() {
 
   const openCredentialModal = (site: SubscriptionSiteInfo) => {
     const existing = credentialMap.get(site.id);
-    const defaultType: CredentialType = isRule34Category(site.id)
+    const defaultType: CredentialType = isBooruApiKeyCategory(site.id)
       ? 'api_key'
       : isTwitterCategory(site.id)
         ? 'cookies'
@@ -235,7 +246,7 @@ export function SubscriptionsWindow() {
       siteCategory: site.id,
       credentialType: defaultType,
       displayName: existing?.display_name ?? site.name,
-      rule34Raw: '',
+      booruApiRaw: '',
       username: '',
       password: '',
       oauthToken: '',
@@ -256,17 +267,17 @@ export function SubscriptionsWindow() {
       const cookies = credentialForm.credentialType === 'cookies'
         ? parseCookies(credentialForm.cookiesRaw)
         : undefined;
-      const parsedRule34 = isRule34Credential
-        ? parseRule34Credential(credentialForm.rule34Raw)
+      const parsedRule34 = isBooruApiCredential
+        ? parseBooruApiCredential(credentialForm.booruApiRaw)
         : null;
       await api.subscriptions.setCredential({
         site_category: credentialForm.siteCategory,
         credential_type: credentialForm.credentialType,
         display_name: credentialForm.displayName || null,
-        username: isRule34Credential
+        username: isBooruApiCredential
           ? (parsedRule34?.userId ?? null)
           : (credentialForm.username || null),
-        password: isRule34Credential
+        password: isBooruApiCredential
           ? (parsedRule34?.apiKey ?? null)
           : (credentialForm.password || null),
         oauth_token: credentialForm.oauthToken || null,
@@ -452,22 +463,31 @@ export function SubscriptionsWindow() {
             </>
           )}
 
-          {/* ── Rule34 ── */}
-          {isRule34Credential && (
+          {/* ── Booru API Key (Rule34 / Gelbooru) ── */}
+          {isBooruApiCredential && (
             <>
               <Text size="xs" c="dimmed">
-                rule34.xxx requires an API key. To get one:
+                This site requires an API key. To get one:
               </Text>
               <Text size="xs" c="dimmed" component="ol" style={{ margin: 0, paddingLeft: 16 }}>
-                <li>Go to <span role="button" style={{ color: 'var(--color-primary)', cursor: 'pointer' }} onClick={() => api.os.openExternalUrl('https://api.rule34.xxx')}>api.rule34.xxx</span></li>
-                <li>Log in and copy your API credentials</li>
-                <li>Paste the full string containing <code>api_key</code> and <code>user_id</code></li>
+                {isRule34Category(credentialForm.siteCategory) ? (
+                  <>
+                    <li>Go to <span role="button" style={{ color: 'var(--color-primary)', cursor: 'pointer' }} onClick={() => api.os.openExternalUrl('https://rule34.xxx/index.php?page=account&s=options')}>rule34.xxx account settings</span></li>
+                    <li>Log in, scroll to your API credentials</li>
+                  </>
+                ) : (
+                  <>
+                    <li>Go to <span role="button" style={{ color: 'var(--color-primary)', cursor: 'pointer' }} onClick={() => api.os.openExternalUrl('https://gelbooru.com/index.php?page=account&s=options')}>Gelbooru account settings</span></li>
+                    <li>Log in, scroll to your API credentials</li>
+                  </>
+                )}
+                <li>Copy the string containing <code>api_key</code> and <code>user_id</code> and paste it below</li>
               </Text>
               <TextInput
                 label="API Credential String"
-                placeholder="&api_key=<YOUR_API_KEY>&user_id=<YOUR_USER_ID>"
-                value={credentialForm.rule34Raw}
-                onChange={(e) => setCredentialForm((prev) => ({ ...prev, rule34Raw: e.currentTarget.value }))}
+                placeholder="&api_key=YOUR_API_KEY&user_id=YOUR_USER_ID"
+                value={credentialForm.booruApiRaw}
+                onChange={(e) => setCredentialForm((prev) => ({ ...prev, booruApiRaw: e.currentTarget.value }))}
               />
             </>
           )}
@@ -506,7 +526,7 @@ export function SubscriptionsWindow() {
           )}
 
           {/* ── Generic sites ── */}
-          {!isTwitterCredential && !isRule34Credential && !isPixivCredential && (
+          {!isTwitterCredential && !isBooruApiCredential && !isPixivCredential && (
             <>
               <Select
                 label="Credential Type"

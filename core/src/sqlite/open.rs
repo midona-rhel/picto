@@ -1,6 +1,6 @@
 use rusqlite::Connection;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex};
 
@@ -96,6 +96,8 @@ impl SqliteDatabase {
             read_model_tx,
             read_model_rx: Arc::new(Mutex::new(Some(read_model_rx))),
             db_path,
+            events_held: AtomicBool::new(false),
+            held_events: std::sync::Mutex::new(Vec::new()),
         }))
     }
 
@@ -105,7 +107,29 @@ impl SqliteDatabase {
     }
 
     pub fn emit_read_model_event(&self, event: ReadModelEvent) {
-        let _ = self.read_model_tx.send(event);
+        if self.events_held.load(std::sync::atomic::Ordering::SeqCst) {
+            self.held_events.lock().unwrap().push(event);
+        } else {
+            let _ = self.read_model_tx.send(event);
+        }
+    }
+
+    /// Hold all read-model events in a buffer instead of sending them.
+    /// Use this during batch imports where you don't want the compiler to
+    /// fire until all files are inserted and organized (e.g., collections).
+    pub fn hold_events(&self) {
+        self.events_held
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    /// Release all held events, sending them to the compiler channel at once.
+    pub fn release_events(&self) {
+        self.events_held
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+        let events: Vec<ReadModelEvent> = self.held_events.lock().unwrap().drain(..).collect();
+        for event in events {
+            let _ = self.read_model_tx.send(event);
+        }
     }
 
     pub async fn flush(&self) -> Result<(), String> {
@@ -132,6 +156,8 @@ impl SqliteDatabase {
             read_model_tx: self.read_model_tx.clone(),
             read_model_rx: self.read_model_rx.clone(),
             db_path: self.db_path.clone(),
+            events_held: AtomicBool::new(false),
+            held_events: std::sync::Mutex::new(Vec::new()),
         }
     }
 }

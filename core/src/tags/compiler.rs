@@ -40,7 +40,12 @@ pub(crate) async fn compile_tag_bitmap(
     db.with_read_conn(move |conn| {
         let mut bitmap = RoaringBitmap::new();
         let mut stmt =
-            conn.prepare_cached("SELECT entity_id FROM entity_tag_raw WHERE tag_id = ?1")?;
+            conn.prepare_cached(
+                "SELECT etr.entity_id FROM entity_tag_raw etr
+                 JOIN media_entity me ON me.entity_id = etr.entity_id
+                 WHERE etr.tag_id = ?1
+                   AND (me.kind = 'collection' OR me.parent_collection_id IS NULL)"
+            )?;
         let rows = stmt.query_map([tag_id], |row| row.get::<_, i64>(0))?;
         for row in rows {
             bitmap.insert(row? as u32);
@@ -56,7 +61,12 @@ pub(crate) async fn compile_all_tag_bitmaps(db: &Arc<SqliteDatabase>) -> Result<
     let bitmaps = db.bitmaps.clone();
     db.with_read_conn(move |conn| {
         let mut stmt =
-            conn.prepare_cached("SELECT tag_id, entity_id FROM entity_tag_raw ORDER BY tag_id")?;
+            conn.prepare_cached(
+                "SELECT etr.tag_id, etr.entity_id FROM entity_tag_raw etr
+                 JOIN media_entity me ON me.entity_id = etr.entity_id
+                 WHERE me.kind = 'collection' OR me.parent_collection_id IS NULL
+                 ORDER BY etr.tag_id"
+            )?;
         let mut current_tag: Option<i64> = None;
         let mut current_bitmap = RoaringBitmap::new();
 

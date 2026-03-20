@@ -31,6 +31,8 @@ pub struct AppState {
     /// Join handles for long-running background workers (bitmap flush, scheduler, etc.)
     /// Used by shutdown to deterministically await completion instead of sleeping.
     pub worker_handles: tokio::sync::Mutex<Vec<(&'static str, tokio::task::JoinHandle<()>)>>,
+    /// AI tagger sessions — one per enabled model, lazily initialised.
+    pub ai_taggers: crate::ai_tagger::inference::SharedTaggerSessions,
 }
 
 static STATE: OnceLock<RwLock<Option<Arc<AppState>>>> = OnceLock::new();
@@ -105,6 +107,7 @@ pub async fn open_library(library_root: PathBuf) -> Result<Arc<AppState>, String
         cancel,
         folder_watch_commands,
         worker_handles: tokio::sync::Mutex::new(worker_handles),
+        ai_taggers: crate::ai_tagger::inference::new_shared_sessions(),
     });
 
     {

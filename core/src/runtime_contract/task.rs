@@ -35,6 +35,7 @@ pub enum TaskKind {
     Subscription,
     SubscriptionGroup,
     Import,
+    ModelDownload,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]

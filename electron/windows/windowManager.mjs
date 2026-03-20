@@ -183,6 +183,7 @@ export function createWindowManager({
     }
 
     const win = new BrowserWindow(winOpts);
+    win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
 
     if (isDetail) {
       win.center();
@@ -385,6 +386,7 @@ export function createWindowManager({
       },
     });
 
+    win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
     windowsByLabel.set(label, win);
     win.on('closed', () => windowsByLabel.delete(label));
 
@@ -416,6 +418,7 @@ export function createWindowManager({
         },
       });
 
+      popup.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
       let resolved = false;
 
       const extractCode = (url) => {

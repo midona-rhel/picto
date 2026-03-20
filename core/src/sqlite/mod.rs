@@ -22,7 +22,7 @@ use bitmaps::BitmapStore;
 use hash_index::HashIndex;
 use rusqlite::Connection;
 use std::path::PathBuf;
-use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::{AtomicBool, AtomicUsize};
 use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex};
 
@@ -41,4 +41,7 @@ pub struct SqliteDatabase {
     pub read_model_tx: mpsc::UnboundedSender<ReadModelEvent>,
     read_model_rx: Arc<Mutex<Option<mpsc::UnboundedReceiver<ReadModelEvent>>>>,
     db_path: PathBuf,
+    /// When true, read model events are buffered instead of sent immediately.
+    events_held: AtomicBool,
+    held_events: std::sync::Mutex<Vec<ReadModelEvent>>,
 }

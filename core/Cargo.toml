@@ -33,9 +33,14 @@ zip = "2"
 # XML parsing (EPUB, OOXML, Krita, etc.)
 roxmltree = "0.20"
 
-# HTTP client (for subscriptions)
-reqwest = { version = "0.12", features = ["json", "cookies"] }
+# HTTP client (for subscriptions + model downloads)
+reqwest = { version = "0.12", features = ["json", "cookies", "stream"] }
+futures-util = "0.3"
 url = "2"
+
+# ONNX Runtime for AI tagger inference (GPU backends loaded dynamically)
+ort = { version = "2.0.0-rc.12", features = ["ndarray", "download-binaries", "copy-dylibs"] }
+ndarray = "0.17"
 
 # OS keychain credential storage (macOS Keychain, Windows Credential Manager, Linux Secret Service)
 keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }

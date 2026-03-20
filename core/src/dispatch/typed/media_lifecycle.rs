@@ -114,116 +114,6 @@ pub async fn import_folder(
     .await
 }
 
-pub async fn update_file_status(
-    state: &AppState,
-    input: UpdateFileStatusInput,
-) -> Result<usize, String> {
-    let file_status = crate::types::parse_file_status(&input.status)?;
-
-    if let Some(hash) = input.hash {
-        // Single file mode
-        state.db.update_file_status(&hash, file_status).await?;
-        let folder_ids = collect_folder_ids_for_hashes(state, &[hash.clone()], 1).await;
-        if let Err(err) = crate::folders::service::refresh_sidebar_projection_for_folder_ids(
-            &state.db,
-            &folder_ids,
-        )
-        .await
-        {
-            tracing::warn!(error = %err, "failed to refresh folder sidebar projection after status update");
-        }
-        let mut impact =
-            crate::runtime_contract::mutation_builder::MutationImpact::file_status_change(
-                &state.db,
-            )
-            .file_hashes(vec![hash]);
-        if !folder_ids.is_empty() {
-            impact = impact.folder_ids(folder_ids);
-        }
-        crate::events::emit_mutation("update_file_status", impact);
-        Ok(1)
-    } else if let Some(selection) = input.selection {
-        // Selection mode
-        let bitmap = resolve_selection_bitmap(state, &selection).await?;
-        let count = bitmap.len() as usize;
-        if count > 0 {
-            let mut folder_ids = selection.filters.folder_ids.clone().unwrap_or_default();
-            if matches!(selection.mode, SelectionMode::ExplicitHashes) {
-                let explicit_hashes = selection.hashes.clone().unwrap_or_default();
-                let mut from_hashes =
-                    collect_folder_ids_for_hashes(state, &explicit_hashes, 200).await;
-                folder_ids.append(&mut from_hashes);
-                folder_ids.sort_unstable();
-                folder_ids.dedup();
-            }
-            state
-                .db
-                .update_file_status_batch(&bitmap, file_status)
-                .await?;
-            if let Err(err) = crate::folders::service::refresh_sidebar_projection_for_folder_ids(
-                &state.db,
-                &folder_ids,
-            )
-            .await
-            {
-                tracing::warn!(error = %err, "failed to refresh folder sidebar projection after status batch update");
-            }
-            let mut impact =
-                crate::runtime_contract::mutation_builder::MutationImpact::file_status_change(
-                    &state.db,
-                );
-            if !folder_ids.is_empty() {
-                impact = impact.folder_ids(folder_ids);
-            }
-            crate::events::emit_mutation("update_file_status", impact);
-        }
-        Ok(count)
-    } else {
-        Err("Either hash or selection must be provided".into())
-    }
-}
-
-pub async fn delete_files(state: &AppState, input: DeleteFilesInput) -> Result<usize, String> {
-    let hashes = if let Some(hashes) = input.hashes {
-        hashes
-    } else if let Some(selection) = input.selection {
-        let bitmap = resolve_selection_bitmap(state, &selection).await?;
-        let file_ids: Vec<i64> = bitmap.iter().map(|id| id as i64).collect();
-        let pairs = state.db.resolve_ids_batch(&file_ids).await?;
-        pairs.into_iter().map(|(_, h)| h).collect()
-    } else {
-        return Err("Either hashes or selection must be provided".into());
-    };
-
-    let count = hashes.len();
-    let folder_ids = collect_folder_ids_for_hashes(state, &hashes, count).await;
-    for hash in &hashes {
-        state.db.delete_file_by_hash(hash).await?;
-        state.blob_store.delete(hash).map_err(|e| e.to_string())?;
-    }
-
-    if count > 0 {
-        if let Err(err) = crate::folders::service::refresh_sidebar_projection_for_folder_ids(
-            &state.db,
-            &folder_ids,
-        )
-        .await
-        {
-            tracing::warn!(error = %err, "failed to refresh folder sidebar projection after delete_files");
-        }
-        let mut impact =
-            crate::runtime_contract::mutation_builder::MutationImpact::file_status_change(
-                &state.db,
-            )
-            .file_hashes(hashes);
-        if !folder_ids.is_empty() {
-            impact = impact.folder_ids(folder_ids);
-        }
-        crate::events::emit_mutation("delete_files", impact);
-    }
-    Ok(count)
-}
-
 // ─── Entity-level lifecycle commands ──────────────────────────────────────────
 // These work uniformly for single files AND collections.
 
@@ -255,6 +145,15 @@ pub async fn set_entity_status(
 
             let count = bitmap.len() as usize;
             state.db.update_file_status_batch(&bitmap, status).await?;
+
+            // Remove member file_ids from status bitmaps — the compiler excludes
+            // collection members (parent_collection_id IS NOT NULL), so leaving
+            // them inflates sidebar counts until the next compiler rebuild.
+            for &fid in &member_fids {
+                for s in 0..=2i64 {
+                    state.db.bitmaps.remove(&crate::sqlite::bitmaps::BitmapKey::Status(s), fid as u32);
+                }
+            }
 
             let folder_ids = collect_folder_ids_for_hashes(state, &[hash.clone()], 1).await;
             if let Err(err) = crate::folders::service::refresh_sidebar_projection_for_folder_ids(
@@ -303,6 +202,17 @@ pub async fn set_entity_status(
                 folder_ids.dedup();
             }
             state.db.update_file_status_batch(&expanded_bitmap, status).await?;
+
+            // Remove expanded member file_ids from status bitmaps — the compiler
+            // excludes collection members (parent_collection_id IS NOT NULL), so
+            // leaving them inflates sidebar counts until the next compiler rebuild.
+            for &fid in &expanded {
+                if !original_ids.contains(&fid) {
+                    for s in 0..=2i64 {
+                        state.db.bitmaps.remove(&crate::sqlite::bitmaps::BitmapKey::Status(s), fid as u32);
+                    }
+                }
+            }
 
             // Sync collection entities whose covers were in the selection
             // (update_file_status_batch only syncs PARENT collections, not the collections themselves)

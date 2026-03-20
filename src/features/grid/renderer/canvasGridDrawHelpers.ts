@@ -264,7 +264,6 @@ export function drawCanvasBaseLayer({
     }
 
     if (isCollection) {
-      drawBadge(ctx, 'Collection', bx + 5, by + 5);
       const itemCount = Math.max(0, image.collection_item_count ?? 0);
       drawBadge(ctx, `${itemCount.toLocaleString()} items`, bx + 5, by + imgH - BADGE_H - 5);
     }

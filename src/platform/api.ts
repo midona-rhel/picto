@@ -35,7 +35,7 @@ import type {
   SubscriptionProgressEvent,
   SubscriptionSiteInfo, SiteMetadataSchema, SiteMetadataValidationResult,
   CredentialDomain, CredentialType, CredentialHealth,
-  AppSettings,
+  AppSettings, AiTaggerStatus, AiTagPredictOutput,
   CollectionInfo, CollectionSummary, CompanionNamespaceValue,
   ViewPrefsDto, ViewPrefsPatch,
   FileStats, PerfSnapshot, PerfSloResult,
@@ -90,7 +90,7 @@ function normalizeSmartFolder(r: Record<string, unknown>): SmartFolder {
   };
 }
 
-const filesApi = {
+const entityApi = {
   get: (hash: string) =>
     invokeTyped('get_entity', { hash }) as Promise<EntityDetails | null>,
   getAllMetadata: (hash: string) =>
@@ -145,8 +145,9 @@ export const api = {
       invokeTyped('get_entities_metadata_batch', { hashes }) as Promise<EntityMetadataBatchResponse>,
   },
 
-  files: filesApi,
-  file: filesApi,
+  entity: entityApi,
+  files: entityApi,
+  file: entityApi,
 
   import: {
     files: (paths: string[], tagStrings?: string[], sourceUrls?: string[], initialStatus?: number) =>
@@ -173,7 +174,7 @@ export const api = {
     getAll: () =>
       invokeTyped('get_all_tags_with_counts') as Promise<TagTuple[]>,
     getForFile: (hash: string) =>
-      invokeTyped('get_file_tags', { hash }) as Promise<TagDisplay[]>,
+      invokeTyped('get_entity_tags', { hash }) as Promise<TagDisplay[]>,
     add: (hashes: string[], tagStrings: string[]) =>
       invokeTyped('add_tags', { hashes, tag_strings: tagStrings }) as unknown as Promise<void>,
     remove: (hashes: string[], tagStrings: string[]) =>
@@ -241,15 +242,15 @@ export const api = {
     moveFolder: (folderId: number, newParentId: number | null, siblingOrder: [number, number][]) =>
       invokeTyped('move_folder', { folder_id: folderId, new_parent_id: newParentId, sibling_order: siblingOrder }) as unknown as Promise<void>,
     addFiles: (folderId: number, hashes: string[]) =>
-      invokeTyped('add_files_to_folder', { folder_id: folderId, hashes }),
+      invokeTyped('add_entities_to_folder', { folder_id: folderId, hashes }),
     removeFiles: (folderId: number, hashes: string[]) =>
-      invokeTyped('remove_files_from_folder', { folder_id: folderId, hashes }),
+      invokeTyped('remove_entities_from_folder', { folder_id: folderId, hashes }),
     getFiles: (folderId: number) =>
       invokeTyped('get_folder_files', { folder_id: folderId }),
     getCoverHash: (folderId: number) =>
       invokeTyped('get_folder_cover_hash', { folder_id: folderId }),
     getFileFolders: (hash: string) =>
-      invokeTyped('get_file_folders', { hash }) as Promise<FolderMembership[]>,
+      invokeTyped('get_entity_folders_by_hash', { hash } as never) as Promise<FolderMembership[]>,
     getEntityFolders: (entityId: number) =>
       invokeTyped('get_entity_folders', { entity_id: entityId }) as Promise<FolderMembership[]>,
     reorder: (moves: [number, number][]) =>
@@ -421,6 +422,17 @@ export const api = {
       invokeTyped('set_zoom_factor', { factor }) as unknown as Promise<void>,
     getZoomFactor: () =>
       invokeTyped('get_zoom_factor') as Promise<number>,
+  },
+
+  aiTagger: {
+    status: () =>
+      invoke<AiTaggerStatus>('ai_tagger_status', {}),
+    downloadModel: (model: string) =>
+      invoke<void>('ai_tagger_download_model', { model }),
+    predict: (hashes: string[]) =>
+      invoke<AiTagPredictOutput>('ai_tag_predict', { hashes }),
+    apply: (hashes: string[], tags: string[]) =>
+      invoke<number>('ai_tag_apply', { hashes, tags }),
   },
 
   stats: {

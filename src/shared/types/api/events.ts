@@ -143,7 +143,55 @@ export interface AppSettings {
   subRateLimitSecs: number;
   subBatchSize: number;
   watchFolderDefaultStatus: 'inbox' | 'active';
+  aiTaggerWd14Enabled: boolean;
+  aiTaggerE621Enabled: boolean;
+  aiTaggerAutoOnImport: boolean;
+  aiThresholdGeneral: number;
+  aiThresholdCharacter: number;
+  aiThresholdCopyright: number;
+  aiThresholdArtist: number;
+  aiThresholdSpecies: number;
+  aiThresholdRating: number;
   [key: string]: unknown;
+}
+
+// ─── AI Tagger ──────────────────────────────────────────────────────────────
+
+export interface AiTaggerModelInfo {
+  slug: string;
+  label: string;
+  onnx_url: string;
+  labels_url: string;
+  input_size: number;
+}
+
+export interface AiTaggerModelStatus {
+  slug: string;
+  label: string;
+  enabled: boolean;
+  downloaded: boolean;
+}
+
+export interface AiTaggerStatus {
+  models: AiTaggerModelStatus[];
+  gpuBackend: string | null;
+  availableModels: AiTaggerModelInfo[];
+}
+
+export interface AiTagPrediction {
+  tag: string;
+  namespace: string;
+  confidence: number;
+}
+
+export interface AiFilePrediction {
+  hash: string;
+  tags: AiTagPrediction[];
+  error?: string;
+}
+
+export interface AiTagPredictOutput {
+  predictions: AiFilePrediction[];
 }
 
 // ─── Storage Stats ──────────────────────────────────────────────────────────
@@ -193,6 +241,8 @@ export interface CollectionSummary {
   rating: number | null;
   created_at: string | null;
   updated_at: string | null;
+  notes: string | null;
+  imported_at: string | null;
 }
 
 // ─── Companion ──────────────────────────────────────────────────────────────

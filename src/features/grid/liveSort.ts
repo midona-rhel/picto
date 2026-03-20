@@ -19,8 +19,12 @@ function compareByField(a: MasonryImageItem, b: MasonryImageItem, sortField: str
       return (a.name ?? '').localeCompare(b.name ?? '');
     case 'mime':
       return a.mime.localeCompare(b.mime);
+    case 'created_at':
+    case 'updated_at':
     case 'imported_at':
     default:
+      // Grid slim items only carry imported_at; created_at/updated_at
+      // fall back to imported_at for live-sort approximation.
       return a.imported_at.localeCompare(b.imported_at);
   }
 }

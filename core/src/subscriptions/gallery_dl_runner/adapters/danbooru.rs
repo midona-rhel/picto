@@ -33,12 +33,21 @@ impl SiteAdapter for DanbooruAdapter {
     fn parse_tags(&self, json: &Value) -> Vec<(String, String)> {
         let mut tags = Vec::new();
 
-        // Array format: tags_artist, tags_character, etc.
+        // Categorized tags: tags_artist, tags_character, etc.
+        // Danbooru provides these as arrays, Gelbooru/Rule34 as space-separated strings.
         for (key, namespace) in CATEGORIES {
-            if let Some(arr) = json.get(*key).and_then(|v| v.as_array()) {
-                for tag_val in arr {
-                    if let Some(tag) = tag_val.as_str().filter(|s| !s.is_empty()) {
-                        tags.push((namespace.to_string(), tag.to_string()));
+            if let Some(val) = json.get(*key) {
+                if let Some(arr) = val.as_array() {
+                    for tag_val in arr {
+                        if let Some(tag) = tag_val.as_str().filter(|s| !s.is_empty()) {
+                            tags.push((namespace.to_string(), tag.to_string()));
+                        }
+                    }
+                } else if let Some(tag_string) = val.as_str() {
+                    for tag in tag_string.split_whitespace() {
+                        if !tag.is_empty() {
+                            tags.push((namespace.to_string(), tag.to_string()));
+                        }
                     }
                 }
             }
@@ -47,7 +56,7 @@ impl SiteAdapter for DanbooruAdapter {
             return tags;
         }
 
-        // String format: tag_string_artist, tag_string_character, etc.
+        // Danbooru-specific: tag_string_artist, tag_string_character, etc.
         for (key, namespace) in TAG_STRINGS {
             if let Some(tag_string) = json.get(*key).and_then(|v| v.as_str()) {
                 for tag in tag_string.split_whitespace() {

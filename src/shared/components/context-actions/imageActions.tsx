@@ -557,7 +557,7 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
         label: e.label,
         icon: e.icon,
         onClick: () => {
-          notifyInfo(`Uploading image to ${e.label}`);
+          notifyInfo(`Uploading to ${e.label}`);
           api.files.resolvePath(singleHash).then(path => reverseImageSearch(path, e.key))
             .catch(err => notifyError(err, 'Search Failed'));
         },

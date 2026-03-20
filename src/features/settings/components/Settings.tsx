@@ -8,6 +8,7 @@ import {
   IconAlertTriangle,
   IconCode,
   IconX,
+  IconSparkles,
 } from '@tabler/icons-react';
 import { getCurrentWindow } from '#desktop/api';
 
@@ -15,6 +16,7 @@ import { GeneralPanel } from './GeneralPanel';
 import { ShortcutsPanel } from './ShortcutsPanel';
 import { DownloadServicesPanel } from './DownloadServicesPanel';
 import { DuplicatesPanel } from './DuplicatesPanel';
+import { AiTaggingPanel } from './AiTaggingPanel';
 import { DangerZonePanel } from './DangerZonePanel';
 import { DeveloperPanel } from './DeveloperPanel';
 import styles from './Settings.module.css';
@@ -35,6 +37,7 @@ const SIDEBAR_PANELS: SidebarEntry[] = [
   { type: 'separator' },
   { id: 'downloads', label: 'Downloads', icon: IconDownload, panel: () => <DownloadServicesPanel />, keywords: 'download service gallery-dl rate limit batch' },
   { id: 'duplicates', label: 'Duplicates', icon: IconCopy, panel: () => <DuplicatesPanel />, keywords: 'duplicate merge phash similarity threshold' },
+  { id: 'ai-tagging', label: 'AI Tagging', icon: IconSparkles, panel: () => <AiTaggingPanel />, keywords: 'ai tag auto tagger model wd14 e621 onnx threshold' },
   { type: 'separator' },
   { id: 'developer', label: 'Developer', icon: IconCode, panel: () => <DeveloperPanel />, keywords: 'developer perf slo diagnostics debug' },
   { id: 'danger', label: 'Danger Zone', icon: IconAlertTriangle, panel: () => <DangerZonePanel />, keywords: 'danger reset delete' },

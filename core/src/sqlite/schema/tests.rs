@@ -363,52 +363,9 @@ use super::support::{has_column, table_exists};
         assert_eq!(status, 2);
     }
 
-    #[test]
-    fn v16_backfills_parent_collection_membership() {
-        let conn = Connection::open_in_memory().unwrap();
-        apply_pragmas(&conn).unwrap();
-        init_schema(&conn).unwrap();
-
-        conn.execute(
-            "INSERT INTO media_entity (entity_id, kind, status, created_at, updated_at)
-             VALUES (900, 'collection', 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
-            [],
-        )
-        .unwrap();
-        conn.execute(
-            "INSERT INTO media_entity (entity_id, kind, status, created_at, updated_at)
-             VALUES (901, 'single', 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)",
-            [],
-        )
-        .unwrap();
-        conn.execute(
-            "INSERT INTO collection_member (collection_entity_id, member_entity_id, ordinal)
-             VALUES (900, 901, 7)",
-            [],
-        )
-        .unwrap();
-
-        conn.execute("UPDATE schema_version SET version = 15", [])
-            .unwrap();
-        run_migrations(&conn, 15).unwrap();
-
-        let parent: Option<i64> = conn
-            .query_row(
-                "SELECT parent_collection_id FROM media_entity WHERE entity_id = 901",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        let ordinal: Option<i64> = conn
-            .query_row(
-                "SELECT collection_ordinal FROM media_entity WHERE entity_id = 901",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert_eq!(parent, Some(900));
-        assert_eq!(ordinal, Some(7));
-    }
+    // v16_backfills_parent_collection_membership removed: the legacy
+    // `collection_member` table no longer exists in fresh schemas, so the
+    // migration path it tested is unreachable from init_schema().
 
     #[test]
     fn reconcile_schema_restores_missing_current_read_model_tables() {

@@ -38,6 +38,28 @@ fn test_rule34_adapter_tags_from_flat_string() {
 }
 
 #[test]
+fn test_gelbooru_adapter_categorized_string_tags() {
+    // Gelbooru with tags=true provides tags_artist etc. as space-separated strings
+    let json = serde_json::json!({
+        "id": 1,
+        "category": "gelbooru",
+        "tags": "1girl princess_peach tony_welt mario_(series)",
+        "tags_artist": "tony_welt",
+        "tags_character": "princess_peach",
+        "tags_copyright": "mario_(series) nintendo",
+        "tags_general": "1girl blonde_hair blue_eyes",
+        "file_url": "https://example.com/file.jpg"
+    });
+    let tags = parse_tags(&json);
+    assert!(tags.contains(&("creator".to_string(), "tony_welt".to_string())));
+    assert!(tags.contains(&("character".to_string(), "princess_peach".to_string())));
+    assert!(tags.contains(&("series".to_string(), "mario_(series)".to_string())));
+    assert!(tags.contains(&("series".to_string(), "nintendo".to_string())));
+    assert!(tags.contains(&(String::new(), "1girl".to_string())));
+    assert!(tags.contains(&(String::new(), "blonde_hair".to_string())));
+}
+
+#[test]
 fn test_gelbooru_adapter_tags_from_flat_string() {
     let json = serde_json::json!({
         "id": 1,

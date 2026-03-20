@@ -5,11 +5,7 @@ import { useDomainStore } from '../state/domainStore';
 import { SHORTCUT_DEFS, formatKeysDisplay, getShortcut, matchesShortcutDef, parseShortcutKeys } from '../shared/lib/shortcuts';
 import type { CommandAction } from '#features/app/components';
 
-interface UseCommandPaletteOpts {
-  toggleAlwaysOnTop: () => void;
-}
-
-export function useCommandPalette({ toggleAlwaysOnTop }: UseCommandPaletteOpts) {
+export function useCommandPalette() {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [paletteMode, setPaletteMode] = useState<'all' | 'navigation'>('all');
   const { canGoBack, canGoForward, goBack, goForward, navigateToFolder, navigateToSmartFolder, navigateTo } = useNavigationStore();
@@ -43,16 +39,10 @@ export function useCommandPalette({ toggleAlwaysOnTop }: UseCommandPaletteOpts) 
         if (canGoForward) goForward();
         return;
       }
-      const aot = getShortcut('view.alwaysOnTop');
-      if (aot && matchesShortcutDef(e, aot)) {
-        e.preventDefault();
-        toggleAlwaysOnTop();
-        return;
-      }
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [canGoBack, canGoForward, goBack, goForward, toggleAlwaysOnTop]);
+  }, [canGoBack, canGoForward, goBack, goForward]);
 
   const paletteActions = useMemo((): CommandAction[] => {
     const actions: CommandAction[] = [];

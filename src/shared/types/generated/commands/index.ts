@@ -267,15 +267,15 @@ export interface TypedCommandMap {
   // files_lifecycle
   import_files: { input: ImportFilesInput; output: ImportBatchResult };
   import_folder: { input: ImportFolderInput; output: ImportBatchResult };
-  update_file_status: { input: UpdateFileStatusInput; output: number };
-  delete_files: { input: DeleteFilesInput; output: number };
+  set_entity_status: { input: UpdateFileStatusInput; output: number };
+  delete_entities: { input: DeleteFilesInput; output: number };
   rebuild_file_fts: { input: Record<string, never>; output: null };
   wipe_image_data: { input: Record<string, never>; output: null };
   // folders
   list_folders: { input: Record<string, never>; output: unknown };
   get_folder_files: { input: GetFolderFilesInput; output: string[] };
   get_folder_cover_hash: { input: GetFolderCoverHashInput; output: string | null };
-  get_file_folders: { input: GetFileFoldersInput; output: unknown };
+  get_entity_folders: { input: GetFileFoldersInput; output: unknown };
   get_entity_folders: { input: GetEntityFoldersInput; output: unknown };
   move_folder: { input: MoveFolderInput; output: null };
   create_folder: { input: CreateFolderInput; output: unknown };
@@ -284,8 +284,8 @@ export interface TypedCommandMap {
   clear_folder_watch_config: { input: ClearFolderWatchConfigInput; output: null };
   delete_folder: { input: DeleteFolderInput; output: null };
   update_folder_parent: { input: UpdateFolderParentInput; output: null };
-  add_files_to_folder: { input: AddFilesToFolderInput; output: number };
-  remove_files_from_folder: { input: RemoveFilesFromFolderInput; output: number };
+  add_entities_to_folder: { input: AddFilesToFolderInput; output: number };
+  remove_entities_from_folder: { input: RemoveFilesFromFolderInput; output: number };
   reorder_folders: { input: ReorderFoldersInput; output: null };
   reorder_folder_items: { input: ReorderFolderItemsInput; output: null };
   get_collections: { input: Record<string, never>; output: unknown };
@@ -302,7 +302,7 @@ export interface TypedCommandMap {
   // tags
   search_tags: { input: SearchTagsInput; output: unknown };
   get_all_tags_with_counts: { input: Record<string, never>; output: unknown };
-  get_file_tags: { input: GetFileTagsInput; output: unknown };
+  get_entity_tags: { input: GetFileTagsInput; output: unknown };
   add_tags: { input: AddTagsInput; output: null };
   remove_tags: { input: RemoveTagsInput; output: null };
   find_files_by_tags: { input: FindFilesByTagsInput; output: unknown };

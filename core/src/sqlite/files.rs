@@ -528,6 +528,12 @@ fn entity_sort_expr(sort_field: &str) -> &'static str {
                   ELSE COALESCE(f.name, me.name, '')
              END"
         }
+        "created_at" => {
+            "COALESCE(me.created_at, '')"
+        }
+        "updated_at" => {
+            "COALESCE(me.updated_at, '')"
+        }
         "mime" => {
             "CASE WHEN me.kind = 'collection'
                   THEN COALESCE(cover_f.mime, 'application/x-collection')

@@ -108,7 +108,10 @@ pub async fn set_notes_selection(
     selection: SelectionQuerySpec,
     notes: HashMap<String, String>,
 ) -> Result<usize, String> {
-    let file_ids = collect_file_ids(db, &selection).await?;
+    let file_ids = {
+        let base = collect_file_ids(db, &selection).await?;
+        db.expand_collection_members(base).await?
+    };
     if file_ids.is_empty() {
         return Ok(0);
     }
@@ -133,7 +136,10 @@ pub async fn set_source_urls_selection(
     selection: SelectionQuerySpec,
     urls: Vec<String>,
 ) -> Result<usize, String> {
-    let file_ids = collect_file_ids(db, &selection).await?;
+    let file_ids = {
+        let base = collect_file_ids(db, &selection).await?;
+        db.expand_collection_members(base).await?
+    };
     if file_ids.is_empty() {
         return Ok(0);
     }

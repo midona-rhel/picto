@@ -137,8 +137,6 @@ export function useInspectorMutations(
       if (selectionSummarySpec) {
         await api.selection.updateRating(selectionSummarySpec, normalizedRating);
         refreshVirtualSelectionSummary();
-      } else if (selectedCollection) {
-        return;
       } else {
         const hashes = selectedImages.map((img) => img.hash);
         if (hashes.length === 0) return;
@@ -150,7 +148,7 @@ export function useInspectorMutations(
         );
         await Promise.all(hashes.map((hash) => api.files.updateRating(hash, rating)));
         registerUndoAction({
-          label: `Update rating (${hashes.length} image${hashes.length === 1 ? '' : 's'})`,
+          label: `Update rating (${hashes.length} item${hashes.length === 1 ? '' : 's'})`,
           undo: async () => {
             await Promise.all(
               previousRatings.map(({ hash, rating: previousRating }) =>
@@ -175,9 +173,6 @@ export function useInspectorMutations(
   const onUpdateSourceUrls = useCallback(
     async (urls: string[]) => {
       setSourceUrls(urls);
-      if (selectedCollection) {
-        return;
-      }
       if (selectionSummarySpec) {
         await api.selection.setSourceUrls(selectionSummarySpec, urls);
         refreshVirtualSelectionSummary();
@@ -195,7 +190,7 @@ export function useInspectorMutations(
           return api.files.setSourceUrls(hash, urls);
         }));
         registerUndoAction({
-          label: `Update source URLs (${hashes.length} image${hashes.length === 1 ? '' : 's'})`,
+          label: `Update source URLs (${hashes.length} item${hashes.length === 1 ? '' : 's'})`,
           undo: async () => {
             await Promise.all(
               previousUrls.map(({ hash, urls: prevUrls }) => api.files.setSourceUrls(hash, prevUrls)),

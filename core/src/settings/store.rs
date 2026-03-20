@@ -65,6 +65,26 @@ pub struct AppSettings {
     /// Default status for watched-folder imports when a folder uses inherited mode.
     #[serde(default = "default_watch_folder_default_status")]
     pub watch_folder_default_status: String,
+
+    // AI Tagger settings — each model can be enabled independently
+    #[serde(default)]
+    pub ai_tagger_wd14_enabled: bool,
+    #[serde(default)]
+    pub ai_tagger_e621_enabled: bool,
+    #[serde(default)]
+    pub ai_tagger_auto_on_import: bool,
+    #[serde(default = "default_ai_threshold_general")]
+    pub ai_threshold_general: f32,
+    #[serde(default = "default_ai_threshold_character")]
+    pub ai_threshold_character: f32,
+    #[serde(default = "default_ai_threshold_copyright")]
+    pub ai_threshold_copyright: f32,
+    #[serde(default = "default_ai_threshold_artist")]
+    pub ai_threshold_artist: f32,
+    #[serde(default = "default_ai_threshold_species")]
+    pub ai_threshold_species: f32,
+    #[serde(default = "default_ai_threshold_rating")]
+    pub ai_threshold_rating: f32,
 }
 
 fn default_grid_target_size() -> f64 {
@@ -118,6 +138,24 @@ fn default_sub_batch_size() -> u32 {
 fn default_watch_folder_default_status() -> String {
     "inbox".into()
 }
+fn default_ai_threshold_general() -> f32 {
+    0.35
+}
+fn default_ai_threshold_character() -> f32 {
+    0.85
+}
+fn default_ai_threshold_copyright() -> f32 {
+    0.85
+}
+fn default_ai_threshold_artist() -> f32 {
+    0.85
+}
+fn default_ai_threshold_species() -> f32 {
+    0.35
+}
+fn default_ai_threshold_rating() -> f32 {
+    0.50
+}
 
 /// Convert similarity percentage (0-100) to Hamming distance (0-256).
 /// At 16x16 hash size (256-bit): `similarity_pct_to_distance(97)` → 7.
@@ -151,6 +189,15 @@ impl Default for AppSettings {
             sub_rate_limit_secs: default_sub_rate_limit_secs(),
             sub_batch_size: default_sub_batch_size(),
             watch_folder_default_status: default_watch_folder_default_status(),
+            ai_tagger_wd14_enabled: false,
+            ai_tagger_e621_enabled: false,
+            ai_tagger_auto_on_import: false,
+            ai_threshold_general: default_ai_threshold_general(),
+            ai_threshold_character: default_ai_threshold_character(),
+            ai_threshold_copyright: default_ai_threshold_copyright(),
+            ai_threshold_artist: default_ai_threshold_artist(),
+            ai_threshold_species: default_ai_threshold_species(),
+            ai_threshold_rating: default_ai_threshold_rating(),
         }
     }
 }
