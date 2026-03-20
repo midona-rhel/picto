@@ -16,16 +16,6 @@ pub enum ChannelOrder {
     Bgr,
 }
 
-/// How pixel values should be normalized before inference.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[ts(export_to = "../../src/shared/types/generated/commands/")]
-#[serde(rename_all = "snake_case")]
-pub enum PixelNorm {
-    /// [0, 255] → [0.0, 1.0]  (standard Keras / torchvision)
-    ZeroOne,
-    /// [0, 255] → [-1.0, 1.0]  (SmilingWolf WD14)
-    NegOneOne,
-}
 
 /// A known tagger model that can be downloaded and used for inference.
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -44,8 +34,6 @@ pub struct ModelInfo {
     pub input_size: u32,
     /// Channel order expected by the model.
     pub channel_order: ChannelOrder,
-    /// Pixel normalization range.
-    pub pixel_norm: PixelNorm,
 }
 
 /// Static registry of known models.
@@ -61,7 +49,6 @@ pub fn known_models() -> Vec<ModelInfo> {
             labels_url: "https://huggingface.co/SmilingWolf/wd-swinv2-tagger-v3/resolve/main/selected_tags.csv".into(),
             input_size: 448,
             channel_order: ChannelOrder::Bgr,
-            pixel_norm: PixelNorm::NegOneOne,
         },
         ModelInfo {
             slug: "z3d-e621-convnext".into(),
@@ -70,7 +57,6 @@ pub fn known_models() -> Vec<ModelInfo> {
             labels_url: "https://huggingface.co/toynya/Z3D-E621-Convnext/resolve/main/tags-selected.csv".into(),
             input_size: 448,
             channel_order: ChannelOrder::Rgb,
-            pixel_norm: PixelNorm::ZeroOne,
         },
     ]
 }

@@ -292,7 +292,6 @@ async fn ensure_session(state: &AppState, slug: &str) -> Result<(), String> {
         slug,
         model_info.input_size,
         model_info.channel_order,
-        model_info.pixel_norm,
     )?;
 
     guard.insert(slug.to_string(), session);

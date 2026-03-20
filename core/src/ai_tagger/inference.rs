@@ -198,7 +198,6 @@ fn preprocess_image(
     image_bytes: &[u8],
     input_size: u32,
     channel_order: ChannelOrder,
-    pixel_norm: PixelNorm,
 ) -> Result<ndarray::Array4<f32>, String> {
     let img = image::load_from_memory(image_bytes)
         .map_err(|e| format!("Failed to decode image: {e}"))?;
@@ -232,15 +231,10 @@ fn preprocess_image(
                 ChannelOrder::Rgb => (pixel[0], pixel[1], pixel[2]),
                 ChannelOrder::Bgr => (pixel[2], pixel[1], pixel[0]),
             };
-            let normalize = |v: u8| -> f32 {
-                match pixel_norm {
-                    PixelNorm::ZeroOne => v as f32 / 255.0,
-                    PixelNorm::NegOneOne => v as f32 / 127.5 - 1.0,
-                }
-            };
-            tensor[[0, y, x, 0]] = normalize(c0);
-            tensor[[0, y, x, 1]] = normalize(c1);
-            tensor[[0, y, x, 2]] = normalize(c2);
+            // Raw float32 [0, 255] — no normalization (matches ComfyUI reference)
+            tensor[[0, y, x, 0]] = c0 as f32;
+            tensor[[0, y, x, 1]] = c1 as f32;
+            tensor[[0, y, x, 2]] = c2 as f32;
         }
     }
 

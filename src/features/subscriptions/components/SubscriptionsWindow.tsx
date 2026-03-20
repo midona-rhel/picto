@@ -64,6 +64,11 @@ function isPixivCategory(siteCategory: string): boolean {
   return normalized === 'pixiv' || normalized === 'pixivuser';
 }
 
+function isFuraffinityCategory(siteCategory: string): boolean {
+  const normalized = siteCategory.trim().toLowerCase();
+  return normalized === 'furaffinity';
+}
+
 
 
 function parseBooruApiCredential(raw: string): { userId: string; apiKey: string } | null {
