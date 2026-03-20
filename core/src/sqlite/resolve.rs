@@ -168,10 +168,21 @@ impl SqliteDatabase {
         self.with_read_conn(move |conn| {
             let mut expanded = file_ids.clone();
             for &fid in &file_ids {
+                // Check if this file_id is a cover file for a collection
                 let members =
                     crate::folders::collections_db::get_cover_collection_member_files(conn, fid)?;
-                for (member_fid, _) in members {
-                    expanded.push(member_fid);
+                if !members.is_empty() {
+                    for (member_fid, _) in members {
+                        expanded.push(member_fid);
+                    }
+                } else {
+                    // Also check if this ID is a collection entity directly
+                    // (status bitmaps include collection entity_ids)
+                    let direct_members =
+                        crate::folders::collections_db::get_collection_member_file_ids(conn, fid)?;
+                    for member_fid in direct_members {
+                        expanded.push(member_fid);
+                    }
                 }
             }
             expanded.sort_unstable();

@@ -82,6 +82,21 @@ impl MetadataQuery {
             .with_read_conn(move |conn| get_implied_tags(conn, file_id))
             .await?;
 
+        // Fetch entity timestamps from media_entity (not on FileRecord)
+        let fid_for_ts = file_id;
+        let (created_at, updated_at): (Option<String>, Option<String>) = db
+            .with_read_conn(move |conn| {
+                use rusqlite::OptionalExtension;
+                conn.query_row(
+                    "SELECT created_at, updated_at FROM media_entity WHERE entity_id = ?1",
+                    [fid_for_ts],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .optional()
+                .map(|opt| opt.unwrap_or((None, None)))
+            })
+            .await?;
+
         let mut entity_info: EntityDetails = entity;
         entity_info.dominant_colors = Some(
             colors
@@ -89,6 +104,8 @@ impl MetadataQuery {
                 .map(|(hex, l, a, b)| DominantColorDto { hex, l, a, b })
                 .collect(),
         );
+        entity_info.created_at = created_at;
+        entity_info.updated_at = updated_at;
 
         Ok(EntityAllMetadata {
             entity: entity_info,

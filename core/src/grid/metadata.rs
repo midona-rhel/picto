@@ -105,6 +105,8 @@ pub async fn get_entities_metadata_batch(
                         dominant_color_hex: slim.dominant_color_hex,
                         dominant_colors,
                         notes,
+                        created_at: full.created_at,
+                        updated_at: full.updated_at,
                     },
                     tags,
                     parent_tags: Vec::new(),

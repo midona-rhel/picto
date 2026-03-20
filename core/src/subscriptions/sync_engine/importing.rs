@@ -28,6 +28,7 @@ impl<'a> SubscriptionSyncEngine<'a> {
         metadata: &ParsedMetadata,
         subscription_id: i64,
         gallery_url: &str,
+        is_collection_member: bool,
     ) -> Result<ImportOutcome, String> {
         let file_data = tokio::fs::read(file_path)
             .await
@@ -120,19 +121,23 @@ impl<'a> SubscriptionSyncEngine<'a> {
                     warn!(error = %e, "Failed to record subscription-file mapping");
                 }
 
-                if surviving_hash == imported.hex_hash {
-                    if let Ok(Some(record)) = self.db.get_file_by_hash(&surviving_hash).await {
-                        let slim = crate::types::FileInfoSlim::from(record);
-                        crate::events::emit(crate::events::event_names::FILE_IMPORTED, &slim);
+                // Collection members: suppress individual events — the collection
+                // materialization step emits its own event once all pages are grouped.
+                if !is_collection_member {
+                    if surviving_hash == imported.hex_hash {
+                        if let Ok(Some(record)) = self.db.get_file_by_hash(&surviving_hash).await {
+                            let slim = crate::types::FileInfoSlim::from(record);
+                            crate::events::emit(crate::events::event_names::FILE_IMPORTED, &slim);
+                        }
                     }
-                }
 
-                crate::events::emit_mutation(
-                    "subscription_import",
-                    crate::runtime_contract::mutation_builder::MutationImpact::file_lifecycle(
-                        self.db,
-                    ),
-                );
+                    crate::events::emit_mutation(
+                        "subscription_import",
+                        crate::runtime_contract::mutation_builder::MutationImpact::file_lifecycle(
+                            self.db,
+                        ),
+                    );
+                }
 
                 Ok(ImportOutcome {
                     hex_hash: surviving_hash,

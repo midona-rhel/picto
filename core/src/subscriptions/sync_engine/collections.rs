@@ -16,9 +16,11 @@ impl<'a> SubscriptionSyncEngine<'a> {
         let mut group_values: Vec<CollectionGroup> = groups
             .into_values()
             .filter_map(|mut group| {
+                // Sort by page number so collection order matches the original post
+                group.members.sort_by_key(|(_, page_num)| *page_num);
                 let mut seen = HashSet::new();
-                group.hashes.retain(|hash| seen.insert(hash.clone()));
-                if group.hashes.len() < 2 {
+                group.members.retain(|(hash, _)| seen.insert(hash.clone()));
+                if group.members.len() < 2 {
                     None
                 } else {
                     Some(group)
@@ -58,10 +60,12 @@ impl<'a> SubscriptionSyncEngine<'a> {
                     None
                 }
             };
+            let hash_list: Vec<String> =
+                group.members.iter().map(|(h, _)| h.clone()).collect();
             let existing_collection_id = if mapped_collection_id.is_some() {
                 mapped_collection_id
             } else {
-                match self.find_collection_for_hashes(&group.hashes).await {
+                match self.find_collection_for_hashes(&hash_list).await {
                     Ok(id) => id,
                     Err(e) => {
                         progress.errors.push(format!(
@@ -89,9 +93,11 @@ impl<'a> SubscriptionSyncEngine<'a> {
                     }
                 },
             };
+            let ordered_hashes: Vec<String> =
+                group.members.iter().map(|(h, _)| h.clone()).collect();
             let add_result = self
                 .db
-                .add_collection_members_by_hashes(collection_id, &group.hashes)
+                .add_collection_members_by_hashes(collection_id, &ordered_hashes)
                 .await;
             if let Err(e) = self
                 .db

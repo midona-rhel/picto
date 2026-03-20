@@ -191,6 +191,8 @@ export interface CollectionSummary {
   mime_breakdown: CollectionMimeCount[];
   source_urls: string[];
   rating: number | null;
+  created_at: string | null;
+  updated_at: string | null;
 }
 
 // ─── Companion ──────────────────────────────────────────────────────────────

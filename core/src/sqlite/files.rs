@@ -296,6 +296,26 @@ pub fn set_media_entity_created_at(
     Ok(())
 }
 
+pub fn set_imported_at(conn: &Connection, file_id: i64, imported_at: &str) -> rusqlite::Result<()> {
+    conn.execute(
+        "UPDATE file SET imported_at = ?1 WHERE file_id = ?2",
+        params![imported_at, file_id],
+    )?;
+    Ok(())
+}
+
+pub fn touch_media_entity_updated_at(
+    conn: &Connection,
+    entity_id: i64,
+) -> rusqlite::Result<()> {
+    let now = chrono::Utc::now().to_rfc3339();
+    conn.execute(
+        "UPDATE media_entity SET updated_at = ?1 WHERE entity_id = ?2",
+        params![now, entity_id],
+    )?;
+    Ok(())
+}
+
 pub fn set_phash(conn: &Connection, file_id: i64, phash: &str) -> rusqlite::Result<()> {
     conn.execute(
         "UPDATE file SET phash = ?1 WHERE file_id = ?2",
@@ -366,7 +386,8 @@ pub(crate) fn delete_file_inner(conn: &Connection, file_id: i64) -> rusqlite::Re
 }
 
 pub fn delete_file(conn: &Connection, file_id: i64) -> rusqlite::Result<()> {
-    crate::folders::collections_db::delete_cover_collection(conn, file_id)?;
+    // If this file is a collection's cover, rotate cover to next member (don't destroy collection)
+    crate::folders::collections_db::handle_cover_file_deletion(conn, file_id)?;
     // Delete the target file itself
     delete_file_inner(conn, file_id)
 }
@@ -1528,6 +1549,19 @@ impl SqliteDatabase {
         let file_id = self.resolve_hash(hash).await?;
         let created_at = created_at.to_string();
         self.with_conn(move |conn| set_media_entity_created_at(conn, file_id, &created_at))
+            .await
+    }
+
+    pub async fn set_imported_at(&self, hash: &str, imported_at: &str) -> Result<(), String> {
+        let file_id = self.resolve_hash(hash).await?;
+        let val = imported_at.to_string();
+        self.with_conn(move |conn| set_imported_at(conn, file_id, &val))
+            .await
+    }
+
+    pub async fn touch_media_entity_updated_at(&self, hash: &str) -> Result<(), String> {
+        let file_id = self.resolve_hash(hash).await?;
+        self.with_conn(move |conn| touch_media_entity_updated_at(conn, file_id))
             .await
     }
 

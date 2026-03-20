@@ -348,8 +348,18 @@ impl DuplicateOrchestrator {
             }
         }
 
+        // Consolidate timestamps: preserve earliest dates, mark as modified
         let winner_fid = db.resolve_hash(&winner_hash).await?;
         let loser_fid = db.resolve_hash(&loser_hash).await?;
+        consolidate_merge_timestamps(
+            db,
+            &winner_hash,
+            winner_fid,
+            loser_fid,
+            &winner_file.imported_at,
+            &loser_file.imported_at,
+        )
+        .await?;
         let loser_in_collection: bool = db
             .with_read_conn(move |conn| {
                 let parent: Option<i64> = conn
@@ -480,6 +490,36 @@ impl DuplicateOrchestrator {
             )
         })
         .await?;
+
+        // Consolidate timestamps before deletion
+        {
+            let w_id = winner_id;
+            let l_id = loser_id;
+            let (w_imported, l_imported) = db
+                .with_read_conn(move |conn| {
+                    let wi: String = conn.query_row(
+                        "SELECT imported_at FROM file WHERE file_id = ?1",
+                        [w_id],
+                        |row| row.get(0),
+                    )?;
+                    let li: String = conn.query_row(
+                        "SELECT imported_at FROM file WHERE file_id = ?1",
+                        [l_id],
+                        |row| row.get(0),
+                    )?;
+                    Ok((wi, li))
+                })
+                .await?;
+            consolidate_merge_timestamps(
+                db,
+                keep_hash,
+                winner_id,
+                loser_id,
+                &w_imported,
+                &l_imported,
+            )
+            .await?;
+        }
 
         let affected_folder_ids = if loser_in_collection {
             let w_fid = winner_id;
@@ -986,4 +1026,81 @@ fn merge_notes(winner_json: Option<&str>, loser_json: Option<&str>) -> Option<St
     }
 
     Some(serde_json::to_string(&winner_notes).unwrap_or_else(|_| "{}".into()))
+}
+
+/// Return the earlier of two ISO-8601 timestamp strings.
+/// Lexicographic comparison is safe for RFC 3339 / ISO 8601 strings.
+fn min_timestamp<'a>(a: &'a str, b: &'a str) -> &'a str {
+    if a <= b {
+        a
+    } else {
+        b
+    }
+}
+
+/// Consolidate timestamps during a merge: preserve the earliest dates on the
+/// winner and mark it as modified. Must be called before deleting the loser.
+async fn consolidate_merge_timestamps(
+    db: &SqliteDatabase,
+    winner_hash: &str,
+    winner_id: i64,
+    loser_id: i64,
+    winner_imported_at: &str,
+    loser_imported_at: &str,
+) -> Result<(), String> {
+    // 1. imported_at → keep the earliest import date
+    let min_imported = min_timestamp(winner_imported_at, loser_imported_at);
+    if min_imported != winner_imported_at {
+        db.set_imported_at(winner_hash, min_imported).await?;
+    }
+
+    // 2. created_at → keep the earliest content date (lives on media_entity)
+    let w_id = winner_id;
+    let l_id = loser_id;
+    let (w_created, l_created): (Option<String>, Option<String>) = db
+        .with_read_conn(move |conn| {
+            let wc: Option<String> = conn
+                .query_row(
+                    "SELECT created_at FROM media_entity WHERE entity_id = ?1",
+                    [w_id],
+                    |row| row.get(0),
+                )
+                .optional()?
+                .flatten();
+            let lc: Option<String> = conn
+                .query_row(
+                    "SELECT created_at FROM media_entity WHERE entity_id = ?1",
+                    [l_id],
+                    |row| row.get(0),
+                )
+                .optional()?
+                .flatten();
+            Ok((wc, lc))
+        })
+        .await?;
+
+    let mut updated_via_created_at = false;
+    match (&w_created, &l_created) {
+        (Some(wc), Some(lc)) => {
+            let min_created = min_timestamp(wc, lc);
+            if min_created != wc.as_str() {
+                // set_media_entity_created_at also sets updated_at = CURRENT_TIMESTAMP
+                db.set_media_entity_created_at(winner_hash, min_created)
+                    .await?;
+                updated_via_created_at = true;
+            }
+        }
+        (None, Some(lc)) => {
+            db.set_media_entity_created_at(winner_hash, lc).await?;
+            updated_via_created_at = true;
+        }
+        _ => {}
+    }
+
+    // 3. Touch updated_at if not already done by set_media_entity_created_at
+    if !updated_via_created_at {
+        db.touch_media_entity_updated_at(winner_hash).await?;
+    }
+
+    Ok(())
 }

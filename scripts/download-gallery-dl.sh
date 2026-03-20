@@ -12,7 +12,7 @@
 
 set -euo pipefail
 
-VERSION="1.31.7"
+VERSION="1.31.10"
 REPO="mikf/gallery-dl"
 BASE_URL="https://github.com/${REPO}/releases/download/v${VERSION}"
 DEST_DIR="vendor/gallery-dl"

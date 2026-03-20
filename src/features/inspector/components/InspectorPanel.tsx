@@ -14,7 +14,7 @@ import { WindowControls } from '../../layout/components/WindowControls';
 import { KbdTooltip } from '../../../shared/components/KbdTooltip';
 import { useNavigationStore } from '../../../state/navigationStore';
 import { useFilterStore } from '../../../state/filterStore';
-import { formatFileSize, formatDuration, getFileExtension } from '../../../shared/lib/formatters';
+import { formatFileSize, formatDuration, formatDateTime, getFileExtension } from '../../../shared/lib/formatters';
 import { MediaItem } from '../../grid/shared';
 import { GlassImagePreview } from '../../../shared/components/GlassImagePreview';
 import { NamespaceTagChip } from '../../../shared/components/NamespaceTagChip';
@@ -460,7 +460,13 @@ export function InspectorPanel({
             {selectedImage.duration_ms != null && selectedImage.duration_ms > 0 && (
               <PropertyRow label="Duration" mono value={formatDuration(selectedImage.duration_ms)} />
             )}
-            <PropertyRow label="Date added" mono value={new Date(selectedImage.imported_at).toLocaleDateString()} />
+            <PropertyRow label="Date added" mono value={formatDateTime(selectedImage.imported_at)} />
+            {fileMetadata?.entity.created_at && (
+              <PropertyRow label="Date created" mono value={formatDateTime(fileMetadata.entity.created_at)} />
+            )}
+            {fileMetadata?.entity.updated_at && (
+              <PropertyRow label="Date modified" mono value={formatDateTime(fileMetadata.entity.updated_at)} />
+            )}
           </>
         )}
       </div>
@@ -488,6 +494,12 @@ export function InspectorPanel({
           <PropertyRow label="Items" mono value={itemCount.toLocaleString()} />
           <PropertyRow label="Total size" mono value={typeof totalSize === 'number' ? formatFileSize(totalSize) : '...'} />
           <PropertyRow label="Types" value={mimeSummary} />
+          {selectedCollection?.created_at && (
+            <PropertyRow label="Date created" mono value={formatDateTime(selectedCollection.created_at)} />
+          )}
+          {selectedCollection?.updated_at && (
+            <PropertyRow label="Date modified" mono value={formatDateTime(selectedCollection.updated_at)} />
+          )}
         </div>
       </InspectorSection>
     );

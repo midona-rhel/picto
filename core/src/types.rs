@@ -92,6 +92,10 @@ pub struct EntityDetails {
     pub dominant_colors: Option<Vec<DominantColorDto>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub notes: Option<JsonValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub updated_at: Option<String>,
 }
 
 impl From<FileRecord> for EntityDetails {
@@ -124,6 +128,8 @@ impl From<FileRecord> for EntityDetails {
             dominant_color_hex: f.dominant_color_hex,
             dominant_colors: None,
             notes,
+            created_at: None,
+            updated_at: None,
         }
     }
 }

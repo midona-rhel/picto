@@ -28,7 +28,7 @@ use crate::subscriptions::gallery_dl_runner::{self, FailureKind, GalleryDlRunner
 use crate::subscriptions::import_policy::{collection_group_parts, validate_metadata_for_site};
 use crate::subscriptions::policy::{
     apply_resume_to_query, default_resume_strategy_for_site, derive_resume_cursor,
-    effective_inbox_limit, resolve_query_name,
+    effective_inbox_limit, range_start_from_cursor, resolve_query_name,
 };
 
 #[derive(Debug, Clone, Default)]
@@ -49,7 +49,8 @@ struct CollectionGroup {
     category: String,
     post_id: String,
     preferred_name: String,
-    hashes: Vec<String>,
+    /// (hash, page_num) pairs — page_num preserves original page order.
+    members: Vec<(String, u32)>,
 }
 
 pub struct SubscriptionSyncEngine<'a> {
@@ -183,6 +184,13 @@ impl<'a> SubscriptionSyncEngine<'a> {
             None
         };
 
+        // For range_offset strategy, compute the starting post index from cursor
+        let range_start = if !completed_initial_run {
+            range_start_from_cursor(resume_cursor, resume_strategy.as_deref())
+        } else {
+            1
+        };
+
         self.emit_progress(
             &sub_id_str,
             &progress,
@@ -192,6 +200,7 @@ impl<'a> SubscriptionSyncEngine<'a> {
         let opts = RunOptions {
             url: url.clone(),
             file_limit,
+            range_start,
             abort_threshold,
             sleep_request: self.settings.sub_rate_limit_secs,
             credential,
@@ -305,8 +314,17 @@ impl<'a> SubscriptionSyncEngine<'a> {
             }
             progress.metadata_validated += 1;
 
+            let collection_parts = collection_group_parts(site_id, &item.metadata);
+            let is_collection_member = collection_parts.is_some();
+
             match self
-                .import_item(&item.file_path, &item.metadata, subscription_id, &url)
+                .import_item(
+                    &item.file_path,
+                    &item.metadata,
+                    subscription_id,
+                    &url,
+                    is_collection_member,
+                )
                 .await
             {
                 Ok(outcome) => {
@@ -316,10 +334,9 @@ impl<'a> SubscriptionSyncEngine<'a> {
                         progress.files_skipped += 1;
                     }
 
-                    if let Some((category, post_id, preferred_name)) =
-                        collection_group_parts(site_id, &item.metadata)
-                    {
+                    if let Some((category, post_id, preferred_name)) = collection_parts {
                         let key = format!("{category}:{post_id}");
+                        let page_num = item.metadata.page_num.unwrap_or(u32::MAX);
                         let group =
                             collection_groups
                                 .entry(key)
@@ -327,10 +344,10 @@ impl<'a> SubscriptionSyncEngine<'a> {
                                     category,
                                     post_id,
                                     preferred_name,
-                                    hashes: Vec::new(),
+                                    members: Vec::new(),
                                 });
-                        if !group.hashes.iter().any(|h| h == &outcome.hex_hash) {
-                            group.hashes.push(outcome.hex_hash.clone());
+                        if !group.members.iter().any(|(h, _)| h == &outcome.hex_hash) {
+                            group.members.push((outcome.hex_hash.clone(), page_num));
                         }
                     }
 
@@ -380,9 +397,10 @@ impl<'a> SubscriptionSyncEngine<'a> {
 
         self.emit_progress_force(&sub_id_str, &progress, "Finalizing...");
         let completed_cleanly = run_result.exit_code == 0 && !progress.cancelled;
+        let range_end = file_limit.map(|limit| range_start.saturating_add(limit).saturating_sub(1));
         let next_resume_cursor = resume_strategy
             .as_deref()
-            .and_then(|strategy| derive_resume_cursor(&run_result.items, strategy));
+            .and_then(|strategy| derive_resume_cursor(&run_result.items, strategy, range_end));
         // Count unique posts (not files) since we use --post-range
         let unique_post_count = {
             let mut seen = std::collections::HashSet::new();

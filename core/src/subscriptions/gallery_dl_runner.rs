@@ -49,8 +49,10 @@ pub use sites::{
 pub struct RunOptions {
     /// Full URL to download from (after query substitution).
     pub url: String,
-    /// Max files to download (maps to `--range 1-N`). None = unlimited.
+    /// Max files to download (maps to `--post-range`). None = unlimited.
     pub file_limit: Option<u32>,
+    /// Starting post index for `--post-range` (1-based). Used by range_offset pagination.
+    pub range_start: u32,
     /// Abort after N consecutive skipped files (maps to `-A N`).
     /// None = no abort (first run / initial sync).
     pub abort_threshold: Option<u32>,
@@ -92,6 +94,8 @@ pub struct ParsedMetadata {
     pub created_at: Option<String>,
     /// Gallery-dl extractor category (e.g. "danbooru", "pixiv").
     pub category: Option<String>,
+    /// 0-based page index within a multi-image post (gallery-dl `num` field).
+    pub page_num: Option<u32>,
 }
 
 /// The gallery-dl subprocess runner.
@@ -139,8 +143,10 @@ impl GalleryDlRunner {
             // Use --post-range instead of --range so multi-image posts
             // aren't split mid-collection. Each post counts as 1 toward
             // the limit regardless of how many images it contains.
+            let start = opts.range_start.max(1);
+            let end = start.saturating_add(limit).saturating_sub(1);
             args.push("--post-range".to_string());
-            args.push(format!("1-{limit}"));
+            args.push(format!("{start}-{end}"));
         }
 
         if let Some(threshold) = opts.abort_threshold {
@@ -158,6 +164,7 @@ impl GalleryDlRunner {
         info!(
             url = %opts.url,
             file_limit = ?opts.file_limit,
+            range_start = opts.range_start,
             abort_threshold = ?opts.abort_threshold,
             "Spawning gallery-dl"
         );

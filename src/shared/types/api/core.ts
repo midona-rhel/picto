@@ -113,6 +113,8 @@ export interface EntityAllMetadata {
     has_thumbnail: boolean;
     dominant_colors: { hex: string; l: number; a: number; b: number }[] | null;
     notes: Record<string, string> | null;
+    created_at?: string | null;
+    updated_at?: string | null;
   };
   tags: ResolvedTagInfo[];
   parent_tags: { namespace: string; subtag: string; display: string; read_only: boolean }[];

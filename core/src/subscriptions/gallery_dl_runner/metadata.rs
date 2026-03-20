@@ -143,6 +143,10 @@ pub fn parse_metadata(json: &serde_json::Value) -> ParsedMetadata {
         .filter(|s| !s.is_empty())
         .map(String::from);
     let created_at = parse_created_at(json);
+    let page_num = json
+        .get("num")
+        .and_then(|v| v.as_u64())
+        .and_then(|n| u32::try_from(n).ok());
 
     ParsedMetadata {
         tags,
@@ -154,6 +158,7 @@ pub fn parse_metadata(json: &serde_json::Value) -> ParsedMetadata {
         post_id,
         created_at,
         category,
+        page_num,
     }
 }
 

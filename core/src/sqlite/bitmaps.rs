@@ -1488,19 +1488,19 @@ mod tests {
         }
 
         // State: status=v3, tags=v2, folders=v1
+        // payload2 refs: status.v1, tags.v2, folders.v1
+        // payload3 refs: status.v3, tags.v2, folders.v1
         // Keep payload3 (current) and payload2 (previous)
         let store = BitmapStore::open_with_active_file(dir.path(), Some(&payload3));
         let deleted = store.prune_artifacts(&[payload3.clone(), payload2.clone()]).unwrap();
 
-        // Should delete: status.v1.bin, tags.v1.bin (folders.v1.bin is kept by payload3)
-        // Kept: status.v3.bin (p3), status.v2.bin doesn't exist, tags.v2.bin (p2+p3),
-        //       folders.v1.bin (p2+p3)
+        // Only tags.v1.bin should be deleted — everything else is referenced
         assert!(bitmaps_dir.join("status.v3.bin").exists());
+        assert!(bitmaps_dir.join("status.v1.bin").exists(), "status.v1 kept by payload2");
         assert!(bitmaps_dir.join("tags.v2.bin").exists());
         assert!(bitmaps_dir.join("folders.v1.bin").exists());
-        assert!(!bitmaps_dir.join("status.v1.bin").exists());
-        assert!(!bitmaps_dir.join("tags.v1.bin").exists());
-        assert!(deleted >= 2);
+        assert!(!bitmaps_dir.join("tags.v1.bin").exists(), "tags.v1 not in any payload");
+        assert_eq!(deleted, 1);
     }
 
     #[test]

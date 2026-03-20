@@ -40,6 +40,8 @@ pub struct CollectionSummary {
     pub mime_breakdown: Vec<CollectionMimeCount>,
     pub source_urls: Vec<String>,
     pub rating: Option<i64>,
+    pub created_at: Option<String>,
+    pub updated_at: Option<String>,
 }
 
 fn normalize_tags(tags: &[String]) -> Vec<String> {
@@ -384,14 +386,30 @@ pub(crate) fn sync_collection_aggregate_metadata(
         |row| row.get(0),
     )?;
 
+    // Inherit created_at from the oldest member so the collection sorts by
+    // the original content date rather than the time it was grouped.
+    let oldest_created_at: Option<String> = conn
+        .query_row(
+            "SELECT MIN(me_member.created_at)
+             FROM media_entity me_member
+             WHERE me_member.kind = 'single'
+               AND me_member.parent_collection_id = ?1
+               AND me_member.created_at IS NOT NULL",
+            [collection_id],
+            |row| row.get(0),
+        )
+        .optional()?
+        .flatten();
+
     let now = chrono::Utc::now().to_rfc3339();
     conn.execute(
         "UPDATE media_entity
          SET rating = ?1,
              status = ?2,
-             updated_at = ?3
-         WHERE entity_id = ?4 AND kind = 'collection'",
-        params![merged_rating, derived_status, now, collection_id],
+             created_at = COALESCE(?3, created_at),
+             updated_at = ?4
+         WHERE entity_id = ?5 AND kind = 'collection'",
+        params![merged_rating, derived_status, oldest_created_at, now, collection_id],
     )?;
 
     // 5) Ensure collection appears anywhere its members already lived (folder replacement semantics).
@@ -430,6 +448,24 @@ pub(crate) fn sync_collection_aggregate_metadata(
 
     // Keep tag.file_count consistent after mirrored collection tagging changes.
     crate::tags::db::rebuild_tag_counts(conn)?;
+
+    // Auto-delete empty collections (no members left)
+    let item_count: i64 = conn.query_row(
+        "SELECT COALESCE(cached_item_count, 0) FROM media_entity WHERE entity_id = ?1",
+        [collection_id],
+        |row| row.get(0),
+    ).unwrap_or(0);
+    if item_count == 0 {
+        conn.execute(
+            "UPDATE media_entity SET parent_collection_id = NULL, collection_ordinal = NULL, updated_at = CURRENT_TIMESTAMP
+             WHERE parent_collection_id = ?1",
+            [collection_id],
+        )?;
+        conn.execute(
+            "DELETE FROM media_entity WHERE entity_id = ?1 AND kind = 'collection'",
+            [collection_id],
+        )?;
+    }
 
     Ok(())
 }
@@ -497,24 +533,43 @@ pub fn delete_collection(conn: &Connection, collection_id: i64) -> rusqlite::Res
     Ok(())
 }
 
-pub fn delete_cover_collection(
+/// Handle deletion of a file that is a collection's cover.
+/// Instead of destroying the collection, rotate the cover to the next member.
+/// If the collection becomes empty, delete it.
+/// Returns the collection_id if the collection was affected (for bitmap/event updates).
+pub fn handle_cover_file_deletion(
     conn: &Connection,
     file_id: i64,
-) -> rusqlite::Result<Vec<(i64, String)>> {
+) -> rusqlite::Result<Option<i64>> {
     let Some(collection_id) = find_collection_for_cover_file(conn, file_id)? else {
-        return Ok(Vec::new());
+        return Ok(None);
     };
 
-    let member_files = get_collection_member_files(conn, collection_id)?;
-    conn.execute(
-        "DELETE FROM media_entity WHERE entity_id = ?1",
+    // Sync metadata — this rotates cover to next member and updates cached_item_count
+    sync_collection_aggregate_metadata(conn, collection_id)?;
+
+    // If no members remain, delete the collection entity
+    let count: i64 = conn.query_row(
+        "SELECT COALESCE(cached_item_count, 0) FROM media_entity WHERE entity_id = ?1",
         [collection_id],
-    )?;
-    for (member_file_id, _) in &member_files {
-        crate::sqlite::files::delete_file_inner(conn, *member_file_id)?;
+        |row| row.get(0),
+    ).unwrap_or(0);
+
+    if count == 0 {
+        // Orphan any remaining references before delete
+        conn.execute(
+            "UPDATE media_entity
+             SET parent_collection_id = NULL, collection_ordinal = NULL, updated_at = CURRENT_TIMESTAMP
+             WHERE parent_collection_id = ?1",
+            [collection_id],
+        )?;
+        conn.execute(
+            "DELETE FROM media_entity WHERE entity_id = ?1 AND kind = 'collection'",
+            [collection_id],
+        )?;
     }
 
-    Ok(member_files)
+    Ok(Some(collection_id))
 }
 
 pub fn list_collections(conn: &Connection) -> rusqlite::Result<Vec<CollectionRecord>> {
@@ -583,14 +638,23 @@ pub fn get_collection_summary(
     conn: &Connection,
     collection_id: i64,
 ) -> rusqlite::Result<CollectionSummary> {
-    let (id, name, image_count, total_size_bytes, rating): (i64, String, i64, i64, Option<i64>) =
-        conn.query_row(
+    let (id, name, image_count, total_size_bytes, rating, created_at, updated_at): (
+        i64,
+        String,
+        i64,
+        i64,
+        Option<i64>,
+        Option<String>,
+        Option<String>,
+    ) = conn.query_row(
         "SELECT
              me.entity_id,
              COALESCE(me.name, ''),
              me.cached_item_count,
              me.cached_total_size_bytes,
-             me.rating
+             me.rating,
+             me.created_at,
+             me.updated_at
          FROM media_entity me
          WHERE me.entity_id = ?1 AND me.kind = 'collection'
          LIMIT 1",
@@ -602,6 +666,8 @@ pub fn get_collection_summary(
                 row.get(2)?,
                 row.get(3)?,
                 row.get(4)?,
+                row.get(5)?,
+                row.get(6)?,
             ))
         },
     )?;
@@ -652,6 +718,8 @@ pub fn get_collection_summary(
         mime_breakdown,
         source_urls,
         rating,
+        created_at,
+        updated_at,
     })
 }
 

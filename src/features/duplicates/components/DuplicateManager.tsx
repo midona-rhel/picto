@@ -13,6 +13,7 @@ import {
   IconCheck,
 } from '@tabler/icons-react';
 import { api } from '#desktop/api';
+import { formatDateTime } from '../../../shared/lib/formatters';
 import { mediaFileUrl, mediaThumbnailUrl } from '../../../shared/lib/mediaUrl';
 import { isImagePreloaded, queueImageDecode } from '../../../shared/lib/useImagePreloader';
 import type { DuplicatePairDto, DuplicatePairsResponse, ResolveDuplicateAction } from '../../../shared/types/api';
@@ -38,6 +39,8 @@ interface PairFileInfo {
   sourceUrls: string[];
   imageUrl: string;
   thumbUrl: string;
+  importedAt: string;
+  createdAt: string | null;
 }
 
 
@@ -251,6 +254,8 @@ export function DuplicateManager() {
             sourceUrls: meta?.entity.source_urls ?? [],
             imageUrl: mediaFileUrl(hash, mime),
             thumbUrl: mediaThumbnailUrl(hash),
+            importedAt: meta?.entity.imported_at ?? '',
+            createdAt: meta?.entity.created_at ?? null,
           };
         };
 
@@ -591,6 +596,18 @@ export function DuplicateManager() {
                 <span className={styles.metaLabel}>Tags</span>
                 <span className={styles.metaValue}>{leftFile.tags.length}</span>
               </div>
+              {leftFile.importedAt && (
+                <div className={styles.metaRow}>
+                  <span className={styles.metaLabel}>Added</span>
+                  <span className={styles.metaValue}>{formatDateTime(leftFile.importedAt)}</span>
+                </div>
+              )}
+              {leftFile.createdAt && leftFile.createdAt !== leftFile.importedAt && (
+                <div className={styles.metaRow}>
+                  <span className={styles.metaLabel}>Created</span>
+                  <span className={styles.metaValue}>{formatDateTime(leftFile.createdAt)}</span>
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -673,6 +690,18 @@ export function DuplicateManager() {
                 <span className={styles.metaLabel}>Tags</span>
                 <span className={styles.metaValue}>{rightFile.tags.length}</span>
               </div>
+              {rightFile.importedAt && (
+                <div className={styles.metaRow}>
+                  <span className={styles.metaLabel}>Added</span>
+                  <span className={styles.metaValue}>{formatDateTime(rightFile.importedAt)}</span>
+                </div>
+              )}
+              {rightFile.createdAt && rightFile.createdAt !== rightFile.importedAt && (
+                <div className={styles.metaRow}>
+                  <span className={styles.metaLabel}>Created</span>
+                  <span className={styles.metaValue}>{formatDateTime(rightFile.createdAt)}</span>
+                </div>
+              )}
             </div>
           )}
         </div>

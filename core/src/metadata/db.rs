@@ -44,6 +44,8 @@ pub struct ResolvedMetadataFull {
     pub source_urls_json: Option<String>,
     pub notes: Option<String>,
     pub colors: Vec<(String, f64, f64, f64)>,
+    pub created_at: Option<String>,
+    pub updated_at: Option<String>,
 }
 
 impl SqliteDatabase {
@@ -85,6 +87,8 @@ impl SqliteDatabase {
             struct FallbackRow {
                 file_id: i64,
                 file: FileRecord,
+                created_at: Option<String>,
+                updated_at: Option<String>,
             }
 
             let placeholders = std::iter::repeat_n("?", hashes.len())
@@ -94,9 +98,12 @@ impl SqliteDatabase {
                 "SELECT f.file_id, f.hash, f.name, f.size, f.mime, f.width, f.height, f.duration_ms, f.num_frames,
                         f.has_audio, f.status, f.rating, f.view_count, f.phash, f.imported_at,
                         f.notes, f.source_urls_json, f.dominant_color_hex,
-                        p.epoch, p.resolved_json
+                        p.epoch, p.resolved_json,
+                        me.created_at, me.updated_at
                  FROM file f
                  LEFT JOIN entity_metadata_projection p ON p.entity_id = f.file_id
+                 LEFT JOIN entity_file ef ON ef.file_id = f.file_id
+                 LEFT JOIN media_entity me ON me.entity_id = ef.entity_id
                  WHERE f.hash IN ({})",
                 placeholders
             );
@@ -125,14 +132,16 @@ impl SqliteDatabase {
                 };
                 let proj_epoch: Option<i64> = row.get(18)?;
                 let proj_resolved_json: Option<String> = row.get(19)?;
-                Ok((file, proj_epoch, proj_resolved_json))
+                let created_at: Option<String> = row.get(20)?;
+                let updated_at: Option<String> = row.get(21)?;
+                Ok((file, proj_epoch, proj_resolved_json, created_at, updated_at))
             })?;
 
             let mut results = Vec::new();
             let mut fallbacks: Vec<FallbackRow> = Vec::new();
 
             for row in rows {
-                let (file, proj_epoch, proj_resolved_json) = row?;
+                let (file, proj_epoch, proj_resolved_json, created_at, updated_at) = row?;
                 let file_id = file.file_id;
                 let source_urls_json = file.source_urls_json.clone();
                 let notes = file.notes.clone();
@@ -147,6 +156,8 @@ impl SqliteDatabase {
                                     source_urls_json,
                                     notes,
                                     colors: Vec::new(),
+                                    created_at,
+                                    updated_at,
                                 });
                                 continue;
                             }
@@ -163,7 +174,7 @@ impl SqliteDatabase {
                     }
                 }
 
-                fallbacks.push(FallbackRow { file_id, file });
+                fallbacks.push(FallbackRow { file_id, file, created_at, updated_at });
             }
 
             if !fallbacks.is_empty() {
@@ -203,6 +214,8 @@ impl SqliteDatabase {
                         source_urls_json,
                         notes,
                         colors: Vec::new(),
+                        created_at: fallback.created_at,
+                        updated_at: fallback.updated_at,
                     });
                 }
             }

@@ -22,16 +22,20 @@ pub fn resolve_query_name(query_id: i64, query_text: &str, display_name: Option<
     format!("Query {query_id}")
 }
 
+const DEFAULT_BATCH_SIZE: u32 = 100;
+
 pub fn effective_query_file_limit(global_batch_size: u32, subscription_limit: u32) -> Option<u32> {
-    if global_batch_size == 0 {
-        return None;
-    }
-    let local = if subscription_limit == 0 {
+    let global = if global_batch_size == 0 {
+        DEFAULT_BATCH_SIZE
+    } else {
         global_batch_size
+    };
+    let local = if subscription_limit == 0 {
+        global
     } else {
         subscription_limit
     };
-    Some(local.min(global_batch_size).max(1))
+    Some(local.min(global).max(1))
 }
 
 pub fn resolve_finished_status_text(status: &str, failure_kind: Option<&str>) -> &'static str {
@@ -49,7 +53,8 @@ pub fn default_resume_strategy_for_site(site_id: &str) -> Option<&'static str> {
     match crate::subscriptions::gallery_dl_runner::canonical_site_id(site_id) {
         "danbooru" | "gelbooru" | "3dbooru" | "safebooru" | "rule34" | "yandere" | "e621"
         | "konachan" => Some("tag_id_lt"),
-        _ => None,
+        // All other sites use sequential range-based pagination via --post-range
+        _ => Some("range_offset"),
     }
 }
 
@@ -80,6 +85,7 @@ pub fn apply_resume_to_query(
 pub fn derive_resume_cursor(
     items: &[crate::subscriptions::gallery_dl_runner::DownloadedItem],
     strategy: &str,
+    range_end: Option<u32>,
 ) -> Option<String> {
     match strategy {
         "tag_id_lt" => {
@@ -96,7 +102,19 @@ pub fn derive_resume_cursor(
             }
             min_id.map(|id| id.to_string())
         }
+        "range_offset" => range_end.map(|end| end.to_string()),
         _ => None,
+    }
+}
+
+/// Parse range_offset cursor into the starting post-range index.
+pub fn range_start_from_cursor(resume_cursor: Option<&str>, strategy: Option<&str>) -> u32 {
+    match strategy {
+        Some("range_offset") => resume_cursor
+            .and_then(|c| c.trim().parse::<u32>().ok())
+            .map(|end| end + 1)
+            .unwrap_or(1),
+        _ => 1,
     }
 }
 
@@ -104,7 +122,7 @@ pub fn derive_resume_cursor(
 mod tests {
     use super::{
         apply_resume_to_query, derive_resume_cursor, effective_inbox_limit,
-        effective_query_file_limit, resolve_finished_status_text,
+        effective_query_file_limit, range_start_from_cursor, resolve_finished_status_text,
     };
 
     #[test]
@@ -112,6 +130,13 @@ mod tests {
         assert_eq!(effective_query_file_limit(100, 0), Some(100));
         assert_eq!(effective_query_file_limit(100, 50), Some(50));
         assert_eq!(effective_query_file_limit(100, 500), Some(100));
+    }
+
+    #[test]
+    fn effective_query_file_limit_never_returns_none() {
+        // Even if global batch size is 0, fall back to default (100)
+        assert_eq!(effective_query_file_limit(0, 0), Some(100));
+        assert_eq!(effective_query_file_limit(0, 50), Some(50));
     }
 
     #[test]
@@ -160,8 +185,28 @@ mod tests {
             },
         ];
         assert_eq!(
-            derive_resume_cursor(&items, "tag_id_lt"),
+            derive_resume_cursor(&items, "tag_id_lt", None),
             Some("93".to_string())
         );
+    }
+
+    #[test]
+    fn derive_resume_cursor_range_offset_returns_range_end() {
+        let items = vec![];
+        assert_eq!(
+            derive_resume_cursor(&items, "range_offset", Some(100)),
+            Some("100".to_string())
+        );
+        assert_eq!(derive_resume_cursor(&items, "range_offset", None), None);
+    }
+
+    #[test]
+    fn range_start_from_cursor_computes_next_offset() {
+        assert_eq!(range_start_from_cursor(None, Some("range_offset")), 1);
+        assert_eq!(range_start_from_cursor(Some("100"), Some("range_offset")), 101);
+        assert_eq!(range_start_from_cursor(Some("200"), Some("range_offset")), 201);
+        // Non range_offset strategies always start at 1
+        assert_eq!(range_start_from_cursor(Some("100"), Some("tag_id_lt")), 1);
+        assert_eq!(range_start_from_cursor(Some("100"), None), 1);
     }
 }

@@ -285,10 +285,9 @@ pub async fn set_entity_status(
         }
     } else if let Some(selection) = input.selection {
         // Selection mode — expand any collection covers to include members
-        let bitmap = resolve_selection_bitmap(state, &selection).await?;
-        let expanded = state.db.expand_collection_members(
-            bitmap.iter().map(|id| id as i64).collect()
-        ).await?;
+        let original_ids: Vec<i64> = resolve_selection_bitmap(state, &selection).await?
+            .iter().map(|id| id as i64).collect();
+        let expanded = state.db.expand_collection_members(original_ids.clone()).await?;
 
         let mut expanded_bitmap = roaring::RoaringBitmap::new();
         for &fid in &expanded { expanded_bitmap.insert(fid as u32); }
@@ -304,6 +303,19 @@ pub async fn set_entity_status(
                 folder_ids.dedup();
             }
             state.db.update_file_status_batch(&expanded_bitmap, status).await?;
+
+            // Sync collection entities whose covers were in the selection
+            // (update_file_status_batch only syncs PARENT collections, not the collections themselves)
+            let oids = original_ids.clone();
+            state.db.with_conn(move |conn| {
+                for fid in &oids {
+                    if let Some(cid) = crate::folders::collections_db::find_collection_for_cover_file(conn, *fid)? {
+                        crate::folders::collections_db::sync_collection_aggregate_metadata(conn, cid)?;
+                    }
+                }
+                Ok(())
+            }).await?;
+
             if let Err(err) = crate::folders::service::refresh_sidebar_projection_for_folder_ids(
                 &state.db, &folder_ids,
             ).await {
@@ -324,49 +336,60 @@ pub async fn delete_entities(
     state: &AppState,
     input: DeleteFilesInput,
 ) -> Result<usize, String> {
-    let hashes = if let Some(hashes) = input.hashes {
-        hashes
-    } else if let Some(selection) = input.selection {
+    // Collect entity IDs from the bitmap (includes both file_ids and collection entity_ids)
+    let all_ids: Vec<i64> = if let Some(ref hashes) = input.hashes {
+        let pairs = state.db.resolve_hashes_batch(hashes).await?;
+        pairs.into_iter().map(|(_, fid)| fid).collect()
+    } else if let Some(ref selection) = input.selection {
         let bitmap = resolve_selection_bitmap(state, &selection).await?;
-        let file_ids: Vec<i64> = bitmap.iter().map(|id| id as i64).collect();
-        let pairs = state.db.resolve_ids_batch(&file_ids).await?;
-        pairs.into_iter().map(|(_, h)| h).collect()
+        bitmap.iter().map(|id| id as i64).collect()
     } else {
         return Err("Either hashes or selection must be provided".into())
     };
 
-    let count = hashes.len();
-    let folder_ids = collect_folder_ids_for_hashes(state, &hashes, count).await;
-    for hash in &hashes {
-        let file_id = match state.db.resolve_hash(hash).await {
-            Ok(fid) => Some(fid),
-            Err(_) => {
-                tracing::warn!(hash, "delete_entities: could not resolve hash, skipping");
-                None
-            }
-        };
+    // Expand to include collection members
+    let expanded = state.db.expand_collection_members(all_ids.clone()).await?;
 
-        if let Some(fid) = file_id {
-            // Check if this is a collection cover
-            let collection_id = state.db.with_read_conn(move |conn| {
-                crate::folders::collections_db::find_collection_for_cover_file(conn, fid)
-            }).await?;
+    // Resolve all expanded IDs to hashes for blob deletion
+    let all_hash_pairs = state.db.resolve_ids_batch(&expanded).await?;
+    let all_hashes: Vec<String> = all_hash_pairs.iter().map(|(_, h)| h.clone()).collect();
 
-            if let Some(cid) = collection_id {
-                // Get member file hashes before deletion (via parent_collection_id)
-                let member_hashes = state.db.list_collection_member_hashes(cid).await?;
-                // Delete collection entity (orphans members)
-                state.db.delete_collection(cid).await?;
-                // Delete each orphaned member file + its blobs
-                for mhash in &member_hashes {
-                    if let Err(e) = state.db.delete_file_by_hash(mhash).await {
-                        tracing::warn!(hash = mhash, error = %e, "delete_entities: failed to delete collection member");
-                    }
-                    let _ = state.blob_store.delete(mhash);
+    let count = all_ids.len();
+    let folder_ids = collect_folder_ids_for_hashes(state, &all_hashes, count).await;
+
+    // Find and delete collection entities first (by checking which IDs are collections)
+    let collection_ids = state.db.with_read_conn({
+        let ids = all_ids.clone();
+        move |conn| {
+            let mut cids = Vec::new();
+            for &id in &ids {
+                // Check if this ID is a collection entity directly
+                let is_coll: bool = conn.query_row(
+                    "SELECT COUNT(*) > 0 FROM media_entity WHERE entity_id = ?1 AND kind = 'collection'",
+                    [id],
+                    |row| row.get(0),
+                ).unwrap_or(false);
+                if is_coll { cids.push(id); }
+                // Also check if it's a cover file for a collection
+                if let Ok(Some(cid)) = crate::folders::collections_db::find_collection_for_cover_file(conn, id) {
+                    if !cids.contains(&cid) { cids.push(cid); }
                 }
-            } else {
-                state.db.delete_file_by_hash(hash).await?;
             }
+            Ok(cids)
+        }
+    }).await?;
+
+    // Delete collections (orphans members, then we delete the orphaned files below)
+    for cid in &collection_ids {
+        if let Err(e) = state.db.delete_collection(*cid).await {
+            tracing::warn!(collection_id = cid, error = %e, "delete_entities: failed to delete collection");
+        }
+    }
+
+    // Delete all individual files (including orphaned collection members)
+    for (_, hash) in &all_hash_pairs {
+        if let Err(e) = state.db.delete_file_by_hash(hash).await {
+            tracing::warn!(hash, error = %e, "delete_entities: failed to delete file");
         }
         let _ = state.blob_store.delete(hash);
     }
@@ -378,7 +401,7 @@ pub async fn delete_entities(
             tracing::warn!(error = %err, "failed to refresh sidebar after delete_entities");
         }
         let mut impact = crate::runtime_contract::mutation_builder::MutationImpact::file_status_change(&state.db)
-            .file_hashes(hashes);
+            .file_hashes(all_hashes);
         if !folder_ids.is_empty() { impact = impact.folder_ids(folder_ids); }
         crate::events::emit_mutation("delete_entities", impact);
     }
