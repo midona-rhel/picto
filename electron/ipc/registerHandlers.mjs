@@ -389,6 +389,7 @@ export function registerIpcHandlers({
   ipcMain.handle('picto:library:rename', async (_event, { path, newName }) => libraryService.renameLibrary(path, newName));
   ipcMain.handle('picto:library:relocate', async (_event, { oldPath }) => libraryService.relocateLibrary(oldPath));
   ipcMain.handle('picto:library:getConfig', async () => libraryService.getLibraryConfig());
+  ipcMain.handle('picto:library:setMeta', async (_event, { path, meta }) => libraryService.setLibraryMeta(path, meta));
 
   // Auto-updater
   ipcMain.handle('picto:updater:check', async () => {

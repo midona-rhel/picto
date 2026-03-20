@@ -20,7 +20,7 @@ export interface SmartFolderMenuOptions {
 
 export function buildSmartFolderItemMenu(opts: SmartFolderMenuOptions): ContextMenuEntry[] {
   const sortChildren: ContextMenuEntry[] = [
-    { type: 'check', label: 'Date Imported', checked: opts.currentSortField === 'imported_at', onClick: () => opts.setSortField('imported_at') },
+    { type: 'check', label: 'Date Imported', checked: opts.currentSortField === 'date_added', onClick: () => opts.setSortField('date_added') },
     { type: 'check', label: 'Name', checked: opts.currentSortField === 'name', onClick: () => opts.setSortField('name') },
     { type: 'check', label: 'File Size', checked: opts.currentSortField === 'file_size', onClick: () => opts.setSortField('file_size') },
     { type: 'check', label: 'Rating', checked: opts.currentSortField === 'rating', onClick: () => opts.setSortField('rating') },

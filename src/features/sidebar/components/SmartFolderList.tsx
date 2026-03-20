@@ -363,7 +363,7 @@ export function SmartFolderList({ onFolderUpdated }: SmartFolderListProps) {
   const handleContextMenu = useCallback((e: React.MouseEvent, node: SmartFolderTreeNode) => {
     const folder = folders.find((item) => item.id === node.id);
     if (!folder) return;
-    const currentSortField = folder.sort_field ?? 'imported_at';
+    const currentSortField = folder.sort_field ?? 'date_added';
     const currentSortOrder: 'asc' | 'desc' = folder.sort_order === 'asc' ? 'asc' : 'desc';
     const smartFolder: SmartFolder = {
       id: folder.id,

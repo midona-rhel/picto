@@ -18,6 +18,7 @@ import {
   IconPencil,
   IconRefresh,
   IconInfoCircle,
+  IconCopy,
 } from '@tabler/icons-react';
 import { useRuntimeSyncStore } from '../../../state/runtimeSyncStore';
 import { useSubscriptionProgressStore } from '../subscriptionProgressStore';
@@ -34,6 +35,64 @@ import {
   formatSubscriptionFailureMessage,
 } from '../lib/subscriptionGroupUtils';
 import st from './SubscriptionGroupsPanel.module.css';
+
+const SITE_QUERY_HELP: Record<string, { description: string; example: string }> = {
+  pixiv:          { description: 'Enter search tags to find artworks.', example: 'landscape' },
+  pixivuser:      { description: 'Enter the numeric user ID from the Pixiv profile URL.', example: '12345' },
+  gelbooru:       { description: 'Enter space-separated booru tags.', example: 'princess_peach 1girl' },
+  danbooru:       { description: 'Enter space-separated booru tags.', example: '1girl solo blue_eyes' },
+  rule34:         { description: 'Enter space-separated booru tags.', example: 'solo score:>=50' },
+  e621:           { description: 'Enter space-separated booru tags.', example: 'solo canine rating:safe' },
+  twitter:        { description: 'Enter the Twitter/X username (without @).', example: 'username' },
+  furaffinity:    { description: 'Enter the FurAffinity username. Downloads gallery and scraps.', example: 'username' },
+  hentaifoundry:  { description: 'Enter the Hentai Foundry username. Downloads gallery and scraps.', example: 'username' },
+  tumblr:         { description: 'Enter the Tumblr blog name (the subdomain).', example: 'blogname' },
+  deviantart:     { description: 'Enter the DeviantArt username.', example: 'username' },
+  artstation:     { description: 'Enter the ArtStation username.', example: 'username' },
+  patreon:        { description: 'Enter the Patreon creator name from their URL.', example: 'creatorname' },
+  kemono:         { description: 'Enter the path: service/user/ID. Find the ID from the Kemono page URL.', example: 'patreon/user/12345' },
+  coomer:         { description: 'Enter the path: service/user/ID. Find the ID from the Coomer page URL.', example: 'onlyfans/user/12345' },
+  fanbox:         { description: 'Enter the Fanbox creator name (their subdomain).', example: 'creatorname' },
+  fantia:         { description: 'Enter the Fantia fanclub ID from the URL.', example: '12345' },
+  nijie:          { description: 'Enter the numeric user ID from the Nijie profile URL.', example: '12345' },
+  instagram:      { description: 'Enter the Instagram username (without @).', example: 'username' },
+  sankaku:        { description: 'Enter space-separated booru tags.', example: '1girl' },
+  idolcomplex:    { description: 'Enter space-separated booru tags.', example: 'idol' },
+  yandere:        { description: 'Enter space-separated booru tags.', example: 'landscape' },
+  konachan:       { description: 'Enter space-separated booru tags.', example: 'landscape' },
+  safebooru:      { description: 'Enter space-separated booru tags.', example: '1girl smile' },
+};
+
+function QueryInfoTooltip({ siteId, sites }: { siteId: string; sites: SitePluginInfo[] }) {
+  const si = sites.find((s) => s.id === siteId);
+  if (!si) return null;
+  const help = SITE_QUERY_HELP[siteId];
+  const description = help?.description ?? (si.supports_query ? 'Enter search tags.' : 'Enter a username or ID.');
+  const example = help?.example ?? si.example_query;
+  return (
+    <Tooltip
+      label={
+        <div style={{ fontSize: 11, lineHeight: 1.4 }}>
+          <div>{description}</div>
+          <div style={{ marginTop: 4, opacity: 0.7 }}>Example: {example}</div>
+          {si.auth_required_for_full_access && (
+            <div style={{ marginTop: 6, borderTop: '1px solid rgba(255,255,255,0.15)', paddingTop: 4, opacity: 0.7 }}>
+              Credentials recommended for full access.
+            </div>
+          )}
+        </div>
+      }
+      position="top"
+      withArrow
+      multiline
+      w={240}
+    >
+      <ActionIcon variant="transparent" size="xs" style={{ flexShrink: 0, color: 'var(--color-text-tertiary)' }}>
+        <IconInfoCircle size={14} />
+      </ActionIcon>
+    </Tooltip>
+  );
+}
 
 export function SubscriptionGroupsPanel({
   onOpenCreateModal,
@@ -58,12 +117,6 @@ export function SubscriptionGroupsPanel({
   const lastSubFinishKeyRef = useRef<string | null>(null);
   const lastSubscriptionGroupFinishKeyRef = useRef<string | null>(null);
 
-  const [addingTo, setAddingTo] = useState<string | null>(null);
-  const [addSite, setAddSite] = useState('');
-  const [addQuery, setAddQuery] = useState('');
-  const [editingQueryId, setEditingQueryId] = useState<string | null>(null);
-  const [editingQueryText, setEditingQueryText] = useState('');
-  const [addLoading, setAddLoading] = useState(false);
   const progressMap = useMemo(() => {
     const next = new Map<string, SubProgress>();
     for (const [subId, progress] of subscriptionProgressById.entries()) {
@@ -302,13 +355,11 @@ export function SubscriptionGroupsPanel({
     }
   };
 
-  const handleSaveEditQuery = async (queryId: string) => {
-    const text = editingQueryText.trim();
-    if (!text) return;
+  const handleSaveEditQuery = async (queryId: string, text?: string) => {
+    const value = (text ?? '').trim();
+    if (!value) return;
     try {
-      await api.subscriptions.editQuery(Number(queryId), text);
-      setEditingQueryId(null);
-      setEditingQueryText('');
+      await api.subscriptions.editQuery(Number(queryId), value);
       await loadData();
     } catch (error) {
       notifyError(`Failed to update query: ${error}`);
@@ -335,45 +386,22 @@ export function SubscriptionGroupsPanel({
     }
   };
 
-  const handleAddQuery = async (subscriptionGroupId: string) => {
-    if (!addSite || !addQuery.trim()) return;
-    setAddLoading(true);
+  const handleAddRow = async (subscriptionGroupId: string) => {
+    const defaultSite = sites[0]?.id ?? 'pixiv';
+    const defaultQuery = 'new_query';
     try {
-      const siteInfo = sites.find((s) => s.id === addSite);
-      const needsAuthWarning = Boolean(
-        siteInfo?.auth_supported &&
-        siteInfo.auth_required_for_full_access &&
-        !credentialSites.has(addSite),
-      );
-      if (needsAuthWarning) {
-        notifyInfo(
-          `${siteInfo?.name ?? addSite} may return partial/limited data without credentials. You can configure auth in the Subscriptions window.`,
-          'Authentication Recommended',
-        );
-      }
-
-      const subscriptionGroup = subscriptionGroups.find((group) => group.id === subscriptionGroupId);
-      const existingSub = subscriptionGroup?.subscriptions.find((s) => (s.site_id ?? s.site_plugin_id) === addSite);
-      if (existingSub) {
-        await api.subscriptions.addQuery(existingSub.id, addQuery.trim());
-      } else {
-        const siteName = sites.find((s) => s.id === addSite)?.name ?? addSite;
-        await api.subscriptions.create({
-          name: `${siteName}: ${addQuery.trim()}`,
-          site_id: addSite,
-          queries: [addQuery.trim()],
-          group_id: Number(subscriptionGroupId),
-          initial_file_limit: 100,
-          periodic_file_limit: 50,
-        });
-      }
-      setAddQuery('');
-      setAddingTo(null);
+      const siteName = sites.find((s) => s.id === defaultSite)?.name ?? defaultSite;
+      await api.subscriptions.create({
+        name: `${siteName}: ${defaultQuery}`,
+        site_id: defaultSite,
+        queries: [defaultQuery],
+        group_id: Number(subscriptionGroupId),
+        initial_file_limit: 100,
+        periodic_file_limit: 50,
+      });
       await loadData();
     } catch (error) {
       notifyError(`Failed to add query: ${error}`);
-    } finally {
-      setAddLoading(false);
     }
   };
 
@@ -512,23 +540,60 @@ export function SubscriptionGroupsPanel({
                   )}
                   {queries.map((q) => (
                     <div key={q.queryId} className={st.queryRow}>
-                      <span className={st.querySite}>{q.siteName}</span>
-                      {editingQueryId === q.queryId ? (
-                        <TextInput
+                      <div className={st.querySiteCell}>
+                        <Select
                           size="xs"
-                          className={st.queryText}
-                          value={editingQueryText}
-                          onChange={(e) => setEditingQueryText(e.currentTarget.value)}
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter') handleSaveEditQuery(q.queryId);
-                            if (e.key === 'Escape') { setEditingQueryId(null); setEditingQueryText(''); }
+                          variant="unstyled"
+                          searchable
+                          data={sites.map((si) => ({ value: si.id, label: si.name }))}
+                          value={q.sitePluginId}
+                          onChange={async (newSiteId) => {
+                            if (!newSiteId || newSiteId === q.sitePluginId) return;
+                            try {
+                              await api.subscriptions.deleteQuery(q.queryId);
+                              const sg = subscriptionGroups.find((g) => g.subscriptions.some((s) => s.queries.some((qq) => qq.id === q.queryId)));
+                              if (!sg) return;
+                              const existingSub = sg.subscriptions.find((s) => (s.site_id ?? s.site_plugin_id) === newSiteId);
+                              if (existingSub) {
+                                await api.subscriptions.addQuery(existingSub.id, q.queryText);
+                              } else {
+                                const siteName = sites.find((s) => s.id === newSiteId)?.name ?? newSiteId;
+                                await api.subscriptions.create({
+                                  name: `${siteName}: ${q.queryText}`,
+                                  site_id: newSiteId,
+                                  queries: [q.queryText],
+                                  group_id: Number(sg.id),
+                                  initial_file_limit: 100,
+                                  periodic_file_limit: 50,
+                                });
+                              }
+                              await loadData();
+                            } catch (error) {
+                              notifyError(`Failed to change site: ${error}`);
+                            }
                           }}
-                          onBlur={() => handleSaveEditQuery(q.queryId)}
-                          autoFocus
+                          styles={{ input: { fontSize: 11, minHeight: 0, height: 'auto', padding: '0 18px 0 0' } }}
+                          comboboxProps={{ width: 'target', styles: { option: { padding: '4px 8px', fontSize: 11, color: 'var(--color-text-primary)' }, dropdown: { padding: 2, background: 'var(--color-bg-primary, var(--mantine-color-body))' } } }}
+                          style={{ flex: 1, minWidth: 0 }}
                         />
-                      ) : (
-                        <span className={st.queryText}>{q.queryText}</span>
-                      )}
+                        <QueryInfoTooltip siteId={q.sitePluginId} sites={sites} />
+                      </div>
+                      <TextInput
+                        size="xs"
+                        variant="unstyled"
+                        className={st.queryTextInput}
+                        defaultValue={q.queryText}
+                        onBlur={(e) => {
+                          const text = e.currentTarget.value.trim();
+                          if (text && text !== q.queryText) {
+                            handleSaveEditQuery(q.queryId, text);
+                          }
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') e.currentTarget.blur();
+                          if (e.key === 'Escape') { e.currentTarget.value = q.queryText; e.currentTarget.blur(); }
+                        }}
+                      />
                       <span className={st.queryStatus}>
                         {q.missingAuth ? (
                           <span className={st.queryAuthWarning}>Missing auth</span>
@@ -543,20 +608,27 @@ export function SubscriptionGroupsPanel({
                           variant="subtle"
                           color="gray"
                           size="xs"
-                          onClick={() => { setEditingQueryId(q.queryId); setEditingQueryText(q.queryText); }}
-                          title="Edit query"
-                        >
-                          <IconPencil size={12} />
-                        </ActionIcon>
-                        <ActionIcon
-                          variant="subtle"
-                          color="gray"
-                          size="xs"
                           onClick={() => handleRunQuery(q.backendSubId, q.queryId, q.queryText, q.missingAuth)}
                           disabled={q.paused || runningQueryIds.has(q.queryId)}
                           title={q.paused ? 'Query is paused' : 'Run query'}
                         >
                           <IconPlayerPlay size={12} />
+                        </ActionIcon>
+                        <ActionIcon
+                          variant="subtle"
+                          color="gray"
+                          size="xs"
+                          onClick={async () => {
+                            try {
+                              await api.subscriptions.addQuery(q.backendSubId, q.queryText);
+                              await loadData();
+                            } catch (error) {
+                              notifyError(`Failed to duplicate: ${error}`);
+                            }
+                          }}
+                          title="Duplicate query"
+                        >
+                          <IconCopy size={12} />
                         </ActionIcon>
                         <ActionIcon variant="subtle" color="gray" size="xs" onClick={() => handleDeleteQuery(q.queryId)}>
                           <IconTrash size={12} />
@@ -565,75 +637,10 @@ export function SubscriptionGroupsPanel({
                     </div>
                   ))}
 
-                  {addingTo === subscriptionGroup.id ? (
-                    <div>
-                      <div className={st.addQueryInputs}>
-                        <Select
-                          placeholder="Site"
-                          size="xs"
-                          searchable
-                          data={sites.map((si) => ({ value: si.id, label: si.name }))}
-                          value={addSite}
-                          onChange={(v) => setAddSite(v || '')}
-                          disabled={addLoading}
-                          style={{ flex: 1 }}
-                        />
-                        {addSite && (() => {
-                          const si = sites.find((s) => s.id === addSite);
-                          if (!si) return null;
-                          let description = '';
-                          if (si.supports_query && si.supports_account) {
-                            description = 'Enter search tags or a username.';
-                          } else if (si.supports_query) {
-                            description = 'Enter search tags.';
-                          } else if (si.supports_account) {
-                            description = 'Enter a username or account ID.';
-                          }
-                          return (
-                            <Tooltip
-                              label={
-                                <div style={{ fontSize: 11, lineHeight: 1.4 }}>
-                                  <div>{description}</div>
-                                  <div style={{ marginTop: 4, opacity: 0.7 }}>Example: {si.example_query}</div>
-                                  {si.auth_required_for_full_access && (
-                                    <div style={{ marginTop: 6, borderTop: '1px solid rgba(255,255,255,0.15)', paddingTop: 4, opacity: 0.7 }}>
-                                      Credentials recommended for full access.
-                                    </div>
-                                  )}
-                                </div>
-                              }
-                              position="top"
-                              withArrow
-                              multiline
-                              w={230}
-                            >
-                              <ActionIcon variant="transparent" size="xs" style={{ flexShrink: 0, color: 'var(--color-text-tertiary)' }}>
-                                <IconInfoCircle size={14} />
-                              </ActionIcon>
-                            </Tooltip>
-                          );
-                        })()}
-                        <TextInput
-                          placeholder={sites.find((s) => s.id === addSite)?.example_query || 'Query'}
-                          size="xs"
-                          value={addQuery}
-                          onChange={(e) => setAddQuery(e.target.value)}
-                          onKeyDown={(e) => { if (e.key === 'Enter') handleAddQuery(subscriptionGroup.id); }}
-                          disabled={addLoading}
-                          style={{ flex: 2 }}
-                        />
-                      </div>
-                      <div className={st.addQueryActions}>
-                        <TextButton compact onClick={() => setAddingTo(null)} disabled={addLoading}>Cancel</TextButton>
-                        <TextButton compact onClick={() => handleAddQuery(subscriptionGroup.id)} disabled={!addSite || !addQuery.trim() || addLoading}>Add</TextButton>
-                      </div>
-                    </div>
-                  ) : (
-                    <TextButton compact style={{ marginTop: 4 }} onClick={() => { setAddingTo(subscriptionGroup.id); if (sites.length > 0 && !addSite) setAddSite(sites[0].id); setAddQuery(''); }}>
-                      <IconPlus size={12} />
-                      Add Query
-                    </TextButton>
-                  )}
+                  <TextButton compact style={{ marginTop: 4 }} onClick={() => handleAddRow(subscriptionGroup.id)}>
+                    <IconPlus size={12} />
+                    Add Query
+                  </TextButton>
                 </div>
               </Collapse>
             </div>

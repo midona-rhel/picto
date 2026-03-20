@@ -2,6 +2,7 @@
 
 export interface AiTaggerRequest {
   anchorEl: HTMLElement;
+  anchorPoint?: { x: number; y: number };
   hashes: string[];
   onApply: (tags: string[]) => Promise<void>;
 }

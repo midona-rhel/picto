@@ -67,20 +67,10 @@
   border: 1px solid var(--color-border-secondary);
   background: var(--color-white-10);
   overflow: hidden;
-  transition: border-color 150ms ease, background-color 150ms ease;
 }
 
 [data-mantine-color-scheme="light"] .subscriptionGroupCard {
   background: var(--color-white-60);
-}
-
-.subscriptionGroupCard:hover {
-  border-color: var(--color-white-20);
-  background: var(--color-white-15);
-}
-
-[data-mantine-color-scheme="light"] .subscriptionGroupCard:hover {
-  border-color: var(--color-black-20);
 }
 
 /* Running state */
@@ -255,7 +245,7 @@
 }
 
 .expandedBody {
-  --query-columns: minmax(72px, 0.8fr) minmax(0, 2.8fr) minmax(88px, 1fr) minmax(60px, auto) minmax(96px, auto) 52px;
+  --query-columns: minmax(130px, 1.2fr) minmax(0, 2.8fr) minmax(88px, 1fr) minmax(60px, auto) minmax(96px, auto) 72px;
 }
 
 .sectionLabel {
@@ -318,12 +308,63 @@
   color: var(--color-text-tertiary);
 }
 
+.querySiteCell {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  min-width: 0;
+}
+
+.querySiteCell :global(.mantine-Select-root) {
+  margin: 0;
+  padding: 0;
+}
+
+.querySiteCell :global(.mantine-Select-wrapper) {
+  margin: 0;
+  padding: 0;
+}
+
+.querySiteCell :global(.mantine-Select-input) {
+  font-size: 11px;
+  color: var(--color-text-primary) !important;
+  background: transparent !important;
+  border: none !important;
+  padding: 0 16px 0 0 !important;
+  margin: 0 !important;
+  height: auto !important;
+  min-height: 0 !important;
+  line-height: 1.4;
+  cursor: pointer;
+}
+
+.querySiteCell :global(.mantine-Select-section) {
+  width: 14px;
+  margin: 0;
+  padding: 0;
+}
+
+
 .queryText {
   composes: truncate from '../../../shared/styles/textClamp.module.css';
   font-size: 12px;
   font-family: var(--font-family-mono, "SF Mono", "Cascadia Code", "Fira Code", ui-monospace, monospace);
   color: var(--color-text-primary);
   min-width: 0;
+}
+
+.queryTextInput {
+  min-width: 0;
+}
+
+.queryTextInput :global(.mantine-TextInput-input) {
+  font-size: 12px;
+  font-family: var(--font-family-mono, "SF Mono", "Cascadia Code", "Fira Code", ui-monospace, monospace);
+  color: var(--color-text-primary);
+  padding: 0;
+  height: auto;
+  min-height: 0;
+  line-height: 1.4;
 }
 
 .queryStatus {
@@ -377,20 +418,10 @@
   gap: 4px;
 }
 
-/* --------------------------------------------------------------------------
-   Add query form
-   -------------------------------------------------------------------------- */
-
-.addQueryInputs {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin-top: 6px;
+.queryActions :global(.mantine-ActionIcon-root:disabled),
+.queryActions :global(.mantine-ActionIcon-root[data-disabled]) {
+  background: transparent !important;
+  border-color: transparent !important;
 }
 
-.addQueryActions {
-  display: flex;
-  gap: 4px;
-  margin-top: 4px;
-  justify-content: flex-end;
-}
+/* (add query form removed — now uses queryRow grid layout) */

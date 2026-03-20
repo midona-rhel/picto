@@ -113,7 +113,10 @@ pub struct UpdateFolderParentInput {
 pub struct AddFilesToFolderInput {
     #[ts(type = "number")]
     pub folder_id: i64,
+    #[serde(default)]
     pub hashes: Vec<String>,
+    #[serde(default)]
+    pub selection: Option<crate::types::SelectionQuerySpec>,
 }
 
 #[derive(Debug, Deserialize, TS)]
@@ -121,7 +124,10 @@ pub struct AddFilesToFolderInput {
 pub struct RemoveFilesFromFolderInput {
     #[ts(type = "number")]
     pub folder_id: i64,
+    #[serde(default)]
     pub hashes: Vec<String>,
+    #[serde(default)]
+    pub selection: Option<crate::types::SelectionQuerySpec>,
 }
 
 #[derive(Debug, Deserialize, TS)]
@@ -429,9 +435,11 @@ pub async fn add_files_to_folder(
     state: &AppState,
     input: AddFilesToFolderInput,
 ) -> Result<usize, String> {
+    let hashes = resolve_folder_op_hashes(state, input.hashes, input.selection).await?;
+    if hashes.is_empty() { return Ok(0); }
     let count = state
         .db
-        .add_entities_to_folder_batch(input.folder_id, &input.hashes)
+        .add_entities_to_folder_batch(input.folder_id, &hashes)
         .await?;
     if count > 0 {
         crate::events::emit_mutation(
@@ -448,9 +456,11 @@ pub async fn remove_files_from_folder(
     state: &AppState,
     input: RemoveFilesFromFolderInput,
 ) -> Result<usize, String> {
+    let hashes = resolve_folder_op_hashes(state, input.hashes, input.selection).await?;
+    if hashes.is_empty() { return Ok(0); }
     let count = state
         .db
-        .remove_entities_from_folder_batch(input.folder_id, &input.hashes)
+        .remove_entities_from_folder_batch(input.folder_id, &hashes)
         .await?;
     if count > 0 {
         crate::events::emit_mutation(
@@ -776,4 +786,22 @@ pub async fn list_collection_member_hashes(
     input: DeleteCollectionInput,
 ) -> Result<Vec<String>, String> {
     state.db.list_collection_member_hashes(input.id).await
+}
+
+// ─── Helpers ──────────────────────────────────────────────────────────────
+
+/// Resolve hashes for folder operations — from explicit hashes or a selection spec.
+async fn resolve_folder_op_hashes(
+    state: &AppState,
+    hashes: Vec<String>,
+    selection: Option<crate::types::SelectionQuerySpec>,
+) -> Result<Vec<String>, String> {
+    if let Some(sel) = selection {
+        let bitmap = super::media_lifecycle::resolve_selection_bitmap(state, &sel).await?;
+        let ids: Vec<i64> = bitmap.iter().map(|id| id as i64).collect();
+        let pairs = state.db.resolve_ids_batch(&ids).await?;
+        Ok(pairs.into_iter().map(|(_, h)| h).collect())
+    } else {
+        Ok(hashes)
+    }
 }

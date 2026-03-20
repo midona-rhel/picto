@@ -13,6 +13,16 @@ const WD14_SLUG = 'wd14-swinv2-v3';
 const E621_SLUG = 'z3d-e621-convnext';
 
 const NAMESPACE_ORDER = ['general', 'character', 'copyright', 'artist', 'species', 'rating'];
+
+/** Format a tag for storage — "general" tags are unnamespaced, others get "ns:tag". */
+function formatTagForApply(namespace: string, tag: string): string {
+  return namespace === 'general' || namespace === '' ? tag : `${namespace}:${tag}`;
+}
+
+/** Internal key for dedup — always includes namespace for uniqueness. */
+function tagKey(namespace: string, tag: string): string {
+  return `${namespace}:${tag}`;
+}
 const NAMESPACE_LABELS: Record<string, string> = {
   general: 'General',
   character: 'Character',
@@ -41,6 +51,7 @@ export function AiTaggerPortal() {
     <AiTaggerPanel
       key={openKey}
       anchorEl={request.anchorEl}
+      anchorPoint={request.anchorPoint}
       hashes={request.hashes}
       onApply={request.onApply}
       onClose={handleClose}
@@ -50,11 +61,13 @@ export function AiTaggerPortal() {
 
 function AiTaggerPanel({
   anchorEl,
+  anchorPoint,
   hashes,
   onApply,
   onClose,
 }: {
   anchorEl: HTMLElement;
+  anchorPoint?: { x: number; y: number };
   hashes: string[];
   onApply: (tags: string[]) => Promise<void>;
   onClose: () => void;
@@ -69,25 +82,37 @@ function AiTaggerPanel({
   const [e621Running, setE621Running] = useState(false);
   const [wd14Done, setWd14Done] = useState(false);
   const [e621Done, setE621Done] = useState(false);
+  const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
 
-  // Tags state
-  const [allTags, setAllTags] = useState<AiTagPrediction[]>([]);
+  // Tags state — per-file and merged
+  const [tagsByFile, setTagsByFile] = useState<Map<string, AiTagPrediction[]>>(new Map());
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [applying, setApplying] = useState(false);
+  const [activeFileIndex, setActiveFileIndex] = useState(0);
 
   // Position panel
   const MARGIN = 12;
+  const showSidebar = hashes.length > 1;
+  const panelWidth = showSidebar ? 520 : 360;
+
   useLayoutEffect(() => {
     const el = menuRef.current;
     if (!el) return;
     const anchorRect = anchorEl.getBoundingClientRect();
     const elRect = el.getBoundingClientRect();
 
-    // Spawn to the left of the inspector panel
-    const inspectorEl = anchorEl.closest('[class*="panel"]') as HTMLElement | null;
-    const inspectorLeft = inspectorEl ? inspectorEl.getBoundingClientRect().left : anchorRect.left;
-    let x = inspectorLeft - elRect.width - 4;
-    let y = anchorRect.top;
+    let x: number;
+    let y: number;
+
+    if (anchorPoint) {
+      x = anchorPoint.x;
+      y = anchorPoint.y + 4;
+    } else {
+      const inspectorEl = anchorEl.closest('[class*="panel"]') as HTMLElement | null;
+      const inspectorLeft = inspectorEl ? inspectorEl.getBoundingClientRect().left : anchorRect.left;
+      x = inspectorLeft - elRect.width - 4;
+      y = anchorRect.top;
+    }
 
     const maxX = window.innerWidth - elRect.width - MARGIN;
     const maxY = window.innerHeight - elRect.height - MARGIN;
@@ -95,7 +120,7 @@ function AiTaggerPanel({
     y = Math.max(MARGIN, Math.min(y, maxY));
 
     setPos({ x, y });
-  }, [anchorEl]);
+  }, [anchorEl, anchorPoint]);
 
   // Dragging (on footer)
   const dragStart = useRef<{ mx: number; my: number; anchor: number; y: number } | null>(null);
@@ -128,53 +153,81 @@ function AiTaggerPanel({
     return () => { document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp); };
   }, []);
 
-  // Run a model
+  // Run a model — process files individually for progress tracking
   const runModel = async (slug: string) => {
     const setRunning = slug === WD14_SLUG ? setWd14Running : setE621Running;
     const setDone = slug === WD14_SLUG ? setWd14Done : setE621Done;
 
     setRunning(true);
+    const total = hashes.length;
+    setProgress({ done: 0, total });
+
     try {
-      const result = await api.aiTagger.predict(hashes, [slug]);
-      const newTags: AiTagPrediction[] = [];
-      for (const pred of result.predictions) {
-        for (const tag of pred.tags) {
-          newTags.push(tag);
+      for (let i = 0; i < hashes.length; i++) {
+        setProgress({ done: i, total });
+        const hash = hashes[i];
+        const result = await api.aiTagger.predict([hash], [slug]);
+        const newTags: AiTagPrediction[] = [];
+        for (const pred of result.predictions) {
+          for (const tag of pred.tags) newTags.push(tag);
         }
-      }
 
-      setAllTags((prev) => {
-        const merged = new Map<string, AiTagPrediction>();
-        for (const tag of prev) merged.set(`${tag.namespace}:${tag.tag}`, tag);
-        for (const tag of newTags) {
-          const key = `${tag.namespace}:${tag.tag}`;
-          const existing = merged.get(key);
-          if (!existing || tag.confidence > existing.confidence) {
-            merged.set(key, tag);
+        // Store per-file tags (merge with existing from other model runs)
+        setTagsByFile((prev) => {
+          const next = new Map(prev);
+          const existing = next.get(hash) ?? [];
+          const merged = new Map<string, AiTagPrediction>();
+          for (const tag of existing) merged.set(tagKey(tag.namespace, tag.tag), tag);
+          for (const tag of newTags) {
+            const key = tagKey(tag.namespace, tag.tag);
+            const ex = merged.get(key);
+            if (!ex || tag.confidence > ex.confidence) merged.set(key, tag);
           }
-        }
-        return Array.from(merged.values());
-      });
+          next.set(hash, Array.from(merged.values()));
+          return next;
+        });
 
-      // Select all new tags by default
-      setSelected((prev) => {
-        const next = new Set(prev);
-        for (const tag of newTags) next.add(`${tag.namespace}:${tag.tag}`);
-        return next;
-      });
+        // Select new tags by default
+        setSelected((prev) => {
+          const next = new Set(prev);
+          for (const tag of newTags) next.add(tagKey(tag.namespace, tag.tag));
+          return next;
+        });
+      }
 
       setDone(true);
     } catch (err) {
       console.error(`AI tagger ${slug} failed:`, err);
     } finally {
       setRunning(false);
+      setProgress(null);
     }
   };
 
   // Group tags by namespace
+  // Merge all files' tags for the "All" view, or show active file's tags
+  const allTags = useMemo(() => {
+    const merged = new Map<string, AiTagPrediction>();
+    for (const fileTags of tagsByFile.values()) {
+      for (const tag of fileTags) {
+        const key = tagKey(tag.namespace, tag.tag);
+        const existing = merged.get(key);
+        if (!existing || tag.confidence > existing.confidence) {
+          merged.set(key, tag);
+        }
+      }
+    }
+    return Array.from(merged.values());
+  }, [tagsByFile]);
+
+  const activeHash = hashes[activeFileIndex] ?? null;
+  const displayTags = activeHash && hashes.length > 1
+    ? (tagsByFile.get(activeHash) ?? [])
+    : allTags;
+
   const grouped = useMemo(() => {
     const map = new Map<string, AiTagPrediction[]>();
-    for (const tag of allTags) {
+    for (const tag of displayTags) {
       const list = map.get(tag.namespace) ?? [];
       list.push(tag);
       map.set(tag.namespace, list);
@@ -183,7 +236,7 @@ function AiTaggerPanel({
       list.sort((a, b) => b.confidence - a.confidence);
     }
     return map;
-  }, [allTags]);
+  }, [displayTags]);
 
   const orderedNamespaces = NAMESPACE_ORDER.filter((ns) => grouped.has(ns));
 
@@ -199,10 +252,22 @@ function AiTaggerPanel({
   const handleApply = async () => {
     setApplying(true);
     try {
-      await onApply(Array.from(selected));
+      // Apply per-file: each file only gets its own predicted tags (filtered by selection)
+      for (const [hash, fileTags] of tagsByFile.entries()) {
+        const tagsForFile: string[] = [];
+        for (const tag of fileTags) {
+          if (selected.has(tagKey(tag.namespace, tag.tag))) {
+            tagsForFile.push(formatTagForApply(tag.namespace, tag.tag));
+          }
+        }
+        if (tagsForFile.length > 0) {
+          await api.aiTagger.apply([hash], tagsForFile);
+        }
+      }
+      await onApply([]); // signal completion (for refresh)
       onClose();
     } catch (err) {
-      console.error('Failed to apply AI tags:', err);
+      console.error('[AiTagger] Apply failed:', err);
     } finally {
       setApplying(false);
     }
@@ -213,7 +278,7 @@ function AiTaggerPanel({
       <div
         ref={menuRef}
         className={`${st.panel}${dragging ? ` ${st.panelDragging}` : ''}`}
-        style={{ left: pos.x, top: pos.y }}
+        style={{ left: pos.x, top: pos.y, width: panelWidth }}
         onContextMenu={(e) => e.preventDefault()}
       >
         {/* Header — model run buttons + pin */}
@@ -247,13 +312,43 @@ function AiTaggerPanel({
           </button>
         </div>
 
-        {/* Content — tag list */}
+        {/* Body — optional sidebar + tag list */}
+        <div className={st.body}>
+        {showSidebar && (
+          <div className={st.sidebar}>
+            {hashes.map((hash, idx) => (
+              <div
+                key={hash}
+                className={`${st.sidebarItem}${idx === activeFileIndex ? ` ${st.sidebarItemActive}` : ''}`}
+                onClick={() => setActiveFileIndex(idx)}
+                title={hash}
+              >
+                <span className={st.sidebarIndex}>{idx + 1}</span>
+                <span className={st.sidebarHash}>{hash.slice(0, 8)}</span>
+                {tagsByFile.has(hash) && (
+                  <span className={st.sidebarBadge}>{tagsByFile.get(hash)!.length}</span>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
         <div className={st.content}>
+          {progress && (
+            <div className={st.progressWrap}>
+              <div className={st.progressBar}>
+                <div
+                  className={st.progressFill}
+                  style={{ width: `${progress.total > 0 ? ((progress.done / progress.total) * 100) : 0}%` }}
+                />
+              </div>
+              <span className={st.progressText}>{progress.done}/{progress.total}</span>
+            </div>
+          )}
           {allTags.length === 0 && !wd14Running && !e621Running ? (
             <div className={st.empty}>
               Click a model above to generate tag predictions
             </div>
-          ) : allTags.length === 0 ? (
+          ) : allTags.length === 0 && !progress ? (
             <div className={st.empty}>
               <Loader size="xs" />
             </div>
@@ -266,7 +361,7 @@ function AiTaggerPanel({
                     {NAMESPACE_LABELS[ns] ?? ns}
                   </div>
                   {tags.map((tag) => {
-                    const key = `${tag.namespace}:${tag.tag}`;
+                    const key = tagKey(tag.namespace, tag.tag);
                     return (
                       <div key={key} className={st.tagRow}>
                         <NamespaceTagChip tag={tag.tag} namespace={tag.namespace} size="sm" />
@@ -286,6 +381,7 @@ function AiTaggerPanel({
               );
             })
           )}
+        </div>
         </div>
 
         {/* Footer — shortcuts + apply (draggable) */}

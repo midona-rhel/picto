@@ -45,6 +45,7 @@ const library = {
   getConfig: () => ipcRenderer.invoke('picto:library:getConfig'),
   rename: (path, newName) => ipcRenderer.invoke('picto:library:rename', { path, newName }),
   relocate: (oldPath) => ipcRenderer.invoke('picto:library:relocate', { oldPath }),
+  setMeta: (path, meta) => ipcRenderer.invoke('picto:library:setMeta', { path, meta }),
 };
 
 const monitor = {

@@ -13,8 +13,8 @@ export function SortByRow({ field, order, onFieldChange, onOrderChange }: {
   const toggle = (o: string) => { setLocalOrder(o); onOrderChange(o); };
   const btnStyle = (active: boolean): React.CSSProperties => ({
     display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-    width: 28, height: 26, borderRadius: 6, cursor: 'pointer', border: 'none',
-    background: active ? 'var(--color-white-15)' : 'transparent',
+    width: 28, height: 26, borderRadius: 5, cursor: 'pointer', border: 'none',
+    background: active ? 'var(--color-black-10, rgba(0, 0, 0, 0.1))' : 'transparent',
     color: active ? 'var(--color-text-primary)' : 'var(--mantine-color-dimmed)',
   });
   return (
@@ -26,9 +26,9 @@ export function SortByRow({ field, order, onFieldChange, onOrderChange }: {
           value={localField}
           onChange={handleFieldChange}
           data={[
-            { value: 'imported_at', label: 'Date Added' },
-            { value: 'created_at', label: 'Date Created' },
-            { value: 'updated_at', label: 'Date Modified' },
+            { value: 'date_added', label: 'Date Added' },
+            { value: 'date_created', label: 'Date Created' },
+            { value: 'date_modified', label: 'Date Modified' },
             { value: 'size', label: 'File Size' },
             { value: 'rating', label: 'Rating' },
           ]}
@@ -46,7 +46,7 @@ export function SortByRow({ field, order, onFieldChange, onOrderChange }: {
         />
         <div style={{
             display: 'flex', alignItems: 'center', gap: 0,
-            background: 'var(--color-white-05)', borderRadius: 6,
+            background: 'var(--color-black-05, rgba(0, 0, 0, 0.05))', borderRadius: 6,
             padding: 1,
           }}>
             <button style={btnStyle(localOrder === 'asc')} onClick={() => toggle('asc')}>

@@ -30,7 +30,7 @@ impl QueryInputs {
             .sort
             .field
             .clone()
-            .unwrap_or_else(|| "imported_at".to_string());
+            .unwrap_or_else(|| "date_added".to_string());
         let sort_dir = query
             .sort
             .order

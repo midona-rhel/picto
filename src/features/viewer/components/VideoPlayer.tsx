@@ -127,21 +127,6 @@ export function VideoPlayer({
     }
   }, []);
 
-  // Scroll: seek by default, volume when Alt held
-  const handleWheel = useCallback((e: React.WheelEvent) => {
-    e.preventDefault();
-    if (e.altKey) {
-      // Volume
-      const delta = e.deltaY < 0 ? VOLUME_SCROLL_STEP : -VOLUME_SCROLL_STEP;
-      actions.setVolume(state.volume + delta);
-      setVolumeHudTrigger(Date.now());
-    } else {
-      // Seek
-      const delta = e.deltaY < 0 ? SEEK_SCROLL_STEP : -SEEK_SCROLL_STEP;
-      actions.seekRelative(delta);
-    }
-    resetHideTimer();
-  }, [actions, state.volume, resetHideTimer]);
 
   // Video ended callback
   useEffect(() => {
@@ -234,7 +219,6 @@ export function VideoPlayer({
       onDoubleClick={handleDoubleClick}
       onMouseMove={resetHideTimer}
       onMouseEnter={resetHideTimer}
-      onWheel={handleWheel}
     >
       <video
         ref={videoRef as React.RefObject<HTMLVideoElement>}

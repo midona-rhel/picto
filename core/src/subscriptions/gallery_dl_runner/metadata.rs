@@ -103,6 +103,11 @@ pub fn parse_metadata(json: &serde_json::Value) -> ParsedMetadata {
                 .and_then(|v| v.as_str())
                 .filter(|s| !s.is_empty())
         })
+        .or_else(|| {
+            json.get("substring")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+        })
         .map(String::from);
 
     let source_urls = adapter.collect_source_urls(json);

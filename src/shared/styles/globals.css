@@ -68,6 +68,8 @@
   --color-white-90: rgba(255, 255, 255, 0.90);
   --color-white-99: rgba(255, 255, 255, 0.99);
 
+  --mantine-color-body: #1a1a1e;
+
   --color-dark-1: #1a1a1e;
   --color-dark-2: #1e1e22;
   --color-dark-3: #222226;
@@ -177,6 +179,7 @@
 
 /* Blue theme */
 :root[data-mantine-color-scheme="dark"][data-theme="blue"] {
+  --mantine-color-body: #0f1732;
   --color-dark-1: #0f1732;
   --color-dark-2: #131b36;
   --color-dark-3: #171f3a;
@@ -209,6 +212,7 @@
 
 /* Purple theme */
 :root[data-mantine-color-scheme="dark"][data-theme="purple"] {
+  --mantine-color-body: #1e1526;
   --color-dark-1: #1e1526;
   --color-dark-2: #22192a;
   --color-dark-3: #261d2e;
@@ -243,6 +247,7 @@
 
 /* Gray theme */
 :root[data-mantine-color-scheme="dark"][data-theme="gray"] {
+  --mantine-color-body: #323236;
   --color-dark-1: #323236;
   --color-dark-2: #36363a;
   --color-dark-3: #3a3a3e;
@@ -346,6 +351,7 @@
 
 /* Light gray theme */
 :root[data-mantine-color-scheme="light"][data-theme="lightgray"] {
+  --mantine-color-body: #d5d7da;
   --sidebar-background-color: #e2e4e6;
   --box-background: #ebedef;
   --box-background-glass: rgba(227, 228, 230, 0.92);
@@ -375,11 +381,23 @@ body {
   font-family: var(--font-family);
   font-size: var(--font-size-md);
   color: var(--color-text-primary);
+  background-color: var(--mantine-color-body, #1a1a1e);
   margin: 0;
   padding: 0;
   overflow: hidden;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+
+/* Disable focus outlines globally — desktop app uses clicks and hotkeys, not tab navigation */
+*:focus,
+*:focus-visible {
+  outline: none !important;
+}
+
+/* Prevent Mantine components from showing focus rings */
+:root {
+  --mantine-focus-ring: none;
 }
 
 .mantine-AppShell-navbar,
@@ -491,6 +509,24 @@ body {
 
 .textBtnDanger:hover {
   background-color: rgba(255, 71, 87, 0.1);
+}
+
+/* ── Mantine Switch overrides ─────────────────────────────────────────── */
+
+.mantine-Switch-track {
+  background-color: rgba(128, 128, 128, 0.25) !important;
+  border: 1px solid rgba(128, 128, 128, 0.2) !important;
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.1);
+}
+
+.mantine-Switch-track[data-checked] {
+  background-color: var(--color-primary-60, #4c6ef5) !important;
+  border-color: var(--color-primary-60, #4c6ef5) !important;
+}
+
+.mantine-Switch-thumb {
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
+  border: 1px solid rgba(128, 128, 128, 0.15) !important;
 }
 
 @keyframes indeterminate {

@@ -29,6 +29,7 @@ pub struct FileMetadataSlim {
     pub size: i64,
     pub status: u8,
     pub rating: Option<i64>,
+    #[serde(rename = "date_added")]
     pub imported_at: String,
     pub dominant_color_hex: Option<String>,
     pub duration_ms: Option<i64>,
@@ -282,7 +283,7 @@ pub fn set_source_urls(
     Ok(())
 }
 
-pub fn set_media_entity_created_at(
+pub fn set_date_created(
     conn: &Connection,
     file_id: i64,
     created_at: &str,
@@ -296,7 +297,7 @@ pub fn set_media_entity_created_at(
     Ok(())
 }
 
-pub fn set_imported_at(conn: &Connection, file_id: i64, imported_at: &str) -> rusqlite::Result<()> {
+pub fn set_date_added(conn: &Connection, file_id: i64, imported_at: &str) -> rusqlite::Result<()> {
     conn.execute(
         "UPDATE file SET imported_at = ?1 WHERE file_id = ?2",
         params![imported_at, file_id],
@@ -304,7 +305,7 @@ pub fn set_imported_at(conn: &Connection, file_id: i64, imported_at: &str) -> ru
     Ok(())
 }
 
-pub fn touch_media_entity_updated_at(
+pub fn touch_date_modified(
     conn: &Connection,
     entity_id: i64,
 ) -> rusqlite::Result<()> {
@@ -498,16 +499,9 @@ fn push_cursor_sort_param(
 /// Returns a COALESCE expression that works for both singles (f.* populated) and collections (f.* NULL).
 fn entity_sort_expr(sort_field: &str) -> &'static str {
     match sort_field {
-        "imported_at" => {
+        "date_added" => {
             "CASE WHEN me.kind = 'collection'
-                  THEN COALESCE(
-                    (SELECT MIN(f_m.imported_at)
-                     FROM media_entity me_m
-                     JOIN entity_file ef_m ON ef_m.entity_id = me_m.entity_id
-                     JOIN file f_m ON f_m.file_id = ef_m.file_id
-                     WHERE me_m.kind = 'single'
-                       AND me_m.parent_collection_id = me.entity_id),
-                    me.created_at, '')
+                  THEN COALESCE(me.created_at, '')
                   ELSE COALESCE(f.imported_at, me.created_at, '')
              END"
         }
@@ -535,20 +529,11 @@ fn entity_sort_expr(sort_field: &str) -> &'static str {
                   ELSE COALESCE(f.name, me.name, '')
              END"
         }
-        "created_at" => {
-            "CASE WHEN me.kind = 'collection'
-                  THEN COALESCE(
-                    (SELECT MIN(me_m.created_at)
-                     FROM media_entity me_m
-                     WHERE me_m.kind = 'single'
-                       AND me_m.parent_collection_id = me.entity_id
-                       AND me_m.created_at IS NOT NULL),
-                    me.created_at, '')
-                  ELSE COALESCE(me.created_at, '')
-             END"
+        "date_created" => {
+            "me.created_at"
         }
-        "updated_at" => {
-            "COALESCE(me.updated_at, '')"
+        "date_modified" => {
+            "me.updated_at"
         }
         "mime" => {
             "CASE WHEN me.kind = 'collection'
@@ -601,14 +586,7 @@ const ENTITY_SLIM_SELECT: &str =
          ELSE COALESCE(f.rating, me.rating)
      END AS rating,
      CASE
-         WHEN me.kind = 'collection' THEN COALESCE(
-             (SELECT MIN(f_m.imported_at)
-              FROM media_entity me_m
-              JOIN entity_file ef_m ON ef_m.entity_id = me_m.entity_id
-              JOIN file f_m ON f_m.file_id = ef_m.file_id
-              WHERE me_m.kind = 'single'
-                AND me_m.parent_collection_id = me.entity_id),
-             me.created_at, '')
+         WHEN me.kind = 'collection' THEN COALESCE(me.created_at, '')
          ELSE COALESCE(f.imported_at, me.created_at, '')
      END AS imported_at,
      CASE
@@ -1570,27 +1548,27 @@ impl SqliteDatabase {
             .await
     }
 
-    pub async fn set_media_entity_created_at(
+    pub async fn set_date_created(
         &self,
         hash: &str,
         created_at: &str,
     ) -> Result<(), String> {
         let file_id = self.resolve_hash(hash).await?;
         let created_at = created_at.to_string();
-        self.with_conn(move |conn| set_media_entity_created_at(conn, file_id, &created_at))
+        self.with_conn(move |conn| set_date_created(conn, file_id, &created_at))
             .await
     }
 
-    pub async fn set_imported_at(&self, hash: &str, imported_at: &str) -> Result<(), String> {
+    pub async fn set_date_added(&self, hash: &str, imported_at: &str) -> Result<(), String> {
         let file_id = self.resolve_hash(hash).await?;
         let val = imported_at.to_string();
-        self.with_conn(move |conn| set_imported_at(conn, file_id, &val))
+        self.with_conn(move |conn| set_date_added(conn, file_id, &val))
             .await
     }
 
-    pub async fn touch_media_entity_updated_at(&self, hash: &str) -> Result<(), String> {
+    pub async fn touch_date_modified(&self, hash: &str) -> Result<(), String> {
         let file_id = self.resolve_hash(hash).await?;
-        self.with_conn(move |conn| touch_media_entity_updated_at(conn, file_id))
+        self.with_conn(move |conn| touch_date_modified(conn, file_id))
             .await
     }
 

@@ -234,11 +234,23 @@ export function useInspectorMutations(
 
   const onAddToFolders = useCallback(
     async (folderIds: number[]) => {
-      const hashes = selectedImages.map((img) => img.hash);
       if (selectedCollection) return;
       const folderIdsSnapshot = [...folderIds];
+      if (folderIdsSnapshot.length === 0) return;
+
+      if (selectionSummarySpec) {
+        // Virtual Select All: let the backend resolve all hashes
+        await Promise.all(
+          folderIdsSnapshot.map((folderId) =>
+            api.folders.addFiles(folderId, [], selectionSummarySpec),
+          ),
+        );
+        return;
+      }
+
+      const hashes = selectedImages.map((img) => img.hash);
       const hashesSnapshot = [...hashes];
-      if (folderIdsSnapshot.length === 0 || hashesSnapshot.length === 0) return;
+      if (hashesSnapshot.length === 0) return;
       await Promise.all(
         folderIdsSnapshot.map((folderId) =>
           api.folders.addFiles(folderId, hashesSnapshot),
@@ -278,30 +290,41 @@ export function useInspectorMutations(
 
   const onRemoveFromFolder = useCallback(
     async (folderId: number) => {
-      if (selectedImages.length !== 1) return;
       if (selectedCollection) return;
-      const hash = selectedImages[0].hash;
       // Optimistic: update UI immediately
       setFileFolders((prev) => prev.filter((f) => f.folder_id !== folderId));
       try {
-        await api.folders.removeFiles(folderId, [hash]);
-        registerUndoAction({
-          label: 'Remove from folder',
-          undo: async () => {
-            await api.folders.addFiles(folderId, [hash]);
-            api.folders.getFileFolders(hash).then(setFileFolders).catch(() => {});
-          },
-          redo: async () => {
-            await api.folders.removeFiles(folderId, [hash]);
-            api.folders.getFileFolders(hash).then(setFileFolders).catch(() => {});
-          },
-        });
+        if (selectionSummarySpec) {
+          // Virtual Select All: let the backend resolve all hashes from the selection
+          await api.folders.removeFiles(folderId, [], selectionSummarySpec);
+        } else {
+          const hashes = selectedImages.filter((i) => !i.is_collection).map((i) => i.hash);
+          if (hashes.length === 0) return;
+          await api.folders.removeFiles(folderId, hashes);
+          registerUndoAction({
+            label: `Remove ${hashes.length} file${hashes.length === 1 ? '' : 's'} from folder`,
+            undo: async () => {
+              await api.folders.addFiles(folderId, hashes);
+              if (hashes.length === 1) {
+                api.folders.getFileFolders(hashes[0]).then(setFileFolders).catch(() => {});
+              }
+            },
+            redo: async () => {
+              await api.folders.removeFiles(folderId, hashes);
+              if (hashes.length === 1) {
+                api.folders.getFileFolders(hashes[0]).then(setFileFolders).catch(() => {});
+              }
+            },
+          });
+        }
       } catch {
-        // Revert on failure
-        api.folders.getFileFolders(hash).then(setFileFolders).catch(() => {});
+        // Revert on failure — refetch folder list
+        if (selectedImages.length === 1) {
+          api.folders.getFileFolders(selectedImages[0].hash).then(setFileFolders).catch(() => {});
+        }
       }
     },
-    [selectedImages, selectedCollection, setFileFolders],
+    [selectedImages, selectedCollection, selectionSummarySpec, setFileFolders],
   );
 
   const onReanalyzeColors = useCallback(

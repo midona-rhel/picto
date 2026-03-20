@@ -8,6 +8,7 @@ import { isVideoMime, type MasonryImageItem } from '../shared';
 import type { GridViewMode } from '../runtime';
 import type { LayoutResult } from '../layoutMath';
 import type { VideoScrubRect } from '../VideoScrubOverlay';
+import { getContainRect } from './canvasGridPrimitives';
 
 interface HoverPreviewData {
   hash: string;
@@ -41,6 +42,7 @@ export function useCanvasPointerInteractions(args: {
   marqueeActiveRef: { current: boolean };
   markDirty: (lanes: 'base' | 'overlay' | 'both') => void;
   videoScrubIdxRef?: { current: number | null };
+  thumbnailFitModeRef?: { current: 'cover' | 'contain' };
 }) {
   const {
     hitTest,
@@ -62,6 +64,7 @@ export function useCanvasPointerInteractions(args: {
     marqueeActiveRef,
     markDirty,
     videoScrubIdxRef: externalVideoScrubIdxRef,
+    thumbnailFitModeRef,
   } = args;
 
   // ── Hover state ──────────────────────────────────────────────────────
@@ -185,11 +188,25 @@ export function useCanvasPointerInteractions(args: {
             const pos = layoutRef.current.positions[idx];
             if (!pos) return;
             const imageH = pos.h - textHeightRef.current;
+
+            // In contain mode, match the contained image area (same as canvas badge positioning)
+            let rx = pos.x;
+            let ry = pos.y - scrollTopRef.current;
+            let rw = pos.w;
+            let rh = imageH;
+            if (thumbnailFitModeRef?.current === 'contain' && image.aspectRatio) {
+              const cr = getContainRect(image.aspectRatio, pos.x, pos.y - scrollTopRef.current, pos.w, imageH);
+              rx = cr.x;
+              ry = cr.y;
+              rw = cr.w;
+              rh = cr.h;
+            }
+
             const rect: VideoScrubRect = {
-              left: canvasRect.left + pos.x,
-              top: canvasRect.top + pos.y - scrollTopRef.current,
-              width: pos.w,
-              height: imageH,
+              left: Math.round(canvasRect.left + rx) - 1,
+              top: Math.round(canvasRect.top + ry) - 1,
+              width: Math.round(rw) + 1,
+              height: Math.round(rh) + 1,
             };
             setVideoScrub({
               index: idx,

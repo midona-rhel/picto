@@ -74,7 +74,7 @@ export function ImageGridControls({
   targetSize,
   onTargetSizeChange,
   containerWidth,
-  sortField = 'imported_at',
+  sortField = 'date_added',
   sortOrder = 'desc',
   onSortFieldChange,
   onSortOrderChange,

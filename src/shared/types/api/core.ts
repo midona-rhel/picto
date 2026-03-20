@@ -23,7 +23,7 @@ export interface EntitySlim {
   status: string;
   rating: number | null;
   source_urls: string[] | null;
-  imported_at: string;
+  date_added: string;
   has_thumbnail: boolean;
   dominant_color_hex?: string | null;
   tags?: string[];
@@ -109,12 +109,12 @@ export interface EntityAllMetadata {
     status: string;
     rating: number | null;
     source_urls: string[] | null;
-    imported_at: string;
+    date_added: string;
     has_thumbnail: boolean;
     dominant_colors: { hex: string; l: number; a: number; b: number }[] | null;
     notes: Record<string, string> | null;
-    created_at?: string | null;
-    updated_at?: string | null;
+    date_created?: string | null;
+    date_modified?: string | null;
   };
   tags: ResolvedTagInfo[];
   parent_tags: { namespace: string; subtag: string; display: string; read_only: boolean }[];

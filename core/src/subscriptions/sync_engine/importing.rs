@@ -66,10 +66,17 @@ impl<'a> SubscriptionSyncEngine<'a> {
 
         options.name = preferred_import_name(metadata);
 
-        if let Some(ref description) = metadata.description {
+        {
             let mut notes = HashMap::new();
-            notes.insert("description".to_string(), description.clone());
-            options.notes = Some(notes);
+            if let Some(ref description) = metadata.description {
+                notes.insert("description".to_string(), description.clone());
+            }
+            if let Some(ref title) = metadata.title {
+                notes.insert("title".to_string(), title.clone());
+            }
+            if !notes.is_empty() {
+                options.notes = Some(notes);
+            }
         }
 
         info!(
@@ -193,6 +200,9 @@ impl<'a> SubscriptionSyncEngine<'a> {
         let mut note_entries = HashMap::new();
         if let Some(ref description) = metadata.description {
             note_entries.insert("description".to_string(), description.clone());
+        }
+        if let Some(ref title) = metadata.title {
+            note_entries.insert("title".to_string(), title.clone());
         }
 
         let mut source_urls = metadata.source_urls.clone();

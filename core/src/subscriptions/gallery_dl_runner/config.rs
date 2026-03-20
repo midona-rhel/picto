@@ -15,9 +15,20 @@ pub fn build_config(opts: &RunOptions, _temp_dir: &Path) -> serde_json::Value {
     );
 
     extractor.insert("metadata".into(), serde_json::Value::Bool(true));
+
     // Fetch categorized tags (tags_artist, tags_character, etc.) from post HTML.
-    // Without this, booru sites only provide a flat `tags` string.
-    extractor.insert("tags".into(), serde_json::Value::Bool(true));
+    // Only for booru sites that support it — enabling globally causes extra
+    // HTTP requests on sites like Kemono/Coomer that don't have tag categories.
+    let tags_true = serde_json::Value::Bool(true);
+    for booru in ["gelbooru", "danbooru", "rule34", "safebooru", "yandere", "konachan",
+                  "sankaku", "idolcomplex", "3dbooru"] {
+        let site_obj = extractor
+            .entry(booru)
+            .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()));
+        if let serde_json::Value::Object(ref mut m) = site_obj {
+            m.insert("tags".into(), tags_true.clone());
+        }
+    }
 
     if let Some(prefix) = opts
         .archive_prefix

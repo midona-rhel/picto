@@ -37,6 +37,8 @@ import { IconBing, IconSauceNAO, IconSogou, IconTinEye, IconYandex } from '../Se
 import type { SmartFolderPredicate } from '../../../features/smart-folders/components/types';
 import type { GridRuntimeAction, GridRuntimeState, GridViewMode } from '../../../features/grid/runtime';
 import { FolderPickerService } from '../../services/folderPickerService';
+import { AiTaggerService } from '../../services/aiTaggerService';
+import { IconSparkles } from '@tabler/icons-react';
 import { registerUndoAction } from '../../controllers/undoRedoController';
 import { notifyError, notifySuccess } from '../../lib/notify';
 import { useSettingsStore } from '../../../state/settingsStore';
@@ -155,7 +157,7 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
     effectiveSize,
   } = args;
 
-  const activeSortField = smartFolderPredicate ? (smartFolderSortField ?? 'imported_at') : sortField;
+  const activeSortField = smartFolderPredicate ? (smartFolderSortField ?? 'date_added') : sortField;
   const activeSortOrder = smartFolderPredicate ? (smartFolderSortOrder ?? 'desc') : sortOrder;
   const items: ContextMenuEntry[] = [];
   const imageLookup = imagesRef.current.length > 0 ? imagesRef.current : state.images;
@@ -412,22 +414,53 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
           selectedFolderIds: [],
           onToggle: (fId, _name, added) => {
             if (!added) return;
-            const s = stateRef.current;
-            const hashes = (s.virtualAllSelection
-              ? s.images.filter(i => !s.virtualAllSelection!.excludedHashes.has(i.hash))
-              : s.images.filter(i => s.selectedHashes.has(i.hash))
-            ).filter(i => !i.is_collection).map(i => i.hash);
+            const hashes = Array.from(effectiveSelectedHashes);
             if (hashes.length === 0) return;
             api.folders.addFiles(fId, hashes)
-              .then(() => {
-                notifySuccess(`${hashes.length} file(s) added to folder`, 'Added');
-              })
+              .then(() => notifySuccess(`${hashes.length} file(s) added to folder`, 'Added'))
               .catch(err => notifyError(err, 'Add Failed'));
           },
         });
       },
     });
     items.push({ type: 'item', label: 'New Folder with Selection', icon: <IconFolderSymlink />, disabled: true, onClick: () => {} });
+    items.push({
+      type: 'item',
+      label: 'Auto-Tag...',
+      icon: <IconSparkles />,
+      onClick: () => {
+        const anchor = document.querySelector('[data-grid-container]') as HTMLElement ?? document.body;
+        const s = stateRef.current;
+        const selected = (s.virtualAllSelection
+          ? s.images.filter(i => !s.virtualAllSelection!.excludedHashes.has(i.hash))
+          : s.images.filter(i => s.selectedHashes.has(i.hash))
+        );
+        // Expand collections to member hashes
+        const expandAndOpen = async () => {
+          const allHashes: string[] = [];
+          for (const item of selected) {
+            if (item.is_collection && item.entity_id != null) {
+              try {
+                const members = await api.collections.listMemberHashes(item.entity_id);
+                allHashes.push(...members);
+              } catch { /* skip */ }
+            } else {
+              allHashes.push(item.hash);
+            }
+          }
+          if (allHashes.length === 0) return;
+          AiTaggerService.open({
+            anchorEl: anchor,
+            anchorPoint: contextPoint,
+            hashes: allHashes,
+            onApply: async () => {
+              notifySuccess(`Tagged ${allHashes.length} file(s)`, 'Auto-Tag');
+            },
+          });
+        };
+        void expandAndOpen();
+      },
+    });
     items.push({ type: 'separator' });
   }
 
@@ -658,8 +691,8 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
         { type: 'item', label: 'Name A→Z', onClick: () => sortAndReload('name', 'asc') },
         { type: 'item', label: 'Name Z→A', onClick: () => sortAndReload('name', 'desc') },
         { type: 'separator' },
-        { type: 'item', label: 'Date Newest First', onClick: () => sortAndReload('imported_at', 'desc') },
-        { type: 'item', label: 'Date Oldest First', onClick: () => sortAndReload('imported_at', 'asc') },
+        { type: 'item', label: 'Date Newest First', onClick: () => sortAndReload('date_added', 'desc') },
+        { type: 'item', label: 'Date Oldest First', onClick: () => sortAndReload('date_added', 'asc') },
         { type: 'separator' },
         { type: 'item', label: 'Size Largest First', onClick: () => sortAndReload('size', 'desc') },
         { type: 'item', label: 'Size Smallest First', onClick: () => sortAndReload('size', 'asc') },

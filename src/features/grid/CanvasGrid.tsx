@@ -5,6 +5,7 @@ import {
   useCallback,
   RefObject,
 } from 'react';
+import { useComputedColorScheme } from '@mantine/core';
 import { isVideoMime, MasonryImageItem } from './shared';
 import { VideoScrubOverlay } from './VideoScrubOverlay';
 import { mediaFileUrl } from '../../shared/lib/mediaUrl';
@@ -187,6 +188,7 @@ export function CanvasGrid({
     borderRadius: number;
     innerBorder: string;
   } | null>(null);
+  const colorScheme = useComputedColorScheme('dark');
   const frozenRef = useRef(frozen);
   frozenRef.current = frozen;
   const drawBaseRef = useRef<() => void>(() => {});
@@ -269,8 +271,17 @@ export function CanvasGrid({
   const prevLayoutRef = useRef(layout);
   const viewModeRef = useRef(viewMode);
   viewModeRef.current = viewMode;
+  const thumbnailFitModeRef = useRef(thumbnailFitMode);
+  thumbnailFitModeRef.current = thumbnailFitMode;
   const imagesRef = useRef(renderImages);
   imagesRef.current = renderImages;
+
+  // Dismiss video scrub when layout changes (images added/removed/reordered)
+  const prevRenderImagesRef = useRef(renderImages);
+  if (prevRenderImagesRef.current !== renderImages) {
+    prevRenderImagesRef.current = renderImages;
+    dismissVideoScrubRef.current();
+  }
   const selectedHashesRef = useRef(selectedHashes);
   selectedHashesRef.current = selectedHashes;
   const onImageClickRef = useRef(onImageClick);
@@ -443,6 +454,7 @@ export function CanvasGrid({
 
   useEffect(() => { markDirty('overlay'); }, [selectedHashes, markDirty]);
   useEffect(() => { markDirty('base'); }, [thumbnailFitMode, showExtension, showExtensionLabel, markDirty]);
+  useEffect(() => { themeRef.current = null; markDirty('both'); }, [colorScheme, markDirty]);
   const hitTest = useCallback((clientX: number, clientY: number): number | null => {
     const canvas = canvasRef.current;
     if (!canvas) return null;
@@ -509,6 +521,7 @@ export function CanvasGrid({
     marqueeActiveRef,
     markDirty,
     videoScrubIdxRef,
+    thumbnailFitModeRef,
   });
   const dismissFn = () => {
     clearPendingHoverTimers();

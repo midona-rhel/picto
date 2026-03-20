@@ -51,11 +51,6 @@
 .triggerChevron {
   flex-shrink: 0;
   opacity: 0.5;
-  transition: transform 150ms ease;
-}
-
-.triggerChevronOpen {
-  transform: rotate(180deg);
 }
 
 .dropdown {
@@ -136,3 +131,4 @@
   composes: separator from '../../../shared/styles/separator.module.css';
   margin: 4px 8px;
 }
+

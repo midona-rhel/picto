@@ -11,6 +11,7 @@ import { useNavigationStore, type ViewType } from '../state/navigationStore';
 import { startAllRefreshers, stopAllRefreshers } from '../runtime/refresherOrchestrator';
 import { useSubscriptionProgressStore } from '../features/subscriptions/subscriptionProgressStore';
 import { performUndo, performRedo } from '../shared/controllers/undoRedoController';
+import { useUpdaterStore } from '../state/updaterStore';
 import { runBestEffort } from '../shared/lib/asyncOps';
 import type { ResourceKey } from '../shared/types/generated/runtime-contract';
 import type { ManualImportProgressEvent, MediaExportProgressEvent } from '../shared/types/api/events';
@@ -135,5 +136,13 @@ export function useNativeEventListeners(): void {
       runBestEffort('menu.unlistenUndo', unlistenUndo.then((fn) => fn()));
       runBestEffort('menu.unlistenRedo', unlistenRedo.then((fn) => fn()));
     };
+  }, []);
+
+  // Auto-updater status listener
+  useEffect(() => {
+    const unlisten = window.picto?.updater?.onStatus((event) => {
+      useUpdaterStore.getState().handleStatusEvent(event);
+    });
+    return () => { unlisten?.(); };
   }, []);
 }

@@ -14,7 +14,7 @@ pub(super) fn slim_cursor_value_for_sort(
             )
         }
         "position_rank" => item.position_rank.map(|r| r.to_string()),
-        "imported_at" => Some(item.imported_at.to_string()),
+        "date_added" => Some(item.imported_at.to_string()),
         "size" => Some(item.size.to_string()),
         "rating" => Some(item.rating.unwrap_or(0).to_string()),
         "view_count" => Some(item.view_count.to_string()),

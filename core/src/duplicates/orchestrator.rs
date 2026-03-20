@@ -1051,7 +1051,7 @@ async fn consolidate_merge_timestamps(
     // 1. imported_at → keep the earliest import date
     let min_imported = min_timestamp(winner_imported_at, loser_imported_at);
     if min_imported != winner_imported_at {
-        db.set_imported_at(winner_hash, min_imported).await?;
+        db.set_date_added(winner_hash, min_imported).await?;
     }
 
     // 2. created_at → keep the earliest content date (lives on media_entity)
@@ -1084,22 +1084,22 @@ async fn consolidate_merge_timestamps(
         (Some(wc), Some(lc)) => {
             let min_created = min_timestamp(wc, lc);
             if min_created != wc.as_str() {
-                // set_media_entity_created_at also sets updated_at = CURRENT_TIMESTAMP
-                db.set_media_entity_created_at(winner_hash, min_created)
+                // set_date_created also sets updated_at = CURRENT_TIMESTAMP
+                db.set_date_created(winner_hash, min_created)
                     .await?;
                 updated_via_created_at = true;
             }
         }
         (None, Some(lc)) => {
-            db.set_media_entity_created_at(winner_hash, lc).await?;
+            db.set_date_created(winner_hash, lc).await?;
             updated_via_created_at = true;
         }
         _ => {}
     }
 
-    // 3. Touch updated_at if not already done by set_media_entity_created_at
+    // 3. Touch updated_at if not already done by set_date_created
     if !updated_via_created_at {
-        db.touch_media_entity_updated_at(winner_hash).await?;
+        db.touch_date_modified(winner_hash).await?;
     }
 
     Ok(())

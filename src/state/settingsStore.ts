@@ -17,7 +17,7 @@ export interface AppSettings {
   inspectorWidth: number;
   colorScheme: 'dark' | 'light';
   theme: Theme;
-  gridSortField: 'imported_at' | 'size' | 'rating';
+  gridSortField: 'date_added' | 'size' | 'rating';
   gridSortOrder: 'asc' | 'desc';
   showTileName: boolean;
   showResolution: boolean;
@@ -35,6 +35,7 @@ export interface AppSettings {
   videoPlaybackRate: number;
   grayscalePreview: boolean;
   showNavigator: boolean;
+  hideTagNamespace: boolean;
 }
 
 /** Derive Mantine color scheme from a Theme value. */
@@ -50,7 +51,7 @@ const DEFAULTS: AppSettings = {
   inspectorWidth: 250,
   colorScheme: 'dark',
   theme: 'dark',
-  gridSortField: 'imported_at',
+  gridSortField: 'date_added',
   gridSortOrder: 'asc',
   showTileName: true,
   showResolution: true,
@@ -68,6 +69,7 @@ const DEFAULTS: AppSettings = {
   videoPlaybackRate: 1.0,
   grayscalePreview: false,
   showNavigator: true,
+  hideTagNamespace: false,
 };
 
 interface SettingsState {

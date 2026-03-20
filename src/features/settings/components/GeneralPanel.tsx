@@ -38,8 +38,16 @@ export function GeneralPanel() {
   const handleThemeChange = (css: string) => {
     const newTheme = css as typeof settings.theme;
     const scheme = themeToColorScheme(newTheme);
-    // Set data-theme synchronously (useThemeSync effect runs after render)
+    // Set theme attributes synchronously so CSS vars apply before next paint
+    const resolved = newTheme === 'auto'
+      ? (window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark')
+      : newTheme;
+    const lightThemes = new Set(['light', 'lightgray']);
     document.documentElement.dataset.theme = newTheme === 'auto' ? '' : newTheme;
+    document.documentElement.dataset.mantineColorScheme = lightThemes.has(resolved) ? 'light' : 'dark';
+    document.documentElement.style.colorScheme = lightThemes.has(resolved) ? 'light' : 'dark';
+    // Persist to localStorage for instant theme on reload
+    localStorage.setItem('picto-theme', newTheme);
     // Atomic store update — Mantine picks up the new scheme via forceColorScheme
     updateSettings({
       theme: newTheme,
@@ -99,6 +107,7 @@ export function GeneralPanel() {
                 className={`${styles.themeSwatch} ${t.css === 'auto' ? styles.themeAuto : ''} ${activeTheme === t.css ? styles.themeActive : ''}`}
                 style={t.color ? { backgroundColor: t.color } : undefined}
                 title={t.name}
+                tabIndex={-1}
                 onClick={() => handleThemeChange(t.css)}
               />
             ))}
@@ -123,6 +132,12 @@ export function GeneralPanel() {
             </div>
           </div>
         </div>
+        <SettingsRow label="Hide tag namespaces" separator>
+          <Switch
+            checked={settings.hideTagNamespace}
+            onChange={(e) => updateSetting('hideTagNamespace', e.currentTarget.checked)}
+          />
+        </SettingsRow>
       </SettingsBlock>
 
       {/* Grid Defaults */}
@@ -146,7 +161,7 @@ export function GeneralPanel() {
             size="xs" w={120} value={settings.gridSortField}
             onChange={(v) => v && updateSetting('gridSortField', v as typeof settings.gridSortField)}
             data={[
-              { value: 'imported_at', label: 'Date Added' },
+              { value: 'date_added', label: 'Date Added' },
               { value: 'size', label: 'File Size' },
               { value: 'rating', label: 'Rating' },
             ]}

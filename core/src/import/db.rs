@@ -116,10 +116,17 @@ impl SqliteDatabase {
 
         if !result.was_duplicate {
             hash_index.insert(hash, result.file_id);
-            bitmaps.insert(&BitmapKey::Status(status), result.file_id as u32);
 
-            for &tag_id in &result.tag_ids {
-                bitmaps.insert(&BitmapKey::Tag(tag_id), result.file_id as u32);
+            // When events are held (collection member import), skip bitmaps
+            // and events entirely. They'll be populated by the compiler when
+            // release_events fires the FileInserted event after the collection
+            // has parent_collection_id set.
+            if !self.events_held.load(std::sync::atomic::Ordering::SeqCst) {
+                let file_id_u32 = result.file_id as u32;
+                bitmaps.insert(&BitmapKey::Status(status), file_id_u32);
+                for &tag_id in &result.tag_ids {
+                    bitmaps.insert(&BitmapKey::Tag(tag_id), file_id_u32);
+                }
             }
 
             self.emit_read_model_event(ReadModelEvent::FileInserted {

@@ -40,11 +40,14 @@ pub struct CollectionSummary {
     pub mime_breakdown: Vec<CollectionMimeCount>,
     pub source_urls: Vec<String>,
     pub rating: Option<i64>,
+    #[serde(rename = "date_created")]
     pub created_at: Option<String>,
+    #[serde(rename = "date_modified")]
     pub updated_at: Option<String>,
     /// Aggregated notes from member files (merged description texts).
     pub notes: Option<String>,
     /// Earliest imported_at among member files.
+    #[serde(rename = "date_added")]
     pub imported_at: Option<String>,
 }
 
@@ -390,8 +393,8 @@ pub(crate) fn sync_collection_aggregate_metadata(
         |row| row.get(0),
     )?;
 
-    // Keep created_at as the collection's original creation timestamp (= "Date added").
-    // Don't overwrite it with member dates — that broke sort-by-date-added for collections.
+    // created_at is set once in create_collection() and never touched again.
+    // It represents "Date added" — when the collection was created in the library.
     let now = chrono::Utc::now().to_rfc3339();
     conn.execute(
         "UPDATE media_entity

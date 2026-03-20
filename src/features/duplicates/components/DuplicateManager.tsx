@@ -254,8 +254,8 @@ export function DuplicateManager() {
             sourceUrls: meta?.entity.source_urls ?? [],
             imageUrl: mediaFileUrl(hash, mime),
             thumbUrl: mediaThumbnailUrl(hash),
-            importedAt: meta?.entity.imported_at ?? '',
-            createdAt: meta?.entity.created_at ?? null,
+            importedAt: meta?.entity.date_added ?? '',
+            createdAt: meta?.entity.date_created ?? null,
           };
         };
 

@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { initSettingsStore, themeToColorScheme, useSettingsStore } from '../../state/settingsStore';
 
 /**
@@ -20,6 +20,7 @@ export function useThemeSync(): void {
     if (!settingsLoaded) return;
     const theme = settings.theme ?? (settings.colorScheme === 'light' ? 'light' : 'dark');
     document.documentElement.dataset.theme = theme === 'auto' ? '' : theme;
+    localStorage.setItem('picto-theme', theme);
   }, [settingsLoaded, settings.theme, settings.colorScheme]);
 }
 
@@ -31,5 +32,20 @@ export function useDerivedColorScheme(): 'light' | 'dark' {
   const { settings } = useSettingsStore();
   const theme = settings.theme ?? 'dark';
   const scheme = themeToColorScheme(theme);
-  return scheme === 'auto' ? 'dark' : scheme;
+
+  // Listen for OS preference changes when set to auto
+  const [osPrefersDark, setOsPrefersDark] = useState(
+    () => !window.matchMedia('(prefers-color-scheme: light)').matches,
+  );
+  useEffect(() => {
+    const mq = window.matchMedia('(prefers-color-scheme: light)');
+    const handler = (e: MediaQueryListEvent) => setOsPrefersDark(!e.matches);
+    mq.addEventListener('change', handler);
+    return () => mq.removeEventListener('change', handler);
+  }, []);
+
+  if (scheme === 'auto') {
+    return osPrefersDark ? 'dark' : 'light';
+  }
+  return scheme;
 }

@@ -293,6 +293,16 @@ export function createLibraryHostService({
     };
   }
 
+  async function setLibraryMeta(libraryPath, meta) {
+    const config = getCachedConfig();
+    if (!config.libraryMeta) config.libraryMeta = {};
+    const existing = config.libraryMeta[libraryPath] ?? {};
+    if ('icon' in meta) existing.icon = meta.icon;
+    if ('color' in meta) existing.color = meta.color;
+    config.libraryMeta[libraryPath] = existing;
+    await saveGlobalConfig(config);
+  }
+
   async function initializeInitialLibrary(libraryPath) {
     setCurrentLibraryRoot(libraryPath);
     await initialize(libraryPath);
@@ -312,6 +322,7 @@ export function createLibraryHostService({
     relocateLibrary,
     removeLibrary,
     renameLibrary,
+    setLibraryMeta,
     switchLibrary,
     toggleLibraryPin,
   };

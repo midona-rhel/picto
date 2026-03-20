@@ -50,7 +50,7 @@ function applyTemplate(
 ): string {
   const baseName = getBaseName(image.name);
   const ext = getExtension(image.name, image.mime);
-  const date = image.imported_at ? image.imported_at.slice(0, 10) : '';
+  const date = image.date_added ? image.date_added.slice(0, 10) : '';
 
   let result = template;
   result = result.replace(/\{name\}/gi, baseName);

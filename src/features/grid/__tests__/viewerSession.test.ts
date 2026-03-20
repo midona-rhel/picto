@@ -28,7 +28,7 @@ function makeImages(...hashes: string[]): MasonryImageItem[] {
     status: 'active',
     rating: null,
     source_urls: null,
-    imported_at: '2025-01-01T00:00:00Z',
+    date_added: '2025-01-01T00:00:00Z',
     has_thumbnail: true,
     aspectRatio: 1,
   }));

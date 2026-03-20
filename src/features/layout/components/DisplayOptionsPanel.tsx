@@ -19,7 +19,8 @@ function ToggleSwitch({ checked, onClick }: { checked: boolean; onClick: () => v
           position: 'absolute',
           inset: 0,
           borderRadius: 10,
-          backgroundColor: checked ? 'var(--color-primary)' : 'rgba(255,255,255,0.10)',
+          backgroundColor: checked ? 'var(--color-primary)' : 'rgba(128,128,128,0.25)',
+          boxShadow: 'inset 0 1px 2px rgba(0,0,0,0.1)',
           transition: 'background-color 0.2s ease',
         }}
       />
@@ -31,9 +32,11 @@ function ToggleSwitch({ checked, onClick }: { checked: boolean; onClick: () => v
           width: 16,
           height: 16,
           borderRadius: '50%',
-          backgroundColor: checked ? '#fff' : 'rgba(255,255,255,0.25)',
+          backgroundColor: '#fff',
+          opacity: checked ? 1 : 0.6,
+          boxShadow: '0 1px 3px rgba(0,0,0,0.2)',
           transform: checked ? 'translateX(12px)' : 'translateX(0)',
-          transition: 'transform 0.2s ease, background-color 0.2s ease',
+          transition: 'transform 0.2s ease, background-color 0.2s ease, opacity 0.2s ease',
         }}
       />
     </label>

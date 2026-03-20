@@ -373,8 +373,7 @@ pub fn build_url(site_id: &str, query: &str) -> Option<String> {
 }
 
 pub fn substitute_query(template: &str, query: &str) -> String {
-    let encoded = url::form_urlencoded::byte_serialize(query.as_bytes()).collect::<String>();
-    template.replace("{query}", &encoded)
+    template.replace("{query}", query)
 }
 
 /// Extract the domain from a URL for rate limiting / credential lookup.

@@ -25,12 +25,11 @@
   position: absolute;
   top: 5px;
   right: 5px;
-  background-color: var(--color-black-50);
-  color: var(--color-white-80);
-  font-size: var(--font-size-xs);
-  font-weight: var(--font-weight-bold);
+  background-color: rgba(0, 0, 0, 0.65);
+  color: rgba(255, 255, 255, 0.80);
+  font: 600 10px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   font-variant-numeric: tabular-nums;
-  padding: 0 2px;
+  padding: 0 4px;
   height: 18px;
   display: flex;
   align-items: center;
@@ -48,13 +47,13 @@
   left: 0;
   right: 0;
   bottom: 0;
-  height: 3px;
-  background: rgba(255, 255, 255, 0.25);
+  height: 4px;
+  background: rgba(255, 255, 255, 0.2);
 }
 
 .progressFill {
   height: 100%;
-  background: rgba(255, 255, 255, 0.85);
+  background: var(--color-primary, rgba(255, 255, 255, 0.85));
   transition: width 50ms linear;
 }
 

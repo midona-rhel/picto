@@ -260,14 +260,14 @@ fn test_substitute_query() {
             "https://danbooru.donmai.us/posts?tags={query}",
             "1girl solo"
         ),
-        "https://danbooru.donmai.us/posts?tags=1girl+solo"
+        "https://danbooru.donmai.us/posts?tags=1girl solo"
     );
     assert_eq!(
         substitute_query(
-            "https://e621.net/posts?tags={query}",
-            "rating:safe order:score"
+            "https://coomer.st/{query}",
+            "fansly/user/12345"
         ),
-        "https://e621.net/posts?tags=rating%3Asafe+order%3Ascore"
+        "https://coomer.st/fansly/user/12345"
     );
 }
 
@@ -299,15 +299,19 @@ fn test_site_by_id() {
 fn test_build_url() {
     assert_eq!(
         build_url("danbooru", "1girl solo").unwrap(),
-        "https://danbooru.donmai.us/posts?tags=1girl+solo"
+        "https://danbooru.donmai.us/posts?tags=1girl solo"
     );
     assert_eq!(
         build_url("e621", "canine rating:safe").unwrap(),
-        "https://e621.net/posts?tags=canine+rating%3Asafe"
+        "https://e621.net/posts?tags=canine rating:safe"
     );
     assert_eq!(
         build_url("pixiv", "風景").unwrap(),
-        "https://www.pixiv.net/en/tags/%E9%A2%A8%E6%99%AF/artworks?s_mode=s_tag"
+        "https://www.pixiv.net/en/tags/風景/artworks?s_mode=s_tag"
+    );
+    assert_eq!(
+        build_url("kemono", "patreon/user/12345").unwrap(),
+        "https://kemono.cr/patreon/user/12345"
     );
     assert!(build_url("nonexistent", "query").is_none());
 }

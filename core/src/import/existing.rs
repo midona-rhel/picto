@@ -87,7 +87,7 @@ pub async fn merge_existing_import_target(
 
     if let Some(ref created_at) = request.created_at {
         if !created_at.is_empty() && existing.imported_at != *created_at {
-            db.set_media_entity_created_at(hex_hash, created_at).await?;
+            db.set_date_created(hex_hash, created_at).await?;
             any_change = true;
             metadata_changed = true;
         }

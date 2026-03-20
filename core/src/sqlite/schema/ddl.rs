@@ -467,5 +467,5 @@ CREATE TABLE IF NOT EXISTS kv_settings (
 
 -- Schema version
 CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL);
-INSERT OR IGNORE INTO schema_version (version) VALUES (29);
+INSERT OR IGNORE INTO schema_version (version) VALUES (32);
 "#;

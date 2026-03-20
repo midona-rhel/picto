@@ -17,7 +17,7 @@ interface FileMetadataSlim {
   size: number;
   status: number;
   rating: number | null;
-  imported_at: string;
+  date_added: string;
   dominant_color_hex: string | null;
   duration_ms: number | null;
   num_frames: number | null;
@@ -92,7 +92,7 @@ export const useGridMetadataStore = create<CacheState>((set, get) => ({
             size: meta.entity.size,
             status: typeof meta.entity.status === 'string' ? parseInt(meta.entity.status) || 0 : meta.entity.status as unknown as number,
             rating: meta.entity.rating,
-            imported_at: meta.entity.imported_at,
+            date_added: meta.entity.date_added,
             dominant_color_hex: meta.entity.dominant_colors?.[0]?.hex ?? null as string | null,
             duration_ms: meta.entity.duration_ms,
             num_frames: meta.entity.num_frames,

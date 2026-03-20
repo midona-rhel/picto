@@ -323,5 +323,21 @@ pub fn reconcile_schema(conn: &Connection) -> rusqlite::Result<()> {
     // still linked through entity_file, which corrupts collection tile rendering.
     repair_collection_entity_file_links(conn)?;
 
+    // Ensure collection created_at reflects the actual library import time
+    // (earliest member file.imported_at), not content origin dates from gallery-dl.
+    // Runs every startup to guard against any code path that might corrupt it.
+    conn.execute_batch(
+        "UPDATE media_entity
+         SET created_at = COALESCE(
+             (SELECT MIN(f_m.imported_at)
+              FROM media_entity me_m
+              JOIN entity_file ef_m ON ef_m.entity_id = me_m.entity_id
+              JOIN file f_m ON f_m.file_id = ef_m.file_id
+              WHERE me_m.kind = 'single'
+                AND me_m.parent_collection_id = media_entity.entity_id),
+             created_at)
+         WHERE kind = 'collection'",
+    )?;
+
     Ok(())
 }

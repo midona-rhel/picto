@@ -4,12 +4,31 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/vite.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' media: data: blob:; media-src 'self' media:; font-src 'self'; connect-src 'self' ws://127.0.0.1:*; object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none';" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' media: data: blob:; media-src 'self' media:; font-src 'self'; connect-src 'self' ws://127.0.0.1:*; object-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none';" />
     <title>Picto</title>
+    <script>
+      // Blocking: set theme attributes + background before CSS loads to prevent flash
+      (function() {
+        var THEME_BG = {
+          dark: '#1a1a1e', blue: '#0f1732', purple: '#1e1526',
+          gray: '#323236', light: '#ebedef', lightgray: '#d5d7da'
+        };
+        var LIGHT_THEMES = { light: 1, lightgray: 1 };
+        var theme = localStorage.getItem('picto-theme') || 'dark';
+        var resolved = theme;
+        if (theme === 'auto') {
+          resolved = window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+        }
+        var scheme = LIGHT_THEMES[resolved] ? 'light' : 'dark';
+        var el = document.documentElement;
+        el.dataset.mantineColorScheme = scheme;
+        el.dataset.theme = theme === 'auto' ? '' : theme;
+        el.style.colorScheme = scheme;
+        el.style.backgroundColor = THEME_BG[resolved] || THEME_BG.dark;
+      })();
+    </script>
     <style>
       html, body, #root {
-        background: transparent !important;
-        background-color: transparent !important;
         height: 100%;
         margin: 0;
         padding: 0;

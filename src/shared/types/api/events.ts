@@ -50,7 +50,7 @@ export interface FileImportedEvent {
   has_audio: boolean;
   status: string;
   rating?: number | null;
-  imported_at: string;
+  date_added: string;
   has_thumbnail: boolean;
 }
 
@@ -239,10 +239,10 @@ export interface CollectionSummary {
   mime_breakdown: CollectionMimeCount[];
   source_urls: string[];
   rating: number | null;
-  created_at: string | null;
-  updated_at: string | null;
+  date_created: string | null;
+  date_modified: string | null;
   notes: string | null;
-  imported_at: string | null;
+  date_added: string | null;
 }
 
 // ─── Companion ──────────────────────────────────────────────────────────────

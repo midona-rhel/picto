@@ -37,27 +37,19 @@ import type { CollectionSummary } from '../../../shared/types/api';
 import type { FolderMembership } from '../hooks/useInspectorData';
 import { AiTaggerService } from '../../../shared/services/aiTaggerService';
 import { api } from '#desktop/api';
-import { registerUndoAction } from '../../../shared/controllers/undoRedoController';
+
 import styles from './InspectorPanel.module.css';
 
 const isMac = navigator.platform.includes('Mac');
 
 /** View-first editable text field — single row pill, hover popover for content. */
-function EditableTextField({ value, onChange, placeholder, readOnly, multiline, fieldId, activePopover, onPopover }: {
+function EditableTextField({ value, onChange, placeholder, readOnly, multiline }: {
   value: string; onChange: (v: string) => void; placeholder: string; readOnly?: boolean; multiline?: boolean;
-  fieldId: string; activePopover: string | null; onPopover: (id: string | null) => void;
 }) {
   const [editing, setEditing] = useState(false);
+  const [hovering, setHovering] = useState(false);
   const inputRef = useRef<HTMLInputElement | HTMLTextAreaElement>(null);
-  const contentRef = useRef<HTMLDivElement>(null);
   const hoverTimer = useRef<ReturnType<typeof setTimeout>>();
-
-  const isTruncated = () => {
-    const el = contentRef.current;
-    return el ? el.scrollWidth > el.clientWidth : false;
-  };
-
-  const showPopover = activePopover === fieldId && !editing && !!value;
 
   useEffect(() => {
     if (editing && inputRef.current) inputRef.current.focus();
@@ -65,20 +57,22 @@ function EditableTextField({ value, onChange, placeholder, readOnly, multiline, 
 
   const handleDone = () => setEditing(false);
 
+  // Only multiline fields get a hover popover (notes)
+  const showPopover = multiline && hovering && !editing && !!value;
+
   const handleMouseEnter = () => {
-    if (editing) return;
+    if (!multiline || editing) return;
     clearTimeout(hoverTimer.current);
-    // Only show popover if content is actually truncated
-    if (value && isTruncated()) onPopover(fieldId);
+    if (value) setHovering(true);
   };
 
   const handleMouseLeave = () => {
-    hoverTimer.current = setTimeout(() => onPopover(null), 400);
+    hoverTimer.current = setTimeout(() => setHovering(false), 400);
   };
 
   return (
     <div
-      className={styles.editableField}
+      className={editing ? styles.editableFieldExpanded : styles.editableField}
       onMouseEnter={handleMouseEnter}
       onMouseLeave={handleMouseLeave}
     >
@@ -93,7 +87,7 @@ function EditableTextField({ value, onChange, placeholder, readOnly, multiline, 
                 onChange={(e) => onChange(e.target.value)}
                 onKeyDown={(e) => { if (e.key === 'Escape') handleDone(); }}
                 placeholder={placeholder}
-                rows={1}
+                rows={2}
               />
             ) : (
               <input
@@ -106,17 +100,17 @@ function EditableTextField({ value, onChange, placeholder, readOnly, multiline, 
               />
             )}
           </div>
-          <button className={styles.editToggleBtn} onClick={handleDone} tabIndex={-1}>
+          <button className={styles.editToggleBtn} onClick={handleDone} tabIndex={-1} style={{ alignSelf: 'flex-start', marginTop: 2 }}>
             <IconCheck size={13} />
           </button>
         </>
       ) : (
         <>
-          <div ref={contentRef} className={styles.editableFieldContent}>
+          <div className={styles.editableFieldContent}>
             {value || <span className={styles.editableFieldPlaceholder}>{placeholder}</span>}
           </div>
           {!readOnly && (
-            <button className={styles.editToggleBtn} onClick={() => { onPopover(null); setEditing(true); }} tabIndex={-1}>
+            <button className={styles.editToggleBtn} onClick={() => setEditing(true)} tabIndex={-1}>
               <IconPencil size={13} />
             </button>
           )}
@@ -497,19 +491,25 @@ export function InspectorPanel({
     });
   }, [fileFolders, onAddToFolders]);
 
-  const handleAutoTag = useCallback(() => {
+  const handleAutoTag = useCallback(async () => {
     if (!autoTagBtnRef.current || selectedImages.length === 0) return;
-    const hashes = selectedImages.map((img) => img.hash);
+
+    // For collections, tag all member files; for regular files, tag directly
+    let hashes: string[];
+    const img = selectedImages[0];
+    if (img?.is_collection && img.entity_id != null) {
+      const memberHashes = await api.collections.listMemberHashes(img.entity_id);
+      hashes = memberHashes;
+    } else {
+      hashes = selectedImages.map((i) => i.hash);
+    }
+
+    if (hashes.length === 0) return;
+
     AiTaggerService.open({
       anchorEl: autoTagBtnRef.current,
       hashes,
-      onApply: async (tags) => {
-        await api.aiTagger.apply(hashes, tags);
-        registerUndoAction({
-          label: `Auto-tag ${hashes.length} file${hashes.length === 1 ? '' : 's'}`,
-          undo: async () => { await api.tags.remove(hashes, tags); refreshMetadata(); },
-          redo: async () => { await api.aiTagger.apply(hashes, tags); refreshMetadata(); },
-        });
+      onApply: async () => {
         refreshMetadata();
       },
     });
@@ -632,8 +632,8 @@ export function InspectorPanel({
       : (fileMetadata?.entity.rating ?? selectedImage?.rating ?? 0);
 
     // created_at = content origin date (for collections: oldest member's content date)
-    const createdAt = isCollection ? selectedCollection?.created_at : fileMetadata?.entity.created_at;
-    const updatedAt = isCollection ? selectedCollection?.updated_at : fileMetadata?.entity.updated_at;
+    const createdAt = isCollection ? selectedCollection?.date_created : fileMetadata?.entity.date_created;
+    const updatedAt = isCollection ? selectedCollection?.date_modified : fileMetadata?.entity.date_modified;
 
     return (
       <InspectorSection
@@ -677,7 +677,7 @@ export function InspectorPanel({
 
           {/* Shared: dates */}
           {selectedImage && !isCollection && (
-            <PropertyRow label="Date added" mono value={formatDateTime(selectedImage.imported_at)} />
+            <PropertyRow label="Date added" mono value={formatDateTime(selectedImage.date_added)} />
           )}
           {isCollection && updatedAt && (
             <PropertyRow label="Date added" mono value={formatDateTime(updatedAt)} />
@@ -735,7 +735,7 @@ export function InspectorPanel({
               </div>
 
               <div className={styles.fieldStack}>
-                <EditableTextField value={notes} onChange={onUpdateNotes} placeholder="Notes" multiline fieldId="vs-notes" activePopover={activePopover} onPopover={setActivePopover} />
+                <EditableTextField value={notes} onChange={onUpdateNotes} placeholder="Notes" multiline  />
                 <EditableUrlList urls={sourceUrls} onChange={handleUrlChange} fieldId="vs-urls" activePopover={activePopover} onPopover={setActivePopover} />
               </div>
 
@@ -778,13 +778,13 @@ export function InspectorPanel({
               />
 
               <div className={styles.fieldStack}>
-                <EditableTextField value={imageName} onChange={onImageNameChange} placeholder="Name" readOnly={selectedImage.is_collection} fieldId="name" activePopover={activePopover} onPopover={setActivePopover} />
-                <EditableTextField value={notes} onChange={onUpdateNotes} placeholder="Notes" readOnly={selectedImage.is_collection} multiline fieldId="notes" activePopover={activePopover} onPopover={setActivePopover} />
+                <EditableTextField value={imageName} onChange={onImageNameChange} placeholder="Name" />
+                <EditableTextField value={notes} onChange={onUpdateNotes} placeholder="Notes" readOnly={selectedImage.is_collection} multiline />
                 <EditableUrlList urls={sourceUrls} onChange={handleUrlChange} readOnly={selectedImage.is_collection} fieldId="urls" activePopover={activePopover} onPopover={setActivePopover} />
               </div>
 
               {renderTags()}
-              {renderFolders(!selectedImage.is_collection)}
+              {renderFolders(!selectedImage.is_collection && String(selectedImage.status) === '1')}
               {renderProperties()}
 
               <button ref={autoTagBtnRef} className={styles.exportButton} onClick={handleAutoTag}>
@@ -802,7 +802,7 @@ export function InspectorPanel({
               </div>
 
               <div className={styles.fieldStack}>
-                <EditableTextField value={notes} onChange={onUpdateNotes} placeholder="Notes" multiline fieldId="ms-notes" activePopover={activePopover} onPopover={setActivePopover} />
+                <EditableTextField value={notes} onChange={onUpdateNotes} placeholder="Notes" multiline />
                 <EditableUrlList urls={sourceUrls} onChange={handleUrlChange} fieldId="ms-urls" activePopover={activePopover} onPopover={setActivePopover} />
               </div>
 

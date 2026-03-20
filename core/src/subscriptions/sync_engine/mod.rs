@@ -146,6 +146,8 @@ impl<'a> SubscriptionSyncEngine<'a> {
             return progress;
         }
 
+        let sync_start = std::time::Instant::now();
+
         let resume_strategy = resume_strategy
             .map(str::to_string)
             .or_else(|| default_resume_strategy_for_site(site_id).map(str::to_string));
@@ -167,10 +169,14 @@ impl<'a> SubscriptionSyncEngine<'a> {
             }
         };
 
+        info!(elapsed_ms = sync_start.elapsed().as_millis(), "sync_query: URL built");
+
         let credential = self
             .load_run_credential(site_id, &url, &sub_id_str, &progress)
             .await;
         let has_credential = credential.is_some();
+
+        info!(elapsed_ms = sync_start.elapsed().as_millis(), "sync_query: credential loaded");
 
         let archive_path = self
             .db
@@ -193,6 +199,8 @@ impl<'a> SubscriptionSyncEngine<'a> {
             1
         };
 
+        info!(elapsed_ms = sync_start.elapsed().as_millis(), "sync_query: pre-spawn ready");
+
         self.emit_progress(
             &sub_id_str,
             &progress,
@@ -213,118 +221,27 @@ impl<'a> SubscriptionSyncEngine<'a> {
             cancel: cancel.clone(),
         };
 
-        let run_result = match self.runner.run(&opts).await {
-            Ok(r) => r,
-            Err(e) => {
-                progress.errors.push(format!("gallery-dl failed: {e}"));
-                progress.failure_kind = Some("unknown".to_string());
-                self.update_credential_health(site_id, "error", Some(&e))
-                    .await;
-                return progress;
-            }
+        // ── Streaming import: process files as gallery-dl downloads them ──
+        let (item_tx, mut item_rx) = tokio::sync::mpsc::channel::<gallery_dl_runner::DownloadedItem>(32);
+
+        let runner_handle = {
+            let runner = gallery_dl_runner::GalleryDlRunner::new(self.runner.binary_path().clone());
+            tokio::spawn(async move { runner.run(&opts, item_tx).await })
         };
 
-        if cancel.is_cancelled() {
-            progress.cancelled = true;
+        struct PendingCollection {
+            category: String,
+            post_id: String,
+            preferred_name: String,
+            expected: u32,
+            members: Vec<(String, u32)>,
         }
-        if run_result.exit_code != 0 && !progress.cancelled {
-            let failure_kind = gallery_dl_runner::classify_failure(&run_result.stderr_output);
-            let failure_kind_str = match failure_kind {
-                FailureKind::Unauthorized => "unauthorized",
-                FailureKind::Expired => "expired",
-                FailureKind::RateLimited => "rate_limited",
-                FailureKind::Network => "network",
-                FailureKind::Unknown => "unknown",
-            };
-            progress.failure_kind = Some(failure_kind_str.to_string());
-            let summary = format!(
-                "gallery-dl exited with code {} ({failure_kind_str})",
-                run_result.exit_code
-            );
-            progress.errors.push(summary.clone());
-            let health_status = match failure_kind {
-                FailureKind::Unauthorized => "unauthorized",
-                FailureKind::Expired => "expired",
-                _ => "error",
-            };
-            let err = if run_result.stderr_output.trim().is_empty() {
-                summary
-            } else {
-                run_result
-                    .stderr_output
-                    .lines()
-                    .rev()
-                    .find(|line| !line.trim().is_empty())
-                    .unwrap_or(summary.as_str())
-                    .trim()
-                    .to_string()
-            };
-            warn!(
-                site_id = %site_id,
-                query_id,
-                failure_kind = failure_kind_str,
-                error = %err,
-                "gallery-dl query execution failed"
-            );
-            self.update_credential_health(site_id, health_status, Some(&err))
-                .await;
-        } else if run_result.exit_code == 0 && has_credential {
-            self.update_credential_health(site_id, "valid", None).await;
-        }
-
-        let temp_dir = run_result
-            .items
-            .first()
-            .and_then(|item| item.file_path.parent())
-            .map(|p| p.to_path_buf());
-
-        // ── Phase 1: Group items by post ──────────────────────────────────
-        // Multi-image posts must be imported atomically as a collection.
-        // Single-image posts are imported and shown immediately.
-        struct PostGroup<'b> {
-            items: Vec<&'b gallery_dl_runner::DownloadedItem>,
-            collection_parts: Option<(String, String, String)>,
-        }
-        let mut post_groups: Vec<PostGroup<'_>> = Vec::new();
-        let mut post_index: HashMap<String, usize> = HashMap::new();
-
-        for item in &run_result.items {
-            if let Err(_) = validate_metadata_for_site(site_id, &item.metadata) {
-                progress.metadata_invalid += 1;
-                continue;
-            }
-            progress.metadata_validated += 1;
-
-            let parts = collection_group_parts(site_id, &item.metadata);
-            let is_multi = item.metadata.page_count.map_or(false, |c| c > 1);
-
-            if is_multi {
-                if let Some(ref p) = parts {
-                    let key = format!("{}:{}", p.0, p.1);
-                    if let Some(&idx) = post_index.get(&key) {
-                        post_groups[idx].items.push(item);
-                        continue;
-                    }
-                    let idx = post_groups.len();
-                    post_index.insert(key, idx);
-                    post_groups.push(PostGroup {
-                        items: vec![item],
-                        collection_parts: parts,
-                    });
-                    continue;
-                }
-            }
-            // Single-image post (or no collection parts)
-            post_groups.push(PostGroup {
-                items: vec![item],
-                collection_parts: None,
-            });
-        }
-
-        // ── Phase 2: Import each post group atomically ────────────────────
+        let mut pending_collections: HashMap<String, PendingCollection> = HashMap::new();
         let mut changed_collection_ids: Vec<i64> = Vec::new();
+        let mut all_post_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut total_items: usize = 0;
 
-        for group in &post_groups {
+        while let Some(item) = item_rx.recv().await {
             if cancel.is_cancelled() {
                 progress.cancelled = true;
                 break;
@@ -335,154 +252,194 @@ impl<'a> SubscriptionSyncEngine<'a> {
                 .len(&crate::sqlite::bitmaps::BitmapKey::Status(0));
             if inbox_count >= inbox_limit as u64 {
                 progress.failure_kind = Some("inbox_full".to_string());
-                self.emit_progress(
-                    &sub_id_str,
-                    &progress,
-                    &format!("Inbox cap reached ({inbox_limit}); pausing download"),
-                );
                 progress.cancelled = true;
                 break;
             }
 
-            let is_collection = group.collection_parts.is_some();
-            let post_id_display = group.items.first()
-                .and_then(|i| i.metadata.post_id.as_deref())
-                .unwrap_or("unknown");
+            if let Err(_) = validate_metadata_for_site(site_id, &item.metadata) {
+                progress.metadata_invalid += 1;
+                continue;
+            }
+            progress.metadata_validated += 1;
+            total_items += 1;
 
-            progress.pages_fetched += 1;
-            self.emit_progress(
-                &sub_id_str,
-                &progress,
-                &format!("Importing post {post_id_display}{}...",
-                    if is_collection { format!(" ({} pages)", group.items.len()) } else { String::new() }),
-            );
-
-            // For collections: hold DB events until collection is fully formed.
-            // This prevents individual files from appearing in the UI before
-            // they have parent_collection_id set.
-            if is_collection {
-                self.db.hold_events();
+            if let Some(pid) = item.metadata.post_id.as_deref() {
+                all_post_ids.insert(pid.to_string());
             }
 
-            let mut post_hashes: Vec<(String, u32)> = Vec::new();
-            let mut any_new = false;
-            for item in &group.items {
+            let collection_parts = collection_group_parts(site_id, &item.metadata);
+            let is_multi = item.metadata.page_count.map_or(false, |c| c > 1);
+            let is_collection_member = collection_parts.is_some() && is_multi;
+
+            let post_id_display = item.metadata.post_id.as_deref().unwrap_or("unknown");
+
+            if is_collection_member {
+                let (category, post_id, preferred_name) = collection_parts.unwrap();
+                let key = format!("{category}:{post_id}");
+                let is_first = !pending_collections.contains_key(&key);
+
+                if is_first {
+                    self.db.hold_events();
+                }
+
+                let pending = pending_collections
+                    .entry(key.clone())
+                    .or_insert_with(|| PendingCollection {
+                        category,
+                        post_id,
+                        preferred_name,
+                        expected: item.metadata.page_count.unwrap_or(0),
+                        members: Vec::new(),
+                    });
+
                 match self
-                    .import_item(
-                        &item.file_path,
-                        &item.metadata,
-                        subscription_id,
-                        &url,
-                        is_collection,
-                    )
+                    .import_item(&item.file_path, &item.metadata, subscription_id, &url, true)
                     .await
                 {
                     Ok(outcome) => {
                         if outcome.imported_new {
                             progress.files_downloaded += 1;
-                            any_new = true;
                         } else {
                             progress.files_skipped += 1;
                         }
-                        if is_collection {
-                            let page_num = item.metadata.page_num.unwrap_or(u32::MAX);
-                            if !post_hashes.iter().any(|(h, _)| h == &outcome.hex_hash) {
-                                post_hashes.push((outcome.hex_hash.clone(), page_num));
-                            }
+                        let page_num = item.metadata.page_num.unwrap_or(u32::MAX);
+                        if !pending.members.iter().any(|(h, _)| h == &outcome.hex_hash) {
+                            pending.members.push((outcome.hex_hash, page_num));
                         }
                     }
                     Err(e) => {
-                        warn!(
-                            post_id = %post_id_display,
-                            path = %item.file_path.display(),
-                            error = %e,
-                            "Subscription item import failed"
-                        );
-                        progress
-                            .errors
-                            .push(format!("Import error for post {post_id_display}: {e}"));
+                        progress.errors.push(format!("Import error for post {post_id_display}: {e}"));
                     }
                 }
-            }
 
-            // For collections: create the collection and add members BEFORE
-            // releasing held events. By the time the compiler sees FileInserted,
-            // parent_collection_id is already set — files never appear solo.
-            if let Some((ref category, ref post_id, ref preferred_name)) = group.collection_parts {
-                if post_hashes.len() >= 2 {
-                    post_hashes.sort_by_key(|(_, num)| *num);
-                    let ordered_hashes: Vec<String> =
-                        post_hashes.iter().map(|(h, _)| h.clone()).collect();
+                // Check if collection is complete
+                let pending = pending_collections.get(&key).unwrap();
+                if pending.expected > 0 && pending.members.len() as u32 >= pending.expected {
+                    let mut pc = pending_collections.remove(&key).unwrap();
+                    pc.members.sort_by_key(|(_, num)| *num);
+                    let hashes: Vec<String> = pc.members.iter().map(|(h, _)| h.clone()).collect();
 
-                    let key = format!("{category}:{post_id}");
-                    // Check if a collection already exists for this post
-                    let existing_id = self
-                        .db
-                        .get_subscription_post_collection(
-                            subscription_id, category, post_id,
-                        )
-                        .await
-                        .ok()
-                        .flatten();
-                    let collection_id = match existing_id {
-                        Some(id) => id,
-                        None => match self.db.create_collection(preferred_name).await {
-                            Ok(id) => id,
-                            Err(e) => {
-                                progress.errors.push(format!(
-                                    "Collection create failed for {key}: {e}"
-                                ));
-                                self.db.release_events();
-                                continue;
-                            }
-                        },
-                    };
-
-                    if let Err(e) = self
-                        .db
-                        .add_collection_members_by_hashes(collection_id, &ordered_hashes)
-                        .await
-                    {
-                        progress.errors.push(format!(
-                            "Collection member add failed for {key}: {e}"
-                        ));
+                    if hashes.len() >= 2 {
+                        let existing_id = self.db
+                            .get_subscription_post_collection(subscription_id, &pc.category, &pc.post_id)
+                            .await.ok().flatten();
+                        let collection_id = match existing_id {
+                            Some(id) => id,
+                            None => match self.db.create_collection(&pc.preferred_name).await {
+                                Ok(id) => id,
+                                Err(e) => {
+                                    progress.errors.push(format!("Collection create failed: {e}"));
+                                    self.db.release_events();
+                                    continue;
+                                }
+                            },
+                        };
+                        let _ = self.db.add_collection_members_by_hashes(collection_id, &hashes).await;
+                        let _ = self.db.upsert_subscription_post_collection(
+                            subscription_id, &pc.category, &pc.post_id, collection_id,
+                        ).await;
+                        changed_collection_ids.push(collection_id);
                     }
-
-                    let _ = self
-                        .db
-                        .upsert_subscription_post_collection(
-                            subscription_id, category, post_id, collection_id,
-                        )
-                        .await;
-
-                    changed_collection_ids.push(collection_id);
+                    self.db.release_events();
                 }
-            }
-
-            // Release held events — compiler fires AFTER parent_collection_id is set
-            if is_collection {
-                self.db.release_events();
-            }
-
-            if any_new {
-                self.emit_progress(
-                    &sub_id_str,
-                    &progress,
-                    &format!("Downloaded {} files", progress.files_downloaded),
-                );
+            } else {
+                // Single image: import and emit immediately
+                self.emit_progress(&sub_id_str, &progress, &format!("Importing {post_id_display}..."));
+                match self
+                    .import_item(&item.file_path, &item.metadata, subscription_id, &url, false)
+                    .await
+                {
+                    Ok(outcome) => {
+                        if outcome.imported_new {
+                            progress.files_downloaded += 1;
+                            self.emit_progress(&sub_id_str, &progress,
+                                &format!("Downloaded {} files", progress.files_downloaded));
+                        } else {
+                            progress.files_skipped += 1;
+                        }
+                    }
+                    Err(e) => {
+                        progress.errors.push(format!("Import error for post {post_id_display}: {e}"));
+                    }
+                }
             }
         }
 
-        // Emit collection mutation events
+        // Finalize any incomplete collections (gallery-dl exited before all pages arrived)
+        for (_, mut pc) in pending_collections {
+            pc.members.sort_by_key(|(_, num)| *num);
+            let hashes: Vec<String> = pc.members.iter().map(|(h, _)| h.clone()).collect();
+            if hashes.len() >= 2 {
+                let existing_id = self.db
+                    .get_subscription_post_collection(subscription_id, &pc.category, &pc.post_id)
+                    .await.ok().flatten();
+                let collection_id = match existing_id {
+                    Some(id) => id,
+                    None => match self.db.create_collection(&pc.preferred_name).await {
+                        Ok(id) => id,
+                        Err(_) => { self.db.release_events(); continue; }
+                    },
+                };
+                let _ = self.db.add_collection_members_by_hashes(collection_id, &hashes).await;
+                let _ = self.db.upsert_subscription_post_collection(
+                    subscription_id, &pc.category, &pc.post_id, collection_id,
+                ).await;
+                changed_collection_ids.push(collection_id);
+            }
+            self.db.release_events();
+        }
+
+        // Wait for gallery-dl to finish
+        let run_summary = match runner_handle.await {
+            Ok(Ok(s)) => s,
+            Ok(Err(e)) => {
+                progress.errors.push(format!("gallery-dl failed: {e}"));
+                progress.failure_kind = Some("unknown".to_string());
+                self.update_credential_health(site_id, "error", Some(&e)).await;
+                return progress;
+            }
+            Err(e) => {
+                progress.errors.push(format!("gallery-dl task panicked: {e}"));
+                progress.failure_kind = Some("unknown".to_string());
+                return progress;
+            }
+        };
+
+        if cancel.is_cancelled() {
+            progress.cancelled = true;
+        }
+        if run_summary.exit_code != 0 && !progress.cancelled {
+            let failure_kind = gallery_dl_runner::classify_failure(&run_summary.stderr_output);
+            let failure_kind_str = match failure_kind {
+                FailureKind::Unauthorized => "unauthorized",
+                FailureKind::Expired => "expired",
+                FailureKind::RateLimited => "rate_limited",
+                FailureKind::Network => "network",
+                FailureKind::Unknown => "unknown",
+            };
+            progress.failure_kind = Some(failure_kind_str.to_string());
+            let summary = format!("gallery-dl exited with code {} ({failure_kind_str})", run_summary.exit_code);
+            progress.errors.push(summary.clone());
+            let health_status = match failure_kind {
+                FailureKind::Unauthorized => "unauthorized",
+                FailureKind::Expired => "expired",
+                _ => "error",
+            };
+            let err = run_summary.stderr_output.lines().rev()
+                .find(|line| !line.trim().is_empty())
+                .unwrap_or(summary.as_str()).trim().to_string();
+            warn!(site_id = %site_id, query_id, failure_kind = failure_kind_str, error = %err, "gallery-dl query execution failed");
+            self.update_credential_health(site_id, health_status, Some(&err)).await;
+        } else if run_summary.exit_code == 0 && has_credential {
+            self.update_credential_health(site_id, "valid", None).await;
+        }
+
+        // Emit collection + final mutation events
         if !changed_collection_ids.is_empty() {
             changed_collection_ids.sort_unstable();
             changed_collection_ids.dedup();
             let mut scopes: Vec<String> = vec!["system:all".to_string()];
-            scopes.extend(
-                changed_collection_ids
-                    .iter()
-                    .map(|id| format!("collection:{id}")),
-            );
+            scopes.extend(changed_collection_ids.iter().map(|id| format!("collection:{id}")));
             crate::events::emit_mutation(
                 "subscription_import_collections",
                 crate::runtime_contract::mutation_builder::MutationImpact::new()
@@ -490,118 +447,62 @@ impl<'a> SubscriptionSyncEngine<'a> {
                     .extra_grid_scopes(scopes),
             );
         }
-
-        // Final mutation so frontend sees everything
         if progress.files_downloaded > 0 {
             crate::events::emit_mutation(
                 "subscription_import",
-                crate::runtime_contract::mutation_builder::MutationImpact::file_lifecycle(
-                    self.db,
-                ),
+                crate::runtime_contract::mutation_builder::MutationImpact::file_lifecycle(self.db),
             );
         }
 
-        if let Some(ref dir) = temp_dir {
-            let temp_root = dir.parent().unwrap_or(dir);
-            gallery_dl_runner::cleanup_temp_dir(temp_root).await;
-        }
+        gallery_dl_runner::cleanup_temp_dir(&run_summary.temp_dir).await;
 
         self.emit_progress_force(&sub_id_str, &progress, "Finalizing...");
-        let completed_cleanly = run_result.exit_code == 0 && !progress.cancelled;
+        let completed_cleanly = run_summary.exit_code == 0 && !progress.cancelled;
         let range_end = file_limit.map(|limit| range_start.saturating_add(limit).saturating_sub(1));
-        let next_resume_cursor = resume_strategy
-            .as_deref()
-            .and_then(|strategy| derive_resume_cursor(&run_result.items, strategy, range_end));
-        // Count unique posts (not files) since we use --post-range
-        let unique_post_count = {
-            let mut seen = std::collections::HashSet::new();
-            for item in &run_result.items {
-                if let Some(pid) = item.metadata.post_id.as_deref() {
-                    seen.insert(pid);
+        let next_resume_cursor = resume_strategy.as_deref().map(|strategy| {
+            match strategy {
+                "range_offset" => range_end.map(|end| end.to_string()),
+                "tag_id_lt" => {
+                    let mut min_id: Option<u64> = None;
+                    for pid in &all_post_ids {
+                        if let Ok(n) = pid.parse::<u64>() {
+                            min_id = Some(min_id.map_or(n, |cur| cur.min(n)));
+                        }
+                    }
+                    min_id.map(|id| id.to_string())
                 }
+                _ => None,
             }
-            seen.len()
-        };
+        }).flatten();
+        let unique_post_count = all_post_ids.len();
         let continue_initial_pagination = should_continue_initial_pagination(
-            completed_initial_run,
-            completed_cleanly,
-            file_limit,
-            unique_post_count,
-            next_resume_cursor.as_deref(),
+            completed_initial_run, completed_cleanly, file_limit, unique_post_count, next_resume_cursor.as_deref(),
         );
 
         if !completed_initial_run {
             let persisted_cursor = if completed_cleanly {
-                if continue_initial_pagination {
-                    next_resume_cursor.clone()
-                } else {
-                    None
-                }
+                if continue_initial_pagination { next_resume_cursor.clone() } else { None }
             } else {
-                next_resume_cursor
-                    .clone()
-                    .or_else(|| resume_cursor.map(|s| s.to_string()))
+                next_resume_cursor.clone().or_else(|| resume_cursor.map(|s| s.to_string()))
             };
-            if let Err(e) = self
-                .db
-                .set_query_resume_state(query_id, persisted_cursor, resume_strategy.clone())
-                .await
-            {
-                progress
-                    .errors
-                    .push(format!("Failed to persist query resume state: {e}"));
-            }
+            let _ = self.db.set_query_resume_state(query_id, persisted_cursor, resume_strategy.clone()).await;
         }
 
         if completed_cleanly {
             let now = Utc::now().to_rfc3339();
-            if let Err(e) = self
-                .db
-                .update_query_progress(query_id, &now, progress.files_downloaded as i64)
-                .await
-            {
-                progress
-                    .errors
-                    .push(format!("Failed to update query progress: {e}"));
-            }
-        } else {
-            info!(
-                query_id,
-                exit_code = run_result.exit_code,
-                cancelled = progress.cancelled,
-                "Skipping progress checkpoint update: run did not complete cleanly"
-            );
+            let _ = self.db.update_query_progress(query_id, &now, progress.files_downloaded as i64).await;
         }
 
         if !completed_initial_run && completed_cleanly && !continue_initial_pagination {
-            if let Err(e) = self
-                .db
-                .set_query_completed_initial_run(query_id, true)
-                .await
-            {
-                progress
-                    .errors
-                    .push(format!("Failed to mark initial run complete: {e}"));
-            }
+            let _ = self.db.set_query_completed_initial_run(query_id, true).await;
         } else if continue_initial_pagination {
-            info!(
-                query_id,
-                next_resume_cursor = ?next_resume_cursor,
-                fetched_items = run_result.items.len(),
-                file_limit = ?file_limit,
-                "Initial run continues; resuming next chunk"
-            );
+            info!(query_id, next_resume_cursor = ?next_resume_cursor, fetched_items = total_items,
+                file_limit = ?file_limit, "Initial run continues; resuming next chunk");
         }
 
-        info!(
-            query_id,
-            downloaded = progress.files_downloaded,
-            skipped = progress.files_skipped,
-            errors = progress.errors.len(),
-            exit_code = run_result.exit_code,
-            cancelled = progress.cancelled,
-            "Sync query finished"
-        );
+        info!(query_id, downloaded = progress.files_downloaded, skipped = progress.files_skipped,
+            errors = progress.errors.len(), exit_code = run_summary.exit_code,
+            cancelled = progress.cancelled, "Sync query finished");
 
         progress
     }

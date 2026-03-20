@@ -84,6 +84,7 @@ pub struct EntityDetails {
     pub view_count: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source_urls: Option<JsonValue>,
+    #[serde(rename = "date_added")]
     pub imported_at: String,
     pub has_thumbnail: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -92,9 +93,9 @@ pub struct EntityDetails {
     pub dominant_colors: Option<Vec<DominantColorDto>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub notes: Option<JsonValue>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "date_created", skip_serializing_if = "Option::is_none")]
     pub created_at: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "date_modified", skip_serializing_if = "Option::is_none")]
     pub updated_at: Option<String>,
 }
 
@@ -153,6 +154,7 @@ pub struct EntitySlim {
     pub status: String,
     pub rating: Option<i64>,
     pub view_count: i64,
+    #[serde(rename = "date_added")]
     pub imported_at: String,
     pub has_thumbnail: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -354,13 +356,13 @@ mod grid_query_tests {
                 "searchText": "cat"
             },
             "sort": {
-                "field": "imported_at",
+                "field": "date_added",
                 "order": "desc"
             }
         });
         let parsed: GridPageSlimQuery =
             serde_json::from_value(raw).expect("query should deserialize");
-        assert_eq!(parsed.sort.field.as_deref(), Some("imported_at"));
+        assert_eq!(parsed.sort.field.as_deref(), Some("date_added"));
         assert_eq!(parsed.sort.order.as_deref(), Some("desc"));
         assert_eq!(parsed.filters.folder_ids, Some(vec![42]));
         assert_eq!(parsed.filters.excluded_folder_ids, Some(vec![99]));

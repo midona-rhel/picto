@@ -678,6 +678,44 @@ pub fn run_migrations(conn: &Connection, from_version: i64) -> rusqlite::Result<
              ON smart_folder(parent_id, COALESCE(display_order, smart_folder_id), smart_folder_id)",
         )?;
     }
+    if from_version < 31 {
+        // V30-31: Repair collection created_at timestamps.
+        // sync_collection_aggregate_metadata used to overwrite created_at with
+        // MIN(member.created_at) from media_entity, which was the content origin
+        // date (from gallery-dl), not the library import date. This made collections
+        // sort as years-old items.
+        // Fix: set created_at to earliest member file.imported_at — the actual
+        // time the first file in this collection was added to the library.
+        conn.execute_batch(
+            "UPDATE media_entity
+             SET created_at = COALESCE(
+                 (SELECT MIN(f_m.imported_at)
+                  FROM media_entity me_m
+                  JOIN entity_file ef_m ON ef_m.entity_id = me_m.entity_id
+                  JOIN file f_m ON f_m.file_id = ef_m.file_id
+                  WHERE me_m.kind = 'single'
+                    AND me_m.parent_collection_id = media_entity.entity_id),
+                 created_at)
+             WHERE kind = 'collection'",
+        )?;
+    }
+    if from_version < 32 {
+        // V32: Re-repair collection created_at after ratchet code was removed.
+        // Previous migration ran but sync_collection_aggregate_metadata re-corrupted
+        // the values before the ratchet was removed. Same fix, re-applied.
+        conn.execute_batch(
+            "UPDATE media_entity
+             SET created_at = COALESCE(
+                 (SELECT MIN(f_m.imported_at)
+                  FROM media_entity me_m
+                  JOIN entity_file ef_m ON ef_m.entity_id = me_m.entity_id
+                  JOIN file f_m ON f_m.file_id = ef_m.file_id
+                  WHERE me_m.kind = 'single'
+                    AND me_m.parent_collection_id = media_entity.entity_id),
+                 created_at)
+             WHERE kind = 'collection'",
+        )?;
+    }
     conn.execute("UPDATE schema_version SET version = ?1", [CURRENT_VERSION])?;
     Ok(())
 }

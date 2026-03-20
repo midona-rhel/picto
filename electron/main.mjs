@@ -212,6 +212,11 @@ async function bootstrapApplication() {
     console.info('[main] no initial library selected; starting without an open library');
   }
 
+  // Check for updates before showing the window — if an update is found
+  // within 3 seconds, download + install it (app restarts automatically).
+  // If no update or timeout, proceed to show the app.
+  await updaterService.checkAndUpdateOnStartup(3000);
+
   buildAppMenu();
   console.info('[main] app menu built');
 

@@ -830,7 +830,25 @@ impl SqliteDatabase {
             return Ok(0);
         }
         let resolved = self.resolve_hashes_batch(hashes).await?;
-        let entity_ids: Vec<i64> = resolved.iter().map(|(_, id)| *id).collect();
+        let all_ids: Vec<i64> = resolved.iter().map(|(_, id)| *id).collect();
+        // Only allow adding active (status=1) entities to folders
+        let entity_ids: Vec<i64> = self.with_read_conn({
+            let ids = all_ids;
+            move |conn| {
+                let mut active = Vec::new();
+                for &eid in &ids {
+                    let status: Option<i64> = conn.query_row(
+                        "SELECT status FROM media_entity WHERE entity_id = ?1",
+                        [eid], |r| r.get(0),
+                    ).ok();
+                    if status == Some(1) { active.push(eid); }
+                }
+                Ok(active)
+            }
+        }).await?;
+        if entity_ids.is_empty() {
+            return Ok(0);
+        }
         let inserted_ids = self
             .with_conn({
                 let eids = entity_ids.clone();
@@ -872,7 +890,25 @@ impl SqliteDatabase {
             return Ok(0);
         }
         let resolved = self.resolve_hashes_batch(hashes).await?;
-        let entity_ids: Vec<i64> = resolved.iter().map(|(_, id)| *id).collect();
+        let all_ids: Vec<i64> = resolved.iter().map(|(_, id)| *id).collect();
+        // Only allow removing active (status=1) entities from folders
+        let entity_ids: Vec<i64> = self.with_read_conn({
+            let ids = all_ids;
+            move |conn| {
+                let mut active = Vec::new();
+                for &eid in &ids {
+                    let status: Option<i64> = conn.query_row(
+                        "SELECT status FROM media_entity WHERE entity_id = ?1",
+                        [eid], |r| r.get(0),
+                    ).ok();
+                    if status == Some(1) { active.push(eid); }
+                }
+                Ok(active)
+            }
+        }).await?;
+        if entity_ids.is_empty() {
+            return Ok(0);
+        }
         let removed = self
             .with_conn({
                 let eids = entity_ids.clone();

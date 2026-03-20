@@ -272,6 +272,12 @@
   position: relative;
 }
 
+.editableFieldExpanded {
+  composes: editableField;
+  height: auto;
+  align-items: flex-start;
+}
+
 .editableFieldColumn {
   composes: editableField;
   flex-direction: column;
@@ -289,6 +295,9 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  user-select: text;
+  -webkit-user-select: text;
+  cursor: text;
 }
 
 .editableFieldPlaceholder {

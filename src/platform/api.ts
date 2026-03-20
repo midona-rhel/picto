@@ -241,10 +241,10 @@ export const api = {
     // PBI-057: Atomic move_folder — reparent + reorder in one transaction.
     moveFolder: (folderId: number, newParentId: number | null, siblingOrder: [number, number][]) =>
       invokeTyped('move_folder', { folder_id: folderId, new_parent_id: newParentId, sibling_order: siblingOrder }) as unknown as Promise<void>,
-    addFiles: (folderId: number, hashes: string[]) =>
-      invokeTyped('add_entities_to_folder', { folder_id: folderId, hashes }),
-    removeFiles: (folderId: number, hashes: string[]) =>
-      invokeTyped('remove_entities_from_folder', { folder_id: folderId, hashes }),
+    addFiles: (folderId: number, hashes: string[], selection?: SelectionQuerySpec) =>
+      invokeTyped('add_entities_to_folder', { folder_id: folderId, hashes, selection: selection ?? null } as never) as unknown as Promise<number>,
+    removeFiles: (folderId: number, hashes: string[], selection?: SelectionQuerySpec) =>
+      invokeTyped('remove_entities_from_folder', { folder_id: folderId, hashes, selection: selection ?? null } as never) as unknown as Promise<number>,
     getFiles: (folderId: number) =>
       invokeTyped('get_folder_files', { folder_id: folderId }),
     getCoverHash: (folderId: number) =>

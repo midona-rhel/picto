@@ -64,6 +64,16 @@ export function useScopedGridPreferences({
   const [scopedGridSortField, setScopedGridSortField] = useState<AppSettings['gridSortField'] | null>(null);
   const [scopedGridSortOrder, setScopedGridSortOrder] = useState<AppSettings['gridSortOrder'] | null>(null);
   const [scopedDisplay, setScopedDisplay] = useState<DisplayOptions | null>(null);
+
+  // Read cached fallback from localStorage for instant display on reload
+  const cachedFallback = useMemo(() => {
+    try {
+      const raw = localStorage.getItem('picto-scope-fallback');
+      if (raw) return JSON.parse(raw) as { viewMode: GridViewMode; targetSize: number; sortField: AppSettings['gridSortField']; sortOrder: AppSettings['gridSortOrder']; display: DisplayOptions };
+    } catch { /* ignore */ }
+    return null;
+  }, []);
+
   const [scopeFallback, setScopeFallback] = useState<{
     viewMode: GridViewMode;
     targetSize: number;
@@ -71,11 +81,11 @@ export function useScopedGridPreferences({
     sortOrder: AppSettings['gridSortOrder'];
     display: DisplayOptions;
   }>({
-    viewMode: defaultGridViewMode,
-    targetSize: defaultGridTargetSize,
-    sortField: defaultSortField,
-    sortOrder: defaultSortOrder,
-    display: defaultDisplayOptions,
+    viewMode: cachedFallback?.viewMode ?? defaultGridViewMode,
+    targetSize: cachedFallback?.targetSize ?? defaultGridTargetSize,
+    sortField: cachedFallback?.sortField ?? defaultSortField,
+    sortOrder: cachedFallback?.sortOrder ?? defaultSortOrder,
+    display: cachedFallback?.display ?? defaultDisplayOptions,
   });
 
   const viewPrefsLoadSeq = useRef(0);
@@ -177,13 +187,15 @@ export function useScopedGridPreferences({
         setScopedGridSortField(nextSortField);
         setScopedGridSortOrder(nextSortOrder);
         setScopedDisplay(nextDisplay);
-        setScopeFallback({
+        const fb = {
           viewMode: nextViewMode,
           targetSize: nextTargetSize,
           sortField: nextSortField,
           sortOrder: nextSortOrder,
           display: nextDisplay,
-        });
+        };
+        setScopeFallback(fb);
+        try { localStorage.setItem('picto-scope-fallback', JSON.stringify(fb)); } catch { /* ignore */ }
       })
       .catch((e) => console.error('Failed to load view prefs:', e));
   }, [

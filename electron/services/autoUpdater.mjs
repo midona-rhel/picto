@@ -19,10 +19,11 @@ export function createAutoUpdaterService({ app, isDev, sendToAllWindows }) {
       checkForUpdates: () => Promise.resolve(null),
       downloadUpdate: () => Promise.resolve(),
       quitAndInstall: () => {},
+      checkAndUpdateOnStartup: () => Promise.resolve(),
     };
   }
 
-  autoUpdater.autoDownload = false;
+  autoUpdater.autoDownload = true;
   autoUpdater.autoInstallOnAppQuit = true;
 
   // Forward all updater events to renderer windows
@@ -71,15 +72,7 @@ export function createAutoUpdaterService({ app, isDev, sendToAllWindows }) {
     });
   });
 
-  // Check once on startup (after a short delay so the window is ready)
-  const STARTUP_CHECK_DELAY_MS = 10_000;
-  setTimeout(() => {
-    autoUpdater.checkForUpdates().catch((err) => {
-      console.warn('[auto-updater] Startup check failed:', err?.message ?? err);
-    });
-  }, STARTUP_CHECK_DELAY_MS);
-
-  // Periodic check every 4 hours
+  // Periodic check every 4 hours (startup check is handled by checkAndUpdateOnStartup)
   const PERIODIC_CHECK_MS = 4 * 60 * 60 * 1000;
   setInterval(() => {
     autoUpdater.checkForUpdates().catch((err) => {
@@ -87,9 +80,42 @@ export function createAutoUpdaterService({ app, isDev, sendToAllWindows }) {
     });
   }, PERIODIC_CHECK_MS);
 
+  /**
+   * Blocking startup update check.
+   * If an update is found within the timeout, downloads and installs it
+   * (app restarts). If no update or timeout, resolves and app continues.
+   */
+  async function checkAndUpdateOnStartup(timeoutMs = 3000) {
+    try {
+      const result = await Promise.race([
+        autoUpdater.checkForUpdates(),
+        new Promise((resolve) => setTimeout(() => resolve(null), timeoutMs)),
+      ]);
+
+      if (!result || !result.updateInfo || result.updateInfo.version === app.getVersion()) {
+        console.info('[auto-updater] No update available or timed out, proceeding');
+        return;
+      }
+
+      console.info(`[auto-updater] Update ${result.updateInfo.version} found, downloading...`);
+
+      // autoDownload=true means download already started — wait for it
+      await new Promise((resolve, reject) => {
+        autoUpdater.once('update-downloaded', resolve);
+        autoUpdater.once('error', reject);
+      });
+
+      console.info('[auto-updater] Update downloaded, installing and restarting...');
+      autoUpdater.quitAndInstall();
+    } catch (err) {
+      console.warn('[auto-updater] Startup update failed, proceeding:', err?.message ?? err);
+    }
+  }
+
   return {
     checkForUpdates: () => autoUpdater.checkForUpdates(),
     downloadUpdate: () => autoUpdater.downloadUpdate(),
     quitAndInstall: () => autoUpdater.quitAndInstall(),
+    checkAndUpdateOnStartup,
   };
 }

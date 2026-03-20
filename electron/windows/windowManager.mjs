@@ -1,3 +1,36 @@
+import fs from 'node:fs';
+
+/** Map theme name to a background color for BrowserWindow creation. */
+const THEME_BG_COLORS = {
+  dark:      '#1a1a1e',
+  blue:      '#0f1732',
+  purple:    '#1e1526',
+  gray:      '#323236',
+  light:     '#ebedef',
+  lightgray: '#d5d7da',
+  auto:      null, // resolved below
+};
+
+/** Try to read the theme from the last library's settings.json synchronously. */
+function getThemeBgColor(getCachedConfig) {
+  try {
+    const config = getCachedConfig();
+    const libraryPath = config?.lastLibrary;
+    if (!libraryPath) return THEME_BG_COLORS.dark;
+    const settingsPath = libraryPath + '/settings.json';
+    const raw = fs.readFileSync(settingsPath, 'utf-8');
+    const settings = JSON.parse(raw);
+    const theme = settings.theme || 'dark';
+    if (theme === 'auto') {
+      // Check OS preference via nativeTheme (imported by caller if needed)
+      return THEME_BG_COLORS.dark; // safe fallback; actual auto handled at CSS level
+    }
+    return THEME_BG_COLORS[theme] || THEME_BG_COLORS.dark;
+  } catch {
+    return THEME_BG_COLORS.dark;
+  }
+}
+
 const MAIN_WINDOW_DEFAULT_WIDTH = 1200;
 const MAIN_WINDOW_DEFAULT_HEIGHT = 800;
 const MAIN_WINDOW_MIN_WIDTH = 700;
@@ -121,6 +154,7 @@ export function createWindowManager({
     const savedMainState = isMain ? getSavedMainWindowState() : null;
     const initialWidth = savedMainState?.width ?? width;
     const initialHeight = savedMainState?.height ?? height;
+    const themeBg = getThemeBgColor(getCachedConfig);
     const winOpts = {
       width: initialWidth,
       height: initialHeight,
@@ -133,7 +167,7 @@ export function createWindowManager({
             fullscreenable: false,
             frame: false,
             transparent: false,
-            backgroundColor: '#1e1e22',
+            backgroundColor: themeBg,
           }
         : isSubscriptions
           ? {
@@ -146,13 +180,13 @@ export function createWindowManager({
               fullscreenable: false,
               frame: false,
               transparent: false,
-              backgroundColor: '#1e1e22',
+              backgroundColor: themeBg,
             }
           : isDetail
             ? {
                 frame: false,
                 transparent: false,
-                backgroundColor: '#1a1a1a',
+                backgroundColor: themeBg,
               }
             : {
                 ...(isMac
@@ -160,12 +194,12 @@ export function createWindowManager({
                       frame: true,
                       titleBarStyle: 'hiddenInset',
                       transparent: false,
-                      backgroundColor: '#0f1115',
+                      backgroundColor: themeBg,
                     }
                   : {
                       frame: false,
                       transparent: false,
-                      backgroundColor: '#0f1115',
+                      backgroundColor: themeBg,
                     }),
               }),
       show: false,
@@ -375,7 +409,7 @@ export function createWindowManager({
       fullscreenable: false,
       frame: false,
       transparent: false,
-      backgroundColor: '#1e1e22',
+      backgroundColor: getThemeBgColor(getCachedConfig),
       ...(mainWin && !mainWin.isDestroyed() ? { parent: mainWin } : {}),
       show: true,
       webPreferences: {

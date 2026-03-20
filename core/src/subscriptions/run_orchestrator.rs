@@ -111,8 +111,9 @@ impl SubscriptionRunOrchestrator {
             map.insert(id.clone(), cancel.clone());
         }
 
+        let run_clock = std::time::Instant::now();
         publish_start(&id, &sub.name, "subscription", None, None);
-        tracing::info!(subscription_id = %id, name = %sub.name, queries = queries.len(), "subscription run starting");
+        tracing::info!(subscription_id = %id, name = %sub.name, queries = queries.len(), elapsed_ms = run_clock.elapsed().as_millis(), "subscription run starting");
 
         let db = db.clone();
         let blob_store = blob_store.clone();
@@ -141,7 +142,9 @@ impl SubscriptionRunOrchestrator {
         let sub_name_guard = sub_name.clone();
 
         tokio::spawn(async move {
+            tracing::info!(elapsed_ms = run_clock.elapsed().as_millis(), "orchestrator: outer spawn entered");
             let inner = tokio::spawn(async move {
+                tracing::info!(elapsed_ms = run_clock.elapsed().as_millis(), "orchestrator: inner spawn entered");
                 let mut total_errors = 0usize;
                 let mut last_error: Option<String> = None;
                 let mut last_failure_kind: Option<String> = None;
@@ -153,6 +156,7 @@ impl SubscriptionRunOrchestrator {
                 let mut last_metadata_error: Option<String> = None;
 
                 let engine_result = SubscriptionSyncEngine::new(&db, &blob_store, &app_settings);
+                tracing::info!(elapsed_ms = run_clock.elapsed().as_millis(), "orchestrator: engine created");
                 match engine_result {
                     Ok(engine) => {
                         let mut engine = engine
@@ -162,6 +166,7 @@ impl SubscriptionRunOrchestrator {
                                 auto_merge_distance,
                                 auto_merge_require_matching_dimensions,
                             );
+                        tracing::info!(elapsed_ms = run_clock.elapsed().as_millis(), "orchestrator: starting queries");
                         for query in &queries {
                             if cancel.is_cancelled() {
                                 was_cancelled = true;

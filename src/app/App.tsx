@@ -22,6 +22,7 @@ import { useAppBootstrap } from './useAppBootstrap';
 import { useCommandPalette } from './useCommandPalette';
 import { useInspectorState } from '../features/inspector/hooks/useInspectorState';
 import { useGridFeatureState } from '../features/grid/hooks/useGridFeatureState';
+import { UpdateBanner } from '../shared/components/UpdateBanner';
 import styles from './App.module.css';
 
 const isMac = navigator.platform.includes('Mac');
@@ -312,6 +313,7 @@ function App() {
     <div
       className={`${styles.root} ${shellVisible ? styles.shellVisible : styles.shellHidden}`}
     >
+      <UpdateBanner />
       {/* Titlebar */}
       <div
         onMouseDown={handleTitlebarMouseDown}

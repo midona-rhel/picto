@@ -7,6 +7,8 @@ export interface LibraryInfo {
   isCurrent: boolean;
   isPinned: boolean;
   exists: boolean;
+  icon: string | null;
+  color: string | null;
 }
 
 interface LibraryState {
@@ -23,6 +25,8 @@ interface LibraryState {
   togglePin: (path: string) => Promise<void>;
   renameLibrary: (path: string, newName: string) => Promise<void>;
   relocateLibrary: (oldPath: string) => Promise<void>;
+  setLibraryIcon: (path: string, icon: string | null) => Promise<void>;
+  setLibraryColor: (path: string, color: string | null) => Promise<void>;
   getLibraryInfo: () => Promise<{ path: string; name: string; file_count: number } | null>;
   setSwitching: (value: boolean) => void;
 }
@@ -40,12 +44,15 @@ export const useLibraryStore = create<LibraryState>((set) => ({
   loadConfig: async () => {
     const config = await libraryHost.getConfig();
     const existsMap = config.existsMap ?? {};
+    const metaMap = config.libraryMeta ?? {};
     const libraries: LibraryInfo[] = (config.libraryHistory ?? []).map((p) => ({
       path: p,
       name: libraryDisplayName(p),
       isCurrent: p === config.currentPath,
       isPinned: (config.pinnedLibraries ?? []).includes(p),
       exists: existsMap[p] ?? true,
+      icon: metaMap[p]?.icon ?? null,
+      color: metaMap[p]?.color ?? null,
     }));
     set({ libraries, currentPath: config.currentPath });
   },
@@ -84,6 +91,16 @@ export const useLibraryStore = create<LibraryState>((set) => ({
 
   relocateLibrary: async (oldPath) => {
     await libraryHost.relocate(oldPath);
+    await useLibraryStore.getState().loadConfig();
+  },
+
+  setLibraryIcon: async (path, icon) => {
+    await libraryHost.setMeta(path, { icon });
+    await useLibraryStore.getState().loadConfig();
+  },
+
+  setLibraryColor: async (path, color) => {
+    await libraryHost.setMeta(path, { color });
     await useLibraryStore.getState().loadConfig();
   },
 

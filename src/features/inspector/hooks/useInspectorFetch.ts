@@ -94,7 +94,22 @@ export function useInspectorFetch(
 
   useEffect(() => {
     if (selectionSummarySpec) {
-      setFileFolders([]);
+      // Virtual selection (Select All): check if scope is a folder
+      const scopeSpec = selectionSummarySpec.scope;
+      if (scopeSpec?.kind === 'folder' && scopeSpec.folder_id) {
+        api.folders.list()
+          .then((folders) => {
+            const folder = folders.find((f: { folder_id: number }) => f.folder_id === scopeSpec.folder_id);
+            if (folder) {
+              setFileFolders([{ folder_id: folder.folder_id, folder_name: folder.name }]);
+            } else {
+              setFileFolders([]);
+            }
+          })
+          .catch(() => setFileFolders([]));
+      } else {
+        setFileFolders([]);
+      }
       return;
     }
     if (selectedCollection) {
@@ -111,9 +126,23 @@ export function useInspectorFetch(
       api.folders.getFileFolders(selectedImages[0].hash)
         .then(setFileFolders)
         .catch(() => setFileFolders([]));
-    } else {
-      // Multi-file: folders not shown (consistent with virtual selection)
-      setFileFolders([]);
+    } else if (selectedImages.length > 1) {
+      // Multi-file: compute shared folders (folders ALL selected files belong to)
+      const hashes = selectedImages.slice(0, 200).map((i) => i.hash); // cap for perf
+      Promise.all(hashes.map((h) => api.folders.getFileFolders(h).catch(() => [] as FolderMembership[])))
+        .then((allFolders) => {
+          if (allFolders.length === 0) { setFileFolders([]); return; }
+          // Intersect: only keep folders present in ALL files
+          const firstIds = new Set(allFolders[0].map((f) => f.folder_id));
+          for (let i = 1; i < allFolders.length; i++) {
+            const ids = new Set(allFolders[i].map((f) => f.folder_id));
+            for (const id of firstIds) {
+              if (!ids.has(id)) firstIds.delete(id);
+            }
+          }
+          setFileFolders(allFolders[0].filter((f) => firstIds.has(f.folder_id)));
+        })
+        .catch(() => setFileFolders([]));
     }
   }, [selectedHashesKey, selectionSummarySpec, selectedCollection]);
 

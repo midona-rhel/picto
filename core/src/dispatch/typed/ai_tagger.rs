@@ -254,6 +254,29 @@ pub async fn ai_tag_apply(
     }
 
     if count > 0 {
+        // Sync parent collection metadata for any tagged files that are collection members
+        let hashes = input.hashes.clone();
+        state.db.with_conn(move |conn| {
+            let mut synced = std::collections::HashSet::new();
+            for hash in &hashes {
+                let file_id: Option<i64> = conn.query_row(
+                    "SELECT file_id FROM file WHERE hash = ?1", [hash], |r| r.get(0),
+                ).ok();
+                if let Some(fid) = file_id {
+                    let parent: Option<i64> = conn.query_row(
+                        "SELECT parent_collection_id FROM media_entity WHERE entity_id = ?1",
+                        [fid], |r| r.get(0),
+                    ).ok().flatten();
+                    if let Some(cid) = parent {
+                        if synced.insert(cid) {
+                            let _ = crate::folders::collections_db::sync_collection_aggregate_metadata(conn, cid);
+                        }
+                    }
+                }
+            }
+            Ok(())
+        }).await?;
+
         crate::events::emit_mutation(
             "ai_tag_apply",
             crate::runtime_contract::mutation_builder::MutationImpact::new()

@@ -67,11 +67,11 @@ pub struct RunOptions {
     pub cancel: CancellationToken,
 }
 
-/// Result of a gallery-dl invocation.
-pub struct RunResult {
-    pub items: Vec<DownloadedItem>,
+/// Summary of a gallery-dl invocation (no items — those are streamed via channel).
+pub struct RunSummary {
     pub exit_code: i32,
     pub stderr_output: String,
+    pub temp_dir: PathBuf,
 }
 
 /// A single file downloaded by gallery-dl, paired with its parsed metadata.
@@ -109,9 +109,20 @@ impl GalleryDlRunner {
         Self { binary_path }
     }
 
-    /// Run gallery-dl and return downloaded items with parsed metadata.
-    pub async fn run(&self, opts: &RunOptions) -> Result<RunResult, String> {
+    pub fn binary_path(&self) -> &PathBuf {
+        &self.binary_path
+    }
+
+    /// Run gallery-dl, streaming downloaded items through `item_tx` as they arrive.
+    /// Returns a summary (exit code, stderr) after the process finishes.
+    pub async fn run(
+        &self,
+        opts: &RunOptions,
+        item_tx: tokio::sync::mpsc::Sender<DownloadedItem>,
+    ) -> Result<RunSummary, String> {
+        let run_start = std::time::Instant::now();
         self.ensure_runtime_dependencies().await?;
+        info!(elapsed_ms = run_start.elapsed().as_millis(), "gallery-dl: deps checked");
 
         // 1. Create temp download directory
         let temp_dir =
@@ -133,7 +144,7 @@ impl GalleryDlRunner {
         let mut args = vec![
             "--config".to_string(),
             config_path.display().to_string(),
-            "--config-ignore".to_string(), // don't read user's default configs
+            "--config-ignore".to_string(),
             "--write-metadata".to_string(),
             "--no-input".to_string(),
             "-d".to_string(),
@@ -141,9 +152,6 @@ impl GalleryDlRunner {
         ];
 
         if let Some(limit) = opts.file_limit {
-            // Use --post-range instead of --range so multi-image posts
-            // aren't split mid-collection. Each post counts as 1 toward
-            // the limit regardless of how many images it contains.
             let start = opts.range_start.max(1);
             let end = start.saturating_add(limit).saturating_sub(1);
             args.push("--post-range".to_string());
@@ -167,6 +175,7 @@ impl GalleryDlRunner {
             file_limit = ?opts.file_limit,
             range_start = opts.range_start,
             abort_threshold = ?opts.abort_threshold,
+            elapsed_ms = run_start.elapsed().as_millis(),
             "Spawning gallery-dl"
         );
         debug!(binary = %self.binary_path.display(), args = ?args, "gallery-dl command");
@@ -180,9 +189,53 @@ impl GalleryDlRunner {
             .spawn()
             .map_err(|e| format!("Failed to spawn gallery-dl: {e}"))?;
 
-        // 5. Capture stderr handle, then wait for exit or cancellation
-        let child_stderr = child.stderr.take();
         let child_stdout = child.stdout.take();
+        let child_stderr = child.stderr.take();
+
+        // 5. Stream stdout: each line is a downloaded file path.
+        //    Parse its sidecar and send through channel for immediate import.
+        use tokio::io::{AsyncBufReadExt, BufReader};
+        let stdout_handle = tokio::spawn(async move {
+            if let Some(out) = child_stdout {
+                let mut reader = BufReader::new(out).lines();
+                while let Ok(Some(line)) = reader.next_line().await {
+                    let trimmed = line.trim().to_string();
+                    if trimmed.is_empty() {
+                        continue;
+                    }
+                    let path = PathBuf::from(&trimmed);
+                    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+                    if ext == "json" || !path.is_file() {
+                        continue;
+                    }
+
+                    let metadata = filesystem::parse_sidecar_for_file(&path);
+                    if item_tx
+                        .send(DownloadedItem {
+                            file_path: path,
+                            metadata,
+                        })
+                        .await
+                        .is_err()
+                    {
+                        break; // receiver dropped
+                    }
+                }
+            }
+        });
+
+        let stderr_handle = tokio::spawn(async move {
+            let mut output = String::new();
+            if let Some(err) = child_stderr {
+                let mut reader = BufReader::new(err).lines();
+                while let Ok(Some(line)) = reader.next_line().await {
+                    debug!(line, "gallery-dl stderr");
+                    output.push_str(&line);
+                    output.push('\n');
+                }
+            }
+            output
+        });
 
         let status = tokio::select! {
             _ = opts.cancel.cancelled() => {
@@ -197,39 +250,17 @@ impl GalleryDlRunner {
         };
 
         let exit_code = status.code().unwrap_or(-1);
+        let _ = stdout_handle.await;
+        let stderr = stderr_handle.await.unwrap_or_default();
 
-        // Read stderr for logging
-        let stderr = if let Some(mut se) = child_stderr {
-            use tokio::io::AsyncReadExt;
-            let mut buf = Vec::new();
-            let _ = se.read_to_end(&mut buf).await;
-            String::from_utf8_lossy(&buf).to_string()
-        } else {
-            String::new()
-        };
-        drop(child_stdout);
+        info!(exit_code, elapsed_ms = run_start.elapsed().as_millis(), "gallery-dl finished");
 
-        if !stderr.is_empty() {
-            for line in stderr.lines().take(20) {
-                debug!(line, "gallery-dl stderr");
-            }
-        }
-
-        info!(exit_code, "gallery-dl finished");
-
-        // 6. Scan output directory for downloaded files + metadata sidecars
-        let items = scan_output_dir(&temp_dir).await?;
-
-        // Note: Rule34 tag enrichment (category lookup via API) is deferred
-        // to AFTER import so files appear quickly. The sync engine handles it.
-
-        // 7. Clean up temp config (leave downloaded files for caller to import)
         let _ = tokio::fs::remove_file(&config_path).await;
 
-        Ok(RunResult {
-            items,
+        Ok(RunSummary {
             exit_code,
             stderr_output: stderr,
+            temp_dir,
         })
     }
 
