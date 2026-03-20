@@ -33,7 +33,7 @@ interface GridMutationActions {
 /*  Shared helpers                                                     */
 /* ------------------------------------------------------------------ */
 
-const plural = (n: number) => `${n.toLocaleString()} image${n === 1 ? '' : 's'}`;
+const plural = (n: number) => `${n.toLocaleString()} item${n === 1 ? '' : 's'}`;
 
 /** Run a status-change mutation on the current selection, with undo/redo and notification. */
 function statusMutation(
@@ -167,7 +167,7 @@ export function useGridMutationActions({
     api.file.setStatus(hash, status)
       .then(() => {
         registerUndoAction({
-          label: status === 'active' ? 'Accept inbox image' : 'Reject inbox image',
+          label: status === 'active' ? 'Accept inbox item' : 'Reject inbox item',
           undo: async () => { await api.file.setStatus(hash, 'inbox'); },
           redo: async () => { await api.file.setStatus(hash, status); },
         });

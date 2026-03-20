@@ -285,12 +285,7 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
           if (sharedBaseName) {
             collectionName = sharedBaseName;
           } else if (!allGenerated && memberNames.length > 0) {
-            const suggested = memberNames[0];
-            const entered = window.prompt('Collection name:', suggested);
-            if (entered == null) return;
-            const trimmed = entered.trim();
-            if (!trimmed) return;
-            collectionName = trimmed;
+            collectionName = memberNames[0];
           }
           try {
             const id = await api.collections.create({ name: collectionName.trim() });
@@ -327,21 +322,10 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
         label: 'Merge Collections',
         icon: <IconGitMerge />,
         onClick: async () => {
-          const names = selCollections.map((c, i) => `${i + 1}. ${c.name ?? 'Untitled'}`).join('\n');
-          const choice = window.prompt(
-            `Which collection should survive?\n\n${names}\n\nEnter number:`,
-            '1',
-          );
-          if (choice == null) return;
-          const idx = parseInt(choice.trim(), 10) - 1;
-          if (idx < 0 || idx >= selCollections.length || !Number.isFinite(idx)) {
-            notifyError('Invalid selection', 'Merge Failed');
-            return;
-          }
-          const target = selCollections[idx];
+          const target = selCollections[0];
           const targetId = target.entity_id;
           if (targetId == null) return;
-          const others = selCollections.filter((_, i) => i !== idx);
+          const others = selCollections.slice(1);
           try {
             // Move members from each non-target collection into target
             for (const other of others) {
@@ -395,7 +379,7 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
     const bulkInboxAction = !!effectiveVirtual || effectiveSize > 1;
     items.push({
       type: 'item',
-      label: bulkInboxAction ? `Accept ${effectiveSize} Image${effectiveSize === 1 ? '' : 's'}` : 'Accept',
+      label: bulkInboxAction ? `Accept ${effectiveSize} Item${effectiveSize === 1 ? '' : 's'}` : 'Accept',
       icon: <IconCheck />,
       onClick: () => {
         if (bulkInboxAction) handleInboxSelectionAction('active');
@@ -404,7 +388,7 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
     });
     items.push({
       type: 'item',
-      label: bulkInboxAction ? `Reject ${effectiveSize} Image${effectiveSize === 1 ? '' : 's'}` : 'Reject',
+      label: bulkInboxAction ? `Reject ${effectiveSize} Item${effectiveSize === 1 ? '' : 's'}` : 'Reject',
       icon: <IconX />,
       onClick: () => {
         if (bulkInboxAction) handleInboxSelectionAction('trash');
@@ -754,7 +738,7 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
     const freshHash = rightClickedHash && !wasAlreadySelected ? rightClickedHash : null;
     items.push({
       type: 'item',
-      label: `Remove ${selCount > 1 ? `${selCount} Images` : 'Image'} from Folder`,
+      label: `Remove ${selCount > 1 ? `${selCount} Items` : 'Item'} from Folder`,
       icon: <IconFolderMinus size={16} />,
       shortcut: isMac ? '\u2318\u21E7\u232B' : 'Ctrl+Shift+Del',
       onClick: () => {
@@ -793,7 +777,7 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
         api.files.setStatus(freshSingleHash, 'active')
           .then(() => {
             registerUndoAction({
-              label: 'Restore image',
+              label: 'Restore item',
               undo: async () => {
                 await api.files.setStatus(freshSingleHash, 'trash');
                     },
@@ -815,11 +799,11 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
           api.files.deleteMany([freshSingleHash])
             .catch(err => notifyError(err, 'Delete Failed'));
         } else {
-          const previousStatus = freshImage?.status ?? (statusFilter ?? 'active');
+          const previousStatus = imagesRef.current.find((img) => img.hash === freshSingleHash)?.status ?? (statusFilter ?? 'active');
           api.files.setStatus(freshSingleHash, 'trash')
             .then(() => {
               registerUndoAction({
-                label: 'Move image to trash',
+                label: 'Move to trash',
                 undo: async () => {
                   await api.files.setStatus(freshSingleHash, previousStatus);
                         },
@@ -840,9 +824,9 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
         type: 'item',
         label: effectiveVirtual
           ? (virtualCount != null
-            ? `Restore ${virtualCount.toLocaleString()} Image${virtualCount === 1 ? '' : 's'}`
-            : 'Restore All Matching Images')
-          : `Restore ${count} Image${count > 1 ? 's' : ''}`,
+            ? `Restore ${virtualCount.toLocaleString()} Item${virtualCount === 1 ? '' : 's'}`
+            : 'Restore All')
+          : `Restore ${count} Item${count > 1 ? 's' : ''}`,
         icon: <IconArrowBackUp />,
         onClick: doRestore,
       });
@@ -853,14 +837,14 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
         label: inTrash
           ? (effectiveVirtual
             ? (virtualCount != null
-              ? `Permanently Delete ${virtualCount.toLocaleString()} Image${virtualCount === 1 ? '' : 's'}`
+              ? `Permanently Delete ${virtualCount.toLocaleString()} Item${virtualCount === 1 ? '' : 's'}`
               : 'Permanently Delete All')
-            : `Permanently Delete ${count} Image${count > 1 ? 's' : ''}`)
+            : `Permanently Delete ${count} Item${count > 1 ? 's' : ''}`)
           : (effectiveVirtual
             ? (virtualCount != null
-              ? `Move ${virtualCount.toLocaleString()} Image${virtualCount === 1 ? '' : 's'} to Trash`
-              : 'Move All Matching Images to Trash')
-            : `Move ${count} Image${count > 1 ? 's' : ''} to Trash`),
+              ? `Move ${virtualCount.toLocaleString()} Item${virtualCount === 1 ? '' : 's'} to Trash`
+              : 'Move All to Trash')
+            : `Move ${count} Item${count > 1 ? 's' : ''} to Trash`),
         icon: <IconTrash />,
         shortcut: isMac ? '\u2318\u232B' : 'Del',
         danger: inTrash,

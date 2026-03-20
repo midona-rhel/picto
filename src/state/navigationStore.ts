@@ -86,17 +86,25 @@ export function deriveNavigationTitle(state: { activeFolderLabel?: string | null
   const statusFilter = state.activeStatusFilter ?? state.statusFilter;
   const filterTags = state.filterTags;
   const view = state.currentView ?? state.view ?? 'images';
-  if (filterTags && filterTags.length > 0) return filterTags.join(', ');
-  if (folderLabel) return folderLabel;
-  if (smartFolderLabel) return smartFolderLabel;
-  if (collectionLabel) return collectionLabel;
-  if (collectionId != null) return `Collection ${collectionId}`;
-  if (statusFilter === 'inbox') return 'Inbox';
-  if (statusFilter === 'uncategorized') return 'Uncategorized';
-  if (statusFilter === 'trash') return 'Trash';
-  if (statusFilter === 'untagged') return 'Untagged';
-  if (statusFilter === 'random') return 'Random';
-  return VIEW_LABELS[view];
+  // Derive parent scope label
+  let parentLabel: string | null = null;
+  if (filterTags && filterTags.length > 0) parentLabel = filterTags.join(', ');
+  else if (folderLabel) parentLabel = folderLabel;
+  else if (smartFolderLabel) parentLabel = smartFolderLabel;
+  else if (statusFilter === 'inbox') parentLabel = 'Inbox';
+  else if (statusFilter === 'uncategorized') parentLabel = 'Uncategorized';
+  else if (statusFilter === 'trash') parentLabel = 'Trash';
+  else if (statusFilter === 'untagged') parentLabel = 'Untagged';
+  else if (statusFilter === 'random') parentLabel = 'Random';
+
+  // Collection breadcrumb: "Parent > Collection"
+  const collName = collectionLabel ?? (collectionId != null ? `Collection ${collectionId}` : null);
+  if (collName) {
+    const parent = parentLabel ?? VIEW_LABELS[view];
+    return `${parent} / ${collName}`;
+  }
+
+  return parentLabel ?? VIEW_LABELS[view];
 }
 
 export const useNavigationStore = create<NavigationState>((set, get) => ({
@@ -243,11 +251,11 @@ export const useNavigationStore = create<NavigationState>((set, get) => ({
     const trimmed = state.history.slice(0, state.historyIndex + 1);
     const entry: HistoryEntry = {
       view: 'images',
-      smartFolderId: null,
-      folderId: null,
+      smartFolderId: state.activeSmartFolderId,
+      folderId: state.activeFolderId,
       collectionId,
-      statusFilter: null,
-      filterTags: null,
+      statusFilter: state.activeStatusFilter,
+      filterTags: state.filterTags,
       scrollTop: 0,
       loadedItemCount: 0,
       randomSeed: null,
@@ -257,11 +265,8 @@ export const useNavigationStore = create<NavigationState>((set, get) => ({
 
     set({
       currentView: 'images',
-      activeSmartFolderId: null,
-      activeFolderId: null,
+      // Preserve parent scope for sidebar highlight
       activeCollectionId: collectionId,
-      activeStatusFilter: null,
-      filterTags: null,
       pendingScrollRestore: null, pendingLoadedItemCount: 0, pendingRandomSeed: null,
       history: newHistory,
       historyIndex: newIndex,

@@ -12,7 +12,6 @@ use super::support::{has_column, table_exists};
             "file_color",
             "media_entity",
             "entity_file",
-            "collection_member",
             "collection_tag",
             "tag",
             "entity_tag_raw",
@@ -158,7 +157,6 @@ use super::support::{has_column, table_exists};
         for table in &[
             "media_entity",
             "entity_file",
-            "collection_member",
             "collection_tag",
         ] {
             let exists: bool = conn

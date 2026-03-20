@@ -374,7 +374,7 @@ export function ImageGridControls({
   // ========================================================================
   return (
     <div className={st.toolbar} ref={toolbarRef}>
-      {/* Left: back/forward + title */}
+      {/* Left: back/forward buttons only */}
       <div className={st.leftSection}>
         <div className={st.icBtnGroup}>
           <KbdTooltip label="Back" shortcut="Mod+ArrowLeft">
@@ -394,8 +394,9 @@ export function ImageGridControls({
             </button>
           </KbdTooltip>
         </div>
-        {showTitle && title && <span className={st.title}>{title}</span>}
       </div>
+      {/* Title — absolutely positioned so it doesn't push the zoom bar off center */}
+      {showTitle && title && <span className={st.title}>{title}</span>}
 
       {/* Center: size controls — centered between left and right */}
       {showZoomPanel ? (

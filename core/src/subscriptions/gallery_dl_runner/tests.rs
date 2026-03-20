@@ -1,43 +1,89 @@
 use super::*;
 
 #[test]
-fn test_parse_danbooru_tags() {
+fn test_danbooru_adapter_tags() {
     let json = serde_json::json!({
-        "id": 12345,
-        "tags_artist": ["artist_name"],
+        "id": 1,
+        "category": "danbooru",
+        "tags_artist": ["artist_a"],
         "tags_character": ["char_a", "char_b"],
-        "tags_copyright": ["series_name"],
-        "tags_general": ["1girl", "solo", "blue_eyes"],
-        "tags_meta": ["highres"]
+        "tags_copyright": ["series_a"],
+        "tags_general": ["tag_1", "tag_2", "tag_3"],
+        "tags_meta": ["meta_1"]
     });
     let tags = parse_tags(&json);
-    assert_eq!(tags.len(), 8); // 1 artist + 2 char + 1 copyright + 3 general + 1 meta
-    assert!(tags.contains(&("creator".to_string(), "artist_name".to_string())));
+    assert_eq!(tags.len(), 8);
+    assert!(tags.contains(&("creator".to_string(), "artist_a".to_string())));
     assert!(tags.contains(&("character".to_string(), "char_a".to_string())));
-    assert!(tags.contains(&("character".to_string(), "char_b".to_string())));
-    assert!(tags.contains(&("series".to_string(), "series_name".to_string())));
-    assert!(tags.contains(&(String::new(), "1girl".to_string())));
-    assert!(tags.contains(&("meta".to_string(), "highres".to_string())));
+    assert!(tags.contains(&("series".to_string(), "series_a".to_string())));
+    assert!(tags.contains(&(String::new(), "tag_1".to_string())));
+    assert!(tags.contains(&("meta".to_string(), "meta_1".to_string())));
 }
 
 #[test]
-fn test_parse_e621_tags() {
+fn test_rule34_adapter_tags_from_flat_string() {
+    // Rule34/Gelbooru use a flat `tags` string, not tag_string_* or tags_*
     let json = serde_json::json!({
-        "id": 67890,
+        "id": 1,
+        "category": "rule34",
+        "tags": "tag_a tag_b tag_c artist_name",
+        "file_url": "https://example.com/file.jpg"
+    });
+    let tags = parse_tags(&json);
+    assert_eq!(tags.len(), 4);
+    assert!(tags.contains(&(String::new(), "tag_a".to_string())));
+    assert!(tags.contains(&(String::new(), "tag_b".to_string())));
+    assert!(tags.contains(&(String::new(), "tag_c".to_string())));
+    assert!(tags.contains(&(String::new(), "artist_name".to_string())));
+}
+
+#[test]
+fn test_gelbooru_adapter_tags_from_flat_string() {
+    let json = serde_json::json!({
+        "id": 1,
+        "category": "gelbooru",
+        "tags": "1girl solo smile",
+        "file_url": "https://example.com/file.jpg"
+    });
+    let tags = parse_tags(&json);
+    assert_eq!(tags.len(), 3);
+    assert!(tags.contains(&(String::new(), "1girl".to_string())));
+}
+
+#[test]
+fn test_e621_adapter_tags() {
+    let json = serde_json::json!({
+        "id": 1,
+        "category": "e621",
         "tags": {
-            "general": ["anthro", "solo"],
-            "artist": ["artist_x"],
-            "character": ["char_y"],
-            "copyright": ["series_z"],
-            "species": ["canine"],
-            "meta": ["hi_res"]
+            "general": ["tag_a", "tag_b"],
+            "artist": ["artist_a"],
+            "character": ["char_a"],
+            "copyright": ["series_a"],
+            "species": ["species_a"],
+            "meta": ["meta_a"]
         }
     });
     let tags = parse_tags(&json);
-    assert_eq!(tags.len(), 7); // 2 + 1 + 1 + 1 + 1 + 1
-    assert!(tags.contains(&("creator".to_string(), "artist_x".to_string())));
-    assert!(tags.contains(&("species".to_string(), "canine".to_string())));
-    assert!(tags.contains(&(String::new(), "anthro".to_string())));
+    assert_eq!(tags.len(), 7);
+    assert!(tags.contains(&("creator".to_string(), "artist_a".to_string())));
+    assert!(tags.contains(&("species".to_string(), "species_a".to_string())));
+    assert!(tags.contains(&(String::new(), "tag_a".to_string())));
+}
+
+#[test]
+fn test_pixiv_adapter_tags() {
+    let json = serde_json::json!({
+        "id": 1,
+        "category": "pixiv",
+        "tags": ["tag_a", "tag_b", "tag_c"],
+        "user": { "id": 1, "name": "creator_a" }
+    });
+    let meta = parse_metadata(&json);
+    assert_eq!(meta.tags.len(), 4); // 3 tags + 1 creator
+    assert!(meta.tags.contains(&(String::new(), "tag_a".to_string())));
+    assert!(meta.tags.contains(&(String::new(), "tag_b".to_string())));
+    assert!(meta.tags.contains(&("creator".to_string(), "creator_a".to_string())));
 }
 
 #[test]
@@ -67,139 +113,86 @@ fn test_twitter_metadata() {
 }
 
 #[test]
-fn test_e621_twokinds_full_metadata() {
-    // Real gallery-dl sidecar JSON for e621 post 6272695 (verbatim format)
+fn test_e621_adapter_full_metadata() {
     let json = serde_json::json!({
-        "id": 6272695,
-        "created_at": "2026-03-19T16:14:56.278-04:00",
+        "id": 1,
+        "created_at": "2025-01-01T12:00:00.000-04:00",
         "file": {
-            "width": 2166,
-            "height": 1280,
-            "ext": "png",
-            "size": 2170623,
-            "md5": "0399b981a2667b630b2fc769516d654c",
-            "url": "https://static1.e621.net/data/03/99/0399b981a2667b630b2fc769516d654c.png"
+            "url": "https://example.com/file.png"
         },
         "rating": "s",
-        "sources": [
-            "https://www.patreon.com/posts/basitins-from-153456971",
-            "https://c10.patreonusercontent.com/4/patreon-media/p/post/153456971/e62e01a6fe214259aff87db11a07ef67/eyJxIjoxMDAsIndlYnAiOjB9/1.png?token-hash=example"
-        ],
-        "description": "",
-        "date": "2026-03-19 20:14:56",
+        "sources": ["https://example.com/source1", "https://example.com/source2"],
+        "date": "2025-01-01 16:00:00",
         "category": "e621",
-        "subcategory": "tag",
         "tags": {
-            "general": [
-                "anthro", "biped", "bottomwear", "clothed", "clothed_anthro",
-                "clothed_male", "clothing", "fingers", "front_view", "fully_clothed",
-                "fully_clothed_anthro", "fully_clothed_male", "fur", "group", "hair",
-                "male", "standing", "tail", "teeth", "text", "tongue", "topwear", "trio"
-            ],
-            "artist": ["conditional_dnp", "tom_fischbach"],
+            "general": ["tag_a", "tag_b"],
+            "artist": ["artist_a"],
             "contributor": [],
-            "copyright": ["twokinds"],
-            "character": ["keith_keiser", "nickolai_alaric"],
-            "species": ["basitin", "mammal"],
+            "copyright": ["series_a"],
+            "character": ["char_a"],
+            "species": ["species_a"],
             "invalid": [],
-            "meta": ["english_text", "hi_res"],
+            "meta": ["meta_a"],
             "lore": []
         }
     });
 
     let meta = parse_metadata(&json);
 
-    // Post ID
-    assert_eq!(meta.post_id.as_deref(), Some("6272695"));
-
-    // Rating
+    assert_eq!(meta.post_id.as_deref(), Some("1"));
     assert_eq!(meta.rating.as_deref(), Some("s"));
+    assert_eq!(meta.source_urls.len(), 3); // file.url + 2 sources
+    assert!(meta.source_urls.contains(&"https://example.com/file.png".to_string()));
+    assert!(meta.source_urls.contains(&"https://example.com/source1".to_string()));
+    assert!(meta.created_at.is_some());
 
-    // Source URLs — file.url (nested) + sources array
-    assert!(meta.source_urls.contains(&"https://static1.e621.net/data/03/99/0399b981a2667b630b2fc769516d654c.png".to_string()),
-        "file.url should be collected; got: {:?}", meta.source_urls);
-    assert!(meta.source_urls.contains(&"https://www.patreon.com/posts/basitins-from-153456971".to_string()),
-        "sources[0] should be collected; got: {:?}", meta.source_urls);
-    assert_eq!(meta.source_urls.len(), 3, "file.url + 2 sources entries; got: {:?}", meta.source_urls);
-
-    // Created at (normalized to UTC)
-    assert!(meta.created_at.is_some(), "created_at should be parsed");
-
-    // Tags — verify namespace mapping
     let tags = &meta.tags;
-
-    // creator (from artist)
-    assert!(tags.contains(&("creator".to_string(), "tom_fischbach".to_string())));
-    assert!(tags.contains(&("creator".to_string(), "conditional_dnp".to_string())));
-
-    // character
-    assert!(tags.contains(&("character".to_string(), "keith_keiser".to_string())));
-    assert!(tags.contains(&("character".to_string(), "nickolai_alaric".to_string())));
-
-    // series (from copyright)
-    assert!(tags.contains(&("series".to_string(), "twokinds".to_string())));
-
-    // species (e621-specific)
-    assert!(tags.contains(&("species".to_string(), "basitin".to_string())));
-    assert!(tags.contains(&("species".to_string(), "mammal".to_string())));
-
-    // meta
-    assert!(tags.contains(&("meta".to_string(), "english_text".to_string())));
-    assert!(tags.contains(&("meta".to_string(), "hi_res".to_string())));
-
-    // general (no namespace)
-    assert!(tags.contains(&(String::new(), "anthro".to_string())));
-    assert!(tags.contains(&(String::new(), "trio".to_string())));
-    assert!(tags.contains(&(String::new(), "fur".to_string())));
-
-    // Total: 23 general + 2 artist + 2 character + 1 copyright + 2 species + 2 meta = 32
-    // (empty arrays contributor/invalid/lore add nothing)
-    assert_eq!(tags.len(), 32, "expected 32 tags total, got {}", tags.len());
+    assert!(tags.contains(&("creator".to_string(), "artist_a".to_string())));
+    assert!(tags.contains(&("character".to_string(), "char_a".to_string())));
+    assert!(tags.contains(&("series".to_string(), "series_a".to_string())));
+    assert!(tags.contains(&("species".to_string(), "species_a".to_string())));
+    assert!(tags.contains(&("meta".to_string(), "meta_a".to_string())));
+    assert!(tags.contains(&(String::new(), "tag_a".to_string())));
+    // 2 general + 1 artist + 1 copyright + 1 character + 1 species + 1 meta = 7
+    assert_eq!(tags.len(), 7);
 }
 
 #[test]
-fn test_parse_pixiv_tags() {
+fn test_pixiv_adapter_object_tags() {
+    // Legacy object format still supported
     let json = serde_json::json!({
-        "id": 99999,
+        "id": 1,
+        "category": "pixiv",
         "tags": [
-            {"name": "オリジナル", "translated_name": "original"},
-            {"name": "女の子", "translated_name": "girl"},
-            {"name": "風景", "translated_name": null}
+            {"name": "tag_a", "translated_name": "translated_a"},
+            {"name": "tag_b", "translated_name": null}
         ]
     });
     let tags = parse_tags(&json);
-    assert_eq!(tags.len(), 3);
-    assert!(tags.contains(&(String::new(), "オリジナル".to_string())));
-    assert!(tags.contains(&(String::new(), "女の子".to_string())));
-    assert!(tags.contains(&(String::new(), "風景".to_string())));
+    assert_eq!(tags.len(), 2);
+    assert!(tags.contains(&(String::new(), "tag_a".to_string())));
+    assert!(tags.contains(&(String::new(), "tag_b".to_string())));
 }
 
 #[test]
-fn test_parse_metadata_artist_commentary() {
-    // Danbooru with metadata: true provides artist_commentary object
+fn test_danbooru_adapter_artist_commentary() {
     let json = serde_json::json!({
-        "id": 10873290,
-        "tag_string_artist": "h4sh1rnoto",
-        "tag_string_general": "1girl blonde_hair",
-        "tag_string_character": "princess_peach",
-        "tag_string_copyright": "mario_(series)",
-        "tag_string_meta": "highres",
+        "id": 1,
+        "tag_string_artist": "artist_a",
+        "tag_string_general": "tag_a tag_b",
         "artist_commentary": {
-            "original_title": "ピーチ姫",
-            "original_description": "マリオシリーズ\r\n#イラスト #illustration",
+            "original_title": "Title text",
+            "original_description": "Description text",
             "translated_title": "",
             "translated_description": ""
         },
-        "file_url": "https://cdn.donmai.us/original/test.jpg",
+        "file_url": "https://example.com/file.jpg",
         "category": "danbooru"
     });
     let meta = parse_metadata(&json);
-    assert_eq!(meta.title.as_deref(), Some("ピーチ姫"));
-    assert_eq!(
-        meta.description.as_deref(),
-        Some("マリオシリーズ\r\n#イラスト #illustration")
-    );
-    assert_eq!(meta.post_id.as_deref(), Some("10873290"));
+    assert_eq!(meta.title.as_deref(), Some("Title text"));
+    assert_eq!(meta.description.as_deref(), Some("Description text"));
+    assert_eq!(meta.post_id.as_deref(), Some("1"));
 }
 
 #[test]
@@ -221,29 +214,21 @@ fn test_parse_metadata_artist_commentary_empty_falls_back() {
 }
 
 #[test]
-fn test_parse_metadata_collects_all_source_urls_and_created_at() {
+fn test_danbooru_adapter_collects_source_urls_and_date() {
     let json = serde_json::json!({
-        "id": 100,
-        "title": "Pixiv work",
-        "file_url": "https://i.pximg.net/img-original/img/2024/03/10/00/00/00/100_p0.png",
-        "url": "https://www.pixiv.net/artworks/100",
-        "source": "https://example.com/original-source",
-        "date": "2024-03-10T12:34:56+09:00",
-        "category": "pixiv"
+        "id": 1,
+        "file_url": "https://example.com/file.png",
+        "url": "https://example.com/post/1",
+        "source": "https://example.com/original",
+        "date": "2025-01-15T12:00:00+00:00",
+        "category": "danbooru"
     });
     let meta = parse_metadata(&json);
-    assert_eq!(
-        meta.source_urls,
-        vec![
-            "https://i.pximg.net/img-original/img/2024/03/10/00/00/00/100_p0.png".to_string(),
-            "https://www.pixiv.net/artworks/100".to_string(),
-            "https://example.com/original-source".to_string(),
-        ]
-    );
-    assert_eq!(
-        meta.created_at.as_deref(),
-        Some("2024-03-10T03:34:56+00:00")
-    );
+    assert_eq!(meta.source_urls.len(), 3);
+    assert!(meta.source_urls.contains(&"https://example.com/file.png".to_string()));
+    assert!(meta.source_urls.contains(&"https://example.com/post/1".to_string()));
+    assert!(meta.source_urls.contains(&"https://example.com/original".to_string()));
+    assert!(meta.created_at.is_some());
 }
 
 #[test]

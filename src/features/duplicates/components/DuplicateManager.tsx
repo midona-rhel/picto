@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Loader, Text, Kbd } from '@mantine/core';
 import { EmptyState } from '../../../shared/components/EmptyState';
 import { TextButton } from '../../../shared/components/TextButton';
-import { notifySuccess, notifyError, notifyInfo, notifyWarning } from '../../../shared/lib/notify';
+import { notifySuccess, notifyError, notifyInfo } from '../../../shared/lib/notify';
 import {
   IconArrowLeft,
   IconArrowRight,

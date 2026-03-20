@@ -96,13 +96,13 @@ const filesApi = {
   getAllMetadata: (hash: string) =>
     invokeTyped('get_media_entity_metadata', { hash }) as Promise<EntityAllMetadata>,
   setStatus: (hash: string, status: string) =>
-    invokeTyped('update_file_status', { hash, status } as never) as unknown as Promise<void>,
+    invokeTyped('set_entity_status', { hash, status } as never) as unknown as Promise<void>,
   setStatusSelection: (selection: SelectionQuerySpec, status: string) =>
-    invokeTyped('update_file_status', { selection, status } as never),
+    invokeTyped('set_entity_status', { selection, status } as never),
   deleteMany: (hashes: string[]) =>
-    invokeTyped('delete_files', { hashes } as never),
+    invokeTyped('delete_entities', { hashes } as never),
   deleteSelection: (selection: SelectionQuerySpec) =>
-    invokeTyped('delete_files', { selection } as never),
+    invokeTyped('delete_entities', { selection } as never),
   updateRating: (hash: string, rating: number | null) =>
     invokeTyped('update_media_entity_metadata', { hash, rating } as never) as unknown as Promise<void>,
   setName: (hash: string, name: string | null) =>
@@ -351,6 +351,8 @@ export const api = {
       invokeTyped('add_subscription_query', { subscription_id: subscriptionId, query_text: queryText }) as Promise<SubscriptionQueryInfo>,
     deleteQuery: (id: string) =>
       invokeTyped('delete_subscription_query', { id }) as unknown as Promise<void>,
+    editQuery: (id: number, queryText: string, displayName?: string | null) =>
+      invoke<void>('edit_subscription_query', { id, query_text: queryText, display_name: displayName ?? null }),
     pauseQuery: (id: string, paused: boolean) =>
       invokeTyped('pause_subscription_query', { id, paused }) as unknown as Promise<void>,
     runQuery: (subscriptionId: string, queryId: string) =>

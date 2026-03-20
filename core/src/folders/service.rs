@@ -49,7 +49,7 @@ async fn upsert_folder_sidebar_node(
 ) -> Result<(), String> {
     use crate::sqlite::bitmaps::BitmapKey;
     let folder_bm = db.bitmaps.get(&BitmapKey::Folder(folder.folder_id));
-    let active_bm = db.bitmaps.get(&BitmapKey::AllActive);
+    let active_bm = db.bitmaps.get(&BitmapKey::Status(1));
     let count = (&folder_bm & &active_bm).len() as i64;
     let node = build_folder_sidebar_node(&folder, count);
     db.with_conn(move |conn| crate::sidebar::db::upsert_sidebar_node(conn, &node))

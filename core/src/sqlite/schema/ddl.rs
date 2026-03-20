@@ -154,13 +154,7 @@ BEGIN
     WHERE (SELECT kind FROM media_entity WHERE entity_id = NEW.entity_id) != 'single';
 END;
 
-CREATE TABLE IF NOT EXISTS collection_member (
-    collection_entity_id INTEGER NOT NULL REFERENCES media_entity(entity_id) ON DELETE CASCADE,
-    member_entity_id     INTEGER NOT NULL REFERENCES media_entity(entity_id) ON DELETE CASCADE,
-    ordinal              INTEGER NOT NULL,
-    PRIMARY KEY (collection_entity_id, member_entity_id)
-);
-CREATE INDEX IF NOT EXISTS idx_collection_member_order ON collection_member(collection_entity_id, ordinal);
+-- collection_member table removed — membership is tracked via media_entity.parent_collection_id
 
 CREATE TABLE IF NOT EXISTS collection_tag (
     collection_entity_id INTEGER NOT NULL REFERENCES media_entity(entity_id) ON DELETE CASCADE,

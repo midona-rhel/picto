@@ -59,6 +59,8 @@ export function SubscriptionGroupsPanel({
   const [addingTo, setAddingTo] = useState<string | null>(null);
   const [addSite, setAddSite] = useState('');
   const [addQuery, setAddQuery] = useState('');
+  const [editingQueryId, setEditingQueryId] = useState<string | null>(null);
+  const [editingQueryText, setEditingQueryText] = useState('');
   const [addLoading, setAddLoading] = useState(false);
   const progressMap = useMemo(() => {
     const next = new Map<string, SubProgress>();
@@ -298,6 +300,19 @@ export function SubscriptionGroupsPanel({
     }
   };
 
+  const handleSaveEditQuery = async (queryId: string) => {
+    const text = editingQueryText.trim();
+    if (!text) return;
+    try {
+      await api.subscriptions.editQuery(Number(queryId), text);
+      setEditingQueryId(null);
+      setEditingQueryText('');
+      await loadData();
+    } catch (error) {
+      notifyError(`Failed to update query: ${error}`);
+    }
+  };
+
   const handleRunQuery = async (
     subId: string,
     queryId: string,
@@ -496,7 +511,22 @@ export function SubscriptionGroupsPanel({
                   {queries.map((q) => (
                     <div key={q.queryId} className={st.queryRow}>
                       <span className={st.querySite}>{q.siteName}</span>
-                      <span className={st.queryText}>{q.queryText}</span>
+                      {editingQueryId === q.queryId ? (
+                        <TextInput
+                          size="xs"
+                          className={st.queryText}
+                          value={editingQueryText}
+                          onChange={(e) => setEditingQueryText(e.currentTarget.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') handleSaveEditQuery(q.queryId);
+                            if (e.key === 'Escape') { setEditingQueryId(null); setEditingQueryText(''); }
+                          }}
+                          onBlur={() => handleSaveEditQuery(q.queryId)}
+                          autoFocus
+                        />
+                      ) : (
+                        <span className={st.queryText}>{q.queryText}</span>
+                      )}
                       <span className={st.queryStatus}>
                         {q.missingAuth ? (
                           <span className={st.queryAuthWarning}>Missing auth</span>
@@ -507,6 +537,15 @@ export function SubscriptionGroupsPanel({
                       <span className={st.queryFiles}>{q.filesFound}</span>
                       <span className={st.queryTime}>{q.lastCheck ? formatRelativeTime(q.lastCheck) : ''}</span>
                       <div className={st.queryActions}>
+                        <ActionIcon
+                          variant="subtle"
+                          color="gray"
+                          size="xs"
+                          onClick={() => { setEditingQueryId(q.queryId); setEditingQueryText(q.queryText); }}
+                          title="Edit query"
+                        >
+                          <IconPencil size={12} />
+                        </ActionIcon>
                         <ActionIcon
                           variant="subtle"
                           color="gray"

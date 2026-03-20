@@ -21,6 +21,7 @@ macro_rules! call {
 /// Commands that mutate state. Logged at `info!` level; everything else is `debug!`.
 const WRITE_COMMANDS: &[&str] = &[
     "import_files", "import_folder", "update_file_status", "delete_files", "wipe_image_data",
+    "set_entity_status", "delete_entities",
     "add_tags", "remove_tags", "manage_tag_alias", "manage_tag_implication", "merge_tags",
     "rename_tag", "delete_tag",
     "add_tags_selection", "remove_tags_selection", "update_selection_metadata",
@@ -196,6 +197,8 @@ async fn dispatch_inner(command: &str, args: serde_json::Value) -> Result<String
         "update_file_status" => call!(typed::media_lifecycle::update_file_status, &state, args),
         "delete_files" => call!(typed::media_lifecycle::delete_files, &state, args),
         "wipe_image_data" => call!(typed::media_lifecycle::wipe_image_data, &state, args),
+        "set_entity_status" => call!(typed::media_lifecycle::set_entity_status, &state, args),
+        "delete_entities" => call!(typed::media_lifecycle::delete_entities, &state, args),
 
         // ── Subscriptions ─────────────────────────────────────
         "get_groups" => call!(typed::subscriptions::get_groups, &state, args),

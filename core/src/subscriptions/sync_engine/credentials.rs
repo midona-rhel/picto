@@ -20,6 +20,10 @@ impl<'a> SubscriptionSyncEngine<'a> {
 
         if auth_supported {
             let mut credential_categories = vec![site_id.to_string()];
+            // Pixiv has two site entries ("pixiv" + "pixivuser") sharing one credential
+            if site_id == "pixivuser" {
+                credential_categories.push("pixiv".to_string());
+            }
             if let Some(site) = site_entry {
                 credential_categories.push(site.domain.to_string());
                 credential_categories.push(site.domain.trim_start_matches("www.").to_string());

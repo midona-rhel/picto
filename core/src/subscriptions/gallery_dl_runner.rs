@@ -136,7 +136,10 @@ impl GalleryDlRunner {
         ];
 
         if let Some(limit) = opts.file_limit {
-            args.push("--range".to_string());
+            // Use --post-range instead of --range so multi-image posts
+            // aren't split mid-collection. Each post counts as 1 toward
+            // the limit regardless of how many images it contains.
+            args.push("--post-range".to_string());
             args.push(format!("1-{limit}"));
         }
 

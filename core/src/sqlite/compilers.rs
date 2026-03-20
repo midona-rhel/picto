@@ -495,8 +495,6 @@ mod tests {
         assert_eq!(db.bitmaps.len(&BitmapKey::Status(1)), 1);
         // Trash (status=2) should have 1 file
         assert_eq!(db.bitmaps.len(&BitmapKey::Status(2)), 1);
-        // Default visible library = active only.
-        assert_eq!(db.bitmaps.len(&BitmapKey::AllActive), 1);
     }
 
     #[tokio::test]
@@ -599,8 +597,7 @@ mod tests {
         // Build status bitmaps first (smart folders depend on them)
         compile_status_bitmaps(&db).await.unwrap();
 
-        // Default visible library stays active-only.
-        assert_eq!(db.bitmaps.len(&BitmapKey::AllActive), 3);
+        // Active (status=1) should have 3 files.
         assert_eq!(db.bitmaps.len(&BitmapKey::Status(1)), 3);
 
         // Compile smart folder
@@ -649,7 +646,6 @@ mod tests {
             // Verify before flush
             assert_eq!(db.bitmaps.len(&BitmapKey::Status(0)), 1);
             assert_eq!(db.bitmaps.len(&BitmapKey::Status(1)), 1);
-            assert_eq!(db.bitmaps.len(&BitmapKey::AllActive), 1);
 
             db.bitmaps.flush().unwrap();
         }
@@ -666,11 +662,6 @@ mod tests {
                 db.bitmaps.len(&BitmapKey::Status(1)),
                 1,
                 "Active bitmap should survive restart"
-            );
-            assert_eq!(
-                db.bitmaps.len(&BitmapKey::AllActive),
-                1,
-                "Default visible-library bitmap should survive restart"
             );
         }
     }

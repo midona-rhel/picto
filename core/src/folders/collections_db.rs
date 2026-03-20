@@ -151,14 +151,29 @@ pub fn get_collection_member_files(
 ) -> rusqlite::Result<Vec<(i64, String)>> {
     let mut stmt = conn.prepare_cached(
         "SELECT ef.file_id, f.hash
-         FROM collection_member cm
-         JOIN entity_file ef ON ef.entity_id = cm.member_entity_id
+         FROM media_entity me
+         JOIN entity_file ef ON ef.entity_id = me.entity_id
          JOIN file f ON f.file_id = ef.file_id
-         WHERE cm.collection_entity_id = ?1",
+         WHERE me.parent_collection_id = ?1 AND me.kind = 'single'",
     )?;
     let rows = stmt.query_map([collection_id], |row| {
         Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
     })?;
+    rows.collect()
+}
+
+/// Get file_ids of all members in a collection (via parent_collection_id).
+pub fn get_collection_member_file_ids(
+    conn: &Connection,
+    collection_id: i64,
+) -> rusqlite::Result<Vec<i64>> {
+    let mut stmt = conn.prepare_cached(
+        "SELECT ef.file_id
+         FROM media_entity me
+         JOIN entity_file ef ON ef.entity_id = me.entity_id
+         WHERE me.parent_collection_id = ?1 AND me.kind = 'single'",
+    )?;
+    let rows = stmt.query_map([collection_id], |row| row.get::<_, i64>(0))?;
     rows.collect()
 }
 
@@ -470,7 +485,7 @@ pub fn delete_collection(conn: &Connection, collection_id: i64) -> rusqlite::Res
          WHERE parent_collection_id = ?1",
         [collection_id],
     )?;
-    // Delete the collection entity (cascades collection_member rows via FK)
+    // Delete the collection entity
     conn.execute(
         "DELETE FROM media_entity WHERE entity_id = ?1 AND kind = 'collection'",
         [collection_id],

@@ -17,7 +17,7 @@ import {
 } from '@tabler/icons-react';
 import { api } from '#desktop/api';
 import { writeText } from '#desktop/api';
-import { notifySuccess, notifyError, notifyWarning } from '../../../shared/lib/notify';
+import { notifySuccess, notifyError } from '../../../shared/lib/notify';
 import { getNamespaceColor } from '../../../shared/lib/namespaceColors';
 import { useInlineRename } from '../../../shared/hooks/useInlineRename';
 import { useNavigationStore } from '../../../state/navigationStore';

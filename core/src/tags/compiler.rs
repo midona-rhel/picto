@@ -26,8 +26,6 @@ pub(crate) async fn compile_status_bitmaps(db: &Arc<SqliteDatabase>) -> Result<(
             bitmaps.set(BitmapKey::Status(status), bitmap);
         }
 
-        bitmaps.set(BitmapKey::AllActive, bitmaps.get(&BitmapKey::Status(1)));
-
         Ok(())
     })
     .await?;
@@ -210,7 +208,7 @@ pub(crate) async fn compile_tagged_bitmap(db: &Arc<SqliteDatabase>) -> Result<()
             tagged.insert(row? as u32);
         }
 
-        tagged &= &bitmaps.get(&BitmapKey::AllActive);
+        tagged &= &bitmaps.get(&BitmapKey::Status(1));
         bitmaps.set(BitmapKey::Tagged, tagged);
         Ok(())
     })

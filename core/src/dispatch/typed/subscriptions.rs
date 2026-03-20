@@ -363,6 +363,29 @@ pub async fn delete_subscription_query(
     Ok(())
 }
 
+#[derive(Debug, Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
+pub struct EditSubscriptionQueryInput {
+    pub id: i64,
+    pub query_text: String,
+    pub display_name: Option<String>,
+}
+
+pub async fn edit_subscription_query(
+    state: &AppState,
+    input: EditSubscriptionQueryInput,
+) -> Result<(), String> {
+    state
+        .db
+        .update_subscription_query(input.id, input.query_text, input.display_name)
+        .await?;
+    crate::events::emit_mutation(
+        "edit_subscription_query",
+        crate::runtime_contract::mutation_builder::MutationImpact::subscriptions_sidebar(),
+    );
+    Ok(())
+}
+
 pub async fn pause_subscription_query(
     state: &AppState,
     input: PauseSubscriptionQueryInput,

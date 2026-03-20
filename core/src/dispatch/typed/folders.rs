@@ -536,6 +536,8 @@ pub async fn create_collection(
                 crate::runtime_contract::mutation::Domain::Sidebar,
                 crate::runtime_contract::mutation::Domain::Selection,
             ])
+            .status_changed()
+            .sidebar_counts_from(&state.db)
             .extra_grid_scopes(vec!["system:all".into()]),
     );
     Ok(collection_id)
@@ -648,11 +650,24 @@ pub async fn add_collection_members(
         .add_collection_members_by_hashes(input.id, &input.hashes)
         .await?;
     if added > 0 {
+        // Members are now hidden inside a collection — remove them from status bitmaps
+        let resolved = state.db.resolve_hashes_batch(&input.hashes).await.unwrap_or_default();
+        {
+            use crate::sqlite::bitmaps::BitmapKey;
+            for (_, fid) in &resolved {
+                for s in 0..=2i64 {
+                    state.db.bitmaps.remove(&BitmapKey::Status(s), *fid as u32);
+                }
+            }
+        }
+        state.db.emit_read_model_event(crate::sqlite::ReadModelEvent::StatusBatchChanged);
         crate::events::emit_mutation(
             "add_collection_members",
             crate::runtime_contract::mutation_builder::MutationImpact::collection_membership_change(
                 input.id,
-            ),
+            )
+            .status_changed()
+            .sidebar_counts_from(&state.db),
         );
     }
     Ok(added)
@@ -662,16 +677,32 @@ pub async fn remove_collection_members(
     state: &AppState,
     input: RemoveCollectionMembersInput,
 ) -> Result<usize, String> {
+    // Resolve member file_ids before removal (they'll be orphaned after)
+    let resolved = state.db.resolve_hashes_batch(&input.hashes).await.unwrap_or_default();
     let removed = state
         .db
         .remove_collection_members_by_hashes(input.id, &input.hashes)
         .await?;
     if removed > 0 {
+        // Members are now standalone — add them back to status bitmaps with their actual status
+        {
+            use crate::sqlite::bitmaps::BitmapKey;
+            for (_, fid) in &resolved {
+                let status = state.db.with_read_conn({
+                    let f = *fid;
+                    move |conn| conn.query_row("SELECT status FROM file WHERE file_id = ?1", [f], |row| row.get::<_, i64>(0))
+                }).await.unwrap_or(1);
+                state.db.bitmaps.insert(&BitmapKey::Status(status), *fid as u32);
+            }
+        }
+        state.db.emit_read_model_event(crate::sqlite::ReadModelEvent::StatusBatchChanged);
         crate::events::emit_mutation(
             "remove_collection_members",
             crate::runtime_contract::mutation_builder::MutationImpact::collection_membership_change(
                 input.id,
-            ),
+            )
+            .status_changed()
+            .sidebar_counts_from(&state.db),
         );
     }
     Ok(removed)
@@ -689,12 +720,53 @@ pub async fn delete_collection(
         .into_iter()
         .map(|folder| folder.folder_id)
         .collect::<Vec<_>>();
+    // Get member file_ids BEFORE deletion (for bitmap updates)
+    let member_file_ids = state.db.with_read_conn({
+        let id = input.id;
+        move |conn| crate::folders::collections_db::get_collection_member_file_ids(conn, id)
+    }).await?;
+
     state.db.delete_collection(input.id).await?;
+
+    // Members are now standalone — add them to the correct Status bitmap based on their actual status.
+    // The collection entity was deleted — remove it from Status bitmaps.
+    {
+        use crate::sqlite::bitmaps::BitmapKey;
+        let cid = input.id as u32;
+        for s in 0..=2i64 {
+            state.db.bitmaps.remove(&BitmapKey::Status(s), cid);
+        }
+        // Look up each member's actual status and add to the right bitmap
+        let member_statuses = state.db.with_read_conn({
+            let fids = member_file_ids.clone();
+            move |conn| {
+                let mut result = Vec::with_capacity(fids.len());
+                for &fid in &fids {
+                    let status: i64 = conn.query_row(
+                        "SELECT status FROM file WHERE file_id = ?1",
+                        [fid],
+                        |row| row.get(0),
+                    ).unwrap_or(1);
+                    result.push((fid, status));
+                }
+                Ok(result)
+            }
+        }).await?;
+        for (fid, status) in &member_statuses {
+            state.db.bitmaps.insert(&BitmapKey::Status(*status), *fid as u32);
+        }
+    }
+
+    // Trigger compiler to rebuild sidebar projection with updated bitmaps
+    state.db.emit_read_model_event(crate::sqlite::ReadModelEvent::StatusBatchChanged);
+
     let mut impact =
         crate::runtime_contract::mutation_builder::MutationImpact::collection_delete(
             input.id,
             affected_folder_ids,
-        );
+        )
+        .status_changed()
+        .sidebar_counts_from(&state.db);
     if !member_hashes.is_empty() {
         impact = impact.file_hashes(member_hashes);
     }

@@ -13,15 +13,6 @@ use serde_json::json;
 use super::read_model::{DerivedArtifact, PublishedArtifacts};
 use super::SqliteDatabase;
 
-fn parse_active_bitmap_file(payload_json: Option<&str>) -> Option<String> {
-    payload_json
-        .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok())
-        .and_then(|v| {
-            v.get("active_file")
-                .and_then(|s| s.as_str())
-                .map(|s| s.to_string())
-        })
-}
 
 struct ManifestState {
     published_epoch: u64,
@@ -56,7 +47,13 @@ impl Manifest {
         }
         artifact_payloads.insert(
             "bitmaps".to_string(),
-            json!({"active_file":"bitmaps.bin"}).to_string(),
+            json!({
+                "format": "per_category",
+                "status": "status.bin",
+                "tags": "tags.bin",
+                "folders": "folders.bin"
+            })
+            .to_string(),
         );
         Self {
             state: RwLock::new(ManifestState {
@@ -254,16 +251,21 @@ impl Manifest {
     }
 }
 
-pub fn active_bitmap_file_from_manifest(manifest: &Manifest) -> Option<String> {
-    parse_active_bitmap_file(manifest.published_artifact_payload_json("bitmaps").as_deref())
+/// Return the raw bitmap manifest payload JSON for the open path.
+///
+/// For legacy manifests this is `{"active_file":"bitmaps.v5.bin"}`.
+/// For new manifests this is `{"format":"per_category","status":"...", ...}`.
+pub fn bitmap_payload_from_manifest(manifest: &Manifest) -> Option<String> {
+    manifest.published_artifact_payload_json("bitmaps")
 }
+
 
 pub async fn publish_pending(
     db: &Arc<SqliteDatabase>,
     dirty_artifacts: &[DerivedArtifact],
 ) -> Result<PublishedArtifacts, String> {
-    let previous_active = active_bitmap_file_from_manifest(&db.manifest);
-    let mut new_active_for_cleanup: Option<String> = None;
+    let previous_payload = bitmap_payload_from_manifest(&db.manifest);
+    let mut new_payload_for_cleanup: Option<String> = None;
 
     for artifact in dirty_artifacts {
         db.manifest.mark_artifact_dirty(*artifact);
@@ -271,15 +273,13 @@ pub async fn publish_pending(
 
     if db.bitmaps.is_dirty() {
         let bitmap_version = db.manifest.mark_artifact_dirty(DerivedArtifact::Bitmaps);
-        let active_file = db
+        let payload = db
             .bitmaps
             .flush_versioned(bitmap_version)
             .map_err(|e| format!("Bitmap flush error: {e}"))?;
-        new_active_for_cleanup = Some(active_file.clone());
-        db.manifest.set_working_artifact_payload_json(
-            "bitmaps",
-            json!({ "active_file": active_file }).to_string(),
-        );
+        new_payload_for_cleanup = Some(payload.clone());
+        db.manifest
+            .set_working_artifact_payload_json("bitmaps", payload);
     }
 
     let manifest = db.manifest.clone();
@@ -287,9 +287,9 @@ pub async fn publish_pending(
         .with_conn_mut(move |conn| manifest.flush_to_db(conn))
         .await?;
 
-    if let Some(active_file) = new_active_for_cleanup {
-        let mut keep = vec![active_file.clone()];
-        if let Some(prev) = previous_active.filter(|p| p != &active_file) {
+    if let Some(new_payload) = new_payload_for_cleanup {
+        let mut keep = vec![new_payload.clone()];
+        if let Some(prev) = previous_payload.filter(|p| p != &new_payload) {
             keep.push(prev);
         }
         match db.bitmaps.prune_artifacts(&keep) {

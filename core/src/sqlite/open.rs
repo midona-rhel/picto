@@ -55,16 +55,12 @@ impl SqliteDatabase {
         let manifest = publish::Manifest::load_from_db(&conn)
             .map_err(|e| format!("Failed to load manifest: {e}"))?;
 
-        let active_bitmap_file = publish::active_bitmap_file_from_manifest(&manifest);
+        let bitmap_payload = publish::bitmap_payload_from_manifest(&manifest);
 
-        let bitmaps = BitmapStore::open_with_active_file(&db_dir, active_bitmap_file.as_deref());
-        let startup_keep = vec![
-            active_bitmap_file
-                .clone()
-                .unwrap_or_else(|| "bitmaps.bin".to_string()),
-        ];
+        let bitmaps = BitmapStore::open_with_active_file(&db_dir, bitmap_payload.as_deref());
+        let startup_keep: Vec<String> = bitmap_payload.into_iter().collect();
         if let Err(e) = bitmaps.prune_artifacts(&startup_keep) {
-            tracing::warn!(error = %e, "Bitmap artifact cleanup (startup) failed");
+            tracing::warn!(error = %e, "Bitmap artifact cleanup (startup) failed — non-fatal");
         }
 
         let pool_size = num_cpus::get().min(8).max(2);

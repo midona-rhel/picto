@@ -298,6 +298,7 @@ export interface TypedCommandMap {
   add_collection_tags: { input: AddCollectionTagsInput; output: null };
   remove_collection_tags: { input: RemoveCollectionTagsInput; output: null };
   delete_collection: { input: DeleteCollectionInput; output: null };
+  list_collection_member_hashes: { input: { id: number }; output: string[] };
   // tags
   search_tags: { input: SearchTagsInput; output: unknown };
   get_all_tags_with_counts: { input: Record<string, never>; output: unknown };

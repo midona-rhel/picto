@@ -891,7 +891,7 @@ impl SqliteDatabase {
         }
 
         // Use bitmap ops
-        let all_active = self.bitmaps.get(&BitmapKey::AllActive);
+        let all_active = self.bitmaps.get(&BitmapKey::Status(1));
 
         let result = if match_all {
             let mut result = self.bitmaps.get(&BitmapKey::EffectiveTag(tag_ids[0]));

@@ -383,11 +383,21 @@ impl<'a> SubscriptionSyncEngine<'a> {
         let next_resume_cursor = resume_strategy
             .as_deref()
             .and_then(|strategy| derive_resume_cursor(&run_result.items, strategy));
+        // Count unique posts (not files) since we use --post-range
+        let unique_post_count = {
+            let mut seen = std::collections::HashSet::new();
+            for item in &run_result.items {
+                if let Some(pid) = item.metadata.post_id.as_deref() {
+                    seen.insert(pid);
+                }
+            }
+            seen.len()
+        };
         let continue_initial_pagination = should_continue_initial_pagination(
             completed_initial_run,
             completed_cleanly,
             file_limit,
-            run_result.items.len(),
+            unique_post_count,
             next_resume_cursor.as_deref(),
         );
 

@@ -97,7 +97,7 @@ pub(crate) async fn compile_sidebar(db: &Arc<SqliteDatabase>) -> Result<(), Stri
             });
         }
 
-        let active_bitmap = bitmaps.get(&BitmapKey::AllActive);
+        let active_bitmap = bitmaps.get(&BitmapKey::Status(1));
         let folders = crate::folders::db::list_folders(conn)?;
         for folder in folders {
             let node_id = format!("folder:{}", folder.folder_id);

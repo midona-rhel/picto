@@ -39,13 +39,18 @@
 }
 
 .title {
-  composes: truncate from '../../../shared/styles/textClamp.module.css';
+  position: absolute;
+  left: 76px;
+  right: 50%;
   font-size: var(--font-size-sm);
   font-weight: var(--font-weight-medium);
   color: var(--color-text-primary);
-  min-width: 0;
-  max-width: 20ch;
+  white-space: nowrap;
+  overflow: hidden;
   user-select: none;
+  pointer-events: none;
+  mask-image: linear-gradient(to right, black calc(100% - 40px), transparent 100%);
+  -webkit-mask-image: linear-gradient(to right, black calc(100% - 40px), transparent 100%);
 }
 
 .counter {
