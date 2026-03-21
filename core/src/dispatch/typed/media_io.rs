@@ -606,9 +606,9 @@ async fn reanalyze_file_colors_inner(
     })
 }
 
-/// Background-backfill dominant colors for images that are missing them.
+/// Background-backfill missing thumbnails and dominant colors.
 /// Fire-and-forget — errors are silently ignored per-file.
-pub async fn backfill_missing_colors(
+pub async fn backfill_missing_deferred(
     db: &crate::sqlite::SqliteDatabase,
     blob_store: &std::sync::Arc<crate::blob_store::BlobStore>,
     hashes: &[String],
@@ -620,28 +620,41 @@ pub async fn backfill_missing_colors(
             Ok(Some(f)) => f,
             _ => continue,
         };
-        if !file.mime.starts_with("image/") {
+        if !file.mime.starts_with("image/") && !file.mime.starts_with("video/") {
             continue;
         }
-        let ext = mime_to_extension(&file.mime).to_string();
-        let h = hash.clone();
-        let bs = blob_store.clone();
-        let colors = match tokio::task::spawn_blocking(move || -> Result<Vec<(String, f32, f32, f32)>, String> {
-            let original = bs
-                .find_original(&h, Some(&ext))
-                .map_err(|e| format!("{e}"))?
-                .ok_or_else(|| "not found".to_string())?;
-            let bytes = std::fs::read(&original.0).map_err(|e| format!("{e}"))?;
-            let img = image::load_from_memory(&bytes).map_err(|e| format!("{e}"))?;
-            let extracted = crate::media_processing::colors::extract_dominant_colors(&img, 8);
-            Ok(extracted.iter().map(|c| (c.hex.clone(), c.l as f32, c.a as f32, c.b as f32)).collect())
-        }).await {
-            Ok(Ok(c)) => c,
-            _ => continue,
-        };
-        let dominant = colors.first().map(|(hex, _, _, _)| hex.clone());
-        if db.set_file_colors(hash, colors, dominant).await.is_ok() {
-            any_changed = true;
+
+        // Generate thumbnail if missing (uses the existing ensure_thumbnail path
+        // which handles MIME detection, ffmpeg for video, etc.)
+        let has_thumb = blob_store.find_thumbnail_path(hash).ok().flatten().is_some();
+        if !has_thumb {
+            if ensure_thumbnail_inner(db, blob_store, hash).await.is_ok() {
+                any_changed = true;
+            }
+        }
+
+        // Extract dominant colors if missing
+        if file.dominant_color_hex.is_none() && file.mime.starts_with("image/") {
+            let ext = mime_to_extension(&file.mime).to_string();
+            let h = hash.clone();
+            let bs = blob_store.clone();
+            let colors = match tokio::task::spawn_blocking(move || -> Result<Vec<(String, f32, f32, f32)>, String> {
+                let original = bs
+                    .find_original(&h, Some(&ext))
+                    .map_err(|e| format!("{e}"))?
+                    .ok_or_else(|| "not found".to_string())?;
+                let bytes = std::fs::read(&original.0).map_err(|e| format!("{e}"))?;
+                let img = image::load_from_memory(&bytes).map_err(|e| format!("{e}"))?;
+                let extracted = crate::media_processing::colors::extract_dominant_colors(&img, 8);
+                Ok(extracted.iter().map(|c| (c.hex.clone(), c.l as f32, c.a as f32, c.b as f32)).collect())
+            }).await {
+                Ok(Ok(c)) => c,
+                _ => continue,
+            };
+            let dominant = colors.first().map(|(hex, _, _, _)| hex.clone());
+            if db.set_file_colors(hash, colors, dominant).await.is_ok() {
+                any_changed = true;
+            }
         }
     }
     if any_changed {

@@ -1,5 +1,4 @@
 import { useState, useRef, useCallback, useEffect } from 'react';
-import { Loader } from '@mantine/core';
 import {
   IconPhoto,
   IconPlus,
@@ -629,9 +628,12 @@ export function InspectorPanel({
 
   const renderProperties = () => {
     const isCollection = !!selectedImage?.is_collection;
-    const rating = isCollection
-      ? (selectedCollection?.rating ?? 0)
-      : (fileMetadata?.entity.rating ?? selectedImage?.rating ?? 0);
+    const isMulti = !selectedImage;
+    const rating = isMulti
+      ? displayedRating
+      : isCollection
+        ? (selectedCollection?.rating ?? 0)
+        : (fileMetadata?.entity.rating ?? selectedImage?.rating ?? 0);
 
     // created_at = content origin date (for collections: oldest member's content date)
     const createdAt = isCollection ? selectedCollection?.date_created : fileMetadata?.entity.date_created;
@@ -676,6 +678,11 @@ export function InspectorPanel({
               </>
             );
           })()}
+
+          {/* Multi-selection: total size */}
+          {isMulti && (
+            <PropertyRow label="Total size" mono value={displayedTotalSize != null ? formatFileSize(displayedTotalSize) : '—'} />
+          )}
 
           {/* Shared: dates */}
           {selectedImage && !isCollection && (
@@ -722,113 +729,44 @@ export function InspectorPanel({
 
       <div className={styles.scrollContent}>
         <div className={styles.contentStack}>
-          {isVirtualSelectionSummary ? (
-            <>
-              {selectedImages.length > 0 ? (
-                <GlassImagePreview images={selectedImages} />
-              ) : (
-                <div className={styles.loadingCenter}>
-                  <Loader size="sm" />
-                </div>
-              )}
-
-              <div className={styles.selectionTitle}>
-                {selectionSummary ? `${selectionSummary.selected_count.toLocaleString()} items selected` : 'Loading selection summary...'}
-              </div>
-
-              <div className={styles.fieldStack}>
-                <EditableTextField value={notes} onChange={onUpdateNotes} placeholder="Notes" multiline  />
-                <EditableUrlList urls={sourceUrls} onChange={handleUrlChange} fieldId="vs-urls" activePopover={activePopover} onPopover={setActivePopover} />
-              </div>
-
-              {renderTags()}
-              {renderFolders(true)}
-
-              <InspectorSection
-                title="Properties"
-                collapsed={sectionState.properties}
-                onToggle={() => toggleSection('properties')}
-              >
-                <div className={styles.propsStack}>
-                  <StarRating value={displayedRating} onChange={handleRatingClick} />
-                  <PropertyRow label="Total size" mono value={displayedTotalSize != null ? formatFileSize(displayedTotalSize) : '...'} />
-                </div>
-              </InspectorSection>
-
-              <KbdTooltip label="Auto-Tag" shortcut="Mod+Shift+A">
-                <button ref={autoTagBtnRef} className={styles.exportButton} onClick={handleAutoTag}>
-                  <IconSparkles size={12} style={{ marginRight: 4 }} />Auto-Tag
-                </button>
-              </KbdTooltip>
-              <KbdTooltip label="Export" shortcut="Mod+Shift+E">
-                <button className={styles.exportButton} onClick={onExport}>Export</button>
-              </KbdTooltip>
-            </>
-          ) : selectedImages.length === 0 ? (
+          {selectedImages.length === 0 && !isVirtualSelectionSummary ? (
             <div style={{ height: 400, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
               <EmptyState
                 icon={IconPhoto}
                 description="Select an item to view properties"
               />
             </div>
-          ) : selectedImage ? (
-            /* Single image view */
+          ) : (
             <>
-              <GlassImagePreview images={[selectedImage]} />
+              <GlassImagePreview images={selectedImage ? [selectedImage] : selectedImages} />
 
-              {/* Always reserve space for color palette */}
               <ColorPalette
-                colors={(!selectedImage.is_collection ? fileMetadata?.entity.dominant_colors : null) ?? []}
-                onFindSimilarColor={!selectedImage.is_collection ? handleFindSimilarColor : undefined}
-                onReanalyzeColors={!selectedImage.is_collection ? onReanalyzeColors : undefined}
+                colors={(!selectedImage?.is_collection ? fileMetadata?.entity.dominant_colors : null) ?? []}
+                onFindSimilarColor={selectedImage && !selectedImage.is_collection ? handleFindSimilarColor : undefined}
+                onReanalyzeColors={selectedImage && !selectedImage.is_collection ? onReanalyzeColors : undefined}
               />
 
               <div className={styles.fieldStack}>
-                <EditableTextField value={imageName} onChange={onImageNameChange} placeholder="Name" />
-                <EditableTextField value={notes} onChange={onUpdateNotes} placeholder="Notes" readOnly={selectedImage.is_collection} multiline />
-                <EditableUrlList urls={sourceUrls} onChange={handleUrlChange} readOnly={selectedImage.is_collection} fieldId="urls" activePopover={activePopover} onPopover={setActivePopover} />
+                {selectedImage ? (
+                  <EditableTextField value={imageName} onChange={onImageNameChange} placeholder="Name" />
+                ) : (
+                  <EditableTextField
+                    value={`${(isVirtualSelectionSummary && selectionSummary
+                      ? selectionSummary.selected_count
+                      : selectedImages.length
+                    ).toLocaleString()} items selected`}
+                    onChange={() => {}}
+                    placeholder="Name"
+                    readOnly
+                  />
+                )}
+                <EditableTextField value={notes} onChange={onUpdateNotes} placeholder="Notes" readOnly={!!selectedImage?.is_collection} multiline />
+                <EditableUrlList urls={sourceUrls} onChange={handleUrlChange} readOnly={!!selectedImage?.is_collection} fieldId="urls" activePopover={activePopover} onPopover={setActivePopover} />
               </div>
 
               {renderTags()}
-              {renderFolders(!selectedImage.is_collection)}
+              {renderFolders(selectedImage ? !selectedImage.is_collection : true)}
               {renderProperties()}
-
-              <KbdTooltip label="Auto-Tag" shortcut="Mod+Shift+A">
-                <button ref={autoTagBtnRef} className={styles.exportButton} onClick={handleAutoTag}>
-                  <IconSparkles size={12} style={{ marginRight: 4 }} />Auto-Tag
-                </button>
-              </KbdTooltip>
-              <KbdTooltip label="Export" shortcut="Mod+Shift+E">
-                <button className={styles.exportButton} onClick={onExport}>Export</button>
-              </KbdTooltip>
-            </>
-          ) : (
-            /* Multi-selection view */
-            <>
-              <GlassImagePreview images={selectedImages} />
-
-              <div className={styles.selectionTitle}>
-                {selectedImages.length.toLocaleString()} items selected
-              </div>
-
-              <div className={styles.fieldStack}>
-                <EditableTextField value={notes} onChange={onUpdateNotes} placeholder="Notes" multiline />
-                <EditableUrlList urls={sourceUrls} onChange={handleUrlChange} fieldId="ms-urls" activePopover={activePopover} onPopover={setActivePopover} />
-              </div>
-
-              {renderTags()}
-              {renderFolders(true)}
-
-              <InspectorSection
-                title="Properties"
-                collapsed={sectionState.properties}
-                onToggle={() => toggleSection('properties')}
-              >
-                <div className={styles.propsStack}>
-                  <StarRating value={displayedRating} onChange={handleRatingClick} />
-                  <PropertyRow label="Total size" mono value={displayedTotalSize != null ? formatFileSize(displayedTotalSize) : '—'} />
-                </div>
-              </InspectorSection>
 
               <KbdTooltip label="Auto-Tag" shortcut="Mod+Shift+A">
                 <button ref={autoTagBtnRef} className={styles.exportButton} onClick={handleAutoTag}>

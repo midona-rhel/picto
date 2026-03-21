@@ -9,9 +9,22 @@
 //! handler blocks new registrations.
 
 use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 type EventCallback = Arc<dyn Fn(&str, &str) + Send + Sync>;
 static EVENT_CB: OnceLock<Mutex<EventCallback>> = OnceLock::new();
+
+/// Controls whether log events are forwarded to the frontend.
+/// Enabled once the frontend signals it wants logs (avoids spam during startup).
+static LOG_FORWARDING_ENABLED: AtomicBool = AtomicBool::new(false);
+
+pub fn enable_log_forwarding() {
+    LOG_FORWARDING_ENABLED.store(true, Ordering::SeqCst);
+}
+
+pub fn disable_log_forwarding() {
+    LOG_FORWARDING_ENABLED.store(false, Ordering::SeqCst);
+}
 
 /// Register the global event callback. Called once at initialization by the
 /// host runtime (e.g. napi-rs addon).
@@ -100,6 +113,95 @@ pub mod event_names {
     pub const MEDIA_EXPORT_PROGRESS: &str = "media-export-progress";
     pub const OPEN_DETAIL_WINDOW: &str = "open-detail-window";
     pub const DUPLICATE_AUTO_MERGE_FINISHED: &str = "duplicate-auto-merge-finished";
+    pub const LOG: &str = "log";
+}
+
+// ── Tracing layer that forwards log events to the frontend ──────────────
+
+use tracing_subscriber::Layer;
+
+/// A tracing Layer that emits log records as `"log"` events to the frontend.
+pub struct EventEmitLayer;
+
+impl<S: tracing::Subscriber> Layer<S> for EventEmitLayer {
+    fn on_event(&self, event: &tracing::Event<'_>, _ctx: tracing_subscriber::layer::Context<'_, S>) {
+        if !LOG_FORWARDING_ENABLED.load(Ordering::Relaxed) {
+            return;
+        }
+
+        let meta = event.metadata();
+        let level = meta.level().as_str();
+        let target = meta.target();
+
+        // Extract the message field from the event
+        let mut visitor = MessageVisitor::default();
+        event.record(&mut visitor);
+
+        let payload = serde_json::json!({
+            "level": level,
+            "target": target,
+            "message": visitor.message,
+            "timestamp": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+        });
+
+        if let Ok(json) = serde_json::to_string(&payload) {
+            emit_event(event_names::LOG, &json);
+        }
+    }
+}
+
+#[derive(Default)]
+struct MessageVisitor {
+    message: String,
+}
+
+impl tracing::field::Visit for MessageVisitor {
+    fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
+        if field.name() == "message" {
+            self.message = format!("{:?}", value);
+            // Strip surrounding quotes from Debug formatting
+            if self.message.starts_with('"') && self.message.ends_with('"') {
+                self.message = self.message[1..self.message.len() - 1].to_string();
+            }
+        } else {
+            if !self.message.is_empty() {
+                self.message.push(' ');
+            }
+            self.message.push_str(&format!("{}={:?}", field.name(), value));
+        }
+    }
+
+    fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+        if field.name() == "message" {
+            self.message = value.to_string();
+        } else {
+            if !self.message.is_empty() {
+                self.message.push(' ');
+            }
+            self.message.push_str(&format!("{}={}", field.name(), value));
+        }
+    }
+
+    fn record_i64(&mut self, field: &tracing::field::Field, value: i64) {
+        if !self.message.is_empty() {
+            self.message.push(' ');
+        }
+        self.message.push_str(&format!("{}={}", field.name(), value));
+    }
+
+    fn record_u64(&mut self, field: &tracing::field::Field, value: u64) {
+        if !self.message.is_empty() {
+            self.message.push(' ');
+        }
+        self.message.push_str(&format!("{}={}", field.name(), value));
+    }
+
+    fn record_bool(&mut self, field: &tracing::field::Field, value: bool) {
+        if !self.message.is_empty() {
+            self.message.push(' ');
+        }
+        self.message.push_str(&format!("{}={}", field.name(), value));
+    }
 }
 
 // --- System / misc

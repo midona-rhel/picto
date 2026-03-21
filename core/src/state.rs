@@ -46,12 +46,18 @@ fn state_lock() -> &'static RwLock<Option<Arc<AppState>>> {
 /// `library_root` is the path to the library directory
 /// (e.g. `~/.local/share/picto/library` or a `.library/` folder).
 pub async fn open_library(library_root: PathBuf) -> Result<Arc<AppState>, String> {
-    let _ = tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "picto=info".parse().unwrap()),
-        )
-        .try_init();
+    {
+        use tracing_subscriber::prelude::*;
+        let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
+            .unwrap_or_else(|_| "picto=info".parse().unwrap());
+        let fmt_layer = tracing_subscriber::fmt::layer();
+        let _ = tracing_subscriber::registry()
+            .with(env_filter)
+            .with(fmt_layer)
+            .with(crate::events::EventEmitLayer)
+            .try_init();
+        crate::events::enable_log_forwarding();
+    }
 
     close_library_inner().await;
 

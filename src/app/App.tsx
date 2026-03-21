@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { IconDownload, IconLayoutSidebar, IconSettings } from '@tabler/icons-react';
+import { useHotkeys } from '@mantine/hooks';
 import { api } from '#desktop/api';
 import { useNavigationStore } from '../state/navigationStore';
 import { useSettingsStore, type AppSettings } from '../state/settingsStore';
 import { useExportActionStore } from '../state/exportActionStore';
 import { useDomainStore } from '../state/domainStore';
-import { CommandPalette } from '#features/app/components';
+import { CommandPalette, LogPanel } from '#features/app/components';
 import { GridViewMode, ImageGridControls, FilterBar, InspectorPanel, DragGhost } from '#features/grid/components';
 import { MainViewModelProvider, MainViewRouter, CreateSubscriptionGroupModal, WindowControls } from '#features/layout/components';
 import { Sidebar, SidebarMenuButton } from '#features/sidebar/components';
@@ -189,6 +190,11 @@ function App() {
 
   // ── Command Palette ──────────
   const { paletteOpen, closePalette, paletteMode, paletteActions } = useCommandPalette();
+
+  // ── Log Panel ──────────
+  const [logPanelOpen, setLogPanelOpen] = useState(false);
+  const toggleLogPanel = useCallback(() => setLogPanelOpen((v) => !v), []);
+  useHotkeys([['mod+L', toggleLogPanel]]);
 
   const [displayControlsFolderId, setDisplayControlsFolderId] = useState<number | null>(
     activeFolderId,
@@ -462,6 +468,7 @@ function App() {
         onCreated={() => setSubscriptionRefreshToken((v) => v + 1)}
       />
       <CommandPalette open={paletteOpen} onClose={closePalette} mode={paletteMode} actions={paletteActions} />
+      {logPanelOpen && <LogPanel onClose={toggleLogPanel} />}
     </div>
   );
 }

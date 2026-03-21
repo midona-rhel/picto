@@ -13,8 +13,6 @@ export function createLibraryHostService({
   updateLibraryPath,
   getCurrentLibraryRoot,
   setCurrentLibraryRoot,
-  startBlurhashBackfill,
-  stopBlurhashBackfill,
   createMainWindow,
   sendToAllWindows,
   buildAppMenu,
@@ -87,7 +85,7 @@ export function createLibraryHostService({
   async function openLibraryAndShow(libraryPath) {
     setCurrentLibraryRoot(libraryPath);
     await openLibrary(libraryPath);
-    startBlurhashBackfill();
+
     await addLibraryToHistory(libraryPath);
     buildAppMenu();
     createMainWindow();
@@ -95,12 +93,12 @@ export function createLibraryHostService({
 
   async function switchLibrary(newPath) {
     sendToAllWindows('library-switching', { path: newPath });
-    stopBlurhashBackfill();
+
     await closeLibrary();
 
     setCurrentLibraryRoot(newPath);
     await openLibrary(newPath);
-    startBlurhashBackfill();
+
     await addLibraryToHistory(newPath);
     buildAppMenu();
 
@@ -190,20 +188,20 @@ export function createLibraryHostService({
 
     if (libraryPath === getCurrentLibraryRoot()) {
       sendToAllWindows('library-switching', { path: newPath });
-      stopBlurhashBackfill();
+  
       await closeLibrary();
       try {
         await fs.rename(libraryPath, newPath);
       } catch (err) {
         await openLibrary(libraryPath);
-        startBlurhashBackfill();
+    
         sendToAllWindows('library-switched', { path: libraryPath });
         throw new Error(`Failed to rename library: ${err.message}`);
       }
       await updateLibraryPath(libraryPath, newPath);
       setCurrentLibraryRoot(newPath);
       await openLibrary(newPath);
-      startBlurhashBackfill();
+  
       sendToAllWindows('library-switched', { path: newPath });
       buildAppMenu();
     } else {
@@ -246,20 +244,20 @@ export function createLibraryHostService({
     if (oldExists) {
       if (oldPath === getCurrentLibraryRoot()) {
         sendToAllWindows('library-switching', { path: newPath });
-        stopBlurhashBackfill();
+    
         await closeLibrary();
         try {
           await fs.rename(oldPath, newPath);
         } catch (err) {
           await openLibrary(oldPath);
-          startBlurhashBackfill();
+      
           sendToAllWindows('library-switched', { path: oldPath });
           throw new Error(`Failed to move library: ${err.message}`);
         }
         await updateLibraryPath(oldPath, newPath);
         setCurrentLibraryRoot(newPath);
         await openLibrary(newPath);
-        startBlurhashBackfill();
+    
         sendToAllWindows('library-switched', { path: newPath });
       } else {
         await fs.rename(oldPath, newPath);

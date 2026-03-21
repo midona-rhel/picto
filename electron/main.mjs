@@ -13,7 +13,6 @@ import {
   updateLibraryPath,
 } from './globalConfig.mjs';
 import { createMediaProtocolService, isValidHash } from './protocol/media.mjs';
-import { createMediaMaintenanceService } from './services/mediaMaintenance.mjs';
 import { createWindowManager } from './windows/windowManager.mjs';
 import { createMenuManager } from './windows/menu.mjs';
 import { createLibraryHostService } from './services/libraryHostService.mjs';
@@ -57,11 +56,6 @@ const mediaProtocol = createMediaProtocolService({
   getCurrentLibraryRoot,
 });
 
-const mediaMaintenance = createMediaMaintenanceService({
-  invoke,
-  isDev,
-  getCurrentLibraryRoot,
-});
 
 const windowManager = createWindowManager({
   BrowserWindow,
@@ -97,8 +91,6 @@ const libraryHost = createLibraryHostService({
   updateLibraryPath,
   getCurrentLibraryRoot,
   setCurrentLibraryRoot,
-  startBlurhashBackfill: mediaMaintenance.startBlurhashBackfill,
-  stopBlurhashBackfill: mediaMaintenance.stopBlurhashBackfill,
   createMainWindow: () => {
     const existing = windowManager.getWindow('main');
     if (existing && !existing.isDestroyed()) {

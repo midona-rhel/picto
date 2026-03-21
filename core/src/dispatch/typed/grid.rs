@@ -36,18 +36,23 @@ pub async fn get_grid_page_slim(state: &AppState, input: GetGridPageSlimInput) -
             .await?;
     crate::perf::record_grid_page_slim(started.elapsed().as_secs_f64() * 1000.0);
 
-    // Backfill missing dominant colors in the background.
-    let missing_color_hashes: Vec<String> = result
+    // Backfill missing thumbnails and dominant colors in the background.
+    // Catches subscription-imported files where deferred processing was skipped.
+    let backfill_hashes: Vec<String> = result
         .items
         .iter()
-        .filter(|item| item.dominant_color_hex.is_none() && item.mime.starts_with("image/"))
+        .filter(|item| {
+            let is_media = item.mime.starts_with("image/") || item.mime.starts_with("video/");
+            is_media && (item.dominant_color_hex.is_none() || item.is_collection)
+        })
         .map(|item| item.hash.clone())
+        .filter(|h| !h.is_empty())
         .collect();
-    if !missing_color_hashes.is_empty() {
+    if !backfill_hashes.is_empty() {
         let db = state.db.clone();
         let blob_store = state.blob_store.clone();
         tokio::spawn(async move {
-            super::media_io::backfill_missing_colors(&db, &blob_store, &missing_color_hashes).await;
+            super::media_io::backfill_missing_deferred(&db, &blob_store, &backfill_hashes).await;
         });
     }
 

@@ -93,6 +93,7 @@ export const SHORTCUT_DEFS: ShortcutDef[] = [
   { id: 'view.toggleBothPanels', label: 'Toggle Panels',      group: 'View', keys: 'Tab', description: 'Show or hide sidebar and inspector together' },
   { id: 'view.toggleTileName',   label: 'Toggle Tile Name',   group: 'View', keys: 'Mod+Alt+4', description: 'Show or hide filename below tiles' },
   { id: 'view.toggleTileMetadata', label: 'Toggle Tile Info', group: 'View', keys: 'Mod+Alt+5', description: 'Show or hide resolution and extension on tiles' },
+  { id: 'view.toggleLogs',        label: 'Toggle Logs',         group: 'View', keys: 'Mod+L',     description: 'Show or hide the log viewer panel' },
 
   // Edit additions
   { id: 'edit.rename',          label: 'Rename',              group: 'Edit', keys: 'Ctrl+R',    description: 'Rename selected file' },

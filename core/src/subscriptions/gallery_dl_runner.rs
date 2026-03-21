@@ -178,11 +178,21 @@ impl GalleryDlRunner {
         debug!(binary = %self.binary_path.display(), args = ?args, "gallery-dl command");
 
         // 4. Spawn subprocess
-        let mut child = tokio::process::Command::new(&self.binary_path)
-            .args(&args)
+        let mut cmd = tokio::process::Command::new(&self.binary_path);
+        cmd.args(&args)
+            .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
-            .kill_on_drop(true)
+            .kill_on_drop(true);
+
+        // On Windows: suppress console window and ensure clean process creation.
+        #[cfg(target_os = "windows")]
+        {
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+        }
+
+        let mut child = cmd
             .spawn()
             .map_err(|e| format!("Failed to spawn gallery-dl: {e}"))?;
 
@@ -196,7 +206,9 @@ impl GalleryDlRunner {
             if let Some(out) = child_stdout {
                 let mut reader = BufReader::new(out).lines();
                 while let Ok(Some(line)) = reader.next_line().await {
-                    let trimmed = line.trim().to_string();
+                    // On Windows, gallery-dl may emit paths with \r or
+                    // surrounding quotes — strip both.
+                    let trimmed = line.trim().trim_matches('"').trim().to_string();
                     if trimmed.is_empty() {
                         continue;
                     }

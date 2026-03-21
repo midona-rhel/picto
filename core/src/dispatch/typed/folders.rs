@@ -786,7 +786,7 @@ pub async fn delete_collection(
         let db = state.db.clone();
         let blob_store = state.blob_store.clone();
         tokio::spawn(async move {
-            super::media_io::backfill_missing_colors(&db, &blob_store, &backfill_hashes).await;
+            super::media_io::backfill_missing_deferred(&db, &blob_store, &backfill_hashes).await;
         });
     }
 

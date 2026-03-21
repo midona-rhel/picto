@@ -100,9 +100,11 @@ impl<'a> SubscriptionSyncEngine<'a> {
 
         let pipeline = ImportPipeline::new(self.db, self.blob_store);
         match pipeline.import_file(file_path, &options).await {
-            Ok((imported, _deferred)) => {
-                // Deferred work (colors, phash) is handled by the background worker.
-                // For subscription imports, auto-merge replaces phash-based dedup anyway.
+            Ok((imported, deferred)) => {
+                // Run deferred work (dominant colors, phash, thumbnail generation).
+                if let Some(work) = deferred {
+                    pipeline.process_deferred(work).await;
+                }
                 info!(hash = %imported.hex_hash, tags = options.tags.len(), "Import success");
 
                 let mut surviving_hash = imported.hex_hash.clone();

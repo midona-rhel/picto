@@ -12,6 +12,7 @@ import { startAllRefreshers, stopAllRefreshers } from '../runtime/refresherOrche
 import { useSubscriptionProgressStore } from '../features/subscriptions/subscriptionProgressStore';
 import { performUndo, performRedo } from '../shared/controllers/undoRedoController';
 import { useUpdaterStore } from '../state/updaterStore';
+import { useLogStore } from '../state/logStore';
 import { runBestEffort } from '../shared/lib/asyncOps';
 import type { ResourceKey } from '../shared/types/generated/runtime-contract';
 import type { ManualImportProgressEvent, MediaExportProgressEvent } from '../shared/types/api/events';
@@ -136,6 +137,20 @@ export function useNativeEventListeners(): void {
       runBestEffort('menu.unlistenUndo', unlistenUndo.then((fn) => fn()));
       runBestEffort('menu.unlistenRedo', unlistenRedo.then((fn) => fn()));
     };
+  }, []);
+
+  // Backend log forwarding
+  useEffect(() => {
+    const unlisten = listen<{ level: string; target: string; message: string; timestamp: string }>('log', (event) => {
+      const { level, target, message, timestamp } = event.payload;
+      useLogStore.getState().addEntry({
+        level: level as 'TRACE' | 'DEBUG' | 'INFO' | 'WARN' | 'ERROR',
+        target,
+        message,
+        timestamp,
+      });
+    });
+    return () => { runBestEffort('log.unlisten', unlisten.then((fn) => fn())); };
   }, []);
 
   // Auto-updater status listener
