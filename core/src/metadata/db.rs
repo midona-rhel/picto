@@ -206,6 +206,8 @@ impl SqliteDatabase {
                         has_audio: file.has_audio,
                         view_count: file.view_count,
                         position_rank: None,
+                        date_created: None,
+                        date_modified: None,
                     };
                     let tags = tags_by_file.remove(&fallback.file_id).unwrap_or_default();
                     results.push(ResolvedMetadataFull {

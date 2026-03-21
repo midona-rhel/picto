@@ -39,6 +39,10 @@ pub struct FileMetadataSlim {
     /// Only populated when sorting by folder position_rank.
     #[serde(skip)]
     pub position_rank: Option<i64>,
+    #[serde(skip)]
+    pub date_created: Option<String>,
+    #[serde(skip)]
+    pub date_modified: Option<String>,
 }
 
 /// Full file record from the database.
@@ -602,7 +606,9 @@ const ENTITY_SLIM_SELECT: &str =
      CASE WHEN me.kind = 'collection' THEN NULL ELSE f.num_frames END AS num_frames,
      CASE WHEN me.kind = 'collection' THEN 0 ELSE COALESCE(f.has_audio, 0) END AS has_audio,
      CASE WHEN me.kind = 'collection' THEN 0 ELSE COALESCE(f.view_count, 0) END AS view_count,
-     CASE WHEN me.kind = 'collection' THEN 0 ELSE COALESCE(f.file_id, 0) END AS file_id";
+     CASE WHEN me.kind = 'collection' THEN 0 ELSE COALESCE(f.file_id, 0) END AS file_id,
+     me.created_at,
+     me.updated_at";
 
 /// Shared FROM/JOIN clause for entity-aware grid queries.
 const ENTITY_SLIM_FROM: &str = " FROM media_entity me
@@ -638,6 +644,8 @@ fn row_to_entity_slim(row: &rusqlite::Row) -> rusqlite::Result<FileMetadataSlim>
         view_count: row.get(16)?,
         file_id: row.get(17)?,
         position_rank: None,
+        date_created: row.get(18)?,
+        date_modified: row.get(19)?,
     })
 }
 
@@ -1072,6 +1080,8 @@ pub fn list_files_slim_by_collection_rank(
             has_audio: row.get::<_, i64>(12)? != 0,
             view_count: row.get(13)?,
             position_rank: row.get(16)?,
+            date_created: None,
+            date_modified: None,
         })
     })?;
 
@@ -1570,6 +1580,8 @@ impl SqliteDatabase {
                         has_audio: r.has_audio,
                         view_count: r.view_count,
                         position_rank: None,
+                        date_created: None,
+                        date_modified: None,
                     })
                     .collect()
             })

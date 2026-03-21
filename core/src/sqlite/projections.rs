@@ -108,6 +108,8 @@ fn build_projections_batch_chunk(
                 has_audio: row.get::<_, i64>(13)? != 0,
                 view_count: row.get(14)?,
                 position_rank: None,
+                date_created: None,
+                date_modified: None,
             });
         }
 
