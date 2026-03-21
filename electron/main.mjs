@@ -118,6 +118,7 @@ const menuManager = createMenuManager({
   libraryDisplayName: libraryHost.libraryDisplayName,
   switchLibrary: libraryHost.switchLibrary,
   openSettingsWindow: windowManager.openSettingsWindow,
+  openSubscriptionsWindow: windowManager.openSubscriptionsWindow,
   openLibraryManager: windowManager.openLibraryManager,
   sendToFocusedWindow: windowManager.sendToFocusedWindow,
   sendToMainWindow: windowManager.sendToMainWindow,

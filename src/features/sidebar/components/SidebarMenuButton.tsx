@@ -1,6 +1,8 @@
 import { useCallback, useMemo, type MouseEvent } from 'react';
 import { IconMenu2 } from '@tabler/icons-react';
 import { api, getCurrentWindow, invoke, libraryHost } from '#desktop/api';
+import { useImportActionStore } from '../../../state/importActionStore';
+import { useExportActionStore } from '../../../state/exportActionStore';
 import { KbdTooltip } from '../../../shared/components/KbdTooltip';
 import { ContextMenu, type ContextMenuEntry, useContextMenu } from '../../../shared/components/ContextMenu';
 import { useNavigationStore } from '../../../state/navigationStore';
@@ -44,6 +46,12 @@ export function SidebarMenuButton() {
       children: [
         { type: 'item', label: 'Library Manager…', shortcut: `${modKey}+L`, onClick: () => { void invoke('open_library_manager'); } },
         { type: 'item', label: 'Open Library…', shortcut: `${modKey}+O`, onClick: () => { void libraryHost.open(); } },
+        { type: 'separator' },
+        { type: 'item', label: 'Import Files…', shortcut: `${modKey}+I`, onClick: () => { useImportActionStore.getState().requestImportFilesDialog(); } },
+        { type: 'item', label: 'Import Folder…', shortcut: `${modKey}+Shift+I`, onClick: () => { useImportActionStore.getState().requestImportFolderDialog(); } },
+        { type: 'separator' },
+        { type: 'item', label: 'Export Originals…', shortcut: `${modKey}+E`, onClick: () => { useExportActionStore.getState().requestBasicExport(); } },
+        { type: 'item', label: 'Export As…', shortcut: `${modKey}+Shift+E`, onClick: () => { useExportActionStore.getState().requestAdvancedExport(); } },
         { type: 'separator' },
         { type: 'item', label: 'Subscriptions…', shortcut: `${modKey}+Shift+S`, onClick: () => { void api.os.openSubscriptionsWindow(); } },
         { type: 'item', label: 'Settings…', shortcut: `${modKey}+,`, onClick: () => { void api.os.openSettingsWindow(); } },

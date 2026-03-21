@@ -9,6 +9,7 @@ export function createMenuManager({
   libraryDisplayName,
   switchLibrary,
   openSettingsWindow,
+  openSubscriptionsWindow,
   openLibraryManager,
   sendToFocusedWindow,
   sendToMainWindow,
@@ -152,6 +153,17 @@ export function createMenuManager({
             click: () => sendToMainWindow('menu:export-advanced'),
           },
           { type: 'separator' },
+          {
+            label: 'Subscriptions…',
+            accelerator: 'Shift+CmdOrCtrl+S',
+            click: () => openSubscriptionsWindow(),
+          },
+          ...(!isMac ? [{
+            label: 'Settings…',
+            accelerator: 'CmdOrCtrl+,',
+            click: () => openSettingsWindow(),
+          }] : []),
+          { type: 'separator' },
           isMac ? { role: 'close' } : { role: 'quit' },
         ],
       },
@@ -205,6 +217,15 @@ export function createMenuManager({
             label: 'Trash',
             accelerator: 'CmdOrCtrl+4',
             click: () => sendToFocusedWindow('menu:navigate', 'trash'),
+          },
+          { type: 'separator' },
+          {
+            label: 'Duplicates',
+            click: () => sendToFocusedWindow('menu:navigate', 'duplicates'),
+          },
+          {
+            label: 'Tag Manager',
+            click: () => sendToFocusedWindow('menu:navigate', 'tags'),
           },
           { type: 'separator' },
           ...(isDev ? [
