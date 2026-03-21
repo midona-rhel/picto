@@ -8,7 +8,6 @@
 //! 5. Merge metadata for already-imported files (tags, URLs, notes, name)
 //! 6. Track `completed_initial_run` for smart-stop behavior
 
-mod collections;
 mod credentials;
 mod importing;
 mod progress;
@@ -27,7 +26,7 @@ use crate::subscriptions::archive::subscription_query_archive_prefix;
 use crate::subscriptions::gallery_dl_runner::{self, FailureKind, GalleryDlRunner, RunOptions};
 use crate::subscriptions::import_policy::{collection_group_parts, preferred_import_name, validate_metadata_for_site};
 use crate::subscriptions::policy::{
-    apply_resume_to_query, default_resume_strategy_for_site, derive_resume_cursor,
+    apply_resume_to_query, default_resume_strategy_for_site,
     effective_inbox_limit, range_start_from_cursor, resolve_query_name,
 };
 
@@ -42,17 +41,6 @@ pub struct SyncProgress {
     pub metadata_validated: usize,
     pub metadata_invalid: usize,
     pub last_metadata_error: Option<String>,
-}
-
-#[derive(Debug, Clone)]
-struct CollectionGroup {
-    category: String,
-    post_id: String,
-    preferred_name: String,
-    /// (hash, page_num) pairs — page_num preserves original page order.
-    members: Vec<(String, u32)>,
-    /// Expected total pages from metadata (gallery-dl `count` field).
-    expected_count: u32,
 }
 
 pub struct SubscriptionSyncEngine<'a> {

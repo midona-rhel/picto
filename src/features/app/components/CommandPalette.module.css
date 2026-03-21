@@ -4,7 +4,7 @@
 
 .backdrop {
   composes: panelBackdrop from '../../../shared/styles/pickerPanel.module.css';
-  background: rgba(0, 0, 0, 0.35);
+  background: var(--color-black-35);
 }
 
 .container {
@@ -67,7 +67,7 @@
   font-size: var(--font-size-2xs);
   padding: 2px 6px;
   border-radius: 4px;
-  background: var(--color-white-10, rgba(255, 255, 255, 0.08));
+  background: var(--color-white-10);
   color: var(--color-text-tertiary);
 }
 

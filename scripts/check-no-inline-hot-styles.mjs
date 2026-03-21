@@ -3,10 +3,9 @@ import path from 'node:path';
 
 const repoRoot = process.cwd();
 const targets = [
-  'src/components/Collections.tsx',
-  'src/components/settings/SubscriptionsPanel.tsx',
-  'src/components/settings/ui.tsx',
-  'src/components/video/VideoPlayer.tsx',
+  'src/features/collections/components/Collections.tsx',
+  'src/features/subscriptions/components/SubscriptionGroupsPanel.tsx',
+  'src/features/viewer/components/VideoPlayer.tsx',
 ];
 
 const violations = [];

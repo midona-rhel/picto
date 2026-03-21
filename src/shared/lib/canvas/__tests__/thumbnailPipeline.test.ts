@@ -99,7 +99,7 @@ describe('thumbnailPipeline source selection', () => {
       activeVisibleThumbLoads: 0,
       activePrefetchThumbLoads: 0,
       activeFullLoads: 0,
-      hasVisibleThumbnailQueued: false,
+
     })).toBe(false);
   });
 
@@ -119,11 +119,11 @@ describe('thumbnailPipeline source selection', () => {
       activeVisibleThumbLoads: 0,
       activePrefetchThumbLoads: 0,
       activeFullLoads: 0,
-      hasVisibleThumbnailQueued: true,
+
     })).toBe(true);
   });
 
-  it('does not start full-quality upgrades while scrolling', () => {
+  it('allows full-quality upgrades within budget regardless of scroll phase', () => {
     expect(__private__.canStartQueueItem({
       item: {
         hash: 'visible-full',
@@ -139,8 +139,8 @@ describe('thumbnailPipeline source selection', () => {
       activeVisibleThumbLoads: 0,
       activePrefetchThumbLoads: 0,
       activeFullLoads: 0,
-      hasVisibleThumbnailQueued: false,
-    })).toBe(false);
+
+    })).toBe(true);
   });
 
   it('treats prefetch work as non-visible work during scrolling', () => {
@@ -159,7 +159,7 @@ describe('thumbnailPipeline source selection', () => {
       activeVisibleThumbLoads: 0,
       activePrefetchThumbLoads: 1,
       activeFullLoads: 0,
-      hasVisibleThumbnailQueued: false,
+
     })).toBe(false);
   });
 
@@ -179,7 +179,7 @@ describe('thumbnailPipeline source selection', () => {
       activeVisibleThumbLoads: 0,
       activePrefetchThumbLoads: 0,
       activeFullLoads: 0,
-      hasVisibleThumbnailQueued: false,
+
     })).toBe(true);
   });
 
@@ -199,7 +199,7 @@ describe('thumbnailPipeline source selection', () => {
       activeVisibleThumbLoads: 0,
       activePrefetchThumbLoads: 0,
       activeFullLoads: 0,
-      hasVisibleThumbnailQueued: false,
+
     })).toBe(true);
   });
 });

@@ -1,9 +1,9 @@
 import { useState, useEffect, useRef, useLayoutEffect, useCallback, useMemo } from 'react';
-import { OverlayShell } from '../components/OverlayShell';
+import { OverlayShell } from '#ui/OverlayShell';
 import { IconCheck, IconChevronDown, IconChevronRight, IconEqual, IconLayersIntersect, IconLayersUnion, IconMinus, IconPin, IconPinFilled } from '@tabler/icons-react';
 import { useDomainStore } from '../../state/domainStore';
 import type { FilterLogicMode } from '../../state/filterStore';
-import { DynamicIcon } from '#features/smart-folders/components/iconRegistry';
+import { DynamicIcon } from '#features/smart-folders/components';
 import { buildFolderTree, parseFolderId, type TreeNode } from '#features/sidebar/lib/folderTreeData';
 import { registerFolderPickerOpenHandler, type FolderPickerRequest } from './folderPickerService';
 import st from './FolderPicker.module.css';

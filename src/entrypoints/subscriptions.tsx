@@ -1,7 +1,7 @@
 import React, { useEffect } from 'react';
 import ReactDOM from 'react-dom/client';
 import { MantineProvider, createTheme, rem } from '@mantine/core';
-import { ToastStack } from '../shared/components/ToastStack';
+import { ToastStack } from '#ui/ToastStack';
 import { api } from '#desktop/api';
 import { SubscriptionsWindow } from '#features/subscriptions/components';
 import { useThemeSync, useDerivedColorScheme } from '../shared/hooks/useThemeSync';

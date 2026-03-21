@@ -34,40 +34,40 @@ export function CanvasGridEmptyState(props: {
         WebkitMaskImage: 'linear-gradient(to bottom, black 30%, transparent 100%)',
       }}
     >
+      {/* Portrait frame — glass material */}
       <div
         style={{
           position: 'absolute',
           inset: 0,
-          borderRadius: 4,
-          border: '1px solid var(--color-border-secondary)',
-          background: 'linear-gradient(180deg, var(--color-border-primary) 0%, var(--color-border-secondary) 100%)',
-          paddingTop: 8,
-          paddingLeft: 6,
-          paddingRight: 6,
-          paddingBottom: 6,
+          borderRadius: 6,
+          background: 'rgba(128, 128, 128, 0.12)',
+          borderTop: '1px solid rgba(255, 255, 255, 0.25)',
+          borderLeft: '1px solid rgba(128, 128, 128, 0.18)',
+          borderRight: '1px solid rgba(128, 128, 128, 0.18)',
+          borderBottom: '1px solid rgba(0, 0, 0, 0.15)',
+          display: 'flex',
+          flexDirection: 'column',
+          overflow: 'hidden',
         }}
       >
+        {/* Image area */}
         <div
           style={{
-            width: '100%',
-            height: '100%',
-            borderRadius: 2,
-            border: '1px solid var(--color-border-secondary)',
-            background: 'var(--color-theme)',
+            flex: 1,
+            margin: 6,
+            borderRadius: 3,
+            borderTop: '1px solid rgba(255, 255, 255, 0.15)',
+            borderLeft: '1px solid rgba(128, 128, 128, 0.12)',
+            borderRight: '1px solid rgba(128, 128, 128, 0.12)',
+            borderBottom: '1px solid rgba(0, 0, 0, 0.10)',
+            background: 'rgba(128, 128, 128, 0.06)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
           }}
-        />
-      </div>
-      <div
-        style={{
-          position: 'absolute',
-          inset: 0,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          zIndex: 1,
-        }}
-      >
-        <IconPhoto size={28} stroke={1.2} style={{ color: 'var(--color-text-tertiary)' }} />
+        >
+          <IconPhoto size={28} stroke={1.2} style={{ color: 'var(--mantine-color-body, #1a1a1e)', opacity: 1 }} />
+        </div>
       </div>
     </div>
   );

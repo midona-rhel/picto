@@ -181,7 +181,7 @@ impl<'a> SubscriptionSyncEngine<'a> {
         hex_hash: &str,
         existing: &crate::sqlite::files::FileRecord,
         metadata: &ParsedMetadata,
-        gallery_url: &str,
+        _gallery_url: &str,
         subscription_id: i64,
     ) -> Result<(), String> {
         let existing_name = existing.name.as_deref().unwrap_or("").trim();

@@ -41,10 +41,10 @@
   flex-shrink: 0;
 }
 
-.dotSuccess { background: #40c057; }
-.dotError { background: #fa5252; }
-.dotWarning { background: #fab005; }
-.dotInfo { background: #339af0; }
+.dotSuccess { background: var(--color-success); }
+.dotError { background: var(--color-danger); }
+.dotWarning { background: var(--color-warning); }
+.dotInfo { background: var(--color-info); }
 
 .message {
   font-size: 13px;

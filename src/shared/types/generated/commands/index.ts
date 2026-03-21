@@ -275,7 +275,7 @@ export interface TypedCommandMap {
   list_folders: { input: Record<string, never>; output: unknown };
   get_folder_files: { input: GetFolderFilesInput; output: string[] };
   get_folder_cover_hash: { input: GetFolderCoverHashInput; output: string | null };
-  get_entity_folders: { input: GetFileFoldersInput; output: unknown };
+  get_entity_folders_by_hash: { input: GetFileFoldersInput; output: unknown };
   get_entity_folders: { input: GetEntityFoldersInput; output: unknown };
   move_folder: { input: MoveFolderInput; output: null };
   create_folder: { input: CreateFolderInput; output: unknown };

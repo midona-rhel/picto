@@ -185,6 +185,9 @@ vendor/ffmpeg/
 # Vendored gallery-dl (downloaded via scripts/download-gallery-dl.sh)
 vendor/gallery-dl/
 
+# Vendored ONNX Runtime (downloaded via scripts/download-onnxruntime.sh)
+vendor/onnxruntime/
+
 # Native addon build outputs (rebuild locally/CI; do not commit)
 /native/picto-node/index.node
 /native/picto-node/index.*.node

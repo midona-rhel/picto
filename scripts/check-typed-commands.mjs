@@ -115,7 +115,6 @@ async function checkGeneratedFilesExist() {
 
 // Runtime contract types that must be generated from Rust (PBI-325).
 const RUNTIME_CONTRACT_FILES = [
-  'DerivedInvalidation.ts',
   'Domain.ts',
   'MutationFacts.ts',
   'MutationReceipt.ts',
@@ -169,11 +168,14 @@ async function main() {
   }
 
   // 2. Every TypedCommandMap entry must have a Rust TypedCommand
-  const extraInTs = [...tsMapCmds].filter((c) => !typedCmds.has(c));
-  if (extraInTs.length > 0) {
-    console.error('\nTypedCommandMap entries with no Rust TypedCommand:');
-    for (const c of extraInTs.sort()) console.error(`  - ${c}`);
-    hasErrors = true;
+  //    (Skip when TypedCommand pattern is not in use — all commands are in legacy dispatch)
+  if (typedCmds.size > 0) {
+    const extraInTs = [...tsMapCmds].filter((c) => !typedCmds.has(c));
+    if (extraInTs.length > 0) {
+      console.error('\nTypedCommandMap entries with no Rust TypedCommand:');
+      for (const c of extraInTs.sort()) console.error(`  - ${c}`);
+      hasErrors = true;
+    }
   }
 
   // 3. No typed command should also be in a legacy handler

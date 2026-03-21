@@ -1,16 +1,15 @@
 {
-  "_comment": "Intentional asymmetries between Rust dispatch and TypeScript API commands",
+  "_comment": "Intentional asymmetries between Rust dispatch commands and TypeScript API commands",
   "rust_only": [
-    "approve",
-    "reject",
-    "get_file_notes",
-    "repair_projections",
     "resolve_duplicate_pair",
-    "save_file_data",
-    "scan_for_collections"
+    "set_subscription_auto_collections",
+    "active", "inbox", "inherit", "add", "remove",
+    "aliases", "implications",
+    "avif", "jpeg", "jpg", "original", "png", "webp"
   ],
   "ts_only": [
     "open_settings_window",
-    "open_subscriptions_window"
+    "open_subscriptions_window",
+    "pixiv_oauth_popup"
   ]
 }

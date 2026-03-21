@@ -375,8 +375,8 @@
 
 .queryAuthWarning {
   font-size: 10px;
-  color: var(--color-red-6, #ff6b6b);
-  border: 1px solid color-mix(in srgb, var(--color-red-6, #ff6b6b) 45%, transparent);
+  color: var(--color-danger);
+  border: 1px solid color-mix(in srgb, var(--color-danger) 45%, transparent);
   border-radius: 999px;
   padding: 0 6px;
   line-height: 16px;
@@ -395,8 +395,8 @@
 
 .queryStatusDone {
   font-size: 10px;
-  color: var(--color-green-6, #51cf66);
-  border: 1px solid color-mix(in srgb, var(--color-green-6, #51cf66) 45%, transparent);
+  color: var(--color-success);
+  border: 1px solid color-mix(in srgb, var(--color-success) 45%, transparent);
   border-radius: 999px;
   padding: 0 6px;
   line-height: 16px;

@@ -335,10 +335,13 @@ fn models_root_for(state: &AppState) -> std::path::PathBuf {
 }
 
 async fn ensure_session(state: &AppState, slug: &str) -> Result<(), String> {
-    let mut guard = state.ai_taggers.lock().await;
-    if guard.contains_key(slug) {
-        return Ok(());
+    {
+        let guard = state.ai_taggers.lock().await;
+        if guard.contains_key(slug) {
+            return Ok(());
+        }
     }
+    // Drop the lock before the heavy model load
 
     let models_root = models_root_for(state);
     let model_info = crate::ai_tagger::models::find_model(slug)
@@ -349,13 +352,23 @@ async fn ensure_session(state: &AppState, slug: &str) -> Result<(), String> {
     }
 
     let model_dir = crate::ai_tagger::models::model_dir(&models_root, slug);
-    let session = crate::ai_tagger::inference::TaggerSession::load(
-        &model_dir,
-        slug,
-        model_info.input_size,
-        model_info.channel_order,
-    )?;
+    let slug_owned = slug.to_string();
+    let input_size = model_info.input_size;
+    let channel_order = model_info.channel_order;
 
+    // Load the model on a blocking thread — ONNX graph optimization is CPU-heavy
+    let session = tokio::task::spawn_blocking(move || {
+        crate::ai_tagger::inference::TaggerSession::load(
+            &model_dir,
+            &slug_owned,
+            input_size,
+            channel_order,
+        )
+    })
+    .await
+    .map_err(|e| format!("Model load task failed: {e}"))??;
+
+    let mut guard = state.ai_taggers.lock().await;
     guard.insert(slug.to_string(), session);
     Ok(())
 }

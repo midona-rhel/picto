@@ -156,7 +156,13 @@ pub(crate) fn generate_image_thumbnail(
     let reader = image::ImageReader::open(path)?
         .with_guessed_format()
         .map_err(FileError::Io)?;
-    let img = reader.decode()?;
+    let mut img = reader.decode()?;
+
+    // Apply ICC color profile if present (converts to sRGB)
+    if let Ok(raw_bytes) = std::fs::read(path) {
+        img = apply_icc_profile_to_srgb(img, &raw_bytes);
+    }
+
     let (orig_w, orig_h) = img.dimensions();
 
     let (tw, th) = get_thumbnail_resolution(
@@ -168,4 +174,162 @@ pub(crate) fn generate_image_thumbnail(
 
     let thumbnail = fast_resize(&img, tw, th)?;
     encode_thumbnail(&thumbnail).map(|(bytes, ext)| (bytes, ext.to_string()))
+}
+
+/// Extract ICC profile from raw image bytes and convert pixels to sRGB.
+/// Returns the original image unchanged if no profile is found or conversion fails.
+fn apply_icc_profile_to_srgb(img: image::DynamicImage, raw_bytes: &[u8]) -> image::DynamicImage {
+    let icc_data = match extract_icc_profile(raw_bytes) {
+        Some(data) => data,
+        None => return img,
+    };
+
+    // Parse the ICC profile
+    let src_profile = match lcms2::Profile::new_icc(&icc_data) {
+        Ok(p) => p,
+        Err(_) => return img,
+    };
+
+    let dst_profile = lcms2::Profile::new_srgb();
+
+    // Check if it's already sRGB (skip conversion)
+    // A rough heuristic: if the profile description contains "sRGB", skip.
+    // lcms2 doesn't expose description easily, so just always convert — it's a no-op for sRGB anyway.
+
+    let transform = match lcms2::Transform::new(
+        &src_profile,
+        lcms2::PixelFormat::RGBA_8,
+        &dst_profile,
+        lcms2::PixelFormat::RGBA_8,
+        lcms2::Intent::Perceptual,
+    ) {
+        Ok(t) => t,
+        Err(_) => return img,
+    };
+
+    let mut rgba = img.to_rgba8();
+    let pixels: &mut [[u8; 4]] = unsafe {
+        let ptr = rgba.as_mut_ptr() as *mut [u8; 4];
+        let len = rgba.len() / 4;
+        std::slice::from_raw_parts_mut(ptr, len)
+    };
+
+    transform.transform_in_place(pixels);
+
+    image::DynamicImage::ImageRgba8(rgba)
+}
+
+/// Extract ICC profile data from JPEG APP2 markers or PNG iCCP chunk.
+fn extract_icc_profile(data: &[u8]) -> Option<Vec<u8>> {
+    if data.len() < 4 {
+        return None;
+    }
+
+    // JPEG: ICC profile in APP2 markers (0xFF 0xE2)
+    if data[0] == 0xFF && data[1] == 0xD8 {
+        return extract_icc_from_jpeg(data);
+    }
+
+    // PNG: iCCP chunk
+    if data.starts_with(b"\x89PNG") {
+        return extract_icc_from_png(data);
+    }
+
+    None
+}
+
+fn extract_icc_from_jpeg(data: &[u8]) -> Option<Vec<u8>> {
+    const ICC_MARKER: &[u8] = b"ICC_PROFILE\0";
+    let mut chunks: Vec<(u8, u8, Vec<u8>)> = Vec::new(); // (seq, total, data)
+    let mut pos = 2; // skip SOI
+
+    while pos + 4 < data.len() {
+        if data[pos] != 0xFF {
+            break;
+        }
+        let marker = data[pos + 1];
+        if marker == 0xD9 || marker == 0xDA {
+            break; // EOI or SOS — stop scanning
+        }
+        let seg_len = u16::from_be_bytes([data[pos + 2], data[pos + 3]]) as usize;
+        if seg_len < 2 || pos + 2 + seg_len > data.len() {
+            break;
+        }
+
+        // APP2 marker with ICC_PROFILE header
+        if marker == 0xE2 && seg_len > ICC_MARKER.len() + 2 {
+            let payload = &data[pos + 4..pos + 2 + seg_len];
+            if payload.starts_with(ICC_MARKER) {
+                let seq = payload[ICC_MARKER.len()];
+                let total = payload[ICC_MARKER.len() + 1];
+                let icc_chunk = &payload[ICC_MARKER.len() + 2..];
+                chunks.push((seq, total, icc_chunk.to_vec()));
+            }
+        }
+
+        pos += 2 + seg_len;
+    }
+
+    if chunks.is_empty() {
+        return None;
+    }
+
+    chunks.sort_by_key(|(seq, _, _)| *seq);
+    let mut profile = Vec::new();
+    for (_, _, chunk) in &chunks {
+        profile.extend_from_slice(chunk);
+    }
+
+    if profile.len() < 128 {
+        return None; // too small to be a valid ICC profile
+    }
+
+    Some(profile)
+}
+
+fn extract_icc_from_png(data: &[u8]) -> Option<Vec<u8>> {
+    let mut pos = 8; // skip PNG signature
+
+    while pos + 12 <= data.len() {
+        let chunk_len = u32::from_be_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]]) as usize;
+        let chunk_type = &data[pos + 4..pos + 8];
+        let chunk_data_start = pos + 8;
+        let chunk_data_end = chunk_data_start + chunk_len;
+
+        if chunk_data_end > data.len() {
+            break;
+        }
+
+        if chunk_type == b"iCCP" {
+            // iCCP: null-terminated profile name, compression method (0), compressed data
+            let chunk_data = &data[chunk_data_start..chunk_data_end];
+            if let Some(null_pos) = chunk_data.iter().position(|&b| b == 0) {
+                if null_pos + 2 <= chunk_data.len() {
+                    let compressed = &chunk_data[null_pos + 2..]; // skip null + compression method byte
+                    if let Ok(decompressed) = decompress_zlib(compressed) {
+                        if decompressed.len() >= 128 {
+                            return Some(decompressed);
+                        }
+                    }
+                }
+            }
+        }
+
+        if chunk_type == b"IDAT" {
+            break; // stop at image data
+        }
+
+        pos = chunk_data_end + 4; // skip CRC
+    }
+
+    None
+}
+
+fn decompress_zlib(data: &[u8]) -> Result<Vec<u8>, std::io::Error> {
+    use flate2::read::ZlibDecoder;
+    use std::io::Read;
+    let mut decoder = ZlibDecoder::new(data);
+    let mut buf = Vec::new();
+    decoder.read_to_end(&mut buf)?;
+    Ok(buf)
 }

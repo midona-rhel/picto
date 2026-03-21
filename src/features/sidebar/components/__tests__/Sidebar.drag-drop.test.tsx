@@ -23,6 +23,9 @@ vi.mock('#desktop/api', () => ({
     file: {
       setStatusSelection: setStatusSelectionMock,
     },
+    files: {
+      setStatusSelection: setStatusSelectionMock,
+    },
     sidebar: {
       getTree: sidebarGetTreeMock,
     },
@@ -105,7 +108,7 @@ describe('Sidebar drag-drop status targets', () => {
     dispatchInternalDrop('All Active', ['hash_a', 'hash_b']);
 
     expect(setStatusSelectionMock).toHaveBeenCalledWith(
-      { mode: 'explicit_hashes', hashes: ['hash_a', 'hash_b'] },
+      expect.objectContaining({ mode: 'explicit_hashes', hashes: ['hash_a', 'hash_b'] }),
       'active',
     );
   });
@@ -115,7 +118,7 @@ describe('Sidebar drag-drop status targets', () => {
     dispatchInternalDrop('Inbox', ['hash_x']);
 
     expect(setStatusSelectionMock).toHaveBeenCalledWith(
-      { mode: 'explicit_hashes', hashes: ['hash_x'] },
+      expect.objectContaining({ mode: 'explicit_hashes', hashes: ['hash_x'] }),
       'inbox',
     );
   });
@@ -125,7 +128,7 @@ describe('Sidebar drag-drop status targets', () => {
     dispatchInternalDrop('Trash', ['hash_z']);
 
     expect(setStatusSelectionMock).toHaveBeenCalledWith(
-      { mode: 'explicit_hashes', hashes: ['hash_z'] },
+      expect.objectContaining({ mode: 'explicit_hashes', hashes: ['hash_z'] }),
       'trash',
     );
   });

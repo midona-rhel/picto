@@ -30,7 +30,6 @@ use tracing::{debug, info, warn};
 use crate::credential_store::SiteCredential;
 
 use self::config::build_config;
-use self::filesystem::scan_output_dir;
 
 pub use failure::{FailureKind, classify_failure};
 pub use filesystem::cleanup_temp_dir;

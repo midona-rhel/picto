@@ -2,7 +2,7 @@
   "name": "picto",
   "productName": "Picto",
   "private": true,
-  "version": "0.1.1-alpha.1",
+  "version": "0.2.0-alpha",
   "description": "Media library manager",
   "author": "Picto <noreply@picto.app>",
   "type": "module",
@@ -49,6 +49,7 @@
   "build": {
     "productName": "Picto",
     "appId": "com.picto.desktop",
+    "electronVersion": "37.10.3",
     "files": [
       "dist/assets/**/*",
       "dist/*.html",
@@ -57,6 +58,22 @@
       "native/picto-node/index.node",
       "native/picto-node/index.*.node",
       "!node_modules/**",
+      "node_modules/electron-updater/**",
+      "node_modules/builder-util-runtime/**",
+      "node_modules/debug/**",
+      "node_modules/ms/**",
+      "node_modules/sax/**",
+      "node_modules/fs-extra/**",
+      "node_modules/graceful-fs/**",
+      "node_modules/jsonfile/**",
+      "node_modules/universalify/**",
+      "node_modules/js-yaml/**",
+      "node_modules/argparse/**",
+      "node_modules/lazy-val/**",
+      "node_modules/lodash.escaperegexp/**",
+      "node_modules/lodash.isequal/**",
+      "node_modules/semver/**",
+      "node_modules/tiny-typed-emitter/**",
       "LICENSE",
       "THIRD_PARTY_LICENSES",
       "package.json"
@@ -97,20 +114,20 @@
     },
     "win": {
       "target": [
-        "nsis",
-        "zip"
+        "nsis"
       ]
     },
     "linux": {
       "maintainer": "Picto <noreply@picto.app>",
       "target": [
-        "AppImage",
-        "deb",
-        "zip"
+        "AppImage"
       ]
     }
   },
   "dependencies": {
+    "electron-updater": "^6.8.3"
+  },
+  "devDependencies": {
     "@dagrejs/dagre": "^2.0.4",
     "@dnd-kit/core": "^6.3.1",
     "@dnd-kit/sortable": "^10.0.0",
@@ -122,12 +139,9 @@
     "@tabler/icons-react": "^3.36.1",
     "@tanstack/react-virtual": "^3.13.18",
     "dayjs": "^1.11.19",
-    "electron-updater": "^6.8.3",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
-    "zustand": "^5.0.11"
-  },
-  "devDependencies": {
+    "zustand": "^5.0.11",
     "@testing-library/dom": "^10.4.1",
     "@testing-library/jest-dom": "^6.2.0",
     "@testing-library/react": "^14.1.2",

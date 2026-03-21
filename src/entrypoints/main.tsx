@@ -1,7 +1,7 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import { MantineProvider, createTheme, rem } from "@mantine/core";
-import { ToastStack } from '../shared/components/ToastStack';
+import { ToastStack } from '#ui/ToastStack';
 import App from "../app/App";
 import { AppErrorBoundary } from '#features/layout/components';
 import { useDerivedColorScheme } from '../shared/hooks/useThemeSync';

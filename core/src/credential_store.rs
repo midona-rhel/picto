@@ -103,7 +103,7 @@ pub fn delete_credential(site_category: &str) -> Result<(), String> {
 pub fn build_extractor_auth(cred: &SiteCredential) -> serde_json::Value {
     let mut obj = serde_json::Map::new();
     let category = cred.site_category.trim().to_ascii_lowercase();
-    let is_rule34 = matches!(category.as_str(), "rule34" | "rule34xxx" | "rule34.xxx");
+    let _is_rule34 = matches!(category.as_str(), "rule34" | "rule34xxx" | "rule34.xxx");
 
     match cred.credential_type {
         CredentialType::UsernamePassword => {

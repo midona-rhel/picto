@@ -50,11 +50,11 @@
 }
 
 .overlayGradientStrong {
-  background: linear-gradient(transparent, rgba(0, 0, 0, 0.8));
+  background: linear-gradient(transparent, var(--color-black-80));
 }
 
 .overlayGradientSoft {
-  background: linear-gradient(transparent, rgba(0, 0, 0, 0.7));
+  background: linear-gradient(transparent, var(--color-black-70));
 }
 
 .overlayContent {

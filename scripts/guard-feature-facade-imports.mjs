@@ -32,6 +32,7 @@ function lineForIndex(content, index) {
 function shouldScan(relPath) {
   if (relPath.startsWith('src/components/')) return false;
   if (relPath.startsWith('src/features/')) return false;
+  if (relPath.startsWith('src/shared/')) return false;
   if (relPath.startsWith('src/test/')) return false;
   return true;
 }

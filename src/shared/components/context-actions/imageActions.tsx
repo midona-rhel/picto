@@ -32,9 +32,9 @@ import type { Dispatch, MutableRefObject, ReactNode, SetStateAction } from 'reac
 import type { ContextMenuEntry } from '../ContextMenu';
 import { LayoutRow } from '../LayoutRow';
 import { SortByRow } from '../SortByRow';
-import { DisplayOptionsPanel } from '../../../features/layout/components/DisplayOptionsPanel';
+import { DisplayOptionsPanel } from '#features/layout/components';
 import { IconBing, IconSauceNAO, IconSogou, IconTinEye, IconYandex } from '../SearchEngineIcons';
-import type { SmartFolderPredicate } from '../../../features/smart-folders/components/types';
+import type { SmartFolderPredicate } from '#features/smart-folders/types';
 import type { GridRuntimeAction, GridRuntimeState, GridViewMode } from '../../../features/grid/runtime';
 import { FolderPickerService } from '../../services/folderPickerService';
 import { AiTaggerService } from '../../services/aiTaggerService';

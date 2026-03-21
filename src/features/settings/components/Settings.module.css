@@ -274,7 +274,7 @@
   height: 28px;
   border-radius: 50%;
   border: none;
-  box-shadow: inset 0 0 0 2px rgba(0, 0, 0, 0.3);
+  box-shadow: inset 0 0 0 2px var(--color-black-30);
   cursor: pointer;
   padding: 0;
   outline-offset: -1px;
@@ -282,13 +282,13 @@
 }
 
 .themeSwatch:hover {
-  box-shadow: inset 0 0 0 2px rgba(0, 0, 0, 0.3), 0 0 0 1px var(--color-border-primary);
+  box-shadow: inset 0 0 0 2px var(--color-black-30), 0 0 0 1px var(--color-border-primary);
 }
 
 .themeActive {
-  box-shadow: inset 0 0 0 2px rgba(0, 0, 0, 0.3), 0 0 0 2px var(--color-primary);
+  box-shadow: inset 0 0 0 2px var(--color-black-30), 0 0 0 2px var(--color-primary);
 }
 
 .themeAuto {
-  background: linear-gradient(135deg, #ffffff 50%, #000000 50%);
+  background: linear-gradient(135deg, var(--color-white-99) 50%, var(--color-black-99) 50%);
 }

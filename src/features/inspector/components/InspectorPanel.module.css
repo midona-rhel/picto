@@ -339,8 +339,8 @@
 }
 
 [data-mantine-color-scheme="light"] .fieldHoverPopover {
-  background: rgba(255, 255, 255, 0.92);
-  border-color: rgba(0, 0, 0, 0.10);
+  background: var(--color-white-92);
+  border-color: var(--color-black-10);
 }
 
 .editableFieldLink {
@@ -358,7 +358,7 @@
   display: block;
   padding: 2px 0;
   color: var(--color-text-primary);
-  text-shadow: 0 0 12px rgba(255, 255, 255, 0.15);
+  text-shadow: 0 0 12px var(--color-white-15);
   cursor: pointer;
   text-decoration: none;
   overflow: hidden;
@@ -368,15 +368,15 @@
 
 .hoverPopoverLink:hover {
   text-decoration: underline;
-  text-shadow: 0 0 16px rgba(255, 255, 255, 0.25);
+  text-shadow: 0 0 16px var(--color-white-25);
 }
 
 [data-mantine-color-scheme="light"] .hoverPopoverLink {
-  text-shadow: 0 0 8px rgba(0, 0, 0, 0.06);
+  text-shadow: 0 0 8px var(--color-black-06);
 }
 
 [data-mantine-color-scheme="light"] .hoverPopoverLink:hover {
-  text-shadow: 0 0 12px rgba(0, 0, 0, 0.1);
+  text-shadow: 0 0 12px var(--color-black-10);
 }
 
 .ghostInput {
@@ -467,27 +467,27 @@
 
 [data-mantine-color-scheme="light"] .editableField,
 [data-mantine-color-scheme="light"] .editableFieldColumn {
-  background: var(--color-bg-secondary, rgba(0, 0, 0, 0.03));
+  background: var(--color-bg-secondary, var(--color-black-04));
   border-color: var(--color-border-primary);
 }
 
 /* Light theme overrides */
 
 [data-mantine-color-scheme="light"] .fieldInput {
-  background: var(--color-bg-secondary, rgba(0, 0, 0, 0.03));
+  background: var(--color-bg-secondary, var(--color-black-04));
   border-color: var(--color-border-primary);
 }
 
 [data-mantine-color-scheme="light"] .fieldInput:focus {
-  background: #fff;
+  background: var(--color-white-99);
   border-color: var(--color-primary);
 }
 
 [data-mantine-color-scheme="light"] .exportButton {
-  background: var(--color-bg-secondary, rgba(0, 0, 0, 0.03));
+  background: var(--color-bg-secondary, var(--color-black-04));
   border-color: var(--color-border-primary);
 }
 
 [data-mantine-color-scheme="light"] .exportButton:hover {
-  background: var(--color-bg-tertiary, rgba(0, 0, 0, 0.06));
+  background: var(--color-bg-tertiary, var(--color-black-06));
 }

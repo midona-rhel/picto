@@ -96,7 +96,7 @@
 }
 
 [data-mantine-color-scheme="light"] .zoomRatio:hover {
-  background: rgba(0, 0, 0, 0.08);
+  background: var(--color-black-08);
 }
 
 .container {

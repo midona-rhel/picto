@@ -77,7 +77,7 @@
   color: var(--color-text-primary);
   font-size: var(--font-size-sm);
   font-family: inherit;
-  background-color: var(--color-bg-secondary, rgba(247, 248, 248, 0.05));
+  background-color: var(--color-bg-secondary, var(--color-white-05));
   transition: background-color var(--transition-fast);
   white-space: nowrap;
   user-select: none;

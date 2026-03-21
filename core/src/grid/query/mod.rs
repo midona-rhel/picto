@@ -1,6 +1,7 @@
 //! Grid page query — resolves paginated file queries for the main image grid.
 //!
-//! Handles scope resolution, sorting, pagination, and color filtering.
+//! Delegates to scope::resolver for canonical scope rules.
+//! Handles sorting, pagination, and color filtering.
 
 mod collection;
 mod common;

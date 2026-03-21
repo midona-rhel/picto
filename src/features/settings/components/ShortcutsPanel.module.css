@@ -56,7 +56,7 @@
 }
 
 [data-mantine-color-scheme="light"] .tableRow:nth-child(even) {
-  background-color: rgba(0, 0, 0, 0.04);
+  background-color: var(--color-black-04);
 }
 
 .functionName {

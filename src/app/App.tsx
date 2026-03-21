@@ -14,15 +14,15 @@ import { useViewerHost } from '#features/viewer/hooks/useViewerHost';
 import { TagSelectPortal } from '#features/tags/components';
 import { FolderPickerPortal } from '../shared/services/FolderPickerPortal';
 import { AiTaggerPortal } from '../shared/services/AiTaggerPortal';
-import { FolderWatchDialog } from '#features/folders/components/FolderWatchDialog';
-import { KbdTooltip } from '../shared/components/KbdTooltip';
+import { FolderWatchDialog } from '#features/folders/components';
+import { KbdTooltip } from '#ui/KbdTooltip';
 import { useScopedGridPreferences } from '../shared/hooks/useScopedGridPreferences';
 import { ScopedDisplayProvider } from '../shared/contexts/ScopedDisplayContext';
 import { useAppBootstrap } from './useAppBootstrap';
 import { useCommandPalette } from './useCommandPalette';
 import { useInspectorState } from '../features/inspector/hooks/useInspectorState';
 import { useGridFeatureState } from '../features/grid/hooks/useGridFeatureState';
-import { UpdateBanner } from '../shared/components/UpdateBanner';
+import { UpdateBanner } from '#ui/UpdateBanner';
 import styles from './App.module.css';
 
 const isMac = navigator.platform.includes('Mac');

@@ -3,8 +3,8 @@
   align-items: center;
   gap: 8px;
   padding: 6px 12px;
-  background: var(--color-primary-alpha-10, rgba(56, 139, 253, 0.1));
-  border-bottom: 1px solid var(--color-primary-alpha-20, rgba(56, 139, 253, 0.2));
+  background: var(--color-primary-alpha-10);
+  border-bottom: 1px solid var(--color-primary-alpha-20);
   font-size: 12px;
   color: var(--color-text-primary);
   flex-shrink: 0;
@@ -32,8 +32,8 @@
   gap: 4px;
   padding: 3px 10px;
   border-radius: 4px;
-  color: var(--color-text-on-primary, #fff);
-  background: var(--color-primary, #388bfd);
+  color: var(--color-text-on-primary);
+  background: var(--color-primary);
   white-space: nowrap;
   flex-shrink: 0;
 }
@@ -57,14 +57,14 @@
 }
 
 .dismiss:hover {
-  background: rgba(255, 255, 255, 0.1);
+  background: var(--color-white-10);
 }
 
 .progressTrack {
   width: 120px;
   height: 4px;
   border-radius: 2px;
-  background: rgba(255, 255, 255, 0.1);
+  background: var(--color-white-10);
   overflow: hidden;
   flex-shrink: 0;
 }
@@ -72,6 +72,6 @@
 .progressFill {
   height: 100%;
   border-radius: 2px;
-  background: var(--color-primary, #388bfd);
+  background: var(--color-primary);
   transition: width 300ms ease;
 }

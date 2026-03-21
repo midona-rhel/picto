@@ -41,7 +41,7 @@ export function extractTsCommandsFromText(content, fileName = 'api.ts') {
    * @param {ts.Node} node
    */
   const visit = (node) => {
-    if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === 'invoke') {
+    if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && (node.expression.text === 'invoke' || node.expression.text === 'invokeTyped')) {
       const [firstArg] = node.arguments;
       if (firstArg && ts.isStringLiteral(firstArg) && /^[a-z_]+$/.test(firstArg.text)) {
         commands.add(firstArg.text);

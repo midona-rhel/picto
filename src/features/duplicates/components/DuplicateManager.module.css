@@ -153,7 +153,7 @@
   padding: 8px 12px;
   border-radius: 6px;
   border: 1px solid var(--color-border-primary);
-  background-color: var(--color-bg-secondary, rgba(247, 248, 248, 0.05));
+  background-color: var(--color-bg-secondary, var(--color-white-05));
   color: var(--color-text-primary);
   font-size: var(--font-size-sm);
   cursor: pointer;
@@ -162,7 +162,7 @@
 }
 
 .actionBtn:hover {
-  background-color: var(--color-bg-tertiary, rgba(247, 248, 248, 0.1));
+  background-color: var(--color-bg-tertiary, var(--color-white-10));
 }
 
 .actionBtn:disabled {

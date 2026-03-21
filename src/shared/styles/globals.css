@@ -33,6 +33,12 @@
   --color-negative: #ff4757;
   --color-positive: #2ed573;
   --color-warning: #ffa502;
+  --color-danger: #fa5252;
+  --color-success: #40c057;
+  --color-info: #339af0;
+  --color-text-on-primary: #fff;
+  --color-primary-alpha-10: color-mix(in srgb, var(--color-primary) 10%, transparent);
+  --color-primary-alpha-20: color-mix(in srgb, var(--color-primary) 20%, transparent);
 
   --color-text-primary: rgba(255, 255, 255, 1.0);
   --color-text-secondary: rgba(255, 255, 255, 0.72);
@@ -43,18 +49,26 @@
   --color-border-secondary: rgba(255, 255, 255, 0.08);
   --color-border-focus: var(--color-primary-60);
 
+  --color-black-04: rgba(0, 0, 0, 0.04);
+  --color-black-06: rgba(0, 0, 0, 0.06);
+  --color-black-08: rgba(0, 0, 0, 0.08);
   --color-black-10: rgba(0, 0, 0, 0.10);
+  --color-black-12: rgba(0, 0, 0, 0.12);
+  --color-black-15: rgba(0, 0, 0, 0.15);
   --color-black-20: rgba(0, 0, 0, 0.20);
   --color-black-30: rgba(0, 0, 0, 0.30);
+  --color-black-35: rgba(0, 0, 0, 0.35);
   --color-black-40: rgba(0, 0, 0, 0.40);
   --color-black-50: rgba(0, 0, 0, 0.50);
   --color-black-60: rgba(0, 0, 0, 0.60);
+  --color-black-65: rgba(0, 0, 0, 0.65);
   --color-black-70: rgba(0, 0, 0, 0.70);
   --color-black-80: rgba(0, 0, 0, 0.80);
   --color-black-90: rgba(0, 0, 0, 0.90);
   --color-black-99: rgba(0, 0, 0, 0.99);
 
   --color-white-05: rgba(255, 255, 255, 0.05);
+  --color-white-08: rgba(255, 255, 255, 0.08);
   --color-white-10: rgba(255, 255, 255, 0.10);
   --color-white-15: rgba(255, 255, 255, 0.15);
   --color-white-20: rgba(255, 255, 255, 0.20);
@@ -65,7 +79,9 @@
   --color-white-60: rgba(255, 255, 255, 0.60);
   --color-white-70: rgba(255, 255, 255, 0.70);
   --color-white-80: rgba(255, 255, 255, 0.80);
+  --color-white-85: rgba(255, 255, 255, 0.85);
   --color-white-90: rgba(255, 255, 255, 0.90);
+  --color-white-92: rgba(255, 255, 255, 0.92);
   --color-white-99: rgba(255, 255, 255, 0.99);
 
   --mantine-color-body: #1a1a1e;

@@ -1,7 +1,7 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { MantineProvider } from '@mantine/core';
-import { DetailWindow } from '#features/viewer/components/DetailWindow';
+import { DetailWindow } from '#features/viewer/components';
 import { useThemeSync, useDerivedColorScheme } from '../shared/hooks/useThemeSync';
 import '@mantine/core/styles.css';
 import '../shared/styles/globals.css';

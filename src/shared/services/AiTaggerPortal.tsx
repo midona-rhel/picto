@@ -1,10 +1,10 @@
 import { useState, useEffect, useCallback, useRef, useLayoutEffect, useMemo } from 'react';
 import { Checkbox, Loader } from '@mantine/core';
 import { IconPin, IconPinFilled, IconSparkles, IconCheck } from '@tabler/icons-react';
-import { TextButton } from '../components/TextButton';
+import { TextButton } from '#ui/TextButton';
 import { api } from '#desktop/api';
-import { OverlayShell } from '../components/OverlayShell';
-import { NamespaceTagChip } from '../components/NamespaceTagChip';
+import { OverlayShell } from '#ui/OverlayShell';
+import { NamespaceTagChip } from '#ui/NamespaceTagChip';
 import { registerAiTaggerOpenHandler, type AiTaggerRequest } from './aiTaggerService';
 import type { AiTagPrediction } from '../types/api';
 import st from './AiTaggerPortal.module.css';

@@ -252,7 +252,7 @@ export const api = {
     getCoverHash: (folderId: number) =>
       invokeTyped('get_folder_cover_hash', { folder_id: folderId }),
     getFileFolders: (hash: string) =>
-      invokeTyped('get_entity_folders_by_hash', { hash } as never) as Promise<FolderMembership[]>,
+      invokeTyped('get_entity_folders_by_hash', { hash }) as Promise<FolderMembership[]>,
     getEntityFolders: (entityId: number) =>
       invokeTyped('get_entity_folders', { entity_id: entityId }) as Promise<FolderMembership[]>,
     reorder: (moves: [number, number][]) =>

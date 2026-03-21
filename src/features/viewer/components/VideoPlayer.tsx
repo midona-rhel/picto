@@ -12,8 +12,6 @@ import { VolumeHUD } from './VolumeHUD';
 import { useVideoPlayer, type UseVideoPlayerOptions } from './useVideoPlayer';
 import {
   CONTROLS_HIDE_DELAY,
-  SEEK_SCROLL_STEP,
-  VOLUME_SCROLL_STEP,
   VOLUME_STEP,
 } from './videoConstants';
 import { getShortcut, matchesShortcutDef } from '../../../shared/lib/shortcuts';
