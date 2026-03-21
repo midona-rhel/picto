@@ -36,6 +36,7 @@ export interface AppSettings {
   grayscalePreview: boolean;
   showNavigator: boolean;
   hideTagNamespace: boolean;
+  stripDefaultFitMode: 'horizontal' | 'vertical';
 }
 
 /** Derive Mantine color scheme from a Theme value. */
@@ -70,6 +71,7 @@ const DEFAULTS: AppSettings = {
   grayscalePreview: false,
   showNavigator: true,
   hideTagNamespace: false,
+  stripDefaultFitMode: 'horizontal',
 };
 
 interface SettingsState {

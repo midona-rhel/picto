@@ -323,7 +323,7 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
             const added = await api.collections.addMembers({ id: targetId, hashes });
             registerUndoAction({
               label: `Add ${added} item${added === 1 ? '' : 's'} to collection`,
-              undo: async () => { await api.collections.removeMembers(targetId, hashes); },
+              undo: async () => { await api.collections.removeMembers({ id: targetId, hashes }); },
               redo: async () => { await api.collections.addMembers({ id: targetId, hashes }); },
             });
             notifySuccess(`Added ${added} item${added === 1 ? '' : 's'} to collection`, 'Collections');
@@ -376,7 +376,7 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
           if (singleCollectionId == null) return;
           try {
             const memberHashes = await api.collections.listMemberHashes(singleCollectionId);
-            const collectionName = selected.find((img) => img.entity_id === singleCollectionId)?.name ?? 'Untitled';
+            const collectionName = singleImage?.name ?? 'Untitled';
             await api.collections.delete(singleCollectionId);
             registerUndoAction({
               label: `Split collection "${collectionName}"`,

@@ -159,14 +159,19 @@ export function MediaView({ images, currentIndex, onNavigate, onClose, onStateCh
   const [stripCols, setStripCols] = useState(1);
   const stripColsRef = useRef(stripCols);
   stripColsRef.current = stripCols;
+  const defaultStripFitMode = useSettingsStore(s => s.settings.stripDefaultFitMode);
+  const [stripFitMode, setStripFitMode] = useState<'horizontal' | 'vertical'>(defaultStripFitMode);
+  const stripFitModeRef = useRef(stripFitMode);
+  stripFitModeRef.current = stripFitMode;
   const [stripResetKey, setStripResetKey] = useState(0);
 
   useEffect(() => {
     if (stripMode) {
       setStripCols(1);
+      setStripFitMode(defaultStripFitMode);
       setStripResetKey((k) => k + 1);
     }
-  }, [currentIndex]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [currentIndex, defaultStripFitMode]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const stripZoomScale = 1 / stripCols;
 
@@ -270,6 +275,9 @@ export function MediaView({ images, currentIndex, onNavigate, onClose, onStateCh
       navigate: (direction: number) => navigateRef.current(direction),
       setZoomScale: (scale: number) => {
         if (stripModeRef.current) {
+          // In fit-vertical mode, +/- doesn't change columns — the layout
+          // is driven by viewport height, not column count.
+          if (stripFitModeRef.current === 'vertical') return;
           const currentCols = stripColsRef.current;
           const zoomingIn = scale > 1 / currentCols;
           if (zoomingIn) {
@@ -283,11 +291,20 @@ export function MediaView({ images, currentIndex, onNavigate, onClose, onStateCh
         zoomToRef.current(scale);
       },
       fitToWindow: () => {
-        if (stripModeRef.current) return;
+        if (stripModeRef.current) {
+          setStripFitMode('horizontal');
+          setStripCols(1);
+          setStripResetKey((k) => k + 1);
+          return;
+        }
         fitToWindowRef.current();
       },
       fitActual: () => {
-        if (stripModeRef.current) return;
+        if (stripModeRef.current) {
+          setStripFitMode('vertical');
+          setStripCols(1);
+          return;
+        }
         fitActualRef.current();
       },
       rotateClockwise: () => {
@@ -605,6 +622,7 @@ export function MediaView({ images, currentIndex, onNavigate, onClose, onStateCh
           images={collectionImages}
           initialIndex={0}
           cols={stripCols}
+          fitMode={stripFitMode}
           resetKey={stripResetKey}
           onLoadMore={stripMode && collectionHasMoreRef.current ? handleStripLoadMore : undefined}
         />

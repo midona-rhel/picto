@@ -120,8 +120,13 @@ export function ImageGridControls({
   };
 
   const [localSliderPos, setLocalSliderPos] = useState(50);
+  const sliderDraggingRef = useRef(false);
   useEffect(() => {
-    if (detailViewState) setLocalSliderPos(zoomToSlider(detailViewState.zoomPercent));
+    // Don't overwrite slider position while user is actively dragging —
+    // the round-trip through log/exp conversions causes jitter.
+    if (detailViewState && !sliderDraggingRef.current) {
+      setLocalSliderPos(zoomToSlider(detailViewState.zoomPercent));
+    }
   }, [detailViewState?.zoomPercent]);
 
   const handleMinus = () => {
@@ -295,8 +300,12 @@ export function ImageGridControls({
             <Slider
               value={localSliderPos}
               onChange={(v) => {
+                sliderDraggingRef.current = true;
                 setLocalSliderPos(v);
                 dc.setZoomScale(sliderToZoom(v) / 100);
+              }}
+              onChangeEnd={() => {
+                sliderDraggingRef.current = false;
               }}
               min={0}
               max={100}
@@ -330,18 +339,18 @@ export function ImageGridControls({
               <div className={st.separator} />
             </>
           )}
-          <KbdTooltip label="Fit to window" shortcut="`">
+          <KbdTooltip label={ds.isStripMode ? 'Fit Horizontal' : 'Fit to window'} shortcut="`">
             <button
-              className={`${st.icBtn} ${ds.isStripMode ? st.icBtnDisabled : ''}`}
-              onClick={ds.isStripMode ? undefined : dc.fitToWindow}
+              className={st.icBtn}
+              onClick={dc.fitToWindow}
             >
               <IconArrowsMaximize size={14} />
             </button>
           </KbdTooltip>
-          <KbdTooltip label="Actual size" shortcut="Mod+0">
+          <KbdTooltip label={ds.isStripMode ? 'Fit Vertical' : 'Actual size'} shortcut="Mod+0">
             <button
-              className={`${st.icBtn} ${ds.isStripMode ? st.icBtnDisabled : ''}`}
-              onClick={ds.isStripMode ? undefined : dc.fitActual}
+              className={st.icBtn}
+              onClick={dc.fitActual}
             >
               <IconMaximize size={14} />
             </button>

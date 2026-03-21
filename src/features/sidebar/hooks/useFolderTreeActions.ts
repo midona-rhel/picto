@@ -142,7 +142,7 @@ export function useFolderTreeActions({
         label: `Delete ${folderIds.length} folder${folderIds.length === 1 ? '' : 's'}`,
         undo: async () => {
           for (const snap of folderSnapshots) {
-            await api.folders.create(snap.name, snap.parentId ?? undefined);
+            await api.folders.create({ name: snap.name, parent_id: snap.parentId });
           }
         },
         redo: async () => {

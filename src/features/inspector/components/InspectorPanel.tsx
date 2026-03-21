@@ -765,7 +765,7 @@ export function InspectorPanel({
               </div>
 
               {renderTags()}
-              {renderFolders(selectedImage ? !selectedImage.is_collection : true)}
+              {renderFolders(true)}
               {renderProperties()}
 
               <KbdTooltip label="Auto-Tag" shortcut="Mod+Shift+A">

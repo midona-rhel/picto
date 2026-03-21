@@ -284,7 +284,6 @@ export function useInspectorMutations(
 
   const onAddToFolders = useCallback(
     async (folderIds: number[]) => {
-      if (selectedCollection) return;
       const folderIdsSnapshot = [...folderIds];
       if (folderIdsSnapshot.length === 0) return;
 
@@ -298,7 +297,17 @@ export function useInspectorMutations(
         return;
       }
 
-      const hashes = selectedImages.map((img) => img.hash);
+      // For collections, use member hashes so the backend adds members
+      // and sync_collection_aggregate_metadata adds the collection tile.
+      let hashes: string[] = [];
+      for (const img of selectedImages) {
+        if (img.is_collection && img.entity_id != null) {
+          const members = await api.collections.listMemberHashes(img.entity_id);
+          hashes.push(...members);
+        } else {
+          hashes.push(img.hash);
+        }
+      }
       const hashesSnapshot = [...hashes];
       if (hashesSnapshot.length === 0) return;
       await Promise.all(
@@ -340,7 +349,6 @@ export function useInspectorMutations(
 
   const onRemoveFromFolder = useCallback(
     async (folderId: number) => {
-      if (selectedCollection) return;
       // Optimistic: update UI immediately
       setFileFolders((prev) => prev.filter((f) => f.folder_id !== folderId));
       try {
@@ -348,7 +356,17 @@ export function useInspectorMutations(
           // Virtual Select All: let the backend resolve all hashes from the selection
           await api.folders.removeFiles(folderId, [], selectionSummarySpec);
         } else {
-          const hashes = selectedImages.filter((i) => !i.is_collection).map((i) => i.hash);
+          // For collections, use member hashes so the backend removes members
+          // and sync_collection_aggregate_metadata updates the collection tile.
+          let hashes: string[] = [];
+          for (const img of selectedImages) {
+            if (img.is_collection && img.entity_id != null) {
+              const members = await api.collections.listMemberHashes(img.entity_id);
+              hashes.push(...members);
+            } else {
+              hashes.push(img.hash);
+            }
+          }
           if (hashes.length === 0) return;
           await api.folders.removeFiles(folderId, hashes);
           registerUndoAction({

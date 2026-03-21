@@ -335,7 +335,7 @@ export function TagManager() {
                 label: `Delete tag "${display}"`,
                 undo: async () => {
                   if (affectedHashes.length > 0) {
-                    await api.tags.addTags(affectedHashes, [tagFullName]);
+                    await api.tags.add(affectedHashes, [tagFullName]);
                   }
                   await refreshAll();
                 },
