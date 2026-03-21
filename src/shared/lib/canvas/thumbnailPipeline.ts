@@ -331,7 +331,9 @@ export class ThumbnailPipeline {
     entry.thumb?.close();
     entry.thumb = bitmap;
     entry.state = 'shown';
-    entry.animateIn = !this.loadedHashes.has(hash);
+    // Always fade in — even from cache. First-load progressive reveal
+    // feels better than instant pop-in which causes visual jank on scroll-back.
+    entry.animateIn = true;
     entry.revealStartedAt = performance.now();
     entry.retryQueued = false;
     entry.sourceKind = sourceKind;
@@ -340,7 +342,7 @@ export class ThumbnailPipeline {
     this.onDirty();
   }
 
-  private static readonly MAX_LOADED_HASHES = 10_000;
+  private static readonly MAX_LOADED_HASHES = 500;
 
   private pruneCache(): void {
     // Cap loadedHashes independently — this set only controls animation.
