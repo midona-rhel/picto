@@ -152,6 +152,45 @@ export class ThumbnailPipeline {
     this.pump();
   }
 
+  /** Check up to `limit` cache entries starting from `cursor`, returning
+   *  hashes with bitmaps that are NOT in the keep set. Wraps around. */
+  getEvictCandidatesBatch(
+    keepHashes: Set<string>,
+    limit: number,
+    cursor: number,
+  ): { evicted: string[]; nextCursor: number } {
+    const evicted: string[] = [];
+    const keys = Array.from(this.cache.keys());
+    if (keys.length === 0) return { evicted, nextCursor: 0 };
+    let idx = cursor % keys.length;
+    for (let checked = 0; checked < limit && checked < keys.length; checked++) {
+      const hash = keys[idx];
+      const entry = this.cache.get(hash);
+      if (entry?.thumb && !keepHashes.has(hash)
+        && entry.state !== 'queued' && entry.state !== 'loading') {
+        evicted.push(hash);
+      }
+      idx = (idx + 1) % keys.length;
+    }
+    return { evicted, nextCursor: idx };
+  }
+
+  /** Evict bitmaps by hash — resets entries to idle so they reload with fade. */
+  evictHashes(hashes: string[]): void {
+    for (const hash of hashes) {
+      const entry = this.cache.get(hash);
+      if (!entry || !entry.thumb) continue;
+      console.log(`[pipeline] EVICT ${hash.slice(0, 8)} state=${entry.state} animateIn=${entry.animateIn}`);
+      entry.thumb.close();
+      entry.thumb = null;
+      entry.animateIn = false;
+      entry.revealStartedAt = 0;
+      entry.sourceKind = 'thumbnail';
+      entry.loadedLongEdge = 0;
+      this.resetEntry(entry);
+    }
+  }
+
   cancelOutsideWindow(top: number, bottom: number): void {
     for (const [hash, item] of this.queueMap) {
       if (item.y >= top && item.y <= bottom) continue;
@@ -338,18 +377,11 @@ export class ThumbnailPipeline {
     entry.state = 'shown';
     if (isUpgrade) {
       // Thumbnail → full-quality: silent swap, no fade.
-      // The image is already visible at the right size; just replace the bitmap.
-    } else if (this.loadedHashes.has(hash)) {
-      // Re-load (evicted then re-fetched): start the fade from when the
-      // request was queued (i.e. when the image entered the prefetch zone).
-      // By the time it scrolls into view the fade is typically already done.
-      entry.animateIn = true;
-      entry.revealStartedAt = item.queuedAt;
     } else {
-      // First load: stagger reveals so at most MAX_CONCURRENT_REVEALS
-      // fade in simultaneously.
+      // Fresh load or re-load after eviction: always fade in from now.
       entry.animateIn = true;
       entry.revealStartedAt = this.nextRevealSlot();
+      console.log(`[pipeline] LOADED ${hash.slice(0, 8)} animateIn=true revealAt=${entry.revealStartedAt.toFixed(0)} now=${performance.now().toFixed(0)}`);
     }
     entry.retryQueued = false;
     entry.sourceKind = sourceKind;
@@ -487,9 +519,13 @@ function buildRequest(hash: string, args: EnsureThumbnailArgs): ThumbnailQueueIt
   const canUseFullQuality = isEligibleForFullQuality(args);
   const queuedAt = performance.now();
 
+  // Threshold in DPR pixels: SOURCE_EDGE is in CSS pixels, scale by DPR
+  const dpr = typeof window !== 'undefined' ? (window.devicePixelRatio || 1) : 1;
+  const thresholdPx = Math.round(THUMBNAIL_PIPELINE_SOURCE_EDGE * THUMBNAIL_PIPELINE_FULL_QUALITY_THRESHOLD * dpr);
+
   if (
     !canUseFullQuality
-    || requestedDisplayLongEdge <= Math.round(THUMBNAIL_PIPELINE_SOURCE_EDGE * THUMBNAIL_PIPELINE_FULL_QUALITY_THRESHOLD)
+    || requestedDisplayLongEdge <= thresholdPx
   ) {
       return {
         hash,
@@ -604,7 +640,10 @@ function needsUpgradeState(
   requestedSourceKind: ThumbnailSourceKind,
   requestedLongEdge: number,
 ): boolean {
+  // Upgrade: thumbnail → full when tile grows past threshold
   if (requestedSourceKind === 'full' && currentSourceKind !== 'full') return true;
+  // Downgrade: full → thumbnail when tile shrinks below threshold
+  if (requestedSourceKind === 'thumbnail' && currentSourceKind === 'full') return true;
   if (requestedSourceKind === currentSourceKind && requestedLongEdge > currentLongEdge * 1.15) return true;
   return false;
 }

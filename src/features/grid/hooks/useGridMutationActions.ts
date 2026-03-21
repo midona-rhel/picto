@@ -141,18 +141,44 @@ export function useGridMutationActions({
   }, [stateRef, statusFilter, dispatch, restoreStatusesByHash]);
 
   const handleRateSelected = useCallback((rating: number) => {
-    const { virtualAllSelection, selectedHashes } = stateRef.current;
+    const { virtualAllSelection, selectedHashes, images } = stateRef.current;
     const normalizedRating = rating || null;
     if (virtualAllSelection) {
       const spec = selectVirtualSpec(stateRef.current)!;
-      api.selection.updateRating(spec, normalizedRating).catch((err) => notifyError(err, 'Rating Failed'));
+      api.selection.updateRating(spec, normalizedRating)
+        .then(() => {
+          registerUndoAction({
+            label: `Rate all to ${rating || 0} stars`,
+            undo: async () => { await api.selection.updateRating(spec, null); },
+            redo: async () => { await api.selection.updateRating(spec, normalizedRating); },
+          });
+        })
+        .catch((err) => notifyError(err, 'Rating Failed'));
       return;
     }
     const hashes = [...selectedHashes];
     if (hashes.length === 0) return;
-    Promise.all(hashes.map((hash) => api.file.updateRating(hash, rating))).catch((err) =>
-      notifyError(err, 'Rating Failed'),
-    );
+    // Capture previous ratings for undo
+    const prevRatings = new Map<string, number | null>();
+    for (const hash of hashes) {
+      const img = images.find((i) => i.hash === hash);
+      prevRatings.set(hash, img?.rating ?? null);
+    }
+    Promise.all(hashes.map((hash) => api.file.updateRating(hash, rating)))
+      .then(() => {
+        registerUndoAction({
+          label: `Rate ${hashes.length} file${hashes.length === 1 ? '' : 's'}`,
+          undo: async () => {
+            await Promise.all(
+              hashes.map((hash) => api.file.updateRating(hash, prevRatings.get(hash) ?? 0)),
+            );
+          },
+          redo: async () => {
+            await Promise.all(hashes.map((hash) => api.file.updateRating(hash, rating)));
+          },
+        });
+      })
+      .catch((err) => notifyError(err, 'Rating Failed'));
   }, [stateRef]);
 
   const handleRestoreSelected = useCallback(() => {

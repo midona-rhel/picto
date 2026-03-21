@@ -559,6 +559,100 @@ impl DuplicateOrchestrator {
         Ok(())
     }
 
+    /// Find all images sorted by visual similarity (phash distance) to a source image.
+    /// No threshold cutoff — returns every image with a phash, sorted closest-first.
+    /// If the source image has no phash, computes it on-the-fly from the blob store.
+    pub async fn find_similar(
+        db: &SqliteDatabase,
+        blob_store: &BlobStore,
+        source_hash: &str,
+    ) -> Result<crate::types::FindSimilarResponse, String> {
+        use img_hash::ImageHash;
+
+        let source_hash_owned = source_hash.to_string();
+
+        // Check if source has a phash; compute one if missing.
+        let source_phash_b64: Option<String> = db
+            .with_read_conn({
+                let h = source_hash_owned.clone();
+                move |conn| {
+                    conn.query_row(
+                        "SELECT phash FROM file WHERE hash = ?1",
+                        [&h],
+                        |row| row.get::<_, Option<String>>(0),
+                    )
+                    .optional()
+                    .map(|o| o.flatten())
+                }
+            })
+            .await?;
+
+        let source_phash_b64 = match source_phash_b64 {
+            Some(b64) => b64,
+            None => {
+                // Compute phash from the original file
+                let file = db.get_file_by_hash(source_hash).await?
+                    .ok_or_else(|| format!("File not found: {source_hash}"))?;
+                let ext = crate::blob_store::mime_to_extension(&file.mime).to_string();
+                let h = source_hash.to_string();
+                let bs_path = blob_store.find_original(&h, Some(&ext))
+                    .map_err(|e| format!("{e}"))?
+                    .ok_or_else(|| format!("Original not found for {h}"))?;
+                let bytes = std::fs::read(&bs_path.0)
+                    .map_err(|e| format!("Read error: {e}"))?;
+                let b64 = crate::duplicates::phash::compute_phash_base64(&bytes)
+                    .map_err(|e| format!("Phash compute failed: {e}"))?;
+                // Store for future use
+                let _ = db.set_phash(&h, &b64).await;
+                b64
+            }
+        };
+
+        let files_with_phash: Vec<(String, String)> = db
+            .with_read_conn(|conn| {
+                let mut stmt = conn.prepare_cached(
+                    "SELECT f.hash, f.phash FROM file f
+                     WHERE f.phash IS NOT NULL AND f.status IN (0, 1)",
+                )?;
+                let rows = stmt.query_map([], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                })?;
+                rows.collect()
+            })
+            .await?;
+
+        let mut results: Vec<(String, u32)> =
+            tokio::task::spawn_blocking(move || {
+                let Ok(source) = ImageHash::<Vec<u8>>::from_base64(&source_phash_b64) else {
+                    return Vec::new();
+                };
+
+                let mut distances: Vec<(String, u32)> = files_with_phash
+                    .iter()
+                    .filter_map(|(hash, phash_b64)| {
+                        if hash == &source_hash_owned { return None; }
+                        let ph = ImageHash::<Vec<u8>>::from_base64(phash_b64).ok()?;
+                        Some((hash.clone(), source.dist(&ph)))
+                    })
+                    .collect();
+
+                distances.sort_by_key(|(_, d)| *d);
+                distances
+            })
+            .await
+            .map_err(|e| format!("find_similar task failed: {e}"))?;
+
+        let items: Vec<crate::types::SimilarItem> = results
+            .drain(..)
+            .map(|(hash, distance)| crate::types::SimilarItem { hash, distance })
+            .collect();
+
+        Ok(crate::types::FindSimilarResponse {
+            source_hash: source_hash.to_string(),
+            items,
+        })
+    }
+
     /// Check a newly imported file for near-duplicates and auto-merge if within threshold.
     ///
     /// Called from the subscription import pipeline after a file is imported and its

@@ -25,6 +25,8 @@ interface HistoryEntry {
   collectionId: number | null;
   statusFilter: string | null;
   filterTags: string[] | null;
+  similarSourceHash: string | null;
+  similarHashes: string[] | null;
   scrollTop: number;
   loadedItemCount: number;
   randomSeed: number | null;
@@ -38,6 +40,8 @@ interface NavigationState {
   activeCollectionId: number | null;
   activeStatusFilter: string | null;
   filterTags: string[] | null;
+  similarSourceHash: string | null;
+  similarHashes: string[] | null;
 
   // History
   history: HistoryEntry[];
@@ -74,18 +78,24 @@ interface NavigationState {
   navigateToCollection: (collection: number | { id: number; name?: string }) => void;
   /** Navigate to images view filtered by specific tags */
   navigateToFilterTags: (tags: string[]) => void;
+  /** Navigate to visually similar results for a source image */
+  navigateToSimilar: (sourceHash: string, hashes: string[]) => void;
   /** Cache a user-provided collection display name */
   rememberCollectionTitle: (id: number, title: string) => void;
 }
 
-export function deriveNavigationTitle(state: { activeFolderLabel?: string | null; activeSmartFolderLabel?: string | null; activeCollectionLabel?: string | null; activeCollectionId?: number | null; activeStatusFilter?: string | null; filterTags?: string[] | null; currentView?: ViewType; folderLabel?: string | null; smartFolderLabel?: string | null; collectionLabel?: string | null; collectionId?: number | null; statusFilter?: string | null; view?: ViewType }): string {
+export function deriveNavigationTitle(state: { activeFolderLabel?: string | null; activeSmartFolderLabel?: string | null; activeCollectionLabel?: string | null; activeCollectionId?: number | null; activeStatusFilter?: string | null; filterTags?: string[] | null; similarHashes?: string[] | null; currentView?: ViewType; folderLabel?: string | null; smartFolderLabel?: string | null; collectionLabel?: string | null; collectionId?: number | null; statusFilter?: string | null; view?: ViewType }): string {
   const folderLabel = state.activeFolderLabel ?? state.folderLabel;
   const smartFolderLabel = state.activeSmartFolderLabel ?? state.smartFolderLabel;
   const collectionLabel = state.activeCollectionLabel ?? state.collectionLabel;
   const collectionId = state.activeCollectionId ?? state.collectionId;
   const statusFilter = state.activeStatusFilter ?? state.statusFilter;
   const filterTags = state.filterTags;
+  const similarHashes = state.similarHashes;
   const view = state.currentView ?? state.view ?? 'images';
+
+  if (similarHashes && similarHashes.length > 0) return 'Visually Similar';
+
   // Derive parent scope label
   let parentLabel: string | null = null;
   if (filterTags && filterTags.length > 0) parentLabel = filterTags.join(', ');
@@ -114,8 +124,10 @@ export const useNavigationStore = create<NavigationState>((set, get) => ({
   activeCollectionId: null,
   activeStatusFilter: null,
   filterTags: null,
+  similarSourceHash: null,
+  similarHashes: null,
 
-  history: [{ view: 'images', smartFolderId: null, folderId: null, collectionId: null, statusFilter: null, filterTags: null, scrollTop: 0, loadedItemCount: 0, randomSeed: null }],
+  history: [{ view: 'images', smartFolderId: null, folderId: null, collectionId: null, statusFilter: null, filterTags: null, similarSourceHash: null, similarHashes: null, scrollTop: 0, loadedItemCount: 0, randomSeed: null }],
   historyIndex: 0,
   canGoBack: false,
   canGoForward: false,
@@ -125,7 +137,7 @@ export const useNavigationStore = create<NavigationState>((set, get) => ({
   navigateTo: (view, smartFolderId = null, folderId = null, statusFilter = null) => {
     const state = get();
     const trimmed = state.history.slice(0, state.historyIndex + 1);
-    const entry: HistoryEntry = { view, smartFolderId, folderId, collectionId: null, statusFilter, filterTags: null, scrollTop: 0, loadedItemCount: 0, randomSeed: null };
+    const entry: HistoryEntry = { view, smartFolderId, folderId, collectionId: null, statusFilter, filterTags: null, similarSourceHash: null, similarHashes: null, scrollTop: 0, loadedItemCount: 0, randomSeed: null };
     const newHistory = [...trimmed, entry];
     const newIndex = newHistory.length - 1;
 
@@ -136,6 +148,8 @@ export const useNavigationStore = create<NavigationState>((set, get) => ({
       activeCollectionId: null,
       activeStatusFilter: statusFilter,
       filterTags: null,
+      similarSourceHash: null,
+      similarHashes: null,
       pendingScrollRestore: null, pendingLoadedItemCount: 0, pendingRandomSeed: null,
       history: newHistory,
       historyIndex: newIndex,
@@ -157,6 +171,8 @@ export const useNavigationStore = create<NavigationState>((set, get) => ({
       activeCollectionId: entry.collectionId,
       activeStatusFilter: entry.statusFilter,
       filterTags: entry.filterTags,
+      similarSourceHash: entry.similarSourceHash,
+      similarHashes: entry.similarHashes,
       historyIndex: newIndex,
       canGoBack: newIndex > 0,
       canGoForward: true,
@@ -177,6 +193,8 @@ export const useNavigationStore = create<NavigationState>((set, get) => ({
       activeCollectionId: entry.collectionId,
       activeStatusFilter: entry.statusFilter,
       filterTags: entry.filterTags,
+      similarSourceHash: entry.similarSourceHash,
+      similarHashes: entry.similarHashes,
       historyIndex: newIndex,
       canGoBack: true,
       canGoForward: newIndex < state.history.length - 1,
@@ -256,6 +274,8 @@ export const useNavigationStore = create<NavigationState>((set, get) => ({
       collectionId,
       statusFilter: state.activeStatusFilter,
       filterTags: state.filterTags,
+      similarSourceHash: null,
+      similarHashes: null,
       scrollTop: 0,
       loadedItemCount: 0,
       randomSeed: null,
@@ -267,6 +287,8 @@ export const useNavigationStore = create<NavigationState>((set, get) => ({
       currentView: 'images',
       // Preserve parent scope for sidebar highlight
       activeCollectionId: collectionId,
+      similarSourceHash: null,
+      similarHashes: null,
       pendingScrollRestore: null, pendingLoadedItemCount: 0, pendingRandomSeed: null,
       history: newHistory,
       historyIndex: newIndex,
@@ -287,7 +309,7 @@ export const useNavigationStore = create<NavigationState>((set, get) => ({
   navigateToFilterTags: (tags) => {
     const state = get();
     const trimmed = state.history.slice(0, state.historyIndex + 1);
-    const entry: HistoryEntry = { view: 'images', smartFolderId: null, folderId: null, collectionId: null, statusFilter: null, filterTags: tags, scrollTop: 0, loadedItemCount: 0, randomSeed: null };
+    const entry: HistoryEntry = { view: 'images', smartFolderId: null, folderId: null, collectionId: null, statusFilter: null, filterTags: tags, similarSourceHash: null, similarHashes: null, scrollTop: 0, loadedItemCount: 0, randomSeed: null };
     const newHistory = [...trimmed, entry];
     const newIndex = newHistory.length - 1;
 
@@ -298,6 +320,44 @@ export const useNavigationStore = create<NavigationState>((set, get) => ({
       activeCollectionId: null,
       activeStatusFilter: null,
       filterTags: tags,
+      similarSourceHash: null,
+      similarHashes: null,
+      pendingScrollRestore: null, pendingLoadedItemCount: 0, pendingRandomSeed: null,
+      history: newHistory,
+      historyIndex: newIndex,
+      canGoBack: newIndex > 0,
+      canGoForward: false,
+    });
+  },
+
+  navigateToSimilar: (sourceHash, hashes) => {
+    const state = get();
+    const trimmed = state.history.slice(0, state.historyIndex + 1);
+    const entry: HistoryEntry = {
+      view: 'images',
+      smartFolderId: null,
+      folderId: null,
+      collectionId: null,
+      statusFilter: null,
+      filterTags: null,
+      similarSourceHash: sourceHash,
+      similarHashes: hashes,
+      scrollTop: 0,
+      loadedItemCount: 0,
+      randomSeed: null,
+    };
+    const newHistory = [...trimmed, entry];
+    const newIndex = newHistory.length - 1;
+
+    set({
+      currentView: 'images',
+      activeSmartFolderId: null,
+      activeFolderId: null,
+      activeCollectionId: null,
+      activeStatusFilter: null,
+      filterTags: null,
+      similarSourceHash: sourceHash,
+      similarHashes: hashes,
       pendingScrollRestore: null, pendingLoadedItemCount: 0, pendingRandomSeed: null,
       history: newHistory,
       historyIndex: newIndex,

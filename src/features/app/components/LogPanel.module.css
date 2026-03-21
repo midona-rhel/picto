@@ -108,6 +108,9 @@
   font-family: 'SF Mono', 'Fira Mono', 'Roboto Mono', monospace;
   font-size: 11px;
   line-height: 18px;
+  user-select: text;
+  -webkit-user-select: text;
+  cursor: text;
 }
 
 .logRow {

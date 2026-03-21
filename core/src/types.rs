@@ -230,6 +230,7 @@ pub enum GridScopeKind {
     Folder,
     Collection,
     Smart,
+    Similar,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -256,6 +257,9 @@ pub struct GridScopeSpec {
     pub collection_entity_id: Option<i64>,
     #[serde(alias = "smartFolderPredicate")]
     pub smart_folder_predicate: Option<SmartFolderPredicate>,
+    /// Pre-ordered hash list for Similar scope (distance-sorted).
+    #[serde(alias = "similarHashes")]
+    pub similar_hashes: Option<Vec<String>>,
 }
 
 impl Default for GridScopeKind {
@@ -563,6 +567,20 @@ pub struct DuplicatePairsResponse {
     pub total: i64,
 }
 
+#[derive(Debug, Serialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
+pub struct FindSimilarResponse {
+    pub source_hash: String,
+    pub items: Vec<SimilarItem>,
+}
+
+#[derive(Debug, Serialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
+pub struct SimilarItem {
+    pub hash: String,
+    pub distance: u32,
+}
+
 #[derive(Debug, Serialize)]
 pub struct SmartMergeResult {
     pub winner_hash: String,
@@ -603,6 +621,7 @@ pub struct SubscriptionQueryInfo {
     pub paused: bool,
     pub last_check_time: Option<String>,
     pub files_found: u64,
+    pub posts_found: u64,
     pub completed_initial_run: bool,
     pub resume_cursor: Option<String>,
     pub resume_strategy: Option<String>,

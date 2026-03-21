@@ -198,14 +198,19 @@ impl<'a> SubscriptionSyncEngine<'a> {
     /// Prepares all files first (hash + MIME + blob write), then commits everything
     /// in a single DB transaction. The grid never sees individual loose files.
     pub(super) async fn materialize_collection(
-        &self,
+        &mut self,
         mut pc: super::PendingCollection,
         subscription_id: i64,
-        _gallery_url: &str,
+        sub_id_str: &str,
         progress: &mut super::SyncProgress,
         changed_collection_ids: &mut Vec<i64>,
     ) {
         pc.members.sort_by_key(|m| m.page_num);
+        let member_count = pc.members.len();
+
+        self.set_phase("importing");
+        self.emit_progress_force(sub_id_str, progress,
+            &format!("Importing {} files for '{}'...", member_count, pc.preferred_name));
 
         let pipeline = ImportPipeline::new(self.db, self.blob_store);
         let mut prepared: Vec<crate::import::pipeline::PreparedFile> = Vec::with_capacity(pc.members.len());
@@ -238,11 +243,13 @@ impl<'a> SubscriptionSyncEngine<'a> {
 
             match pipeline.prepare_file(&member.file_path, &options).await {
                 Ok(pf) => {
-                    progress.files_downloaded += 1;
+                    // files_downloaded already incremented during stashing
                     prepared.push(pf);
                 }
                 Err(crate::import::pipeline::ImportError::AlreadyImported(_)) => {
+                    // Was counted as downloaded during stash, move to skipped
                     progress.files_skipped += 1;
+                    if progress.files_downloaded > 0 { progress.files_downloaded -= 1; }
                 }
                 Err(e) => {
                     progress.errors.push(format!("Prepare error for post {}: {e}", pc.post_id));
@@ -267,6 +274,9 @@ impl<'a> SubscriptionSyncEngine<'a> {
         }
 
         // Phase 2: one atomic DB transaction — insert all files + create collection
+        self.set_phase("creating_collection");
+        self.emit_progress_force(sub_id_str, progress,
+            &format!("Creating collection '{}' ({} items)", pc.preferred_name, prepared.len()));
         let db_opts: Vec<_> = prepared.into_iter().map(|pf| pf.db_opts).collect();
         match self.db.import_collection_batch(db_opts, &pc.preferred_name).await {
             Ok(result) => {
@@ -274,6 +284,11 @@ impl<'a> SubscriptionSyncEngine<'a> {
                     subscription_id, &pc.category, &pc.post_id, result.collection_id,
                 ).await;
                 changed_collection_ids.push(result.collection_id);
+
+                // Mark download queue entry as complete
+                if let Some(qid) = pc.queue_id {
+                    let _ = self.db.mark_queue_complete(qid).await;
+                }
 
                 crate::events::emit_mutation(
                     "subscription_collection_import",

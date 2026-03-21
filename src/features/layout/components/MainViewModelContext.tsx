@@ -12,6 +12,7 @@ type MainViewNavigationState = {
   activeFolderId: number | null;
   activeCollectionId: number | null;
   activeStatusFilter: string | null;
+  similarHashes: string[] | null;
 };
 
 type MainViewGridState = {

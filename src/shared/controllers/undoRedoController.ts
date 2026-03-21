@@ -12,31 +12,41 @@ export function registerUndoAction(input: Omit<UndoRedoAction, 'id'>): void {
 }
 
 export async function performUndo(): Promise<boolean> {
-  try {
-    const action = await useUndoRedoStore.getState().undo();
-    if (!action) {
-      notifyInfo('Nothing to undo', 'Undo');
-      return false;
+  const store = useUndoRedoStore.getState();
+  // Try up to 5 actions in case some fail (e.g. file deleted since action was recorded)
+  for (let attempt = 0; attempt < 5; attempt++) {
+    try {
+      const action = await store.undo();
+      if (!action) {
+        if (attempt === 0) notifyInfo('Nothing to undo', 'Undo');
+        return attempt > 0;
+      }
+      notifyInfo(action.label, 'Undo');
+      return true;
+    } catch {
+      // Action failed (likely missing file) — skip and try the next one
+      continue;
     }
-    notifyInfo(action.label, 'Undo');
-    return true;
-  } catch (err) {
-    notifyError(err, 'Undo Failed');
-    return false;
   }
+  notifyInfo('Nothing to undo', 'Undo');
+  return false;
 }
 
 export async function performRedo(): Promise<boolean> {
-  try {
-    const action = await useUndoRedoStore.getState().redo();
-    if (!action) {
-      notifyInfo('Nothing to redo', 'Redo');
-      return false;
+  const store = useUndoRedoStore.getState();
+  for (let attempt = 0; attempt < 5; attempt++) {
+    try {
+      const action = await store.redo();
+      if (!action) {
+        if (attempt === 0) notifyInfo('Nothing to redo', 'Redo');
+        return attempt > 0;
+      }
+      notifyInfo(action.label, 'Redo');
+      return true;
+    } catch {
+      continue;
     }
-    notifyInfo(action.label, 'Redo');
-    return true;
-  } catch (err) {
-    notifyError(err, 'Redo Failed');
-    return false;
   }
+  notifyInfo('Nothing to redo', 'Redo');
+  return false;
 }

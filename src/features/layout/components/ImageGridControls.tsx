@@ -332,16 +332,16 @@ export function ImageGridControls({
           )}
           <KbdTooltip label="Fit to window" shortcut="`">
             <button
-              className={st.icBtn}
-              onClick={dc.fitToWindow}
+              className={`${st.icBtn} ${ds.isStripMode ? st.icBtnDisabled : ''}`}
+              onClick={ds.isStripMode ? undefined : dc.fitToWindow}
             >
               <IconArrowsMaximize size={14} />
             </button>
           </KbdTooltip>
           <KbdTooltip label="Actual size" shortcut="Mod+0">
             <button
-              className={st.icBtn}
-              onClick={dc.fitActual}
+              className={`${st.icBtn} ${ds.isStripMode ? st.icBtnDisabled : ''}`}
+              onClick={ds.isStripMode ? undefined : dc.fitActual}
             >
               <IconMaximize size={14} />
             </button>

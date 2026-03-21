@@ -465,7 +465,9 @@ export function SubscriptionGroupsPanel({
               </div>
 
               <div className={st.cardMeta}>
-                <span className={st.metaFiles}>{subscriptionGroup.total_files} files</span>
+                <span className={st.metaFiles}>{queries.reduce((s, q) => s + q.filesFound, 0)} files</span>
+                <span className={st.metaFiles}>{queries.reduce((s, q) => s + q.postsFound, 0)} posts</span>
+                <span className={st.metaFiles}>{queries.length} queries</span>
                 {!isRunning && <span className={st.metaTime}>Last run: {formatRelativeTime(lastRan)}</span>}
               </div>
               {actionMessage && (
@@ -534,9 +536,11 @@ export function SubscriptionGroupsPanel({
                       <span className={st.queryHeaderCell}>Site</span>
                       <span className={st.queryHeaderCell}>Query</span>
                       <span className={st.queryHeaderCell}>Status</span>
-                      <span className={st.queryHeaderCell}>Files</span>
-                      <span className={st.queryHeaderCell}>Last check</span>
-                      <span className={st.queryHeaderCell}>Actions</span>
+                      <span className={st.queryHeaderCellRight}>Files</span>
+                      <span className={st.queryHeaderCellRight}>Posts</span>
+                      <span className={st.queryHeaderCellRight}>Cursor</span>
+                      <span className={st.queryHeaderCellRight}>Last run</span>
+                      <span className={st.queryHeaderCell}></span>
                     </div>
                   )}
                   {queries.map((q) => (
@@ -605,6 +609,8 @@ export function SubscriptionGroupsPanel({
                         )}
                       </span>
                       <span className={st.queryFiles}>{q.filesFound}</span>
+                      <span className={st.queryFiles}>{q.postsFound}</span>
+                      <span className={st.queryCursor}>{q.resumeCursor ? `@${q.resumeCursor}` : ''}</span>
                       <span className={st.queryTime}>{q.lastCheck ? formatRelativeTime(q.lastCheck) : ''}</span>
                       <div className={st.queryActions}>
                         <ActionIcon

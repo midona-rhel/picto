@@ -3,4 +3,8 @@ import type { GridScopeKind } from "./GridScopeKind";
 import type { GridSystemScopeKey } from "./GridSystemScopeKey";
 import type { SmartFolderPredicate } from "./SmartFolderPredicate";
 
-export type GridScopeSpec = { kind: GridScopeKind, system_key: GridSystemScopeKey | null, folder_id: number | null, collection_entity_id: number | null, smart_folder_predicate: SmartFolderPredicate | null, };
+export type GridScopeSpec = { kind: GridScopeKind, system_key: GridSystemScopeKey | null, folder_id: number | null, collection_entity_id: number | null, smart_folder_predicate: SmartFolderPredicate | null, 
+/**
+ * Pre-ordered hash list for Similar scope (distance-sorted).
+ */
+similar_hashes: Array<string> | null, };

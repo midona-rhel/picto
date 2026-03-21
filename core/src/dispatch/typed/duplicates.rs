@@ -59,7 +59,23 @@ pub struct UpdateDuplicateSettingsInput {
     pub duplicate_auto_merge_enabled: Option<bool>,
 }
 
+#[derive(Debug, Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
+pub struct FindSimilarInput {
+    pub hash: String,
+}
+
 // ─── Handlers ──────────────────────────────────────────────────────────────
+
+pub async fn find_similar(state: &AppState, input: FindSimilarInput) -> Result<serde_json::Value, String> {
+    let result = crate::duplicates::orchestrator::DuplicateOrchestrator::find_similar(
+        &state.db,
+        &state.blob_store,
+        &input.hash,
+    )
+    .await?;
+    serde_json::to_value(&result).map_err(|e| e.to_string())
+}
 
 pub async fn scan_duplicates(state: &AppState, input: ScanDuplicatesInput) -> Result<serde_json::Value, String> {
     let effective_threshold = input.threshold.or_else(|| {

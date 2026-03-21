@@ -33,6 +33,7 @@ pub async fn get_groups(db: &SqliteDatabase) -> Result<Vec<SubscriptionGroupInfo
                     paused: q.paused,
                     last_check_time: q.last_check_time,
                     files_found: q.files_found as u64,
+                    posts_found: q.posts_found as u64,
                     completed_initial_run: q.completed_initial_run,
                     resume_cursor: q.resume_cursor,
                     resume_strategy: q.resume_strategy,

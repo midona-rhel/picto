@@ -1,4 +1,4 @@
-import { useCallback } from 'react';
+import { useCallback, useRef } from 'react';
 import { api } from '#desktop/api';
 import { registerUndoAction } from '../../../shared/controllers/undoRedoController';
 import { useGridMetadataStore } from '../../../state/gridMetadataStore';
@@ -136,6 +136,17 @@ export function useInspectorMutations(
       const normalizedRating = rating || null;
       if (selectionSummarySpec) {
         await api.selection.updateRating(selectionSummarySpec, normalizedRating);
+        registerUndoAction({
+          label: 'Update rating (all selected)',
+          undo: async () => {
+            await api.selection.updateRating(selectionSummarySpec, null);
+            refreshVirtualSelectionSummary();
+          },
+          redo: async () => {
+            await api.selection.updateRating(selectionSummarySpec, normalizedRating);
+            refreshVirtualSelectionSummary();
+          },
+        });
         refreshVirtualSelectionSummary();
       } else {
         const hashes = selectedImages.map((img) => img.hash);
@@ -209,6 +220,7 @@ export function useInspectorMutations(
     [selectedImages, selectionSummarySpec, selectedCollection, collectionSummary, refreshMetadata, refreshVirtualSelectionSummary, setSourceUrls, setCollectionSummary],
   );
 
+  const committedNotesRef = useRef('');
   const onUpdateNotes = useCallback(
     (text: string) => {
       setNotes(text);
@@ -217,14 +229,52 @@ export function useInspectorMutations(
         if (selectedCollection) {
           return;
         }
+        const prevNotes = committedNotesRef.current;
         const notesObj: Record<string, string> = {};
         if (text) notesObj.description = text;
         if (selectionSummarySpec) {
           api.selection.setNotes(selectionSummarySpec, notesObj)
+            .then(() => {
+              committedNotesRef.current = text;
+              const prevObj: Record<string, string> = {};
+              if (prevNotes) prevObj.description = prevNotes;
+              registerUndoAction({
+                label: 'Update notes',
+                undo: async () => {
+                  await api.selection.setNotes(selectionSummarySpec, prevObj);
+                  setNotes(prevNotes);
+                  committedNotesRef.current = prevNotes;
+                },
+                redo: async () => {
+                  await api.selection.setNotes(selectionSummarySpec, notesObj);
+                  setNotes(text);
+                  committedNotesRef.current = text;
+                },
+              });
+            })
             .catch((e) => console.error('Failed to save notes:', e));
         } else {
           if (selectedImages.length === 0) return;
-          Promise.all(selectedImages.map((img) => api.files.setNotes(img.hash, notesObj)))
+          const hashes = selectedImages.map((img) => img.hash);
+          Promise.all(hashes.map((hash) => api.files.setNotes(hash, notesObj)))
+            .then(() => {
+              committedNotesRef.current = text;
+              const prevObj: Record<string, string> = {};
+              if (prevNotes) prevObj.description = prevNotes;
+              registerUndoAction({
+                label: 'Update notes',
+                undo: async () => {
+                  await Promise.all(hashes.map((hash) => api.files.setNotes(hash, prevObj)));
+                  setNotes(prevNotes);
+                  committedNotesRef.current = prevNotes;
+                },
+                redo: async () => {
+                  await Promise.all(hashes.map((hash) => api.files.setNotes(hash, notesObj)));
+                  setNotes(text);
+                  committedNotesRef.current = text;
+                },
+              });
+            })
             .catch((e) => console.error('Failed to save notes:', e));
         }
       }, 500);

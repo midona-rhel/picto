@@ -1,5 +1,5 @@
 
-import { useCallback } from 'react';
+import { useCallback, useEffect } from 'react';
 import {
   IconPhoto,
   IconInbox,
@@ -13,9 +13,11 @@ import {
 
 import { useDomainStore } from '../../../state/domainStore';
 import { useNavigationStore } from '../../../state/navigationStore';
+import { useLibraryStore } from '../../../state/libraryStore';
 import { api } from '#desktop/api';
 import { SidebarJobStatus } from '../../layout/components/SidebarJobStatus';
 import { runCriticalAction } from '../../../shared/lib/asyncOps';
+import { imageDrag } from '../../../shared/lib/imageDrag';
 import { FolderTree } from './FolderTree';
 import { LibrarySwitcher } from './LibrarySwitcher';
 import { SmartFolderList } from './SmartFolderList';
@@ -27,6 +29,8 @@ interface SidebarProps {
 }
 
 export function Sidebar({ onSmartFolderUpdated }: SidebarProps) {
+  const libraryPath = useLibraryStore((s) => s.currentPath);
+  const noLibrary = !libraryPath;
   const { allActiveCount, inboxCount, uncategorizedCount, trashCount, untaggedCount, tagsCount, duplicatesCount } = useDomainStore();
   const { currentView, activeSmartFolderId, activeFolderId, activeStatusFilter, navigateTo } = useNavigationStore();
 
@@ -63,10 +67,19 @@ export function Sidebar({ onSmartFolderUpdated }: SidebarProps) {
     handleStatusDrop(hashes, 'trash');
   }, [handleStatusDrop]);
 
+  // Register internal drag status drop handler (pointer-based drag from grid)
+  useEffect(() => {
+    return imageDrag.onStatusDrop(({ hashes, status }) => {
+      if (status === 'active' || status === 'inbox' || status === 'trash') {
+        handleStatusDrop(hashes, status);
+      }
+    });
+  }, [handleStatusDrop]);
+
   return (
     <div className={styles.sidebar}>
       <LibrarySwitcher />
-      <div className={styles.scrollArea}>
+      <div className={styles.scrollArea} style={noLibrary ? { pointerEvents: 'none', opacity: 0.4 } : undefined}>
         <SidebarItem
           icon={<IconPhoto size={16} />}
           label="All Active"
@@ -74,6 +87,7 @@ export function Sidebar({ onSmartFolderUpdated }: SidebarProps) {
           isActive={isAllActiveScope}
           onClick={() => navigateTo('images')}
           onHashDrop={handleDropToAllActive}
+          dataStatusDrop="active"
         />
         <SidebarItem
           icon={<IconInbox size={16} />}
@@ -82,6 +96,7 @@ export function Sidebar({ onSmartFolderUpdated }: SidebarProps) {
           isActive={currentView === 'images' && activeStatusFilter === 'inbox'}
           onClick={() => navigateTo('images', null, null, 'inbox')}
           onHashDrop={handleDropToInbox}
+          dataStatusDrop="inbox"
         />
         <SidebarItem
           icon={<IconFolderQuestion size={16} />}
@@ -124,6 +139,7 @@ export function Sidebar({ onSmartFolderUpdated }: SidebarProps) {
           isActive={currentView === 'images' && activeStatusFilter === 'trash'}
           onClick={() => navigateTo('images', null, null, 'trash')}
           onHashDrop={handleDropToTrash}
+          dataStatusDrop="trash"
         />
         <FolderTree />
 

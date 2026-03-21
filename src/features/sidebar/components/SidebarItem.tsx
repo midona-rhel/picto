@@ -1,7 +1,7 @@
 
 import { type ReactNode, type MouseEvent, type DragEvent, useState, useCallback } from 'react';
 import styles from './Sidebar.module.css';
-import { imageDrag } from '../../../shared/lib/imageDrag';
+import { imageDrag, useImageDrag } from '../../../shared/lib/imageDrag';
 
 interface SidebarItemProps {
   icon: ReactNode;
@@ -23,6 +23,8 @@ interface SidebarItemProps {
   children?: ReactNode;
   /** data attribute for drag-drop targeting */
   dataFolderDropId?: number | null;
+  /** data attribute for status drop targeting (inbox/trash/active) */
+  dataStatusDrop?: string | null;
 }
 
 export function SidebarItem({
@@ -43,9 +45,12 @@ export function SidebarItem({
   className,
   children,
   dataFolderDropId,
+  dataStatusDrop,
 }: SidebarItemProps) {
   const [nativeDragOver, setNativeDragOver] = useState(false);
   const dropEnabled = dataFolderDropId != null || !!onHashDrop;
+  const dragState = useImageDrag();
+  const internalDragOver = !!dataStatusDrop && dragState?.dropTargetStatus === dataStatusDrop;
 
   const handleDragOver = useCallback((e: DragEvent) => {
     if (!dropEnabled || !imageDrag.getPendingNativeDragHashes()) return;
@@ -78,7 +83,7 @@ export function SidebarItem({
     styles.item,
     isActive && styles.itemActive,
     isSelected && styles.itemSelected,
-    (isDropTarget || nativeDragOver) && styles.itemDropTarget,
+    (isDropTarget || nativeDragOver || internalDragOver) && styles.itemDropTarget,
     isContextHighlight && !isActive && styles.itemContextHighlight,
     className,
   ].filter(Boolean).join(' ');
@@ -94,6 +99,7 @@ export function SidebarItem({
       onDrop={dropEnabled ? handleDrop : undefined}
       style={{ paddingLeft: indent * 20, ...style }}
       data-folder-drop-id={dataFolderDropId}
+      data-status-drop={dataStatusDrop ?? undefined}
     >
       <span className={styles.itemIcon}>{icon}</span>
       {children ?? (

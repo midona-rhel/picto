@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useDisclosure } from '@mantine/hooks';
 import { useInlineRename } from '../../../shared/hooks/useInlineRename';
 import { api } from '#desktop/api';
@@ -54,6 +54,20 @@ function SortableSmartFolderRow({
     isDragging,
   } = useSortable({ id: node.id });
 
+  // Wrap dnd-kit listeners to skip drag initiation when modifier keys are held
+  // so shift-click and ctrl/cmd-click work for selection instead.
+  const filteredListeners = useMemo(() => {
+    if (!listeners) return listeners;
+    const wrapped: Record<string, (e: React.PointerEvent) => void> = {};
+    for (const [key, handler] of Object.entries(listeners)) {
+      wrapped[key] = (e: React.PointerEvent) => {
+        if (e.shiftKey || e.metaKey || e.ctrlKey) return;
+        (handler as (e: React.PointerEvent) => void)(e);
+      };
+    }
+    return wrapped;
+  }, [listeners]);
+
   const style: React.CSSProperties = {
     marginLeft: node.depth * 20,
     opacity: isDragging ? 0.3 : 1,
@@ -65,7 +79,7 @@ function SortableSmartFolderRow({
   const isDropAfter = dropIndicator?.nodeId === node.id && dropIndicator.position === 'after';
 
   return (
-    <div ref={setNodeRef} style={style} {...attributes} {...listeners} className={styles.folderRow}>
+    <div ref={setNodeRef} style={style} {...attributes} {...filteredListeners} className={styles.folderRow}>
       {isDropBefore && <div className={styles.dropLine} style={{ top: 0 }} />}
       <div className={isDropInside ? styles.dropHighlight : undefined}>
         {children}
@@ -165,6 +179,21 @@ export function SmartFolderList({ onFolderUpdated }: SmartFolderListProps) {
   const [initialParentId, setInitialParentId] = useState<number | null>(null);
   const contextMenu = useContextMenu();
   const [contextMenuFolderId, setContextMenuFolderId] = useState<string | null>(null);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const lastClickedId = useRef<string | null>(null);
+  const sectionRef = useRef<HTMLDivElement>(null);
+
+  // Clear selection when clicking anywhere outside the smart folder list
+  useEffect(() => {
+    if (selectedIds.size === 0) return;
+    const handler = (e: MouseEvent) => {
+      if (sectionRef.current && !sectionRef.current.contains(e.target as Node)) {
+        setSelectedIds(new Set());
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [selectedIds.size]);
 
   const refreshSidebarAndGrid = useCallback(async () => {
     useDomainStore.getState().invalidate();
@@ -432,30 +461,18 @@ export function SmartFolderList({ onFolderUpdated }: SmartFolderListProps) {
         void updateFolder(smartFolder, { color });
       },
       deleteSmartFolder: async () => {
-        if (!folder.id) return;
+        // Batch delete if multiple selected and this folder is in the selection
+        const idsToDelete = selectedIds.has(node.id) && selectedIds.size > 1
+          ? [...selectedIds]
+          : folder.id ? [folder.id] : [];
+        if (idsToDelete.length === 0) return;
         try {
-          const snapshot = { ...smartFolder };
-          const childMoves = node.children.map((child, index) => [parseInt(child.id, 10), (index + 1) * 1000] as [number, number]);
-          await api.smartFolders.delete(folder.id);
-          let recreated: SmartFolder | null = null;
-          registerUndoAction({
-            label: 'Delete smart folder',
-            undo: async () => {
-              recreated = await api.smartFolders.create(folderToRust({ ...snapshot, id: undefined }));
-              if (recreated?.id && childMoves.length > 0) {
-                const newParentId = parseInt(recreated.id, 10);
-                await api.smartFolders.move(childMoves[0][0], newParentId, childMoves);
-              }
-              await refreshSidebarAndGrid();
-            },
-            redo: async () => {
-              const id = recreated?.id ?? snapshot.id;
-              if (id) await api.smartFolders.delete(id);
-              await refreshSidebarAndGrid();
-            },
-          });
+          for (const id of idsToDelete) {
+            await api.smartFolders.delete(id);
+          }
+          setSelectedIds(new Set());
           await refreshSidebarAndGrid();
-          if (activeSmartFolderId === folder.id) navigateTo('images');
+          if (idsToDelete.includes(activeSmartFolderId ?? '')) navigateTo('images');
         } catch (error) {
           console.error('Delete failed:', error);
         }
@@ -469,6 +486,7 @@ export function SmartFolderList({ onFolderUpdated }: SmartFolderListProps) {
 
   return (
     <>
+      <div ref={sectionRef}>
       <SidebarSection title="Smart Folders" onAdd={openCreateRoot}>
         <DndContext
           sensors={sensors}
@@ -518,8 +536,42 @@ export function SmartFolderList({ onFolderUpdated }: SmartFolderListProps) {
                     count={isRenaming ? null : count}
                     isActive={isActive}
                     isContextHighlight={contextMenuFolderId === node.id && !isActive}
-                    onClick={() => {
+                    isSelected={selectedIds.has(node.id)}
+                    onClick={(e) => {
                       if (isRenaming) return;
+
+                      // Shift-click: range select
+                      if (e.shiftKey && lastClickedId.current) {
+                        const startIdx = flatNodes.findIndex((n) => n.id === lastClickedId.current);
+                        const endIdx = flatNodes.findIndex((n) => n.id === node.id);
+                        if (startIdx !== -1 && endIdx !== -1) {
+                          const lo = Math.min(startIdx, endIdx);
+                          const hi = Math.max(startIdx, endIdx);
+                          setSelectedIds((prev) => {
+                            const next = new Set(prev);
+                            for (let i = lo; i <= hi; i++) next.add(flatNodes[i].id);
+                            return next;
+                          });
+                        }
+                        return;
+                      }
+
+                      // Cmd/Ctrl-click: toggle select
+                      if (e.metaKey || e.ctrlKey) {
+                        setSelectedIds((prev) => {
+                          const next = new Set(prev);
+                          if (next.has(node.id)) next.delete(node.id);
+                          else next.add(node.id);
+                          return next;
+                        });
+                        lastClickedId.current = node.id;
+                        return;
+                      }
+
+                      // Plain click: navigate + clear selection
+                      setSelectedIds(new Set());
+                      lastClickedId.current = node.id;
+
                       if (!node.hasEffectiveRules) {
                         if (hasChildren) toggleExpand(node.id);
                         return;
@@ -571,6 +623,7 @@ export function SmartFolderList({ onFolderUpdated }: SmartFolderListProps) {
           </DragOverlay>
         </DndContext>
       </SidebarSection>
+      </div>
 
       {contextMenu.state && (
         <ContextMenu

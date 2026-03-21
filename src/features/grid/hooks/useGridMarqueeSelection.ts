@@ -88,6 +88,8 @@ export function useGridMarqueeSelection({
   const handleBoxPointerDown = useCallback((e: React.PointerEvent) => {
     if (!e.isPrimary || e.button !== 0) return;
     if ((e.target as HTMLElement).closest('[data-subfolder-grid]')) return;
+    // Don't capture clicks on interactive elements (empty state buttons, etc.)
+    if ((e.target as HTMLElement).closest('button, a, input, textarea, [role="button"]')) return;
 
     const container = scrollRef.current;
     if (!container) return;

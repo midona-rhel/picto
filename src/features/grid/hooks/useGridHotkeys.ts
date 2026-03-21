@@ -6,6 +6,7 @@ import { notifyError, notifySuccess } from '../../../shared/lib/notify';
 import { FolderPickerService } from '../../../shared/services/folderPickerService';
 import { bustThumbnailCache } from '../../../shared/lib/mediaUrl';
 import type { AppSettings } from '../../../state/settingsStore';
+import { useNavigationStore } from '../../../state/navigationStore';
 import type { GridRuntimeAction, GridRuntimeState, GridViewMode } from '../runtime';
 
 let lastUsedFolder: { id: number; name: string } | null = null;
@@ -206,6 +207,26 @@ export function useGridHotkeys({
             bustThumbnailCache(hashes);
           })
           .catch((err) => notifyError(err, 'Regenerate Failed'));
+      },
+    ],
+    [
+      'mod+shift+s',
+      () => {
+        const s = stateRef.current;
+        const hashes = [...s.selectedHashes];
+        if (hashes.length !== 1) return;
+        const hash = hashes[0];
+        const img = s.images.find((i) => i.hash === hash);
+        if (!img || img.is_collection) return;
+        api.duplicates.findSimilar(hash)
+          .then((result) => {
+            if (result.items.length === 0) {
+              notifyInfo('No visually similar images found');
+              return;
+            }
+            useNavigationStore.getState().navigateToSimilar(hash, result.items.map((i: { hash: string }) => i.hash));
+          })
+          .catch((err) => notifyError(err, 'Find Similar Failed'));
       },
     ],
   ]);

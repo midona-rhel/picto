@@ -16,8 +16,11 @@ export interface SubscriptionQueryInfo {
   paused: boolean;
   last_check_time: string | null;
   files_found: number;
+  posts_found: number;
   completed_initial_run: boolean;
   last_seen_id: string | null;
+  resume_cursor: string | null;
+  resume_strategy: string | null;
 }
 
 export interface SubInfo {

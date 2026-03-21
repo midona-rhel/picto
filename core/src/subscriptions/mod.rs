@@ -1,5 +1,6 @@
 pub mod archive;
 pub mod db;
+pub mod download_queue;
 pub mod gallery_dl_runner;
 pub mod group_orchestrator;
 pub mod group_service;

@@ -26,12 +26,19 @@ import type {
 export interface RuntimeSubscriptionProgress {
   subscription_id: string;
   subscription_name: string;
+  group_name?: string;
   query_id?: string;
   query_name?: string;
   files_downloaded: number;
   files_skipped: number;
   pages_fetched: number;
   status_text: string;
+  phase?: string;
+  current_post_id?: string | null;
+  current_post_items: number;
+  posts_processed: number;
+  resume_cursor?: string | null;
+  last_error?: string | null;
   status: 'running' | 'finished';
   finished_status?: 'succeeded' | 'failed' | 'cancelled';
   failure_kind?: string | null;
@@ -177,6 +184,9 @@ export const useSubscriptionProgressStore = create<SubscriptionProgressState>((s
             files_skipped: progress.files_skipped,
             pages_fetched: progress.pages_fetched,
             status_text: progress.status_text,
+            current_post_items: 0,
+            posts_processed: 0,
+            resume_cursor: null,
             status: 'running',
           });
         }
@@ -249,12 +259,19 @@ function applyTaskChange(
             ((detail.subscription_name as string) ?? '').trim()
             || existing?.subscription_name
             || `Subscription ${subId}`,
+          group_name: (detail.group_name as string | undefined) ?? existing?.group_name,
           query_id: detail.query_id as string | undefined,
           query_name: (detail.query_name as string | undefined) ?? existing?.query_name,
           files_downloaded: (detail.files_downloaded as number) ?? 0,
           files_skipped: (detail.files_skipped as number) ?? 0,
           pages_fetched: (detail.pages_fetched as number) ?? 0,
           status_text: (detail.status_text as string) ?? 'Running...',
+          phase: (detail.phase as string | undefined) ?? existing?.phase,
+          current_post_id: (detail.current_post_id as string | undefined) ?? existing?.current_post_id,
+          current_post_items: (detail.current_post_items as number) ?? existing?.current_post_items ?? 0,
+          posts_processed: (detail.posts_processed as number) ?? existing?.posts_processed ?? 0,
+          resume_cursor: (detail.resume_cursor as string | undefined) ?? existing?.resume_cursor,
+          last_error: (detail.last_error as string | undefined) ?? existing?.last_error,
           status: 'running',
         });
       } else if (isTerminal) {
@@ -267,6 +284,7 @@ function applyTaskChange(
             ((detail.subscription_name as string) ?? '').trim()
             || existing?.subscription_name
             || `Subscription ${subId}`,
+          group_name: (detail.group_name as string | undefined) ?? existing?.group_name,
           query_id: detail.query_id as string | undefined,
           query_name: (detail.query_name as string | undefined) ?? existing?.query_name,
           files_downloaded: (detail.files_downloaded as number) ?? 0,
@@ -276,6 +294,12 @@ function applyTaskChange(
             status: finishedStatus as 'succeeded' | 'failed' | 'cancelled',
             failure_kind: detail.failure_kind as string | undefined,
           } as SubscriptionFinishedEvent),
+          phase: (detail.phase as string | undefined) ?? 'finished',
+          current_post_id: null,
+          current_post_items: 0,
+          posts_processed: (detail.posts_processed as number) ?? existing?.posts_processed ?? 0,
+          resume_cursor: (detail.resume_cursor as string | undefined) ?? existing?.resume_cursor,
+          last_error: (detail.last_error as string | undefined) ?? (detail.error as string | undefined),
           status: 'finished',
           finished_status: finishedStatus as 'succeeded' | 'failed' | 'cancelled',
           failure_kind: detail.failure_kind as string | undefined,

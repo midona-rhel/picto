@@ -326,6 +326,37 @@ pub fn reconcile_schema(conn: &Connection) -> rusqlite::Result<()> {
         tracing::warn!("Reconciled subscription schema: added auto_collections");
     }
 
+    if table_exists(conn, "subscription_query")? && !has_column(conn, "subscription_query", "posts_found")? {
+        conn.execute_batch("ALTER TABLE subscription_query ADD COLUMN posts_found INTEGER NOT NULL DEFAULT 0")?;
+        tracing::warn!("Reconciled subscription_query schema: added posts_found");
+    }
+
+    // Download queue tables (PBI-539)
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS download_queue (
+             queue_id        INTEGER PRIMARY KEY,
+             subscription_id INTEGER NOT NULL,
+             query_id        INTEGER,
+             post_id         TEXT NOT NULL,
+             category        TEXT NOT NULL,
+             preferred_name  TEXT,
+             expected_count  INTEGER,
+             status          TEXT NOT NULL DEFAULT 'pending',
+             created_at      TEXT NOT NULL,
+             updated_at      TEXT NOT NULL
+         );
+         CREATE TABLE IF NOT EXISTS download_queue_item (
+             item_id     INTEGER PRIMARY KEY,
+             queue_id    INTEGER NOT NULL REFERENCES download_queue(queue_id) ON DELETE CASCADE,
+             blob_hash   TEXT,
+             page_num    INTEGER,
+             metadata    TEXT,
+             status      TEXT NOT NULL DEFAULT 'pending',
+             created_at  TEXT NOT NULL
+         );
+         CREATE INDEX IF NOT EXISTS idx_dqi_queue ON download_queue_item(queue_id);",
+    )?;
+
     // Data reconciliation: some upgraded builds may have illegal collection rows
     // still linked through entity_file, which corrupts collection tile rendering.
     repair_collection_entity_file_links(conn)?;

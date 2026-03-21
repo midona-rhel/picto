@@ -324,7 +324,29 @@ export function TagManager() {
             await handleDeleteSelected();
           } else {
             try {
+              // Capture files with this tag for undo restore
+              const tagFullName = tag.namespace ? `${tag.namespace}:${tag.subtag}` : tag.subtag;
+              let affectedHashes: string[] = [];
+              try {
+                affectedHashes = await api.tags.findFilesByTags([tagFullName]);
+              } catch { /* best effort */ }
               await api.tags.delete(tag.tag_id);
+              registerUndoAction({
+                label: `Delete tag "${display}"`,
+                undo: async () => {
+                  if (affectedHashes.length > 0) {
+                    await api.tags.addTags(affectedHashes, [tagFullName]);
+                  }
+                  await refreshAll();
+                },
+                redo: async () => {
+                  // Re-delete: find the tag again by name and delete it
+                  const found = await api.tags.getPaginated({ search: tag.subtag, limit: 10 });
+                  const match = found.find(t => t.subtag === tag.subtag && t.namespace === tag.namespace);
+                  if (match) await api.tags.delete(match.tag_id);
+                  await refreshAll();
+                },
+              });
               notifySuccess(`"${display}" deleted`);
               setSelectedTagIds(new Set());
               await refreshAll();

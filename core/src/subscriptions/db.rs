@@ -29,6 +29,7 @@ pub struct SubscriptionQuery {
     pub paused: bool,
     pub last_check_time: Option<String>,
     pub files_found: i64,
+    pub posts_found: i64,
     pub completed_initial_run: bool,
     pub resume_cursor: Option<String>,
     pub resume_strategy: Option<String>,
@@ -59,13 +60,14 @@ fn map_query_row(row: &rusqlite::Row) -> rusqlite::Result<SubscriptionQuery> {
         paused: row.get::<_, i64>(4)? != 0,
         last_check_time: row.get(5)?,
         files_found: row.get(6)?,
-        completed_initial_run: row.get::<_, i64>(7)? != 0,
-        resume_cursor: row.get(8)?,
-        resume_strategy: row.get(9)?,
+        posts_found: row.get(7)?,
+        completed_initial_run: row.get::<_, i64>(8)? != 0,
+        resume_cursor: row.get(9)?,
+        resume_strategy: row.get(10)?,
     })
 }
 
-const QUERY_COLS: &str = "query_id, subscription_id, query_text, display_name, paused, last_check_time, files_found, completed_initial_run, resume_cursor, resume_strategy";
+const QUERY_COLS: &str = "query_id, subscription_id, query_text, display_name, paused, last_check_time, files_found, posts_found, completed_initial_run, resume_cursor, resume_strategy";
 
 pub fn create_subscription(
     conn: &Connection,
@@ -236,11 +238,12 @@ pub fn update_query_progress(
     query_id: i64,
     last_check_time: &str,
     files_found: i64,
+    posts_found: i64,
 ) -> rusqlite::Result<()> {
     conn.execute(
-        "UPDATE subscription_query SET last_check_time = ?1, files_found = ?2
-         WHERE query_id = ?3",
-        params![last_check_time, files_found, query_id],
+        "UPDATE subscription_query SET last_check_time = ?1, files_found = ?2, posts_found = ?3
+         WHERE query_id = ?4",
+        params![last_check_time, files_found, posts_found, query_id],
     )?;
     Ok(())
 }
@@ -636,6 +639,7 @@ impl SqliteDatabase {
             paused: false,
             last_check_time: None,
             files_found: 0,
+            posts_found: 0,
             completed_initial_run: false,
             resume_cursor: None,
             resume_strategy: None,
@@ -677,9 +681,15 @@ impl SqliteDatabase {
         query_id: i64,
         last_check_time: &str,
         files_found: i64,
+        posts_found: i64,
     ) -> Result<(), String> {
         let lct = last_check_time.to_string();
-        self.with_conn(move |conn| update_query_progress(conn, query_id, &lct, files_found))
+        self.with_conn(move |conn| update_query_progress(conn, query_id, &lct, files_found, posts_found))
+            .await
+    }
+
+    pub async fn get_subscription_query(&self, query_id: i64) -> Result<Option<SubscriptionQuery>, String> {
+        self.with_read_conn(move |conn| get_subscription_query(conn, query_id))
             .await
     }
 

@@ -30,6 +30,7 @@ export function MainViewRouter() {
             excludedFilterFolderIds={grid.excludedFilterFolderIds}
             folderMatchMode={grid.folderMatchMode}
             statusFilter={navigation.activeStatusFilter}
+            similarHashes={navigation.similarHashes}
             viewMode={grid.viewMode}
             targetSize={grid.targetSize}
             onViewModeChange={gridActions.onViewModeChange}

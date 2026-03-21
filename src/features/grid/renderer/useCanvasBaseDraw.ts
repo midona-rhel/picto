@@ -8,6 +8,13 @@ import type { ThumbnailPipeline } from '../../../shared/lib/canvas/thumbnailPipe
 import type { CanvasScrollDirection, CanvasScrollPhase } from '../../../shared/lib/canvas/scrollState';
 import { useNavigationImageAdjustmentsStore } from '../../../state/navigationImageAdjustmentsStore';
 
+/** Persistent state for throttled bitmap eviction (survives across frames). */
+const evictState = {
+  lastRun: 0,
+  keepHashes: new Set<string>(),
+  cursor: 0,
+};
+
 interface ThemeState {
   primaryColor: string;
   textPrimary: string;
@@ -219,6 +226,44 @@ export function useCanvasBaseDraw(args: {
     }
 
     atlas.cancelOutsideWindow(cancelTop, cancelBottom);
+
+    // Throttled eviction: process up to 5 cache entries every ~33ms.
+    // Keep zone = viewport ± 1 full viewport height.
+    const evictNow = performance.now();
+    if (evictNow - evictState.lastRun >= 33) {
+      evictState.lastRun = evictNow;
+      const keepTop = scrollTop - cssH;
+      const keepBottom = scrollTop + cssH + cssH;
+      // Rebuild keep set from visible + nearby tiles.
+      // Use the visible indices + scan a band around them.
+      evictState.keepHashes.clear();
+      // Add all currently visible tiles
+      for (let n = 0; n < visibleIterEnd; n++) {
+        const idx = visibleIndices ? visibleIndices[n] : startIdx + n;
+        const img = imgs[idx];
+        if (img) evictState.keepHashes.add(img.hash);
+      }
+      // Add prefetch tiles
+      for (const idx of prefetchIndices) {
+        const img = imgs[idx];
+        if (img) evictState.keepHashes.add(img.hash);
+      }
+      // Add tiles in the keep zone (scan ±30 around visible range)
+      const scanStart = Math.max(0, startIdx - 30);
+      const scanEnd = Math.min(positions.length, endIdx + 30);
+      for (let idx = scanStart; idx < scanEnd; idx++) {
+        const p = positions[idx];
+        if (!p) continue;
+        if (p.y + p.h >= keepTop && p.y <= keepBottom) {
+          const img = imgs[idx];
+          if (img) evictState.keepHashes.add(img.hash);
+        }
+      }
+      // Check up to 5 cache entries per tick
+      const batch = atlas.getEvictCandidatesBatch(evictState.keepHashes, 5, evictState.cursor);
+      if (batch.evicted.length > 0) atlas.evictHashes(batch.evicted);
+      evictState.cursor = batch.nextCursor;
+    }
 
     if (hasActiveReveal) {
       markDirty('base');

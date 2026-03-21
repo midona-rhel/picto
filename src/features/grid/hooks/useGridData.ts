@@ -70,6 +70,7 @@ export function useGridData({
   const excludedSearchTagsKey = queryInput.excludedSearchTags ? JSON.stringify(queryInput.excludedSearchTags) : 'null';
   const mimePrefixesKey = queryInput.mimePrefixes ? JSON.stringify(queryInput.mimePrefixes) : 'null';
   const smartFolderKey = queryInput.smartFolderPredicate ? JSON.stringify(queryInput.smartFolderPredicate) : 'null';
+  const similarHashesKey = queryInput.similarHashes ? JSON.stringify(queryInput.similarHashes) : 'null';
 
   const query = useMemo(() => buildGridQuery({
     ...queryInput,
@@ -95,6 +96,7 @@ export function useGridData({
     queryInput.colorHex,
     queryInput.colorAccuracy,
     queryInput.searchText,
+    similarHashesKey,
   ]);
 
   const queryKey = useMemo(() => serializeGridQuery(query), [query]);

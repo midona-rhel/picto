@@ -315,6 +315,7 @@ CREATE TABLE IF NOT EXISTS subscription_query (
     paused                INTEGER NOT NULL DEFAULT 0,
     last_check_time       TEXT,
     files_found           INTEGER NOT NULL DEFAULT 0,
+    posts_found           INTEGER NOT NULL DEFAULT 0,
     completed_initial_run INTEGER NOT NULL DEFAULT 0,
     resume_cursor         TEXT,
     resume_strategy       TEXT
@@ -337,6 +338,33 @@ CREATE TABLE IF NOT EXISTS subscription_post_collection (
     PRIMARY KEY (subscription_id, site_id, post_id)
 );
 CREATE INDEX IF NOT EXISTS idx_spc_collection ON subscription_post_collection(collection_entity_id);
+
+-- ═══════════════════════════════════════════════════
+-- DOWNLOAD QUEUE (persistent staging for interrupted imports)
+-- ═══════════════════════════════════════════════════
+CREATE TABLE IF NOT EXISTS download_queue (
+    queue_id        INTEGER PRIMARY KEY,
+    subscription_id INTEGER NOT NULL,
+    query_id        INTEGER,
+    post_id         TEXT NOT NULL,
+    category        TEXT NOT NULL,
+    preferred_name  TEXT,
+    expected_count  INTEGER,
+    status          TEXT NOT NULL DEFAULT 'pending',
+    created_at      TEXT NOT NULL,
+    updated_at      TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS download_queue_item (
+    item_id     INTEGER PRIMARY KEY,
+    queue_id    INTEGER NOT NULL REFERENCES download_queue(queue_id) ON DELETE CASCADE,
+    blob_hash   TEXT,
+    page_num    INTEGER,
+    metadata    TEXT,
+    status      TEXT NOT NULL DEFAULT 'pending',
+    created_at  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_dqi_queue ON download_queue_item(queue_id);
 
 -- ═══════════════════════════════════════════════════
 -- CREDENTIALS (domain list; actual secrets in OS keychain)
@@ -468,5 +496,5 @@ CREATE TABLE IF NOT EXISTS kv_settings (
 
 -- Schema version
 CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL);
-INSERT OR IGNORE INTO schema_version (version) VALUES (34);
+INSERT OR IGNORE INTO schema_version (version) VALUES (35);
 "#;

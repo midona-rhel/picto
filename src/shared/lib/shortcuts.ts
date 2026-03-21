@@ -39,6 +39,7 @@ export const SHORTCUT_DEFS: ShortcutDef[] = [
   { id: 'file.addToLastFolder', label: 'Add to Last Folder',   group: 'File', keys: 'Shift+D',        description: 'Add selected files to the last used folder' },
   { id: 'file.removeFromFolder', label: 'Remove from Folder',   group: 'File', keys: 'Mod+Shift+Backspace', description: 'Remove selected files from current folder' },
   { id: 'file.regenerateThumbnail', label: 'Regenerate Thumbnail', group: 'File', keys: 'Mod+Shift+T', description: 'Regenerate thumbnails for selected files' },
+  { id: 'file.findSimilar',        label: 'Find Visually Similar', group: 'File', keys: 'Mod+Shift+S', description: 'Find images visually similar to the selected image' },
 
   // Organize
   { id: 'organize.addTag',    label: 'Add Tags',        group: 'Edit', keys: 'T',     description: 'Open tag panel for selected images' },
@@ -58,7 +59,7 @@ export const SHORTCUT_DEFS: ShortcutDef[] = [
   { id: 'inbox.reject',  label: 'Reject',  group: 'Inbox', keys: 'Backspace', description: 'Reject inbox image (move to trash)' },
 
   // View
-  { id: 'view.detailView',  label: 'Detail View',     group: 'View', keys: 'Enter',     description: 'Open selected image in detail view' },
+  { id: 'view.detailView',  label: 'Media View',      group: 'View', keys: 'Enter',     description: 'Open selected image in media view' },
   { id: 'view.quicklook',   label: 'Quick Look',      group: 'View', keys: 'Space',     description: 'Preview selected image' },
   { id: 'view.fitWindow',   label: 'Fit to Window',   group: 'View', keys: '`' },
   { id: 'view.actualSize',  label: 'Actual Size',     group: 'View', keys: 'Mod+0' },
@@ -66,9 +67,9 @@ export const SHORTCUT_DEFS: ShortcutDef[] = [
   { id: 'view.zoomOut',     label: 'Zoom Out',        group: 'View', keys: '-' },
   { id: 'view.grayscale',   label: 'Toggle Grayscale', group: 'View', keys: 'Mod+Alt+G', description: 'Toggle grayscale preview mode' },
   { id: 'view.slideshow',   label: 'Slideshow',        group: 'View', keys: 'F5',        description: 'Start slideshow presentation mode' },
-  { id: 'view.prevImage',   label: 'Previous Image',  group: 'View', keys: 'ArrowLeft', keys2: 'A', description: 'Navigate to previous image in detail view' },
-  { id: 'view.nextImage',   label: 'Next Image',      group: 'View', keys: 'ArrowRight', keys2: 'D', description: 'Navigate to next image in detail view' },
-  { id: 'view.closeDetail', label: 'Close Detail',    group: 'View', keys: 'Escape',    description: 'Return to grid view' },
+  { id: 'view.prevImage',   label: 'Previous Image',  group: 'View', keys: 'ArrowLeft', keys2: 'A', description: 'Navigate to previous image in media view' },
+  { id: 'view.nextImage',   label: 'Next Image',      group: 'View', keys: 'ArrowRight', keys2: 'D', description: 'Navigate to next image in media view' },
+  { id: 'view.closeDetail', label: 'Close Media View', group: 'View', keys: 'Escape',   description: 'Return to grid view' },
 
   // Grid navigation
   { id: 'grid.moveLeft',        label: 'Grid: Move Left',     group: 'Navigation', keys: 'ArrowLeft',  keys2: 'A', description: 'Select previous image in grid' },

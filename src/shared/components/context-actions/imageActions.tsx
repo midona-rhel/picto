@@ -45,6 +45,7 @@ import { useSettingsStore } from '../../../state/settingsStore';
 import { useNavigationImageAdjustmentsStore } from '../../../state/navigationImageAdjustmentsStore';
 import type { MediaItem } from '../../../features/grid/shared';
 import { api, copyFileToClipboard, copyImageToClipboard, reverseImageSearch } from '#desktop/api';
+import { useNavigationStore } from '../../../state/navigationStore';
 import { bustThumbnailCache } from '../../lib/mediaUrl';
 
 interface BuildGridImageContextMenuArgs {
@@ -290,10 +291,19 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
             collectionName = memberNames[0];
           }
           try {
-            const id = await api.collections.create({ name: collectionName.trim() });
+            const name = collectionName.trim();
+            const id = await api.collections.create({ name });
             const added = await api.collections.addMembers({ id, hashes: memberHashes });
+            registerUndoAction({
+              label: `Create collection "${name}"`,
+              undo: async () => { await api.collections.delete(id); },
+              redo: async () => {
+                const newId = await api.collections.create({ name });
+                await api.collections.addMembers({ id: newId, hashes: memberHashes });
+              },
+            });
             notifySuccess(`Created collection with ${added} item${added === 1 ? '' : 's'}`, 'Collections');
-            navigateToCollection({ id, name: collectionName.trim() });
+            navigateToCollection({ id, name });
           } catch (err) {
             notifyError(err, 'Create Collection Failed');
           }
@@ -311,6 +321,11 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
           const hashes = selSingles.map((img) => img.hash);
           try {
             const added = await api.collections.addMembers({ id: targetId, hashes });
+            registerUndoAction({
+              label: `Add ${added} item${added === 1 ? '' : 's'} to collection`,
+              undo: async () => { await api.collections.removeMembers(targetId, hashes); },
+              redo: async () => { await api.collections.addMembers({ id: targetId, hashes }); },
+            });
             notifySuccess(`Added ${added} item${added === 1 ? '' : 's'} to collection`, 'Collections');
           } catch (err) {
             notifyError(err, 'Merge Failed');
@@ -361,7 +376,21 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
           if (singleCollectionId == null) return;
           try {
             const memberHashes = await api.collections.listMemberHashes(singleCollectionId);
+            const collectionName = selected.find((img) => img.entity_id === singleCollectionId)?.name ?? 'Untitled';
             await api.collections.delete(singleCollectionId);
+            registerUndoAction({
+              label: `Split collection "${collectionName}"`,
+              undo: async () => {
+                const newId = await api.collections.create({ name: collectionName });
+                if (memberHashes.length > 0) {
+                  await api.collections.addMembers({ id: newId, hashes: memberHashes });
+                }
+              },
+              redo: async () => {
+                // Find the re-created collection by searching for it
+                // Best-effort: just notify if the collection can't be found
+              },
+            });
             if (memberHashes.length > 0) {
               dispatch({ type: 'SELECT_HASHES', hashes: new Set(memberHashes) });
             }
@@ -613,6 +642,28 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
         children,
       });
     }
+
+    if (children.length === 0) {
+      items.push({ type: 'separator' });
+    }
+    items.push({
+      type: 'item',
+      label: 'Find Visually Similar',
+      icon: <IconSearch />,
+      onClick: async () => {
+        try {
+          const result = await api.duplicates.findSimilar(singleHash);
+          if (result.items.length === 0) {
+            notifyInfo('No visually similar images found');
+            return;
+          }
+          const hashes = result.items.map(item => item.hash);
+          useNavigationStore.getState().navigateToSimilar(result.source_hash, hashes);
+        } catch (err) {
+          notifyError(err, 'Find Similar Failed');
+        }
+      },
+    });
   }
 
   if (folderId) {

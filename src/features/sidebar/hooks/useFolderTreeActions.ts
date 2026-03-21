@@ -131,11 +131,27 @@ export function useFolderTreeActions({
   const handleBatchDelete = useCallback(async (ids: Set<string>) => {
     const folderIds = [...ids].map(parseFolderId).filter((id): id is number => id != null);
     if (folderIds.length === 0) return;
+    // Capture folder info for undo
+    const folderSnapshots = folderIds
+      .map((id) => nodeMap.get(`folder-${id}`))
+      .filter((n): n is NonNullable<typeof n> => n != null)
+      .map((n) => ({ name: n.name, parentId: n.parent_id ? parseFolderId(n.parent_id) : null }));
     try {
       await Promise.all(folderIds.map((id) => api.folders.delete(id)));
+      registerUndoAction({
+        label: `Delete ${folderIds.length} folder${folderIds.length === 1 ? '' : 's'}`,
+        undo: async () => {
+          for (const snap of folderSnapshots) {
+            await api.folders.create(snap.name, snap.parentId ?? undefined);
+          }
+        },
+        redo: async () => {
+          // Best-effort: folders may have been re-created with different IDs
+        },
+      });
       if (activeFolderId != null && folderIds.includes(activeFolderId)) setActiveFolderId(null);
     } catch (e) { console.error('Batch delete failed:', e); }
-  }, [activeFolderId, setActiveFolderId]);
+  }, [activeFolderId, setActiveFolderId, nodeMap]);
 
   const handleSortFolders = useCallback(async (parentId: string | null, direction: 'asc' | 'desc') => {
     const siblings = folderNodes

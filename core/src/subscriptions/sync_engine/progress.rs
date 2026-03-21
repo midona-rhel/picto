@@ -21,6 +21,10 @@ impl<'a> SubscriptionSyncEngine<'a> {
         self.emit_progress_inner(subscription_id, progress, status_text, true);
     }
 
+    pub(super) fn set_phase(&mut self, phase: &str) {
+        self.current_phase = phase.to_string();
+    }
+
     fn emit_progress_inner(
         &mut self,
         subscription_id: &str,
@@ -37,10 +41,12 @@ impl<'a> SubscriptionSyncEngine<'a> {
             subscription_id,
             &self.subscription_name,
             "subscription",
+            self.group_name.as_deref(),
             self.current_query_id.map(|id| id.to_string()),
             self.current_query_name.clone(),
             progress,
             status_text,
+            &self.current_phase,
         );
     }
 }

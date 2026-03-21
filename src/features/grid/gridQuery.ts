@@ -34,6 +34,7 @@ export interface GridQueryInput {
   colorAccuracy: number | null;
   searchText: string | null;
   randomSeed: number | null;
+  similarHashes: string[] | null;
 }
 
 type ScopeQueryInput = Partial<Pick<
@@ -42,6 +43,7 @@ type ScopeQueryInput = Partial<Pick<
   | 'statusFilter'
   | 'collectionEntityId'
   | 'folderId'
+  | 'similarHashes'
 >>;
 
 type FilterQueryInput = Partial<Pick<
@@ -92,6 +94,13 @@ function toSystemScopeKey(statusFilter: string | null | undefined): GridSystemSc
 }
 
 export function buildGridScopeSpec(input: ScopeQueryInput): GridScopeSpec {
+  if (input.similarHashes && input.similarHashes.length > 0) {
+    return {
+      kind: 'similar',
+      similar_hashes: input.similarHashes,
+    };
+  }
+
   const hasSmartFolder = !!(input.smartFolderPredicate && input.smartFolderPredicate.groups.length > 0);
   const rustPredicate = hasSmartFolder ? predicateToRust(input.smartFolderPredicate!) : null;
 

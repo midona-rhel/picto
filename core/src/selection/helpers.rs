@@ -121,6 +121,20 @@ pub async fn selection_bitmap_for_all_results(
     } else {
         db.filter_visible_entity_ids(&resolved_ids).await?
     };
+
+    // Apply grid-level filters (rating, mime, collections_only, color, search text)
+    let grid_filters = build_grid_filters_from_selection(&selection.filters);
+    let base_ids = if grid_filters.is_some() {
+        let ids = base_ids;
+        let gf = grid_filters;
+        db.with_read_conn(move |conn| {
+            let rows = list_files_slim_by_ids(conn, &ids, ids.len() as i64 + 1, "date_added", "desc", None, gf.as_ref(), None)?;
+            Ok(rows.into_iter().map(|r| r.entity_id).collect::<Vec<_>>())
+        }).await?
+    } else {
+        base_ids
+    };
+
     let base = RoaringBitmap::from_iter(base_ids.into_iter().map(|id| id as u32));
 
     let mut filtered = base.clone();
@@ -136,6 +150,22 @@ pub async fn selection_bitmap_for_all_results(
         }
     }
     Ok((base, filtered))
+}
+
+fn build_grid_filters_from_selection(filters: &crate::types::GridFilterSpec) -> Option<crate::sqlite::files::GridFilters> {
+    let has_any = filters.rating_min.is_some()
+        || filters.mime_prefixes.as_ref().map(|v| !v.is_empty()).unwrap_or(false)
+        || filters.search_text.as_ref().map(|s| !s.trim().is_empty()).unwrap_or(false)
+        || filters.collections_only == Some(true);
+    if !has_any {
+        return None;
+    }
+    Some(crate::sqlite::files::GridFilters {
+        rating_min: filters.rating_min,
+        mime_prefixes: filters.mime_prefixes.clone(),
+        search_text: filters.search_text.clone(),
+        collections_only: filters.collections_only,
+    })
 }
 
 pub async fn summarize_tags_from_bitmap(

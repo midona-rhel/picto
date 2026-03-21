@@ -6,6 +6,8 @@ pub struct SubscriptionProgressEvent {
     pub subscription_name: String,
     pub mode: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub group_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub query_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub query_name: Option<String>,
@@ -17,6 +19,16 @@ pub struct SubscriptionProgressEvent {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_metadata_error: Option<String>,
     pub status_text: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub phase: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub current_post_id: Option<String>,
+    pub current_post_items: usize,
+    pub posts_processed: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resume_cursor: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_error: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub finished_status: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

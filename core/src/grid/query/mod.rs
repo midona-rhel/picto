@@ -7,6 +7,7 @@ mod collection;
 mod common;
 mod cursor;
 mod scope;
+mod similar;
 mod status;
 
 use common::QueryInputs;
@@ -22,6 +23,9 @@ pub async fn get_grid_outline(
 ) -> Result<GridOutlineResponse, String> {
     let inputs = QueryInputs::build(db, &query).await?;
 
+    if query.scope.kind == GridScopeKind::Similar {
+        return similar::get_similar_outline(db, &query, &inputs).await;
+    }
     if query.scope.kind == GridScopeKind::Collection {
         return collection::get_collection_outline(db, &query, &inputs).await;
     }
@@ -39,6 +43,9 @@ pub async fn get_grid_page_slim(
 ) -> Result<GridPageSlimResponse, String> {
     let inputs = QueryInputs::build(db, &query).await?;
 
+    if query.scope.kind == GridScopeKind::Similar {
+        return similar::get_similar_page(db, &query, &inputs).await;
+    }
     if query.scope.kind == GridScopeKind::Collection {
         return collection::get_collection_page(db, &query, &inputs).await;
     }

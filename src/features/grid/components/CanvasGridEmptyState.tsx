@@ -99,7 +99,7 @@ export function CanvasGridEmptyState(props: {
                 <IconUpload size={14} />
                 Import Files
               </TextButton>
-              {emptyContext === 'folder' && onImportFolder && (
+              {onImportFolder && (
                 <TextButton onClick={onImportFolder}>
                   <IconFolderPlus size={14} />
                   Import Folder

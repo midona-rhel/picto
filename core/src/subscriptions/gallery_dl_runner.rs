@@ -214,11 +214,25 @@ impl GalleryDlRunner {
                     }
                     let path = PathBuf::from(&trimmed);
                     let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-                    if ext == "json" || !path.is_file() {
+                    if ext == "json" {
+                        tracing::trace!(path = %trimmed, "gallery-dl stdout: skipping json sidecar");
+                        continue;
+                    }
+                    if !path.is_file() {
+                        tracing::warn!(path = %trimmed, "gallery-dl stdout: path is not a file, skipping");
                         continue;
                     }
 
+                    tracing::info!(path = %trimmed, ext, "gallery-dl stdout: downloaded file");
                     let metadata = filesystem::parse_sidecar_for_file(&path);
+                    tracing::debug!(
+                        post_id = metadata.post_id.as_deref().unwrap_or("?"),
+                        page_num = ?metadata.page_num,
+                        page_count = ?metadata.page_count,
+                        tags = metadata.tags.len(),
+                        category = metadata.category.as_deref().unwrap_or("?"),
+                        "gallery-dl stdout: parsed sidecar metadata"
+                    );
                     if item_tx
                         .send(DownloadedItem {
                             file_path: path,
@@ -227,7 +241,8 @@ impl GalleryDlRunner {
                         .await
                         .is_err()
                     {
-                        break; // receiver dropped
+                        tracing::warn!("gallery-dl stdout: receiver dropped, stopping");
+                        break;
                     }
                 }
             }
@@ -238,7 +253,7 @@ impl GalleryDlRunner {
             if let Some(err) = child_stderr {
                 let mut reader = BufReader::new(err).lines();
                 while let Ok(Some(line)) = reader.next_line().await {
-                    debug!(line, "gallery-dl stderr");
+                    info!(line, "gallery-dl stderr");
                     output.push_str(&line);
                     output.push('\n');
                 }

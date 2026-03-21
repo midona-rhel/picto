@@ -733,6 +733,33 @@ pub fn run_migrations(conn: &Connection, from_version: i64) -> rusqlite::Result<
             )?;
         }
     }
+    if from_version < 35 {
+        // V35: Persistent download queue for interrupted collection imports.
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS download_queue (
+                queue_id        INTEGER PRIMARY KEY,
+                subscription_id INTEGER NOT NULL,
+                query_id        INTEGER,
+                post_id         TEXT NOT NULL,
+                category        TEXT NOT NULL,
+                preferred_name  TEXT,
+                expected_count  INTEGER,
+                status          TEXT NOT NULL DEFAULT 'pending',
+                created_at      TEXT NOT NULL,
+                updated_at      TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS download_queue_item (
+                item_id     INTEGER PRIMARY KEY,
+                queue_id    INTEGER NOT NULL REFERENCES download_queue(queue_id) ON DELETE CASCADE,
+                blob_hash   TEXT,
+                page_num    INTEGER,
+                metadata    TEXT,
+                status      TEXT NOT NULL DEFAULT 'pending',
+                created_at  TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_dqi_queue ON download_queue_item(queue_id);",
+        )?;
+    }
     conn.execute("UPDATE schema_version SET version = ?1", [CURRENT_VERSION])?;
     Ok(())
 }

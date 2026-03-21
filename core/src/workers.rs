@@ -121,6 +121,18 @@ pub async fn start_workers(
         handles.push(("group_scheduler", handle));
     }
 
+    // ── Download queue cleanup (one-shot on library open) ──
+    {
+        let cleanup_db = db.clone();
+        tokio::spawn(async move {
+            if let Err(e) = cleanup_db.cleanup_download_queue().await {
+                tracing::warn!(error = %e, "Download queue cleanup failed");
+            } else {
+                tracing::debug!("Download queue cleanup complete");
+            }
+        });
+    }
+
     // ── Folder watch worker ────────────────────────────
     {
         let watch_db = db.clone();

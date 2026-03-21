@@ -32,6 +32,7 @@ export type VirtualSelectionScopeInput = Partial<Pick<
 >> & {
   ratingMin?: number | null;
   mimePrefixes?: string[] | null;
+  collectionsOnly?: boolean | null;
   colorHex?: string | null;
   colorAccuracy?: number | null;
   searchText?: string | null;

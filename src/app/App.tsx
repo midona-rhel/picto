@@ -36,6 +36,7 @@ function App() {
   // --- Navigation ---
   const {
     currentView, activeSmartFolderId, activeFolderId, activeCollectionId, activeStatusFilter, filterTags,
+    similarHashes,
     canGoBack, canGoForward,
     goBack, goForward,
   } = useNavigationStore();
@@ -239,6 +240,7 @@ function App() {
         activeFolderId,
         activeCollectionId,
         activeStatusFilter,
+        similarHashes,
       },
       grid: {
         viewMode: gridViewMode,
@@ -288,6 +290,7 @@ function App() {
       activeFolderId,
       activeCollectionId,
       activeStatusFilter,
+      similarHashes,
       gridViewMode,
       gridTargetSize,
       gridSortField,

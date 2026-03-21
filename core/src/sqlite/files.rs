@@ -561,6 +561,7 @@ fn entity_sort_expr(sort_field: &str) -> &'static str {
 
 /// Shared SELECT column list for entity-aware grid queries.
 /// Returns both singles and collections with unified column shape.
+pub(crate) const ENTITY_SLIM_SELECT_PUB: &str = ENTITY_SLIM_SELECT;
 const ENTITY_SLIM_SELECT: &str =
     "me.entity_id,
      (me.kind = 'collection') AS is_collection,
@@ -611,6 +612,7 @@ const ENTITY_SLIM_SELECT: &str =
      me.updated_at";
 
 /// Shared FROM/JOIN clause for entity-aware grid queries.
+pub(crate) const ENTITY_SLIM_FROM_PUB: &str = ENTITY_SLIM_FROM;
 const ENTITY_SLIM_FROM: &str = " FROM media_entity me
       LEFT JOIN entity_file ef ON ef.entity_id = me.entity_id
       LEFT JOIN file f ON f.file_id = ef.file_id
@@ -623,6 +625,9 @@ const NON_MEMBER_SINGLE_CLAUSE: &str = " AND (me.kind = 'collection'
 
 /// Map a database row from an entity-aware query to FileMetadataSlim.
 /// Column order must match ENTITY_SLIM_SELECT.
+pub(crate) fn row_to_entity_slim_pub(row: &rusqlite::Row) -> rusqlite::Result<FileMetadataSlim> {
+    row_to_entity_slim(row)
+}
 fn row_to_entity_slim(row: &rusqlite::Row) -> rusqlite::Result<FileMetadataSlim> {
     Ok(FileMetadataSlim {
         entity_id: row.get(0)?,
@@ -674,7 +679,7 @@ fn row_to_file_record(row: &rusqlite::Row) -> rusqlite::Result<FileRecord> {
 }
 
 /// Populate the `_grid_filter` temp table with the given file IDs for efficient JOINs.
-fn populate_grid_filter(conn: &Connection, file_ids: &[i64]) -> rusqlite::Result<()> {
+pub(crate) fn populate_grid_filter(conn: &Connection, file_ids: &[i64]) -> rusqlite::Result<()> {
     conn.execute(
         "CREATE TEMP TABLE IF NOT EXISTS _grid_filter (file_id INTEGER PRIMARY KEY)",
         [],

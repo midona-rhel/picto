@@ -119,6 +119,11 @@ impl SubscriptionRunOrchestrator {
         let blob_store = blob_store.clone();
         let running_subs = running_subs.clone();
         let sub_name = sub.name.clone();
+        let group_name = if let Some(gid) = sub.group_id {
+            db.get_group(gid).await.ok().flatten().map(|g| g.name)
+        } else {
+            None
+        };
         let sub_id_str = id.clone();
         let site_id =
             crate::subscriptions::gallery_dl_runner::canonical_site_id(&sub.site_id).to_string();
@@ -161,6 +166,7 @@ impl SubscriptionRunOrchestrator {
                     Ok(engine) => {
                         let mut engine = engine
                             .with_name(sub_name.clone())
+                            .with_group_name(group_name.clone())
                             .with_auto_merge(
                                 auto_merge_enabled,
                                 auto_merge_distance,
@@ -370,6 +376,11 @@ impl SubscriptionRunOrchestrator {
         let blob_store = blob_store.clone();
         let running_subs = running_subs.clone();
         let sub_name = sub.name.clone();
+        let group_name_q = if let Some(gid) = sub.group_id {
+            db.get_group(gid).await.ok().flatten().map(|g| g.name)
+        } else {
+            None
+        };
         let sub_id_str = subscription_id.clone();
         let query_id_str = query_id.clone();
         let query_name_str = query_name.clone();
@@ -426,6 +437,7 @@ impl SubscriptionRunOrchestrator {
                         Ok(engine) => {
                             let mut engine = engine
                                 .with_name(sub_name.clone())
+                                .with_group_name(group_name_q.clone())
                                 .with_auto_merge(
                                     auto_merge_enabled,
                                     auto_merge_distance,

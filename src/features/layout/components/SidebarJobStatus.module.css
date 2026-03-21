@@ -4,11 +4,11 @@
 
 .root {
   border-top: 1px solid var(--color-border-secondary);
-  padding: 8px 12px;
+  padding: 6px 8px;
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 4px;
 }
 
 /* PBI-044: Subscription job list — max 3 cards visible, scroll for overflow */
@@ -28,14 +28,30 @@
    └──┘
    -------------------------------------------------------------------------- */
 
+.groupHeader {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 2px 8px;
+}
+
+.groupName {
+  font-size: var(--font-size-2xs);
+  font-weight: var(--font-weight-bold);
+  color: var(--color-text-secondary);
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .jobCard {
-  display: grid;
-  grid-template-columns: auto 1fr;
-  grid-template-rows: auto auto;
-  column-gap: 8px;
-  row-gap: 2px;
-  padding: 6px 8px;
-  border-radius: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 4px 8px;
+  border-radius: 5px;
   background: var(--color-bg-secondary);
   border: 1px solid var(--color-border-secondary);
 }
@@ -44,58 +60,49 @@
   background: var(--color-black-10);
 }
 
-.jobIcon {
-  grid-row: 1 / 3;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 28px;
-  height: 28px;
-  border-radius: 6px;
-  background: var(--color-primary-alpha);
-  color: var(--color-primary);
-  flex-shrink: 0;
-  align-self: center;
-}
-
-/* Top-right: name + domain — PBI-045: space-between for right-aligned status */
 .jobNameRow {
   display: flex;
   align-items: baseline;
-  justify-content: space-between;
   gap: 6px;
   min-width: 0;
 }
 
 .jobName {
   composes: truncate from '../../../shared/styles/textClamp.module.css';
-  font-size: var(--font-size-sm);
-  font-weight: var(--font-weight-bold);
+  font-size: var(--font-size-2xs);
+  font-weight: var(--font-weight-medium);
   color: var(--color-text-primary);
   min-width: 0;
+  flex: 1;
+}
+
+.jobCounters {
+  font-family: 'SF Mono', 'Fira Mono', 'Roboto Mono', monospace;
+  font-size: 9px;
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.jobPhaseRow {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.jobStatusIcon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  color: var(--color-text-tertiary);
 }
 
 .jobPhase {
   composes: truncate from '../../../shared/styles/textClamp.module.css';
-  font-size: var(--font-size-xs);
+  font-size: var(--font-size-2xs);
   color: var(--color-text-tertiary);
-  min-width: 0;
-}
-
-/* Bottom-right: progress bar */
-.jobProgressRow {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-}
-
-.jobProgress {
-  flex: 1;
-  height: 3px;
-  border-radius: 2px;
-  background: var(--color-border-secondary);
-  overflow: hidden;
   min-width: 0;
 }
 
@@ -105,5 +112,20 @@
 
 .progressIndeterminate {
   composes: progressIndeterminate from '../../../shared/styles/progressBar.module.css';
+}
+
+/* Spinner animation for running jobs */
+.spinner {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+/* Error phase text */
+.jobPhaseError {
+  color: var(--color-negative);
 }
 

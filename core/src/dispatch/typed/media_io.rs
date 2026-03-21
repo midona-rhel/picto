@@ -633,6 +633,26 @@ pub async fn backfill_missing_deferred(
             }
         }
 
+        // Compute phash if missing (images only)
+        if file.phash.is_none() && file.mime.starts_with("image/") {
+            let ext = mime_to_extension(&file.mime).to_string();
+            let h = hash.clone();
+            let bs = blob_store.clone();
+            let phash_result = tokio::task::spawn_blocking(move || -> Result<String, String> {
+                let original = bs
+                    .find_original(&h, Some(&ext))
+                    .map_err(|e| format!("{e}"))?
+                    .ok_or_else(|| "not found".to_string())?;
+                let bytes = std::fs::read(&original.0).map_err(|e| format!("{e}"))?;
+                crate::duplicates::phash::compute_phash_base64(&bytes)
+                    .map_err(|e| format!("{e}"))
+            }).await;
+            if let Ok(Ok(phash_b64)) = phash_result {
+                let _ = db.set_phash(hash, &phash_b64).await;
+                any_changed = true;
+            }
+        }
+
         // Extract dominant colors if missing
         if file.dominant_color_hex.is_none() && file.mime.starts_with("image/") {
             let ext = mime_to_extension(&file.mime).to_string();

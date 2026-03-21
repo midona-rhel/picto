@@ -93,6 +93,8 @@ interface CanvasGridProps {
   dismissHoverPreviewRef?: React.MutableRefObject<() => void>;
   /** External ref updated with the dismiss-video-scrub function (for parent dismiss triggers). */
   dismissVideoScrubRef?: React.MutableRefObject<() => void>;
+  /** Horizontal content padding (default: 4). Increases padding to center narrower content. */
+  contentPaddingX?: number;
 }
 
 export interface CanvasGridHandle {
@@ -146,6 +148,7 @@ export function CanvasGrid({
   atlasRef: sharedAtlasRef,
   dismissHoverPreviewRef: externalDismissRef,
   dismissVideoScrubRef: externalVideoScrubDismissRef,
+  contentPaddingX,
 }: CanvasGridProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const ctxRef = useRef<CanvasRenderingContext2D | null>(null);
@@ -236,7 +239,7 @@ export function CanvasGrid({
   }, [images]);
 
   // Horizontal padding prevents clipping of edge drop indicators
-  const paddingX = 4;
+  const paddingX = contentPaddingX ?? 4;
   const textHeight = computeTextHeight(showTileName, showResolution);
   const { renderImages, layout, bucketIndex } = useWaterfallLayoutWorker({
     images: layoutImages,
@@ -626,7 +629,7 @@ export function CanvasGrid({
       return <div ref={containerRef} style={{ minHeight: 1 }} />;
     }
     return (
-      <div ref={containerRef}>
+      <div ref={containerRef} style={{ position: 'relative', minHeight: 400 }}>
         <CanvasGridEmptyState
           emptyContext={emptyContext}
           searchTags={searchTags}

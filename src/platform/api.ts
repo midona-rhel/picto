@@ -320,6 +320,8 @@ export const api = {
       invokeTyped('get_duplicate_settings') as Promise<DuplicateSettings>,
     updateSettings: (settings: Partial<DuplicateSettings>) =>
       invokeTyped('update_duplicate_settings', settings as never) as Promise<{ ok: boolean }>,
+    findSimilar: (hash: string) =>
+      invoke<{ source_hash: string; items: Array<{ hash: string; distance: number }> }>('find_similar', { hash }),
   },
 
   subscriptions: {

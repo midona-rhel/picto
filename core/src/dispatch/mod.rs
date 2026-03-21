@@ -117,6 +117,7 @@ async fn dispatch_inner(command: &str, args: serde_json::Value) -> Result<String
         "update_selection_metadata" => call!(typed::selection::update_selection_metadata, &state, args),
 
         // ── Duplicates ────────────────────────────────────────
+        "find_similar" => call!(typed::duplicates::find_similar, &state, args),
         "scan_duplicates" => call!(typed::duplicates::scan_duplicates, &state, args),
         "get_duplicate_pairs" => call!(typed::duplicates::get_duplicate_pairs, &state, args),
         "resolve_duplicate_pair" => call!(typed::duplicates::resolve_duplicate_pair, &state, args),

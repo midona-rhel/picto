@@ -157,6 +157,9 @@ export function useCanvasViewport(args: {
     const enableCoarseWheelSmoothing =
       typeof navigator !== 'undefined' && !/Mac/i.test(navigator.userAgent);
     let wheelTargetScrollTop = scrollElement.scrollTop;
+    let wheelAnimStartTop = scrollElement.scrollTop;
+    let wheelAnimStartTime = 0;
+    const WHEEL_ANIM_DURATION = 1200; // ms — smooth glide duration
 
     const onScroll = () => {
       isScrollingRef.current = true;
@@ -209,17 +212,18 @@ export function useCanvasViewport(args: {
       markDirty('both');
     };
 
+    const easeOutCubic = (t: number) => 1 - (1 - t) * (1 - t) * (1 - t);
+
     const stepWheelAnimation = () => {
       wheelRafId = 0;
-      const current = scrollElement.scrollTop;
-      const diff = wheelTargetScrollTop - current;
-      if (Math.abs(diff) < 0.5) {
-        scrollElement.scrollTop = wheelTargetScrollTop;
-        return;
-      }
-      const next = current + diff * 0.22;
+      const elapsed = performance.now() - wheelAnimStartTime;
+      const t = Math.min(1, elapsed / WHEEL_ANIM_DURATION);
+      const eased = easeOutCubic(t);
+      const next = wheelAnimStartTop + (wheelTargetScrollTop - wheelAnimStartTop) * eased;
       scrollElement.scrollTop = next;
-      wheelRafId = requestAnimationFrame(stepWheelAnimation);
+      if (t < 1) {
+        wheelRafId = requestAnimationFrame(stepWheelAnimation);
+      }
     };
 
     const onWheel = (event: WheelEvent) => {
@@ -238,10 +242,11 @@ export function useCanvasViewport(args: {
             ? event.deltaY * scrollElement.clientHeight
             : event.deltaY;
       const maxScrollTop = Math.max(0, scrollElement.scrollHeight - scrollElement.clientHeight);
-      wheelTargetScrollTop = Math.max(
-        0,
-        Math.min(maxScrollTop, (wheelRafId ? wheelTargetScrollTop : scrollElement.scrollTop) + delta),
-      );
+      const baseTop = wheelRafId ? wheelTargetScrollTop : scrollElement.scrollTop;
+      wheelTargetScrollTop = Math.max(0, Math.min(maxScrollTop, baseTop + delta));
+      // Restart animation from current position toward new target
+      wheelAnimStartTop = scrollElement.scrollTop;
+      wheelAnimStartTime = performance.now();
       if (!wheelRafId) {
         wheelRafId = requestAnimationFrame(stepWheelAnimation);
       }

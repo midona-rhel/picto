@@ -19,6 +19,7 @@ import {
 } from './canvasGridPrimitives';
 import {
   THUMBNAIL_PIPELINE_REVEAL_MS,
+  THUMBNAIL_PIPELINE_SOURCE_EDGE,
 } from '../../../shared/lib/canvas/thumbnailPipelinePolicy';
 import { getNavigationImageAdjustment } from '../../../state/navigationImageAdjustmentsStore';
 
@@ -134,14 +135,21 @@ export function drawCanvasBaseLayer({
     const imageHeight = pos.h - th;
     if (drawY + pos.h < 0 || drawY > cssH) continue;
 
-    // Load once: either thumbnail or full quality based on CSS tile size.
-    // No upgrading — once a bitmap is cached, it stays.
     const entry = atlasGet(image.hash);
-    if (!entry || entry.state !== 'shown') {
+    const cssLongEdge = Math.max(pos.w, imageHeight);
+    const dpr = window.devicePixelRatio || 1;
+    const needsFull = cssLongEdge > THUMBNAIL_PIPELINE_SOURCE_EDGE && image.mime.startsWith('image/');
+    const wrongKind = entry?.state === 'shown' && (
+      (needsFull && entry.sourceKind === 'thumbnail') ||
+      (!needsFull && entry.sourceKind === 'full')
+    );
+    if (!entry || entry.state !== 'shown' || wrongKind) {
+      // Pass DPR-scaled dimensions for the actual decode resolution,
+      // but the pipeline uses CSS-based SOURCE_EDGE threshold internally.
       atlasEnsure(image.hash, {
         y: pos.y + pos.h / 2,
-        drawWidth: pos.w,
-        drawHeight: imageHeight,
+        drawWidth: pos.w * dpr,
+        drawHeight: imageHeight * dpr,
         mime: image.mime,
         sourceWidth: image.width,
         sourceHeight: image.height,

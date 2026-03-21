@@ -45,7 +45,7 @@ export interface GridOutlineResponse {
   total_count: number | null;
 }
 
-export type GridScopeKind = 'system' | 'folder' | 'collection' | 'smart';
+export type GridScopeKind = 'system' | 'folder' | 'collection' | 'smart' | 'similar';
 export type GridSystemScopeKey = 'all' | 'inbox' | 'trash' | 'untagged' | 'uncategorized';
 
 export interface GridScopeSpec {
@@ -54,6 +54,7 @@ export interface GridScopeSpec {
   folder_id?: number | null;
   collection_entity_id?: number | null;
   smart_folder_predicate?: unknown | null;
+  similar_hashes?: string[] | null;
 }
 
 export interface GridFilterSpec {

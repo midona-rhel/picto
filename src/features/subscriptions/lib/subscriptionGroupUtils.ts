@@ -37,12 +37,16 @@ export function formatRelativeTime(iso: string | null | undefined): string {
   const now = new Date();
   const diffMs = now.getTime() - date.getTime();
   const diffMin = Math.floor(diffMs / 60000);
-  if (diffMin < 1) return 'Just now';
-  if (diffMin < 60) return `${diffMin}m ago`;
+  if (diffMin < 1) return 'Now';
+  if (diffMin < 60) return `${diffMin}m`;
   const diffHrs = Math.floor(diffMin / 60);
-  if (diffHrs < 24) return `${diffHrs}h ago`;
+  if (diffHrs < 24) return `${diffHrs}h`;
   const diffDays = Math.floor(diffHrs / 24);
-  return `${diffDays}d ago`;
+  if (diffDays < 30) return `${diffDays}d`;
+  const diffMonths = Math.floor(diffDays / 30);
+  if (diffMonths < 12) return `${diffMonths}mo`;
+  const diffYears = Math.floor(diffDays / 365);
+  return `${diffYears}y`;
 }
 
 export function flattenQueries(subscriptionGroup: SubscriptionGroupInfo, sites: SitePluginInfo[], credentialSites: Set<string>) {
@@ -53,11 +57,13 @@ export function flattenQueries(subscriptionGroup: SubscriptionGroupInfo, sites: 
     sitePluginId: string;
     backendSubId: string;
     filesFound: number;
+    postsFound: number;
     lastCheck: string | null;
     paused: boolean;
     missingAuth: boolean;
     autoCollections: boolean;
     completedInitialRun: boolean;
+    resumeCursor: string | null;
   }[] = [];
   for (const sub of subscriptionGroup.subscriptions) {
     const siteIdRaw = sub.site_id ?? sub.site_plugin_id ?? '';
@@ -78,11 +84,13 @@ export function flattenQueries(subscriptionGroup: SubscriptionGroupInfo, sites: 
         sitePluginId: siteId,
         backendSubId: sub.id,
         filesFound: q.files_found,
+        postsFound: q.posts_found ?? 0,
         lastCheck: q.last_check_time,
         paused: q.paused,
         missingAuth,
         autoCollections: sub.auto_collections ?? true,
         completedInitialRun: q.completed_initial_run ?? false,
+        resumeCursor: q.resume_cursor ?? null,
       });
     }
   }

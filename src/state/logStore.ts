@@ -8,7 +8,7 @@ export interface LogEntry {
   timestamp: string;
 }
 
-const MAX_ENTRIES = 2000;
+const MAX_ENTRIES = 1000;
 let nextId = 1;
 
 interface LogState {

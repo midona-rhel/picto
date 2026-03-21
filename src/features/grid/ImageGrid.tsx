@@ -17,7 +17,9 @@ import { GridInlineRenameOverlay } from './components/GridInlineRenameOverlay';
 import { transitionOpacity, transitionCss, isTransitionFrozen } from './runtime/gridTransitionPipeline';
 import { GridDialogsLayer } from './components/GridDialogsLayer';
 import { GridErrorState } from './components/GridErrorState';
+import { NoLibraryState } from './components/NoLibraryState';
 import { useNavigationStore } from '../../state/navigationStore';
+import { useLibraryStore } from '../../state/libraryStore';
 import { useDomainStore } from '../../state/domainStore';
 import type { MediaViewState, MediaViewControls } from '../../features/viewer/hooks/useViewerHost';
 import type { ViewerHostController } from '../../features/viewer/hooks/useViewerHost';
@@ -118,6 +120,8 @@ interface ImageGridProps {
   folderMatchMode?: 'all' | 'any' | 'exact' | null;
   /** Explicit status filter (e.g. 'trash' for status=2 files) */
   statusFilter?: string | null;
+  /** Pre-ordered hash list for "Find Visually Similar" scope */
+  similarHashes?: string[] | null;
   viewMode?: GridViewMode;
   targetSize?: number;
   onViewModeChange?: (mode: GridViewMode) => void;
@@ -142,7 +146,7 @@ interface ImageGridProps {
   viewer: ViewerHostController;
 }
 
-export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartFolderPredicate, smartFolderSortField, smartFolderSortOrder, folderId, collectionEntityId, filterFolderIds, excludedFilterFolderIds, folderMatchMode, statusFilter, viewMode = 'waterfall', targetSize = 250, onViewModeChange, sortField = 'date_added', sortOrder = 'asc', onSortFieldChange, onSortOrderChange, onContainerWidthChange, refreshTrigger, onSelectedImagesChange, onSelectionSummarySpecChange, selectedScopeCount = null, onMediaViewStateChange, ratingMin, mimePrefixes, collectionsOnly, colorHex, colorAccuracy, searchText, externalFreeze = false, viewer }: ImageGridProps) {
+export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartFolderPredicate, smartFolderSortField, smartFolderSortOrder, folderId, collectionEntityId, filterFolderIds, excludedFilterFolderIds, folderMatchMode, statusFilter, similarHashes, viewMode = 'waterfall', targetSize = 250, onViewModeChange, sortField = 'date_added', sortOrder = 'asc', onSortFieldChange, onSortOrderChange, onContainerWidthChange, refreshTrigger, onSelectedImagesChange, onSelectionSummarySpecChange, selectedScopeCount = null, onMediaViewStateChange, ratingMin, mimePrefixes, collectionsOnly, colorHex, colorAccuracy, searchText, externalFreeze = false, viewer }: ImageGridProps) {
   const { state, dispatch } = useGridRuntime({
     viewMode,
     targetSize,
@@ -263,6 +267,7 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
       colorHex: colorHex ?? null,
       colorAccuracy: colorAccuracy ?? null,
       searchText: searchText || null,
+      similarHashes: similarHashes ?? null,
     },
     dispatch,
     stateRef,
@@ -342,6 +347,12 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
       filterFolderIds: filterFolderIds ?? null,
       excludedFilterFolderIds: excludedFilterFolderIds ?? null,
       folderMatchMode: folderMatchMode ?? null,
+      ratingMin: ratingMin ?? null,
+      mimePrefixes: mimePrefixes ?? null,
+      collectionsOnly: collectionsOnly ?? null,
+      colorHex: colorHex ?? null,
+      colorAccuracy: colorAccuracy ?? null,
+      searchText: searchText ?? null,
     },
   });
 
@@ -708,6 +719,12 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
     renameCancelledRef,
     setBatchRenameOpen,
   });
+
+  const libraryPath = useLibraryStore((s) => s.currentPath);
+
+  if (!libraryPath) {
+    return <NoLibraryState />;
+  }
 
   if (state.error) {
     return <GridErrorState error={state.error} onRetry={requestReplace} />;

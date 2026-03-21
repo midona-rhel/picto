@@ -156,18 +156,19 @@ export function MediaView({ images, currentIndex, onNavigate, onClose, onStateCh
   const [holdingStrip, setHoldingStrip] = useState(false);
   const prevStripRef = useRef(false);
 
-  const [stripZoomScale, setStripZoomScale] = useState(1);
-  const stripZoomRef = useRef(stripZoomScale);
-  stripZoomRef.current = stripZoomScale;
+  const [stripCols, setStripCols] = useState(1);
+  const stripColsRef = useRef(stripCols);
+  stripColsRef.current = stripCols;
   const [stripResetKey, setStripResetKey] = useState(0);
 
-  // Reset strip zoom + scroll when navigating to a new image
   useEffect(() => {
     if (stripMode) {
-      setStripZoomScale(1);
+      setStripCols(1);
       setStripResetKey((k) => k + 1);
     }
   }, [currentIndex]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const stripZoomScale = 1 / stripCols;
 
   const imageSize: ImageSize | null = currentImage?.width && currentImage?.height
     ? { width: currentImage.width, height: currentImage.height }
@@ -269,24 +270,24 @@ export function MediaView({ images, currentIndex, onNavigate, onClose, onStateCh
       navigate: (direction: number) => navigateRef.current(direction),
       setZoomScale: (scale: number) => {
         if (stripModeRef.current) {
-          setStripZoomScale(Math.max(0.05, Math.min(8, scale)));
+          const currentCols = stripColsRef.current;
+          const zoomingIn = scale > 1 / currentCols;
+          if (zoomingIn) {
+            if (currentCols <= 1) return;
+            setStripCols(currentCols - 1);
+          } else {
+            setStripCols(currentCols + 1);
+          }
           return;
         }
         zoomToRef.current(scale);
       },
       fitToWindow: () => {
-        if (stripModeRef.current) {
-          setStripZoomScale(1);
-          setStripResetKey((k) => k + 1);
-          return;
-        }
+        if (stripModeRef.current) return;
         fitToWindowRef.current();
       },
       fitActual: () => {
-        if (stripModeRef.current) {
-          setStripZoomScale(1);
-          return;
-        }
+        if (stripModeRef.current) return;
         fitActualRef.current();
       },
       rotateClockwise: () => {
@@ -463,7 +464,7 @@ export function MediaView({ images, currentIndex, onNavigate, onClose, onStateCh
         }
       }
 
-      // Close detail view — Escape always works; Enter works for both; Space only for images
+      // Close media view — Escape always works; Enter works for both; Space only for images
       if (matchesShortcut(e, closeKeys)) {
         e.preventDefault();
         controlsRef.current!.close();
@@ -603,7 +604,7 @@ export function MediaView({ images, currentIndex, onNavigate, onClose, onStateCh
         <StripView
           images={collectionImages}
           initialIndex={0}
-          zoomScale={stripZoomScale}
+          cols={stripCols}
           resetKey={stripResetKey}
           onLoadMore={stripMode && collectionHasMoreRef.current ? handleStripLoadMore : undefined}
         />

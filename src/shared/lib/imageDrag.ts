@@ -14,6 +14,7 @@ export interface ImageDragState {
   x: number;
   y: number;
   dropTargetFolderId: number | null;
+  dropTargetStatus: string | null;
 }
 
 let _state: ImageDragState | null = null;
@@ -24,7 +25,9 @@ function _notify() { _listeners.forEach(fn => fn()); }
 let _selectedHashesRef: Set<string> = new Set();
 
 type DropHandler = (result: { hashes: string[]; folderId: number }) => void;
+type StatusDropHandler = (result: { hashes: string[]; status: string }) => void;
 let _onDropHandler: DropHandler | null = null;
+let _onStatusDropHandler: StatusDropHandler | null = null;
 
 // PBI-053: Session-tracked native drag state with timeout guard.
 interface NativeDragSession {
@@ -47,7 +50,7 @@ export const imageDrag = {
   getSelectedHashes() { return _selectedHashesRef; },
 
   start(hashes: string[], thumbnailUrls: string[], x: number, y: number) {
-    _state = { hashes, thumbnailUrls, x, y, dropTargetFolderId: null };
+    _state = { hashes, thumbnailUrls, x, y, dropTargetFolderId: null, dropTargetStatus: null };
     document.body.style.userSelect = 'none';
     document.body.style.cursor = 'grabbing';
     _notify();
@@ -58,24 +61,29 @@ export const imageDrag = {
     const el = document.elementFromPoint(x, y);
     const folderEl = el?.closest('[data-folder-drop-id]') as HTMLElement | null;
     const folderId = folderEl ? parseInt(folderEl.dataset.folderDropId!, 10) : null;
+    const statusEl = el?.closest('[data-status-drop]') as HTMLElement | null;
+    const statusDrop = statusEl?.dataset.statusDrop ?? null;
     _state = {
       ..._state,
       x,
       y,
       dropTargetFolderId: folderId != null && !isNaN(folderId) ? folderId : null,
+      dropTargetStatus: statusDrop,
     };
     _notify();
   },
 
   end() {
     if (!_state) return;
-    const { hashes, dropTargetFolderId } = _state;
+    const { hashes, dropTargetFolderId, dropTargetStatus } = _state;
     _state = null;
     document.body.style.userSelect = '';
     document.body.style.cursor = '';
     _notify();
     if (dropTargetFolderId != null && _onDropHandler) {
       _onDropHandler({ hashes, folderId: dropTargetFolderId });
+    } else if (dropTargetStatus != null && _onStatusDropHandler) {
+      _onStatusDropHandler({ hashes, status: dropTargetStatus });
     }
   },
 
@@ -99,6 +107,14 @@ export const imageDrag = {
     _onDropHandler = handler;
     return () => {
       if (_onDropHandler === handler) _onDropHandler = null;
+    };
+  },
+
+  /** Register a handler for drops onto status targets (inbox/trash/active). Returns cleanup function. */
+  onStatusDrop(handler: StatusDropHandler) {
+    _onStatusDropHandler = handler;
+    return () => {
+      if (_onStatusDropHandler === handler) _onStatusDropHandler = null;
     };
   },
 

@@ -27,6 +27,7 @@ export function useAppBootstrap(): AppBootstrap {
   const activeStatusFilter = useNavigationStore((state) => state.activeStatusFilter);
   const currentView = useNavigationStore((state) => state.currentView);
   const filterTags = useNavigationStore((state) => state.filterTags);
+  const similarHashes = useNavigationStore((state) => state.similarHashes);
   const smartFolders = useDomainStore((state) => state.smartFolders);
   const folderNodes = useDomainStore((state) => state.folderNodes);
   const collectionTitles = useNavigationStore((state) => state.collectionTitles);
@@ -60,7 +61,8 @@ export function useAppBootstrap(): AppBootstrap {
     activeStatusFilter,
     currentView,
     filterTags,
-  }), [activeCollectionId, activeCollectionLabel, activeFolderId, activeFolderLabel, activeSmartFolder?.name, activeStatusFilter, currentView, filterTags]);
+    similarHashes,
+  }), [activeCollectionId, activeCollectionLabel, activeFolderId, activeFolderLabel, activeSmartFolder?.name, activeStatusFilter, currentView, filterTags, similarHashes]);
   const { colorScheme } = useMantineColorScheme();
   const appWindow = useMemo(() => getCurrentWindow(), []);
   const isSystemDark = colorScheme === 'dark';
@@ -88,6 +90,7 @@ export function useAppBootstrap(): AppBootstrap {
       activeStatusFilter: state.activeStatusFilter,
       currentView: state.currentView,
       filterTags: state.filterTags,
+      similarHashes: state.similarHashes,
     }));
   }, []);
   useEffect(() => {
