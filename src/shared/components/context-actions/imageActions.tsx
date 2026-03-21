@@ -360,7 +360,11 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
         onClick: async () => {
           if (singleCollectionId == null) return;
           try {
+            const memberHashes = await api.collections.listMemberHashes(singleCollectionId);
             await api.collections.delete(singleCollectionId);
+            if (memberHashes.length > 0) {
+              dispatch({ type: 'SELECT_HASHES', hashes: new Set(memberHashes) });
+            }
             notifySuccess('Collection split', 'Collections');
           } catch (err) {
             notifyError(err, 'Split Collection Failed');

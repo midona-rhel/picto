@@ -2417,6 +2417,7 @@ dependencies = [
 name = "picto_node"
 version = "0.1.1-alpha.1"
 dependencies = [
+ "cc",
  "napi",
  "napi-build",
  "napi-derive",

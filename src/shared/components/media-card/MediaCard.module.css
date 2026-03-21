@@ -4,6 +4,16 @@
   overflow: hidden;
 }
 
+.frame::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.2);
+  pointer-events: none;
+  z-index: 1;
+}
+
 .imageRoot {
   position: relative;
   width: 100%;

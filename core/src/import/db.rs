@@ -136,4 +136,89 @@ impl SqliteDatabase {
 
         Ok(result)
     }
+
+    /// Import multiple files as a collection in a single transaction.
+    /// All files + the collection entity + member assignments are committed atomically,
+    /// so the grid only ever sees the final collection — never individual loose files.
+    pub async fn import_collection_batch(
+        &self,
+        files: Vec<ImportOptions>,
+        collection_name: &str,
+    ) -> Result<BatchCollectionResult, String> {
+        let bitmaps = self.bitmaps.clone();
+        let hash_index = self.hash_index.clone();
+        let cname = collection_name.to_string();
+
+        let result = self
+            .with_conn_mut(move |conn| {
+                let mut file_ids: Vec<i64> = Vec::with_capacity(files.len());
+                let mut hashes: Vec<String> = Vec::with_capacity(files.len());
+
+                // Insert all files
+                for opts in &files {
+                    match import_file_with_tags(conn, opts) {
+                        Ok(r) if !r.was_duplicate => {
+                            file_ids.push(r.file_id);
+                            hashes.push(opts.hash.clone());
+                        }
+                        Ok(_) => {
+                            // Duplicate — still include in collection
+                            if let Ok(fid) = conn.query_row(
+                                "SELECT file_id FROM file WHERE hash = ?1",
+                                [&opts.hash],
+                                |row| row.get::<_, i64>(0),
+                            ) {
+                                file_ids.push(fid);
+                                hashes.push(opts.hash.clone());
+                            }
+                        }
+                        Err(e) => {
+                            tracing::warn!(hash = %opts.hash, error = %e, "Batch import: file failed (skipped)");
+                        }
+                    }
+                }
+
+                // Create collection entity
+                let collection_id = crate::folders::collections_db::create_collection(conn, &cname)?;
+
+                // Assign members (set parent_collection_id + ordinal)
+                for (ordinal, &fid) in file_ids.iter().enumerate() {
+                    conn.execute(
+                        "UPDATE media_entity
+                         SET parent_collection_id = ?1,
+                             collection_ordinal = ?2,
+                             updated_at = CURRENT_TIMESTAMP
+                         WHERE entity_id = ?3 AND kind = 'single'",
+                        rusqlite::params![collection_id, ordinal as i64 + 1, fid],
+                    )?;
+                }
+
+                // Sync collection metadata (cover, count, size, tags, dates)
+                crate::folders::collections_db::sync_collection_aggregate_metadata(conn, collection_id)?;
+
+                Ok(BatchCollectionResult {
+                    collection_id,
+                    file_ids,
+                    hashes,
+                })
+            })
+            .await?;
+
+        // Update in-memory indexes outside the transaction
+        for (hash, &fid) in result.hashes.iter().zip(&result.file_ids) {
+            hash_index.insert(hash.clone(), fid);
+        }
+        // Only add the collection to the status bitmap — members are hidden
+        bitmaps.insert(&BitmapKey::Status(0), result.collection_id as u32);
+
+        self.emit_read_model_event(ReadModelEvent::StatusBatchChanged);
+
+        Ok(result)
+    }
+}
+
+pub struct BatchCollectionResult {
+    pub collection_id: i64,
+    pub file_ids: Vec<i64>,
+    pub hashes: Vec<String>,
 }

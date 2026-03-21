@@ -462,7 +462,10 @@ async fn import_file_into_folder(
     let mut skipped_hashes = Vec::<String>::new();
 
     match pipeline.import_file(path, &options).await {
-        Ok(imported) => {
+        Ok((imported, deferred)) => {
+            if let Some(work) = deferred {
+                pipeline.process_deferred(work).await;
+            }
             let surviving_hash = maybe_auto_merge(
                 db,
                 blob_store,

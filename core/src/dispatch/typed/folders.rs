@@ -771,6 +771,8 @@ pub async fn delete_collection(
         )
         .status_changed()
         .sidebar_counts_from(&state.db);
+    // Clone before moving into impact — needed for color backfill below.
+    let backfill_hashes = member_hashes.clone();
     if !member_hashes.is_empty() {
         impact = impact.file_hashes(member_hashes);
     }
@@ -778,6 +780,16 @@ pub async fn delete_collection(
         "delete_collection",
         impact,
     );
+
+    // Backfill missing colors for members that were hidden inside the collection.
+    if !backfill_hashes.is_empty() {
+        let db = state.db.clone();
+        let blob_store = state.blob_store.clone();
+        tokio::spawn(async move {
+            super::media_io::backfill_missing_colors(&db, &blob_store, &backfill_hashes).await;
+        });
+    }
+
     Ok(())
 }
 

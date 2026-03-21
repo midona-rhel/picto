@@ -59,10 +59,14 @@ export function buildCanvasVisibilityPlan(args: {
   const top = scrollTop;
   const bottom = scrollTop + viewportHeight;
 
-  // Binary search for visible range
-  const startIdx = lowerBound(positions, top, (p) => p.y + p.h);
-  const endIdx = lowerBound(positions, bottom, (p) => p.y);
-  const visibleIterEnd = Math.max(0, Math.min(endIdx, positions.length) - startIdx);
+  // Binary search for visible range, then extend by at least 1 row in each
+  // direction so adjacent tiles are always ready — prevents flicker when
+  // images are large relative to the viewport.
+  const rawStart = lowerBound(positions, top, (p) => p.y + p.h);
+  const rawEnd = lowerBound(positions, bottom, (p) => p.y);
+  const startIdx = Math.max(0, rawStart - 1);
+  const endIdx = Math.min(positions.length, rawEnd + 1);
+  const visibleIterEnd = Math.max(0, endIdx - startIdx);
 
   const prefetchPx = scrollPhase === 'idle' ? PREFETCH_PX : scrollPhase === 'slow' ? 600 : 0;
   const prefetchLimit = getPrimaryPrefetchLimit(scrollPhase, queueDepth);
@@ -71,7 +75,8 @@ export function buildCanvasVisibilityPlan(args: {
   const prefetchBottom = scrollTop + viewportHeight + prefetchPx;
 
   if (bucketIndex && bucketIndex.size > 0) {
-    const visibleIndices = collectBucketWindowIndices(positions, bucketIndex, top, bottom);
+    // Expand the visible window by one bucket so adjacent rows are always loaded
+    const visibleIndices = collectBucketWindowIndices(positions, bucketIndex, top - BUCKET_SIZE, bottom + BUCKET_SIZE);
     const visibleSet = new Set(visibleIndices);
     const prefetchCandidates = collectBucketWindowIndices(positions, bucketIndex, prefetchTop, prefetchBottom)
       .filter((index) => !visibleSet.has(index));

@@ -395,19 +395,24 @@ fn reorder_entity(
     entity_id: i64,
     prev_rank: Option<i64>,
     next_rank: Option<i64>,
+    after_eid: Option<i64>,
+    before_eid: Option<i64>,
 ) -> rusqlite::Result<()> {
-    let new_rank = match (prev_rank, next_rank) {
-        (Some(p), Some(n)) => {
-            if n - p <= 1 {
-                // Gap exhausted — redistribute
-                redistribute_ranks(conn, folder_id)?;
-                // Re-fetch surrounding ranks and compute midpoint
-                let midpoint = (p + n) / 2;
-                midpoint.max(p + 1)
-            } else {
-                (p + n) / 2
-            }
+    let (prev_rank, next_rank) = match (prev_rank, next_rank) {
+        (Some(p), Some(n)) if n - p <= 1 => {
+            // Gap exhausted — redistribute all ranks then re-fetch the
+            // anchor entities' new ranks so the midpoint is correct.
+            redistribute_ranks(conn, folder_id)?;
+            let fresh_p = after_eid
+                .and_then(|eid| get_entity_rank_in_folder(conn, folder_id, eid).ok().flatten());
+            let fresh_n = before_eid
+                .and_then(|eid| get_entity_rank_in_folder(conn, folder_id, eid).ok().flatten());
+            (fresh_p.or(Some(p)), fresh_n.or(Some(n)))
         }
+        other => other,
+    };
+    let new_rank = match (prev_rank, next_rank) {
+        (Some(p), Some(n)) => (p + n) / 2,
         (Some(p), None) => p + RANK_GAP,
         (None, Some(n)) => n / 2,
         (None, None) => RANK_GAP,
@@ -1165,7 +1170,7 @@ impl SqliteDatabase {
                     other => other,
                 };
 
-                reorder_entity(conn, folder_id, rm.entity_id, prev_rank, next_rank)?;
+                reorder_entity(conn, folder_id, rm.entity_id, prev_rank, next_rank, rm.after_id, rm.before_id)?;
             }
             Ok(())
         })

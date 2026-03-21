@@ -495,6 +495,7 @@ export function CanvasGrid({
     clearPendingHoverTimers,
     clearPendingVideoScrubTimer,
     clearVideoScrubIndex,
+    dragJustEndedRef,
     reorderDragRef,
     handlePointerDown,
     clearDragState,
@@ -563,6 +564,14 @@ export function CanvasGrid({
 
   // -- click interactions (inlined from useCanvasClickInteractions) --
   const handleClick = useCallback((e: React.MouseEvent) => {
+    // Suppress the click that fires after a drag (native or internal) ends —
+    // without this, releasing the mouse changes the selection to whatever is
+    // under the cursor at drop time.
+    if (dragJustEndedRef.current) {
+      dragJustEndedRef.current = false;
+      return;
+    }
+
     const idx = hitTest(e.clientX, e.clientY);
     if (idx == null) return;
     const image = imagesRef.current[idx];
@@ -574,7 +583,7 @@ export function CanvasGrid({
     }
 
     onImageClickRef.current(image, e);
-  }, [hitTest, imagesRef, isZoomButtonHit, onImageClickRef, showHoverPreview]);
+  }, [dragJustEndedRef, hitTest, imagesRef, isZoomButtonHit, onImageClickRef, showHoverPreview]);
 
   // -- pop animation / scroll-into-view (inlined from useCanvasPopAnimation) --
   useEffect(() => {

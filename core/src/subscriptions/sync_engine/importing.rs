@@ -30,6 +30,18 @@ impl<'a> SubscriptionSyncEngine<'a> {
         gallery_url: &str,
         is_collection_member: bool,
     ) -> Result<ImportOutcome, String> {
+        self.import_item_inner(file_path, metadata, subscription_id, gallery_url, is_collection_member, false).await
+    }
+
+    async fn import_item_inner(
+        &self,
+        file_path: &Path,
+        metadata: &ParsedMetadata,
+        subscription_id: i64,
+        gallery_url: &str,
+        is_collection_member: bool,
+        skip_thumbnail: bool,
+    ) -> Result<ImportOutcome, String> {
         let file_data = tokio::fs::read(file_path)
             .await
             .map_err(|e| format!("Read error: {e}"))?;
@@ -65,6 +77,7 @@ impl<'a> SubscriptionSyncEngine<'a> {
         });
 
         options.name = preferred_import_name(metadata);
+        options.skip_thumbnail = skip_thumbnail;
 
         {
             let mut notes = HashMap::new();
@@ -87,7 +100,9 @@ impl<'a> SubscriptionSyncEngine<'a> {
 
         let pipeline = ImportPipeline::new(self.db, self.blob_store);
         match pipeline.import_file(file_path, &options).await {
-            Ok(imported) => {
+            Ok((imported, _deferred)) => {
+                // Deferred work (colors, phash) is handled by the background worker.
+                // For subscription imports, auto-merge replaces phash-based dedup anyway.
                 info!(hash = %imported.hex_hash, tags = options.tags.len(), "Import success");
 
                 let mut surviving_hash = imported.hex_hash.clone();
@@ -139,7 +154,8 @@ impl<'a> SubscriptionSyncEngine<'a> {
                         "subscription_import",
                         crate::runtime_contract::mutation_builder::MutationImpact::file_lifecycle(
                             self.db,
-                        ),
+                        )
+                        .extra_grid_scopes(vec!["system:inbox".into()]),
                     );
                 }
 
@@ -172,6 +188,99 @@ impl<'a> SubscriptionSyncEngine<'a> {
                     "Import pipeline failed"
                 );
                 Err(format!("{e}"))
+            }
+        }
+    }
+
+    /// Import all stashed members and group them into a collection atomically.
+    /// Prepares all files first (hash + MIME + blob write), then commits everything
+    /// in a single DB transaction. The grid never sees individual loose files.
+    pub(super) async fn materialize_collection(
+        &self,
+        mut pc: super::PendingCollection,
+        subscription_id: i64,
+        _gallery_url: &str,
+        progress: &mut super::SyncProgress,
+        changed_collection_ids: &mut Vec<i64>,
+    ) {
+        pc.members.sort_by_key(|m| m.page_num);
+
+        let pipeline = ImportPipeline::new(self.db, self.blob_store);
+        let mut prepared: Vec<crate::import::pipeline::PreparedFile> = Vec::with_capacity(pc.members.len());
+
+        // Phase 1: prepare all files (hash, MIME, blob write — no DB)
+        for (i, member) in pc.members.iter().enumerate() {
+            let mut options = ImportOptions::default();
+            options.tags = member.metadata.tags.clone();
+            options.source_urls = member.metadata.source_urls.clone();
+            options.created_at = member.metadata.created_at.clone();
+            options.name = preferred_import_name(&member.metadata);
+            options.skip_thumbnail = i > 0; // only cover gets thumbnail
+            {
+                let mut notes = HashMap::new();
+                if let Some(ref desc) = member.metadata.description {
+                    notes.insert("description".to_string(), desc.clone());
+                }
+                if let Some(ref title) = member.metadata.title {
+                    notes.insert("title".to_string(), title.clone());
+                }
+                if !notes.is_empty() {
+                    options.notes = Some(notes);
+                }
+            }
+            let mut seen_urls = HashSet::new();
+            options.source_urls.retain(|url| {
+                let trimmed = url.trim();
+                !trimmed.is_empty() && seen_urls.insert(trimmed.to_string())
+            });
+
+            match pipeline.prepare_file(&member.file_path, &options).await {
+                Ok(pf) => {
+                    progress.files_downloaded += 1;
+                    prepared.push(pf);
+                }
+                Err(crate::import::pipeline::ImportError::AlreadyImported(_)) => {
+                    progress.files_skipped += 1;
+                }
+                Err(e) => {
+                    progress.errors.push(format!("Prepare error for post {}: {e}", pc.post_id));
+                }
+            }
+        }
+
+        if prepared.is_empty() {
+            return;
+        }
+
+        // Single-member "collection" — import as standalone file
+        if prepared.len() < 2 {
+            let pf = prepared.remove(0);
+            let _ = self.db.import_file(pf.db_opts).await;
+            crate::events::emit_mutation(
+                "subscription_import",
+                crate::runtime_contract::mutation_builder::MutationImpact::file_lifecycle(self.db)
+                    .extra_grid_scopes(vec!["system:inbox".into()]),
+            );
+            return;
+        }
+
+        // Phase 2: one atomic DB transaction — insert all files + create collection
+        let db_opts: Vec<_> = prepared.into_iter().map(|pf| pf.db_opts).collect();
+        match self.db.import_collection_batch(db_opts, &pc.preferred_name).await {
+            Ok(result) => {
+                let _ = self.db.upsert_subscription_post_collection(
+                    subscription_id, &pc.category, &pc.post_id, result.collection_id,
+                ).await;
+                changed_collection_ids.push(result.collection_id);
+
+                crate::events::emit_mutation(
+                    "subscription_collection_import",
+                    crate::runtime_contract::mutation_builder::MutationImpact::file_lifecycle(self.db)
+                        .extra_grid_scopes(vec!["system:inbox".into()]),
+                );
+            }
+            Err(e) => {
+                progress.errors.push(format!("Collection batch commit failed: {e}"));
             }
         }
     }

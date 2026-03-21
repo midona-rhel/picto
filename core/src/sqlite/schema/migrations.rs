@@ -724,6 +724,15 @@ pub fn run_migrations(conn: &Connection, from_version: i64) -> rusqlite::Result<
             )?;
         }
     }
+    if from_version < 34 {
+        // V34: Rename file_limit → post_limit to clarify semantics (limits posts, not files).
+        if has_column(conn, "subscription", "initial_file_limit")? {
+            conn.execute_batch(
+                "ALTER TABLE subscription RENAME COLUMN initial_file_limit TO initial_post_limit;
+                 ALTER TABLE subscription RENAME COLUMN periodic_file_limit TO periodic_post_limit;",
+            )?;
+        }
+    }
     conn.execute("UPDATE schema_version SET version = ?1", [CURRENT_VERSION])?;
     Ok(())
 }

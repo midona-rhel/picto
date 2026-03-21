@@ -2,7 +2,7 @@ import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, nati
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { initialize, invoke, onNativeEvent, openLibrary, closeLibrary } from './nativeClient.mjs';
+import { initialize, invoke, onNativeEvent, openLibrary, closeLibrary, startNativeDrag } from './nativeClient.mjs';
 import {
   addLibraryToHistory,
   getCachedConfig,
@@ -144,6 +144,7 @@ registerIpcHandlers({
   windowManager,
   libraryService: libraryHost,
   updaterService,
+  startNativeDrag,
 });
 
 function wireNativeEvents() {

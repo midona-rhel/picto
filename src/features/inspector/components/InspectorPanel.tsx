@@ -609,7 +609,7 @@ export function InspectorPanel({
             icon={<IconFolder size={14} />}
             colorRgb={[134, 142, 150]}
             onLabelClick={() => navigateToFolder({ folder_id: folder.folder_id, name: folder.folder_name })}
-            onRemove={editable && selectedImage ? () => handleRemoveFolderMembership(folder.folder_id) : undefined}
+            onRemove={editable ? () => handleRemoveFolderMembership(folder.folder_id) : undefined}
           />
         ))}
         {editable && (
@@ -790,7 +790,7 @@ export function InspectorPanel({
               </div>
 
               {renderTags()}
-              {renderFolders(!selectedImage.is_collection && String(selectedImage.status) === '1')}
+              {renderFolders(!selectedImage.is_collection)}
               {renderProperties()}
 
               <KbdTooltip label="Auto-Tag" shortcut="Mod+Shift+A">

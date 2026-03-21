@@ -20,6 +20,12 @@ pub struct ResolveFilePathInput {
 
 #[derive(Debug, Deserialize, TS)]
 #[ts(export_to = "../../src/shared/types/generated/commands/")]
+pub struct ResolveFilePathsBatchInput {
+    pub hashes: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct OpenFileDefaultInput {
     pub hash: String,
 }
@@ -600,10 +606,63 @@ async fn reanalyze_file_colors_inner(
     })
 }
 
+/// Background-backfill dominant colors for images that are missing them.
+/// Fire-and-forget — errors are silently ignored per-file.
+pub async fn backfill_missing_colors(
+    db: &crate::sqlite::SqliteDatabase,
+    blob_store: &std::sync::Arc<crate::blob_store::BlobStore>,
+    hashes: &[String],
+) {
+    use crate::blob_store::mime_to_extension;
+    let mut any_changed = false;
+    for hash in hashes {
+        let file = match db.get_file_by_hash(hash).await {
+            Ok(Some(f)) => f,
+            _ => continue,
+        };
+        if !file.mime.starts_with("image/") {
+            continue;
+        }
+        let ext = mime_to_extension(&file.mime).to_string();
+        let h = hash.clone();
+        let bs = blob_store.clone();
+        let colors = match tokio::task::spawn_blocking(move || -> Result<Vec<(String, f32, f32, f32)>, String> {
+            let original = bs
+                .find_original(&h, Some(&ext))
+                .map_err(|e| format!("{e}"))?
+                .ok_or_else(|| "not found".to_string())?;
+            let bytes = std::fs::read(&original.0).map_err(|e| format!("{e}"))?;
+            let img = image::load_from_memory(&bytes).map_err(|e| format!("{e}"))?;
+            let extracted = crate::media_processing::colors::extract_dominant_colors(&img, 8);
+            Ok(extracted.iter().map(|c| (c.hex.clone(), c.l as f32, c.a as f32, c.b as f32)).collect())
+        }).await {
+            Ok(Ok(c)) => c,
+            _ => continue,
+        };
+        let dominant = colors.first().map(|(hex, _, _, _)| hex.clone());
+        if db.set_file_colors(hash, colors, dominant).await.is_ok() {
+            any_changed = true;
+        }
+    }
+    if any_changed {
+        db.emit_read_model_event(crate::sqlite::ReadModelEvent::RebuildAll);
+    }
+}
+
 // ─── Handlers ──────────────────────────────────────────────────────────────
 
 pub async fn resolve_file_path(state: &AppState, input: ResolveFilePathInput) -> Result<String, String> {
     resolve_file_path_inner(&state.db, &state.blob_store, &input.hash).await
+}
+
+pub async fn resolve_file_paths_batch(state: &AppState, input: ResolveFilePathsBatchInput) -> Result<serde_json::Value, String> {
+    let mut paths = Vec::with_capacity(input.hashes.len());
+    for hash in &input.hashes {
+        if let Ok(p) = resolve_file_path_inner(&state.db, &state.blob_store, hash).await {
+            paths.push(p);
+        }
+    }
+    serde_json::to_value(&paths).map_err(|e| e.to_string())
 }
 
 pub async fn open_file_default(state: &AppState, input: OpenFileDefaultInput) -> Result<(), String> {

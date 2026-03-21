@@ -47,8 +47,8 @@ pub async fn get_subscriptions(db: &SqliteDatabase) -> Result<Vec<SubscriptionIn
                 site_id: canonical_site_id.to_string(),
                 paused: sub.paused,
                 group_id: sub.group_id.map(|id| id.to_string()),
-                initial_file_limit: sub.initial_file_limit as u32,
-                periodic_file_limit: sub.periodic_file_limit as u32,
+                initial_post_limit: sub.initial_post_limit as u32,
+                periodic_post_limit: sub.periodic_post_limit as u32,
                 auto_collections: sub.auto_collections,
                 created_at: sub.created_at,
                 total_files: total_files as u64,
@@ -72,8 +72,8 @@ pub async fn create_subscription(
     site_id: String,
     queries: Vec<String>,
     group_id: Option<i64>,
-    initial_file_limit: Option<u32>,
-    periodic_file_limit: Option<u32>,
+    initial_post_limit: Option<u32>,
+    periodic_post_limit: Option<u32>,
 ) -> Result<SubscriptionInfo, String> {
     if crate::subscriptions::gallery_dl_runner::site_by_id(&site_id).is_none() {
         return Err(format!("Unknown site: {site_id}"));
@@ -85,12 +85,12 @@ pub async fn create_subscription(
         .await?;
     let sub_id = sub.subscription_id;
 
-    if initial_file_limit.is_some() || periodic_file_limit.is_some() {
-        let il = initial_file_limit.unwrap_or(100) as i64;
-        let pl = periodic_file_limit.unwrap_or(50) as i64;
+    if initial_post_limit.is_some() || periodic_post_limit.is_some() {
+        let il = initial_post_limit.unwrap_or(100) as i64;
+        let pl = periodic_post_limit.unwrap_or(50) as i64;
         db.with_conn(move |conn| {
             conn.execute(
-                "UPDATE subscription SET initial_file_limit = ?1, periodic_file_limit = ?2
+                "UPDATE subscription SET initial_post_limit = ?1, periodic_post_limit = ?2
                  WHERE subscription_id = ?3",
                 params![il, pl, sub_id],
             )?;
@@ -127,8 +127,8 @@ pub async fn create_subscription(
         site_id: canonical_site_id,
         paused: false,
         group_id: group_id.map(|id| id.to_string()),
-        initial_file_limit: initial_file_limit.unwrap_or(100),
-        periodic_file_limit: periodic_file_limit.unwrap_or(50),
+        initial_post_limit: initial_post_limit.unwrap_or(100),
+        periodic_post_limit: periodic_post_limit.unwrap_or(50),
         auto_collections: true,
         created_at: sub.created_at,
         total_files: 0,

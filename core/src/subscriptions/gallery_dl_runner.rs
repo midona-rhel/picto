@@ -46,7 +46,7 @@ pub struct RunOptions {
     /// Full URL to download from (after query substitution).
     pub url: String,
     /// Max files to download (maps to `--post-range`). None = unlimited.
-    pub file_limit: Option<u32>,
+    pub post_limit: Option<u32>,
     /// Starting post index for `--post-range` (1-based). Used by range_offset pagination.
     pub range_start: u32,
     /// Abort after N consecutive skipped files (maps to `-A N`).
@@ -148,7 +148,7 @@ impl GalleryDlRunner {
             temp_dir.display().to_string(),
         ];
 
-        if let Some(limit) = opts.file_limit {
+        if let Some(limit) = opts.post_limit {
             let start = opts.range_start.max(1);
             let end = start.saturating_add(limit).saturating_sub(1);
             args.push("--post-range".to_string());
@@ -169,7 +169,7 @@ impl GalleryDlRunner {
 
         info!(
             url = %opts.url,
-            file_limit = ?opts.file_limit,
+            post_limit = ?opts.post_limit,
             range_start = opts.range_start,
             abort_threshold = ?opts.abort_threshold,
             elapsed_ms = run_start.elapsed().as_millis(),

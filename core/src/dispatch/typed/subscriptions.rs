@@ -71,9 +71,9 @@ pub struct CreateSubscriptionInput {
     #[ts(type = "number | null")]
     pub group_id: Option<i64>,
     #[ts(type = "number | null")]
-    pub initial_file_limit: Option<u32>,
+    pub initial_post_limit: Option<u32>,
     #[ts(type = "number | null")]
-    pub periodic_file_limit: Option<u32>,
+    pub periodic_post_limit: Option<u32>,
 }
 
 #[derive(Debug, Deserialize, TS)]
@@ -297,8 +297,8 @@ pub async fn create_subscription(
         input.site_id,
         input.queries,
         input.group_id,
-        input.initial_file_limit,
-        input.periodic_file_limit,
+        input.initial_post_limit,
+        input.periodic_post_limit,
     )
     .await?;
     crate::events::emit_mutation(

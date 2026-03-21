@@ -27,8 +27,8 @@ export interface SubInfo {
   site_plugin_id?: string;
   paused: boolean;
   group_id: string | null;
-  initial_file_limit: number;
-  periodic_file_limit: number;
+  initial_post_limit: number;
+  periodic_post_limit: number;
   auto_collections: boolean;
   created_at: string;
   total_files: number;

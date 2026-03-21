@@ -27,15 +27,14 @@ export function singleSelectedHash(state: GridRuntimeState): string | null {
 }
 
 /**
- * Returns the selected images for preview/collage UI.
- * In virtual-all mode, returns up to 12 visible selected images.
+ * Returns the selected images for the inspector.
+ * In virtual-all mode, returns all loaded images matching the selection.
  * In normal mode, returns all explicitly selected images.
  */
 export function selectedImagesPreview(state: GridRuntimeState): MasonryImageItem[] {
   if (state.virtualAllSelection) {
     return state.images
-      .filter(i => !state.virtualAllSelection!.excludedHashes.has(i.hash))
-      .slice(0, 12);
+      .filter(i => !state.virtualAllSelection!.excludedHashes.has(i.hash));
   }
   return state.images.filter(i => state.selectedHashes.has(i.hash));
 }

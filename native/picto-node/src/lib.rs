@@ -7,6 +7,68 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 
+// ── macOS native drag (bypasses Electron's startDrag to avoid icon stacking) ──
+
+#[cfg(target_os = "macos")]
+extern "C" {
+    fn picto_start_file_drag(
+        ns_view_ptr: *mut std::ffi::c_void,
+        paths: *const *const std::ffi::c_char,
+        path_count: std::ffi::c_int,
+        rgba_data: *const u8,
+        icon_width: std::ffi::c_int,
+        icon_height: std::ffi::c_int,
+    );
+}
+
+/// Start a native file drag on macOS with a single composite icon.
+/// On non-macOS platforms this is a no-op (use Electron's startDrag instead).
+#[napi]
+pub fn start_native_drag(
+    window_handle: Buffer,
+    file_paths: Vec<String>,
+    icon_rgba: Buffer,
+    icon_width: i32,
+    icon_height: i32,
+) -> Result<()> {
+    #[cfg(target_os = "macos")]
+    {
+        use std::ffi::CString;
+
+        let handle_bytes = window_handle.as_ref();
+        if handle_bytes.len() < std::mem::size_of::<*mut std::ffi::c_void>() {
+            return Err(Error::from_reason("Invalid window handle buffer"));
+        }
+        let view_ptr =
+            unsafe { *(handle_bytes.as_ptr() as *const *mut std::ffi::c_void) };
+
+        let c_paths: Vec<CString> = file_paths
+            .iter()
+            .filter_map(|p| CString::new(p.as_str()).ok())
+            .collect();
+        let c_ptrs: Vec<*const std::ffi::c_char> =
+            c_paths.iter().map(|p| p.as_ptr()).collect();
+
+        unsafe {
+            picto_start_file_drag(
+                view_ptr,
+                c_ptrs.as_ptr(),
+                c_ptrs.len() as std::ffi::c_int,
+                icon_rgba.as_ref().as_ptr(),
+                icon_width,
+                icon_height,
+            );
+        }
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (window_handle, file_paths, icon_rgba, icon_width, icon_height);
+    }
+
+    Ok(())
+}
+
 static EVENTS_DROPPED: AtomicU64 = AtomicU64::new(0);
 
 /// Newtype wrapper for event data to use with ThreadsafeFunction.

@@ -14,3 +14,4 @@ picto_core = { path = "../../core" }
 
 [build-dependencies]
 napi-build = "2.1"
+cc = "1"

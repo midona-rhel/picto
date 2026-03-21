@@ -182,6 +182,7 @@ async fn dispatch_inner(command: &str, args: serde_json::Value) -> Result<String
 
         // ── Media I/O ─────────────────────────────────────────
         "resolve_file_path" => call!(typed::media_io::resolve_file_path, &state, args),
+        "resolve_file_paths_batch" => call!(typed::media_io::resolve_file_paths_batch, &state, args),
         "open_file_default" => call!(typed::media_io::open_file_default, &state, args),
         "reveal_in_folder" => call!(typed::media_io::reveal_in_folder, &state, args),
         "export_file" => call!(typed::media_io::export_file, &state, args),

@@ -393,16 +393,28 @@ pub(crate) fn sync_collection_aggregate_metadata(
         |row| row.get(0),
     )?;
 
-    // created_at is set once in create_collection() and never touched again.
-    // It represents "Date added" — when the collection was created in the library.
+    // Inherit created_at from the earliest member so the collection sorts
+    // alongside its children in date-based views.
+    let earliest_date: Option<String> = conn.query_row(
+        "SELECT MIN(COALESCE(f.imported_at, me_member.created_at))
+         FROM media_entity me_member
+         JOIN entity_file ef ON ef.entity_id = me_member.entity_id
+         JOIN file f ON f.file_id = ef.file_id
+         WHERE me_member.kind = 'single'
+           AND me_member.parent_collection_id = ?1",
+        [collection_id],
+        |row| row.get(0),
+    )?;
+
     let now = chrono::Utc::now().to_rfc3339();
     conn.execute(
         "UPDATE media_entity
          SET rating = ?1,
              status = ?2,
-             updated_at = ?3
-         WHERE entity_id = ?4 AND kind = 'collection'",
-        params![merged_rating, derived_status, now, collection_id],
+             created_at = COALESCE(?3, created_at),
+             updated_at = ?4
+         WHERE entity_id = ?5 AND kind = 'collection'",
+        params![merged_rating, derived_status, earliest_date, now, collection_id],
     )?;
 
     // 5) Ensure collection appears anywhere its members already lived (folder replacement semantics).

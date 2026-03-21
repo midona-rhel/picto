@@ -169,6 +169,7 @@ export function registerIpcHandlers({
   windowManager,
   libraryService,
   updaterService,
+  startNativeDrag,
 }) {
   ipcMain.handle('picto:invoke', async (_event, payload) => {
     const { command, args } = payload || {};
@@ -331,19 +332,17 @@ export function registerIpcHandlers({
   ipcMain.handle('picto:drag:start', async (event, { hashes, iconDataUrl }) => {
     if (!hashes?.length) return null;
 
-    // Resolve ALL hashes to file paths for multi-file drag
-    const filePaths = [];
-    for (const hash of hashes) {
-      try {
-        const fp = await invoke('resolve_file_path', { hash });
-        if (fp) filePaths.push(fp);
-      } catch {
-        // Skip unresolvable hashes
-      }
+    // Batch-resolve all hashes to filesystem paths in one round-trip
+    let filePaths;
+    try {
+      filePaths = await invoke('resolve_file_paths_batch', { hashes });
+    } catch {
+      filePaths = [];
     }
-    if (filePaths.length === 0) return null;
+    if (!filePaths?.length) return null;
 
-    let icon;
+    // Decode the renderer-generated badge icon (thumbnail + count pill)
+    let icon = null;
     if (iconDataUrl) {
       try {
         icon = nativeImage.createFromDataURL(iconDataUrl);
@@ -352,21 +351,48 @@ export function registerIpcHandlers({
         icon = null;
       }
     }
+    // Fallback: load first file's thumbnail from disk
     if (!icon) {
       const thumbPath = buildBlobPath('thumb', hashes[0], 'jpg');
       try {
         icon = nativeImage.createFromPath(thumbPath);
-        if (icon.isEmpty()) icon = null;
+        if (!icon.isEmpty()) {
+          icon = icon.resize({ width: 64 });
+        } else {
+          icon = null;
+        }
       } catch {
         icon = null;
       }
-      if (icon) icon = icon.resize({ width: 64 });
     }
 
-    event.sender.startDrag({
-      files: filePaths,
-      icon: icon || nativeImage.createEmpty(),
-    });
+    if (process.platform === 'darwin' && startNativeDrag) {
+      // macOS: bypass Electron's startDrag to avoid icon-per-NSDraggingItem stacking.
+      // Native addon gives item[0] the composite icon, items[1-N] get 1×1 transparent.
+      const win = BrowserWindow.fromWebContents(event.sender);
+      if (win && icon) {
+        const handle = win.getNativeWindowHandle();
+        const { width, height } = icon.getSize();
+        const rgba = icon.toBitmap(); // RGBA pixel buffer
+        try {
+          startNativeDrag(handle, filePaths, rgba, width, height);
+        } catch (err) {
+          // Fallback to Electron's startDrag if native addon fails
+          event.sender.startDrag({ files: filePaths, icon });
+        }
+      } else {
+        event.sender.startDrag({
+          files: filePaths,
+          icon: icon || nativeImage.createEmpty(),
+        });
+      }
+    } else {
+      // Windows / Linux: Electron's startDrag shows one icon for the whole drag.
+      event.sender.startDrag({
+        files: filePaths,
+        icon: icon || nativeImage.createEmpty(),
+      });
+    }
 
     return { ok: true };
   });

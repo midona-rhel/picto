@@ -218,7 +218,7 @@ use super::support::{has_column, table_exists};
         )
         .unwrap();
         conn.execute(
-            "INSERT INTO subscription (subscription_id, name, site_id, paused, group_id, initial_file_limit, periodic_file_limit, created_at)
+            "INSERT INTO subscription (subscription_id, name, site_id, paused, group_id, initial_post_limit, periodic_post_limit, created_at)
              VALUES (1, 'sub', 'x', 0, 1, 100, 50, CURRENT_TIMESTAMP)",
             [],
         )

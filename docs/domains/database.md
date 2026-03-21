@@ -374,8 +374,8 @@ CREATE TABLE subscription (
     site_id             TEXT NOT NULL,
     paused              INTEGER NOT NULL DEFAULT 0,
     group_id            INTEGER REFERENCES subscription_group(group_id) ON DELETE CASCADE,
-    initial_file_limit  INTEGER NOT NULL DEFAULT 100,
-    periodic_file_limit INTEGER NOT NULL DEFAULT 50,
+    initial_post_limit  INTEGER NOT NULL DEFAULT 100,
+    periodic_post_limit INTEGER NOT NULL DEFAULT 50,
     created_at          TEXT NOT NULL
 );
 CREATE TABLE subscription_query (

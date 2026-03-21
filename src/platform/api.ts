@@ -330,8 +330,8 @@ export const api = {
       site_id: string;
       queries: string[];
       group_id?: number;
-      initial_file_limit?: number;
-      periodic_file_limit?: number;
+      initial_post_limit?: number;
+      periodic_post_limit?: number;
     }) =>
       invokeTyped('create_subscription', params as never) as Promise<SubscriptionInfo>,
     delete: (id: string, deleteFiles?: boolean) =>

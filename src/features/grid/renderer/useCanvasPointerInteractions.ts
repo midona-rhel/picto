@@ -84,6 +84,7 @@ export function useCanvasPointerInteractions(args: {
   const videoScrubIdxRef = externalVideoScrubIdxRef ?? internalVideoScrubIdxRef;
 
   // ── Drag state ───────────────────────────────────────────────────────
+  const dragJustEndedRef = useRef(false);
   const dragStateRef = useRef<{ hash: string; startX: number; startY: number; started: boolean } | null>(null);
   const reorderDragRef = useRef<{
     draggedHashes: string[];
@@ -355,6 +356,7 @@ export function useCanvasPointerInteractions(args: {
 
       if (!state.started) {
         state.started = true;
+        dragJustEndedRef.current = false;
         draggedHashSetRef.current = new Set(hashes);
         sessionId = imageDrag.startNativeDragSession(hashes);
 
@@ -418,6 +420,7 @@ export function useCanvasPointerInteractions(args: {
       const { clientX, clientY } = moveEvent;
       if (clientX <= 0 || clientY <= 0 || clientX >= window.innerWidth || clientY >= window.innerHeight) {
         nativeDragStarted = true;
+        dragJustEndedRef.current = true;
         imageDrag.forceEnd();
         stopAutoScroll();
         cleanup();
@@ -442,6 +445,8 @@ export function useCanvasPointerInteractions(args: {
       stopAutoScroll();
 
       if (state.started && !nativeDragStarted) {
+        // Internal drag ended — suppress the click that follows pointerup
+        dragJustEndedRef.current = true;
         // Internal drag ended — execute action
         if (reorderModeRef.current && reorderDragRef.current) {
           const rstate = reorderDragRef.current;
@@ -590,6 +595,7 @@ export function useCanvasPointerInteractions(args: {
       videoScrubIdxRef.current = null;
     },
     // Drag returns
+    dragJustEndedRef,
     reorderDragRef,
     handlePointerDown,
     handleCanvasDragOver,

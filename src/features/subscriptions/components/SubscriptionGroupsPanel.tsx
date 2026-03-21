@@ -286,7 +286,7 @@ export function SubscriptionGroupsPanel({
         return;
       }
 
-      const missingAuthSites = subscriptionGroup.subscriptions
+      const missingAuthSites = runnableSubscriptions
         .map((sub) => {
           const siteIdRaw = sub.site_id ?? sub.site_plugin_id ?? '';
           const canonical = canonicalSiteId(siteIdRaw);
@@ -397,8 +397,8 @@ export function SubscriptionGroupsPanel({
         site_id: defaultSite,
         queries: [defaultQuery],
         group_id: Number(subscriptionGroupId),
-        initial_file_limit: 100,
-        periodic_file_limit: 50,
+        initial_post_limit: 100,
+        periodic_post_limit: 50,
       });
       await loadData();
     } catch (error) {
@@ -564,8 +564,8 @@ export function SubscriptionGroupsPanel({
                                   site_id: newSiteId,
                                   queries: [q.queryText],
                                   group_id: Number(sg.id),
-                                  initial_file_limit: 100,
-                                  periodic_file_limit: 50,
+                                  initial_post_limit: 100,
+                                  periodic_post_limit: 50,
                                 });
                               }
                               await loadData();

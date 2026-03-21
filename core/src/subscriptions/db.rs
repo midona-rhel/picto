@@ -13,8 +13,8 @@ pub struct Subscription {
     pub site_id: String,
     pub paused: bool,
     pub group_id: Option<i64>,
-    pub initial_file_limit: i64,
-    pub periodic_file_limit: i64,
+    pub initial_post_limit: i64,
+    pub periodic_post_limit: i64,
     pub auto_collections: bool,
     pub created_at: String,
 }
@@ -41,14 +41,14 @@ fn map_subscription_row(row: &rusqlite::Row) -> rusqlite::Result<Subscription> {
         site_id: row.get(2)?,
         paused: row.get::<_, i64>(3)? != 0,
         group_id: row.get(4)?,
-        initial_file_limit: row.get(5)?,
-        periodic_file_limit: row.get(6)?,
+        initial_post_limit: row.get(5)?,
+        periodic_post_limit: row.get(6)?,
         auto_collections: row.get::<_, i64>(7)? != 0,
         created_at: row.get(8)?,
     })
 }
 
-const SUB_COLS: &str = "subscription_id, name, site_id, paused, group_id, initial_file_limit, periodic_file_limit, auto_collections, created_at";
+const SUB_COLS: &str = "subscription_id, name, site_id, paused, group_id, initial_post_limit, periodic_post_limit, auto_collections, created_at";
 
 fn map_query_row(row: &rusqlite::Row) -> rusqlite::Result<SubscriptionQuery> {
     Ok(SubscriptionQuery {
@@ -874,8 +874,8 @@ mod tests {
                  site_plugin_id          TEXT NOT NULL,
                  paused                  INTEGER NOT NULL DEFAULT 0,
                  group_id                 INTEGER,
-                 initial_file_limit      INTEGER NOT NULL DEFAULT 100,
-                 periodic_file_limit     INTEGER NOT NULL DEFAULT 50,
+                 initial_post_limit      INTEGER NOT NULL DEFAULT 100,
+                 periodic_post_limit     INTEGER NOT NULL DEFAULT 50,
                  created_at              TEXT NOT NULL
              );",
         )

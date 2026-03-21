@@ -136,7 +136,7 @@ impl SqliteDatabase {
         self.with_read_conn(move |conn| {
             let mut stmt = conn.prepare_cached(
                 "SELECT subscription_id, name, site_id, paused, group_id,
-                        initial_file_limit, periodic_file_limit, auto_collections, created_at
+                        initial_post_limit, periodic_post_limit, auto_collections, created_at
                  FROM subscription WHERE group_id = ?1 ORDER BY name",
             )?;
             let rows = stmt.query_map([group_id], |row| {
@@ -146,8 +146,8 @@ impl SqliteDatabase {
                     site_id: row.get(2)?,
                     paused: row.get::<_, i64>(3)? != 0,
                     group_id: row.get(4)?,
-                    initial_file_limit: row.get(5)?,
-                    periodic_file_limit: row.get(6)?,
+                    initial_post_limit: row.get(5)?,
+                    periodic_post_limit: row.get(6)?,
                     auto_collections: row.get::<_, i64>(7)? != 0,
                     created_at: row.get(8)?,
                 })

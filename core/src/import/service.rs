@@ -82,7 +82,10 @@ impl ImportService {
         for (index, path) in file_paths.iter().enumerate() {
             let result = pipeline.import_file(path, &options).await;
             match result {
-                Ok(imported) => {
+                Ok((imported, deferred)) => {
+                    if let Some(work) = deferred {
+                        pipeline.process_deferred(work).await;
+                    }
                     let surviving_hash = maybe_auto_merge(
                         db,
                         blob_store,
@@ -261,7 +264,10 @@ impl ImportService {
             let mut skipped_hashes = Vec::<String>::new();
 
             match pipeline.import_file(file_path, &options).await {
-                Ok(imported) => {
+                Ok((imported, deferred)) => {
+                    if let Some(work) = deferred {
+                        pipeline.process_deferred(work).await;
+                    }
                     let surviving_hash = maybe_auto_merge(
                         db,
                         blob_store,

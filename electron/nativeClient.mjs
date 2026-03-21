@@ -30,6 +30,10 @@ export async function invoke(command, args = {}) {
   return JSON.parse(resultJson);
 }
 
+export function startNativeDrag(windowHandle, filePaths, iconRgba, iconWidth, iconHeight) {
+  return binding.startNativeDrag(windowHandle, filePaths, iconRgba, iconWidth, iconHeight);
+}
+
 export function onNativeEvent(handler) {
   if (typeof binding.registerEventCallback !== 'function') {
     throw new Error('Native addon missing registerEventCallback');

@@ -13,7 +13,7 @@ use crate::settings::store::SettingsStore;
 use crate::sqlite::SqliteDatabase;
 use crate::subscriptions::db::{get_subscription, get_subscription_query};
 use crate::subscriptions::policy::{
-    effective_query_file_limit, resolve_finished_status_text, resolve_query_name,
+    effective_query_post_limit, resolve_finished_status_text, resolve_query_name,
 };
 use crate::subscriptions::progress::{SubscriptionProgressEvent, list_runtime_progress_from_tasks};
 use crate::subscriptions::runtime_tasks::{
@@ -177,11 +177,11 @@ impl SubscriptionRunOrchestrator {
                                 continue;
                             }
                             let subscription_limit = if query.completed_initial_run {
-                                sub.periodic_file_limit as u32
+                                sub.periodic_post_limit as u32
                             } else {
-                                sub.initial_file_limit as u32
+                                sub.initial_post_limit as u32
                             };
-                            let file_limit = effective_query_file_limit(
+                            let post_limit = effective_query_post_limit(
                                 app_settings.sub_batch_size,
                                 subscription_limit,
                             );
@@ -192,7 +192,7 @@ impl SubscriptionRunOrchestrator {
                                     &query.query_text,
                                     query.display_name.as_deref(),
                                     &site_id,
-                                    file_limit,
+                                    post_limit,
                                     query.completed_initial_run,
                                     query.resume_cursor.as_deref(),
                                     query.resume_strategy.as_deref(),
@@ -393,12 +393,12 @@ impl SubscriptionRunOrchestrator {
         let auto_merge_require_matching_dimensions =
             app_settings.duplicate_auto_merge_require_matching_dimensions;
         let subscription_limit = if completed_initial_run {
-            sub.periodic_file_limit as u32
+            sub.periodic_post_limit as u32
         } else {
-            sub.initial_file_limit as u32
+            sub.initial_post_limit as u32
         };
-        let file_limit =
-            effective_query_file_limit(app_settings.sub_batch_size, subscription_limit);
+        let post_limit =
+            effective_query_post_limit(app_settings.sub_batch_size, subscription_limit);
 
         let running_subs_guard = running_subs.clone();
         let sub_id_guard = sub_id_str.clone();
@@ -439,7 +439,7 @@ impl SubscriptionRunOrchestrator {
                                     &query_text,
                                     query_display_name.as_deref(),
                                     &site_id,
-                                    file_limit,
+                                    post_limit,
                                     completed_initial_run,
                                     resume_cursor.as_deref(),
                                     resume_strategy.as_deref(),

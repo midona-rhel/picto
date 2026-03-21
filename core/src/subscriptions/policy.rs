@@ -24,7 +24,7 @@ pub fn resolve_query_name(query_id: i64, query_text: &str, display_name: Option<
 
 const DEFAULT_BATCH_SIZE: u32 = 100;
 
-pub fn effective_query_file_limit(global_batch_size: u32, subscription_limit: u32) -> Option<u32> {
+pub fn effective_query_post_limit(global_batch_size: u32, subscription_limit: u32) -> Option<u32> {
     let global = if global_batch_size == 0 {
         DEFAULT_BATCH_SIZE
     } else {
@@ -122,21 +122,21 @@ pub fn range_start_from_cursor(resume_cursor: Option<&str>, strategy: Option<&st
 mod tests {
     use super::{
         apply_resume_to_query, derive_resume_cursor, effective_inbox_limit,
-        effective_query_file_limit, range_start_from_cursor, resolve_finished_status_text,
+        effective_query_post_limit, range_start_from_cursor, resolve_finished_status_text,
     };
 
     #[test]
-    fn effective_query_file_limit_clamps_to_global_cap_when_enabled() {
-        assert_eq!(effective_query_file_limit(100, 0), Some(100));
-        assert_eq!(effective_query_file_limit(100, 50), Some(50));
-        assert_eq!(effective_query_file_limit(100, 500), Some(100));
+    fn effective_query_post_limit_clamps_to_global_cap_when_enabled() {
+        assert_eq!(effective_query_post_limit(100, 0), Some(100));
+        assert_eq!(effective_query_post_limit(100, 50), Some(50));
+        assert_eq!(effective_query_post_limit(100, 500), Some(100));
     }
 
     #[test]
-    fn effective_query_file_limit_never_returns_none() {
+    fn effective_query_post_limit_never_returns_none() {
         // Even if global batch size is 0, fall back to default (100)
-        assert_eq!(effective_query_file_limit(0, 0), Some(100));
-        assert_eq!(effective_query_file_limit(0, 50), Some(50));
+        assert_eq!(effective_query_post_limit(0, 0), Some(100));
+        assert_eq!(effective_query_post_limit(0, 50), Some(50));
     }
 
     #[test]

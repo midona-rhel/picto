@@ -332,15 +332,25 @@ export class ThumbnailPipeline {
       this.visibleThumbWaitTotalMs += Math.max(0, performance.now() - item.queuedAt);
       this.visibleThumbWaitSamples += 1;
     }
+    const isUpgrade = entry.thumb != null;
     entry.thumb?.close();
     entry.thumb = bitmap;
     entry.state = 'shown';
-    // Always fade in — even from cache. First-load progressive reveal
-    // feels better than instant pop-in which causes visual jank on scroll-back.
-    entry.animateIn = true;
-    // Stagger reveals so at most MAX_CONCURRENT_REVEALS fade in simultaneously.
-    // If too many are already mid-fade, delay this one's start time.
-    entry.revealStartedAt = this.nextRevealSlot();
+    if (isUpgrade) {
+      // Thumbnail → full-quality: silent swap, no fade.
+      // The image is already visible at the right size; just replace the bitmap.
+    } else if (this.loadedHashes.has(hash)) {
+      // Re-load (evicted then re-fetched): start the fade from when the
+      // request was queued (i.e. when the image entered the prefetch zone).
+      // By the time it scrolls into view the fade is typically already done.
+      entry.animateIn = true;
+      entry.revealStartedAt = item.queuedAt;
+    } else {
+      // First load: stagger reveals so at most MAX_CONCURRENT_REVEALS
+      // fade in simultaneously.
+      entry.animateIn = true;
+      entry.revealStartedAt = this.nextRevealSlot();
+    }
     entry.retryQueued = false;
     entry.sourceKind = sourceKind;
     entry.loadedLongEdge = loadedLongEdge;

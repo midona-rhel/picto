@@ -58,6 +58,20 @@ pub struct SubscriptionSyncEngine<'a> {
     auto_collections: bool,
 }
 
+pub(super) struct PendingMember {
+    pub file_path: PathBuf,
+    pub metadata: gallery_dl_runner::ParsedMetadata,
+    pub page_num: u32,
+}
+
+pub(super) struct PendingCollection {
+    pub category: String,
+    pub post_id: String,
+    pub preferred_name: String,
+    pub expected: u32,
+    pub members: Vec<PendingMember>,
+}
+
 impl<'a> SubscriptionSyncEngine<'a> {
     pub fn new(
         db: &'a SqliteDatabase,
@@ -113,7 +127,7 @@ impl<'a> SubscriptionSyncEngine<'a> {
         query_text: &str,
         query_display_name: Option<&str>,
         site_id: &str,
-        file_limit: Option<u32>,
+        post_limit: Option<u32>,
         completed_initial_run: bool,
         resume_cursor: Option<&str>,
         resume_strategy: Option<&str>,
@@ -204,7 +218,7 @@ impl<'a> SubscriptionSyncEngine<'a> {
 
         let opts = RunOptions {
             url: url.clone(),
-            file_limit,
+            post_limit,
             range_start,
             abort_threshold,
             sleep_request: self.settings.sub_rate_limit_secs,
@@ -224,13 +238,6 @@ impl<'a> SubscriptionSyncEngine<'a> {
             tokio::spawn(async move { runner.run(&opts, item_tx).await })
         };
 
-        struct PendingCollection {
-            category: String,
-            post_id: String,
-            preferred_name: String,
-            expected: u32,
-            members: Vec<(String, u32)>,
-        }
         let mut pending_collections: HashMap<String, PendingCollection> = HashMap::new();
         let mut changed_collection_ids: Vec<i64> = Vec::new();
         let mut all_post_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -263,19 +270,39 @@ impl<'a> SubscriptionSyncEngine<'a> {
             }
 
             let collection_parts = collection_group_parts(site_id, &item.metadata);
-            let is_multi = item.metadata.page_count.map_or(false, |c| c > 1);
             let is_collection_member =
-                self.auto_collections && collection_parts.is_some() && is_multi;
+                self.auto_collections && collection_parts.is_some();
 
             let post_id_display = item.metadata.post_id.as_deref().unwrap_or("unknown");
 
+            info!(
+                post_id = post_id_display,
+                auto_collections = self.auto_collections,
+                has_collection_parts = collection_parts.is_some(),
+                is_collection_member,
+                "sync_engine: routing item"
+            );
+
             if is_collection_member {
+                // Don't import yet — just stash the file for later.
+                // Files are only imported once the full collection is ready.
                 let (category, post_id, preferred_name) = collection_parts.unwrap();
                 let key = format!("{category}:{post_id}");
-                let is_first = !pending_collections.contains_key(&key);
+                let page_count = item.metadata.page_count.unwrap_or(0);
+                let page_num = item.metadata.page_num.unwrap_or(u32::MAX);
 
-                if is_first {
-                    self.db.hold_events();
+                // gallery-dl processes posts sequentially — a new post_id means
+                // the previous post is complete. Materialize it now.
+                let finished: Vec<_> = pending_collections
+                    .keys()
+                    .filter(|k| *k != &key)
+                    .cloned()
+                    .collect();
+                for k in finished {
+                    let pc = pending_collections.remove(&k).unwrap();
+                    self.materialize_collection(
+                        pc, subscription_id, &url, &mut progress, &mut changed_collection_ids,
+                    ).await;
                 }
 
                 let pending = pending_collections
@@ -284,66 +311,29 @@ impl<'a> SubscriptionSyncEngine<'a> {
                         category,
                         post_id,
                         preferred_name,
-                        expected: item.metadata.page_count.unwrap_or(0),
+                        expected: page_count,
                         members: Vec::new(),
                     });
 
-                match self
-                    .import_item(&item.file_path, &item.metadata, subscription_id, &url, true)
-                    .await
-                {
-                    Ok(outcome) => {
-                        if outcome.imported_new {
-                            progress.files_downloaded += 1;
-                        } else {
-                            progress.files_skipped += 1;
-                        }
-                        let page_num = item.metadata.page_num.unwrap_or(u32::MAX);
-                        if !pending.members.iter().any(|(h, _)| h == &outcome.hex_hash) {
-                            pending.members.push((outcome.hex_hash, page_num));
-                        }
-                    }
-                    Err(e) => {
-                        progress.errors.push(format!("Import error for post {post_id_display}: {e}"));
-                    }
-                }
-
-                // Check if collection is complete
-                let pending = pending_collections.get(&key).unwrap();
-                if pending.expected > 0 && pending.members.len() as u32 >= pending.expected {
-                    let mut pc = pending_collections.remove(&key).unwrap();
-                    pc.members.sort_by_key(|(_, num)| *num);
-                    let hashes: Vec<String> = pc.members.iter().map(|(h, _)| h.clone()).collect();
-
-                    if hashes.len() >= 2 {
-                        let existing_id = self.db
-                            .get_subscription_post_collection(subscription_id, &pc.category, &pc.post_id)
-                            .await.ok().flatten();
-                        let collection_id = match existing_id {
-                            Some(id) => id,
-                            None => match self.db.create_collection(&pc.preferred_name).await {
-                                Ok(id) => id,
-                                Err(e) => {
-                                    progress.errors.push(format!("Collection create failed: {e}"));
-                                    self.db.release_events();
-                                    continue;
-                                }
-                            },
-                        };
-                        let _ = self.db.add_collection_members_by_hashes(collection_id, &hashes).await;
-                        let _ = self.db.upsert_subscription_post_collection(
-                            subscription_id, &pc.category, &pc.post_id, collection_id,
-                        ).await;
-                        changed_collection_ids.push(collection_id);
-                    }
-                    self.db.release_events();
-                }
+                pending.members.push(PendingMember {
+                    file_path: item.file_path,
+                    metadata: item.metadata,
+                    page_num,
+                });
             } else {
+                // A non-collection item means any pending collection is complete
+                for (_, pc) in pending_collections.drain() {
+                    self.materialize_collection(
+                        pc, subscription_id, &url, &mut progress, &mut changed_collection_ids,
+                    ).await;
+                }
+
                 // Single image (or multi-image with auto_collections off): import immediately
                 self.emit_progress(&sub_id_str, &progress, &format!("Importing {post_id_display}..."));
 
                 // When auto_collections is off and this is a multi-image post,
                 // append _p{N} suffix so each page has a distinct name.
+                let is_multi = item.metadata.page_count.map_or(false, |c| c > 1);
                 let import_metadata;
                 let metadata_ref = if !self.auto_collections && is_multi {
                     let base = preferred_import_name(&item.metadata)
@@ -383,28 +373,14 @@ impl<'a> SubscriptionSyncEngine<'a> {
             }
         }
 
-        // Finalize any incomplete collections (gallery-dl exited before all pages arrived)
-        for (_, mut pc) in pending_collections {
-            pc.members.sort_by_key(|(_, num)| *num);
-            let hashes: Vec<String> = pc.members.iter().map(|(h, _)| h.clone()).collect();
-            if hashes.len() >= 2 {
-                let existing_id = self.db
-                    .get_subscription_post_collection(subscription_id, &pc.category, &pc.post_id)
-                    .await.ok().flatten();
-                let collection_id = match existing_id {
-                    Some(id) => id,
-                    None => match self.db.create_collection(&pc.preferred_name).await {
-                        Ok(id) => id,
-                        Err(_) => { self.db.release_events(); continue; }
-                    },
-                };
-                let _ = self.db.add_collection_members_by_hashes(collection_id, &hashes).await;
-                let _ = self.db.upsert_subscription_post_collection(
-                    subscription_id, &pc.category, &pc.post_id, collection_id,
+        // Finalize any incomplete collections (gallery-dl exited before all pages arrived).
+        // If cancelled, drop everything — don't import stashed files.
+        if !progress.cancelled {
+            for (_, pc) in pending_collections {
+                self.materialize_collection(
+                    pc, subscription_id, &url, &mut progress, &mut changed_collection_ids,
                 ).await;
-                changed_collection_ids.push(collection_id);
             }
-            self.db.release_events();
         }
 
         // Wait for gallery-dl to finish
@@ -476,7 +452,7 @@ impl<'a> SubscriptionSyncEngine<'a> {
 
         self.emit_progress_force(&sub_id_str, &progress, "Finalizing...");
         let completed_cleanly = run_summary.exit_code == 0 && !progress.cancelled;
-        let range_end = file_limit.map(|limit| range_start.saturating_add(limit).saturating_sub(1));
+        let range_end = post_limit.map(|limit| range_start.saturating_add(limit).saturating_sub(1));
         let next_resume_cursor = resume_strategy.as_deref().map(|strategy| {
             match strategy {
                 "range_offset" => range_end.map(|end| end.to_string()),
@@ -494,7 +470,7 @@ impl<'a> SubscriptionSyncEngine<'a> {
         }).flatten();
         let unique_post_count = all_post_ids.len();
         let continue_initial_pagination = should_continue_initial_pagination(
-            completed_initial_run, completed_cleanly, file_limit, unique_post_count, next_resume_cursor.as_deref(),
+            completed_initial_run, completed_cleanly, post_limit, unique_post_count, next_resume_cursor.as_deref(),
         );
 
         if !completed_initial_run {
@@ -515,7 +491,7 @@ impl<'a> SubscriptionSyncEngine<'a> {
             let _ = self.db.set_query_completed_initial_run(query_id, true).await;
         } else if continue_initial_pagination {
             info!(query_id, next_resume_cursor = ?next_resume_cursor, fetched_items = total_items,
-                file_limit = ?file_limit, "Initial run continues; resuming next chunk");
+                post_limit = ?post_limit, "Initial run continues; resuming next chunk");
         }
 
         info!(query_id, downloaded = progress.files_downloaded, skipped = progress.files_skipped,
@@ -529,14 +505,14 @@ impl<'a> SubscriptionSyncEngine<'a> {
 fn should_continue_initial_pagination(
     completed_initial_run: bool,
     completed_cleanly: bool,
-    file_limit: Option<u32>,
+    post_limit: Option<u32>,
     fetched_items: usize,
     next_resume_cursor: Option<&str>,
 ) -> bool {
     if completed_initial_run || !completed_cleanly {
         return false;
     }
-    let Some(limit) = file_limit else {
+    let Some(limit) = post_limit else {
         return false;
     };
     if limit == 0 || fetched_items < limit as usize {

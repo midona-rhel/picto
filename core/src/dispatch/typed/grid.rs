@@ -35,6 +35,22 @@ pub async fn get_grid_page_slim(state: &AppState, input: GetGridPageSlimInput) -
         crate::grid::query::get_grid_page_slim(&state.db, input.query)
             .await?;
     crate::perf::record_grid_page_slim(started.elapsed().as_secs_f64() * 1000.0);
+
+    // Backfill missing dominant colors in the background.
+    let missing_color_hashes: Vec<String> = result
+        .items
+        .iter()
+        .filter(|item| item.dominant_color_hex.is_none() && item.mime.starts_with("image/"))
+        .map(|item| item.hash.clone())
+        .collect();
+    if !missing_color_hashes.is_empty() {
+        let db = state.db.clone();
+        let blob_store = state.blob_store.clone();
+        tokio::spawn(async move {
+            super::media_io::backfill_missing_colors(&db, &blob_store, &missing_color_hashes).await;
+        });
+    }
+
     serde_json::to_value(&result).map_err(|e| e.to_string())
 }
 
