@@ -86,14 +86,7 @@ impl TaggerSession {
     }
 
     pub fn gpu_backend(&self) -> String {
-        // Report which providers were attempted for this platform
-        if cfg!(target_os = "macos") {
-            "CoreML → CPU".into()
-        } else if cfg!(target_os = "windows") {
-            "CUDA → DirectML → CPU".into()
-        } else {
-            "CUDA → CPU".into()
-        }
+        "CPU".into()
     }
 
     /// Run inference on raw image bytes and return predictions above thresholds.
@@ -175,53 +168,15 @@ impl TaggerSession {
     }
 }
 
-/// Create an ONNX Runtime session with GPU acceleration.
+/// Create an ONNX Runtime session (CPU execution provider).
 ///
-/// Tries platform-appropriate GPU providers first, falls back to CPU:
-/// - macOS: CoreML (Neural Engine + GPU) → CPU
-/// - Windows: CUDA → DirectML → CPU
-/// - Linux: CUDA → CPU
-///
-/// Provider registration failures are non-fatal — ort logs a warning
-/// and falls back to the next provider automatically.
+/// GPU acceleration (CoreML, CUDA, DirectML) requires models that are
+/// compatible with those providers. WD14/E621 models currently use
+/// operators that fail on CoreML, so we use CPU for now.
 fn create_session(model_path: &Path) -> Result<ort::session::Session, String> {
     tracing::info!(path = %model_path.display(), "Loading ONNX model");
-
-    let mut providers: Vec<ort::ep::ExecutionProviderDispatch> = Vec::new();
-
-    #[cfg(target_os = "macos")]
-    {
-        providers.push(
-            ort::ep::CoreML::default()
-                .with_compute_units(ort::ep::coreml::ComputeUnits::All)
-                .build(),
-        );
-    }
-
-    #[cfg(target_os = "windows")]
-    {
-        providers.push(ort::ep::CUDA::default().build());
-        providers.push(ort::ep::DirectML::default().build());
-    }
-
-    #[cfg(target_os = "linux")]
-    {
-        providers.push(ort::ep::CUDA::default().build());
-    }
-
-    let builder = ort::session::Session::builder()
-        .map_err(|e| format!("Failed to create session builder: {e}"))?;
-
-    let mut builder = if providers.is_empty() {
-        builder
-    } else {
-        builder
-            .with_execution_providers(providers)
-            .map_err(|e| format!("Failed to set execution providers: {e}"))?
-    };
-
-    builder
-        .commit_from_file(model_path)
+    ort::session::Session::builder()
+        .and_then(|mut b| b.commit_from_file(model_path))
         .map_err(|e| format!("Failed to load ONNX model: {e}"))
 }
 
