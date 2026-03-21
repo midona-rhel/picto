@@ -68,14 +68,16 @@ src/
 - Stores moved to `src/state/`
 - Shared code moved to `src/shared/` (lib, styles, types, services, contexts)
 - UI primitives moved to `src/shared/components/`
+- Feature-owned UI moved under `src/features/`
+- Shared controllers moved under `src/shared/controllers/`
+- Shared hooks moved under `src/shared/hooks/`
+- Legacy top-level frontend paths removed:
+  - `src/components/`
+  - `src/controllers/`
+  - `src/hooks/`
+  - `src/domain/`
 
-### Transitional (to be completed in PBI-404/405)
-- `src/components/` — legacy component tree, feature-owned items to be moved into `src/features/`
-- `src/controllers/` — to be split between features
-- `src/hooks/` — to be split between features and shared
-- `src/domain/` — to be moved into features
-
-## Classification Table
+## Historical Migration Map
 
 | Current Path | Classification | Target |
 |-------------|---------------|--------|
@@ -132,8 +134,8 @@ The topology is enforced by `scripts/guard-topology.mjs` (run via `npm run guard
 
 ### What it allows
 
-- Files within transitional directories (`components/`, `controllers/`, `hooks/`, `domain/`) are allowed until PBI-404/405 complete the migration.
-- Internal imports within the same directory tree are allowed.
+- Internal imports within canonical directory trees.
+- Transitional compatibility only where it still resolves to canonical shared paths.
 
 ### Contributor rules
 

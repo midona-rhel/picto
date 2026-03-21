@@ -32,6 +32,7 @@ export function extractSmartFolderFromSidebarNode(node: SidebarNodeDto): SmartFo
   return {
     id: typeof raw.id === 'string' ? raw.id : undefined,
     name: raw.name,
+    parent_id: typeof raw.parent_id === 'number' ? raw.parent_id : null,
     icon: typeof raw.icon === 'string' || raw.icon === null ? raw.icon : null,
     color: typeof raw.color === 'string' || raw.color === null ? raw.color : null,
     predicate: (raw.predicate as SmartFolder['predicate']) ?? { groups: [] },

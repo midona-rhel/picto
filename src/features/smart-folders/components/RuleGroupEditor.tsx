@@ -1,5 +1,6 @@
 import { Stack, Group, Select, ActionIcon, Text } from '@mantine/core';
 import { IconMinus, IconPlus } from '@tabler/icons-react';
+import { cmComboboxProps } from '../../../shared/components/cmSelectStyles';
 import { RuleEditor } from './RuleEditor';
 import type { SmartRuleGroup, SmartRule } from './types';
 import { createDefaultRule } from './types';
@@ -52,7 +53,7 @@ export function RuleGroupEditor({ group, onChange, onRemove, onAddGroup, canRemo
               value={group.match_mode}
               onChange={(v) => onChange({ ...group, match_mode: (v as 'all' | 'any') ?? 'all' })}
               style={{ width: 70 }}
-              comboboxProps={{ withinPortal: true }}
+              comboboxProps={cmComboboxProps}
               styles={{ input: { fontWeight: 500, fontSize: 'var(--mantine-font-size-xs)' } }}
             />
             <Text size="xs" c="dimmed" style={{ whiteSpace: 'nowrap' }}>
@@ -67,7 +68,7 @@ export function RuleGroupEditor({ group, onChange, onRemove, onAddGroup, canRemo
               value={group.negate ? 'true' : 'false'}
               onChange={(v) => onChange({ ...group, negate: v === 'true' })}
               style={{ width: 75 }}
-              comboboxProps={{ withinPortal: true }}
+              comboboxProps={cmComboboxProps}
               styles={{ input: { fontWeight: 500, fontSize: 'var(--mantine-font-size-xs)' } }}
             />
           </Group>

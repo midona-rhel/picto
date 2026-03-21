@@ -2,6 +2,9 @@ export interface SitePluginInfo {
   id: string;
   name: string;
   domain: string;
+  example_query: string;
+  supports_query: boolean;
+  supports_account: boolean;
   auth_supported?: boolean;
   auth_required_for_full_access?: boolean;
 }
@@ -13,6 +16,7 @@ export interface SubscriptionQueryInfo {
   paused: boolean;
   last_check_time: string | null;
   files_found: number;
+  completed_initial_run: boolean;
   last_seen_id: string | null;
 }
 
@@ -22,15 +26,16 @@ export interface SubInfo {
   site_id?: string;
   site_plugin_id?: string;
   paused: boolean;
-  flow_id: string | null;
+  group_id: string | null;
   initial_file_limit: number;
   periodic_file_limit: number;
+  auto_collections: boolean;
   created_at: string;
   total_files: number;
   queries: SubscriptionQueryInfo[];
 }
 
-export interface FlowInfo {
+export interface SubscriptionGroupInfo {
   id: string;
   name: string;
   schedule: string;
@@ -39,20 +44,7 @@ export interface FlowInfo {
   subscriptions: SubInfo[];
 }
 
-export interface FlowExecutionSummary {
-  added: number;
-  skipped_duplicate: number;
-  skipped_error: number;
-  errors?: string[];
-  method?: string;
-}
-
-export type FlowResultEntry = FlowExecutionSummary & { error?: string };
-
-export interface FlowsWorkingProps {
-  flowId?: string | null;
-  lastResults: Record<string, FlowResultEntry>;
-  onLastResultsChange: (results: Record<string, FlowResultEntry>) => void;
+export interface SubscriptionGroupsPanelProps {
   onOpenCreateModal?: () => void;
   showHeader?: boolean;
   layoutMode?: 'grid' | 'list';

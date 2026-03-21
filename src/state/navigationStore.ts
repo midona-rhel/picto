@@ -8,48 +8,34 @@
 import { create } from 'zustand';
 import type { SmartFolder } from '#features/smart-folders/types';
 
-export type ViewType = 'images' | 'collections' | 'flows' | 'duplicates' | 'tags';
+export type ViewType = 'images' | 'collections' | 'subscriptions' | 'duplicates' | 'tags';
 
 export const VIEW_LABELS: Record<ViewType, string> = {
-  images: 'All Images',
+  images: 'All Active',
   collections: 'Albums',
-  flows: 'Flows',
+  subscriptions: 'Subscriptions',
   duplicates: 'Duplicates',
   tags: 'Tags',
 };
 
-export interface ActiveFolder {
-  folder_id: number;
-  name: string;
-}
-
-export interface ActiveFlow {
-  id: string;
-  name: string;
-}
-
-export interface ActiveCollection {
-  id: number;
-  name: string;
-}
-
 interface HistoryEntry {
   view: ViewType;
-  smartFolder: SmartFolder | null;
-  folder: ActiveFolder | null;
-  collection: ActiveCollection | null;
-  flow: ActiveFlow | null;
+  smartFolderId: string | null;
+  folderId: number | null;
+  collectionId: number | null;
   statusFilter: string | null;
   filterTags: string[] | null;
+  scrollTop: number;
+  loadedItemCount: number;
+  randomSeed: number | null;
 }
 
 interface NavigationState {
   // Current state
   currentView: ViewType;
-  activeSmartFolder: SmartFolder | null;
-  activeFolder: ActiveFolder | null;
-  activeCollection: ActiveCollection | null;
-  activeFlow: ActiveFlow | null;
+  activeSmartFolderId: string | null;
+  activeFolderId: number | null;
+  activeCollectionId: number | null;
   activeStatusFilter: string | null;
   filterTags: string[] | null;
 
@@ -59,85 +45,102 @@ interface NavigationState {
   canGoBack: boolean;
   canGoForward: boolean;
 
+  // Collection display name cache (UI label state)
+  collectionTitles: Record<number, string>;
+
+  // Scroll restore for back/forward navigation
+  pendingScrollRestore: number | null;
+  pendingLoadedItemCount: number;
+  pendingRandomSeed: number | null;
+
   // Actions
-  navigateTo: (view: ViewType, smartFolder?: SmartFolder | null, folder?: ActiveFolder | null, statusFilter?: string | null) => void;
+  navigateTo: (view: ViewType, smartFolderId?: string | null, folderId?: number | null, statusFilter?: string | null) => void;
   goBack: () => void;
   goForward: () => void;
-  setActiveFolder: (folder: ActiveFolder | null) => void;
-  setActiveSmartFolder: (folder: SmartFolder | null) => void;
+  /** Save current scroll position to the current history entry */
+  saveScrollTop: (scrollTop: number, expectedHistoryIndex?: number) => void;
+  /** Save loaded item count to the current history entry */
+  saveLoadedItemCount: (count: number) => void;
+  /** Save random seed to the current history entry */
+  saveRandomSeed: (seed: number | null) => void;
+  /** Consume the pending scroll restore value (returns it and clears it) */
+  consumeScrollRestore: () => number | null;
+  setActiveFolderId: (folderId: number | null) => void;
   /** Navigate to a folder (sets view to 'images', clears smart folder) */
-  navigateToFolder: (folder: ActiveFolder) => void;
+  navigateToFolder: (folder: number | { folder_id: number; name?: string }) => void;
   /** Navigate to a smart folder (sets view to 'images', clears folder) */
   navigateToSmartFolder: (folder: SmartFolder) => void;
   /** Navigate to a collection drill-down session (images view scoped to collection members). */
-  navigateToCollection: (collection: ActiveCollection) => void;
-  /** Navigate to a flow (sets view to 'flows', clears folder/smart folder) */
-  navigateToFlow: (flow: ActiveFlow) => void;
+  navigateToCollection: (collection: number | { id: number; name?: string }) => void;
   /** Navigate to images view filtered by specific tags */
   navigateToFilterTags: (tags: string[]) => void;
-
-  /** Title computed from current navigation state */
-  titlebarTitle: string;
+  /** Cache a user-provided collection display name */
+  rememberCollectionTitle: (id: number, title: string) => void;
 }
 
-function computeTitle(state: { activeFolder?: ActiveFolder | null; activeSmartFolder?: SmartFolder | null; activeCollection?: ActiveCollection | null; activeFlow?: ActiveFlow | null; activeStatusFilter?: string | null; filterTags?: string[] | null; currentView?: ViewType; folder?: ActiveFolder | null; smartFolder?: SmartFolder | null; collection?: ActiveCollection | null; flow?: ActiveFlow | null; statusFilter?: string | null; view?: ViewType }): string {
-  const folder = state.activeFolder ?? state.folder;
-  const smartFolder = state.activeSmartFolder ?? state.smartFolder;
-  const collection = state.activeCollection ?? state.collection;
-  const flow = state.activeFlow ?? state.flow;
+export function deriveNavigationTitle(state: { activeFolderLabel?: string | null; activeSmartFolderLabel?: string | null; activeCollectionLabel?: string | null; activeCollectionId?: number | null; activeStatusFilter?: string | null; filterTags?: string[] | null; currentView?: ViewType; folderLabel?: string | null; smartFolderLabel?: string | null; collectionLabel?: string | null; collectionId?: number | null; statusFilter?: string | null; view?: ViewType }): string {
+  const folderLabel = state.activeFolderLabel ?? state.folderLabel;
+  const smartFolderLabel = state.activeSmartFolderLabel ?? state.smartFolderLabel;
+  const collectionLabel = state.activeCollectionLabel ?? state.collectionLabel;
+  const collectionId = state.activeCollectionId ?? state.collectionId;
   const statusFilter = state.activeStatusFilter ?? state.statusFilter;
   const filterTags = state.filterTags;
   const view = state.currentView ?? state.view ?? 'images';
-  if (filterTags && filterTags.length > 0) return filterTags.join(', ');
-  if (folder) return folder.name;
-  if (smartFolder) return smartFolder.name;
-  if (collection) return collection.name;
-  if (flow) return flow.name;
-  if (statusFilter === 'inbox') return 'Inbox';
-  if (statusFilter === 'uncategorized') return 'Uncategorized';
-  if (statusFilter === 'trash') return 'Trash';
-  if (statusFilter === 'untagged') return 'Untagged';
-  if (statusFilter === 'recently_viewed') return 'Recently Viewed';
-  if (statusFilter === 'random') return 'Random';
-  return VIEW_LABELS[view];
+  // Derive parent scope label
+  let parentLabel: string | null = null;
+  if (filterTags && filterTags.length > 0) parentLabel = filterTags.join(', ');
+  else if (folderLabel) parentLabel = folderLabel;
+  else if (smartFolderLabel) parentLabel = smartFolderLabel;
+  else if (statusFilter === 'inbox') parentLabel = 'Inbox';
+  else if (statusFilter === 'uncategorized') parentLabel = 'Uncategorized';
+  else if (statusFilter === 'trash') parentLabel = 'Trash';
+  else if (statusFilter === 'untagged') parentLabel = 'Untagged';
+  else if (statusFilter === 'random') parentLabel = 'Random';
+
+  // Collection breadcrumb: "Parent > Collection"
+  const collName = collectionLabel ?? (collectionId != null ? `Collection ${collectionId}` : null);
+  if (collName) {
+    const parent = parentLabel ?? VIEW_LABELS[view];
+    return `${parent} / ${collName}`;
+  }
+
+  return parentLabel ?? VIEW_LABELS[view];
 }
 
 export const useNavigationStore = create<NavigationState>((set, get) => ({
   currentView: 'images',
-  activeSmartFolder: null,
-  activeFolder: null,
-  activeCollection: null,
-  activeFlow: null,
+  activeSmartFolderId: null,
+  activeFolderId: null,
+  activeCollectionId: null,
   activeStatusFilter: null,
   filterTags: null,
 
-  history: [{ view: 'images', smartFolder: null, folder: null, collection: null, flow: null, statusFilter: null, filterTags: null }],
+  history: [{ view: 'images', smartFolderId: null, folderId: null, collectionId: null, statusFilter: null, filterTags: null, scrollTop: 0, loadedItemCount: 0, randomSeed: null }],
   historyIndex: 0,
   canGoBack: false,
   canGoForward: false,
+  collectionTitles: {},
+  pendingScrollRestore: null, pendingLoadedItemCount: 0, pendingRandomSeed: null,
 
-  titlebarTitle: VIEW_LABELS.images,
-
-  navigateTo: (view, smartFolder = null, folder = null, statusFilter = null) => {
+  navigateTo: (view, smartFolderId = null, folderId = null, statusFilter = null) => {
     const state = get();
     const trimmed = state.history.slice(0, state.historyIndex + 1);
-    const entry: HistoryEntry = { view, smartFolder, folder, collection: null, flow: null, statusFilter, filterTags: null };
+    const entry: HistoryEntry = { view, smartFolderId, folderId, collectionId: null, statusFilter, filterTags: null, scrollTop: 0, loadedItemCount: 0, randomSeed: null };
     const newHistory = [...trimmed, entry];
     const newIndex = newHistory.length - 1;
 
     set({
       currentView: view,
-      activeSmartFolder: smartFolder,
-      activeFolder: folder,
-      activeCollection: null,
-      activeFlow: null,
+      activeSmartFolderId: smartFolderId,
+      activeFolderId: folderId,
+      activeCollectionId: null,
       activeStatusFilter: statusFilter,
       filterTags: null,
+      pendingScrollRestore: null, pendingLoadedItemCount: 0, pendingRandomSeed: null,
       history: newHistory,
       historyIndex: newIndex,
       canGoBack: newIndex > 0,
       canGoForward: false,
-      titlebarTitle: computeTitle({ activeFolder: folder, activeSmartFolder: smartFolder, activeCollection: null, activeFlow: null, activeStatusFilter: statusFilter, currentView: view }),
     });
   },
 
@@ -149,16 +152,15 @@ export const useNavigationStore = create<NavigationState>((set, get) => ({
 
     set({
       currentView: entry.view,
-      activeSmartFolder: entry.smartFolder,
-      activeFolder: entry.folder,
-      activeCollection: entry.collection,
-      activeFlow: entry.flow,
+      activeSmartFolderId: entry.smartFolderId,
+      activeFolderId: entry.folderId,
+      activeCollectionId: entry.collectionId,
       activeStatusFilter: entry.statusFilter,
       filterTags: entry.filterTags,
       historyIndex: newIndex,
       canGoBack: newIndex > 0,
       canGoForward: true,
-      titlebarTitle: computeTitle(entry),
+      pendingScrollRestore: entry.scrollTop, pendingLoadedItemCount: entry.loadedItemCount, pendingRandomSeed: entry.randomSeed,
     });
   },
 
@@ -170,117 +172,137 @@ export const useNavigationStore = create<NavigationState>((set, get) => ({
 
     set({
       currentView: entry.view,
-      activeSmartFolder: entry.smartFolder,
-      activeFolder: entry.folder,
-      activeCollection: entry.collection,
-      activeFlow: entry.flow,
+      activeSmartFolderId: entry.smartFolderId,
+      activeFolderId: entry.folderId,
+      activeCollectionId: entry.collectionId,
       activeStatusFilter: entry.statusFilter,
       filterTags: entry.filterTags,
       historyIndex: newIndex,
       canGoBack: true,
       canGoForward: newIndex < state.history.length - 1,
-      titlebarTitle: computeTitle(entry),
+      pendingScrollRestore: entry.scrollTop, pendingLoadedItemCount: entry.loadedItemCount, pendingRandomSeed: entry.randomSeed,
     });
   },
 
-  setActiveFolder: (folder) => {
-    set((state) => ({
-      activeFolder: folder,
-      activeCollection: null,
-      titlebarTitle: computeTitle({ ...state, activeFolder: folder }),
-    }));
+  saveScrollTop: (scrollTop, expectedHistoryIndex) => {
+    set((state) => {
+      if (
+        expectedHistoryIndex != null
+        && state.historyIndex !== expectedHistoryIndex
+      ) {
+        return state;
+      }
+      const history = [...state.history];
+      if (history[state.historyIndex]) {
+        history[state.historyIndex] = { ...history[state.historyIndex], scrollTop };
+      }
+      return { history };
+    });
   },
 
-  setActiveSmartFolder: (folder) => {
-    set((state) => ({
-      activeSmartFolder: folder,
-      activeCollection: null,
-      titlebarTitle: computeTitle({ ...state, activeSmartFolder: folder }),
+  saveLoadedItemCount: (count: number) => {
+    set((state) => {
+      const history = [...state.history];
+      if (history[state.historyIndex]) {
+        history[state.historyIndex] = { ...history[state.historyIndex], loadedItemCount: count };
+      }
+      return { history };
+    });
+  },
+
+  saveRandomSeed: (seed) => {
+    set((state) => {
+      const history = [...state.history];
+      if (history[state.historyIndex]) {
+        history[state.historyIndex] = { ...history[state.historyIndex], randomSeed: seed };
+      }
+      return { history };
+    });
+  },
+
+  consumeScrollRestore: () => {
+    const value = get().pendingScrollRestore;
+    if (value != null) set({ pendingScrollRestore: null });
+    return value;
+  },
+
+  setActiveFolderId: (folderId) => {
+    set(() => ({
+      activeFolderId: folderId,
+      activeCollectionId: null,
     }));
   },
 
   navigateToFolder: (folder) => {
-    get().navigateTo('images', null, folder);
+    const folderId = typeof folder === 'number' ? folder : folder.folder_id;
+    get().navigateTo('images', null, folderId);
   },
 
   navigateToSmartFolder: (folder) => {
-    get().navigateTo('images', folder, null);
+    get().navigateTo('images', folder.id ?? null, null);
   },
 
   navigateToCollection: (collection) => {
+    const collectionId = typeof collection === 'number' ? collection : collection.id;
+    if (typeof collection !== 'number' && collection.name) {
+      get().rememberCollectionTitle(collection.id, collection.name);
+    }
     const state = get();
     const trimmed = state.history.slice(0, state.historyIndex + 1);
     const entry: HistoryEntry = {
       view: 'images',
-      smartFolder: null,
-      folder: null,
-      collection,
-      flow: null,
-      statusFilter: null,
-      filterTags: null,
+      smartFolderId: state.activeSmartFolderId,
+      folderId: state.activeFolderId,
+      collectionId,
+      statusFilter: state.activeStatusFilter,
+      filterTags: state.filterTags,
+      scrollTop: 0,
+      loadedItemCount: 0,
+      randomSeed: null,
     };
     const newHistory = [...trimmed, entry];
     const newIndex = newHistory.length - 1;
 
     set({
       currentView: 'images',
-      activeSmartFolder: null,
-      activeFolder: null,
-      activeCollection: collection,
-      activeFlow: null,
-      activeStatusFilter: null,
-      filterTags: null,
+      // Preserve parent scope for sidebar highlight
+      activeCollectionId: collectionId,
+      pendingScrollRestore: null, pendingLoadedItemCount: 0, pendingRandomSeed: null,
       history: newHistory,
       historyIndex: newIndex,
       canGoBack: newIndex > 0,
       canGoForward: false,
-      titlebarTitle: computeTitle({ activeCollection: collection, currentView: 'images' }),
     });
   },
 
-  navigateToFlow: (flow) => {
-    const state = get();
-    const trimmed = state.history.slice(0, state.historyIndex + 1);
-    const entry: HistoryEntry = { view: 'flows', smartFolder: null, folder: null, collection: null, flow, statusFilter: null, filterTags: null };
-    const newHistory = [...trimmed, entry];
-    const newIndex = newHistory.length - 1;
-
-    set({
-      currentView: 'flows',
-      activeSmartFolder: null,
-      activeFolder: null,
-      activeCollection: null,
-      activeFlow: flow,
-      activeStatusFilter: null,
-      filterTags: null,
-      history: newHistory,
-      historyIndex: newIndex,
-      canGoBack: newIndex > 0,
-      canGoForward: false,
-      titlebarTitle: computeTitle({ activeFlow: flow, currentView: 'flows' }),
-    });
+  rememberCollectionTitle: (id, title) => {
+    set((state) => ({
+      collectionTitles:
+        state.collectionTitles[id] === title
+          ? state.collectionTitles
+          : { ...state.collectionTitles, [id]: title },
+    }));
   },
 
   navigateToFilterTags: (tags) => {
     const state = get();
     const trimmed = state.history.slice(0, state.historyIndex + 1);
-    const entry: HistoryEntry = { view: 'images', smartFolder: null, folder: null, collection: null, flow: null, statusFilter: null, filterTags: tags };
+    const entry: HistoryEntry = { view: 'images', smartFolderId: null, folderId: null, collectionId: null, statusFilter: null, filterTags: tags, scrollTop: 0, loadedItemCount: 0, randomSeed: null };
     const newHistory = [...trimmed, entry];
     const newIndex = newHistory.length - 1;
 
     set({
       currentView: 'images',
-      activeSmartFolder: null,
-      activeFolder: null,
-      activeCollection: null,
-      activeFlow: null,
+      activeSmartFolderId: null,
+      activeFolderId: null,
+      activeCollectionId: null,
       activeStatusFilter: null,
       filterTags: tags,
+      pendingScrollRestore: null, pendingLoadedItemCount: 0, pendingRandomSeed: null,
       history: newHistory,
       historyIndex: newIndex,
       canGoBack: newIndex > 0,
       canGoForward: false,
-      titlebarTitle: computeTitle({ filterTags: tags, currentView: 'images' }),
     });
   },
 }));

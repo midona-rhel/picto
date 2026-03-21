@@ -1,18 +1,21 @@
 //! Smart folder CRUD + predicate → bitmap compilation.
 
+use std::collections::HashSet;
+
 use roaring::RoaringBitmap;
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-use crate::sqlite::bitmaps::{BitmapKey, BitmapStore};
-use crate::sqlite::compilers::CompilerEvent;
+use crate::sqlite::ReadModelEvent;
 use crate::sqlite::SqliteDatabase;
+use crate::sqlite::bitmaps::{BitmapKey, BitmapStore};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SmartFolder {
     pub smart_folder_id: i64,
     pub name: String,
+    pub parent_id: Option<i64>,
     pub icon: Option<String>,
     pub color: Option<String>,
     pub predicate_json: String,
@@ -25,13 +28,13 @@ pub struct SmartFolder {
 
 /// Predicate system for smart folders — groups-based format from the frontend.
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct SmartFolderPredicate {
     pub groups: Vec<SmartRuleGroup>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct SmartRuleGroup {
     pub match_mode: MatchMode,
     #[serde(default)]
@@ -40,7 +43,7 @@ pub struct SmartRuleGroup {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
 #[serde(rename_all = "snake_case")]
 pub enum MatchMode {
     All,
@@ -48,7 +51,7 @@ pub enum MatchMode {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct PredicateRule {
     pub field: String,
     pub op: String,
@@ -65,6 +68,7 @@ pub struct PredicateRule {
 pub fn create_smart_folder(
     conn: &Connection,
     name: &str,
+    parent_id: Option<i64>,
     predicate_json: &str,
     icon: Option<&str>,
     color: Option<&str>,
@@ -73,9 +77,19 @@ pub fn create_smart_folder(
 ) -> rusqlite::Result<i64> {
     let now = chrono::Utc::now().to_rfc3339();
     conn.execute(
-        "INSERT INTO smart_folder (name, predicate_json, icon, color, sort_field, sort_order, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-        params![name, predicate_json, icon, color, sort_field, sort_order, now, now],
+        "INSERT INTO smart_folder (name, parent_id, predicate_json, icon, color, sort_field, sort_order, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        params![
+            name,
+            parent_id,
+            predicate_json,
+            icon,
+            color,
+            sort_field,
+            sort_order,
+            now,
+            now
+        ],
     )?;
     Ok(conn.last_insert_rowid())
 }
@@ -85,21 +99,22 @@ pub fn get_smart_folder(
     smart_folder_id: i64,
 ) -> rusqlite::Result<Option<SmartFolder>> {
     conn.query_row(
-        "SELECT smart_folder_id, name, icon, color, predicate_json, sort_field, sort_order, display_order, created_at, updated_at
+        "SELECT smart_folder_id, name, parent_id, icon, color, predicate_json, sort_field, sort_order, display_order, created_at, updated_at
          FROM smart_folder WHERE smart_folder_id = ?1",
         [smart_folder_id],
         |row| {
             Ok(SmartFolder {
                 smart_folder_id: row.get(0)?,
                 name: row.get(1)?,
-                icon: row.get(2)?,
-                color: row.get(3)?,
-                predicate_json: row.get(4)?,
-                sort_field: row.get(5)?,
-                sort_order: row.get(6)?,
-                display_order: row.get(7)?,
-                created_at: row.get(8)?,
-                updated_at: row.get(9)?,
+                parent_id: row.get(2)?,
+                icon: row.get(3)?,
+                color: row.get(4)?,
+                predicate_json: row.get(5)?,
+                sort_field: row.get(6)?,
+                sort_order: row.get(7)?,
+                display_order: row.get(8)?,
+                created_at: row.get(9)?,
+                updated_at: row.get(10)?,
             })
         },
     )
@@ -108,21 +123,23 @@ pub fn get_smart_folder(
 
 pub fn list_smart_folders(conn: &Connection) -> rusqlite::Result<Vec<SmartFolder>> {
     let mut stmt = conn.prepare_cached(
-        "SELECT smart_folder_id, name, icon, color, predicate_json, sort_field, sort_order, display_order, created_at, updated_at
-         FROM smart_folder ORDER BY COALESCE(display_order, smart_folder_id)",
+        "SELECT smart_folder_id, name, parent_id, icon, color, predicate_json, sort_field, sort_order, display_order, created_at, updated_at
+         FROM smart_folder
+         ORDER BY COALESCE(parent_id, 0), COALESCE(display_order, smart_folder_id), smart_folder_id",
     )?;
     let rows = stmt.query_map([], |row| {
         Ok(SmartFolder {
             smart_folder_id: row.get(0)?,
             name: row.get(1)?,
-            icon: row.get(2)?,
-            color: row.get(3)?,
-            predicate_json: row.get(4)?,
-            sort_field: row.get(5)?,
-            sort_order: row.get(6)?,
-            display_order: row.get(7)?,
-            created_at: row.get(8)?,
-            updated_at: row.get(9)?,
+            parent_id: row.get(2)?,
+            icon: row.get(3)?,
+            color: row.get(4)?,
+            predicate_json: row.get(5)?,
+            sort_field: row.get(6)?,
+            sort_order: row.get(7)?,
+            display_order: row.get(8)?,
+            created_at: row.get(9)?,
+            updated_at: row.get(10)?,
         })
     })?;
     rows.collect()
@@ -131,11 +148,12 @@ pub fn list_smart_folders(conn: &Connection) -> rusqlite::Result<Vec<SmartFolder
 pub fn update_smart_folder(conn: &Connection, sf: &SmartFolder) -> rusqlite::Result<()> {
     let now = chrono::Utc::now().to_rfc3339();
     conn.execute(
-        "UPDATE smart_folder SET name = ?1, predicate_json = ?2, icon = ?3, color = ?4,
-         sort_field = ?5, sort_order = ?6, updated_at = ?7
-         WHERE smart_folder_id = ?8",
+        "UPDATE smart_folder SET name = ?1, parent_id = ?2, predicate_json = ?3, icon = ?4, color = ?5,
+         sort_field = ?6, sort_order = ?7, updated_at = ?8
+         WHERE smart_folder_id = ?9",
         params![
             sf.name,
+            sf.parent_id,
             sf.predicate_json,
             sf.icon,
             sf.color,
@@ -148,21 +166,130 @@ pub fn update_smart_folder(conn: &Connection, sf: &SmartFolder) -> rusqlite::Res
     Ok(())
 }
 
-/// Batch-update display_order on the canonical smart_folder table.
-pub fn reorder_smart_folders(conn: &Connection, moves: &[(i64, i64)]) -> rusqlite::Result<()> {
-    let mut stmt = conn
-        .prepare_cached("UPDATE smart_folder SET display_order = ?1 WHERE smart_folder_id = ?2")?;
-    for &(smart_folder_id, new_display_order) in moves {
-        stmt.execute(params![new_display_order, smart_folder_id])?;
+pub fn move_smart_folder(
+    conn: &Connection,
+    smart_folder_id: i64,
+    new_parent_id: Option<i64>,
+    sibling_order: &[(i64, i64)],
+) -> rusqlite::Result<()> {
+    conn.execute(
+        "UPDATE smart_folder SET parent_id = ?1 WHERE smart_folder_id = ?2",
+        params![new_parent_id, smart_folder_id],
+    )?;
+    if sibling_order.is_empty() {
+        return Ok(());
+    }
+    let mut stmt = conn.prepare_cached(
+        "UPDATE smart_folder SET display_order = ?1, parent_id = ?2 WHERE smart_folder_id = ?3",
+    )?;
+    for &(id, order) in sibling_order {
+        stmt.execute(params![order, new_parent_id, id])?;
     }
     Ok(())
 }
 
-pub fn delete_smart_folder(conn: &Connection, smart_folder_id: i64) -> rusqlite::Result<()> {
+pub fn collect_descendant_smart_folder_ids(
+    conn: &Connection,
+    smart_folder_id: i64,
+) -> rusqlite::Result<Vec<i64>> {
+    let mut descendants = Vec::new();
+    let mut stack = vec![smart_folder_id];
+    while let Some(current) = stack.pop() {
+        let mut stmt = conn.prepare_cached(
+            "SELECT smart_folder_id FROM smart_folder WHERE parent_id = ?1 ORDER BY smart_folder_id",
+        )?;
+        let child_ids: Vec<i64> = stmt
+            .query_map([current], |row| row.get(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        for child_id in child_ids {
+            descendants.push(child_id);
+            stack.push(child_id);
+        }
+    }
+    Ok(descendants)
+}
+
+pub fn delete_smart_folder(conn: &Connection, smart_folder_id: i64) -> rusqlite::Result<Vec<i64>> {
+    let parent_id: Option<i64> = conn.query_row(
+        "SELECT parent_id FROM smart_folder WHERE smart_folder_id = ?1",
+        [smart_folder_id],
+        |row| row.get(0),
+    )?;
+    let child_ids: Vec<i64> = conn
+        .prepare_cached(
+            "SELECT smart_folder_id FROM smart_folder WHERE parent_id = ?1 ORDER BY COALESCE(display_order, smart_folder_id)",
+        )?
+        .query_map([smart_folder_id], |row| row.get(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    conn.execute(
+        "UPDATE smart_folder SET parent_id = ?1 WHERE parent_id = ?2",
+        params![parent_id, smart_folder_id],
+    )?;
     conn.execute(
         "DELETE FROM smart_folder WHERE smart_folder_id = ?1",
         [smart_folder_id],
     )?;
+    Ok(child_ids)
+}
+
+pub fn has_local_rules(pred: &SmartFolderPredicate) -> bool {
+    pred.groups.iter().any(|group| !group.rules.is_empty())
+}
+
+fn parse_predicate_json(predicate_json: &str) -> rusqlite::Result<SmartFolderPredicate> {
+    serde_json::from_str(predicate_json)
+        .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))
+}
+
+pub fn get_smart_folder_chain(
+    conn: &Connection,
+    smart_folder_id: i64,
+) -> rusqlite::Result<Vec<SmartFolder>> {
+    let mut chain = Vec::new();
+    let mut current_id = Some(smart_folder_id);
+    let mut visited = HashSet::new();
+
+    while let Some(id) = current_id {
+        if !visited.insert(id) {
+            return Err(rusqlite::Error::InvalidQuery);
+        }
+        let folder =
+            get_smart_folder(conn, id)?.ok_or(rusqlite::Error::QueryReturnedNoRows)?;
+        current_id = folder.parent_id;
+        chain.push(folder);
+    }
+
+    chain.reverse();
+    Ok(chain)
+}
+
+pub fn build_effective_predicate_for_smart_folder(
+    conn: &Connection,
+    smart_folder_id: i64,
+) -> rusqlite::Result<SmartFolderPredicate> {
+    let chain = get_smart_folder_chain(conn, smart_folder_id)?;
+    let mut groups = Vec::new();
+    for folder in chain {
+        let pred = parse_predicate_json(&folder.predicate_json)?;
+        if has_local_rules(&pred) {
+            groups.extend(pred.groups);
+        }
+    }
+    Ok(SmartFolderPredicate { groups })
+}
+
+/// Batch-update display_order within a specific parent scope.
+pub fn reorder_smart_folders(
+    conn: &Connection,
+    parent_id: Option<i64>,
+    moves: &[(i64, i64)],
+) -> rusqlite::Result<()> {
+    let mut stmt = conn.prepare_cached(
+        "UPDATE smart_folder SET display_order = ?1, parent_id = ?2 WHERE smart_folder_id = ?3",
+    )?;
+    for &(smart_folder_id, new_display_order) in moves {
+        stmt.execute(params![new_display_order, parent_id, smart_folder_id])?;
+    }
     Ok(())
 }
 
@@ -174,29 +301,29 @@ pub fn delete_smart_folder(conn: &Connection, smart_folder_id: i64) -> rusqlite:
 ///
 /// Within each group, rules are combined according to the group's `match_mode`
 /// (all = AND, any = OR). If `group.negate` is set, the group bitmap is inverted
-/// against AllActive (never includes trash — `AllActive - group_result`).
+/// against active (status=1) — `active - group_result`.
 pub fn compile_predicate(
     conn: &Connection,
     pred: &SmartFolderPredicate,
     bitmaps: &BitmapStore,
 ) -> rusqlite::Result<RoaringBitmap> {
-    let all_active = bitmaps.get(&BitmapKey::AllActive);
-
     if pred.groups.is_empty() {
-        return Ok(all_active);
+        return Ok(RoaringBitmap::new());
     }
+
+    let active = bitmaps.get(&BitmapKey::Status(1));
 
     let mut final_result: Option<RoaringBitmap> = None;
 
     for group in &pred.groups {
-        let group_bm = compile_group(conn, group, bitmaps, &all_active)?;
+        let group_bm = compile_group(conn, group, bitmaps, &active)?;
         final_result = Some(match final_result {
             Some(prev) => prev & &group_bm,
             None => group_bm,
         });
     }
 
-    Ok(final_result.unwrap_or(all_active))
+    Ok(final_result.unwrap_or_default())
 }
 
 /// Compile a single rule group into a bitmap.
@@ -204,7 +331,7 @@ fn compile_group(
     conn: &Connection,
     group: &SmartRuleGroup,
     bitmaps: &BitmapStore,
-    all_active: &RoaringBitmap,
+    active: &RoaringBitmap,
 ) -> rusqlite::Result<RoaringBitmap> {
     let mut include_bitmaps: Vec<RoaringBitmap> = Vec::new();
     let mut exclude_bitmaps: Vec<RoaringBitmap> = Vec::new();
@@ -236,7 +363,8 @@ fn compile_group(
                         for tag_str in tag_values {
                             if let Some(key) = crate::tags::normalize::parse_tag(tag_str) {
                                 if let Some(&tag_id) = tag_id_map.get(&key) {
-                                    include_bitmaps.push(bitmaps.get(&BitmapKey::EffectiveTag(tag_id)));
+                                    include_bitmaps
+                                        .push(bitmaps.get(&BitmapKey::EffectiveTag(tag_id)));
                                 } else {
                                     include_bitmaps.push(RoaringBitmap::new());
                                 }
@@ -260,7 +388,8 @@ fn compile_group(
                         for tag_str in tag_values {
                             if let Some(key) = crate::tags::normalize::parse_tag(tag_str) {
                                 if let Some(&tag_id) = tag_id_map.get(&key) {
-                                    exclude_bitmaps.push(bitmaps.get(&BitmapKey::EffectiveTag(tag_id)));
+                                    exclude_bitmaps
+                                        .push(bitmaps.get(&BitmapKey::EffectiveTag(tag_id)));
                                 }
                             }
                         }
@@ -285,9 +414,6 @@ fn compile_group(
             }
             "duration" => {
                 compile_numeric_rule(conn, "duration", rule, &mut include_bitmaps)?;
-            }
-            "view_count" => {
-                compile_numeric_rule(conn, "view_count", rule, &mut include_bitmaps)?;
             }
             "aspect_ratio" => {
                 let expr = "CAST(width AS REAL) / CAST(height AS REAL)";
@@ -448,7 +574,7 @@ fn compile_group(
     let combined = match group.match_mode {
         MatchMode::All => {
             if include_bitmaps.is_empty() {
-                all_active.clone()
+                active.clone()
             } else {
                 let mut result = include_bitmaps[0].clone();
                 for bm in &include_bitmaps[1..] {
@@ -459,7 +585,7 @@ fn compile_group(
         }
         MatchMode::Any => {
             if include_bitmaps.is_empty() {
-                all_active.clone()
+                active.clone()
             } else {
                 let mut result = RoaringBitmap::new();
                 for bm in &include_bitmaps {
@@ -470,13 +596,13 @@ fn compile_group(
         }
     };
 
-    let mut result = combined & all_active;
+    let mut result = combined & active;
     for exclude in &exclude_bitmaps {
         result -= exclude;
     }
 
     if group.negate {
-        result = all_active - &result;
+        result = active - &result;
     }
 
     Ok(result)
@@ -703,33 +829,29 @@ impl SqliteDatabase {
     pub async fn create_smart_folder(
         &self,
         name: String,
+        parent_id: Option<i64>,
         predicate_json: String,
         icon: Option<String>,
         color: Option<String>,
         sort_field: Option<String>,
         sort_order: Option<String>,
     ) -> Result<SmartFolder, String> {
-        let n = name.clone();
-        let pj = predicate_json.clone();
-        let i = icon.clone();
-        let c = color.clone();
-        let sf = sort_field.clone();
-        let so = sort_order.clone();
         let sf_id = self
             .with_conn(move |conn| {
                 create_smart_folder(
                     conn,
-                    &n,
-                    &pj,
-                    i.as_deref(),
-                    c.as_deref(),
-                    sf.as_deref(),
-                    so.as_deref(),
+                    &name,
+                    parent_id,
+                    &predicate_json,
+                    icon.as_deref(),
+                    color.as_deref(),
+                    sort_field.as_deref(),
+                    sort_order.as_deref(),
                 )
             })
             .await?;
 
-        self.emit_compiler_event(CompilerEvent::SmartFolderChanged {
+        self.emit_read_model_event(ReadModelEvent::SmartFolderChanged {
             smart_folder_id: sf_id,
         });
 
@@ -746,60 +868,48 @@ impl SqliteDatabase {
         let sf_id = sf.smart_folder_id;
         self.with_conn(move |conn| update_smart_folder(conn, &sf))
             .await?;
-        self.emit_compiler_event(CompilerEvent::SmartFolderChanged {
+        self.emit_read_model_event(ReadModelEvent::SmartFolderChanged {
             smart_folder_id: sf_id,
         });
         Ok(())
     }
 
-    pub async fn reorder_smart_folders(&self, moves: Vec<(i64, i64)>) -> Result<(), String> {
-        self.with_conn(move |conn| reorder_smart_folders(conn, &moves))
+    pub async fn reorder_smart_folders(
+        &self,
+        parent_id: Option<i64>,
+        moves: Vec<(i64, i64)>,
+    ) -> Result<(), String> {
+        self.with_conn(move |conn| reorder_smart_folders(conn, parent_id, &moves))
             .await?;
-        self.emit_compiler_event(CompilerEvent::SmartFolderChanged { smart_folder_id: 0 });
+        self.emit_read_model_event(ReadModelEvent::SmartFolderChanged { smart_folder_id: 0 });
         Ok(())
     }
 
-    pub async fn delete_smart_folder(&self, smart_folder_id: i64) -> Result<(), String> {
-        self.bitmaps
-            .remove_key(&BitmapKey::SmartFolder(smart_folder_id));
-        self.with_conn(move |conn| delete_smart_folder(conn, smart_folder_id))
-            .await
-    }
-
-    /// Query a smart folder using bitmap compilation.
-    pub async fn query_smart_folder(
+    pub async fn move_smart_folder(
         &self,
         smart_folder_id: i64,
-        limit: i64,
-        offset: i64,
-    ) -> Result<Vec<i64>, String> {
-        let bm = self.bitmaps.get(&BitmapKey::SmartFolder(smart_folder_id));
-        if !bm.is_empty() {
-            let file_ids: Vec<i64> = bm
-                .iter()
-                .skip(offset as usize)
-                .take(limit as usize)
-                .map(|id| id as i64)
-                .collect();
-            return Ok(file_ids);
-        }
-
-        let bitmaps = self.bitmaps.clone();
-        self.with_read_conn(move |conn| {
-            let sf = get_smart_folder(conn, smart_folder_id)?
-                .ok_or(rusqlite::Error::QueryReturnedNoRows)?;
-            let pred: SmartFolderPredicate = serde_json::from_str(&sf.predicate_json)
-                .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
-            let result = compile_predicate(conn, &pred, &bitmaps)?;
-            let file_ids: Vec<i64> = result
-                .iter()
-                .skip(offset as usize)
-                .take(limit as usize)
-                .map(|id| id as i64)
-                .collect();
-            Ok(file_ids)
+        new_parent_id: Option<i64>,
+        sibling_order: Vec<(i64, i64)>,
+    ) -> Result<(), String> {
+        self.with_conn(move |conn| {
+            move_smart_folder(conn, smart_folder_id, new_parent_id, &sibling_order)
         })
-        .await
+        .await?;
+        self.emit_read_model_event(ReadModelEvent::SmartFolderChanged { smart_folder_id: 0 });
+        Ok(())
+    }
+
+    pub async fn delete_smart_folder(&self, smart_folder_id: i64) -> Result<Vec<i64>, String> {
+        self.bitmaps
+            .remove_key(&BitmapKey::SmartFolder(smart_folder_id));
+        let descendants = self
+            .with_read_conn(move |conn| collect_descendant_smart_folder_ids(conn, smart_folder_id))
+            .await?;
+        for descendant_id in &descendants {
+            self.bitmaps.remove_key(&BitmapKey::SmartFolder(*descendant_id));
+        }
+        self.with_conn(move |conn| delete_smart_folder(conn, smart_folder_id))
+            .await
     }
 
     /// Count files matching a smart folder.
@@ -811,10 +921,9 @@ impl SqliteDatabase {
 
         let bitmaps = self.bitmaps.clone();
         self.with_read_conn(move |conn| {
-            let sf = get_smart_folder(conn, smart_folder_id)?
+            get_smart_folder(conn, smart_folder_id)?
                 .ok_or(rusqlite::Error::QueryReturnedNoRows)?;
-            let pred: SmartFolderPredicate = serde_json::from_str(&sf.predicate_json)
-                .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(e)))?;
+            let pred = build_effective_predicate_for_smart_folder(conn, smart_folder_id)?;
             let result = compile_predicate(conn, &pred, &bitmaps)?;
             Ok(result.len() as i64)
         })

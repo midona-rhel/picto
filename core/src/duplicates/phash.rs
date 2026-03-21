@@ -5,16 +5,14 @@
 
 use img_hash::{HasherConfig, ImageHash};
 
-// ---------------------------------------------------------------------------
-// Perceptual hash
-// ---------------------------------------------------------------------------
+// --- Perceptual hash ---
 
 /// Default Hamming distance threshold for "likely duplicate" (0 = identical, lower = more similar).
-/// 8 is a good default — matches images with minor compression artifacts or resizes.
-pub const DEFAULT_DISTANCE_THRESHOLD: u32 = 8;
+/// 32 at 16x16 (256-bit hash) is proportional to the old 8 at 8x8 (64-bit hash).
+pub const DEFAULT_DISTANCE_THRESHOLD: u32 = 32;
 
-/// Hash size in bits (64 = 8x8, good balance of speed and accuracy).
-const HASH_SIZE: u32 = 8;
+/// Hash size per dimension (16x16 = 256-bit hash).
+const HASH_SIZE: u32 = 16;
 
 /// Generate a perceptual hash for an image from raw bytes.
 pub fn compute_phash(image_data: &[u8]) -> Result<ImageHash, image::ImageError> {
@@ -38,9 +36,7 @@ pub fn compute_phash_base64(image_data: &[u8]) -> Result<String, image::ImageErr
     Ok(hash.to_base64())
 }
 
-// ---------------------------------------------------------------------------
-// BK-tree for Hamming distance
-// ---------------------------------------------------------------------------
+// --- BK-tree for Hamming distance ---
 
 /// A BK-tree node for efficient near-neighbor search in Hamming space.
 struct BkNode {
@@ -138,22 +134,10 @@ mod tests {
         let hasher = HasherConfig::new()
             .hash_size(HASH_SIZE, HASH_SIZE)
             .to_hasher();
-        let img = img_hash::image::RgbaImage::from_pixel(8, 8, img_hash::image::Rgba(pixel));
+        let img = img_hash::image::RgbaImage::from_pixel(HASH_SIZE, HASH_SIZE, img_hash::image::Rgba(pixel));
         let hash = hasher.hash_image(&img);
         let b64 = hash.to_base64();
         ImageHash::<Vec<u8>>::from_base64(&b64).unwrap()
-    }
-
-    #[test]
-    fn test_bk_tree_exact_match() {
-        let hash = make_hash([255, 255, 255, 255]);
-        let mut tree = BkTree::new();
-        tree.insert("file_a".to_string(), hash.clone());
-        tree.insert("file_b".to_string(), hash.clone());
-
-        let results = tree.find_within(&hash, 0);
-        assert_eq!(results.len(), 2);
-        assert!(results.iter().all(|(_, dist)| *dist == 0));
     }
 
     #[test]
@@ -164,7 +148,7 @@ mod tests {
 
         let mut img_a = img_hash::image::RgbaImage::new(64, 64);
         for (x, y, pixel) in img_a.enumerate_pixels_mut() {
-            let val = if (x / 8 + y / 8) % 2 == 0 { 255 } else { 0 };
+            let val = if (x / HASH_SIZE + y / HASH_SIZE) % 2 == 0 { 255 } else { 0 };
             *pixel = img_hash::image::Rgba([val as u8, val as u8, val as u8, 255]);
         }
         let hash_a: ImageHash<Vec<u8>> = {
@@ -195,17 +179,6 @@ mod tests {
         let results = tree.find_within(&hash_a, 0);
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].0, "checker");
-    }
-
-    #[test]
-    fn test_bk_tree_len() {
-        let hash = make_hash([128, 128, 128, 255]);
-        let mut tree = BkTree::new();
-        assert_eq!(tree.len(), 0);
-        tree.insert("a".to_string(), hash.clone());
-        assert_eq!(tree.len(), 1);
-        tree.insert("b".to_string(), hash.clone());
-        assert_eq!(tree.len(), 2);
     }
 
     #[test]

@@ -1,2 +1,2 @@
-export { DetailWindow } from '../../grid/DetailWindow';
 export { Slideshow } from './Slideshow';
+export { ViewerHost } from './ViewerHost';

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Modal, Stack, Group, TextInput, Text, Loader, ActionIcon } from '@mantine/core';
 import { glassModalStyles } from '../../../shared/styles/glassModal';
 import { api } from '#desktop/api';
@@ -10,17 +10,29 @@ import { createDefaultGroup, predicateToRust, folderToRust } from './types';
 import { IconPicker } from './IconPicker';
 import { FolderColorPicker } from './FolderColorPicker';
 import { DynamicIcon, DEFAULT_FOLDER_ICON } from './iconRegistry';
-import { SidebarController } from '../../../shared/controllers/sidebarController';
+import { useDomainStore } from '../../../state/domainStore';
 import { registerUndoAction } from '../../../shared/controllers/undoRedoController';
 
 interface SmartFolderModalProps {
   opened: boolean;
   onClose: () => void;
   folder?: SmartFolder | null;
-  onSaved: () => void;
+  initialParentId?: number | null;
+  onSaved: () => void | Promise<void>;
 }
 
-export function SmartFolderModal({ opened, onClose, folder, onSaved }: SmartFolderModalProps) {
+function hasRules(predicate: SmartFolderPredicate): boolean {
+  return predicate.groups.some((group) => group.rules.length > 0);
+}
+
+function combinePredicates(predicates: SmartFolderPredicate[]): SmartFolderPredicate {
+  return {
+    groups: predicates.flatMap((predicate) => predicate.groups.filter((group) => group.rules.length > 0)),
+  };
+}
+
+export function SmartFolderModal({ opened, onClose, folder, initialParentId = null, onSaved }: SmartFolderModalProps) {
+  const smartFolders = useDomainStore((state) => state.smartFolders);
   const [name, setName] = useState('');
   const [icon, setIcon] = useState<string | null>(null);
   const [color, setColor] = useState<string | null>(null);
@@ -45,13 +57,44 @@ export function SmartFolderModal({ opened, onClose, folder, onSaved }: SmartFold
       }
       setLiveCount(null);
     }
-  }, [opened, folder]);
+  }, [opened, folder, initialParentId]);
+
+  const nodeMap = useMemo(() => {
+    const map = new Map<string, typeof smartFolders[number]>();
+    for (const smartFolder of smartFolders) map.set(smartFolder.id, smartFolder);
+    return map;
+  }, [smartFolders]);
+
+  const resolvedParentId = folder?.parent_id != null
+    ? String(folder.parent_id)
+    : initialParentId != null
+      ? String(initialParentId)
+      : null;
+
+  const inheritedChain = useMemo(() => {
+    if (!resolvedParentId) return [];
+    const chain: typeof smartFolders = [];
+    let currentId: string | null = resolvedParentId;
+    const visited = new Set<string>();
+    while (currentId && !visited.has(currentId)) {
+      visited.add(currentId);
+      const current = nodeMap.get(currentId);
+      if (!current) break;
+      chain.unshift(current);
+      currentId = current.parent_id;
+    }
+    return chain;
+  }, [nodeMap, resolvedParentId, smartFolders]);
+
+  const effectivePredicate = useMemo(() => combinePredicates([
+    ...inheritedChain.map((item) => item.localPredicate ?? item.predicate ?? { groups: [] }),
+    predicate,
+  ]), [inheritedChain, predicate]);
 
   const updateCount = useCallback((pred: SmartFolderPredicate) => {
     if (countTimer.current) clearTimeout(countTimer.current);
     countTimer.current = setTimeout(async () => {
-      const hasRules = pred.groups.some((g) => g.rules.length > 0);
-      if (!hasRules) {
+      if (!hasRules(pred)) {
         setLiveCount(null);
         return;
       }
@@ -69,8 +112,8 @@ export function SmartFolderModal({ opened, onClose, folder, onSaved }: SmartFold
   }, []);
 
   useEffect(() => {
-    if (opened) updateCount(predicate);
-  }, [predicate, opened, updateCount]);
+    if (opened) updateCount(effectivePredicate);
+  }, [effectivePredicate, opened, updateCount]);
 
   const handleGroupChange = (index: number, group: SmartFolderPredicate['groups'][0]) => {
     const groups = [...predicate.groups];
@@ -92,6 +135,7 @@ export function SmartFolderModal({ opened, onClose, folder, onSaved }: SmartFold
     try {
       const folderData = folderToRust({
         name: name.trim(),
+        parent_id: resolvedParentId ? parseInt(resolvedParentId, 10) : null,
         icon,
         color,
         predicate,
@@ -100,6 +144,7 @@ export function SmartFolderModal({ opened, onClose, folder, onSaved }: SmartFold
       if (folder?.id) {
         const beforeData = folderToRust({
           name: folder.name,
+          parent_id: folder.parent_id ?? null,
           icon: folder.icon ?? null,
           color: folder.color ?? null,
           predicate: folder.predicate,
@@ -111,11 +156,11 @@ export function SmartFolderModal({ opened, onClose, folder, onSaved }: SmartFold
           label: 'Update smart folder',
           undo: async () => {
             await api.smartFolders.update(folder.id!, beforeData);
-            SidebarController.fetchInitialTree();
+            useDomainStore.getState().invalidate();
           },
           redo: async () => {
             await api.smartFolders.update(folder.id!, folderData);
-            SidebarController.fetchInitialTree();
+            useDomainStore.getState().invalidate();
           },
         });
       } else {
@@ -124,17 +169,17 @@ export function SmartFolderModal({ opened, onClose, folder, onSaved }: SmartFold
           label: 'Create smart folder',
           undo: async () => {
             if (created?.id) await api.smartFolders.delete(created.id);
-            SidebarController.fetchInitialTree();
+            useDomainStore.getState().invalidate();
           },
           redo: async () => {
             created = await api.smartFolders.create(folderData);
-            SidebarController.fetchInitialTree();
+            useDomainStore.getState().invalidate();
           },
         });
       }
-      SidebarController.fetchInitialTree();
+      useDomainStore.getState().invalidate();
 
-      onSaved();
+      await onSaved();
       onClose();
     } catch (e) {
       console.error('Save failed:', e);
@@ -168,6 +213,15 @@ export function SmartFolderModal({ opened, onClose, folder, onSaved }: SmartFold
           />
         </div>
 
+        {inheritedChain.length > 0 && (
+          <div>
+            <Text size="sm" fw={500} mb={6}>Parent</Text>
+            <Text size="sm" c="dimmed">
+              {inheritedChain.map((item) => item.name).join(' / ')}
+            </Text>
+          </div>
+        )}
+
         {/* Icon & Color */}
         <Group gap="xl">
           <div>
@@ -183,6 +237,24 @@ export function SmartFolderModal({ opened, onClose, folder, onSaved }: SmartFold
             <FolderColorPicker value={color} onChange={setColor} />
           </div>
         </Group>
+
+        {inheritedChain.length > 0 && (
+          <div>
+            <Text size="sm" fw={500} mb={6}>Inherited Rules</Text>
+            <Text size="sm" c="dimmed">
+              From {inheritedChain.map((item) => item.name).join(' / ')}
+            </Text>
+            <Text size="xs" c="dimmed" mt={4}>
+              {combinePredicates(inheritedChain.map((item) => item.localPredicate ?? item.predicate ?? { groups: [] })).groups.length} inherited rule group(s)
+            </Text>
+          </div>
+        )}
+
+        {!hasRules(predicate) && (
+          <Text size="sm" c="dimmed">
+            This smart folder has no local rules and will behave as an organizer unless it inherits rules from a parent.
+          </Text>
+        )}
 
         {/* Rule groups */}
         {predicate.groups.map((group, i) => (
@@ -213,7 +285,7 @@ export function SmartFolderModal({ opened, onClose, folder, onSaved }: SmartFold
                 <Text span fw={600}>{liveCount.toLocaleString()}</Text> {liveCount === 1 ? 'item' : 'items'} found
               </Text>
             ) : (
-              <Text size="sm" c="dimmed">0 items found</Text>
+              <Text size="sm" c="dimmed">Organizer only</Text>
             )}
           </div>
 

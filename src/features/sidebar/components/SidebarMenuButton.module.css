@@ -1,20 +1,17 @@
 .button {
+  composes: btnReset from '../../../shared/styles/buttonReset.module.css';
   display: flex;
   align-items: center;
   justify-content: center;
   width: 28px;
   height: 28px;
-  padding: 0;
-  border: none;
   border-radius: 6px;
-  background: transparent;
-  color: #fff;
-  cursor: pointer;
+  color: var(--color-text-primary);
   -webkit-app-region: no-drag;
   transition: color 150ms ease, background 150ms ease;
 }
 
 .button:hover {
-  color: #fff;
+  color: var(--color-text-primary);
   background: var(--ig-bg-hover);
 }

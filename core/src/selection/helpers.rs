@@ -2,48 +2,15 @@
 //!
 //! Scope resolution is delegated to `crate::scope::resolver::resolve_scope`.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use roaring::RoaringBitmap;
 
 use crate::scope::resolver::{resolve_scope, ScopeFilter};
 use crate::sqlite::bitmaps::BitmapKey;
-use crate::sqlite::files::batch_get_by_hashes;
+use crate::sqlite::files::{batch_get_by_hashes, list_files_slim_by_ids};
 use crate::sqlite::SqliteDatabase;
-use crate::types::{tag_display_key, SelectionMode, SelectionQuerySpec, SelectionTagCount};
-
-/// Collect all hashes matching a selection query (bounded snapshot).
-pub async fn collect_selection_hashes(
-    db: &SqliteDatabase,
-    selection: &SelectionQuerySpec,
-) -> Result<Vec<String>, String> {
-    match &selection.mode {
-        SelectionMode::ExplicitHashes => {
-            let excluded: HashSet<String> = selection
-                .excluded_hashes
-                .clone()
-                .unwrap_or_default()
-                .into_iter()
-                .collect();
-            let hashes = selection.hashes.clone().unwrap_or_default();
-            if excluded.is_empty() {
-                Ok(hashes)
-            } else {
-                Ok(hashes
-                    .into_iter()
-                    .filter(|h| !excluded.contains(h))
-                    .collect())
-            }
-        }
-        SelectionMode::AllResults => {
-            // Reuse bitmap resolution (handles exclusions internally).
-            let (_base_bm, filtered_bm) = selection_bitmap_for_all_results(db, selection).await?;
-            let file_ids: Vec<i64> = filtered_bm.iter().map(|id| id as i64).collect();
-            let resolved = db.resolve_ids_batch(&file_ids).await?;
-            Ok(resolved.into_iter().map(|(_, h)| h).collect())
-        }
-    }
-}
+use crate::types::{tag_display_key, SelectionQuerySpec, SelectionTagCount};
 
 pub async fn summarize_hashes_bulk(
     db: &SqliteDatabase,
@@ -144,7 +111,17 @@ pub async fn selection_bitmap_for_all_results(
     selection: &SelectionQuerySpec,
 ) -> Result<(RoaringBitmap, RoaringBitmap), String> {
     let scope_filter = ScopeFilter::from(selection);
-    let base = resolve_scope(db, &scope_filter).await?;
+    let resolved_ids = resolve_scope(db, &scope_filter)
+        .await?
+        .iter()
+        .map(|id| id as i64)
+        .collect::<Vec<_>>();
+    let base_ids = if selection.scope.collection_entity_id.is_some() {
+        resolved_ids
+    } else {
+        db.filter_visible_entity_ids(&resolved_ids).await?
+    };
+    let base = RoaringBitmap::from_iter(base_ids.into_iter().map(|id| id as u32));
 
     let mut filtered = base.clone();
     if let Some(excluded_hashes) = &selection.excluded_hashes {
@@ -265,6 +242,146 @@ pub async fn summarize_stats_from_bitmap(
         let shared = if r_distinct == 1 { Some(r_min) } else { None };
 
         Ok((total_size, mime_counts, RatingStats { min: Some(r_min), max: Some(r_max), shared }))
+    })
+    .await
+}
+
+pub async fn summarize_entity_stats_from_bitmap(
+    db: &SqliteDatabase,
+    bitmap: &RoaringBitmap,
+) -> Result<(i64, HashMap<String, i64>, RatingStats), String> {
+    if bitmap.is_empty() {
+        return Ok((
+            0,
+            HashMap::new(),
+            RatingStats {
+                min: None,
+                max: None,
+                shared: None,
+            },
+        ));
+    }
+
+    let entity_ids: Vec<i64> = bitmap.iter().map(|id| id as i64).collect();
+    db.with_read_conn(move |conn| {
+        let placeholders = std::iter::repeat_n("?", entity_ids.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        let aggregate_sql = format!(
+            "SELECT
+                 CASE
+                     WHEN me.kind = 'collection' THEN COALESCE(cover_f.mime, 'application/x-collection')
+                     ELSE COALESCE(f.mime, 'application/octet-stream')
+                 END AS mime,
+                 COUNT(*) AS entity_count,
+                 COALESCE(SUM(
+                     CASE
+                         WHEN me.kind = 'collection' THEN COALESCE(me.cached_total_size_bytes, 0)
+                         ELSE COALESCE(f.size, 0)
+                     END
+                 ), 0) AS total_size
+             FROM media_entity me
+             LEFT JOIN entity_file ef ON ef.entity_id = me.entity_id
+             LEFT JOIN file f ON f.file_id = ef.file_id
+             LEFT JOIN file cover_f ON cover_f.file_id = me.cover_file_id
+             WHERE me.entity_id IN ({placeholders})
+             GROUP BY
+                 CASE
+                     WHEN me.kind = 'collection' THEN COALESCE(cover_f.mime, 'application/x-collection')
+                     ELSE COALESCE(f.mime, 'application/octet-stream')
+                 END"
+        );
+        let mut stmt = conn.prepare(&aggregate_sql)?;
+        let rows = stmt.query_map(
+            rusqlite::params_from_iter(entity_ids.iter()),
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, i64>(2)?,
+                ))
+            },
+        )?;
+
+        let mut total_size: i64 = 0;
+        let mut mime_counts: HashMap<String, i64> = HashMap::new();
+        for row in rows {
+            let (mime, count, size_sum) = row?;
+            total_size += size_sum;
+            mime_counts.insert(mime, count);
+        }
+
+        let rating_sql = format!(
+            "SELECT
+                 MIN(COALESCE(
+                     CASE
+                         WHEN me.kind = 'collection' THEN me.rating
+                         ELSE COALESCE(f.rating, me.rating)
+                     END,
+                     0
+                 )),
+                 MAX(COALESCE(
+                     CASE
+                         WHEN me.kind = 'collection' THEN me.rating
+                         ELSE COALESCE(f.rating, me.rating)
+                     END,
+                     0
+                 )),
+                 COUNT(DISTINCT COALESCE(
+                     CASE
+                         WHEN me.kind = 'collection' THEN me.rating
+                         ELSE COALESCE(f.rating, me.rating)
+                     END,
+                     0
+                 ))
+             FROM media_entity me
+             LEFT JOIN entity_file ef ON ef.entity_id = me.entity_id
+             LEFT JOIN file f ON f.file_id = ef.file_id
+             WHERE me.entity_id IN ({placeholders})"
+        );
+        let mut rating_stmt = conn.prepare(&rating_sql)?;
+        let (r_min, r_max, r_distinct): (i64, i64, i64) = rating_stmt.query_row(
+            rusqlite::params_from_iter(entity_ids.iter()),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )?;
+        let shared = if r_distinct == 1 { Some(r_min) } else { None };
+
+        Ok((
+            total_size,
+            mime_counts,
+            RatingStats {
+                min: Some(r_min),
+                max: Some(r_max),
+                shared,
+            },
+        ))
+    })
+    .await
+}
+
+pub async fn sample_hashes_from_entity_bitmap(
+    db: &SqliteDatabase,
+    bitmap: &RoaringBitmap,
+    limit: i64,
+) -> Result<Vec<String>, String> {
+    if bitmap.is_empty() || limit <= 0 {
+        return Ok(Vec::new());
+    }
+
+    let entity_ids: Vec<i64> = bitmap.iter().map(|id| id as i64).collect();
+    db.with_read_conn(move |conn| {
+        list_files_slim_by_ids(
+            conn,
+            &entity_ids,
+            limit,
+            "imported_at",
+            "desc",
+            None,
+            None,
+            None,
+        )
+        .map(|rows| rows.into_iter().map(|row| row.hash).collect())
     })
     .await
 }

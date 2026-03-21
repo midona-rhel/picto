@@ -1,8 +1,8 @@
 //! Application settings — persisted JSON configuration shared across the app.
 //!
-//! Holds UI preferences, PTR configuration, duplicate settings, and
-//! subscription/gallery-dl runtime knobs. This module owns defaults and disk
-//! persistence semantics so the rest of the app can treat settings as typed data.
+//! Holds UI preferences, duplicate settings, and subscription/gallery-dl
+//! runtime knobs. This module owns defaults and disk persistence semantics
+//! so the rest of the app can treat settings as typed data.
 
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -16,8 +16,8 @@ pub struct AppSettings {
     pub grid_target_size: f64,
     #[serde(default = "default_grid_view_mode")]
     pub grid_view_mode: String,
-    #[serde(default = "default_properties_panel_width")]
-    pub properties_panel_width: f64,
+    #[serde(default = "default_inspector_width")]
+    pub inspector_width: f64,
     #[serde(default = "default_color_scheme")]
     pub color_scheme: String,
     #[serde(default)]
@@ -35,21 +35,6 @@ pub struct AppSettings {
     #[serde(default = "default_grid_sort_order")]
     pub grid_sort_order: String,
     #[serde(default)]
-    pub ptr_server_url: Option<String>,
-    #[serde(default)]
-    pub ptr_access_key: Option<String>,
-    #[serde(default)]
-    pub ptr_enabled: bool,
-    #[serde(default)]
-    pub ptr_auto_sync: bool,
-    #[serde(default = "default_ptr_sync_schedule")]
-    pub ptr_sync_schedule: String,
-    #[serde(default)]
-    pub ptr_last_sync_time: Option<String>,
-    /// Custom path for PTR database. If None, defaults to `{library_root}/../ptr/`.
-    #[serde(default)]
-    pub ptr_data_path: Option<String>,
-    #[serde(default)]
     pub zoom_factor: Option<f64>,
     #[serde(default = "default_duplicate_detect_similarity_pct")]
     pub duplicate_detect_similarity_pct: u32,
@@ -57,6 +42,8 @@ pub struct AppSettings {
     pub duplicate_review_similarity_pct: u32,
     #[serde(default = "default_duplicate_auto_merge_similarity_pct")]
     pub duplicate_auto_merge_similarity_pct: u32,
+    #[serde(default)]
+    pub duplicate_auto_merge_require_matching_dimensions: bool,
     #[serde(default = "default_true")]
     pub duplicate_auto_merge_subscriptions_only: bool,
     #[serde(default = "default_true")]
@@ -75,6 +62,29 @@ pub struct AppSettings {
     /// Max files per gallery-dl invocation (`--range 1-N`).
     #[serde(default = "default_sub_batch_size")]
     pub sub_batch_size: u32,
+    /// Default status for watched-folder imports when a folder uses inherited mode.
+    #[serde(default = "default_watch_folder_default_status")]
+    pub watch_folder_default_status: String,
+
+    // AI Tagger settings — each model can be enabled independently
+    #[serde(default)]
+    pub ai_tagger_wd14_enabled: bool,
+    #[serde(default)]
+    pub ai_tagger_e621_enabled: bool,
+    #[serde(default)]
+    pub ai_tagger_auto_on_import: bool,
+    #[serde(default = "default_ai_threshold_general")]
+    pub ai_threshold_general: f32,
+    #[serde(default = "default_ai_threshold_character")]
+    pub ai_threshold_character: f32,
+    #[serde(default = "default_ai_threshold_copyright")]
+    pub ai_threshold_copyright: f32,
+    #[serde(default = "default_ai_threshold_artist")]
+    pub ai_threshold_artist: f32,
+    #[serde(default = "default_ai_threshold_species")]
+    pub ai_threshold_species: f32,
+    #[serde(default = "default_ai_threshold_rating")]
+    pub ai_threshold_rating: f32,
 }
 
 fn default_grid_target_size() -> f64 {
@@ -83,7 +93,7 @@ fn default_grid_target_size() -> f64 {
 fn default_grid_view_mode() -> String {
     "waterfall".into()
 }
-fn default_properties_panel_width() -> f64 {
+fn default_inspector_width() -> f64 {
     280.0
 }
 fn default_color_scheme() -> String {
@@ -100,9 +110,6 @@ fn default_grid_sort_field() -> String {
 }
 fn default_grid_sort_order() -> String {
     "asc".into()
-}
-fn default_ptr_sync_schedule() -> String {
-    "weekly".into()
 }
 fn default_duplicate_detect_similarity_pct() -> u32 {
     97
@@ -128,11 +135,32 @@ fn default_sub_rate_limit_secs() -> f64 {
 fn default_sub_batch_size() -> u32 {
     100
 }
+fn default_watch_folder_default_status() -> String {
+    "inbox".into()
+}
+fn default_ai_threshold_general() -> f32 {
+    0.35
+}
+fn default_ai_threshold_character() -> f32 {
+    0.85
+}
+fn default_ai_threshold_copyright() -> f32 {
+    0.85
+}
+fn default_ai_threshold_artist() -> f32 {
+    0.85
+}
+fn default_ai_threshold_species() -> f32 {
+    0.35
+}
+fn default_ai_threshold_rating() -> f32 {
+    0.50
+}
 
-/// Convert similarity percentage (0-100) to Hamming distance (0-64).
-/// `similarity_pct_to_distance(97)` → 1 (distance = floor((100-97)*64/100))
+/// Convert similarity percentage (0-100) to Hamming distance (0-256).
+/// At 16x16 hash size (256-bit): `similarity_pct_to_distance(97)` → 7.
 pub fn similarity_pct_to_distance(pct: u32) -> u32 {
-    ((100u32.saturating_sub(pct)) * 64) / 100
+    ((100u32.saturating_sub(pct)) * 256) / 100
 }
 
 impl Default for AppSettings {
@@ -140,7 +168,7 @@ impl Default for AppSettings {
         Self {
             grid_target_size: default_grid_target_size(),
             grid_view_mode: default_grid_view_mode(),
-            properties_panel_width: default_properties_panel_width(),
+            inspector_width: default_inspector_width(),
             color_scheme: default_color_scheme(),
             window_x: None,
             window_y: None,
@@ -149,23 +177,27 @@ impl Default for AppSettings {
             window_maximized: false,
             grid_sort_field: default_grid_sort_field(),
             grid_sort_order: default_grid_sort_order(),
-            ptr_server_url: None,
-            ptr_access_key: None,
-            ptr_enabled: false,
-            ptr_auto_sync: false,
-            ptr_sync_schedule: default_ptr_sync_schedule(),
-            ptr_last_sync_time: None,
-            ptr_data_path: None,
             zoom_factor: None,
             duplicate_detect_similarity_pct: default_duplicate_detect_similarity_pct(),
             duplicate_review_similarity_pct: default_duplicate_review_similarity_pct(),
             duplicate_auto_merge_similarity_pct: default_duplicate_auto_merge_similarity_pct(),
+            duplicate_auto_merge_require_matching_dimensions: false,
             duplicate_auto_merge_subscriptions_only: true,
             duplicate_auto_merge_enabled: true,
             sub_abort_threshold: default_sub_abort_threshold(),
             sub_inbox_pause_limit: default_sub_inbox_pause_limit(),
             sub_rate_limit_secs: default_sub_rate_limit_secs(),
             sub_batch_size: default_sub_batch_size(),
+            watch_folder_default_status: default_watch_folder_default_status(),
+            ai_tagger_wd14_enabled: false,
+            ai_tagger_e621_enabled: false,
+            ai_tagger_auto_on_import: false,
+            ai_threshold_general: default_ai_threshold_general(),
+            ai_threshold_character: default_ai_threshold_character(),
+            ai_threshold_copyright: default_ai_threshold_copyright(),
+            ai_threshold_artist: default_ai_threshold_artist(),
+            ai_threshold_species: default_ai_threshold_species(),
+            ai_threshold_rating: default_ai_threshold_rating(),
         }
     }
 }

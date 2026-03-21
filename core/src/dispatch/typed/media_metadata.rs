@@ -1,4 +1,4 @@
-//! Typed command implementations for media metadata operations.
+//! Handler functions for media metadata operations.
 
 use std::collections::HashMap;
 
@@ -6,293 +6,108 @@ use serde::Deserialize;
 use ts_rs::TS;
 
 use crate::state::AppState;
-use super::{TypedCommand, run_typed};
 
 // ─── Input structs ─────────────────────────────────────────────────────────
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
-pub struct GetFileAllMetadataInput {
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
+pub struct GetMediaEntityMetadataInput {
     pub hash: String,
 }
 
+/// Unified metadata update. All fields except `hash` are optional —
+/// only present fields are applied. Use `null` to clear rating/name.
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
-pub struct GetFileTagsDisplayInput {
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
+pub struct UpdateMediaEntityMetadataInput {
     pub hash: String,
-}
-
-#[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
-pub struct GetFileParentsInput {
-    pub hash: String,
-}
-
-#[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
-pub struct UpdateRatingInput {
-    pub hash: String,
+    #[serde(default, deserialize_with = "deserialize_some")]
     #[ts(type = "number | null")]
-    pub rating: Option<i64>,
+    pub rating: Option<Option<i64>>,
+    #[serde(default, deserialize_with = "deserialize_some")]
+    #[ts(type = "string | null")]
+    pub name: Option<Option<String>>,
+    #[serde(default)]
+    pub notes: Option<HashMap<String, String>>,
+    #[serde(default)]
+    pub source_urls: Option<Vec<String>>,
 }
 
-#[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
-pub struct SetFileNameInput {
-    pub hash: String,
-    pub name: Option<String>,
+use super::super::common::deserialize_some;
+
+// ─── Handlers ──────────────────────────────────────────────────────────────
+
+pub async fn get_media_entity_metadata(
+    state: &AppState,
+    input: GetMediaEntityMetadataInput,
+) -> Result<serde_json::Value, String> {
+    let result = crate::metadata::query::MetadataQuery::get_entity_all_metadata(
+        &state.db,
+        input.hash,
+    )
+    .await?;
+    serde_json::to_value(&result).map_err(|e| e.to_string())
 }
 
-#[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
-pub struct GetFileNotesInput {
-    pub hash: String,
-}
+pub async fn update_media_entity_metadata(
+    state: &AppState,
+    input: UpdateMediaEntityMetadataInput,
+) -> Result<(), String> {
+    let hash = input.hash;
 
-#[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
-pub struct SetFileNotesInput {
-    pub hash: String,
-    pub notes: HashMap<String, String>,
-}
-
-#[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
-pub struct IncrementViewCountInput {
-    pub hash: String,
-}
-
-#[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
-pub struct SetSourceUrlsInput {
-    pub hash: String,
-    pub urls: Vec<String>,
-}
-
-// ─── Command structs ───────────────────────────────────────────────────────
-
-pub struct GetFileAllMetadata;
-pub struct GetFileTagsDisplay;
-pub struct GetFileParents;
-pub struct UpdateRating;
-pub struct SetFileName;
-pub struct GetFileNotes;
-pub struct SetFileNotes;
-pub struct IncrementViewCount;
-pub struct SetSourceUrls;
-pub struct GetStorageStats;
-pub struct GetImageStorageStats;
-
-// ─── TypedCommand impls ────────────────────────────────────────────────────
-
-impl TypedCommand for GetFileAllMetadata {
-    const NAME: &'static str = "get_file_all_metadata";
-    type Input = GetFileAllMetadataInput;
-    type Output = serde_json::Value;
-
-    async fn execute(state: &AppState, input: Self::Input) -> Result<Self::Output, String> {
-        let result = crate::metadata::controller::MetadataController::get_file_all_metadata(
-            &state.db,
-            &state.ptr_db,
-            input.hash,
-        )
-        .await?;
-        serde_json::to_value(&result).map_err(|e| e.to_string())
+    if let Some(rating) = input.rating {
+        // Cascade rating to collection members
+        let hashes = state
+            .db
+            .expand_hashes_for_collections(&[hash.clone()])
+            .await?;
+        for h in &hashes {
+            state.db.update_rating(h, rating).await?;
+        }
     }
-}
 
-impl TypedCommand for GetFileTagsDisplay {
-    const NAME: &'static str = "get_file_tags_display";
-    type Input = GetFileTagsDisplayInput;
-    type Output = serde_json::Value;
-
-    async fn execute(state: &AppState, input: Self::Input) -> Result<Self::Output, String> {
-        let result = crate::metadata::controller::MetadataController::get_file_tags_display(
-            &state.db,
-            &state.ptr_db,
-            input.hash,
-        )
-        .await?;
-        serde_json::to_value(&result).map_err(|e| e.to_string())
+    if let Some(name) = input.name {
+        state.db.set_file_name(&hash, name.as_deref()).await?;
     }
-}
 
-impl TypedCommand for GetFileParents {
-    const NAME: &'static str = "get_file_parents";
-    type Input = GetFileParentsInput;
-    type Output = serde_json::Value;
-
-    async fn execute(state: &AppState, input: Self::Input) -> Result<Self::Output, String> {
-        let result =
-            crate::metadata::controller::MetadataController::get_file_parents(&state.db, input.hash)
-                .await?;
-        serde_json::to_value(&result).map_err(|e| e.to_string())
+    if let Some(notes) = input.notes {
+        let json = serde_json::to_string(&notes).map_err(|e| e.to_string())?;
+        state.db.set_notes(&hash, Some(&json)).await?;
     }
-}
 
-impl TypedCommand for UpdateRating {
-    const NAME: &'static str = "update_rating";
-    type Input = UpdateRatingInput;
-    type Output = ();
-
-    async fn execute(state: &AppState, input: Self::Input) -> Result<Self::Output, String> {
-        let hash_clone = input.hash.clone();
-        crate::metadata::controller::MetadataController::update_rating(
-            &state.db,
-            input.hash,
-            input.rating,
-        )
-        .await?;
-        crate::events::emit_mutation(
-            "update_rating",
-            crate::events::MutationImpact::file_metadata(hash_clone),
-        );
-        Ok(())
-    }
-}
-
-impl TypedCommand for SetFileName {
-    const NAME: &'static str = "set_file_name";
-    type Input = SetFileNameInput;
-    type Output = ();
-
-    async fn execute(state: &AppState, input: Self::Input) -> Result<Self::Output, String> {
-        let hash_clone = input.hash.clone();
-        crate::metadata::controller::MetadataController::set_file_name(
-            &state.db,
-            input.hash,
-            input.name,
-        )
-        .await?;
-        crate::events::emit_mutation(
-            "set_file_name",
-            crate::events::MutationImpact::file_metadata(hash_clone),
-        );
-        Ok(())
-    }
-}
-
-impl TypedCommand for GetFileNotes {
-    const NAME: &'static str = "get_file_notes";
-    type Input = GetFileNotesInput;
-    type Output = serde_json::Value;
-
-    async fn execute(state: &AppState, input: Self::Input) -> Result<Self::Output, String> {
-        let result =
-            crate::metadata::controller::MetadataController::get_file_notes(&state.db, input.hash)
-                .await?;
-        serde_json::to_value(&result).map_err(|e| e.to_string())
-    }
-}
-
-impl TypedCommand for SetFileNotes {
-    const NAME: &'static str = "set_file_notes";
-    type Input = SetFileNotesInput;
-    type Output = ();
-
-    async fn execute(state: &AppState, input: Self::Input) -> Result<Self::Output, String> {
-        let hash_clone = input.hash.clone();
-        crate::metadata::controller::MetadataController::set_file_notes(
-            &state.db,
-            input.hash,
-            input.notes,
-        )
-        .await?;
-        crate::events::emit_mutation(
-            "set_file_notes",
-            crate::events::MutationImpact::file_metadata(hash_clone),
-        );
-        Ok(())
-    }
-}
-
-impl TypedCommand for IncrementViewCount {
-    const NAME: &'static str = "increment_view_count";
-    type Input = IncrementViewCountInput;
-    type Output = ();
-
-    async fn execute(state: &AppState, input: Self::Input) -> Result<Self::Output, String> {
-        let hash_clone = input.hash.clone();
-        crate::metadata::controller::MetadataController::increment_view_count(
-            &state.db,
-            input.hash,
-        )
-        .await?;
-        crate::events::emit_mutation(
-            "increment_view_count",
-            crate::events::MutationImpact::file_metadata(hash_clone)
-                .domains(&[crate::events::Domain::Files, crate::events::Domain::Sidebar])
-                .extra_grid_scopes(vec!["system:recently_viewed".to_string()]),
-        );
-        Ok(())
-    }
-}
-
-impl TypedCommand for SetSourceUrls {
-    const NAME: &'static str = "set_source_urls";
-    type Input = SetSourceUrlsInput;
-    type Output = ();
-
-    async fn execute(state: &AppState, input: Self::Input) -> Result<Self::Output, String> {
-        let urls_json = if input.urls.is_empty() {
+    if let Some(ref urls) = input.source_urls {
+        let urls_json = if urls.is_empty() {
             None
         } else {
-            Some(serde_json::to_string(&input.urls).map_err(|e| e.to_string())?)
+            Some(serde_json::to_string(urls).map_err(|e| e.to_string())?)
         };
         state
             .db
-            .set_source_urls(&input.hash, urls_json.as_deref())
+            .set_source_urls(&hash, urls_json.as_deref())
             .await?;
-        crate::events::emit_mutation(
-            "set_source_urls",
-            crate::events::MutationImpact::file_metadata(input.hash),
-        );
-        Ok(())
     }
+
+    let impact = crate::runtime_contract::mutation_builder::MutationImpact::file_metadata(hash);
+    crate::events::emit_mutation("update_media_entity_metadata", impact);
+    Ok(())
 }
 
-impl TypedCommand for GetStorageStats {
-    const NAME: &'static str = "get_storage_stats";
-    type Input = serde_json::Value;
-    type Output = serde_json::Value;
-
-    async fn execute(state: &AppState, _input: Self::Input) -> Result<Self::Output, String> {
-        let file_count = state.db.count_files(None).await?;
-        serde_json::to_value(&crate::types::StorageStats { file_count })
-            .map_err(|e| e.to_string())
-    }
-}
-
-impl TypedCommand for GetImageStorageStats {
-    const NAME: &'static str = "get_image_storage_stats";
-    type Input = serde_json::Value;
-    type Output = serde_json::Value;
-
-    async fn execute(state: &AppState, _input: Self::Input) -> Result<Self::Output, String> {
-        let stats = state.db.aggregate_file_stats().await?;
-        serde_json::to_value(&stats).map_err(|e| e.to_string())
-    }
-}
-
-// ─── Dispatch router ───────────────────────────────────────────────────────
-
-pub async fn dispatch_typed(
+pub async fn get_storage_stats(
     state: &AppState,
-    command: &str,
-    args: &serde_json::Value,
-) -> Option<Result<String, String>> {
-    match command {
-        GetFileAllMetadata::NAME => Some(run_typed::<GetFileAllMetadata>(state, args).await),
-        GetFileTagsDisplay::NAME => Some(run_typed::<GetFileTagsDisplay>(state, args).await),
-        GetFileParents::NAME => Some(run_typed::<GetFileParents>(state, args).await),
-        UpdateRating::NAME => Some(run_typed::<UpdateRating>(state, args).await),
-        SetFileName::NAME => Some(run_typed::<SetFileName>(state, args).await),
-        GetFileNotes::NAME => Some(run_typed::<GetFileNotes>(state, args).await),
-        SetFileNotes::NAME => Some(run_typed::<SetFileNotes>(state, args).await),
-        IncrementViewCount::NAME => Some(run_typed::<IncrementViewCount>(state, args).await),
-        SetSourceUrls::NAME => Some(run_typed::<SetSourceUrls>(state, args).await),
-        GetStorageStats::NAME => Some(run_typed::<GetStorageStats>(state, args).await),
-        GetImageStorageStats::NAME => Some(run_typed::<GetImageStorageStats>(state, args).await),
-        _ => None,
-    }
+    _input: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let stats = state.db.aggregate_file_stats().await?;
+    let breakdown = state.db.aggregate_media_type_breakdown().await?;
+    let blob_store = state.blob_store.clone();
+    let (originals_disk, thumbnails_disk) =
+        tokio::task::spawn_blocking(move || blob_store.disk_usage())
+            .await
+            .map_err(|e| e.to_string())?;
+
+    let mut result = serde_json::to_value(&stats).map_err(|e| e.to_string())?;
+    let obj = result.as_object_mut().ok_or("expected object")?;
+    obj.insert("breakdown".to_string(), serde_json::to_value(&breakdown).map_err(|e| e.to_string())?);
+    obj.insert("originals_disk".to_string(), serde_json::Value::Number(originals_disk.into()));
+    obj.insert("thumbnails_disk".to_string(), serde_json::Value::Number(thumbnails_disk.into()));
+    Ok(result)
 }

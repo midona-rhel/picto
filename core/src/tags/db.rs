@@ -1,12 +1,12 @@
-//! Tag CRUD, file tagging, search (FTS5), sibling/parent operations.
+//! Tag CRUD, file tagging, search (FTS5), alias/implication operations.
 
-use rusqlite::{params, params_from_iter, Connection, OptionalExtension};
+use rusqlite::{Connection, OptionalExtension, params, params_from_iter};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
-use crate::sqlite::bitmaps::BitmapKey;
-use crate::sqlite::compilers::CompilerEvent;
+use crate::sqlite::ReadModelEvent;
 use crate::sqlite::SqliteDatabase;
+use crate::sqlite::bitmaps::BitmapKey;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TagRecord {
@@ -21,7 +21,7 @@ pub struct TagRelation {
     pub tag_id: i64,
     pub namespace: String,
     pub subtag: String,
-    pub relation: String, // "to"/"from" for siblings, "parent"/"child" for parents
+    pub relation: String, // "to"/"from" for aliases, "parent"/"child" for implications
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -221,7 +221,7 @@ pub fn search_tags(conn: &Connection, query: &str, limit: i64) -> rusqlite::Resu
     rows.collect()
 }
 
-// PBI-038: Paged tag query — supports offset for incremental loading.
+// Paged tag query — supports offset for incremental loading.
 pub fn search_tags_paged(
     conn: &Connection,
     query: &str,
@@ -289,39 +289,39 @@ pub fn find_tag(conn: &Connection, namespace: &str, subtag: &str) -> rusqlite::R
     .optional()
 }
 
-/// Add a tag sibling relationship.
-pub fn add_sibling(
+/// Add a tag alias relationship.
+pub fn add_alias(
     conn: &Connection,
     from_tag_id: i64,
     to_tag_id: i64,
     source: &str,
 ) -> rusqlite::Result<()> {
     conn.execute(
-        "INSERT OR REPLACE INTO tag_sibling (from_tag_id, to_tag_id, source)
+        "INSERT OR REPLACE INTO tag_alias (from_tag_id, to_tag_id, source)
          VALUES (?1, ?2, ?3)",
         params![from_tag_id, to_tag_id, source],
     )?;
     Ok(())
 }
 
-/// Remove a tag sibling relationship.
-pub fn remove_sibling(conn: &Connection, from_tag_id: i64, source: &str) -> rusqlite::Result<()> {
+/// Remove a tag alias relationship.
+pub fn remove_alias(conn: &Connection, from_tag_id: i64, source: &str) -> rusqlite::Result<()> {
     conn.execute(
-        "DELETE FROM tag_sibling WHERE from_tag_id = ?1 AND source = ?2",
+        "DELETE FROM tag_alias WHERE from_tag_id = ?1 AND source = ?2",
         params![from_tag_id, source],
     )?;
     Ok(())
 }
 
 /// Add a tag parent relationship.
-pub fn add_parent(
+pub fn add_implication(
     conn: &Connection,
     child_tag_id: i64,
     parent_tag_id: i64,
     source: &str,
 ) -> rusqlite::Result<()> {
     conn.execute(
-        "INSERT OR REPLACE INTO tag_parent (child_tag_id, parent_tag_id, source)
+        "INSERT OR REPLACE INTO tag_implication (child_tag_id, parent_tag_id, source)
          VALUES (?1, ?2, ?3)",
         params![child_tag_id, parent_tag_id, source],
     )?;
@@ -329,28 +329,28 @@ pub fn add_parent(
 }
 
 /// Remove a tag parent relationship.
-pub fn remove_parent(
+pub fn remove_implication(
     conn: &Connection,
     child_tag_id: i64,
     parent_tag_id: i64,
     source: &str,
 ) -> rusqlite::Result<()> {
     conn.execute(
-        "DELETE FROM tag_parent WHERE child_tag_id = ?1 AND parent_tag_id = ?2 AND source = ?3",
+        "DELETE FROM tag_implication WHERE child_tag_id = ?1 AND parent_tag_id = ?2 AND source = ?3",
         params![child_tag_id, parent_tag_id, source],
     )?;
     Ok(())
 }
 
 /// Get all siblings for a given tag (both directions).
-pub fn get_siblings_for_tag(conn: &Connection, tag_id: i64) -> rusqlite::Result<Vec<TagRelation>> {
+pub fn get_aliases_for_tag(conn: &Connection, tag_id: i64) -> rusqlite::Result<Vec<TagRelation>> {
     let mut stmt = conn.prepare(
         "SELECT t.tag_id, t.namespace, t.subtag, 'to' as direction
-           FROM tag_sibling ts JOIN tag t ON ts.to_tag_id = t.tag_id
+           FROM tag_alias ts JOIN tag t ON ts.to_tag_id = t.tag_id
           WHERE ts.from_tag_id = ?1
          UNION
          SELECT t.tag_id, t.namespace, t.subtag, 'from' as direction
-           FROM tag_sibling ts JOIN tag t ON ts.from_tag_id = t.tag_id
+           FROM tag_alias ts JOIN tag t ON ts.from_tag_id = t.tag_id
           WHERE ts.to_tag_id = ?1",
     )?;
     let results: Vec<TagRelation> = stmt
@@ -367,14 +367,17 @@ pub fn get_siblings_for_tag(conn: &Connection, tag_id: i64) -> rusqlite::Result<
 }
 
 /// Get all parents and children for a given tag.
-pub fn get_parents_for_tag(conn: &Connection, tag_id: i64) -> rusqlite::Result<Vec<TagRelation>> {
+pub fn get_implications_for_tag(
+    conn: &Connection,
+    tag_id: i64,
+) -> rusqlite::Result<Vec<TagRelation>> {
     let mut stmt = conn.prepare(
         "SELECT t.tag_id, t.namespace, t.subtag, 'parent' as relation
-           FROM tag_parent tp JOIN tag t ON tp.parent_tag_id = t.tag_id
+           FROM tag_implication tp JOIN tag t ON tp.parent_tag_id = t.tag_id
           WHERE tp.child_tag_id = ?1
          UNION
          SELECT t.tag_id, t.namespace, t.subtag, 'child' as relation
-           FROM tag_parent tp JOIN tag t ON tp.child_tag_id = t.tag_id
+           FROM tag_implication tp JOIN tag t ON tp.child_tag_id = t.tag_id
           WHERE tp.parent_tag_id = ?1",
     )?;
     let results: Vec<TagRelation> = stmt
@@ -563,8 +566,9 @@ pub fn rename_tag(
     tag_id: i64,
     new_tag_str: &str,
 ) -> rusqlite::Result<(Vec<i64>, Option<i64>)> {
-    let (new_ns, new_st) = crate::tags::normalize::parse_tag(new_tag_str)
-        .ok_or_else(|| rusqlite::Error::InvalidParameterName(format!("Invalid tag: {new_tag_str}")))?;
+    let (new_ns, new_st) = crate::tags::normalize::parse_tag(new_tag_str).ok_or_else(|| {
+        rusqlite::Error::InvalidParameterName(format!("Invalid tag: {new_tag_str}"))
+    })?;
 
     // Check if target already exists
     let existing: Option<i64> = conn
@@ -600,11 +604,11 @@ pub fn rename_tag(
         )?;
         // Clean up old tag
         conn.execute(
-            "DELETE FROM tag_sibling WHERE from_tag_id = ?1 OR to_tag_id = ?1",
+            "DELETE FROM tag_alias WHERE from_tag_id = ?1 OR to_tag_id = ?1",
             params![tag_id],
         )?;
         conn.execute(
-            "DELETE FROM tag_parent WHERE child_tag_id = ?1 OR parent_tag_id = ?1",
+            "DELETE FROM tag_implication WHERE child_tag_id = ?1 OR parent_tag_id = ?1",
             params![tag_id],
         )?;
         conn.execute(
@@ -647,11 +651,11 @@ pub fn delete_tag(conn: &Connection, tag_id: i64) -> rusqlite::Result<Vec<i64>> 
         params![tag_id],
     )?;
     conn.execute(
-        "DELETE FROM tag_sibling WHERE from_tag_id = ?1 OR to_tag_id = ?1",
+        "DELETE FROM tag_alias WHERE from_tag_id = ?1 OR to_tag_id = ?1",
         params![tag_id],
     )?;
     conn.execute(
-        "DELETE FROM tag_parent WHERE child_tag_id = ?1 OR parent_tag_id = ?1",
+        "DELETE FROM tag_implication WHERE child_tag_id = ?1 OR parent_tag_id = ?1",
         params![tag_id],
     )?;
     conn.execute("DELETE FROM tag_fts WHERE rowid = ?1", params![tag_id])?;
@@ -737,8 +741,8 @@ impl SqliteDatabase {
         // Update tag bitmap
         self.bitmaps
             .insert(&BitmapKey::Tag(tag_id), entity_id as u32);
-        self.emit_compiler_event(CompilerEvent::FileTagsChanged { file_id: entity_id });
-        self.emit_compiler_event(CompilerEvent::TagChanged { tag_id });
+        self.emit_read_model_event(ReadModelEvent::FileTagsChanged { file_id: entity_id });
+        self.emit_read_model_event(ReadModelEvent::TagChanged { tag_id });
         Ok(true)
     }
 
@@ -766,8 +770,8 @@ impl SqliteDatabase {
         if let Some((tag_id, true)) = result {
             self.bitmaps
                 .remove(&BitmapKey::Tag(tag_id), entity_id as u32);
-            self.emit_compiler_event(CompilerEvent::FileTagsChanged { file_id: entity_id });
-            self.emit_compiler_event(CompilerEvent::TagChanged { tag_id });
+            self.emit_read_model_event(ReadModelEvent::FileTagsChanged { file_id: entity_id });
+            self.emit_read_model_event(ReadModelEvent::TagChanged { tag_id });
         }
 
         Ok(result.map(|(_, r)| r).unwrap_or(false))
@@ -785,7 +789,7 @@ impl SqliteDatabase {
             .await
     }
 
-    // PBI-038: Paged tag search.
+    // Paged tag search.
     pub async fn search_tags_paged(
         &self,
         query: &str,
@@ -866,7 +870,9 @@ impl SqliteDatabase {
         // Resolve tag strings to tag_ids
         let mut tag_ids = Vec::new();
         for ts in tag_strings {
-            let Some((ns, st)) = crate::tags::normalize::parse_tag(ts) else { continue };
+            let Some((ns, st)) = crate::tags::normalize::parse_tag(ts) else {
+                continue;
+            };
             let ns_c = ns.clone();
             let st_c = st.clone();
             if let Some(tid) = self
@@ -885,7 +891,7 @@ impl SqliteDatabase {
         }
 
         // Use bitmap ops
-        let all_active = self.bitmaps.get(&BitmapKey::AllActive);
+        let all_active = self.bitmaps.get(&BitmapKey::Status(1));
 
         let result = if match_all {
             let mut result = self.bitmaps.get(&BitmapKey::EffectiveTag(tag_ids[0]));
@@ -911,7 +917,7 @@ impl SqliteDatabase {
         Ok(hashes)
     }
 
-    pub async fn add_sibling(
+    pub async fn add_alias(
         &self,
         from_ns: &str,
         from_st: &str,
@@ -927,14 +933,14 @@ impl SqliteDatabase {
         self.with_conn(move |conn| {
             let from_id = get_or_create_tag(conn, &fns, &fst)?;
             let to_id = get_or_create_tag(conn, &tns, &tst)?;
-            add_sibling(conn, from_id, to_id, &src)
+            add_alias(conn, from_id, to_id, &src)
         })
         .await?;
-        self.emit_compiler_event(CompilerEvent::TagGraphChanged);
+        self.emit_read_model_event(ReadModelEvent::TagGraphChanged);
         Ok(())
     }
 
-    pub async fn remove_sibling(
+    pub async fn remove_alias(
         &self,
         from_ns: &str,
         from_st: &str,
@@ -945,16 +951,16 @@ impl SqliteDatabase {
         let src = source.to_string();
         self.with_conn(move |conn| {
             if let Some(from_id) = find_tag(conn, &fns, &fst)? {
-                remove_sibling(conn, from_id, &src)?;
+                remove_alias(conn, from_id, &src)?;
             }
             Ok(())
         })
         .await?;
-        self.emit_compiler_event(CompilerEvent::TagGraphChanged);
+        self.emit_read_model_event(ReadModelEvent::TagGraphChanged);
         Ok(())
     }
 
-    pub async fn add_parent(
+    pub async fn add_implication(
         &self,
         child_ns: &str,
         child_st: &str,
@@ -970,14 +976,14 @@ impl SqliteDatabase {
         self.with_conn(move |conn| {
             let child_id = get_or_create_tag(conn, &cns, &cst)?;
             let parent_id = get_or_create_tag(conn, &pns, &pst)?;
-            add_parent(conn, child_id, parent_id, &src)
+            add_implication(conn, child_id, parent_id, &src)
         })
         .await?;
-        self.emit_compiler_event(CompilerEvent::TagGraphChanged);
+        self.emit_read_model_event(ReadModelEvent::TagGraphChanged);
         Ok(())
     }
 
-    pub async fn remove_parent(
+    pub async fn remove_implication(
         &self,
         child_ns: &str,
         child_st: &str,
@@ -994,22 +1000,22 @@ impl SqliteDatabase {
             if let (Some(child_id), Some(parent_id)) =
                 (find_tag(conn, &cns, &cst)?, find_tag(conn, &pns, &pst)?)
             {
-                remove_parent(conn, child_id, parent_id, &src)?;
+                remove_implication(conn, child_id, parent_id, &src)?;
             }
             Ok(())
         })
         .await?;
-        self.emit_compiler_event(CompilerEvent::TagGraphChanged);
+        self.emit_read_model_event(ReadModelEvent::TagGraphChanged);
         Ok(())
     }
 
-    pub async fn get_siblings_for_tag(&self, tag_id: i64) -> Result<Vec<TagRelation>, String> {
-        self.with_read_conn(move |conn| get_siblings_for_tag(conn, tag_id))
+    pub async fn get_aliases_for_tag(&self, tag_id: i64) -> Result<Vec<TagRelation>, String> {
+        self.with_read_conn(move |conn| get_aliases_for_tag(conn, tag_id))
             .await
     }
 
-    pub async fn get_parents_for_tag(&self, tag_id: i64) -> Result<Vec<TagRelation>, String> {
-        self.with_read_conn(move |conn| get_parents_for_tag(conn, tag_id))
+    pub async fn get_implications_for_tag(&self, tag_id: i64) -> Result<Vec<TagRelation>, String> {
+        self.with_read_conn(move |conn| get_implications_for_tag(conn, tag_id))
             .await
     }
 
@@ -1050,12 +1056,12 @@ impl SqliteDatabase {
             .with_conn(move |conn| rename_tag(conn, tag_id, &new_str))
             .await?;
 
-        self.emit_compiler_event(CompilerEvent::TagChanged { tag_id });
+        self.emit_read_model_event(ReadModelEvent::TagChanged { tag_id });
         if let Some(target_id) = merged_into {
-            self.emit_compiler_event(CompilerEvent::TagChanged { tag_id: target_id });
+            self.emit_read_model_event(ReadModelEvent::TagChanged { tag_id: target_id });
         }
         for &eid in &affected_entity_ids {
-            self.emit_compiler_event(CompilerEvent::FileTagsChanged { file_id: eid });
+            self.emit_read_model_event(ReadModelEvent::FileTagsChanged { file_id: eid });
         }
         Ok((affected_entity_ids, merged_into))
     }
@@ -1063,9 +1069,9 @@ impl SqliteDatabase {
     pub async fn delete_tag_by_id(&self, tag_id: i64) -> Result<Vec<i64>, String> {
         let affected_entity_ids = self.with_conn(move |conn| delete_tag(conn, tag_id)).await?;
 
-        self.emit_compiler_event(CompilerEvent::TagChanged { tag_id });
+        self.emit_read_model_event(ReadModelEvent::TagChanged { tag_id });
         for &eid in &affected_entity_ids {
-            self.emit_compiler_event(CompilerEvent::FileTagsChanged { file_id: eid });
+            self.emit_read_model_event(ReadModelEvent::FileTagsChanged { file_id: eid });
         }
         Ok(affected_entity_ids)
     }
@@ -1075,7 +1081,7 @@ impl SqliteDatabase {
     ) -> Result<NamespaceNormalizationStats, String> {
         let stats = self.with_conn(normalize_disallowed_namespaces).await?;
         if stats.tags_rewritten > 0 {
-            self.emit_compiler_event(CompilerEvent::TagGraphChanged);
+            self.emit_read_model_event(ReadModelEvent::TagGraphChanged);
         }
         Ok(stats)
     }
@@ -1092,11 +1098,13 @@ impl SqliteDatabase {
         }
 
         // Parse tag strings upfront
-        let parsed: Vec<(String, String)> =
-            tag_strings.iter().filter_map(|s| crate::tags::normalize::parse_tag(s)).collect();
+        let parsed: Vec<(String, String)> = tag_strings
+            .iter()
+            .filter_map(|s| crate::tags::normalize::parse_tag(s))
+            .collect();
 
         let bitmaps = self.bitmaps.clone();
-        let compiler_tx = self.compiler_tx.clone();
+        let read_model_tx = self.read_model_tx.clone();
 
         self.with_conn(move |conn| {
             for (ns, st) in &parsed {
@@ -1136,10 +1144,10 @@ impl SqliteDatabase {
                         bitmaps.insert(&BitmapKey::Tag(tag_id), eid as u32);
                     }
                 }
-                let _ = compiler_tx.send(CompilerEvent::TagChanged { tag_id });
+                let _ = read_model_tx.send(ReadModelEvent::TagChanged { tag_id });
             }
             for &eid in &entity_ids {
-                let _ = compiler_tx.send(CompilerEvent::FileTagsChanged { file_id: eid });
+                let _ = read_model_tx.send(ReadModelEvent::FileTagsChanged { file_id: eid });
             }
             Ok(())
         })
@@ -1156,11 +1164,13 @@ impl SqliteDatabase {
             return Ok(());
         }
 
-        let parsed: Vec<(String, String)> =
-            tag_strings.iter().filter_map(|s| crate::tags::normalize::parse_tag(s)).collect();
+        let parsed: Vec<(String, String)> = tag_strings
+            .iter()
+            .filter_map(|s| crate::tags::normalize::parse_tag(s))
+            .collect();
 
         let bitmaps = self.bitmaps.clone();
-        let compiler_tx = self.compiler_tx.clone();
+        let read_model_tx = self.read_model_tx.clone();
 
         self.with_conn(move |conn| {
             for (ns, st) in &parsed {
@@ -1198,11 +1208,11 @@ impl SqliteDatabase {
                     for &eid in &entity_ids {
                         bitmaps.remove(&BitmapKey::Tag(tag_id), eid as u32);
                     }
-                    let _ = compiler_tx.send(CompilerEvent::TagChanged { tag_id });
+                    let _ = read_model_tx.send(ReadModelEvent::TagChanged { tag_id });
                 }
             }
             for &eid in &entity_ids {
-                let _ = compiler_tx.send(CompilerEvent::FileTagsChanged { file_id: eid });
+                let _ = read_model_tx.send(ReadModelEvent::FileTagsChanged { file_id: eid });
             }
             Ok(())
         })

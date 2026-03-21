@@ -168,6 +168,7 @@ export function registerIpcHandlers({
   buildBlobPath,
   windowManager,
   libraryService,
+  updaterService,
 }) {
   ipcMain.handle('picto:invoke', async (_event, payload) => {
     const { command, args } = payload || {};
@@ -178,6 +179,10 @@ export function registerIpcHandlers({
     if (command === 'open_settings_window') {
       windowManager.openSettingsWindow();
       return null;
+    }
+    if (command === 'pixiv_oauth_popup') {
+      const result = await windowManager.openPixivOAuthPopup(args?.login_url);
+      return result; // { code, phpsessid }
     }
     if (command === 'open_subscriptions_window') {
       windowManager.openSubscriptionsWindow();
@@ -258,10 +263,31 @@ export function registerIpcHandlers({
     }
   });
 
-  ipcMain.handle('picto:dialog:open', async (_event, options = {}) => {
-    const result = await dialog.showOpenDialog({
-      properties: ['openFile', 'multiSelections'],
-      ...options,
+  ipcMain.handle('picto:dialog:open', async (event, options = {}) => {
+    const win = BrowserWindow.fromWebContents(event.sender) ?? undefined;
+    const {
+      properties: requestedProperties,
+      multiple,
+      ...rest
+    } = options ?? {};
+
+    const properties = new Set(
+      Array.isArray(requestedProperties) && requestedProperties.length > 0
+        ? requestedProperties
+        : ['openFile'],
+    );
+    if (multiple !== false) {
+      properties.add('multiSelections');
+    } else {
+      properties.delete('multiSelections');
+    }
+    if (!properties.has('openFile') && !properties.has('openDirectory')) {
+      properties.add('openFile');
+    }
+
+    const result = await dialog.showOpenDialog(win, {
+      ...rest,
+      properties: [...properties],
     });
     if (result.canceled) return null;
     if (result.filePaths.length === 0) return null;
@@ -363,4 +389,21 @@ export function registerIpcHandlers({
   ipcMain.handle('picto:library:rename', async (_event, { path, newName }) => libraryService.renameLibrary(path, newName));
   ipcMain.handle('picto:library:relocate', async (_event, { oldPath }) => libraryService.relocateLibrary(oldPath));
   ipcMain.handle('picto:library:getConfig', async () => libraryService.getLibraryConfig());
+  ipcMain.handle('picto:library:setMeta', async (_event, { path, meta }) => libraryService.setLibraryMeta(path, meta));
+
+  // Auto-updater
+  ipcMain.handle('picto:updater:check', async () => {
+    try {
+      const result = await updaterService.checkForUpdates();
+      return result?.updateInfo ?? null;
+    } catch (err) {
+      return { error: err?.message ?? String(err) };
+    }
+  });
+  ipcMain.handle('picto:updater:download', async () => {
+    await updaterService.downloadUpdate();
+  });
+  ipcMain.handle('picto:updater:install', () => {
+    updaterService.quitAndInstall();
+  });
 }

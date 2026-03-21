@@ -49,6 +49,7 @@ pub struct ImportedFile {
 pub struct ImportOptions {
     pub tags: Vec<(String, String)>, // (namespace, subtag)
     pub source_urls: Vec<String>,
+    pub created_at: Option<String>,
     pub thumbnail_dimensions: (u32, u32),
     /// Override the default file-stem name.
     pub name: Option<String>,
@@ -63,6 +64,7 @@ impl Default for ImportOptions {
         Self {
             tags: Vec::new(),
             source_urls: Vec::new(),
+            created_at: None,
             thumbnail_dimensions: media_processing::DEFAULT_THUMBNAIL_DIMENSIONS,
             name: None,
             notes: None,
@@ -79,6 +81,13 @@ pub struct ImportPipeline<'a> {
 impl<'a> ImportPipeline<'a> {
     pub fn new(db: &'a SqliteDatabase, blob_store: &'a BlobStore) -> Self {
         Self { db, blob_store }
+    }
+
+    fn cleanup_partial_blob_write(&self, hex_hash: &str, mime_string: &str) {
+        let _ = mime_string;
+        if let Err(err) = self.blob_store.delete(hex_hash) {
+            warn!(hash = %hex_hash, error = %err, "Failed to clean up partial blob writes");
+        }
     }
 
     /// Import a single file from disk.
@@ -138,10 +147,6 @@ impl<'a> ImportPipeline<'a> {
         )
         .ok();
 
-        let blurhash = thumbnail_result.as_ref().and_then(|(thumb, _ext)| {
-            media_processing::blurhash::get_blurhash_from_thumbnail_bytes(thumb).ok()
-        });
-
         let mut colors_lab: Vec<(String, f32, f32, f32)> = Vec::new();
         let mut dominant_color_hex: Option<String> = None;
         if media_processing::is_image(file_info.mime) {
@@ -184,8 +189,13 @@ impl<'a> ImportPipeline<'a> {
             .write_original(&hex_hash, &file_data, Some(blob_ext))?;
 
         if let Some((ref thumb_bytes, ref thumb_ext)) = thumbnail_result {
-            self.blob_store
-                .write_thumbnail(&hex_hash, thumb_bytes, thumb_ext)?;
+            if let Err(err) = self
+                .blob_store
+                .write_thumbnail(&hex_hash, thumb_bytes, thumb_ext)
+            {
+                self.cleanup_partial_blob_write(&hex_hash, &mime_string);
+                return Err(ImportError::Blob(err));
+            }
         }
 
         let import_opts = sqlite_import::ImportOptions {
@@ -198,7 +208,6 @@ impl<'a> ImportPipeline<'a> {
             duration_ms: file_info.duration_ms.map(|d| d as i64),
             num_frames: file_info.num_frames.map(|n| n as i64),
             has_audio: file_info.has_audio,
-            blurhash,
             status: options.initial_status,
             notes: notes_json,
             source_urls: if options.source_urls.is_empty() {
@@ -206,6 +215,7 @@ impl<'a> ImportPipeline<'a> {
             } else {
                 Some(options.source_urls.clone())
             },
+            created_at: options.created_at.clone(),
             dominant_color_hex,
             dominant_palette_blob: None,
             tags: tag_tuples,
@@ -213,10 +223,10 @@ impl<'a> ImportPipeline<'a> {
             colors: colors_lab,
         };
 
-        self.db
-            .import_file(import_opts)
-            .await
-            .map_err(ImportError::Db)?;
+        if let Err(err) = self.db.import_file(import_opts).await {
+            self.cleanup_partial_blob_write(&hex_hash, &mime_string);
+            return Err(ImportError::Db(err));
+        }
 
         // Compute phash from thumbnail (faster than full image) for duplicate detection
         if media_processing::is_image(file_info.mime) {

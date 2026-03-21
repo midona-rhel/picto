@@ -19,7 +19,7 @@ This document is based on the current code in:
 - `src/stores/eventBridge.ts`
 - `src/domain/actions/mutationEffects.ts`
 - `src/stores/domainStore.ts`
-- `src/stores/cacheStore.ts`
+- `src/stores/gridMetadataStore.ts`
 - `src/hooks/useInspectorData.ts`
 - `src/controllers/folderController.ts`
 - `src/controllers/smartFolderController.ts`
@@ -78,7 +78,7 @@ This is the exact failure mode behind cases like:
 Current stores are organized as separate concerns:
 
 - `domainStore`: sidebar tree + counts
-- `cacheStore`: metadata cache + grid refresh sequence + active scope
+- `gridMetadataStore`: metadata cache + grid refresh sequence + active scope
 - `selectionController`: summary cache invalidation
 - local hooks/components: inspector state, grid reload, flow refresh tokens
 

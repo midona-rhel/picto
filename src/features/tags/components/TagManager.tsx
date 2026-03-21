@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useDebouncedCallback } from '../../../shared/hooks/useDebouncedCallback';
-import { Loader, Modal, SegmentedControl, TextInput } from '@mantine/core';
+import { Loader, Modal, TextInput } from '@mantine/core';
 import { TextButton } from '../../../shared/components/TextButton';
 import { glassModalStyles } from '../../../shared/styles/glassModal';
 import { useVirtualizer } from '@tanstack/react-virtual';
@@ -17,9 +17,8 @@ import {
 } from '@tabler/icons-react';
 import { api } from '#desktop/api';
 import { writeText } from '#desktop/api';
-import { notifySuccess, notifyError, notifyWarning } from '../../../shared/lib/notify';
+import { notifySuccess, notifyError } from '../../../shared/lib/notify';
 import { getNamespaceColor } from '../../../shared/lib/namespaceColors';
-import { parseTagString } from '../../../shared/lib/tagParsing';
 import { useInlineRename } from '../../../shared/hooks/useInlineRename';
 import { useNavigationStore } from '../../../state/navigationStore';
 import { ContextMenu, useContextMenu, type ContextMenuEntry } from '../../../shared/components/ContextMenu';
@@ -46,41 +45,22 @@ function formatTagDisplay(ns: string, subtag: string): string {
   return ns ? `${ns}:${subtag}` : subtag;
 }
 
-function normalizeTagRecord(tag: TagRecord): TagRecord {
-  const parsed = parseTagString(formatTagDisplay(tag.namespace, tag.subtag));
-  return {
-    ...tag,
-    namespace: parsed.namespace,
-    subtag: parsed.subtag,
-  };
-}
-
-function normalizeNamespaceSummaries(input: NamespaceSummary[]): NamespaceSummary[] {
-  const counts = new Map<string, number>();
-  for (const entry of input) {
-    const parsed = parseTagString(
-      entry.namespace ? `${entry.namespace}:x` : 'x',
-    );
-    const ns = parsed.namespace;
-    counts.set(ns, (counts.get(ns) ?? 0) + entry.count);
-  }
-  return [...counts.entries()]
-    .map(([namespace, count]) => ({ namespace, count }))
-    .sort((a, b) => b.count - a.count || a.namespace.localeCompare(b.namespace));
-}
-
 function nsDotColor(ns: string): string {
   const [r, g, b] = getNamespaceColor(ns, true);
   return `rgb(${r}, ${g}, ${b})`;
 }
 
+function relationActionLabel(
+  kind: 'alias' | 'implication' | 'reverse_implication',
+): string {
+  if (kind === 'alias') return 'alias';
+  if (kind === 'implication') return 'implication';
+  return 'implied-by relation';
+}
+
 const ROW_HEIGHT = 27;
 
-type TagSource = 'local' | 'ptr';
-
 export function TagManager() {
-  const [source, setSource] = useState<TagSource>('local');
-
   const [namespaces, setNamespaces] = useState<NamespaceSummary[]>([]);
   const [selectedNs, setSelectedNs] = useState<string | null>(null);
   const [totalTagCount, setTotalTagCount] = useState(0);
@@ -91,6 +71,10 @@ export function TagManager() {
   const [listMode, setListMode] = useState(false);
   const [hasMore, setHasMore] = useState(true);
 
+  const [selectedTagIds, setSelectedTagIds] = useState<Set<number>>(new Set());
+  const [selectAll, setSelectAll] = useState(false);
+  const lastClickedTagIdRef = useRef<number | null>(null);
+
   const [containerWidth, setContainerWidth] = useState(800);
 
   const [mergeSource, setMergeSource] = useState<TagRecord | null>(null);
@@ -98,7 +82,7 @@ export function TagManager() {
   const [mergeResults, setMergeResults] = useState<TagSearchResult[]>([]);
   const [mergeTarget, setMergeTarget] = useState<TagRecord | null>(null);
 
-  const [relationModal, setRelationModal] = useState<{ type: 'sibling' | 'parent' | 'child'; source: TagRecord } | null>(null);
+  const [relationModal, setRelationModal] = useState<{ type: 'alias' | 'implication' | 'reverse_implication'; source: TagRecord } | null>(null);
   const [relationSearch, setRelationSearch] = useState('');
   const [relationResults, setRelationResults] = useState<TagSearchResult[]>([]);
   const [relationTarget, setRelationTarget] = useState<TagRecord | null>(null);
@@ -147,8 +131,6 @@ export function TagManager() {
             await refreshAll();
           },
         });
-      } else if (result.merged_into) {
-        notifyWarning('Rename merged into an existing tag; undo is not available for this rename.', 'Rename Merged');
       }
       notifySuccess(`Renamed to "${newName}"`, 'Tag Renamed');
       await refreshAll();
@@ -159,16 +141,13 @@ export function TagManager() {
 
   const fetchNamespaces = useCallback(async () => {
     try {
-      const result = source === 'ptr'
-        ? await api.ptr.getNamespaceSummary()
-        : await api.tags.getNamespaceSummary();
-      const normalized = normalizeNamespaceSummaries(result);
-      setNamespaces(normalized);
-      setTotalTagCount(normalized.reduce((sum, ns) => sum + ns.count, 0));
+      const result = await api.tags.getNamespaceSummary();
+      setNamespaces(result);
+      setTotalTagCount(result.reduce((sum: number, ns: NamespaceSummary) => sum + ns.count, 0));
     } catch (err) {
       console.error('Failed to load namespace summary:', err);
     }
-  }, [source]);
+  }, []);
 
   const fetchTags = useCallback(
     async (cursor?: string) => {
@@ -179,10 +158,7 @@ export function TagManager() {
           cursor: cursor ?? undefined,
           limit: 500,
         };
-        const resultRaw = source === 'ptr'
-          ? await api.ptr.getTagsPaginated(params)
-          : await api.tags.getPaginated(params);
-        const result = resultRaw.map(normalizeTagRecord);
+        const result = await api.tags.getPaginated(params);
         if (cursor) {
           setTags((prev) => [...prev, ...result]);
         } else {
@@ -195,7 +171,7 @@ export function TagManager() {
         return [];
       }
     },
-    [selectedNs, searchQuery, source],
+    [selectedNs, searchQuery],
   );
 
   const refreshAll = useCallback(async () => {
@@ -227,13 +203,6 @@ export function TagManager() {
     if (!exact) return;
     await api.tags.delete(exact.tag_id);
   }, []);
-
-  useEffect(() => {
-    setSelectedNs(null);
-    setTags([]);
-    setHasMore(true);
-    setSearchQuery('');
-  }, [source]);
 
   useEffect(() => {
     let cancelled = false;
@@ -278,17 +247,50 @@ export function TagManager() {
     }
   }, [virtualItems, loadedRows, hasMore, loadMore]);
 
+  const handleDeleteSelected = useCallback(async () => {
+    if (!selectAll && selectedTagIds.size === 0) return;
+    try {
+      if (selectAll) {
+        let deleted = 0;
+        // eslint-disable-next-line no-constant-condition
+        while (true) {
+          const batch = await api.tags.getPaginated({
+            namespace: selectedNs ?? undefined,
+            search: searchQuery || undefined,
+            limit: 500,
+          });
+          if (batch.length === 0) break;
+          for (const tag of batch) {
+            await api.tags.delete(tag.tag_id);
+          }
+          deleted += batch.length;
+        }
+        notifySuccess(`Deleted ${deleted} tag${deleted !== 1 ? 's' : ''}`);
+      } else {
+        const toDelete = tags.filter(t => selectedTagIds.has(t.tag_id));
+        for (const tag of toDelete) {
+          await api.tags.delete(tag.tag_id);
+        }
+        notifySuccess(`Deleted ${toDelete.length} tag${toDelete.length !== 1 ? 's' : ''}`);
+      }
+      setSelectAll(false);
+      setSelectedTagIds(new Set());
+      await refreshAll();
+    } catch (err) {
+      notifyError(err);
+    }
+  }, [selectAll, selectedTagIds, tags, refreshAll, selectedNs, searchQuery]);
+
   const handleTagContextMenu = useCallback(
     async (e: React.MouseEvent, tag: TagRecord) => {
       e.preventDefault();
       e.stopPropagation();
       const pos = { x: e.clientX, y: e.clientY };
       const display = formatTagDisplay(tag.namespace, tag.subtag);
-      const isPtr = source === 'ptr';
 
-      const [siblings, relations] = await Promise.all([
-        (isPtr ? api.ptr.getTagSiblings(tag.tag_id) : api.tags.getSiblings(tag.tag_id)).catch(() => [] as TagRelation[]),
-        (isPtr ? api.ptr.getTagParents(tag.tag_id) : api.tags.getParents(tag.tag_id)).catch(() => [] as TagRelation[]),
+      const [aliases, relations] = await Promise.all([
+        api.tags.getRelations(tag.tag_id, 'aliases').catch(() => [] as TagRelation[]),
+        api.tags.getRelations(tag.tag_id, 'implications').catch(() => [] as TagRelation[]),
       ]);
 
       const parentTags = relations.filter((r) => r.relation === 'parent');
@@ -298,8 +300,7 @@ export function TagManager() {
         useNavigationStore.getState().navigateToFilterTags([formatTagDisplay(ns, st)]);
       const items: ContextMenuEntry[] = buildTagContextMenu({
         tag,
-        source,
-        siblings,
+        aliases,
         parents: parentTags,
         children: childTags,
         formatTagDisplay,
@@ -314,38 +315,82 @@ export function TagManager() {
         onCopy: () => writeText(display),
         onViewRelations: () => setRelationsTag(tag),
         onNavigateTag: navToTag,
-        onAddSibling: () => setRelationModal({ type: 'sibling', source: tag }),
-        onAddParent: () => setRelationModal({ type: 'parent', source: tag }),
-        onAddChild: () => setRelationModal({ type: 'child', source: tag }),
+        onAddAlias: () => setRelationModal({ type: 'alias', source: tag }),
+        onAddParent: () => setRelationModal({ type: 'implication', source: tag }),
+        onAddChild: () => setRelationModal({ type: 'reverse_implication', source: tag }),
         onDelete: async () => {
-          try {
-            const snapshotHashes = await fetchAllHashesForTag(display);
-            await api.tags.delete(tag.tag_id);
-            registerUndoAction({
-              label: `Delete tag "${display}"`,
-              undo: async () => {
-                if (snapshotHashes.length > 0) {
-                  await api.tags.addBatch(snapshotHashes, [display]);
-                }
-                await refreshAll();
-              },
-              redo: async () => {
-                await deleteTagByDisplay(display);
-                await refreshAll();
-              },
-            });
-            notifySuccess(`"${display}" deleted`, 'Tag Deleted');
-            await refreshAll();
-          } catch (err) {
-            notifyError(err);
+          // If select-all or multi-selection includes this tag, use batch delete
+          if (selectAll || (selectedTagIds.size > 1 && selectedTagIds.has(tag.tag_id))) {
+            await handleDeleteSelected();
+          } else {
+            try {
+              await api.tags.delete(tag.tag_id);
+              notifySuccess(`"${display}" deleted`);
+              setSelectedTagIds(new Set());
+              await refreshAll();
+            } catch (err) {
+              notifyError(err);
+            }
           }
         },
       });
 
       ctxMenu.openAt(pos, items);
     },
-    [rename, refreshAll, ctxMenu, source, fetchAllHashesForTag, deleteTagByDisplay],
+    [rename, refreshAll, ctxMenu, fetchAllHashesForTag, deleteTagByDisplay, selectedTagIds, selectAll, tags, handleDeleteSelected],
   );
+
+  // ── Multi-select ──────────────────────────────────────────────────────
+
+  const handleTagClick = useCallback((e: React.MouseEvent, tag: TagRecord) => {
+    setSelectAll(false);
+    if (e.metaKey || e.ctrlKey) {
+      setSelectedTagIds(prev => {
+        const next = new Set(prev);
+        if (next.has(tag.tag_id)) next.delete(tag.tag_id); else next.add(tag.tag_id);
+        return next;
+      });
+    } else if (e.shiftKey && lastClickedTagIdRef.current != null) {
+      const startIdx = tags.findIndex(t => t.tag_id === lastClickedTagIdRef.current);
+      const endIdx = tags.findIndex(t => t.tag_id === tag.tag_id);
+      if (startIdx !== -1 && endIdx !== -1) {
+        const [lo, hi] = [Math.min(startIdx, endIdx), Math.max(startIdx, endIdx)];
+        setSelectedTagIds(prev => {
+          const next = new Set(prev);
+          for (let i = lo; i <= hi; i++) next.add(tags[i].tag_id);
+          return next;
+        });
+      }
+    } else {
+      setSelectedTagIds(new Set([tag.tag_id]));
+    }
+    lastClickedTagIdRef.current = tag.tag_id;
+  }, [tags]);
+
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      // Don't handle keys while renaming or in modals
+      if (document.activeElement?.tagName === 'INPUT') return;
+      if ((e.metaKey || e.ctrlKey) && e.key === 'a') {
+        e.preventDefault();
+        setSelectAll(true);
+        setSelectedTagIds(new Set(tags.map(t => t.tag_id)));
+      }
+      if ((e.key === 'Delete' || e.key === 'Backspace') && selectedTagIds.size > 0) {
+        e.preventDefault();
+        handleDeleteSelected();
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [tags, selectedTagIds, handleDeleteSelected]);
+
+  // Clear selection on namespace/search change
+  useEffect(() => {
+    setSelectedTagIds(new Set());
+    setSelectAll(false);
+    lastClickedTagIdRef.current = null;
+  }, [selectedNs, searchQuery]);
 
   useEffect(() => {
     if (!mergeSource) return;
@@ -378,8 +423,8 @@ export function TagManager() {
       registerUndoAction({
         label: `Merge tag "${sourceDisplay}" into "${targetDisplay}"`,
         undo: async () => {
-          if (sourceHashes.length > 0) await api.tags.addBatch(sourceHashes, [sourceDisplay]);
-          if (sourceOnly.length > 0) await api.tags.removeBatch(sourceOnly, [targetDisplay]);
+          if (sourceHashes.length > 0) await api.tags.add(sourceHashes, [sourceDisplay]);
+          if (sourceOnly.length > 0) await api.tags.remove(sourceOnly, [targetDisplay]);
           await refreshAll();
         },
         redo: async () => {
@@ -416,48 +461,48 @@ export function TagManager() {
     const sourceDisplay = formatTagDisplay(relationModal.source.namespace, relationModal.source.subtag);
     const targetDisplay = formatTagDisplay(relationTarget.namespace, relationTarget.subtag);
     try {
-      if (relationModal.type === 'sibling') {
-        await api.tags.setAlias(sourceDisplay, targetDisplay);
+      if (relationModal.type === 'alias') {
+        await api.tags.manageAlias(sourceDisplay, targetDisplay);
         registerUndoAction({
-          label: `Set sibling "${sourceDisplay}"`,
+          label: `Set alias "${sourceDisplay}"`,
           undo: async () => {
-            await api.tags.removeAlias(sourceDisplay);
+            await api.tags.manageAlias(sourceDisplay);
             await refreshAll();
           },
           redo: async () => {
-            await api.tags.setAlias(sourceDisplay, targetDisplay);
+            await api.tags.manageAlias(sourceDisplay, targetDisplay);
             await refreshAll();
           },
         });
-        notifySuccess(`"${sourceDisplay}" → "${targetDisplay}"`, 'Sibling Added');
-      } else if (relationModal.type === 'parent') {
-        await api.tags.addParent(sourceDisplay, targetDisplay);
+        notifySuccess(`"${sourceDisplay}" now resolves to "${targetDisplay}"`, 'Alias Added');
+      } else if (relationModal.type === 'implication') {
+        await api.tags.manageImplication(sourceDisplay, targetDisplay, 'add');
         registerUndoAction({
-          label: `Add parent "${targetDisplay}"`,
+          label: `Add implication "${targetDisplay}"`,
           undo: async () => {
-            await api.tags.removeParent(sourceDisplay, targetDisplay);
+            await api.tags.manageImplication(sourceDisplay, targetDisplay, 'remove');
             await refreshAll();
           },
           redo: async () => {
-            await api.tags.addParent(sourceDisplay, targetDisplay);
+            await api.tags.manageImplication(sourceDisplay, targetDisplay, 'add');
             await refreshAll();
           },
         });
-        notifySuccess(`"${targetDisplay}" is now parent of "${sourceDisplay}"`, 'Parent Added');
+        notifySuccess(`"${sourceDisplay}" now implies "${targetDisplay}"`, 'Implication Added');
       } else {
-        await api.tags.addParent(targetDisplay, sourceDisplay);
+        await api.tags.manageImplication(targetDisplay, sourceDisplay, 'add');
         registerUndoAction({
-          label: `Add child "${targetDisplay}"`,
+          label: `Add implied-by relation "${targetDisplay}"`,
           undo: async () => {
-            await api.tags.removeParent(targetDisplay, sourceDisplay);
+            await api.tags.manageImplication(targetDisplay, sourceDisplay, 'remove');
             await refreshAll();
           },
           redo: async () => {
-            await api.tags.addParent(targetDisplay, sourceDisplay);
+            await api.tags.manageImplication(targetDisplay, sourceDisplay, 'add');
             await refreshAll();
           },
         });
-        notifySuccess(`"${sourceDisplay}" is now parent of "${targetDisplay}"`, 'Child Added');
+        notifySuccess(`"${targetDisplay}" now implies "${sourceDisplay}"`, 'Reverse Implication Added');
       }
       setRelationModal(null);
       await refreshAll();
@@ -474,7 +519,8 @@ export function TagManager() {
       return (
         <div
           key={tag.tag_id}
-          className={classes.tag}
+          className={`${classes.tag} ${selectAll || selectedTagIds.has(tag.tag_id) ? classes.tagSelected : ''}`}
+          onClick={(e) => handleTagClick(e, tag)}
           onContextMenu={(e) => handleTagContextMenu(e, tag)}
           onDoubleClick={() => rename.startRename(String(tag.tag_id), display)}
         >
@@ -502,25 +548,12 @@ export function TagManager() {
         </div>
       );
     },
-    [rename, handleTagContextMenu],
+    [rename, handleTagContextMenu, handleTagClick, selectedTagIds],
   );
 
   const sidebarContent = useMemo(
     () => (
       <div className={classes.sidebar}>
-        <div className={classes.sourceToggle}>
-          <SegmentedControl
-            size="xs"
-            fullWidth
-            value={source}
-            onChange={(v) => setSource(v as TagSource)}
-            data={[
-              { label: 'Local', value: 'local' },
-              { label: 'PTR', value: 'ptr' },
-            ]}
-          />
-        </div>
-
         <div
           className={`${classes.sidebarItem} ${selectedNs === null ? classes.sidebarItemActive : ''}`}
           onClick={() => setSelectedNs(null)}
@@ -583,7 +616,7 @@ export function TagManager() {
           ))}
       </div>
     ),
-    [namespaces, selectedNs, totalTagCount, source],
+    [namespaces, selectedNs, totalTagCount],
   );
 
   const activeNsLabel = selectedNs === null ? 'All Tags' : selectedNs === '' ? 'Unfiled' : selectedNs;
@@ -721,7 +754,9 @@ export function TagManager() {
       <Modal
         opened={!!relationModal}
         onClose={() => { setRelationModal(null); setRelationSearch(''); setRelationResults([]); setRelationTarget(null); }}
-        title={`Add ${relationModal?.type ?? ''} for "${relationModal ? formatTagDisplay(relationModal.source.namespace, relationModal.source.subtag) : ''}"…`}
+        title={`Add ${
+          relationModal ? relationActionLabel(relationModal.type) : 'relation'
+        } for "${relationModal ? formatTagDisplay(relationModal.source.namespace, relationModal.source.subtag) : ''}"…`}
         centered
         size="sm"
         styles={glassModalStyles}
@@ -756,11 +791,11 @@ export function TagManager() {
             )}
           </div>
           <TextButton onClick={handleRelationAdd} disabled={!relationTarget}>
-            {relationModal?.type === 'sibling' ? <IconArrowsExchange size={16} /> :
-              relationModal?.type === 'parent' ? <IconArrowUp size={16} /> :
+            {relationModal?.type === 'alias' ? <IconArrowsExchange size={16} /> :
+              relationModal?.type === 'implication' ? <IconArrowUp size={16} /> :
               <IconArrowDown size={16} />}
-            {relationModal?.type === 'sibling' ? 'Add Sibling' :
-             relationModal?.type === 'parent' ? 'Add Parent' : 'Add Child'}
+            {relationModal?.type === 'alias' ? 'Add Alias' :
+             relationModal?.type === 'implication' ? 'Add Implication' : 'Add Implied-By'}
           </TextButton>
         </div>
       </Modal>
@@ -769,7 +804,6 @@ export function TagManager() {
         opened={!!relationsTag}
         onClose={() => setRelationsTag(null)}
         tag={relationsTag}
-        source={source}
       />
     </div>
   );

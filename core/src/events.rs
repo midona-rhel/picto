@@ -49,254 +49,14 @@ pub fn emit_empty(name: &str) {
 }
 
 // SEQ counter lives in runtime_state — single source of truth.
-
-#[derive(Debug, Clone, serde::Serialize, ts_rs::TS)]
-#[ts(export, export_to = "../../src/shared/types/generated/runtime-contract/")]
-#[serde(rename_all = "snake_case")]
-pub enum Domain {
-    Files,
-    Folders,
-    SmartFolders,
-    Tags,
-    Sidebar,
-    Selection,
-    ViewPrefs,
-    Ptr,
-    Subscriptions,
-}
-
-#[derive(Debug, Clone, Default, serde::Serialize)]
-pub struct SidebarCounts {
-    pub all_images: i64,
-    pub inbox: i64,
-    pub trash: i64,
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct MutationImpact {
-    pub domains: Vec<Domain>,
-    pub file_hashes: Option<Vec<String>>,
-    pub folder_ids: Option<Vec<i64>>,
-    pub smart_folder_ids: Option<Vec<i64>>,
-    pub compiler_batch_done: Option<bool>,
-    pub sidebar_counts: Option<SidebarCounts>,
-    // Fact fields — describe what changed at the model level.
-    // derive_invalidation() converts these into DerivedInvalidation.
-    pub status_changed: Option<bool>,
-    pub tags_changed: Option<bool>,
-    pub tag_structure_changed: Option<bool>,
-    pub folder_membership_changed: Option<Vec<i64>>,
-    pub view_prefs_changed: Option<bool>,
-    /// Extra grid scopes not derivable from facts (e.g. `collection:{id}`).
-    pub extra_grid_scopes: Option<Vec<String>>,
-}
-
-impl MutationImpact {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub fn domains(mut self, d: &[Domain]) -> Self {
-        self.domains = d.to_vec();
-        self
-    }
-    pub fn file_hashes(mut self, h: Vec<String>) -> Self {
-        self.file_hashes = Some(h);
-        self
-    }
-    pub fn folder_ids(mut self, ids: Vec<i64>) -> Self {
-        self.folder_ids = Some(ids);
-        self
-    }
-    pub fn smart_folder_ids(mut self, ids: Vec<i64>) -> Self {
-        self.smart_folder_ids = Some(ids);
-        self
-    }
-    pub fn sidebar_counts(mut self, c: SidebarCounts) -> Self {
-        self.sidebar_counts = Some(c);
-        self
-    }
-    pub fn sidebar_counts_from(mut self, db: &crate::sqlite::SqliteDatabase) -> Self {
-        self.sidebar_counts = Some(sidebar_counts_from_bitmaps(db));
-        self
-    }
-
-    // --- Fact-setting methods ---
-
-    pub fn status_changed(mut self) -> Self {
-        self.status_changed = Some(true);
-        self
-    }
-    pub fn tags_changed(mut self) -> Self {
-        self.tags_changed = Some(true);
-        self
-    }
-    pub fn tag_structure_changed_fact(mut self) -> Self {
-        self.tag_structure_changed = Some(true);
-        self
-    }
-    pub fn folder_membership_changed(mut self, ids: Vec<i64>) -> Self {
-        self.folder_membership_changed = Some(ids);
-        self
-    }
-    pub fn view_prefs_changed(mut self) -> Self {
-        self.view_prefs_changed = Some(true);
-        self
-    }
-    /// Add extra grid scopes not derivable from facts (e.g. `collection:{id}`).
-    pub fn extra_grid_scopes(mut self, s: Vec<String>) -> Self {
-        self.extra_grid_scopes = Some(s);
-        self
-    }
-
-    /// File lifecycle (import, status change, delete). Fact: status_changed.
-    ///
-    /// Includes SmartFolders because status/existence changes can affect smart folder
-    /// membership. Does NOT include Tags — tag bitmaps are rebuilt by the compiler
-    /// separately via `FileInserted`/`FileDeleted` events.
-    pub fn file_lifecycle(db: &crate::sqlite::SqliteDatabase) -> Self {
-        Self::new()
-            .domains(&[Domain::Files, Domain::Sidebar, Domain::SmartFolders])
-            .status_changed()
-            .sidebar_counts_from(db)
-    }
-
-    /// File metadata change (rating, name, notes, urls). Only invalidates detail view.
-    pub fn file_metadata(hash: String) -> Self {
-        Self::new()
-            .domains(&[Domain::Files])
-            .file_hashes(vec![hash])
-    }
-
-    /// Tag change on specific files. Fact: tags_changed.
-    pub fn file_tags(hash: String) -> Self {
-        Self::new()
-            .domains(&[Domain::Tags, Domain::Files])
-            .tags_changed()
-            .file_hashes(vec![hash])
-    }
-
-    /// Batch tag change. Fact: tags_changed (no file_hashes → derives grid_all).
-    pub fn batch_tags() -> Self {
-        Self::new()
-            .domains(&[Domain::Tags, Domain::Files])
-            .tags_changed()
-    }
-
-    /// Sidebar structure change (folder/smart folder/subscription CRUD).
-    /// Derives sidebar_tree from Domain::Sidebar.
-    pub fn sidebar(domain: Domain) -> Self {
-        Self::new()
-            .domains(&[domain, Domain::Sidebar])
-    }
-
-    /// File status change (status update, delete, wipe). Fact: status_changed.
-    pub fn file_status_change(db: &crate::sqlite::SqliteDatabase) -> Self {
-        Self::new()
-            .domains(&[
-                Domain::Files,
-                Domain::Sidebar,
-                Domain::Folders,
-                Domain::SmartFolders,
-                Domain::Selection,
-            ])
-            .status_changed()
-            .sidebar_counts_from(db)
-    }
-
-    /// File added/removed from a folder. Fact: folder_membership_changed.
-    pub fn folder_file_change(folder_id: i64) -> Self {
-        Self::new()
-            .domains(&[
-                Domain::Folders,
-                Domain::Files,
-                Domain::Selection,
-                Domain::Sidebar,
-            ])
-            .folder_ids(vec![folder_id])
-            .folder_membership_changed(vec![folder_id])
-    }
-
-    /// Tag structure change (merge, delete, normalize). Fact: tag_structure_changed.
-    pub fn tag_structure_change() -> Self {
-        Self::new()
-            .domains(&[Domain::Tags, Domain::Sidebar, Domain::SmartFolders])
-            .tag_structure_changed_fact()
-    }
-
-    /// Folder item reorder/sort/reverse. No fact flags — derives grid_scopes from folder_ids.
-    pub fn folder_item_reorder(folder_id: i64) -> Self {
-        Self::new()
-            .domains(&[Domain::Folders])
-            .folder_ids(vec![folder_id])
-    }
-
-    /// All domains changed (subscription import with collections). Fact: status_changed.
-    pub fn all_domains_change(db: &crate::sqlite::SqliteDatabase) -> Self {
-        Self::new()
-            .domains(&[
-                Domain::Files,
-                Domain::Folders,
-                Domain::Tags,
-                Domain::Sidebar,
-                Domain::SmartFolders,
-            ])
-            .status_changed()
-            .sidebar_counts_from(db)
-    }
-
-    /// Batch tag change on a selection. Fact: tags_changed.
-    pub fn selection_batch_tags() -> Self {
-        Self::new()
-            .domains(&[Domain::Tags, Domain::Files, Domain::Selection])
-            .tags_changed()
-    }
-
-    /// Collection metadata update (rating, source URLs). Sidebar + grid invalidation.
-    pub fn collection_update(collection_id: i64) -> Self {
-        Self::new()
-            .domains(&[Domain::Folders, Domain::Sidebar, Domain::Selection])
-            .folder_ids(vec![collection_id])
-            .extra_grid_scopes(vec!["system:all".into()])
-    }
-
-    /// Single domain change with no invalidation. Used for minimal mutations.
-    pub fn domain_only(domain: Domain) -> Self {
-        Self::new().domains(&[domain])
-    }
-
-    /// Selection-scoped file metadata change. Invalidates selection summary only.
-    pub fn selection_metadata() -> Self {
-        Self::new()
-            .domains(&[Domain::Files, Domain::Selection])
-    }
-
-    /// Selection-scoped file metadata change with grid refresh.
-    /// Fact: tags_changed (derives grid_all + selection_summary).
-    pub fn selection_metadata_grid() -> Self {
-        Self::new()
-            .domains(&[Domain::Files])
-            .tags_changed()
-    }
-
-    /// View preferences change. Fact: view_prefs_changed.
-    pub fn view_prefs_change() -> Self {
-        Self::new()
-            .domains(&[Domain::ViewPrefs])
-            .view_prefs_changed()
-    }
-}
+use crate::runtime_contract::mutation_builder::MutationImpact;
 
 /// Emit a `runtime/mutation_committed` event with a `MutationReceipt`.
 ///
-/// Builds `MutationFacts` from the impact, calls `derive_invalidation()` to
-/// compute the transitional `invalidate` field, and emits the receipt.
+/// Builds `MutationFacts` from the impact and emits the receipt.
 /// The frontend derives stale resources from `facts` directly.
 pub fn emit_mutation(origin: &str, impact: MutationImpact) {
-    use crate::runtime_contract::mutation::{
-        derive_invalidation, MutationFacts, MutationReceipt,
-        SidebarCounts as ContractSidebarCounts,
-    };
+    use crate::runtime_contract::mutation::{MutationFacts, MutationReceipt};
 
     let seq = crate::runtime_state::next_seq();
     let ts = chrono::Utc::now().to_rfc3339();
@@ -315,47 +75,15 @@ pub fn emit_mutation(origin: &str, impact: MutationImpact) {
         extra_grid_scopes: impact.extra_grid_scopes,
     };
 
-    // Transitional: compute DerivedInvalidation for backward compatibility.
-    // The frontend derives stale resources from facts directly; this field
-    // will be removed once confirmed unused by all consumers.
-    let mut invalidate = derive_invalidation(&facts);
-    if let Some(ref extra) = facts.extra_grid_scopes {
-        let mut scopes = invalidate.grid_scopes.unwrap_or_default();
-        scopes.extend(extra.clone());
-        scopes.sort();
-        scopes.dedup();
-        invalidate.grid_scopes = Some(scopes);
-    }
-
     let receipt = MutationReceipt {
         seq,
         ts,
         origin_command: origin.to_string(),
         facts,
-        invalidate,
-        sidebar_counts: impact.sidebar_counts.map(|c| ContractSidebarCounts {
-            all_images: c.all_images,
-            inbox: c.inbox,
-            trash: c.trash,
-        }),
+        sidebar_counts: impact.sidebar_counts,
     };
 
     emit(event_names::RUNTIME_MUTATION_COMMITTED, &receipt);
-}
-
-/// Compute system sidebar counts from bitmaps (O(1)).
-/// Call AFTER inline bitmap updates so values reflect the mutation.
-///
-/// `all_images` counts only Status(1) (active), NOT inbox. This matches the
-/// frontend's "All Images" view which shows reviewed files only. Inbox and
-/// trash get their own dedicated counts.
-pub fn sidebar_counts_from_bitmaps(db: &crate::sqlite::SqliteDatabase) -> SidebarCounts {
-    use crate::sqlite::bitmaps::BitmapKey;
-    SidebarCounts {
-        all_images: db.bitmaps.len(&BitmapKey::Status(1)) as i64,
-        inbox: db.bitmaps.len(&BitmapKey::Status(0)) as i64,
-        trash: db.bitmaps.len(&BitmapKey::Status(2)) as i64,
-    }
 }
 
 pub mod event_names {
@@ -364,189 +92,14 @@ pub mod event_names {
     pub const RUNTIME_TASK_UPSERTED: &str = "runtime/task_upserted";
     pub const RUNTIME_TASK_REMOVED: &str = "runtime/task_removed";
 
-    // --- Compatibility events (legacy) ---
-    // These duplicate information already carried by runtime/task_upserted.
-    // Retained for frontend backward compatibility; remove once all frontend
-    // listeners migrate to the task-based model.
-    pub const SUBSCRIPTION_STARTED: &str = "subscription-started";
-    pub const SUBSCRIPTION_PROGRESS: &str = "subscription-progress";
-    pub const SUBSCRIPTION_FINISHED: &str = "subscription-finished";
-
-    pub const FLOW_STARTED: &str = "flow-started";
-    pub const FLOW_PROGRESS: &str = "flow-progress";
-    pub const FLOW_FINISHED: &str = "flow-finished";
-
-    pub const PTR_SYNC_STARTED: &str = "ptr-sync-started";
-    pub const PTR_SYNC_PROGRESS: &str = "ptr-sync-progress";
-    pub const PTR_SYNC_FINISHED: &str = "ptr-sync-finished";
-    pub const PTR_SYNC_PHASE_CHANGED: &str = "ptr-sync-phase-changed";
-
-    pub const PTR_BOOTSTRAP_STARTED: &str = "ptr-bootstrap-started";
-    pub const PTR_BOOTSTRAP_PROGRESS: &str = "ptr-bootstrap-progress";
-    pub const PTR_BOOTSTRAP_FINISHED: &str = "ptr-bootstrap-finished";
-    pub const PTR_BOOTSTRAP_FAILED: &str = "ptr-bootstrap-failed";
-
-    // --- Non-task events (kept) ---
+    // --- Non-task events ---
     pub const LIBRARY_CLOSED: &str = "library-closed";
     pub const ZOOM_FACTOR_CHANGED: &str = "zoom-factor-changed";
     pub const FILE_IMPORTED: &str = "file-imported";
+    pub const MANUAL_IMPORT_PROGRESS: &str = "manual-import-progress";
+    pub const MEDIA_EXPORT_PROGRESS: &str = "media-export-progress";
     pub const OPEN_DETAIL_WINDOW: &str = "open-detail-window";
     pub const DUPLICATE_AUTO_MERGE_FINISHED: &str = "duplicate-auto-merge-finished";
-}
-
-// --- Subscription lifecycle
-
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct SubscriptionStartedEvent {
-    pub subscription_id: String,
-    pub subscription_name: String,
-    pub mode: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub query_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub query_name: Option<String>,
-}
-
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct SubscriptionFinishedEvent {
-    pub subscription_id: String,
-    pub subscription_name: String,
-    pub mode: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub query_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub query_name: Option<String>,
-    pub status: String,
-    pub files_downloaded: usize,
-    pub files_skipped: usize,
-    pub errors_count: usize,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub error: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub failure_kind: Option<String>,
-    pub metadata_validated: usize,
-    pub metadata_invalid: usize,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub last_metadata_error: Option<String>,
-}
-
-// --- Flow lifecycle
-
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct FlowStartedEvent {
-    pub flow_id: String,
-    pub subscription_count: usize,
-}
-
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct FlowProgressEvent {
-    pub flow_id: String,
-    pub total: u32,
-    pub done: usize,
-    pub remaining: usize,
-}
-
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct FlowFinishedEvent {
-    pub flow_id: String,
-    pub status: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub started_count: Option<u32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub error: Option<String>,
-}
-
-// --- PTR sync lifecycle
-
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct PtrSyncFinishedEvent {
-    pub success: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub error: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub updates_processed: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tags_added: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub schema_rebuild: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub index_rebuild: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub changed_hashes_truncated: Option<bool>,
-}
-
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct PtrSyncPhaseChangedEvent {
-    pub phase: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub current_update_index: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub ts: Option<String>,
-}
-
-// --- PTR bootstrap lifecycle
-
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct PtrBootstrapStartedEvent {
-    pub snapshot_dir: String,
-    pub service_id: i64,
-    pub mode: String,
-}
-
-/// Superset struct for ptr-bootstrap-progress. Different call sites populate
-/// different subsets of fields; all optional fields are skipped when None.
-#[derive(Debug, Clone, Default, serde::Serialize)]
-pub struct PtrBootstrapProgressEvent {
-    pub phase: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub stage: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub service_id: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub running: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub rows_done: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub rows_total: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub rows_done_stage: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub rows_total_stage: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub rows_per_sec: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub eta_seconds: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub counts: Option<serde_json::Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub updated_at: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub ts: Option<String>,
-}
-
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct PtrBootstrapFinishedEvent {
-    pub success: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub dry_run: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub service_id: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub result: Option<serde_json::Value>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cursor_index: Option<i64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cursor_source: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub delta_sync_started: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub counts: Option<serde_json::Value>,
-}
-
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct PtrBootstrapFailedEvent {
-    pub success: bool,
-    pub error: String,
 }
 
 // --- System / misc
@@ -571,4 +124,24 @@ pub struct DuplicateAutoMergeFinishedEvent {
     pub loser_hash: String,
     pub distance: u32,
     pub tags_merged: usize,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ManualImportProgressEvent {
+    pub done: usize,
+    pub total: usize,
+    pub current_file: String,
+    pub imported: usize,
+    pub skipped: usize,
+    pub errors: usize,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct MediaExportProgressEvent {
+    pub done: usize,
+    pub total: usize,
+    pub current_file: String,
+    pub exported: usize,
+    pub skipped: usize,
+    pub errors: usize,
 }

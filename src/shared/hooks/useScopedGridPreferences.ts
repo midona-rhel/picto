@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
-import { ViewPrefsController, type ViewPrefsPatch } from '../controllers/viewPrefsController';
+import { api } from '#desktop/api';
+import type { ViewPrefsPatch } from '../types/api';
 import type { AppSettings } from '../../state/settingsStore';
 import type { GridViewMode } from '#features/grid/types';
+import { deriveGridScopeKey } from '#features/grid/scopeModel';
 
 export type ThumbnailFitMode = 'contain' | 'cover';
 
@@ -17,6 +19,7 @@ export interface DisplayOptions {
 type UseScopedGridPreferencesParams = {
   currentView: string;
   activeFolderId: number | null;
+  activeCollectionId: number | null;
   activeSmartFolderId: string | null;
   activeStatusFilter: string | null;
   settingsLoaded: boolean;
@@ -46,6 +49,7 @@ const VALID_VIEW_MODES = new Set<string>(['grid', 'waterfall', 'justified']);
 export function useScopedGridPreferences({
   currentView,
   activeFolderId,
+  activeCollectionId,
   activeSmartFolderId,
   activeStatusFilter,
   settingsLoaded,
@@ -60,6 +64,16 @@ export function useScopedGridPreferences({
   const [scopedGridSortField, setScopedGridSortField] = useState<AppSettings['gridSortField'] | null>(null);
   const [scopedGridSortOrder, setScopedGridSortOrder] = useState<AppSettings['gridSortOrder'] | null>(null);
   const [scopedDisplay, setScopedDisplay] = useState<DisplayOptions | null>(null);
+
+  // Read cached fallback from localStorage for instant display on reload
+  const cachedFallback = useMemo(() => {
+    try {
+      const raw = localStorage.getItem('picto-scope-fallback');
+      if (raw) return JSON.parse(raw) as { viewMode: GridViewMode; targetSize: number; sortField: AppSettings['gridSortField']; sortOrder: AppSettings['gridSortOrder']; display: DisplayOptions };
+    } catch { /* ignore */ }
+    return null;
+  }, []);
+
   const [scopeFallback, setScopeFallback] = useState<{
     viewMode: GridViewMode;
     targetSize: number;
@@ -67,11 +81,11 @@ export function useScopedGridPreferences({
     sortOrder: AppSettings['gridSortOrder'];
     display: DisplayOptions;
   }>({
-    viewMode: defaultGridViewMode,
-    targetSize: defaultGridTargetSize,
-    sortField: defaultSortField,
-    sortOrder: defaultSortOrder,
-    display: defaultDisplayOptions,
+    viewMode: cachedFallback?.viewMode ?? defaultGridViewMode,
+    targetSize: cachedFallback?.targetSize ?? defaultGridTargetSize,
+    sortField: cachedFallback?.sortField ?? defaultSortField,
+    sortOrder: cachedFallback?.sortOrder ?? defaultSortOrder,
+    display: cachedFallback?.display ?? defaultDisplayOptions,
   });
 
   const viewPrefsLoadSeq = useRef(0);
@@ -79,15 +93,13 @@ export function useScopedGridPreferences({
   const pendingViewPrefsPatch = useRef<ViewPrefsPatch>({});
   const prevScopeKeyRef = useRef<string | null>(null);
 
-  const gridScopeKey = useMemo(() => {
-    if (currentView !== 'images') return null;
-    if (activeFolderId) return `folder:${activeFolderId}`;
-    if (activeSmartFolderId) return `smart:${activeSmartFolderId}`;
-    if (activeStatusFilter === 'inbox') return 'system:inbox';
-    if (activeStatusFilter === 'uncategorized') return 'system:uncategorized';
-    if (activeStatusFilter === 'trash') return 'system:trash';
-    return 'system:all';
-  }, [currentView, activeFolderId, activeSmartFolderId, activeStatusFilter]);
+  const gridScopeKey = useMemo(() => deriveGridScopeKey({
+    currentView,
+    activeFolderId,
+    activeCollectionId,
+    activeSmartFolderId,
+    activeStatusFilter,
+  }), [currentView, activeCollectionId, activeFolderId, activeSmartFolderId, activeStatusFilter]);
 
   const effectiveGridViewMode = scopedGridViewMode ?? scopeFallback.viewMode;
   const effectiveGridTargetSize = scopedGridTargetSize ?? scopeFallback.targetSize;
@@ -112,7 +124,7 @@ export function useScopedGridPreferences({
     saveViewPrefsTimer.current = setTimeout(() => {
       const mergedPatch = pendingViewPrefsPatch.current;
       pendingViewPrefsPatch.current = {};
-      void ViewPrefsController.set(gridScopeKey, mergedPatch).catch((e) => {
+      void api.settings.setViewPrefs(gridScopeKey, mergedPatch).catch((e) => {
         console.error('Failed to persist view prefs:', e);
       });
     }, 180);
@@ -146,7 +158,7 @@ export function useScopedGridPreferences({
       saveViewPrefsTimer.current = null;
     }
 
-    void ViewPrefsController.get(gridScopeKey)
+    void api.settings.getViewPrefs(gridScopeKey)
       .then((pref) => {
         if (viewPrefsLoadSeq.current !== seq) return;
         const nextViewMode =
@@ -175,13 +187,15 @@ export function useScopedGridPreferences({
         setScopedGridSortField(nextSortField);
         setScopedGridSortOrder(nextSortOrder);
         setScopedDisplay(nextDisplay);
-        setScopeFallback({
+        const fb = {
           viewMode: nextViewMode,
           targetSize: nextTargetSize,
           sortField: nextSortField,
           sortOrder: nextSortOrder,
           display: nextDisplay,
-        });
+        };
+        setScopeFallback(fb);
+        try { localStorage.setItem('picto-scope-fallback', JSON.stringify(fb)); } catch { /* ignore */ }
       })
       .catch((e) => console.error('Failed to load view prefs:', e));
   }, [

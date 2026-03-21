@@ -37,14 +37,14 @@ describe('check-command-parity parser helpers', () => {
   it('extracts multiple rust command literals on one match arm', () => {
     const source = `
       "approve" | "reject" => cmd_result_ok(()),
-      "ptr_bootstrap_from_hydrus_snapshot" => cmd_result_ok(()),
+      "repair_projections" => cmd_result_ok(()),
       let not_a_command = "hello";
     `;
 
     const commands = extractRustCommandsFromText(source);
     expect(commands.has('approve')).toBe(true);
     expect(commands.has('reject')).toBe(true);
-    expect(commands.has('ptr_bootstrap_from_hydrus_snapshot')).toBe(true);
+    expect(commands.has('repair_projections')).toBe(true);
     expect(commands.has('hello')).toBe(false);
   });
 });

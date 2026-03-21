@@ -1,2 +1,2 @@
-pub mod controller;
+pub mod compiler;
 pub mod db;

@@ -154,19 +154,6 @@ def classify_callsite(file: str, line: int, op: str, fn_name: str, source_line: 
             _add(file, line, f"tags_{fn_name}", "warm", "bounded")
         return
 
-    # --- sqlite_ptr/ ---
-    if "sqlite_ptr" in file:
-        if "overlay" in fn_name.lower() or "merge" in fn_name.lower():
-            _add(file, line, f"ptr_{fn_name}", "warm", "bounded")
-        elif "sync" in fn_name.lower() or "bootstrap" in fn_name.lower() or "import" in fn_name.lower():
-            _add(file, line, f"ptr_{fn_name}", "warm", "unbounded", "none",
-                 ["idx_ptr_definitions", "idx_ptr_mappings"])
-        elif "stats" in fn_name.lower() or "info" in fn_name.lower() or "count" in fn_name.lower():
-            _add(file, line, f"ptr_{fn_name}", "cold", "single")
-        else:
-            _add(file, line, f"ptr_{fn_name}", "warm", "bounded")
-        return
-
     # --- sqlite/subscriptions.rs ---
     if file.endswith("sqlite/subscriptions.rs"):
         if "get" in fn_name.lower() or "list" in fn_name.lower():

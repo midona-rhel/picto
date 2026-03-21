@@ -4,19 +4,19 @@ import {
   IconSettings2,
   IconCommand,
   IconDownload,
-  IconCloud,
   IconCopy,
   IconAlertTriangle,
   IconCode,
   IconX,
+  IconSparkles,
 } from '@tabler/icons-react';
 import { getCurrentWindow } from '#desktop/api';
 
 import { GeneralPanel } from './GeneralPanel';
 import { ShortcutsPanel } from './ShortcutsPanel';
 import { DownloadServicesPanel } from './DownloadServicesPanel';
-import { PtrPanel } from './PtrPanel';
 import { DuplicatesPanel } from './DuplicatesPanel';
+import { AiTaggingPanel } from './AiTaggingPanel';
 import { DangerZonePanel } from './DangerZonePanel';
 import { DeveloperPanel } from './DeveloperPanel';
 import styles from './Settings.module.css';
@@ -33,11 +33,11 @@ type SidebarEntry = NavItem | { type: 'separator' };
 
 const SIDEBAR_PANELS: SidebarEntry[] = [
   { id: 'general', label: 'General', icon: IconSettings2, panel: () => <GeneralPanel />, keywords: 'theme appearance color language zoom' },
-  { id: 'shortcuts', label: 'Shortcuts', icon: IconCommand, panel: () => <ShortcutsPanel />, keywords: 'keyboard shortcut keybind hotkey' },
   { type: 'separator' },
+  { id: 'shortcuts', label: 'Shortcuts', icon: IconCommand, panel: () => <ShortcutsPanel />, keywords: 'keyboard shortcut keybind hotkey' },
   { id: 'downloads', label: 'Downloads', icon: IconDownload, panel: () => <DownloadServicesPanel />, keywords: 'download service gallery-dl rate limit batch' },
-  { id: 'ptr', label: 'PTR', icon: IconCloud, panel: () => <PtrPanel />, keywords: 'ptr public tag repository hydrus sync tags' },
   { id: 'duplicates', label: 'Duplicates', icon: IconCopy, panel: () => <DuplicatesPanel />, keywords: 'duplicate merge phash similarity threshold' },
+  { id: 'ai-tagging', label: 'AI Tagging', icon: IconSparkles, panel: () => <AiTaggingPanel />, keywords: 'ai tag auto tagger model wd14 e621 onnx threshold' },
   { type: 'separator' },
   { id: 'developer', label: 'Developer', icon: IconCode, panel: () => <DeveloperPanel />, keywords: 'developer perf slo diagnostics debug' },
   { id: 'danger', label: 'Danger Zone', icon: IconAlertTriangle, panel: () => <DangerZonePanel />, keywords: 'danger reset delete' },

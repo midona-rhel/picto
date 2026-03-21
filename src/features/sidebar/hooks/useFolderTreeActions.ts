@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useRef } from 'react';
-import { FolderController } from '../../../shared/controllers/folderController';
+import { api } from '#desktop/api';
 import { registerUndoAction } from '../../../shared/controllers/undoRedoController';
-import { notifyWarning } from '../../../shared/lib/notify';
 import { useInlineRename } from '../../../shared/hooks/useInlineRename';
 import { imageDrag } from '../../../shared/lib/imageDrag';
+import { useImportActionStore } from '../../../state/importActionStore';
+import { useFolderWatchActionStore } from '../../../state/folderWatchActionStore';
+import { useNavigationStore } from '../../../state/navigationStore';
 import type { SidebarNodeDto } from '../../../shared/types/sidebar';
 import { TagSelectService } from '../../tags/components/tagSelectService';
 import { type TreeNode, parseFolderId, getFolderAutoTags } from '../lib/folderTreeData';
@@ -11,8 +13,8 @@ import { type TreeNode, parseFolderId, getFolderAutoTags } from '../lib/folderTr
 interface UseFolderTreeActionsOptions {
   folderNodes: SidebarNodeDto[];
   nodeMap: Map<string, TreeNode>;
-  activeFolder: { folder_id: number; name: string } | null;
-  setActiveFolder: (folder: { folder_id: number; name: string } | null) => void;
+  activeFolderId: number | null;
+  setActiveFolderId: (folderId: number | null) => void;
   expandFolder: (nodeId: string) => void;
   setCollapsedNodes: React.Dispatch<React.SetStateAction<Set<string>>>;
 }
@@ -20,8 +22,8 @@ interface UseFolderTreeActionsOptions {
 export function useFolderTreeActions({
   folderNodes,
   nodeMap,
-  activeFolder,
-  setActiveFolder,
+  activeFolderId,
+  setActiveFolderId,
   expandFolder,
   setCollapsedNodes,
 }: UseFolderTreeActionsOptions) {
@@ -34,14 +36,14 @@ export function useFolderTreeActions({
         const currentNode = folderNodes.find((n) => n.id === id);
         const oldName = currentNode?.name ?? '';
         if (oldName === newName) return;
-        await FolderController.updateFolder({ folderId, name: newName });
+        await api.folders.update({ folder_id: folderId, name: newName });
         registerUndoAction({
           label: 'Rename folder',
           undo: async () => {
-            await FolderController.updateFolder({ folderId, name: oldName });
+            await api.folders.update({ folder_id: folderId, name: oldName });
           },
           redo: async () => {
-            await FolderController.updateFolder({ folderId, name: newName });
+            await api.folders.update({ folder_id: folderId, name: newName });
           },
         });
       } catch (e) { console.error('Rename failed:', e); }
@@ -69,16 +71,16 @@ export function useFolderTreeActions({
 
   const handleCreate = useCallback(async () => {
     try {
-      let folder = await FolderController.createFolder({ name: 'New Folder' });
+      let folder = await api.folders.create({ name: 'New Folder' });
       pendingRenameFolderId.current = folder.folder_id;
       startRename(`folder:${folder.folder_id}`, folder.name);
       registerUndoAction({
         label: 'Create folder',
         undo: async () => {
-          await FolderController.deleteFolder(folder.folder_id);
+          await api.folders.delete(folder.folder_id);
         },
         redo: async () => {
-          folder = await FolderController.createFolder({ name: folder.name });
+          folder = await api.folders.create({ name: folder.name });
         },
       });
     } catch (e) {
@@ -97,46 +99,43 @@ export function useFolderTreeActions({
         parentId: node.parent_id ? parseFolderId(node.parent_id) : null,
         icon: node.icon ?? null,
         color: node.color ?? null,
-        files: await FolderController.getFolderFiles(folderId),
+        files: await api.folders.getFiles(folderId),
       } : null;
-      await FolderController.deleteFolder(folderId);
+      await api.folders.delete(folderId);
       if (snapshot) {
         let recreatedId: number | null = null;
         registerUndoAction({
           label: `Delete folder "${snapshot.name}"`,
           undo: async () => {
-            const recreated = await FolderController.createFolder({
+            const recreated = await api.folders.create({
               name: snapshot.name,
-              parentId: snapshot.parentId,
-              icon: snapshot.icon,
-              color: snapshot.color,
+              parent_id: snapshot.parentId,
+              icon: snapshot.icon ?? undefined,
+              color: snapshot.color ?? undefined,
             });
             recreatedId = recreated.folder_id;
             if (snapshot.files.length > 0) {
-              await FolderController.addFilesToFolderBatch(recreated.folder_id, snapshot.files);
+              await api.folders.addFiles(recreated.folder_id, snapshot.files);
             }
           },
           redo: async () => {
             const id = recreatedId ?? folderId;
-            await FolderController.deleteFolder(id);
+            await api.folders.delete(id);
           },
         });
-      } else {
-        notifyWarning('Undo for deleting folders with subfolders is not supported yet.', 'Limited Undo');
       }
-      if (activeFolder?.folder_id === folderId) setActiveFolder(null);
+      if (activeFolderId === folderId) setActiveFolderId(null);
     } catch (e) { console.error('Delete failed:', e); }
-  }, [activeFolder, setActiveFolder, nodeMap]);
+  }, [activeFolderId, setActiveFolderId, nodeMap]);
 
   const handleBatchDelete = useCallback(async (ids: Set<string>) => {
     const folderIds = [...ids].map(parseFolderId).filter((id): id is number => id != null);
     if (folderIds.length === 0) return;
     try {
-      await Promise.all(folderIds.map((id) => FolderController.deleteFolder(id)));
-      notifyWarning('Batch folder delete cannot be undone yet.', 'Limited Undo');
-      if (activeFolder && folderIds.includes(activeFolder.folder_id)) setActiveFolder(null);
+      await Promise.all(folderIds.map((id) => api.folders.delete(id)));
+      if (activeFolderId != null && folderIds.includes(activeFolderId)) setActiveFolderId(null);
     } catch (e) { console.error('Batch delete failed:', e); }
-  }, [activeFolder, setActiveFolder]);
+  }, [activeFolderId, setActiveFolderId]);
 
   const handleSortFolders = useCallback(async (parentId: string | null, direction: 'asc' | 'desc') => {
     const siblings = folderNodes
@@ -155,14 +154,14 @@ export function useFolderTreeActions({
       if (fid != null) moves.push([fid, (i + 1) * 1000]);
     });
     try {
-      await FolderController.reorderFolders(moves);
+      await api.folders.reorder(moves);
       registerUndoAction({
         label: 'Sort folders',
         undo: async () => {
-          await FolderController.reorderFolders(previousMoves);
+          await api.folders.reorder(previousMoves);
         },
         redo: async () => {
-          await FolderController.reorderFolders(moves);
+          await api.folders.reorder(moves);
         },
       });
     } catch (err) { console.error('Sort failed:', err); }
@@ -191,14 +190,14 @@ export function useFolderTreeActions({
       });
     }
     try {
-      await FolderController.reorderFolders(allMoves);
+      await api.folders.reorder(allMoves);
       registerUndoAction({
         label: 'Sort all folders',
         undo: async () => {
-          await FolderController.reorderFolders(previousMoves);
+          await api.folders.reorder(previousMoves);
         },
         redo: async () => {
-          await FolderController.reorderFolders(allMoves);
+          await api.folders.reorder(allMoves);
         },
       });
     } catch (err) { console.error('Sort all failed:', err); }
@@ -206,32 +205,32 @@ export function useFolderTreeActions({
 
   const createSiblingFolder = useCallback(async (node: TreeNode) => {
     const parentId = node.parent_id ? parseFolderId(node.parent_id) : null;
-    let folder = await FolderController.createFolder({ name: 'New Folder', parentId });
+    let folder = await api.folders.create({ name: 'New Folder', parent_id: parentId ?? null });
     pendingRenameFolderId.current = folder.folder_id;
     startRename(`folder:${folder.folder_id}`, folder.name);
     registerUndoAction({
       label: 'Create folder',
       undo: async () => {
-        await FolderController.deleteFolder(folder.folder_id);
+        await api.folders.delete(folder.folder_id);
       },
       redo: async () => {
-        folder = await FolderController.createFolder({ name: folder.name, parentId });
+        folder = await api.folders.create({ name: folder.name, parent_id: parentId ?? null });
       },
     });
   }, [startRename]);
 
   const createSubfolderForNode = useCallback(async (node: TreeNode, folderId: number) => {
     expandFolder(node.id);
-    let sub = await FolderController.createFolder({ name: 'New Folder', parentId: folderId });
+    let sub = await api.folders.create({ name: 'New Folder', parent_id: folderId });
     pendingRenameFolderId.current = sub.folder_id;
     startRename(`folder:${sub.folder_id}`, sub.name);
     registerUndoAction({
       label: 'Create subfolder',
       undo: async () => {
-        await FolderController.deleteFolder(sub.folder_id);
+        await api.folders.delete(sub.folder_id);
       },
       redo: async () => {
-        sub = await FolderController.createFolder({ name: sub.name, parentId: folderId });
+        sub = await api.folders.create({ name: sub.name, parent_id: folderId });
       },
     });
   }, [expandFolder, startRename]);
@@ -241,14 +240,14 @@ export function useFolderTreeActions({
       const targetNode = folderNodes.find((n) => parseFolderId(n.id) === id);
       return { id, icon: targetNode?.icon ?? null };
     });
-    await Promise.all(ids.map((id) => FolderController.updateFolder({ folderId: id, icon })));
+    await Promise.all(ids.map((id) => api.folders.update({ folder_id: id, icon: icon === null ? '' : (icon ?? undefined) })));
     registerUndoAction({
       label: ids.length > 1 ? 'Change folder icons' : 'Change folder icon',
       undo: async () => {
-        await Promise.all(previous.map((entry) => FolderController.updateFolder({ folderId: entry.id, icon: entry.icon })));
+        await Promise.all(previous.map((entry) => api.folders.update({ folder_id: entry.id, icon: entry.icon === null ? '' : (entry.icon ?? undefined) })));
       },
       redo: async () => {
-        await Promise.all(ids.map((id) => FolderController.updateFolder({ folderId: id, icon })));
+        await Promise.all(ids.map((id) => api.folders.update({ folder_id: id, icon: icon === null ? '' : (icon ?? undefined) })));
       },
     });
   }, [folderNodes]);
@@ -258,14 +257,14 @@ export function useFolderTreeActions({
       const targetNode = folderNodes.find((n) => parseFolderId(n.id) === id);
       return { id, color: targetNode?.color ?? null };
     });
-    await Promise.all(ids.map((id) => FolderController.updateFolder({ folderId: id, color })));
+    await Promise.all(ids.map((id) => api.folders.update({ folder_id: id, color: color === null ? '' : (color ?? undefined) })));
     registerUndoAction({
       label: ids.length > 1 ? 'Change folder colors' : 'Change folder color',
       undo: async () => {
-        await Promise.all(previous.map((entry) => FolderController.updateFolder({ folderId: entry.id, color: entry.color })));
+        await Promise.all(previous.map((entry) => api.folders.update({ folder_id: entry.id, color: entry.color === null ? '' : (entry.color ?? undefined) })));
       },
       redo: async () => {
-        await Promise.all(ids.map((id) => FolderController.updateFolder({ folderId: id, color })));
+        await Promise.all(ids.map((id) => api.folders.update({ folder_id: id, color: color === null ? '' : (color ?? undefined) })));
       },
     });
   }, [folderNodes]);
@@ -285,14 +284,14 @@ export function useFolderTreeActions({
         const next = Array.from(new Set(draft)).sort();
         const prev = Array.from(new Set(original)).sort();
         if (JSON.stringify(next) === JSON.stringify(prev)) return;
-        void FolderController.updateFolder({ folderId, autoTags: next }).then(() => {
+        void api.folders.update({ folder_id: folderId, auto_tags: next }).then(() => {
           registerUndoAction({
             label: 'Update folder auto-tags',
             undo: async () => {
-              await FolderController.updateFolder({ folderId, autoTags: prev });
+              await api.folders.update({ folder_id: folderId, auto_tags: prev });
             },
             redo: async () => {
-              await FolderController.updateFolder({ folderId, autoTags: next });
+              await api.folders.update({ folder_id: folderId, auto_tags: next });
             },
           });
         }).catch((error) => {
@@ -304,14 +303,14 @@ export function useFolderTreeActions({
 
   const handleFilesDropOnFolder = useCallback(async (folderId: number, hashes: string[]) => {
     try {
-      await FolderController.addFilesToFolderBatch(folderId, hashes);
+      await api.folders.addFiles(folderId, hashes);
       registerUndoAction({
         label: `Add ${hashes.length} to folder`,
         undo: async () => {
-          await FolderController.removeFilesFromFolderBatch(folderId, hashes);
+          await api.folders.removeFiles(folderId, hashes);
         },
         redo: async () => {
-          await FolderController.addFilesToFolderBatch(folderId, hashes);
+          await api.folders.addFiles(folderId, hashes);
         },
       });
     } catch (err) { console.error('Failed to add files to folder:', err); }
@@ -322,6 +321,19 @@ export function useFolderTreeActions({
       handleFilesDropOnFolder(folderId, hashes);
     });
   }, [handleFilesDropOnFolder]);
+
+  const handleImportFolderHere = useCallback((folderId: number, folderName: string) => {
+    useNavigationStore.getState().navigateToFolder({ folder_id: folderId, name: folderName });
+    useImportActionStore.getState().requestImportFolderDialog(folderId);
+  }, []);
+
+  const handleOpenFolderWatchDialog = useCallback((folderId: number) => {
+    useFolderWatchActionStore.getState().requestOpen(folderId);
+  }, []);
+
+  const handleClearFolderWatchConfig = useCallback(async (folderId: number) => {
+    await api.folders.clearWatchConfig(folderId);
+  }, []);
 
   return {
     // Rename state
@@ -344,6 +356,9 @@ export function useFolderTreeActions({
     applyColorToFolders,
     openFolderAutoTagsEditor,
     handleFilesDropOnFolder,
+    handleImportFolderHere,
+    handleOpenFolderWatchDialog,
+    handleClearFolderWatchConfig,
     // Re-export for context menu
     getFolderAutoTags,
   };

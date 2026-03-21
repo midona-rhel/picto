@@ -42,7 +42,7 @@ pub fn tag_display_key(namespace: &str, subtag: &str) -> String {
 }
 
 #[derive(Debug, Serialize, TS)]
-#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct ImportResult {
     pub hash: String,
     pub mime: String,
@@ -53,7 +53,7 @@ pub struct ImportResult {
 }
 
 #[derive(Debug, Serialize, TS)]
-#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct ImportBatchResult {
     pub imported: Vec<ImportResult>,
     pub skipped: Vec<String>,
@@ -84,16 +84,19 @@ pub struct EntityDetails {
     pub view_count: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source_urls: Option<JsonValue>,
+    #[serde(rename = "date_added")]
     pub imported_at: String,
     pub has_thumbnail: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub blurhash: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dominant_color_hex: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dominant_colors: Option<Vec<DominantColorDto>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub notes: Option<JsonValue>,
+    #[serde(rename = "date_created", skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<String>,
+    #[serde(rename = "date_modified", skip_serializing_if = "Option::is_none")]
+    pub updated_at: Option<String>,
 }
 
 impl From<FileRecord> for EntityDetails {
@@ -123,10 +126,11 @@ impl From<FileRecord> for EntityDetails {
             source_urls,
             imported_at: f.imported_at,
             has_thumbnail,
-            blurhash: f.blurhash,
             dominant_color_hex: f.dominant_color_hex,
             dominant_colors: None,
             notes,
+            created_at: None,
+            updated_at: None,
         }
     }
 }
@@ -150,10 +154,11 @@ pub struct EntitySlim {
     pub status: String,
     pub rating: Option<i64>,
     pub view_count: i64,
+    #[serde(rename = "date_added")]
     pub imported_at: String,
     pub has_thumbnail: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub blurhash: Option<String>,
+    pub dominant_color_hex: Option<String>,
 }
 
 impl From<FileMetadataSlim> for EntitySlim {
@@ -186,7 +191,7 @@ impl From<FileMetadataSlim> for EntitySlim {
             view_count: f.view_count,
             imported_at: f.imported_at,
             has_thumbnail,
-            blurhash: f.blurhash,
+            dominant_color_hex: f.dominant_color_hex,
         }
     }
 }
@@ -212,23 +217,56 @@ impl From<crate::sqlite::files::FileRecord> for EntitySlim {
             view_count: f.view_count,
             imported_at: f.imported_at,
             has_thumbnail,
-            blurhash: f.blurhash,
+            dominant_color_hex: f.dominant_color_hex,
         }
     }
 }
 
-#[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
-pub struct GridPageSlimQuery {
-    pub limit: Option<usize>,
-    pub cursor: Option<String>,
-    pub status: Option<String>,
-    #[serde(alias = "sortField")]
-    pub sort_field: Option<String>,
-    #[serde(alias = "sortOrder")]
-    pub sort_order: Option<String>,
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
+#[serde(rename_all = "snake_case")]
+pub enum GridScopeKind {
+    System,
+    Folder,
+    Collection,
+    Smart,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
+#[serde(rename_all = "snake_case")]
+pub enum GridSystemScopeKey {
+    All,
+    Inbox,
+    Trash,
+    Untagged,
+    Uncategorized,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS, Default)]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
+pub struct GridScopeSpec {
+    pub kind: GridScopeKind,
+    pub system_key: Option<GridSystemScopeKey>,
+    #[serde(alias = "folderId")]
+    #[ts(type = "number | null")]
+    pub folder_id: Option<i64>,
+    #[serde(alias = "collectionEntityId")]
+    #[ts(type = "number | null")]
+    pub collection_entity_id: Option<i64>,
     #[serde(alias = "smartFolderPredicate")]
     pub smart_folder_predicate: Option<SmartFolderPredicate>,
+}
+
+impl Default for GridScopeKind {
+    fn default() -> Self {
+        Self::System
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS, Default)]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
+pub struct GridFilterSpec {
     #[serde(alias = "searchTags")]
     pub search_tags: Option<Vec<String>>,
     #[serde(alias = "searchExcludedTags")]
@@ -243,31 +281,44 @@ pub struct GridPageSlimQuery {
     pub excluded_folder_ids: Option<Vec<i64>>,
     #[serde(alias = "folderMatchMode")]
     pub folder_match_mode: Option<String>,
-    /// Collection entity scope filter — restricts grid to members of this collection.
-    #[serde(alias = "collectionEntityId")]
-    #[ts(type = "number | null")]
-    pub collection_entity_id: Option<i64>,
-    /// Minimum rating filter (1-5)
     #[serde(alias = "ratingMin")]
     #[ts(type = "number | null")]
     pub rating_min: Option<i64>,
-    /// MIME prefix filters (e.g. ["image/", "video/"])
     #[serde(alias = "mimePrefixes")]
     pub mime_prefixes: Option<Vec<String>>,
-    /// Dominant color hex filter
     #[serde(alias = "colorHex")]
     pub color_hex: Option<String>,
-    /// Color tolerance / max distance (1-30, lower = stricter). Default 20.
     #[serde(alias = "colorAccuracy")]
     #[ts(type = "number | null")]
     pub color_accuracy: Option<f64>,
-    /// Free-text search query (FTS5 on name + notes)
     #[serde(alias = "searchText")]
     pub search_text: Option<String>,
-    /// Seed for deterministic random ordering (Random view)
+    #[serde(alias = "collectionsOnly")]
+    pub collections_only: Option<bool>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS, Default)]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
+pub struct GridSortSpec {
+    #[serde(alias = "field")]
+    pub field: Option<String>,
+    #[serde(alias = "order")]
+    pub order: Option<String>,
     #[serde(alias = "randomSeed")]
     #[ts(type = "number | null")]
     pub random_seed: Option<i64>,
+}
+
+#[derive(Debug, Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
+pub struct GridPageSlimQuery {
+    pub limit: Option<usize>,
+    pub cursor: Option<String>,
+    pub scope: GridScopeSpec,
+    #[serde(default)]
+    pub filters: GridFilterSpec,
+    #[serde(default)]
+    pub sort: GridSortSpec,
 }
 
 #[derive(Debug, Serialize)]
@@ -289,37 +340,50 @@ mod grid_query_tests {
         let raw = serde_json::json!({
             "limit": 100,
             "cursor": null,
-            "sortField": "imported_at",
-            "sortOrder": "desc",
-            "smartFolderPredicate": { "groups": [] },
-            "searchTags": ["series:test"],
-            "searchExcludedTags": ["artist:foo"],
-            "tagMatchMode": "any",
-            "folderIds": [42],
-            "excludedFolderIds": [99],
-            "folderMatchMode": "all",
-            "collectionEntityId": 7,
-            "ratingMin": 3,
-            "mimePrefixes": ["image/"],
-            "colorHex": "#ffffff",
-            "colorAccuracy": 12.0,
-            "searchText": "cat"
+            "scope": {
+                "kind": "collection",
+                "collectionEntityId": 7
+            },
+            "filters": {
+                "searchTags": ["series:test"],
+                "searchExcludedTags": ["artist:foo"],
+                "tagMatchMode": "any",
+                "folderIds": [42],
+                "excludedFolderIds": [99],
+                "folderMatchMode": "all",
+                "ratingMin": 3,
+                "mimePrefixes": ["image/"],
+                "colorHex": "#ffffff",
+                "colorAccuracy": 12.0,
+                "searchText": "cat"
+            },
+            "sort": {
+                "field": "date_added",
+                "order": "desc"
+            }
         });
         let parsed: GridPageSlimQuery =
             serde_json::from_value(raw).expect("query should deserialize");
-        assert_eq!(parsed.sort_field.as_deref(), Some("imported_at"));
-        assert_eq!(parsed.sort_order.as_deref(), Some("desc"));
-        assert_eq!(parsed.folder_ids, Some(vec![42]));
-        assert_eq!(parsed.excluded_folder_ids, Some(vec![99]));
-        assert_eq!(parsed.folder_match_mode.as_deref(), Some("all"));
-        assert_eq!(parsed.collection_entity_id, Some(7));
-        assert_eq!(parsed.search_tags, Some(vec!["series:test".to_string()]));
+        assert_eq!(parsed.sort.field.as_deref(), Some("date_added"));
+        assert_eq!(parsed.sort.order.as_deref(), Some("desc"));
+        assert_eq!(parsed.filters.folder_ids, Some(vec![42]));
+        assert_eq!(parsed.filters.excluded_folder_ids, Some(vec![99]));
+        assert_eq!(parsed.filters.folder_match_mode.as_deref(), Some("all"));
+        assert_eq!(parsed.scope.collection_entity_id, Some(7));
         assert_eq!(
-            parsed.search_excluded_tags,
+            parsed.scope.kind,
+            super::GridScopeKind::Collection,
+        );
+        assert_eq!(
+            parsed.filters.search_tags,
+            Some(vec!["series:test".to_string()])
+        );
+        assert_eq!(
+            parsed.filters.search_excluded_tags,
             Some(vec!["artist:foo".to_string()])
         );
-        assert_eq!(parsed.tag_match_mode.as_deref(), Some("any"));
-        assert_eq!(parsed.search_text.as_deref(), Some("cat"));
+        assert_eq!(parsed.filters.tag_match_mode.as_deref(), Some("any"));
+        assert_eq!(parsed.filters.search_text.as_deref(), Some("cat"));
     }
 }
 
@@ -344,30 +408,27 @@ pub struct ResolvedTagInfo {
 }
 
 #[derive(Debug, Serialize)]
-pub struct StorageStats {
-    pub file_count: i64,
-}
-
-#[derive(Debug, Serialize)]
-pub struct FileAllMetadata {
-    pub file: EntityDetails,
+pub struct EntityAllMetadata {
+    pub entity: EntityDetails,
     pub tags: Vec<ResolvedTagInfo>,
     pub parent_tags: Vec<TagInfo>,
 }
 
 #[derive(Debug, Serialize)]
 pub struct EntityMetadataBatchResponse {
-    pub items: HashMap<String, FileAllMetadata>,
+    pub items: HashMap<String, EntityAllMetadata>,
     pub missing: Vec<String>,
     pub generated_at: String,
 }
 
-// Temporary migration aliases while TS/front-end callsites are moved to entity-centric naming.
-pub type FileInfo = EntityDetails;
-pub type FileInfoSlim = EntitySlim;
+pub type EntityInfo = EntityDetails;
+pub type EntityInfoSlim = EntitySlim;
+pub type FileAllMetadata = EntityAllMetadata;
+pub type FileInfo = EntityInfo;
+pub type FileInfoSlim = EntityInfoSlim;
 
 #[derive(Debug, Clone, Deserialize, TS)]
-#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
 #[serde(rename_all = "snake_case")]
 pub enum SelectionMode {
     ExplicitHashes,
@@ -375,26 +436,17 @@ pub enum SelectionMode {
 }
 
 #[derive(Debug, Clone, Deserialize, TS)]
-#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct SelectionQuerySpec {
     pub mode: SelectionMode,
     pub hashes: Option<Vec<String>>,
-    pub search_tags: Option<Vec<String>>,
-    pub search_excluded_tags: Option<Vec<String>>,
-    pub tag_match_mode: Option<String>,
-    pub smart_folder_predicate: Option<SmartFolderPredicate>,
-    pub smart_folder_sort_field: Option<String>,
-    pub smart_folder_sort_order: Option<String>,
-    pub sort_field: Option<String>,
-    pub sort_order: Option<String>,
+    pub scope: GridScopeSpec,
+    #[serde(default)]
+    pub filters: GridFilterSpec,
+    #[serde(default)]
+    pub sort: GridSortSpec,
     pub excluded_hashes: Option<Vec<String>>,
     pub included_hashes: Option<Vec<String>>,
-    pub status: Option<String>,
-    #[ts(type = "number[] | null")]
-    pub folder_ids: Option<Vec<i64>>,
-    #[ts(type = "number[] | null")]
-    pub excluded_folder_ids: Option<Vec<i64>>,
-    pub folder_match_mode: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -460,7 +512,7 @@ pub struct ViewPrefsDto {
 }
 
 #[derive(Debug, Clone, Deserialize, TS)]
-#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct ViewPrefsPatch {
     pub sort_field: Option<String>,
     pub sort_order: Option<String>,
@@ -475,25 +527,11 @@ pub struct ViewPrefsPatch {
 }
 
 #[derive(Debug, Clone, Deserialize, TS)]
-#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct FolderReorderMove {
     pub hash: String,
     pub before_hash: Option<String>,
     pub after_hash: Option<String>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct DuplicateInfo {
-    pub other_hash: String,
-    pub distance: f64,
-    pub status: String,
-}
-
-#[derive(Debug, Serialize)]
-pub struct DuplicatePairResponse {
-    pub hash_a: String,
-    pub hash_b: String,
-    pub distance: f64,
 }
 
 #[derive(Debug, Serialize)]
@@ -504,6 +542,7 @@ pub struct ScanDuplicatesResponse {
     pub reviewable_detected_new: usize,
     pub total_files: usize,
     pub files_with_phash: usize,
+    pub files_scanned: usize,
     pub closest_distance: Option<u32>,
 }
 
@@ -532,13 +571,7 @@ pub struct SmartMergeResult {
 }
 
 #[derive(Debug, Serialize)]
-pub struct ColorSearchResult {
-    pub hash: String,
-    pub distance: f64,
-}
-
-#[derive(Debug, Serialize)]
-pub struct FlowInfo {
+pub struct SubscriptionGroupInfo {
     pub id: String,
     pub name: String,
     pub schedule: String,
@@ -553,9 +586,10 @@ pub struct SubscriptionInfo {
     pub name: String,
     pub site_id: String,
     pub paused: bool,
-    pub flow_id: Option<String>,
+    pub group_id: Option<String>,
     pub initial_file_limit: u32,
     pub periodic_file_limit: u32,
+    pub auto_collections: bool,
     pub created_at: String,
     pub total_files: u64,
     pub queries: Vec<SubscriptionQueryInfo>,
@@ -579,5 +613,5 @@ pub type RunningSubscriptions =
     std::sync::Arc<tokio::sync::Mutex<HashMap<String, tokio_util::sync::CancellationToken>>>;
 
 /// Terminal status map for finished subscriptions. Key = subscription ID, Value = terminal status string.
-/// Written by subscription tasks on exit, read by flow monitor to aggregate final flow status.
+/// Written by subscription tasks on exit, read by group monitor to aggregate final group status.
 pub type SubTerminalStatuses = std::sync::Arc<tokio::sync::Mutex<HashMap<String, String>>>;

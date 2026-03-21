@@ -9,7 +9,7 @@
   "scripts": {
     "dev": "vite",
     "dev:electron": "concurrently -k -n vite,rust,electron -c cyan,red,green \"vite --host 127.0.0.1 --port 8080\" \"cargo watch -w core/src -w native/picto-node/src -s 'cd native/picto-node && ./node_modules/.bin/napi build' -d 1\" \"wait-on tcp:8080 && nodemon --watch native/picto-node/index.node --delay 1 --exec 'electron electron/main.mjs'\"",
-    "start:electron": "electron electron/main.mjs",
+    "start:electron": "npm run rebuild:native && electron electron/main.mjs",
     "rebuild:native": "cd native/picto-node && ./node_modules/.bin/napi build",
     "build": "tsc && vite build",
     "build:electron": "tsc && vite build",
@@ -84,6 +84,11 @@
         ]
       }
     ],
+    "publish": {
+      "provider": "github",
+      "owner": "midona-rhel",
+      "repo": "picto"
+    },
     "mac": {
       "target": [
         "dmg",
@@ -116,8 +121,8 @@
     "@mantine/notifications": "^8.3.14",
     "@tabler/icons-react": "^3.36.1",
     "@tanstack/react-virtual": "^3.13.18",
-    "blurhash": "^2.0.5",
     "dayjs": "^1.11.19",
+    "electron-updater": "^6.8.3",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "zustand": "^5.0.11"

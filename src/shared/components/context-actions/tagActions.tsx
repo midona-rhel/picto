@@ -12,8 +12,6 @@ import {
 } from '@tabler/icons-react';
 import type { ContextMenuEntry } from '../ContextMenu';
 
-export type TagSourceKind = 'local' | 'ptr';
-
 export interface TagMenuTagLike {
   tag_id: number;
   namespace: string;
@@ -22,8 +20,7 @@ export interface TagMenuTagLike {
 
 export interface BuildTagMenuArgs {
   tag: TagMenuTagLike;
-  source: TagSourceKind;
-  siblings: TagMenuTagLike[];
+  aliases: TagMenuTagLike[];
   parents: TagMenuTagLike[];
   children: TagMenuTagLike[];
   formatTagDisplay: (ns: string, subtag: string) => string;
@@ -33,7 +30,7 @@ export interface BuildTagMenuArgs {
   onCopy: () => void | Promise<void>;
   onViewRelations: () => void;
   onNavigateTag: (ns: string, subtag: string) => void;
-  onAddSibling: () => void;
+  onAddAlias: () => void;
   onAddParent: () => void;
   onAddChild: () => void;
   onDelete: () => void | Promise<void>;
@@ -41,7 +38,6 @@ export interface BuildTagMenuArgs {
 
 function buildRelationChildren(
   relationTags: TagMenuTagLike[],
-  isPtr: boolean,
   onNavigateTag: (ns: string, subtag: string) => void,
   addLabel: string,
   onAdd: () => void,
@@ -52,15 +48,13 @@ function buildRelationChildren(
     label: formatTagDisplay(t.namespace, t.subtag),
     onClick: () => onNavigateTag(t.namespace, t.subtag),
   }));
-  if (!isPtr) {
-    if (entries.length > 0) entries.push({ type: 'separator' });
-    entries.push({
-      type: 'item',
-      label: addLabel,
-      icon: <IconPlus size={16} />,
-      onClick: onAdd,
-    });
-  }
+  if (entries.length > 0) entries.push({ type: 'separator' });
+  entries.push({
+    type: 'item',
+    label: addLabel,
+    icon: <IconPlus size={16} />,
+    onClick: onAdd,
+  });
   if (entries.length === 0) {
     entries.push({ type: 'item', label: 'None', disabled: true, onClick: () => {} });
   }
@@ -68,30 +62,27 @@ function buildRelationChildren(
 }
 
 export function buildTagContextMenu(args: BuildTagMenuArgs): ContextMenuEntry[] {
-  const isPtr = args.source === 'ptr';
   const items: ContextMenuEntry[] = [
     {
       type: 'item',
-      label: 'Show Images',
+      label: 'Show Items',
       icon: <IconFilter size={16} />,
       onClick: args.onShowImages,
     },
     { type: 'separator' },
-    ...(!isPtr ? [
-      {
-        type: 'item' as const,
-        label: 'Rename',
-        icon: <IconCursorText size={16} />,
-        shortcut: 'F2',
-        onClick: args.onRename,
-      },
-      {
-        type: 'item' as const,
-        label: 'Merge into…',
-        icon: <IconGitMerge size={16} />,
-        onClick: args.onMerge,
-      },
-    ] : []),
+    {
+      type: 'item',
+      label: 'Rename',
+      icon: <IconCursorText size={16} />,
+      shortcut: 'F2',
+      onClick: args.onRename,
+    },
+    {
+      type: 'item',
+      label: 'Merge into…',
+      icon: <IconGitMerge size={16} />,
+      onClick: args.onMerge,
+    },
     {
       type: 'item',
       label: 'Copy',
@@ -107,53 +98,48 @@ export function buildTagContextMenu(args: BuildTagMenuArgs): ContextMenuEntry[] 
     { type: 'separator' },
     {
       type: 'submenu',
-      label: 'Siblings',
+      label: 'Aliases',
       icon: <IconArrowsExchange size={16} />,
       children: buildRelationChildren(
-        args.siblings,
-        isPtr,
+        args.aliases,
         args.onNavigateTag,
-        'Add sibling…',
-        args.onAddSibling,
+        'Add alias…',
+        args.onAddAlias,
         args.formatTagDisplay,
       ),
     },
     {
       type: 'submenu',
-      label: 'Parents',
+      label: 'Implications',
       icon: <IconArrowUp size={16} />,
       children: buildRelationChildren(
         args.parents,
-        isPtr,
         args.onNavigateTag,
-        'Add parent…',
+        'Add implication…',
         args.onAddParent,
         args.formatTagDisplay,
       ),
     },
     {
       type: 'submenu',
-      label: 'Children',
+      label: 'Implied By',
       icon: <IconArrowDown size={16} />,
       children: buildRelationChildren(
         args.children,
-        isPtr,
         args.onNavigateTag,
-        'Add child…',
+        'Add implied-by…',
         args.onAddChild,
         args.formatTagDisplay,
       ),
     },
-    ...(!isPtr ? [
-      { type: 'separator' as const },
-      {
-        type: 'item' as const,
-        label: 'Delete',
-        icon: <IconTrash size={16} />,
-        danger: true,
-        onClick: () => { void args.onDelete(); },
-      },
-    ] : []),
+    { type: 'separator' },
+    {
+      type: 'item',
+      label: 'Delete',
+      icon: <IconTrash size={16} />,
+      danger: true,
+      onClick: () => { void args.onDelete(); },
+    },
   ];
   return items;
 }

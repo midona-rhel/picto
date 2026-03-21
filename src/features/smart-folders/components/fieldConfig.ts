@@ -12,7 +12,6 @@ import {
   IconVolume,
   IconNotes,
   IconLink,
-  IconEye,
   IconPalette,
   IconRectangle,
 } from '@tabler/icons-react';
@@ -187,13 +186,6 @@ export const FIELD_CONFIGS: FieldConfig[] = [
     icon: IconLink,
     operators: TEXT_OPS,
     valueType: 'text',
-  },
-  {
-    key: 'view_count',
-    label: 'View Count',
-    icon: IconEye,
-    operators: NUM_OPS,
-    valueType: 'number',
   },
   {
     key: 'color',

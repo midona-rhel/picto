@@ -8,7 +8,6 @@
 import { describe, it, expect } from 'vitest';
 import { deriveStaleResources, gridResourceMatchesScope } from '../resourceInvalidator';
 import type { MutationReceipt, MutationFacts, ResourceKey } from '../../shared/types/generated/runtime-contract';
-import type { DerivedInvalidation } from '../../shared/types/generated/runtime-contract/DerivedInvalidation';
 import type { Domain } from '../../shared/types/generated/runtime-contract/Domain';
 
 // ---------------------------------------------------------------------------
@@ -28,7 +27,6 @@ function makeReceipt(
     ts: '2026-01-01T00:00:00Z',
     origin_command: 'test',
     facts,
-    invalidate: {} as DerivedInvalidation,
     ...extras,
   };
 }
@@ -55,7 +53,8 @@ describe('deriveStaleResources', () => {
     expect(result).toContain('grid/system:all');
     expect(result).toContain('grid/system:inbox');
     expect(result).toContain('grid/system:trash');
-    expect(result).toContain('grid/system:recently_viewed');
+    expect(result).toContain('grid/system:untagged');
+    expect(result).toContain('grid/system:uncategorized');
     expect(result).toContain('grid/smart:all');
   });
 
@@ -78,6 +77,7 @@ describe('deriveStaleResources', () => {
       file_hashes: ['abc', 'def'],
     })));
     expect(result).toContain('selection/current');
+    expect(result).toContain('grid/system:untagged');
     expect(result).toContain('metadata/hash:abc');
     expect(result).toContain('metadata/hash:def');
     expect(result).not.toContain('grid/system:all');
@@ -87,6 +87,7 @@ describe('deriveStaleResources', () => {
     const result = keys(makeReceipt(makeFacts({ tags_changed: true })));
     expect(result).toContain('selection/current');
     expect(result).toContain('grid/system:all');
+    expect(result).toContain('grid/system:untagged');
   });
 
   // --- tag_structure_changed ---
@@ -107,6 +108,7 @@ describe('deriveStaleResources', () => {
     })));
     expect(result).toContain('sidebar/tree');
     expect(result).toContain('selection/current');
+    expect(result).toContain('grid/system:uncategorized');
     expect(result).toContain('grid/folder:5');
     expect(result).toContain('grid/folder:15');
   });
@@ -186,7 +188,7 @@ describe('deriveStaleResources', () => {
   it('sidebar_counts present yields sidebar/counts', () => {
     const result = keys(makeReceipt(
       makeFacts({}),
-      { sidebar_counts: { all_images: 100, inbox: 5, trash: 2 } },
+      { sidebar_counts: { all_active: 100, inbox: 5, trash: 2 } },
     ));
     expect(result).toContain('sidebar/counts');
   });
@@ -261,10 +263,12 @@ describe('gridResourceMatchesScope', () => {
     expect(gridResourceMatchesScope('grid/folder:5', 'folder:10')).toBe(false);
   });
 
-  it('system:all is a wildcard for any scope', () => {
-    expect(gridResourceMatchesScope('grid/system:all', 'folder:5')).toBe(true);
-    expect(gridResourceMatchesScope('grid/system:all', 'smart:3')).toBe(true);
+  it('system:all is a wildcard only for system scopes', () => {
     expect(gridResourceMatchesScope('grid/system:all', 'system:inbox')).toBe(true);
+    expect(gridResourceMatchesScope('grid/system:all', 'system:uncategorized')).toBe(true);
+    expect(gridResourceMatchesScope('grid/system:all', 'folder:5')).toBe(false);
+    expect(gridResourceMatchesScope('grid/system:all', 'smart:3')).toBe(false);
+    expect(gridResourceMatchesScope('grid/system:all', 'collection:7')).toBe(false);
   });
 
   it('folder:all matches any folder:N scope', () => {

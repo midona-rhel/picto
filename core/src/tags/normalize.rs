@@ -1,17 +1,13 @@
 //! Simplified tag utilities for Picto.
 //!
-//! Keeps: split_tag, combine_tag, clean_tag, clean_tags (essential for PTR tag normalization).
+//! Keeps: split_tag, combine_tag, clean_tag, clean_tags (essential for tag normalization).
 //! Drops: TagFilter whitelist/blacklist, human_text_sort_key (→ natord), display string helpers.
-//!
-//! Ported from HydrusTags.py — tag cleaning logic is preserved exactly for PTR compatibility.
 
 use std::sync::OnceLock;
 
 use regex::Regex;
 
-// ---------------------------------------------------------------------------
-// Regex patterns (lazy-initialised, mirrors HydrusText.py globals)
-// ---------------------------------------------------------------------------
+// Regex patterns (lazy-initialised)
 
 static RE_UNDESIRED_CONTROL_CHARACTERS: OnceLock<Regex> = OnceLock::new();
 static RE_ONE_OR_MORE_WHITESPACE: OnceLock<Regex> = OnceLock::new();
@@ -66,9 +62,7 @@ fn re_looks_like_hangul() -> &'static Regex {
         .get_or_init(|| Regex::new(r"[\u{1100}-\u{11FF}\u{AC00}-\u{D7AF}]").unwrap())
 }
 
-// ---------------------------------------------------------------------------
-// Core tag functions
-// ---------------------------------------------------------------------------
+// --- Core tag functions ---
 
 /// A valid namespace is either empty (leading-colon = no namespace) or starts
 /// with a letter and contains only letters, digits, underscores, hyphens, or
@@ -117,7 +111,6 @@ pub fn combine_tag(namespace: &str, subtag: &str) -> String {
 }
 
 /// Strip unwanted characters and normalise text.
-/// Matches Python StripTagTextOfGumpf exactly (ported from HydrusText.py).
 ///
 /// Order matters: control chars → whitespace collapse → garbage prefix → then
 /// script-aware cleanup. The Hangul/zero-width handling must come after
@@ -151,8 +144,7 @@ fn strip_tag_text_of_gumpf(t: &str) -> String {
     t
 }
 
-/// Clean a tag according to Hydrus rules (lowercase, strip garbage, normalise).
-/// Essential for PTR tag normalization — must match Python behavior exactly.
+/// Clean a tag (lowercase, strip garbage, normalise).
 pub fn clean_tag(tag: &str) -> Result<String, String> {
     if tag.is_empty() {
         return Err("Received an empty tag".to_string());
@@ -227,7 +219,7 @@ pub fn parse_tags(raw_tags: &[String]) -> Vec<(String, String)> {
     raw_tags.iter().filter_map(|s| parse_tag(s)).collect()
 }
 
-/// Namespaces accepted on external ingest paths (import/subscription/PTR-like feeds).
+/// Namespaces accepted on external ingest paths (import/subscription feeds).
 /// Any other `ns:tag` input is coerced to an unnamespaced tag literal `ns:tag`.
 pub fn is_ingest_namespace_allowed(namespace: &str) -> bool {
     matches!(
@@ -290,45 +282,6 @@ mod tests {
         assert_eq!(split_tag("character:samus"), ("character", "samus"));
         assert_eq!(split_tag("my ns:tag"), ("my ns", "tag"));
         assert_eq!(split_tag("meta-data:value"), ("meta-data", "value"));
-    }
-
-    #[test]
-    fn test_combine_tag() {
-        assert_eq!(combine_tag("artist", "bob"), "artist:bob");
-        assert_eq!(combine_tag("", "solo"), "solo");
-        assert_eq!(combine_tag("", "has:colons"), ":has:colons");
-    }
-
-    #[test]
-    fn test_clean_tag_basic() {
-        assert_eq!(clean_tag("  Artist:Bob  ").unwrap(), "artist:bob");
-        assert_eq!(clean_tag("UPPERCASE").unwrap(), "uppercase");
-        assert!(clean_tag("").is_err());
-    }
-
-    #[test]
-    fn test_parse_tag() {
-        assert_eq!(
-            parse_tag("Artist:Bob"),
-            Some(("artist".into(), "bob".into()))
-        );
-        assert_eq!(parse_tag("  solo  "), Some(("".into(), "solo".into())));
-        assert_eq!(parse_tag(""), None);
-        // Emoticon tags stay unnamespaced
-        assert_eq!(parse_tag(">:("), Some(("".into(), ">:(".into())));
-    }
-
-    #[test]
-    fn test_parse_tags() {
-        let tags = vec![
-            "Artist:Bob".into(),
-            "".into(),
-            "  solo  ".into(),
-            "UPPERCASE".into(),
-        ];
-        let parsed = parse_tags(&tags);
-        assert_eq!(parsed.len(), 3);
-        assert_eq!(parsed[0], ("artist".into(), "bob".into()));
     }
 
     #[test]

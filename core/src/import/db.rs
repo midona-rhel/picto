@@ -3,7 +3,7 @@
 use rusqlite::Connection;
 
 use crate::sqlite::bitmaps::BitmapKey;
-use crate::sqlite::compilers::CompilerEvent;
+use crate::sqlite::ReadModelEvent;
 use crate::sqlite::files::{self, NewFile};
 use crate::tags::db as tags_db;
 use crate::sqlite::SqliteDatabase;
@@ -19,10 +19,10 @@ pub struct ImportOptions {
     pub duration_ms: Option<i64>,
     pub num_frames: Option<i64>,
     pub has_audio: bool,
-    pub blurhash: Option<String>,
     pub status: i64,
     pub notes: Option<String>,
     pub source_urls: Option<Vec<String>>,
+    pub created_at: Option<String>,
     pub dominant_color_hex: Option<String>,
     pub dominant_palette_blob: Option<Vec<u8>>,
     pub tags: Vec<(String, String)>, // (namespace, subtag)
@@ -72,9 +72,9 @@ pub fn import_file_with_tags(
         duration_ms: opts.duration_ms,
         num_frames: opts.num_frames,
         has_audio: opts.has_audio,
-        blurhash: opts.blurhash.clone(),
         status: opts.status,
         imported_at: now,
+        entity_created_at: opts.created_at.clone(),
         notes: opts.notes.clone(),
         source_urls_json: urls_json,
         dominant_color_hex: opts.dominant_color_hex.clone(),
@@ -116,13 +116,20 @@ impl SqliteDatabase {
 
         if !result.was_duplicate {
             hash_index.insert(hash, result.file_id);
-            bitmaps.insert(&BitmapKey::Status(status), result.file_id as u32);
 
-            for &tag_id in &result.tag_ids {
-                bitmaps.insert(&BitmapKey::Tag(tag_id), result.file_id as u32);
+            // When events are held (collection member import), skip bitmaps
+            // and events entirely. They'll be populated by the compiler when
+            // release_events fires the FileInserted event after the collection
+            // has parent_collection_id set.
+            if !self.events_held.load(std::sync::atomic::Ordering::SeqCst) {
+                let file_id_u32 = result.file_id as u32;
+                bitmaps.insert(&BitmapKey::Status(status), file_id_u32);
+                for &tag_id in &result.tag_ids {
+                    bitmaps.insert(&BitmapKey::Tag(tag_id), file_id_u32);
+                }
             }
 
-            self.emit_compiler_event(CompilerEvent::FileInserted {
+            self.emit_read_model_event(ReadModelEvent::FileInserted {
                 file_id: result.file_id,
             });
         }

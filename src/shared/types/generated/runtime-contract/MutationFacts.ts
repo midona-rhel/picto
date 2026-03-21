@@ -5,8 +5,8 @@ import type { Domain } from "./Domain";
  * What actually changed — domain flags, affected entity IDs, and change descriptors.
  *
  * Change descriptors (`status_changed`, `tags_changed`, etc.) tell the system
- * *what kind* of mutation happened. `derive_invalidation()` converts these
- * facts into the concrete `DerivedInvalidation` the frontend needs.
+ * *what kind* of mutation happened. The frontend derives stale resources
+ * from these facts directly.
  */
 export type MutationFacts = { domains: Array<Domain>, file_hashes?: Array<string>, folder_ids?: Array<number>, smart_folder_ids?: Array<number>, compiler_batch_done?: boolean, 
 /**

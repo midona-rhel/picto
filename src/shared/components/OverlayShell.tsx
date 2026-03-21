@@ -40,7 +40,7 @@ export function OverlayShell({
       {!pinned && (
         <div
           className={st.backdrop}
-          onClick={onClose}
+          onPointerDown={(e) => { e.preventDefault(); e.stopPropagation(); onClose(); }}
           onContextMenu={
             closeOnRightClick
               ? (e) => {

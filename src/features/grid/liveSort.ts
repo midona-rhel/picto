@@ -15,15 +15,17 @@ function compareByField(a: MasonryImageItem, b: MasonryImageItem, sortField: str
       return a.size - b.size;
     case 'rating':
       return compareNullableNumber(a.rating, b.rating);
-    case 'view_count':
-      return a.view_count - b.view_count;
     case 'name':
       return (a.name ?? '').localeCompare(b.name ?? '');
     case 'mime':
       return a.mime.localeCompare(b.mime);
-    case 'imported_at':
+    case 'date_created':
+    case 'date_modified':
+    case 'date_added':
     default:
-      return a.imported_at.localeCompare(b.imported_at);
+      // Grid slim items only carry date_added; date_created/date_modified
+      // fall back to date_added for live-sort approximation.
+      return a.date_added.localeCompare(b.date_added);
   }
 }
 
@@ -37,8 +39,8 @@ export function sortLiveImages(
     const base = compareByField(a, b, sortField);
     if (base !== 0) return sortOrder === 'desc' ? -base : base;
     // Deterministic tie-breakers to avoid visual jitter.
-    const importedAtCmp = a.imported_at.localeCompare(b.imported_at);
-    if (importedAtCmp !== 0) return sortOrder === 'desc' ? -importedAtCmp : importedAtCmp;
+    const dateAddedCmp = a.date_added.localeCompare(b.date_added);
+    if (dateAddedCmp !== 0) return sortOrder === 'desc' ? -dateAddedCmp : dateAddedCmp;
     return a.hash.localeCompare(b.hash);
   });
   return sorted;

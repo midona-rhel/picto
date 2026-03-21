@@ -1,3 +1,36 @@
+import fs from 'node:fs';
+
+/** Map theme name to a background color for BrowserWindow creation. */
+const THEME_BG_COLORS = {
+  dark:      '#1a1a1e',
+  blue:      '#0f1732',
+  purple:    '#1e1526',
+  gray:      '#323236',
+  light:     '#ebedef',
+  lightgray: '#d5d7da',
+  auto:      null, // resolved below
+};
+
+/** Try to read the theme from the last library's settings.json synchronously. */
+function getThemeBgColor(getCachedConfig) {
+  try {
+    const config = getCachedConfig();
+    const libraryPath = config?.lastLibrary;
+    if (!libraryPath) return THEME_BG_COLORS.dark;
+    const settingsPath = libraryPath + '/settings.json';
+    const raw = fs.readFileSync(settingsPath, 'utf-8');
+    const settings = JSON.parse(raw);
+    const theme = settings.theme || 'dark';
+    if (theme === 'auto') {
+      // Check OS preference via nativeTheme (imported by caller if needed)
+      return THEME_BG_COLORS.dark; // safe fallback; actual auto handled at CSS level
+    }
+    return THEME_BG_COLORS[theme] || THEME_BG_COLORS.dark;
+  } catch {
+    return THEME_BG_COLORS.dark;
+  }
+}
+
 const MAIN_WINDOW_DEFAULT_WIDTH = 1200;
 const MAIN_WINDOW_DEFAULT_HEIGHT = 800;
 const MAIN_WINDOW_MIN_WIDTH = 700;
@@ -121,6 +154,7 @@ export function createWindowManager({
     const savedMainState = isMain ? getSavedMainWindowState() : null;
     const initialWidth = savedMainState?.width ?? width;
     const initialHeight = savedMainState?.height ?? height;
+    const themeBg = getThemeBgColor(getCachedConfig);
     const winOpts = {
       width: initialWidth,
       height: initialHeight,
@@ -133,7 +167,7 @@ export function createWindowManager({
             fullscreenable: false,
             frame: false,
             transparent: false,
-            backgroundColor: '#1e1e22',
+            backgroundColor: themeBg,
           }
         : isSubscriptions
           ? {
@@ -146,13 +180,13 @@ export function createWindowManager({
               fullscreenable: false,
               frame: false,
               transparent: false,
-              backgroundColor: '#1e1e22',
+              backgroundColor: themeBg,
             }
           : isDetail
             ? {
                 frame: false,
                 transparent: false,
-                backgroundColor: '#1a1a1a',
+                backgroundColor: themeBg,
               }
             : {
                 ...(isMac
@@ -160,12 +194,12 @@ export function createWindowManager({
                       frame: true,
                       titleBarStyle: 'hiddenInset',
                       transparent: false,
-                      backgroundColor: '#0f1115',
+                      backgroundColor: themeBg,
                     }
                   : {
                       frame: false,
                       transparent: false,
-                      backgroundColor: '#0f1115',
+                      backgroundColor: themeBg,
                     }),
               }),
       show: false,
@@ -183,6 +217,7 @@ export function createWindowManager({
     }
 
     const win = new BrowserWindow(winOpts);
+    win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
 
     if (isDetail) {
       win.center();
@@ -374,7 +409,7 @@ export function createWindowManager({
       fullscreenable: false,
       frame: false,
       transparent: false,
-      backgroundColor: '#1e1e22',
+      backgroundColor: getThemeBgColor(getCachedConfig),
       ...(mainWin && !mainWin.isDestroyed() ? { parent: mainWin } : {}),
       show: true,
       webPreferences: {
@@ -385,6 +420,7 @@ export function createWindowManager({
       },
     });
 
+    win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
     windowsByLabel.set(label, win);
     win.on('closed', () => windowsByLabel.delete(label));
 
@@ -396,12 +432,88 @@ export function createWindowManager({
     }
   }
 
+  /**
+   * Open a popup for Pixiv OAuth login.
+   * Intercepts the pixiv:// callback redirect and extracts the auth code.
+   * Returns a Promise that resolves with the code or rejects on cancel/error.
+   */
+  function openPixivOAuthPopup(loginUrl) {
+    return new Promise((resolve, reject) => {
+      const popup = new BrowserWindow({
+        width: 500,
+        height: 700,
+        resizable: false,
+        minimizable: false,
+        maximizable: false,
+        title: 'Pixiv Login',
+        webPreferences: {
+          nodeIntegration: false,
+          contextIsolation: true,
+        },
+      });
+
+      popup.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+      let resolved = false;
+
+      const extractCode = (url) => {
+        try {
+          const parsed = new URL(url);
+          return parsed.searchParams.get('code') || null;
+        } catch {
+          return null;
+        }
+      };
+
+      const handlePixivCallback = async (url) => {
+        resolved = true;
+        const code = extractCode(url);
+        if (!code) {
+          reject(new Error('No code in Pixiv callback'));
+          popup.close();
+          return;
+        }
+        // Capture PHPSESSID cookie from the login session
+        let phpsessid = null;
+        try {
+          const cookies = await popup.webContents.session.cookies.get({ domain: '.pixiv.net', name: 'PHPSESSID' });
+          if (cookies.length > 0) phpsessid = cookies[0].value;
+        } catch { /* best effort */ }
+        resolve({ code, phpsessid });
+        popup.close();
+      };
+
+      // Intercept redirects to pixiv:// scheme — prevent OS from handling it
+      popup.webContents.on('will-redirect', (event, url) => {
+        if (url.startsWith('pixiv://')) {
+          event.preventDefault();
+          handlePixivCallback(url);
+        }
+      });
+
+      popup.webContents.on('will-navigate', (event, url) => {
+        if (url.startsWith('pixiv://')) {
+          event.preventDefault();
+          handlePixivCallback(url);
+        }
+      });
+
+      popup.on('closed', () => {
+        if (!resolved) {
+          reject(new Error('Pixiv login cancelled'));
+        }
+      });
+
+      popup.loadURL(loginUrl);
+    });
+  }
+
   return {
     calcDetailWindowSize: (imgW, imgH) => calcDetailWindowSize(screen, imgW, imgH),
     createWindow,
     getAllWindows,
     getWindow,
     openLibraryManager,
+    openPixivOAuthPopup,
     openSettingsWindow,
     openSubscriptionsWindow,
     sendToAllWindows,

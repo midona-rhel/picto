@@ -14,10 +14,11 @@ describe('buildVirtualSelectAllBaseSpec', () => {
     });
 
     expect(spec.mode).toBe('all_results');
-    expect(spec.search_tags).toEqual(['fox']);
-    expect(spec.folder_ids).toEqual([42]);
-    expect(spec.excluded_folder_ids).toBeNull();
-    expect(spec.folder_match_mode).toBeNull();
+    expect(spec.scope).toEqual({ kind: 'folder', folder_id: 42 });
+    expect(spec.filters.search_tags).toEqual(['fox']);
+    expect(spec.filters.folder_ids).toBeNull();
+    expect(spec.filters.excluded_folder_ids).toBeNull();
+    expect(spec.filters.folder_match_mode).toBeNull();
   });
 
   it('uses include/exclude folder filters when no explicit folder scope is active', () => {
@@ -27,8 +28,19 @@ describe('buildVirtualSelectAllBaseSpec', () => {
       folderMatchMode: 'exact',
     });
 
-    expect(spec.folder_ids).toEqual([3, 4]);
-    expect(spec.excluded_folder_ids).toEqual([9]);
-    expect(spec.folder_match_mode).toBe('exact');
+    expect(spec.scope).toEqual({ kind: 'system', system_key: 'all' });
+    expect(spec.filters.folder_ids).toEqual([3, 4]);
+    expect(spec.filters.excluded_folder_ids).toEqual([9]);
+    expect(spec.filters.folder_match_mode).toBe('exact');
+  });
+
+  it('preserves collection scope in the selection query spec', () => {
+    const spec = buildVirtualSelectAllBaseSpec({
+      collectionEntityId: 77,
+      statusFilter: 'active',
+    });
+
+    expect(spec.scope).toEqual({ kind: 'collection', collection_entity_id: 77 });
+    expect(spec.filters.folder_ids).toBeNull();
   });
 });

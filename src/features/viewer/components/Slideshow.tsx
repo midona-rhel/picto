@@ -3,13 +3,13 @@ import { createPortal } from 'react-dom';
 import { IconPlayerPause, IconPlayerPlay, IconChevronLeft, IconChevronRight, IconX } from '@tabler/icons-react';
 import { useGlobalKeydown } from '../../../shared/hooks/useGlobalKeydown';
 import { mediaFileUrl, mediaThumbnailUrl } from '../../../shared/lib/mediaUrl';
-import type { MasonryImageItem } from '../../grid/shared';
+import type { MediaItem } from '../../grid/shared';
 import classes from './Slideshow.module.css';
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
 interface SlideshowProps {
-  images: MasonryImageItem[];
+  images: MediaItem[];
   startIndex?: number;
   onClose: () => void;
 }
@@ -109,7 +109,7 @@ export function Slideshow({ images, startIndex = 0, onClose }: SlideshowProps) {
       <div className={classes.backdrop} />
 
       {/* Image */}
-      <div className={classes.imageArea}>
+      <div className={classes.tileArea}>
         {isVideo ? (
           <video
             key={image.hash}

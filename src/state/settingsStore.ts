@@ -14,10 +14,10 @@ export type Theme = 'auto' | 'dark' | 'blue' | 'purple' | 'gray' | 'light' | 'li
 export interface AppSettings {
   gridTargetSize: number;
   gridViewMode: 'waterfall' | 'justified' | 'grid';
-  propertiesPanelWidth: number;
+  inspectorWidth: number;
   colorScheme: 'dark' | 'light';
   theme: Theme;
-  gridSortField: 'imported_at' | 'size' | 'rating' | 'view_count';
+  gridSortField: 'date_added' | 'size' | 'rating';
   gridSortOrder: 'asc' | 'desc';
   showTileName: boolean;
   showResolution: boolean;
@@ -34,7 +34,8 @@ export interface AppSettings {
   videoVolume: number;
   videoPlaybackRate: number;
   grayscalePreview: boolean;
-  showMinimap: boolean;
+  showNavigator: boolean;
+  hideTagNamespace: boolean;
 }
 
 /** Derive Mantine color scheme from a Theme value. */
@@ -47,10 +48,10 @@ export function themeToColorScheme(theme: Theme): 'auto' | 'dark' | 'light' {
 const DEFAULTS: AppSettings = {
   gridTargetSize: 250,
   gridViewMode: 'waterfall',
-  propertiesPanelWidth: 250,
+  inspectorWidth: 250,
   colorScheme: 'dark',
   theme: 'dark',
-  gridSortField: 'imported_at',
+  gridSortField: 'date_added',
   gridSortOrder: 'asc',
   showTileName: true,
   showResolution: true,
@@ -67,7 +68,8 @@ const DEFAULTS: AppSettings = {
   videoVolume: 0.9,
   videoPlaybackRate: 1.0,
   grayscalePreview: false,
-  showMinimap: true,
+  showNavigator: true,
+  hideTagNamespace: false,
 };
 
 interface SettingsState {
@@ -75,6 +77,8 @@ interface SettingsState {
   loaded: boolean;
   /** Update a single key and persist to the store. */
   updateSetting: <K extends keyof AppSettings>(key: K, value: AppSettings[K]) => void;
+  /** Update multiple keys atomically (single state update + single save). */
+  updateSettings: (updates: Partial<AppSettings>) => void;
 }
 
 // Module-level store instance so we don't create multiple
@@ -92,6 +96,17 @@ export const useSettingsStore = create<SettingsState>((set, _get) => ({
     // Persist async — fire and forget
     if (storeInstance && storeReady) {
       void storeInstance.set(key, value).then(() => storeInstance!.save());
+    }
+  },
+
+  updateSettings: (updates) => {
+    set((state) => ({
+      settings: { ...state.settings, ...updates },
+    }));
+    if (storeInstance && storeReady) {
+      const entries = Object.entries(updates);
+      void Promise.all(entries.map(([k, v]) => storeInstance!.set(k, v)))
+        .then(() => storeInstance!.save());
     }
   },
 }));
@@ -123,6 +138,8 @@ export async function initSettingsStore(): Promise<void> {
     for (const key of Object.keys(DEFAULTS) as (keyof AppSettings)[]) {
       void storeInstance.onKeyChange(key, (val) => {
         if (val !== null && val !== undefined) {
+          const current = useSettingsStore.getState().settings[key];
+          console.log('[settings] onKeyChange:', key, '| new:', val, '| current:', current);
           useSettingsStore.setState((state) => ({
             settings: { ...state.settings, [key]: val },
           }));

@@ -1,9 +1,10 @@
 import { Collections } from '#features/collections/components';
-import { FlowsWorking, type FlowResultEntry, CreateFlowModal } from '#features/subscriptions/components';
+import { SubscriptionGroupsPanel, CreateSubscriptionGroupModal } from '#features/subscriptions/components';
 import { TagManager } from '#features/tags/components';
 import { DuplicateManager } from '#features/duplicates/components';
 import { ImageGrid } from '#features/grid/components';
-import { useMainViewFlowsState, useMainViewGridActions, useMainViewGridState, useMainViewNavigationState, useMainViewSelectionState } from './MainViewModelContext';
+import { useMainViewSubscriptionsState, useMainViewGridActions, useMainViewGridState, useMainViewNavigationState, useMainViewSelectionState, useMainViewViewerState } from './MainViewModelContext';
+import { MainViewProgressBar } from './MainViewProgressBar';
 import styles from '../../../app/App.module.css';
 
 export function MainViewRouter() {
@@ -11,7 +12,8 @@ export function MainViewRouter() {
   const grid = useMainViewGridState();
   const gridActions = useMainViewGridActions();
   const selection = useMainViewSelectionState();
-  const flows = useMainViewFlowsState();
+  const subscriptions = useMainViewSubscriptionsState();
+  const viewer = useMainViewViewerState();
 
   switch (navigation.currentView) {
     case 'images':
@@ -39,31 +41,29 @@ export function MainViewRouter() {
             refreshTrigger={grid.filterRefreshTrigger}
             onSelectedImagesChange={selection.onSelectedImagesChange}
             onSelectionSummarySpecChange={selection.onSelectionSummarySpecChange}
-            selectedScopeCount={grid.selectedScopeCount}
-            onDetailViewStateChange={selection.onDetailViewStateChange}
+            onMediaViewStateChange={selection.onMediaViewStateChange}
             ratingMin={grid.ratingFilter}
             mimePrefixes={grid.mimePrefixes}
+            collectionsOnly={grid.collectionsOnly}
             colorHex={grid.colorHex}
             colorAccuracy={grid.colorAccuracy}
             searchText={grid.searchText || grid.filterSearchText}
             excludedSearchTags={grid.excludedSearchTags}
             tagMatchMode={grid.tagMatchMode}
-            externalFreeze={false}
-            onScopeTransitionMidpoint={gridActions.onScopeTransitionMidpoint}
+            externalFreeze={grid.externalFreeze}
+            viewer={viewer}
           />
+          <MainViewProgressBar />
         </div>
       );
     case 'collections':
       return <div className={styles.frame}><Collections /></div>;
-    case 'flows':
+    case 'subscriptions':
       return (
         <div className={styles.frame}>
-          <FlowsWorking
-            flowId={flows.activeFlowId}
-            lastResults={flows.flowLastResults}
-            onLastResultsChange={flows.setFlowLastResults}
-            onOpenCreateModal={flows.onOpenCreateFlowModal}
-            refreshToken={flows.flowRefreshToken}
+          <SubscriptionGroupsPanel
+            onOpenCreateModal={subscriptions.onOpenCreateSubscriptionGroupModal}
+            refreshToken={subscriptions.subscriptionRefreshToken}
           />
         </div>
       );
@@ -76,5 +76,4 @@ export function MainViewRouter() {
   }
 }
 
-export { CreateFlowModal };
-export type { FlowResultEntry };
+export { CreateSubscriptionGroupModal };

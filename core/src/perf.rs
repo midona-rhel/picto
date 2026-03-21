@@ -24,12 +24,8 @@ pub struct PercentileSnapshot {
 pub struct MetadataBatchLatest {
     pub total_ms: f64,
     pub local_ms: f64,
-    pub ptr_ms: f64,
     pub merge_ms: f64,
     pub req_hashes: usize,
-    pub local_hits: usize,
-    pub ptr_lookup: usize,
-    pub ptr_hits: usize,
     pub missing: usize,
     pub ts: String,
 }
@@ -146,12 +142,8 @@ pub fn record_grid_page_slim(ms: f64) {
 pub fn record_files_metadata_batch(
     total_ms: f64,
     local_ms: f64,
-    ptr_ms: f64,
     merge_ms: f64,
     req_hashes: usize,
-    local_hits: usize,
-    ptr_lookup: usize,
-    ptr_hits: usize,
     missing: usize,
 ) {
     if let Ok(mut g) = state().lock() {
@@ -159,12 +151,8 @@ pub fn record_files_metadata_batch(
         g.metadata_batch_latest = Some(MetadataBatchLatest {
             total_ms,
             local_ms,
-            ptr_ms,
             merge_ms,
             req_hashes,
-            local_hits,
-            ptr_lookup,
-            ptr_hits,
             missing,
             ts: chrono::Utc::now().to_rfc3339(),
         });

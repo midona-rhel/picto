@@ -1,9 +1,10 @@
 import { type ReactNode } from 'react';
 import { Text, ActionIcon } from '@mantine/core';
 import { IconX } from '@tabler/icons-react';
-import { useMantineColorScheme } from '@mantine/core';
+import { useComputedColorScheme } from '@mantine/core';
 import { namespaceChipStyle, chipStyleFromRgb } from '../lib/namespaceColors';
 import { extractNamespace as extractNamespaceFromTag } from '../lib/tagParsing';
+import { useSettingsStore } from '../../state/settingsStore';
 import { KbdTooltip } from './KbdTooltip';
 
 interface NamespaceTagChipProps {
@@ -16,18 +17,20 @@ interface NamespaceTagChipProps {
   size?: 'sm' | 'md';
 }
 
-/** Extract namespace from "namespace:subtag" format */
-export function extractNamespace(tag: string): string {
-  return extractNamespaceFromTag(tag);
-}
-
 export function NamespaceTagChip({ tag, namespace, onRemove, onLabelClick, icon, colorRgb, size = 'md' }: NamespaceTagChipProps) {
-  const { colorScheme } = useMantineColorScheme();
+  const colorScheme = useComputedColorScheme('dark');
   const isDark = colorScheme === 'dark';
-  const ns = namespace ?? extractNamespace(tag);
+  const hideNamespace = useSettingsStore((s) => s.settings.hideTagNamespace);
+  const ns = namespace ?? extractNamespaceFromTag(tag);
   const chipStyle = colorRgb
     ? chipStyleFromRgb(colorRgb, isDark)
     : namespaceChipStyle(ns, isDark);
+
+  // Strip namespace prefix from display text when setting is enabled
+  let displayText = tag;
+  if (hideNamespace && ns && tag.startsWith(ns + ':')) {
+    displayText = tag.slice(ns.length + 1);
+  }
 
   const isSm = size === 'sm';
 
@@ -64,7 +67,7 @@ export function NamespaceTagChip({ tag, namespace, onRemove, onLabelClick, icon,
         }}
         onClick={onLabelClick}
       >
-        {tag}
+        {displayText}
       </Text>
       {onRemove && (
         <KbdTooltip label="Remove">

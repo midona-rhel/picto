@@ -1,14 +1,14 @@
 //! File CRUD operations.
 
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 
-use super::bitmaps::BitmapKey;
-use super::compilers::CompilerEvent;
+use super::ReadModelEvent;
 use super::SqliteDatabase;
+use super::bitmaps::BitmapKey;
 
 /// Default visibility clause: active (1) only, excludes inbox (0) and trash (2).
-pub const DEFAULT_VISIBILITY_CLAUSE: &str = "status = 1";
+const DEFAULT_VISIBILITY_CLAUSE: &str = "status = 1";
 
 /// Slim DTO for grid display — no filesystem paths.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -29,7 +29,7 @@ pub struct FileMetadataSlim {
     pub size: i64,
     pub status: u8,
     pub rating: Option<i64>,
-    pub blurhash: Option<String>,
+    #[serde(rename = "date_added")]
     pub imported_at: String,
     pub dominant_color_hex: Option<String>,
     pub duration_ms: Option<i64>,
@@ -54,7 +54,6 @@ pub struct FileRecord {
     pub duration_ms: Option<i64>,
     pub num_frames: Option<i64>,
     pub has_audio: bool,
-    pub blurhash: Option<String>,
     pub status: i64,
     pub rating: Option<i64>,
     pub view_count: i64,
@@ -76,9 +75,9 @@ pub struct NewFile {
     pub duration_ms: Option<i64>,
     pub num_frames: Option<i64>,
     pub has_audio: bool,
-    pub blurhash: Option<String>,
     pub status: i64,
     pub imported_at: String,
+    pub entity_created_at: Option<String>,
     pub notes: Option<String>,
     pub source_urls_json: Option<String>,
     pub dominant_color_hex: Option<String>,
@@ -108,11 +107,13 @@ pub fn insert_file(conn: &Connection, f: &NewFile) -> rusqlite::Result<i64> {
         file_id += 1;
     }
 
+    let entity_created_at = f.entity_created_at.as_deref().unwrap_or(&f.imported_at);
+
     conn.execute(
         "INSERT INTO file (file_id, hash, name, size, mime, width, height, duration_ms, num_frames,
-         has_audio, blurhash, status, imported_at, notes, source_urls_json,
+         has_audio, status, imported_at, notes, source_urls_json,
          dominant_color_hex, dominant_palette_blob)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
         params![
             file_id,
             f.hash,
@@ -124,7 +125,6 @@ pub fn insert_file(conn: &Connection, f: &NewFile) -> rusqlite::Result<i64> {
             f.duration_ms,
             f.num_frames,
             f.has_audio as i64,
-            f.blurhash,
             f.status,
             f.imported_at,
             f.notes,
@@ -144,7 +144,7 @@ pub fn insert_file(conn: &Connection, f: &NewFile) -> rusqlite::Result<i64> {
         "INSERT OR IGNORE INTO media_entity
             (entity_id, kind, name, description, status, rating, created_at, updated_at)
          VALUES (?1, 'single', ?2, '', ?3, NULL, ?4, ?4)",
-        params![file_id, f.name, f.status, f.imported_at],
+        params![file_id, f.name, f.status, entity_created_at],
     )?;
     conn.execute(
         "INSERT OR IGNORE INTO entity_file (entity_id, file_id) VALUES (?1, ?2)",
@@ -154,41 +154,14 @@ pub fn insert_file(conn: &Connection, f: &NewFile) -> rusqlite::Result<i64> {
     Ok(file_id)
 }
 
-pub fn rebuild_file_fts(conn: &Connection) -> rusqlite::Result<()> {
-    conn.execute("INSERT INTO file_fts(file_fts) VALUES('rebuild')", [])?;
-    Ok(())
-}
-
 pub fn get_file_by_hash(conn: &Connection, hash: &str) -> rusqlite::Result<Option<FileRecord>> {
     conn.query_row(
         "SELECT file_id, hash, name, size, mime, width, height, duration_ms, num_frames,
-                has_audio, blurhash, status, rating, view_count, phash, imported_at,
+                has_audio, status, rating, view_count, phash, imported_at,
                 notes, source_urls_json, dominant_color_hex
          FROM file WHERE hash = ?1",
         [hash],
-        |row| {
-            Ok(FileRecord {
-                file_id: row.get(0)?,
-                hash: row.get(1)?,
-                name: row.get(2)?,
-                size: row.get(3)?,
-                mime: row.get(4)?,
-                width: row.get(5)?,
-                height: row.get(6)?,
-                duration_ms: row.get(7)?,
-                num_frames: row.get(8)?,
-                has_audio: row.get::<_, i64>(9)? != 0,
-                blurhash: row.get(10)?,
-                status: row.get(11)?,
-                rating: row.get(12)?,
-                view_count: row.get(13)?,
-                phash: row.get(14)?,
-                imported_at: row.get(15)?,
-                notes: row.get(16)?,
-                source_urls_json: row.get(17)?,
-                dominant_color_hex: row.get(18)?,
-            })
-        },
+        |row| row_to_file_record(row),
     )
     .optional()
 }
@@ -196,33 +169,11 @@ pub fn get_file_by_hash(conn: &Connection, hash: &str) -> rusqlite::Result<Optio
 pub fn get_file_by_id(conn: &Connection, file_id: i64) -> rusqlite::Result<Option<FileRecord>> {
     conn.query_row(
         "SELECT file_id, hash, name, size, mime, width, height, duration_ms, num_frames,
-                has_audio, blurhash, status, rating, view_count, phash, imported_at,
+                has_audio, status, rating, view_count, phash, imported_at,
                 notes, source_urls_json, dominant_color_hex
          FROM file WHERE file_id = ?1",
         [file_id],
-        |row| {
-            Ok(FileRecord {
-                file_id: row.get(0)?,
-                hash: row.get(1)?,
-                name: row.get(2)?,
-                size: row.get(3)?,
-                mime: row.get(4)?,
-                width: row.get(5)?,
-                height: row.get(6)?,
-                duration_ms: row.get(7)?,
-                num_frames: row.get(8)?,
-                has_audio: row.get::<_, i64>(9)? != 0,
-                blurhash: row.get(10)?,
-                status: row.get(11)?,
-                rating: row.get(12)?,
-                view_count: row.get(13)?,
-                phash: row.get(14)?,
-                imported_at: row.get(15)?,
-                notes: row.get(16)?,
-                source_urls_json: row.get(17)?,
-                dominant_color_hex: row.get(18)?,
-            })
-        },
+        |row| row_to_file_record(row),
     )
     .optional()
 }
@@ -251,6 +202,30 @@ pub fn count_files(conn: &Connection, status: Option<i64>) -> rusqlite::Result<i
     }
 }
 
+pub fn filter_visible_entity_ids(
+    conn: &Connection,
+    entity_ids: &[i64],
+) -> rusqlite::Result<Vec<i64>> {
+    if entity_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let placeholders = std::iter::repeat_n("?", entity_ids.len())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let sql = format!(
+        "SELECT me.entity_id
+         FROM media_entity me
+         WHERE me.entity_id IN ({placeholders})
+           AND (me.kind = 'collection' OR me.parent_collection_id IS NULL)"
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map(rusqlite::params_from_iter(entity_ids.iter()), |row| {
+        row.get::<_, i64>(0)
+    })?;
+    rows.collect()
+}
+
 pub fn update_status(conn: &Connection, file_id: i64, status: i64) -> rusqlite::Result<()> {
     conn.execute(
         "UPDATE file SET status = ?1 WHERE file_id = ?2",
@@ -264,6 +239,11 @@ pub fn update_status(conn: &Connection, file_id: i64, status: i64) -> rusqlite::
          )",
         params![status, file_id],
     )?;
+    for collection_id in
+        crate::folders::collections_db::get_parent_collection_ids_for_file_ids(conn, &[file_id])?
+    {
+        crate::folders::collections_db::sync_collection_aggregate_metadata(conn, collection_id)?;
+    }
     Ok(())
 }
 
@@ -303,22 +283,44 @@ pub fn set_source_urls(
     Ok(())
 }
 
-pub fn set_phash(conn: &Connection, file_id: i64, phash: &str) -> rusqlite::Result<()> {
+pub fn set_date_created(
+    conn: &Connection,
+    file_id: i64,
+    created_at: &str,
+) -> rusqlite::Result<()> {
     conn.execute(
-        "UPDATE file SET phash = ?1 WHERE file_id = ?2",
-        params![phash, file_id],
+        "UPDATE media_entity
+         SET created_at = ?1, updated_at = CURRENT_TIMESTAMP
+         WHERE entity_id = ?2 AND kind = 'single'",
+        params![created_at, file_id],
     )?;
     Ok(())
 }
 
-pub fn set_blurhash(
-    conn: &Connection,
-    file_id: i64,
-    blurhash: Option<&str>,
-) -> rusqlite::Result<()> {
+pub fn set_date_added(conn: &Connection, file_id: i64, imported_at: &str) -> rusqlite::Result<()> {
     conn.execute(
-        "UPDATE file SET blurhash = ?1 WHERE file_id = ?2",
-        params![blurhash, file_id],
+        "UPDATE file SET imported_at = ?1 WHERE file_id = ?2",
+        params![imported_at, file_id],
+    )?;
+    Ok(())
+}
+
+pub fn touch_date_modified(
+    conn: &Connection,
+    entity_id: i64,
+) -> rusqlite::Result<()> {
+    let now = chrono::Utc::now().to_rfc3339();
+    conn.execute(
+        "UPDATE media_entity SET updated_at = ?1 WHERE entity_id = ?2",
+        params![now, entity_id],
+    )?;
+    Ok(())
+}
+
+pub fn set_phash(conn: &Connection, file_id: i64, phash: &str) -> rusqlite::Result<()> {
+    conn.execute(
+        "UPDATE file SET phash = ?1 WHERE file_id = ?2",
+        params![phash, file_id],
     )?;
     Ok(())
 }
@@ -335,14 +337,6 @@ pub fn set_dominant_color_hex(
     Ok(())
 }
 
-pub fn increment_view_count(conn: &Connection, file_id: i64) -> rusqlite::Result<()> {
-    conn.execute(
-        "UPDATE file SET view_count = view_count + 1, last_viewed_at = datetime('now') WHERE file_id = ?1",
-        [file_id],
-    )?;
-    Ok(())
-}
-
 /// Delete ALL files and related data (bulk wipe).
 pub fn wipe_all_files(conn: &Connection) -> rusqlite::Result<()> {
     conn.execute("DELETE FROM entity_tag_implied", [])?;
@@ -354,14 +348,15 @@ pub fn wipe_all_files(conn: &Connection) -> rusqlite::Result<()> {
     conn.execute("DELETE FROM subscription_entity", [])?;
     conn.execute("DELETE FROM entity_tag_raw", [])?;
     conn.execute("DELETE FROM file", [])?;
-    conn.execute("DELETE FROM collection_member", [])?;
     conn.execute("DELETE FROM collection_tag", [])?;
     conn.execute("DELETE FROM entity_file", [])?;
     conn.execute("DELETE FROM media_entity", [])?;
     Ok(())
 }
 
-pub fn delete_file(conn: &Connection, file_id: i64) -> rusqlite::Result<()> {
+/// Delete a single file and its entity. Does NOT cascade to collection members
+/// (use `delete_file_cascade` for that).
+pub(crate) fn delete_file_inner(conn: &Connection, file_id: i64) -> rusqlite::Result<()> {
     {
         let mut rid_stmt =
             conn.prepare_cached("SELECT rowid FROM file_color WHERE file_id = ?1")?;
@@ -391,12 +386,20 @@ pub fn delete_file(conn: &Connection, file_id: i64) -> rusqlite::Result<()> {
     Ok(())
 }
 
+pub fn delete_file(conn: &Connection, file_id: i64) -> rusqlite::Result<()> {
+    // If this file is a collection's cover, rotate cover to next member (don't destroy collection)
+    crate::folders::collections_db::handle_cover_file_deletion(conn, file_id)?;
+    // Delete the target file itself
+    delete_file_inner(conn, file_id)
+}
+
 /// Optional filter parameters for grid queries.
 #[derive(Debug, Default, Clone)]
 pub struct GridFilters {
     pub rating_min: Option<i64>,
     pub mime_prefixes: Option<Vec<String>>,
     pub search_text: Option<String>,
+    pub collections_only: Option<bool>,
 }
 
 /// Append filter WHERE clauses to a SQL query.
@@ -470,13 +473,38 @@ fn append_filter_clauses(
             }
         }
     }
+
+    if filters.collections_only == Some(true) {
+        sql.push_str(" AND me.kind = 'collection'");
+    }
+}
+
+/// Returns true when a sort field produces numeric (INTEGER/REAL) values in SQL.
+/// Cursor values for these fields must be bound as i64, not text, to avoid
+/// SQLite type-affinity mismatches that break keyset pagination comparisons.
+fn is_numeric_sort(sort_field: &str) -> bool {
+    matches!(sort_field, "size" | "rating" | "view_count" | "random")
+}
+
+/// Bind a cursor sort value with the correct type for the sort field.
+fn push_cursor_sort_param(
+    params: &mut Vec<Box<dyn rusqlite::types::ToSql>>,
+    raw: &str,
+    sort_field: &str,
+) {
+    if is_numeric_sort(sort_field) {
+        let v: i64 = raw.parse().unwrap_or(0);
+        params.push(Box::new(v));
+    } else {
+        params.push(Box::new(raw.to_string()));
+    }
 }
 
 /// Map a sort field name to the SQL expression for entity-aware queries.
 /// Returns a COALESCE expression that works for both singles (f.* populated) and collections (f.* NULL).
 fn entity_sort_expr(sort_field: &str) -> &'static str {
     match sort_field {
-        "imported_at" => {
+        "date_added" => {
             "CASE WHEN me.kind = 'collection'
                   THEN COALESCE(me.created_at, '')
                   ELSE COALESCE(f.imported_at, me.created_at, '')
@@ -505,6 +533,12 @@ fn entity_sort_expr(sort_field: &str) -> &'static str {
                   THEN COALESCE(me.name, '')
                   ELSE COALESCE(f.name, me.name, '')
              END"
+        }
+        "date_created" => {
+            "me.created_at"
+        }
+        "date_modified" => {
+            "me.updated_at"
         }
         "mime" => {
             "CASE WHEN me.kind = 'collection'
@@ -557,10 +591,6 @@ const ENTITY_SLIM_SELECT: &str =
          ELSE COALESCE(f.rating, me.rating)
      END AS rating,
      CASE
-         WHEN me.kind = 'collection' THEN cover_f.blurhash
-         ELSE COALESCE(f.blurhash, cover_f.blurhash)
-     END AS blurhash,
-     CASE
          WHEN me.kind = 'collection' THEN COALESCE(me.created_at, '')
          ELSE COALESCE(f.imported_at, me.created_at, '')
      END AS imported_at,
@@ -600,16 +630,63 @@ fn row_to_entity_slim(row: &rusqlite::Row) -> rusqlite::Result<FileMetadataSlim>
         size: row.get(8)?,
         status: row.get::<_, i64>(9)? as u8,
         rating: row.get(10)?,
-        blurhash: row.get(11)?,
-        imported_at: row.get(12)?,
-        dominant_color_hex: row.get(13)?,
-        duration_ms: row.get(14)?,
-        num_frames: row.get(15)?,
-        has_audio: row.get::<_, i64>(16)? != 0,
-        view_count: row.get(17)?,
-        file_id: row.get(18)?,
+        imported_at: row.get(11)?,
+        dominant_color_hex: row.get(12)?,
+        duration_ms: row.get(13)?,
+        num_frames: row.get(14)?,
+        has_audio: row.get::<_, i64>(15)? != 0,
+        view_count: row.get(16)?,
+        file_id: row.get(17)?,
         position_rank: None,
     })
+}
+
+/// Map a database row to FileRecord. Column order must match FILE_RECORD_SELECT.
+fn row_to_file_record(row: &rusqlite::Row) -> rusqlite::Result<FileRecord> {
+    Ok(FileRecord {
+        file_id: row.get(0)?,
+        hash: row.get(1)?,
+        name: row.get(2)?,
+        size: row.get(3)?,
+        mime: row.get(4)?,
+        width: row.get(5)?,
+        height: row.get(6)?,
+        duration_ms: row.get(7)?,
+        num_frames: row.get(8)?,
+        has_audio: row.get::<_, i64>(9)? != 0,
+        status: row.get(10)?,
+        rating: row.get(11)?,
+        view_count: row.get(12)?,
+        phash: row.get(13)?,
+        imported_at: row.get(14)?,
+        notes: row.get(15)?,
+        source_urls_json: row.get(16)?,
+        dominant_color_hex: row.get(17)?,
+    })
+}
+
+/// Populate the `_grid_filter` temp table with the given file IDs for efficient JOINs.
+fn populate_grid_filter(conn: &Connection, file_ids: &[i64]) -> rusqlite::Result<()> {
+    conn.execute(
+        "CREATE TEMP TABLE IF NOT EXISTS _grid_filter (file_id INTEGER PRIMARY KEY)",
+        [],
+    )?;
+    conn.execute("DELETE FROM _grid_filter", [])?;
+    for chunk in file_ids.chunks(500) {
+        let placeholders: String = chunk
+            .iter()
+            .enumerate()
+            .map(|(i, _)| format!("(?{})", i + 1))
+            .collect::<Vec<_>>()
+            .join(",");
+        let sql = format!("INSERT INTO _grid_filter (file_id) VALUES {}", placeholders);
+        let params: Vec<&dyn rusqlite::types::ToSql> = chunk
+            .iter()
+            .map(|id| id as &dyn rusqlite::types::ToSql)
+            .collect();
+        conn.execute(&sql, params.as_slice())?;
+    }
+    Ok(())
 }
 
 /// List entities (singles + collections) with keyset pagination.
@@ -657,7 +734,7 @@ pub fn list_files_slim(
             sql.push_str(&format!(
                 " AND ({sort_expr}, me.entity_id) {op} (?{p1}, ?{p2})",
             ));
-            param_values.push(Box::new(parts[0].to_string()));
+            push_cursor_sort_param(&mut param_values, parts[0], sort_field);
             param_values.push(Box::new(cursor_entity_id));
         } else {
             // Legacy single-value cursor fallback
@@ -667,7 +744,7 @@ pub fn list_files_slim(
                 op,
                 param_values.len() + 1
             ));
-            param_values.push(Box::new(c.to_string()));
+            push_cursor_sort_param(&mut param_values, c, sort_field);
         }
     }
 
@@ -700,7 +777,7 @@ pub fn batch_get_by_hashes(
     let placeholders: Vec<String> = (1..=hashes.len()).map(|i| format!("?{i}")).collect();
     let sql = format!(
         "SELECT file_id, hash, name, size, mime, width, height, duration_ms, num_frames,
-                has_audio, blurhash, status, rating, view_count, phash, imported_at,
+                has_audio, status, rating, view_count, phash, imported_at,
                 notes, source_urls_json, dominant_color_hex
          FROM file WHERE hash IN ({})",
         placeholders.join(",")
@@ -724,15 +801,14 @@ pub fn batch_get_by_hashes(
             duration_ms: row.get(7)?,
             num_frames: row.get(8)?,
             has_audio: row.get::<_, i64>(9)? != 0,
-            blurhash: row.get(10)?,
-            status: row.get(11)?,
-            rating: row.get(12)?,
-            view_count: row.get(13)?,
-            phash: row.get(14)?,
-            imported_at: row.get(15)?,
-            notes: row.get(16)?,
-            source_urls_json: row.get(17)?,
-            dominant_color_hex: row.get(18)?,
+            status: row.get(10)?,
+            rating: row.get(11)?,
+            view_count: row.get(12)?,
+            phash: row.get(13)?,
+            imported_at: row.get(14)?,
+            notes: row.get(15)?,
+            source_urls_json: row.get(16)?,
+            dominant_color_hex: row.get(17)?,
         })
     })?;
 
@@ -783,28 +859,7 @@ pub fn list_files_slim_by_ids(
         "<"
     };
 
-    // Build temp table for filtered entity_ids for efficient JOIN
-    conn.execute(
-        "CREATE TEMP TABLE IF NOT EXISTS _grid_filter (file_id INTEGER PRIMARY KEY)",
-        [],
-    )?;
-    conn.execute("DELETE FROM _grid_filter", [])?;
-
-    // Batch INSERT — chunks of 500 values per statement to reduce overhead
-    for chunk in file_ids.chunks(500) {
-        let placeholders: String = chunk
-            .iter()
-            .enumerate()
-            .map(|(i, _)| format!("(?{})", i + 1))
-            .collect::<Vec<_>>()
-            .join(",");
-        let sql = format!("INSERT INTO _grid_filter (file_id) VALUES {}", placeholders);
-        let params: Vec<&dyn rusqlite::types::ToSql> = chunk
-            .iter()
-            .map(|id| id as &dyn rusqlite::types::ToSql)
-            .collect();
-        conn.execute(&sql, params.as_slice())?;
-    }
+    populate_grid_filter(conn, file_ids)?;
 
     let mut sql = format!(
         "SELECT {}
@@ -834,14 +889,7 @@ pub fn list_files_slim_by_ids(
             sql.push_str(&format!(
                 " AND ({sort_expr}, me.entity_id) {op} (?{p1}, ?{p2})",
             ));
-            // Random sort expression produces integer values — bind cursor as i64
-            // to match SQLite type affinity (TEXT vs INTEGER would always fail).
-            if is_random {
-                let cursor_sort_val: i64 = parts[0].parse().unwrap_or(0);
-                param_values.push(Box::new(cursor_sort_val));
-            } else {
-                param_values.push(Box::new(parts[0].to_string()));
-            }
+            push_cursor_sort_param(&mut param_values, parts[0], sort_field);
             param_values.push(Box::new(cursor_entity_id));
         } else {
             // Legacy single-value cursor fallback
@@ -851,7 +899,7 @@ pub fn list_files_slim_by_ids(
                 op,
                 param_values.len() + 1
             ));
-            param_values.push(Box::new(c.to_string()));
+            push_cursor_sort_param(&mut param_values, c, sort_field);
         }
     }
 
@@ -889,33 +937,13 @@ pub fn list_files_slim_by_folder_rank(
     let dir = if sort_dir == "asc" { "ASC" } else { "DESC" };
     let op = if sort_dir == "asc" { ">" } else { "<" };
 
-    // Build temp table for filtered file_ids
-    conn.execute(
-        "CREATE TEMP TABLE IF NOT EXISTS _grid_filter (file_id INTEGER PRIMARY KEY)",
-        [],
-    )?;
-    conn.execute("DELETE FROM _grid_filter", [])?;
-
-    for chunk in file_ids.chunks(500) {
-        let placeholders: String = chunk
-            .iter()
-            .enumerate()
-            .map(|(i, _)| format!("(?{})", i + 1))
-            .collect::<Vec<_>>()
-            .join(",");
-        let sql = format!("INSERT INTO _grid_filter (file_id) VALUES {}", placeholders);
-        let params: Vec<&dyn rusqlite::types::ToSql> = chunk
-            .iter()
-            .map(|id| id as &dyn rusqlite::types::ToSql)
-            .collect();
-        conn.execute(&sql, params.as_slice())?;
-    }
+    populate_grid_filter(conn, file_ids)?;
 
     let mut sql = format!(
-        "SELECT {}, fe.position_rank
+        "SELECT {}, COALESCE(fe.position_rank, 2147483647) AS position_rank
          FROM media_entity me
          INNER JOIN _grid_filter gf ON gf.file_id = me.entity_id
-         INNER JOIN folder_entity fe ON fe.entity_id = me.entity_id AND fe.folder_id = ?1
+         LEFT JOIN folder_entity fe ON fe.entity_id = me.entity_id AND fe.folder_id = ?1
          LEFT JOIN entity_file ef ON ef.entity_id = me.entity_id
          LEFT JOIN file f ON f.file_id = ef.file_id
          LEFT JOIN file cover_f ON cover_f.file_id = me.cover_file_id
@@ -938,7 +966,7 @@ pub fn list_files_slim_by_folder_rank(
             let p1 = param_values.len() + 1;
             let p2 = param_values.len() + 2;
             sql.push_str(&format!(
-                " AND (fe.position_rank, me.entity_id) {op} (?{p1}, ?{p2})",
+                " AND (COALESCE(fe.position_rank, 2147483647), me.entity_id) {op} (?{p1}, ?{p2})",
             ));
             param_values.push(Box::new(cursor_rank));
             param_values.push(Box::new(cursor_entity_id));
@@ -946,7 +974,7 @@ pub fn list_files_slim_by_folder_rank(
     }
 
     sql.push_str(&format!(
-        " ORDER BY fe.position_rank {}, me.entity_id {} LIMIT ?{}",
+        " ORDER BY COALESCE(fe.position_rank, 2147483647) {}, me.entity_id {} LIMIT ?{}",
         dir,
         dir,
         param_values.len() + 1
@@ -958,7 +986,7 @@ pub fn list_files_slim_by_folder_rank(
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt.query_map(params_refs.as_slice(), |row| {
         let mut item = row_to_entity_slim(row)?;
-        item.position_rank = row.get(19)?; // position_rank after 19 entity_slim columns
+        item.position_rank = row.get(18)?; // position_rank after 18 entity_slim columns
         Ok(item)
     })?;
 
@@ -978,30 +1006,10 @@ pub fn list_files_slim_by_collection_rank(
         return Ok(Vec::new());
     }
 
-    // Build temp table for filtered file_ids
-    conn.execute(
-        "CREATE TEMP TABLE IF NOT EXISTS _grid_filter (file_id INTEGER PRIMARY KEY)",
-        [],
-    )?;
-    conn.execute("DELETE FROM _grid_filter", [])?;
-
-    for chunk in file_ids.chunks(500) {
-        let placeholders: String = chunk
-            .iter()
-            .enumerate()
-            .map(|(i, _)| format!("(?{})", i + 1))
-            .collect::<Vec<_>>()
-            .join(",");
-        let sql = format!("INSERT INTO _grid_filter (file_id) VALUES {}", placeholders);
-        let params: Vec<&dyn rusqlite::types::ToSql> = chunk
-            .iter()
-            .map(|id| id as &dyn rusqlite::types::ToSql)
-            .collect();
-        conn.execute(&sql, params.as_slice())?;
-    }
+    populate_grid_filter(conn, file_ids)?;
 
     let mut sql = String::from(
-        "SELECT f.hash, f.name, f.mime, f.width, f.height, f.size, f.status, f.rating, f.blurhash,
+        "SELECT f.hash, f.name, f.mime, f.width, f.height, f.size, f.status, f.rating,
                 f.imported_at, f.dominant_color_hex, f.duration_ms, f.num_frames, f.has_audio, f.view_count,
                 f.file_id, ef.entity_id, COALESCE(me.collection_ordinal, 0)
          FROM file f
@@ -1045,8 +1053,8 @@ pub fn list_files_slim_by_collection_rank(
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt.query_map(params_refs.as_slice(), |row| {
         Ok(FileMetadataSlim {
-            file_id: row.get(15)?,
-            entity_id: row.get(16)?,
+            file_id: row.get(14)?,
+            entity_id: row.get(15)?,
             is_collection: false,
             collection_item_count: None,
             hash: row.get(0)?,
@@ -1057,14 +1065,13 @@ pub fn list_files_slim_by_collection_rank(
             size: row.get(5)?,
             status: row.get::<_, i64>(6)? as u8,
             rating: row.get(7)?,
-            blurhash: row.get(8)?,
-            imported_at: row.get(9)?,
-            dominant_color_hex: row.get(10)?,
-            duration_ms: row.get(11)?,
-            num_frames: row.get(12)?,
-            has_audio: row.get::<_, i64>(13)? != 0,
-            view_count: row.get(14)?,
-            position_rank: row.get(17)?,
+            imported_at: row.get(8)?,
+            dominant_color_hex: row.get(9)?,
+            duration_ms: row.get(10)?,
+            num_frames: row.get(11)?,
+            has_audio: row.get::<_, i64>(12)? != 0,
+            view_count: row.get(13)?,
+            position_rank: row.get(16)?,
         })
     })?;
 
@@ -1213,6 +1220,55 @@ pub fn aggregate_stats(conn: &Connection) -> rusqlite::Result<FileStats> {
     })
 }
 
+/// Per-MIME-category breakdown: count + total size for non-trash files.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MediaTypeBreakdown {
+    pub images: i64,
+    pub images_size: i64,
+    pub videos: i64,
+    pub videos_size: i64,
+    pub audio: i64,
+    pub audio_size: i64,
+    pub other: i64,
+    pub other_size: i64,
+}
+
+pub fn aggregate_media_type_breakdown(conn: &Connection) -> rusqlite::Result<MediaTypeBreakdown> {
+    let mut stmt = conn.prepare_cached(
+        "SELECT
+            CASE
+                WHEN mime LIKE 'image/%' THEN 'image'
+                WHEN mime LIKE 'video/%' THEN 'video'
+                WHEN mime LIKE 'audio/%' THEN 'audio'
+                ELSE 'other'
+            END AS category,
+            COUNT(*),
+            COALESCE(SUM(size), 0)
+         FROM file
+         WHERE status IN (0, 1)
+         GROUP BY category",
+    )?;
+    let mut b = MediaTypeBreakdown {
+        images: 0, images_size: 0,
+        videos: 0, videos_size: 0,
+        audio: 0, audio_size: 0,
+        other: 0, other_size: 0,
+    };
+    let rows = stmt.query_map([], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?, row.get::<_, i64>(2)?))
+    })?;
+    for row in rows {
+        let (cat, count, size) = row?;
+        match cat.as_str() {
+            "image" => { b.images = count; b.images_size = size; }
+            "video" => { b.videos = count; b.videos_size = size; }
+            "audio" => { b.audio = count; b.audio_size = size; }
+            _ => { b.other = count; b.other_size = size; }
+        }
+    }
+    Ok(b)
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileStats {
     pub total: i64,
@@ -1227,7 +1283,7 @@ impl SqliteDatabase {
         self.with_conn(|conn| wipe_all_files(conn)).await?;
         self.hash_index.clear();
         self.bitmaps.clear();
-        self.emit_compiler_event(CompilerEvent::RebuildAll);
+        self.emit_read_model_event(ReadModelEvent::RebuildAll);
         Ok(())
     }
 
@@ -1238,7 +1294,7 @@ impl SqliteDatabase {
         self.hash_index.insert(hash, file_id);
         self.bitmaps
             .insert(&BitmapKey::Status(status), file_id as u32);
-        self.emit_compiler_event(CompilerEvent::FileInserted { file_id });
+        self.emit_read_model_event(ReadModelEvent::FileInserted { file_id });
         Ok(file_id)
     }
 
@@ -1246,6 +1302,16 @@ impl SqliteDatabase {
         let h = hash.to_string();
         self.with_read_conn(move |conn| get_file_by_hash(conn, &h))
             .await
+    }
+
+    pub async fn get_entity_details_by_hash(
+        &self,
+        hash: &str,
+    ) -> Result<Option<crate::types::EntityDetails>, String> {
+        Ok(self
+            .get_file_by_hash(hash)
+            .await?
+            .map(crate::types::EntityDetails::from))
     }
 
     pub async fn file_exists(&self, hash: &str) -> Result<bool, String> {
@@ -1275,18 +1341,50 @@ impl SqliteDatabase {
     pub async fn update_file_status(&self, hash: &str, status: i64) -> Result<(), String> {
         let file_id = self.resolve_hash(hash).await?;
         let fid = file_id;
+
+        // Collect member file_ids BEFORE the status update (for bitmap sync)
+        let member_files = self
+            .with_read_conn(move |conn| {
+                crate::folders::collections_db::get_cover_collection_member_files(conn, fid)
+            })
+            .await?;
+
+        let fid = file_id;
         self.with_conn(move |conn| update_status(conn, fid, status))
             .await?;
 
-        // Update status bitmaps
+        // Update status bitmaps for the target file
         let fid_u32 = file_id as u32;
         for s in 0..=2i64 {
             self.bitmaps.remove(&BitmapKey::Status(s), fid_u32);
         }
         self.bitmaps.insert(&BitmapKey::Status(status), fid_u32);
 
-        self.emit_compiler_event(CompilerEvent::FileStatusChanged { file_id });
+        // Update bitmaps for cascaded member files
+        for (member_fid, _) in &member_files {
+            let m = *member_fid as u32;
+            for s in 0..=2i64 {
+                self.bitmaps.remove(&BitmapKey::Status(s), m);
+            }
+            self.bitmaps.insert(&BitmapKey::Status(status), m);
+        }
+
+        if member_files.is_empty() {
+            self.emit_read_model_event(ReadModelEvent::FileStatusChanged { file_id });
+        } else {
+            // Batch event is more appropriate when many files changed
+            self.emit_read_model_event(ReadModelEvent::StatusBatchChanged);
+        }
         Ok(())
+    }
+
+    pub async fn filter_visible_entity_ids(
+        &self,
+        entity_ids: &[i64],
+    ) -> Result<Vec<i64>, String> {
+        let ids = entity_ids.to_vec();
+        self.with_read_conn(move |conn| filter_visible_entity_ids(conn, &ids))
+            .await
     }
 
     /// Batch update status for many files at once (single transaction + bulk bitmap swap).
@@ -1295,16 +1393,29 @@ impl SqliteDatabase {
         file_ids: &roaring::RoaringBitmap,
         status: i64,
     ) -> Result<usize, String> {
-        let ids: Vec<i64> = file_ids.iter().map(|id| id as i64).collect();
-        let count = ids.len();
-        if count == 0 {
+        let original_ids: Vec<i64> = file_ids.iter().map(|id| id as i64).collect();
+        if original_ids.is_empty() {
             return Ok(0);
         }
 
+        let parent_collection_ids = self
+            .with_read_conn({
+                let file_ids = original_ids.clone();
+                move |conn| {
+                    crate::folders::collections_db::get_parent_collection_ids_for_file_ids(
+                        conn, &file_ids,
+                    )
+                }
+            })
+            .await?;
+
+        let count = original_ids.len();
         let s = status;
+        let ids_for_update = original_ids.clone();
+        let coll_ids = parent_collection_ids;
         self.with_conn_mut(move |conn| {
             let tx = conn.transaction()?;
-            for chunk in ids.chunks(999) {
+            for chunk in ids_for_update.chunks(999) {
                 let placeholders: String = std::iter::repeat("?")
                     .take(chunk.len())
                     .collect::<Vec<_>>()
@@ -1330,11 +1441,17 @@ impl SqliteDatabase {
                 tx.execute(&entity_sql, param_refs.as_slice())?;
             }
             tx.commit()?;
+
+            for &collection_id in &coll_ids {
+                crate::folders::collections_db::sync_collection_aggregate_metadata(
+                    conn,
+                    collection_id,
+                )?;
+            }
             Ok(())
         })
         .await?;
 
-        // Bulk bitmap update
         for fid in file_ids.iter() {
             for s in 0..=2i64 {
                 self.bitmaps.remove(&BitmapKey::Status(s), fid);
@@ -1342,35 +1459,62 @@ impl SqliteDatabase {
             self.bitmaps.insert(&BitmapKey::Status(status), fid);
         }
 
-        // One compiler event for the whole batch
-        self.emit_compiler_event(CompilerEvent::StatusBatchChanged);
+        self.emit_read_model_event(ReadModelEvent::StatusBatchChanged);
         Ok(count)
     }
 
     pub async fn delete_file_by_hash(&self, hash: &str) -> Result<(), String> {
         let file_id = self.resolve_hash(hash).await?;
 
-        // Query folder memberships BEFORE deletion (CASCADE will remove folder_entity rows)
+        // Collect member files + folder memberships BEFORE deletion
         let fid = file_id;
-        let folder_ids = self
-            .with_read_conn(move |conn| crate::folders::db::get_entity_folder_memberships(conn, fid))
+        let (member_files, folder_ids, member_folder_ids) = self
+            .with_read_conn(move |conn| {
+                let members =
+                    crate::folders::collections_db::get_cover_collection_member_files(conn, fid)?;
+                let member_file_ids: Vec<i64> =
+                    members.iter().map(|(member_fid, _)| *member_fid).collect();
+                let (folders, member_folders) =
+                    crate::folders::db::collect_file_delete_folder_memberships(
+                        conn,
+                        fid,
+                        &member_file_ids,
+                    )?;
+                Ok((members, folders, member_folders))
+            })
             .await?;
 
         let fid = file_id;
         self.with_conn(move |conn| delete_file(conn, fid)).await?;
 
-        // Clean up caches
+        // Clean up caches for target file
         let fid_u32 = file_id as u32;
         for s in 0..=2i64 {
             self.bitmaps.remove(&BitmapKey::Status(s), fid_u32);
         }
-        // Remove from folder bitmaps (counts were stale without this)
         for membership in &folder_ids {
             self.bitmaps
                 .remove(&BitmapKey::Folder(membership.folder_id), fid_u32);
         }
         self.hash_index.remove_by_hash(hash);
-        self.emit_compiler_event(CompilerEvent::FileDeleted { file_id });
+
+        // Clean up caches for cascaded member files
+        for (member_fid, member_hash) in &member_files {
+            let m = *member_fid as u32;
+            for s in 0..=2i64 {
+                self.bitmaps.remove(&BitmapKey::Status(s), m);
+            }
+            self.hash_index.remove_by_hash(member_hash);
+        }
+        for (member_fid, folders) in &member_folder_ids {
+            let m = *member_fid as u32;
+            for membership in folders {
+                self.bitmaps
+                    .remove(&BitmapKey::Folder(membership.folder_id), m);
+            }
+        }
+
+        self.emit_read_model_event(ReadModelEvent::FileDeleted { file_id });
         Ok(())
     }
 
@@ -1419,7 +1563,6 @@ impl SqliteDatabase {
                         size: r.size,
                         status: r.status as u8,
                         rating: r.rating,
-                        blurhash: r.blurhash,
                         imported_at: r.imported_at,
                         dominant_color_hex: r.dominant_color_hex,
                         duration_ms: r.duration_ms,
@@ -1459,25 +1602,34 @@ impl SqliteDatabase {
             .await
     }
 
-    pub async fn increment_view_count(&self, hash: &str) -> Result<(), String> {
+    pub async fn set_date_created(
+        &self,
+        hash: &str,
+        created_at: &str,
+    ) -> Result<(), String> {
         let file_id = self.resolve_hash(hash).await?;
-        self.with_conn(move |conn| increment_view_count(conn, file_id))
-            .await?;
-        self.emit_compiler_event(CompilerEvent::ViewCountChanged);
-        Ok(())
+        let created_at = created_at.to_string();
+        self.with_conn(move |conn| set_date_created(conn, file_id, &created_at))
+            .await
+    }
+
+    pub async fn set_date_added(&self, hash: &str, imported_at: &str) -> Result<(), String> {
+        let file_id = self.resolve_hash(hash).await?;
+        let val = imported_at.to_string();
+        self.with_conn(move |conn| set_date_added(conn, file_id, &val))
+            .await
+    }
+
+    pub async fn touch_date_modified(&self, hash: &str) -> Result<(), String> {
+        let file_id = self.resolve_hash(hash).await?;
+        self.with_conn(move |conn| touch_date_modified(conn, file_id))
+            .await
     }
 
     pub async fn set_phash(&self, hash: &str, phash: &str) -> Result<(), String> {
         let file_id = self.resolve_hash(hash).await?;
         let p = phash.to_string();
         self.with_conn(move |conn| set_phash(conn, file_id, &p))
-            .await
-    }
-
-    pub async fn set_blurhash(&self, hash: &str, blurhash: Option<&str>) -> Result<(), String> {
-        let file_id = self.resolve_hash(hash).await?;
-        let b = blurhash.map(|s| s.to_string());
-        self.with_conn(move |conn| set_blurhash(conn, file_id, b.as_deref()))
             .await
     }
 
@@ -1499,11 +1651,15 @@ impl SqliteDatabase {
     pub async fn aggregate_file_stats(&self) -> Result<FileStats, String> {
         self.with_read_conn(aggregate_stats).await
     }
+
+    pub async fn aggregate_media_type_breakdown(&self) -> Result<MediaTypeBreakdown, String> {
+        self.with_read_conn(aggregate_media_type_breakdown).await
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{insert_file, save_file_colors, NewFile};
+    use super::{NewFile, insert_file, save_file_colors};
     use rusqlite::Connection;
 
     #[test]
@@ -1525,9 +1681,9 @@ mod tests {
                 duration_ms: None,
                 num_frames: None,
                 has_audio: false,
-                blurhash: None,
                 status: 0,
                 imported_at: now,
+                entity_created_at: None,
                 notes: None,
                 source_urls_json: None,
                 dominant_color_hex: None,
@@ -1544,16 +1700,61 @@ mod tests {
         )
         .unwrap();
 
-        save_file_colors(
+        save_file_colors(&conn, file_id, &[("#ffffff".to_string(), 100.0, 0.0, 0.0)]).unwrap();
+
+        let rtree_rows: i64 = conn
+            .query_row("SELECT COUNT(*) FROM file_color_rtree", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(rtree_rows, 1);
+    }
+
+    #[test]
+    fn insert_file_uses_entity_created_at_when_present() {
+        let conn = Connection::open_in_memory().unwrap();
+        crate::sqlite::schema::apply_pragmas(&conn).unwrap();
+        crate::sqlite::schema::init_schema(&conn).unwrap();
+
+        let imported_at = "2026-03-18T12:00:00+00:00".to_string();
+        let entity_created_at = "2024-03-10T03:34:56+00:00".to_string();
+        let file_id = insert_file(
             &conn,
-            file_id,
-            &[("#ffffff".to_string(), 100.0, 0.0, 0.0)],
+            &NewFile {
+                hash: "hash_created_at".to_string(),
+                name: Some("created-at".to_string()),
+                size: 1024,
+                mime: "image/png".to_string(),
+                width: Some(128),
+                height: Some(128),
+                duration_ms: None,
+                num_frames: None,
+                has_audio: false,
+                status: 0,
+                imported_at: imported_at.clone(),
+                entity_created_at: Some(entity_created_at.clone()),
+                notes: None,
+                source_urls_json: None,
+                dominant_color_hex: None,
+                dominant_palette_blob: None,
+            },
         )
         .unwrap();
 
-        let rtree_rows: i64 = conn
-            .query_row("SELECT COUNT(*) FROM file_color_rtree", [], |row| row.get(0))
+        let stored_created_at: String = conn
+            .query_row(
+                "SELECT created_at FROM media_entity WHERE entity_id = ?1 AND kind = 'single'",
+                [file_id],
+                |row| row.get(0),
+            )
             .unwrap();
-        assert_eq!(rtree_rows, 1);
+        assert_eq!(stored_created_at, entity_created_at);
+
+        let stored_imported_at: String = conn
+            .query_row("SELECT imported_at FROM file WHERE file_id = ?1", [file_id], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(stored_imported_at, imported_at);
     }
 }

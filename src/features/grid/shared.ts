@@ -31,8 +31,10 @@ export const isVideoMime = (mime: string) => mime.startsWith('video/');
 
 export type EntitySlim = ApiEntitySlim;
 
+export type MediaItem = EntitySlim;
+
 // Extended type for Masonic grid with computed aspect ratio
-export interface MasonryImageItem extends EntitySlim {
+export interface MasonryImageItem extends MediaItem {
   aspectRatio: number;
 }
 
@@ -48,7 +50,7 @@ function sanitizeAspectRatio(raw: number): number {
 }
 
 /** Convert a FileInfo from the backend into a MasonryImageItem */
-export function toMasonryItem(file: EntitySlim): MasonryImageItem {
+export function toMasonryItem(file: MediaItem): MasonryImageItem {
   const w = sanitizeDimension(file.width, 300);
   const h = sanitizeDimension(file.height, 200);
   return { ...file, aspectRatio: sanitizeAspectRatio(w / h) };

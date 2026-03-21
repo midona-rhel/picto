@@ -23,7 +23,7 @@
    Image area
    -------------------------------------------------------------------------- */
 
-.imageArea {
+.tileArea {
   position: relative;
   width: 100%;
   height: 100%;
@@ -73,16 +73,14 @@
 }
 
 .controlBtn {
+  composes: btnReset from '../../../shared/styles/buttonReset.module.css';
   display: flex;
   align-items: center;
   justify-content: center;
   width: 36px;
   height: 36px;
-  border: none;
   border-radius: 6px;
-  background: transparent;
   color: rgba(255, 255, 255, 0.85);
-  cursor: pointer;
   transition: background 0.15s;
 }
 
@@ -91,19 +89,17 @@
 }
 
 .intervalBtn {
+  composes: btnReset from '../../../shared/styles/buttonReset.module.css';
   display: flex;
   align-items: center;
   justify-content: center;
   min-width: 40px;
   height: 36px;
   padding: 0 8px;
-  border: none;
   border-radius: 6px;
-  background: transparent;
   color: rgba(255, 255, 255, 0.6);
   font-size: var(--font-size-xs);
   font-family: var(--font-family);
-  cursor: pointer;
   transition: background 0.15s;
 }
 

@@ -8,12 +8,11 @@ import {
   TextInput,
   Textarea,
 } from '@mantine/core';
-import { IconCheck, IconKey, IconPlus, IconTrash, IconX } from '@tabler/icons-react';
+import { IconPlus, IconX } from '@tabler/icons-react';
 import { api, getCurrentWindow } from '#desktop/api';
 import { notifyError, notifySuccess } from '../../../shared/lib/notify';
-import { FlowsWorking, type FlowResultEntry } from './FlowsWorking';
-import { CreateFlowModal } from './CreateFlowModal';
-import { SubscriptionController } from '../../../shared/controllers/subscriptionController';
+import { SubscriptionGroupsPanel } from './SubscriptionGroupsPanel';
+import { CreateSubscriptionGroupModal } from './CreateSubscriptionGroupModal';
 import type {
   CredentialDomain,
   CredentialHealth,
@@ -27,7 +26,7 @@ type CredentialFormState = {
   siteCategory: string;
   credentialType: CredentialType;
   displayName: string;
-  rule34Raw: string;
+  booruApiRaw: string;
   username: string;
   password: string;
   oauthToken: string;
@@ -46,24 +45,33 @@ function isRule34Category(siteCategory: string): boolean {
   return normalized === 'rule34' || normalized === 'rule34xxx' || normalized === 'rule34.xxx';
 }
 
-function canonicalSiteForVerification(siteId: string): string {
-  const normalized = siteId.trim().toLowerCase();
-  if (normalized === 'rule34xxx' || normalized === 'rule34.xxx') return 'rule34';
-  if (normalized === 'e621.net') return 'e621';
-  return normalized;
+function isGelbooruCategory(siteCategory: string): boolean {
+  const normalized = siteCategory.trim().toLowerCase();
+  return normalized === 'gelbooru';
 }
 
-function isConfirmedWorkingSite(siteId: string): boolean {
-  const canonical = canonicalSiteForVerification(siteId);
-  return (
-    canonical === 'danbooru'
-    || canonical === 'e621'
-    || canonical === 'rule34'
-    || canonical === 'safebooru'
-  );
+function isBooruApiKeyCategory(siteCategory: string): boolean {
+  return isRule34Category(siteCategory) || isGelbooruCategory(siteCategory);
 }
 
-function parseRule34Credential(raw: string): { userId: string; apiKey: string } | null {
+function isTwitterCategory(siteCategory: string): boolean {
+  const normalized = siteCategory.trim().toLowerCase();
+  return normalized === 'twitter' || normalized === 'x.com';
+}
+
+function isPixivCategory(siteCategory: string): boolean {
+  const normalized = siteCategory.trim().toLowerCase();
+  return normalized === 'pixiv' || normalized === 'pixivuser';
+}
+
+function isFuraffinityCategory(siteCategory: string): boolean {
+  const normalized = siteCategory.trim().toLowerCase();
+  return normalized === 'furaffinity';
+}
+
+
+
+function parseBooruApiCredential(raw: string): { userId: string; apiKey: string } | null {
   const input = raw.trim();
   if (!input) return null;
 
@@ -85,12 +93,13 @@ function parseRule34Credential(raw: string): { userId: string; apiKey: string } 
 
 function parseCookies(raw: string): Record<string, string> {
   const out: Record<string, string> = {};
-  const lines = raw.split('\n').map((s) => s.trim()).filter(Boolean);
-  for (const line of lines) {
-    const idx = line.indexOf('=');
+  // Split on newlines or semicolons to handle both "a=x; b=y" and "a=x\nb=y"
+  const entries = raw.split(/[\n;]/).map((s) => s.trim()).filter(Boolean);
+  for (const entry of entries) {
+    const idx = entry.indexOf('=');
     if (idx <= 0) continue;
-    const key = line.slice(0, idx).trim();
-    const value = line.slice(idx + 1).trim();
+    const key = entry.slice(0, idx).trim();
+    const value = entry.slice(idx + 1).trim();
     if (!key || !value) continue;
     out[key] = value;
   }
@@ -100,8 +109,14 @@ function parseCookies(raw: string): Record<string, string> {
 function validateCredentialForm(form: CredentialFormState): string | null {
   if (!form.siteCategory) return 'No site selected for credential.';
   const isRule34 = isRule34Category(form.siteCategory);
-  if (isRule34 && form.credentialType !== 'api_key') {
-    return 'rule34.xxx requires API key credentials (user-id + api-key).';
+  const isGelbooru = isGelbooruCategory(form.siteCategory);
+  const isBooruApi = isRule34 || isGelbooru;
+  const isTwitter = isTwitterCategory(form.siteCategory);
+  if (isBooruApi && form.credentialType !== 'api_key') {
+    return 'This site requires API key credentials (user-id + api-key).';
+  }
+  if (isTwitter && form.credentialType !== 'cookies') {
+    return 'Twitter/X requires browser cookies (auth_token + ct0).';
   }
   if (form.credentialType === 'username_password') {
     if (!form.username.trim() || !form.password.trim()) {
@@ -109,9 +124,9 @@ function validateCredentialForm(form: CredentialFormState): string | null {
     }
   }
   if (form.credentialType === 'api_key') {
-    if (isRule34) {
-      if (!parseRule34Credential(form.rule34Raw)) {
-        return 'Paste rule34 credentials containing both api_key and user_id.';
+    if (isBooruApi) {
+      if (!parseBooruApiCredential(form.booruApiRaw)) {
+        return 'Paste the credential string containing both api_key and user_id.';
       }
     } else if (!form.password.trim()) {
       return 'API key value is required.';
@@ -124,7 +139,15 @@ function validateCredentialForm(form: CredentialFormState): string | null {
   }
   if (form.credentialType === 'cookies') {
     const parsed = parseCookies(form.cookiesRaw);
-    if (Object.keys(parsed).length === 0) {
+    if (isTwitter) {
+      if (!parsed['auth_token'] || !parsed['ct0']) {
+        return 'Twitter/X requires both auth_token and ct0 cookies.';
+      }
+    } else if (isFuraffinityCategory(form.siteCategory)) {
+      if (!parsed['a'] || !parsed['b']) {
+        return 'FurAffinity requires both "a" and "b" cookies.';
+      }
+    } else if (Object.keys(parsed).length === 0) {
       return 'At least one cookie entry (key=value) is required.';
     }
   }
@@ -133,18 +156,19 @@ function validateCredentialForm(form: CredentialFormState): string | null {
 
 export function SubscriptionsWindow() {
   const [createModalOpen, setCreateModalOpen] = useState(false);
-  const [flowRefreshToken, setFlowRefreshToken] = useState(0);
-  const [flowLastResults, setFlowLastResults] = useState<Record<string, FlowResultEntry>>({});
+  const [subscriptionRefreshToken, setSubscriptionRefreshToken] = useState(0);
   const [sites, setSites] = useState<SubscriptionSiteInfo[]>([]);
   const [credentials, setCredentials] = useState<CredentialDomain[]>([]);
   const [credentialHealth, setCredentialHealth] = useState<CredentialHealth[]>([]);
   const [credentialModalOpen, setCredentialModalOpen] = useState(false);
   const [savingCredential, setSavingCredential] = useState(false);
+  const [pixivOAuthBusy, setPixivOAuthBusy] = useState(false);
+  const [activePanel, setActivePanel] = useState<'subscriptions' | 'credentials'>('subscriptions');
   const [credentialForm, setCredentialForm] = useState<CredentialFormState>({
     siteCategory: '',
     credentialType: 'username_password',
     displayName: '',
-    rule34Raw: '',
+    booruApiRaw: '',
     username: '',
     password: '',
     oauthToken: '',
@@ -154,9 +178,9 @@ export function SubscriptionsWindow() {
   const loadCredentialData = useCallback(async () => {
     try {
       const [siteCatalog, storedCreds, health] = await Promise.all([
-        SubscriptionController.getSiteCatalog(),
-        SubscriptionController.listCredentials(),
-        SubscriptionController.listCredentialHealth(),
+        api.subscriptions.getSites(),
+        api.subscriptions.listCredentials(),
+        api.subscriptions.listCredentialHealth(),
       ]);
       setSites(siteCatalog);
       setCredentials(storedCreds);
@@ -186,27 +210,58 @@ export function SubscriptionsWindow() {
     () => sites.filter((site) => site.auth_supported),
     [sites],
   );
-  const isRule34Credential = useMemo(
-    () => isRule34Category(credentialForm.siteCategory),
+  const isBooruApiCredential = useMemo(
+    () => isBooruApiKeyCategory(credentialForm.siteCategory),
+    [credentialForm.siteCategory],
+  );
+  const isTwitterCredential = useMemo(
+    () => isTwitterCategory(credentialForm.siteCategory),
+    [credentialForm.siteCategory],
+  );
+  const isFuraffinityCredential = useMemo(
+    () => isFuraffinityCategory(credentialForm.siteCategory),
+    [credentialForm.siteCategory],
+  );
+  const isPixivCredential = useMemo(
+    () => isPixivCategory(credentialForm.siteCategory),
     [credentialForm.siteCategory],
   );
   const credentialTypeOptions = useMemo(
-    () => (isRule34Credential
-      ? [{ value: 'api_key', label: 'API Key (rule34 user-id + api-key)' }]
-      : CREDENTIAL_TYPE_OPTIONS),
-    [isRule34Credential],
+    () => {
+      if (isBooruApiCredential) return [{ value: 'api_key', label: 'API Key (user-id + api-key)' }];
+      if (isTwitterCredential) return [{ value: 'cookies', label: 'Browser Cookies (auth_token + ct0)' }];
+      if (isFuraffinityCredential) return [{ value: 'cookies', label: 'Browser Cookies (a + b)' }];
+      if (isPixivCredential) return [{ value: 'oauth_token', label: 'OAuth (Pixiv login)' }];
+      return CREDENTIAL_TYPE_OPTIONS;
+    },
+    [isBooruApiCredential, isTwitterCredential, isFuraffinityCredential, isPixivCredential],
   );
+  const missingRequiredAuthSites = useMemo(
+    () => authSites.filter((site) => site.auth_required_for_full_access && !credentialMap.get(site.id)),
+    [authSites, credentialMap],
+  );
+  const credentialsSummary = useMemo(() => {
+    if (authSites.length === 0) return 'No credential-capable sites enabled.';
+    if (missingRequiredAuthSites.length > 0) {
+      return `${missingRequiredAuthSites.length} site${missingRequiredAuthSites.length === 1 ? '' : 's'} still need credentials for full access.`;
+    }
+    return `${credentials.filter((row) => authSites.some((site) => site.id === row.site_category)).length} credential${credentials.length === 1 ? '' : 's'} saved.`;
+  }, [authSites, credentials, missingRequiredAuthSites]);
 
   const openCredentialModal = (site: SubscriptionSiteInfo) => {
     const existing = credentialMap.get(site.id);
-    const defaultType: CredentialType = isRule34Category(site.id)
+    const defaultType: CredentialType = isBooruApiKeyCategory(site.id)
       ? 'api_key'
-      : (existing?.credential_type ?? 'username_password');
+      : (isTwitterCategory(site.id) || isFuraffinityCategory(site.id))
+        ? 'cookies'
+        : isPixivCategory(site.id)
+          ? 'oauth_token'
+          : (existing?.credential_type ?? 'username_password');
     setCredentialForm({
       siteCategory: site.id,
       credentialType: defaultType,
       displayName: existing?.display_name ?? site.name,
-      rule34Raw: '',
+      booruApiRaw: '',
       username: '',
       password: '',
       oauthToken: '',
@@ -227,20 +282,20 @@ export function SubscriptionsWindow() {
       const cookies = credentialForm.credentialType === 'cookies'
         ? parseCookies(credentialForm.cookiesRaw)
         : undefined;
-      const parsedRule34 = isRule34Credential
-        ? parseRule34Credential(credentialForm.rule34Raw)
+      const parsedRule34 = isBooruApiCredential
+        ? parseBooruApiCredential(credentialForm.booruApiRaw)
         : null;
-      await SubscriptionController.setCredential({
-        siteCategory: credentialForm.siteCategory,
-        credentialType: credentialForm.credentialType,
-        displayName: credentialForm.displayName || null,
-        username: isRule34Credential
+      await api.subscriptions.setCredential({
+        site_category: credentialForm.siteCategory,
+        credential_type: credentialForm.credentialType,
+        display_name: credentialForm.displayName || null,
+        username: isBooruApiCredential
           ? (parsedRule34?.userId ?? null)
           : (credentialForm.username || null),
-        password: isRule34Credential
+        password: isBooruApiCredential
           ? (parsedRule34?.apiKey ?? null)
           : (credentialForm.password || null),
-        oauthToken: credentialForm.oauthToken || null,
+        oauth_token: credentialForm.oauthToken || null,
         cookies: cookies && Object.keys(cookies).length > 0 ? cookies : null,
       });
       notifySuccess('Credential saved to secure storage');
@@ -255,7 +310,7 @@ export function SubscriptionsWindow() {
 
   const deleteCredential = async (siteCategory: string) => {
     try {
-      await SubscriptionController.deleteCredential(siteCategory);
+      await api.subscriptions.deleteCredential(siteCategory);
       notifySuccess('Credential removed');
       await loadCredentialData();
     } catch (error) {
@@ -285,205 +340,281 @@ export function SubscriptionsWindow() {
       </div>
 
       <div className={styles.body}>
-        <section className={`${styles.section} ${styles.credentialsSection}`}>
-          <div className={styles.sectionTitle}>Site Credentials</div>
-          <div className={styles.sectionHelp}>
-            Configure optional site login credentials in OS secure storage. Some sites require auth for full access.
-          </div>
-          <div className={`${styles.siteGrid} ${styles.cardsContainer}`}>
-            {authSites.map((site) => {
-              const cred = credentialMap.get(site.id);
-              const health = healthMap.get(site.id);
-              const missingAuth = site.auth_supported && site.auth_required_for_full_access && !cred;
-              const verified = isConfirmedWorkingSite(site.id);
-              const healthStatus = site.auth_supported
-                ? (missingAuth ? 'missing' : (health?.health_status ?? 'unknown'))
-                : 'unknown';
-              const healthLabel = healthStatus.replace('_', ' ');
-              return (
-                <div key={site.id} className={styles.siteRow}>
-                  <div>
-                    <div className={styles.siteName}>{site.name}</div>
-                    <div className={styles.siteDomain}>{site.domain}</div>
-                  </div>
-                  <div className={styles.capabilityList}>
-                    <span className={site.supports_query ? styles.capabilityOn : styles.capabilityOff}>
-                      {site.supports_query ? <IconCheck size={11} /> : <IconX size={11} />}
-                      Query
-                    </span>
-                    <span className={site.supports_account ? styles.capabilityOn : styles.capabilityOff}>
-                      {site.supports_account ? <IconCheck size={11} /> : <IconX size={11} />}
-                      Account
-                    </span>
-                    <span className={site.auth_supported ? styles.capabilityOn : styles.capabilityOff}>
-                      {site.auth_supported ? <IconCheck size={11} /> : <IconX size={11} />}
-                      Auth
-                    </span>
-                    <span className={verified ? styles.capabilityOn : styles.capabilityOff}>
-                      {verified ? <IconCheck size={11} /> : <IconX size={11} />}
-                      Verified
-                    </span>
-                  </div>
-                  <Text size="xs" c={cred ? 'green' : 'dimmed'}>
-                    {site.auth_supported
-                      ? (cred ? `Saved (${cred.credential_type})` : 'No credential')
-                      : 'Auth not supported'}
-                  </Text>
-                  <Text
-                    size="xs"
-                    className={
-                      healthStatus === 'valid'
-                        ? styles.healthGood
-                        : healthStatus === 'unauthorized' || healthStatus === 'expired' || healthStatus === 'missing'
-                          ? styles.healthWarn
-                          : healthStatus === 'error'
-                            ? styles.healthBad
-                            : styles.healthUnknown
-                    }
-                  >
-                    {site.auth_supported ? healthLabel : 'n/a'}
-                  </Text>
-                  <div style={{ display: 'inline-flex', gap: 6 }}>
-                    {site.auth_supported && (
-                      <ActionIcon variant="subtle" color="gray" onClick={() => openCredentialModal(site)}>
-                        <IconKey size={14} />
-                      </ActionIcon>
-                    )}
-                    {site.auth_supported && cred && (
-                      <ActionIcon variant="subtle" color="red" onClick={() => deleteCredential(site.id)}>
-                        <IconTrash size={14} />
-                      </ActionIcon>
-                    )}
-                  </div>
-                  {site.auth_supported && health?.last_error && (
-                    <Text size="xs" c="dimmed" style={{ gridColumn: '1 / -1' }}>
-                      Last auth error: {health.last_error}
-                    </Text>
-                  )}
-                </div>
-              );
-            })}
-            {authSites.length === 0 && (
-              <Text size="xs" c="dimmed">
-                No credential-capable sites are currently enabled.
-              </Text>
-            )}
-          </div>
-        </section>
+        <div className={styles.panelSwitchRow}>
+          <button
+            type="button"
+            className={`${styles.panelSwitchButton} ${activePanel === 'subscriptions' ? styles.panelSwitchButtonActive : ''}`.trim()}
+            onClick={() => setActivePanel('subscriptions')}
+          >
+            Subscriptions
+          </button>
+          {authSites.length > 0 && (
+            <button
+              type="button"
+              className={`${styles.panelSwitchButton} ${activePanel === 'credentials' ? styles.panelSwitchButtonActive : ''}`.trim()}
+              onClick={() => setActivePanel('credentials')}
+            >
+              Credentials
+            </button>
+          )}
+        </div>
 
-        <section className={`${styles.section} ${styles.subscriptionsSection}`}>
-          <div className={styles.sectionHeaderRow}>
-            <div className={styles.sectionTitle}>Subscriptions</div>
-            <TextButton compact onClick={() => setCreateModalOpen(true)}>
-              <IconPlus size={12} />
-              New
-            </TextButton>
-          </div>
-          <div className={`${styles.flowsWrap} ${styles.cardsContainer}`}>
-            <FlowsWorking
-              flowId={null}
-              lastResults={flowLastResults}
-              onLastResultsChange={setFlowLastResults}
-              showHeader={false}
-              layoutMode="list"
-              refreshToken={flowRefreshToken}
-            />
-          </div>
-        </section>
+        {activePanel === 'subscriptions' ? (
+          <section className={`${styles.section} ${styles.subscriptionsSection}`}>
+            <div className={styles.sectionHeaderRow}>
+              <div className={styles.sectionTitle}>Subscriptions</div>
+              <TextButton compact onClick={() => setCreateModalOpen(true)}>
+                <IconPlus size={12} />
+                New
+              </TextButton>
+            </div>
+            <div className={styles.sectionHelp}>
+              Create a subscription, then add one or more site queries below. This is the main download workflow.
+            </div>
+            <div className={`${styles.groupsWrap} ${styles.cardsContainer}`}>
+              <SubscriptionGroupsPanel
+                showHeader={false}
+                layoutMode="list"
+                refreshToken={subscriptionRefreshToken}
+              />
+            </div>
+          </section>
+        ) : (
+          <section className={`${styles.section} ${styles.credentialsSection}`}>
+            <div className={styles.sectionHeaderRow}>
+              <div>
+                <div className={styles.sectionTitle}>Site Credentials</div>
+                <div className={styles.sectionSummary}>{credentialsSummary}</div>
+              </div>
+            </div>
+            <div className={styles.sectionHelp}>
+              Configure optional site login credentials in OS secure storage. Some sites require auth for full access.
+            </div>
+            <div className={`${styles.credentialList} ${styles.cardsContainer}`}>
+              {authSites.map((site) => {
+                const cred = credentialMap.get(site.id);
+                const health = healthMap.get(site.id);
+                const required = site.auth_required_for_full_access;
+                const hasError = cred && health && (health.health_status === 'unauthorized' || health.health_status === 'expired' || health.health_status === 'error');
+                return (
+                  <div key={site.id} className={styles.credentialRow}>
+                    <div className={styles.credentialInfo}>
+                      <span className={styles.siteName}>{site.name}</span>
+                      <Text size="xs" c={hasError ? 'red' : cred ? 'green' : required ? 'yellow' : 'dimmed'}>
+                        {hasError ? (health.health_status === 'unauthorized' ? 'Expired' : 'Error') : cred ? 'Saved' : required ? 'Required' : 'Optional'}
+                      </Text>
+                    </div>
+                    <div className={styles.credentialActions}>
+                      <TextButton compact onClick={() => openCredentialModal(site)}>
+                        {cred ? 'Edit' : 'Add'}
+                      </TextButton>
+                      <TextButton compact disabled={!cred} onClick={() => cred && deleteCredential(site.id)}>
+                        Remove
+                      </TextButton>
+                    </div>
+                  </div>
+                );
+              })}
+              {authSites.length === 0 && (
+                <Text size="xs" c="dimmed">
+                  No sites require credentials.
+                </Text>
+              )}
+            </div>
+          </section>
+        )}
       </div>
 
-      <CreateFlowModal
+      <CreateSubscriptionGroupModal
         opened={createModalOpen}
         onClose={() => setCreateModalOpen(false)}
-        onCreated={() => setFlowRefreshToken((v) => v + 1)}
+        onCreated={() => setSubscriptionRefreshToken((v) => v + 1)}
       />
 
       <Modal
         opened={credentialModalOpen}
         onClose={() => setCredentialModalOpen(false)}
-        title="Configure Site Credential"
+        title={`${credentialForm.displayName || 'Site'} — Credentials`}
         size="md"
       >
         <Stack gap="sm">
-          {!isRule34Credential && (
-            <Select
-              label="Credential Type"
-              value={credentialForm.credentialType}
-              data={credentialTypeOptions}
-              onChange={(value) => {
-                if (!value) return;
-                setCredentialForm((prev) => ({ ...prev, credentialType: value as CredentialType }));
-              }}
-              allowDeselect={false}
-            />
-          )}
-          {isRule34Credential && (
-            <div className={styles.rule34Hint}>
-              <Text size="xs" c="dimmed">
-                rule34.xxx requires both <code>user-id</code> and <code>api-key</code>.
-              </Text>
-              <Text size="xs" c="dimmed">
-                Get both values from: <code>https://api.rule34.xxx</code>
-              </Text>
-              <Text size="xs" c="dimmed">
-                gallery-dl/API format: <code>&amp;api_key=&lt;YOUR_API_KEY&gt;&amp;user_id=&lt;YOUR_USER_ID&gt;</code>
-              </Text>
-            </div>
-          )}
-          <TextInput
-            label="Display Name"
-            value={credentialForm.displayName}
-            onChange={(e) => setCredentialForm((prev) => ({ ...prev, displayName: e.currentTarget.value }))}
-          />
-          {isRule34Credential && (
-            <TextInput
-              label="Rule34 API Credential String"
-              placeholder="&api_key=<YOUR_API_KEY>&user_id=<YOUR_USER_ID>"
-              value={credentialForm.rule34Raw}
-              onChange={(e) => setCredentialForm((prev) => ({ ...prev, rule34Raw: e.currentTarget.value }))}
-            />
-          )}
-          {!isRule34Credential && (credentialForm.credentialType === 'username_password' || credentialForm.credentialType === 'api_key') && (
+          {/* ── Twitter/X ── */}
+          {isTwitterCredential && (
             <>
+              <Text size="xs" c="dimmed">
+                Twitter/X requires two browser cookies. To get them:
+              </Text>
+              <Text size="xs" c="dimmed" component="ol" style={{ margin: 0, paddingLeft: 16 }}>
+                <li>Log into <span role="button" style={{ color: 'var(--color-primary)', cursor: 'pointer' }} onClick={() => api.os.openExternalUrl('https://x.com')}>x.com</span> in your browser</li>
+                <li>Open DevTools (F12) → Application → Cookies → x.com</li>
+                <li>Copy the values for <code>auth_token</code> and <code>ct0</code></li>
+              </Text>
               <TextInput
-                label={credentialForm.credentialType === 'api_key'
-                  ? 'API Key Label (optional username field)'
-                  : 'Username / Email'}
+                label="auth_token"
+                placeholder="Paste auth_token cookie value"
                 value={credentialForm.username}
-                onChange={(e) => setCredentialForm((prev) => ({ ...prev, username: e.currentTarget.value }))}
+                onChange={(e) => {
+                  const val = e.currentTarget.value;
+                  setCredentialForm((prev) => ({
+                    ...prev,
+                    username: val,
+                    cookiesRaw: `auth_token=${val}\nct0=${prev.password}`,
+                  }));
+                }}
               />
               <TextInput
-                label={credentialForm.credentialType === 'api_key'
-                  ? 'API Key / Password'
-                  : 'Password / API Key'}
-                type="password"
+                label="ct0"
+                placeholder="Paste ct0 cookie value"
                 value={credentialForm.password}
-                onChange={(e) => setCredentialForm((prev) => ({ ...prev, password: e.currentTarget.value }))}
+                onChange={(e) => {
+                  const val = e.currentTarget.value;
+                  setCredentialForm((prev) => ({
+                    ...prev,
+                    password: val,
+                    cookiesRaw: `auth_token=${prev.username}\nct0=${val}`,
+                  }));
+                }}
               />
             </>
           )}
-          {credentialForm.credentialType === 'oauth_token' && (
-            <TextInput
-              label="Refresh/OAuth Token"
-              value={credentialForm.oauthToken}
-              onChange={(e) => setCredentialForm((prev) => ({ ...prev, oauthToken: e.currentTarget.value }))}
-            />
+
+          {/* ── FurAffinity ── */}
+          {isFuraffinityCredential && (
+            <>
+              <Text size="xs" c="dimmed">
+                FurAffinity requires browser cookies. To get them:
+              </Text>
+              <Text size="xs" c="dimmed" component="ol" style={{ margin: 0, paddingLeft: 16 }}>
+                <li>Log into <span role="button" style={{ color: 'var(--color-primary)', cursor: 'pointer' }} onClick={() => api.os.openExternalUrl('https://www.furaffinity.net')}>furaffinity.net</span> in your browser</li>
+                <li>Open DevTools (F12) → Application → Cookies → furaffinity.net</li>
+                <li>Copy cookies <code>a</code> and <code>b</code> and paste below</li>
+              </Text>
+              <TextInput
+                label="Cookies"
+                placeholder="a=VALUE; b=VALUE"
+                value={credentialForm.cookiesRaw}
+                onChange={(e) => setCredentialForm((prev) => ({ ...prev, cookiesRaw: e.currentTarget.value }))}
+              />
+            </>
           )}
-          {credentialForm.credentialType === 'cookies' && (
-            <Textarea
-              label="Cookies (one key=value per line)"
-              minRows={5}
-              value={credentialForm.cookiesRaw}
-              onChange={(e) => setCredentialForm((prev) => ({ ...prev, cookiesRaw: e.currentTarget.value }))}
-            />
+
+          {/* ── Booru API Key (Rule34 / Gelbooru) ── */}
+          {isBooruApiCredential && (
+            <>
+              <Text size="xs" c="dimmed">
+                This site requires an API key. To get one:
+              </Text>
+              <Text size="xs" c="dimmed" component="ol" style={{ margin: 0, paddingLeft: 16 }}>
+                {isRule34Category(credentialForm.siteCategory) ? (
+                  <>
+                    <li>Go to <span role="button" style={{ color: 'var(--color-primary)', cursor: 'pointer' }} onClick={() => api.os.openExternalUrl('https://rule34.xxx/index.php?page=account&s=options')}>rule34.xxx account settings</span></li>
+                    <li>Log in, scroll to your API credentials</li>
+                  </>
+                ) : (
+                  <>
+                    <li>Go to <span role="button" style={{ color: 'var(--color-primary)', cursor: 'pointer' }} onClick={() => api.os.openExternalUrl('https://gelbooru.com/index.php?page=account&s=options')}>Gelbooru account settings</span></li>
+                    <li>Log in, scroll to your API credentials</li>
+                  </>
+                )}
+                <li>Copy the string containing <code>api_key</code> and <code>user_id</code> and paste it below</li>
+              </Text>
+              <TextInput
+                label="API Credential String"
+                placeholder="&api_key=YOUR_API_KEY&user_id=YOUR_USER_ID"
+                value={credentialForm.booruApiRaw}
+                onChange={(e) => setCredentialForm((prev) => ({ ...prev, booruApiRaw: e.currentTarget.value }))}
+              />
+            </>
           )}
+
+          {/* ── Pixiv ── */}
+          {isPixivCredential && (
+            <>
+              <Text size="xs" c="dimmed">
+                Pixiv requires you to log in. A login window will open — sign in with your Pixiv account and the authorization will complete automatically.
+              </Text>
+              <TextButton
+                compact
+                disabled={pixivOAuthBusy}
+                onClick={async () => {
+                  try {
+                    setPixivOAuthBusy(true);
+                    const challenge = await api.subscriptions.pixivOAuthStart();
+                    const { code, phpsessid } = await api.subscriptions.pixivOAuthPopup(challenge.login_url);
+                    await api.subscriptions.pixivOAuthExchange(code, challenge.code_verifier, phpsessid);
+                    notifySuccess('Pixiv authorized successfully');
+                    setCredentialModalOpen(false);
+                    await loadCredentialData();
+                  } catch (err) {
+                    const msg = String(err);
+                    if (!msg.includes('cancelled')) {
+                      notifyError(`Pixiv authorization failed: ${msg}`);
+                    }
+                  } finally {
+                    setPixivOAuthBusy(false);
+                  }
+                }}
+              >
+                {pixivOAuthBusy ? 'Waiting for login...' : 'Log in with Pixiv'}
+              </TextButton>
+            </>
+          )}
+
+          {/* ── Generic sites ── */}
+          {!isTwitterCredential && !isBooruApiCredential && !isPixivCredential && (
+            <>
+              <Select
+                label="Credential Type"
+                value={credentialForm.credentialType}
+                data={credentialTypeOptions}
+                onChange={(value) => {
+                  if (!value) return;
+                  setCredentialForm((prev) => ({ ...prev, credentialType: value as CredentialType }));
+                }}
+                allowDeselect={false}
+              />
+              {(credentialForm.credentialType === 'username_password' || credentialForm.credentialType === 'api_key') && (
+                <>
+                  <TextInput
+                    label={credentialForm.credentialType === 'api_key' ? 'Label (optional)' : 'Username / Email'}
+                    value={credentialForm.username}
+                    onChange={(e) => setCredentialForm((prev) => ({ ...prev, username: e.currentTarget.value }))}
+                  />
+                  <TextInput
+                    label={credentialForm.credentialType === 'api_key' ? 'API Key' : 'Password'}
+                    type="password"
+                    value={credentialForm.password}
+                    onChange={(e) => setCredentialForm((prev) => ({ ...prev, password: e.currentTarget.value }))}
+                  />
+                </>
+              )}
+              {credentialForm.credentialType === 'oauth_token' && (
+                <TextInput
+                  label="Refresh/OAuth Token"
+                  value={credentialForm.oauthToken}
+                  onChange={(e) => setCredentialForm((prev) => ({ ...prev, oauthToken: e.currentTarget.value }))}
+                />
+              )}
+              {credentialForm.credentialType === 'cookies' && (
+                <Textarea
+                  label="Cookies (one key=value per line)"
+                  minRows={5}
+                  value={credentialForm.cookiesRaw}
+                  onChange={(e) => setCredentialForm((prev) => ({ ...prev, cookiesRaw: e.currentTarget.value }))}
+                />
+              )}
+            </>
+          )}
+
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
-            <TextButton compact onClick={() => setCredentialModalOpen(false)} disabled={savingCredential}>
-              Cancel
+            <TextButton compact onClick={() => setCredentialModalOpen(false)} disabled={savingCredential || pixivOAuthBusy}>
+              {isPixivCredential ? 'Close' : 'Cancel'}
             </TextButton>
-            <TextButton compact onClick={saveCredential} disabled={savingCredential}>
-              Save
-            </TextButton>
+            {!isPixivCredential && (
+              <TextButton compact onClick={saveCredential} disabled={savingCredential}>
+                Save
+              </TextButton>
+            )}
           </div>
         </Stack>
       </Modal>

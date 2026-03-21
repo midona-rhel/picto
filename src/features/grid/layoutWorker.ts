@@ -1,6 +1,11 @@
 /// <reference lib="webworker" />
 
-import { buildBucketIndexEntries, computeLayoutFromAspectRatios, type BucketIndexEntry, type LayoutResult } from './layoutMath';
+import {
+  buildBucketIndexEntries,
+  computeLayoutFromAspectRatios,
+  type BucketIndexEntry,
+  type LayoutResult,
+} from './layoutMath';
 import type { GridViewMode } from './runtime';
 
 export interface LayoutWorkerRequest {

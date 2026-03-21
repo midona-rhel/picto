@@ -3,7 +3,7 @@
 //! The sidebar tree is a pre-compiled projection — counts maintained by the
 //! compiler system (O(1) via bitmap .len()), never computed on the read path.
 
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
 
 use crate::sqlite::SqliteDatabase;
@@ -143,7 +143,40 @@ pub fn delete_sidebar_node(conn: &Connection, node_id: &str) -> rusqlite::Result
     Ok(())
 }
 
+fn normalize_root_library_scope(conn: &Connection) -> rusqlite::Result<()> {
+    let has_all: i64 = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sidebar_node WHERE node_id = 'system:all')",
+        [],
+        |row| row.get(0),
+    )?;
+    let has_all_files: i64 = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sidebar_node WHERE node_id = 'system:all_files')",
+        [],
+        |row| row.get(0),
+    )?;
+
+    if has_all != 0 && has_all_files != 0 {
+        conn.execute("DELETE FROM sidebar_node WHERE node_id = 'system:all_files'", [])?;
+    } else if has_all == 0 && has_all_files != 0 {
+        conn.execute(
+            "UPDATE sidebar_node
+             SET node_id = 'system:all', name = 'All Active'
+             WHERE node_id = 'system:all_files'",
+            [],
+        )?;
+    }
+
+    conn.execute(
+        "UPDATE sidebar_node SET name = 'All Active' WHERE node_id = 'system:all'",
+        [],
+    )?;
+
+    Ok(())
+}
+
 pub fn seed_sidebar_if_empty(conn: &Connection) -> rusqlite::Result<()> {
+    normalize_root_library_scope(conn)?;
+
     let now = chrono::Utc::now().to_rfc3339();
     let nodes = vec![
         SidebarNode {
@@ -163,10 +196,10 @@ pub fn seed_sidebar_if_empty(conn: &Connection) -> rusqlite::Result<()> {
             updated_at: Some(now.clone()),
         },
         SidebarNode {
-            node_id: "system:all_files".into(),
+            node_id: "system:all".into(),
             kind: "system".into(),
             parent_id: Some("system:library".into()),
-            name: "All Files".into(),
+            name: "All Active".into(),
             icon: Some("IconPhoto".into()),
             color: None,
             sort_order: Some(1),
@@ -338,7 +371,8 @@ pub fn seed_sidebar_if_empty(conn: &Connection) -> rusqlite::Result<()> {
 
 impl SqliteDatabase {
     pub async fn get_sidebar_tree(&self) -> Result<Vec<SidebarNode>, String> {
-        self.with_read_conn(get_sidebar_tree).await
+        self.with_read_conn_labeled("sidebar/get_tree", get_sidebar_tree)
+            .await
     }
 
     pub async fn reorder_sidebar_nodes(&self, moves: Vec<(String, i64)>) -> Result<(), String> {

@@ -45,10 +45,18 @@ const library = {
   getConfig: () => ipcRenderer.invoke('picto:library:getConfig'),
   rename: (path, newName) => ipcRenderer.invoke('picto:library:rename', { path, newName }),
   relocate: (oldPath) => ipcRenderer.invoke('picto:library:relocate', { oldPath }),
+  setMeta: (path, meta) => ipcRenderer.invoke('picto:library:setMeta', { path, meta }),
 };
 
 const monitor = {
   current: () => ipcRenderer.invoke('picto:monitor:current'),
+};
+
+const updater = {
+  check: () => ipcRenderer.invoke('picto:updater:check'),
+  download: () => ipcRenderer.invoke('picto:updater:download'),
+  install: () => ipcRenderer.invoke('picto:updater:install'),
+  onStatus: (handler) => on('updater:status', handler),
 };
 
 const webview = {
@@ -108,4 +116,5 @@ contextBridge.exposeInMainWorld('picto', {
   webview,
   search,
   library,
+  updater,
 });

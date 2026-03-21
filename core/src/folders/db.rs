@@ -1,12 +1,12 @@
 //! Folder CRUD + manual ordering with gap-based ranking.
 
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
-use crate::sqlite::bitmaps::BitmapKey;
-use crate::sqlite::compilers::CompilerEvent;
+use crate::sqlite::ReadModelEvent;
 use crate::sqlite::SqliteDatabase;
+use crate::sqlite::bitmaps::BitmapKey;
 
 /// Gap between position_rank values for folder file ordering.
 const RANK_GAP: i64 = 1 << 20; // ~1M
@@ -19,6 +19,10 @@ pub struct Folder {
     pub icon: Option<String>,
     pub color: Option<String>,
     pub auto_tags: Vec<String>,
+    pub watch_path: Option<String>,
+    pub watch_enabled: bool,
+    pub watch_subfolders: bool,
+    pub watch_import_status_mode: String,
     pub sort_order: Option<i64>,
     pub created_at: Option<String>,
     pub updated_at: Option<String>,
@@ -54,8 +58,8 @@ pub fn create_folder(conn: &Connection, f: &NewFolder) -> rusqlite::Result<i64> 
     let sort_order = max_order.unwrap_or(0) + 1;
 
     conn.execute(
-        "INSERT INTO folder (name, parent_id, icon, color, auto_tags, sort_order, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        "INSERT INTO folder (name, parent_id, icon, color, auto_tags, watch_path, watch_enabled, watch_subfolders, watch_import_status_mode, sort_order, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, NULL, 0, 0, 'inherit', ?6, ?7, ?8)",
         params![
             f.name,
             f.parent_id,
@@ -72,7 +76,7 @@ pub fn create_folder(conn: &Connection, f: &NewFolder) -> rusqlite::Result<i64> 
 
 pub fn get_folder(conn: &Connection, folder_id: i64) -> rusqlite::Result<Option<Folder>> {
     conn.query_row(
-        "SELECT folder_id, name, parent_id, icon, color, auto_tags, sort_order, created_at, updated_at
+        "SELECT folder_id, name, parent_id, icon, color, auto_tags, watch_path, watch_enabled, watch_subfolders, watch_import_status_mode, sort_order, created_at, updated_at
          FROM folder WHERE folder_id = ?1",
         [folder_id],
         |row| {
@@ -83,9 +87,13 @@ pub fn get_folder(conn: &Connection, folder_id: i64) -> rusqlite::Result<Option<
                 icon: row.get(3)?,
                 color: row.get(4)?,
                 auto_tags: decode_auto_tags(row.get(5)?),
-                sort_order: row.get(6)?,
-                created_at: row.get(7)?,
-                updated_at: row.get(8)?,
+                watch_path: row.get(6)?,
+                watch_enabled: row.get::<_, i64>(7)? != 0,
+                watch_subfolders: row.get::<_, i64>(8)? != 0,
+                watch_import_status_mode: row.get(9)?,
+                sort_order: row.get(10)?,
+                created_at: row.get(11)?,
+                updated_at: row.get(12)?,
             })
         },
     )
@@ -94,7 +102,7 @@ pub fn get_folder(conn: &Connection, folder_id: i64) -> rusqlite::Result<Option<
 
 pub fn list_folders(conn: &Connection) -> rusqlite::Result<Vec<Folder>> {
     let mut stmt = conn.prepare_cached(
-        "SELECT folder_id, name, parent_id, icon, color, auto_tags, sort_order, created_at, updated_at
+        "SELECT folder_id, name, parent_id, icon, color, auto_tags, watch_path, watch_enabled, watch_subfolders, watch_import_status_mode, sort_order, created_at, updated_at
          FROM folder ORDER BY sort_order",
     )?;
     let rows = stmt.query_map([], |row| {
@@ -105,9 +113,13 @@ pub fn list_folders(conn: &Connection) -> rusqlite::Result<Vec<Folder>> {
             icon: row.get(3)?,
             color: row.get(4)?,
             auto_tags: decode_auto_tags(row.get(5)?),
-            sort_order: row.get(6)?,
-            created_at: row.get(7)?,
-            updated_at: row.get(8)?,
+            watch_path: row.get(6)?,
+            watch_enabled: row.get::<_, i64>(7)? != 0,
+            watch_subfolders: row.get::<_, i64>(8)? != 0,
+            watch_import_status_mode: row.get(9)?,
+            sort_order: row.get(10)?,
+            created_at: row.get(11)?,
+            updated_at: row.get(12)?,
         })
     })?;
     rows.collect()
@@ -125,9 +137,152 @@ pub fn update_folder(
     conn.execute(
         "UPDATE folder SET name = ?1, icon = ?2, color = ?3, auto_tags = ?4, updated_at = ?5
          WHERE folder_id = ?6",
-        params![name, icon, color, encode_auto_tags(auto_tags), now, folder_id],
+        params![
+            name,
+            icon,
+            color,
+            encode_auto_tags(auto_tags),
+            now,
+            folder_id
+        ],
     )?;
     Ok(())
+}
+
+pub fn update_folder_watch_config(
+    conn: &Connection,
+    folder_id: i64,
+    watch_path: &str,
+    watch_enabled: bool,
+    watch_subfolders: bool,
+    watch_import_status_mode: &str,
+) -> rusqlite::Result<()> {
+    let now = chrono::Utc::now().to_rfc3339();
+    conn.execute(
+        "UPDATE folder
+         SET watch_path = ?1,
+             watch_enabled = ?2,
+             watch_subfolders = ?3,
+             watch_import_status_mode = ?4,
+             updated_at = ?5
+         WHERE folder_id = ?6",
+        params![
+            watch_path,
+            if watch_enabled { 1 } else { 0 },
+            if watch_subfolders { 1 } else { 0 },
+            watch_import_status_mode,
+            now,
+            folder_id
+        ],
+    )?;
+    Ok(())
+}
+
+pub fn clear_folder_watch_config(conn: &Connection, folder_id: i64) -> rusqlite::Result<()> {
+    let now = chrono::Utc::now().to_rfc3339();
+    conn.execute(
+        "UPDATE folder
+         SET watch_path = NULL,
+             watch_enabled = 0,
+             watch_subfolders = 0,
+             watch_import_status_mode = 'inherit',
+             updated_at = ?1
+         WHERE folder_id = ?2",
+        params![now, folder_id],
+    )?;
+    Ok(())
+}
+
+pub fn get_folder_by_watch_path(
+    conn: &Connection,
+    watch_path: &str,
+) -> rusqlite::Result<Option<Folder>> {
+    conn.query_row(
+        "SELECT folder_id, name, parent_id, icon, color, auto_tags, watch_path, watch_enabled, watch_subfolders, watch_import_status_mode, sort_order, created_at, updated_at
+         FROM folder
+         WHERE watch_path = ?1",
+        [watch_path],
+        |row| {
+            Ok(Folder {
+                folder_id: row.get(0)?,
+                name: row.get(1)?,
+                parent_id: row.get(2)?,
+                icon: row.get(3)?,
+                color: row.get(4)?,
+                auto_tags: decode_auto_tags(row.get(5)?),
+                watch_path: row.get(6)?,
+                watch_enabled: row.get::<_, i64>(7)? != 0,
+                watch_subfolders: row.get::<_, i64>(8)? != 0,
+                watch_import_status_mode: row.get(9)?,
+                sort_order: row.get(10)?,
+                created_at: row.get(11)?,
+                updated_at: row.get(12)?,
+            })
+        },
+    )
+    .optional()
+}
+
+pub fn list_watched_folders(conn: &Connection) -> rusqlite::Result<Vec<Folder>> {
+    let mut stmt = conn.prepare_cached(
+        "SELECT folder_id, name, parent_id, icon, color, auto_tags, watch_path, watch_enabled, watch_subfolders, watch_import_status_mode, sort_order, created_at, updated_at
+         FROM folder
+         WHERE watch_path IS NOT NULL
+           AND watch_enabled = 1
+         ORDER BY folder_id",
+    )?;
+    let rows = stmt.query_map([], |row| {
+        Ok(Folder {
+            folder_id: row.get(0)?,
+            name: row.get(1)?,
+            parent_id: row.get(2)?,
+            icon: row.get(3)?,
+            color: row.get(4)?,
+            auto_tags: decode_auto_tags(row.get(5)?),
+            watch_path: row.get(6)?,
+            watch_enabled: row.get::<_, i64>(7)? != 0,
+            watch_subfolders: row.get::<_, i64>(8)? != 0,
+            watch_import_status_mode: row.get(9)?,
+            sort_order: row.get(10)?,
+            created_at: row.get(11)?,
+            updated_at: row.get(12)?,
+        })
+    })?;
+    rows.collect()
+}
+
+pub fn find_child_folder_by_name(
+    conn: &Connection,
+    parent_id: Option<i64>,
+    name: &str,
+) -> rusqlite::Result<Option<Folder>> {
+    conn.query_row(
+        "SELECT folder_id, name, parent_id, icon, color, auto_tags, watch_path, watch_enabled, watch_subfolders, watch_import_status_mode, sort_order, created_at, updated_at
+         FROM folder
+         WHERE parent_id IS ?1
+           AND name = ?2
+         ORDER BY folder_id
+         LIMIT 1",
+        params![parent_id, name],
+        |row| {
+            Ok(Folder {
+                folder_id: row.get(0)?,
+                name: row.get(1)?,
+                parent_id: row.get(2)?,
+                icon: row.get(3)?,
+                color: row.get(4)?,
+                auto_tags: decode_auto_tags(row.get(5)?),
+                watch_path: row.get(6)?,
+                watch_enabled: row.get::<_, i64>(7)? != 0,
+                watch_subfolders: row.get::<_, i64>(8)? != 0,
+                watch_import_status_mode: row.get(9)?,
+                sort_order: row.get(10)?,
+                created_at: row.get(11)?,
+                updated_at: row.get(12)?,
+            })
+        },
+    )
+    .optional()
 }
 
 pub fn delete_folder(conn: &Connection, folder_id: i64) -> rusqlite::Result<()> {
@@ -234,8 +389,7 @@ pub fn remove_entity_from_folder(
     Ok(())
 }
 
-/// Reorder an entity within a folder (move between prev and next).
-pub fn reorder_entity(
+fn reorder_entity(
     conn: &Connection,
     folder_id: i64,
     entity_id: i64,
@@ -259,6 +413,12 @@ pub fn reorder_entity(
         (None, None) => RANK_GAP,
     };
 
+    // Ensure the folder_entity row exists (for files added via bitmap but missing the row)
+    conn.execute(
+        "INSERT OR IGNORE INTO folder_entity (folder_id, entity_id, position_rank)
+         VALUES (?1, ?2, ?3)",
+        params![folder_id, entity_id, new_rank],
+    )?;
     conn.execute(
         "UPDATE folder_entity SET position_rank = ?1 WHERE folder_id = ?2 AND entity_id = ?3",
         params![new_rank, folder_id, entity_id],
@@ -294,6 +454,22 @@ pub fn get_entity_folder_memberships(
     rows.collect()
 }
 
+pub fn collect_file_delete_folder_memberships(
+    conn: &Connection,
+    file_id: i64,
+    member_file_ids: &[i64],
+) -> rusqlite::Result<(Vec<FolderMembership>, Vec<(i64, Vec<FolderMembership>)>)> {
+    let target_memberships = get_entity_folder_memberships(conn, file_id)?;
+    let mut member_memberships = Vec::with_capacity(member_file_ids.len());
+    for &member_file_id in member_file_ids {
+        member_memberships.push((
+            member_file_id,
+            get_entity_folder_memberships(conn, member_file_id)?,
+        ));
+    }
+    Ok((target_memberships, member_memberships))
+}
+
 /// Get the hash of the first file in a folder (by position_rank) for cover preview.
 pub fn get_folder_cover_hash(
     conn: &Connection,
@@ -302,7 +478,7 @@ pub fn get_folder_cover_hash(
     conn.query_row(
         "SELECT f.hash FROM folder_entity fe
          JOIN file f ON f.file_id = fe.entity_id
-         WHERE fe.folder_id = ?1 AND f.status != 2
+         WHERE fe.folder_id = ?1 AND f.status = 1
          ORDER BY fe.position_rank
          LIMIT 1",
         [folder_id],
@@ -320,13 +496,13 @@ pub fn get_folder_entity_ids(conn: &Connection, folder_id: i64) -> rusqlite::Res
     rows.collect()
 }
 
-/// Get top-level single entities that are not assigned to any folder.
+/// Get top-level entities (singles + collections) not assigned to any folder.
 pub fn list_uncategorized_entity_ids(conn: &Connection) -> rusqlite::Result<Vec<i64>> {
     let mut stmt = conn.prepare_cached(
         "SELECT me.entity_id
          FROM media_entity me
          WHERE me.status = 1
-           AND me.kind = 'single'
+           AND me.kind IN ('single', 'collection')
            AND me.parent_collection_id IS NULL
            AND NOT EXISTS (
                SELECT 1 FROM folder_entity fe WHERE fe.entity_id = me.entity_id
@@ -337,13 +513,13 @@ pub fn list_uncategorized_entity_ids(conn: &Connection) -> rusqlite::Result<Vec<
     rows.collect()
 }
 
-/// Count top-level single entities that are not assigned to any folder.
+/// Count top-level entities (singles + collections) not assigned to any folder.
 pub fn count_uncategorized_entities(conn: &Connection) -> rusqlite::Result<i64> {
     conn.query_row(
         "SELECT COUNT(*)
          FROM media_entity me
          WHERE me.status = 1
-           AND me.kind = 'single'
+           AND me.kind IN ('single', 'collection')
            AND me.parent_collection_id IS NULL
            AND NOT EXISTS (
                SELECT 1 FROM folder_entity fe WHERE fe.entity_id = me.entity_id
@@ -361,6 +537,48 @@ fn get_entity_rank_in_folder(
     conn.query_row(
         "SELECT position_rank FROM folder_entity WHERE folder_id = ?1 AND entity_id = ?2",
         params![folder_id, entity_id],
+        |row| row.get(0),
+    )
+    .optional()
+}
+
+/// Get the rank of the next entity after (anchor_rank, anchor_eid) in folder order,
+/// excluding the entity being moved.
+fn get_next_rank_in_folder(
+    conn: &Connection,
+    folder_id: i64,
+    anchor_rank: i64,
+    anchor_eid: i64,
+    exclude_eid: i64,
+) -> rusqlite::Result<Option<i64>> {
+    conn.query_row(
+        "SELECT position_rank FROM folder_entity
+         WHERE folder_id = ?1 AND entity_id != ?4 AND entity_id != ?5
+           AND (position_rank > ?2 OR (position_rank = ?2 AND entity_id > ?3))
+         ORDER BY position_rank ASC, entity_id ASC
+         LIMIT 1",
+        params![folder_id, anchor_rank, anchor_eid, exclude_eid, anchor_eid],
+        |row| row.get(0),
+    )
+    .optional()
+}
+
+/// Get the rank of the previous entity before (anchor_rank, anchor_eid) in folder order,
+/// excluding the entity being moved.
+fn get_prev_rank_in_folder(
+    conn: &Connection,
+    folder_id: i64,
+    anchor_rank: i64,
+    anchor_eid: i64,
+    exclude_eid: i64,
+) -> rusqlite::Result<Option<i64>> {
+    conn.query_row(
+        "SELECT position_rank FROM folder_entity
+         WHERE folder_id = ?1 AND entity_id != ?4 AND entity_id != ?5
+           AND (position_rank < ?2 OR (position_rank = ?2 AND entity_id < ?3))
+         ORDER BY position_rank DESC, entity_id DESC
+         LIMIT 1",
+        params![folder_id, anchor_rank, anchor_eid, exclude_eid, anchor_eid],
         |row| row.get(0),
     )
     .optional()
@@ -586,7 +804,7 @@ pub fn reorder_folders(conn: &Connection, moves: &[(i64, i64)]) -> rusqlite::Res
 impl SqliteDatabase {
     pub async fn create_folder(&self, f: NewFolder) -> Result<Folder, String> {
         let folder_id = self.with_conn(move |conn| create_folder(conn, &f)).await?;
-        self.emit_compiler_event(CompilerEvent::FolderChanged { folder_id });
+        self.emit_read_model_event(ReadModelEvent::FolderChanged { folder_id });
         let fid = folder_id;
         self.with_read_conn(move |conn| get_folder(conn, fid))
             .await?
@@ -603,34 +821,6 @@ impl SqliteDatabase {
             .await
     }
 
-    pub async fn add_entity_to_folder(&self, folder_id: i64, hash: &str) -> Result<(), String> {
-        let entity_id = self.resolve_hash(hash).await?;
-        let inserted = self
-            .with_conn(move |conn| add_entity_to_folder(conn, folder_id, entity_id))
-            .await?;
-        if inserted {
-            let auto_tags = self
-                .with_read_conn(move |conn| {
-                    Ok(get_folder(conn, folder_id)?
-                        .map(|folder| folder.auto_tags)
-                        .unwrap_or_default())
-                })
-                .await?;
-            if !auto_tags.is_empty() {
-                self.add_tags_batch_by_entity_ids(
-                    vec![entity_id],
-                    auto_tags,
-                    "folder_auto".to_string(),
-                )
-                .await?;
-            }
-        }
-        self.bitmaps
-            .insert(&BitmapKey::Folder(folder_id), entity_id as u32);
-        self.emit_compiler_event(CompilerEvent::FolderChanged { folder_id });
-        Ok(())
-    }
-
     pub async fn add_entities_to_folder_batch(
         &self,
         folder_id: i64,
@@ -640,11 +830,32 @@ impl SqliteDatabase {
             return Ok(0);
         }
         let resolved = self.resolve_hashes_batch(hashes).await?;
-        let entity_ids: Vec<i64> = resolved.iter().map(|(_, id)| *id).collect();
-        let eids = entity_ids.clone();
+        let all_ids: Vec<i64> = resolved.iter().map(|(_, id)| *id).collect();
+        // Only allow adding active (status=1) entities to folders
+        let entity_ids: Vec<i64> = self.with_read_conn({
+            let ids = all_ids;
+            move |conn| {
+                let mut active = Vec::new();
+                for &eid in &ids {
+                    let status: Option<i64> = conn.query_row(
+                        "SELECT status FROM media_entity WHERE entity_id = ?1",
+                        [eid], |r| r.get(0),
+                    ).ok();
+                    if status == Some(1) { active.push(eid); }
+                }
+                Ok(active)
+            }
+        }).await?;
+        if entity_ids.is_empty() {
+            return Ok(0);
+        }
         let inserted_ids = self
-            .with_conn(move |conn| add_entities_to_folder_batch(conn, folder_id, &eids))
+            .with_conn({
+                let eids = entity_ids.clone();
+                move |conn| add_entities_to_folder_batch(conn, folder_id, &eids)
+            })
             .await?;
+        let inserted_count = inserted_ids.len();
         if !inserted_ids.is_empty() {
             let auto_tags = self
                 .with_read_conn(move |conn| {
@@ -655,7 +866,7 @@ impl SqliteDatabase {
                 .await?;
             if !auto_tags.is_empty() {
                 self.add_tags_batch_by_entity_ids(
-                    inserted_ids.clone(),
+                    inserted_ids,
                     auto_tags,
                     "folder_auto".to_string(),
                 )
@@ -666,22 +877,8 @@ impl SqliteDatabase {
             self.bitmaps
                 .insert(&BitmapKey::Folder(folder_id), eid as u32);
         }
-        self.emit_compiler_event(CompilerEvent::FolderChanged { folder_id });
-        Ok(inserted_ids.len())
-    }
-
-    pub async fn remove_entity_from_folder(
-        &self,
-        folder_id: i64,
-        hash: &str,
-    ) -> Result<(), String> {
-        let entity_id = self.resolve_hash(hash).await?;
-        self.with_conn(move |conn| remove_entity_from_folder(conn, folder_id, entity_id))
-            .await?;
-        self.bitmaps
-            .remove(&BitmapKey::Folder(folder_id), entity_id as u32);
-        self.emit_compiler_event(CompilerEvent::FolderChanged { folder_id });
-        Ok(())
+        self.emit_read_model_event(ReadModelEvent::FolderChanged { folder_id });
+        Ok(inserted_count)
     }
 
     pub async fn remove_entities_from_folder_batch(
@@ -693,39 +890,59 @@ impl SqliteDatabase {
             return Ok(0);
         }
         let resolved = self.resolve_hashes_batch(hashes).await?;
-        let entity_ids: Vec<i64> = resolved.iter().map(|(_, id)| *id).collect();
-        let eids = entity_ids.clone();
-        let removed = self
-            .with_conn(move |conn| {
-                let mut count = 0usize;
-                for chunk in eids.chunks(500) {
-                    let placeholders: String = (0..chunk.len())
-                        .map(|i| format!("?{}", i + 2))
-                        .collect::<Vec<_>>()
-                        .join(",");
-                    let sql = format!(
-                        "DELETE FROM folder_entity WHERE folder_id = ?1 AND entity_id IN ({placeholders})"
-                    );
-                    let mut param_values: Vec<rusqlite::types::Value> =
-                        Vec::with_capacity(chunk.len() + 1);
-                    param_values.push(rusqlite::types::Value::Integer(folder_id));
-                    for &eid in chunk {
-                        param_values.push(rusqlite::types::Value::Integer(eid));
-                    }
-                    let changed = conn.execute(
-                        &sql,
-                        rusqlite::params_from_iter(param_values.iter()),
-                    )?;
-                    count += changed;
+        let all_ids: Vec<i64> = resolved.iter().map(|(_, id)| *id).collect();
+        // Only allow removing active (status=1) entities from folders
+        let entity_ids: Vec<i64> = self.with_read_conn({
+            let ids = all_ids;
+            move |conn| {
+                let mut active = Vec::new();
+                for &eid in &ids {
+                    let status: Option<i64> = conn.query_row(
+                        "SELECT status FROM media_entity WHERE entity_id = ?1",
+                        [eid], |r| r.get(0),
+                    ).ok();
+                    if status == Some(1) { active.push(eid); }
                 }
-                Ok(count)
+                Ok(active)
+            }
+        }).await?;
+        if entity_ids.is_empty() {
+            return Ok(0);
+        }
+        let removed = self
+            .with_conn({
+                let eids = entity_ids.clone();
+                move |conn| {
+                    let mut count = 0usize;
+                    for chunk in eids.chunks(500) {
+                        let placeholders: String = (0..chunk.len())
+                            .map(|i| format!("?{}", i + 2))
+                            .collect::<Vec<_>>()
+                            .join(",");
+                        let sql = format!(
+                            "DELETE FROM folder_entity WHERE folder_id = ?1 AND entity_id IN ({placeholders})"
+                        );
+                        let mut param_values: Vec<rusqlite::types::Value> =
+                            Vec::with_capacity(chunk.len() + 1);
+                        param_values.push(rusqlite::types::Value::Integer(folder_id));
+                        for &eid in chunk {
+                            param_values.push(rusqlite::types::Value::Integer(eid));
+                        }
+                        let changed = conn.execute(
+                            &sql,
+                            rusqlite::params_from_iter(param_values.iter()),
+                        )?;
+                        count += changed;
+                    }
+                    Ok(count)
+                }
             })
             .await?;
         for &eid in &entity_ids {
             self.bitmaps
                 .remove(&BitmapKey::Folder(folder_id), eid as u32);
         }
-        self.emit_compiler_event(CompilerEvent::FolderChanged { folder_id });
+        self.emit_read_model_event(ReadModelEvent::FolderChanged { folder_id });
         Ok(removed)
     }
 
@@ -766,7 +983,7 @@ impl SqliteDatabase {
     ) -> Result<(), String> {
         self.with_conn(move |conn| update_folder_parent(conn, folder_id, new_parent_id))
             .await?;
-        self.emit_compiler_event(CompilerEvent::FolderChanged { folder_id });
+        self.emit_read_model_event(ReadModelEvent::FolderChanged { folder_id });
         Ok(())
     }
 
@@ -785,15 +1002,66 @@ impl SqliteDatabase {
         self.with_conn(move |conn| {
             update_folder(conn, folder_id, &n, i.as_deref(), c.as_deref(), &tags)
         })
-            .await?;
-        self.emit_compiler_event(CompilerEvent::FolderChanged { folder_id });
+        .await?;
+        self.emit_read_model_event(ReadModelEvent::FolderChanged { folder_id });
         Ok(())
+    }
+
+    pub async fn update_folder_watch_config(
+        &self,
+        folder_id: i64,
+        watch_path: String,
+        watch_enabled: bool,
+        watch_subfolders: bool,
+        watch_import_status_mode: String,
+    ) -> Result<(), String> {
+        self.with_conn(move |conn| {
+            update_folder_watch_config(
+                conn,
+                folder_id,
+                &watch_path,
+                watch_enabled,
+                watch_subfolders,
+                &watch_import_status_mode,
+            )
+        })
+        .await?;
+        self.emit_read_model_event(ReadModelEvent::FolderChanged { folder_id });
+        Ok(())
+    }
+
+    pub async fn clear_folder_watch_config(&self, folder_id: i64) -> Result<(), String> {
+        self.with_conn(move |conn| clear_folder_watch_config(conn, folder_id))
+            .await?;
+        self.emit_read_model_event(ReadModelEvent::FolderChanged { folder_id });
+        Ok(())
+    }
+
+    pub async fn get_folder_by_watch_path(
+        &self,
+        watch_path: String,
+    ) -> Result<Option<Folder>, String> {
+        self.with_read_conn(move |conn| get_folder_by_watch_path(conn, &watch_path))
+            .await
+    }
+
+    pub async fn list_watched_folders(&self) -> Result<Vec<Folder>, String> {
+        self.with_read_conn(list_watched_folders).await
+    }
+
+    pub async fn find_child_folder_by_name(
+        &self,
+        parent_id: Option<i64>,
+        name: String,
+    ) -> Result<Option<Folder>, String> {
+        self.with_read_conn(move |conn| find_child_folder_by_name(conn, parent_id, &name))
+            .await
     }
 
     pub async fn reorder_folders(&self, moves: Vec<(i64, i64)>) -> Result<(), String> {
         self.with_conn(move |conn| reorder_folders(conn, &moves))
             .await?;
-        self.emit_compiler_event(CompilerEvent::FolderChanged { folder_id: 0 });
+        self.emit_read_model_event(ReadModelEvent::FolderChanged { folder_id: 0 });
         Ok(())
     }
 
@@ -805,41 +1073,7 @@ impl SqliteDatabase {
     ) -> Result<(), String> {
         self.with_conn(move |conn| move_folder(conn, folder_id, new_parent_id, &sibling_order))
             .await?;
-        self.emit_compiler_event(CompilerEvent::FolderChanged { folder_id });
-        Ok(())
-    }
-
-    pub async fn reorder_entity_in_folder(
-        &self,
-        folder_id: i64,
-        hash: &str,
-        prev_hash: Option<&str>,
-        next_hash: Option<&str>,
-    ) -> Result<(), String> {
-        let target_entity_id = self.resolve_hash(hash).await?;
-        let prev_entity_id = match prev_hash {
-            Some(h) => Some(self.resolve_hash(h).await?),
-            None => None,
-        };
-        let next_entity_id = match next_hash {
-            Some(h) => Some(self.resolve_hash(h).await?),
-            None => None,
-        };
-
-        self.with_conn(move |conn| {
-            let prev_rank = match prev_entity_id {
-                Some(eid) => get_entity_rank_in_folder(conn, folder_id, eid)?,
-                None => None,
-            };
-            let next_rank = match next_entity_id {
-                Some(eid) => get_entity_rank_in_folder(conn, folder_id, eid)?,
-                None => None,
-            };
-            reorder_entity(conn, folder_id, target_entity_id, prev_rank, next_rank)
-        })
-        .await?;
-
-        self.emit_compiler_event(CompilerEvent::FolderChanged { folder_id });
+        self.emit_read_model_event(ReadModelEvent::FolderChanged { folder_id });
         Ok(())
     }
 
@@ -900,20 +1134,44 @@ impl SqliteDatabase {
         self.with_conn(move |conn| {
             for rm in &resolved_moves {
                 let prev_rank = match rm.after_id {
-                    Some(eid) => get_entity_rank_in_folder(conn, folder_id, eid)?,
+                    Some(eid) => get_entity_rank_in_folder(conn, folder_id, eid)?
+                        .or(Some(2_147_483_647)),
                     None => None,
                 };
                 let next_rank = match rm.before_id {
-                    Some(eid) => get_entity_rank_in_folder(conn, folder_id, eid)?,
+                    Some(eid) => get_entity_rank_in_folder(conn, folder_id, eid)?
+                        .or(Some(2_147_483_647)),
                     None => None,
                 };
+
+                // Auto-fill the missing anchor by looking up the neighbor in rank order.
+                // Without this, (Some(p), None) falls to p + RANK_GAP which collides with
+                // the next item when items are spaced exactly RANK_GAP apart.
+                let (prev_rank, next_rank) = match (prev_rank, next_rank) {
+                    (Some(pr), None) => {
+                        let after_eid = rm.after_id.unwrap();
+                        let nr = get_next_rank_in_folder(
+                            conn, folder_id, pr, after_eid, rm.entity_id,
+                        )?;
+                        (Some(pr), nr)
+                    }
+                    (None, Some(nr)) => {
+                        let before_eid = rm.before_id.unwrap();
+                        let pr = get_prev_rank_in_folder(
+                            conn, folder_id, nr, before_eid, rm.entity_id,
+                        )?;
+                        (pr, Some(nr))
+                    }
+                    other => other,
+                };
+
                 reorder_entity(conn, folder_id, rm.entity_id, prev_rank, next_rank)?;
             }
             Ok(())
         })
         .await?;
 
-        self.emit_compiler_event(CompilerEvent::FolderChanged { folder_id });
+        self.emit_read_model_event(ReadModelEvent::FolderChanged { folder_id });
         Ok(())
     }
 
@@ -940,7 +1198,7 @@ impl SqliteDatabase {
             sort_folder_items(conn, folder_id, &sb, &dir, entity_ids.as_deref())
         })
         .await?;
-        self.emit_compiler_event(CompilerEvent::FolderChanged { folder_id });
+        self.emit_read_model_event(ReadModelEvent::FolderChanged { folder_id });
         Ok(())
     }
 
@@ -961,7 +1219,7 @@ impl SqliteDatabase {
         };
         self.with_conn(move |conn| reverse_folder_items(conn, folder_id, entity_ids.as_deref()))
             .await?;
-        self.emit_compiler_event(CompilerEvent::FolderChanged { folder_id });
+        self.emit_read_model_event(ReadModelEvent::FolderChanged { folder_id });
         Ok(())
     }
 }

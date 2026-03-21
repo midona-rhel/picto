@@ -1,9 +1,8 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { MantineProvider, createTheme, rem } from '@mantine/core';
-import { api } from '#desktop/api';
 import { Settings } from '#features/settings/components';
-import { useThemeSync } from '../shared/hooks/useThemeSync';
+import { useThemeSync, useDerivedColorScheme } from '../shared/hooks/useThemeSync';
 import '@mantine/core/styles.css';
 import '../shared/styles/globals.css';
 
@@ -84,30 +83,32 @@ const theme = createTheme({
       },
     },
     Badge: { defaultProps: { size: 'sm' } },
+    Switch: {
+      styles: {
+        track: {
+          backgroundColor: 'rgba(128, 128, 128, 0.25)',
+          border: '1px solid rgba(128, 128, 128, 0.2)',
+          cursor: 'pointer',
+        },
+      },
+    },
     Slider: { defaultProps: { size: 'xs' } },
     Tabs: { defaultProps: { variant: 'default' } },
   },
 });
 
-// Sync color scheme + theme from settings before React hydrates
-(api.settings.get() as Promise<{ colorScheme?: string; theme?: string }>)
-  .then((settings) => {
-    const theme = settings?.theme ?? (settings?.colorScheme === 'light' ? 'light' : 'dark');
-    const scheme = theme === 'auto' ? 'dark' : (theme === 'light' || theme === 'lightgray') ? 'light' : 'dark';
-    document.documentElement.setAttribute('data-mantine-color-scheme', scheme);
-    document.documentElement.dataset.theme = theme === 'auto' ? '' : theme;
-  })
-  .catch(() => {});
-
 function SettingsApp() {
   useThemeSync();
-  return <Settings />;
+  const colorScheme = useDerivedColorScheme();
+  return (
+    <MantineProvider theme={theme} forceColorScheme={colorScheme} cssVariablesSelector=":root:root">
+      <Settings />
+    </MantineProvider>
+  );
 }
 
 ReactDOM.createRoot(document.getElementById('root') as HTMLElement).render(
   <React.StrictMode>
-    <MantineProvider theme={theme} defaultColorScheme="dark" cssVariablesSelector=":root:root">
-      <SettingsApp />
-    </MantineProvider>
+    <SettingsApp />
   </React.StrictMode>
 );

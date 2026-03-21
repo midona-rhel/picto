@@ -25,34 +25,34 @@ import {
   IconTags,
   IconTrash,
   IconX,
+  IconGitMerge,
 } from '@tabler/icons-react';
-import { notifications } from '@mantine/notifications';
+import { notifyInfo } from '../../lib/notify';
 import type { Dispatch, MutableRefObject, ReactNode, SetStateAction } from 'react';
 import type { ContextMenuEntry } from '../ContextMenu';
-import { LayoutRow } from '../../../features/grid/LayoutRow';
-import { SortByRow } from '../../../features/grid/SortByRow';
-import { DisplayOptionsPanel } from '../../../features/grid/DisplayOptionsPanel';
+import { LayoutRow } from '../LayoutRow';
+import { SortByRow } from '../SortByRow';
+import { DisplayOptionsPanel } from '../../../features/layout/components/DisplayOptionsPanel';
 import { IconBing, IconSauceNAO, IconSogou, IconTinEye, IconYandex } from '../SearchEngineIcons';
 import type { SmartFolderPredicate } from '../../../features/smart-folders/components/types';
 import type { GridRuntimeAction, GridRuntimeState, GridViewMode } from '../../../features/grid/runtime';
-import { FileController } from '../../controllers/fileController';
-import { FolderController } from '../../controllers/folderController';
 import { FolderPickerService } from '../../services/folderPickerService';
+import { AiTaggerService } from '../../services/aiTaggerService';
+import { IconSparkles } from '@tabler/icons-react';
 import { registerUndoAction } from '../../controllers/undoRedoController';
 import { notifyError, notifySuccess } from '../../lib/notify';
 import { useSettingsStore } from '../../../state/settingsStore';
-import { deleteHashesWithLifecycleEffects, setFileStatusWithLifecycleEffects } from '../../controllers/fileLifecycleActions';
-import type { MasonryImageItem } from '../../../features/grid/shared';
-import { api } from '#desktop/api';
+import { useNavigationImageAdjustmentsStore } from '../../../state/navigationImageAdjustmentsStore';
+import type { MediaItem } from '../../../features/grid/shared';
+import { api, copyFileToClipboard, copyImageToClipboard, reverseImageSearch } from '#desktop/api';
 import { bustThumbnailCache } from '../../lib/mediaUrl';
-import { useCacheStore } from '../../../state/cacheStore';
 
 interface BuildGridImageContextMenuArgs {
   contextPoint: { x: number; y: number };
   isMac: boolean;
   state: GridRuntimeState;
   stateRef: MutableRefObject<GridRuntimeState>;
-  imagesRef: MutableRefObject<MasonryImageItem[]>;
+  imagesRef: MutableRefObject<MediaItem[]>;
   dispatch: Dispatch<GridRuntimeAction>;
   viewMode: GridViewMode;
   onViewModeChange?: (mode: GridViewMode) => void;
@@ -72,21 +72,22 @@ interface BuildGridImageContextMenuArgs {
   handleRemoveFromFolder: () => void;
   handleRemoveFromCollection: () => void;
   handleInboxAction: (hash: string, status: 'active' | 'trash') => void;
+  handleInboxSelectionAction: (status: 'active' | 'trash') => void;
   handleCopyTags: () => void;
   handlePasteTags: () => void;
   hasCopiedTags: boolean;
+  handleOpenDetail: (hash: string) => void;
   collectionEntityId?: number | null;
   navigateToCollection: (collection: { id: number; name: string }) => void;
   setRenameValue: Dispatch<SetStateAction<string>>;
   setRenamingHash: Dispatch<SetStateAction<string | null>>;
   renameCancelledRef: MutableRefObject<boolean>;
   setBatchRenameOpen: Dispatch<SetStateAction<boolean>>;
-  requestGridReload: () => void;
   rightClickedHash: string | null;
   wasAlreadySelected: boolean;
   hasSelection: boolean;
   singleHash: string | null;
-  singleImage: MasonryImageItem | null;
+  singleImage: MediaItem | null;
   singleIsCollection: boolean;
   singleCollectionId: number | null;
   effectiveVirtual: GridRuntimeState['virtualAllSelection'] | null;
@@ -133,16 +134,18 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
     handleRemoveFromFolder,
     handleRemoveFromCollection,
     handleInboxAction,
+    handleInboxSelectionAction,
     handleCopyTags,
     handlePasteTags,
     hasCopiedTags,
+    handleOpenDetail,
     collectionEntityId,
     navigateToCollection,
     setRenameValue,
     setRenamingHash,
     renameCancelledRef,
     setBatchRenameOpen,
-    requestGridReload,
+
     rightClickedHash,
     wasAlreadySelected,
     hasSelection,
@@ -154,9 +157,12 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
     effectiveSize,
   } = args;
 
-  const activeSortField = smartFolderPredicate ? (smartFolderSortField ?? 'imported_at') : sortField;
+  const activeSortField = smartFolderPredicate ? (smartFolderSortField ?? 'date_added') : sortField;
   const activeSortOrder = smartFolderPredicate ? (smartFolderSortOrder ?? 'desc') : sortOrder;
   const items: ContextMenuEntry[] = [];
+  const imageLookup = imagesRef.current.length > 0 ? imagesRef.current : state.images;
+  const hasAnyStillImages = imageLookup.some((entry) => entry.is_collection !== true && !entry.mime.startsWith('video/'));
+  const grayscaleChecked = useNavigationImageAdjustmentsStore.getState().grayscaleEnabled;
 
   if (singleHash) {
     items.push({
@@ -165,7 +171,7 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
       icon: <IconArrowsMaximize />,
       shortcut: 'Enter',
       onClick: () => {
-        dispatch({ type: 'OPEN_DETAIL', hash: singleHash });
+        handleOpenDetail(singleHash);
       },
     });
     if (singleIsCollection && singleCollectionId != null) {
@@ -187,87 +193,164 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
         label: 'Open With Default App',
         icon: <IconExternalLink />,
         shortcut: isMac ? '\u21E7Enter' : 'Shift+Enter',
-        onClick: () => FileController.openDefault(singleHash).catch(err => {
+        onClick: () => api.files.openDefault(singleHash).catch(err => {
           notifyError(err, 'Open Failed');
         }),
       });
+      items.push({
+        type: 'item',
+        label: isMac ? 'Reveal in Finder' : 'Reveal in Explorer',
+        icon: <IconFolderOpen />,
+        shortcut: isMac ? '\u2318Enter' : 'Ctrl+Enter',
+        onClick: () => api.files.revealInFolder(singleHash).catch(err => {
+          notifyError(err, 'Reveal Failed');
+        }),
+      });
+      items.push({
+        type: 'item',
+        label: 'Open in New Window',
+        icon: <IconAppWindow />,
+        shortcut: isMac ? '\u2318O' : 'Ctrl+O',
+        onClick: async () => {
+          const img = stateRef.current.images.find(i => i.hash === singleHash);
+          api.files.openInNewWindow(singleHash, img?.width, img?.height).catch(err => {
+            notifyError(err, 'New Window Failed');
+          });
+        },
+      });
     }
+    items.push({ type: 'separator' });
+  }
+
+  if (hasSelection && collectionEntityId) {
+    const freshHash = rightClickedHash && !wasAlreadySelected ? rightClickedHash : null;
     items.push({
       type: 'item',
-      label: isMac ? 'Reveal in Finder' : 'Reveal in Explorer',
-      icon: <IconFolderOpen />,
-      shortcut: isMac ? '\u2318Enter' : 'Ctrl+Enter',
-      disabled: singleIsCollection,
-      onClick: () => FileController.revealInFolder(singleHash).catch(err => {
-        notifyError(err, 'Reveal Failed');
-      }),
-    });
-    items.push({
-      type: 'item',
-      label: 'Open in New Window',
-      icon: <IconAppWindow />,
-      shortcut: isMac ? '\u2318O' : 'Ctrl+O',
-      disabled: singleIsCollection,
-      onClick: async () => {
-        const img = stateRef.current.images.find(i => i.hash === singleHash);
-        FileController.openInNewWindow(singleHash, img?.width, img?.height).catch(err => {
-          notifyError(err, 'New Window Failed');
-        });
+      label: 'Remove from Collection',
+      icon: <IconFolderMinus size={16} />,
+      shortcut: isMac ? '\u2318\u21E7\u232B' : 'Ctrl+Shift+Del',
+      onClick: () => {
+        if (freshHash && collectionEntityId) {
+          dispatch({ type: 'CLEAR_SELECTION' });
+          api.collections.removeMembers({ id: collectionEntityId, hashes: [freshHash] })
+            .then(() => {
+              registerUndoAction({
+                label: 'Remove from collection',
+                undo: async () => {
+                  await api.collections.addMembers({ id: collectionEntityId, hashes: [freshHash] });
+                },
+                redo: async () => {
+                  await api.collections.removeMembers({ id: collectionEntityId, hashes: [freshHash] });
+                },
+              });
+            })
+            .catch(err => notifyError(err, 'Remove from Collection Failed'));
+        } else {
+          handleRemoveFromCollection();
+        }
       },
     });
     items.push({ type: 'separator' });
   }
 
-  if (hasSelection && !effectiveVirtual) {
-    items.push({
-      type: 'item',
-      label: 'Create Collection from Selection',
-      icon: <IconFolderPlus />,
-      onClick: async () => {
-        const selectedHashSet = (() => {
-          if (rightClickedHash && !wasAlreadySelected) return new Set([rightClickedHash]);
-          return new Set(stateRef.current.selectedHashes);
-        })();
-        const selectedImages = stateRef.current.images.filter((img) => selectedHashSet.has(img.hash));
-        const memberHashes = selectedImages
-          .filter((img) => !img.is_collection)
-          .map((img) => img.hash);
-        if (memberHashes.length === 0) return;
-        const now = new Date();
-        const fallbackName = `Collection ${now.toLocaleDateString()} ${now.toLocaleTimeString()}`;
-        const memberNames = selectedImages
-          .filter((img) => !img.is_collection)
-          .map((img) => (img.name ?? '').trim())
-          .filter((n) => n.length > 0);
-        const allGenerated = memberNames.length > 0 && memberNames.every(isGeneratedName);
-        const normalizedBases = memberNames.map(normalizeNameBase).filter(Boolean);
-        const uniqueBases = new Set(normalizedBases);
-        const sharedBaseName = uniqueBases.size === 1 && normalizedBases.length > 0
-          ? memberNames.find((n) => normalizeNameBase(n) === normalizedBases[0]) ?? fallbackName
-          : null;
+  if (hasSelection && !effectiveVirtual && !collectionEntityId) {
+    const selectedHashSet = (() => {
+      if (rightClickedHash && !wasAlreadySelected) return new Set([rightClickedHash]);
+      return new Set(stateRef.current.selectedHashes);
+    })();
+    const selectedImages = stateRef.current.images.filter((img) => selectedHashSet.has(img.hash));
+    const selCollections = selectedImages.filter((img) => img.is_collection);
+    const selSingles = selectedImages.filter((img) => !img.is_collection);
 
-        let collectionName = fallbackName;
-        if (sharedBaseName) {
-          collectionName = sharedBaseName;
-        } else if (!allGenerated && memberNames.length > 0) {
-          const suggested = memberNames[0];
-          const entered = window.prompt('Collection name:', suggested);
-          if (entered == null) return;
-          const trimmed = entered.trim();
-          if (!trimmed) return;
-          collectionName = trimmed;
-        }
-        try {
-          const id = await api.collections.create({ name: collectionName.trim() });
-          const added = await api.collections.addMembers({ id, hashes: memberHashes });
-          notifySuccess(`Created collection with ${added} item${added === 1 ? '' : 's'}`, 'Collections');
-          requestGridReload();
-          navigateToCollection({ id, name: collectionName.trim() });
-        } catch (err) {
-          notifyError(err, 'Create Collection Failed');
-        }
-      },
-    });
+    if (selCollections.length === 0 && selSingles.length >= 2) {
+      // Only images selected → Create Collection
+      items.push({
+        type: 'item',
+        label: 'Create Collection',
+        icon: <IconFolderPlus />,
+        onClick: async () => {
+          const memberHashes = selSingles.map((img) => img.hash);
+          if (memberHashes.length === 0) return;
+          const now = new Date();
+          const fallbackName = `Collection ${now.toLocaleDateString()} ${now.toLocaleTimeString()}`;
+          const memberNames = selSingles
+            .map((img) => (img.name ?? '').trim())
+            .filter((n) => n.length > 0);
+          const allGenerated = memberNames.length > 0 && memberNames.every(isGeneratedName);
+          const normalizedBases = memberNames.map(normalizeNameBase).filter(Boolean);
+          const uniqueBases = new Set(normalizedBases);
+          const sharedBaseName = uniqueBases.size === 1 && normalizedBases.length > 0
+            ? memberNames.find((n) => normalizeNameBase(n) === normalizedBases[0]) ?? fallbackName
+            : null;
+
+          let collectionName = fallbackName;
+          if (sharedBaseName) {
+            collectionName = sharedBaseName;
+          } else if (!allGenerated && memberNames.length > 0) {
+            collectionName = memberNames[0];
+          }
+          try {
+            const id = await api.collections.create({ name: collectionName.trim() });
+            const added = await api.collections.addMembers({ id, hashes: memberHashes });
+            notifySuccess(`Created collection with ${added} item${added === 1 ? '' : 's'}`, 'Collections');
+            navigateToCollection({ id, name: collectionName.trim() });
+          } catch (err) {
+            notifyError(err, 'Create Collection Failed');
+          }
+        },
+      });
+    } else if (selCollections.length === 1 && selSingles.length > 0) {
+      // 1 collection + images → Merge into Collection
+      items.push({
+        type: 'item',
+        label: 'Merge into Collection',
+        icon: <IconGitMerge />,
+        onClick: async () => {
+          const targetId = selCollections[0].entity_id;
+          if (targetId == null) return;
+          const hashes = selSingles.map((img) => img.hash);
+          try {
+            const added = await api.collections.addMembers({ id: targetId, hashes });
+            notifySuccess(`Added ${added} item${added === 1 ? '' : 's'} to collection`, 'Collections');
+          } catch (err) {
+            notifyError(err, 'Merge Failed');
+          }
+        },
+      });
+    } else if (selCollections.length >= 2) {
+      // 2+ collections → Merge Collections
+      items.push({
+        type: 'item',
+        label: 'Merge Collections',
+        icon: <IconGitMerge />,
+        onClick: async () => {
+          const target = selCollections[0];
+          const targetId = target.entity_id;
+          if (targetId == null) return;
+          const others = selCollections.slice(1);
+          try {
+            // Move members from each non-target collection into target
+            for (const other of others) {
+              if (other.entity_id == null) continue;
+              const memberHashes = await api.collections.listMemberHashes(other.entity_id);
+              if (memberHashes.length > 0) {
+                await api.collections.addMembers({ id: targetId, hashes: memberHashes });
+              }
+              await api.collections.delete(other.entity_id);
+            }
+            // Also add any loose singles
+            if (selSingles.length > 0) {
+              await api.collections.addMembers({ id: targetId, hashes: selSingles.map((img) => img.hash) });
+            }
+            notifySuccess(`Merged ${others.length + 1} collections into "${target.name ?? 'Untitled'}"`, 'Collections');
+            navigateToCollection({ id: targetId, name: target.name ?? 'Untitled' });
+          } catch (err) {
+            notifyError(err, 'Merge Collections Failed');
+          }
+        },
+      });
+    }
+
     if (singleIsCollection) {
       items.push({
         type: 'item',
@@ -279,34 +362,44 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
           try {
             await api.collections.delete(singleCollectionId);
             notifySuccess('Collection split', 'Collections');
-            requestGridReload();
           } catch (err) {
             notifyError(err, 'Split Collection Failed');
           }
         },
       });
     }
-    items.push({ type: 'separator' });
+    // Only add separator if we actually added collection-related items
+    const addedCollectionItems = selCollections.length > 0 || (selCollections.length === 0 && selSingles.length >= 2) || singleIsCollection;
+    if (addedCollectionItems) {
+      items.push({ type: 'separator' });
+    }
   }
 
-  if (singleHash && folderId) {
+  if (singleHash && folderId && !singleIsCollection) {
     items.push({ type: 'item', label: 'Pin to Top', icon: <IconPin />, disabled: true, onClick: () => {} });
     items.push({ type: 'item', label: 'Set as Folder Cover', icon: <IconSetCover />, disabled: true, onClick: () => {} });
     items.push({ type: 'separator' });
   }
 
-  if (statusFilter === 'inbox' && singleHash) {
+  if (statusFilter === 'inbox' && (singleHash || hasSelection)) {
+    const bulkInboxAction = !!effectiveVirtual || effectiveSize > 1;
     items.push({
       type: 'item',
-      label: 'Accept',
+      label: bulkInboxAction ? `Accept ${effectiveSize} Item${effectiveSize === 1 ? '' : 's'}` : 'Accept',
       icon: <IconCheck />,
-      onClick: () => handleInboxAction(singleHash, 'active'),
+      onClick: () => {
+        if (bulkInboxAction) handleInboxSelectionAction('active');
+        else if (singleHash) handleInboxAction(singleHash, 'active');
+      },
     });
     items.push({
       type: 'item',
-      label: 'Reject',
+      label: bulkInboxAction ? `Reject ${effectiveSize} Item${effectiveSize === 1 ? '' : 's'}` : 'Reject',
       icon: <IconX />,
-      onClick: () => handleInboxAction(singleHash, 'trash'),
+      onClick: () => {
+        if (bulkInboxAction) handleInboxSelectionAction('trash');
+        else if (singleHash) handleInboxAction(singleHash, 'trash');
+      },
     });
     items.push({ type: 'separator' });
   }
@@ -325,20 +418,54 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
           selectedFolderIds: [],
           onToggle: (fId, _name, added) => {
             if (!added) return;
-            const s = stateRef.current;
-            const hashes = s.virtualAllSelection
-              ? s.images.filter(i => !s.virtualAllSelection!.excludedHashes.has(i.hash)).map(i => i.hash)
-              : [...s.selectedHashes];
-            FolderController.addFilesToFolderBatch(fId, hashes)
-              .then(() => {
-                notifySuccess(`${hashes.length} file(s) added to folder`, 'Added');
-              })
+            const hashes = Array.from(effectiveSelectedHashes);
+            if (hashes.length === 0) return;
+            api.folders.addFiles(fId, hashes)
+              .then(() => notifySuccess(`${hashes.length} file(s) added to folder`, 'Added'))
               .catch(err => notifyError(err, 'Add Failed'));
           },
         });
       },
     });
     items.push({ type: 'item', label: 'New Folder with Selection', icon: <IconFolderSymlink />, disabled: true, onClick: () => {} });
+    items.push({
+      type: 'item',
+      label: 'Auto-Tag...',
+      icon: <IconSparkles />,
+      shortcut: isMac ? '\u2318\u21E7A' : 'Ctrl+Shift+A',
+      onClick: () => {
+        const anchor = document.querySelector('[data-grid-container]') as HTMLElement ?? document.body;
+        const s = stateRef.current;
+        const selected = (s.virtualAllSelection
+          ? s.images.filter(i => !s.virtualAllSelection!.excludedHashes.has(i.hash))
+          : s.images.filter(i => s.selectedHashes.has(i.hash))
+        );
+        // Expand collections to member hashes
+        const expandAndOpen = async () => {
+          const allHashes: string[] = [];
+          for (const item of selected) {
+            if (item.is_collection && item.entity_id != null) {
+              try {
+                const members = await api.collections.listMemberHashes(item.entity_id);
+                allHashes.push(...members);
+              } catch { /* skip */ }
+            } else {
+              allHashes.push(item.hash);
+            }
+          }
+          if (allHashes.length === 0) return;
+          AiTaggerService.open({
+            anchorEl: anchor,
+            anchorPoint: contextPoint,
+            hashes: allHashes,
+            onApply: async () => {
+              notifySuccess(`Tagged ${allHashes.length} file(s)`, 'Auto-Tag');
+            },
+          });
+        };
+        void expandAndOpen();
+      },
+    });
     items.push({ type: 'separator' });
   }
 
@@ -369,14 +496,14 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
     });
   }
 
-  if (singleHash) {
+  if (singleHash && !singleIsCollection) {
     items.push({
       type: 'item',
       label: 'Copy',
       icon: <IconCopy />,
       shortcut: isMac ? '\u2318C' : 'Ctrl+C',
       onClick: () => {
-        FileController.copyToClipboard(singleHash)
+        api.files.resolvePath(singleHash).then(copyFileToClipboard)
           .then(() => notifySuccess('File copied to clipboard', 'Copied'))
           .catch(err => notifyError(err, 'Copy Failed'));
       },
@@ -388,7 +515,7 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
       shortcut: isMac ? '\u2318\u2325C' : 'Ctrl+Alt+C',
       onClick: async () => {
         try {
-          const path = await FileController.resolveFilePath(singleHash);
+          const path = await api.files.resolvePath(singleHash);
           await navigator.clipboard.writeText(path);
           notifySuccess('File path copied to clipboard', 'Copied');
         } catch (err) {
@@ -425,7 +552,7 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
           label: 'Copy Thumbnail',
           icon: <IconPhoto />,
           onClick: () => {
-            FileController.copyThumbnailToClipboard(singleHash)
+            api.files.resolveThumbnailPath(singleHash).then(copyImageToClipboard)
               .then(() => notifySuccess('Thumbnail copied to clipboard', 'Copied'))
               .catch(err => notifyError(err, 'Copy Failed'));
           },
@@ -452,7 +579,7 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
     });
   }
 
-  if (singleHash) {
+  if (singleHash && !singleIsCollection) {
     const { enabledSearchEngines } = useSettingsStore.getState().settings;
     const engineDefs: { key: typeof enabledSearchEngines[number]; label: string; icon: ReactNode }[] = [
       { key: 'tineye', label: 'TinEye', icon: <IconTinEye /> },
@@ -468,8 +595,8 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
         label: e.label,
         icon: e.icon,
         onClick: () => {
-          notifications.show({ title: 'Searching...', message: `Uploading image to ${e.label}`, autoClose: 3000, loading: true });
-          FileController.searchByImage(singleHash, e.key)
+          notifyInfo(`Uploading to ${e.label}`);
+          api.files.resolvePath(singleHash).then(path => reverseImageSearch(path, e.key))
             .catch(err => notifyError(err, 'Search Failed'));
         },
       }));
@@ -491,7 +618,7 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
       label: 'New Subfolder',
       icon: <IconFolderPlus />,
       onClick: () => {
-        void FolderController.createFolder({ name: 'New Folder', parentId: folderId })
+        void api.folders.create({ name: 'New Folder', parent_id: folderId })
           .then(() => notifySuccess('Subfolder created', 'Folders'))
           .catch((err) => notifyError(err, 'Create Subfolder Failed'));
       },
@@ -504,13 +631,14 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
       label: 'New Folder from Selection',
       icon: <IconFolderSymlink />,
       onClick: async () => {
-        const hashes = effectiveVirtual
-          ? state.images.filter(i => !effectiveVirtual.excludedHashes.has(i.hash)).map(i => i.hash)
-          : [...state.selectedHashes];
+        const hashes = (effectiveVirtual
+          ? state.images.filter(i => !effectiveVirtual.excludedHashes.has(i.hash))
+          : state.images.filter(i => state.selectedHashes.has(i.hash))
+        ).filter(i => !i.is_collection).map(i => i.hash);
         if (hashes.length === 0) return;
         try {
-          const folder = await FolderController.createFolder({ name: 'New Folder' });
-          await FolderController.addFilesToFolderBatch(folder.folder_id, hashes);
+          const folder = await api.folders.create({ name: 'New Folder' });
+          await api.folders.addFiles(folder.folder_id, hashes);
           notifySuccess(`Created folder with ${hashes.length} file(s)`, 'Folder Created');
         } catch (err) {
           notifyError(err, 'Create Folder Failed');
@@ -520,11 +648,12 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
   }
 
   if (hasSelection) {
-    const regenHashes: string[] = effectiveVirtual
-      ? state.images.filter(i => !effectiveVirtual.excludedHashes.has(i.hash)).map(i => i.hash)
+    const regenHashes: string[] = (effectiveVirtual
+      ? state.images.filter(i => !effectiveVirtual.excludedHashes.has(i.hash))
       : effectiveSize === 1 && singleHash
-        ? [singleHash]
-        : [...state.selectedHashes];
+        ? state.images.filter(i => i.hash === singleHash)
+        : state.images.filter(i => state.selectedHashes.has(i.hash))
+    ).filter(i => !i.is_collection).map(i => i.hash);
     if (regenHashes.length > 0) {
       items.push({ type: 'separator' });
       items.push({
@@ -533,12 +662,11 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
         icon: <IconRefresh />,
         shortcut: isMac ? '\u2318\u21E7T' : 'Ctrl+Shift+T',
         onClick: () => {
-          notifications.show({ title: 'Regenerating...', message: `Regenerating ${regenHashes.length} thumbnail(s)`, autoClose: 3000, loading: true });
-          FileController.regenerateThumbnailsBatch(regenHashes)
+          notifyInfo(`Regenerating ${regenHashes.length} thumbnail(s)`);
+          api.files.regenerateThumbnailsBatch(regenHashes)
             .then(r => {
               notifySuccess(`Regenerated ${r.regenerated} thumbnail(s)`, 'Thumbnails');
               bustThumbnailCache(regenHashes);
-              useCacheStore.getState().bumpGridRefresh();
             })
             .catch(err => notifyError(err, 'Regenerate Failed'));
         },
@@ -557,9 +685,9 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
 
   if (folderId) {
     const sortAndReload = (sortBy: string, dir: string) =>
-      FolderController.sortFolderItems(folderId, sortBy, dir);
+      api.folders.sortItems(folderId, sortBy, dir);
     const reverseAndReload = (hashes?: string[]) =>
-      FolderController.reverseFolderItems(folderId, hashes);
+      api.folders.reverseItems(folderId, hashes);
     items.push({
       type: 'submenu',
       label: 'Sort by',
@@ -568,8 +696,8 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
         { type: 'item', label: 'Name A→Z', onClick: () => sortAndReload('name', 'asc') },
         { type: 'item', label: 'Name Z→A', onClick: () => sortAndReload('name', 'desc') },
         { type: 'separator' },
-        { type: 'item', label: 'Date Newest First', onClick: () => sortAndReload('imported_at', 'desc') },
-        { type: 'item', label: 'Date Oldest First', onClick: () => sortAndReload('imported_at', 'asc') },
+        { type: 'item', label: 'Date Newest First', onClick: () => sortAndReload('date_added', 'desc') },
+        { type: 'item', label: 'Date Oldest First', onClick: () => sortAndReload('date_added', 'asc') },
         { type: 'separator' },
         { type: 'item', label: 'Size Largest First', onClick: () => sortAndReload('size', 'desc') },
         { type: 'item', label: 'Size Smallest First', onClick: () => sortAndReload('size', 'asc') },
@@ -610,6 +738,17 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
     icon: <IconAdjustments size={16} />,
     children: [{ type: 'custom', key: 'display-panel', render: () => <DisplayOptionsPanel /> }],
   });
+  if (hasAnyStillImages) {
+    items.push({
+      type: 'check',
+      label: 'Show in Grayscale',
+      icon: <IconAdjustments size={16} />,
+      checked: grayscaleChecked,
+      onClick: () => {
+        useNavigationImageAdjustmentsStore.getState().toggleGrayscale();
+      },
+    });
+  }
 
   items.push({ type: 'separator' });
   items.push({
@@ -637,64 +776,27 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
     const freshHash = rightClickedHash && !wasAlreadySelected ? rightClickedHash : null;
     items.push({
       type: 'item',
-      label: `Remove ${selCount > 1 ? `${selCount} Images` : 'Image'} from Folder`,
+      label: `Remove ${selCount > 1 ? `${selCount} Items` : 'Item'} from Folder`,
       icon: <IconFolderMinus size={16} />,
       shortcut: isMac ? '\u2318\u21E7\u232B' : 'Ctrl+Shift+Del',
       onClick: () => {
         if (freshHash && folderId) {
-          dispatch({ type: 'FILTER_IMAGES', predicate: i => i.hash !== freshHash });
           dispatch({ type: 'CLEAR_SELECTION' });
-          FolderController.removeFilesFromFolderBatch(folderId, [freshHash])
+          api.folders.removeFiles(folderId, [freshHash])
             .then(() => {
               registerUndoAction({
                 label: 'Remove from folder',
                 undo: async () => {
-                  await FolderController.addFilesToFolderBatch(folderId, [freshHash]);
-                  requestGridReload();
-                },
+                  await api.folders.addFiles(folderId, [freshHash]);
+                        },
                 redo: async () => {
-                  await FolderController.removeFilesFromFolderBatch(folderId, [freshHash]);
-                  requestGridReload();
-                },
+                  await api.folders.removeFiles(folderId, [freshHash]);
+                        },
               });
             })
             .catch(err => notifyError(err, 'Remove from Folder Failed'));
         } else {
           handleRemoveFromFolder();
-        }
-      },
-    });
-  }
-
-  if (hasSelection && collectionEntityId) {
-    items.push({ type: 'separator' });
-    const freshHash = rightClickedHash && !wasAlreadySelected ? rightClickedHash : null;
-    items.push({
-      type: 'item',
-      label: 'Remove from Collection',
-      icon: <IconFolderMinus size={16} />,
-      shortcut: isMac ? '\u2318\u21E7\u232B' : 'Ctrl+Shift+Del',
-      onClick: () => {
-        if (freshHash && collectionEntityId) {
-          dispatch({ type: 'FILTER_IMAGES', predicate: i => i.hash !== freshHash });
-          dispatch({ type: 'CLEAR_SELECTION' });
-          api.collections.removeMembers({ id: collectionEntityId, hashes: [freshHash] })
-            .then(() => {
-              registerUndoAction({
-                label: 'Remove from collection',
-                undo: async () => {
-                  await api.collections.addMembers({ id: collectionEntityId, hashes: [freshHash] });
-                  requestGridReload();
-                },
-                redo: async () => {
-                  await api.collections.removeMembers({ id: collectionEntityId, hashes: [freshHash] });
-                  requestGridReload();
-                },
-              });
-            })
-            .catch(err => notifyError(err, 'Remove from Collection Failed'));
-        } else {
-          handleRemoveFromCollection();
         }
       },
     });
@@ -709,20 +811,17 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
 
     const doRestore = () => {
       if (freshSingleHash) {
-        dispatch({ type: 'FILTER_IMAGES', predicate: i => i.hash !== freshSingleHash });
         dispatch({ type: 'CLEAR_SELECTION' });
-        setFileStatusWithLifecycleEffects(freshSingleHash, 'active')
+        api.files.setStatus(freshSingleHash, 'active')
           .then(() => {
             registerUndoAction({
-              label: 'Restore image',
+              label: 'Restore item',
               undo: async () => {
-                await api.file.setStatus(freshSingleHash, 'trash');
-                requestGridReload();
-              },
+                await api.files.setStatus(freshSingleHash, 'trash');
+                    },
               redo: async () => {
-                await api.file.setStatus(freshSingleHash, 'active');
-                requestGridReload();
-              },
+                await api.files.setStatus(freshSingleHash, 'active');
+                    },
             });
           })
           .catch(err => notifyError(err, 'Restore Failed'));
@@ -733,25 +832,22 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
 
     const doDelete = () => {
       if (freshSingleHash) {
-        dispatch({ type: 'FILTER_IMAGES', predicate: i => i.hash !== freshSingleHash });
         dispatch({ type: 'CLEAR_SELECTION' });
         if (inTrash) {
-          deleteHashesWithLifecycleEffects([freshSingleHash])
+          api.files.deleteMany([freshSingleHash])
             .catch(err => notifyError(err, 'Delete Failed'));
         } else {
           const previousStatus = imagesRef.current.find((img) => img.hash === freshSingleHash)?.status ?? (statusFilter ?? 'active');
-          setFileStatusWithLifecycleEffects(freshSingleHash, 'trash')
+          api.files.setStatus(freshSingleHash, 'trash')
             .then(() => {
               registerUndoAction({
-                label: 'Move image to trash',
+                label: 'Move to trash',
                 undo: async () => {
-                  await api.file.setStatus(freshSingleHash, previousStatus);
-                  requestGridReload();
-                },
+                  await api.files.setStatus(freshSingleHash, previousStatus);
+                        },
                 redo: async () => {
-                  await api.file.setStatus(freshSingleHash, 'trash');
-                  requestGridReload();
-                },
+                  await api.files.setStatus(freshSingleHash, 'trash');
+                        },
               });
             })
             .catch(err => notifyError(err, 'Delete Failed'));
@@ -766,32 +862,48 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
         type: 'item',
         label: effectiveVirtual
           ? (virtualCount != null
-            ? `Restore ${virtualCount.toLocaleString()} Image${virtualCount === 1 ? '' : 's'}`
-            : 'Restore All Matching Images')
-          : `Restore ${count} Image${count > 1 ? 's' : ''}`,
+            ? `Restore ${virtualCount.toLocaleString()} Item${virtualCount === 1 ? '' : 's'}`
+            : 'Restore All')
+          : `Restore ${count} Item${count > 1 ? 's' : ''}`,
         icon: <IconArrowBackUp />,
         onClick: doRestore,
       });
     }
-    items.push({
-      type: 'item',
-      label: inTrash
-        ? (effectiveVirtual
-          ? (virtualCount != null
-            ? `Permanently Delete ${virtualCount.toLocaleString()} Image${virtualCount === 1 ? '' : 's'}`
-            : 'Permanently Delete All')
-          : `Permanently Delete ${count} Image${count > 1 ? 's' : ''}`)
-        : (effectiveVirtual
-          ? (virtualCount != null
-            ? `Move ${virtualCount.toLocaleString()} Image${virtualCount === 1 ? '' : 's'} to Trash`
-            : 'Move All Matching Images to Trash')
-          : `Move ${count} Image${count > 1 ? 's' : ''} to Trash`),
-      icon: <IconTrash />,
-      shortcut: isMac ? '\u2318\u232B' : 'Del',
-      danger: inTrash,
-      onClick: doDelete,
-    });
+    if (statusFilter !== 'inbox') {
+      items.push({
+        type: 'item',
+        label: inTrash
+          ? (effectiveVirtual
+            ? (virtualCount != null
+              ? `Permanently Delete ${virtualCount.toLocaleString()} Item${virtualCount === 1 ? '' : 's'}`
+              : 'Permanently Delete All')
+            : `Permanently Delete ${count} Item${count > 1 ? 's' : ''}`)
+          : (effectiveVirtual
+            ? (virtualCount != null
+              ? `Move ${virtualCount.toLocaleString()} Item${virtualCount === 1 ? '' : 's'} to Trash`
+              : 'Move All to Trash')
+            : `Move ${count} Item${count > 1 ? 's' : ''} to Trash`),
+        icon: <IconTrash />,
+        shortcut: isMac ? '\u2318\u232B' : 'Del',
+        danger: inTrash,
+        onClick: doDelete,
+      });
+    }
   }
 
-  return items;
+  // Clean up: remove consecutive separators and trailing separator
+  const cleaned: ContextMenuEntry[] = [];
+  for (const item of items) {
+    if (item.type === 'separator') {
+      if (cleaned.length === 0) continue; // no leading separator
+      if (cleaned[cleaned.length - 1]?.type === 'separator') continue; // no consecutive separators
+    }
+    cleaned.push(item);
+  }
+  // Remove trailing separator
+  if (cleaned.length > 0 && cleaned[cleaned.length - 1]?.type === 'separator') {
+    cleaned.pop();
+  }
+
+  return cleaned;
 }

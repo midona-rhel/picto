@@ -27,7 +27,7 @@ async fn collect_file_ids(
                 .into_iter()
                 .filter(|h| !excluded.contains(h))
                 .collect();
-            // PBI-011: Use lightweight hash→file_id resolver instead of loading full records.
+            // Use lightweight hash→file_id resolver instead of loading full records.
             let resolved = db.resolve_hashes_batch(&filtered).await?;
             let file_ids: Vec<i64> = resolved.into_iter().map(|(_, id)| id).collect();
             Ok(file_ids)
@@ -54,8 +54,10 @@ pub async fn add_tags_selection(
     if file_ids.is_empty() {
         return Ok(0);
     }
-    let affected = file_ids.len();
-    db.add_tags_batch_by_entity_ids(file_ids, tag_strings, "local".to_string())
+    // Expand to include collection member entities
+    let expanded = db.expand_collection_members(file_ids).await?;
+    let affected = expanded.len();
+    db.add_tags_batch_by_entity_ids(expanded, tag_strings, "local".to_string())
         .await?;
     Ok(affected)
 }
@@ -73,8 +75,10 @@ pub async fn remove_tags_selection(
     if file_ids.is_empty() {
         return Ok(0);
     }
-    let affected = file_ids.len();
-    db.remove_tags_batch_by_entity_ids(file_ids, tag_strings)
+    // Expand to include collection member entities
+    let expanded = db.expand_collection_members(file_ids).await?;
+    let affected = expanded.len();
+    db.remove_tags_batch_by_entity_ids(expanded, tag_strings)
         .await?;
     Ok(affected)
 }
@@ -88,8 +92,10 @@ pub async fn update_rating_selection(
     if file_ids.is_empty() {
         return Ok(0);
     }
-    let affected = file_ids.len();
-    for file_id in file_ids {
+    // Expand to include collection member files
+    let expanded = db.expand_collection_members(file_ids).await?;
+    let affected = expanded.len();
+    for file_id in expanded {
         db.with_conn(move |conn| crate::sqlite::files::update_rating(conn, file_id, rating))
             .await
             .map_err(|e| e.to_string())?;
@@ -102,7 +108,10 @@ pub async fn set_notes_selection(
     selection: SelectionQuerySpec,
     notes: HashMap<String, String>,
 ) -> Result<usize, String> {
-    let file_ids = collect_file_ids(db, &selection).await?;
+    let file_ids = {
+        let base = collect_file_ids(db, &selection).await?;
+        db.expand_collection_members(base).await?
+    };
     if file_ids.is_empty() {
         return Ok(0);
     }
@@ -127,7 +136,10 @@ pub async fn set_source_urls_selection(
     selection: SelectionQuerySpec,
     urls: Vec<String>,
 ) -> Result<usize, String> {
-    let file_ids = collect_file_ids(db, &selection).await?;
+    let file_ids = {
+        let base = collect_file_ids(db, &selection).await?;
+        db.expand_collection_members(base).await?
+    };
     if file_ids.is_empty() {
         return Ok(0);
     }

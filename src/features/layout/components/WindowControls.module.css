@@ -6,22 +6,7 @@
 }
 
 .btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 28px;
-  height: 28px;
-  min-width: 28px;
-  padding: 0;
-  border: none;
-  border-radius: 5px;
-  background: transparent;
-  color: var(--color-text-primary);
-  cursor: pointer;
-  box-sizing: border-box;
-  outline: none;
-  -webkit-app-region: no-drag;
-  transition: background 150ms var(--timing-function-super), color 150ms ease;
+  composes: icBtn28 from '../../../shared/styles/iconButton.module.css';
 }
 
 .btn:hover {

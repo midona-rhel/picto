@@ -1,12 +1,11 @@
 import { useCallback, useEffect, useRef } from 'react';
 import { api, emitTo, listen } from '#desktop/api';
-import { FileController } from '../../../shared/controllers/fileController';
 import { notifyError, notifySuccess } from '../../../shared/lib/notify';
 import { registerUndoAction } from '../../../shared/controllers/undoRedoController';
 import { logBestEffortError, runBestEffort } from '../../../shared/lib/asyncOps';
 import type { MasonryImageItem } from '../shared';
-import type { DetailViewControls, DetailViewState } from '../DetailView';
-import type { GridRuntimeAction, GridRuntimeState } from '../runtime';
+import type { GridRuntimeState } from '../runtime';
+import type { ViewerHostController } from '../../../features/viewer/hooks/useViewerHost';
 
 let copiedTags: string[] | null = null;
 
@@ -15,9 +14,7 @@ interface UseGridItemActionsArgs {
   stateRef: { current: GridRuntimeState };
   imagesRef: { current: MasonryImageItem[] };
   singleSelectedHash: string | null;
-  dispatch: React.Dispatch<GridRuntimeAction>;
-  navigateToCollection: (collection: { id: number; name: string }) => void;
-  onDetailViewStateChange?: (state: DetailViewState | null, controls: DetailViewControls | null) => void;
+  viewer: ViewerHostController;
   selectedScopeCount?: number | null;
 }
 
@@ -38,25 +35,22 @@ export function useGridItemActions({
   stateRef,
   imagesRef,
   singleSelectedHash,
-  dispatch,
-  selectedScopeCount,
+  viewer,
+  selectedScopeCount: _selectedScopeCount,
 }: UseGridItemActionsArgs): GridItemActionsResult {
   const handleOpenDetail = useCallback(() => {
     if (!singleSelectedHash) return;
-    dispatch({ type: 'OPEN_DETAIL', hash: singleSelectedHash });
-  }, [singleSelectedHash, dispatch]);
+    viewer.openDetail(singleSelectedHash);
+  }, [singleSelectedHash, viewer]);
 
   const handleOpenQuickLook = useCallback(() => {
-    if (state.quickLookHash) {
-      dispatch({ type: 'CLOSE_QUICK_LOOK' });
-    } else if (singleSelectedHash) {
-      dispatch({ type: 'OPEN_QUICK_LOOK', hash: singleSelectedHash });
-    }
-  }, [singleSelectedHash, state.quickLookHash, dispatch]);
+    if (!singleSelectedHash) return;
+    viewer.toggleQuickLook(singleSelectedHash);
+  }, [singleSelectedHash, viewer]);
 
   const handleOpenWithDefaultApp = useCallback(() => {
     if (!singleSelectedHash) return;
-    FileController.openDefault(singleSelectedHash).catch((err) => {
+    api.file.openDefault(singleSelectedHash).catch((err) => {
       notifyError(err, 'Open Failed');
     });
   }, [singleSelectedHash]);
@@ -64,13 +58,10 @@ export function useGridItemActions({
   const handleOpenInNewWindow = useCallback(async () => {
     if (!singleSelectedHash) return;
     const img = state.images.find((i) => i.hash === singleSelectedHash);
-    FileController.openInNewWindow(singleSelectedHash, img?.width, img?.height).catch((err) => {
+    api.file.openInNewWindow(singleSelectedHash, img?.width, img?.height).catch((err) => {
       notifyError(err, 'New Window Failed');
     });
   }, [singleSelectedHash, state.images]);
-
-  const selectedScopeCountRef = useRef(selectedScopeCount);
-  selectedScopeCountRef.current = selectedScopeCount;
 
   const detailWindowLabelsRef = useRef<Set<string>>(new Set());
   useEffect(() => {
@@ -85,7 +76,7 @@ export function useGridItemActions({
         width: i.width,
         height: i.height,
       }));
-      const totalCount = stateRef.current.responseTotalCount ?? selectedScopeCountRef.current ?? null;
+      const totalCount = stateRef.current.responseTotalCount ?? null;
       runBestEffort(`grid.emitDetailImages.${label}`, emitTo(label, 'detail-images', { images: lightImages, totalCount }));
     });
     return () => {
@@ -103,7 +94,7 @@ export function useGridItemActions({
       width: i.width,
       height: i.height,
     }));
-    const totalCount = state.responseTotalCount ?? selectedScopeCountRef.current ?? null;
+    const totalCount = state.responseTotalCount ?? null;
     for (const label of labels) {
       emitTo(label, 'detail-images', { images: lightImages, totalCount }).catch(() => {
         logBestEffortError(`grid.emitDetailImages.refresh.${label}`, 'detail window unavailable');
@@ -114,7 +105,7 @@ export function useGridItemActions({
 
   const handleRevealInFolder = useCallback(() => {
     if (!singleSelectedHash) return;
-    FileController.revealInFolder(singleSelectedHash).catch((err) => {
+    api.file.revealInFolder(singleSelectedHash).catch((err) => {
       notifyError(err, 'Reveal Failed');
     });
   }, [singleSelectedHash]);
@@ -122,7 +113,7 @@ export function useGridItemActions({
   const handleCopyFilePath = useCallback(async () => {
     if (!singleSelectedHash) return;
     try {
-      const path = await FileController.resolveFilePath(singleSelectedHash);
+      const path = await api.file.resolvePath(singleSelectedHash);
       await navigator.clipboard.writeText(path);
       notifySuccess('File path copied to clipboard', 'Copied');
     } catch (err) {
@@ -137,7 +128,7 @@ export function useGridItemActions({
       : [...selectedHashes];
     if (hashesToCopy.length === 0) return;
     try {
-      const tags = await FileController.getFileTags(hashesToCopy[0]);
+      const tags = await api.tags.getForFile(hashesToCopy[0]);
       copiedTags = tags.map((t) => t.display);
       notifySuccess(`${copiedTags.length} tag(s) copied`, 'Tags Copied');
     } catch (err) {
@@ -155,11 +146,11 @@ export function useGridItemActions({
     try {
       const tagsSnapshot = [...copiedTags];
       const hashesSnapshot = [...hashesToPaste];
-      await api.tags.addBatch(hashesSnapshot, tagsSnapshot);
+      await api.tags.add(hashesSnapshot, tagsSnapshot);
       registerUndoAction({
         label: `Paste ${tagsSnapshot.length} tag${tagsSnapshot.length === 1 ? '' : 's'}`,
-        undo: () => api.tags.removeBatch(hashesSnapshot, tagsSnapshot),
-        redo: () => api.tags.addBatch(hashesSnapshot, tagsSnapshot),
+        undo: () => api.tags.remove(hashesSnapshot, tagsSnapshot),
+        redo: () => api.tags.add(hashesSnapshot, tagsSnapshot),
       });
       notifySuccess(
         `Applied ${copiedTags.length} tag(s) to ${hashesToPaste.length} file(s)`,

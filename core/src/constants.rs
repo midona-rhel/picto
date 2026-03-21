@@ -1,14 +1,7 @@
-//! Simplified constants for Picto media library.
-//!
-//! Keeps: MimeType enum, MIME string mappings, file type groupings.
-//! Drops: all Hydrus protocol constants (ContentStatus, ContentType, ServiceType, etc.)
+//! Constants — MimeType enum, MIME string mappings, file type groupings.
 
 use std::collections::HashSet;
 use std::sync::OnceLock;
-
-// ---------------------------------------------------------------------------
-// MimeType enum — all file types we handle
-// ---------------------------------------------------------------------------
 
 #[repr(i32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
@@ -245,9 +238,7 @@ impl MimeType {
 
 }
 
-// ---------------------------------------------------------------------------
-// File type groupings
-// ---------------------------------------------------------------------------
+// --- File type groupings ---
 
 static IMAGES: OnceLock<HashSet<MimeType>> = OnceLock::new();
 static ANIMATIONS: OnceLock<HashSet<MimeType>> = OnceLock::new();

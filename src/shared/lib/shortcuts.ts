@@ -15,17 +15,18 @@ const isMac =
 
 export const SHORTCUT_DEFS: ShortcutDef[] = [
   // Navigation
-  { id: 'nav.allImages',      label: 'All Images',         group: 'Navigation', keys: 'Mod+1' },
+  { id: 'nav.allActive',      label: 'All Active',         group: 'Navigation', keys: 'Mod+1' },
   { id: 'nav.inbox',          label: 'Inbox',              group: 'Navigation', keys: 'Mod+2' },
   { id: 'nav.untagged',       label: 'Untagged',           group: 'Navigation', keys: 'Mod+3' },
-  { id: 'nav.recentViewed',   label: 'Recently Viewed',    group: 'Navigation', keys: 'Mod+4' },
-  { id: 'nav.trash',          label: 'Trash',              group: 'Navigation', keys: 'Mod+5' },
+  { id: 'nav.trash',          label: 'Trash',              group: 'Navigation', keys: 'Mod+4' },
   { id: 'nav.search',      label: 'Search',             group: 'Navigation', keys: 'Mod+F' },
   { id: 'nav.commandPalette', label: 'Command Palette', group: 'Navigation', keys: 'Mod+K',         description: 'Open command palette' },
   { id: 'nav.goToFolder',     label: 'Go to Folder',   group: 'Navigation', keys: 'Mod+J',         description: 'Quick-jump to a folder or smart folder' },
 
   // File
   { id: 'file.import',       label: 'Import Files',         group: 'File', keys: 'Mod+I' },
+  { id: 'file.export',       label: 'Export Originals',     group: 'File', keys: 'Mod+E' },
+  { id: 'file.exportAs',     label: 'Export As...',         group: 'File', keys: 'Mod+Shift+E' },
   { id: 'file.delete',       label: 'Delete',               group: 'File', keys: 'Mod+Backspace' },
   { id: 'file.openDefault',  label: 'Open with Default App', group: 'File', keys: 'Shift+Enter' },
   { id: 'file.newWindow',    label: 'Open in New Window',   group: 'File', keys: 'Mod+O' },
@@ -42,6 +43,7 @@ export const SHORTCUT_DEFS: ShortcutDef[] = [
   // Organize
   { id: 'organize.addTag',    label: 'Add Tags',        group: 'Edit', keys: 'T',     description: 'Open tag panel for selected images' },
   { id: 'organize.addFolder', label: 'Add to Folders',  group: 'Edit', keys: 'F',     description: 'Open folder picker for selected images' },
+  { id: 'organize.autoTag',   label: 'Auto-Tag',        group: 'Edit', keys: 'Mod+Shift+A', description: 'Open AI auto-tagger for selected images' },
 
   // Edit
   { id: 'edit.undo',       label: 'Undo',           group: 'Edit', keys: 'Mod+Z' },
@@ -80,7 +82,7 @@ export const SHORTCUT_DEFS: ShortcutDef[] = [
   { id: 'nav.back',             label: 'Go Back',             group: 'Navigation', keys: 'Alt+ArrowLeft',  description: 'Return to previous view' },
   { id: 'nav.forward',          label: 'Go Forward',          group: 'Navigation', keys: 'Alt+ArrowRight', description: 'Go forward in view history' },
   { id: 'view.alwaysOnTop',     label: 'Always on Top',       group: 'View', keys: 'Shift+T',    description: 'Toggle window always on top' },
-  { id: 'view.minimap',         label: 'Toggle Minimap',      group: 'View', keys: 'Mod+Alt+8',  description: 'Toggle navigator minimap when zoomed' },
+  { id: 'view.navigator',       label: 'Toggle Navigator',    group: 'View', keys: 'Mod+Alt+8',  description: 'Toggle navigator overlay when zoomed' },
 
   // Layout shortcuts
   { id: 'view.layoutGrid',      label: 'Grid Layout',         group: 'View', keys: 'Alt+1',     description: 'Switch to grid layout' },
@@ -113,6 +115,15 @@ export const SHORTCUT_DEFS: ShortcutDef[] = [
   { id: 'video.rateIncrease',    label: 'Speed Up',                group: 'Video', keys: ']',                 description: 'Increase playback speed' },
   { id: 'video.rateDecrease',    label: 'Slow Down',               group: 'Video', keys: '[',                 description: 'Decrease playback speed' },
   { id: 'video.rateReset',       label: 'Reset Speed',             group: 'Video', keys: 'Backspace',         description: 'Reset playback speed to 1x' },
+
+  // Duplicates
+  { id: 'dup.smartMerge',   label: 'Smart Merge',       group: 'Duplicates', keys: 'S',          description: 'Auto-merge keeping the better file' },
+  { id: 'dup.keepLeft',     label: 'Keep Left',         group: 'Duplicates', keys: 'L',          description: 'Keep the left file, delete right' },
+  { id: 'dup.keepRight',    label: 'Keep Right',        group: 'Duplicates', keys: 'R',          description: 'Keep the right file, delete left' },
+  { id: 'dup.notDuplicate', label: 'Not Duplicate',     group: 'Duplicates', keys: 'N',          description: 'Mark pair as not duplicate' },
+  { id: 'dup.fitToWindow',  label: 'Fit to Window',     group: 'Duplicates', keys: 'F',          description: 'Reset zoom to fit images in view' },
+  { id: 'dup.prevPair',     label: 'Previous Pair',     group: 'Duplicates', keys: 'ArrowLeft',  description: 'Go to previous duplicate pair' },
+  { id: 'dup.nextPair',     label: 'Next Pair',         group: 'Duplicates', keys: 'ArrowRight', description: 'Go to next duplicate pair' },
 ];
 
 export interface ShortcutGroup {
@@ -127,7 +138,7 @@ export function getShortcutGroups(): ShortcutGroup[] {
     if (!list) { list = []; map.set(def.group, list); }
     list.push(def);
   }
-  const order = ['Navigation', 'File', 'Edit', 'Rating', 'View', 'Inbox', 'Video'];
+  const order = ['Navigation', 'File', 'Edit', 'Rating', 'View', 'Inbox', 'Video', 'Duplicates'];
   return order
     .filter((g) => map.has(g))
     .map((g) => ({ name: g, items: map.get(g)! }));
@@ -194,6 +205,34 @@ export function formatKeysAsArray(keys: string): string[] {
 
   const lookup = isMac ? MAC_SYMBOLS : WIN_LABELS;
   return parts.map((p) => lookup[p] ?? p);
+}
+
+/** Parse a shortcut key string (e.g. "Mod+Shift+T") into KeyboardEvent init values. */
+export function parseShortcutKeys(keys: string): { key: string; code: string; meta: boolean; ctrl: boolean; alt: boolean; shift: boolean } | null {
+  const parts = keys.split('+');
+  let key = '';
+  let meta = false;
+  let ctrl = false;
+  let alt = false;
+  let shift = false;
+  for (const p of parts) {
+    const lower = p.toLowerCase();
+    if (lower === 'mod') { if (isMac) meta = true; else ctrl = true; }
+    else if (lower === 'ctrl') ctrl = true;
+    else if (lower === 'alt') alt = true;
+    else if (lower === 'shift') shift = true;
+    else key = p;
+  }
+  if (!key) return null;
+  // Normalize key name to what KeyboardEvent expects
+  const keyMap: Record<string, string> = {
+    'Backspace': 'Backspace', 'Delete': 'Delete', 'Enter': 'Enter', 'Escape': 'Escape',
+    'ArrowLeft': 'ArrowLeft', 'ArrowRight': 'ArrowRight', 'ArrowUp': 'ArrowUp', 'ArrowDown': 'ArrowDown',
+    'Tab': 'Tab', 'Space': ' ', 'F2': 'F2',
+  };
+  const resolvedKey = keyMap[key] ?? key.toLowerCase();
+  const code = resolvedKey.length === 1 ? `Key${resolvedKey.toUpperCase()}` : resolvedKey;
+  return { key: resolvedKey, code, meta, ctrl, alt, shift };
 }
 
 /** Look up a shortcut def by id */

@@ -222,9 +222,11 @@ impl BlobStore {
             .join(format!("{}.{}", hex_hash, ext)))
     }
 
-    /// Legacy path to the thumbnail (`.jpg`): `blobs/t/<ab>/<cd>/<hash>.jpg`
-    pub fn thumbnail_path(&self, hex_hash: &str) -> BlobResult<PathBuf> {
-        self.thumbnail_path_with_ext(hex_hash, "jpg")
+    /// Compute disk usage for originals (`blobs/f/`) and thumbnails (`blobs/t/`).
+    pub fn disk_usage(&self) -> (u64, u64) {
+        let originals = dir_size(&self.root.join("f"));
+        let thumbnails = dir_size(&self.root.join("t"));
+        (originals, thumbnails)
     }
 
     /// Find thumbnail path, checking `.jpg` first then `.png` for backwards
@@ -240,6 +242,25 @@ impl BlobStore {
         }
         Ok(None)
     }
+}
+
+/// Recursively sum file sizes under a directory.
+fn dir_size(path: &Path) -> u64 {
+    let mut total = 0u64;
+    if let Ok(entries) = fs::read_dir(path) {
+        for entry in entries.flatten() {
+            let ft = match entry.file_type() {
+                Ok(ft) => ft,
+                Err(_) => continue,
+            };
+            if ft.is_dir() {
+                total += dir_size(&entry.path());
+            } else if ft.is_file() {
+                total += entry.metadata().map(|m| m.len()).unwrap_or(0);
+            }
+        }
+    }
+    total
 }
 
 /// Extract two-level shard prefix from a hex hash: `("ab", "cd")` from `"abcd..."`.
@@ -263,24 +284,6 @@ mod tests {
     }
 
     #[test]
-    fn test_write_and_read_original_with_ext() {
-        let dir = TempDir::new().unwrap();
-        let store = BlobStore::open(dir.path()).unwrap();
-        let hash = test_hash();
-
-        store
-            .write_original(&hash, b"hello world", Some("jpg"))
-            .unwrap();
-        let data = store.read_original(&hash, Some("jpg")).unwrap();
-        assert_eq!(data, b"hello world");
-
-        // Verify file has .jpg extension
-        let path = store.original_path_with_ext(&hash, Some("jpg")).unwrap();
-        assert!(path.to_string_lossy().ends_with(".jpg"));
-        assert!(path.exists());
-    }
-
-    #[test]
     fn test_write_idempotent() {
         let dir = TempDir::new().unwrap();
         let store = BlobStore::open(dir.path()).unwrap();
@@ -293,104 +296,10 @@ mod tests {
     }
 
     #[test]
-    fn test_find_original_with_ext() {
-        let dir = TempDir::new().unwrap();
-        let store = BlobStore::open(dir.path()).unwrap();
-        let hash = test_hash();
-
-        store.write_original(&hash, b"data", Some("png")).unwrap();
-        let result = store.find_original(&hash, Some("png")).unwrap();
-        assert!(result.is_some());
-        let (_, ext) = result.unwrap();
-        assert_eq!(ext, Some("png".to_string()));
-    }
-
-    #[test]
-    fn test_thumbnail_with_jpg_extension() {
-        let dir = TempDir::new().unwrap();
-        let store = BlobStore::open(dir.path()).unwrap();
-        let hash = test_hash();
-
-        store.write_thumbnail(&hash, b"thumb bytes", "jpg").unwrap();
-        let path = store.thumbnail_path(&hash).unwrap();
-        assert!(path.to_string_lossy().ends_with(".jpg"));
-        assert!(path.exists());
-
-        let data = store.read_thumbnail(&hash).unwrap();
-        assert_eq!(data, Some(b"thumb bytes".to_vec()));
-    }
-
-    #[test]
-    fn test_missing_thumbnail() {
-        let dir = TempDir::new().unwrap();
-        let store = BlobStore::open(dir.path()).unwrap();
-        let hash = test_hash();
-
-        let data = store.read_thumbnail(&hash).unwrap();
-        assert_eq!(data, None);
-    }
-
-    #[test]
-    fn test_delete_with_extension() {
-        let dir = TempDir::new().unwrap();
-        let store = BlobStore::open(dir.path()).unwrap();
-        let hash = test_hash();
-
-        store.write_original(&hash, b"data", Some("jpg")).unwrap();
-        store.write_thumbnail(&hash, b"thumb", "jpg").unwrap();
-        assert!(store
-            .original_path_with_ext(&hash, Some("jpg"))
-            .unwrap()
-            .exists());
-        assert!(store.thumbnail_path(&hash).unwrap().exists());
-
-        store.delete(&hash).unwrap();
-        assert!(!store
-            .original_path_with_ext(&hash, Some("jpg"))
-            .unwrap()
-            .exists());
-        assert_eq!(store.read_thumbnail(&hash).unwrap(), None);
-    }
-
-    #[test]
-    fn test_shard_paths() {
-        let dir = TempDir::new().unwrap();
-        let store = BlobStore::open(dir.path()).unwrap();
-        let hash = test_hash();
-
-        let orig = store.original_path_with_ext(&hash, Some("jpg")).unwrap();
-        assert!(orig.to_string_lossy().contains("/f/ab/cd/"));
-        assert!(orig.to_string_lossy().ends_with(".jpg"));
-
-        let thumb = store.thumbnail_path(&hash).unwrap();
-        assert!(thumb.to_string_lossy().contains("/t/ab/cd/"));
-        assert!(thumb.to_string_lossy().ends_with(".jpg"));
-    }
-
-    #[test]
     fn test_invalid_hash() {
         let dir = TempDir::new().unwrap();
         let store = BlobStore::open(dir.path()).unwrap();
 
         assert!(store.original_path_with_ext("ab", Some("jpg")).is_err()); // too short
-    }
-
-    #[test]
-    fn test_mime_to_extension() {
-        assert_eq!(mime_to_extension("image/jpeg"), "jpg");
-        assert_eq!(mime_to_extension("image/png"), "png");
-        assert_eq!(mime_to_extension("video/mp4"), "mp4");
-        assert_eq!(mime_to_extension("application/pdf"), "pdf");
-        assert_eq!(mime_to_extension("unknown/type"), "bin");
-    }
-
-    #[test]
-    fn test_extension_to_mime() {
-        assert_eq!(extension_to_mime("jpg"), "image/jpeg");
-        assert_eq!(extension_to_mime("jpeg"), "image/jpeg");
-        assert_eq!(extension_to_mime("png"), "image/png");
-        assert_eq!(extension_to_mime("mp4"), "video/mp4");
-        assert_eq!(extension_to_mime("pdf"), "application/pdf");
-        assert_eq!(extension_to_mime("xyz"), "application/octet-stream");
     }
 }

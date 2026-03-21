@@ -15,7 +15,14 @@ export function deriveStaleResources(receipt: MutationReceipt): Set<ResourceKey>
   if (facts.status_changed) {
     keys.add('sidebar/tree');
     keys.add('selection/current');
-    scopes.push('system:all', 'system:inbox', 'system:trash', 'system:recently_viewed', 'smart:all');
+    scopes.push(
+      'system:all',
+      'system:inbox',
+      'system:trash',
+      'system:untagged',
+      'system:uncategorized',
+      'smart:all',
+    );
     if (facts.folder_ids) {
       for (const id of facts.folder_ids) {
         scopes.push(`folder:${id}`);
@@ -25,6 +32,7 @@ export function deriveStaleResources(receipt: MutationReceipt): Set<ResourceKey>
 
   if (facts.tags_changed) {
     keys.add('selection/current');
+    scopes.push('system:untagged');
     if (!facts.file_hashes) {
       scopes.push('system:all');
     }
@@ -39,6 +47,7 @@ export function deriveStaleResources(receipt: MutationReceipt): Set<ResourceKey>
   if (facts.folder_membership_changed) {
     keys.add('sidebar/tree');
     keys.add('selection/current');
+    scopes.push('system:uncategorized');
     for (const id of facts.folder_membership_changed) {
       scopes.push(`folder:${id}`);
     }
@@ -56,6 +65,10 @@ export function deriveStaleResources(receipt: MutationReceipt): Set<ResourceKey>
 
   if (!keys.has('selection/current') && hasDomain(facts, 'selection')) {
     keys.add('selection/current');
+  }
+
+  if (hasDomain(facts, 'subscriptions')) {
+    keys.add('subscriptions/list');
   }
 
   // compiler_batch_done refreshes sidebar tree only if Domain::Sidebar is present
@@ -127,8 +140,7 @@ export function gridResourceMatchesScope(
   if (scope === activeScope) return true;
   if (activeScope.startsWith('folder:') && scope === 'folder:all') return true;
   if (activeScope.startsWith('smart:') && scope === 'smart:all') return true;
-  // system:all is a wildcard for non-specific scopes
-  if (scope === 'system:all') return true;
+  if (activeScope.startsWith('system:') && scope === 'system:all') return true;
 
   return false;
 }

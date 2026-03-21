@@ -34,9 +34,9 @@
   --color-positive: #2ed573;
   --color-warning: #ffa502;
 
-  --color-text-primary: rgba(255, 255, 255, 0.92);
-  --color-text-secondary: rgba(255, 255, 255, 0.56);
-  --color-text-tertiary: rgba(255, 255, 255, 0.36);
+  --color-text-primary: rgba(255, 255, 255, 1.0);
+  --color-text-secondary: rgba(255, 255, 255, 0.72);
+  --color-text-tertiary: rgba(255, 255, 255, 0.50);
   --color-text-disabled: rgba(255, 255, 255, 0.22);
 
   --color-border-primary: rgba(255, 255, 255, 0.14);
@@ -67,6 +67,8 @@
   --color-white-80: rgba(255, 255, 255, 0.80);
   --color-white-90: rgba(255, 255, 255, 0.90);
   --color-white-99: rgba(255, 255, 255, 0.99);
+
+  --mantine-color-body: #1a1a1e;
 
   --color-dark-1: #1a1a1e;
   --color-dark-2: #1e1e22;
@@ -136,7 +138,7 @@
 
   --timing-function-super: cubic-bezier(0.4, 0, 0.22, 1);
   --timing-function-ease: cubic-bezier(0.4, 0, 0.2, 1);
-  --transition-fast: 100ms var(--timing-function-ease);
+  --transition-fast: 250ms var(--timing-function-ease);
 
   --folder-red: #ff4757;
   --folder-orange: #ff6348;
@@ -177,6 +179,7 @@
 
 /* Blue theme */
 :root[data-mantine-color-scheme="dark"][data-theme="blue"] {
+  --mantine-color-body: #0f1732;
   --color-dark-1: #0f1732;
   --color-dark-2: #131b36;
   --color-dark-3: #171f3a;
@@ -209,6 +212,7 @@
 
 /* Purple theme */
 :root[data-mantine-color-scheme="dark"][data-theme="purple"] {
+  --mantine-color-body: #1e1526;
   --color-dark-1: #1e1526;
   --color-dark-2: #22192a;
   --color-dark-3: #261d2e;
@@ -243,6 +247,7 @@
 
 /* Gray theme */
 :root[data-mantine-color-scheme="dark"][data-theme="gray"] {
+  --mantine-color-body: #323236;
   --color-dark-1: #323236;
   --color-dark-2: #36363a;
   --color-dark-3: #3a3a3e;
@@ -289,9 +294,9 @@
   --color-primary-90: rgba(37, 99, 235, 0.90);
   --color-primary-99: rgba(37, 99, 235, 0.99);
 
-  --color-text-primary: rgba(0, 0, 0, 0.87);
-  --color-text-secondary: rgba(0, 0, 0, 0.54);
-  --color-text-tertiary: rgba(0, 0, 0, 0.38);
+  --color-text-primary: rgba(0, 0, 0, 1.0);
+  --color-text-secondary: rgba(0, 0, 0, 0.72);
+  --color-text-tertiary: rgba(0, 0, 0, 0.50);
   --color-text-disabled: rgba(0, 0, 0, 0.22);
 
   --color-border-primary: rgba(0, 0, 0, 0.12);
@@ -346,6 +351,7 @@
 
 /* Light gray theme */
 :root[data-mantine-color-scheme="light"][data-theme="lightgray"] {
+  --mantine-color-body: #d5d7da;
   --sidebar-background-color: #e2e4e6;
   --box-background: #ebedef;
   --box-background-glass: rgba(227, 228, 230, 0.92);
@@ -375,11 +381,23 @@ body {
   font-family: var(--font-family);
   font-size: var(--font-size-md);
   color: var(--color-text-primary);
+  background-color: var(--mantine-color-body, #1a1a1e);
   margin: 0;
   padding: 0;
   overflow: hidden;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+
+/* Disable focus outlines globally — desktop app uses clicks and hotkeys, not tab navigation */
+*:focus,
+*:focus-visible {
+  outline: none !important;
+}
+
+/* Prevent Mantine components from showing focus rings */
+:root {
+  --mantine-focus-ring: none;
 }
 
 .mantine-AppShell-navbar,
@@ -474,6 +492,8 @@ body {
   opacity: 0.4;
   cursor: default;
   pointer-events: none;
+  background-color: transparent;
+  border-color: transparent;
 }
 
 .textBtnCompact {
@@ -491,6 +511,26 @@ body {
   background-color: rgba(255, 71, 87, 0.1);
 }
 
+/* ── Mantine Switch overrides ─────────────────────────────────────────── */
+
+/* Mantine Switch overrides (v8 hashed classes) */
+/* .m_9307d992 = track, .m_926b4011 = hidden input, .m_93039a1d = thumb */
+.m_9307d992 {
+  background-color: rgba(128, 128, 128, 0.25) !important;
+  border: 1px solid rgba(128, 128, 128, 0.2) !important;
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.1);
+}
+
+.m_926b4011:checked + .m_9307d992 {
+  background-color: var(--color-primary, #3297FF) !important;
+  border-color: var(--color-primary, #3297FF) !important;
+}
+
+.m_93039a1d {
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
+  border: 1px solid rgba(128, 128, 128, 0.15) !important;
+}
+
 @keyframes indeterminate {
   0% { transform: translateX(-100%); }
   100% { transform: translateX(350%); }
@@ -505,29 +545,44 @@ body {
 /* Select contrast normalization — Mantine defaults don't respect our text tokens */
 
 .mantine-Select-input,
-.mantine-NativeSelect-input {
-  color: var(--select-text);
+.mantine-NativeSelect-input,
+.mantine-Combobox-input,
+.mantine-Input-input {
+  color: var(--color-text-primary) !important;
 }
 
 .mantine-Select-input::placeholder,
-.mantine-NativeSelect-input::placeholder {
+.mantine-NativeSelect-input::placeholder,
+.mantine-Combobox-input::placeholder {
   color: var(--select-placeholder);
 }
 
-.mantine-Select-option {
+.mantine-Select-option,
+.mantine-Combobox-option {
   color: var(--select-text);
 }
 
 .mantine-Select-option:hover,
-.mantine-Select-option[data-hovered] {
+.mantine-Select-option[data-hovered],
+.mantine-Combobox-option:hover,
+.mantine-Combobox-option[data-combobox-selected],
+.mantine-Combobox-option[data-combobox-active] {
   background-color: var(--select-option-hover);
 }
 
-.mantine-Select-option[data-selected] {
+.mantine-Select-option[data-selected],
+.mantine-Combobox-option[data-combobox-selected] {
   background-color: var(--select-option-selected);
   color: var(--select-text);
 }
 
 .mantine-Select-option[data-disabled] {
   color: var(--select-option-disabled);
+}
+
+/* Disable expensive backdrop-filter on non-essential panels during grid scroll.
+   The .grid-scrolling class is toggled on <html> by useCanvasViewport. */
+:root.grid-scrolling [data-scroll-blur-opt] {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
 }

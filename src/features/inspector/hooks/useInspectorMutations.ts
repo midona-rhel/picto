@@ -1,20 +1,17 @@
 import { useCallback } from 'react';
 import { api } from '#desktop/api';
-import { FileController } from '../../../shared/controllers/fileController';
-import { SelectionController } from '../../../shared/controllers/selectionController';
-import { FolderController } from '../../../shared/controllers/folderController';
-import { deepClone, registerUndoAction } from '../../../shared/controllers/undoRedoController';
-import { useCacheStore } from '../../../state/cacheStore';
+import { registerUndoAction } from '../../../shared/controllers/undoRedoController';
+import { useGridMetadataStore } from '../../../state/gridMetadataStore';
 import {
   getMetadata,
   invalidateMetadata,
   type SelectionQuerySpec,
 } from '#features/grid/data';
-import type { MasonryImageItem } from '#features/grid/types';
+import type { MediaItem } from '#features/grid/types';
 import type { InspectorFetchState } from './useInspectorFetch';
 
 export function useInspectorMutations(
-  selectedImages: MasonryImageItem[],
+  selectedImages: MediaItem[],
   selectionSummarySpec: SelectionQuerySpec | null,
   fetch: InspectorFetchState,
 ) {
@@ -30,71 +27,53 @@ export function useInspectorMutations(
       if (tags.length === 0) return;
       const tagsSnapshot = [...tags];
       if (selectionSummarySpec) {
-        const specSnapshot = deepClone(selectionSummarySpec);
-        await SelectionController.addTagsSelection(specSnapshot, tagsSnapshot);
+        const specSnapshot = structuredClone(selectionSummarySpec);
+        await api.selection.addTags(specSnapshot, tagsSnapshot);
         registerUndoAction({
           label: `Add ${tagsSnapshot.length} tag${tagsSnapshot.length === 1 ? '' : 's'}`,
           undo: async () => {
-            await SelectionController.removeTagsSelection(specSnapshot, tagsSnapshot);
+            await api.selection.removeTags(specSnapshot, tagsSnapshot);
             refreshVirtualSelectionSummary();
           },
           redo: async () => {
-            await SelectionController.addTagsSelection(specSnapshot, tagsSnapshot);
+            await api.selection.addTags(specSnapshot, tagsSnapshot);
             refreshVirtualSelectionSummary();
           },
         });
         refreshVirtualSelectionSummary();
       } else if (selectedCollection) {
-        const current = collectionSummary ?? await api.collections.getSummary(selectedCollection.id);
-        const merged = Array.from(new Set([...current.tags, ...tagsSnapshot]));
-        await api.collections.update({
-          id: selectedCollection.id,
-          name: current.name,
-          description: current.description,
-          tags: merged,
-        });
+        await api.collections.addTags(selectedCollection.id, tagsSnapshot);
         registerUndoAction({
           label: `Add ${tagsSnapshot.length} tag${tagsSnapshot.length === 1 ? '' : 's'}`,
           undo: async () => {
-            await api.collections.update({
-              id: selectedCollection.id,
-              name: current.name,
-              description: current.description,
-              tags: current.tags,
-            });
+            await api.collections.removeTags(selectedCollection.id, tagsSnapshot);
             refreshMetadata();
           },
           redo: async () => {
-            await api.collections.update({
-              id: selectedCollection.id,
-              name: current.name,
-              description: current.description,
-              tags: merged,
-            });
+            await api.collections.addTags(selectedCollection.id, tagsSnapshot);
             refreshMetadata();
           },
         });
-        setCollectionSummary({ ...current, tags: merged });
-        setFileTags(mapCollectionTags(merged));
+        refreshMetadata();
       } else {
         const hashes = selectedImages.map((img) => img.hash);
         if (hashes.length === 0) return;
-        await api.tags.addBatch(hashes, tagsSnapshot);
+        await api.tags.add(hashes, tagsSnapshot);
         registerUndoAction({
           label: `Add ${tagsSnapshot.length} tag${tagsSnapshot.length === 1 ? '' : 's'}`,
           undo: async () => {
-            await api.tags.removeBatch(hashes, tagsSnapshot);
+            await api.tags.remove(hashes, tagsSnapshot);
             refreshMetadata();
           },
           redo: async () => {
-            await api.tags.addBatch(hashes, tagsSnapshot);
+            await api.tags.add(hashes, tagsSnapshot);
             refreshMetadata();
           },
         });
         refreshMetadata();
       }
     },
-    [selectedImages, selectionSummarySpec, selectedCollection, collectionSummary, refreshMetadata, refreshVirtualSelectionSummary, mapCollectionTags, setCollectionSummary, setFileTags],
+    [selectedImages, selectionSummarySpec, selectedCollection, refreshMetadata, refreshVirtualSelectionSummary, mapCollectionTags, setFileTags],
   );
 
   const onRemoveTags = useCallback(
@@ -102,65 +81,46 @@ export function useInspectorMutations(
       if (tags.length === 0) return;
       const tagsSnapshot = [...tags];
       if (selectionSummarySpec) {
-        const specSnapshot = deepClone(selectionSummarySpec);
-        await SelectionController.removeTagsSelection(specSnapshot, tagsSnapshot);
+        const specSnapshot = structuredClone(selectionSummarySpec);
+        await api.selection.removeTags(specSnapshot, tagsSnapshot);
         registerUndoAction({
           label: `Remove ${tagsSnapshot.length} tag${tagsSnapshot.length === 1 ? '' : 's'}`,
           undo: async () => {
-            await SelectionController.addTagsSelection(specSnapshot, tagsSnapshot);
+            await api.selection.addTags(specSnapshot, tagsSnapshot);
             refreshVirtualSelectionSummary();
           },
           redo: async () => {
-            await SelectionController.removeTagsSelection(specSnapshot, tagsSnapshot);
+            await api.selection.removeTags(specSnapshot, tagsSnapshot);
             refreshVirtualSelectionSummary();
           },
         });
         refreshVirtualSelectionSummary();
       } else if (selectedCollection) {
-        const current = collectionSummary ?? await api.collections.getSummary(selectedCollection.id);
-        const removeSet = new Set(tagsSnapshot);
-        const nextTags = current.tags.filter((t) => !removeSet.has(t));
-        await api.collections.update({
-          id: selectedCollection.id,
-          name: current.name,
-          description: current.description,
-          tags: nextTags,
-        });
+        await api.collections.removeTags(selectedCollection.id, tagsSnapshot);
         registerUndoAction({
           label: `Remove ${tagsSnapshot.length} tag${tagsSnapshot.length === 1 ? '' : 's'}`,
           undo: async () => {
-            await api.collections.update({
-              id: selectedCollection.id,
-              name: current.name,
-              description: current.description,
-              tags: current.tags,
-            });
+            await api.collections.addTags(selectedCollection.id, tagsSnapshot);
             refreshMetadata();
           },
           redo: async () => {
-            await api.collections.update({
-              id: selectedCollection.id,
-              name: current.name,
-              description: current.description,
-              tags: nextTags,
-            });
+            await api.collections.removeTags(selectedCollection.id, tagsSnapshot);
             refreshMetadata();
           },
         });
-        setCollectionSummary({ ...current, tags: nextTags });
-        setFileTags(mapCollectionTags(nextTags));
+        refreshMetadata();
       } else {
         const hashes = selectedImages.map((img) => img.hash);
         if (hashes.length === 0) return;
-        await api.tags.removeBatch(hashes, tagsSnapshot);
+        await api.tags.remove(hashes, tagsSnapshot);
         registerUndoAction({
           label: `Remove ${tagsSnapshot.length} tag${tagsSnapshot.length === 1 ? '' : 's'}`,
           undo: async () => {
-            await api.tags.addBatch(hashes, tagsSnapshot);
+            await api.tags.add(hashes, tagsSnapshot);
             refreshMetadata();
           },
           redo: async () => {
-            await api.tags.removeBatch(hashes, tagsSnapshot);
+            await api.tags.remove(hashes, tagsSnapshot);
             refreshMetadata();
           },
         });
@@ -168,54 +128,38 @@ export function useInspectorMutations(
         setFileTags((prev) => prev.filter((t) => !tags.includes(t.raw_tag)));
       }
     },
-    [selectedImages, selectionSummarySpec, selectedCollection, collectionSummary, refreshMetadata, refreshVirtualSelectionSummary, mapCollectionTags, setCollectionSummary, setFileTags],
+    [selectedImages, selectionSummarySpec, selectedCollection, refreshMetadata, refreshVirtualSelectionSummary, mapCollectionTags, setFileTags],
   );
 
   const onUpdateRating = useCallback(
     async (rating: number) => {
       const normalizedRating = rating || null;
       if (selectionSummarySpec) {
-        await SelectionController.updateRatingSelection(selectionSummarySpec, normalizedRating);
+        await api.selection.updateRating(selectionSummarySpec, normalizedRating);
         refreshVirtualSelectionSummary();
-      } else if (selectedCollection) {
-        const current = collectionSummary ?? await api.collections.getSummary(selectedCollection.id);
-        const previousRating = current.rating ?? null;
-        await api.collections.setRating(selectedCollection.id, normalizedRating);
-        registerUndoAction({
-          label: 'Update collection rating',
-          undo: async () => {
-            await api.collections.setRating(selectedCollection.id, previousRating);
-            refreshMetadata();
-          },
-          redo: async () => {
-            await api.collections.setRating(selectedCollection.id, normalizedRating);
-            refreshMetadata();
-          },
-        });
-        setCollectionSummary({ ...current, rating: normalizedRating });
       } else {
         const hashes = selectedImages.map((img) => img.hash);
         if (hashes.length === 0) return;
         const previousRatings = await Promise.all(
           hashes.map(async (hash) => ({
             hash,
-            rating: (await getMetadata(hash)).file.rating ?? null,
+            rating: (await getMetadata(hash)).entity.rating ?? null,
           })),
         );
-        await Promise.all(hashes.map((hash) => FileController.updateRating(hash, rating)));
+        await Promise.all(hashes.map((hash) => api.files.updateRating(hash, rating)));
         registerUndoAction({
-          label: `Update rating (${hashes.length} image${hashes.length === 1 ? '' : 's'})`,
+          label: `Update rating (${hashes.length} item${hashes.length === 1 ? '' : 's'})`,
           undo: async () => {
             await Promise.all(
               previousRatings.map(({ hash, rating: previousRating }) =>
-                api.file.updateRating(hash, previousRating),
+                api.files.updateRating(hash, previousRating),
               ),
             );
             refreshMetadata();
           },
           redo: async () => {
             await Promise.all(
-              hashes.map((hash) => api.file.updateRating(hash, normalizedRating)),
+              hashes.map((hash) => api.files.updateRating(hash, normalizedRating)),
             );
             refreshMetadata();
           },
@@ -229,26 +173,8 @@ export function useInspectorMutations(
   const onUpdateSourceUrls = useCallback(
     async (urls: string[]) => {
       setSourceUrls(urls);
-      if (selectedCollection) {
-        const current = collectionSummary ?? await api.collections.getSummary(selectedCollection.id);
-        const previousUrls = [...(current.source_urls ?? [])];
-        await api.collections.setSourceUrls(selectedCollection.id, urls);
-        registerUndoAction({
-          label: 'Update collection source URLs',
-          undo: async () => {
-            await api.collections.setSourceUrls(selectedCollection.id, previousUrls);
-            refreshMetadata();
-          },
-          redo: async () => {
-            await api.collections.setSourceUrls(selectedCollection.id, urls);
-            refreshMetadata();
-          },
-        });
-        setCollectionSummary({ ...current, source_urls: [...urls] });
-        return;
-      }
       if (selectionSummarySpec) {
-        await SelectionController.setSourceUrlsSelection(selectionSummarySpec, urls);
+        await api.selection.setSourceUrls(selectionSummarySpec, urls);
         refreshVirtualSelectionSummary();
       } else {
         const hashes = selectedImages.map((img) => img.hash);
@@ -256,24 +182,24 @@ export function useInspectorMutations(
         const previousUrls = await Promise.all(
           hashes.map(async (hash) => ({
             hash,
-            urls: [...((await getMetadata(hash)).file.source_urls ?? [])],
+            urls: [...((await getMetadata(hash)).entity.source_urls ?? [])],
           })),
         );
         await Promise.all(hashes.map((hash) => {
           invalidateMetadata(hash);
-          return FileController.setSourceUrls(hash, urls);
+          return api.files.setSourceUrls(hash, urls);
         }));
         registerUndoAction({
-          label: `Update source URLs (${hashes.length} image${hashes.length === 1 ? '' : 's'})`,
+          label: `Update source URLs (${hashes.length} item${hashes.length === 1 ? '' : 's'})`,
           undo: async () => {
             await Promise.all(
-              previousUrls.map(({ hash, urls: prevUrls }) => api.file.setSourceUrls(hash, prevUrls)),
+              previousUrls.map(({ hash, urls: prevUrls }) => api.files.setSourceUrls(hash, prevUrls)),
             );
             refreshMetadata();
           },
           redo: async () => {
             await Promise.all(
-              hashes.map((hash) => api.file.setSourceUrls(hash, urls)),
+              hashes.map((hash) => api.files.setSourceUrls(hash, urls)),
             );
             refreshMetadata();
           },
@@ -289,25 +215,16 @@ export function useInspectorMutations(
       if (saveNotesTimer.current) clearTimeout(saveNotesTimer.current);
       saveNotesTimer.current = setTimeout(() => {
         if (selectedCollection) {
-          const current = collectionSummary;
-          api.collections.update({
-            id: selectedCollection.id,
-            name: current?.name ?? selectedCollection.name,
-            description: text,
-            tags: current?.tags,
-          }).then(() => {
-            if (current) setCollectionSummary({ ...current, description: text });
-          }).catch((e) => console.error('Failed to save collection description:', e));
           return;
         }
         const notesObj: Record<string, string> = {};
         if (text) notesObj.description = text;
         if (selectionSummarySpec) {
-          SelectionController.setNotesSelection(selectionSummarySpec, notesObj)
+          api.selection.setNotes(selectionSummarySpec, notesObj)
             .catch((e) => console.error('Failed to save notes:', e));
         } else {
           if (selectedImages.length === 0) return;
-          Promise.all(selectedImages.map((img) => api.file.setNotes(img.hash, notesObj)))
+          Promise.all(selectedImages.map((img) => api.files.setNotes(img.hash, notesObj)))
             .catch((e) => console.error('Failed to save notes:', e));
         }
       }, 500);
@@ -317,14 +234,26 @@ export function useInspectorMutations(
 
   const onAddToFolders = useCallback(
     async (folderIds: number[]) => {
-      const hashes = selectedImages.map((img) => img.hash);
       if (selectedCollection) return;
       const folderIdsSnapshot = [...folderIds];
+      if (folderIdsSnapshot.length === 0) return;
+
+      if (selectionSummarySpec) {
+        // Virtual Select All: let the backend resolve all hashes
+        await Promise.all(
+          folderIdsSnapshot.map((folderId) =>
+            api.folders.addFiles(folderId, [], selectionSummarySpec),
+          ),
+        );
+        return;
+      }
+
+      const hashes = selectedImages.map((img) => img.hash);
       const hashesSnapshot = [...hashes];
-      if (folderIdsSnapshot.length === 0 || hashesSnapshot.length === 0) return;
+      if (hashesSnapshot.length === 0) return;
       await Promise.all(
         folderIdsSnapshot.map((folderId) =>
-          FolderController.addFilesToFolderBatch(folderId, hashesSnapshot),
+          api.folders.addFiles(folderId, hashesSnapshot),
         ),
       );
       registerUndoAction({
@@ -332,26 +261,26 @@ export function useInspectorMutations(
         undo: async () => {
           await Promise.all(
             folderIdsSnapshot.map((folderId) =>
-              FolderController.removeFilesFromFolderBatch(folderId, hashesSnapshot),
+              api.folders.removeFiles(folderId, hashesSnapshot),
             ),
           );
           if (hashesSnapshot.length === 1) {
-            FolderController.getFileFolders(hashesSnapshot[0]).then(setFileFolders).catch(() => {});
+            api.folders.getFileFolders(hashesSnapshot[0]).then(setFileFolders).catch(() => {});
           }
         },
         redo: async () => {
           await Promise.all(
             folderIdsSnapshot.map((folderId) =>
-              FolderController.addFilesToFolderBatch(folderId, hashesSnapshot),
+              api.folders.addFiles(folderId, hashesSnapshot),
             ),
           );
           if (hashesSnapshot.length === 1) {
-            FolderController.getFileFolders(hashesSnapshot[0]).then(setFileFolders).catch(() => {});
+            api.folders.getFileFolders(hashesSnapshot[0]).then(setFileFolders).catch(() => {});
           }
         },
       });
       if (selectedImages.length === 1) {
-        FolderController.getFileFolders(selectedImages[0].hash)
+        api.folders.getFileFolders(selectedImages[0].hash)
           .then(setFileFolders)
           .catch(() => {});
       }
@@ -361,28 +290,41 @@ export function useInspectorMutations(
 
   const onRemoveFromFolder = useCallback(
     async (folderId: number) => {
-      if (selectedImages.length !== 1) return;
       if (selectedCollection) return;
-      const hash = selectedImages[0].hash;
-      await FolderController.removeFileFromFolder(folderId, hash);
-      registerUndoAction({
-        label: 'Remove from folder',
-        undo: async () => {
-          await FolderController.addFileToFolder(folderId, hash);
-          FolderController.getFileFolders(hash).then(setFileFolders).catch(() => {});
-        },
-        redo: async () => {
-          await FolderController.removeFileFromFolder(folderId, hash);
-          FolderController.getFileFolders(hash).then(setFileFolders).catch(() => {});
-        },
-      });
+      // Optimistic: update UI immediately
       setFileFolders((prev) => prev.filter((f) => f.folder_id !== folderId));
-      const activeScope = useCacheStore.getState().activeGridScope;
-      if (activeScope === `folder:${folderId}`) {
-        useCacheStore.getState().enqueueGridRemoval(hash);
+      try {
+        if (selectionSummarySpec) {
+          // Virtual Select All: let the backend resolve all hashes from the selection
+          await api.folders.removeFiles(folderId, [], selectionSummarySpec);
+        } else {
+          const hashes = selectedImages.filter((i) => !i.is_collection).map((i) => i.hash);
+          if (hashes.length === 0) return;
+          await api.folders.removeFiles(folderId, hashes);
+          registerUndoAction({
+            label: `Remove ${hashes.length} file${hashes.length === 1 ? '' : 's'} from folder`,
+            undo: async () => {
+              await api.folders.addFiles(folderId, hashes);
+              if (hashes.length === 1) {
+                api.folders.getFileFolders(hashes[0]).then(setFileFolders).catch(() => {});
+              }
+            },
+            redo: async () => {
+              await api.folders.removeFiles(folderId, hashes);
+              if (hashes.length === 1) {
+                api.folders.getFileFolders(hashes[0]).then(setFileFolders).catch(() => {});
+              }
+            },
+          });
+        }
+      } catch {
+        // Revert on failure — refetch folder list
+        if (selectedImages.length === 1) {
+          api.folders.getFileFolders(selectedImages[0].hash).then(setFileFolders).catch(() => {});
+        }
       }
     },
-    [selectedImages, selectedCollection, setFileFolders],
+    [selectedImages, selectedCollection, selectionSummarySpec, setFileFolders],
   );
 
   const onReanalyzeColors = useCallback(
@@ -390,15 +332,15 @@ export function useInspectorMutations(
       if (selectionSummarySpec || selectedCollection || selectedImages.length !== 1) return;
       const hash = selectedImages[0].hash;
 
-      await FileController.reanalyzeColors(hash);
+      await api.files.reanalyzeColors(hash);
       invalidateMetadata(hash);
 
       const metadata = await getMetadata(hash);
       setFileMetadata(metadata);
       setFileTags(metadata.tags);
-      setSourceUrls(metadata.file.source_urls ?? []);
-      setNotes(metadata.file.notes?.description ?? '');
-      useCacheStore.getState().invalidateHash(hash);
+      setSourceUrls(metadata.entity.source_urls ?? []);
+      setNotes(metadata.entity.notes?.description ?? '');
+      useGridMetadataStore.getState().invalidateHash(hash);
     },
     [selectedImages, selectedCollection, selectionSummarySpec, setFileMetadata, setFileTags, setSourceUrls, setNotes],
   );

@@ -4,15 +4,15 @@ import type { MutationReceipt, TaskUpsertedEvent, TaskRemovedEvent } from '../ge
 // Typed interfaces for all backend events. Single source of truth — all
 // controllers and stores should import event types from here.
 
-export interface FlowProgressEvent {
-  flow_id: string;
+export interface GroupProgressEvent {
+  group_id: string;
   total: number;
   done: number;
   remaining: number;
 }
 
-export interface FlowFinishedEvent {
-  flow_id: string;
+export interface GroupFinishedEvent {
+  group_id: string;
   status: 'succeeded' | 'failed';
   started_count?: number;
   error?: string;
@@ -50,10 +50,26 @@ export interface FileImportedEvent {
   has_audio: boolean;
   status: string;
   rating?: number | null;
-  view_count: number;
-  imported_at: string;
+  date_added: string;
   has_thumbnail: boolean;
-  blurhash?: string | null;
+}
+
+export interface ManualImportProgressEvent {
+  done: number;
+  total: number;
+  current_file: string;
+  imported: number;
+  skipped: number;
+  errors: number;
+}
+
+export interface MediaExportProgressEvent {
+  done: number;
+  total: number;
+  current_file: string;
+  exported: number;
+  skipped: number;
+  errors: number;
 }
 
 /**
@@ -61,13 +77,15 @@ export interface FileImportedEvent {
  * Keep in sync with `core/src/events.rs::event_names`.
  *
  * Authoritative events: `runtime/mutation_committed`, `runtime/task_upserted`,
- * `runtime/task_removed`. All domain state (subscriptions, flows, PTR) is
+ * `runtime/task_removed`. All domain state (subscriptions, groups) is
  * derived from task events via `applyTaskUpsert`.
  */
 export interface CoreRuntimeEventPayloadMap {
   'library-closed': null;
   'zoom-factor-changed': ZoomFactorChangedEvent;
   'file-imported': FileImportedEvent;
+  'manual-import-progress': ManualImportProgressEvent;
+  'media-export-progress': MediaExportProgressEvent;
   'open-detail-window': OpenDetailWindowEvent;
   'duplicate-auto-merge-finished': DuplicateAutoMergeFinishedEvent;
 
@@ -98,24 +116,13 @@ export interface LibrarySwitchedEvent {
   path?: string;
 }
 
-// ─── PTR Status ─────────────────────────────────────────────────────────────
-
-export interface PtrStats {
-  tag_count: number;
-  file_stub_count: number;
-  mapping_count: number;
-  sibling_count: number;
-  parent_count: number;
-  sync_position: number;
-}
-
 // ─── App Settings ───────────────────────────────────────────────────────────
 
 /** Backend uses `#[serde(rename_all = "camelCase")]` — JSON keys are camelCase */
 export interface AppSettings {
   gridTargetSize: number;
   gridViewMode: string;
-  propertiesPanelWidth: number;
+  inspectorWidth: number;
   colorScheme: string;
   windowX?: number | null;
   windowY?: number | null;
@@ -124,24 +131,67 @@ export interface AppSettings {
   windowMaximized: boolean;
   gridSortField: string;
   gridSortOrder: string;
-  ptrServerUrl?: string | null;
-  ptrAccessKey?: string | null;
-  ptrEnabled: boolean;
-  ptrAutoSync: boolean;
-  ptrSyncSchedule: string;
-  ptrLastSyncTime?: string | null;
-  ptrDataPath?: string | null;
   zoomFactor?: number | null;
   duplicateDetectSimilarityPct: number;
   duplicateReviewSimilarityPct: number;
   duplicateAutoMergeSimilarityPct: number;
+  duplicateAutoMergeRequireMatchingDimensions: boolean;
   duplicateAutoMergeSubscriptionsOnly: boolean;
   duplicateAutoMergeEnabled: boolean;
   subAbortThreshold: number;
   subInboxPauseLimit: number;
   subRateLimitSecs: number;
   subBatchSize: number;
+  watchFolderDefaultStatus: 'inbox' | 'active';
+  aiTaggerWd14Enabled: boolean;
+  aiTaggerE621Enabled: boolean;
+  aiTaggerAutoOnImport: boolean;
+  aiThresholdGeneral: number;
+  aiThresholdCharacter: number;
+  aiThresholdCopyright: number;
+  aiThresholdArtist: number;
+  aiThresholdSpecies: number;
+  aiThresholdRating: number;
   [key: string]: unknown;
+}
+
+// ─── AI Tagger ──────────────────────────────────────────────────────────────
+
+export interface AiTaggerModelInfo {
+  slug: string;
+  label: string;
+  onnx_url: string;
+  labels_url: string;
+  input_size: number;
+}
+
+export interface AiTaggerModelStatus {
+  slug: string;
+  label: string;
+  enabled: boolean;
+  downloaded: boolean;
+}
+
+export interface AiTaggerStatus {
+  models: AiTaggerModelStatus[];
+  gpuBackend: string | null;
+  availableModels: AiTaggerModelInfo[];
+}
+
+export interface AiTagPrediction {
+  tag: string;
+  namespace: string;
+  confidence: number;
+}
+
+export interface AiFilePrediction {
+  hash: string;
+  tags: AiTagPrediction[];
+  error?: string;
+}
+
+export interface AiTagPredictOutput {
+  predictions: AiFilePrediction[];
 }
 
 // ─── Storage Stats ──────────────────────────────────────────────────────────
@@ -163,51 +213,11 @@ export interface DuplicateInfo {
   status: string;
 }
 
-// ─── PTR Sync Perf Breakdown ────────────────────────────────────────────────
-
-export interface PtrSyncRunPerf {
-  started_at: string;
-  finished_at?: string | null;
-  elapsed_ms?: number | null;
-  updates_processed: number;
-  tags_added: number;
-  siblings_added: number;
-  parents_added: number;
-}
-
-export interface PtrSyncChunkPerf {
-  ts: string;
-  index_start: number;
-  index_end: number;
-  defs_insert_ms: number;
-  resolve_ids_ms: number;
-  content_write_ms: number;
-  mapping_add_apply_ms: number;
-  sibling_add_apply_ms: number;
-  parent_add_apply_ms: number;
-  mapping_del_apply_ms: number;
-  sibling_del_apply_ms: number;
-  parent_del_apply_ms: number;
-  mapping_adds: number;
-  sibling_adds: number;
-  parent_adds: number;
-  mapping_dels: number;
-  sibling_dels: number;
-  parent_dels: number;
-  total_batches: number;
-}
-
-export interface PtrSyncPerfBreakdown {
-  latest_run?: PtrSyncRunPerf | null;
-  latest_chunk?: PtrSyncChunkPerf | null;
-}
-
 // ─── Collections ────────────────────────────────────────────────────────────
 
 export interface CollectionInfo {
   id: number;
   name: string;
-  description: string;
   tags: string[];
   image_count: number;
   created_at: string | null;
@@ -223,13 +233,16 @@ export interface CollectionMimeCount {
 export interface CollectionSummary {
   id: number;
   name: string;
-  description: string;
   tags: string[];
   image_count: number;
   total_size_bytes: number;
   mime_breakdown: CollectionMimeCount[];
   source_urls: string[];
   rating: number | null;
+  date_created: string | null;
+  date_modified: string | null;
+  notes: string | null;
+  date_added: string | null;
 }
 
 // ─── Companion ──────────────────────────────────────────────────────────────

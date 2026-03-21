@@ -4,7 +4,7 @@ import { useContextMenu } from '../../../shared/components/ContextMenu';
 import type { MasonryImageItem } from '../shared';
 import type { SmartFolderPredicate } from '../../../features/smart-folders/components/types';
 import type { GridRuntimeAction, GridRuntimeState, GridViewMode } from '../runtime';
-import type { LayoutItem } from '../VirtualGrid';
+import type { LayoutItem } from '../gridLayout';
 import { buildGridImageContextMenu } from '../../../shared/components/context-actions/imageActions';
 
 interface UseGridContextMenuArgs {
@@ -34,16 +34,17 @@ interface UseGridContextMenuArgs {
   handleRemoveFromFolder: () => void;
   handleRemoveFromCollection: () => void;
   handleInboxAction: (hash: string, status: 'active' | 'trash') => void;
+  handleInboxSelectionAction: (status: 'active' | 'trash') => void;
   handleCopyTags: () => void;
   handlePasteTags: () => void;
   hasCopiedTags: boolean;
+  handleOpenDetail: (hash: string) => void;
   collectionEntityId?: number | null;
   navigateToCollection: (collection: { id: number; name: string }) => void;
   setRenameValue: React.Dispatch<React.SetStateAction<string>>;
   setRenamingHash: React.Dispatch<React.SetStateAction<string | null>>;
   renameCancelledRef: React.MutableRefObject<boolean>;
   setBatchRenameOpen: React.Dispatch<React.SetStateAction<boolean>>;
-  requestGridReload: () => void;
 }
 
 export function useGridContextMenu({
@@ -73,16 +74,17 @@ export function useGridContextMenu({
   handleRemoveFromFolder,
   handleRemoveFromCollection,
   handleInboxAction,
+  handleInboxSelectionAction,
   handleCopyTags,
   handlePasteTags,
   hasCopiedTags,
+  handleOpenDetail,
   collectionEntityId,
   navigateToCollection,
   setRenameValue,
   setRenamingHash,
   renameCancelledRef,
   setBatchRenameOpen,
-  requestGridReload,
 }: UseGridContextMenuArgs) {
   return useCallback((e: React.MouseEvent) => {
     const contextPoint = { x: e.clientX, y: e.clientY };
@@ -120,7 +122,7 @@ export function useGridContextMenu({
     // After right-click hit-test, compute selection state accounting for the
     // just-applied selection (state updates are async, so selectedHashes is stale).
     const wasAlreadySelected = !!(rightClickedHash && effectiveSelectedHashes.has(rightClickedHash));
-    const effectiveSize = rightClickedHash && !wasAlreadySelected ? 1 : state.selectedHashes.size;
+    const effectiveSize = rightClickedHash && !wasAlreadySelected ? 1 : effectiveSelectedHashes.size;
     const effectiveVirtual = rightClickedHash && !wasAlreadySelected ? null : state.virtualAllSelection;
     const hasSingleSelection = !effectiveVirtual && effectiveSize === 1;
     const hasSelection = !!effectiveVirtual || effectiveSize > 0 || !!rightClickedHash;
@@ -156,16 +158,17 @@ export function useGridContextMenu({
       handleRemoveFromFolder,
       handleRemoveFromCollection,
       handleInboxAction,
+      handleInboxSelectionAction,
       handleCopyTags,
       handlePasteTags,
       hasCopiedTags,
+      handleOpenDetail,
       collectionEntityId,
       navigateToCollection,
       setRenameValue,
       setRenamingHash,
       renameCancelledRef,
       setBatchRenameOpen,
-      requestGridReload,
       rightClickedHash,
       wasAlreadySelected,
       hasSelection,
@@ -195,17 +198,18 @@ export function useGridContextMenu({
     handleRestoreSelected,
     handleRemoveFromFolder,
     handleInboxAction,
+    handleInboxSelectionAction,
     statusFilter,
     state.images,
     contextMenu,
     activateVirtualSelectAll,
     handleCopyTags,
     handlePasteTags,
+    handleOpenDetail,
     folderId,
     getCanvasOffsetTop,
     dispatch,
     navigateToCollection,
-    requestGridReload,
     hasCopiedTags,
     scrollRef,
     canvasLayoutRef,

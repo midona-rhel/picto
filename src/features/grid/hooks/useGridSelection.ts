@@ -1,27 +1,41 @@
 import { useCallback, useEffect, useRef } from 'react';
 
-import { SelectionController } from '../../../shared/controllers/selectionController';
 import type { SelectionQuerySpec } from '../metadataPrefetch';
-import { pinMetadata, unpinMetadata } from '../metadataPrefetch';
+import {
+  buildGridFilterSpec,
+  buildGridScopeSpec,
+  buildGridSortSpec,
+  type GridQueryInput,
+} from '../gridQuery';
+import { getOrStartSelectionSummary, pinMetadata, unpinMetadata } from '../metadataPrefetch';
 import { selectedImagesPreview as selectImagesPreview, virtualSelectionSpec as selectVirtualSpec } from '../runtime';
 import type { GridRuntimeAction, GridRuntimeState } from '../runtime';
 import type { MasonryImageItem } from '../shared';
 
-export interface VirtualSelectionScopeInput {
-  searchTags?: string[];
-  excludedSearchTags?: string[];
-  tagMatchMode?: 'all' | 'any' | 'exact' | null;
-  smartFolderPredicate?: unknown;
-  smartFolderSortField?: string;
-  smartFolderSortOrder?: string;
-  sortField?: string;
-  sortOrder?: string;
-  statusFilter?: string | null;
-  folderId?: number | null;
-  filterFolderIds?: number[] | null;
-  excludedFilterFolderIds?: number[] | null;
-  folderMatchMode?: 'all' | 'any' | 'exact' | null;
-}
+export type VirtualSelectionScopeInput = Partial<Pick<
+  GridQueryInput,
+  | 'searchTags'
+  | 'excludedSearchTags'
+  | 'tagMatchMode'
+  | 'smartFolderPredicate'
+  | 'smartFolderSortField'
+  | 'smartFolderSortOrder'
+  | 'sortField'
+  | 'sortOrder'
+  | 'statusFilter'
+  | 'collectionEntityId'
+  | 'folderId'
+  | 'filterFolderIds'
+  | 'excludedFilterFolderIds'
+  | 'folderMatchMode'
+  | 'randomSeed'
+>> & {
+  ratingMin?: number | null;
+  mimePrefixes?: string[] | null;
+  colorHex?: string | null;
+  colorAccuracy?: number | null;
+  searchText?: string | null;
+};
 
 export interface UseGridSelectionArgs {
   state: GridRuntimeState;
@@ -39,56 +53,20 @@ export interface UseGridSelectionResult {
 export function buildVirtualSelectAllBaseSpec(
   scope: VirtualSelectionScopeInput,
 ): Omit<SelectionQuerySpec, 'excluded_hashes'> {
-  const {
-    searchTags,
-    excludedSearchTags,
-    tagMatchMode,
-    smartFolderPredicate,
-    smartFolderSortField,
-    smartFolderSortOrder,
-    sortField,
-    sortOrder,
-    statusFilter,
-    folderId,
-    filterFolderIds,
-    excludedFilterFolderIds,
-    folderMatchMode,
-  } = scope;
-
   return {
     mode: 'all_results',
-    search_tags: searchTags && searchTags.length > 0 ? [...searchTags] : null,
-    search_excluded_tags:
-      excludedSearchTags && excludedSearchTags.length > 0 ? [...excludedSearchTags] : null,
-    tag_match_mode: tagMatchMode ?? null,
-    smart_folder_predicate: (smartFolderPredicate as SelectionQuerySpec['smart_folder_predicate']) ?? null,
-    smart_folder_sort_field: smartFolderSortField ?? null,
-    smart_folder_sort_order: smartFolderSortOrder ?? null,
-    sort_field: sortField ?? null,
-    sort_order: sortOrder ?? null,
+    scope: buildGridScopeSpec(scope),
+    filters: buildGridFilterSpec(scope),
+    sort: buildGridSortSpec(scope),
     included_hashes: null,
     hashes: null,
-    status: statusFilter ?? null,
-    folder_ids:
-      folderId != null
-        ? [folderId]
-        : filterFolderIds && filterFolderIds.length > 0
-          ? filterFolderIds
-          : null,
-    excluded_folder_ids:
-      folderId != null
-        ? null
-        : excludedFilterFolderIds && excludedFilterFolderIds.length > 0
-          ? excludedFilterFolderIds
-          : null,
-    folder_match_mode: folderId != null ? null : folderMatchMode ?? null,
   };
 }
 
 export function useGridSelection({
   state,
   dispatch,
-  selectedScopeCount = null,
+  selectedScopeCount: _selectedScopeCount = null,
   onSelectedImagesChange,
   onSelectionSummarySpecChange,
   scope,
@@ -120,15 +98,9 @@ export function useGridSelection({
       }
       return;
     }
-    if (
-      selectedScopeCount != null &&
-      state.virtualAllSelectedCount !== selectedScopeCount
-    ) {
-      dispatch({ type: 'SET_VIRTUAL_ALL_COUNT', count: selectedScopeCount });
-    }
     const spec = selectVirtualSpec(state);
     if (!spec) return;
-    void SelectionController.getOrStartSummary(spec)
+    void getOrStartSelectionSummary(spec)
       .then((summary) => {
         if (!cancelled && state.virtualAllSelectedCount !== summary.selected_count) {
           dispatch({ type: 'SET_VIRTUAL_ALL_COUNT', count: summary.selected_count });
@@ -145,7 +117,6 @@ export function useGridSelection({
   }, [
     state.virtualAllSelection,
     state.virtualAllSelectedCount,
-    selectedScopeCount,
     dispatch,
   ]);
 

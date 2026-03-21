@@ -1,10 +1,9 @@
 import { createContext, useContext, type ReactNode } from 'react';
 import type { AppSettings } from '../../../state/settingsStore';
 import type { SmartFolderPredicate } from '../../smart-folders/components/types';
-import type { GridViewMode, DetailViewControls, DetailViewState } from '#features/grid/components';
-import type { MasonryImageItem, SelectionQuerySpec } from '#features/grid/types';
-import type { FlowResultEntry } from '#features/subscriptions/components';
-
+import type { GridViewMode, MediaViewControls, MediaViewState } from '#features/grid/components';
+import type { MediaItem, SelectionQuerySpec } from '#features/grid/types';
+import type { ViewerHostController } from '#features/viewer/hooks/useViewerHost';
 type MainViewNavigationState = {
   currentView: string;
   activeSmartFolderPredicate?: SmartFolderPredicate;
@@ -30,10 +29,11 @@ type MainViewGridState = {
   folderMatchMode: 'all' | 'any' | 'exact';
   ratingFilter: number | null;
   mimePrefixes: string[] | null;
+  collectionsOnly: boolean;
   colorHex: string | null;
   colorAccuracy: number;
   filterRefreshTrigger: number;
-  selectedScopeCount: number | null;
+  externalFreeze: boolean;
 };
 
 type MainViewGridActions = {
@@ -45,25 +45,25 @@ type MainViewGridActions = {
 };
 
 type MainViewSelectionState = {
-  onSelectedImagesChange: (images: MasonryImageItem[]) => void;
+  onSelectedImagesChange: (images: MediaItem[]) => void;
   onSelectionSummarySpecChange: (spec: SelectionQuerySpec | null) => void;
-  onDetailViewStateChange: (state: DetailViewState | null, controls: DetailViewControls | null) => void;
+  onMediaViewStateChange: (state: MediaViewState | null, controls: MediaViewControls | null) => void;
 };
 
-type MainViewFlowsState = {
-  activeFlowId?: string;
-  flowLastResults: Record<number, FlowResultEntry>;
-  setFlowLastResults: (next: Record<number, FlowResultEntry>) => void;
-  flowRefreshToken?: number;
-  onOpenCreateFlowModal: () => void;
+type MainViewSubscriptionsState = {
+  subscriptionRefreshToken?: number;
+  onOpenCreateSubscriptionGroupModal: () => void;
 };
+
+type MainViewViewerState = ViewerHostController;
 
 export type MainViewModel = {
   navigation: MainViewNavigationState;
   grid: MainViewGridState;
   gridActions: MainViewGridActions;
   selection: MainViewSelectionState;
-  flows: MainViewFlowsState;
+  subscriptions: MainViewSubscriptionsState;
+  viewer: MainViewViewerState;
 };
 
 const MainViewModelContext = createContext<MainViewModel | null>(null);
@@ -101,6 +101,10 @@ export function useMainViewSelectionState(): MainViewSelectionState {
   return useMainViewModel().selection;
 }
 
-export function useMainViewFlowsState(): MainViewFlowsState {
-  return useMainViewModel().flows;
+export function useMainViewSubscriptionsState(): MainViewSubscriptionsState {
+  return useMainViewModel().subscriptions;
+}
+
+export function useMainViewViewerState(): MainViewViewerState {
+  return useMainViewModel().viewer;
 }

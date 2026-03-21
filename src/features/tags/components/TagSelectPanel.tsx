@@ -740,8 +740,8 @@ function TagSelectPanelInner({
             )}
           </div>
       </div>
-      {/* Footer */}
-      <div className={st.footer}>
+      {/* Footer (also draggable) */}
+      <div className={st.footer} onMouseDown={onHeaderMouseDown}>
         <div className={st.footerLeft}>
           {isFilterMode ? (
             <>

@@ -1,33 +1,33 @@
 /**
- * useGridFeatureState — search tags/text, filter bar, flow modal, folder sort
+ * useGridFeatureState — search tags/text, filter bar, subscription modal, folder sort
  * actions, smart-folder refresh, color debounce, and active scope count.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { api } from '#desktop/api';
-import { useFilterStore, mimeFilterToPrefixes, type FilterLogicMode } from '../../../state/filterStore';
-import { FolderController } from '../../../shared/controllers/folderController';
+import { useFilterStore, mimeFilterToResult, type FilterLogicMode } from '../../../state/filterStore';
+import { useDomainStore } from '../../../state/domainStore';
 import type { SmartFolder } from '#features/smart-folders/types';
 import type { TagFilterLogicMode } from '#features/tags/types';
-import type { MasonryImageItem } from '#features/grid/types';
-import type { FlowResultEntry } from '#features/subscriptions/components';
-
+import type { MediaItem } from '#features/grid/types';
+import { deriveActiveGridScopeCount } from '../scopeModel';
 export interface GridFeatureParams {
   currentView: string;
   isDetailMode: boolean;
-  activeFolder: { folder_id: number } | null;
+  activeFolderId: number | null;
+  activeCollectionId: number | null;
   activeSmartFolder: SmartFolder | null;
-  setActiveSmartFolder: (sf: SmartFolder) => void;
   filterTags: string[] | null;
   allImagesCount: number | null;
   activeStatusFilter: string | null;
   inboxCount: number | null;
   uncategorizedCount: number | null;
+  untaggedCount: number | null;
   trashCount: number | null;
   smartFolderCounts: Record<string, number>;
   folderNodes: Array<{ id: string; count?: number | null }>;
-  selectedImages: MasonryImageItem[];
+  selectedImages: MediaItem[];
 }
 
 export interface GridFeatureState {
@@ -35,10 +35,8 @@ export interface GridFeatureState {
   setSearchTags: (tags: string[]) => void;
   searchText: string;
   setSearchText: (text: string) => void;
-  flowLastResults: Record<number, FlowResultEntry>;
-  setFlowLastResults: React.Dispatch<React.SetStateAction<Record<number, FlowResultEntry>>>;
-  createFlowModalOpen: boolean;
-  setCreateFlowModalOpen: (v: boolean) => void;
+  createSubscriptionGroupModalOpen: boolean;
+  setCreateSubscriptionGroupModalOpen: (v: boolean) => void;
   effectiveSearchTags: string[];
   smartFolderRefresh: number;
   handleSmartFolderUpdated: () => Promise<void>;
@@ -50,6 +48,7 @@ export interface GridFeatureState {
   ratingFilter: number | null;
   mimeFilter: ReturnType<typeof useFilterStore.getState>['mimeFilter'];
   mimePrefixes: string[] | null;
+  collectionsOnly: boolean;
   showFilterBar: boolean;
   filterFolderIds: number[] | null;
   excludedFilterFolderIds: number[] | null;
@@ -68,14 +67,15 @@ export interface GridFeatureState {
 export function useGridFeatureState({
   currentView,
   isDetailMode,
-  activeFolder,
+  activeFolderId,
+  activeCollectionId,
   activeSmartFolder,
-  setActiveSmartFolder,
   filterTags,
   allImagesCount,
   activeStatusFilter,
   inboxCount,
   uncategorizedCount,
+  untaggedCount,
   trashCount,
   smartFolderCounts,
   folderNodes,
@@ -86,8 +86,7 @@ export function useGridFeatureState({
   const [excludedSearchTags, setExcludedSearchTags] = useState<string[]>([]);
   const [tagLogicMode, setTagLogicMode] = useState<TagFilterLogicMode>('OR');
   const [searchText, setSearchText] = useState('');
-  const [flowLastResults, setFlowLastResults] = useState<Record<number, FlowResultEntry>>({});
-  const [createFlowModalOpen, setCreateFlowModalOpen] = useState(false);
+  const [createSubscriptionGroupModalOpen, setCreateSubscriptionGroupModalOpen] = useState(false);
 
   const effectiveSearchTags = useMemo(() => {
     if (!filterTags || filterTags.length === 0) return searchTags;
@@ -101,40 +100,36 @@ export function useGridFeatureState({
   const handleSmartFolderUpdated = useCallback(async () => {
     if (!activeSmartFolder?.id) return;
     try {
-      const folders = await api.smartFolders.list();
-      const updated = folders.find((f) => f.id === activeSmartFolder.id);
-      if (updated) {
-        setActiveSmartFolder(updated);
-        setSmartFolderRefresh((c) => c + 1);
-      }
+      useDomainStore.getState().invalidate();
+      setSmartFolderRefresh((c) => c + 1);
     } catch (e) {
       console.error('Failed to refresh active smart folder:', e);
     }
-  }, [activeSmartFolder?.id, setActiveSmartFolder]);
+  }, [activeSmartFolder?.id]);
 
   // --- Folder sort actions ---
   const handleSortFolderAction = useCallback((sortBy: string, direction: string) => {
-    const fid = activeFolder?.folder_id;
+    const fid = activeFolderId;
     if (!fid) return;
-    FolderController.sortFolderItems(fid, sortBy, direction)
+    api.folders.sortItems(fid, sortBy, direction)
       .catch((e) => console.error('Failed to sort folder items:', e));
-  }, [activeFolder?.folder_id]);
+  }, [activeFolderId]);
 
   const handleReverseFolderAction = useCallback(() => {
-    const fid = activeFolder?.folder_id;
+    const fid = activeFolderId;
     if (!fid) return;
-    FolderController.reverseFolderItems(fid)
+    api.folders.reverseItems(fid)
       .catch((e) => console.error('Failed to reverse folder items:', e));
-  }, [activeFolder?.folder_id]);
+  }, [activeFolderId]);
 
   const handleReverseSelectedAction = useCallback(() => {
-    const fid = activeFolder?.folder_id;
+    const fid = activeFolderId;
     if (!fid) return;
     const hashes = selectedImages.map((img) => img.hash);
     if (hashes.length === 0) return;
-    FolderController.reverseFolderItems(fid, hashes)
+    api.folders.reverseItems(fid, hashes)
       .catch((e) => console.error('Failed to reverse selected folder items:', e));
-  }, [activeFolder?.folder_id, selectedImages]);
+  }, [activeFolderId, selectedImages]);
 
   // --- Filter bar ---
   const filterBarOpen = useFilterStore((s) => s.filterBarOpen);
@@ -149,7 +144,9 @@ export function useGridFeatureState({
   const excludedFilterFolderIds = folderFilter.excludes.size > 0 ? [...folderFilter.excludes.keys()] : null;
   const isImagesView = currentView === 'images';
   const showFilterBar = filterBarOpen && isImagesView && !isDetailMode;
-  const mimePrefixes = mimeFilterToPrefixes(mimeFilter);
+  const mimeResult = mimeFilterToResult(mimeFilter);
+  const mimePrefixes = mimeResult.prefixes;
+  const collectionsOnly = mimeResult.collectionsOnly;
 
   const toBackendMatchMode = useCallback((mode: FilterLogicMode | TagFilterLogicMode): 'all' | 'any' | 'exact' => {
     if (mode === 'AND') return 'all';
@@ -189,29 +186,31 @@ export function useGridFeatureState({
   }, [showFilterBar]);
 
   // --- Scope count ---
-  const activeFolderCount = activeFolder
-    ? (folderNodes.find((n) => n.id === `folder:${activeFolder.folder_id}`)?.count ?? null)
+  const activeFolderCount = activeFolderId != null
+    ? (folderNodes.find((n) => n.id === `folder:${activeFolderId}`)?.count ?? null)
     : null;
-  const statusFilterCount =
-    activeStatusFilter === 'inbox' ? inboxCount
-    : activeStatusFilter === 'uncategorized' ? uncategorizedCount
-    : activeStatusFilter === 'trash' ? trashCount
-    : null;
-  const activeGridScopeCount = activeFolder
-    ? activeFolderCount
-    : activeSmartFolder?.id
-      ? (smartFolderCounts[activeSmartFolder.id] ?? null)
-      : statusFilterCount ?? allImagesCount;
+  const activeGridScopeCount = deriveActiveGridScopeCount({
+    activeFolderId,
+    activeCollectionId,
+    activeSmartFolderId: activeSmartFolder?.id ?? null,
+    activeStatusFilter,
+    activeFolderCount,
+    allImagesCount,
+    inboxCount,
+    uncategorizedCount,
+    untaggedCount,
+    trashCount,
+    smartFolderCounts,
+  });
 
   return {
     searchTags, setSearchTags,
     searchText, setSearchText,
-    flowLastResults, setFlowLastResults,
-    createFlowModalOpen, setCreateFlowModalOpen,
+    createSubscriptionGroupModalOpen, setCreateSubscriptionGroupModalOpen,
     effectiveSearchTags,
     smartFolderRefresh, handleSmartFolderUpdated,
     handleSortFolderAction, handleReverseFolderAction, handleReverseSelectedAction,
-    filterBarOpen, ratingFilter, mimeFilter, mimePrefixes, showFilterBar,
+    filterBarOpen, ratingFilter, mimeFilter, mimePrefixes, collectionsOnly, showFilterBar,
     filterFolderIds, excludedFilterFolderIds, folderMatchMode, filterSearchText,
     excludedSearchTags, setExcludedSearchTags, tagLogicMode, setTagLogicMode, tagMatchMode,
     debouncedColorHex, debouncedColorAccuracy,

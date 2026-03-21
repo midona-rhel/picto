@@ -1,24 +1,28 @@
 .root {
   position: relative;
   flex-shrink: 0;
-  padding: 0 8px;
+  padding: 0 12px;
   -webkit-app-region: no-drag;
 }
 
 .trigger {
+  appearance: none;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+  outline: none;
   display: flex;
   align-items: center;
   gap: 6px;
   width: 100%;
   height: 32px;
   padding: 0 8px;
-  border: none;
   border-radius: 6px;
-  background: transparent;
   color: var(--color-text-primary);
   font-size: 13px;
   font-weight: 600;
-  cursor: pointer;
   user-select: none;
   transition: background 100ms ease;
 }
@@ -38,30 +42,23 @@
 }
 
 .triggerName {
+  composes: truncate from '../../../shared/styles/textClamp.module.css';
   flex: 1;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
   text-align: left;
 }
 
 .triggerChevron {
   flex-shrink: 0;
   opacity: 0.5;
-  transition: transform 150ms ease;
-}
-
-.triggerChevronOpen {
-  transform: rotate(180deg);
 }
 
 .dropdown {
   position: absolute;
   z-index: 100;
   top: calc(100% + 2px);
-  left: 8px;
-  right: 8px;
+  left: 12px;
+  right: 12px;
   min-width: 180px;
   max-height: 320px;
   overflow-y: auto;
@@ -75,18 +72,22 @@
 }
 
 .dropdownItem {
+  appearance: none;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+  outline: none;
   display: flex;
   align-items: center;
   gap: 6px;
   width: 100%;
   height: 28px;
   padding: 0 8px;
-  border: none;
   border-radius: 5px;
-  background: transparent;
   color: var(--color-text-primary);
   font-size: 12px;
-  cursor: pointer;
   user-select: none;
   transition: background 80ms ease;
   text-align: left;
@@ -107,11 +108,9 @@
 }
 
 .dropdownItemLabel {
+  composes: truncate from '../../../shared/styles/textClamp.module.css';
   flex: 1;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .dropdownItemCheck {
@@ -129,7 +128,7 @@
 }
 
 .dropdownSeparator {
-  height: 1px;
+  composes: separator from '../../../shared/styles/separator.module.css';
   margin: 4px 8px;
-  background: var(--color-border-secondary);
 }
+

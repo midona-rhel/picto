@@ -34,7 +34,9 @@ export function onNativeEvent(handler) {
   if (typeof binding.registerEventCallback !== 'function') {
     throw new Error('Native addon missing registerEventCallback');
   }
-  return binding.registerEventCallback((name, payloadJson) => {
+  // napi-rs ThreadsafeFunction uses error-first callback convention:
+  // (err, ...values) — first arg is null on success, then the actual values.
+  return binding.registerEventCallback((_err, name, payloadJson) => {
     let payload = null;
     try {
       payload = payloadJson ? JSON.parse(payloadJson) : null;

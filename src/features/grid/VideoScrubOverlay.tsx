@@ -9,7 +9,7 @@
  * for selection/context menu. Mouse tracking uses a window-level listener.
  */
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { formatDuration } from '../../shared/lib/formatters';
 import styles from './VideoScrubOverlay.module.css';
@@ -39,17 +39,25 @@ export function VideoScrubOverlay({ tileRect, src, duration, onDismiss }: VideoS
   tileRectRef.current = tileRect;
   const onDismissRef = useRef(onDismiss);
   onDismissRef.current = onDismiss;
+  const dismissedRef = useRef(false);
+
+  const dismiss = useCallback(() => {
+    if (dismissedRef.current) return;
+    dismissedRef.current = true;
+    onDismissRef.current();
+  }, []);
 
   // Track mouse via window listener — overlay is pointer-events: none
   useEffect(() => {
     const onMove = (e: MouseEvent) => {
       const r = tileRectRef.current;
-      // Dismiss if mouse leaves tile rect
+      // Dismiss if mouse leaves tile rect (with a small tolerance)
+      const tolerance = 2;
       if (
-        e.clientX < r.left || e.clientX > r.left + r.width ||
-        e.clientY < r.top || e.clientY > r.top + r.height
+        e.clientX < r.left - tolerance || e.clientX > r.left + r.width + tolerance ||
+        e.clientY < r.top - tolerance || e.clientY > r.top + r.height + tolerance
       ) {
-        onDismissRef.current();
+        dismiss();
         return;
       }
 
@@ -69,12 +77,29 @@ export function VideoScrubOverlay({ tileRect, src, duration, onDismiss }: VideoS
       }
     };
 
+    // Dismiss on click or any keydown (Enter/Space/Escape etc.)
+    const onMouseDown = () => dismiss();
+    const onKeyDown = () => {
+      dismiss();
+    };
+
     window.addEventListener('mousemove', onMove);
+    window.addEventListener('mousedown', onMouseDown);
+    window.addEventListener('keydown', onKeyDown, true); // capture phase for immediate dismiss
     return () => {
       window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mousedown', onMouseDown);
+      window.removeEventListener('keydown', onKeyDown, true);
       if (rafRef.current) cancelAnimationFrame(rafRef.current);
     };
-  }, [duration]);
+  }, [duration, dismiss]);
+
+  // Pad current time to same length as total duration (e.g. "0:03" for a "1:24" video)
+  const totalTime = formatDuration(duration * 1000);
+  const rawCurrentTime = formatDuration(fraction * duration * 1000);
+  const currentTime = rawCurrentTime.length < totalTime.length
+    ? rawCurrentTime.padStart(totalTime.length, '0')
+    : rawCurrentTime;
 
   return createPortal(
     <div
@@ -92,11 +117,10 @@ export function VideoScrubOverlay({ tileRect, src, duration, onDismiss }: VideoS
         muted
         preload="auto"
         className={styles.video}
-        style={{ objectFit: 'contain' }}
       />
-      {/* Current time badge — top right, replaces the duration badge */}
+      {/* Time badge — shows current / total */}
       <span className={styles.timeBadge}>
-        {formatDuration(fraction * duration * 1000)}
+        {currentTime}
       </span>
       {/* Progress bar */}
       <div className={styles.progressTrack}>

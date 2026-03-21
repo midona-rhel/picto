@@ -1,0 +1,493 @@
+/* Inspector panel */
+
+.panel {
+  height: 100%;
+  background: var(--inspector-background);
+  flex-shrink: 0;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+}
+
+.panelDragging {
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.panelDragging * {
+  transition: none !important;
+}
+
+/* Resize handle */
+
+.resizeHandle {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 5px;
+  cursor: col-resize;
+  z-index: 10;
+  border-left: 1px solid var(--color-border-secondary);
+  transition: border 200ms var(--timing-function-super);
+  transition-delay: 100ms;
+}
+
+.resizeHandle:hover {
+  border-left-width: 2px;
+  border-color: var(--color-primary-70);
+  transition-delay: 0ms;
+}
+
+/* Titlebar spacer */
+
+.titlebarSpacer {
+  flex-shrink: 0;
+  -webkit-app-region: drag;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding: 0 8px;
+}
+
+.pinBtn {
+  composes: icBtn28 from '../../../shared/styles/iconButton.module.css';
+}
+
+.pinBtnActive {
+  color: var(--color-text-primary);
+}
+
+/* Scrollable content */
+
+.scrollContent {
+  composes: scrollYStable from '../../../shared/styles/scrollArea.module.css';
+  flex: 1;
+  padding: 0 16px 48px 16px;
+}
+
+.contentStack {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  color: var(--color-text-primary);
+}
+
+/* Selection count */
+
+.selectionTitle {
+  text-align: center;
+  font-size: var(--font-size-md);
+  height: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-text-primary);
+  margin: 12px 0 8px;
+}
+
+/* Fields */
+
+.fieldStack {
+  display: flex;
+  flex-direction: column;
+  margin-top: 8px;
+}
+
+.fieldInput {
+  font-family: var(--font-family);
+  font-size: var(--font-size-md);
+  line-height: 20px;
+  min-height: 32px;
+  background: var(--color-black-20);
+  border: 1px solid var(--color-border-secondary);
+  border-radius: 6px;
+  padding: 6px 10px;
+  margin-bottom: 8px;
+  color: var(--color-text-primary);
+  outline: none;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.fieldInput:focus {
+  border-color: var(--color-primary);
+}
+
+.fieldInput::placeholder {
+  color: var(--color-text-tertiary);
+}
+
+.fieldInput[readonly] {
+  cursor: default;
+  opacity: 0.7;
+}
+
+/* Field row — composed from shared primitive */
+
+.fieldRow {
+  composes: fieldRow from '../../../shared/styles/fieldRow.module.css';
+  margin-bottom: 8px;
+}
+
+.fieldRowIcon {
+  composes: fieldRowIcon from '../../../shared/styles/fieldRow.module.css';
+}
+
+.fieldRowSep {
+  composes: fieldRowSep from '../../../shared/styles/fieldRow.module.css';
+}
+
+.fieldRowContent {
+  composes: fieldRowContent from '../../../shared/styles/fieldRow.module.css';
+}
+
+.fieldRowPlaceholder {
+  composes: fieldRowPlaceholder from '../../../shared/styles/fieldRow.module.css';
+}
+
+.fieldRowPopover {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  z-index: 10;
+  background: var(--box-background-glass);
+  backdrop-filter: blur(var(--box-background-blur));
+  -webkit-backdrop-filter: blur(var(--box-background-blur));
+  border: 1px solid var(--color-border-secondary);
+  border-radius: 6px;
+  box-shadow: var(--box-border-shadow);
+  margin-top: 2px;
+  padding: 0;
+}
+
+.fieldRowPopoverTextarea {
+  display: block;
+  width: 100%;
+  min-height: 60px;
+  max-height: 200px;
+  background: none;
+  border: none;
+  outline: none;
+  resize: none;
+  font-family: var(--font-family);
+  font-size: var(--font-size-md);
+  line-height: var(--line-height-relaxed);
+  color: var(--color-text-primary);
+  padding: 8px 10px;
+  box-sizing: border-box;
+  overflow-y: auto;
+  field-sizing: content;
+}
+
+.fieldRowPopoverTextarea::placeholder {
+  color: var(--color-text-tertiary);
+}
+
+/* Tags & Folders — same layout */
+
+.tagsWrap,
+.foldersWrap {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+/* Export button */
+
+.exportButton {
+  composes: btnReset from '../../../shared/styles/buttonReset.module.css';
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 36px;
+  margin-top: 12px;
+  background: var(--color-white-05);
+  border: 1px solid var(--color-border-primary) !important;
+  border-radius: 6px;
+  color: var(--color-text-primary);
+  font-family: var(--font-family);
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-medium);
+  transition: background 150ms var(--timing-function-super);
+}
+
+.exportButton:hover {
+  background: var(--color-white-10);
+}
+
+/* Add button */
+
+.addButton {
+  composes: btnReset from '../../../shared/styles/buttonReset.module.css';
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  color: var(--color-text-primary);
+  border-radius: 6px;
+}
+
+.addButton > svg,
+.addButton > img {
+  opacity: 0.5;
+}
+
+.addButton:hover > svg,
+.addButton:hover > img {
+  opacity: 1;
+}
+
+/* Properties table */
+
+.propsStack {
+  display: flex;
+  flex-direction: column;
+}
+
+/* Loading */
+
+.loadingCenter {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 120px;
+}
+
+/* Editable field — pill container, view-first pattern */
+
+.editableField {
+  display: flex;
+  align-items: center;
+  height: 32px;
+  padding: 4px 8px;
+  gap: 6px;
+  border-radius: 6px;
+  background: var(--color-white-05);
+  border: 1px solid var(--color-border-primary) !important;
+  margin-bottom: 8px;
+  position: relative;
+}
+
+.editableFieldExpanded {
+  composes: editableField;
+  height: auto;
+  align-items: flex-start;
+}
+
+.editableFieldColumn {
+  composes: editableField;
+  flex-direction: column;
+  align-items: stretch;
+  height: auto;
+}
+
+.editableFieldContent {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-family);
+  font-size: var(--font-size-md);
+  line-height: 20px;
+  color: var(--color-text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  user-select: text;
+  -webkit-user-select: text;
+  cursor: text;
+}
+
+.editableFieldPlaceholder {
+  color: var(--color-text-tertiary);
+}
+
+/* Hover popover for truncated content */
+@keyframes popoverFadeIn {
+  from { opacity: 0; transform: translateY(-2px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+.fieldHoverPopover {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  right: 0;
+  z-index: 10;
+  background: var(--color-white-05);
+  border: 1px solid var(--color-border-secondary);
+  border-radius: 6px;
+  box-shadow: var(--box-border-shadow-small);
+  padding: 10px 10px;
+  margin-top: 6px;
+  max-height: 220px;
+  overflow-y: auto;
+  font-family: var(--font-family);
+  font-size: var(--font-size-md);
+  line-height: var(--line-height-relaxed);
+  color: var(--color-text-primary);
+  white-space: pre-wrap;
+  word-break: break-word;
+  animation: popoverFadeIn 120ms ease-out;
+  backdrop-filter: blur(16px) saturate(1.2);
+  -webkit-backdrop-filter: blur(16px) saturate(1.2);
+  user-select: text;
+  -webkit-user-select: text;
+  cursor: text;
+}
+
+[data-mantine-color-scheme="light"] .fieldHoverPopover {
+  background: rgba(255, 255, 255, 0.92);
+  border-color: rgba(0, 0, 0, 0.10);
+}
+
+.editableFieldLink {
+  color: var(--color-text-primary);
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.editableFieldLink:hover {
+  text-decoration: underline;
+}
+
+/* URL link in hover popover — subtle glow */
+.hoverPopoverLink {
+  display: block;
+  padding: 2px 0;
+  color: var(--color-text-primary);
+  text-shadow: 0 0 12px rgba(255, 255, 255, 0.15);
+  cursor: pointer;
+  text-decoration: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hoverPopoverLink:hover {
+  text-decoration: underline;
+  text-shadow: 0 0 16px rgba(255, 255, 255, 0.25);
+}
+
+[data-mantine-color-scheme="light"] .hoverPopoverLink {
+  text-shadow: 0 0 8px rgba(0, 0, 0, 0.06);
+}
+
+[data-mantine-color-scheme="light"] .hoverPopoverLink:hover {
+  text-shadow: 0 0 12px rgba(0, 0, 0, 0.1);
+}
+
+.ghostInput {
+  background: none;
+  border: none;
+  outline: none;
+  color: var(--color-text-primary);
+  font-family: var(--font-family);
+  font-size: var(--font-size-md);
+  line-height: 20px;
+  width: 100%;
+  min-width: 0;
+  padding: 0;
+  resize: none;
+  field-sizing: content;
+}
+
+.ghostInput::placeholder {
+  color: var(--color-text-tertiary);
+}
+
+.editToggleBtn {
+  composes: btnReset from '../../../shared/styles/buttonReset.module.css';
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  border-radius: 4px;
+  color: var(--color-text-primary);
+  opacity: 0.35;
+  transition: opacity 150ms ease;
+}
+
+.editToggleBtn:hover {
+  opacity: 1;
+}
+
+.urlViewRow {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 20px;
+  overflow: hidden;
+}
+
+.urlEditRow {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 24px;
+  width: 100%;
+}
+
+.urlRemoveBtn {
+  composes: btnReset from '../../../shared/styles/buttonReset.module.css';
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 4px;
+  color: var(--color-text-primary);
+  opacity: 0.3;
+  flex-shrink: 0;
+}
+
+.urlRemoveBtn:hover {
+  opacity: 1;
+}
+
+.inspectorAddUrlBtn {
+  composes: btnReset from '../../../shared/styles/buttonReset.module.css';
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 24px;
+  color: var(--color-text-tertiary);
+  font-family: var(--font-family);
+  font-size: var(--font-size-xs);
+  margin-top: 2px;
+}
+
+.inspectorAddUrlBtn:hover {
+  color: var(--color-text-primary);
+}
+
+[data-mantine-color-scheme="light"] .editableField,
+[data-mantine-color-scheme="light"] .editableFieldColumn {
+  background: var(--color-bg-secondary, rgba(0, 0, 0, 0.03));
+  border-color: var(--color-border-primary);
+}
+
+/* Light theme overrides */
+
+[data-mantine-color-scheme="light"] .fieldInput {
+  background: var(--color-bg-secondary, rgba(0, 0, 0, 0.03));
+  border-color: var(--color-border-primary);
+}
+
+[data-mantine-color-scheme="light"] .fieldInput:focus {
+  background: #fff;
+  border-color: var(--color-primary);
+}
+
+[data-mantine-color-scheme="light"] .exportButton {
+  background: var(--color-bg-secondary, rgba(0, 0, 0, 0.03));
+  border-color: var(--color-border-primary);
+}
+
+[data-mantine-color-scheme="light"] .exportButton:hover {
+  background: var(--color-bg-tertiary, rgba(0, 0, 0, 0.06));
+}

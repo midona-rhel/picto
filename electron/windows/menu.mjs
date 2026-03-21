@@ -135,6 +135,22 @@ export function createMenuManager({
             accelerator: 'CmdOrCtrl+I',
             click: () => sendToFocusedWindow('menu:import-files'),
           },
+          {
+            label: 'Import Folder…',
+            accelerator: 'Shift+CmdOrCtrl+I',
+            click: () => sendToFocusedWindow('menu:import-folder'),
+          },
+          { type: 'separator' },
+          {
+            label: 'Export Originals…',
+            accelerator: 'CmdOrCtrl+E',
+            click: () => sendToMainWindow('menu:export-basic'),
+          },
+          {
+            label: 'Export As…',
+            accelerator: 'Shift+CmdOrCtrl+E',
+            click: () => sendToMainWindow('menu:export-advanced'),
+          },
           { type: 'separator' },
           isMac ? { role: 'close' } : { role: 'quit' },
         ],
@@ -186,13 +202,8 @@ export function createMenuManager({
             click: () => sendToFocusedWindow('menu:navigate', 'untagged'),
           },
           {
-            label: 'Recently Viewed',
-            accelerator: 'CmdOrCtrl+4',
-            click: () => sendToFocusedWindow('menu:navigate', 'recently_viewed'),
-          },
-          {
             label: 'Trash',
-            accelerator: 'CmdOrCtrl+5',
+            accelerator: 'CmdOrCtrl+4',
             click: () => sendToFocusedWindow('menu:navigate', 'trash'),
           },
           { type: 'separator' },

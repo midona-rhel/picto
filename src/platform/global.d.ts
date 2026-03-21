@@ -34,6 +34,22 @@ declare global {
       search?: {
         reverseImage: (filePath: string, engine: string) => Promise<string>;
       };
+      updater?: {
+        check: () => Promise<unknown>;
+        download: () => Promise<void>;
+        install: () => void;
+        onStatus: (handler: (status: {
+          status: 'checking' | 'available' | 'up-to-date' | 'downloading' | 'ready' | 'error';
+          version?: string;
+          releaseNotes?: string | null;
+          releaseDate?: string | null;
+          percent?: number;
+          bytesPerSecond?: number;
+          transferred?: number;
+          total?: number;
+          error?: string;
+        }) => void) => () => void;
+      };
       library?: {
         create: (name: string, savePath: string) => Promise<string>;
         open: () => Promise<string | null>;

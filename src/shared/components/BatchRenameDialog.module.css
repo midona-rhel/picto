@@ -1,0 +1,112 @@
+/* ==========================================================================
+   BatchRenameDialog — Batch rename modal styles
+   ========================================================================== */
+
+.modeToggle {
+  display: flex;
+  gap: 4px;
+  padding: 2px;
+  border-radius: 6px;
+  background: var(--color-bg-secondary);
+}
+
+.modeBtn {
+  composes: btnReset from '../styles/buttonReset.module.css';
+  flex: 1;
+  padding: 4px 12px;
+  border-radius: 4px;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+  font-family: var(--font-family);
+  transition: background 0.15s, color 0.15s;
+}
+
+.modeBtn:hover {
+  color: var(--color-text-primary);
+}
+
+.modeBtnActive {
+  background: var(--color-primary);
+  color: #fff; /* White on primary blue is always readable */
+}
+
+/* --------------------------------------------------------------------------
+   Preview list
+   -------------------------------------------------------------------------- */
+
+.previewList {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.previewRow {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  font-size: var(--font-size-xs);
+  border-bottom: 1px solid var(--color-border-secondary);
+}
+
+.previewRow:last-child {
+  border-bottom: none;
+}
+
+.previewBefore {
+  composes: truncate from '../styles/textClamp.module.css';
+  color: var(--color-text-secondary);
+}
+
+.previewArrow {
+  color: var(--color-text-tertiary);
+  flex-shrink: 0;
+}
+
+.previewAfter {
+  composes: truncate from '../styles/textClamp.module.css';
+  color: var(--color-text-primary);
+}
+
+.previewChanged {
+  color: var(--color-primary);
+  font-weight: 500;
+}
+
+.previewHeader {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  gap: 8px;
+  padding: 4px 8px 6px;
+  font-size: var(--font-size-xs);
+  font-weight: 600;
+  color: var(--color-text-tertiary);
+  border-bottom: 1px solid var(--color-border-primary);
+}
+
+.helpText {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+  line-height: 1.5;
+}
+
+.helpCode {
+  font-family: var(--font-family-mono, monospace);
+  background: var(--color-bg-secondary);
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-size: 0.9em;
+}
+
+.footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+
+.fileCount {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}

@@ -1,8 +1,7 @@
 import { useState, useEffect } from 'react';
-import { Text, Loader, Select, NumberInput, Tooltip, Switch } from '@mantine/core';
-import { useMantineColorScheme } from '@mantine/core';
+import { Text, Loader, Select, NumberInput, Switch } from '@mantine/core';
 import { api } from '#desktop/api';
-import { useSettingsStore, themeToColorScheme, type ReverseSearchEngine, type Theme } from '../../../state/settingsStore';
+import { useSettingsStore, themeToColorScheme, type ReverseSearchEngine } from '../../../state/settingsStore';
 import { formatFileSize } from '../../../shared/lib/formatters';
 import { runCriticalAction } from '../../../shared/lib/asyncOps';
 import { TextButton } from '../../../shared/components/TextButton';
@@ -31,24 +30,29 @@ const ZOOM_OPTIONS = [
 ];
 
 export function GeneralPanel() {
-  const { settings, updateSetting } = useSettingsStore();
-  const { setColorScheme } = useMantineColorScheme();
+  const { settings, updateSetting, updateSettings } = useSettingsStore();
 
   const activeTheme = settings.theme ?? 'dark';
   const [zoom, setZoom] = useState('100');
 
-  useEffect(() => {
-    const t = settings.theme ?? 'dark';
-    document.documentElement.dataset.theme = t === 'auto' ? '' : t;
-  }, [settings.theme]);
-
   const handleThemeChange = (css: string) => {
-    const newTheme = css as Theme;
-    updateSetting('theme', newTheme);
+    const newTheme = css as typeof settings.theme;
     const scheme = themeToColorScheme(newTheme);
-    setColorScheme(scheme);
-    updateSetting('colorScheme', scheme === 'auto' ? 'dark' : scheme);
+    // Set theme attributes synchronously so CSS vars apply before next paint
+    const resolved = newTheme === 'auto'
+      ? (window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark')
+      : newTheme;
+    const lightThemes = new Set(['light', 'lightgray']);
     document.documentElement.dataset.theme = newTheme === 'auto' ? '' : newTheme;
+    document.documentElement.dataset.mantineColorScheme = lightThemes.has(resolved) ? 'light' : 'dark';
+    document.documentElement.style.colorScheme = lightThemes.has(resolved) ? 'light' : 'dark';
+    // Persist to localStorage for instant theme on reload
+    localStorage.setItem('picto-theme', newTheme);
+    // Atomic store update — Mantine picks up the new scheme via forceColorScheme
+    updateSettings({
+      theme: newTheme,
+      colorScheme: scheme === 'auto' ? 'dark' : scheme,
+    });
   };
 
   const handleZoomChange = (value: string | null) => {
@@ -98,13 +102,14 @@ export function GeneralPanel() {
         <SettingsRow label="Theme">
           <div className={styles.themesPicker}>
             {THEMES.map((t) => (
-              <Tooltip key={t.css} label={t.name} position="top" withArrow>
-                <button
-                  className={`${styles.themeSwatch} ${t.css === 'auto' ? styles.themeAuto : ''} ${activeTheme === t.css ? styles.themeActive : ''}`}
-                  style={t.color ? { backgroundColor: t.color } : undefined}
-                  onClick={() => handleThemeChange(t.css)}
-                />
-              </Tooltip>
+              <button
+                key={t.css}
+                className={`${styles.themeSwatch} ${t.css === 'auto' ? styles.themeAuto : ''} ${activeTheme === t.css ? styles.themeActive : ''}`}
+                style={t.color ? { backgroundColor: t.color } : undefined}
+                title={t.name}
+                tabIndex={-1}
+                onClick={() => handleThemeChange(t.css)}
+              />
             ))}
           </div>
         </SettingsRow>
@@ -127,6 +132,12 @@ export function GeneralPanel() {
             </div>
           </div>
         </div>
+        <SettingsRow label="Hide tag namespaces" separator>
+          <Switch
+            checked={settings.hideTagNamespace}
+            onChange={(e) => updateSetting('hideTagNamespace', e.currentTarget.checked)}
+          />
+        </SettingsRow>
       </SettingsBlock>
 
       {/* Grid Defaults */}
@@ -150,10 +161,9 @@ export function GeneralPanel() {
             size="xs" w={120} value={settings.gridSortField}
             onChange={(v) => v && updateSetting('gridSortField', v as typeof settings.gridSortField)}
             data={[
-              { value: 'imported_at', label: 'Date Added' },
+              { value: 'date_added', label: 'Date Added' },
               { value: 'size', label: 'File Size' },
               { value: 'rating', label: 'Rating' },
-              { value: 'view_count', label: 'View Count' },
             ]}
             allowDeselect={false}
           />
@@ -214,9 +224,41 @@ export function GeneralPanel() {
             <SettingsRow label="Trash" light>
               <Text size="sm" c="dimmed">{stats.trash.toLocaleString()}</Text>
             </SettingsRow>
-            <SettingsRow label="Total size" separator>
+            <SettingsRow label="Total size (DB)" separator>
               <Text size="sm" fw={600}>{formatFileSize(stats.total_size)}</Text>
             </SettingsRow>
+
+            {stats.breakdown && (
+              <>
+                <SettingsRow label="Images" light>
+                  <Text size="sm" c="dimmed">{stats.breakdown.images.toLocaleString()} &middot; {formatFileSize(stats.breakdown.images_size)}</Text>
+                </SettingsRow>
+                <SettingsRow label="Videos" light>
+                  <Text size="sm" c="dimmed">{stats.breakdown.videos.toLocaleString()} &middot; {formatFileSize(stats.breakdown.videos_size)}</Text>
+                </SettingsRow>
+                {stats.breakdown.audio > 0 && (
+                  <SettingsRow label="Audio" light>
+                    <Text size="sm" c="dimmed">{stats.breakdown.audio.toLocaleString()} &middot; {formatFileSize(stats.breakdown.audio_size)}</Text>
+                  </SettingsRow>
+                )}
+                {stats.breakdown.other > 0 && (
+                  <SettingsRow label="Other" light>
+                    <Text size="sm" c="dimmed">{stats.breakdown.other.toLocaleString()} &middot; {formatFileSize(stats.breakdown.other_size)}</Text>
+                  </SettingsRow>
+                )}
+              </>
+            )}
+
+            {stats.originals_disk != null && stats.thumbnails_disk != null && (
+              <>
+                <SettingsRow label="Originals on disk" separator>
+                  <Text size="sm">{formatFileSize(stats.originals_disk)}</Text>
+                </SettingsRow>
+                <SettingsRow label="Thumbnails on disk" light>
+                  <Text size="sm" c="dimmed">{formatFileSize(stats.thumbnails_disk)}</Text>
+                </SettingsRow>
+              </>
+            )}
           </>
         )}
         <SettingsButtonRow>

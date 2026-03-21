@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Loader, Text, Kbd } from '@mantine/core';
 import { EmptyState } from '../../../shared/components/EmptyState';
 import { TextButton } from '../../../shared/components/TextButton';
-import { notifySuccess, notifyError, notifyInfo, notifyWarning } from '../../../shared/lib/notify';
+import { notifySuccess, notifyError, notifyInfo } from '../../../shared/lib/notify';
 import {
   IconArrowLeft,
   IconArrowRight,
@@ -13,12 +13,16 @@ import {
   IconCheck,
 } from '@tabler/icons-react';
 import { api } from '#desktop/api';
+import { formatDateTime } from '../../../shared/lib/formatters';
 import { mediaFileUrl, mediaThumbnailUrl } from '../../../shared/lib/mediaUrl';
-import { isImagePreloaded, queueImageDecode } from '../../grid/useImagePreloader';
+import { isImagePreloaded, queueImageDecode } from '../../../shared/lib/useImagePreloader';
 import type { DuplicatePairDto, DuplicatePairsResponse, ResolveDuplicateAction } from '../../../shared/types/api';
 import { useDomainStore } from '../../../state/domainStore';
 import { registerUndoAction } from '../../../shared/controllers/undoRedoController';
 import { useGlobalKeydown } from '../../../shared/hooks/useGlobalKeydown';
+import { useImageZoom } from '../../viewer/hooks/useImageZoom';
+import { useNavigatorRenderer } from '../../viewer/hooks/useNavigatorRenderer';
+import { useNavigatorDrag } from '../../viewer/hooks/useNavigatorDrag';
 import styles from './DuplicateManager.module.css';
 
 const PERIODIC_SCAN_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
@@ -35,6 +39,8 @@ interface PairFileInfo {
   sourceUrls: string[];
   imageUrl: string;
   thumbUrl: string;
+  importedAt: string;
+  createdAt: string | null;
 }
 
 
@@ -74,6 +80,102 @@ export function DuplicateManager() {
   processingRef.current = processing;
 
   const currentPair = pairs[currentIndex] ?? null;
+
+  // Zoom infrastructure — left pane is the zoom container so that focal point,
+  // containerSize, and navigator rect are all computed against a single pane.
+  const leftPaneImageRef = useRef<HTMLDivElement>(null);
+  const rightPaneImageRef = useRef<HTMLDivElement>(null);
+  const leftFrameRef = useRef<HTMLDivElement>(null);
+  const rightFrameRef = useRef<HTMLDivElement>(null);
+  const navigatorRef = useRef<HTMLDivElement>(null);
+  const navViewportRef = useRef<HTMLDivElement>(null);
+
+  // Use the larger image's dimensions as reference so both frames render at the
+  // same visual size — the smaller/lower-quality duplicate will show pixelation.
+  const imageSize = useMemo(() => {
+    if (!leftFile && !rightFile) return null;
+    const lw = leftFile?.width ?? 0;
+    const lh = leftFile?.height ?? 0;
+    const rw = rightFile?.width ?? 0;
+    const rh = rightFile?.height ?? 0;
+    const leftArea = lw * lh;
+    const rightArea = rw * rh;
+    return leftArea >= rightArea
+      ? { width: lw, height: lh }
+      : { width: rw, height: rh };
+  }, [leftFile?.width, leftFile?.height, rightFile?.width, rightFile?.height]);
+  const imageSizeRef = useRef(imageSize);
+  imageSizeRef.current = imageSize;
+
+  // Stable reference — prevents useImageZoom callback cascade on every render
+  const transformTargets = useMemo(() => [leftFrameRef, rightFrameRef], []);
+
+  const {
+    state: zoomState,
+    setState: setZoomState,
+    isDragging,
+    navigatorRect,
+    panToNormalized,
+    onLiveFrameRef,
+    containerSize,
+    handlers: zoomHandlers,
+  } = useImageZoom(leftPaneImageRef, imageSize, { transformTargets });
+
+  // Right pane also supports wheel zoom — translate focal point relative to that pane
+  useEffect(() => {
+    const rightPane = rightPaneImageRef.current;
+    if (!rightPane) return;
+    const handleWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      const rect = rightPane.getBoundingClientRect();
+      const focalX = e.clientX - rect.left - rect.width / 2;
+      const focalY = e.clientY - rect.top - rect.height / 2;
+      const sensitivity = 0.004;
+      const multiplier = Math.exp(-e.deltaY * sensitivity);
+      setZoomState(prev => {
+        const newScale = Math.min(8, Math.max(0.05, prev.scale * multiplier));
+        const ratio = newScale / prev.scale;
+        return { scale: newScale, tx: focalX - ratio * (focalX - prev.tx), ty: focalY - ratio * (focalY - prev.ty) };
+      }, true);
+    };
+    rightPane.addEventListener('wheel', handleWheel, { passive: false });
+    return () => rightPane.removeEventListener('wheel', handleWheel);
+  }, [setZoomState]);
+
+  // Fit-to-pane: read pane dimensions directly from DOM (not state — avoids async race)
+  const fitToPane = useCallback(() => {
+    const pane = leftPaneImageRef.current;
+    if (!pane || !imageSize) return false;
+    const pw = pane.clientWidth;
+    const ph = pane.clientHeight;
+    if (pw === 0 || ph === 0) return false;
+    const scale = Math.min(pw / imageSize.width, ph / imageSize.height, 1);
+    setZoomState({ scale, tx: 0, ty: 0 });
+    return true;
+  }, [imageSize, setZoomState]);
+
+  const dummyImgRef = useRef<HTMLImageElement>(null);
+  useNavigatorRenderer(
+    dummyImgRef, navigatorRef, navViewportRef, imageSizeRef,
+    zoomState, navigatorRect, 120, undefined, onLiveFrameRef, containerSize,
+  );
+
+  const handleNavMouseDown = useNavigatorDrag(navigatorRef, imageSizeRef, panToNormalized);
+
+  // Reset zoom when pair changes. We track a composite key of pair hash + image
+  // dimensions so that navigating to a new pair always re-fits, even if the effect
+  // fires before leftFile has updated (stale imageSize from previous pair).
+  const fitToPaneRef = useRef(fitToPane);
+  fitToPaneRef.current = fitToPane;
+  const lastFitKeyRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!imageSize || !currentPair) return;
+    const key = `${currentPair.hash_a}:${imageSize.width}x${imageSize.height}`;
+    if (lastFitKeyRef.current === key) return;
+    if (fitToPaneRef.current()) {
+      lastFitKeyRef.current = key;
+    }
+  }, [currentPair?.hash_a, imageSize, containerSize]);
 
   /** Push the live duplicate count to the sidebar immediately (bypasses compiler lag). */
   const refreshDuplicateCount = useCallback(async () => {
@@ -132,26 +234,28 @@ export function DuplicateManager() {
 
     const loadFileInfo = async () => {
       try {
-        const batch = await api.grid.getFilesMetadataBatch([
+        const batch = await api.grid.getEntitiesMetadataBatch([
           currentPair.hash_a,
           currentPair.hash_b,
         ]);
 
         const buildInfo = (hash: string): PairFileInfo => {
           const meta = batch.items[hash];
-          const mime = meta?.file.mime ?? 'image/jpeg';
+          const mime = meta?.entity.mime ?? 'image/jpeg';
           return {
             hash,
-            name: meta?.file.name ?? `${hash.slice(0, 12)}...`,
-            size: meta?.file.size ?? 0,
+            name: meta?.entity.name ?? `${hash.slice(0, 12)}...`,
+            size: meta?.entity.size ?? 0,
             mime,
-            width: meta?.file.width ?? 0,
-            height: meta?.file.height ?? 0,
-            rating: meta?.file.rating ?? null,
+            width: meta?.entity.width ?? 0,
+            height: meta?.entity.height ?? 0,
+            rating: meta?.entity.rating ?? null,
             tags: meta?.tags.map((t) => t.display_tag) ?? [],
-            sourceUrls: meta?.file.source_urls ?? [],
+            sourceUrls: meta?.entity.source_urls ?? [],
             imageUrl: mediaFileUrl(hash, mime),
             thumbUrl: mediaThumbnailUrl(hash),
+            importedAt: meta?.entity.date_added ?? '',
+            createdAt: meta?.entity.date_created ?? null,
           };
         };
 
@@ -217,7 +321,7 @@ export function DuplicateManager() {
             label: `Resolve duplicate (${action})`,
             undo: async () => {
               if (loserHash) {
-                await api.file.setStatus(loserHash, 'active');
+                await api.files.setStatus(loserHash, 'active');
               }
               // Re-scan to re-detect/open the pair state.
               await api.duplicates.scan();
@@ -228,8 +332,6 @@ export function DuplicateManager() {
               await loadPairs();
             },
           });
-        } else {
-          notifyWarning('Smart merge changes metadata and file state; undo is not supported yet.', 'Not Undoable');
         }
 
         setPairs((prev) => {
@@ -250,7 +352,7 @@ export function DuplicateManager() {
         };
         notifySuccess(labels[action] ?? 'Resolved', 'Done');
 
-        void refreshDuplicateCount();
+        await refreshDuplicateCount();
       } catch (err) {
         notifyError(err);
       } finally {
@@ -293,8 +395,14 @@ export function DuplicateManager() {
         e.preventDefault();
         handleAction('not_duplicate');
         break;
+      case 'f':
+      case 'F':
+      case '0':
+        e.preventDefault();
+        fitToPane();
+        break;
     }
-  }, [goToPrev, goToNext, handleAction]);
+  }, [goToPrev, goToNext, handleAction, fitToPane]);
   useGlobalKeydown(handleDuplicateHotkeys);
 
   const scanForDuplicates = useCallback(async () => {
@@ -364,56 +472,46 @@ export function DuplicateManager() {
     return () => clearInterval(timer);
   }, [refreshDuplicateCount]);
 
-  if (loading) {
-    return (
-      <div className={styles.centeredState}>
-        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12 }}>
-          <Loader size="lg" />
-          <Text c="dimmed">Loading duplicate pairs...</Text>
-        </div>
-      </div>
-    );
-  }
-
-  if (pairs.length === 0) {
-    if (loadingMore) {
-      return (
-        <div className={styles.centeredState}>
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12 }}>
-            <Loader size="lg" />
-            <Text c="dimmed">Loading duplicate pairs...</Text>
-          </div>
-        </div>
-      );
-    }
-
-    return (
-      <div className={styles.centeredState}>
-        <EmptyState
-          icon={IconCopy}
-          title={resolvedCount > 0 ? 'All Resolved' : 'No Duplicates Found'}
-          description={
-            resolvedCount > 0
-              ? `All ${resolvedCount} duplicate pair(s) have been resolved`
-              : 'Scan your library to detect duplicate images using perceptual hashing'
-          }
-          action={
-            <TextButton onClick={scanForDuplicates} disabled={scanning}>
-              <IconRefresh size={14} />
-              {scanning ? 'Scanning...' : 'Scan for Duplicates'}
-            </TextButton>
-          }
-        />
-      </div>
-    );
-  }
+  const showCompare = !loading && pairs.length > 0;
+  const showLoading = loading || (!loading && pairs.length === 0 && loadingMore);
+  const showEmpty = !loading && pairs.length === 0 && !loadingMore;
 
   const totalForProgress = initialTotalRef.current || totalPairs || pairs.length;
   const progressPercent = totalForProgress > 0 ? (resolvedCount / totalForProgress) * 100 : 0;
 
   return (
     <div className={styles.root}>
-      <div className={styles.topBar}>
+      {/* Loading / empty overlays */}
+      {showLoading && (
+        <div className={styles.centeredState}>
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12 }}>
+            <Loader size="lg" />
+            <Text c="dimmed">Loading duplicate pairs...</Text>
+          </div>
+        </div>
+      )}
+      {showEmpty && (
+        <div className={styles.centeredState}>
+          <EmptyState
+            icon={IconCopy}
+            title={resolvedCount > 0 ? 'All Resolved' : 'No Duplicates Found'}
+            description={
+              resolvedCount > 0
+                ? `All ${resolvedCount} duplicate pair(s) have been resolved`
+                : 'Scan your library to detect duplicate images using perceptual hashing'
+            }
+            action={
+              <TextButton onClick={scanForDuplicates} disabled={scanning}>
+                <IconRefresh size={14} />
+                {scanning ? 'Scanning...' : 'Scan for Duplicates'}
+              </TextButton>
+            }
+          />
+        </div>
+      )}
+
+      {/* Always render the layout so zoom refs mount and effects register */}
+      <div className={styles.topBar} style={showCompare ? undefined : { visibility: 'hidden' }}>
         <div className={styles.topBarLeft}>
           <Text fw={600} size="sm">
             Duplicate Review
@@ -447,41 +545,70 @@ export function DuplicateManager() {
         </div>
       </div>
 
-      <div className={styles.progressBar}>
+      <div className={styles.progressBar} style={showCompare ? undefined : { visibility: 'hidden' }}>
         <div className={styles.progressFill} style={{ width: `${progressPercent}%` }} />
       </div>
 
-      <div className={styles.compareArea}>
+      <div className={styles.compareArea} style={showCompare ? undefined : { visibility: 'hidden' }}>
         <div className={styles.pane}>
-          {leftFile && (
-            <>
-              <div className={styles.paneImage}>
-                <img src={leftFile.thumbUrl} alt={leftFile.name} className={styles.paneThumb} />
+          {/* paneImage always rendered so leftPaneImageRef is always in the DOM for useImageZoom */}
+          <div ref={leftPaneImageRef} className={`${styles.paneImage}${isDragging ? ` ${styles.dragging}` : ''}`} onMouseDown={zoomHandlers.onMouseDown}>
+            {leftFile && imageSize && (
+              <div
+                ref={leftFrameRef}
+                className={styles.paneImageFrame}
+                style={{ width: imageSize.width, height: imageSize.height }}
+              >
+                <img src={leftFile.thumbUrl} alt={leftFile.name} className={styles.paneImg} />
                 {leftDecoded && (
-                  <img src={leftFile.imageUrl} alt={leftFile.name} className={styles.paneFull} />
+                  <img src={leftFile.imageUrl} alt={leftFile.name} className={`${styles.paneImg} ${styles.paneFull}`} />
                 )}
               </div>
-              <div className={styles.paneMeta}>
-                <div className={styles.metaRow}>
-                  <span className={styles.metaLabel}>Name</span>
-                  <span className={styles.metaValue}>{leftFile.name}</span>
-                </div>
-                <div className={styles.metaRow}>
-                  <span className={styles.metaLabel}>Size</span>
-                  <span className={styles.metaValue}>
-                    {leftFile.width}x{leftFile.height} &middot; {formatSize(leftFile.size)}
-                  </span>
-                </div>
-                <div className={styles.metaRow}>
-                  <span className={styles.metaLabel}>Format</span>
-                  <span className={styles.metaValue}>{leftFile.mime}</span>
-                </div>
-                <div className={styles.metaRow}>
-                  <span className={styles.metaLabel}>Tags</span>
-                  <span className={styles.metaValue}>{leftFile.tags.length}</span>
-                </div>
+            )}
+            {/* Navigator inside left pane, positioned relative to image area */}
+            <div
+              ref={navigatorRef}
+              className={styles.navigator}
+              onMouseDown={handleNavMouseDown}
+              style={{ display: 'none' }}
+            >
+              {leftFile && <img src={leftFile.thumbUrl} alt="" />}
+              <div ref={navViewportRef} className={styles.navigatorViewport} />
+            </div>
+          </div>
+          {leftFile && (
+            <div className={styles.paneMeta}>
+              <div className={styles.metaRow}>
+                <span className={styles.metaLabel}>Name</span>
+                <span className={styles.metaValue}>{leftFile.name}</span>
               </div>
-            </>
+              <div className={styles.metaRow}>
+                <span className={styles.metaLabel}>Size</span>
+                <span className={styles.metaValue}>
+                  {leftFile.width}x{leftFile.height} &middot; {formatSize(leftFile.size)}
+                </span>
+              </div>
+              <div className={styles.metaRow}>
+                <span className={styles.metaLabel}>Format</span>
+                <span className={styles.metaValue}>{leftFile.mime}</span>
+              </div>
+              <div className={styles.metaRow}>
+                <span className={styles.metaLabel}>Tags</span>
+                <span className={styles.metaValue}>{leftFile.tags.length}</span>
+              </div>
+              {leftFile.importedAt && (
+                <div className={styles.metaRow}>
+                  <span className={styles.metaLabel}>Added</span>
+                  <span className={styles.metaValue}>{formatDateTime(leftFile.importedAt)}</span>
+                </div>
+              )}
+              {leftFile.createdAt && leftFile.createdAt !== leftFile.importedAt && (
+                <div className={styles.metaRow}>
+                  <span className={styles.metaLabel}>Created</span>
+                  <span className={styles.metaValue}>{formatDateTime(leftFile.createdAt)}</span>
+                </div>
+              )}
+            </div>
           )}
         </div>
 
@@ -528,40 +655,59 @@ export function DuplicateManager() {
         </div>
 
         <div className={styles.pane}>
-          {rightFile && (
-            <>
-              <div className={styles.paneImage}>
-                <img src={rightFile.thumbUrl} alt={rightFile.name} className={styles.paneThumb} />
+          {/* paneImage always rendered for right pane wheel handler */}
+          <div ref={rightPaneImageRef} className={`${styles.paneImage}${isDragging ? ` ${styles.dragging}` : ''}`} onMouseDown={zoomHandlers.onMouseDown}>
+            {rightFile && imageSize && (
+              <div
+                ref={rightFrameRef}
+                className={styles.paneImageFrame}
+                style={{ width: imageSize.width, height: imageSize.height }}
+              >
+                <img src={rightFile.thumbUrl} alt={rightFile.name} className={styles.paneImg} />
                 {rightDecoded && (
-                  <img src={rightFile.imageUrl} alt={rightFile.name} className={styles.paneFull} />
+                  <img src={rightFile.imageUrl} alt={rightFile.name} className={`${styles.paneImg} ${styles.paneFull}`} />
                 )}
               </div>
-              <div className={styles.paneMeta}>
-                <div className={styles.metaRow}>
-                  <span className={styles.metaLabel}>Name</span>
-                  <span className={styles.metaValue}>{rightFile.name}</span>
-                </div>
-                <div className={styles.metaRow}>
-                  <span className={styles.metaLabel}>Size</span>
-                  <span className={styles.metaValue}>
-                    {rightFile.width}x{rightFile.height} &middot; {formatSize(rightFile.size)}
-                  </span>
-                </div>
-                <div className={styles.metaRow}>
-                  <span className={styles.metaLabel}>Format</span>
-                  <span className={styles.metaValue}>{rightFile.mime}</span>
-                </div>
-                <div className={styles.metaRow}>
-                  <span className={styles.metaLabel}>Tags</span>
-                  <span className={styles.metaValue}>{rightFile.tags.length}</span>
-                </div>
+            )}
+          </div>
+          {rightFile && (
+            <div className={styles.paneMeta}>
+              <div className={styles.metaRow}>
+                <span className={styles.metaLabel}>Name</span>
+                <span className={styles.metaValue}>{rightFile.name}</span>
               </div>
-            </>
+              <div className={styles.metaRow}>
+                <span className={styles.metaLabel}>Size</span>
+                <span className={styles.metaValue}>
+                  {rightFile.width}x{rightFile.height} &middot; {formatSize(rightFile.size)}
+                </span>
+              </div>
+              <div className={styles.metaRow}>
+                <span className={styles.metaLabel}>Format</span>
+                <span className={styles.metaValue}>{rightFile.mime}</span>
+              </div>
+              <div className={styles.metaRow}>
+                <span className={styles.metaLabel}>Tags</span>
+                <span className={styles.metaValue}>{rightFile.tags.length}</span>
+              </div>
+              {rightFile.importedAt && (
+                <div className={styles.metaRow}>
+                  <span className={styles.metaLabel}>Added</span>
+                  <span className={styles.metaValue}>{formatDateTime(rightFile.importedAt)}</span>
+                </div>
+              )}
+              {rightFile.createdAt && rightFile.createdAt !== rightFile.importedAt && (
+                <div className={styles.metaRow}>
+                  <span className={styles.metaLabel}>Created</span>
+                  <span className={styles.metaValue}>{formatDateTime(rightFile.createdAt)}</span>
+                </div>
+              )}
+            </div>
           )}
         </div>
       </div>
 
-      <div className={styles.bottomBar}>
+      <div className={styles.bottomBar} style={showCompare ? undefined : { visibility: 'hidden' }}>
         <TextButton onClick={goToPrev} disabled={currentIndex === 0 || processing}>
           <IconArrowLeft size={14} /> Prev
         </TextButton>

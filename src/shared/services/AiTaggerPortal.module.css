@@ -1,0 +1,198 @@
+/* Composed from shared primitives — same pattern as FolderPicker */
+
+.panel {
+  composes: panelGlass from '../styles/pickerPanel.module.css';
+  position: fixed;
+  z-index: var(--z-context-menu);
+  width: 360px; /* overridden inline when sidebar is shown */
+  height: 480px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  user-select: none;
+  -webkit-user-select: none;
+  font-size: 13px;
+  color: var(--color-text-primary);
+}
+
+.panelDragging {
+  composes: panelDragging from '../styles/pickerPanel.module.css';
+}
+
+/* Header — model buttons + pin */
+.header {
+  composes: panelHeader from '../styles/pickerPanel.module.css';
+  gap: 4px;
+  padding: 0 4px;
+}
+
+.modelButtons {
+  display: flex;
+  flex: 1;
+  gap: 4px;
+  padding: 4px 0;
+}
+
+.pinBtn {
+  composes: pinBtn from '../styles/pickerPanel.module.css';
+}
+
+/* Body — sidebar + content */
+.body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  overflow: hidden;
+}
+
+/* Sidebar — file list */
+.sidebar {
+  width: 140px;
+  flex-shrink: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  border-right: 1px solid var(--color-border-secondary);
+  padding: 4px 0;
+}
+
+.sidebarItem {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 26px;
+  padding: 0 8px;
+  cursor: pointer;
+  font-size: 11px;
+  color: var(--color-text-secondary);
+  transition: background 60ms ease;
+}
+
+.sidebarItem:hover {
+  background: var(--color-white-10);
+}
+
+.sidebarItemActive {
+  background: var(--color-white-10);
+  color: var(--color-text-primary);
+}
+
+.sidebarIndex {
+  color: var(--color-text-tertiary);
+  font-variant-numeric: tabular-nums;
+  width: 18px;
+  flex-shrink: 0;
+}
+
+.sidebarHash {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-family: var(--font-family-mono, monospace);
+}
+
+.sidebarBadge {
+  font-size: 10px;
+  color: var(--color-text-tertiary);
+  flex-shrink: 0;
+}
+
+[data-mantine-color-scheme="light"] .sidebarItem:hover {
+  background: var(--color-black-10);
+}
+
+[data-mantine-color-scheme="light"] .sidebarItemActive {
+  background: var(--color-black-10);
+}
+
+/* Content — scrollable tag list */
+.content {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 4px 0;
+}
+
+.progressWrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px 4px;
+}
+
+.progressBar {
+  flex: 1;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--color-white-10);
+  overflow: hidden;
+}
+
+.progressFill {
+  height: 100%;
+  background: var(--color-primary);
+  border-radius: 2px;
+  transition: width 150ms ease;
+}
+
+.progressText {
+  font-size: 11px;
+  color: var(--color-text-tertiary);
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+}
+
+[data-mantine-color-scheme="light"] .progressBar {
+  background: var(--color-black-10);
+}
+
+.empty {
+  composes: emptyState from '../styles/pickerPanel.module.css';
+  height: 20px;
+  line-height: 20px;
+  padding: 16px 0;
+}
+
+.sectionHeader {
+  padding: 6px 12px 4px;
+  color: var(--color-text-tertiary);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.tagRow {
+  composes: checkItem from '../styles/pickerPanel.module.css';
+}
+
+.tagRow:hover {
+  background-color: var(--color-white-10);
+}
+
+.confidence {
+  composes: itemBadge from '../styles/pickerPanel.module.css';
+}
+
+/* Footer — shortcuts + apply (draggable) */
+.footer {
+  composes: panelFooter from '../styles/pickerPanel.module.css';
+}
+
+.footerLeft {
+  composes: footerLeft from '../styles/pickerPanel.module.css';
+}
+
+.footerRight {
+  composes: footerRight from '../styles/pickerPanel.module.css';
+}
+
+.shortcutTip {
+  composes: shortcutTip from '../styles/pickerPanel.module.css';
+}
+
+.kbd {
+  composes: kbd from '../styles/pickerPanel.module.css';
+}
+

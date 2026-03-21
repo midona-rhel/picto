@@ -18,6 +18,7 @@ import { createWindowManager } from './windows/windowManager.mjs';
 import { createMenuManager } from './windows/menu.mjs';
 import { createLibraryHostService } from './services/libraryHostService.mjs';
 import { registerIpcHandlers } from './ipc/registerHandlers.mjs';
+import { createAutoUpdaterService } from './services/autoUpdater.mjs';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -67,6 +68,12 @@ const windowManager = createWindowManager({
   isDev,
   getCachedConfig,
   saveGlobalConfig,
+});
+
+const updaterService = createAutoUpdaterService({
+  app,
+  isDev,
+  sendToAllWindows: (...args) => windowManager.sendToAllWindows(...args),
 });
 
 let buildAppMenu = () => {};
@@ -131,6 +138,7 @@ registerIpcHandlers({
   buildBlobPath: mediaProtocol.buildBlobPath,
   windowManager,
   libraryService: libraryHost,
+  updaterService,
 });
 
 function wireNativeEvents() {
@@ -203,6 +211,11 @@ async function bootstrapApplication() {
     setCurrentLibraryRoot(null);
     console.info('[main] no initial library selected; starting without an open library');
   }
+
+  // Check for updates before showing the window — if an update is found
+  // within 3 seconds, download + install it (app restarts automatically).
+  // If no update or timeout, proceed to show the app.
+  await updaterService.checkAndUpdateOnStartup(3000);
 
   buildAppMenu();
   console.info('[main] app menu built');

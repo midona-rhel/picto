@@ -4,7 +4,7 @@ import { MantineProvider, createTheme, rem } from '@mantine/core';
 import { api, getCurrentWindow } from '#desktop/api';
 import { IconX } from '@tabler/icons-react';
 import { LibraryPanel } from '#features/settings/components';
-import { useThemeSync } from '../shared/hooks/useThemeSync';
+import { useThemeSync, useDerivedColorScheme } from '../shared/hooks/useThemeSync';
 import '@mantine/core/styles.css';
 import '../shared/styles/globals.css';
 
@@ -147,10 +147,17 @@ function LibraryManagerApp() {
   );
 }
 
-ReactDOM.createRoot(document.getElementById('root') as HTMLElement).render(
-  <React.StrictMode>
-    <MantineProvider theme={theme} defaultColorScheme="dark" cssVariablesSelector=":root:root">
+function LibraryManagerRoot() {
+  const colorScheme = useDerivedColorScheme();
+  return (
+    <MantineProvider theme={theme} forceColorScheme={colorScheme} cssVariablesSelector=":root:root">
       <LibraryManagerApp />
     </MantineProvider>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root') as HTMLElement).render(
+  <React.StrictMode>
+    <LibraryManagerRoot />
   </React.StrictMode>
 );

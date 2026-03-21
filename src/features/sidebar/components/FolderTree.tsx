@@ -1,6 +1,6 @@
 
 import { useCallback, useMemo, useState, useRef } from 'react';
-import { IconTag } from '@tabler/icons-react';
+import { IconAntennaBars5, IconTag } from '@tabler/icons-react';
 import {
   DndContext,
   DragOverlay,
@@ -22,6 +22,7 @@ import {
   buildFolderTree,
   parseFolderId,
   getFolderAutoTags,
+  getFolderWatchMeta,
 } from '../lib/folderTreeData';
 import { useFolderTreeActions } from '../hooks/useFolderTreeActions';
 import { useFolderTreeDnd } from '../hooks/useFolderTreeDnd';
@@ -69,7 +70,7 @@ function SortableFolderRow({
 
 export function FolderTree() {
   const folderNodes = useDomainStore((s) => s.folderNodes);
-  const { activeFolder, navigateToFolder, setActiveFolder } = useNavigationStore();
+  const { activeFolderId, navigateToFolder, setActiveFolderId } = useNavigationStore();
 
   const tree = buildFolderTree(folderNodes);
 
@@ -110,8 +111,8 @@ export function FolderTree() {
   const actions = useFolderTreeActions({
     folderNodes,
     nodeMap,
-    activeFolder,
-    setActiveFolder,
+    activeFolderId,
+    setActiveFolderId,
     expandFolder,
     setCollapsedNodes,
   });
@@ -222,11 +223,18 @@ export function FolderTree() {
 
     const hasChildren = node.children.length > 0;
     const autoTags = getFolderAutoTags(node);
+    const watchMeta = getFolderWatchMeta(node);
     const items: ContextMenuEntry[] = buildFolderSingleMenu({
       createFolder: () => actions.createSiblingFolder(node),
       createSubfolder: () => actions.createSubfolderForNode(node, folderId),
       renameFolder: () => actions.startRename(node.id, node.name),
       setAutoTags: () => actions.openFolderAutoTagsEditor(folderId, node.name, autoTags),
+      importFolderHere: () => actions.handleImportFolderHere(folderId, node.name),
+      watchActions: {
+        attachOrEdit: () => actions.handleOpenFolderWatchDialog(folderId),
+        remove: watchMeta.watchPath ? () => actions.handleClearFolderWatchConfig(folderId) : undefined,
+        attached: !!watchMeta.watchPath,
+      },
       sortBy: {
         currentLevelAsc: () => actions.handleSortFolders(node.parent_id, 'asc'),
         currentLevelDesc: () => actions.handleSortFolders(node.parent_id, 'desc'),
@@ -273,11 +281,12 @@ export function FolderTree() {
           <SortableContext items={sortableIds} strategy={verticalListSortingStrategy}>
             {flat.map((node) => {
               const folderId = parseFolderId(node.id);
-              const isActive = folderId != null && activeFolder?.folder_id === folderId;
+              const isActive = folderId != null && activeFolderId === folderId;
               const isRenaming = actions.renamingId === node.id;
               const hasChildren = node.children.length > 0;
               const isExpanded = !collapsedNodes.has(node.id);
               const autoTags = getFolderAutoTags(node);
+              const watchMeta = getFolderWatchMeta(node);
 
               return (
                 <SortableFolderRow key={node.id} node={node} dropIndicator={dnd.dropIndicator}>
@@ -319,6 +328,11 @@ export function FolderTree() {
                         {autoTags.length > 0 ? (
                           <span className={styles.folderAutoTagIndicator} title={`${autoTags.length} auto-tag${autoTags.length === 1 ? '' : 's'}`}>
                             <IconTag size={11} />
+                          </span>
+                        ) : null}
+                        {watchMeta.watchPath ? (
+                          <span className={styles.folderAutoTagIndicator} title={`Watched folder: ${watchMeta.watchPath}`}>
+                            <IconAntennaBars5 size={11} />
                           </span>
                         ) : null}
                       </span>

@@ -1,5 +1,5 @@
 import { useRuntimeSyncStore } from '../../state/runtimeSyncStore';
-import { useCacheStore } from '../../state/cacheStore';
+import { useGridMetadataStore } from '../../state/gridMetadataStore';
 import { invalidateMetadata } from '#features/grid/data';
 import { gridResourceMatchesScope } from '../resourceInvalidator';
 import type { ResourceKey } from '../../shared/types/generated/runtime-contract';
@@ -14,7 +14,7 @@ export function startGridRefresher(): void {
     if (state.staleResources === prevStaleRef) return;
     prevStaleRef = state.staleResources;
 
-    const activeScope = useCacheStore.getState().activeGridScope;
+    const activeScope = useGridMetadataStore.getState().activeGridScope;
     const originCommand = state.lastOriginCommand;
     const toFreshen: ResourceKey[] = [];
 
@@ -22,8 +22,8 @@ export function startGridRefresher(): void {
       // Metadata hash invalidation
       if (key.startsWith('metadata/hash:')) {
         const hash = key.slice('metadata/hash:'.length);
-        useCacheStore.getState().invalidateHash(hash);
-        useCacheStore.getState().markHashInvalidated(hash);
+        useGridMetadataStore.getState().invalidateHash(hash);
+        useGridMetadataStore.getState().markHashInvalidated(hash);
         invalidateMetadata(hash);
         toFreshen.push(key);
         continue;
@@ -40,8 +40,8 @@ export function startGridRefresher(): void {
           && key === 'grid/system:inbox';
 
         if (matches && !skipInboxReplace) {
-          useCacheStore.getState().invalidateAll();
-          useCacheStore.getState().bumpGridRefresh();
+          useGridMetadataStore.getState().invalidateAll();
+          useGridMetadataStore.getState().bumpGridRefresh();
         }
         toFreshen.push(key);
       }

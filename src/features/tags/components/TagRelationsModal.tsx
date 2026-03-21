@@ -20,10 +20,9 @@ interface TagRelationsModalProps {
   opened: boolean;
   onClose: () => void;
   tag: TagInfo | null;
-  source: 'local' | 'ptr';
 }
 
-type ViewMode = 'children' | 'siblings';
+type ViewMode = 'hierarchy' | 'aliases';
 
 interface LayoutNode {
   id: string;
@@ -121,15 +120,15 @@ function buildHierarchy(parents: TagInfo[], current: TagInfo, childTags: TagInfo
   return computeLayout(rawNodes, rawEdges);
 }
 
-// ── Build siblings graph ──
+// ── Build aliases graph ──
 // ideal/superior at top → current → subordinates at bottom
 
-function buildSiblings(current: TagInfo, siblings: TagRelation[]) {
+function buildAliases(current: TagInfo, aliases: TagRelation[]) {
   const rawNodes: { id: string; label: string; ns: string; isCurrent: boolean }[] = [];
   const rawEdges: LayoutEdge[] = [];
 
-  const superiors = siblings.filter((s) => s.relation === 'to');
-  const subordinates = siblings.filter((s) => s.relation === 'from');
+  const superiors = aliases.filter((s) => s.relation === 'to');
+  const subordinates = aliases.filter((s) => s.relation === 'from');
 
   // Superior nodes first (ideal direction, goes at top)
   for (const sup of superiors) {
@@ -205,12 +204,12 @@ function chipColors(ns: string, isDark: boolean) {
 
 // ── Component ──
 
-export function TagRelationsModal({ opened, onClose, tag, source }: TagRelationsModalProps) {
+export function TagRelationsModal({ opened, onClose, tag }: TagRelationsModalProps) {
   const [loading, setLoading] = useState(false);
   const [parents, setParents] = useState<TagInfo[]>([]);
   const [children, setChildren] = useState<TagInfo[]>([]);
-  const [siblings, setSiblings] = useState<TagRelation[]>([]);
-  const [view, setView] = useState<ViewMode>('children');
+  const [aliases, setAliases] = useState<TagRelation[]>([]);
+  const [view, setView] = useState<ViewMode>('hierarchy');
   const { colorScheme } = useMantineColorScheme();
   const isDark = colorScheme === 'dark';
 
@@ -219,22 +218,22 @@ export function TagRelationsModal({ opened, onClose, tag, source }: TagRelations
     setLoading(true);
     setParents([]);
     setChildren([]);
-    setSiblings([]);
+    setAliases([]);
 
     Promise.all([
-      (source === 'ptr' ? api.ptr.getTagSiblings(tag.tag_id) : api.tags.getSiblings(tag.tag_id)).catch(() => []),
-      (source === 'ptr' ? api.ptr.getTagParents(tag.tag_id) : api.tags.getParents(tag.tag_id)).catch(() => []),
+      api.tags.getRelations(tag.tag_id, 'aliases').catch(() => []),
+      api.tags.getRelations(tag.tag_id, 'implications').catch(() => []),
     ]).then(([sibs, rels]) => {
       const p = rels.filter((r) => r.relation === 'parent');
       const c = rels.filter((r) => r.relation === 'child');
-      setSiblings(sibs);
+      setAliases(sibs);
       setParents(p);
       setChildren(c);
-      if (c.length > 0) setView('children');
-      else if (sibs.length > 0) setView('siblings');
+      if (c.length > 0 || p.length > 0) setView('hierarchy');
+      else if (sibs.length > 0) setView('aliases');
       setLoading(false);
     });
-  }, [opened, tag, source]);
+  }, [opened, tag]);
 
   const handleClickTag = useCallback(
     (label: string) => {
@@ -249,16 +248,16 @@ export function TagRelationsModal({ opened, onClose, tag, source }: TagRelations
     return buildHierarchy(parents, tag, children);
   }, [tag, parents, children]);
 
-  const siblingGraph = useMemo(() => {
+  const aliasGraph = useMemo(() => {
     if (!tag) return null;
-    return buildSiblings(tag, siblings);
-  }, [tag, siblings]);
+    return buildAliases(tag, aliases);
+  }, [tag, aliases]);
 
   if (!tag) return null;
 
   const display = formatTag(tag.namespace, tag.subtag);
-  const hasAny = parents.length > 0 || children.length > 0 || siblings.length > 0;
-  const graph = view === 'children' ? hierarchy : siblingGraph;
+  const hasAny = parents.length > 0 || children.length > 0 || aliases.length > 0;
+  const graph = view === 'hierarchy' ? hierarchy : aliasGraph;
 
   return (
     <Modal
@@ -278,8 +277,8 @@ export function TagRelationsModal({ opened, onClose, tag, source }: TagRelations
           <>
             <div className={classes.tabs}>
               <button
-                className={`${classes.tab} ${view === 'children' ? classes.tabActive : ''}`}
-                onClick={() => setView('children')}
+                className={`${classes.tab} ${view === 'hierarchy' ? classes.tabActive : ''}`}
+                onClick={() => setView('hierarchy')}
               >
                 Hierarchy
                 {parents.length + children.length > 0 && (
@@ -287,12 +286,12 @@ export function TagRelationsModal({ opened, onClose, tag, source }: TagRelations
                 )}
               </button>
               <button
-                className={`${classes.tab} ${view === 'siblings' ? classes.tabActive : ''}`}
-                onClick={() => setView('siblings')}
+                className={`${classes.tab} ${view === 'aliases' ? classes.tabActive : ''}`}
+                onClick={() => setView('aliases')}
               >
-                Siblings
-                {siblings.length > 0 && (
-                  <span className={classes.tabBadge}>{siblings.length}</span>
+                Aliases
+                {aliases.length > 0 && (
+                  <span className={classes.tabBadge}>{aliases.length}</span>
                 )}
               </button>
             </div>

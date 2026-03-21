@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 
-export type MimeFilterKey = 'images' | 'videos' | 'gifs' | 'audio' | 'other';
+export type MimeFilterKey = 'images' | 'videos' | 'gifs' | 'audio' | 'collections' | 'other';
 
 export interface FolderFilterState {
   includes: Map<number, string>; // folderId → name
@@ -128,13 +128,23 @@ export function useActiveFilterCount(): number {
 }
 
 /** Convert mimeFilter Set to MIME prefix strings for backend query. */
-export function mimeFilterToPrefixes(filter: Set<MimeFilterKey>): string[] | null {
-  if (filter.size === 0) return null;
+export interface MimeFilterResult {
+  prefixes: string[] | null;
+  collectionsOnly: boolean;
+}
+
+export function mimeFilterToResult(filter: Set<MimeFilterKey>): MimeFilterResult {
+  if (filter.size === 0) return { prefixes: null, collectionsOnly: false };
   const prefixes: string[] = [];
   if (filter.has('images')) prefixes.push('image/');
   if (filter.has('videos')) prefixes.push('video/');
   if (filter.has('gifs')) prefixes.push('image/gif');
   if (filter.has('audio')) prefixes.push('audio/');
-  // 'other' is handled by the backend as "not matching any known prefix"
-  return prefixes.length > 0 ? prefixes : null;
+  const collectionsOnly = filter.size === 1 && filter.has('collections');
+  return { prefixes: prefixes.length > 0 ? prefixes : null, collectionsOnly };
+}
+
+/** @deprecated Use mimeFilterToResult instead */
+export function mimeFilterToPrefixes(filter: Set<MimeFilterKey>): string[] | null {
+  return mimeFilterToResult(filter).prefixes;
 }

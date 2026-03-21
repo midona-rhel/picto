@@ -6,24 +6,28 @@ import type { SmartFolderPredicate } from '../shared/types/api';
 interface SmartFolderSummary {
   id: string;
   name: string;
+  parent_id: string | null;
+  display_order?: number | null;
   icon?: string | null;
   color?: string | null;
   count: number;
   freshness: SidebarFreshness | string;
   predicate?: SmartFolderPredicate;
+  localPredicate?: SmartFolderPredicate;
+  hasEffectiveRules: boolean;
+  hasLocalRules: boolean;
   sort_field?: string | null;
   sort_order?: string | null;
 }
 
 interface DomainState {
   // Sidebar counts
-  allImagesCount: number;
+  allActiveCount: number;
   inboxCount: number;
   uncategorizedCount: number;
   trashCount: number;
   untaggedCount: number;
   tagsCount: number;
-  recentViewedCount: number;
   duplicatesCount: number;
 
   // Smart folders derived from sidebar tree
@@ -36,8 +40,6 @@ interface DomainState {
   // Raw sidebar tree for custom consumers
   sidebarNodes: SidebarNodeDto[];
   treeEpoch: number;
-  liveInboxImportRuns: number;
-  liveInboxFloor: number | null;
 
   // Loading state
   loading: boolean;
@@ -45,10 +47,7 @@ interface DomainState {
   // Actions
   fetchSidebarTree: () => Promise<void>;
   invalidate: () => void;
-  applySidebarCounts: (counts: { all_images: number; inbox: number; trash: number }) => void;
-  incrementInboxCount: (delta?: number) => void;
-  subscriptionRunStarted: () => void;
-  subscriptionRunFinished: () => void;
+  applySidebarCounts: (counts: { all_active: number; inbox: number; trash: number }) => void;
   setDuplicatesCount: (count: number) => void;
 }
 
@@ -85,21 +84,18 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number, fallback: T): Pr
 }
 
 export const useDomainStore = create<DomainState>((set, get) => ({
-  allImagesCount: 0,
+  allActiveCount: 0,
   inboxCount: 0,
   uncategorizedCount: 0,
   trashCount: 0,
   untaggedCount: 0,
   tagsCount: 0,
-  recentViewedCount: 0,
   duplicatesCount: 0,
   smartFolders: [],
   smartFolderCounts: {},
   folderNodes: [],
   sidebarNodes: [],
   treeEpoch: 0,
-  liveInboxImportRuns: 0,
-  liveInboxFloor: null,
   loading: false,
 
   fetchSidebarTree: async () => {
@@ -125,36 +121,8 @@ export const useDomainStore = create<DomainState>((set, get) => ({
         SIDEBAR_FETCH_STUCK_TIMEOUT_MS,
         { nodes: [], tree_epoch: 0, generated_at: new Date(0).toISOString() },
       );
-      const [namespaceSummary, inboxCountResp, uncategorizedCountResp, untaggedCountResp, recentViewedCountResp] = await Promise.all([
+      const [namespaceSummary] = await Promise.all([
         withTimeout(api.tags.getNamespaceSummary(), SIDEBAR_OPTIONAL_QUERY_TIMEOUT_MS, []),
-        withTimeout(api.grid.getPageSlim({
-          limit: 1,
-          cursor: null,
-          sortField: 'imported_at',
-          sortOrder: 'desc',
-          status: 'inbox',
-        }), SIDEBAR_OPTIONAL_QUERY_TIMEOUT_MS, null),
-        withTimeout(api.grid.getPageSlim({
-          limit: 1,
-          cursor: null,
-          sortField: 'imported_at',
-          sortOrder: 'desc',
-          status: 'uncategorized',
-        }), SIDEBAR_OPTIONAL_QUERY_TIMEOUT_MS, null),
-        withTimeout(api.grid.getPageSlim({
-          limit: 1,
-          cursor: null,
-          sortField: 'imported_at',
-          sortOrder: 'desc',
-          status: 'untagged',
-        }), SIDEBAR_OPTIONAL_QUERY_TIMEOUT_MS, null),
-        withTimeout(api.grid.getPageSlim({
-          limit: 1,
-          cursor: null,
-          sortField: 'imported_at',
-          sortOrder: 'desc',
-          status: 'recently_viewed',
-        }), SIDEBAR_OPTIONAL_QUERY_TIMEOUT_MS, null),
       ]);
       const nodes = tree.nodes;
       const tagsCount = Array.isArray(namespaceSummary)
@@ -170,21 +138,10 @@ export const useDomainStore = create<DomainState>((set, get) => ({
       const untaggedNode = nodes.find(
         (n) => n.id === 'system:untagged' || n.id === 'system:untagged_files',
       );
-      const recentViewedNode = nodes.find(
-        (n) => n.id === 'system:recent_viewed' || n.id === 'system:recently_viewed',
-      );
       const duplicatesNode = nodes.find((n) => n.id === 'system:duplicates');
-      // Prefer the compiled sidebar node count. During subscription imports,
-      // the inbox grid snapshot can intentionally stay cached for live insertion,
-      // which would otherwise overwrite a fresher sidebar count.
-      const resolvedInboxCount = inboxNode?.count ?? inboxCountResp?.total_count ?? get().inboxCount;
-      const liveInboxFloor = get().liveInboxFloor;
-      const inboxCount = get().liveInboxImportRuns > 0
-        ? Math.max(resolvedInboxCount, liveInboxFloor ?? resolvedInboxCount)
-        : resolvedInboxCount;
-      const uncategorizedCount = uncategorizedCountResp?.total_count ?? uncategorizedNode?.count ?? 0;
-      const untaggedCount = untaggedCountResp?.total_count ?? untaggedNode?.count ?? 0;
-      const recentViewedCount = recentViewedCountResp?.total_count ?? recentViewedNode?.count ?? 0;
+      const inboxCount = inboxNode?.count ?? get().inboxCount;
+      const uncategorizedCount = uncategorizedNode?.count ?? 0;
+      const untaggedCount = untaggedNode?.count ?? 0;
 
       const smartNodes = nodes.filter((n) => n.kind === 'smart_folder');
       const smartFolders: SmartFolderSummary[] = [];
@@ -196,11 +153,19 @@ export const useDomainStore = create<DomainState>((set, get) => ({
         smartFolders.push({
           id,
           name: node.name,
+          parent_id:
+            typeof meta?.parent_id === 'number'
+              ? String(meta.parent_id)
+              : null,
+          display_order: node.sort_order ?? null,
           icon: node.icon,
           color: node.color,
           count: node.count ?? 0,
           freshness: node.freshness,
           predicate: meta?.predicate as SmartFolderPredicate | undefined,
+          localPredicate: meta?.local_predicate as SmartFolderPredicate | undefined,
+          hasEffectiveRules: meta?.has_effective_rules === true,
+          hasLocalRules: meta?.has_local_rules === true,
           sort_field: meta?.sort_field as string | null | undefined,
           sort_order: meta?.sort_order as string | null | undefined,
         });
@@ -212,13 +177,12 @@ export const useDomainStore = create<DomainState>((set, get) => ({
       const folderNodes = nodes.filter((n) => n.kind === 'folder');
 
       set({
-        allImagesCount: allNode?.count ?? 0,
+        allActiveCount: allNode?.count ?? 0,
         inboxCount,
         uncategorizedCount,
         trashCount: trashNode?.count ?? 0,
         untaggedCount,
         tagsCount,
-        recentViewedCount,
         duplicatesCount: duplicatesNode?.count ?? 0,
         smartFolders,
         smartFolderCounts,
@@ -253,42 +217,10 @@ export const useDomainStore = create<DomainState>((set, get) => ({
   },
 
   applySidebarCounts: (counts) => {
-    const { liveInboxImportRuns, liveInboxFloor } = get();
     set({
-      allImagesCount: counts.all_images,
+      allActiveCount: counts.all_active,
       inboxCount: counts.inbox,
       trashCount: counts.trash,
-      liveInboxFloor: liveInboxImportRuns > 0
-        ? Math.max(liveInboxFloor ?? counts.inbox, counts.inbox)
-        : liveInboxFloor,
-    });
-  },
-
-  incrementInboxCount: (delta = 1) => {
-    if (!Number.isFinite(delta) || delta <= 0) return;
-    const nextInbox = get().inboxCount + delta;
-    const { liveInboxImportRuns, liveInboxFloor } = get();
-    set({
-      inboxCount: nextInbox,
-      liveInboxFloor: liveInboxImportRuns > 0
-        ? Math.max(liveInboxFloor ?? nextInbox, nextInbox)
-        : liveInboxFloor,
-    });
-  },
-
-  subscriptionRunStarted: () => {
-    const { liveInboxImportRuns, liveInboxFloor, inboxCount } = get();
-    set({
-      liveInboxImportRuns: liveInboxImportRuns + 1,
-      liveInboxFloor: liveInboxFloor ?? inboxCount,
-    });
-  },
-
-  subscriptionRunFinished: () => {
-    const nextRuns = Math.max(0, get().liveInboxImportRuns - 1);
-    set({
-      liveInboxImportRuns: nextRuns,
-      liveInboxFloor: nextRuns > 0 ? get().liveInboxFloor : null,
     });
   },
 

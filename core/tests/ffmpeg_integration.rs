@@ -75,7 +75,7 @@ fn test_audio() -> &'static Path {
 #[test]
 fn test_video_properties() {
     let video = test_video();
-    let props = picto_core::files::ffmpeg::get_video_properties(video)
+    let props = picto_core::media_processing::ffmpeg::get_video_properties(video)
         .expect("get_video_properties failed");
 
     assert_eq!(props.width, 640);
@@ -90,23 +90,9 @@ fn test_video_properties() {
 }
 
 #[test]
-fn test_video_properties_legacy_wrapper() {
-    let video = test_video();
-    let ((w, h), dur, nframes, has_audio) =
-        picto_core::files::ffmpeg::get_ffmpeg_video_properties(video, false)
-            .expect("get_ffmpeg_video_properties failed");
-
-    assert_eq!(w, 640);
-    assert_eq!(h, 480);
-    assert!(dur >= 1900 && dur <= 2100);
-    assert_eq!(nframes, 60);
-    assert!(!has_audio);
-}
-
-#[test]
 fn test_audio_duration() {
     let audio = test_audio();
-    let dur = picto_core::files::ffmpeg::get_audio_duration_ms(audio)
+    let dur = picto_core::media_processing::ffmpeg::get_audio_duration_ms(audio)
         .expect("get_audio_duration_ms failed");
 
     assert!(
@@ -119,7 +105,7 @@ fn test_audio_duration() {
 #[test]
 fn test_mime_detection_video() {
     let video = test_video();
-    let mime = picto_core::files::ffmpeg::get_mime(video).expect("get_mime failed");
+    let mime = picto_core::media_processing::ffmpeg::get_mime(video).expect("get_mime failed");
 
     assert_eq!(
         mime,
@@ -132,7 +118,7 @@ fn test_mime_detection_video() {
 #[test]
 fn test_mime_detection_audio() {
     let audio = test_audio();
-    let mime = picto_core::files::ffmpeg::get_mime(audio).expect("get_mime failed");
+    let mime = picto_core::media_processing::ffmpeg::get_mime(audio).expect("get_mime failed");
 
     assert_eq!(
         mime,
@@ -145,24 +131,28 @@ fn test_mime_detection_audio() {
 #[test]
 fn test_file_is_animated() {
     let video = test_video();
-    assert!(picto_core::files::ffmpeg::file_is_animated(video));
+    assert!(picto_core::media_processing::ffmpeg::file_is_animated(video));
 }
 
 #[test]
 fn test_render_video_thumbnail() {
     let video = test_video();
 
-    let props = picto_core::files::ffmpeg::get_video_properties(video)
+    let props = picto_core::media_processing::ffmpeg::get_video_properties(video)
         .expect("get_video_properties failed");
 
-    let bytes = picto_core::files::ffmpeg::render_video_frame_to_png(
+    let dur = if props.duration_ms > 0 {
+        Some(props.duration_ms)
+    } else {
+        None
+    };
+    let bytes = picto_core::media_processing::ffmpeg::render_video_thumbnail(
         video,
         (200, 200),
         50, // 50% into the video
-        props.num_frames,
-        props.duration_ms,
+        dur,
     )
-    .expect("render_video_frame_to_png failed");
+    .expect("render_video_thumbnail failed");
 
     // Should be a valid JPEG (starts with FF D8)
     assert!(
@@ -183,8 +173,8 @@ fn test_render_video_thumbnail_at_start() {
     let video = test_video();
 
     let bytes =
-        picto_core::files::ffmpeg::render_video_frame_to_png(video, (200, 200), 0, 60, 2000)
-            .expect("render_video_frame_to_png at start failed");
+        picto_core::media_processing::ffmpeg::render_video_thumbnail(video, (200, 200), 0, Some(2000))
+            .expect("render_video_thumbnail at start failed");
 
     assert!(bytes.len() > 100);
     assert_eq!(bytes[0], 0xFF);
@@ -195,7 +185,7 @@ fn test_render_video_thumbnail_at_start() {
 fn test_file_info_video() {
     let video = test_video();
     let info =
-        picto_core::files::get_file_info(video, Some(picto_core::constants::MimeType::VideoMp4))
+        picto_core::media_processing::get_file_info(video, Some(picto_core::constants::MimeType::VideoMp4))
             .expect("get_file_info failed");
 
     assert_eq!(info.width, Some(640));
@@ -209,7 +199,7 @@ fn test_file_info_video() {
 fn test_file_info_audio() {
     let audio = test_audio();
     let info =
-        picto_core::files::get_file_info(audio, Some(picto_core::constants::MimeType::AudioMp3))
+        picto_core::media_processing::get_file_info(audio, Some(picto_core::constants::MimeType::AudioMp3))
             .expect("get_file_info failed");
 
     assert!(info.duration_ms.is_some());
@@ -220,7 +210,7 @@ fn test_file_info_audio() {
 #[test]
 fn test_nonexistent_file_errors() {
     let bad_path = Path::new("/tmp/does_not_exist_picto_test.mp4");
-    assert!(picto_core::files::ffmpeg::get_video_properties(bad_path).is_err());
-    assert!(picto_core::files::ffmpeg::get_audio_duration_ms(bad_path).is_err());
-    assert!(picto_core::files::ffmpeg::get_mime(bad_path).is_err());
+    assert!(picto_core::media_processing::ffmpeg::get_video_properties(bad_path).is_err());
+    assert!(picto_core::media_processing::ffmpeg::get_audio_duration_ms(bad_path).is_err());
+    assert!(picto_core::media_processing::ffmpeg::get_mime(bad_path).is_err());
 }

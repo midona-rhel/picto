@@ -1,20 +1,18 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Sidebar } from '../Sidebar';
 import { imageDrag } from '../../../../shared/lib/imageDrag';
 import { useDomainStore } from '../../../../state/domainStore';
 import { useNavigationStore } from '../../../../state/navigationStore';
-import { useCacheStore } from '../../../../state/cacheStore';
+import { useGridMetadataStore } from '../../../../state/gridMetadataStore';
 
 const {
   setStatusSelectionMock,
-  invalidateSummaryMock,
   sidebarGetTreeMock,
   tagsNamespaceSummaryMock,
   gridGetPageSlimMock,
 } = vi.hoisted(() => ({
   setStatusSelectionMock: vi.fn(),
-  invalidateSummaryMock: vi.fn(),
   sidebarGetTreeMock: vi.fn(),
   tagsNamespaceSummaryMock: vi.fn(),
   gridGetPageSlimMock: vi.fn(),
@@ -34,12 +32,6 @@ vi.mock('#desktop/api', () => ({
     grid: {
       getPageSlim: gridGetPageSlimMock,
     },
-  },
-}));
-
-vi.mock('../../../../controllers/selectionController', () => ({
-  SelectionController: {
-    invalidateSummary: invalidateSummaryMock,
   },
 }));
 
@@ -72,17 +64,15 @@ function dispatchInternalDrop(label: string, hashes: string[]) {
 describe('Sidebar drag-drop status targets', () => {
   beforeEach(() => {
     setStatusSelectionMock.mockReset();
-    invalidateSummaryMock.mockReset();
     sidebarGetTreeMock.mockReset();
     tagsNamespaceSummaryMock.mockReset();
     gridGetPageSlimMock.mockReset();
     useDomainStore.setState({
-      allImagesCount: 100,
+      allActiveCount: 100,
       inboxCount: 20,
       uncategorizedCount: 12,
       trashCount: 5,
       untaggedCount: 10,
-      recentViewedCount: 0,
       duplicatesCount: 0,
       folderNodes: [],
       smartFolders: [],
@@ -93,14 +83,13 @@ describe('Sidebar drag-drop status targets', () => {
     });
     useNavigationStore.setState({
       currentView: 'images',
-      activeSmartFolder: null,
-      activeFolder: null,
-      activeCollection: null,
-      activeFlow: null,
+      activeSmartFolderId: null,
+      activeFolderId: null,
+      activeCollectionId: null,
       activeStatusFilter: null,
       filterTags: null,
     });
-    useCacheStore.setState({ gridRefreshSeq: 0, metadataCache: new Map() });
+    useGridMetadataStore.setState({ gridRefreshSeq: 0, metadataCache: new Map() });
     setStatusSelectionMock.mockResolvedValue(0);
     sidebarGetTreeMock.mockResolvedValue({ nodes: [], tree_epoch: 1, generated_at: new Date(0).toISOString() });
     tagsNamespaceSummaryMock.mockResolvedValue([]);
@@ -111,16 +100,14 @@ describe('Sidebar drag-drop status targets', () => {
     imageDrag.clearNativeDragSession();
   });
 
-  it('drops to All Images and restores active status', async () => {
+  it('drops to All Active and restores active status', async () => {
     render(<Sidebar />);
-    dispatchInternalDrop('All Images', ['hash_a', 'hash_b']);
+    dispatchInternalDrop('All Active', ['hash_a', 'hash_b']);
 
     expect(setStatusSelectionMock).toHaveBeenCalledWith(
       { mode: 'explicit_hashes', hashes: ['hash_a', 'hash_b'] },
       'active',
     );
-    await waitFor(() => expect(invalidateSummaryMock).toHaveBeenCalledTimes(1));
-    await waitFor(() => expect(useCacheStore.getState().gridRefreshSeq).toBe(1));
   });
 
   it('drops to Inbox and sets inbox status', async () => {
@@ -131,8 +118,6 @@ describe('Sidebar drag-drop status targets', () => {
       { mode: 'explicit_hashes', hashes: ['hash_x'] },
       'inbox',
     );
-    await waitFor(() => expect(invalidateSummaryMock).toHaveBeenCalledTimes(1));
-    await waitFor(() => expect(useCacheStore.getState().gridRefreshSeq).toBe(1));
   });
 
   it('drops to Trash and sets trash status', async () => {
@@ -143,7 +128,5 @@ describe('Sidebar drag-drop status targets', () => {
       { mode: 'explicit_hashes', hashes: ['hash_z'] },
       'trash',
     );
-    await waitFor(() => expect(invalidateSummaryMock).toHaveBeenCalledTimes(1));
-    await waitFor(() => expect(useCacheStore.getState().gridRefreshSeq).toBe(1));
   });
 });

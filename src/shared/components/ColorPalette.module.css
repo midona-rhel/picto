@@ -40,10 +40,10 @@
 }
 
 [data-mantine-color-scheme="light"] .colorPalette {
-  background: var(--color-white-50);
-  border-color: var(--color-border-secondary);
+  background: rgba(0, 0, 0, 0.04);
+  border-color: rgba(0, 0, 0, 0.12);
 }
 
 [data-mantine-color-scheme="light"] .colorSwatch {
-  box-shadow: 0 0 0 1px var(--color-black-10) inset;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.15) inset;
 }

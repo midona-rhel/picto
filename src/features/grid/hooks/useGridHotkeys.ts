@@ -1,27 +1,24 @@
 import { useEffect, useRef } from 'react';
 import { useHotkeys } from '@mantine/hooks';
-import { notifications } from '@mantine/notifications';
+import { notifyInfo } from '../../../shared/lib/notify';
+import { api } from '#desktop/api';
 import { notifyError, notifySuccess } from '../../../shared/lib/notify';
-import { FolderController } from '../../../shared/controllers/folderController';
 import { FolderPickerService } from '../../../shared/services/folderPickerService';
-import { FileController } from '../../../shared/controllers/fileController';
 import { bustThumbnailCache } from '../../../shared/lib/mediaUrl';
-import { useCacheStore } from '../../../state/cacheStore';
-import { useSettingsStore, type AppSettings } from '../../../state/settingsStore';
-import { getShortcut, matchesShortcutDef } from '../../../shared/lib/shortcuts';
+import type { AppSettings } from '../../../state/settingsStore';
 import type { GridRuntimeAction, GridRuntimeState, GridViewMode } from '../runtime';
-import type { DetailViewControls, DetailViewState } from '../DetailView';
 
 let lastUsedFolder: { id: number; name: string } | null = null;
 
 interface UseGridHotkeysArgs {
   stateRef: { current: GridRuntimeState };
   dispatch: React.Dispatch<GridRuntimeAction>;
-  onDetailViewStateChange?: (state: DetailViewState | null, controls: DetailViewControls | null) => void;
   activateVirtualSelectAll: () => void;
   handleOpenWithDefaultApp: () => void;
   handleRevealInFolder: () => void;
   handleOpenInNewWindow: () => void;
+  handleBasicExport: () => void | Promise<void>;
+  handleAdvancedExport: () => void | Promise<void>;
   handleDeleteSelected: () => void;
   handleCopyFilePath: () => void;
   handleCopyTags: () => void;
@@ -29,7 +26,7 @@ interface UseGridHotkeysArgs {
   onViewModeChange?: (mode: GridViewMode) => void;
   updateSetting: <K extends keyof AppSettings>(key: K, value: AppSettings[K]) => void;
   grayscalePreview: boolean;
-  setSlideshowOpen: React.Dispatch<React.SetStateAction<boolean>>;
+  openSlideshow: (hash?: string | null) => void;
   setBatchRenameOpen: React.Dispatch<React.SetStateAction<boolean>>;
   startInlineRename: () => void;
   folderId?: number | null;
@@ -40,18 +37,20 @@ interface UseGridHotkeysArgs {
   handleRateSelected: (rating: number) => void;
   handleOpenQuickLook: () => void;
   handleOpenDetail: () => void;
+  viewerOpen: boolean;
+  closeViewer: (exitHash?: string) => void;
   statusFilter?: string | null;
-  handleInboxAction?: (hash: string, status: 'active' | 'trash') => void;
 }
 
 export function useGridHotkeys({
   stateRef,
   dispatch,
-  onDetailViewStateChange,
   activateVirtualSelectAll,
   handleOpenWithDefaultApp,
   handleRevealInFolder,
   handleOpenInNewWindow,
+  handleBasicExport,
+  handleAdvancedExport,
   handleDeleteSelected,
   handleCopyFilePath,
   handleCopyTags,
@@ -59,7 +58,7 @@ export function useGridHotkeys({
   onViewModeChange,
   updateSetting,
   grayscalePreview,
-  setSlideshowOpen,
+  openSlideshow,
   setBatchRenameOpen,
   startInlineRename,
   folderId,
@@ -70,8 +69,9 @@ export function useGridHotkeys({
   handleRateSelected,
   handleOpenQuickLook,
   handleOpenDetail,
-  statusFilter,
-  handleInboxAction,
+  viewerOpen,
+  closeViewer,
+  statusFilter: _statusFilter,
 }: UseGridHotkeysArgs): void {
   const handleGridNavigationRef = useRef(handleGridNavigation);
   handleGridNavigationRef.current = handleGridNavigation;
@@ -80,21 +80,17 @@ export function useGridHotkeys({
   handleRenameRef.current = startInlineRename;
 
   useHotkeys([
-    ['mod+f', () => console.log('Focus search')],
     ['mod+a', () => activateVirtualSelectAll()],
     ['shift+Enter', handleOpenWithDefaultApp],
     ['mod+Enter', handleRevealInFolder],
     ['mod+o', handleOpenInNewWindow],
+    ['mod+e', () => { void handleBasicExport(); }],
+    ['mod+shift+e', () => { void handleAdvancedExport(); }],
     [
       'escape',
       () => {
-        if (stateRef.current.detailHash) {
-          dispatch({ type: 'CLOSE_DETAIL' });
-          onDetailViewStateChange?.(null, null);
-          return;
-        }
-        if (stateRef.current.quickLookHash) {
-          dispatch({ type: 'CLOSE_QUICK_LOOK' });
+        if (viewerOpen) {
+          closeViewer();
           return;
         }
         dispatch({ type: 'CLEAR_SELECTION' });
@@ -109,11 +105,15 @@ export function useGridHotkeys({
     ['alt+2', () => onViewModeChange?.('waterfall')],
     ['alt+3', () => onViewModeChange?.('justified')],
     ['mod+alt+g', () => updateSetting('grayscalePreview', !grayscalePreview)],
-    ['mod+alt+8', () => updateSetting('showMinimap', !useSettingsStore.getState().settings.showMinimap)],
     [
       'F5',
       () => {
-        if (stateRef.current.images.length > 0) setSlideshowOpen(true);
+        if (stateRef.current.images.length > 0) {
+          const selectedHash = stateRef.current.selectedHashes.size === 1
+            ? [...stateRef.current.selectedHashes][0]
+            : null;
+          openSlideshow(selectedHash);
+        }
       },
     ],
     ['mod+r', () => handleRenameRef.current()],
@@ -128,8 +128,8 @@ export function useGridHotkeys({
     [
       'mod+shift+n',
       () => {
-        FolderController.createFolder({ name: 'New Folder' })
-          
+        api.folders.create({ name: 'New Folder' })
+
           .catch((err) => notifyError(err, 'Create Folder Failed'));
       },
     ],
@@ -137,8 +137,8 @@ export function useGridHotkeys({
       'alt+n',
       () => {
         if (!folderId) return;
-        FolderController.createFolder({ name: 'New Folder', parentId: folderId })
-          
+        api.folders.create({ name: 'New Folder', parent_id: folderId })
+
           .catch((err) => notifyError(err, 'Create Subfolder Failed'));
       },
     ],
@@ -162,7 +162,7 @@ export function useGridHotkeys({
                   .filter((i) => !s.virtualAllSelection!.excludedHashes.has(i.hash))
                   .map((i) => i.hash)
               : [...s.selectedHashes];
-            FolderController.addFilesToFolderBatch(fId, hashes)
+            api.folders.addFiles(fId, hashes)
               .then(() => {
                 notifySuccess(`${hashes.length} file(s) added to folder`, 'Added');
               })
@@ -182,7 +182,7 @@ export function useGridHotkeys({
               .map((i) => i.hash)
           : [...s.selectedHashes];
         if (hashes.length === 0) return;
-        FolderController.addFilesToFolderBatch(lastUsedFolder.id, hashes)
+        api.folders.addFiles(lastUsedFolder.id, hashes)
           .then(() => {
             notifySuccess(`${hashes.length} file(s) added to "${lastUsedFolder!.name}"`, 'Added');
           })
@@ -199,17 +199,11 @@ export function useGridHotkeys({
               .map((i) => i.hash)
           : [...s.selectedHashes];
         if (hashes.length === 0) return;
-        notifications.show({
-          title: 'Regenerating...',
-          message: `Regenerating ${hashes.length} thumbnail(s)`,
-          autoClose: 3000,
-          loading: true,
-        });
-        FileController.regenerateThumbnailsBatch(hashes)
+        notifyInfo(`Regenerating ${hashes.length} thumbnail(s)`);
+        api.file.regenerateThumbnailsBatch(hashes)
           .then((r) => {
             notifySuccess(`Regenerated ${r.regenerated} thumbnail(s)`, 'Thumbnails');
             bustThumbnailCache(hashes);
-            useCacheStore.getState().bumpGridRefresh();
           })
           .catch((err) => notifyError(err, 'Regenerate Failed'));
       },
@@ -222,18 +216,12 @@ export function useGridHotkeys({
   handleOpenQuickLookRef.current = handleOpenQuickLook;
   const handleOpenDetailRef = useRef(handleOpenDetail);
   handleOpenDetailRef.current = handleOpenDetail;
-  const statusFilterRef = useRef(statusFilter);
-  statusFilterRef.current = statusFilter;
-  const handleInboxActionRef = useRef(handleInboxAction);
-  handleInboxActionRef.current = handleInboxAction;
-  const detailHashRef = useRef(stateRef.current.detailHash);
-  detailHashRef.current = stateRef.current.detailHash;
-  const quickLookHashRef = useRef(stateRef.current.quickLookHash);
-  quickLookHashRef.current = stateRef.current.quickLookHash;
+  const viewerOpenRef = useRef(viewerOpen);
+  viewerOpenRef.current = viewerOpen;
   useEffect(() => {
     const handleNativeKey = (e: KeyboardEvent) => {
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
-      if (detailHashRef.current || quickLookHashRef.current) return;
+      if (viewerOpenRef.current) return;
 
       const wasdMap: Record<string, string> = {
         w: 'ArrowUp',
@@ -265,22 +253,6 @@ export function useGridHotkeys({
         }
       }
 
-      // Inbox reject from grid — Backspace rejects selected image(s)
-      if (statusFilterRef.current === 'inbox' && handleInboxActionRef.current) {
-        const rejectDef = getShortcut('inbox.reject');
-        if (rejectDef && matchesShortcutDef(e, rejectDef)) {
-          const s = stateRef.current;
-          const hashes = s.virtualAllSelection
-            ? s.images.filter((i) => !s.virtualAllSelection!.excludedHashes.has(i.hash)).map((i) => i.hash)
-            : [...s.selectedHashes];
-          if (hashes.length > 0) {
-            e.preventDefault();
-            for (const hash of hashes) handleInboxActionRef.current!(hash, 'trash');
-          }
-          return;
-        }
-      }
-
       if (e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return;
       if (e.key === ' ' || e.code === 'Space') {
         e.preventDefault();
@@ -292,5 +264,5 @@ export function useGridHotkeys({
     };
     window.addEventListener('keydown', handleNativeKey);
     return () => window.removeEventListener('keydown', handleNativeKey);
-  }, []);
+  }, [openSlideshow, closeViewer]);
 }

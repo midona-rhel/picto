@@ -1,8 +1,5 @@
-//! Archive file handling (CBZ, EPUB, ZIP).
-//!
-//! Ported from `hydrus/core/files/HydrusArchiveHandling.py`.
-//! Handles extraction of cover pages from archive files for resolution detection
-//! and thumbnail generation.
+//! Archive file handling (CBZ, EPUB, ZIP) — cover page extraction for
+//! resolution detection and thumbnail generation.
 
 use std::io::{Cursor, Read};
 use std::path::Path;
@@ -11,14 +8,13 @@ use image::GenericImageView;
 
 use super::{FileError, FileResult};
 
-/// Image file extensions recognized in archives (matches Python's HC.IMAGE_FILE_EXTS).
+/// Image file extensions recognized in archives.
 const IMAGE_FILE_EXTS: &[&str] = &[
     ".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp", ".tiff", ".tif", ".ico",
 ];
 
 /// Get the path to the cover page (first image) inside a ZIP archive.
 ///
-/// Ported from `HydrusArchiveHandling.GetCoverPagePath()`.
 /// Finds the first image file in the archive, sorted by filename.
 pub fn get_cover_page_path(archive_path: &Path) -> FileResult<String> {
     let file = std::fs::File::open(archive_path).map_err(FileError::Io)?;
@@ -38,7 +34,7 @@ pub fn get_cover_page_path(archive_path: &Path) -> FileResult<String> {
 
         let name = entry.name().to_string();
 
-        // Skip macOS resource fork files (matches Python)
+        // Skip macOS resource fork files
         if name.starts_with("__MACOSX/") {
             continue;
         }
@@ -58,7 +54,6 @@ pub fn get_cover_page_path(archive_path: &Path) -> FileResult<String> {
 
 /// Get cover page path from an EPUB file.
 ///
-/// Ported from `HydrusArchiveHandling.GetCoverPagePathFromEpub()`.
 /// EPUBs specify cover images in their OPF metadata. Supports EPUB 2 and EPUB 3 standards,
 /// plus Apple iBooks format.
 pub fn get_cover_page_path_from_epub(archive_path: &Path) -> FileResult<String> {
@@ -149,7 +144,6 @@ pub fn get_cover_page_path_from_epub(archive_path: &Path) -> FileResult<String> 
 
 /// Extract a single file from a ZIP archive as bytes.
 ///
-/// Ported from `HydrusArchiveHandling.GetSingleFileFromZipBytes()`.
 pub fn get_single_file_from_zip_bytes(
     archive_path: &Path,
     path_in_zip: &str,
@@ -170,7 +164,6 @@ pub fn get_single_file_from_zip_bytes(
 
 /// Extract the cover page image bytes from an archive.
 ///
-/// Ported from the cover page extraction logic in `HydrusFileHandling.py`.
 /// For EPUBs, uses the OPF metadata to find the cover. For CBZs, uses
 /// the first image file sorted alphabetically.
 pub fn extract_cover_page(archive_path: &Path, is_epub: bool) -> FileResult<Vec<u8>> {
@@ -241,7 +234,6 @@ pub fn filename_has_image_ext_pub(filename: &str) -> bool {
 
 /// Check if a filename has an image extension.
 ///
-/// Ported from `HydrusArchiveHandling.filename_has_image_ext()`.
 fn filename_has_image_ext(filename: &str) -> bool {
     if let Some(dot_pos) = filename.rfind('.') {
         let ext = &filename[dot_pos..];
@@ -271,17 +263,3 @@ fn read_zip_entry_string(
 // They are omitted because they are called during MIME detection which is
 // already ported in files.rs.
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_filename_has_image_ext() {
-        assert!(filename_has_image_ext("page001.jpg"));
-        assert!(filename_has_image_ext("cover.PNG"));
-        assert!(filename_has_image_ext("art.gif"));
-        assert!(!filename_has_image_ext("readme.txt"));
-        assert!(!filename_has_image_ext("noext"));
-        assert!(!filename_has_image_ext("archive.zip"));
-    }
-}

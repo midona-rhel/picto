@@ -218,6 +218,7 @@
   box-sizing: border-box;
   background-color: var(--color-black-10);
   flex-shrink: 0;
+  cursor: grab;
 }
 
 .footerLeft {
@@ -256,8 +257,5 @@
 
 .emptyState {
   text-align: center;
-  height: 20px;
-  line-height: 20px;
-  padding: 16px 0;
   color: var(--color-text-tertiary);
 }

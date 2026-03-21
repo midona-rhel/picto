@@ -68,7 +68,10 @@ export function useWaterfallLayoutWorker({
   textHeight,
   paddingX,
 }: UseWaterfallLayoutWorkerArgs): UseWaterfallLayoutWorkerResult {
-  const shouldUseWorker = viewMode === 'waterfall' && images.length >= WORKER_LAYOUT_THRESHOLD && layoutWidth > 0;
+  const shouldUseWorker =
+    viewMode === 'waterfall' &&
+    images.length >= WORKER_LAYOUT_THRESHOLD &&
+    layoutWidth > 0;
   const signature = useMemo(
     () => buildSignature(images, layoutWidth, targetSize, gap, textHeight, paddingX),
     [images, layoutWidth, targetSize, gap, textHeight, paddingX],
@@ -151,7 +154,8 @@ export function useWaterfallLayoutWorker({
   }, []);
 
   if (!shouldUseWorker || workerDisabledRef.current) {
-    const layout = syncLayout ?? computeLayout(images, layoutWidth, targetSize, gap, viewMode, textHeight, paddingX);
+    const layout =
+      syncLayout ?? computeLayout(images, layoutWidth, targetSize, gap, viewMode, textHeight, paddingX);
     return {
       renderImages: images,
       layout,
@@ -181,7 +185,8 @@ export function useWaterfallLayoutWorker({
     };
   }
 
-  const initialLayout = syncLayout ?? computeLayout(images, layoutWidth, targetSize, gap, viewMode, textHeight, paddingX);
+  const initialLayout =
+    syncLayout ?? computeLayout(images, layoutWidth, targetSize, gap, viewMode, textHeight, paddingX);
   return {
     renderImages: images,
     layout: initialLayout,

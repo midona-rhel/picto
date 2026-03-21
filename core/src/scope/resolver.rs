@@ -9,11 +9,11 @@ use rusqlite::Connection;
 
 use crate::folders::db::{count_uncategorized_entities, list_uncategorized_entity_ids};
 use crate::smart_folders::db as smart_folders_db;
-use crate::smart_folders::db::SmartFolderPredicate;
 use crate::sqlite::bitmaps::{BitmapKey, BitmapStore};
 use crate::sqlite::SqliteDatabase;
 use crate::tags::db::find_tag as sql_find_tag;
 use crate::tags::normalize;
+use crate::types::{GridFilterSpec, GridScopeKind, GridScopeSpec, GridSystemScopeKey};
 
 use super::{parse_include_match_mode, IncludeMatchMode};
 
@@ -24,27 +24,27 @@ use super::{parse_include_match_mode, IncludeMatchMode};
 /// or selection-specific concerns (excluded_hashes).
 #[derive(Debug, Clone, Default)]
 pub struct ScopeFilter {
-    pub status: Option<String>,
-    pub smart_folder_predicate: Option<SmartFolderPredicate>,
-    pub search_tags: Option<Vec<String>>,
-    pub search_excluded_tags: Option<Vec<String>>,
-    pub tag_match_mode: Option<String>,
-    pub folder_ids: Option<Vec<i64>>,
-    pub excluded_folder_ids: Option<Vec<i64>>,
-    pub folder_match_mode: Option<String>,
+    pub scope: GridScopeSpec,
+    pub filters: GridFilterSpec,
 }
 
 impl ScopeFilter {
+    pub fn has_collection(&self) -> bool {
+        self.scope.kind == GridScopeKind::Collection
+    }
+
     pub fn has_smart_folder(&self) -> bool {
-        self.smart_folder_predicate.is_some()
+        self.scope.kind == GridScopeKind::Smart && self.scope.smart_folder_predicate.is_some()
     }
 
     pub fn has_search_tags(&self) -> bool {
-        self.search_tags
+        self.filters
+            .search_tags
             .as_ref()
             .map(|t| !t.is_empty())
             .unwrap_or(false)
             || self
+                .filters
                 .search_excluded_tags
                 .as_ref()
                 .map(|t| !t.is_empty())
@@ -52,29 +52,59 @@ impl ScopeFilter {
     }
 
     pub fn has_folder(&self) -> bool {
-        self.folder_ids
-            .as_ref()
-            .map(|v| !v.is_empty())
-            .unwrap_or(false)
+        self.scope.kind == GridScopeKind::Folder
             || self
+                .filters
+                .folder_ids
+                .as_ref()
+                .map(|v| !v.is_empty())
+                .unwrap_or(false)
+            || self
+                .filters
                 .excluded_folder_ids
                 .as_ref()
                 .map(|v| !v.is_empty())
                 .unwrap_or(false)
+    }
+
+    pub fn system_key(&self) -> Option<GridSystemScopeKey> {
+        if self.scope.kind == GridScopeKind::System {
+            self.scope.system_key
+        } else {
+            None
+        }
+    }
+
+    pub fn folder_ids(&self) -> Option<Vec<i64>> {
+        if self.scope.kind == GridScopeKind::Folder {
+            self.scope.folder_id.map(|id| vec![id])
+        } else {
+            self.filters.folder_ids.clone()
+        }
+    }
+
+    pub fn excluded_folder_ids(&self) -> Option<Vec<i64>> {
+        if self.scope.kind == GridScopeKind::Folder {
+            None
+        } else {
+            self.filters.excluded_folder_ids.clone()
+        }
+    }
+
+    pub fn folder_match_mode(&self) -> Option<String> {
+        if self.scope.kind == GridScopeKind::Folder {
+            None
+        } else {
+            self.filters.folder_match_mode.clone()
+        }
     }
 }
 
 impl From<&crate::types::GridPageSlimQuery> for ScopeFilter {
     fn from(q: &crate::types::GridPageSlimQuery) -> Self {
         ScopeFilter {
-            status: q.status.clone(),
-            smart_folder_predicate: q.smart_folder_predicate.clone(),
-            search_tags: q.search_tags.clone(),
-            search_excluded_tags: q.search_excluded_tags.clone(),
-            tag_match_mode: q.tag_match_mode.clone(),
-            folder_ids: q.folder_ids.clone(),
-            excluded_folder_ids: q.excluded_folder_ids.clone(),
-            folder_match_mode: q.folder_match_mode.clone(),
+            scope: q.scope.clone(),
+            filters: q.filters.clone(),
         }
     }
 }
@@ -82,14 +112,8 @@ impl From<&crate::types::GridPageSlimQuery> for ScopeFilter {
 impl From<&crate::types::SelectionQuerySpec> for ScopeFilter {
     fn from(s: &crate::types::SelectionQuerySpec) -> Self {
         ScopeFilter {
-            status: s.status.clone(),
-            smart_folder_predicate: s.smart_folder_predicate.clone(),
-            search_tags: s.search_tags.clone(),
-            search_excluded_tags: s.search_excluded_tags.clone(),
-            tag_match_mode: s.tag_match_mode.clone(),
-            folder_ids: s.folder_ids.clone(),
-            excluded_folder_ids: s.excluded_folder_ids.clone(),
-            folder_match_mode: s.folder_match_mode.clone(),
+            scope: s.scope.clone(),
+            filters: s.filters.clone(),
         }
     }
 }
@@ -97,15 +121,18 @@ impl From<&crate::types::SelectionQuerySpec> for ScopeFilter {
 /// Resolve a scope filter to a `RoaringBitmap` of matching file IDs.
 ///
 /// Resolution cascade:
-/// 1. Smart folder predicate → `compile_predicate`
-/// 2. Tag search → EffectiveTag bitmap ops (AND/OR), intersect AllActive
-/// 3. Folder → Folder bitmap ops (AND/OR), intersect AllActive
-/// 4. Status fallback: inbox, trash, untagged, uncategorized, recently_viewed, default
+/// 1. Collection scope → collection members
+/// 2. Smart folder scope → `compile_predicate`
+/// 3. Tag search → EffectiveTag bitmap ops (AND/OR), intersect active (status=1)
+/// 4. Folder scope/filter → Folder bitmap ops (AND/OR), intersect active (status=1)
+/// 5. System fallback: inbox, trash, untagged, uncategorized, default
 pub async fn resolve_scope(
     db: &SqliteDatabase,
     filter: &ScopeFilter,
 ) -> Result<RoaringBitmap, String> {
-    if filter.has_smart_folder() {
+    if filter.has_collection() {
+        resolve_collection(db, filter).await
+    } else if filter.has_smart_folder() {
         resolve_smart_folder(db, filter).await
     } else if filter.has_search_tags() {
         resolve_tag_search(db, filter).await
@@ -116,11 +143,25 @@ pub async fn resolve_scope(
     }
 }
 
+async fn resolve_collection(
+    db: &SqliteDatabase,
+    filter: &ScopeFilter,
+) -> Result<RoaringBitmap, String> {
+    let collection_id = filter
+        .scope
+        .collection_entity_id
+        .expect("collection id required");
+    let file_ids = db.list_collection_member_file_ids(collection_id).await?;
+    Ok(RoaringBitmap::from_iter(
+        file_ids.into_iter().map(|id| id as u32),
+    ))
+}
+
 async fn resolve_smart_folder(
     db: &SqliteDatabase,
     filter: &ScopeFilter,
 ) -> Result<RoaringBitmap, String> {
-    let pred = filter.smart_folder_predicate.clone().unwrap();
+    let pred = filter.scope.smart_folder_predicate.clone().unwrap();
     let bitmaps = db.bitmaps.clone();
     db.with_read_conn(move |conn| smart_folders_db::compile_predicate(conn, &pred, &bitmaps))
         .await
@@ -130,10 +171,14 @@ async fn resolve_tag_search(
     db: &SqliteDatabase,
     filter: &ScopeFilter,
 ) -> Result<RoaringBitmap, String> {
-    let include_tags = filter.search_tags.clone().unwrap_or_default();
-    let exclude_tags = filter.search_excluded_tags.clone().unwrap_or_default();
+    let include_tags = filter.filters.search_tags.clone().unwrap_or_default();
+    let exclude_tags = filter
+        .filters
+        .search_excluded_tags
+        .clone()
+        .unwrap_or_default();
     let match_mode = parse_include_match_mode(
-        filter.tag_match_mode.as_deref(),
+        filter.filters.tag_match_mode.as_deref(),
         IncludeMatchMode::All,
     );
     let bitmaps = db.bitmaps.clone();
@@ -156,16 +201,14 @@ async fn resolve_tag_search(
 
         let include_ids = resolve_ids(&include_tags, match_mode != IncludeMatchMode::Any)?;
         let exclude_ids = resolve_ids(&exclude_tags, false)?;
-        let all_active = bitmaps.get(&BitmapKey::AllActive);
+        let active = bitmaps.get(&BitmapKey::Status(1));
 
-        // If the user searched for tags but none resolved to valid tag_ids,
-        // return empty — the tags don't exist so no files can match.
         if !include_tags.is_empty() && include_ids.is_empty() {
             return Ok(RoaringBitmap::new());
         }
 
         let mut result = if include_ids.is_empty() {
-            all_active.clone()
+            active.clone()
         } else if match_mode == IncludeMatchMode::Any {
             let mut union = RoaringBitmap::new();
             for tid in &include_ids {
@@ -189,7 +232,7 @@ async fn resolve_tag_search(
             }
             result -= &excluded;
         }
-        result &= &all_active;
+        result &= &active;
         Ok(result)
     })
     .await
@@ -199,16 +242,16 @@ fn resolve_folder(
     db: &SqliteDatabase,
     filter: &ScopeFilter,
 ) -> Result<RoaringBitmap, String> {
-    let include_folders = filter.folder_ids.clone().unwrap_or_default();
-    let exclude_folders = filter.excluded_folder_ids.clone().unwrap_or_default();
+    let include_folders = filter.folder_ids().unwrap_or_default();
+    let exclude_folders = filter.excluded_folder_ids().unwrap_or_default();
     let match_mode = parse_include_match_mode(
-        filter.folder_match_mode.as_deref(),
+        filter.folder_match_mode().as_deref(),
         IncludeMatchMode::Any,
     );
-    let all_active = db.bitmaps.get(&BitmapKey::AllActive);
+    let active = db.bitmaps.get(&BitmapKey::Status(1));
 
     let mut result = if include_folders.is_empty() {
-        all_active.clone()
+        active.clone()
     } else if match_mode == IncludeMatchMode::Any {
         let mut union = RoaringBitmap::new();
         for fid in &include_folders {
@@ -232,7 +275,7 @@ fn resolve_folder(
         }
         result -= &excluded;
     }
-    result &= &all_active;
+    result &= &active;
     Ok(result)
 }
 
@@ -240,26 +283,20 @@ async fn resolve_status(
     db: &SqliteDatabase,
     filter: &ScopeFilter,
 ) -> Result<RoaringBitmap, String> {
-    match filter.status.as_deref() {
-        Some("inbox") => Ok(db.bitmaps.get(&BitmapKey::Status(0))),
-        Some("trash") => Ok(db.bitmaps.get(&BitmapKey::Status(2))),
-        Some("untagged") => {
-            let all_active = db.bitmaps.get(&BitmapKey::AllActive);
+    match filter.system_key() {
+        Some(GridSystemScopeKey::Inbox) => Ok(db.bitmaps.get(&BitmapKey::Status(0))),
+        Some(GridSystemScopeKey::Trash) => Ok(db.bitmaps.get(&BitmapKey::Status(2))),
+        Some(GridSystemScopeKey::Untagged) => {
+            let active = db.bitmaps.get(&BitmapKey::Status(1));
             let tagged = db.bitmaps.get(&BitmapKey::Tagged);
-            Ok(&all_active - &tagged)
+            Ok(&active - &tagged)
         }
-        Some("uncategorized") => {
+        Some(GridSystemScopeKey::Uncategorized) => {
             let uncategorized_ids = db.with_read_conn(list_uncategorized_entity_ids).await?;
             Ok(RoaringBitmap::from_iter(
                 uncategorized_ids.into_iter().map(|id| id as u32),
             ))
         }
-        Some("recently_viewed") => {
-            // Bitmap approximation — AllActive. Actual view_count check
-            // happens in the grid controller's SQL query.
-            Ok(db.bitmaps.get(&BitmapKey::AllActive))
-        }
-        // Default "All Images" = status=1 (active only).
         _ => Ok(db.bitmaps.get(&BitmapKey::Status(1))),
     }
 }
@@ -267,39 +304,27 @@ async fn resolve_status(
 /// Canonical count for a system scope — synchronous, used by sidebar compiler.
 ///
 /// Encodes the same business rules as `resolve_scope` / `resolve_status`:
-/// - `system:all_files` = active (status=1)
+/// - `system:all` = active (status=1)
+/// - `system:all_files` = active (status=1) legacy alias
 /// - `system:inbox` = inbox (status=0)
 /// - `system:trash` = trash (status=2)
-/// - `system:untagged` = AllActive minus Tagged
+/// - `system:untagged` = active (status=1) minus Tagged
 /// - `system:uncategorized` = active singles not in any folder
-/// - `system:recent_viewed` = active singles with view_count > 0
 pub fn scope_count(
     conn: &Connection,
     bitmaps: &BitmapStore,
     scope_key: &str,
 ) -> rusqlite::Result<i64> {
     match scope_key {
-        "system:all_files" => Ok(bitmaps.len(&BitmapKey::Status(1)) as i64),
+        "system:all" | "system:all_files" => Ok(bitmaps.len(&BitmapKey::Status(1)) as i64),
         "system:inbox" => Ok(bitmaps.len(&BitmapKey::Status(0)) as i64),
         "system:trash" => Ok(bitmaps.len(&BitmapKey::Status(2)) as i64),
         "system:untagged" => {
-            let all_active = bitmaps.len(&BitmapKey::AllActive);
+            let active = bitmaps.len(&BitmapKey::Status(1));
             let tagged = bitmaps.len(&BitmapKey::Tagged);
-            Ok(all_active.saturating_sub(tagged) as i64)
+            Ok(active.saturating_sub(tagged) as i64)
         }
         "system:uncategorized" => count_uncategorized_entities(conn),
-        "system:recent_viewed" => conn.query_row(
-            "SELECT COUNT(*)
-             FROM media_entity me
-             JOIN entity_file ef ON ef.entity_id = me.entity_id
-             JOIN file f ON f.file_id = ef.file_id
-             WHERE me.status = 1
-               AND me.kind = 'single'
-               AND f.view_count > 0
-               AND me.parent_collection_id IS NULL",
-            [],
-            |row| row.get(0),
-        ),
         _ => Ok(0),
     }
 }

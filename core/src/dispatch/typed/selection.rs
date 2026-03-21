@@ -1,192 +1,160 @@
-//! Typed command implementations for selection operations.
+//! Handler functions for selection operations.
 
-use std::collections::HashMap;
 use serde::Deserialize;
+use std::collections::HashMap;
 use ts_rs::TS;
 
 use crate::state::AppState;
 use crate::types::SelectionQuerySpec;
-use super::{TypedCommand, run_typed};
 
 // ─── Input structs ─────────────────────────────────────────────────────────
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct AddTagsSelectionInput {
     pub selection: SelectionQuerySpec,
     pub tag_strings: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct RemoveTagsSelectionInput {
     pub selection: SelectionQuerySpec,
     pub tag_strings: Vec<String>,
 }
 
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct GetSelectionSummaryInput {
     pub selection: SelectionQuerySpec,
 }
 
+/// Unified selection metadata update. All fields except `selection` are optional.
 #[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
-pub struct UpdateRatingSelectionInput {
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
+pub struct UpdateSelectionMetadataInput {
     pub selection: SelectionQuerySpec,
+    #[serde(default, deserialize_with = "deserialize_some")]
     #[ts(type = "number | null")]
-    pub rating: Option<i64>,
+    pub rating: Option<Option<i64>>,
+    #[serde(default)]
+    pub notes: Option<HashMap<String, String>>,
+    #[serde(default)]
+    pub source_urls: Option<Vec<String>>,
 }
 
-#[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
-pub struct SetNotesSelectionInput {
-    pub selection: SelectionQuerySpec,
-    pub notes: HashMap<String, String>,
-}
+use super::super::common::deserialize_some;
 
-#[derive(Debug, Deserialize, TS)]
-#[ts(export, export_to = "../../src/shared/types/generated/commands/")]
-pub struct SetSourceUrlsSelectionInput {
-    pub selection: SelectionQuerySpec,
-    pub urls: Vec<String>,
-}
+// ─── Handlers ──────────────────────────────────────────────────────────────
 
-// ─── Command structs ───────────────────────────────────────────────────────
-
-pub struct AddTagsSelection;
-pub struct RemoveTagsSelection;
-pub struct GetSelectionSummary;
-pub struct UpdateRatingSelection;
-pub struct SetNotesSelection;
-pub struct SetSourceUrlsSelection;
-
-// ─── TypedCommand impls ────────────────────────────────────────────────────
-
-impl TypedCommand for AddTagsSelection {
-    const NAME: &'static str = "add_tags_selection";
-    type Input = AddTagsSelectionInput;
-    type Output = usize;
-
-    async fn execute(state: &AppState, input: Self::Input) -> Result<Self::Output, String> {
-        let count = crate::selection::controller::SelectionController::add_tags_selection(
-            &state.db, input.selection, input.tag_strings,
-        ).await?;
-        if count > 0 {
-            crate::events::emit_mutation(
-                "add_tags_selection",
-                crate::events::MutationImpact::selection_batch_tags(),
-            );
-        }
-        Ok(count)
-    }
-}
-
-impl TypedCommand for RemoveTagsSelection {
-    const NAME: &'static str = "remove_tags_selection";
-    type Input = RemoveTagsSelectionInput;
-    type Output = usize;
-
-    async fn execute(state: &AppState, input: Self::Input) -> Result<Self::Output, String> {
-        let count = crate::selection::controller::SelectionController::remove_tags_selection(
-            &state.db, input.selection, input.tag_strings,
-        ).await?;
-        if count > 0 {
-            crate::events::emit_mutation(
-                "remove_tags_selection",
-                crate::events::MutationImpact::selection_batch_tags(),
-            );
-        }
-        Ok(count)
-    }
-}
-
-impl TypedCommand for GetSelectionSummary {
-    const NAME: &'static str = "get_selection_summary";
-    type Input = GetSelectionSummaryInput;
-    type Output = serde_json::Value;
-
-    async fn execute(state: &AppState, input: Self::Input) -> Result<Self::Output, String> {
-        let started = std::time::Instant::now();
-        let result = crate::selection::controller::SelectionController::get_selection_summary(
-            &state.db, input.selection,
-        ).await?;
-        crate::perf::record_selection_summary(started.elapsed().as_secs_f64() * 1000.0);
-        serde_json::to_value(&result).map_err(|e| e.to_string())
-    }
-}
-
-impl TypedCommand for UpdateRatingSelection {
-    const NAME: &'static str = "update_rating_selection";
-    type Input = UpdateRatingSelectionInput;
-    type Output = usize;
-
-    async fn execute(state: &AppState, input: Self::Input) -> Result<Self::Output, String> {
-        let count = crate::selection::controller::SelectionController::update_rating_selection(
-            &state.db, input.selection, input.rating,
-        ).await?;
-        if count > 0 {
-            crate::events::emit_mutation(
-                "update_rating_selection",
-                crate::events::MutationImpact::selection_metadata_grid(),
-            );
-        }
-        Ok(count)
-    }
-}
-
-impl TypedCommand for SetNotesSelection {
-    const NAME: &'static str = "set_notes_selection";
-    type Input = SetNotesSelectionInput;
-    type Output = usize;
-
-    async fn execute(state: &AppState, input: Self::Input) -> Result<Self::Output, String> {
-        let count = crate::selection::controller::SelectionController::set_notes_selection(
-            &state.db, input.selection, input.notes,
-        ).await?;
-        if count > 0 {
-            crate::events::emit_mutation(
-                "set_notes_selection",
-                crate::events::MutationImpact::selection_metadata(),
-            );
-        }
-        Ok(count)
-    }
-}
-
-impl TypedCommand for SetSourceUrlsSelection {
-    const NAME: &'static str = "set_source_urls_selection";
-    type Input = SetSourceUrlsSelectionInput;
-    type Output = usize;
-
-    async fn execute(state: &AppState, input: Self::Input) -> Result<Self::Output, String> {
-        let count = crate::selection::controller::SelectionController::set_source_urls_selection(
-            &state.db, input.selection, input.urls,
-        ).await?;
-        if count > 0 {
-            crate::events::emit_mutation(
-                "set_source_urls_selection",
-                crate::events::MutationImpact::selection_metadata(),
-            );
-        }
-        Ok(count)
-    }
-}
-
-// ─── Dispatch router ───────────────────────────────────────────────────────
-
-pub async fn dispatch_typed(
+pub async fn add_tags_selection(
     state: &AppState,
-    command: &str,
-    args: &serde_json::Value,
-) -> Option<Result<String, String>> {
-    match command {
-        AddTagsSelection::NAME => Some(run_typed::<AddTagsSelection>(state, args).await),
-        RemoveTagsSelection::NAME => Some(run_typed::<RemoveTagsSelection>(state, args).await),
-        GetSelectionSummary::NAME => Some(run_typed::<GetSelectionSummary>(state, args).await),
-        UpdateRatingSelection::NAME => Some(run_typed::<UpdateRatingSelection>(state, args).await),
-        SetNotesSelection::NAME => Some(run_typed::<SetNotesSelection>(state, args).await),
-        SetSourceUrlsSelection::NAME => Some(run_typed::<SetSourceUrlsSelection>(state, args).await),
-        _ => None,
+    input: AddTagsSelectionInput,
+) -> Result<usize, String> {
+    let count = crate::selection::mutations::add_tags_selection(
+        &state.db,
+        input.selection,
+        input.tag_strings,
+    )
+    .await?;
+    if count > 0 {
+        crate::events::emit_mutation(
+            "add_tags_selection",
+            crate::runtime_contract::mutation_builder::MutationImpact::selection_batch_tags(),
+        );
     }
+    Ok(count)
+}
+
+pub async fn remove_tags_selection(
+    state: &AppState,
+    input: RemoveTagsSelectionInput,
+) -> Result<usize, String> {
+    let count = crate::selection::mutations::remove_tags_selection(
+        &state.db,
+        input.selection,
+        input.tag_strings,
+    )
+    .await?;
+    if count > 0 {
+        crate::events::emit_mutation(
+            "remove_tags_selection",
+            crate::runtime_contract::mutation_builder::MutationImpact::selection_batch_tags(),
+        );
+    }
+    Ok(count)
+}
+
+pub async fn get_selection_summary(
+    state: &AppState,
+    input: GetSelectionSummaryInput,
+) -> Result<serde_json::Value, String> {
+    let started = std::time::Instant::now();
+    let result =
+        crate::selection::summary::get_selection_summary(&state.db, input.selection).await?;
+    crate::perf::record_selection_summary(started.elapsed().as_secs_f64() * 1000.0);
+    serde_json::to_value(&result).map_err(|e| e.to_string())
+}
+
+pub async fn update_selection_metadata(
+    state: &AppState,
+    input: UpdateSelectionMetadataInput,
+) -> Result<usize, String> {
+    let mut total_count = 0;
+    let mut need_grid = false;
+
+    if let Some(rating) = input.rating {
+        let count = crate::selection::mutations::update_rating_selection(
+            &state.db,
+            input.selection.clone(),
+            rating,
+        )
+        .await?;
+        total_count += count;
+        need_grid = true;
+    }
+
+    if let Some(notes) = input.notes {
+        let count = crate::selection::mutations::set_notes_selection(
+            &state.db,
+            input.selection.clone(),
+            notes,
+        )
+        .await?;
+        total_count += count;
+    }
+
+    if let Some(urls) = input.source_urls {
+        let count = crate::selection::mutations::set_source_urls_selection(
+            &state.db,
+            input.selection,
+            urls,
+        )
+        .await?;
+        total_count += count;
+    }
+
+    if total_count > 0 {
+        let impact = if need_grid {
+            crate::runtime_contract::mutation_builder::MutationImpact::selection_metadata_grid()
+        } else {
+            crate::runtime_contract::mutation_builder::MutationImpact::selection_metadata()
+        };
+        crate::events::emit_mutation("update_selection_metadata", impact);
+    }
+    Ok(total_count)
+}
+
+/// Resolve a selection spec to all matching file hashes.
+/// Collections are expanded to their member files so every taggable file is included.
+pub async fn resolve_selection_hashes(
+    state: &AppState,
+    input: GetSelectionSummaryInput,
+) -> Result<Vec<String>, String> {
+    let bitmap = super::media_lifecycle::resolve_selection_bitmap(state, &input.selection).await?;
+    let ids: Vec<i64> = bitmap.iter().map(|id| id as i64).collect();
+    // Expand collections to member file IDs
+    let expanded = state.db.expand_collection_members(ids).await?;
+    let pairs = state.db.resolve_ids_batch(&expanded).await?;
+    Ok(pairs.into_iter().map(|(_, h)| h).collect())
 }

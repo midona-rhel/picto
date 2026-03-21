@@ -11,6 +11,7 @@
 
 /* Sidebar */
 .sidebar {
+  composes: scrollYStable from '../../../shared/styles/scrollArea.module.css';
   z-index: 2;
   position: absolute;
   top: 0;
@@ -20,9 +21,6 @@
   padding-top: 12px;
   padding-bottom: 12px;
   border-right: 1px solid var(--color-border-secondary);
-  overflow-y: auto;
-  overflow-x: hidden;
-  scrollbar-gutter: stable;
 }
 
 .sourceToggle {
@@ -94,10 +92,8 @@
 }
 
 .sidebarItemName {
+  composes: truncate from '../../../shared/styles/textClamp.module.css';
   width: 100%;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  overflow: hidden;
   font-size: 13px;
   line-height: 24px;
   color: var(--color-text-primary);
@@ -127,12 +123,10 @@
 }
 
 .scrollArea {
+  composes: scrollYStable from '../../../shared/styles/scrollArea.module.css';
   flex: 1;
-  overflow-y: auto;
-  overflow-x: hidden;
   min-height: 0;
   padding-bottom: 24px;
-  scrollbar-gutter: stable;
 }
 
 .groupHeader {
@@ -211,17 +205,14 @@
 }
 
 .viewBtn {
+  composes: btnReset from '../../../shared/styles/buttonReset.module.css';
   width: 28px;
   height: 28px;
   display: flex;
   align-items: center;
   justify-content: center;
   border-radius: 5px;
-  border: none;
-  background: transparent;
   color: var(--color-text-secondary);
-  cursor: pointer;
-  padding: 0;
 }
 
 .viewBtn:hover {
@@ -253,6 +244,14 @@
   background-color: var(--sidebar-item-hover-bg);
 }
 
+.tagSelected {
+  background-color: var(--sidebar-item-active-bg);
+}
+
+.tagSelected:hover {
+  background-color: var(--sidebar-item-active-bg);
+}
+
 .tag:hover .tagIcon .tagDot,
 .tag:hover .tagName {
   opacity: 1;
@@ -279,11 +278,9 @@
 }
 
 .tagName {
+  composes: truncate from '../../../shared/styles/textClamp.module.css';
   flex: 1;
   min-width: 0;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
   line-height: 26px;
   opacity: 0.95;
 }

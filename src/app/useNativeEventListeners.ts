@@ -1,13 +1,20 @@
 import { useEffect } from 'react';
 import { api, listen } from '#desktop/api';
-import { SidebarController } from '../shared/controllers/sidebarController';
+import { useDomainStore } from '../state/domainStore';
+import { useImportActionStore } from '../state/importActionStore';
 import { useRuntimeSyncStore } from '../state/runtimeSyncStore';
 import { useLibraryStore } from '../state/libraryStore';
+import { useManualImportStore } from '../state/manualImportStore';
+import { useExportActionStore } from '../state/exportActionStore';
+import { useExportProgressStore } from '../state/exportProgressStore';
 import { useNavigationStore, type ViewType } from '../state/navigationStore';
 import { startAllRefreshers, stopAllRefreshers } from '../runtime/refresherOrchestrator';
+import { useSubscriptionProgressStore } from '../features/subscriptions/subscriptionProgressStore';
 import { performUndo, performRedo } from '../shared/controllers/undoRedoController';
+import { useUpdaterStore } from '../state/updaterStore';
 import { runBestEffort } from '../shared/lib/asyncOps';
 import type { ResourceKey } from '../shared/types/generated/runtime-contract';
+import type { ManualImportProgressEvent, MediaExportProgressEvent } from '../shared/types/api/events';
 
 /**
  * Consolidates all native event listeners and runtime init/teardown
@@ -20,8 +27,9 @@ import type { ResourceKey } from '../shared/types/generated/runtime-contract';
  */
 export function useNativeEventListeners(): void {
   useEffect(() => {
-    void SidebarController.fetchInitialTree();
+    void useDomainStore.getState().fetchSidebarTree();
     void useRuntimeSyncStore.getState().ensureInitialized();
+    useSubscriptionProgressStore.getState().start();
     startAllRefreshers();
 
     // Library lifecycle listeners (previously in eventBridge)
@@ -42,6 +50,7 @@ export function useNativeEventListeners(): void {
     ]);
     return () => {
       stopAllRefreshers();
+      useSubscriptionProgressStore.getState().stop();
       useRuntimeSyncStore.getState().teardown();
       runBestEffort('cleanup.libraryListeners', libraryListeners.then((fns) => { for (const fn of fns) fn(); }));
     };
@@ -52,6 +61,60 @@ export function useNativeEventListeners(): void {
       runBestEffort('menu.openSettingsWindow', api.os.openSettingsWindow());
     });
     return () => { runBestEffort('menu.unlistenOpenSettings', unlisten.then((fn) => fn())); };
+  }, []);
+
+  useEffect(() => {
+    const unlisten = listen('menu:import-files', () => {
+      if (useNavigationStore.getState().currentView !== 'images') {
+        useNavigationStore.getState().navigateTo('images');
+      }
+      useImportActionStore.getState().requestImportFilesDialog();
+    });
+    return () => { runBestEffort('menu.unlistenImportFiles', unlisten.then((fn) => fn())); };
+  }, []);
+
+  useEffect(() => {
+    const unlisten = listen('menu:import-folder', () => {
+      if (useNavigationStore.getState().currentView !== 'images') {
+        useNavigationStore.getState().navigateTo('images');
+      }
+      useImportActionStore.getState().requestImportFolderDialog();
+    });
+    return () => { runBestEffort('menu.unlistenImportFolder', unlisten.then((fn) => fn())); };
+  }, []);
+
+  useEffect(() => {
+    const unlisten = listen('menu:export-basic', () => {
+      if (useNavigationStore.getState().currentView !== 'images') {
+        useNavigationStore.getState().navigateTo('images');
+      }
+      useExportActionStore.getState().requestBasicExport();
+    });
+    return () => { runBestEffort('menu.unlistenExportBasic', unlisten.then((fn) => fn())); };
+  }, []);
+
+  useEffect(() => {
+    const unlisten = listen('menu:export-advanced', () => {
+      if (useNavigationStore.getState().currentView !== 'images') {
+        useNavigationStore.getState().navigateTo('images');
+      }
+      useExportActionStore.getState().requestAdvancedExport();
+    });
+    return () => { runBestEffort('menu.unlistenExportAdvanced', unlisten.then((fn) => fn())); };
+  }, []);
+
+  useEffect(() => {
+    const unlisten = listen<ManualImportProgressEvent>('manual-import-progress', (event) => {
+      useManualImportStore.getState().update(event.payload);
+    });
+    return () => { runBestEffort('manualImportProgress.unlisten', unlisten.then((fn) => fn())); };
+  }, []);
+
+  useEffect(() => {
+    const unlisten = listen<MediaExportProgressEvent>('media-export-progress', (event) => {
+      useExportProgressStore.getState().update(event.payload);
+    });
+    return () => { runBestEffort('mediaExportProgress.unlisten', unlisten.then((fn) => fn())); };
   }, []);
 
   useEffect(() => {
@@ -73,5 +136,13 @@ export function useNativeEventListeners(): void {
       runBestEffort('menu.unlistenUndo', unlistenUndo.then((fn) => fn()));
       runBestEffort('menu.unlistenRedo', unlistenRedo.then((fn) => fn()));
     };
+  }, []);
+
+  // Auto-updater status listener
+  useEffect(() => {
+    const unlisten = window.picto?.updater?.onStatus((event) => {
+      useUpdaterStore.getState().handleStatusEvent(event);
+    });
+    return () => { unlisten?.(); };
   }, []);
 }

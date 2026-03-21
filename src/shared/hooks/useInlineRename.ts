@@ -2,7 +2,7 @@ import { useState, useCallback, useRef, useEffect } from 'react';
 
 /**
  * Extracts the inline rename pattern shared across FolderTree,
- * SmartFolderList, and FlowsWorking.
+ * SmartFolderList, and SubscriptionGroupsPanel.
  */
 export function useInlineRename(
   onCommit: (id: string, newName: string) => Promise<void> | void,

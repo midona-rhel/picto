@@ -45,11 +45,22 @@ export interface LibraryConfig {
   libraryHistory: string[];
   pinnedLibraries: string[];
   existsMap: Record<string, boolean>;
+  libraryMeta: Record<string, { icon?: string | null; color?: string | null }>;
 }
 
 export const libraryHost = {
-  getConfig: async (): Promise<LibraryConfig> =>
-    await window.picto?.library?.getConfig?.() ?? { currentPath: null, libraryHistory: [], pinnedLibraries: [], existsMap: {} },
+  getConfig: async (): Promise<LibraryConfig> => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const raw: any = await window.picto?.library?.getConfig?.();
+    if (!raw) return { currentPath: null, libraryHistory: [], pinnedLibraries: [], existsMap: {}, libraryMeta: {} };
+    return {
+      currentPath: raw.currentPath ?? null,
+      libraryHistory: raw.libraryHistory ?? [],
+      pinnedLibraries: raw.pinnedLibraries ?? [],
+      existsMap: raw.existsMap ?? {},
+      libraryMeta: raw.libraryMeta ?? {},
+    };
+  },
   create: async (name: string, savePath: string): Promise<void> => {
     await window.picto?.library?.create?.(name, savePath);
   },
@@ -73,5 +84,9 @@ export const libraryHost = {
   },
   relocate: async (oldPath: string): Promise<void> => {
     await window.picto?.library?.relocate?.(oldPath);
+  },
+  setMeta: async (path: string, meta: { icon?: string | null; color?: string | null }): Promise<void> => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (window.picto?.library as any)?.setMeta?.(path, meta);
   },
 };

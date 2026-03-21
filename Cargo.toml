@@ -7,3 +7,16 @@ resolver = "2"
 
 [profile.release]
 strip = "symbols"
+
+# Optimize image-processing deps even in debug builds (PNG decode is 10-50x
+# slower without optimizations, making phash computation painfully slow).
+[profile.dev.package.image]
+opt-level = 3
+[profile.dev.package.png]
+opt-level = 3
+[profile.dev.package.fast_image_resize]
+opt-level = 3
+[profile.dev.package.img_hash]
+opt-level = 3
+[profile.dev.package.webp]
+opt-level = 3

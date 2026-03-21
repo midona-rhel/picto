@@ -19,9 +19,9 @@ import type {
   EntityDetails,
   EntityMetadataBatchResponse,
   EntitySlim,
+  GridOutlineResponse,
   GridPageSlimResponse, GridPageSlimQuery,
   EnsureThumbnailResponse, ReanalyzeFileColorsResponse,
-  ImportResult,
   TagDisplay, TagSearchResult, TagTuple, TagRecord,
   NamespaceSummary, TagRelation,
   RenameTagResult, DeleteTagResult,
@@ -31,13 +31,11 @@ import type {
   SidebarTreeResponse,
   ScanDuplicatesResult, DuplicatePairsResponse, DuplicateSettings,
   SmartMergeResult, ResolveDuplicateAction,
-  SubscriptionInfo, SubscriptionQueryInfo, FlowInfo,
+  SubscriptionInfo, SubscriptionQueryInfo, SubscriptionGroupInfo,
   SubscriptionProgressEvent,
   SubscriptionSiteInfo, SiteMetadataSchema, SiteMetadataValidationResult,
   CredentialDomain, CredentialType, CredentialHealth,
-  PtrStats, PtrSyncPerfBreakdown,
-  PtrSyncProgress, PtrBootstrapStatus, PtrCompactIndexStatus,
-  AppSettings,
+  AppSettings, AiTaggerStatus, AiTagPredictOutput,
   CollectionInfo, CollectionSummary, CompanionNamespaceValue,
   ViewPrefsDto, ViewPrefsPatch,
   FileStats, PerfSnapshot, PerfSloResult,
@@ -57,6 +55,8 @@ export function listenRuntimeEvent<K extends keyof CoreRuntimeEventPayloadMap>(
 // invokeTyped() provides compile-time checked command names and argument types.
 
 import type { TypedCommandMap } from '../shared/types/generated/commands';
+import type { ImportBatchResult } from '../shared/types/generated/commands';
+import type { ExportMediaInput, ExportMediaResult } from '../shared/types/generated/commands';
 
 type HasInput<K extends keyof TypedCommandMap> =
   TypedCommandMap[K]['input'] extends Record<string, never> ? false : true;
@@ -77,6 +77,7 @@ function normalizeSmartFolder(r: Record<string, unknown>): SmartFolder {
   return {
     id: String(r.smart_folder_id ?? r.id ?? ''),
     name: String(r.name ?? ''),
+    parent_id: typeof r.parent_id === 'number' ? r.parent_id : r.parent_id == null ? null : Number(r.parent_id),
     icon: (r.icon as string | null) ?? undefined,
     color: (r.color as string | null) ?? undefined,
     predicate: r.predicate_json
@@ -89,6 +90,47 @@ function normalizeSmartFolder(r: Record<string, unknown>): SmartFolder {
   };
 }
 
+const entityApi = {
+  get: (hash: string) =>
+    invokeTyped('get_entity', { hash }) as Promise<EntityDetails | null>,
+  getAllMetadata: (hash: string) =>
+    invokeTyped('get_media_entity_metadata', { hash }) as Promise<EntityAllMetadata>,
+  setStatus: (hash: string, status: string) =>
+    invokeTyped('set_entity_status', { hash, status } as never) as unknown as Promise<void>,
+  setStatusSelection: (selection: SelectionQuerySpec, status: string) =>
+    invokeTyped('set_entity_status', { selection, status } as never),
+  deleteMany: (hashes: string[]) =>
+    invokeTyped('delete_entities', { hashes } as never),
+  deleteSelection: (selection: SelectionQuerySpec) =>
+    invokeTyped('delete_entities', { selection } as never),
+  updateRating: (hash: string, rating: number | null) =>
+    invokeTyped('update_media_entity_metadata', { hash, rating } as never) as unknown as Promise<void>,
+  setName: (hash: string, name: string | null) =>
+    invokeTyped('update_media_entity_metadata', { hash, name } as never) as unknown as Promise<void>,
+  setSourceUrls: (hash: string, urls: string[]) =>
+    invokeTyped('update_media_entity_metadata', { hash, source_urls: urls } as never) as unknown as Promise<void>,
+  setNotes: (hash: string, notes: Record<string, string>) =>
+    invokeTyped('update_media_entity_metadata', { hash, notes } as never) as unknown as Promise<void>,
+  resolvePath: (hash: string) =>
+    invokeTyped('resolve_file_path', { hash }),
+  resolveThumbnailPath: (hash: string) =>
+    invokeTyped('resolve_thumbnail_path', { hash }),
+  openDefault: (hash: string) =>
+    invokeTyped('open_file_default', { hash }) as unknown as Promise<void>,
+  revealInFolder: (hash: string) =>
+    invokeTyped('reveal_in_folder', { hash }) as unknown as Promise<void>,
+  openInNewWindow: (hash: string, width?: number | null, height?: number | null) =>
+    invokeTyped('open_in_new_window', { hash, width: width ?? null, height: height ?? null }) as unknown as Promise<void>,
+  ensureThumbnail: (hash: string) =>
+    invokeTyped('ensure_thumbnail', { hash }) as Promise<EnsureThumbnailResponse>,
+  regenerateThumbnail: (hash: string) =>
+    invokeTyped('regenerate_thumbnail', { hash }) as Promise<EnsureThumbnailResponse>,
+  reanalyzeColors: (hash: string) =>
+    invokeTyped('reanalyze_file_colors', { hash }) as Promise<ReanalyzeFileColorsResponse>,
+  regenerateThumbnailsBatch: (hashes: string[]) =>
+    invokeTyped('regenerate_thumbnails_batch', { hashes }) as Promise<{ total: number; regenerated: number; errors: number }>,
+};
+
 /**
  * Typed API surface — single place where all backend command strings live.
  * Every invoke() in the codebase should route through here.
@@ -97,58 +139,33 @@ export const api = {
   grid: {
     getPageSlim: (query: GridPageSlimQuery) =>
       invokeTyped('get_grid_page_slim', { query } as never) as Promise<GridPageSlimResponse>,
-    getFilesMetadataBatch: (hashes: string[]) =>
-      invokeTyped('get_files_metadata_batch', { hashes }) as Promise<EntityMetadataBatchResponse>,
-    getFileCount: () =>
-      invokeTyped('get_file_count') as Promise<number>,
+    getOutline: (query: GridPageSlimQuery) =>
+      invoke('get_grid_outline', { query }) as Promise<GridOutlineResponse>,
+    getEntitiesMetadataBatch: (hashes: string[]) =>
+      invokeTyped('get_entities_metadata_batch', { hashes }) as Promise<EntityMetadataBatchResponse>,
   },
 
-  file: {
-    get: (hash: string) =>
-      invokeTyped('get_file', { hash }) as Promise<EntityDetails | null>,
-    getAllMetadata: (hash: string) =>
-      invokeTyped('get_file_all_metadata', { hash }) as Promise<EntityAllMetadata>,
-    setStatus: (hash: string, status: string) =>
-      invokeTyped('update_file_status', { hash, status }) as unknown as Promise<void>,
-    setStatusSelection: (selection: SelectionQuerySpec, status: string) =>
-      invokeTyped('update_file_status_selection', { selection, status } as never),
-    deleteMany: (hashes: string[]) =>
-      invokeTyped('delete_files', { hashes }),
-    deleteSelection: (selection: SelectionQuerySpec) =>
-      invokeTyped('delete_files_selection', { selection } as never),
-    updateRating: (hash: string, rating: number | null) =>
-      invokeTyped('update_rating', { hash, rating }) as unknown as Promise<void>,
-    setName: (hash: string, name: string | null) =>
-      invokeTyped('set_file_name', { hash, name }) as unknown as Promise<void>,
-    setSourceUrls: (hash: string, urls: string[]) =>
-      invokeTyped('set_source_urls', { hash, urls }) as unknown as Promise<void>,
-    setNotes: (hash: string, notes: Record<string, string>) =>
-      invokeTyped('set_file_notes', { hash, notes }) as unknown as Promise<void>,
-    incrementViewCount: (hash: string) =>
-      invokeTyped('increment_view_count', { hash }) as unknown as Promise<void>,
-    resolvePath: (hash: string) =>
-      invokeTyped('resolve_file_path', { hash }),
-    resolveThumbnailPath: (hash: string) =>
-      invokeTyped('resolve_thumbnail_path', { hash }),
-    openDefault: (hash: string) =>
-      invokeTyped('open_file_default', { hash }) as unknown as Promise<void>,
-    revealInFolder: (hash: string) =>
-      invokeTyped('reveal_in_folder', { hash }) as unknown as Promise<void>,
-    openInNewWindow: (hash: string, width?: number | null, height?: number | null) =>
-      invokeTyped('open_in_new_window', { hash, width: width ?? null, height: height ?? null }) as unknown as Promise<void>,
-    ensureThumbnail: (hash: string) =>
-      invokeTyped('ensure_thumbnail', { hash }) as Promise<EnsureThumbnailResponse>,
-    regenerateThumbnail: (hash: string) =>
-      invokeTyped('regenerate_thumbnail', { hash }) as Promise<EnsureThumbnailResponse>,
-    reanalyzeColors: (hash: string) =>
-      invokeTyped('reanalyze_file_colors', { hash }) as Promise<ReanalyzeFileColorsResponse>,
-    regenerateThumbnailsBatch: (hashes: string[]) =>
-      invokeTyped('regenerate_thumbnails_batch', { hashes }) as Promise<{ total: number; regenerated: number; errors: number }>,
-  },
+  entity: entityApi,
+  files: entityApi,
+  file: entityApi,
 
   import: {
     files: (paths: string[], tagStrings?: string[], sourceUrls?: string[], initialStatus?: number) =>
-      invokeTyped('import_files', { paths, tag_strings: tagStrings, source_urls: sourceUrls, initial_status: initialStatus } as never) as unknown as Promise<ImportResult>,
+      invokeTyped('import_files', { paths, tag_strings: tagStrings, source_urls: sourceUrls, initial_status: initialStatus } as never) as unknown as Promise<ImportBatchResult>,
+    folder: (path: string, preserveStructure: boolean, parentFolderId?: number | null, initialStatus?: number) =>
+      invokeTyped('import_folder', {
+        path,
+        preserve_structure: preserveStructure,
+        parent_folder_id: parentFolderId ?? null,
+        initial_status: initialStatus,
+      } as never) as unknown as Promise<ImportBatchResult>,
+  },
+
+  export: {
+    file: (hash: string, destPath: string) =>
+      invokeTyped('export_file', { hash, dest_path: destPath }) as Promise<null>,
+    run: (input: ExportMediaInput) =>
+      invokeTyped('export_media', input) as Promise<ExportMediaResult>,
   },
 
   tags: {
@@ -157,33 +174,23 @@ export const api = {
     getAll: () =>
       invokeTyped('get_all_tags_with_counts') as Promise<TagTuple[]>,
     getForFile: (hash: string) =>
-      invokeTyped('get_file_tags', { hash }) as Promise<TagDisplay[]>,
-    add: (hash: string, tagStrings: string[]) =>
-      invokeTyped('add_tags', { hash, tag_strings: tagStrings }) as unknown as Promise<void>,
-    remove: (hash: string, tagStrings: string[]) =>
-      invokeTyped('remove_tags', { hash, tag_strings: tagStrings }) as unknown as Promise<void>,
-    addBatch: (hashes: string[], tagStrings: string[]) =>
-      invokeTyped('add_tags_batch', { hashes, tag_strings: tagStrings }) as unknown as Promise<void>,
-    removeBatch: (hashes: string[], tagStrings: string[]) =>
-      invokeTyped('remove_tags_batch', { hashes, tag_strings: tagStrings }) as unknown as Promise<void>,
+      invokeTyped('get_entity_tags', { hash }) as Promise<TagDisplay[]>,
+    add: (hashes: string[], tagStrings: string[]) =>
+      invokeTyped('add_tags', { hashes, tag_strings: tagStrings }) as unknown as Promise<void>,
+    remove: (hashes: string[], tagStrings: string[]) =>
+      invokeTyped('remove_tags', { hashes, tag_strings: tagStrings }) as unknown as Promise<void>,
     findFilesByTags: (tagStrings: string[], limit?: number, offset?: number) =>
       invokeTyped('find_files_by_tags', { tag_strings: tagStrings, limit, offset } as never) as Promise<string[]>,
     getPaginated: (params: { namespace?: string; search?: string; cursor?: string; limit?: number }) =>
       invokeTyped('get_tags_paginated', params as never) as Promise<TagRecord[]>,
     getNamespaceSummary: () =>
       invokeTyped('get_namespace_summary') as Promise<NamespaceSummary[]>,
-    setAlias: (from: string, to: string) =>
-      invokeTyped('set_tag_alias', { from, to }) as unknown as Promise<void>,
-    removeAlias: (from: string) =>
-      invokeTyped('remove_tag_alias', { from }) as unknown as Promise<void>,
-    getSiblings: (tagId: number) =>
-      invokeTyped('get_tag_siblings_for_tag', { tag_id: tagId }) as Promise<TagRelation[]>,
-    getParents: (tagId: number) =>
-      invokeTyped('get_tag_parents_for_tag', { tag_id: tagId }) as Promise<TagRelation[]>,
-    addParent: (child: string, parent: string) =>
-      invokeTyped('add_tag_parent', { child, parent }) as unknown as Promise<void>,
-    removeParent: (child: string, parent: string) =>
-      invokeTyped('remove_tag_parent', { child, parent }) as unknown as Promise<void>,
+    manageAlias: (from: string, to?: string) =>
+      invokeTyped('manage_tag_alias', { from, to: to ?? null }) as unknown as Promise<void>,
+    getRelations: (tagId: number, relationType: 'aliases' | 'implications') =>
+      invokeTyped('get_tag_relations', { tag_id: tagId, relation_type: relationType }) as Promise<TagRelation[]>,
+    manageImplication: (child: string, parent: string, action: 'add' | 'remove') =>
+      invokeTyped('manage_tag_implication', { child, parent, action }) as unknown as Promise<void>,
     merge: (fromTag: string, toTag: string) =>
       invokeTyped('merge_tags', { from_tag: fromTag, to_tag: toTag }) as unknown as Promise<void>,
     rename: (tagId: number, newName: string) =>
@@ -191,22 +198,24 @@ export const api = {
     delete: (tagId: number) =>
       invokeTyped('delete_tag', { tag_id: tagId }) as Promise<DeleteTagResult>,
     searchPaged: (query: string, limit: number, offset: number) =>
-      invokeTyped('search_tags_paged', { query, limit, offset } as never) as Promise<[string, string, number][]>,
+      invokeTyped('search_tags', { query, limit, offset } as never) as Promise<[string, string, number][]>,
   },
 
   selection: {
     getSummary: (selection: SelectionQuerySpec) =>
       invokeTyped('get_selection_summary', { selection } as never) as Promise<SelectionSummary>,
+    resolveHashes: (selection: SelectionQuerySpec) =>
+      invoke<string[]>('resolve_selection_hashes', { selection }),
     addTags: (selection: SelectionQuerySpec, tagStrings: string[]) =>
       invokeTyped('add_tags_selection', { selection, tag_strings: tagStrings } as never),
     removeTags: (selection: SelectionQuerySpec, tagStrings: string[]) =>
       invokeTyped('remove_tags_selection', { selection, tag_strings: tagStrings } as never),
     updateRating: (selection: SelectionQuerySpec, rating: number | null) =>
-      invokeTyped('update_rating_selection', { selection, rating } as never),
+      invokeTyped('update_selection_metadata', { selection, rating } as never),
     setNotes: (selection: SelectionQuerySpec, notes: Record<string, string>) =>
-      invokeTyped('set_notes_selection', { selection, notes } as never),
+      invokeTyped('update_selection_metadata', { selection, notes } as never),
     setSourceUrls: (selection: SelectionQuerySpec, urls: string[]) =>
-      invokeTyped('set_source_urls_selection', { selection, urls } as never),
+      invokeTyped('update_selection_metadata', { selection, source_urls: urls } as never),
   },
 
   folders: {
@@ -216,6 +225,17 @@ export const api = {
       invokeTyped('create_folder', params as never) as Promise<Folder>,
     update: (params: { folder_id: number; name?: string; icon?: string; color?: string; auto_tags?: string[] }) =>
       invokeTyped('update_folder', params as never) as unknown as Promise<void>,
+    setWatchConfig: (params: {
+      folder_id: number;
+      watch_path: string;
+      watch_enabled?: boolean;
+      watch_subfolders: boolean;
+      watch_import_status_mode: 'inherit' | 'inbox' | 'active';
+      import_existing_now: boolean;
+    }) =>
+      invokeTyped('set_folder_watch_config', params as never) as unknown as Promise<void>,
+    clearWatchConfig: (folderId: number) =>
+      invokeTyped('clear_folder_watch_config', { folder_id: folderId } as never) as unknown as Promise<void>,
     delete: (folderId: number) =>
       invokeTyped('delete_folder', { folder_id: folderId }) as unknown as Promise<void>,
     updateParent: (folderId: number, newParentId?: number | null) =>
@@ -223,21 +243,16 @@ export const api = {
     // PBI-057: Atomic move_folder — reparent + reorder in one transaction.
     moveFolder: (folderId: number, newParentId: number | null, siblingOrder: [number, number][]) =>
       invokeTyped('move_folder', { folder_id: folderId, new_parent_id: newParentId, sibling_order: siblingOrder }) as unknown as Promise<void>,
-    addFile: (folderId: number, hash: string) =>
-      invokeTyped('add_file_to_folder', { folder_id: folderId, hash }) as unknown as Promise<void>,
-    // PBI-054: Batch add files to folder.
-    addFilesBatch: (folderId: number, hashes: string[]) =>
-      invokeTyped('add_files_to_folder_batch', { folder_id: folderId, hashes }),
-    removeFile: (folderId: number, hash: string) =>
-      invokeTyped('remove_file_from_folder', { folder_id: folderId, hash }) as unknown as Promise<void>,
-    removeFilesBatch: (folderId: number, hashes: string[]) =>
-      invokeTyped('remove_files_from_folder_batch', { folder_id: folderId, hashes }),
+    addFiles: (folderId: number, hashes: string[], selection?: SelectionQuerySpec) =>
+      invokeTyped('add_entities_to_folder', { folder_id: folderId, hashes, selection: selection ?? null } as never) as unknown as Promise<number>,
+    removeFiles: (folderId: number, hashes: string[], selection?: SelectionQuerySpec) =>
+      invokeTyped('remove_entities_from_folder', { folder_id: folderId, hashes, selection: selection ?? null } as never) as unknown as Promise<number>,
     getFiles: (folderId: number) =>
       invokeTyped('get_folder_files', { folder_id: folderId }),
     getCoverHash: (folderId: number) =>
       invokeTyped('get_folder_cover_hash', { folder_id: folderId }),
     getFileFolders: (hash: string) =>
-      invokeTyped('get_file_folders', { hash }) as Promise<FolderMembership[]>,
+      invokeTyped('get_entity_folders_by_hash', { hash } as never) as Promise<FolderMembership[]>,
     getEntityFolders: (entityId: number) =>
       invokeTyped('get_entity_folders', { entity_id: entityId }) as Promise<FolderMembership[]>,
     reorder: (moves: [number, number][]) =>
@@ -245,9 +260,9 @@ export const api = {
     reorderItems: (folderId: number, moves: FolderReorderMove[]) =>
       invokeTyped('reorder_folder_items', { folder_id: folderId, moves } as never) as unknown as Promise<void>,
     sortItems: (folderId: number, sortBy: string, direction: string, hashes?: string[]) =>
-      invokeTyped('sort_folder_items', { folder_id: folderId, sort_by: sortBy, direction, hashes } as never) as unknown as Promise<void>,
+      invokeTyped('reorder_folder_items', { folder_id: folderId, sort_by: sortBy, direction, hashes } as never) as unknown as Promise<void>,
     reverseItems: (folderId: number, hashes?: string[]) =>
-      invokeTyped('reverse_folder_items', { folder_id: folderId, hashes } as never) as unknown as Promise<void>,
+      invokeTyped('reorder_folder_items', { folder_id: folderId, reverse: true, hashes } as never) as unknown as Promise<void>,
   },
 
   smartFolders: {
@@ -267,8 +282,14 @@ export const api = {
       invokeTyped('delete_smart_folder', { id }) as unknown as Promise<void>,
     count: (predicate: SmartFolderPredicate) =>
       invokeTyped('count_smart_folder', { predicate } as never) as Promise<number>,
-    reorder: (moves: [number, number][]) =>
-      invokeTyped('reorder_smart_folders', { moves }) as unknown as Promise<void>,
+    reorder: (parentId: number | null, moves: [number, number][]) =>
+      invokeTyped('reorder_smart_folders', { parent_id: parentId, moves } as never) as unknown as Promise<void>,
+    move: (smartFolderId: number, newParentId: number | null, siblingOrder: [number, number][]) =>
+      invokeTyped('move_smart_folder', {
+        smart_folder_id: smartFolderId,
+        new_parent_id: newParentId,
+        sibling_order: siblingOrder,
+      } as never) as unknown as Promise<void>,
   },
 
   sidebar: {
@@ -290,7 +311,6 @@ export const api = {
         action,
         hash_a: hashA,
         hash_b: hashB,
-        preferred_hash: null,
       } as never) as Promise<SmartMergeResult | Record<string, string>>,
     getCount: () =>
       invokeTyped('get_duplicate_count') as Promise<{ count: number }>,
@@ -309,7 +329,7 @@ export const api = {
       name: string;
       site_id: string;
       queries: string[];
-      flow_id?: number;
+      group_id?: number;
       initial_file_limit?: number;
       periodic_file_limit?: number;
     }) =>
@@ -334,8 +354,12 @@ export const api = {
       invokeTyped('add_subscription_query', { subscription_id: subscriptionId, query_text: queryText }) as Promise<SubscriptionQueryInfo>,
     deleteQuery: (id: string) =>
       invokeTyped('delete_subscription_query', { id }) as unknown as Promise<void>,
+    editQuery: (id: number, queryText: string, displayName?: string | null) =>
+      invoke<void>('edit_subscription_query', { id, query_text: queryText, display_name: displayName ?? null }),
     pauseQuery: (id: string, paused: boolean) =>
       invokeTyped('pause_subscription_query', { id, paused }) as unknown as Promise<void>,
+    setAutoCollections: (subscriptionId: string, autoCollections: boolean) =>
+      invoke<void>('set_subscription_auto_collections', { id: subscriptionId, auto_collections: autoCollections }),
     runQuery: (subscriptionId: string, queryId: string) =>
       invokeTyped('run_subscription_query', { subscription_id: subscriptionId, query_id: queryId }) as unknown as Promise<void>,
     getSites: () =>
@@ -364,54 +388,29 @@ export const api = {
       invokeTyped('set_credential', params as never) as unknown as Promise<void>,
     deleteCredential: (siteCategory: string) =>
       invokeTyped('delete_credential', { site_category: siteCategory }) as unknown as Promise<void>,
+    pixivOAuthStart: () =>
+      invoke<{ login_url: string; code_verifier: string }>('pixiv_oauth_start'),
+    pixivOAuthPopup: (loginUrl: string) =>
+      invoke<{ code: string; phpsessid: string | null }>('pixiv_oauth_popup', { login_url: loginUrl }),
+    pixivOAuthExchange: (code: string, codeVerifier: string, phpsessid?: string | null) =>
+      invoke<{ ok: boolean }>('pixiv_oauth_exchange', { code, code_verifier: codeVerifier, phpsessid: phpsessid ?? null }),
   },
 
-  flows: {
+  groups: {
     list: () =>
-      invokeTyped('get_flows') as Promise<FlowInfo[]>,
+      invokeTyped('get_groups') as Promise<SubscriptionGroupInfo[]>,
     create: (name: string, schedule?: string) =>
-      invokeTyped('create_flow', { name, schedule: schedule ?? null } as never) as Promise<FlowInfo>,
+      invokeTyped('create_group', { name, schedule: schedule ?? null } as never) as Promise<SubscriptionGroupInfo>,
     delete: (id: string, deleteFiles?: boolean) =>
-      invokeTyped('delete_flow', { id, delete_files: deleteFiles ?? null } as never) as unknown as Promise<void>,
+      invokeTyped('delete_group', { id, delete_files: deleteFiles ?? null } as never) as unknown as Promise<void>,
     rename: (id: string, name: string) =>
-      invokeTyped('rename_flow', { id, name }) as unknown as Promise<void>,
+      invokeTyped('rename_group', { id, name }) as unknown as Promise<void>,
     setSchedule: (id: string, schedule: string) =>
-      invokeTyped('set_flow_schedule', { id, schedule }) as unknown as Promise<void>,
+      invokeTyped('set_group_schedule', { id, schedule }) as unknown as Promise<void>,
     run: (id: string) =>
-      invokeTyped('run_flow', { id }) as unknown as Promise<void>,
+      invokeTyped('run_group', { id }) as unknown as Promise<void>,
     stop: (id: string) =>
-      invokeTyped('stop_flow', { id }) as unknown as Promise<void>,
-  },
-
-  ptr: {
-    getStatus: () =>
-      invokeTyped('get_ptr_status') as Promise<PtrStats>,
-    isSyncing: () =>
-      invokeTyped('is_ptr_syncing') as Promise<boolean>,
-    getSyncProgress: () =>
-      invokeTyped('get_ptr_sync_progress') as Promise<PtrSyncProgress | null>,
-    sync: () =>
-      invokeTyped('ptr_sync') as Promise<{ id: string; message: string }>,
-    cancelSync: () =>
-      invokeTyped('cancel_ptr_sync') as unknown as Promise<void>,
-    cancelBootstrap: () =>
-      invokeTyped('ptr_cancel_bootstrap') as unknown as Promise<void>,
-    bootstrapFromSnapshot: (req: { snapshot_dir: string; ptr_service_id?: number | null; mode: string }) =>
-      invokeTyped('ptr_bootstrap_from_hydrus_snapshot', req) as Promise<Record<string, unknown>>,
-    getBootstrapStatus: () =>
-      invokeTyped('ptr_get_bootstrap_status') as Promise<PtrBootstrapStatus>,
-    getCompactIndexStatus: () =>
-      invokeTyped('ptr_get_compact_index_status') as Promise<PtrCompactIndexStatus>,
-    getNamespaceSummary: () =>
-      invokeTyped('ptr_get_namespace_summary') as Promise<NamespaceSummary[]>,
-    getTagsPaginated: (params: { namespace?: string; search?: string; cursor?: string; limit?: number }) =>
-      invokeTyped('ptr_get_tags_paginated', params as never) as Promise<TagRecord[]>,
-    getTagSiblings: (tagId: number) =>
-      invokeTyped('ptr_get_tag_siblings', { tag_id: tagId }) as Promise<TagRelation[]>,
-    getTagParents: (tagId: number) =>
-      invokeTyped('ptr_get_tag_parents', { tag_id: tagId }) as Promise<TagRelation[]>,
-    getSyncPerfBreakdown: () =>
-      invokeTyped('get_ptr_sync_perf_breakdown') as Promise<PtrSyncPerfBreakdown>,
+      invokeTyped('stop_group', { id }) as unknown as Promise<void>,
   },
 
   settings: {
@@ -429,9 +428,22 @@ export const api = {
       invokeTyped('get_zoom_factor') as Promise<number>,
   },
 
+  aiTagger: {
+    status: () =>
+      invoke<AiTaggerStatus>('ai_tagger_status', {}),
+    downloadModel: (model: string) =>
+      invoke<void>('ai_tagger_download_model', { model }),
+    deleteModel: (model: string) =>
+      invoke<void>('ai_tagger_delete_model', { model }),
+    predict: (hashes: string[], models?: string[]) =>
+      invoke<AiTagPredictOutput>('ai_tag_predict', { hashes, models: models ?? null }),
+    apply: (hashes: string[], tags: string[]) =>
+      invoke<number>('ai_tag_apply', { hashes, tags }),
+  },
+
   stats: {
     getImageStorageStats: () =>
-      invokeTyped('get_image_storage_stats') as Promise<FileStats>,
+      invokeTyped('get_storage_stats') as Promise<FileStats>,
     getPerfSnapshot: () =>
       invokeTyped('get_perf_snapshot') as Promise<PerfSnapshot>,
     checkPerfSlo: () =>
@@ -455,8 +467,6 @@ export const api = {
   os: {
     openExternalUrl: (url: string) =>
       invokeTyped('open_external_url', { url }) as unknown as Promise<void>,
-    enableModernWindowStyle: (cornerRadius: number) =>
-      invokeTyped('enable_modern_window_style', { cornerRadius }) as unknown as Promise<void>,
     openSettingsWindow: () =>
       invoke<void>('open_settings_window'),
     openSubscriptionsWindow: () =>
@@ -468,28 +478,28 @@ export const api = {
       invokeTyped('get_collections') as Promise<CollectionInfo[]>,
     getSummary: (id: number) =>
       invokeTyped('get_collection_summary', { id }) as Promise<CollectionSummary>,
-    setRating: (id: number, rating: number | null) =>
-      invokeTyped('set_collection_rating', { id, rating }) as unknown as Promise<void>,
-    setSourceUrls: (id: number, sourceUrls: string[]) =>
-      invokeTyped('set_collection_source_urls', { id, source_urls: sourceUrls }) as unknown as Promise<void>,
     reorderMembers: (id: number, hashes: string[]) =>
       invokeTyped('reorder_collection_members', { id, hashes }) as unknown as Promise<void>,
-    create: (params: { name: string; description?: string | null; tags?: string[] }) =>
+    create: (params: { name: string }) =>
       invokeTyped('create_collection', params as never),
     addMembers: (params: { id: number; hashes: string[] }) =>
       invokeTyped('add_collection_members', params),
     removeMembers: (params: { id: number; hashes: string[] }) =>
       invokeTyped('remove_collection_members', params),
-    update: (params: { id: number; name?: string; description?: string | null; tags?: string[]; sourceUrls?: string[] }) =>
+    update: (params: { id: number; name?: string; tags?: string[] }) =>
       invokeTyped('update_collection', {
         id: params.id,
         name: params.name,
-        description: params.description,
         tags: params.tags,
-        source_urls: params.sourceUrls,
       } as never) as unknown as Promise<void>,
+    addTags: (id: number, tags: string[]) =>
+      invokeTyped('add_collection_tags', { id, tags } as never) as unknown as Promise<void>,
+    removeTags: (id: number, tags: string[]) =>
+      invokeTyped('remove_collection_tags', { id, tags } as never) as unknown as Promise<void>,
     delete: (id: number) =>
       invokeTyped('delete_collection', { id }) as unknown as Promise<void>,
+    listMemberHashes: (id: number) =>
+      invokeTyped('list_collection_member_hashes', { id }) as unknown as Promise<string[]>,
   },
 
   companion: {

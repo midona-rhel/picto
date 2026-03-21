@@ -22,11 +22,10 @@ export interface EntitySlim {
   has_audio: boolean;
   status: string;
   rating: number | null;
-  view_count: number;
   source_urls: string[] | null;
-  imported_at: string;
+  date_added: string;
   has_thumbnail: boolean;
-  blurhash?: string | null;
+  dominant_color_hex?: string | null;
   tags?: string[];
   dominant_colors?: { hex: string; l: number; a: number; b: number }[] | null;
   notes?: Record<string, string> | null;
@@ -41,26 +40,49 @@ export interface GridPageSlimResponse {
   total_count: number | null;
 }
 
+export interface GridOutlineResponse {
+  items: EntitySlim[];
+  total_count: number | null;
+}
+
+export type GridScopeKind = 'system' | 'folder' | 'collection' | 'smart';
+export type GridSystemScopeKey = 'all' | 'inbox' | 'trash' | 'untagged' | 'uncategorized';
+
+export interface GridScopeSpec {
+  kind: GridScopeKind;
+  system_key?: GridSystemScopeKey | null;
+  folder_id?: number | null;
+  collection_entity_id?: number | null;
+  smart_folder_predicate?: unknown | null;
+}
+
+export interface GridFilterSpec {
+  search_tags?: string[] | null;
+  search_excluded_tags?: string[] | null;
+  tag_match_mode?: 'all' | 'any' | 'exact' | null;
+  folder_ids?: number[] | null;
+  excluded_folder_ids?: number[] | null;
+  folder_match_mode?: 'all' | 'any' | 'exact' | null;
+  rating_min?: number | null;
+  mime_prefixes?: string[] | null;
+  color_hex?: string | null;
+  color_accuracy?: number | null;
+  search_text?: string | null;
+  collections_only?: boolean | null;
+}
+
+export interface GridSortSpec {
+  field?: string | null;
+  order?: string | null;
+  random_seed?: number | null;
+}
+
 export interface GridPageSlimQuery {
   limit: number;
   cursor: string | null;
-  sortField: string;
-  sortOrder: string;
-  smartFolderPredicate?: unknown | null;
-  searchTags?: string[] | null;
-  searchExcludedTags?: string[] | null;
-  tagMatchMode?: 'all' | 'any' | 'exact' | null;
-  status?: string | null;
-  folderIds?: number[] | null;
-  excludedFolderIds?: number[] | null;
-  folderMatchMode?: 'all' | 'any' | 'exact' | null;
-  collectionEntityId?: number | null;
-  ratingMin?: number | null;
-  mimePrefixes?: string[] | null;
-  colorHex?: string | null;
-  colorAccuracy?: number | null;
-  searchText?: string | null;
-  randomSeed?: number | null;
+  scope: GridScopeSpec;
+  filters: GridFilterSpec;
+  sort: GridSortSpec;
 }
 
 // ─── File Metadata ───────────────────────────────────────────────────────────
@@ -75,7 +97,7 @@ export interface ResolvedTagInfo {
 }
 
 export interface EntityAllMetadata {
-  file: {
+  entity: {
     hash: string;
     name: string | null;
     size: number;
@@ -87,13 +109,13 @@ export interface EntityAllMetadata {
     has_audio: boolean;
     status: string;
     rating: number | null;
-    view_count: number;
     source_urls: string[] | null;
-    imported_at: string;
+    date_added: string;
     has_thumbnail: boolean;
-    blurhash: string | null;
     dominant_colors: { hex: string; l: number; a: number; b: number }[] | null;
     notes: Record<string, string> | null;
+    date_created?: string | null;
+    date_modified?: string | null;
   };
   tags: ResolvedTagInfo[];
   parent_tags: { namespace: string; subtag: string; display: string; read_only: boolean }[];
@@ -107,9 +129,7 @@ export interface EntityMetadataBatchResponse {
 
 export interface EnsureThumbnailResponse {
   regenerated_thumbnail: boolean;
-  generated_blurhash: boolean;
   has_thumbnail: boolean;
-  blurhash?: string | null;
 }
 
 export interface ReanalyzeFileColorsResponse {
@@ -121,13 +141,6 @@ export interface ImportResult {
   imported: string[];
   skipped: string[];
   errors: string[];
-}
-
-export interface BackfillBlurhashResult {
-  processed: number;
-  regenerated_thumbnails: number;
-  generated_blurhashes: number;
-  remaining: number;
 }
 
 // ─── Tags ────────────────────────────────────────────────────────────────────
@@ -192,20 +205,11 @@ export type SelectionMode = 'explicit_hashes' | 'all_results';
 export interface SelectionQuerySpec {
   mode: SelectionMode;
   hashes?: string[] | null;
-  search_tags?: string[] | null;
-  search_excluded_tags?: string[] | null;
-  tag_match_mode?: 'all' | 'any' | 'exact' | null;
-  smart_folder_predicate?: SmartFolderPredicate | null;
-  smart_folder_sort_field?: string | null;
-  smart_folder_sort_order?: string | null;
-  sort_field?: string | null;
-  sort_order?: string | null;
+  scope: GridScopeSpec;
+  filters: GridFilterSpec;
+  sort: GridSortSpec;
   excluded_hashes?: string[] | null;
   included_hashes?: string[] | null;
-  status?: string | null;
-  folder_ids?: number[] | null;
-  excluded_folder_ids?: number[] | null;
-  folder_match_mode?: 'all' | 'any' | 'exact' | null;
 }
 
 export interface SelectionTagCount {
@@ -237,6 +241,10 @@ export interface Folder {
   icon: string | null;
   color: string | null;
   auto_tags: string[];
+  watch_path: string | null;
+  watch_enabled: boolean;
+  watch_subfolders: boolean;
+  watch_import_status_mode: 'inherit' | 'inbox' | 'active';
   sort_order: number | null;
   created_at: string | null;
   updated_at: string | null;
@@ -276,6 +284,7 @@ export interface SmartFolderPredicate {
 export interface SmartFolder {
   id?: string;
   name: string;
+  parent_id?: number | null;
   icon?: string | null;
   color?: string | null;
   predicate: SmartFolderPredicate;
@@ -289,6 +298,7 @@ export interface SmartFolder {
 export interface SmartFolderIpcInput {
   smart_folder_id: number;
   name: string;
+  parent_id: number | null;
   icon: string | null;
   color: string | null;
   predicate_json: string;
@@ -296,6 +306,12 @@ export interface SmartFolderIpcInput {
   sort_order: string | null;
   created_at: string | null;
   updated_at: string | null;
+}
+
+export interface SmartFolderMove {
+  smart_folder_id: number;
+  new_parent_id: number | null;
+  sibling_order: [number, number][];
 }
 
 // ─── Drag & Drop ────────────────────────────────────────────────────────────
@@ -318,7 +334,7 @@ export interface ScanDuplicatesResult {
   closest_distance: number | null;
 }
 
-// ─── Subscriptions & Flows (CRUD) ────────────────────────────────────────────
+// ─── Subscriptions & Groups (CRUD) ───────────────────────────────────────────
 
 export interface SubscriptionQueryInfo {
   id: string;
@@ -337,7 +353,7 @@ export interface SubscriptionInfo {
   name: string;
   site_id: string;
   paused: boolean;
-  flow_id: string | null;
+  group_id: string | null;
   initial_file_limit: number;
   periodic_file_limit: number;
   created_at: string;
@@ -397,7 +413,7 @@ export interface CredentialHealth {
   last_error: string | null;
 }
 
-export interface FlowInfo {
+export interface SubscriptionGroupInfo {
   id: string;
   name: string;
   schedule: string;
@@ -406,7 +422,7 @@ export interface FlowInfo {
   subscriptions: SubscriptionInfo[];
 }
 
-// ─── Subscriptions & Flows (Events) ─────────────────────────────────────────
+// ─── Subscriptions & Groups (Events) ────────────────────────────────────────
 
 export interface SubscriptionProgressEvent {
   subscription_id: string;
@@ -440,99 +456,6 @@ export interface SubscriptionFinishedEvent {
   last_metadata_error?: string | null;
 }
 
-// ─── PTR (Public Tag Repository) ─────────────────────────────────────────────
-
-export interface PtrSyncProgress {
-  updates_total: number;
-  updates_processed: number;
-  tags_added: number;
-  siblings_added: number;
-  parents_added: number;
-  current_update_index: number;
-  latest_server_index: number;
-  starting_index: number;
-  phase: string;
-  heartbeat: boolean;
-  elapsed_ms: number;
-}
-
-export interface PtrBootstrapCounts {
-  hash_defs: number;
-  tag_defs: number;
-  mappings: number;
-  siblings: number;
-  parents: number;
-  max_update_index: number;
-}
-
-export interface PtrBootstrapResult {
-  service_id: number;
-  counts: PtrBootstrapCounts;
-  projected_import_seconds: number;
-  snapshot_dir: string;
-}
-
-export interface PtrBootstrapStatus {
-  running: boolean;
-  phase: string;
-  stage?: string;
-  mode: string;
-  service_id?: number;
-  started_at?: string;
-  updated_at?: string;
-  last_error?: string;
-  rows_total?: number;
-  rows_done?: number;
-  rows_done_stage?: number;
-  rows_total_stage?: number;
-  rows_per_sec?: number;
-  eta_seconds?: number;
-  checkpoint?: {
-    phase: string;
-    last_hash_id: number;
-    last_tag_id: number;
-    last_service_hash_id: number;
-  };
-  last_result?: {
-    service_id: number;
-    counts: PtrBootstrapCounts;
-    cursor_index: number;
-    snapshot_dir: string;
-  };
-  dry_run_result?: PtrBootstrapResult;
-}
-
-export interface PtrSyncResult {
-  success: boolean;
-  error?: string;
-  updates_processed?: number;
-  tags_added?: number;
-}
-
-export interface PtrCompactIndexStatus {
-  running: boolean;
-  stage: string;
-  rows_done_stage: number;
-  rows_total_stage: number;
-  rows_per_sec: number;
-  snapshot_dir?: string;
-  service_id?: number;
-  snapshot_max_index?: number;
-  updated_at?: string;
-  checkpoint: {
-    phase: string;
-    last_hash_id: number;
-    last_tag_id: number;
-    last_service_hash_id: number;
-  };
-}
-
-export interface PtrSyncPhaseChangedEvent {
-  phase: string;
-  current_update_index?: number;
-  ts?: string;
-}
-
 // ─── View Preferences ────────────────────────────────────────────────────────
 
 export interface ViewPrefsDto {
@@ -562,12 +485,26 @@ export interface ViewPrefsPatch {
 
 // ─── Settings ────────────────────────────────────────────────────────────────
 
+export interface MediaTypeBreakdown {
+  images: number;
+  images_size: number;
+  videos: number;
+  videos_size: number;
+  audio: number;
+  audio_size: number;
+  other: number;
+  other_size: number;
+}
+
 export interface FileStats {
   total: number;
   inbox: number;
   active: number;
   trash: number;
   total_size: number;
+  breakdown?: MediaTypeBreakdown;
+  originals_disk?: number;
+  thumbnails_disk?: number;
 }
 
 export interface PercentileSnapshot {
@@ -582,12 +519,8 @@ export interface PercentileSnapshot {
 export interface MetadataBatchLatest {
   total_ms: number;
   local_ms: number;
-  ptr_ms: number;
   merge_ms: number;
   req_hashes: number;
-  local_hits: number;
-  ptr_lookup: number;
-  ptr_hits: number;
   missing: number;
   ts: string;
 }
@@ -629,6 +562,7 @@ export interface DuplicateSettings {
   duplicateDetectSimilarityPct: number;
   duplicateReviewSimilarityPct: number;
   duplicateAutoMergeSimilarityPct: number;
+  duplicateAutoMergeRequireMatchingDimensions: boolean;
   duplicateAutoMergeSubscriptionsOnly: boolean;
   duplicateAutoMergeEnabled: boolean;
 }

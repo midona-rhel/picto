@@ -24,15 +24,6 @@ pub enum CredentialType {
 }
 
 impl CredentialType {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::UsernamePassword => "username_password",
-            Self::Cookies => "cookies",
-            Self::ApiKey => "api_key",
-            Self::OAuthToken => "oauth_token",
-        }
-    }
-
     pub fn from_str(s: &str) -> Option<Self> {
         match s {
             "username_password" => Some(Self::UsernamePassword),
@@ -136,18 +127,16 @@ pub fn build_extractor_auth(cred: &SiteCredential) -> serde_json::Value {
             if let Some(ref key) = cred.password {
                 obj.insert("api-key".into(), serde_json::Value::String(key.clone()));
             }
-            if is_rule34 {
-                let user_id = cred
-                    .username
-                    .as_deref()
-                    .map(str::trim)
-                    .filter(|s| !s.is_empty());
-                if let Some(user_id) = user_id {
-                    obj.insert(
-                        "user-id".into(),
-                        serde_json::Value::String(user_id.to_string()),
-                    );
-                }
+            if let Some(user_id) = cred
+                .username
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+            {
+                obj.insert(
+                    "user-id".into(),
+                    serde_json::Value::String(user_id.to_string()),
+                );
             }
         }
         CredentialType::OAuthToken => {
@@ -156,6 +145,14 @@ pub fn build_extractor_auth(cred: &SiteCredential) -> serde_json::Value {
                     "refresh-token".into(),
                     serde_json::Value::String(token.clone()),
                 );
+            }
+            // Some OAuth sites (Pixiv) also need cookies (PHPSESSID)
+            if let Some(ref cookies) = cred.cookies {
+                let cookie_obj: serde_json::Map<String, serde_json::Value> = cookies
+                    .iter()
+                    .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
+                    .collect();
+                obj.insert("cookies".into(), serde_json::Value::Object(cookie_obj));
             }
         }
     }
@@ -166,21 +163,6 @@ pub fn build_extractor_auth(cred: &SiteCredential) -> serde_json::Value {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn credential_type_roundtrip_strings() {
-        let all = [
-            CredentialType::UsernamePassword,
-            CredentialType::Cookies,
-            CredentialType::ApiKey,
-            CredentialType::OAuthToken,
-        ];
-        for ty in all {
-            let raw = ty.as_str();
-            assert_eq!(CredentialType::from_str(raw), Some(ty));
-        }
-        assert_eq!(CredentialType::from_str("invalid"), None);
-    }
 
     #[test]
     fn build_extractor_auth_contract_by_credential_type() {

@@ -1,23 +1,16 @@
-import { useEffect, useRef } from 'react';
-import { useMantineColorScheme } from '@mantine/core';
+import { useEffect, useState } from 'react';
 import { initSettingsStore, themeToColorScheme, useSettingsStore } from '../../state/settingsStore';
 
 /**
  * Unified theme sync hook — initializes settings store and keeps
- * Mantine color scheme + DOM theme attribute in sync with user settings.
+ * the DOM theme attribute in sync with user settings.
  *
- * Replaces duplicated theme effects in useAppBootstrap and all entrypoint windows.
+ * Mantine color scheme is controlled via forceColorScheme prop on
+ * MantineProvider (not setColorScheme) to avoid cross-window
+ * localStorage storage-event conflicts.
  */
 export function useThemeSync(): void {
   const { settings, loaded: settingsLoaded } = useSettingsStore();
-  const { setColorScheme, colorScheme } = useMantineColorScheme();
-
-  // Ref avoids setColorScheme/colorScheme as effect deps (they're stable but not
-  // declared so by Mantine, which would force an exhaustive-deps suppression).
-  const setColorSchemeRef = useRef(setColorScheme);
-  setColorSchemeRef.current = setColorScheme;
-  const colorSchemeRef = useRef(colorScheme);
-  colorSchemeRef.current = colorScheme;
 
   useEffect(() => {
     void initSettingsStore();
@@ -26,8 +19,33 @@ export function useThemeSync(): void {
   useEffect(() => {
     if (!settingsLoaded) return;
     const theme = settings.theme ?? (settings.colorScheme === 'light' ? 'light' : 'dark');
-    const scheme = themeToColorScheme(theme);
-    if (scheme !== colorSchemeRef.current) setColorSchemeRef.current(scheme);
     document.documentElement.dataset.theme = theme === 'auto' ? '' : theme;
+    localStorage.setItem('picto-theme', theme);
   }, [settingsLoaded, settings.theme, settings.colorScheme]);
+}
+
+/**
+ * Derive the Mantine color scheme from the settings store.
+ * Used as forceColorScheme prop on MantineProvider.
+ */
+export function useDerivedColorScheme(): 'light' | 'dark' {
+  const { settings } = useSettingsStore();
+  const theme = settings.theme ?? 'dark';
+  const scheme = themeToColorScheme(theme);
+
+  // Listen for OS preference changes when set to auto
+  const [osPrefersDark, setOsPrefersDark] = useState(
+    () => !window.matchMedia('(prefers-color-scheme: light)').matches,
+  );
+  useEffect(() => {
+    const mq = window.matchMedia('(prefers-color-scheme: light)');
+    const handler = (e: MediaQueryListEvent) => setOsPrefersDark(!e.matches);
+    mq.addEventListener('change', handler);
+    return () => mq.removeEventListener('change', handler);
+  }, []);
+
+  if (scheme === 'auto') {
+    return osPrefersDark ? 'dark' : 'light';
+  }
+  return scheme;
 }

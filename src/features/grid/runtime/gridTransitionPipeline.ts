@@ -8,20 +8,17 @@
 // Flow:  idle → fading_out → fading_in → idle
 //
 
-export type TransitionStage = 'idle' | 'fading_out' | 'fading_in';
+export type TransitionStage = 'idle' | 'fading_out' | 'preparing' | 'fading_in';
 
 // ---------------------------------------------------------------------------
 // Timing constants — single source of truth for all transition durations
 // ---------------------------------------------------------------------------
 
 /** CSS transition duration for grid opacity fades (ms). */
-export const FADE_DURATION_MS = 120;
+export const FADE_DURATION_MS = 150;
 
 /** Minimum wait before committing a transition — FADE_DURATION_MS + safety buffer (ms). */
-export const FADE_SETTLE_MS = 130;
-
-/** Debounce window for coalescing multi-step scope navigation state changes (ms). */
-export const SCOPE_COALESCE_MS = 32;
+export const FADE_SETTLE_MS = 160;
 
 // ---------------------------------------------------------------------------
 // Selectors
@@ -29,12 +26,13 @@ export const SCOPE_COALESCE_MS = 32;
 
 /** CSS opacity value for the grid container. */
 export function transitionOpacity(stage: TransitionStage): number {
-  return stage === 'fading_out' ? 0 : 1;
+  return stage === 'fading_out' || stage === 'preparing' ? 0 : 1;
 }
 
 /** CSS transition property for the grid container. */
 export function transitionCss(stage: TransitionStage): string {
-  return stage === 'idle' ? 'none' : `opacity ${FADE_DURATION_MS}ms ease`;
+  if (stage === 'idle' || stage === 'preparing') return 'none';
+  return `opacity ${FADE_DURATION_MS}ms ease`;
 }
 
 /**

@@ -1,13 +1,4 @@
-//! Specialty file format handlers.
-//!
-//! Ported from:
-//! - `HydrusClipHandling.py` - CLIP Studio Paint files (embedded SQLite)
-//! - `HydrusKritaHandling.py` - Krita KRA files (ZIP with XML metadata)
-//! - `HydrusPaintNETHandling.py` - Paint.NET PDN files (binary header with XML)
-//! - `HydrusProcreateHandling.py` - Procreate files (ZIP with plist)
-//! - `HydrusPSDHandling.py` - Adobe PSD files (binary header)
-//! - `HydrusUgoiraHandling.py` - Ugoira animations (ZIP with frame images)
-//! - `HydrusFlashHandling.py` - SWF Flash files (binary header)
+//! Specialty file format handlers (CLIP, Krita, Paint.NET, Procreate, PSD, Ugoira, Flash).
 
 use std::io::{Cursor, Read, Seek, SeekFrom};
 use std::path::Path;
@@ -23,7 +14,6 @@ const SQLITE_MAGIC: &[u8] = b"SQLite format 3";
 
 /// Get CLIP Studio Paint file properties: ((width, height), duration_ms, num_frames).
 ///
-/// Ported from `HydrusClipHandling.GetClipProperties()`.
 /// CLIP files embed a SQLite database containing canvas metadata.
 /// The SQLite portion is extracted, then Canvas table is queried for dimensions.
 pub fn get_clip_properties(path: &Path) -> FileResult<((u32, u32), Option<u64>, Option<u32>)> {
@@ -69,7 +59,7 @@ pub fn get_clip_properties(path: &Path) -> FileResult<((u32, u32), Option<u64>, 
     let mut num_frames: Option<u32> = None;
     let mut duration_ms: Option<u64> = None;
 
-    // Python: checks if TimeLine table exists
+    // Check if TimeLine table exists (animation support)
     let has_timeline: bool = db
         .query_row(
             "SELECT 1 FROM sqlite_master WHERE name = 'TimeLine';",
@@ -99,7 +89,7 @@ pub fn get_clip_properties(path: &Path) -> FileResult<((u32, u32), Option<u64>, 
         }
     }
 
-    // Unit conversion to pixels (matches Python exactly)
+    // Unit conversion to pixels
     // canvas_unit: 0=pixels, 1=cm, 2=mm, 3=inches, 5=points
     let unit_conversion_multiplier: f64 = match canvas_unit {
         0 => 1.0,                     // pixels
@@ -118,7 +108,6 @@ pub fn get_clip_properties(path: &Path) -> FileResult<((u32, u32), Option<u64>, 
 
 /// Extract the DBPNG preview image from a CLIP file.
 ///
-/// Ported from `HydrusClipHandling.ExtractDBPNGToPath()`.
 /// The CLIP file's embedded SQLite database has a CanvasPreview table
 /// with the PNG image data.
 pub fn extract_clip_dbpng(path: &Path) -> FileResult<Vec<u8>> {
@@ -165,7 +154,6 @@ const KRITA_DOC_INFO: &str = "maindoc.xml";
 
 /// Get Krita KRA file properties (width, height).
 ///
-/// Ported from `HydrusKritaHandling.GetKraProperties()`.
 /// Reads `maindoc.xml` from the KRA (ZIP) archive and extracts width/height
 /// from the IMAGE element attributes.
 pub fn get_kra_properties(path: &Path) -> FileResult<(u32, u32)> {
@@ -200,13 +188,12 @@ pub fn get_kra_properties(path: &Path) -> FileResult<(u32, u32)> {
 
 /// Generate a thumbnail from a Krita KRA file.
 ///
-/// Ported from `HydrusKritaHandling.GenerateThumbnailNumPyFromKraPath()`.
 /// Tries the merged image first, falls back to the preview thumbnail.
 pub fn generate_thumbnail_from_krita(
     path: &Path,
     target_resolution: (u32, u32),
 ) -> FileResult<Vec<u8>> {
-    // Try merged image first, fall back to thumbnail (matches Python)
+    // Try merged image first, fall back to thumbnail
     let image_bytes = read_zip_entry_bytes(path, KRITA_FILE_MERGED)
         .or_else(|_| read_zip_entry_bytes(path, KRITA_FILE_THUMB))?;
 
@@ -217,7 +204,6 @@ pub fn generate_thumbnail_from_krita(
 
 /// Get Paint.NET file resolution.
 ///
-/// Ported from `HydrusPaintNETHandling.GetPaintNETResolution()`.
 /// PDN files have a binary header followed by an XML section containing
 /// width and height attributes.
 pub fn get_paint_net_resolution(path: &Path) -> FileResult<(u32, u32)> {
@@ -249,7 +235,6 @@ pub fn get_paint_net_resolution(path: &Path) -> FileResult<(u32, u32)> {
 
 /// Generate a thumbnail from a Paint.NET file.
 ///
-/// Ported from `HydrusPaintNETHandling.GenerateThumbnailNumPyFromPaintNET()`.
 /// The PDN XML header contains a base64-encoded PNG thumbnail.
 pub fn generate_thumbnail_from_paint_net(
     path: &Path,
@@ -288,7 +273,6 @@ pub fn generate_thumbnail_from_paint_net(
 
 /// Read the XML header from a Paint.NET file.
 ///
-/// Ported from `HydrusPaintNETHandling.GetPaintNETXMLHeader()`.
 /// Format: 4 magic bytes, 3-byte header length (little-endian), then UTF-8 XML.
 fn get_paint_net_xml_header(path: &Path) -> FileResult<String> {
     let mut file = std::fs::File::open(path).map_err(FileError::Io)?;
@@ -322,7 +306,6 @@ const PROCREATE_DOCUMENT_ARCHIVE: &str = "Document.archive";
 
 /// Get Procreate file resolution.
 ///
-/// Ported from `HydrusProcreateHandling.GetProcreateResolution()`.
 /// Procreate files are ZIP archives. The `Document.archive` file is a binary plist
 /// containing canvas dimensions and orientation.
 ///
@@ -330,35 +313,19 @@ const PROCREATE_DOCUMENT_ARCHIVE: &str = "Document.archive";
 /// simplified extraction approach, falling back gracefully.
 pub fn get_procreate_resolution(path: &Path) -> FileResult<(u32, u32)> {
     // Procreate uses binary plist format in Document.archive
-    // Full parsing requires a plist library. Python uses plistlib.
+    // Full parsing requires a plist library.
     // We attempt to extract dimensions from the plist data.
     let plist_bytes = read_zip_entry_bytes(path, PROCREATE_DOCUMENT_ARCHIVE)?;
 
-    // Try to parse as XML plist first (some files use XML format)
-    if let Ok(plist_str) = String::from_utf8(plist_bytes.clone()) {
-        if let Some(dims) = parse_procreate_xml_plist(&plist_str) {
-            return Ok(dims);
-        }
-    }
-
-    // Binary plist parsing would require a dedicated library.
-    // Python uses plistlib which handles binary plists natively.
-    // TODO: Add plist crate for binary plist support
+    // Plist parsing (binary or XML) requires a dedicated library.
+    let _ = plist_bytes;
     Err(FileError::UnsupportedFile(
-        "Procreate binary plist parsing not yet supported (needs plist crate)".to_string(),
+        "Procreate plist parsing not supported (needs plist crate)".to_string(),
     ))
-}
-
-/// Try to parse dimensions from an XML plist (fallback for non-binary plists).
-fn parse_procreate_xml_plist(_xml: &str) -> Option<(u32, u32)> {
-    // This is a simplified parser for the rare case of XML plists
-    // Most Procreate files use binary plist format
-    None
 }
 
 /// Extract the thumbnail from a Procreate file.
 ///
-/// Ported from `HydrusProcreateHandling.ExtractZippedThumbnailToPath()`.
 pub fn extract_procreate_thumbnail(path: &Path) -> FileResult<Vec<u8>> {
     read_zip_entry_bytes(path, PROCREATE_THUMBNAIL_FILE_PATH)
         .map_err(|_| FileError::Thumbnail("This procreate file had no thumbnail file!".to_string()))
@@ -377,7 +344,6 @@ pub fn generate_thumbnail_from_procreate(
 
 /// Get PSD file resolution from the binary header.
 ///
-/// Ported from `HydrusPSDHandling.GetPSDResolution()`.
 /// PSD header layout: at offset 14, 4 bytes height (big-endian), 4 bytes width (big-endian).
 pub fn get_psd_resolution(path: &Path) -> FileResult<(u32, u32)> {
     let mut file = std::fs::File::open(path).map_err(FileError::Io)?;
@@ -397,19 +363,11 @@ pub fn get_psd_resolution(path: &Path) -> FileResult<(u32, u32)> {
     Ok((width, height))
 }
 
-/// Generate a thumbnail from a PSD file.
-///
-/// Ported from `HydrusPSDHandling.GenerateThumbnailNumPyFromPSDPath()`.
-/// Python uses FFMPEG to render PSD preview to PNG bytes, then resizes.
-/// We use ffmpeg-next via the existing infrastructure.
+/// Generate a thumbnail from a PSD file using the `image` crate.
 pub fn generate_thumbnail_from_psd(
     path: &Path,
     target_resolution: (u32, u32),
 ) -> FileResult<Vec<u8>> {
-    // Python renders PSD via FFMPEG: HydrusFFMPEG.RenderImageToPNGBytes(path)
-    // Then resizes the result. We can try using the image crate directly,
-    // as some PSD files can be loaded by it.
-    // Fall back to returning an error if the image crate can't handle it.
     let reader = image::ImageReader::open(path)
         .map_err(FileError::Io)?
         .with_guessed_format()
@@ -439,7 +397,6 @@ pub fn generate_thumbnail_from_psd(
 
 /// Get Ugoira file properties: ((width, height), duration_ms, num_frames).
 ///
-/// Ported from `HydrusUgoiraHandling.GetUgoiraProperties()`.
 /// Tries JSON metadata first, then falls back to scanning frame images.
 pub fn get_ugoira_properties(path: &Path) -> FileResult<((u32, u32), Option<u64>, Option<u32>)> {
     // Try JSON-based properties first
@@ -448,7 +405,7 @@ pub fn get_ugoira_properties(path: &Path) -> FileResult<((u32, u32), Option<u64>
     }
 
     // Fallback: get resolution from first frame image
-    let (width, height) = get_ugoira_first_frame_dimensions(path).unwrap_or((100, 100)); // Python defaults to (100, 100)
+    let (width, height) = get_ugoira_first_frame_dimensions(path).unwrap_or((100, 100));
 
     let num_frames = get_frame_paths_from_ugoira_zip(path)
         .map(|paths| paths.len() as u32)
@@ -459,7 +416,6 @@ pub fn get_ugoira_properties(path: &Path) -> FileResult<((u32, u32), Option<u64>
 
 /// Get Ugoira properties from the animation.json metadata file.
 ///
-/// Ported from `HydrusUgoiraHandling.GetUgoiraPropertiesFromJSON()`.
 fn get_ugoira_properties_from_json(
     path: &Path,
 ) -> FileResult<((u32, u32), Option<u64>, Option<u32>)> {
@@ -497,14 +453,13 @@ struct UgoiraFrame {
 
 /// Read and parse the animation.json from a Ugoira ZIP.
 ///
-/// Ported from `HydrusUgoiraHandling.GetUgoiraFrameDataJSON()`.
 fn get_ugoira_frame_data_json(path: &Path) -> FileResult<Vec<UgoiraFrame>> {
     let json_bytes = super::archive::get_single_file_from_zip_bytes(path, "animation.json")?;
 
     let json_str = String::from_utf8(json_bytes)
         .map_err(|_| FileError::UnsupportedFile("animation.json is not valid UTF-8".to_string()))?;
 
-    // Python: JSON from gallery-dl is just the array, otherwise it's {frames: [...]}
+    // gallery-dl exports as a bare array, others wrap in {frames: [...]}
     if let Ok(frames) = serde_json::from_str::<Vec<UgoiraFrame>>(&json_str) {
         return Ok(frames);
     }
@@ -523,7 +478,6 @@ fn get_ugoira_frame_data_json(path: &Path) -> FileResult<Vec<UgoiraFrame>> {
 
 /// Get image file paths from a Ugoira ZIP (without JSON metadata).
 ///
-/// Ported from `HydrusUgoiraHandling.GetFramePathsFromUgoiraZip()`.
 fn get_frame_paths_from_ugoira_zip(path: &Path) -> FileResult<Vec<String>> {
     let file = std::fs::File::open(path).map_err(FileError::Io)?;
     let mut zip = zip::ZipArchive::new(file)
@@ -588,7 +542,6 @@ fn get_ugoira_first_frame_dimensions(path: &Path) -> FileResult<(u32, u32)> {
 
 /// Generate a thumbnail from a Ugoira file at a specific frame index.
 ///
-/// Ported from `HydrusUgoiraHandling.GenerateThumbnailNumPyFromUgoiraPath()`.
 pub fn generate_thumbnail_from_ugoira(
     path: &Path,
     target_resolution: (u32, u32),
@@ -613,7 +566,6 @@ pub fn generate_thumbnail_from_ugoira(
 
 /// Get Flash SWF file properties: ((width, height), duration_ms, num_frames).
 ///
-/// Ported from `HydrusFlashHandling.GetFlashProperties()`.
 /// Parses the SWF binary header to extract dimensions, frame count, and FPS.
 ///
 /// SWF header format:
@@ -697,7 +649,7 @@ pub fn get_flash_properties(path: &Path) -> FileResult<((u32, u32), u64, u32)> {
     );
 
     // Convert from twips to pixels (1 twip = 1/20 pixel)
-    // Python uses abs() since some flash files deliver negatives
+    // abs() because some SWF files deliver negative dimensions
     let width = ((xmax - xmin).abs() / 20) as u32;
     let height = ((ymax - ymin).abs() / 20) as u32;
 
@@ -800,7 +752,7 @@ fn resize_image_bytes_to_thumbnail(
 
     let thumbnail = img.resize_exact(tw, th, image::imageops::FilterType::Lanczos3);
 
-    // Use PNG for images with alpha, JPEG otherwise (matches Python)
+    // Use PNG for images with alpha, JPEG otherwise
     let has_alpha = img.color().has_alpha();
     let mut buf = Vec::new();
     let mut cursor = Cursor::new(&mut buf);
@@ -841,18 +793,6 @@ mod tests {
         let (w, h) = get_psd_resolution(tmp.path()).unwrap();
         assert_eq!(w, 100);
         assert_eq!(h, 200);
-    }
-
-    #[test]
-    fn test_paint_net_xml_header_parsing() {
-        // Test XML parsing for Paint.NET
-        let xml = r#"<pdnImage width="800" height="600"><custom><thumb png="iVBORw0KGgo="/></custom></pdnImage>"#;
-        let doc = roxmltree::Document::parse(xml).unwrap();
-        let root = doc.root_element();
-        let w: u32 = root.attribute("width").unwrap().parse().unwrap();
-        let h: u32 = root.attribute("height").unwrap().parse().unwrap();
-        assert_eq!(w, 800);
-        assert_eq!(h, 600);
     }
 
     #[test]

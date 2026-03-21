@@ -1,5 +1,5 @@
 //! Background task contract types — visible progress indicators for
-//! long-running operations (subscriptions, flows, PTR sync, imports).
+//! long-running operations (subscriptions, imports).
 //!
 //! Tasks are upserted via `runtime/task_upserted` events and removed
 //! via `runtime/task_removed` when complete.
@@ -9,7 +9,7 @@ use ts_rs::TS;
 
 /// A running or recently-finished background task visible to the frontend.
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "../../src/shared/types/generated/runtime-contract/")]
+#[ts(export_to = "../../src/shared/types/generated/runtime-contract/")]
 pub struct RuntimeTask {
     pub task_id: String,
     pub kind: TaskKind,
@@ -29,18 +29,17 @@ pub struct RuntimeTask {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "../../src/shared/types/generated/runtime-contract/")]
+#[ts(export_to = "../../src/shared/types/generated/runtime-contract/")]
 #[serde(rename_all = "snake_case")]
 pub enum TaskKind {
     Subscription,
-    Flow,
-    PtrSync,
-    PtrBootstrap,
+    SubscriptionGroup,
     Import,
+    ModelDownload,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "../../src/shared/types/generated/runtime-contract/")]
+#[ts(export_to = "../../src/shared/types/generated/runtime-contract/")]
 #[serde(rename_all = "snake_case")]
 pub enum TaskStatus {
     Running,
@@ -50,7 +49,7 @@ pub enum TaskStatus {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "../../src/shared/types/generated/runtime-contract/")]
+#[ts(export_to = "../../src/shared/types/generated/runtime-contract/")]
 pub struct TaskProgress {
     #[ts(type = "number")]
     pub done: u64,
@@ -66,7 +65,7 @@ pub struct TaskProgress {
 /// Carries a monotonic sequence number so the frontend can detect
 /// ordering and gaps, matching the `MutationReceipt` pattern.
 #[derive(Debug, Clone, Serialize, TS)]
-#[ts(export, export_to = "../../src/shared/types/generated/runtime-contract/")]
+#[ts(export_to = "../../src/shared/types/generated/runtime-contract/")]
 pub struct TaskUpsertedEvent {
     #[ts(type = "number")]
     pub seq: u64,
@@ -75,7 +74,7 @@ pub struct TaskUpsertedEvent {
 
 /// Sequenced envelope for `runtime/task_removed` events.
 #[derive(Debug, Clone, Serialize, TS)]
-#[ts(export, export_to = "../../src/shared/types/generated/runtime-contract/")]
+#[ts(export_to = "../../src/shared/types/generated/runtime-contract/")]
 pub struct TaskRemovedEvent {
     #[ts(type = "number")]
     pub seq: u64,

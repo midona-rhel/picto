@@ -56,15 +56,13 @@
 }
 
 [data-mantine-color-scheme="light"] .tableRow:nth-child(even) {
-  background-color: var(--color-black-10);
+  background-color: rgba(0, 0, 0, 0.04);
 }
 
 .functionName {
+  composes: truncate from '../../../shared/styles/textClamp.module.css';
   flex: 4;
   padding: 4px 12px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
   min-width: 0;
 }
 
@@ -133,19 +131,17 @@
 }
 
 .clearShortcutButton {
+  composes: btnReset from '../../../shared/styles/buttonReset.module.css';
   position: absolute;
   top: 50%;
   right: 6px;
   transform: translateY(-50%);
   height: 18px;
-  border: none;
-  background: transparent;
   color: var(--color-text-tertiary);
   font-size: 11px;
   line-height: 18px;
   padding: 0 4px;
   border-radius: 4px;
-  cursor: pointer;
 }
 
 .clearShortcutButton:hover {
@@ -162,8 +158,7 @@
 }
 
 .emptyState {
+  composes: emptyState from '../../../shared/styles/pickerPanel.module.css';
   padding: 24px;
-  text-align: center;
-  color: var(--color-text-tertiary);
   font-size: 13px;
 }

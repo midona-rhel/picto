@@ -1,0 +1,42 @@
+.inboxBar {
+  position: absolute;
+  bottom: 80px;
+  left: 0;
+  right: 0;
+  z-index: 20;
+  display: flex;
+  justify-content: center;
+  gap: 2px;
+  pointer-events: none;
+}
+
+.inboxBtn {
+  composes: btnReset from './buttonReset.module.css';
+  width: 44px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: auto;
+  color: var(--color-text-primary);
+  background: var(--box-background);
+  transition: background 150ms ease, color 150ms ease;
+}
+
+.inboxBtn:first-child {
+  border-radius: 8px 0 0 8px;
+}
+
+.inboxBtn:last-child {
+  border-radius: 0 8px 8px 0;
+}
+
+.inboxBtnReject:hover {
+  background: rgb(180, 50, 50); /* guard:allow — opaque reject button */
+  color: var(--color-white);
+}
+
+.inboxBtnAccept:hover {
+  background: rgb(40, 130, 65); /* guard:allow — opaque accept button */
+  color: var(--color-white);
+}

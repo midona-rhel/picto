@@ -2,10 +2,10 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { MouseEvent as ReactMouseEvent } from 'react';
 import { useMantineColorScheme } from '@mantine/core';
 import { useHotkeys } from '@mantine/hooks';
-import { getCurrentWindow, setTheme as setAppTheme, api } from '#desktop/api';
+import { getCurrentWindow, setTheme as setAppTheme } from '#desktop/api';
 
-import { registerCacheCleanup } from '../shared/lib/cacheCleanup';
-import { useNavigationStore } from '../state/navigationStore';
+import { deriveNavigationTitle, useNavigationStore } from '../state/navigationStore';
+import { useDomainStore } from '../state/domainStore';
 import { useSettingsStore } from '../state/settingsStore';
 import { performRedo, performUndo } from '../shared/controllers/undoRedoController';
 import { runBestEffort } from '../shared/lib/asyncOps';
@@ -21,7 +21,46 @@ export interface AppBootstrap {
 }
 
 export function useAppBootstrap(): AppBootstrap {
-  const { titlebarTitle, currentView } = useNavigationStore();
+  const activeCollectionId = useNavigationStore((state) => state.activeCollectionId);
+  const activeFolderId = useNavigationStore((state) => state.activeFolderId);
+  const activeSmartFolderId = useNavigationStore((state) => state.activeSmartFolderId);
+  const activeStatusFilter = useNavigationStore((state) => state.activeStatusFilter);
+  const currentView = useNavigationStore((state) => state.currentView);
+  const filterTags = useNavigationStore((state) => state.filterTags);
+  const smartFolders = useDomainStore((state) => state.smartFolders);
+  const folderNodes = useDomainStore((state) => state.folderNodes);
+  const collectionTitles = useNavigationStore((state) => state.collectionTitles);
+  const activeFolderLabel = useMemo(
+    () => (activeFolderId != null ? folderNodes.find((node) => node.id === `folder:${activeFolderId}`)?.name ?? null : null),
+    [activeFolderId, folderNodes],
+  );
+  const activeSmartFolder = useMemo(() => {
+    if (!activeSmartFolderId) return null;
+    const active = smartFolders.find((folder) => folder.id === activeSmartFolderId);
+    if (!active) return null;
+    return {
+      id: active.id,
+      name: active.name,
+      parent_id: active.parent_id != null ? Number(active.parent_id) : null,
+      icon: active.icon ?? null,
+      color: active.color ?? null,
+      predicate: active.predicate ?? active.localPredicate ?? { groups: [] },
+      sort_field: active.sort_field ?? null,
+      sort_order: active.sort_order ?? null,
+    };
+  }, [activeSmartFolderId, smartFolders]);
+  const activeCollectionLabel = activeCollectionId != null
+    ? collectionTitles[activeCollectionId] ?? `Collection ${activeCollectionId}`
+    : null;
+  const titlebarTitle = useMemo(() => deriveNavigationTitle({
+    activeCollectionId,
+    activeCollectionLabel,
+    activeFolderLabel,
+    activeSmartFolderLabel: activeSmartFolder?.name ?? null,
+    activeStatusFilter,
+    currentView,
+    filterTags,
+  }), [activeCollectionId, activeCollectionLabel, activeFolderId, activeFolderLabel, activeSmartFolder?.name, activeStatusFilter, currentView, filterTags]);
   const { colorScheme } = useMantineColorScheme();
   const appWindow = useMemo(() => getCurrentWindow(), []);
   const isSystemDark = colorScheme === 'dark';
@@ -32,19 +71,31 @@ export function useAppBootstrap(): AppBootstrap {
   // ── Native event listeners (library lifecycle, menu events, runtime init) ──
   useNativeEventListeners();
 
-  // Displayed title lags behind titlebarTitle — only updates when grid fade-out completes.
   const [displayedTitle, setDisplayedTitle] = useState(titlebarTitle);
   const handleScopeTransitionMidpoint = useCallback(() => {
-    setDisplayedTitle(useNavigationStore.getState().titlebarTitle);
+    const state = useNavigationStore.getState();
+    const domainState = useDomainStore.getState();
+    const activeSmartFolder = domainState.smartFolders.find((folder) => folder.id === state.activeSmartFolderId);
+    setDisplayedTitle(deriveNavigationTitle({
+      activeCollectionId: state.activeCollectionId,
+      activeCollectionLabel: state.activeCollectionId != null
+        ? state.collectionTitles[state.activeCollectionId] ?? `Collection ${state.activeCollectionId}`
+        : null,
+      activeFolderLabel: state.activeFolderId != null
+        ? domainState.folderNodes.find((node) => node.id === `folder:${state.activeFolderId}`)?.name ?? null
+        : null,
+      activeSmartFolderLabel: activeSmartFolder?.name ?? null,
+      activeStatusFilter: state.activeStatusFilter,
+      currentView: state.currentView,
+      filterTags: state.filterTags,
+    }));
   }, []);
   useEffect(() => {
-    if (currentView !== 'images') setDisplayedTitle(titlebarTitle);
-  }, [titlebarTitle, currentView]);
+    setDisplayedTitle(titlebarTitle);
+  }, [titlebarTitle]);
 
-  // ── One-time startup: cache cleanup, window style, show ──
+  // ── One-time startup: show window ──
   useEffect(() => {
-    registerCacheCleanup();
-    runBestEffort('startup.enableModernWindowStyle', api.os.enableModernWindowStyle(4.0));
     runBestEffort('startup.windowShow', appWindow.show());
   }, [appWindow]);
 

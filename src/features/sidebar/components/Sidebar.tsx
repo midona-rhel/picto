@@ -6,7 +6,6 @@ import {
   IconFolderQuestion,
   IconTrash,
   IconBookmarkQuestion,
-  IconClock,
   IconBookmark,
   IconCopy,
   IconArrowsShuffle,
@@ -14,7 +13,7 @@ import {
 
 import { useDomainStore } from '../../../state/domainStore';
 import { useNavigationStore } from '../../../state/navigationStore';
-import { setStatusSelectionWithLifecycleEffects } from '../../../shared/controllers/fileLifecycleActions';
+import { api } from '#desktop/api';
 import { SidebarJobStatus } from '../../layout/components/SidebarJobStatus';
 import { runCriticalAction } from '../../../shared/lib/asyncOps';
 import { FolderTree } from './FolderTree';
@@ -28,20 +27,31 @@ interface SidebarProps {
 }
 
 export function Sidebar({ onSmartFolderUpdated }: SidebarProps) {
-  const { allImagesCount, inboxCount, uncategorizedCount, trashCount, untaggedCount, tagsCount, recentViewedCount, duplicatesCount } = useDomainStore();
-  const { currentView, activeSmartFolder, activeFolder, activeStatusFilter, navigateTo } = useNavigationStore();
+  const { allActiveCount, inboxCount, uncategorizedCount, trashCount, untaggedCount, tagsCount, duplicatesCount } = useDomainStore();
+  const { currentView, activeSmartFolderId, activeFolderId, activeStatusFilter, navigateTo } = useNavigationStore();
 
-  const isAllImagesActive = !activeSmartFolder && !activeFolder && !activeStatusFilter && currentView === 'images';
+  const isAllActiveScope = !activeSmartFolderId && activeFolderId == null && !activeStatusFilter && currentView === 'images';
 
   const handleStatusDrop = useCallback((hashes: string[], status: 'active' | 'inbox' | 'trash') => {
     runCriticalAction(
       'Move Failed',
       `sidebar status drop (${status})`,
-      setStatusSelectionWithLifecycleEffects({ mode: 'explicit_hashes', hashes }, status),
+      api.files.setStatusSelection({
+        mode: 'explicit_hashes',
+        hashes,
+        scope: {
+          kind: 'system',
+          system_key: 'all',
+        },
+        filters: {},
+        sort: {},
+        excluded_hashes: null,
+        included_hashes: null,
+      }, status),
     );
   }, []);
 
-  const handleDropToAllImages = useCallback((hashes: string[]) => {
+  const handleDropToAllActive = useCallback((hashes: string[]) => {
     handleStatusDrop(hashes, 'active');
   }, [handleStatusDrop]);
 
@@ -59,11 +69,11 @@ export function Sidebar({ onSmartFolderUpdated }: SidebarProps) {
       <div className={styles.scrollArea}>
         <SidebarItem
           icon={<IconPhoto size={16} />}
-          label="All Images"
-          count={allImagesCount}
-          isActive={isAllImagesActive}
+          label="All Active"
+          count={allActiveCount}
+          isActive={isAllActiveScope}
           onClick={() => navigateTo('images')}
-          onHashDrop={handleDropToAllImages}
+          onHashDrop={handleDropToAllActive}
         />
         <SidebarItem
           icon={<IconInbox size={16} />}
@@ -93,13 +103,6 @@ export function Sidebar({ onSmartFolderUpdated }: SidebarProps) {
           count={tagsCount}
           isActive={currentView === 'tags'}
           onClick={() => navigateTo('tags')}
-        />
-        <SidebarItem
-          icon={<IconClock size={16} />}
-          label="Recently Viewed"
-          count={recentViewedCount}
-          isActive={currentView === 'images' && activeStatusFilter === 'recently_viewed'}
-          onClick={() => navigateTo('images', null, null, 'recently_viewed')}
         />
         <SidebarItem
           icon={<IconArrowsShuffle size={16} />}
