@@ -57,9 +57,6 @@
       "native/picto-node/index.js",
       "native/picto-node/index.node",
       "native/picto-node/index.*.node",
-      "native/picto-node/*.dll",
-      "native/picto-node/*.dylib",
-      "native/picto-node/*.so*",
       "!node_modules/**",
       "node_modules/electron-updater/**",
       "node_modules/builder-util-runtime/**",
@@ -82,10 +79,7 @@
       "package.json"
     ],
     "asarUnpack": [
-      "native/**/*.node",
-      "native/**/*.dll",
-      "native/**/*.dylib",
-      "native/**/*.so*"
+      "native/**/*.node"
     ],
     "extraFiles": [
       {
@@ -122,6 +116,13 @@
       "target": [
         "nsis"
       ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "installerIcon": null,
+      "uninstallerIcon": null,
+      "installerHeader": null
     },
     "linux": {
       "maintainer": "Picto <noreply@picto.app>",
