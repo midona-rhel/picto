@@ -501,8 +501,6 @@ pub fn update_collection_name(
 }
 
 pub fn delete_collection(conn: &Connection, collection_id: i64) -> rusqlite::Result<()> {
-    // Delete all member files (and their entities) before removing the collection
-    let member_files = get_collection_member_files(conn, collection_id)?;
     // Orphan any entities that used parent_collection_id BEFORE deleting the collection
     // (must happen before DELETE to avoid FK ON DELETE SET NULL triggering the
     // collection_ordinal check trigger with a stale ordinal value)
@@ -514,15 +512,11 @@ pub fn delete_collection(conn: &Connection, collection_id: i64) -> rusqlite::Res
          WHERE parent_collection_id = ?1",
         [collection_id],
     )?;
-    // Delete the collection entity
+    // Delete the collection entity only — member files become standalone
     conn.execute(
         "DELETE FROM media_entity WHERE entity_id = ?1 AND kind = 'collection'",
         [collection_id],
     )?;
-    // Delete each member file
-    for (member_fid, _) in member_files {
-        crate::sqlite::files::delete_file(conn, member_fid)?;
-    }
     Ok(())
 }
 

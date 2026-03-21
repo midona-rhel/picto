@@ -330,13 +330,18 @@ export function registerIpcHandlers({
 
   ipcMain.handle('picto:drag:start', async (event, { hashes, iconDataUrl }) => {
     if (!hashes?.length) return null;
-    let filePath;
-    try {
-      filePath = await invoke('resolve_file_path', { hash: hashes[0] });
-    } catch {
-      return null;
+
+    // Resolve ALL hashes to file paths for multi-file drag
+    const filePaths = [];
+    for (const hash of hashes) {
+      try {
+        const fp = await invoke('resolve_file_path', { hash });
+        if (fp) filePaths.push(fp);
+      } catch {
+        // Skip unresolvable hashes
+      }
     }
-    if (!filePath) return null;
+    if (filePaths.length === 0) return null;
 
     let icon;
     if (iconDataUrl) {
@@ -359,7 +364,7 @@ export function registerIpcHandlers({
     }
 
     event.sender.startDrag({
-      files: [filePath],
+      files: filePaths,
       icon: icon || nativeImage.createEmpty(),
     });
 

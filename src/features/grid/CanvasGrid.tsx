@@ -497,9 +497,6 @@ export function CanvasGrid({
     clearVideoScrubIndex,
     reorderDragRef,
     handlePointerDown,
-    handleCanvasDragOver,
-    handleCanvasDrop,
-    handleCanvasDragLeave,
     clearDragState,
   } = useCanvasPointerInteractions({
     hitTest,
@@ -653,9 +650,6 @@ export function CanvasGrid({
             onMouseMove={handleMouseMove}
             onMouseLeave={handleMouseLeave}
             onDragStart={(e: React.DragEvent) => e.preventDefault()}
-            onDragOver={handleCanvasDragOver}
-            onDrop={handleCanvasDrop}
-            onDragLeave={handleCanvasDragLeave}
             style={{
               width: lockedCanvasWidth,
               height: canvasSize,

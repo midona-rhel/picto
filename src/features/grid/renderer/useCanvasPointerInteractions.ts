@@ -343,53 +343,135 @@ export function useCanvasPointerInteractions(args: {
       window.removeEventListener('pointerup', handleUp);
     };
 
+    let nativeDragStarted = false;
+    let sessionId: number | null = null;
+
     const handleMove = (moveEvent: PointerEvent) => {
+      if (nativeDragStarted) return;
+
       const dx = moveEvent.clientX - state.startX;
       const dy = moveEvent.clientY - state.startY;
-      if (state.started || dx * dx + dy * dy <= DRAG_THRESHOLD_SQ) return;
-      state.started = true;
-      cleanup();
+      if (!state.started && dx * dx + dy * dy <= DRAG_THRESHOLD_SQ) return;
 
-      draggedHashSetRef.current = new Set(hashes);
-      if (reorderModeRef.current) {
-        reorderDragRef.current = {
-          draggedHashes: hashes,
-          startX: state.startX,
-          startY: state.startY,
-          started: true,
-          dropIndex: null,
-          dropSide: null,
-        };
+      if (!state.started) {
+        state.started = true;
+        draggedHashSetRef.current = new Set(hashes);
+        sessionId = imageDrag.startNativeDragSession(hashes);
+
+        if (reorderModeRef.current) {
+          reorderDragRef.current = {
+            draggedHashes: hashes,
+            startX: state.startX,
+            startY: state.startY,
+            started: true,
+            dropIndex: null,
+            dropSide: null,
+          };
+        }
+
+        // Start custom pointer-based drag (DragGhost + elementFromPoint)
+        const thumbUrls = hashes.slice(0, 3).map((h) => mediaThumbnailUrl(h));
+        imageDrag.start(hashes, thumbUrls, moveEvent.clientX, moveEvent.clientY);
       }
 
-      const sessionId = imageDrag.startNativeDragSession(hashes);
-      const thumbnailUrl = mediaThumbnailUrl(image.hash);
-      const icon = new Image();
-      const startDrag = (iconDataUrl?: string | null) => {
-        getCurrentWebview()
-          .startNativeDrag(hashes, iconDataUrl)
-          .catch(() => {
-            imageDrag.clearNativeDragSession(sessionId);
-          });
-      };
-      icon.onload = () => startDrag(createDragIcon(icon, hashes.length));
-      icon.onerror = () => startDrag();
-      icon.src = thumbnailUrl;
+      // Track pointer for sidebar folder drops + reorder
+      imageDrag.move(moveEvent.clientX, moveEvent.clientY);
+
+      // Reorder: update drop indicator via pointer position
+      if (reorderModeRef.current && reorderDragRef.current) {
+        const draggedSet = draggedHashSetRef.current;
+        if (draggedSet) {
+          const target = computeReorderTarget(moveEvent.clientX, moveEvent.clientY, draggedSet);
+          const rstate = reorderDragRef.current;
+          const nextIndex = target?.index ?? null;
+          const nextSide = target?.side ?? null;
+          if (nextIndex !== rstate.dropIndex || nextSide !== rstate.dropSide) {
+            rstate.dropIndex = nextIndex;
+            rstate.dropSide = nextSide;
+            markDirty('overlay');
+          }
+        }
+
+        // Auto-scroll at edges
+        const scrollElement = scrollContainerRef?.current;
+        if (scrollElement) {
+          const rect = scrollElement.getBoundingClientRect();
+          const distFromTop = moveEvent.clientY - rect.top;
+          const distFromBottom = rect.bottom - moveEvent.clientY;
+          const autoScroll = autoScrollRef.current;
+          if (distFromTop > EDGE_ZONE && distFromBottom > EDGE_ZONE) {
+            autoScroll.armed = true;
+          }
+          if (autoScroll.armed && distFromTop < EDGE_ZONE) {
+            autoScroll.speed = -Math.round(MAX_SCROLL_SPEED * (1 - distFromTop / EDGE_ZONE));
+            startAutoScroll();
+          } else if (autoScroll.armed && distFromBottom < EDGE_ZONE) {
+            autoScroll.speed = Math.round(MAX_SCROLL_SPEED * (1 - distFromBottom / EDGE_ZONE));
+            startAutoScroll();
+          } else {
+            stopAutoScroll();
+          }
+        }
+      }
+
+      // Check if pointer left the window — escalate to native OS drag
+      const { clientX, clientY } = moveEvent;
+      if (clientX <= 0 || clientY <= 0 || clientX >= window.innerWidth || clientY >= window.innerHeight) {
+        nativeDragStarted = true;
+        imageDrag.forceEnd();
+        stopAutoScroll();
+        cleanup();
+
+        const thumbnailUrl = mediaThumbnailUrl(image.hash);
+        const icon = new Image();
+        const doStartDrag = (iconDataUrl?: string | null) => {
+          getCurrentWebview()
+            .startNativeDrag(hashes, iconDataUrl)
+            .catch(() => {
+              if (sessionId != null) imageDrag.clearNativeDragSession(sessionId);
+            });
+        };
+        icon.onload = () => doStartDrag(createDragIcon(icon, hashes.length));
+        icon.onerror = () => doStartDrag();
+        icon.src = thumbnailUrl;
+      }
     };
 
     const handleUp = () => {
       cleanup();
+      stopAutoScroll();
+
+      if (state.started && !nativeDragStarted) {
+        // Internal drag ended — execute action
+        if (reorderModeRef.current && reorderDragRef.current) {
+          const rstate = reorderDragRef.current;
+          if (rstate.dropIndex != null && rstate.dropSide != null) {
+            const targetIndex = rstate.dropSide === 'right' ? rstate.dropIndex + 1 : rstate.dropIndex;
+            onReorderRef.current?.(rstate.draggedHashes, targetIndex);
+          }
+        }
+
+        imageDrag.end();
+        if (sessionId != null) imageDrag.clearNativeDragSession(sessionId);
+        clearDragState();
+      }
     };
 
     window.addEventListener('pointermove', handleMove);
     window.addEventListener('pointerup', handleUp);
   }, [
+    clearDragState,
+    computeReorderTarget,
     dragDisabledRef,
     hitTest,
     imagesRef,
     isZoomButtonHit,
+    markDirty,
     reorderModeRef,
+    scrollContainerRef,
     selectedHashesRef,
+    startAutoScroll,
+    stopAutoScroll,
   ]);
 
   const handleCanvasDragOver = useCallback((event: React.DragEvent) => {

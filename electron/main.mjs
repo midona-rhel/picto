@@ -31,8 +31,12 @@ if (process.platform === 'win32') {
 }
 
 if (app.isPackaged) {
-  process.env.PICTO_FFMPEG_DIR = path.dirname(process.execPath);
-  process.env.PICTO_GALLERY_DL_DIR = path.join(path.dirname(process.execPath), 'gallery-dl');
+  // macOS: extraFiles land in Contents/, but the exe is in Contents/MacOS/
+  const sidecarBase = process.platform === 'darwin'
+    ? path.join(path.dirname(process.execPath), '..')
+    : path.dirname(process.execPath);
+  process.env.PICTO_FFMPEG_DIR = sidecarBase;
+  process.env.PICTO_GALLERY_DL_DIR = path.join(sidecarBase, 'gallery-dl');
 }
 
 protocol.registerSchemesAsPrivileged([
