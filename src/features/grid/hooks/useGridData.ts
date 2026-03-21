@@ -13,7 +13,7 @@ import {
 } from '../gridQuery';
 
 export const PAGE_SIZE = 100;
-export const MAX_LOADED_ITEMS = 10_000;
+export const MAX_LOADED_ITEMS = 50_000;
 
 export interface GridReplacePayload {
   images: ReturnType<typeof toMasonryItem>[];
