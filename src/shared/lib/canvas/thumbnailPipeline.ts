@@ -16,6 +16,8 @@ import {
   THUMBNAIL_PIPELINE_MAX_FULL_LONG_EDGE,
   THUMBNAIL_PIPELINE_MAX_ENTRIES,
   THUMBNAIL_PIPELINE_SOURCE_EDGE,
+  THUMBNAIL_PIPELINE_REVEAL_MS,
+  THUMBNAIL_PIPELINE_MAX_CONCURRENT_REVEALS,
 } from './thumbnailPipelinePolicy';
 import type {
   ThumbnailPipelineEntry,
@@ -60,6 +62,8 @@ export class ThumbnailPipeline {
   private cacheHitCount = 0;
   private cacheMissCount = 0;
   private visibleThumbWaitTotalMs = 0;
+  /** Scheduled reveal timestamps — used to stagger fade-ins so at most N happen at once. */
+  private revealSlots: number[] = [];
   private visibleThumbWaitSamples = 0;
   private decodeTotalMs = 0;
   private decodeSamples = 0;
@@ -334,7 +338,9 @@ export class ThumbnailPipeline {
     // Always fade in — even from cache. First-load progressive reveal
     // feels better than instant pop-in which causes visual jank on scroll-back.
     entry.animateIn = true;
-    entry.revealStartedAt = performance.now();
+    // Stagger reveals so at most MAX_CONCURRENT_REVEALS fade in simultaneously.
+    // If too many are already mid-fade, delay this one's start time.
+    entry.revealStartedAt = this.nextRevealSlot();
     entry.retryQueued = false;
     entry.sourceKind = sourceKind;
     entry.loadedLongEdge = loadedLongEdge;
@@ -343,6 +349,29 @@ export class ThumbnailPipeline {
   }
 
   private static readonly MAX_LOADED_HASHES = 500;
+
+  /**
+   * Returns a staggered reveal start time so at most MAX_CONCURRENT_REVEALS
+   * thumbnails are fading in simultaneously. If fewer than the max are active,
+   * returns now. Otherwise, schedules after the earliest active one finishes.
+   */
+  private nextRevealSlot(): number {
+    const now = performance.now();
+    // Prune expired slots
+    this.revealSlots = this.revealSlots.filter(
+      (t) => now - t < THUMBNAIL_PIPELINE_REVEAL_MS,
+    );
+    if (this.revealSlots.length < THUMBNAIL_PIPELINE_MAX_CONCURRENT_REVEALS) {
+      this.revealSlots.push(now);
+      return now;
+    }
+    // Stagger: start after the oldest active slot finishes
+    const oldest = this.revealSlots[0];
+    const staggered = oldest + THUMBNAIL_PIPELINE_REVEAL_MS;
+    this.revealSlots.shift();
+    this.revealSlots.push(staggered);
+    return staggered;
+  }
 
   private pruneCache(): void {
     // Cap loadedHashes independently — this set only controls animation.
