@@ -113,7 +113,11 @@ async fn status_rows_with_total(
             .map(|id| id as i64)
             .filter(|id| color_ids.contains(id))
             .collect();
-        let total_count = Some(filtered_ids.len() as i64);
+        let total_count = if inputs.grid_filters.is_some() {
+            None
+        } else {
+            Some(filtered_ids.len() as i64)
+        };
         let sf = inputs.sort_field.clone();
         let sd = inputs.sort_dir.clone();
         let fetch_limit = inputs.limit + 1;
