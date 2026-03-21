@@ -138,30 +138,59 @@ export function StripView({
     }
   }, [images.length, layout, initialIndex]);
 
-  // ─── Keyboard: only vertical scrolling ─────────────────────
+  // ─── Keyboard: vertical scrolling with held-key support ────
   useEffect(() => {
-    const handleKey = (e: KeyboardEvent) => {
-      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
-      if (e.metaKey || e.ctrlKey || e.altKey) return;
+    const scrollDir = { current: 0 }; // -1 up, 0 none, 1 down
+    let rafId = 0;
 
-      switch (e.key) {
-        case 'w':
-        case 'ArrowUp': {
-          e.preventDefault();
-          scrollRef.current?.scrollBy({ top: -SCROLL_STEP, behavior: 'smooth' });
-          break;
-        }
-        case 's':
-        case 'ArrowDown': {
-          e.preventDefault();
-          scrollRef.current?.scrollBy({ top: SCROLL_STEP, behavior: 'smooth' });
-          break;
-        }
+    const tick = () => {
+      if (scrollDir.current !== 0 && scrollRef.current) {
+        scrollRef.current.scrollBy({ top: scrollDir.current * SCROLL_STEP * 0.3, behavior: 'instant' });
+      }
+      if (scrollDir.current !== 0) {
+        rafId = requestAnimationFrame(tick);
       }
     };
 
-    window.addEventListener('keydown', handleKey);
-    return () => window.removeEventListener('keydown', handleKey);
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+
+      const dir =
+        e.key === 'ArrowUp' || e.key === 'w' ? -1 :
+        e.key === 'ArrowDown' || e.key === 's' ? 1 : 0;
+
+      if (dir === 0) return;
+      e.preventDefault();
+
+      if (e.repeat) return; // rAF loop handles held keys
+
+      if (scrollDir.current === 0) {
+        // First press — do one smooth scroll + start continuous loop
+        scrollRef.current?.scrollBy({ top: dir * SCROLL_STEP, behavior: 'smooth' });
+        scrollDir.current = dir;
+        rafId = requestAnimationFrame(tick);
+      }
+    };
+
+    const handleKeyUp = (e: KeyboardEvent) => {
+      const dir =
+        e.key === 'ArrowUp' || e.key === 'w' ? -1 :
+        e.key === 'ArrowDown' || e.key === 's' ? 1 : 0;
+      if (dir !== 0 && scrollDir.current === dir) {
+        scrollDir.current = 0;
+        cancelAnimationFrame(rafId);
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('keyup', handleKeyUp);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('keyup', handleKeyUp);
+      cancelAnimationFrame(rafId);
+      scrollDir.current = 0;
+    };
   }, []);
 
   // ─── Render ────────────────────────────────────────────────

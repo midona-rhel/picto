@@ -20,7 +20,6 @@ pub(super) async fn get_collection_outline(
         });
     }
 
-    let gf = inputs.grid_filters.clone();
     let rows = db
         .with_read_conn(move |conn| {
             crate::sqlite::files::list_files_slim_by_collection_rank(
@@ -29,7 +28,7 @@ pub(super) async fn get_collection_outline(
                 collection_id,
                 member_file_ids.len() as i64 + 1,
                 None,
-                gf.as_ref(),
+                None,
             )
         })
         .await?;
@@ -62,7 +61,8 @@ pub(super) async fn get_collection_page(
 
     let cursor = query.cursor.clone();
     let fetch_limit = inputs.limit + 1;
-    let gf = inputs.grid_filters.clone();
+    // Don't apply grid filters in collection view — show all members regardless
+    // of active filters (user expects to see the full collection when editing).
     let mut rows = db
         .with_read_conn(move |conn| {
             crate::sqlite::files::list_files_slim_by_collection_rank(
@@ -71,7 +71,7 @@ pub(super) async fn get_collection_page(
                 collection_id,
                 fetch_limit,
                 cursor.as_deref(),
-                gf.as_ref(),
+                None,
             )
         })
         .await?;
@@ -114,10 +114,8 @@ async fn collection_member_snapshot(
         .collection_entity_id
         .expect("collection id required");
 
-    let mut ids = db.list_collection_member_file_ids(collection_id).await?;
-    if let Some(ref color_ids) = inputs.color_file_ids {
-        ids.retain(|id| color_ids.contains(id));
-    }
+    // Don't apply filters — collection view always shows all members
+    let ids = db.list_collection_member_file_ids(collection_id).await?;
     let total_count = ids.len() as i64;
     Ok((ids, Some(total_count)))
 }

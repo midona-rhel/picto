@@ -69,11 +69,24 @@
 }
 
 .sliderSection {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 6px;
   flex-shrink: 0;
+  background: var(--color-theme);
   -webkit-app-region: no-drag;
+}
+
+.sliderSection::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: 100%;
+  width: 20px;
+  background: linear-gradient(to right, transparent, var(--color-theme));
+  pointer-events: none;
 }
 
 .sliderSection :global(.mantine-Slider-thumb) {
