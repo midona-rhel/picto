@@ -33,6 +33,7 @@ impl ImportService {
         auto_merge_distance: u32,
         auto_merge_require_matching_dimensions: bool,
         initial_status: i64,
+        library_root: Option<&Path>,
     ) -> Result<ImportBatchResult, String> {
         let pipeline = ImportPipeline::new(db, blob_store);
 
@@ -47,11 +48,21 @@ impl ImportService {
 
         let file_paths: Vec<PathBuf> = paths
             .into_iter()
-            .map(|p| {
+            .flat_map(|p| {
                 let path = PathBuf::from(&p);
-                path.canonicalize().unwrap_or(path)
+                let path = path.canonicalize().unwrap_or(path);
+                if path.is_dir() {
+                    // Recursively collect files from dropped directories
+                    collect_files_recursive(&path)
+                } else {
+                    vec![path]
+                }
             })
-            .filter(|p| p.is_file() && crate::media_processing::has_supported_extension(p))
+            .filter(|p| {
+                p.is_file()
+                    && crate::media_processing::has_supported_extension(p)
+                    && !library_root.map_or(false, |root| p.starts_with(root))
+            })
             .collect();
         if file_paths.is_empty() {
             return Ok(ImportBatchResult {
@@ -475,4 +486,20 @@ fn collect_import_paths(root: &Path) -> Result<(Vec<PathBuf>, Vec<PathBuf>), Str
     directories.sort();
     files.sort();
     Ok((directories, files))
+}
+
+/// Recursively collect all files from a directory.
+fn collect_files_recursive(dir: &Path) -> Vec<PathBuf> {
+    let mut files = Vec::new();
+    if let Ok(entries) = fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                files.extend(collect_files_recursive(&path));
+            } else if path.is_file() {
+                files.push(path);
+            }
+        }
+    }
+    files
 }

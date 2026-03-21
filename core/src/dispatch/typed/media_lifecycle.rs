@@ -93,6 +93,7 @@ pub async fn import_files(
         auto_merge_distance,
         auto_merge_require_matching_dimensions,
         input.initial_status,
+        Some(&state.library_root),
     )
     .await?;
 
