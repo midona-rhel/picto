@@ -215,7 +215,15 @@ impl<'a> ImportPipeline<'a> {
             } else {
                 Some(options.source_urls.clone())
             },
-            created_at: options.created_at.clone(),
+            created_at: options.created_at.clone().or_else(|| {
+                // Fall back to filesystem creation/modification time
+                std::fs::metadata(path).ok().and_then(|meta| {
+                    // Prefer creation time (birth time), fall back to modification time
+                    let ts = meta.created().or_else(|_| meta.modified()).ok()?;
+                    let dt: chrono::DateTime<chrono::Utc> = ts.into();
+                    Some(dt.to_rfc3339())
+                })
+            }),
             dominant_color_hex,
             dominant_palette_blob: None,
             tags: tag_tuples,

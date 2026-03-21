@@ -145,8 +145,21 @@ export function useGridImportActions(args: {
       imageDrag.clearNativeDragSession();
       if (pendingHashes) return;
 
+      // If a single path is dropped and it looks like a directory (no media extension),
+      // show the folder import dialog so the user can choose to preserve structure.
+      const paths = payload.paths;
+      const mediaExtensions = /\.(jpe?g|png|gif|webp|bmp|tiff?|svg|mp4|mkv|webm|avi|mov|wmv|flv|m4v|psd|avif|jxl|ico|pdf)$/i;
+      if (paths.length === 1 && !mediaExtensions.test(paths[0])) {
+        setFolderImportDialog({
+          path: paths[0],
+          preserveStructure: true,
+          targetFolderId: folderIdRef.current ?? null,
+        });
+        return;
+      }
+
       try {
-        await importPaths(payload.paths);
+        await importPaths(paths);
       } catch (err) {
         useManualImportStore.getState().fail();
         notifyError(err, 'Import Failed');
