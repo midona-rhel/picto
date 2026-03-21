@@ -27,11 +27,11 @@ function lowerBound(
   return lo;
 }
 
-const PREFETCH_PX = 1600;
+const PREFETCH_PX = 800;
 const FAST_PRIMARY_PREFETCH_LIMIT = 0;
-const SLOW_PRIMARY_PREFETCH_LIMIT = 12;
-const IDLE_PRIMARY_PREFETCH_LIMIT = 24;
-const IDLE_BACKFILL_LIMIT = 8;
+const SLOW_PRIMARY_PREFETCH_LIMIT = 6;
+const IDLE_PRIMARY_PREFETCH_LIMIT = 12;
+const IDLE_BACKFILL_LIMIT = 4;
 
 export function buildCanvasVisibilityPlan(args: {
   positions: LayoutItem[];
@@ -191,14 +191,14 @@ function buildCancelWindow(args: {
   let aheadMultiplier = 3;
 
   if (scrollPhase === 'fast') {
-    behindMultiplier = 1.5;
-    aheadMultiplier = 3;
+    behindMultiplier = 0.5;
+    aheadMultiplier = 1;
   } else if (scrollPhase === 'slow') {
-    behindMultiplier = 2;
-    aheadMultiplier = 3.5;
+    behindMultiplier = 0.75;
+    aheadMultiplier = 1.5;
   } else {
-    behindMultiplier = 2.5;
-    aheadMultiplier = 4;
+    behindMultiplier = 1;
+    aheadMultiplier = 1.5;
   }
 
   if (scrollDirection === 'backward') {

@@ -994,7 +994,7 @@ pub fn list_files_slim_by_folder_rank(
     let mut stmt = conn.prepare(&sql)?;
     let rows = stmt.query_map(params_refs.as_slice(), |row| {
         let mut item = row_to_entity_slim(row)?;
-        item.position_rank = row.get(18)?; // position_rank after 18 entity_slim columns
+        item.position_rank = row.get(20)?; // position_rank after 20 entity_slim columns
         Ok(item)
     })?;
 

@@ -63,8 +63,8 @@ describe('buildCanvasVisibilityPlan', () => {
       queueDepth: 0,
     });
 
-    expect(plan.cancelTop).toBe(-225);
-    expect(plan.cancelBottom).toBe(1150);
+    expect(plan.cancelTop).toBe(25);
+    expect(plan.cancelBottom).toBe(650);
   });
 
   it('adds a small forward-biased near-ahead window during slow scrolling', () => {
