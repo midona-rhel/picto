@@ -113,8 +113,16 @@ async fn get_scoped_snapshot(
         ids = db.filter_visible_entity_ids(&ids).await?;
     }
 
-    let total_count = ids.len() as i64;
-    Ok((ids, Some(total_count)))
+    // When grid filters are active (mime, rating, search, etc.), we can't know
+    // the exact filtered count from IDs alone — the SQL query applies additional
+    // WHERE clauses. Return None so the frontend uses exact height from loaded items
+    // instead of estimating from an inaccurate total count.
+    let total_count = if inputs.grid_filters.is_some() {
+        None
+    } else {
+        Some(ids.len() as i64)
+    };
+    Ok((ids, total_count))
 }
 
 async fn list_scoped_rows(
