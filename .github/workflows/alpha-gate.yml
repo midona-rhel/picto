@@ -138,6 +138,13 @@ jobs:
         working-directory: native/picto-node
         run: npx napi build --release
 
+      - name: Copy ONNX Runtime shared libraries alongside native module
+        shell: bash
+        run: |
+          cp native/picto-node/target/release/onnxruntime.dll native/picto-node/ 2>/dev/null || true
+          cp native/picto-node/target/release/libonnxruntime.dylib native/picto-node/ 2>/dev/null || true
+          cp native/picto-node/target/release/libonnxruntime.so* native/picto-node/ 2>/dev/null || true
+
       - name: Build frontend
         run: npm run build:electron
 

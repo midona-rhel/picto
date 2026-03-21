@@ -93,6 +93,16 @@ jobs:
         working-directory: native/picto-node
         run: npx napi build --release
 
+      - name: Copy ONNX Runtime shared libraries alongside native module
+        shell: bash
+        run: |
+          # copy-dylibs puts ONNX Runtime libs in the Rust target dir
+          # Copy them next to index.node so electron-builder bundles them
+          cp native/picto-node/target/release/onnxruntime.dll native/picto-node/ 2>/dev/null || true
+          cp native/picto-node/target/release/libonnxruntime.dylib native/picto-node/ 2>/dev/null || true
+          cp native/picto-node/target/release/libonnxruntime.so* native/picto-node/ 2>/dev/null || true
+          ls -la native/picto-node/*.dll native/picto-node/*.dylib native/picto-node/*.so* 2>/dev/null || echo "No shared libs found (may be statically linked)"
+
       - name: Build frontend
         run: npm run build:electron
 
