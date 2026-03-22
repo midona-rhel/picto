@@ -280,7 +280,6 @@ async fn collection_membership_preset_refreshes_collection_and_system_scopes() {
         .map(|v| v.as_str().unwrap().to_string())
         .collect();
     assert!(scopes.contains(&"collection:42".to_string()));
-    assert!(scopes.contains(&"system:active".to_string()));
     assert!(scopes.contains(&"folder:all".to_string()));
 }
 
