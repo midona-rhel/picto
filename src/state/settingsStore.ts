@@ -79,7 +79,7 @@ const DEFAULTS: AppSettings = {
   hideTagNamespace: false,
   stripDefaultFitMode: 'horizontal',
   stripScrollSpeed: 108,
-  stripScrollEnabled: true,
+  stripScrollEnabled: false,
   smoothZoomEnabled: false,
 };
 

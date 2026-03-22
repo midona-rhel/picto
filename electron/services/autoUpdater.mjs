@@ -25,6 +25,7 @@ export function createAutoUpdaterService({ app, isDev, sendToAllWindows }) {
 
   autoUpdater.autoDownload = true;
   autoUpdater.autoInstallOnAppQuit = true;
+  autoUpdater.allowPrerelease = true;
 
   // Forward all updater events to renderer windows
   autoUpdater.on('checking-for-update', () => {
