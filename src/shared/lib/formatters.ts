@@ -29,12 +29,19 @@ export function formatDateTime(isoString: string): string {
   });
 }
 
+const MIME_EXT_MAP: Record<string, string> = {
+  jpeg: 'JPG', png: 'PNG', gif: 'GIF', webp: 'WEBP', 'svg+xml': 'SVG',
+  mp4: 'MP4', webm: 'WEBM', quicktime: 'MOV', 'x-matroska': 'MKV',
+  bmp: 'BMP', tiff: 'TIFF', avif: 'AVIF', heic: 'HEIC',
+  flac: 'FLAC', mpeg: 'MP3', ogg: 'OGG', wav: 'WAV',
+};
+
 export function getFileExtension(name: string | null, mime: string | null): string {
   // Prefer MIME type (detected from file bytes) over filename extension
   // because subscription downloads often have incorrect or missing extensions.
   if (mime) {
-    const sub = mime.split('/').pop();
-    if (sub) return sub.toUpperCase();
+    const sub = mime.split('/').pop()?.toLowerCase();
+    if (sub) return MIME_EXT_MAP[sub] ?? sub.toUpperCase();
   }
   if (name) {
     const dotIdx = name.lastIndexOf('.');
