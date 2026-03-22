@@ -5,9 +5,9 @@ import { cmSelectInput, cmSelectDropdown, cmSelectOption, cmComboboxProps } from
 import type { GridViewMode } from '../../features/grid/runtime';
 
 function ModeIcon({ mode, size = 14 }: { mode: GridViewMode; size?: number }) {
-  if (mode === 'grid') return <IconBorderAll size={size} fill="none" />;
-  if (mode === 'justified') return <IconLayoutBoard size={size} fill="none" style={{ transform: 'rotate(-90deg)' }} />;
-  return <IconLayoutBoard size={size} fill="none" />;
+  if (mode === 'grid') return <IconBorderAll size={size} />;
+  if (mode === 'justified') return <IconLayoutBoard size={size} style={{ transform: 'rotate(-90deg)' }} />;
+  return <IconLayoutBoard size={size} />;
 }
 
 export function LayoutRow({ viewMode, onChange }: { viewMode: GridViewMode; onChange: (m: GridViewMode) => void }) {
@@ -29,12 +29,12 @@ export function LayoutRow({ viewMode, onChange }: { viewMode: GridViewMode; onCh
         withCheckIcon={false}
         leftSection={<ModeIcon mode={local} size={14} />}
         leftSectionPointerEvents="none"
-        leftSectionWidth={24}
+        leftSectionWidth={36}
         rightSectionWidth={20}
         comboboxProps={cmComboboxProps}
         styles={{
-          input: { ...cmSelectInput, paddingLeft: 30 },
-          wrapper: { width: 130 },
+          input: { ...cmSelectInput, paddingLeft: 33 },
+          wrapper: { width: 120 },
           dropdown: cmSelectDropdown,
           option: cmSelectOption,
           section: { color: 'var(--color-text-primary)' },

@@ -605,7 +605,7 @@ body {
 .mantine-Combobox-chevron svg,
 .mantine-Input-section svg {
   color: var(--color-text-primary) !important;
-  fill: var(--color-text-primary) !important;
+  /* fill removed — it forces solid fill on outline icons like layout mode */
   opacity: 1 !important;
 }
 
