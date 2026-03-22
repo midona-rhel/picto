@@ -69,14 +69,21 @@ export function startApplyingGridRefreshTargets(): void {
       }
 
       if (key.startsWith('grid/')) {
-        // When a grid scope matches AND there are new hashes that no
-        // controller handled eagerly, fetch those entities and insert
-        // them into the grid. This covers background producers like
-        // subscription imports and watch-folder imports where no
-        // frontend controller is involved.
-        if (hasMatchingGridScope && newHashes.length > 0) {
+        // Only insert new tiles for background producers (subscription/watch
+        // imports) where no frontend controller handled the eager update.
+        // Controller-initiated actions (status change, folder drag, etc.)
+        // already did their own eager insertions/removals — don't re-insert
+        // expanded collection members as individual tiles.
+        const changeOrigin = state.lastChangeOrigin;
+        const isBackgroundOrigin =
+          changeOrigin === 'subscription_import'
+          || changeOrigin === 'subscription_collection_import'
+          || changeOrigin === 'watch_folder_import'
+          || changeOrigin === 'watch_folder_membership'
+          || changeOrigin === 'manual_import';
+        if (isBackgroundOrigin && hasMatchingGridScope && newHashes.length > 0) {
           const hashesToInsert = [...newHashes];
-          newHashes.length = 0; // only insert once per batch
+          newHashes.length = 0;
           Promise.all(hashesToInsert.map((h) => entityController.getEntity(h))).then((entities) => {
             const valid = entities.filter((e): e is NonNullable<typeof e> => e != null);
             if (valid.length > 0) {

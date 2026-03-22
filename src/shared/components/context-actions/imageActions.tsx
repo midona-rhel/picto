@@ -799,7 +799,7 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
         onClick: doRestore,
       });
     }
-    if (statusFilter !== 'inbox') {
+    {
       items.push({
         type: 'item',
         label: inTrash
