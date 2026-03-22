@@ -127,7 +127,7 @@ export const foldersController = {
 
   async addFiles(folderId: number, hashes: string[], selection?: SelectionQuerySpec) {
     await api.folders.addFiles(folderId, hashes, selection);
-    const count = hashes.length || 0;
+    const count = hashes.length;
     if (count > 0) useDomainStore.getState().adjustFolderCount(folderId, count);
     if (useNavigationStore.getState().activeFolderId === folderId && hashes.length > 0) {
       Promise.all(hashes.map((h) => queryApi.file.get(h))).then((entities) => {
@@ -155,7 +155,7 @@ export const foldersController = {
 
   async removeFiles(folderId: number, hashes: string[], selection?: SelectionQuerySpec) {
     await api.folders.removeFiles(folderId, hashes, selection);
-    const count = hashes.length || 0;
+    const count = hashes.length;
     if (count > 0) useDomainStore.getState().adjustFolderCount(folderId, -count);
     eagerGridRemove(folderId, hashes);
     if (hashes.length > 0 && !selection) {
@@ -171,7 +171,11 @@ export const foldersController = {
             });
           }
         },
-        forward: async () => { await api.folders.removeFiles(folderId, hashes); useDomainStore.getState().adjustFolderCount(folderId, -count); eagerGridRemove(folderId, hashes); },
+        forward: async () => {
+          await api.folders.removeFiles(folderId, hashes);
+          useDomainStore.getState().adjustFolderCount(folderId, -count);
+          eagerGridRemove(folderId, hashes);
+        },
       });
     }
   },
