@@ -258,33 +258,14 @@ pub async fn ensure_thumbnail(
     hash: &str,
     force: bool,
 ) -> Result<EnsureThumbnailResult, String> {
-    let effective_hash;
     let file = match db.get_file_by_hash(hash).await? {
         Some(f) => f,
         None => {
-            let entity_id = db
-                .resolve_hash(hash)
-                .await
-                .map_err(|_| format!("Entity not found for hash: {}", hash))?;
-            let cover_hash = db
-                .with_read_conn(move |conn| {
-                    conn.query_row(
-                        "SELECT f.hash FROM media_entity me
-                         JOIN file f ON f.file_id = me.cover_file_id
-                         WHERE me.entity_id = ?1 AND me.kind = 'collection'",
-                        [entity_id],
-                        |row| row.get::<_, String>(0),
-                    )
-                })
-                .await
-                .map_err(|_| {
-                    // Collection cover not set yet — skip silently, don't retry
-                    format!("Collection has no cover file: {}", hash)
-                })?;
-            effective_hash = cover_hash;
-            db.get_file_by_hash(&effective_hash)
-                .await?
-                .ok_or_else(|| format!("Cover file not found: {}", effective_hash))?
+            // File was deleted between enqueue and processing — skip gracefully
+            return Ok(EnsureThumbnailResult {
+                regenerated_thumbnail: false,
+                has_thumbnail: false,
+            });
         }
     };
 
@@ -454,57 +435,6 @@ pub async fn ensure_phash(
     Ok(true)
 }
 
-async fn process_deferred_work_item(
-    db: &SqliteDatabase,
-    blob_store: &Arc<BlobStore>,
-    item: &DeferredWorkItem,
-) -> Result<Option<MediaDerivativeField>, String> {
-    // If the file/entity no longer exists (deleted between enqueue and processing),
-    // skip silently — returning Ok(None) so the job is completed and removed.
-    let file_exists = db.get_file_by_hash(&item.hash).await.ok().flatten().is_some();
-    if !file_exists {
-        // Could be a collection hash — check entity table too.
-        let entity_exists = db.resolve_hash(&item.hash).await.is_ok();
-        if !entity_exists {
-            debug!(hash = %item.hash, work_type = item.work_type.as_str(), "Deferred work skipped: entity no longer exists");
-            return Ok(None);
-        }
-    }
-
-    let started = std::time::Instant::now();
-    let result = match item.work_type {
-        DeferredWorkType::Thumbnail => {
-            let result = ensure_thumbnail(db, blob_store, &item.hash, false).await?;
-            Ok(result.regenerated_thumbnail.then_some(MediaDerivativeField::Thumbnail))
-        }
-        DeferredWorkType::DominantColors => {
-            let result = reanalyze_file_colors(db, blob_store, &item.hash).await?;
-            Ok((result.colors_extracted > 0).then_some(MediaDerivativeField::DominantColorHex))
-        }
-        DeferredWorkType::Phash => {
-            let changed = ensure_phash(db, blob_store, &item.hash, false).await?;
-            Ok(changed.then_some(MediaDerivativeField::Phash))
-        }
-    };
-    let elapsed_ms = started.elapsed().as_millis();
-    if elapsed_ms > 100 {
-        info!(
-            hash = %item.hash,
-            work_type = item.work_type.as_str(),
-            elapsed_ms = elapsed_ms as u64,
-            "Deferred work item completed (slow)"
-        );
-    } else {
-        debug!(
-            hash = %item.hash,
-            work_type = item.work_type.as_str(),
-            elapsed_ms = elapsed_ms as u64,
-            "Deferred work item completed"
-        );
-    }
-    result
-}
-
 /// Process all deferred work for a single image, then emit immediately.
 /// Returns the number of jobs processed (0 = nothing pending).
 async fn drain_next_image(
@@ -519,11 +449,106 @@ async fn drain_next_image(
     let image_started = std::time::Instant::now();
     let hash = jobs[0].hash.clone();
     let job_count = jobs.len();
+
+    // If the file/entity no longer exists, complete all jobs silently.
+    let file_exists = db.get_file_by_hash(&hash).await.ok().flatten().is_some();
+    if !file_exists {
+        let entity_exists = db.resolve_hash(&hash).await.is_ok();
+        if !entity_exists {
+            debug!(hash = %hash, "Deferred work skipped: entity no longer exists");
+            for job in &jobs {
+                let _ = db.complete_deferred_work(job.work_id).await;
+            }
+            return Ok(job_count);
+        }
+    }
+
     let mut fields: Vec<MediaDerivativeField> = Vec::new();
     let mut any_changed = false;
 
+    // Pre-load and decode the original image once if both thumbnail and phash
+    // are in the job set. Avoids decoding the full original twice (~4s saved
+    // per 22MP image).
+    let has_thumbnail = jobs.iter().any(|j| j.work_type == DeferredWorkType::Thumbnail);
+    let has_phash = jobs.iter().any(|j| j.work_type == DeferredWorkType::Phash);
+    let shared_decoded: Option<Arc<image::DynamicImage>> = if has_thumbnail && has_phash {
+        // Read + decode once on a blocking thread, share the result.
+        let file = db.get_file_by_hash(&hash).await.ok().flatten();
+        if let Some(ref file) = file {
+            if file.mime.starts_with("image/") {
+                let ext = mime_to_extension(&file.mime).to_string();
+                let h = hash.clone();
+                let bs = blob_store.clone();
+                let decoded = tokio::task::spawn_blocking(move || -> Option<image::DynamicImage> {
+                    let original = bs.find_original(&h, Some(&ext)).ok()??;
+                    let bytes = std::fs::read(&original.0).ok()?;
+                    image::load_from_memory(&bytes).ok()
+                })
+                .await
+                .ok()
+                .flatten();
+                decoded.map(Arc::new)
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
     for job in &jobs {
-        match process_deferred_work_item(db, blob_store, job).await {
+        let started = std::time::Instant::now();
+        let result: Result<Option<MediaDerivativeField>, String> = match job.work_type {
+            DeferredWorkType::Thumbnail => {
+                // Thumbnail uses its own path-based pipeline (handles video too).
+                match ensure_thumbnail(db, blob_store, &job.hash, false).await {
+                    Ok(r) => Ok(r.regenerated_thumbnail.then_some(MediaDerivativeField::Thumbnail)),
+                    Err(e) => Err(e),
+                }
+            }
+            DeferredWorkType::DominantColors => {
+                // Colors already use the thumbnail file (fast).
+                match reanalyze_file_colors(db, blob_store, &job.hash).await {
+                    Ok(r) => Ok((r.colors_extracted > 0).then_some(MediaDerivativeField::DominantColorHex)),
+                    Err(e) => Err(e),
+                }
+            }
+            DeferredWorkType::Phash => {
+                // Use the shared pre-decoded image if available, otherwise fall back.
+                if let Some(ref img) = shared_decoded {
+                    let img_ref = img.clone();
+                    let phash_result = tokio::task::spawn_blocking(move || {
+                        crate::duplicates::phash::compute_phash_base64_from_image(&img_ref)
+                            .map_err(|e| format!("{e}"))
+                    })
+                    .await
+                    .map_err(|e| format!("Phash task failed: {e}"))?;
+                    match phash_result {
+                        Ok(phash_b64) => {
+                            db.set_phash(&job.hash, &phash_b64).await?;
+                            Ok(Some(MediaDerivativeField::Phash))
+                        }
+                        Err(e) => Err(e),
+                    }
+                } else {
+                    match ensure_phash(db, blob_store, &job.hash, false).await {
+                        Ok(changed) => Ok(changed.then_some(MediaDerivativeField::Phash)),
+                        Err(e) => Err(e),
+                    }
+                }
+            }
+        };
+
+        let elapsed_ms = started.elapsed().as_millis();
+        if elapsed_ms > 100 {
+            info!(hash = %job.hash, work_type = job.work_type.as_str(), elapsed_ms = elapsed_ms as u64, "Deferred work item completed (slow)");
+        } else {
+            debug!(hash = %job.hash, work_type = job.work_type.as_str(), elapsed_ms = elapsed_ms as u64, "Deferred work item completed");
+        }
+
+        match result {
             Ok(changed_field) => {
                 db.complete_deferred_work(job.work_id).await?;
                 if let Some(field) = changed_field {
