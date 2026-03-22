@@ -30,9 +30,9 @@ export function startApplyingSidebarRefreshTargets(): void {
     }
 
     if (needsTreeRefresh) {
-      // Use the same requestRefresh() as controller eager updates so both
-      // paths share the same 120ms debounce timer — no double-fetch.
-      useDomainStore.getState().requestRefresh();
+      // Controllers perform targeted sidebar mutations eagerly (patchFolderNode,
+      // removeFolderNode, adjustFolderCount, insertFolderNode, etc.).
+      // The sidebar/tree target is consumed without a broad refetch.
       useStateChangeStore.getState().markRefreshTargetHandled('sidebar/tree');
     }
   });

@@ -150,25 +150,21 @@ describe('multi-step state-change workflows', () => {
     expect(targets).toContain('selection/current');
   });
 
-  it('eager controller + backend event produce identical sidebar/tree targets (reconciliation)', () => {
-    // Simulate: controller does eagerSidebarRefresh() (produces sidebar/tree)
-    // Then backend event arrives with folder_membership_changed
-    const controllerEvent = makeEvent(makeChanges({
+  it('multiple folder membership events deduplicate sidebar/tree target', () => {
+    const event1 = makeEvent(makeChanges({
       domains: ['sidebar', 'folders'] as Domain[],
       folder_membership_changed: [5],
     }), {}, 1);
 
-    const backendEvent = makeEvent(makeChanges({
+    const event2 = makeEvent(makeChanges({
       domains: ['sidebar', 'folders'] as Domain[],
       folder_membership_changed: [5],
     }), { sidebar_counts: { all_active: 100, inbox: 3, trash: 1 } }, 2);
 
-    const targets = accumulateRefreshTargets([controllerEvent, backendEvent]);
+    const targets = accumulateRefreshTargets([event1, event2]);
 
-    // sidebar/tree appears once in the set (deduped)
     expect(targets).toContain('sidebar/tree');
     expect(targets).toContain('sidebar/counts');
-    // Both paths share the same requestRefresh() debounce timer → single fetch
   });
 
   it('eager metadata invalidation followed by backend event should not produce duplicate metadata keys', () => {

@@ -52,18 +52,12 @@ describe('sidebar applier reconciliation', () => {
     expect(result).toContain('sidebar/counts');
   });
 
-  it('controller eager + backend event produces the same sidebar targets', () => {
-    // Controller calls eagerSidebarRefresh() → requestRefresh()
-    // Backend event also produces sidebar/tree → requestRefresh()
-    // Both share the same debounce timer, so only one fetch.
-    // This test verifies the planning produces the expected target.
+  it('folder membership change produces sidebar/tree target', () => {
     const result = keys(makeEvent(makeChanges({
       domains: ['sidebar', 'folders'] as Domain[],
       folder_membership_changed: [5],
     })));
     expect(result).toContain('sidebar/tree');
-    // The applier calls requestRefresh() directly (not its own timer)
-    // so double-fetch is impossible when both paths fire.
   });
 });
 

@@ -68,16 +68,15 @@ interface CacheState {
   fetchMetadataBatch: (hashes: string[]) => Promise<ResolvedMetadata[]>;
   getMetadata: (hash: string) => ResolvedMetadata | undefined;
   dropCachedMetadata: (hash: string) => void;
-  clearMetadataCache: () => void;
-  bumpGridRefresh: () => void;
   markMetadataChanged: (hash: string) => void;
   clearChangedMetadataMarks: () => void;
   queueRemovals: (hashes: string[]) => void;
-  queueClearAll: () => void;
   drainRemovals: () => { hashes: Set<string>; clearAll: boolean };
   queueInsertions: (entities: EntitySlim[]) => void;
   drainInsertions: () => EntitySlim[];
   setActiveGridScope: (scope: string | null) => void;
+  /** Scoped grid replace — only bumps refresh if the given scope matches the active scope. */
+  requestScopedReplace: (scope: string) => void;
 
 }
 
@@ -168,14 +167,6 @@ export const useGridMetadataStore = create<CacheState>((set, get) => ({
     });
   },
 
-  clearMetadataCache: () => {
-    set({ metadataCache: new Map() });
-  },
-
-  bumpGridRefresh: () => {
-    set((s) => ({ gridRefreshSeq: s.gridRefreshSeq + 1 }));
-  },
-
   markMetadataChanged: (hash: string) => {
     set((s) => {
       const next = new Set(s.metadataInvalidatedHashes);
@@ -194,10 +185,6 @@ export const useGridMetadataStore = create<CacheState>((set, get) => ({
       for (const hash of hashes) next.add(hash);
       return { pendingRemovals: next };
     });
-  },
-
-  queueClearAll: () => {
-    set({ pendingClearAll: true });
   },
 
   drainRemovals: () => {
@@ -222,5 +209,10 @@ export const useGridMetadataStore = create<CacheState>((set, get) => ({
     set({ activeGridScope: scope });
   },
 
+  requestScopedReplace: (scope: string) => {
+    if (get().activeGridScope === scope) {
+      set((s) => ({ gridRefreshSeq: s.gridRefreshSeq + 1 }));
+    }
+  },
 
 }));

@@ -4,10 +4,6 @@ import { useDomainStore } from '../state/domainStore';
 import { useNavigationStore } from '../state/navigationStore';
 import type { SmartFolder, SmartFolderIpcInput, SmartFolderPredicate } from '../shared/types/api';
 
-function eagerSidebarRefresh(): void {
-  useDomainStore.getState().requestRefresh();
-}
-
 /** Compute current sibling ordering for a parent (used for undo snapshots). */
 function computeSiblingMoves(
   folders: Array<{ id: string; parent_id: number | null; display_order: number | null }>,
@@ -35,38 +31,53 @@ export const smartFoldersController = {
 
   async create(folder: SmartFolderIpcInput, label = 'Create smart folder'): Promise<SmartFolder> {
     let created = await api.smartFolders.create(folder);
-    eagerSidebarRefresh();
+    const sfId = parseInt(created.id ?? '0', 10);
+    useDomainStore.getState().insertSmartFolder(sfId, folder.name, folder.parent_id ?? null, folder.icon ?? null, folder.color ?? null);
     registerUndoAction({
       label,
-      backward: async () => { if (created?.id) { await api.smartFolders.delete(created.id); eagerSidebarRefresh(); } },
-      forward: async () => { created = await api.smartFolders.create(folder); eagerSidebarRefresh(); },
+      backward: async () => { if (created?.id) { await api.smartFolders.delete(created.id); useDomainStore.getState().removeSmartFolder(parseInt(created.id, 10)); } },
+      forward: async () => {
+        created = await api.smartFolders.create(folder);
+        useDomainStore.getState().insertSmartFolder(parseInt(created.id ?? '0', 10), folder.name, folder.parent_id ?? null, folder.icon ?? null, folder.color ?? null);
+      },
     });
     return created;
   },
 
   async update(id: string, folder: SmartFolderIpcInput, beforeData?: SmartFolderIpcInput): Promise<SmartFolder> {
     const updated = await api.smartFolders.update(id, folder);
-    eagerSidebarRefresh();
+    const sfId = parseInt(id, 10);
+    useDomainStore.getState().patchSmartFolder(sfId, { name: folder.name, icon: folder.icon, color: folder.color });
     if (beforeData) {
       registerUndoAction({
         label: 'Update smart folder',
-        backward: async () => { await api.smartFolders.update(id, beforeData); eagerSidebarRefresh(); },
-        forward: async () => { await api.smartFolders.update(id, folder); eagerSidebarRefresh(); },
+        backward: async () => {
+          await api.smartFolders.update(id, beforeData);
+          useDomainStore.getState().patchSmartFolder(sfId, { name: beforeData.name, icon: beforeData.icon, color: beforeData.color });
+        },
+        forward: async () => {
+          await api.smartFolders.update(id, folder);
+          useDomainStore.getState().patchSmartFolder(sfId, { name: folder.name, icon: folder.icon, color: folder.color });
+        },
       });
     }
     return updated;
   },
 
   async delete(id: string, snapshotData?: SmartFolderIpcInput) {
+    const sfId = parseInt(id, 10);
     await api.smartFolders.delete(id);
-    eagerSidebarRefresh();
+    useDomainStore.getState().removeSmartFolder(sfId);
     if (useNavigationStore.getState().activeSmartFolderId === id) {
       useNavigationStore.getState().navigateTo('images');
     }
     if (snapshotData) {
       registerUndoAction({
         label: 'Delete smart folder',
-        backward: async () => { await api.smartFolders.create(snapshotData); eagerSidebarRefresh(); },
+        backward: async () => {
+          const re = await api.smartFolders.create(snapshotData);
+          useDomainStore.getState().insertSmartFolder(parseInt(re.id ?? '0', 10), snapshotData.name, snapshotData.parent_id ?? null, snapshotData.icon ?? null, snapshotData.color ?? null);
+        },
         forward: async () => { /* ID differs after re-creation — cannot reliably re-delete */ },
       });
     }
@@ -76,7 +87,7 @@ export const smartFoldersController = {
     for (const id of ids) {
       await api.smartFolders.delete(id);
     }
-    eagerSidebarRefresh();
+    for (const id of ids) useDomainStore.getState().removeSmartFolder(parseInt(id, 10));
     const activeId = useNavigationStore.getState().activeSmartFolderId;
     if (activeId && ids.includes(activeId)) {
       useNavigationStore.getState().navigateTo('images');
@@ -85,8 +96,10 @@ export const smartFoldersController = {
       registerUndoAction({
         label: `Delete ${ids.length} smart folder${ids.length === 1 ? '' : 's'}`,
         backward: async () => {
-          for (const snap of snapshots) { await api.smartFolders.create(snap); }
-          eagerSidebarRefresh();
+          for (const snap of snapshots) {
+            const re = await api.smartFolders.create(snap);
+            useDomainStore.getState().insertSmartFolder(parseInt(re.id ?? '0', 10), snap.name, snap.parent_id ?? null, snap.icon ?? null, snap.color ?? null);
+          }
         },
         forward: async () => { /* best-effort: IDs will differ after re-creation */ },
       });
@@ -95,15 +108,6 @@ export const smartFoldersController = {
 
   // ── Tree ordering ──────────────────────────────────────────────────────────
 
-  /**
-   * Move a smart folder to a new position in the tree.
-   * The controller computes sibling reorder moves and undo snapshots internally.
-   *
-   * @param draggedId  The folder being moved
-   * @param targetId   The folder being dropped on (or next to)
-   * @param position   'before' | 'after' | 'inside'
-   * @param folders    The full flat folder list (id, parent_id, display_order) for computing siblings
-   */
   async moveToPosition(
     draggedId: number,
     targetId: number,
@@ -113,7 +117,6 @@ export const smartFoldersController = {
     const draggedIdStr = String(draggedId);
     const targetIdStr = String(targetId);
 
-    // Snapshot old sibling order for undo
     const draggedFolder = folders.find((f) => f.id === draggedIdStr);
     const oldParentId = draggedFolder?.parent_id ?? null;
     const oldSiblingMoves = computeSiblingMoves(folders, oldParentId);
@@ -142,23 +145,32 @@ export const smartFoldersController = {
     }
 
     await api.smartFolders.move(draggedId, newParentId, newSiblingMoves);
-    eagerSidebarRefresh();
+    useDomainStore.getState().moveSmartFolderNode(draggedId, newParentId);
+    useDomainStore.getState().reorderSmartFolderNodes(newSiblingMoves);
 
     registerUndoAction({
       label: 'Move smart folder',
-      backward: async () => { await api.smartFolders.move(draggedId, oldParentId, oldSiblingMoves); eagerSidebarRefresh(); },
-      forward: async () => { await api.smartFolders.move(draggedId, newParentId, newSiblingMoves); eagerSidebarRefresh(); },
+      backward: async () => {
+        await api.smartFolders.move(draggedId, oldParentId, oldSiblingMoves);
+        useDomainStore.getState().moveSmartFolderNode(draggedId, oldParentId);
+        useDomainStore.getState().reorderSmartFolderNodes(oldSiblingMoves);
+      },
+      forward: async () => {
+        await api.smartFolders.move(draggedId, newParentId, newSiblingMoves);
+        useDomainStore.getState().moveSmartFolderNode(draggedId, newParentId);
+        useDomainStore.getState().reorderSmartFolderNodes(newSiblingMoves);
+      },
     });
   },
 
   async reorder(parentId: number | null, moves: [number, number][], previousMoves?: [number, number][]) {
     await api.smartFolders.reorder(parentId, moves);
-    eagerSidebarRefresh();
+    useDomainStore.getState().reorderSmartFolderNodes(moves);
     if (previousMoves) {
       registerUndoAction({
         label: 'Reorder smart folders',
-        backward: async () => { await api.smartFolders.reorder(parentId, previousMoves); eagerSidebarRefresh(); },
-        forward: async () => { await api.smartFolders.reorder(parentId, moves); eagerSidebarRefresh(); },
+        backward: async () => { await api.smartFolders.reorder(parentId, previousMoves); useDomainStore.getState().reorderSmartFolderNodes(previousMoves); },
+        forward: async () => { await api.smartFolders.reorder(parentId, moves); useDomainStore.getState().reorderSmartFolderNodes(moves); },
       });
     }
   },

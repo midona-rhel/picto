@@ -62,6 +62,18 @@ interface DomainState {
   patchSmartFolder: (sfId: number, patch: { name?: string; icon?: string | null; color?: string | null }) => void;
   /** Remove a smart folder from the sidebar tree. */
   removeSmartFolder: (sfId: number) => void;
+  /** Insert a new folder node into the sidebar tree. */
+  insertFolderNode: (folderId: number, name: string, parentId: number | null, icon?: string | null, color?: string | null) => void;
+  /** Insert a new smart folder node into the sidebar tree. */
+  insertSmartFolder: (sfId: number, name: string, parentId: number | null, icon?: string | null, color?: string | null) => void;
+  /** Move a smart folder to a new parent in the tree. */
+  moveSmartFolderNode: (sfId: number, newParentId: number | null) => void;
+  /** Reorder smart folder nodes by applying sort order patches. */
+  reorderSmartFolderNodes: (moves: [number, number][]) => void;
+  /** Reorder folder nodes by applying sort order patches. */
+  reorderFolderNodes: (moves: [number, number][]) => void;
+  /** Move a folder to a new parent in the tree. */
+  moveFolderNode: (folderId: number, newParentId: number | null) => void;
 }
 
 const SIDEBAR_REFRESH_DEBOUNCE_MS = 120;
@@ -301,6 +313,106 @@ export const useDomainStore = create<DomainState>((set, get) => ({
         Object.entries(s.smartFolderCounts).filter(([k]) => k !== id),
       ),
       sidebarNodes: s.sidebarNodes.filter((n) => n.id !== `smart:${id}`),
+    }));
+  },
+
+  insertFolderNode: (folderId, name, parentId, icon, color) => {
+    const node = {
+      id: `folder:${folderId}`,
+      kind: 'folder' as const,
+      parent_id: parentId != null ? `folder:${parentId}` : null,
+      name,
+      icon: icon ?? null,
+      color: color ?? null,
+      count: 0,
+      freshness: 'exact' as const,
+      selectable: true,
+    };
+    set((s) => ({
+      folderNodes: [...s.folderNodes, node],
+      sidebarNodes: [...s.sidebarNodes, node],
+    }));
+  },
+
+  insertSmartFolder: (sfId, name, parentId, icon, color) => {
+    const id = String(sfId);
+    const node = {
+      id: `smart:${id}`,
+      kind: 'smart_folder' as const,
+      parent_id: parentId != null ? `smart:${parentId}` : null,
+      name,
+      icon: icon ?? null,
+      color: color ?? null,
+      count: 0,
+      freshness: 'exact' as const,
+      selectable: true,
+    };
+    set((s) => ({
+      smartFolders: [...s.smartFolders, {
+        id, name, parent_id: parentId != null ? String(parentId) : null,
+        count: 0, freshness: 'exact', hasEffectiveRules: false, hasLocalRules: false,
+        icon: icon ?? null, color: color ?? null,
+      }],
+      smartFolderCounts: { ...s.smartFolderCounts, [id]: 0 },
+      sidebarNodes: [...s.sidebarNodes, node],
+    }));
+  },
+
+  moveSmartFolderNode: (sfId, newParentId) => {
+    const id = String(sfId);
+    const newPid = newParentId != null ? String(newParentId) : null;
+    set((s) => ({
+      smartFolders: s.smartFolders.map((sf) =>
+        sf.id === id ? { ...sf, parent_id: newPid } : sf,
+      ),
+      sidebarNodes: s.sidebarNodes.map((n) =>
+        n.id === `smart:${id}` ? { ...n, parent_id: newPid != null ? `smart:${newPid}` : null } : n,
+      ),
+    }));
+  },
+
+  reorderSmartFolderNodes: (moves) => {
+    const orderMap = new Map(moves.map(([id, order]) => [String(id), order]));
+    set((s) => ({
+      smartFolders: [...s.smartFolders].sort((a, b) =>
+        (orderMap.get(a.id) ?? Infinity) - (orderMap.get(b.id) ?? Infinity),
+      ),
+      sidebarNodes: s.sidebarNodes.map((n) => {
+        if (!n.id.startsWith('smart:')) return n;
+        const sfId = n.id.slice('smart:'.length);
+        const order = orderMap.get(sfId);
+        return order != null ? { ...n, sort_order: order } : n;
+      }),
+    }));
+  },
+
+  reorderFolderNodes: (moves) => {
+    const orderMap = new Map(moves.map(([id, order]) => [id, order]));
+    set((s) => ({
+      folderNodes: s.folderNodes.map((n) => {
+        const fid = n.id.startsWith('folder:') ? parseInt(n.id.slice('folder:'.length), 10) : 0;
+        const order = orderMap.get(fid);
+        return order != null ? { ...n, sort_order: order } : n;
+      }),
+      sidebarNodes: s.sidebarNodes.map((n) => {
+        if (!n.id.startsWith('folder:')) return n;
+        const fid = parseInt(n.id.slice('folder:'.length), 10);
+        const order = orderMap.get(fid);
+        return order != null ? { ...n, sort_order: order } : n;
+      }),
+    }));
+  },
+
+  moveFolderNode: (folderId, newParentId) => {
+    const fid = `folder:${folderId}`;
+    const newPid = newParentId != null ? `folder:${newParentId}` : null;
+    set((s) => ({
+      folderNodes: s.folderNodes.map((n) =>
+        n.id === fid ? { ...n, parent_id: newPid } : n,
+      ),
+      sidebarNodes: s.sidebarNodes.map((n) =>
+        n.id === fid ? { ...n, parent_id: newPid } : n,
+      ),
     }));
   },
 }));

@@ -1,7 +1,6 @@
 import { useStateChangeStore } from './stateChangeStore';
 import { useGridMetadataStore } from '../../state/gridMetadataStore';
 import { noteMetadataChanged } from '#features/grid/data';
-import { refreshTargetMatchesGridScope } from './planRefreshTargets';
 import type { ResourceKey } from '../../shared/types/backendState';
 
 let unsub: (() => void) | null = null;
@@ -35,21 +34,8 @@ export function startApplyingGridRefreshTargets(): void {
     if (state.pendingRefreshTargets === prevStaleRef) return;
     prevStaleRef = state.pendingRefreshTargets;
 
-    const activeScope = useGridMetadataStore.getState().activeGridScope;
-    const changeOrigin = state.lastChangeOrigin;
     const handledTargets: ResourceKey[] = [];
 
-    // Phase 1: Collect affected hashes from metadata targets.
-    // These are the exact files the backend told us changed.
-    const affectedHashes: string[] = [];
-
-    for (const key of state.pendingRefreshTargets) {
-      if (key.startsWith('metadata/hash:')) {
-        affectedHashes.push(key.slice('metadata/hash:'.length));
-      }
-    }
-
-    // Phase 2: Apply targets.
     for (const key of state.pendingRefreshTargets) {
       // Metadata hash refresh target
       if (key.startsWith('metadata/hash:')) {
@@ -65,30 +51,10 @@ export function startApplyingGridRefreshTargets(): void {
         continue;
       }
 
-      // Grid scope refresh target
+      // Grid scope refresh target — consumed without broad action.
+      // Per-hash metadata/hash:* targets handle metadata invalidation.
+      // Controllers handle membership eagerly via targeted queueRemovals/queueInsertions.
       if (key.startsWith('grid/')) {
-        const matches = refreshTargetMatchesGridScope(key, activeScope);
-
-        // Subscription import suppression
-        const skipInboxReplace =
-          activeScope === 'system:inbox'
-          && changeOrigin === 'subscription_import'
-          && key === 'grid/system:inbox';
-
-        if (matches && !skipInboxReplace) {
-          if (affectedHashes.length > 0) {
-            // Targeted: the backend gave us exact hashes. The per-hash
-            // metadata/hash:* targets already handle metadata invalidation.
-            // The controller already handled membership changes eagerly
-            // (queueRemovals/queueInsertions). No broad refresh needed.
-          } else {
-            // No specific hashes from the backend — true fallback.
-            // This should be rare with PBI-561/562 providing exact hashes
-            // for all normal flows.
-            useGridMetadataStore.getState().clearMetadataCache();
-            useGridMetadataStore.getState().bumpGridRefresh();
-          }
-        }
         handledTargets.push(key);
       }
     }
