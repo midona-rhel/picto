@@ -5,7 +5,9 @@
  */
 import { useEffect, useLayoutEffect, useRef, useState, useMemo, useCallback } from 'react';
 import type { MediaItem } from '../../grid/shared';
-import { toMasonryItem } from '../../grid/shared';
+import { toMasonryItem, isVideoMime } from '../../grid/shared';
+import { mediaFileUrl } from '../../../shared/lib/mediaUrl';
+import { VideoPlayer } from './VideoPlayer';
 import { useThumbnailPipelineLifecycle } from '../../../shared/lib/canvas/useThumbnailPipelineLifecycle';
 import { THUMBNAIL_PIPELINE_REVEAL_MS } from '../../../shared/lib/canvas/thumbnailPipelinePolicy';
 import {
@@ -200,6 +202,9 @@ export function StripView({
   const scrollTopRef = useRef(0);
   const [viewportHeight, setViewportHeight] = useState(800);
   const viewportHeightRef = useRef(800);
+  const [activeVideo, setActiveVideo] = useState<number | null>(null);
+  const activeVideoRef = useRef<number | null>(null);
+  activeVideoRef.current = activeVideo;
 
   const masonryImages = useMemo(() => images.map(toMasonryItem), [images]);
 
@@ -377,6 +382,30 @@ export function StripView({
         ctx.strokeStyle = 'rgba(255, 255, 255, 0.08)';
         ctx.lineWidth = 1;
         ctx.stroke();
+
+        // Play button for videos
+        if (isVideoMime(img.mime) && activeVideoRef.current !== i) {
+          const btnSize = Math.min(48, pos.w * 0.15, pos.h * 0.15);
+          const cx = pos.x + pos.w / 2;
+          const cy = drawY + pos.h / 2;
+          ctx.beginPath();
+          ctx.arc(cx, cy, btnSize, 0, Math.PI * 2);
+          ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+          ctx.fill();
+          ctx.strokeStyle = 'rgba(255, 255, 255, 0.3)';
+          ctx.lineWidth = 1.5;
+          ctx.stroke();
+          // Triangle
+          const triSize = btnSize * 0.45;
+          const triX = cx - triSize * 0.35;
+          ctx.beginPath();
+          ctx.moveTo(triX, cy - triSize);
+          ctx.lineTo(triX + triSize * 1.2, cy);
+          ctx.lineTo(triX, cy + triSize);
+          ctx.closePath();
+          ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
+          ctx.fill();
+        }
       } else {
         // Placeholder with rounded corners
         ctx.beginPath();
@@ -518,14 +547,81 @@ export function StripView({
     return () => { window.removeEventListener('keydown', onDown); window.removeEventListener('keyup', onUp); cancelAnimationFrame(rafId); };
   }, [stripScrollEnabled, stripScrollSpeed]);
 
+  // ─── Click to play video ──────────────────────────────────
+  const handleClick = useCallback((e: React.MouseEvent) => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    const clickX = e.clientX - rect.left + el.scrollLeft;
+    const clickY = e.clientY - rect.top + el.scrollTop;
+
+    for (let i = 0; i < positions.length; i++) {
+      const pos = positions[i];
+      if (clickX >= pos.x && clickX <= pos.x + pos.w && clickY >= pos.y && clickY <= pos.y + pos.h) {
+        const img = masonryImages[i];
+        if (img && isVideoMime(img.mime)) {
+          setActiveVideo(activeVideo === i ? null : i);
+        } else {
+          setActiveVideo(null);
+        }
+        return;
+      }
+    }
+    setActiveVideo(null);
+  }, [activeVideo, masonryImages, positions]);
+
+  // Dismiss video when scrolling far from it
+  useEffect(() => {
+    if (activeVideo == null || !positions[activeVideo]) return;
+    const pos = positions[activeVideo];
+    const st = scrollTopRef.current;
+    const vh = viewportHeightRef.current;
+    if (pos.y + pos.h < st - vh || pos.y > st + vh * 2) {
+      setActiveVideo(null);
+    }
+  });
+
+  // Video overlay position
+  const videoSettings = useSettingsStore(s => s.settings);
+  const activePos = activeVideo != null ? positions[activeVideo] : null;
+  const activeImg = activeVideo != null ? masonryImages[activeVideo] : null;
+
   return (
     <div className={styles.stripView}>
-      <div ref={scrollRef} className={styles.scrollContainer} onScroll={handleScroll}>
+      <div ref={scrollRef} className={styles.scrollContainer} onScroll={handleScroll} onClick={handleClick}>
         <div style={{ height: totalHeight, position: 'relative' }}>
           <canvas
             ref={canvasRef}
             style={{ position: 'sticky', top: 0, display: 'block', pointerEvents: 'none' }}
           />
+          {activeVideo != null && activePos && activeImg && (
+            <div
+              style={{
+                position: 'absolute',
+                top: activePos.y,
+                left: activePos.x,
+                width: activePos.w,
+                height: activePos.h,
+                borderRadius: CORNER_RADIUS,
+                overflow: 'hidden',
+                zIndex: 1,
+              }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <VideoPlayer
+                src={mediaFileUrl(activeImg.hash, activeImg.mime)}
+                autoPlay={videoSettings.videoAutoPlay}
+                loop={videoSettings.videoLoop}
+                muted={videoSettings.videoMuted}
+                initialVolume={videoSettings.videoVolume}
+                initialPlaybackRate={videoSettings.videoPlaybackRate}
+                onVolumeChange={(v) => useSettingsStore.getState().updateSetting('videoVolume', v)}
+                onMutedChange={(m) => useSettingsStore.getState().updateSetting('videoMuted', m)}
+                onPlaybackRateChange={(r) => useSettingsStore.getState().updateSetting('videoPlaybackRate', r)}
+                onLoopChange={(l) => useSettingsStore.getState().updateSetting('videoLoop', l)}
+              />
+            </div>
+          )}
         </div>
       </div>
     </div>
