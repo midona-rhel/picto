@@ -16,8 +16,8 @@ import { useNavigationStore } from '../../../state/navigationStore';
 import { useLibraryStore } from '../../../state/libraryStore';
 import { api } from '#desktop/api';
 import { SidebarJobStatus } from '../../layout/components/SidebarJobStatus';
-import { runCriticalAction } from '../../../shared/lib/asyncOps';
 import { imageDrag } from '../../../shared/lib/imageDrag';
+import { registerUndoAction } from '../../../shared/controllers/undoRedoController';
 import { FolderTree } from './FolderTree';
 import { LibrarySwitcher } from './LibrarySwitcher';
 import { SmartFolderList } from './SmartFolderList';
@@ -37,23 +37,30 @@ export function Sidebar({ onSmartFolderUpdated }: SidebarProps) {
   const isAllActiveScope = !activeSmartFolderId && activeFolderId == null && !activeStatusFilter && currentView === 'images';
 
   const handleStatusDrop = useCallback((hashes: string[], status: 'active' | 'inbox' | 'trash') => {
-    runCriticalAction(
-      'Move Failed',
-      `sidebar status drop (${status})`,
-      api.files.setStatusSelection({
-        mode: 'explicit_hashes',
-        hashes,
-        scope: {
-          kind: 'system',
-          system_key: 'all',
-        },
-        filters: {},
-        sort: {},
-        excluded_hashes: null,
-        included_hashes: null,
-      }, status),
-    );
-  }, []);
+    // Infer source status from current view for undo
+    const prevStatus: string = activeStatusFilter === 'inbox' ? 'inbox'
+      : activeStatusFilter === 'trash' ? 'trash'
+      : 'active';
+    const spec = {
+      mode: 'explicit_hashes' as const,
+      hashes,
+      scope: { kind: 'system' as const, system_key: 'all' as const },
+      filters: {},
+      sort: {},
+      excluded_hashes: null,
+      included_hashes: null,
+    };
+    api.files.setStatusSelection(spec, status)
+      .then(() => {
+        const statusLabel = status === 'inbox' ? 'Inbox' : status === 'trash' ? 'Trash' : 'Active';
+        registerUndoAction({
+          label: `Move ${hashes.length} item${hashes.length === 1 ? '' : 's'} to ${statusLabel}`,
+          undo: async () => { await api.files.setStatusSelection(spec, prevStatus); },
+          redo: async () => { await api.files.setStatusSelection(spec, status); },
+        });
+      })
+      .catch((err) => console.error('Status drop failed:', err));
+  }, [activeStatusFilter]);
 
   const handleDropToAllActive = useCallback((hashes: string[]) => {
     handleStatusDrop(hashes, 'active');
