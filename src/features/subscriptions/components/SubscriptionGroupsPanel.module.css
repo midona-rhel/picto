@@ -295,7 +295,7 @@
   min-height: 32px;
   padding: 0 10px;
   border-radius: 6px;
-  background: var(--color-white-05);
+  background: rgb(64, 64, 67);
 }
 
 .queryRow > * {
