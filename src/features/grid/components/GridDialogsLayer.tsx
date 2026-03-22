@@ -4,7 +4,7 @@ import { BatchRenameDialog } from '../../../shared/components/BatchRenameDialog'
 import type { ExportDialogState } from '../hooks/useGridExportActions';
 import { ExportDialog } from './ExportDialog';
 import { GridDropOverlay } from './GridDropOverlay';
-import type { MasonryImageItem } from '../shared';
+import type { MasonryItem } from '../shared';
 
 export function GridDialogsLayer(props: {
   contextMenuState: {
@@ -15,7 +15,7 @@ export function GridDialogsLayer(props: {
   isDragOver: boolean;
   batchRenameOpen: boolean;
   onCloseBatchRename: () => void;
-  batchRenameImages: MasonryImageItem[];
+  batchRenameImages: MasonryItem[];
   folderImportDialog: { path: string; preserveStructure: boolean; targetFolderId: number | null } | null;
   setFolderImportDialog: React.Dispatch<React.SetStateAction<{ path: string; preserveStructure: boolean; targetFolderId: number | null } | null>>;
   onConfirmImportFolder: () => void | Promise<void>;

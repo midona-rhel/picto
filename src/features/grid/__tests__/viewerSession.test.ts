@@ -12,9 +12,9 @@ import {
   rebaseSession,
   clampSession,
 } from '../runtime/gridViewerSession';
-import type { MasonryImageItem } from '../shared';
+import type { MasonryItem } from '../shared';
 
-function makeImages(...hashes: string[]): MasonryImageItem[] {
+function makeImages(...hashes: string[]): MasonryItem[] {
   return hashes.map(hash => ({
     hash,
     name: hash,

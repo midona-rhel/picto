@@ -1,5 +1,5 @@
 import type { GridEmptyContext } from '../runtime';
-import type { MasonryImageItem } from '../shared';
+import type { MasonryItem } from '../shared';
 
 export const BADGE_H = 18;
 export const BADGE_FONT = '600 10px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
@@ -143,8 +143,8 @@ export function drawBadge(
 }
 
 export function hasSameLayoutGeometry(
-  prev: MasonryImageItem[],
-  next: MasonryImageItem[],
+  prev: MasonryItem[],
+  next: MasonryItem[],
 ): boolean {
   if (prev === next) return true;
   if (prev.length !== next.length) return false;

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, type Dispatch } from 'react';
 import { useGridMetadataStore } from '../../../state/gridMetadataStore';
 import { useNavigationStore } from '../../../state/navigationStore';
 import type { GridRuntimeAction } from '../runtime';
-import type { MasonryImageItem } from '../shared';
+import { toMasonryItem, type MasonryItem } from '../shared';
 import type { SmartFolderPredicate } from '../../smart-folders/components/types';
 import { deriveGridScopeKey } from '../scopeModel';
 
@@ -20,7 +20,7 @@ export function useGridRefreshLifecycle(args: {
   statusFilter?: string | null;
   requestReplace: () => Promise<void>;
   refreshTrigger?: number;
-  stateRef: { current: { images: MasonryImageItem[] } };
+  stateRef: { current: { images: MasonryItem[] } };
 }) {
   const {
     dispatch,
@@ -34,6 +34,9 @@ export function useGridRefreshLifecycle(args: {
   } = args;
 
   const metadataInvalidatedHashes = useGridMetadataStore((s) => s.metadataInvalidatedHashes);
+  const pendingRemovals = useGridMetadataStore((s) => s.pendingRemovals);
+  const pendingClearAll = useGridMetadataStore((s) => s.pendingClearAll);
+  const pendingInsertions = useGridMetadataStore((s) => s.pendingInsertions);
   const gridRefreshSeq = useGridMetadataStore((s) => s.gridRefreshSeq);
   const activeSmartFolderId = useNavigationStore((s) => s.activeSmartFolderId);
 
@@ -52,7 +55,7 @@ export function useGridRefreshLifecycle(args: {
   useEffect(() => {
     if (metadataInvalidatedHashes.size === 0) return;
     const hashes = [...metadataInvalidatedHashes];
-    useGridMetadataStore.getState().clearInvalidatedHashes();
+    useGridMetadataStore.getState().clearChangedMetadataMarks();
 
     useGridMetadataStore.getState().fetchMetadataBatch(hashes).then((results) => {
       if (results.length === 0) return;
@@ -71,6 +74,33 @@ export function useGridRefreshLifecycle(args: {
       if (changed) dispatch({ type: 'SET_IMAGES', images: next });
     });
   }, [dispatch, metadataInvalidatedHashes, stateRef]);
+
+  // Eager removals: controller queues specific hashes or a full clear to remove
+  // items from the visible grid immediately (e.g. trash/delete).
+  useEffect(() => {
+    if (pendingRemovals.size === 0 && !pendingClearAll) return;
+    const { hashes, clearAll } = useGridMetadataStore.getState().drainRemovals();
+    if (clearAll) {
+      dispatch({ type: 'CLEAR_DATASET' });
+    } else if (hashes.size > 0) {
+      dispatch({ type: 'FILTER_IMAGES', predicate: (img) => !hashes.has(img.hash) });
+    }
+  }, [dispatch, pendingRemovals, pendingClearAll]);
+
+  // Eager insertions: controller queues entities that entered the current scope
+  // (e.g. restore from trash while viewing system:all). Prepend to visible grid.
+  useEffect(() => {
+    if (pendingInsertions.length === 0) return;
+    const entities = useGridMetadataStore.getState().drainInsertions();
+    if (entities.length === 0) return;
+    const currentHashes = new Set(stateRef.current.images.map((img) => img.hash));
+    const newItems = entities
+      .filter((e) => !currentHashes.has(e.hash))
+      .map(toMasonryItem);
+    if (newItems.length > 0) {
+      dispatch({ type: 'SET_IMAGES', images: [...newItems, ...stateRef.current.images] });
+    }
+  }, [dispatch, pendingInsertions, stateRef]);
 
   const prevRefreshTrigger = useRef(refreshTrigger);
   useEffect(() => {

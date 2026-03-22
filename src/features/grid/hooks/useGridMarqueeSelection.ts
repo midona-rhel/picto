@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef } from 'react';
 
 import type { GridRuntimeAction } from '../runtime';
 import type { LayoutItem } from '../gridLayout';
-import type { MasonryImageItem } from '../shared';
+import type { MasonryItem } from '../shared';
 
 export interface MarqueeRect {
   left: number;
@@ -16,7 +16,7 @@ export interface UseGridMarqueeSelectionArgs {
   dispatch: React.Dispatch<GridRuntimeAction>;
   scrollRef: React.RefObject<HTMLDivElement | null>;
   getCanvasOffsetTop: () => number;
-  imagesRef: React.MutableRefObject<MasonryImageItem[]>;
+  imagesRef: React.MutableRefObject<MasonryItem[]>;
   selectedHashesRef: React.MutableRefObject<Set<string>>;
 }
 

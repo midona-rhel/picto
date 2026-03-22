@@ -4,7 +4,7 @@ import { imageDrag } from '../../../shared/lib/imageDrag';
 import { mediaFileUrl, mediaThumbnailUrl } from '../../../shared/lib/mediaUrl';
 import { getCurrentWebview } from '#desktop/api';
 import { computeCanvasReorderTarget } from './canvasHitTesting';
-import { isVideoMime, type MasonryImageItem } from '../shared';
+import { isVideoMime, type MasonryItem } from '../shared';
 import type { GridViewMode } from '../runtime';
 import type { LayoutResult } from '../layoutMath';
 import type { VideoScrubRect } from '../VideoScrubOverlay';
@@ -28,7 +28,7 @@ export function useCanvasPointerInteractions(args: {
   canvasRef: RefObject<HTMLCanvasElement | null>;
   scrollContainerRef?: RefObject<HTMLDivElement | null>;
   getScrollMetrics: () => { localScrollTop: number; canvasTopInScroll: number; viewportHeight: number };
-  imagesRef: React.MutableRefObject<MasonryImageItem[]>;
+  imagesRef: React.MutableRefObject<MasonryItem[]>;
   selectedHashesRef: React.MutableRefObject<Set<string>>;
   layoutRef: React.MutableRefObject<LayoutResult>;
   viewModeRef: React.MutableRefObject<GridViewMode>;
@@ -102,7 +102,7 @@ export function useCanvasPointerInteractions(args: {
   });
 
   // ── Hover helpers ────────────────────────────────────────────────────
-  const showHoverPreview = useCallback((image: MasonryImageItem | undefined) => {
+  const showHoverPreview = useCallback((image: MasonryItem | undefined) => {
     if (!image || isVideoMime(image.mime) || image.is_collection) return;
     if (hoverHideTimerRef.current) {
       clearTimeout(hoverHideTimerRef.current);

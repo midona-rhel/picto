@@ -1,13 +1,13 @@
 import { useEffect } from 'react';
 import { listen } from '#desktop/api';
 import { sortLiveImages } from '../liveSort';
-import { toMasonryItem, type MasonryImageItem } from '../shared';
+import { toMasonryItem, type MasonryItem } from '../shared';
 import type { SmartFolderPredicate } from '../../../features/smart-folders/components/types';
 import type { FileImportedEvent } from '../../../shared/types/api/events';
 
 export function useGridLiveInsertion(args: {
   dispatch: React.Dispatch<any>;
-  stateRef: React.MutableRefObject<{ images: MasonryImageItem[] }>;
+  stateRef: React.MutableRefObject<{ images: MasonryItem[] }>;
   sortField: string;
   sortOrder: string;
   folderId?: number | null;

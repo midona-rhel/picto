@@ -1,4 +1,4 @@
-import type { MasonryImageItem } from './shared';
+import type { MasonryItem } from './shared';
 
 function compareNullableNumber(
   a: number | null | undefined,
@@ -9,7 +9,7 @@ function compareNullableNumber(
   return av - bv;
 }
 
-function compareByField(a: MasonryImageItem, b: MasonryImageItem, sortField: string): number {
+function compareByField(a: MasonryItem, b: MasonryItem, sortField: string): number {
   switch (sortField) {
     case 'size':
       return a.size - b.size;
@@ -30,10 +30,10 @@ function compareByField(a: MasonryImageItem, b: MasonryImageItem, sortField: str
 }
 
 export function sortLiveImages(
-  images: MasonryImageItem[],
+  images: MasonryItem[],
   sortField: string,
   sortOrder: 'asc' | 'desc',
-): MasonryImageItem[] {
+): MasonryItem[] {
   const sorted = [...images];
   sorted.sort((a, b) => {
     const base = compareByField(a, b, sortField);

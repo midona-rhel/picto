@@ -1,7 +1,7 @@
 import { useCallback } from 'react';
 import { prefetchMetadata } from '../metadataPrefetch';
 import { useContextMenu } from '../../../shared/components/ContextMenu';
-import type { MasonryImageItem } from '../shared';
+import type { MasonryItem } from '../shared';
 import type { SmartFolderPredicate } from '../../../features/smart-folders/components/types';
 import type { GridRuntimeAction, GridRuntimeState, GridViewMode } from '../runtime';
 import type { LayoutItem } from '../gridLayout';
@@ -11,7 +11,7 @@ interface UseGridContextMenuArgs {
   scrollRef: React.RefObject<HTMLDivElement>;
   getCanvasOffsetTop: () => number;
   canvasLayoutRef: React.MutableRefObject<LayoutItem[]>;
-  imagesRef: React.MutableRefObject<MasonryImageItem[]>;
+  imagesRef: React.MutableRefObject<MasonryItem[]>;
   state: GridRuntimeState;
   stateRef: React.MutableRefObject<GridRuntimeState>;
   effectiveSelectedHashes: Set<string>;

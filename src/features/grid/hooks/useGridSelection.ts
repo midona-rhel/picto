@@ -10,7 +10,7 @@ import {
 import { getOrStartSelectionSummary, pinMetadata, unpinMetadata } from '../metadataPrefetch';
 import { selectedImagesPreview as selectImagesPreview, virtualSelectionSpec as selectVirtualSpec } from '../runtime';
 import type { GridRuntimeAction, GridRuntimeState } from '../runtime';
-import type { MasonryImageItem } from '../shared';
+import type { MasonryItem } from '../shared';
 
 export type VirtualSelectionScopeInput = Partial<Pick<
   GridQueryInput,
@@ -42,7 +42,7 @@ export interface UseGridSelectionArgs {
   state: GridRuntimeState;
   dispatch: React.Dispatch<GridRuntimeAction>;
   selectedScopeCount?: number | null;
-  onSelectedImagesChange?: (images: MasonryImageItem[]) => void;
+  onSelectedImagesChange?: (images: MasonryItem[]) => void;
   onSelectionSummarySpecChange?: (spec: SelectionQuerySpec | null) => void;
   scope: VirtualSelectionScopeInput;
 }

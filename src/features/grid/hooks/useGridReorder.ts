@@ -1,14 +1,15 @@
 import { useCallback } from 'react';
-import { api } from '#desktop/api';
 import type { FolderReorderMove } from '../../../shared/types/api';
+import { collectionsController } from '../../../controllers/collectionsController';
+import { foldersController } from '../../../controllers/foldersController';
 import type { GridRuntimeAction } from '../runtime';
-import type { MasonryImageItem } from '../shared';
+import type { MasonryItem } from '../shared';
 
 export function useGridReorder(args: {
   folderId?: number | null;
   collectionEntityId?: number | null;
   dispatch: React.Dispatch<GridRuntimeAction>;
-  stateRef: { current: { images: MasonryImageItem[] } };
+  stateRef: { current: { images: MasonryItem[] } };
   requestReplace: () => Promise<void>;
   displayFolderId: number | null;
 }) {
@@ -36,7 +37,7 @@ export function useGridReorder(args: {
 
     if (currentCollectionId != null) {
       dispatch({ type: 'SET_IMAGES', images: next });
-      api.collections.reorderMembers(currentCollectionId, next.map((img) => img.hash)).catch((err) => {
+      collectionsController.reorderMembers(currentCollectionId, next.map((img) => img.hash)).catch((err) => {
         console.error('Collection reorder failed, reloading collection:', err);
         void requestReplace();
       });
@@ -60,7 +61,7 @@ export function useGridReorder(args: {
     dispatch({ type: 'SET_IMAGES', images: next });
 
     if (moves.length > 0) {
-      api.folders.reorderItems(currentFolderId!, moves).catch((err) => {
+      foldersController.reorderItems(currentFolderId!, moves).catch((err) => {
         console.error('Reorder failed, reloading folder:', err);
         void requestReplace();
       });

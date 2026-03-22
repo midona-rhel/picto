@@ -1,4 +1,4 @@
-import type { MasonryImageItem } from '../shared';
+import type { MasonryItem } from '../shared';
 import type { LayoutItem } from '../layoutMath';
 
 export function hitTestCanvasTile(args: {
@@ -23,7 +23,7 @@ export function hitTestCanvasTile(args: {
 
 export function computeCanvasReorderTarget(args: {
   positions: LayoutItem[];
-  images: MasonryImageItem[];
+  images: MasonryItem[];
   mouseX: number;
   mouseY: number;
   scrollTop: number;

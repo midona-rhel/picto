@@ -1,4 +1,4 @@
-import type { MasonryImageItem } from '../../grid/shared';
+import type { MasonryItem } from '../../grid/shared';
 
 export type DecodePriority = 'high' | 'normal';
 
@@ -30,7 +30,7 @@ function isHeavyMime(mime: string): boolean {
 }
 
 export function buildNeighborDecodePlan(
-  images: Array<Pick<MasonryImageItem, 'hash' | 'mime'>>,
+  images: Array<Pick<MasonryItem, 'hash' | 'mime'>>,
   currentIndex: number,
   heavyDecodeLimit = 2,
 ): NeighborDecodePlan {

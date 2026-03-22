@@ -34,7 +34,7 @@ export type EntitySlim = ApiEntitySlim;
 export type MediaItem = EntitySlim;
 
 // Extended type for Masonic grid with computed aspect ratio
-export interface MasonryImageItem extends MediaItem {
+export interface MasonryItem extends MediaItem {
   aspectRatio: number;
 }
 
@@ -49,8 +49,8 @@ function sanitizeAspectRatio(raw: number): number {
   return Math.min(8, Math.max(0.125, raw));
 }
 
-/** Convert a FileInfo from the backend into a MasonryImageItem */
-export function toMasonryItem(file: MediaItem): MasonryImageItem {
+/** Convert a FileInfo from the backend into a MasonryItem */
+export function toMasonryItem(file: MediaItem): MasonryItem {
   const w = sanitizeDimension(file.width, 300);
   const h = sanitizeDimension(file.height, 200);
   return { ...file, aspectRatio: sanitizeAspectRatio(w / h) };

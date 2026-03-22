@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef } from 'react';
-import { api } from '#desktop/api';
+import { filesController } from '../../../controllers/filesController';
 import { prefetchMetadataBatch } from '#features/grid/data';
 import type { GridRuntimeAction } from '../runtime/gridRuntimeReducer';
 import type { GridRuntimeState } from '../runtime/gridRuntimeState';
-import { toMasonryItem, type MasonryImageItem } from '../shared';
+import { toMasonryItem, type MasonryItem } from '../shared';
 import {
   buildGridQuery,
   serializeGridQuery,
@@ -103,7 +103,7 @@ export function useGridData({
 
   const fetchReplace = useCallback(async (minItems = 0): Promise<GridReplacePayload> => {
     try {
-      const allImages: MasonryImageItem[] = [];
+      const allImages: MasonryItem[] = [];
       let cursor: string | null = null;
       let hasMore = true;
       let totalCount: number | null = null;
@@ -113,7 +113,7 @@ export function useGridData({
       // so layout computes exact height — no estimation, no scrollbar flicker.
       const prefetchCap = Math.max(500, minItems);
       while (hasMore && allImages.length < prefetchCap) {
-        const page = await api.grid.getPageSlim(toFetchGridPageArgs(query, cursor, PAGE_SIZE));
+        const page = await filesController.getGridPage(toFetchGridPageArgs(query, cursor, PAGE_SIZE));
         allImages.push(...page.items.map(toMasonryItem));
         totalCount = page.total_count ?? totalCount;
         cursor = page.next_cursor;
@@ -205,7 +205,7 @@ export function useGridData({
 
     const generation = generationRef.current;
     try {
-      const page = await api.grid.getPageSlim(toFetchGridPageArgs(query, cursor, PAGE_SIZE));
+      const page = await filesController.getGridPage(toFetchGridPageArgs(query, cursor, PAGE_SIZE));
       if (generation !== generationRef.current) return;
 
       const items = page.items.map(toMasonryItem);

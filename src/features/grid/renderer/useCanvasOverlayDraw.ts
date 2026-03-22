@@ -1,6 +1,6 @@
 import { useCallback, type RefObject } from 'react';
 import { drawCanvasOverlayLayer } from './canvasGridDrawHelpers';
-import type { MasonryImageItem } from '../shared';
+import type { MasonryItem } from '../shared';
 import type { LayoutItem } from '../layoutMath';
 
 interface ThemeState {
@@ -41,7 +41,7 @@ export function useCanvasOverlayDraw(args: {
   overlayCtxRef: { current: CanvasRenderingContext2D | null };
   themeRef: { current: ThemeState | null };
   layoutRef: { current: { positions: LayoutItem[] } };
-  imagesRef: { current: MasonryImageItem[] };
+  imagesRef: { current: MasonryItem[] };
   selectedHashesRef: { current: Set<string> };
   hoveredTileRef: { current: number | null };
   marqueeRectRefProp?: RefObject<{ left: number; top: number; width: number; height: number } | null>;

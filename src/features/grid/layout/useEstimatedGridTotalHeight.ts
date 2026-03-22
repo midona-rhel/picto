@@ -1,11 +1,11 @@
 import { useMemo } from 'react';
 import type { GridViewMode } from '../runtime';
-import type { MasonryImageItem } from '../shared';
+import type { MasonryItem } from '../shared';
 
 interface UseEstimatedGridTotalHeightArgs {
   exactHeight: number;
-  renderImages: MasonryImageItem[];
-  estimateSampleImages: MasonryImageItem[];
+  renderImages: MasonryItem[];
+  estimateSampleImages: MasonryItem[];
   totalCount: number | null;
   viewMode: GridViewMode;
   layoutWidth: number;

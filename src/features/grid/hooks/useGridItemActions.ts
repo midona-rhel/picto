@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useRef } from 'react';
-import { api, emitTo, listen } from '#desktop/api';
+import { emitTo, listen } from '#desktop/api';
+import { filesController } from '../../../controllers/filesController';
+import { tagsController } from '../../../controllers/tagsController';
 import { notifyError, notifySuccess } from '../../../shared/lib/notify';
 import { registerUndoAction } from '../../../shared/controllers/undoRedoController';
 import { logBestEffortError, runBestEffort } from '../../../shared/lib/asyncOps';
-import type { MasonryImageItem } from '../shared';
+import type { MasonryItem } from '../shared';
 import type { GridRuntimeState } from '../runtime';
 import type { ViewerHostController } from '../../../features/viewer/hooks/useViewerHost';
 
@@ -12,7 +14,7 @@ let copiedTags: string[] | null = null;
 interface UseGridItemActionsArgs {
   state: GridRuntimeState;
   stateRef: { current: GridRuntimeState };
-  imagesRef: { current: MasonryImageItem[] };
+  imagesRef: { current: MasonryItem[] };
   singleSelectedHash: string | null;
   viewer: ViewerHostController;
   selectedScopeCount?: number | null;
@@ -50,7 +52,7 @@ export function useGridItemActions({
 
   const handleOpenWithDefaultApp = useCallback(() => {
     if (!singleSelectedHash) return;
-    api.file.openDefault(singleSelectedHash).catch((err) => {
+    filesController.openDefault(singleSelectedHash).catch((err) => {
       notifyError(err, 'Open Failed');
     });
   }, [singleSelectedHash]);
@@ -58,7 +60,7 @@ export function useGridItemActions({
   const handleOpenInNewWindow = useCallback(async () => {
     if (!singleSelectedHash) return;
     const img = state.images.find((i) => i.hash === singleSelectedHash);
-    api.file.openInNewWindow(singleSelectedHash, img?.width, img?.height).catch((err) => {
+    filesController.openInNewWindow(singleSelectedHash, img?.width, img?.height).catch((err) => {
       notifyError(err, 'New Window Failed');
     });
   }, [singleSelectedHash, state.images]);
@@ -105,7 +107,7 @@ export function useGridItemActions({
 
   const handleRevealInFolder = useCallback(() => {
     if (!singleSelectedHash) return;
-    api.file.revealInFolder(singleSelectedHash).catch((err) => {
+    filesController.revealInFolder(singleSelectedHash).catch((err) => {
       notifyError(err, 'Reveal Failed');
     });
   }, [singleSelectedHash]);
@@ -113,7 +115,7 @@ export function useGridItemActions({
   const handleCopyFilePath = useCallback(async () => {
     if (!singleSelectedHash) return;
     try {
-      const path = await api.file.resolvePath(singleSelectedHash);
+      const path = await filesController.resolvePath(singleSelectedHash);
       await navigator.clipboard.writeText(path);
       notifySuccess('File path copied to clipboard', 'Copied');
     } catch (err) {
@@ -128,7 +130,7 @@ export function useGridItemActions({
       : [...selectedHashes];
     if (hashesToCopy.length === 0) return;
     try {
-      const tags = await api.tags.getForFile(hashesToCopy[0]);
+      const tags = await tagsController.getForFile(hashesToCopy[0]);
       copiedTags = tags.map((t) => t.display);
       notifySuccess(`${copiedTags.length} tag(s) copied`, 'Tags Copied');
     } catch (err) {
@@ -146,11 +148,11 @@ export function useGridItemActions({
     try {
       const tagsSnapshot = [...copiedTags];
       const hashesSnapshot = [...hashesToPaste];
-      await api.tags.add(hashesSnapshot, tagsSnapshot);
+      await tagsController.addToHashes(hashesSnapshot, tagsSnapshot);
       registerUndoAction({
         label: `Paste ${tagsSnapshot.length} tag${tagsSnapshot.length === 1 ? '' : 's'}`,
-        undo: () => api.tags.remove(hashesSnapshot, tagsSnapshot),
-        redo: () => api.tags.add(hashesSnapshot, tagsSnapshot),
+        undo: () => tagsController.removeFromHashes(hashesSnapshot, tagsSnapshot),
+        redo: () => tagsController.addToHashes(hashesSnapshot, tagsSnapshot),
       });
       notifySuccess(
         `Applied ${copiedTags.length} tag(s) to ${hashesToPaste.length} file(s)`,

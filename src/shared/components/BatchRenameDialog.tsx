@@ -5,8 +5,8 @@ import { glassModalStyles } from '../styles/glassModal';
 import { TextButton } from './TextButton';
 import { registerUndoAction } from '../controllers/undoRedoController';
 import { notifySuccess, notifyError } from '../lib/notify';
-import { api } from '#desktop/api';
-import type { MasonryImageItem } from '../../features/grid/shared';
+import { filesController } from '../../controllers/filesController';
+import type { MasonryItem } from '../../features/grid/shared';
 import classes from './BatchRenameDialog.module.css';
 
 // ── Types ──────────────────────────────────────────────────────────────────
@@ -14,7 +14,7 @@ import classes from './BatchRenameDialog.module.css';
 interface BatchRenameDialogProps {
   opened: boolean;
   onClose: () => void;
-  images: MasonryImageItem[];
+  images: MasonryItem[];
 }
 
 type Mode = 'template' | 'regex';
@@ -44,7 +44,7 @@ function padIndex(n: number, total: number): string {
 
 function applyTemplate(
   template: string,
-  image: MasonryImageItem,
+  image: MasonryItem,
   index: number,
   total: number,
 ): string {
@@ -111,20 +111,20 @@ export function BatchRenameDialog({ opened, onClose, images }: BatchRenameDialog
 
     setSaving(true);
     try {
-      for (const item of toRename) {
-        await api.file.setName(item.hash, item.after || null);
-      }
+      await filesController.batchRename(
+        toRename.map((item) => ({ hash: item.hash, name: item.after || null })),
+      );
       registerUndoAction({
         label: `Batch rename ${toRename.length} file(s)`,
         undo: async () => {
-          for (const item of toRename) {
-            await api.file.setName(item.hash, item.before || null);
-          }
+          await filesController.batchRename(
+            toRename.map((item) => ({ hash: item.hash, name: item.before || null })),
+          );
         },
         redo: async () => {
-          for (const item of toRename) {
-            await api.file.setName(item.hash, item.after || null);
-          }
+          await filesController.batchRename(
+            toRename.map((item) => ({ hash: item.hash, name: item.after || null })),
+          );
         },
       });
       notifySuccess(`Renamed ${toRename.length} file(s)`, 'Batch Rename');

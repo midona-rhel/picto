@@ -7,13 +7,13 @@ import {
   type LayoutResult,
 } from '../layoutMath';
 import type { GridViewMode } from '../runtime';
-import type { MasonryImageItem } from '../shared';
+import type { MasonryItem } from '../shared';
 import type { LayoutWorkerResponse } from '../layoutWorker';
 
 const WORKER_LAYOUT_THRESHOLD = 180;
 
 interface UseWaterfallLayoutWorkerArgs {
-  images: MasonryImageItem[];
+  images: MasonryItem[];
   layoutWidth: number;
   targetSize: number;
   gap: number;
@@ -24,13 +24,13 @@ interface UseWaterfallLayoutWorkerArgs {
 
 interface SettledSnapshot {
   signature: string;
-  images: MasonryImageItem[];
+  images: MasonryItem[];
   layout: LayoutResult;
   bucketIndex: Map<number, number[]> | null;
 }
 
 interface UseWaterfallLayoutWorkerResult {
-  renderImages: MasonryImageItem[];
+  renderImages: MasonryItem[];
   layout: LayoutResult;
   bucketIndex: Map<number, number[]> | null;
   pending: boolean;
@@ -38,7 +38,7 @@ interface UseWaterfallLayoutWorkerResult {
 }
 
 function buildSignature(
-  images: MasonryImageItem[],
+  images: MasonryItem[],
   layoutWidth: number,
   targetSize: number,
   gap: number,
@@ -82,7 +82,7 @@ export function useWaterfallLayoutWorker({
   const workerDisabledRef = useRef(false);
   const latestRequestIdRef = useRef(0);
   const latestRequestSignatureRef = useRef('');
-  const latestImagesRef = useRef<MasonryImageItem[]>(images);
+  const latestImagesRef = useRef<MasonryItem[]>(images);
   const [settledSnapshot, setSettledSnapshot] = useState<SettledSnapshot | null>(null);
   const [pendingSignature, setPendingSignature] = useState<string | null>(null);
 

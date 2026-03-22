@@ -6,7 +6,7 @@ import {
   RefObject,
 } from 'react';
 import { useComputedColorScheme } from '@mantine/core';
-import { isVideoMime, MasonryImageItem } from './shared';
+import { isVideoMime, MasonryItem } from './shared';
 import { VideoScrubOverlay } from './VideoScrubOverlay';
 import { mediaFileUrl } from '../../shared/lib/mediaUrl';
 import { imageDrag } from '../../shared/lib/imageDrag';
@@ -34,13 +34,13 @@ const ZOOM_BTN_SIZE = 24;
 const LOAD_MORE_THRESHOLD = 500;
 
 interface CanvasGridProps {
-  images: MasonryImageItem[];
+  images: MasonryItem[];
   targetSize: number;
   gap: number;
   viewMode: GridViewMode;
   selectedHashes: Set<string>;
   searchTags?: string[];
-  onImageClick: (image: MasonryImageItem, event: React.MouseEvent) => void;
+  onImageClick: (image: MasonryItem, event: React.MouseEvent) => void;
   onImport: () => void;
   onImportFolder?: () => void;
   onContainerWidthChange?: (width: number) => void;
@@ -75,7 +75,7 @@ interface CanvasGridProps {
   /** Total item count for scroll height estimation (prevents scrollbar jitter on batch load) */
   totalCount?: number | null;
   /** Optional slim lookahead sample (next-page metadata only; never rendered). */
-  estimateSampleImages?: MasonryImageItem[];
+  estimateSampleImages?: MasonryItem[];
   /** Disable drag initiation for scoped interactions that should be read-only. */
   dragDisabled?: boolean;
   thumbnailFitMode?: 'cover' | 'contain';
@@ -99,7 +99,7 @@ export interface CanvasGridHandle {
   /** Get the current layout positions array (for marquee hit testing) */
   getLayoutPositions(): LayoutItem[];
   /** Get the images array */
-  getImages(): MasonryImageItem[];
+  getImages(): MasonryItem[];
   /** Request a canvas redraw (e.g. from marquee drag without React state) */
   scheduleRedraw(): void;
 }
@@ -225,7 +225,7 @@ export function CanvasGrid({
 
   // Keep layout input reference stable unless tile geometry truly changed.
   // This avoids expensive waterfall re-layouts when only metadata fields update.
-  const stableLayoutImagesRef = useRef<MasonryImageItem[] | null>(null);
+  const stableLayoutImagesRef = useRef<MasonryItem[] | null>(null);
   const layoutImages = useMemo(() => {
     const prev = stableLayoutImagesRef.current;
     if (prev && hasSameLayoutGeometry(prev, images)) {

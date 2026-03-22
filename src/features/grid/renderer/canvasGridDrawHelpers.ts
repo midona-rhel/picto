@@ -2,7 +2,7 @@ import { formatDuration } from '../../../shared/lib/formatters';
 import { TEXT_NAME_ROW_H } from '../gridLayout';
 import type { LayoutItem } from '../layoutMath';
 import type { ThumbnailPipelineEntry } from '../../../shared/lib/canvas/thumbnailPipeline';
-import { isVideoMime, type MasonryImageItem } from '../shared';
+import { isVideoMime, type MasonryItem } from '../shared';
 import type { GridViewMode } from '../runtime';
 import {
   BADGE_FONT,
@@ -45,7 +45,7 @@ interface VisibleWindow {
 interface BaseLayerArgs {
   ctx: CanvasRenderingContext2D;
   positions: LayoutItem[];
-  imgs: MasonryImageItem[];
+  imgs: MasonryItem[];
   atlasGet: (hash: string) => ThumbnailPipelineEntry | null;
   atlasEnsure: (hash: string, args?: {
     y?: number;
@@ -70,7 +70,7 @@ interface BaseLayerArgs {
 
 function fillPlaceholder(
   ctx: CanvasRenderingContext2D,
-  image: MasonryImageItem,
+  image: MasonryItem,
   theme: ThemeLike,
   fit: 'cover' | 'contain',
   x: number,
@@ -321,7 +321,7 @@ export function drawCanvasBaseLayer({
 interface OverlayLayerArgs {
   ctx: CanvasRenderingContext2D;
   positions: LayoutItem[];
-  imgs: MasonryImageItem[];
+  imgs: MasonryItem[];
   theme: ThemeLike;
   visible: VisibleWindow;
   selected: Set<string>;

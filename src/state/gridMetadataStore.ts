@@ -6,7 +6,8 @@
  */
 
 import { create } from 'zustand';
-import { api } from '#desktop/api';
+import { filesController } from '../controllers/filesController';
+import type { EntitySlim } from '../shared/types/api';
 
 interface FileMetadataSlim {
   hash: string;
@@ -45,22 +46,37 @@ interface CacheState {
   // Grid refresh sequence — incremented by gridRefresher on grid_scopes invalidation
   gridRefreshSeq: number;
 
-  // Metadata invalidation tracking — hashes whose metadata changed (name, rating, etc.)
+  // Metadata change tracking — hashes whose metadata changed (name, rating, etc.)
   // ImageGrid subscribes and patches tiles in-place without a full grid reload.
   metadataInvalidatedHashes: Set<string>;
 
-  // Active grid scope — used by gridRefresher for scope-aware grid_scopes filtering.
+  // Pending removals — hashes that should be immediately removed from the visible
+  // grid (e.g. after trash/delete). The grid subscribes and applies FILTER_IMAGES.
+  // When pendingClearAll is true, the entire dataset is cleared (virtual select-all ops).
+  pendingRemovals: Set<string>;
+  pendingClearAll: boolean;
+
+  // Pending insertions — entities that should be inserted/updated in the visible
+  // grid (e.g. restore to active while viewing system:all).
+  pendingInsertions: EntitySlim[];
+
+  // Active grid scope — used by the grid refresh applier for scope-aware grid target filtering.
   // e.g. "folder:5", "system:inbox", "system:all"
   activeGridScope: string | null;
 
   // Actions
   fetchMetadataBatch: (hashes: string[]) => Promise<ResolvedMetadata[]>;
   getMetadata: (hash: string) => ResolvedMetadata | undefined;
-  invalidateHash: (hash: string) => void;
-  invalidateAll: () => void;
+  dropCachedMetadata: (hash: string) => void;
+  clearMetadataCache: () => void;
   bumpGridRefresh: () => void;
-  markHashInvalidated: (hash: string) => void;
-  clearInvalidatedHashes: () => void;
+  markMetadataChanged: (hash: string) => void;
+  clearChangedMetadataMarks: () => void;
+  queueRemovals: (hashes: string[]) => void;
+  queueClearAll: () => void;
+  drainRemovals: () => { hashes: Set<string>; clearAll: boolean };
+  queueInsertions: (entities: EntitySlim[]) => void;
+  drainInsertions: () => EntitySlim[];
   setActiveGridScope: (scope: string | null) => void;
 
 }
@@ -69,6 +85,9 @@ export const useGridMetadataStore = create<CacheState>((set, get) => ({
   metadataCache: new Map(),
   gridRefreshSeq: 0,
   metadataInvalidatedHashes: new Set(),
+  pendingRemovals: new Set(),
+  pendingClearAll: false,
+  pendingInsertions: [],
   activeGridScope: null,
 
   fetchMetadataBatch: async (hashes: string[]) => {
@@ -81,7 +100,7 @@ export const useGridMetadataStore = create<CacheState>((set, get) => ({
 
     if (missing.length > 0) {
       try {
-        const resp = await api.grid.getEntitiesMetadataBatch(missing);
+        const resp = await filesController.getMetadataBatch(missing);
         const results: ResolvedMetadata[] = Object.values(resp.items ?? {}).map(meta => ({
           file: {
             hash: meta.entity.hash,
@@ -141,7 +160,7 @@ export const useGridMetadataStore = create<CacheState>((set, get) => ({
     return get().metadataCache.get(hash);
   },
 
-  invalidateHash: (hash: string) => {
+  dropCachedMetadata: (hash: string) => {
     set((state) => {
       const newCache = new Map(state.metadataCache);
       newCache.delete(hash);
@@ -149,7 +168,7 @@ export const useGridMetadataStore = create<CacheState>((set, get) => ({
     });
   },
 
-  invalidateAll: () => {
+  clearMetadataCache: () => {
     set({ metadataCache: new Map() });
   },
 
@@ -157,7 +176,7 @@ export const useGridMetadataStore = create<CacheState>((set, get) => ({
     set((s) => ({ gridRefreshSeq: s.gridRefreshSeq + 1 }));
   },
 
-  markHashInvalidated: (hash: string) => {
+  markMetadataChanged: (hash: string) => {
     set((s) => {
       const next = new Set(s.metadataInvalidatedHashes);
       next.add(hash);
@@ -165,8 +184,38 @@ export const useGridMetadataStore = create<CacheState>((set, get) => ({
     });
   },
 
-  clearInvalidatedHashes: () => {
+  clearChangedMetadataMarks: () => {
     set({ metadataInvalidatedHashes: new Set() });
+  },
+
+  queueRemovals: (hashes: string[]) => {
+    set((s) => {
+      const next = new Set(s.pendingRemovals);
+      for (const hash of hashes) next.add(hash);
+      return { pendingRemovals: next };
+    });
+  },
+
+  queueClearAll: () => {
+    set({ pendingClearAll: true });
+  },
+
+  drainRemovals: () => {
+    const { pendingRemovals, pendingClearAll } = get();
+    if (pendingRemovals.size > 0 || pendingClearAll) {
+      set({ pendingRemovals: new Set(), pendingClearAll: false });
+    }
+    return { hashes: pendingRemovals, clearAll: pendingClearAll };
+  },
+
+  queueInsertions: (entities: EntitySlim[]) => {
+    set((s) => ({ pendingInsertions: [...s.pendingInsertions, ...entities] }));
+  },
+
+  drainInsertions: () => {
+    const current = get().pendingInsertions;
+    if (current.length > 0) set({ pendingInsertions: [] });
+    return current;
   },
 
   setActiveGridScope: (scope: string | null) => {

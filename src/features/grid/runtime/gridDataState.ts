@@ -1,9 +1,9 @@
-import type { MasonryImageItem } from '../shared';
+import type { MasonryItem } from '../shared';
 import type { GridEmptyContext, GridRuntimeInitProps, GridViewMode } from './gridRuntimeState';
 import type { TransitionStage } from './gridTransitionPipeline';
 
 export interface GridDataState {
-  images: MasonryImageItem[];
+  images: MasonryItem[];
   responseTotalCount: number | null;
   hasMore: boolean;
   defaultGridCursor: string | null;

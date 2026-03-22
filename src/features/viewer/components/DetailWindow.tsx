@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { api } from '#desktop/api';
+import { filesController } from '../../../controllers/filesController';
 import { getCurrentWindow } from '#desktop/api';
 import { PhysicalSize } from '#desktop/api';
 import { listen, emit } from '#desktop/api';
@@ -11,7 +11,7 @@ import {
   IconPinFilled,
   IconX,
 } from '@tabler/icons-react';
-import { toMasonryItem, isVideoMime, type MasonryImageItem } from '../../grid/shared';
+import { toMasonryItem, isVideoMime, type MasonryItem } from '../../grid/shared';
 import { VideoPlayer } from './VideoPlayer';
 import { useSettingsStore } from '../../../state/settingsStore';
 import { mediaFileUrl, mediaThumbnailUrl } from '../../../shared/lib/mediaUrl';
@@ -46,7 +46,7 @@ const TOOLBAR_HIDE_DELAY = 1000; // 1s
 const zoomCache = new Map<string, ZoomState>();
 
 export function DetailWindow({ hash }: DetailWindowProps) {
-  const [image, setImage] = useState<MasonryImageItem | null>(null);
+  const [image, setImage] = useState<MasonryItem | null>(null);
   const [images, setImages] = useState<LightImage[]>([]);
   const [totalCount, setTotalCount] = useState<number | null>(null);
   const [currentIndex, setCurrentIndex] = useState(0);
@@ -69,7 +69,7 @@ export function DetailWindow({ hash }: DetailWindowProps) {
         width: img.width,
         height: img.height,
         aspectRatio: (img.width && img.height) ? img.width / img.height : 1,
-      } as MasonryImageItem;
+      } as MasonryItem;
     }
     return image;
   }, [images, currentIndex, image]);
@@ -111,7 +111,7 @@ export function DetailWindow({ hash }: DetailWindowProps) {
   }, [resetToolbarTimer]);
 
   useEffect(() => {
-    api.file.get(hash).then((raw) => {
+    filesController.getEntity(hash).then((raw) => {
       if (!raw) return;
       setImage(toMasonryItem(raw));
     }).catch((err) => {
@@ -327,7 +327,7 @@ export function DetailWindow({ hash }: DetailWindowProps) {
   const handleCopyPath = useCallback(async () => {
     if (!currentImage || currentImage.is_collection) return;
     try {
-      const path = await api.file.resolvePath(currentImage.hash);
+      const path = await filesController.resolvePath(currentImage.hash);
       await writeText(path);
     } catch (error) {
       notifyError(error, 'Copy Failed');

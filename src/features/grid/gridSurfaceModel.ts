@@ -1,9 +1,9 @@
-import type { MasonryImageItem } from './shared';
+import type { MasonryItem } from './shared';
 import type { GridEmptyContext, GridViewMode } from './runtime';
 
 export interface GridSurfaceModel {
   scopeKey: string;
-  images: MasonryImageItem[];
+  images: MasonryItem[];
   responseTotalCount: number | null;
   totalCount: number | null;
   hasMore: boolean;
@@ -18,7 +18,7 @@ export interface GridSurfaceModel {
 
 export function buildGridSurfaceModel(args: {
   scopeKey: string;
-  images: MasonryImageItem[];
+  images: MasonryItem[];
   responseTotalCount: number | null;
   totalCount: number | null;
   hasMore: boolean;

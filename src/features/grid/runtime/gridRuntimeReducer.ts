@@ -1,4 +1,4 @@
-import type { MasonryImageItem } from '../shared';
+import type { MasonryItem } from '../shared';
 import type {
   GridViewMode,
   GridEmptyContext,
@@ -11,9 +11,9 @@ import type { TransitionStage } from './gridTransitionPipeline';
 // ---------------------------------------------------------------------------
 
 // Dataset
-type SetImages = { type: 'SET_IMAGES'; images: MasonryImageItem[] };
-type AppendImages = { type: 'APPEND_IMAGES'; images: MasonryImageItem[]; maxItems: number };
-type FilterImages = { type: 'FILTER_IMAGES'; predicate: (img: MasonryImageItem) => boolean };
+type SetImages = { type: 'SET_IMAGES'; images: MasonryItem[] };
+type AppendImages = { type: 'APPEND_IMAGES'; images: MasonryItem[]; maxItems: number };
+type FilterImages = { type: 'FILTER_IMAGES'; predicate: (img: MasonryItem) => boolean };
 type SetCursor = { type: 'SET_CURSOR'; cursor: string | null; hasMore: boolean };
 type SetResponseTotalCount = { type: 'SET_RESPONSE_TOTAL_COUNT'; count: number | null };
 type SetHasMore = { type: 'SET_HAS_MORE'; hasMore: boolean };

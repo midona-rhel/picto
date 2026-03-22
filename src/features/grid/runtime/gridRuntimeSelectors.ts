@@ -1,5 +1,5 @@
 import type { GridRuntimeState } from './gridRuntimeState';
-import type { MasonryImageItem } from '../shared';
+import type { MasonryItem } from '../shared';
 import type { SelectionQuerySpec } from '../metadataPrefetch';
 
 /**
@@ -31,7 +31,7 @@ export function singleSelectedHash(state: GridRuntimeState): string | null {
  * In virtual-all mode, returns all loaded images matching the selection.
  * In normal mode, returns all explicitly selected images.
  */
-export function selectedImagesPreview(state: GridRuntimeState): MasonryImageItem[] {
+export function selectedImagesPreview(state: GridRuntimeState): MasonryItem[] {
   if (state.virtualAllSelection) {
     return state.images
       .filter(i => !state.virtualAllSelection!.excludedHashes.has(i.hash));

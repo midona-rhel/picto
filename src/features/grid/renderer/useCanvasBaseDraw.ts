@@ -2,7 +2,7 @@ import { useCallback, useEffect } from 'react';
 import { buildCanvasVisibilityPlan } from '../layout/canvasVisibilityPlan';
 import { drawCanvasBaseLayer } from './canvasGridDrawHelpers';
 import type { GridViewMode } from '../runtime';
-import type { MasonryImageItem } from '../shared';
+import type { MasonryItem } from '../shared';
 import type { LayoutItem } from '../layoutMath';
 import type { ThumbnailPipeline } from '../../../shared/lib/canvas/thumbnailPipeline';
 import type { CanvasScrollDirection, CanvasScrollPhase } from '../../../shared/lib/canvas/scrollState';
@@ -63,7 +63,7 @@ export function useCanvasBaseDraw(args: {
   viewModeRef: { current: GridViewMode };
   layoutRef: { current: { positions: LayoutItem[] } };
   bucketIndexRef: { current: Map<number, number[]> | null };
-  imagesRef: { current: MasonryImageItem[] };
+  imagesRef: { current: MasonryItem[] };
   lastVisibleRef: { current: LastVisibleState | null };
   textHeightRef: { current: number };
   showTileNameRef: { current: boolean };

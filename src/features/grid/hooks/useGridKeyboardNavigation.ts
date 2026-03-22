@@ -1,12 +1,12 @@
 import { useCallback, useRef } from 'react';
 import { computeLayout, computeTextHeight } from '../gridLayout';
 import { prefetchMetadata } from '../metadataPrefetch';
-import type { MasonryImageItem } from '../shared';
+import type { MasonryItem } from '../shared';
 import type { GridRuntimeAction, GridRuntimeState, GridViewMode } from '../runtime';
 
 interface UseGridKeyboardNavigationArgs {
   stateRef: { current: GridRuntimeState };
-  imagesRef: { current: MasonryImageItem[] };
+  imagesRef: { current: MasonryItem[] };
   lastClickedHashRef: { current: string | null };
   displayViewModeRef: { current: GridViewMode };
   displaySettingsRef: { current: { showTileName: boolean; showResolution: boolean } };
