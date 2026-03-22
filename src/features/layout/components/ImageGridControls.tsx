@@ -456,7 +456,7 @@ export function ImageGridControls({
               className={st.icBtn}
               onClick={handleViewClick}
             >
-              <IconAdjustments size={14} />
+              <IconAdjustments size={14} style={{ transform: 'rotate(90deg)' }} />
             </button>
           </KbdTooltip>
 
