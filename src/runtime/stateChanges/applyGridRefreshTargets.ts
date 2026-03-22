@@ -1,6 +1,8 @@
 import { useStateChangeStore } from './stateChangeStore';
 import { useGridMetadataStore } from '../../state/gridMetadataStore';
 import { noteMetadataChanged } from '#features/grid/data';
+import { filesController } from '../../controllers/filesController';
+import { refreshTargetMatchesGridScope } from './planRefreshTargets';
 import type { ResourceKey } from '../../shared/types/backendState';
 
 let unsub: (() => void) | null = null;
@@ -35,13 +37,28 @@ export function startApplyingGridRefreshTargets(): void {
     prevStaleRef = state.pendingRefreshTargets;
 
     const handledTargets: ResourceKey[] = [];
+    const activeScope = useGridMetadataStore.getState().activeGridScope;
+
+    // Phase 1: Collect hashes not already handled eagerly by controllers.
+    const newHashes: string[] = [];
+    let hasMatchingGridScope = false;
 
     for (const key of state.pendingRefreshTargets) {
-      // Metadata hash refresh target
       if (key.startsWith('metadata/hash:')) {
         const hash = key.slice('metadata/hash:'.length);
-        // Skip re-invalidation if the eager controller path already
-        // invalidated this hash within the reconciliation window.
+        if (!isRecentlyEagerInvalidated(hash)) {
+          newHashes.push(hash);
+        }
+      }
+      if (key.startsWith('grid/') && refreshTargetMatchesGridScope(key, activeScope)) {
+        hasMatchingGridScope = true;
+      }
+    }
+
+    // Phase 2: Apply targets.
+    for (const key of state.pendingRefreshTargets) {
+      if (key.startsWith('metadata/hash:')) {
+        const hash = key.slice('metadata/hash:'.length);
         if (!isRecentlyEagerInvalidated(hash)) {
           useGridMetadataStore.getState().dropCachedMetadata(hash);
           useGridMetadataStore.getState().markMetadataChanged(hash);
@@ -51,10 +68,22 @@ export function startApplyingGridRefreshTargets(): void {
         continue;
       }
 
-      // Grid scope refresh target — consumed without broad action.
-      // Per-hash metadata/hash:* targets handle metadata invalidation.
-      // Controllers handle membership eagerly via targeted queueRemovals/queueInsertions.
       if (key.startsWith('grid/')) {
+        // When a grid scope matches AND there are new hashes that no
+        // controller handled eagerly, fetch those entities and insert
+        // them into the grid. This covers background producers like
+        // subscription imports and watch-folder imports where no
+        // frontend controller is involved.
+        if (hasMatchingGridScope && newHashes.length > 0) {
+          const hashesToInsert = [...newHashes];
+          newHashes.length = 0; // only insert once per batch
+          Promise.all(hashesToInsert.map((h) => filesController.getEntity(h))).then((entities) => {
+            const valid = entities.filter((e): e is NonNullable<typeof e> => e != null);
+            if (valid.length > 0) {
+              useGridMetadataStore.getState().queueInsertions(valid);
+            }
+          });
+        }
         handledTargets.push(key);
       }
     }
