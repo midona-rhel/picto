@@ -578,7 +578,7 @@ export function SubscriptionGroupsPanel({
                             }
                           }}
                           styles={{ input: { fontSize: 11, minHeight: 0, height: 'auto', padding: '0 18px 0 0' } }}
-                          comboboxProps={{ width: 'target', styles: { option: { padding: '4px 8px', fontSize: 11, color: 'var(--color-text-primary)' }, dropdown: { padding: 2, background: 'var(--color-bg-primary, var(--mantine-color-body))' } } }}
+                          comboboxProps={{ width: 'target', offset: 0, styles: { option: { padding: '4px 8px', fontSize: 11, color: 'var(--color-text-primary)' }, dropdown: { padding: 2, marginLeft: -10, width: 'calc(100% + 10px)', background: 'var(--color-bg-primary, var(--mantine-color-body))' } } }}
                           style={{ flex: 1, minWidth: 0 }}
                         />
                         <QueryInfoTooltip siteId={q.sitePluginId} sites={sites} />

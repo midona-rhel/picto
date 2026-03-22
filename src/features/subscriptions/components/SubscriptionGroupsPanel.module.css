@@ -317,6 +317,7 @@
   align-items: center;
   gap: 0;
   min-width: 0;
+  width: 100%;
 }
 
 .querySiteCell :global(.mantine-Select-root) {
@@ -346,6 +347,17 @@
   width: 14px;
   margin: 0;
   padding: 0;
+  color: var(--color-text-primary) !important;
+  opacity: 1 !important;
+}
+
+.querySiteCell :global(.mantine-Select-root) {
+  width: 100%;
+}
+
+.querySiteCell :global(.mantine-Combobox-dropdown) {
+  background: var(--color-bg-primary, var(--mantine-color-body)) !important;
+  border-color: var(--color-border-secondary) !important;
 }
 
 
