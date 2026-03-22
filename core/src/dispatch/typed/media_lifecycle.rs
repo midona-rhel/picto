@@ -162,14 +162,22 @@ pub async fn set_entity_status(
 ) -> Result<usize, String> {
     let status = crate::types::parse_file_status(&input.status)?;
 
-    // Resolve to hashes — single hash or selection
+    // Resolve to hashes — single hash or selection.
+    // For explicit selections, use the provided hashes (top-level items).
+    // For virtual select-all, resolve from bitmap.
+    // update_file_status handles collection member cascade internally.
     let hashes: Vec<String> = if let Some(hash) = input.hash {
         vec![hash]
-    } else if let Some(selection) = input.selection {
-        let bitmap = resolve_selection_bitmap(state, &selection).await?;
-        let ids: Vec<i64> = bitmap.iter().map(|id| id as i64).collect();
-        state.db.resolve_ids_batch(&ids).await?
-            .into_iter().map(|(_, h)| h).collect()
+    } else if let Some(ref selection) = input.selection {
+        match &selection.hashes {
+            Some(h) if !h.is_empty() => h.clone(),
+            _ => {
+                let bitmap = resolve_selection_bitmap(state, selection).await?;
+                let ids: Vec<i64> = bitmap.iter().map(|id| id as i64).collect();
+                state.db.resolve_ids_batch(&ids).await?
+                    .into_iter().map(|(_, h)| h).collect()
+            }
+        }
     } else {
         return Err("Either hash or selection must be provided".into());
     };
