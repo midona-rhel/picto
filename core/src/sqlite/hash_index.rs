@@ -64,6 +64,14 @@ impl HashIndex {
         file_id
     }
 
+    pub fn insert_batch(&self, pairs: Vec<(String, i64)>) {
+        let mut inner = self.inner.write();
+        for (hash, file_id) in pairs {
+            inner.forward.put(hash.clone(), file_id);
+            inner.reverse.put(file_id, hash);
+        }
+    }
+
     pub fn clear(&self) {
         let mut inner = self.inner.write();
         inner.forward.clear();

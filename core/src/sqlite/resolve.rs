@@ -1,7 +1,34 @@
 use super::SqliteDatabase;
 
 impl SqliteDatabase {
-    /// Resolve a hex hash to file_id, checking cache first, then DB.
+    /// Pre-warm the hash index cache with the most recently imported active files.
+    /// Called once after library open so the first grid page has zero cache misses.
+    pub async fn warm_hash_index(&self) -> Result<usize, String> {
+        let hash_index = self.hash_index.clone();
+        let count = self
+            .with_read_conn_labeled("hash_index/warm", move |conn| {
+                let mut stmt = conn.prepare(
+                    "SELECT hash, file_id FROM file WHERE status = 1
+                     ORDER BY imported_at DESC LIMIT 50000",
+                )?;
+                let rows = stmt.query_map([], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+                })?;
+                let mut pairs = Vec::new();
+                for row in rows {
+                    pairs.push(row?);
+                }
+                let count = pairs.len();
+                hash_index.insert_batch(pairs);
+                Ok(count)
+            })
+            .await?;
+        Ok(count)
+    }
+
+    /// Resolve a hex hash to entity_id, checking cache first, then DB.
+    /// Checks the file table first, then falls back to media_entity.hash
+    /// (for collection entities which have their own hash identity).
     pub async fn resolve_hash(&self, hash: &str) -> Result<i64, String> {
         if let Some(id) = self.hash_index.get_id(hash) {
             return Ok(id);
@@ -9,8 +36,17 @@ impl SqliteDatabase {
         let hash_owned = hash.to_string();
         let id = self
             .with_read_conn_labeled("hash_index/resolve_hash", move |conn| {
-                conn.query_row(
+                // Try file table first (covers all single entities)
+                if let Ok(fid) = conn.query_row(
                     "SELECT file_id FROM file WHERE hash = ?1",
+                    [&hash_owned],
+                    |row| row.get::<_, i64>(0),
+                ) {
+                    return Ok(fid);
+                }
+                // Fall back to media_entity.hash (covers collection entities)
+                conn.query_row(
+                    "SELECT entity_id FROM media_entity WHERE hash = ?1",
                     [&hash_owned],
                     |row| row.get::<_, i64>(0),
                 )
@@ -83,13 +119,13 @@ impl SqliteDatabase {
         Ok(results)
     }
 
-    /// Batch resolve hashes → (hash, entity_id) pairs. Checks cache first, then DB.
+    /// Batch resolve hashes → (hash, entity_id) pairs.
     ///
-    /// **Collection awareness**: if a hash belongs to a collection's cover file,
-    /// the result set automatically includes the collection entity_id AND all
-    /// member entity_ids. This means every operation that goes through this
-    /// function (folder add/remove, tag add/remove, etc.) transparently applies
-    /// to collections and their children. No special-casing needed per handler.
+    /// Checks file table first, then falls back to media_entity.hash for
+    /// collection entities. If a resolved entity is a collection, the result
+    /// set automatically includes ALL member entity_ids — so every operation
+    /// that goes through this function transparently applies to collections
+    /// and their children.
     pub async fn resolve_hashes_batch(
         &self,
         hashes: &[String],
@@ -109,51 +145,85 @@ impl SqliteDatabase {
             let hash_index = self.hash_index.clone();
             let db_results = self
                 .with_read_conn_labeled("hash_index/resolve_hashes_batch", move |conn| {
-                    let placeholders = std::iter::repeat_n("?", misses.len())
-                        .collect::<Vec<_>>()
-                        .join(", ");
-                    let sql = format!(
-                        "SELECT hash, file_id FROM file WHERE hash IN ({})",
-                        placeholders
-                    );
-                    let mut stmt = conn.prepare(&sql)?;
-                    let rows = stmt
-                        .query_map(rusqlite::params_from_iter(misses.iter()), |row| {
-                            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
-                        })?;
                     let mut batch = Vec::new();
-                    for row in rows {
-                        let (hash, fid) = row?;
-                        hash_index.insert(hash.clone(), fid);
-                        batch.push((hash, fid));
+                    let mut still_missing = Vec::new();
+
+                    // 1. Try file table
+                    if !misses.is_empty() {
+                        let placeholders = std::iter::repeat_n("?", misses.len())
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        let sql = format!(
+                            "SELECT hash, file_id FROM file WHERE hash IN ({})",
+                            placeholders
+                        );
+                        let mut stmt = conn.prepare(&sql)?;
+                        let rows = stmt.query_map(
+                            rusqlite::params_from_iter(misses.iter()),
+                            |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
+                        )?;
+                        let mut found = std::collections::HashSet::new();
+                        for row in rows {
+                            let (hash, fid) = row?;
+                            hash_index.insert(hash.clone(), fid);
+                            found.insert(hash.clone());
+                            batch.push((hash, fid));
+                        }
+                        for h in &misses {
+                            if !found.contains(h) {
+                                still_missing.push(h.clone());
+                            }
+                        }
                     }
+
+                    // 2. Fallback: media_entity.hash (collection entities)
+                    if !still_missing.is_empty() {
+                        let placeholders = std::iter::repeat_n("?", still_missing.len())
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        let sql = format!(
+                            "SELECT hash, entity_id FROM media_entity WHERE hash IN ({})",
+                            placeholders
+                        );
+                        let mut stmt = conn.prepare(&sql)?;
+                        let rows = stmt.query_map(
+                            rusqlite::params_from_iter(still_missing.iter()),
+                            |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
+                        )?;
+                        for row in rows {
+                            let (hash, eid) = row?;
+                            hash_index.insert(hash.clone(), eid);
+                            batch.push((hash, eid));
+                        }
+                    }
+
                     Ok(batch)
                 })
                 .await?;
             results.extend(db_results);
         }
 
-        // Collection expansion: for any resolved file_id that is a collection
-        // cover, also include the collection entity_id and all member entity_ids.
-        let file_ids: Vec<i64> = results.iter().map(|(_, fid)| *fid).collect();
-        if !file_ids.is_empty() {
+        // Collection expansion: for any resolved entity_id that is a collection,
+        // include all member entity_ids so actions propagate to children.
+        let entity_ids: Vec<i64> = results.iter().map(|(_, id)| *id).collect();
+        if !entity_ids.is_empty() {
             let extra = self
                 .with_read_conn(move |conn| {
                     let mut expanded: Vec<(String, i64)> = Vec::new();
-                    for &fid in &file_ids {
-                        if let Ok(Some(collection_id)) =
-                            crate::folders::collections_db::find_collection_for_cover_file(conn, fid)
-                        {
-                            // Add the collection entity itself (use empty hash — it has no file)
-                            expanded.push((String::new(), collection_id));
-                            // Add all member entity_ids
+                    for &eid in &entity_ids {
+                        let is_collection: bool = conn
+                            .query_row(
+                                "SELECT kind = 'collection' FROM media_entity WHERE entity_id = ?1",
+                                [eid],
+                                |row| row.get(0),
+                            )
+                            .unwrap_or(false);
+                        if is_collection {
                             let member_fids =
                                 crate::folders::collections_db::get_collection_member_file_ids(
-                                    conn,
-                                    collection_id,
+                                    conn, eid,
                                 )?;
                             for member_fid in member_fids {
-                                // Resolve member file_id → hash for the result set
                                 if let Ok(hash) = conn.query_row(
                                     "SELECT hash FROM file WHERE file_id = ?1",
                                     [member_fid],
@@ -170,7 +240,7 @@ impl SqliteDatabase {
             results.extend(extra);
         }
 
-        // Dedup by entity_id (keep first occurrence of each id)
+        // Dedup by entity_id
         let mut seen = std::collections::HashSet::new();
         results.retain(|(_, id)| seen.insert(*id));
 

@@ -74,6 +74,12 @@ pub async fn open_library(library_root: PathBuf) -> Result<Arc<AppState>, String
         "Library database initialized"
     );
 
+    // Pre-warm hash index so the first grid page has zero cache misses.
+    match library_db.warm_hash_index().await {
+        Ok(count) => tracing::info!(count, "Hash index pre-warmed"),
+        Err(e) => tracing::warn!(error = %e, "Hash index pre-warm failed (non-fatal)"),
+    }
+
     let settings = SettingsStore::load(&library_root);
 
     let blob_store: Arc<BlobStore> = Arc::new(
