@@ -154,91 +154,55 @@ pub async fn import_folder(
 // These work uniformly for single files AND collections.
 
 /// Set status on a media entity (single or collection) by hash.
-/// Set status on a single entity. For collections, only the collection entity
-/// changes status — member files keep their own independent status.
+/// Set status on entities. For collections, cascades status to members.
+/// Sidebar counts exclude members via CollectionMember bitmap.
 pub async fn set_entity_status(
     state: &AppState,
     input: UpdateFileStatusInput,
 ) -> Result<usize, String> {
     let status = crate::types::parse_file_status(&input.status)?;
 
-    if let Some(hash) = input.hash {
-        // Single entity status change (works for both regular files and collections).
-        // Collection member files keep their own independent status.
-        state.db.update_file_status(&hash, status).await?;
-        {
-            let folder_ids = collect_folder_ids_for_hashes(state, &[hash.clone()], 1).await;
-            if let Err(err) = crate::folders::service::refresh_sidebar_projection_for_folder_ids(
-                &state.db,
-                &folder_ids,
-            )
-            .await
-            {
-                tracing::warn!(error = %err, "failed to refresh sidebar after set_entity_status");
-            }
-            let mut impact =
-                crate::runtime_contract::change_builder::ChangeImpact::file_lifecycle(
-                    &state.db,
-                )
-                .file_hashes(vec![hash]);
-            if !folder_ids.is_empty() {
-                impact = impact.folder_ids(folder_ids);
-            }
-            crate::events::emit_state_changed("set_entity_status", impact);
-            Ok(1)
-        }
+    // Resolve to hashes — single hash or selection
+    let hashes: Vec<String> = if let Some(hash) = input.hash {
+        vec![hash]
     } else if let Some(selection) = input.selection {
-        // Selection mode — only change status of the selected entities themselves.
-        // Collection member files keep their own independent status.
-        let selected_bitmap = resolve_selection_bitmap(state, &selection).await?;
-        let count = selected_bitmap.len() as usize;
-        if count > 0 {
-            let selected_ids: Vec<i64> = selected_bitmap.iter().map(|id| id as i64).collect();
-            let affected_hashes = state
-                .db
-                .resolve_ids_batch(&selected_ids)
-                .await?
-                .into_iter()
-                .map(|(_, hash)| hash)
-                .collect::<Vec<_>>();
-            let mut folder_ids = selection.filters.folder_ids.clone().unwrap_or_default();
-            if matches!(selection.mode, SelectionMode::ExplicitHashes) {
-                let explicit_hashes = selection.hashes.clone().unwrap_or_default();
-                let mut from_hashes =
-                    collect_folder_ids_for_hashes(state, &explicit_hashes, 200).await;
-                folder_ids.append(&mut from_hashes);
-                folder_ids.sort_unstable();
-                folder_ids.dedup();
-            }
-            state
-                .db
-                .update_file_status_batch(&selected_bitmap, status)
-                .await?;
-
-            if let Err(err) = crate::folders::service::refresh_sidebar_projection_for_folder_ids(
-                &state.db,
-                &folder_ids,
-            )
-            .await
-            {
-                tracing::warn!(error = %err, "failed to refresh sidebar after set_entity_status batch");
-            }
-            let mut impact =
-                crate::runtime_contract::change_builder::ChangeImpact::file_lifecycle(
-                    &state.db,
-                );
-            if !affected_hashes.is_empty() {
-                impact = impact.file_hashes(affected_hashes);
-            }
-            if !folder_ids.is_empty() {
-                impact = impact.folder_ids(folder_ids);
-            }
-            crate::events::emit_state_changed("set_entity_status", impact);
-        }
-        Ok(count)
+        let bitmap = resolve_selection_bitmap(state, &selection).await?;
+        let ids: Vec<i64> = bitmap.iter().map(|id| id as i64).collect();
+        state.db.resolve_ids_batch(&ids).await?
+            .into_iter().map(|(_, h)| h).collect()
     } else {
-        Err("Either hash or selection must be provided".into())
+        return Err("Either hash or selection must be provided".into());
+    };
+
+    if hashes.is_empty() {
+        return Ok(0);
     }
+
+    // Use the same update_file_status path for every hash — it handles
+    // collection member cascade and CollectionMember bitmap correctly.
+    for hash in &hashes {
+        state.db.update_file_status(hash, status).await?;
+    }
+
+    let folder_ids = collect_folder_ids_for_hashes(state, &hashes, 200).await;
+    if let Err(err) = crate::folders::service::refresh_sidebar_projection_for_folder_ids(
+        &state.db,
+        &folder_ids,
+    )
+    .await
+    {
+        tracing::warn!(error = %err, "failed to refresh sidebar after set_entity_status");
+    }
+
+    let mut impact = crate::runtime_contract::change_builder::ChangeImpact::file_lifecycle(
+        &state.db,
+    )
+    .file_hashes(hashes.clone());
+    if !folder_ids.is_empty() {
+        impact = impact.folder_ids(folder_ids);
+    }
+    crate::events::emit_state_changed("set_entity_status", impact);
+    Ok(hashes.len())
 }
 
 /// Permanently delete entities by hash. For collections: flattens and deletes all members.
