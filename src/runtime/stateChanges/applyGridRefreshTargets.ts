@@ -86,14 +86,23 @@ export function startApplyingGridRefreshTargets(): void {
           || changeOrigin === 'watch_folder_import'
           || changeOrigin === 'watch_folder_membership'
           || changeOrigin === 'manual_import';
-        if (isBackgroundOrigin && scopeMatchesInsertion && newHashes.length > 0) {
-          const hashesToInsert = [...newHashes];
-          newHashes.length = 0;
-          queryApi.file.getGridItems(hashesToInsert).then((entities) => {
-            if (entities.length > 0) {
-              useGridMetadataStore.getState().queueInsertions(entities);
-            }
-          });
+        if (isBackgroundOrigin && newHashes.length > 0) {
+          if (scopeMatchesInsertion) {
+            const hashesToInsert = [...newHashes];
+            newHashes.length = 0;
+            console.log(
+              `[grid-insert] Inserting ${hashesToInsert.length} tile(s) — origin=${changeOrigin} activeScope=${activeScope} insertionScopes=${JSON.stringify(insertionScopes)}`,
+            );
+            queryApi.file.getGridItems(hashesToInsert).then((entities) => {
+              if (entities.length > 0) {
+                useGridMetadataStore.getState().queueInsertions(entities);
+              }
+            });
+          } else {
+            console.log(
+              `[grid-insert] BLOCKED ${newHashes.length} tile(s) — scope mismatch: origin=${changeOrigin} activeScope=${activeScope} insertionScopes=${JSON.stringify(insertionScopes)}`,
+            );
+          }
         }
         handledTargets.push(key);
       }
