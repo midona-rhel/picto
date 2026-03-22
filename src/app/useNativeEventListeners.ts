@@ -1,21 +1,23 @@
 import { useEffect } from 'react';
-import { api, listen } from '#desktop/api';
+import { listen } from '#desktop/api';
 import { useDomainStore } from '../state/domainStore';
 import { useImportActionStore } from '../state/importActionStore';
-import { useRuntimeSyncStore } from '../state/runtimeSyncStore';
+import { useStateChangeStore } from '../runtime/stateChanges/stateChangeStore';
 import { useLibraryStore } from '../state/libraryStore';
-import { useManualImportStore } from '../state/manualImportStore';
 import { useExportActionStore } from '../state/exportActionStore';
-import { useExportProgressStore } from '../state/exportProgressStore';
+import { useTaskStore } from '../state/taskStore';
+import { importController } from '../controllers/importController';
+import { exportController } from '../controllers/exportController';
 import { useNavigationStore, type ViewType } from '../state/navigationStore';
-import { startAllRefreshers, stopAllRefreshers } from '../runtime/refresherOrchestrator';
-import { useSubscriptionProgressStore } from '../features/subscriptions/subscriptionProgressStore';
+import { startAllStateChangeAppliers, stopAllStateChangeAppliers } from '../runtime/refresherOrchestrator';
+import { useSubscriptionProgressStore } from '../state/taskStore';
 import { performUndo, performRedo } from '../shared/controllers/undoRedoController';
 import { useUpdaterStore } from '../state/updaterStore';
 import { useLogStore } from '../state/logStore';
 import { runBestEffort } from '../shared/lib/asyncOps';
-import type { ResourceKey } from '../shared/types/generated/runtime-contract';
+import type { ResourceKey } from '../shared/types/backendState';
 import type { ManualImportProgressEvent, MediaExportProgressEvent } from '../shared/types/api/events';
+import { openSettingsWindow } from '../platform/api';
 
 /**
  * Consolidates all native event listeners and runtime init/teardown
@@ -29,17 +31,19 @@ import type { ManualImportProgressEvent, MediaExportProgressEvent } from '../sha
 export function useNativeEventListeners(): void {
   useEffect(() => {
     void useDomainStore.getState().fetchSidebarTree();
-    void useRuntimeSyncStore.getState().ensureInitialized();
+    void useStateChangeStore.getState().ensureInitialized();
     useSubscriptionProgressStore.getState().start();
-    startAllRefreshers();
+    startAllStateChangeAppliers();
 
     // Library lifecycle listeners (previously in eventBridge)
     const libraryListeners = Promise.all([
       listen('library-switching', () => {
         useLibraryStore.getState().setSwitching(true);
+        useTaskStore.getState().setLibrarySwitching(true);
       }),
       listen('library-switched', () => {
-        useRuntimeSyncStore.getState().markResourcesStale([
+        useTaskStore.getState().setLibrarySwitching(false);
+        useStateChangeStore.getState().queueRefreshTargets([
           'sidebar/tree' as ResourceKey,
           'sidebar/counts' as ResourceKey,
           'grid/system:all' as ResourceKey,
@@ -50,16 +54,16 @@ export function useNativeEventListeners(): void {
       }),
     ]);
     return () => {
-      stopAllRefreshers();
+      stopAllStateChangeAppliers();
       useSubscriptionProgressStore.getState().stop();
-      useRuntimeSyncStore.getState().teardown();
+      useStateChangeStore.getState().teardown();
       runBestEffort('cleanup.libraryListeners', libraryListeners.then((fns) => { for (const fn of fns) fn(); }));
     };
   }, []);
 
   useEffect(() => {
     const unlisten = listen('menu:open-settings', () => {
-      runBestEffort('menu.openSettingsWindow', api.os.openSettingsWindow());
+      runBestEffort('menu.openSettingsWindow', openSettingsWindow());
     });
     return () => { runBestEffort('menu.unlistenOpenSettings', unlisten.then((fn) => fn())); };
   }, []);
@@ -106,14 +110,36 @@ export function useNativeEventListeners(): void {
 
   useEffect(() => {
     const unlisten = listen<ManualImportProgressEvent>('manual-import-progress', (event) => {
-      useManualImportStore.getState().update(event.payload);
+      const p = event.payload;
+      importController.updateProgress({
+        done: p.done,
+        total: p.total,
+        statusText: p.current_file,
+        imported: p.imported,
+        skipped: p.skipped,
+        errors: p.errors,
+      });
+      if (p.done >= p.total && p.total > 0) {
+        importController.finish();
+      }
     });
     return () => { runBestEffort('manualImportProgress.unlisten', unlisten.then((fn) => fn())); };
   }, []);
 
   useEffect(() => {
     const unlisten = listen<MediaExportProgressEvent>('media-export-progress', (event) => {
-      useExportProgressStore.getState().update(event.payload);
+      const p = event.payload;
+      exportController.updateProgress({
+        done: p.done,
+        total: p.total,
+        statusText: p.current_file,
+        exported: p.exported,
+        skipped: p.skipped,
+        errors: p.errors,
+      });
+      if (p.done >= p.total && p.total > 0) {
+        exportController.finish();
+      }
     });
     return () => { runBestEffort('mediaExportProgress.unlisten', unlisten.then((fn) => fn())); };
   }, []);

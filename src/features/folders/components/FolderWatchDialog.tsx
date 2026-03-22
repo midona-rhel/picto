@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Button, Group, Modal, Select, Stack, Switch, Text, TextInput } from '@mantine/core';
-import { api, open } from '#desktop/api';
+import { open } from '#desktop/api';
 import { notifyError, notifySuccess } from '../../../shared/lib/notify';
 import { useDomainStore } from '../../../state/domainStore';
 import { useFolderWatchActionStore } from '../../../state/folderWatchActionStore';
-import { useManualImportStore } from '../../../state/manualImportStore';
+import { useTaskStore } from '../../../state/taskStore';
 import { getFolderWatchMeta, parseFolderId } from '../../sidebar/lib/folderTreeData';
 import { glassModalStyles } from '../../../shared/styles/glassModal';
+import { foldersController } from '../../../controllers/foldersController';
 
 type WatchImportStatusMode = 'inherit' | 'inbox' | 'active';
 
@@ -78,9 +79,9 @@ export function FolderWatchDialog() {
     setSaving(true);
     try {
       if (importExistingNow) {
-        useManualImportStore.getState().startBackend('Adding files');
+        useTaskStore.getState().startFamily('import', 'Adding files');
       }
-      await api.folders.setWatchConfig({
+      await foldersController.setWatchConfig({
         folder_id: folderId,
         watch_path: watchPath.trim(),
         watch_enabled: watchEnabled,
@@ -89,18 +90,13 @@ export function FolderWatchDialog() {
         import_existing_now: importExistingNow,
       });
       if (importExistingNow) {
-        const progress = useManualImportStore.getState();
-        useManualImportStore.getState().finish({
-          imported: progress.imported,
-          skipped: progress.skipped,
-          errors: progress.errors,
-        });
+        useTaskStore.getState().finishFamily('import');
       }
       notifySuccess('Watched folder saved', 'Folders');
       handleClose();
     } catch (error) {
       if (importExistingNow) {
-        useManualImportStore.getState().fail();
+        useTaskStore.getState().failFamily('import');
       }
       notifyError(error, 'Save Watched Folder Failed');
     } finally {
@@ -112,7 +108,7 @@ export function FolderWatchDialog() {
     if (folderId == null) return;
     setSaving(true);
     try {
-      await api.folders.clearWatchConfig(folderId);
+      await foldersController.clearWatchConfig(folderId);
       notifySuccess('Watched folder removed', 'Folders');
       handleClose();
     } catch (error) {

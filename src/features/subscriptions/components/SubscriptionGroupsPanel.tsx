@@ -21,10 +21,15 @@ import {
   IconCopy,
   IconCheck,
 } from '@tabler/icons-react';
-import { useRuntimeSyncStore } from '../../../state/runtimeSyncStore';
-import { useSubscriptionProgressStore } from '../subscriptionProgressStore';
-import { api } from '#desktop/api';
+import { useStateChangeStore } from '../../../runtime/stateChanges/stateChangeStore';
+import { useSubscriptionProgressStore } from '../../../state/taskStore';
+import { subscriptionsController } from '../../../controllers/subscriptionsController';
 import type { SubscriptionGroupInfo, SubscriptionGroupsPanelProps, SitePluginInfo, SubProgress } from '../types';
+import type {
+  SubscriptionGroupInfo as BackendSubscriptionGroupInfo,
+  SubscriptionInfo as BackendSubscriptionInfo,
+  SubscriptionQueryInfo as BackendSubscriptionQueryInfo,
+} from '../../../shared/types/api/core';
 import { SCHEDULE_OPTIONS } from '../types';
 import {
   canonicalSiteId,
@@ -64,6 +69,52 @@ const SITE_QUERY_HELP: Record<string, { description: string; example: string }> 
   safebooru:      { description: 'Enter space-separated booru tags.', example: '1girl smile' },
 };
 
+function normalizeQuery(query: BackendSubscriptionQueryInfo): SubscriptionGroupInfo['subscriptions'][number]['queries'][number] {
+  const q = query as BackendSubscriptionQueryInfo & { posts_found?: number; last_seen_id?: string | null };
+  return {
+    id: q.id,
+    query_text: q.query_text,
+    display_name: q.display_name,
+    paused: q.paused,
+    last_check_time: q.last_check_time,
+    files_found: q.files_found,
+    posts_found: q.posts_found ?? q.files_found,
+    completed_initial_run: q.completed_initial_run,
+    last_seen_id: q.last_seen_id ?? null,
+    resume_cursor: q.resume_cursor ?? null,
+    resume_strategy: q.resume_strategy ?? null,
+  };
+}
+
+function normalizeSubscription(sub: BackendSubscriptionInfo): SubscriptionGroupInfo['subscriptions'][number] {
+  const s = sub as BackendSubscriptionInfo & { site_plugin_id?: string; auto_collections?: boolean };
+  return {
+    id: s.id,
+    name: s.name,
+    site_id: s.site_id,
+    site_plugin_id: s.site_plugin_id ?? s.site_id,
+    paused: s.paused,
+    group_id: s.group_id,
+    initial_post_limit: s.initial_post_limit,
+    periodic_post_limit: s.periodic_post_limit,
+    auto_collections: s.auto_collections ?? true,
+    created_at: s.created_at,
+    total_files: s.total_files,
+    queries: s.queries.map(normalizeQuery),
+  };
+}
+
+function normalizeGroup(group: BackendSubscriptionGroupInfo): SubscriptionGroupInfo {
+  return {
+    id: group.id,
+    name: group.name,
+    schedule: group.schedule,
+    created_at: group.created_at,
+    total_files: group.total_files,
+    subscriptions: group.subscriptions.map(normalizeSubscription),
+  };
+}
+
 function QueryInfoTooltip({ siteId, sites }: { siteId: string; sites: SitePluginInfo[] }) {
   const si = sites.find((s) => s.id === siteId);
   if (!si) return null;
@@ -102,7 +153,7 @@ export function SubscriptionGroupsPanel({
   headerTitle = 'Subscriptions',
   refreshToken,
 }: SubscriptionGroupsPanelProps) {
-  const ensureInitialized = useRuntimeSyncStore((s) => s.ensureInitialized);
+  const ensureInitialized = useStateChangeStore((s) => s.ensureInitialized);
   const subscriptionProgressById = useSubscriptionProgressStore((s) => s.subscriptionProgressById);
   const subscriptionGroupProgress = useSubscriptionProgressStore((s) => s.groupProgressById);
   const lastSubscriptionFinished = useSubscriptionProgressStore((s) => s.lastSubscriptionFinished);
@@ -154,7 +205,7 @@ export function SubscriptionGroupsPanel({
       next.set(subscriptionGroupId, message);
       return next;
     });
-    // Auto-clear stale status text.
+    // Auto-clear old status text.
     window.setTimeout(() => {
       setSubscriptionGroupActionMessage((prev) => {
         const next = new Map(prev);
@@ -167,11 +218,11 @@ export function SubscriptionGroupsPanel({
   const loadData = useCallback(async () => {
     try {
       const [subscriptionGroupsData, sitesData, creds] = await Promise.all([
-        api.groups.list() as unknown as Promise<SubscriptionGroupInfo[]>,
-        api.subscriptions.getSites(),
-        api.subscriptions.listCredentials().catch(() => []),
+        subscriptionsController.listGroups(),
+        subscriptionsController.getSites(),
+        subscriptionsController.listCredentials().catch(() => []),
       ]);
-      setSubscriptionGroups(subscriptionGroupsData);
+      setSubscriptionGroups(subscriptionGroupsData.map(normalizeGroup));
       setSites(sitesData);
       const siteKeys = new Set<string>();
       for (const row of creds) {
@@ -186,7 +237,7 @@ export function SubscriptionGroupsPanel({
     }
   }, []);
 
-  const staleResources = useRuntimeSyncStore((s) => s.staleResources);
+  const pendingRefreshTargets = useStateChangeStore((s) => s.pendingRefreshTargets);
 
   useEffect(() => {
     void ensureInitialized();
@@ -194,10 +245,10 @@ export function SubscriptionGroupsPanel({
   }, [ensureInitialized, loadData]);
 
   useEffect(() => {
-    if (!staleResources.has('subscriptions/list')) return;
+    if (!pendingRefreshTargets.has('subscriptions/list')) return;
     void loadData();
-    useRuntimeSyncStore.getState().markResourceFresh('subscriptions/list');
-  }, [staleResources, loadData]);
+    useStateChangeStore.getState().markRefreshTargetHandled('subscriptions/list');
+  }, [pendingRefreshTargets, loadData]);
 
   useEffect(() => {
     if (refreshToken == null) return;
@@ -245,7 +296,7 @@ export function SubscriptionGroupsPanel({
 
   const handleRenameCommit = useCallback(async (id: string, newName: string) => {
     try {
-      await api.groups.rename(id, newName);
+      await subscriptionsController.renameGroup(id, newName);
       await loadData();
     } catch (e) { console.error('Rename failed:', e); }
   }, [loadData]);
@@ -264,7 +315,7 @@ export function SubscriptionGroupsPanel({
 
   const handleDelete = async (subscriptionGroupId: string) => {
     try {
-      await api.groups.delete(subscriptionGroupId);
+      await subscriptionsController.deleteGroup(subscriptionGroupId);
       await loadData();
     } catch (error) {
       notifyError(`Failed to delete: ${error}`);
@@ -307,7 +358,7 @@ export function SubscriptionGroupsPanel({
       }
 
       setSubscriptionGroupMessage(subscriptionGroup.id, 'Starting…');
-      await api.groups.run(subscriptionGroup.id);
+      await subscriptionsController.runGroup(subscriptionGroup.id);
       setSubscriptionGroupMessage(subscriptionGroup.id, 'Run requested');
       notifyInfo(`Started "${subscriptionGroup.name}"`, 'Subscription Group Started');
       await loadData();
@@ -319,7 +370,7 @@ export function SubscriptionGroupsPanel({
 
   const handleStop = async (subscriptionGroup: SubscriptionGroupInfo) => {
     try {
-      await api.groups.stop(subscriptionGroup.id);
+      await subscriptionsController.stopGroup(subscriptionGroup.id);
       notifyInfo(`Stopping "${subscriptionGroup.name}"...`, 'Stopping');
     } catch (error) {
       notifyError(`Failed to stop: ${error}`);
@@ -329,7 +380,7 @@ export function SubscriptionGroupsPanel({
   const handleReset = async (subscriptionGroup: SubscriptionGroupInfo) => {
     try {
       for (const sub of subscriptionGroup.subscriptions) {
-        await api.subscriptions.reset(sub.id);
+        await subscriptionsController.resetSubscription(sub.id);
       }
       notifySuccess(`"${subscriptionGroup.name}" reset. Next run starts fresh.`, 'Reset Complete');
       await loadData();
@@ -340,7 +391,7 @@ export function SubscriptionGroupsPanel({
 
   const handleScheduleChange = async (subscriptionGroupId: string, schedule: string) => {
     try {
-      await api.groups.setSchedule(subscriptionGroupId, schedule);
+      await subscriptionsController.setGroupSchedule(subscriptionGroupId, schedule);
       setSubscriptionGroups((prev) => prev.map((group) => group.id === subscriptionGroupId ? { ...group, schedule } : group));
     } catch (error) {
       notifyError(`Failed to set schedule: ${error}`);
@@ -349,7 +400,7 @@ export function SubscriptionGroupsPanel({
 
   const handleDeleteQuery = async (queryId: string) => {
     try {
-      await api.subscriptions.deleteQuery(queryId);
+      await subscriptionsController.deleteQuery(queryId);
       await loadData();
     } catch (error) {
       notifyError(`Failed to delete query: ${error}`);
@@ -360,7 +411,7 @@ export function SubscriptionGroupsPanel({
     const value = (text ?? '').trim();
     if (!value) return;
     try {
-      await api.subscriptions.editQuery(Number(queryId), value);
+      await subscriptionsController.editQuery(Number(queryId), value);
       await loadData();
     } catch (error) {
       notifyError(`Failed to update query: ${error}`);
@@ -380,7 +431,7 @@ export function SubscriptionGroupsPanel({
       );
     }
     try {
-      await api.subscriptions.runQuery(subId, queryId);
+      await subscriptionsController.runQuery(subId, queryId);
       notifyInfo(`Started query "${queryText}"`, 'Query Started');
     } catch (error) {
       notifyError(`Failed to run query: ${error}`);
@@ -392,7 +443,7 @@ export function SubscriptionGroupsPanel({
     const defaultQuery = 'new_query';
     try {
       const siteName = sites.find((s) => s.id === defaultSite)?.name ?? defaultSite;
-      await api.subscriptions.create({
+      await subscriptionsController.createSubscription({
         name: `${siteName}: ${defaultQuery}`,
         site_id: defaultSite,
         queries: [defaultQuery],
@@ -555,15 +606,15 @@ export function SubscriptionGroupsPanel({
                           onChange={async (newSiteId) => {
                             if (!newSiteId || newSiteId === q.sitePluginId) return;
                             try {
-                              await api.subscriptions.deleteQuery(q.queryId);
+                              await subscriptionsController.deleteQuery(q.queryId);
                               const sg = subscriptionGroups.find((g) => g.subscriptions.some((s) => s.queries.some((qq) => qq.id === q.queryId)));
                               if (!sg) return;
                               const existingSub = sg.subscriptions.find((s) => (s.site_id ?? s.site_plugin_id) === newSiteId);
                               if (existingSub) {
-                                await api.subscriptions.addQuery(existingSub.id, q.queryText);
+                                await subscriptionsController.addQuery(existingSub.id, q.queryText);
                               } else {
                                 const siteName = sites.find((s) => s.id === newSiteId)?.name ?? newSiteId;
-                                await api.subscriptions.create({
+                                await subscriptionsController.createSubscription({
                                   name: `${siteName}: ${q.queryText}`,
                                   site_id: newSiteId,
                                   queries: [q.queryText],
@@ -629,7 +680,7 @@ export function SubscriptionGroupsPanel({
                           size="xs"
                           onClick={async () => {
                             try {
-                              await api.subscriptions.addQuery(q.backendSubId, q.queryText);
+                              await subscriptionsController.addQuery(q.backendSubId, q.queryText);
                               await loadData();
                             } catch (error) {
                               notifyError(`Failed to duplicate: ${error}`);
@@ -663,7 +714,7 @@ export function SubscriptionGroupsPanel({
                       const toggle = async () => {
                         try {
                           for (const subId of uniqueSubs.keys()) {
-                            await api.subscriptions.setAutoCollections(subId, !firstAutoCollections);
+                            await subscriptionsController.setAutoCollections(subId, !firstAutoCollections);
                           }
                           await loadData();
                         } catch (error) {

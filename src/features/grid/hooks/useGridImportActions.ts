@@ -1,9 +1,11 @@
 import { useCallback, useEffect, useState } from 'react';
 import { notifyError } from '../../../shared/lib/notify';
-import { api, getCurrentWebview, open } from '#desktop/api';
+import { getCurrentWebview, open } from '#desktop/api';
 import type { DragDropPayload } from '../../../shared/types/api';
+import { importController } from '../../../controllers/importController';
+import { foldersController } from '../../../controllers/foldersController';
 import { useImportActionStore } from '../../../state/importActionStore';
-import { useManualImportStore } from '../../../state/manualImportStore';
+import { useTaskStore } from '../../../state/taskStore';
 import { imageDrag } from '../../../shared/lib/imageDrag';
 
 export function useGridImportActions(args: {
@@ -25,32 +27,31 @@ export function useGridImportActions(args: {
 
   const importPaths = useCallback(async (paths: string[]) => {
     if (paths.length === 0) return;
-    const store = useManualImportStore.getState();
+    const ts = useTaskStore.getState();
     const currentFolderId = folderIdRef.current;
     let imported = 0;
     let skipped = 0;
     let errors = 0;
-    store.start(paths.length);
+    ts.startFamily('import', 'Importing files');
 
     for (let index = 0; index < paths.length; index += 1) {
-      const result = await api.import.files([paths[index]]);
+      const result = await importController.importFiles([paths[index]]);
       const importedHashes = result.imported.map((file) => file.hash);
       if (currentFolderId != null && importedHashes.length > 0) {
-        await api.folders.addFiles(currentFolderId, importedHashes);
+        await foldersController.addFiles(currentFolderId, importedHashes);
       }
       imported += result.imported.length;
       skipped += result.skipped.length;
       errors += result.errors.length;
-      store.setProgress({
+      ts.updateFamilyProgress('import', {
         done: index + 1,
         total: paths.length,
-        imported,
-        skipped,
-        errors,
+        statusText: `${imported} imported, ${skipped} skipped`,
+        imported, skipped, errors,
       });
     }
 
-    store.finish({ imported, skipped, errors });
+    ts.finishFamily('import');
   }, [folderIdRef]);
 
   const handleImport = useCallback(async () => {
@@ -66,7 +67,7 @@ export function useGridImportActions(args: {
       const paths = Array.isArray(selected) ? selected : [selected];
       await importPaths(paths);
     } catch (err) {
-      useManualImportStore.getState().fail();
+      useTaskStore.getState().failFamily('import');
       notifyError(err, 'Import Failed');
     }
   }, [importPaths]);
@@ -90,20 +91,15 @@ export function useGridImportActions(args: {
     if (!pendingImport) return;
     setFolderImportDialog(null);
     try {
-      const store = useManualImportStore.getState();
-      store.startBackend('Adding folder');
-      const result = await api.import.folder(
+      useTaskStore.getState().startFamily('import', 'Adding folder');
+      await importController.importFolder(
         pendingImport.path,
         pendingImport.preserveStructure,
         pendingImport.targetFolderId ?? folderIdRef.current ?? null,
       );
-      store.finish({
-        imported: result.imported.length,
-        skipped: result.skipped.length,
-        errors: result.errors.length,
-      });
+      useTaskStore.getState().finishFamily('import');
     } catch (err) {
-      useManualImportStore.getState().fail();
+      useTaskStore.getState().failFamily('import');
       notifyError(err, 'Import Folder Failed');
     }
   }, [folderIdRef, folderImportDialog]);
@@ -161,7 +157,7 @@ export function useGridImportActions(args: {
       try {
         await importPaths(paths);
       } catch (err) {
-        useManualImportStore.getState().fail();
+        useTaskStore.getState().failFamily('import');
         notifyError(err, 'Import Failed');
       }
     });

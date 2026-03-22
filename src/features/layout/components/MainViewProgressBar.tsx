@@ -1,13 +1,21 @@
 import { useMemo } from 'react';
 
-import { useExportProgressStore } from '../../../state/exportProgressStore';
-import { useManualImportStore } from '../../../state/manualImportStore';
+import { useTaskStore } from '../../../state/taskStore';
 import styles from './MainViewProgressBar.module.css';
 
 export function MainViewProgressBar() {
-  const exportProgress = useExportProgressStore();
-  const importProgress = useManualImportStore();
-  const { visible, status, label, done, total } = exportProgress.visible ? exportProgress : importProgress;
+  const familyProgress = useTaskStore((s) => s.familyProgress);
+
+  // Show whichever family is active: export takes priority, then import
+  const active = familyProgress.export.visible ? familyProgress.export
+    : familyProgress.import.visible ? familyProgress.import
+    : null;
+
+  const visible = !!active?.visible;
+  const status = active?.completed ? 'completed' : active?.failed ? 'failed' : 'running';
+  const done = active?.progress?.done ?? 0;
+  const total = active?.progress?.total ?? 0;
+  const label = active?.progress?.statusText ?? active?.label ?? '';
 
   const progress = useMemo(() => {
     if (total <= 0) return 0;

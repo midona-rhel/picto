@@ -2,11 +2,11 @@ import React, { useEffect } from 'react';
 import ReactDOM from 'react-dom/client';
 import { MantineProvider, createTheme, rem } from '@mantine/core';
 import { ToastStack } from '#ui/ToastStack';
-import { api } from '#desktop/api';
 import { SubscriptionsWindow } from '#features/subscriptions/components';
 import { useThemeSync, useDerivedColorScheme } from '../shared/hooks/useThemeSync';
-import { useRuntimeSyncStore } from '../state/runtimeSyncStore';
-import { useSubscriptionProgressStore } from '../features/subscriptions/subscriptionProgressStore';
+import { useStateChangeStore } from '../runtime/stateChanges/stateChangeStore';
+import { useSubscriptionProgressStore } from '../state/taskStore';
+import { settingsController } from '../controllers/settingsController';
 import '@mantine/core/styles.css';
 import '../shared/styles/globals.css';
 
@@ -81,7 +81,9 @@ const theme = createTheme({
   },
 });
 
-(api.settings.get() as Promise<{ colorScheme?: string; theme?: string }>)
+(
+  settingsController.get() as Promise<{ colorScheme?: string; theme?: string }>
+)
   .then((settings) => {
     const selectedTheme = settings?.theme ?? (settings?.colorScheme === 'light' ? 'light' : 'dark');
     const scheme = selectedTheme === 'auto'
@@ -99,11 +101,11 @@ function SubscriptionsApp() {
   // Initialize runtime event chain so subscription progress updates in real-time.
   // The main window does this via useNativeEventListeners; this window needs its own.
   useEffect(() => {
-    void useRuntimeSyncStore.getState().ensureInitialized();
+    void useStateChangeStore.getState().ensureInitialized();
     useSubscriptionProgressStore.getState().start();
     return () => {
       useSubscriptionProgressStore.getState().stop();
-      useRuntimeSyncStore.getState().teardown();
+      useStateChangeStore.getState().teardown();
     };
   }, []);
 

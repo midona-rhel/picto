@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
-import { api, open } from '#desktop/api';
+import { open } from '#desktop/api';
+import { exportController } from '../../../controllers/exportController';
 import { useExportActionStore } from '../../../state/exportActionStore';
-import { useExportProgressStore } from '../../../state/exportProgressStore';
+import { useTaskStore } from '../../../state/taskStore';
 import { notifyError, notifySuccess, notifyWarning } from '../../../shared/lib/notify';
 import { virtualSelectionSpec } from '../runtime/gridRuntimeSelectors';
 import type { ExportMediaInput, SelectionQuerySpec as ExportSelectionQuerySpec } from '../../../shared/types/generated/commands';
@@ -100,10 +101,9 @@ export function useGridExportActions(args: {
       successTitle: string;
     },
   ) => {
-    const progress = useExportProgressStore.getState();
-    progress.start(target.total, options.label);
+    useTaskStore.getState().startFamily('export', options.label);
     try {
-      const result = await api.export.run({
+      const result = await exportController.run({
         hashes: target.hashes,
         selection: target.selection,
         output_dir: options.outputDir,
@@ -113,10 +113,10 @@ export function useGridExportActions(args: {
         height: options.height,
         keep_aspect: options.keepAspect,
       });
-      progress.finish(result);
+      useTaskStore.getState().finishFamily('export');
       notifySuccess(summarize(result), options.successTitle);
     } catch (err) {
-      progress.fail();
+      useTaskStore.getState().failFamily('export');
       notifyError(err, 'Export Failed');
     }
   }, []);

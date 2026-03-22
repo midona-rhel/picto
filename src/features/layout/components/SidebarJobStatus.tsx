@@ -1,7 +1,7 @@
 import { useMemo } from 'react';
 import { IconCheck, IconLoader2, IconX } from '@tabler/icons-react';
 
-import { useSubscriptionProgressStore, type RuntimeSubscriptionProgress } from '../../subscriptions/subscriptionProgressStore';
+import { useSubscriptionProgressStore, type RuntimeSubscriptionProgress } from '../../../state/taskStore';
 import st from './SidebarJobStatus.module.css';
 
 interface GroupSummary {
