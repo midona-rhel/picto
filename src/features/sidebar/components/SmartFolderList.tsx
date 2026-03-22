@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useDisclosure } from '@mantine/hooks';
 import { useInlineRename } from '../../../shared/hooks/useInlineRename';
-import { api } from '#desktop/api';
 import {
   DndContext,
   DragOverlay,
@@ -19,7 +18,7 @@ import { SmartFolderModal } from '../../smart-folders/components/SmartFolderModa
 import { DynamicIcon, DEFAULT_FOLDER_ICON } from '../../smart-folders/components/iconRegistry';
 import type { SmartFolder } from '../../smart-folders/components/types';
 import { folderToRust } from '../../smart-folders/components/types';
-import { registerUndoAction } from '../../../shared/controllers/undoRedoController';
+import { smartFoldersController } from '../../../controllers/smartFoldersController';
 import { useDomainStore } from '../../../state/domainStore';
 import { useNavigationStore } from '../../../state/navigationStore';
 import { SidebarSection } from './SidebarSection';
@@ -97,7 +96,7 @@ function parseSmartFolderId(id: string | null | undefined): number | null {
 
 export function SmartFolderList({ onFolderUpdated }: SmartFolderListProps) {
   const { smartFolders: domainFolders, smartFolderCounts: counts } = useDomainStore();
-  const { activeSmartFolderId, navigateToSmartFolder, navigateTo } = useNavigationStore();
+  const { activeSmartFolderId, navigateToSmartFolder } = useNavigationStore();
 
   const folders = useMemo(() => domainFolders.map((sf) => ({
     id: sf.id,
@@ -196,31 +195,17 @@ export function SmartFolderList({ onFolderUpdated }: SmartFolderListProps) {
   }, [selectedIds.size]);
 
   const refreshSidebarAndGrid = useCallback(async () => {
-    useDomainStore.getState().invalidate();
     await onFolderUpdated?.();
   }, [onFolderUpdated]);
 
   const updateFolder = useCallback(async (
     folder: SmartFolder,
     updates: Partial<SmartFolder>,
-    options?: { recordUndo?: boolean },
   ) => {
     if (!folder.id) return;
     try {
       const updated = { ...folder, ...updates };
-      await api.smartFolders.update(folder.id, folderToRust(updated));
-      if (options?.recordUndo !== false) {
-        const before = { ...folder };
-        registerUndoAction({
-          label: 'Update smart folder',
-          undo: async () => {
-            await updateFolder(updated, before, { recordUndo: false });
-          },
-          redo: async () => {
-            await updateFolder(before, updates, { recordUndo: false });
-          },
-        });
-      }
+      await smartFoldersController.update(folder.id, folderToRust(updated), folderToRust(folder));
       await refreshSidebarAndGrid();
     } catch (e) {
       console.error('Update failed:', e);
@@ -335,7 +320,6 @@ export function SmartFolderList({ onFolderUpdated }: SmartFolderListProps) {
     const oldParentId = draggedNode.parent_id ? parseInt(draggedNode.parent_id, 10) : null;
     const oldSiblingMoves = buildSiblingMovesForParent(draggedNode.parent_id ?? null);
 
-    let redoParentId: number | null = oldParentId;
     let redoSiblingMoves: [number, number][] = [];
 
     try {
@@ -345,9 +329,9 @@ export function SmartFolderList({ onFolderUpdated }: SmartFolderListProps) {
           .filter((folder) => folder.parent_id === newParentId && folder.id !== draggedNode.id)
           .sort((a, b) => (a.display_order ?? 0) - (b.display_order ?? 0));
         const reordered = [...siblingNodes, folders.find((folder) => folder.id === draggedNode.id)!];
-        redoParentId = newParentId;
         redoSiblingMoves = reordered.map((folder, index) => [parseInt(folder.id, 10), (index + 1) * 1000]);
-        await api.smartFolders.move(draggedId, newParentId, redoSiblingMoves);
+        const undoParams = { oldParentId: oldParentId, oldSiblingMoves };
+        await smartFoldersController.move(draggedId, newParentId, redoSiblingMoves, undoParams);
         setCollapsedNodes((prev) => {
           const next = new Set(prev);
           next.delete(targetNode.id);
@@ -362,22 +346,10 @@ export function SmartFolderList({ onFolderUpdated }: SmartFolderListProps) {
         const insertIdx = indicator.position === 'before' ? targetIdx : targetIdx + 1;
         const reordered = [...siblingNodes];
         reordered.splice(insertIdx, 0, folders.find((folder) => folder.id === draggedNode.id)!);
-        redoParentId = targetParentId;
         redoSiblingMoves = reordered.map((folder, index) => [parseInt(folder.id, 10), (index + 1) * 1000]);
-        await api.smartFolders.move(draggedId, targetParentId, redoSiblingMoves);
+        const undoParams = { oldParentId: oldParentId, oldSiblingMoves };
+        await smartFoldersController.move(draggedId, targetParentId, redoSiblingMoves, undoParams);
       }
-
-      registerUndoAction({
-          label: 'Move smart folder',
-          undo: async () => {
-            await api.smartFolders.move(draggedId, oldParentId, oldSiblingMoves);
-            await refreshSidebarAndGrid();
-          },
-          redo: async () => {
-            await api.smartFolders.move(draggedId, redoParentId, redoSiblingMoves);
-            await refreshSidebarAndGrid();
-          },
-        });
       await refreshSidebarAndGrid();
     } catch (error) {
       console.error('Smart folder DnD failed:', error);
@@ -427,26 +399,10 @@ export function SmartFolderList({ onFolderUpdated }: SmartFolderListProps) {
       currentSortOrder,
       duplicateSmartFolder: async () => {
         try {
-          let created = await api.smartFolders.create(folderToRust({
-            ...smartFolder,
-            id: undefined,
-            name: `${smartFolder.name} (copy)`,
-          }));
-          registerUndoAction({
-            label: 'Duplicate smart folder',
-            undo: async () => {
-              if (created?.id) await api.smartFolders.delete(created.id);
-              await refreshSidebarAndGrid();
-            },
-            redo: async () => {
-              created = await api.smartFolders.create(folderToRust({
-                ...smartFolder,
-                id: undefined,
-                name: `${smartFolder.name} (copy)`,
-              }));
-              await refreshSidebarAndGrid();
-            },
-          });
+          await smartFoldersController.create(
+            folderToRust({ ...smartFolder, id: undefined, name: `${smartFolder.name} (copy)` }),
+            'Duplicate smart folder',
+          );
           await refreshSidebarAndGrid();
         } catch (error) {
           console.error('Duplicate failed:', error);
@@ -461,25 +417,26 @@ export function SmartFolderList({ onFolderUpdated }: SmartFolderListProps) {
         void updateFolder(smartFolder, { color });
       },
       deleteSmartFolder: async () => {
-        // Batch delete if multiple selected and this folder is in the selection
-        const idsToDelete = selectedIds.has(node.id) && selectedIds.size > 1
-          ? [...selectedIds]
+        const currentSelectedIds = selectedIds;
+        const idsToDelete = currentSelectedIds.has(node.id) && currentSelectedIds.size > 1
+          ? [...currentSelectedIds]
           : folder.id ? [folder.id] : [];
         if (idsToDelete.length === 0) return;
         try {
-          for (const id of idsToDelete) {
-            await api.smartFolders.delete(id);
-          }
+          const snapshots = idsToDelete
+            .map((id) => folders.find((f) => f.id === id))
+            .filter((f): f is NonNullable<typeof f> => f != null)
+            .map((f) => folderToRust({ ...f, id: undefined }));
+          await smartFoldersController.deleteBatch(idsToDelete, snapshots);
           setSelectedIds(new Set());
           await refreshSidebarAndGrid();
-          if (idsToDelete.includes(activeSmartFolderId ?? '')) navigateTo('images');
         } catch (error) {
           console.error('Delete failed:', error);
         }
       },
     });
     contextMenu.open(e, items);
-  }, [activeSmartFolderId, contextMenu, folders, navigateTo, onFolderUpdated, openCreateChild, openModal, startRename, updateFolder]);
+  }, [contextMenu, folders, openCreateChild, openModal, refreshSidebarAndGrid, selectedIds, startRename, updateFolder]);
 
   const activeFolder = activeId ? flatNodes.find((node) => node.id === activeId) : null;
   const sortableIds = flatNodes.map((node) => node.id);

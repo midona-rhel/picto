@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Modal, Stack, Group, TextInput, Text, Loader, ActionIcon } from '@mantine/core';
 import { glassModalStyles } from '../../../shared/styles/glassModal';
-import { api } from '#desktop/api';
+import { smartFoldersController } from '../../../controllers/smartFoldersController';
 import { TextButton } from '../../../shared/components/TextButton';
 import { RuleGroupEditor } from './RuleGroupEditor';
 import type { SmartFolderPredicate } from './types';
@@ -11,7 +11,6 @@ import { IconPicker } from './IconPicker';
 import { FolderColorPicker } from './FolderColorPicker';
 import { DynamicIcon, DEFAULT_FOLDER_ICON } from './iconRegistry';
 import { useDomainStore } from '../../../state/domainStore';
-import { registerUndoAction } from '../../../shared/controllers/undoRedoController';
 
 interface SmartFolderModalProps {
   opened: boolean;
@@ -100,7 +99,7 @@ export function SmartFolderModal({ opened, onClose, folder, initialParentId = nu
       }
       setCounting(true);
       try {
-        const count = await api.smartFolders.count(predicateToRust(pred));
+        const count = await smartFoldersController.count(predicateToRust(pred));
         setLiveCount(count);
       } catch (e) {
         console.error('Count failed:', e);
@@ -151,33 +150,10 @@ export function SmartFolderModal({ opened, onClose, folder, initialParentId = nu
           sort_field: folder.sort_field,
           sort_order: folder.sort_order,
         });
-        await api.smartFolders.update(folder.id!, folderData);
-        registerUndoAction({
-          label: 'Update smart folder',
-          undo: async () => {
-            await api.smartFolders.update(folder.id!, beforeData);
-            useDomainStore.getState().invalidate();
-          },
-          redo: async () => {
-            await api.smartFolders.update(folder.id!, folderData);
-            useDomainStore.getState().invalidate();
-          },
-        });
+        await smartFoldersController.update(folder.id!, folderData, beforeData);
       } else {
-        let created = await api.smartFolders.create(folderData);
-        registerUndoAction({
-          label: 'Create smart folder',
-          undo: async () => {
-            if (created?.id) await api.smartFolders.delete(created.id);
-            useDomainStore.getState().invalidate();
-          },
-          redo: async () => {
-            created = await api.smartFolders.create(folderData);
-            useDomainStore.getState().invalidate();
-          },
-        });
+        await smartFoldersController.create(folderData);
       }
-      useDomainStore.getState().invalidate();
 
       await onSaved();
       onClose();

@@ -35,7 +35,6 @@ import {
   IconUserCircle,
   IconBooks,
 } from "@tabler/icons-react";
-import { api } from "#desktop/api";
 import { EmptyState } from '../../../shared/components/EmptyState';
 import { TextButton } from '../../../shared/components/TextButton';
 import styles from './Collections.module.css';
@@ -44,6 +43,10 @@ import {
   MediaCardMeta,
   MediaCardOverlay,
 } from '../../../shared/components/media-card';
+import { collectionsController } from '../../../controllers/collectionsController';
+import { companionController } from '../../../controllers/companionController';
+import { useCollectionListStore } from '../../../state/collectionListStore';
+import type { CollectionInfo as BackendCollectionInfo } from '../../../shared/types/api';
 
 interface Collection {
   id: number;
@@ -112,6 +115,36 @@ export function Collections() {
     }
   }, [viewType]);
 
+  // Subscribe to eager collection list mutations from the controller.
+  const pendingCollectionRemovals = useCollectionListStore((s) => s.pendingRemovals);
+  const pendingCollectionUpdates = useCollectionListStore((s) => s.pendingUpdates);
+  const pendingCollectionCreatedId = useCollectionListStore((s) => s.pendingCreatedId);
+  useEffect(() => {
+    if (pendingCollectionRemovals.length === 0 && pendingCollectionUpdates.length === 0 && pendingCollectionCreatedId == null) return;
+    const { removals, updates, createdId } = useCollectionListStore.getState().drainMutations();
+
+    if (removals.length > 0) {
+      const removeIds = new Set(removals.map((r) => r.id));
+      setCollections((prev) => prev.filter((c) => !removeIds.has(c.id)));
+    }
+
+    if (updates.length > 0) {
+      setCollections((prev) =>
+        prev.map((c) => {
+          const update = updates.find((u) => u.id === c.id);
+          return update?.name != null ? { ...c, name: update.name } : c;
+        }),
+      );
+    }
+
+    if (createdId != null) {
+      // New collection created — fetch the full list to get the new entry with
+      // thumbnail and counts. This is the one case where we re-fetch, since the
+      // controller doesn't have the full Collection shape at create time.
+      loadCollections();
+    }
+  }, [pendingCollectionRemovals, pendingCollectionUpdates, pendingCollectionCreatedId]);
+
   // Load data when view changes
   const handleViewTypeChange = (newViewType: ViewType) => {
     setViewType(newViewType);
@@ -123,8 +156,16 @@ export function Collections() {
   const loadCollections = async () => {
     try {
       setLoading(true);
-      const result = await api.collections.list() as Collection[];
-      setCollections(result);
+      const result = await collectionsController.list();
+      setCollections(result.map((row: BackendCollectionInfo) => ({
+        id: row.id,
+        name: row.name,
+        tags: row.tags ?? [],
+        image_count: row.image_count,
+        created_at: row.created_at,
+        updated_at: row.updated_at,
+        thumbnail_url: row.thumbnail_url ?? undefined,
+      })));
     } catch (error) {
       console.error("Failed to load collections:", error);
       notifyError('Failed to load collections');
@@ -137,7 +178,7 @@ export function Collections() {
     try {
       setLoading(true);
       const namespace = viewType; // 'artist', 'character', 'series'
-      const result = await api.companion.getNamespaceValues(namespace) as NamespaceCard[];
+      const result = await companionController.getNamespaceValues(namespace) as NamespaceCard[];
       setNamespaceCards(result);
     } catch (error) {
       console.error("Failed to load namespace values:", error);
@@ -151,7 +192,7 @@ export function Collections() {
     try {
       setLoading(true);
       const tag = `${viewType}:${namespaceValue}`;
-      const result = await api.companion.getFilesByTag(tag) as FileImage[];
+      const result = await companionController.getFilesByTag(tag) as FileImage[];
       setFilteredImages(result);
       setSelectedNamespaceValue(namespaceValue);
     } catch (error) {
@@ -169,7 +210,7 @@ export function Collections() {
     }
 
     try {
-      await api.collections.create({
+      await collectionsController.create({
         name: formData.name.trim(),
       });
 
@@ -177,7 +218,7 @@ export function Collections() {
 
       closeCreateModal();
       resetForm();
-      loadCollections();
+      // Controller signals queueCreated → subscription re-fetches list.
     } catch (error) {
       console.error("Failed to create collection:", error);
       notifyError('Failed to create collection');
@@ -190,7 +231,7 @@ export function Collections() {
     }
 
     try {
-      await api.collections.update({
+      await collectionsController.update({
         id: editingCollection.id,
         name: formData.name.trim(),
         tags: formData.tags,
@@ -200,7 +241,7 @@ export function Collections() {
 
       closeEditModal();
       resetForm();
-      loadCollections();
+      // Controller signals queueUpdate → subscription patches name eagerly.
     } catch (error) {
       console.error("Failed to update collection:", error);
       notifyError('Failed to update collection');
@@ -213,11 +254,10 @@ export function Collections() {
     }
 
     try {
-      await api.collections.delete(collection.id);
+      await collectionsController.delete(collection.id);
 
       notifySuccess('Collection deleted successfully');
-
-      loadCollections();
+      // Controller signals queueRemoval → subscription removes eagerly.
     } catch (error) {
       console.error("Failed to delete collection:", error);
       notifyError('Failed to delete collection');
