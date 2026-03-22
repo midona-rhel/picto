@@ -80,6 +80,13 @@ pub async fn open_library(library_root: PathBuf) -> Result<Arc<AppState>, String
         "Library database initialized"
     );
 
+    // Reconcile tag file_counts from entity_tag_raw (fixes stale counts from
+    // older versions that didn't decrement on file deletion).
+    match library_db.rebuild_tag_counts().await {
+        Ok(()) => tracing::info!("Tag counts reconciled"),
+        Err(e) => tracing::warn!(error = %e, "Tag count reconciliation failed (non-fatal)"),
+    }
+
     // Pre-warm hash index so the first grid page has zero cache misses.
     match library_db.warm_hash_index().await {
         Ok(count) => tracing::info!(count, "Hash index pre-warmed"),
