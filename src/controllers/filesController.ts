@@ -233,34 +233,6 @@ export const filesController = {
     return result;
   },
 
-  /** @internal — used by undo closures. External callers use rename(). */
-  async _setName(hash: string, name: string | null) {
-    const result = await commandApi.file.setName(hash, name);
-    eagerInvalidate(hash);
-    return result;
-  },
-
-  /** @internal — used by undo closures. External callers use batchRename(). */
-  async _batchRename(items: Array<{ hash: string; name: string | null }>) {
-    for (const item of items) {
-      await commandApi.file.setName(item.hash, item.name);
-    }
-    eagerInvalidateMany(items.map((i) => i.hash));
-  },
-
-  /** @internal — used by undo closures. */
-  async _setSourceUrls(hash: string, urls: string[]) {
-    const result = await commandApi.file.setSourceUrls(hash, urls);
-    eagerInvalidate(hash);
-    return result;
-  },
-
-  /** @internal — used by undo closures. */
-  async _setNotes(hash: string, notes: Record<string, string>) {
-    const result = await commandApi.file.setNotes(hash, notes);
-    eagerInvalidate(hash);
-    return result;
-  },
 
   openDefault(hash: string) {
     return commandApi.file.openDefault(hash);
@@ -408,48 +380,54 @@ export const filesController = {
     }
   },
 
-  /** Rename a file. Registers undo. */
+  /** Rename a file. Registers undo (suppressed during undo/redo execution). */
   async rename(hash: string, newName: string | null, oldName: string | null): Promise<void> {
-    await this._setName(hash, newName);
+    await commandApi.file.setName(hash, newName);
+    eagerInvalidate(hash);
     registerUndoAction({
       label: 'Rename file',
-      backward: async () => { await this._setName(hash, oldName); },
-      forward: async () => { await this._setName(hash, newName); },
+      backward: async () => { await this.rename(hash, oldName, newName); },
+      forward: async () => { await this.rename(hash, newName, oldName); },
     });
   },
 
-  /** Batch rename files. Registers undo. */
+  /** Batch rename files. Registers undo (suppressed during undo/redo). */
   async batchRename(
     items: Array<{ hash: string; name: string | null }>,
     previousNames: Array<{ hash: string; name: string | null }>,
   ): Promise<void> {
-    await this._batchRename(items);
+    for (const item of items) {
+      await commandApi.file.setName(item.hash, item.name);
+    }
+    eagerInvalidateMany(items.map((i) => i.hash));
     const itemsSnapshot = [...items];
     const prevSnapshot = [...previousNames];
     registerUndoAction({
       label: `Rename ${items.length} file${items.length === 1 ? '' : 's'}`,
-      backward: async () => { await this._batchRename(prevSnapshot); },
-      forward: async () => { await this._batchRename(itemsSnapshot); },
+      backward: async () => { await this.batchRename(prevSnapshot, itemsSnapshot); },
+      forward: async () => { await this.batchRename(itemsSnapshot, prevSnapshot); },
     });
   },
 
-  /** Set source URLs. Registers undo. */
+  /** Set source URLs. Registers undo (suppressed during undo/redo). */
   async setSourceUrls(hash: string, urls: string[], previousUrls: string[]): Promise<void> {
-    await this._setSourceUrls(hash, urls);
+    await commandApi.file.setSourceUrls(hash, urls);
+    eagerInvalidate(hash);
     registerUndoAction({
       label: 'Update source URLs',
-      backward: async () => { await this._setSourceUrls(hash, previousUrls); },
-      forward: async () => { await this._setSourceUrls(hash, urls); },
+      backward: async () => { await this.setSourceUrls(hash, previousUrls, urls); },
+      forward: async () => { await this.setSourceUrls(hash, urls, previousUrls); },
     });
   },
 
-  /** Set notes. Registers undo. */
+  /** Set notes. Registers undo (suppressed during undo/redo). */
   async setNotes(hash: string, notes: Record<string, string>, previousNotes: Record<string, string>): Promise<void> {
-    await this._setNotes(hash, notes);
+    await commandApi.file.setNotes(hash, notes);
+    eagerInvalidate(hash);
     registerUndoAction({
       label: 'Update notes',
-      backward: async () => { await this._setNotes(hash, previousNotes); },
-      forward: async () => { await this._setNotes(hash, notes); },
+      backward: async () => { await this.setNotes(hash, previousNotes, notes); },
+      forward: async () => { await this.setNotes(hash, notes, previousNotes); },
     });
   },
 

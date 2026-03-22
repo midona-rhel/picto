@@ -3,17 +3,36 @@ import { useUndoRedoStore } from '../../state/undoRedoStore';
 
 let actionCounter = 0;
 
+/**
+ * When true, undo registration is suppressed. Set by performUndo/performRedo
+ * so that controller methods called during undo/redo execution don't create
+ * recursive undo entries.
+ */
+let suppressRegistration = false;
+
+/** Check if we're currently executing an undo/redo operation. */
+export function isUndoRedoInProgress(): boolean {
+  return suppressRegistration;
+}
+
 export function registerUndoAction(input: {
   label: string;
   forward: () => Promise<void> | void;
   backward: () => Promise<void> | void;
 }): void {
+  if (suppressRegistration) return;
   actionCounter += 1;
   useUndoRedoStore.getState().pushAction({
     id: `undo-${Date.now()}-${actionCounter}`,
     label: input.label,
-    forward: async () => { await input.forward(); },
-    backward: async () => { await input.backward(); },
+    forward: async () => {
+      suppressRegistration = true;
+      try { await input.forward(); } finally { suppressRegistration = false; }
+    },
+    backward: async () => {
+      suppressRegistration = true;
+      try { await input.backward(); } finally { suppressRegistration = false; }
+    },
   });
 }
 
