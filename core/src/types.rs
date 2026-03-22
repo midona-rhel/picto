@@ -143,6 +143,8 @@ pub struct EntitySlim {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub collection_item_count: Option<i64>,
     pub hash: String,
+    /// Hash for thumbnail/media asset URLs. For collections, this is the cover file's hash.
+    pub thumbnail_hash: String,
     pub name: Option<String>,
     pub size: i64,
     pub mime: String,
@@ -178,6 +180,7 @@ impl From<FileMetadataSlim> for EntitySlim {
             is_collection: f.is_collection,
             collection_item_count: f.collection_item_count,
             hash: f.hash,
+            thumbnail_hash: f.thumbnail_hash,
             name: f.name,
             size: f.size,
             mime: f.mime,
@@ -203,6 +206,7 @@ impl From<crate::sqlite::files::FileRecord> for EntitySlim {
             entity_id: f.file_id,
             is_collection: false,
             collection_item_count: None,
+            thumbnail_hash: f.hash.clone(),
             hash: f.hash,
             name: f.name,
             size: f.size,

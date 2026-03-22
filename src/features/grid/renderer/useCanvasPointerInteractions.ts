@@ -139,7 +139,7 @@ export function useCanvasPointerInteractions(args: {
           preloadTimerRef.current = setTimeout(() => {
             preloadTimerRef.current = null;
             if (image) {
-              const url = mediaFileUrl(image.hash, image.mime);
+              const url = mediaFileUrl(image.thumbnail_hash || image.hash, image.mime);
               if (!hoverPreviewLoadedCache.has(url)) {
                 const img = new Image();
                 img.src = url;
@@ -425,7 +425,7 @@ export function useCanvasPointerInteractions(args: {
         stopAutoScroll();
         cleanup();
 
-        const thumbnailUrl = mediaThumbnailUrl(image.hash);
+        const thumbnailUrl = mediaThumbnailUrl(image.thumbnail_hash || image.hash);
         const icon = new Image();
         const doStartDrag = (iconDataUrl?: string | null) => {
           getCurrentWebview()

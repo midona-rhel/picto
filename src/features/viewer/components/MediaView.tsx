@@ -147,7 +147,7 @@ export function MediaView({ images, currentIndex, onNavigate, onClose, onStateCh
   useEffect(() => {
     if (stripMode && collectionImages.length > 0) {
       setThumbLoaded(true);
-      lastLoadedSrcRef.current = mediaThumbnailUrl(collectionImages[0].hash);
+      lastLoadedSrcRef.current = mediaThumbnailUrl(collectionImages[0].thumbnail_hash || collectionImages[0].hash);
     }
   }, [stripMode, collectionImages.length]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -239,7 +239,7 @@ export function MediaView({ images, currentIndex, onNavigate, onClose, onStateCh
 
   const imageUrl = useMemo(() => {
     if (!currentImage) return '';
-    return mediaFileUrl(currentImage.hash, currentImage.mime);
+    return mediaFileUrl(currentImage.thumbnail_hash || currentImage.hash, currentImage.mime);
   }, [currentImage]);
 
   // Navigate with boundary flash — adapt delta-based onNavigate to absolute-index API
@@ -611,7 +611,7 @@ export function MediaView({ images, currentIndex, onNavigate, onClose, onStateCh
 
   if (!currentImage) return null;
 
-  const thumbUrl = mediaThumbnailUrl(currentImage.hash);
+  const thumbUrl = mediaThumbnailUrl(currentImage.thumbnail_hash || currentImage.hash);
   const mediaElementTransform = [
     currentAdjustment.rotation !== 0 ? `rotate(${currentAdjustment.rotation}deg)` : '',
     currentAdjustment.mirrored ? 'scaleX(-1)' : '',
@@ -702,7 +702,7 @@ export function MediaView({ images, currentIndex, onNavigate, onClose, onStateCh
             </>
           ) : (
             <VideoPlayer
-              src={mediaFileUrl(currentImage.hash, currentImage.mime)}
+              src={mediaFileUrl(currentImage.thumbnail_hash || currentImage.hash, currentImage.mime)}
               autoPlay={useSettingsStore.getState().settings.videoAutoPlay}
               loop={useSettingsStore.getState().settings.videoLoop}
               muted={useSettingsStore.getState().settings.videoMuted}

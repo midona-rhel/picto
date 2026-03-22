@@ -22,6 +22,7 @@ pub struct FileMetadataSlim {
     #[serde(default)]
     pub collection_item_count: Option<i64>,
     pub hash: String,
+    pub thumbnail_hash: String,
     pub name: Option<String>,
     pub mime: String,
     pub width: Option<i64>,
@@ -558,6 +559,7 @@ const ENTITY_SLIM_SELECT: &str =
          WHEN me.kind = 'collection' THEN COALESCE(me.hash, '')
          ELSE COALESCE(f.hash, cover_f.hash, '')
      END AS hash,
+     COALESCE(cover_f.hash, f.hash, '') AS thumbnail_hash,
      CASE
          WHEN me.kind = 'collection' THEN me.name
          ELSE COALESCE(f.name, me.name)
@@ -622,23 +624,24 @@ fn row_to_entity_slim(row: &rusqlite::Row) -> rusqlite::Result<FileMetadataSlim>
         is_collection: row.get::<_, i64>(1)? != 0,
         collection_item_count: row.get(2)?,
         hash: row.get(3)?,
-        name: row.get(4)?,
-        mime: row.get(5)?,
-        width: row.get(6)?,
-        height: row.get(7)?,
-        size: row.get(8)?,
-        status: row.get::<_, i64>(9)? as u8,
-        rating: row.get(10)?,
-        imported_at: row.get(11)?,
-        dominant_color_hex: row.get(12)?,
-        duration_ms: row.get(13)?,
-        num_frames: row.get(14)?,
-        has_audio: row.get::<_, i64>(15)? != 0,
-        view_count: row.get(16)?,
-        file_id: row.get(17)?,
+        thumbnail_hash: row.get(4)?,
+        name: row.get(5)?,
+        mime: row.get(6)?,
+        width: row.get(7)?,
+        height: row.get(8)?,
+        size: row.get(9)?,
+        status: row.get::<_, i64>(10)? as u8,
+        rating: row.get(11)?,
+        imported_at: row.get(12)?,
+        dominant_color_hex: row.get(13)?,
+        duration_ms: row.get(14)?,
+        num_frames: row.get(15)?,
+        has_audio: row.get::<_, i64>(16)? != 0,
+        view_count: row.get(17)?,
+        file_id: row.get(18)?,
         position_rank: None,
-        date_created: row.get(18)?,
-        date_modified: row.get(19)?,
+        date_created: row.get(19)?,
+        date_modified: row.get(20)?,
     })
 }
 
@@ -1059,6 +1062,7 @@ pub fn list_files_slim_by_collection_rank(
             is_collection: false,
             collection_item_count: None,
             hash: row.get(0)?,
+            thumbnail_hash: row.get(0)?,
             name: row.get(1)?,
             mime: row.get(2)?,
             width: row.get(3)?,
@@ -1575,6 +1579,7 @@ impl SqliteDatabase {
                         entity_id: r.file_id,
                         is_collection: false,
                         collection_item_count: None,
+                        thumbnail_hash: r.hash.clone(),
                         hash: r.hash,
                         name: r.name,
                         mime: r.mime,

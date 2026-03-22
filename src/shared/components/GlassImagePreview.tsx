@@ -20,7 +20,7 @@ export const GlassImagePreview = memo(function GlassImagePreview({ images }: Gla
   const thumbUrls = useMemo(() => {
     const urls = new Map<string, string>();
     for (const img of images) {
-      urls.set(img.hash, mediaThumbnailUrl(img.hash));
+      urls.set(img.hash, mediaThumbnailUrl(img.thumbnail_hash || img.hash));
     }
     return urls;
   }, [images]);

@@ -100,8 +100,8 @@ export function Slideshow({ images, startIndex = 0, onClose }: SlideshowProps) {
   if (!image) return null;
 
   const isVideo = image.mime.startsWith('video/');
-  const src = mediaFileUrl(image.hash, image.mime);
-  const thumbSrc = mediaThumbnailUrl(image.hash);
+  const src = mediaFileUrl(image.thumbnail_hash || image.hash, image.mime);
+  const thumbSrc = mediaThumbnailUrl(image.thumbnail_hash || image.hash);
 
   return createPortal(
     <div className={`${classes.root} no-drag-region`} onMouseMove={showControls}>

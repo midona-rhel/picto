@@ -94,6 +94,7 @@ fn build_projections_batch_chunk(
                 is_collection: false,
                 collection_item_count: None,
                 hash: row.get(1)?,
+                thumbnail_hash: row.get(1)?,
                 name: row.get(2)?,
                 mime: row.get(3)?,
                 width: row.get(4)?,

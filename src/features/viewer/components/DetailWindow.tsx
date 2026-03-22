@@ -177,10 +177,10 @@ export function DetailWindow({ hash }: DetailWindowProps) {
 
   const imageUrl = useMemo(() => {
     if (!currentImage) return '';
-    return mediaFileUrl(currentImage.hash, currentImage.mime);
+    return mediaFileUrl(currentImage.thumbnail_hash || currentImage.hash, currentImage.mime);
   }, [currentImage]);
 
-  const thumbUrl = currentImage ? mediaThumbnailUrl(currentImage.hash) : '';
+  const thumbUrl = currentImage ? mediaThumbnailUrl(currentImage.thumbnail_hash || currentImage.hash) : '';
 
   const imageSizeRef = useRef(imageSize);
   imageSizeRef.current = imageSize;
@@ -525,7 +525,7 @@ export function DetailWindow({ hash }: DetailWindowProps) {
               </>
             ) : (
               <VideoPlayer
-                src={mediaFileUrl(currentImage.hash, currentImage.mime)}
+                src={mediaFileUrl(currentImage.thumbnail_hash || currentImage.hash, currentImage.mime)}
                 autoPlay={useSettingsStore.getState().settings.videoAutoPlay}
                 loop={useSettingsStore.getState().settings.videoLoop}
                 muted={useSettingsStore.getState().settings.videoMuted}

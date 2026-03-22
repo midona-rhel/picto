@@ -12,6 +12,8 @@ export interface EntitySlim {
   is_collection?: boolean;
   collection_item_count?: number | null;
   hash: string;
+  /** Hash used for thumbnail/media URLs. For collections, this is the cover file's hash. */
+  thumbnail_hash: string;
   name: string | null;
   mime: string;
   size: number;

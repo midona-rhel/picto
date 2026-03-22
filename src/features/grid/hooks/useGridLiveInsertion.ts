@@ -54,6 +54,7 @@ export function useGridLiveInsertion(args: {
 
       const nextItem = toMasonryItem({
         ...event,
+        thumbnail_hash: event.hash,
         name: event.name ?? null,
         width: event.width ?? null,
         height: event.height ?? null,

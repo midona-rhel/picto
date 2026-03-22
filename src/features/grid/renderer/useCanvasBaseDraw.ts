@@ -222,7 +222,7 @@ export function useCanvasBaseDraw(args: {
       const pos = positions[i];
       const image = imgs[i];
       if (!pos || !image) continue;
-      atlas.ensure(image.hash, { y: pos.y + pos.h / 2 });
+      atlas.ensure(image.thumbnail_hash || image.hash, { y: pos.y + pos.h / 2 });
     }
 
     atlas.cancelOutsideWindow(cancelTop, cancelBottom);
@@ -241,12 +241,12 @@ export function useCanvasBaseDraw(args: {
       for (let n = 0; n < visibleIterEnd; n++) {
         const idx = visibleIndices ? visibleIndices[n] : startIdx + n;
         const img = imgs[idx];
-        if (img) evictState.keepHashes.add(img.hash);
+        if (img) evictState.keepHashes.add(img.thumbnail_hash || img.hash);
       }
       // Add prefetch tiles
       for (const idx of prefetchIndices) {
         const img = imgs[idx];
-        if (img) evictState.keepHashes.add(img.hash);
+        if (img) evictState.keepHashes.add(img.thumbnail_hash || img.hash);
       }
       // Add tiles in the keep zone (scan ±30 around visible range)
       const scanStart = Math.max(0, startIdx - 30);
@@ -256,7 +256,7 @@ export function useCanvasBaseDraw(args: {
         if (!p) continue;
         if (p.y + p.h >= keepTop && p.y <= keepBottom) {
           const img = imgs[idx];
-          if (img) evictState.keepHashes.add(img.hash);
+          if (img) evictState.keepHashes.add(img.thumbnail_hash || img.hash);
         }
       }
       // Check up to 5 cache entries per tick

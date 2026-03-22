@@ -100,7 +100,7 @@ export function useViewerMediaPipeline({
 
   useEffect(() => {
     if (!currentImage) return;
-    const targetThumb = mediaThumbnailUrl(currentImage.hash);
+    const targetThumb = mediaThumbnailUrl(currentImage.thumbnail_hash || currentImage.hash);
     let cancelled = false;
     let cancelDecode: (() => void) | null = null;
     setDisplayThumbUrl('');

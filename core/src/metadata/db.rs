@@ -191,6 +191,7 @@ impl SqliteDatabase {
                         entity_id: fallback.file_id,
                         is_collection: false,
                         collection_item_count: None,
+                        thumbnail_hash: file.hash.clone(),
                         hash: file.hash,
                         name: file.name,
                         mime: file.mime,

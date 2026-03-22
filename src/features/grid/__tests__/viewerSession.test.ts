@@ -17,6 +17,7 @@ import type { MasonryItem } from '../shared';
 function makeImages(...hashes: string[]): MasonryItem[] {
   return hashes.map(hash => ({
     hash,
+    thumbnail_hash: hash,
     name: hash,
     mime: 'image/jpeg',
     size: 1000,

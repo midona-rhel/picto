@@ -135,7 +135,8 @@ export function drawCanvasBaseLayer({
     const imageHeight = pos.h - th;
     if (drawY + pos.h < 0 || drawY > cssH) continue;
 
-    const entry = atlasGet(image.hash);
+    const thumbHash = image.thumbnail_hash || image.hash;
+    const entry = atlasGet(thumbHash);
     const cssLongEdge = Math.max(pos.w, imageHeight);
     const dpr = window.devicePixelRatio || 1;
     const needsFull = cssLongEdge > THUMBNAIL_PIPELINE_SOURCE_EDGE && image.mime.startsWith('image/');
@@ -146,7 +147,7 @@ export function drawCanvasBaseLayer({
     if (!entry || entry.state !== 'shown' || wrongKind) {
       // Pass DPR-scaled dimensions for the actual decode resolution,
       // but the pipeline uses CSS-based SOURCE_EDGE threshold internally.
-      atlasEnsure(image.hash, {
+      atlasEnsure(thumbHash, {
         y: pos.y + pos.h / 2,
         drawWidth: pos.w * dpr,
         drawHeight: imageHeight * dpr,
