@@ -269,10 +269,14 @@ pub async fn manage_tag_alias(state: &AppState, input: ManageTagAliasInput) -> R
         state.db.remove_alias(&from_ns, &from_st, "local").await?;
     }
 
-    crate::events::emit_state_changed(
-        "manage_tag_alias",
-        crate::runtime_contract::change_builder::ChangeImpact::tag_structure_change(),
-    );
+    let mut impact = crate::runtime_contract::change_builder::ChangeImpact::tag_structure_change()
+        .tags_removed(vec![input.from.clone()]);
+    if let Some(to) = &input.to {
+        if !to.is_empty() {
+            impact = impact.tags_added(vec![to.clone()]);
+        }
+    }
+    crate::events::emit_state_changed("manage_tag_alias", impact);
     Ok(())
 }
 
@@ -315,7 +319,9 @@ pub async fn manage_tag_implication(
 
     crate::events::emit_state_changed(
         "manage_tag_implication",
-        crate::runtime_contract::change_builder::ChangeImpact::tag_structure_change(),
+        crate::runtime_contract::change_builder::ChangeImpact::tag_structure_change()
+            .tags_added(vec![input.parent.clone()])
+            .tags_removed(vec![input.child.clone()]),
     );
     Ok(())
 }

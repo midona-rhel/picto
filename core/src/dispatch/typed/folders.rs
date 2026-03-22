@@ -543,15 +543,11 @@ pub async fn create_collection(
     let collection_id = state.db.create_collection(&input.name).await?;
     crate::events::emit_state_changed(
         "create_collection",
-        crate::runtime_contract::change_builder::ChangeImpact::new()
-            .domains(&[
-                crate::runtime_contract::state_change::Domain::Folders,
-                crate::runtime_contract::state_change::Domain::Sidebar,
-                crate::runtime_contract::state_change::Domain::Selection,
-            ])
-            .status_changed()
-            .sidebar_counts_from(&state.db)
-            .extra_grid_scopes(vec!["system:all".into()]),
+        crate::runtime_contract::change_builder::ChangeImpact::collection_membership_change(
+            collection_id,
+        )
+        .status_changed()
+        .sidebar_counts_from(&state.db),
     );
     Ok(collection_id)
 }
@@ -581,66 +577,8 @@ pub async fn update_collection(
     Ok(())
 }
 
-pub async fn add_collection_tags(
-    state: &AppState,
-    input: AddCollectionTagsInput,
-) -> Result<(), String> {
-    let summary = state.db.get_collection_summary(input.id).await?;
-    let current_tags: Vec<String> = summary.tags;
-    let current_set: std::collections::HashSet<&str> =
-        current_tags.iter().map(|s| s.as_str()).collect();
-    let merged: Vec<String> = current_tags
-        .iter()
-        .cloned()
-        .chain(
-            input
-                .tags
-                .iter()
-                .filter(|t| !current_set.contains(t.as_str()))
-                .cloned(),
-        )
-        .collect();
-    let member_hashes = state.db.list_collection_member_hashes(input.id).await?;
-    state
-        .db
-        .update_collection(input.id, None, Some(&merged))
-        .await?;
-    let mut impact =
-        crate::runtime_contract::change_builder::ChangeImpact::collection_update(input.id)
-            .tags_changed();
-    if !member_hashes.is_empty() {
-        impact = impact.file_hashes(member_hashes);
-    }
-    crate::events::emit_state_changed("add_collection_tags", impact);
-    Ok(())
-}
-
-pub async fn remove_collection_tags(
-    state: &AppState,
-    input: RemoveCollectionTagsInput,
-) -> Result<(), String> {
-    let summary = state.db.get_collection_summary(input.id).await?;
-    let remove_set: std::collections::HashSet<&str> =
-        input.tags.iter().map(|s| s.as_str()).collect();
-    let remaining: Vec<String> = summary
-        .tags
-        .into_iter()
-        .filter(|t| !remove_set.contains(t.as_str()))
-        .collect();
-    let member_hashes = state.db.list_collection_member_hashes(input.id).await?;
-    state
-        .db
-        .update_collection(input.id, None, Some(&remaining))
-        .await?;
-    let mut impact =
-        crate::runtime_contract::change_builder::ChangeImpact::collection_update(input.id)
-            .tags_changed();
-    if !member_hashes.is_empty() {
-        impact = impact.file_hashes(member_hashes);
-    }
-    crate::events::emit_state_changed("remove_collection_tags", impact);
-    Ok(())
-}
+// add_collection_tags / remove_collection_tags removed —
+// collection tags use the generic add_tags/remove_tags path via entity_tag_raw.
 
 pub async fn reorder_collection_members(
     state: &AppState,

@@ -435,6 +435,8 @@ pub async fn delete_entities(state: &AppState, input: DeleteFilesInput) -> Resul
     Ok(count)
 }
 
+/// Wipe all image data — catastrophic full reset.
+/// Uses file_lifecycle without specific hashes because ALL files are removed.
 pub async fn wipe_image_data(state: &AppState, _input: serde_json::Value) -> Result<(), String> {
     state.db.wipe_all_files().await?;
     state.blob_store.wipe().map_err(|e| e.to_string())?;

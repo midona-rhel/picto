@@ -148,13 +148,28 @@ pub async fn reorder_sidebar_nodes(
     state: &AppState,
     input: ReorderSidebarNodesInput,
 ) -> Result<(), String> {
+    let mut folder_ids = Vec::new();
+    let mut smart_folder_ids = Vec::new();
+    for (id, _) in &input.moves {
+        if let Some(fid) = id.strip_prefix("folder:") {
+            if let Ok(n) = fid.parse::<i64>() { folder_ids.push(n); }
+        } else if let Some(sfid) = id.strip_prefix("smart:") {
+            if let Ok(n) = sfid.parse::<i64>() { smart_folder_ids.push(n); }
+        }
+    }
     state.db.reorder_sidebar_nodes(input.moves).await?;
-    crate::events::emit_state_changed(
-        "reorder_sidebar_nodes",
-        crate::runtime_contract::change_builder::ChangeImpact::sidebar(
-            crate::runtime_contract::state_change::Domain::Sidebar,
-        ),
+    let mut impact = crate::runtime_contract::change_builder::ChangeImpact::sidebar(
+        crate::runtime_contract::state_change::Domain::Sidebar,
     );
+    if !folder_ids.is_empty() {
+        impact = impact.add_domain(crate::runtime_contract::state_change::Domain::Folders)
+            .folder_ids(folder_ids);
+    }
+    if !smart_folder_ids.is_empty() {
+        impact = impact.add_domain(crate::runtime_contract::state_change::Domain::SmartFolders)
+            .smart_folder_ids(smart_folder_ids);
+    }
+    crate::events::emit_state_changed("reorder_sidebar_nodes", impact);
     Ok(())
 }
 
