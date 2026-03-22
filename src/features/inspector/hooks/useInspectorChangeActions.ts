@@ -6,7 +6,6 @@ import { foldersController } from '../../../controllers/foldersController';
 import { registerUndoAction } from '../../../shared/controllers/undoRedoController';
 import {
   getMetadata,
-  noteMetadataChanged,
   type SelectionQuerySpec,
 } from '#features/grid/data';
 import type { MediaItem } from '#features/grid/types';
@@ -21,7 +20,6 @@ export function useInspectorChangeActions(
     collectionSummary, selectedCollection, saveNotesTimer,
     setFileTags, setFileMetadata, setCollectionSummary,
     setFileFolders, setSourceUrls, setNotes,
-    refreshMetadata, refreshVirtualSelectionSummary, mapCollectionTags,
   } = fetch;
 
   const onAddTags = useCallback(
@@ -33,49 +31,41 @@ export function useInspectorChangeActions(
         await tagsController.addToSelection(specSnapshot, tagsSnapshot);
         registerUndoAction({
           label: `Add ${tagsSnapshot.length} tag${tagsSnapshot.length === 1 ? '' : 's'}`,
-          undo: async () => {
-            await tagsController.removeFromSelection(specSnapshot, tagsSnapshot);
-            refreshVirtualSelectionSummary();
-          },
-          redo: async () => {
-            await tagsController.addToSelection(specSnapshot, tagsSnapshot);
-            refreshVirtualSelectionSummary();
-          },
+          undo: async () => { await tagsController.removeFromSelection(specSnapshot, tagsSnapshot); },
+          redo: async () => { await tagsController.addToSelection(specSnapshot, tagsSnapshot); },
         });
-        refreshVirtualSelectionSummary();
       } else if (selectedCollection) {
         await collectionsController.addTags(selectedCollection.id, tagsSnapshot);
         registerUndoAction({
           label: `Add ${tagsSnapshot.length} tag${tagsSnapshot.length === 1 ? '' : 's'}`,
-          undo: async () => {
-            await collectionsController.removeTags(selectedCollection.id, tagsSnapshot);
-            refreshMetadata();
-          },
-          redo: async () => {
-            await collectionsController.addTags(selectedCollection.id, tagsSnapshot);
-            refreshMetadata();
-          },
+          undo: async () => { await collectionsController.removeTags(selectedCollection.id, tagsSnapshot); },
+          redo: async () => { await collectionsController.addTags(selectedCollection.id, tagsSnapshot); },
         });
-        refreshMetadata();
       } else {
         const hashes = selectedImages.map((img) => img.hash);
         if (hashes.length === 0) return;
+        // Optimistic: add chips immediately
+        setFileTags((prev) => {
+          const existing = new Set(prev.map((t) => t.raw_tag));
+          const newTags = tagsSnapshot
+            .filter((t) => !existing.has(t))
+            .map((raw) => {
+              const idx = raw.indexOf(':');
+              const namespace = idx === -1 ? '' : raw.slice(0, idx);
+              const subtag = idx === -1 ? raw : raw.slice(idx + 1);
+              return { raw_tag: raw, display_tag: raw, namespace, subtag, source: 'local', read_only: false };
+            });
+          return [...prev, ...newTags];
+        });
         await tagsController.addToHashes(hashes, tagsSnapshot);
         registerUndoAction({
           label: `Add ${tagsSnapshot.length} tag${tagsSnapshot.length === 1 ? '' : 's'}`,
-          undo: async () => {
-            await tagsController.removeFromHashes(hashes, tagsSnapshot);
-            refreshMetadata();
-          },
-          redo: async () => {
-            await tagsController.addToHashes(hashes, tagsSnapshot);
-            refreshMetadata();
-          },
+          undo: async () => { await tagsController.removeFromHashes(hashes, tagsSnapshot); },
+          redo: async () => { await tagsController.addToHashes(hashes, tagsSnapshot); },
         });
-        refreshMetadata();
       }
     },
-    [selectedImages, selectionSummarySpec, selectedCollection, refreshMetadata, refreshVirtualSelectionSummary, mapCollectionTags, setFileTags],
+    [selectedImages, selectionSummarySpec, selectedCollection, setFileTags],
   );
 
   const onRemoveTags = useCallback(
@@ -87,50 +77,30 @@ export function useInspectorChangeActions(
         await tagsController.removeFromSelection(specSnapshot, tagsSnapshot);
         registerUndoAction({
           label: `Remove ${tagsSnapshot.length} tag${tagsSnapshot.length === 1 ? '' : 's'}`,
-          undo: async () => {
-            await tagsController.addToSelection(specSnapshot, tagsSnapshot);
-            refreshVirtualSelectionSummary();
-          },
-          redo: async () => {
-            await tagsController.removeFromSelection(specSnapshot, tagsSnapshot);
-            refreshVirtualSelectionSummary();
-          },
+          undo: async () => { await tagsController.addToSelection(specSnapshot, tagsSnapshot); },
+          redo: async () => { await tagsController.removeFromSelection(specSnapshot, tagsSnapshot); },
         });
-        refreshVirtualSelectionSummary();
       } else if (selectedCollection) {
         await collectionsController.removeTags(selectedCollection.id, tagsSnapshot);
         registerUndoAction({
           label: `Remove ${tagsSnapshot.length} tag${tagsSnapshot.length === 1 ? '' : 's'}`,
-          undo: async () => {
-            await collectionsController.addTags(selectedCollection.id, tagsSnapshot);
-            refreshMetadata();
-          },
-          redo: async () => {
-            await collectionsController.removeTags(selectedCollection.id, tagsSnapshot);
-            refreshMetadata();
-          },
+          undo: async () => { await collectionsController.addTags(selectedCollection.id, tagsSnapshot); },
+          redo: async () => { await collectionsController.removeTags(selectedCollection.id, tagsSnapshot); },
         });
-        refreshMetadata();
       } else {
         const hashes = selectedImages.map((img) => img.hash);
         if (hashes.length === 0) return;
+        // Optimistic: remove chips immediately
+        setFileTags((prev) => prev.filter((t) => !tags.includes(t.raw_tag)));
         await tagsController.removeFromHashes(hashes, tagsSnapshot);
         registerUndoAction({
           label: `Remove ${tagsSnapshot.length} tag${tagsSnapshot.length === 1 ? '' : 's'}`,
-          undo: async () => {
-            await tagsController.addToHashes(hashes, tagsSnapshot);
-            refreshMetadata();
-          },
-          redo: async () => {
-            await tagsController.removeFromHashes(hashes, tagsSnapshot);
-            refreshMetadata();
-          },
+          undo: async () => { await tagsController.addToHashes(hashes, tagsSnapshot); },
+          redo: async () => { await tagsController.removeFromHashes(hashes, tagsSnapshot); },
         });
-        for (const hash of hashes) noteMetadataChanged(hash);
-        setFileTags((prev) => prev.filter((t) => !tags.includes(t.raw_tag)));
       }
     },
-    [selectedImages, selectionSummarySpec, selectedCollection, refreshMetadata, refreshVirtualSelectionSummary, mapCollectionTags, setFileTags],
+    [selectedImages, selectionSummarySpec, selectedCollection, setFileTags],
   );
 
   const onUpdateRating = useCallback(
@@ -174,7 +144,7 @@ export function useInspectorChangeActions(
         });
       }
     },
-    [selectedImages, selectionSummarySpec, selectedCollection, collectionSummary, refreshMetadata, refreshVirtualSelectionSummary, setCollectionSummary],
+    [selectedImages, selectionSummarySpec],
   );
 
   const onUpdateSourceUrls = useCallback(
@@ -207,7 +177,7 @@ export function useInspectorChangeActions(
         });
       }
     },
-    [selectedImages, selectionSummarySpec, selectedCollection, collectionSummary, refreshMetadata, refreshVirtualSelectionSummary, setSourceUrls, setCollectionSummary],
+    [selectedImages, selectionSummarySpec, setSourceUrls],
   );
 
   const committedNotesRef = useRef('');

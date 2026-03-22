@@ -15,8 +15,8 @@ import {
   IconArrowUp,
   IconArrowDown,
 } from '@tabler/icons-react';
-import { api } from '#desktop/api';
 import { writeText } from '#desktop/api';
+import { tagsController } from '../../../controllers/tagsController';
 import { notifySuccess, notifyError } from '../../../shared/lib/notify';
 import { getNamespaceColor } from '../../../shared/lib/namespaceColors';
 import { useInlineRename } from '../../../shared/hooks/useInlineRename';
@@ -25,6 +25,7 @@ import { ContextMenu, useContextMenu, type ContextMenuEntry } from '../../../sha
 import { TagRelationsModal } from './TagRelationsModal';
 import { registerUndoAction } from '../../../shared/controllers/undoRedoController';
 import { buildTagContextMenu } from '../../../shared/components/context-actions/tagActions';
+import { useTagListStore } from '../../../state/tagListStore';
 import classes from './TagManager.module.css';
 
 interface TagRecord {
@@ -114,26 +115,19 @@ export function TagManager() {
     : namespaces.find((n) => n.namespace === selectedNs)?.count ?? 0;
 
   const rename = useInlineRename(async (id, newName) => {
-    const tagId = parseInt(id);
-    try {
-      const oldTag = tags.find((t) => t.tag_id === tagId);
-      const oldDisplay = oldTag ? formatTagDisplay(oldTag.namespace, oldTag.subtag) : null;
-      const result = await api.tags.rename(tagId, newName);
-      if (oldDisplay && oldDisplay !== newName && !result.merged_into) {
-        registerUndoAction({
-          label: 'Rename tag',
-          undo: async () => {
-            await api.tags.rename(tagId, oldDisplay);
-            await refreshAll();
-          },
-          redo: async () => {
-            await api.tags.rename(tagId, newName);
-            await refreshAll();
-          },
-        });
+      const tagId = parseInt(id);
+      try {
+        const oldTag = tags.find((t) => t.tag_id === tagId);
+        const oldDisplay = oldTag ? formatTagDisplay(oldTag.namespace, oldTag.subtag) : null;
+        const result = await tagsController.rename(tagId, newName);
+        if (oldDisplay && oldDisplay !== newName && !result.merged_into) {
+          registerUndoAction({
+            label: 'Rename tag',
+            undo: async () => { await tagsController.rename(tagId, oldDisplay); },
+            redo: async () => { await tagsController.rename(tagId, newName); },
+          });
       }
       notifySuccess(`Renamed to "${newName}"`, 'Tag Renamed');
-      await refreshAll();
     } catch (err) {
       notifyError(err);
     }
@@ -141,7 +135,7 @@ export function TagManager() {
 
   const fetchNamespaces = useCallback(async () => {
     try {
-      const result = await api.tags.getNamespaceSummary();
+      const result = await tagsController.getNamespaceSummary();
       setNamespaces(result);
       setTotalTagCount(result.reduce((sum: number, ns: NamespaceSummary) => sum + ns.count, 0));
     } catch (err) {
@@ -158,7 +152,7 @@ export function TagManager() {
           cursor: cursor ?? undefined,
           limit: 500,
         };
-        const result = await api.tags.getPaginated(params);
+        const result = await tagsController.getPaginated(params);
         if (cursor) {
           setTags((prev) => [...prev, ...result]);
         } else {
@@ -174,18 +168,12 @@ export function TagManager() {
     [selectedNs, searchQuery],
   );
 
-  const refreshAll = useCallback(async () => {
-    setLoading(true);
-    await Promise.all([fetchNamespaces(), fetchTags()]);
-    setLoading(false);
-  }, [fetchNamespaces, fetchTags]);
-
   const fetchAllHashesForTag = useCallback(async (tagDisplay: string): Promise<string[]> => {
     const limit = 5000;
     let offset = 0;
     const all: string[] = [];
     while (true) {
-      const batch = await api.tags.findFilesByTags([tagDisplay], limit, offset);
+      const batch = await tagsController.findFilesByTags([tagDisplay], limit, offset);
       if (!batch || batch.length === 0) break;
       all.push(...batch);
       if (batch.length < limit) break;
@@ -195,13 +183,13 @@ export function TagManager() {
   }, []);
 
   const deleteTagByDisplay = useCallback(async (tagDisplay: string): Promise<void> => {
-    const candidates = await api.tags.search(tagDisplay, 50);
+    const candidates = await tagsController.search(tagDisplay, 50);
     const exact = candidates.find((c) => {
       const formatted = formatTagDisplay(c.namespace, c.subtag);
       return formatted === tagDisplay || c.display === tagDisplay;
     });
     if (!exact) return;
-    await api.tags.delete(exact.tag_id);
+    await tagsController.delete(exact.tag_id);
   }, []);
 
   useEffect(() => {
@@ -214,6 +202,50 @@ export function TagManager() {
     })();
     return () => { cancelled = true; };
   }, [fetchNamespaces, fetchTags]);
+
+  // Subscribe to eager tag list mutations from the controller.
+  const pendingTagRemovals = useTagListStore((s) => s.pendingRemovals);
+  const pendingTagRenames = useTagListStore((s) => s.pendingRenames);
+  useEffect(() => {
+    if (pendingTagRemovals.length === 0 && pendingTagRenames.length === 0) return;
+    const { removals, renames } = useTagListStore.getState().drainMutations();
+
+    if (removals.length > 0) {
+      setTags((prev) =>
+        prev.filter((t) => {
+          for (const r of removals) {
+            if (r.tagId != null && t.tag_id === r.tagId) return false;
+            if (r.namespace != null && r.subtag != null && t.namespace === r.namespace && t.subtag === r.subtag) return false;
+          }
+          return true;
+        }),
+      );
+      // Update namespace counts
+      setNamespaces((prev) => {
+        const decrements = new Map<string, number>();
+        for (const r of removals) {
+          const ns = r.namespace ?? '';
+          decrements.set(ns, (decrements.get(ns) ?? 0) + 1);
+        }
+        return prev
+          .map((ns) => {
+            const dec = decrements.get(ns.namespace) ?? 0;
+            return dec > 0 ? { ...ns, count: Math.max(0, ns.count - dec) } : ns;
+          })
+          .filter((ns) => ns.count > 0);
+      });
+      setTotalTagCount((prev) => Math.max(0, prev - removals.length));
+    }
+
+    if (renames.length > 0) {
+      setTags((prev) =>
+        prev.map((t) => {
+          const rename = renames.find((r) => r.tagId === t.tag_id);
+          return rename ? { ...t, namespace: rename.namespace, subtag: rename.subtag } : t;
+        }),
+      );
+    }
+  }, [pendingTagRemovals, pendingTagRenames]);
 
   const debouncedSearch = useDebouncedCallback((val: string) => setSearchQuery(val), 150);
 
@@ -254,14 +286,14 @@ export function TagManager() {
         let deleted = 0;
         // eslint-disable-next-line no-constant-condition
         while (true) {
-          const batch = await api.tags.getPaginated({
+          const batch = await tagsController.getPaginated({
             namespace: selectedNs ?? undefined,
             search: searchQuery || undefined,
             limit: 500,
           });
           if (batch.length === 0) break;
           for (const tag of batch) {
-            await api.tags.delete(tag.tag_id);
+            await tagsController.delete(tag.tag_id);
           }
           deleted += batch.length;
         }
@@ -269,17 +301,18 @@ export function TagManager() {
       } else {
         const toDelete = tags.filter(t => selectedTagIds.has(t.tag_id));
         for (const tag of toDelete) {
-          await api.tags.delete(tag.tag_id);
+          await tagsController.delete(tag.tag_id);
         }
         notifySuccess(`Deleted ${toDelete.length} tag${toDelete.length !== 1 ? 's' : ''}`);
       }
       setSelectAll(false);
       setSelectedTagIds(new Set());
-      await refreshAll();
+      // Each tagsController.delete() already signals queueRemoval — tags
+      // disappear eagerly from the list via the tagListStore subscription.
     } catch (err) {
       notifyError(err);
     }
-  }, [selectAll, selectedTagIds, tags, refreshAll, selectedNs, searchQuery]);
+  }, [selectAll, selectedTagIds, tags, selectedNs, searchQuery]);
 
   const handleTagContextMenu = useCallback(
     async (e: React.MouseEvent, tag: TagRecord) => {
@@ -289,8 +322,8 @@ export function TagManager() {
       const display = formatTagDisplay(tag.namespace, tag.subtag);
 
       const [aliases, relations] = await Promise.all([
-        api.tags.getRelations(tag.tag_id, 'aliases').catch(() => [] as TagRelation[]),
-        api.tags.getRelations(tag.tag_id, 'implications').catch(() => [] as TagRelation[]),
+        tagsController.getRelations(tag.tag_id, 'aliases').catch(() => [] as TagRelation[]),
+        tagsController.getRelations(tag.tag_id, 'implications').catch(() => [] as TagRelation[]),
       ]);
 
       const parentTags = relations.filter((r) => r.relation === 'parent');
@@ -328,28 +361,24 @@ export function TagManager() {
               const tagFullName = tag.namespace ? `${tag.namespace}:${tag.subtag}` : tag.subtag;
               let affectedHashes: string[] = [];
               try {
-                affectedHashes = await api.tags.findFilesByTags([tagFullName]);
+                affectedHashes = await tagsController.findFilesByTags([tagFullName]);
               } catch { /* best effort */ }
-              await api.tags.delete(tag.tag_id);
+              await tagsController.delete(tag.tag_id);
               registerUndoAction({
                 label: `Delete tag "${display}"`,
                 undo: async () => {
                   if (affectedHashes.length > 0) {
-                    await api.tags.add(affectedHashes, [tagFullName]);
+                    await tagsController.addToHashes(affectedHashes, [tagFullName]);
                   }
-                  await refreshAll();
                 },
                 redo: async () => {
-                  // Re-delete: find the tag again by name and delete it
-                  const found = await api.tags.getPaginated({ search: tag.subtag, limit: 10 });
+                  const found = await tagsController.getPaginated({ search: tag.subtag, limit: 10 });
                   const match = found.find(t => t.subtag === tag.subtag && t.namespace === tag.namespace);
-                  if (match) await api.tags.delete(match.tag_id);
-                  await refreshAll();
+                  if (match) await tagsController.delete(match.tag_id);
                 },
               });
               notifySuccess(`"${display}" deleted`);
               setSelectedTagIds(new Set());
-              await refreshAll();
             } catch (err) {
               notifyError(err);
             }
@@ -359,7 +388,7 @@ export function TagManager() {
 
       ctxMenu.openAt(pos, items);
     },
-    [rename, refreshAll, ctxMenu, fetchAllHashesForTag, deleteTagByDisplay, selectedTagIds, selectAll, tags, handleDeleteSelected],
+    [rename, ctxMenu, fetchAllHashesForTag, deleteTagByDisplay, selectedTagIds, selectAll, tags, handleDeleteSelected],
   );
 
   // ── Multi-select ──────────────────────────────────────────────────────
@@ -418,7 +447,7 @@ export function TagManager() {
     if (!mergeSource) return;
     const timer = setTimeout(async () => {
       try {
-        const results = await api.tags.search(mergeSearch, 20);
+        const results = await tagsController.search(mergeSearch, 20);
         setMergeResults(results.filter((t) => t.tag_id !== mergeSource.tag_id));
       } catch (err) {
         console.error('Merge search failed:', err);
@@ -436,7 +465,7 @@ export function TagManager() {
         fetchAllHashesForTag(sourceDisplay),
         fetchAllHashesForTag(targetDisplay),
       ]);
-      await api.tags.merge(
+      await tagsController.merge(
         sourceDisplay,
         targetDisplay,
       );
@@ -445,13 +474,11 @@ export function TagManager() {
       registerUndoAction({
         label: `Merge tag "${sourceDisplay}" into "${targetDisplay}"`,
         undo: async () => {
-          if (sourceHashes.length > 0) await api.tags.add(sourceHashes, [sourceDisplay]);
-          if (sourceOnly.length > 0) await api.tags.remove(sourceOnly, [targetDisplay]);
-          await refreshAll();
+          if (sourceHashes.length > 0) await tagsController.addToHashes(sourceHashes, [sourceDisplay]);
+          if (sourceOnly.length > 0) await tagsController.removeFromHashes(sourceOnly, [targetDisplay]);
         },
         redo: async () => {
-          await api.tags.merge(sourceDisplay, targetDisplay);
-          await refreshAll();
+          await tagsController.merge(sourceDisplay, targetDisplay);
         },
       });
       notifySuccess(
@@ -459,17 +486,16 @@ export function TagManager() {
         'Tags Merged',
       );
       setMergeSource(null);
-      await refreshAll();
     } catch (err) {
       notifyError(err);
     }
-  }, [mergeSource, mergeTarget, refreshAll, fetchAllHashesForTag]);
+  }, [mergeSource, mergeTarget, fetchAllHashesForTag]);
 
   useEffect(() => {
     if (!relationModal) return;
     const timer = setTimeout(async () => {
       try {
-        const results = await api.tags.search(relationSearch, 20);
+        const results = await tagsController.search(relationSearch, 20);
         setRelationResults(results.filter((t) => t.tag_id !== relationModal.source.tag_id));
       } catch (err) {
         console.error('Relation search failed:', err);
@@ -484,54 +510,35 @@ export function TagManager() {
     const targetDisplay = formatTagDisplay(relationTarget.namespace, relationTarget.subtag);
     try {
       if (relationModal.type === 'alias') {
-        await api.tags.manageAlias(sourceDisplay, targetDisplay);
+        await tagsController.manageAlias(sourceDisplay, targetDisplay);
         registerUndoAction({
           label: `Set alias "${sourceDisplay}"`,
-          undo: async () => {
-            await api.tags.manageAlias(sourceDisplay);
-            await refreshAll();
-          },
-          redo: async () => {
-            await api.tags.manageAlias(sourceDisplay, targetDisplay);
-            await refreshAll();
-          },
+          undo: async () => { await tagsController.manageAlias(sourceDisplay); },
+          redo: async () => { await tagsController.manageAlias(sourceDisplay, targetDisplay); },
         });
         notifySuccess(`"${sourceDisplay}" now resolves to "${targetDisplay}"`, 'Alias Added');
       } else if (relationModal.type === 'implication') {
-        await api.tags.manageImplication(sourceDisplay, targetDisplay, 'add');
+        await tagsController.manageImplication(sourceDisplay, targetDisplay, 'add');
         registerUndoAction({
           label: `Add implication "${targetDisplay}"`,
-          undo: async () => {
-            await api.tags.manageImplication(sourceDisplay, targetDisplay, 'remove');
-            await refreshAll();
-          },
-          redo: async () => {
-            await api.tags.manageImplication(sourceDisplay, targetDisplay, 'add');
-            await refreshAll();
-          },
+          undo: async () => { await tagsController.manageImplication(sourceDisplay, targetDisplay, 'remove'); },
+          redo: async () => { await tagsController.manageImplication(sourceDisplay, targetDisplay, 'add'); },
         });
         notifySuccess(`"${sourceDisplay}" now implies "${targetDisplay}"`, 'Implication Added');
       } else {
-        await api.tags.manageImplication(targetDisplay, sourceDisplay, 'add');
+        await tagsController.manageImplication(targetDisplay, sourceDisplay, 'add');
         registerUndoAction({
           label: `Add implied-by relation "${targetDisplay}"`,
-          undo: async () => {
-            await api.tags.manageImplication(targetDisplay, sourceDisplay, 'remove');
-            await refreshAll();
-          },
-          redo: async () => {
-            await api.tags.manageImplication(targetDisplay, sourceDisplay, 'add');
-            await refreshAll();
-          },
+          undo: async () => { await tagsController.manageImplication(targetDisplay, sourceDisplay, 'remove'); },
+          redo: async () => { await tagsController.manageImplication(targetDisplay, sourceDisplay, 'add'); },
         });
         notifySuccess(`"${targetDisplay}" now implies "${sourceDisplay}"`, 'Reverse Implication Added');
       }
       setRelationModal(null);
-      await refreshAll();
     } catch (err) {
       notifyError(err);
     }
-  }, [relationModal, relationTarget, refreshAll]);
+  }, [relationModal, relationTarget]);
 
   const renderTag = useCallback(
     (tag: TagRecord) => {
