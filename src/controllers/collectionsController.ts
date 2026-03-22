@@ -177,6 +177,15 @@ export const collectionsController = {
   ): Promise<string[]> {
     const memberHashes = await this.listMemberHashes(collectionId);
     await this.delete(collectionId);
+    // Insert freed members into the grid as individual tiles
+    if (memberHashes.length > 0) {
+      Promise.all(memberHashes.map((h) => entityController.getEntity(h))).then((entities) => {
+        const valid = entities.filter((e): e is NonNullable<typeof e> => e != null);
+        if (valid.length > 0) {
+          useGridMetadataStore.getState().queueInsertions(valid);
+        }
+      });
+    }
     registerUndoAction({
       label: `Split collection "${collectionName}"`,
       backward: async () => {
@@ -186,7 +195,6 @@ export const collectionsController = {
         }
       },
       forward: async () => {
-        // Re-split: find the restored collection and delete it again
         const list = await this.list();
         const match = list.find((c) => c.name === collectionName);
         if (match) await this.delete(match.id);

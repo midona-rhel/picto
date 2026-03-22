@@ -47,7 +47,6 @@ import { copyFileToClipboard, copyImageToClipboard, reverseImageSearch } from '#
 import { entityController } from '../../../controllers/entityController';
 import { foldersController } from '../../../controllers/foldersController';
 import { collectionsController } from '../../../controllers/collectionsController';
-import { useGridMetadataStore } from '../../../state/gridMetadataStore';
 import { useNavigationStore } from '../../../state/navigationStore';
 
 interface BuildGridImageContextMenuArgs {
@@ -313,14 +312,6 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
               singleImage?.name ?? 'Untitled',
             );
             if (memberHashes.length > 0) {
-              // Insert freed members into the grid and preselect them
-              const entities = await Promise.all(
-                memberHashes.map((h) => entityController.getEntity(h)),
-              );
-              const valid = entities.filter((e): e is NonNullable<typeof e> => e != null);
-              if (valid.length > 0) {
-                useGridMetadataStore.getState().queueInsertions(valid);
-              }
               dispatch({ type: 'SELECT_HASHES', hashes: new Set(memberHashes) });
             }
             notifySuccess('Collection split', 'Collections');
