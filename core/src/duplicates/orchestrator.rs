@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use rusqlite::OptionalExtension;
 
 use crate::blob_store::BlobStore;
-use crate::runtime_contract::mutation_builder::MutationImpact;
+use crate::runtime_contract::change_builder::ChangeImpact;
 use crate::sqlite::ReadModelEvent;
 use crate::sqlite::SqliteDatabase;
 use crate::types::{
@@ -413,26 +413,22 @@ impl DuplicateOrchestrator {
         };
         blob_store.delete(&loser_hash).map_err(|e| e.to_string())?;
 
-        db.emit_read_model_event(ReadModelEvent::FileTagsChanged {
-            file_id: winner_id,
-        });
-        db.emit_read_model_event(ReadModelEvent::FileDeleted {
-            file_id: loser_id,
-        });
+        db.emit_read_model_event(ReadModelEvent::FileTagsChanged { file_id: winner_id });
+        db.emit_read_model_event(ReadModelEvent::FileDeleted { file_id: loser_id });
         for &folder_id in &affected_folder_ids {
             db.emit_read_model_event(ReadModelEvent::FolderChanged { folder_id });
         }
         db.emit_read_model_event(ReadModelEvent::DuplicateChanged);
 
-        let mut impact = MutationImpact::file_status_change(db)
+        let mut impact = ChangeImpact::file_lifecycle(db)
             .file_hashes(vec![winner_hash.clone(), loser_hash.clone()]);
         if !affected_folder_ids.is_empty() {
             impact = impact.folder_membership_changed(affected_folder_ids.clone());
         }
         if tags_merged > 0 {
-            impact = impact.tags_changed();
+            impact = impact.tags_changed().all_smart_folder_scopes_changed();
         }
-        crate::events::emit_mutation("resolve_duplicate_pair", impact);
+        crate::events::emit_state_changed("resolve_duplicate_pair", impact);
 
         Ok(SmartMergeResult {
             winner_hash,
@@ -542,20 +538,18 @@ impl DuplicateOrchestrator {
         };
         blob_store.delete(delete_hash).map_err(|e| e.to_string())?;
 
-        db.emit_read_model_event(ReadModelEvent::FileDeleted {
-            file_id: loser_id,
-        });
+        db.emit_read_model_event(ReadModelEvent::FileDeleted { file_id: loser_id });
         for &folder_id in &affected_folder_ids {
             db.emit_read_model_event(ReadModelEvent::FolderChanged { folder_id });
         }
         db.emit_read_model_event(ReadModelEvent::DuplicateChanged);
 
-        let mut impact = MutationImpact::file_status_change(db)
+        let mut impact = ChangeImpact::file_lifecycle(db)
             .file_hashes(vec![keep_hash.to_string(), delete_hash.to_string()]);
         if !affected_folder_ids.is_empty() {
             impact = impact.folder_membership_changed(affected_folder_ids);
         }
-        crate::events::emit_mutation("resolve_duplicate_pair", impact);
+        crate::events::emit_state_changed("resolve_duplicate_pair", impact);
         Ok(())
     }
 
@@ -576,11 +570,9 @@ impl DuplicateOrchestrator {
             .with_read_conn({
                 let h = source_hash_owned.clone();
                 move |conn| {
-                    conn.query_row(
-                        "SELECT phash FROM file WHERE hash = ?1",
-                        [&h],
-                        |row| row.get::<_, Option<String>>(0),
-                    )
+                    conn.query_row("SELECT phash FROM file WHERE hash = ?1", [&h], |row| {
+                        row.get::<_, Option<String>>(0)
+                    })
                     .optional()
                     .map(|o| o.flatten())
                 }
@@ -591,15 +583,17 @@ impl DuplicateOrchestrator {
             Some(b64) => b64,
             None => {
                 // Compute phash from the original file
-                let file = db.get_file_by_hash(source_hash).await?
+                let file = db
+                    .get_file_by_hash(source_hash)
+                    .await?
                     .ok_or_else(|| format!("File not found: {source_hash}"))?;
                 let ext = crate::blob_store::mime_to_extension(&file.mime).to_string();
                 let h = source_hash.to_string();
-                let bs_path = blob_store.find_original(&h, Some(&ext))
+                let bs_path = blob_store
+                    .find_original(&h, Some(&ext))
                     .map_err(|e| format!("{e}"))?
                     .ok_or_else(|| format!("Original not found for {h}"))?;
-                let bytes = std::fs::read(&bs_path.0)
-                    .map_err(|e| format!("Read error: {e}"))?;
+                let bytes = std::fs::read(&bs_path.0).map_err(|e| format!("Read error: {e}"))?;
                 let b64 = crate::duplicates::phash::compute_phash_base64(&bytes)
                     .map_err(|e| format!("Phash compute failed: {e}"))?;
                 // Store for future use
@@ -621,26 +615,27 @@ impl DuplicateOrchestrator {
             })
             .await?;
 
-        let mut results: Vec<(String, u32)> =
-            tokio::task::spawn_blocking(move || {
-                let Ok(source) = ImageHash::<Vec<u8>>::from_base64(&source_phash_b64) else {
-                    return Vec::new();
-                };
+        let mut results: Vec<(String, u32)> = tokio::task::spawn_blocking(move || {
+            let Ok(source) = ImageHash::<Vec<u8>>::from_base64(&source_phash_b64) else {
+                return Vec::new();
+            };
 
-                let mut distances: Vec<(String, u32)> = files_with_phash
-                    .iter()
-                    .filter_map(|(hash, phash_b64)| {
-                        if hash == &source_hash_owned { return None; }
-                        let ph = ImageHash::<Vec<u8>>::from_base64(phash_b64).ok()?;
-                        Some((hash.clone(), source.dist(&ph)))
-                    })
-                    .collect();
+            let mut distances: Vec<(String, u32)> = files_with_phash
+                .iter()
+                .filter_map(|(hash, phash_b64)| {
+                    if hash == &source_hash_owned {
+                        return None;
+                    }
+                    let ph = ImageHash::<Vec<u8>>::from_base64(phash_b64).ok()?;
+                    Some((hash.clone(), source.dist(&ph)))
+                })
+                .collect();
 
-                distances.sort_by_key(|(_, d)| *d);
-                distances
-            })
-            .await
-            .map_err(|e| format!("find_similar task failed: {e}"))?;
+            distances.sort_by_key(|(_, d)| *d);
+            distances
+        })
+        .await
+        .map_err(|e| format!("find_similar task failed: {e}"))?;
 
         let items: Vec<crate::types::SimilarItem> = results
             .drain(..)
@@ -771,7 +766,10 @@ impl DuplicateOrchestrator {
                         .ok_or_else(|| rusqlite::Error::QueryReturnedNoRows)?;
                     let closest = crate::sqlite::files::get_file_by_id(conn, closest_id)?
                         .ok_or_else(|| rusqlite::Error::QueryReturnedNoRows)?;
-                    Ok(((imported.width, imported.height), (closest.width, closest.height)))
+                    Ok((
+                        (imported.width, imported.height),
+                        (closest.width, closest.height),
+                    ))
                 })
                 .await?;
 
@@ -797,9 +795,14 @@ impl DuplicateOrchestrator {
             "Auto-merging duplicate from subscription import"
         );
 
-        let result =
-            Self::smart_merge_with_source(db, blob_store, imported_hash, closest_hash, "subscription_auto")
-                .await?;
+        let result = Self::smart_merge_with_source(
+            db,
+            blob_store,
+            imported_hash,
+            closest_hash,
+            "subscription_auto",
+        )
+        .await?;
 
         crate::events::emit(
             crate::events::event_names::DUPLICATE_AUTO_MERGE_FINISHED,
@@ -871,7 +874,8 @@ impl DuplicateOrchestrator {
         // Recompute from thumbnail if the decoded size is wrong.
         {
             const EXPECTED_HASH_BYTES: usize = 32; // 16x16 = 256 bits = 32 bytes
-            let stale_count = files_with_phash.iter()
+            let stale_count = files_with_phash
+                .iter()
                 .filter(|(_, _, p, _)| {
                     ImageHash::<Vec<u8>>::from_base64(p)
                         .map(|h| h.as_bytes().len() != EXPECTED_HASH_BYTES)
@@ -879,9 +883,15 @@ impl DuplicateOrchestrator {
                 })
                 .count();
             if stale_count > 0 {
-                tracing::info!(stale_count, total = files_with_phash.len(), "upgrading stale phashes to 16x16");
+                tracing::info!(
+                    stale_count,
+                    total = files_with_phash.len(),
+                    "upgrading stale phashes to 16x16"
+                );
                 // Collect stale entries to recompute
-                let stale_indices: Vec<usize> = files_with_phash.iter().enumerate()
+                let stale_indices: Vec<usize> = files_with_phash
+                    .iter()
+                    .enumerate()
                     .filter(|(_, (_, _, p, _))| {
                         ImageHash::<Vec<u8>>::from_base64(p)
                             .map(|h| h.as_bytes().len() != EXPECTED_HASH_BYTES)
@@ -893,7 +903,8 @@ impl DuplicateOrchestrator {
                 let bs = blob_store;
                 for idx in stale_indices {
                     let (file_id, ref hex_hash, ref mut phash_b64, _) = files_with_phash[idx];
-                    let thumb_data = bs.find_thumbnail_path(hex_hash)
+                    let thumb_data = bs
+                        .find_thumbnail_path(hex_hash)
                         .ok()
                         .flatten()
                         .and_then(|p| std::fs::read(&p).ok());
@@ -901,9 +912,11 @@ impl DuplicateOrchestrator {
                         if let Ok(new_b64) = crate::duplicates::phash::compute_phash_base64(&data) {
                             let fid = file_id;
                             let stored = new_b64.clone();
-                            let _ = db.with_conn(move |conn| {
-                                crate::sqlite::files::set_phash(conn, fid, &stored)
-                            }).await;
+                            let _ = db
+                                .with_conn(move |conn| {
+                                    crate::sqlite::files::set_phash(conn, fid, &stored)
+                                })
+                                .await;
                             *phash_b64 = new_b64;
                         }
                     }
@@ -912,7 +925,11 @@ impl DuplicateOrchestrator {
         }
 
         let phash_count = files_with_phash.len();
-        tracing::info!(threshold = distance_threshold, total_files, "duplicate scan starting");
+        tracing::info!(
+            threshold = distance_threshold,
+            total_files,
+            "duplicate scan starting"
+        );
 
         if phash_count < 2 {
             return Ok(ScanDuplicatesResponse {
@@ -928,51 +945,53 @@ impl DuplicateOrchestrator {
         }
 
         let cutoff = effective_last_scan_at.clone();
-        let (pairs, files_scanned): (Vec<(i64, i64, u32)>, usize) = tokio::task::spawn_blocking(move || {
-            let mut tree = BkTree::new();
-            let mut parsed: Vec<(i64, String, ImageHash<Vec<u8>>, String)> =
-                Vec::with_capacity(phash_count);
+        let (pairs, files_scanned): (Vec<(i64, i64, u32)>, usize) =
+            tokio::task::spawn_blocking(move || {
+                let mut tree = BkTree::new();
+                let mut parsed: Vec<(i64, String, ImageHash<Vec<u8>>, String)> =
+                    Vec::with_capacity(phash_count);
 
-            for (file_id, file_hash, phash_b64, imported_at) in &files_with_phash {
-                if let Ok(h) = ImageHash::<Vec<u8>>::from_base64(phash_b64) {
-                    parsed.push((*file_id, file_hash.clone(), h, imported_at.clone()));
+                for (file_id, file_hash, phash_b64, imported_at) in &files_with_phash {
+                    if let Ok(h) = ImageHash::<Vec<u8>>::from_base64(phash_b64) {
+                        parsed.push((*file_id, file_hash.clone(), h, imported_at.clone()));
+                    }
                 }
-            }
 
-            let mut found_pairs: Vec<(i64, i64, u32)> = Vec::new();
-            let mut seen = std::collections::HashSet::new();
-            let mut scanned = 0usize;
+                let mut found_pairs: Vec<(i64, i64, u32)> = Vec::new();
+                let mut seen = std::collections::HashSet::new();
+                let mut scanned = 0usize;
 
-            for (i, (file_id, _file_hash, phash, imported_at)) in parsed.iter().enumerate() {
-                if i > 0 {
-                    let is_new = cutoff.as_ref()
-                        .map_or(true, |c| imported_at.as_str() > c.as_str());
-                    if is_new {
-                        scanned += 1;
-                        let matches = tree.find_within(phash, distance_threshold);
-                        for (match_hash, dist) in matches {
-                            if let Some((match_fid, _, _, _)) =
-                                parsed.iter().find(|(_, h, _, _)| h == &match_hash)
-                            {
-                                let (a, b) = if *file_id < *match_fid {
-                                    (*file_id, *match_fid)
-                                } else {
-                                    (*match_fid, *file_id)
-                                };
-                                if seen.insert((a, b)) {
-                                    found_pairs.push((a, b, dist));
+                for (i, (file_id, _file_hash, phash, imported_at)) in parsed.iter().enumerate() {
+                    if i > 0 {
+                        let is_new = cutoff
+                            .as_ref()
+                            .map_or(true, |c| imported_at.as_str() > c.as_str());
+                        if is_new {
+                            scanned += 1;
+                            let matches = tree.find_within(phash, distance_threshold);
+                            for (match_hash, dist) in matches {
+                                if let Some((match_fid, _, _, _)) =
+                                    parsed.iter().find(|(_, h, _, _)| h == &match_hash)
+                                {
+                                    let (a, b) = if *file_id < *match_fid {
+                                        (*file_id, *match_fid)
+                                    } else {
+                                        (*match_fid, *file_id)
+                                    };
+                                    if seen.insert((a, b)) {
+                                        found_pairs.push((a, b, dist));
+                                    }
                                 }
                             }
                         }
                     }
+                    tree.insert(_file_hash.clone(), phash.clone());
                 }
-                tree.insert(_file_hash.clone(), phash.clone());
-            }
 
-            (found_pairs, scanned)
-        })
-        .await
-        .map_err(|e| format!("Scan task error: {}", e))?;
+                (found_pairs, scanned)
+            })
+            .await
+            .map_err(|e| format!("Scan task error: {}", e))?;
 
         let candidates_found = pairs.len();
         let closest_distance = pairs.iter().map(|(_, _, d)| *d).min();
@@ -998,7 +1017,10 @@ impl DuplicateOrchestrator {
             .with_conn(|conn| crate::duplicates::db::reset_stale_merged_pairs(conn))
             .await?;
         if pairs_reset > 0 {
-            tracing::warn!(pairs_reset, "reset stale confirmed_merged pairs where loser was still active");
+            tracing::warn!(
+                pairs_reset,
+                "reset stale confirmed_merged pairs where loser was still active"
+            );
         }
 
         if pairs_inserted > 0 || pairs_reset > 0 {
@@ -1028,7 +1050,8 @@ impl DuplicateOrchestrator {
                 Ok(h) => h,
                 Err(_) => continue,
             };
-            match Self::smart_merge_with_source(db, blob_store, &hash_a, &hash_b, "scan_auto").await {
+            match Self::smart_merge_with_source(db, blob_store, &hash_a, &hash_b, "scan_auto").await
+            {
                 Ok(result) => {
                     tracing::info!(
                         winner = %result.winner_hash,
@@ -1061,10 +1084,19 @@ impl DuplicateOrchestrator {
         let reviewable_detected_new = reviewable_detected_total.saturating_sub(reviewable_before);
 
         // Record scan epoch
-        db.with_conn(move |conn| crate::duplicates::db::set_last_duplicate_scan(conn, distance_threshold))
-            .await?;
+        db.with_conn(move |conn| {
+            crate::duplicates::db::set_last_duplicate_scan(conn, distance_threshold)
+        })
+        .await?;
 
-        tracing::info!(candidates_found, pairs_inserted, pairs_reset, files_scanned, files_with_phash = phash_count, "duplicate scan complete");
+        tracing::info!(
+            candidates_found,
+            pairs_inserted,
+            pairs_reset,
+            files_scanned,
+            files_with_phash = phash_count,
+            "duplicate scan complete"
+        );
 
         Ok(ScanDuplicatesResponse {
             candidates_found,
@@ -1179,8 +1211,7 @@ async fn consolidate_merge_timestamps(
             let min_created = min_timestamp(wc, lc);
             if min_created != wc.as_str() {
                 // set_date_created also sets updated_at = CURRENT_TIMESTAMP
-                db.set_date_created(winner_hash, min_created)
-                    .await?;
+                db.set_date_created(winner_hash, min_created).await?;
                 updated_via_created_at = true;
             }
         }

@@ -4,6 +4,7 @@ use serde::Deserialize;
 use std::collections::HashMap;
 use ts_rs::TS;
 
+use crate::runtime_contract::state_change::MediaMetadataField;
 use crate::state::AppState;
 use crate::types::SelectionQuerySpec;
 
@@ -51,16 +52,22 @@ pub async fn add_tags_selection(
     state: &AppState,
     input: AddTagsSelectionInput,
 ) -> Result<usize, String> {
-    let count = crate::selection::mutations::add_tags_selection(
+    let selection = input.selection.clone();
+    let tag_strings = input.tag_strings.clone();
+    let count = crate::selection::batch_updates::add_tags_selection(
         &state.db,
         input.selection,
         input.tag_strings,
     )
     .await?;
     if count > 0 {
-        crate::events::emit_mutation(
+        let file_hashes =
+            resolve_selection_hashes(state, GetSelectionSummaryInput { selection }).await?;
+        crate::events::emit_state_changed(
             "add_tags_selection",
-            crate::runtime_contract::mutation_builder::MutationImpact::selection_batch_tags(),
+            crate::runtime_contract::change_builder::ChangeImpact::batch_tags()
+                .file_hashes(file_hashes)
+                .tags_added(tag_strings),
         );
     }
     Ok(count)
@@ -70,16 +77,22 @@ pub async fn remove_tags_selection(
     state: &AppState,
     input: RemoveTagsSelectionInput,
 ) -> Result<usize, String> {
-    let count = crate::selection::mutations::remove_tags_selection(
+    let selection = input.selection.clone();
+    let tag_strings = input.tag_strings.clone();
+    let count = crate::selection::batch_updates::remove_tags_selection(
         &state.db,
         input.selection,
         input.tag_strings,
     )
     .await?;
     if count > 0 {
-        crate::events::emit_mutation(
+        let file_hashes =
+            resolve_selection_hashes(state, GetSelectionSummaryInput { selection }).await?;
+        crate::events::emit_state_changed(
             "remove_tags_selection",
-            crate::runtime_contract::mutation_builder::MutationImpact::selection_batch_tags(),
+            crate::runtime_contract::change_builder::ChangeImpact::batch_tags()
+                .file_hashes(file_hashes)
+                .tags_removed(tag_strings),
         );
     }
     Ok(count)
@@ -101,46 +114,50 @@ pub async fn update_selection_metadata(
     input: UpdateSelectionMetadataInput,
 ) -> Result<usize, String> {
     let mut total_count = 0;
-    let mut need_grid = false;
+    let mut changed_fields = Vec::new();
+    let selection = input.selection.clone();
 
     if let Some(rating) = input.rating {
-        let count = crate::selection::mutations::update_rating_selection(
+        let count = crate::selection::batch_updates::update_rating_selection(
             &state.db,
             input.selection.clone(),
             rating,
         )
         .await?;
         total_count += count;
-        need_grid = true;
+        changed_fields.push(MediaMetadataField::Rating);
     }
 
     if let Some(notes) = input.notes {
-        let count = crate::selection::mutations::set_notes_selection(
+        let count = crate::selection::batch_updates::set_notes_selection(
             &state.db,
             input.selection.clone(),
             notes,
         )
         .await?;
         total_count += count;
+        changed_fields.push(MediaMetadataField::Notes);
     }
 
     if let Some(urls) = input.source_urls {
-        let count = crate::selection::mutations::set_source_urls_selection(
+        let count = crate::selection::batch_updates::set_source_urls_selection(
             &state.db,
             input.selection,
             urls,
         )
         .await?;
         total_count += count;
+        changed_fields.push(MediaMetadataField::SourceUrls);
     }
 
     if total_count > 0 {
-        let impact = if need_grid {
-            crate::runtime_contract::mutation_builder::MutationImpact::selection_metadata_grid()
-        } else {
-            crate::runtime_contract::mutation_builder::MutationImpact::selection_metadata()
-        };
-        crate::events::emit_mutation("update_selection_metadata", impact);
+        let file_hashes =
+            resolve_selection_hashes(state, GetSelectionSummaryInput { selection }).await?;
+        let impact = crate::runtime_contract::change_builder::ChangeImpact::selection_metadata()
+            .file_hashes(file_hashes)
+            .media_fields_changed(&changed_fields)
+            .smart_folder_scopes_changed_for_media_fields(&changed_fields);
+        crate::events::emit_state_changed("update_selection_metadata", impact);
     }
     Ok(total_count)
 }

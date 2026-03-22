@@ -271,10 +271,10 @@ pub async fn move_folder(state: &AppState, input: MoveFolderInput) -> Result<(),
         .db
         .move_folder(input.folder_id, input.new_parent_id, input.sibling_order)
         .await?;
-    crate::events::emit_mutation(
+    crate::events::emit_state_changed(
         "move_folder",
-        crate::runtime_contract::mutation_builder::MutationImpact::sidebar(
-            crate::runtime_contract::mutation::Domain::Folders,
+        crate::runtime_contract::change_builder::ChangeImpact::sidebar(
+            crate::runtime_contract::state_change::Domain::Folders,
         )
         .folder_ids(vec![input.folder_id]),
     );
@@ -293,10 +293,10 @@ pub async fn create_folder(
         input.color,
     )
     .await?;
-    crate::events::emit_mutation(
+    crate::events::emit_state_changed(
         "create_folder",
-        crate::runtime_contract::mutation_builder::MutationImpact::sidebar(
-            crate::runtime_contract::mutation::Domain::Folders,
+        crate::runtime_contract::change_builder::ChangeImpact::sidebar(
+            crate::runtime_contract::state_change::Domain::Folders,
         ),
     );
     Ok(folder)
@@ -312,10 +312,10 @@ pub async fn update_folder(state: &AppState, input: UpdateFolderInput) -> Result
         input.auto_tags,
     )
     .await?;
-    crate::events::emit_mutation(
+    crate::events::emit_state_changed(
         "update_folder",
-        crate::runtime_contract::mutation_builder::MutationImpact::sidebar(
-            crate::runtime_contract::mutation::Domain::Folders,
+        crate::runtime_contract::change_builder::ChangeImpact::sidebar(
+            crate::runtime_contract::state_change::Domain::Folders,
         )
         .folder_ids(vec![input.folder_id]),
     );
@@ -372,10 +372,10 @@ pub async fn set_folder_watch_config(
         .folder_watch_commands
         .send(crate::folders::watch::FolderWatchCommand::Reload);
 
-    crate::events::emit_mutation(
+    crate::events::emit_state_changed(
         "set_folder_watch_config",
-        crate::runtime_contract::mutation_builder::MutationImpact::sidebar(
-            crate::runtime_contract::mutation::Domain::Folders,
+        crate::runtime_contract::change_builder::ChangeImpact::sidebar(
+            crate::runtime_contract::state_change::Domain::Folders,
         )
         .folder_ids(vec![input.folder_id]),
     );
@@ -390,10 +390,10 @@ pub async fn clear_folder_watch_config(
     let _ = state
         .folder_watch_commands
         .send(crate::folders::watch::FolderWatchCommand::Reload);
-    crate::events::emit_mutation(
+    crate::events::emit_state_changed(
         "clear_folder_watch_config",
-        crate::runtime_contract::mutation_builder::MutationImpact::sidebar(
-            crate::runtime_contract::mutation::Domain::Folders,
+        crate::runtime_contract::change_builder::ChangeImpact::sidebar(
+            crate::runtime_contract::state_change::Domain::Folders,
         )
         .folder_ids(vec![input.folder_id]),
     );
@@ -402,13 +402,13 @@ pub async fn clear_folder_watch_config(
 
 pub async fn delete_folder(state: &AppState, input: DeleteFolderInput) -> Result<(), String> {
     crate::folders::service::delete_folder(&state.db, input.folder_id).await?;
-    crate::events::emit_mutation(
+    crate::events::emit_state_changed(
         "delete_folder",
-        crate::runtime_contract::mutation_builder::MutationImpact::new()
+        crate::runtime_contract::change_builder::ChangeImpact::new()
             .domains(&[
-                crate::runtime_contract::mutation::Domain::Folders,
-                crate::runtime_contract::mutation::Domain::Sidebar,
-                crate::runtime_contract::mutation::Domain::Selection,
+                crate::runtime_contract::state_change::Domain::Folders,
+                crate::runtime_contract::state_change::Domain::Sidebar,
+                crate::runtime_contract::state_change::Domain::Selection,
             ])
             .folder_ids(vec![input.folder_id]),
     );
@@ -421,10 +421,10 @@ pub async fn update_folder_parent(
 ) -> Result<(), String> {
     crate::folders::service::update_folder_parent(&state.db, input.folder_id, input.new_parent_id)
         .await?;
-    crate::events::emit_mutation(
+    crate::events::emit_state_changed(
         "update_folder_parent",
-        crate::runtime_contract::mutation_builder::MutationImpact::sidebar(
-            crate::runtime_contract::mutation::Domain::Folders,
+        crate::runtime_contract::change_builder::ChangeImpact::sidebar(
+            crate::runtime_contract::state_change::Domain::Folders,
         )
         .folder_ids(vec![input.folder_id]),
     );
@@ -436,15 +436,17 @@ pub async fn add_files_to_folder(
     input: AddFilesToFolderInput,
 ) -> Result<usize, String> {
     let hashes = resolve_folder_op_hashes(state, input.hashes, input.selection).await?;
-    if hashes.is_empty() { return Ok(0); }
+    if hashes.is_empty() {
+        return Ok(0);
+    }
     let count = state
         .db
         .add_entities_to_folder_batch(input.folder_id, &hashes)
         .await?;
     if count > 0 {
-        crate::events::emit_mutation(
+        crate::events::emit_state_changed(
             "add_files_to_folder",
-            crate::runtime_contract::mutation_builder::MutationImpact::folder_file_change(
+            crate::runtime_contract::change_builder::ChangeImpact::folder_file_change(
                 input.folder_id,
             ),
         );
@@ -457,15 +459,17 @@ pub async fn remove_files_from_folder(
     input: RemoveFilesFromFolderInput,
 ) -> Result<usize, String> {
     let hashes = resolve_folder_op_hashes(state, input.hashes, input.selection).await?;
-    if hashes.is_empty() { return Ok(0); }
+    if hashes.is_empty() {
+        return Ok(0);
+    }
     let count = state
         .db
         .remove_entities_from_folder_batch(input.folder_id, &hashes)
         .await?;
     if count > 0 {
-        crate::events::emit_mutation(
+        crate::events::emit_state_changed(
             "remove_files_from_folder",
-            crate::runtime_contract::mutation_builder::MutationImpact::folder_file_change(
+            crate::runtime_contract::change_builder::ChangeImpact::folder_file_change(
                 input.folder_id,
             ),
         );
@@ -475,10 +479,10 @@ pub async fn remove_files_from_folder(
 
 pub async fn reorder_folders(state: &AppState, input: ReorderFoldersInput) -> Result<(), String> {
     state.db.reorder_folders(input.moves).await?;
-    crate::events::emit_mutation(
+    crate::events::emit_state_changed(
         "reorder_folders",
-        crate::runtime_contract::mutation_builder::MutationImpact::sidebar(
-            crate::runtime_contract::mutation::Domain::Folders,
+        crate::runtime_contract::change_builder::ChangeImpact::sidebar(
+            crate::runtime_contract::state_change::Domain::Folders,
         ),
     );
     Ok(())
@@ -504,11 +508,9 @@ pub async fn reorder_folder_items(
     } else {
         return Err("No reorder operation specified".to_string());
     }
-    crate::events::emit_mutation(
+    crate::events::emit_state_changed(
         "reorder_folder_items",
-        crate::runtime_contract::mutation_builder::MutationImpact::folder_item_reorder(
-            input.folder_id,
-        ),
+        crate::runtime_contract::change_builder::ChangeImpact::folder_item_reorder(input.folder_id),
     );
     Ok(())
 }
@@ -532,13 +534,13 @@ pub async fn create_collection(
     input: CreateCollectionInput,
 ) -> Result<i64, String> {
     let collection_id = state.db.create_collection(&input.name).await?;
-    crate::events::emit_mutation(
+    crate::events::emit_state_changed(
         "create_collection",
-        crate::runtime_contract::mutation_builder::MutationImpact::new()
+        crate::runtime_contract::change_builder::ChangeImpact::new()
             .domains(&[
-                crate::runtime_contract::mutation::Domain::Folders,
-                crate::runtime_contract::mutation::Domain::Sidebar,
-                crate::runtime_contract::mutation::Domain::Selection,
+                crate::runtime_contract::state_change::Domain::Folders,
+                crate::runtime_contract::state_change::Domain::Sidebar,
+                crate::runtime_contract::state_change::Domain::Selection,
             ])
             .status_changed()
             .sidebar_counts_from(&state.db)
@@ -560,16 +562,15 @@ pub async fn update_collection(
         .db
         .update_collection(input.id, input.name.as_deref(), input.tags.as_deref())
         .await?;
-    let mut impact = crate::runtime_contract::mutation_builder::MutationImpact::collection_update(
-        input.id,
-    );
+    let mut impact =
+        crate::runtime_contract::change_builder::ChangeImpact::collection_update(input.id);
     if input.tags.is_some() {
         impact = impact.tags_changed();
         if !member_hashes.is_empty() {
             impact = impact.file_hashes(member_hashes);
         }
     }
-    crate::events::emit_mutation("update_collection", impact);
+    crate::events::emit_state_changed("update_collection", impact);
     Ok(())
 }
 
@@ -584,7 +585,13 @@ pub async fn add_collection_tags(
     let merged: Vec<String> = current_tags
         .iter()
         .cloned()
-        .chain(input.tags.iter().filter(|t| !current_set.contains(t.as_str())).cloned())
+        .chain(
+            input
+                .tags
+                .iter()
+                .filter(|t| !current_set.contains(t.as_str()))
+                .cloned(),
+        )
         .collect();
     let member_hashes = state.db.list_collection_member_hashes(input.id).await?;
     state
@@ -592,12 +599,12 @@ pub async fn add_collection_tags(
         .update_collection(input.id, None, Some(&merged))
         .await?;
     let mut impact =
-        crate::runtime_contract::mutation_builder::MutationImpact::collection_update(input.id)
+        crate::runtime_contract::change_builder::ChangeImpact::collection_update(input.id)
             .tags_changed();
     if !member_hashes.is_empty() {
         impact = impact.file_hashes(member_hashes);
     }
-    crate::events::emit_mutation("add_collection_tags", impact);
+    crate::events::emit_state_changed("add_collection_tags", impact);
     Ok(())
 }
 
@@ -619,12 +626,12 @@ pub async fn remove_collection_tags(
         .update_collection(input.id, None, Some(&remaining))
         .await?;
     let mut impact =
-        crate::runtime_contract::mutation_builder::MutationImpact::collection_update(input.id)
+        crate::runtime_contract::change_builder::ChangeImpact::collection_update(input.id)
             .tags_changed();
     if !member_hashes.is_empty() {
         impact = impact.file_hashes(member_hashes);
     }
-    crate::events::emit_mutation("remove_collection_tags", impact);
+    crate::events::emit_state_changed("remove_collection_tags", impact);
     Ok(())
 }
 
@@ -636,9 +643,9 @@ pub async fn reorder_collection_members(
         .db
         .reorder_collection_members_by_hashes(input.id, &input.hashes)
         .await?;
-    crate::events::emit_mutation(
+    crate::events::emit_state_changed(
         "reorder_collection_members",
-        crate::runtime_contract::mutation_builder::MutationImpact::collection_members_reordered(
+        crate::runtime_contract::change_builder::ChangeImpact::collection_update(
             input.id,
         ),
     );
@@ -655,7 +662,11 @@ pub async fn add_collection_members(
         .await?;
     if added > 0 {
         // Members are now hidden inside a collection — remove them from status bitmaps
-        let resolved = state.db.resolve_hashes_batch(&input.hashes).await.unwrap_or_default();
+        let resolved = state
+            .db
+            .resolve_hashes_batch(&input.hashes)
+            .await
+            .unwrap_or_default();
         {
             use crate::sqlite::bitmaps::BitmapKey;
             for (_, fid) in &resolved {
@@ -664,10 +675,12 @@ pub async fn add_collection_members(
                 }
             }
         }
-        state.db.emit_read_model_event(crate::sqlite::ReadModelEvent::StatusBatchChanged);
-        crate::events::emit_mutation(
+        state
+            .db
+            .emit_read_model_event(crate::sqlite::ReadModelEvent::StatusBatchChanged);
+        crate::events::emit_state_changed(
             "add_collection_members",
-            crate::runtime_contract::mutation_builder::MutationImpact::collection_membership_change(
+            crate::runtime_contract::change_builder::ChangeImpact::collection_membership_change(
                 input.id,
             )
             .status_changed()
@@ -682,7 +695,11 @@ pub async fn remove_collection_members(
     input: RemoveCollectionMembersInput,
 ) -> Result<usize, String> {
     // Resolve member file_ids before removal (they'll be orphaned after)
-    let resolved = state.db.resolve_hashes_batch(&input.hashes).await.unwrap_or_default();
+    let resolved = state
+        .db
+        .resolve_hashes_batch(&input.hashes)
+        .await
+        .unwrap_or_default();
     let removed = state
         .db
         .remove_collection_members_by_hashes(input.id, &input.hashes)
@@ -692,17 +709,32 @@ pub async fn remove_collection_members(
         {
             use crate::sqlite::bitmaps::BitmapKey;
             for (_, fid) in &resolved {
-                let status = state.db.with_read_conn({
-                    let f = *fid;
-                    move |conn| conn.query_row("SELECT status FROM file WHERE file_id = ?1", [f], |row| row.get::<_, i64>(0))
-                }).await.unwrap_or(1);
-                state.db.bitmaps.insert(&BitmapKey::Status(status), *fid as u32);
+                let status = state
+                    .db
+                    .with_read_conn({
+                        let f = *fid;
+                        move |conn| {
+                            conn.query_row(
+                                "SELECT status FROM file WHERE file_id = ?1",
+                                [f],
+                                |row| row.get::<_, i64>(0),
+                            )
+                        }
+                    })
+                    .await
+                    .unwrap_or(1);
+                state
+                    .db
+                    .bitmaps
+                    .insert(&BitmapKey::Status(status), *fid as u32);
             }
         }
-        state.db.emit_read_model_event(crate::sqlite::ReadModelEvent::StatusBatchChanged);
-        crate::events::emit_mutation(
+        state
+            .db
+            .emit_read_model_event(crate::sqlite::ReadModelEvent::StatusBatchChanged);
+        crate::events::emit_state_changed(
             "remove_collection_members",
-            crate::runtime_contract::mutation_builder::MutationImpact::collection_membership_change(
+            crate::runtime_contract::change_builder::ChangeImpact::collection_membership_change(
                 input.id,
             )
             .status_changed()
@@ -725,10 +757,13 @@ pub async fn delete_collection(
         .map(|folder| folder.folder_id)
         .collect::<Vec<_>>();
     // Get member file_ids BEFORE deletion (for bitmap updates)
-    let member_file_ids = state.db.with_read_conn({
-        let id = input.id;
-        move |conn| crate::folders::collections_db::get_collection_member_file_ids(conn, id)
-    }).await?;
+    let member_file_ids = state
+        .db
+        .with_read_conn({
+            let id = input.id;
+            move |conn| crate::folders::collections_db::get_collection_member_file_ids(conn, id)
+        })
+        .await?;
 
     state.db.delete_collection(input.id).await?;
 
@@ -741,45 +776,49 @@ pub async fn delete_collection(
             state.db.bitmaps.remove(&BitmapKey::Status(s), cid);
         }
         // Look up each member's actual status and add to the right bitmap
-        let member_statuses = state.db.with_read_conn({
-            let fids = member_file_ids.clone();
-            move |conn| {
-                let mut result = Vec::with_capacity(fids.len());
-                for &fid in &fids {
-                    let status: i64 = conn.query_row(
-                        "SELECT status FROM file WHERE file_id = ?1",
-                        [fid],
-                        |row| row.get(0),
-                    ).unwrap_or(1);
-                    result.push((fid, status));
+        let member_statuses = state
+            .db
+            .with_read_conn({
+                let fids = member_file_ids.clone();
+                move |conn| {
+                    let mut result = Vec::with_capacity(fids.len());
+                    for &fid in &fids {
+                        let status: i64 = conn
+                            .query_row("SELECT status FROM file WHERE file_id = ?1", [fid], |row| {
+                                row.get(0)
+                            })
+                            .unwrap_or(1);
+                        result.push((fid, status));
+                    }
+                    Ok(result)
                 }
-                Ok(result)
-            }
-        }).await?;
+            })
+            .await?;
         for (fid, status) in &member_statuses {
-            state.db.bitmaps.insert(&BitmapKey::Status(*status), *fid as u32);
+            state
+                .db
+                .bitmaps
+                .insert(&BitmapKey::Status(*status), *fid as u32);
         }
     }
 
     // Trigger compiler to rebuild sidebar projection with updated bitmaps
-    state.db.emit_read_model_event(crate::sqlite::ReadModelEvent::StatusBatchChanged);
+    state
+        .db
+        .emit_read_model_event(crate::sqlite::ReadModelEvent::StatusBatchChanged);
 
-    let mut impact =
-        crate::runtime_contract::mutation_builder::MutationImpact::collection_delete(
-            input.id,
-            affected_folder_ids,
-        )
-        .status_changed()
-        .sidebar_counts_from(&state.db);
+    let mut impact = crate::runtime_contract::change_builder::ChangeImpact::collection_delete(
+        input.id,
+        affected_folder_ids,
+    )
+    .status_changed()
+    .sidebar_counts_from(&state.db);
     // Clone before moving into impact — needed for color backfill below.
     let backfill_hashes = member_hashes.clone();
     if !member_hashes.is_empty() {
         impact = impact.file_hashes(member_hashes);
     }
-    crate::events::emit_mutation(
-        "delete_collection",
-        impact,
-    );
+    crate::events::emit_state_changed("delete_collection", impact);
 
     // Backfill missing colors for members that were hidden inside the collection.
     if !backfill_hashes.is_empty() {

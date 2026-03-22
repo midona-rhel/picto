@@ -165,18 +165,26 @@ pub async fn set_entity_status(
         let file_id = state.db.resolve_hash(&hash).await?;
 
         // Check if this file is a collection cover
-        let collection_id = state.db.with_read_conn(move |conn| {
-            crate::folders::collections_db::find_collection_for_cover_file(conn, file_id)
-        }).await?;
+        let collection_id = state
+            .db
+            .with_read_conn(move |conn| {
+                crate::folders::collections_db::find_collection_for_cover_file(conn, file_id)
+            })
+            .await?;
 
         if let Some(cid) = collection_id {
             // Collection: set status on all member files, sync derives collection status
-            let member_fids = state.db.with_read_conn(move |conn| {
-                crate::folders::collections_db::get_collection_member_file_ids(conn, cid)
-            }).await?;
+            let member_fids = state
+                .db
+                .with_read_conn(move |conn| {
+                    crate::folders::collections_db::get_collection_member_file_ids(conn, cid)
+                })
+                .await?;
 
             let mut bitmap = roaring::RoaringBitmap::new();
-            for &fid in &member_fids { bitmap.insert(fid as u32); }
+            for &fid in &member_fids {
+                bitmap.insert(fid as u32);
+            }
             bitmap.insert(file_id as u32); // include cover file itself
 
             let count = bitmap.len() as usize;
@@ -187,57 +195,95 @@ pub async fn set_entity_status(
             // them inflates sidebar counts until the next compiler rebuild.
             for &fid in &member_fids {
                 for s in 0..=2i64 {
-                    state.db.bitmaps.remove(&crate::sqlite::bitmaps::BitmapKey::Status(s), fid as u32);
+                    state
+                        .db
+                        .bitmaps
+                        .remove(&crate::sqlite::bitmaps::BitmapKey::Status(s), fid as u32);
                 }
             }
 
             let folder_ids = collect_folder_ids_for_hashes(state, &[hash.clone()], 1).await;
             if let Err(err) = crate::folders::service::refresh_sidebar_projection_for_folder_ids(
-                &state.db, &folder_ids,
-            ).await {
+                &state.db,
+                &folder_ids,
+            )
+            .await
+            {
                 tracing::warn!(error = %err, "failed to refresh sidebar after set_entity_status");
             }
 
-            let mut impact = crate::runtime_contract::mutation_builder::MutationImpact::file_status_change(&state.db)
+            let mut impact =
+                crate::runtime_contract::change_builder::ChangeImpact::file_lifecycle(
+                    &state.db,
+                )
                 .file_hashes(vec![hash]);
-            if !folder_ids.is_empty() { impact = impact.folder_ids(folder_ids); }
-            crate::events::emit_mutation("set_entity_status", impact);
+            if !folder_ids.is_empty() {
+                impact = impact.folder_ids(folder_ids);
+            }
+            crate::events::emit_state_changed("set_entity_status", impact);
             Ok(count)
         } else {
             // Regular single file — use existing path
             state.db.update_file_status(&hash, status).await?;
             let folder_ids = collect_folder_ids_for_hashes(state, &[hash.clone()], 1).await;
             if let Err(err) = crate::folders::service::refresh_sidebar_projection_for_folder_ids(
-                &state.db, &folder_ids,
-            ).await {
+                &state.db,
+                &folder_ids,
+            )
+            .await
+            {
                 tracing::warn!(error = %err, "failed to refresh sidebar after set_entity_status");
             }
-            let mut impact = crate::runtime_contract::mutation_builder::MutationImpact::file_status_change(&state.db)
+            let mut impact =
+                crate::runtime_contract::change_builder::ChangeImpact::file_lifecycle(
+                    &state.db,
+                )
                 .file_hashes(vec![hash]);
-            if !folder_ids.is_empty() { impact = impact.folder_ids(folder_ids); }
-            crate::events::emit_mutation("set_entity_status", impact);
+            if !folder_ids.is_empty() {
+                impact = impact.folder_ids(folder_ids);
+            }
+            crate::events::emit_state_changed("set_entity_status", impact);
             Ok(1)
         }
     } else if let Some(selection) = input.selection {
         // Selection mode — expand any collection covers to include members
-        let original_ids: Vec<i64> = resolve_selection_bitmap(state, &selection).await?
-            .iter().map(|id| id as i64).collect();
-        let expanded = state.db.expand_collection_members(original_ids.clone()).await?;
+        let original_ids: Vec<i64> = resolve_selection_bitmap(state, &selection)
+            .await?
+            .iter()
+            .map(|id| id as i64)
+            .collect();
+        let expanded = state
+            .db
+            .expand_collection_members(original_ids.clone())
+            .await?;
 
         let mut expanded_bitmap = roaring::RoaringBitmap::new();
-        for &fid in &expanded { expanded_bitmap.insert(fid as u32); }
+        for &fid in &expanded {
+            expanded_bitmap.insert(fid as u32);
+        }
 
         let count = expanded_bitmap.len() as usize;
         if count > 0 {
+            let affected_hashes = state
+                .db
+                .resolve_ids_batch(&expanded)
+                .await?
+                .into_iter()
+                .map(|(_, hash)| hash)
+                .collect::<Vec<_>>();
             let mut folder_ids = selection.filters.folder_ids.clone().unwrap_or_default();
             if matches!(selection.mode, SelectionMode::ExplicitHashes) {
                 let explicit_hashes = selection.hashes.clone().unwrap_or_default();
-                let mut from_hashes = collect_folder_ids_for_hashes(state, &explicit_hashes, 200).await;
+                let mut from_hashes =
+                    collect_folder_ids_for_hashes(state, &explicit_hashes, 200).await;
                 folder_ids.append(&mut from_hashes);
                 folder_ids.sort_unstable();
                 folder_ids.dedup();
             }
-            state.db.update_file_status_batch(&expanded_bitmap, status).await?;
+            state
+                .db
+                .update_file_status_batch(&expanded_bitmap, status)
+                .await?;
 
             // Remove expanded member file_ids from status bitmaps — the compiler
             // excludes collection members (parent_collection_id IS NOT NULL), so
@@ -245,7 +291,10 @@ pub async fn set_entity_status(
             for &fid in &expanded {
                 if !original_ids.contains(&fid) {
                     for s in 0..=2i64 {
-                        state.db.bitmaps.remove(&crate::sqlite::bitmaps::BitmapKey::Status(s), fid as u32);
+                        state
+                            .db
+                            .bitmaps
+                            .remove(&crate::sqlite::bitmaps::BitmapKey::Status(s), fid as u32);
                     }
                 }
             }
@@ -253,23 +302,43 @@ pub async fn set_entity_status(
             // Sync collection entities whose covers were in the selection
             // (update_file_status_batch only syncs PARENT collections, not the collections themselves)
             let oids = original_ids.clone();
-            state.db.with_conn(move |conn| {
-                for fid in &oids {
-                    if let Some(cid) = crate::folders::collections_db::find_collection_for_cover_file(conn, *fid)? {
-                        crate::folders::collections_db::sync_collection_aggregate_metadata(conn, cid)?;
+            state
+                .db
+                .with_conn(move |conn| {
+                    for fid in &oids {
+                        if let Some(cid) =
+                            crate::folders::collections_db::find_collection_for_cover_file(
+                                conn, *fid,
+                            )?
+                        {
+                            crate::folders::collections_db::sync_collection_aggregate_metadata(
+                                conn, cid,
+                            )?;
+                        }
                     }
-                }
-                Ok(())
-            }).await?;
+                    Ok(())
+                })
+                .await?;
 
             if let Err(err) = crate::folders::service::refresh_sidebar_projection_for_folder_ids(
-                &state.db, &folder_ids,
-            ).await {
+                &state.db,
+                &folder_ids,
+            )
+            .await
+            {
                 tracing::warn!(error = %err, "failed to refresh sidebar after set_entity_status batch");
             }
-            let mut impact = crate::runtime_contract::mutation_builder::MutationImpact::file_status_change(&state.db);
-            if !folder_ids.is_empty() { impact = impact.folder_ids(folder_ids); }
-            crate::events::emit_mutation("set_entity_status", impact);
+            let mut impact =
+                crate::runtime_contract::change_builder::ChangeImpact::file_lifecycle(
+                    &state.db,
+                );
+            if !affected_hashes.is_empty() {
+                impact = impact.file_hashes(affected_hashes);
+            }
+            if !folder_ids.is_empty() {
+                impact = impact.folder_ids(folder_ids);
+            }
+            crate::events::emit_state_changed("set_entity_status", impact);
         }
         Ok(count)
     } else {
@@ -278,10 +347,7 @@ pub async fn set_entity_status(
 }
 
 /// Permanently delete entities by hash. For collections: deletes collection + all members.
-pub async fn delete_entities(
-    state: &AppState,
-    input: DeleteFilesInput,
-) -> Result<usize, String> {
+pub async fn delete_entities(state: &AppState, input: DeleteFilesInput) -> Result<usize, String> {
     // Collect entity IDs from the bitmap (includes both file_ids and collection entity_ids)
     let all_ids: Vec<i64> = if let Some(ref hashes) = input.hashes {
         let pairs = state.db.resolve_hashes_batch(hashes).await?;
@@ -290,7 +356,7 @@ pub async fn delete_entities(
         let bitmap = resolve_selection_bitmap(state, &selection).await?;
         bitmap.iter().map(|id| id as i64).collect()
     } else {
-        return Err("Either hashes or selection must be provided".into())
+        return Err("Either hashes or selection must be provided".into());
     };
 
     // Expand to include collection members
@@ -342,14 +408,29 @@ pub async fn delete_entities(
 
     if count > 0 {
         if let Err(err) = crate::folders::service::refresh_sidebar_projection_for_folder_ids(
-            &state.db, &folder_ids,
-        ).await {
+            &state.db,
+            &folder_ids,
+        )
+        .await
+        {
             tracing::warn!(error = %err, "failed to refresh sidebar after delete_entities");
         }
-        let mut impact = crate::runtime_contract::mutation_builder::MutationImpact::file_status_change(&state.db)
-            .file_hashes(all_hashes);
-        if !folder_ids.is_empty() { impact = impact.folder_ids(folder_ids); }
-        crate::events::emit_mutation("delete_entities", impact);
+        let mut extra_grid_scopes = collection_ids
+            .iter()
+            .map(|id| format!("collection:{id}"))
+            .collect::<Vec<_>>();
+        let mut impact =
+            crate::runtime_contract::change_builder::ChangeImpact::file_lifecycle(&state.db)
+                .file_hashes(all_hashes);
+        if !folder_ids.is_empty() {
+            impact = impact
+                .folder_ids(folder_ids.clone())
+                .folder_membership_changed(folder_ids);
+        }
+        if !extra_grid_scopes.is_empty() {
+            impact = impact.extra_grid_scopes(std::mem::take(&mut extra_grid_scopes));
+        }
+        crate::events::emit_state_changed("delete_entities", impact);
     }
     Ok(count)
 }
@@ -357,9 +438,9 @@ pub async fn delete_entities(
 pub async fn wipe_image_data(state: &AppState, _input: serde_json::Value) -> Result<(), String> {
     state.db.wipe_all_files().await?;
     state.blob_store.wipe().map_err(|e| e.to_string())?;
-    crate::events::emit_mutation(
+    crate::events::emit_state_changed(
         "wipe_image_data",
-        crate::runtime_contract::mutation_builder::MutationImpact::file_status_change(&state.db),
+        crate::runtime_contract::change_builder::ChangeImpact::file_lifecycle(&state.db),
     );
     Ok(())
 }
