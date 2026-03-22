@@ -1393,21 +1393,14 @@ impl SqliteDatabase {
         }
         self.bitmaps.insert(&BitmapKey::Status(status), fid_u32);
 
-        // Update bitmaps for cascaded member files
+        // Collection members keep their own status — don't cascade.
+        // Only update the CollectionMember bitmap for member tracking.
         for (member_fid, _) in &member_files {
-            let m = *member_fid as u32;
-            for s in 0..=2i64 {
-                self.bitmaps.remove(&BitmapKey::Status(s), m);
-            }
-            self.bitmaps.insert(&BitmapKey::Status(status), m);
+            self.bitmaps
+                .insert(&BitmapKey::CollectionMember, *member_fid as u32);
         }
 
-        if member_files.is_empty() {
-            self.emit_read_model_event(ReadModelEvent::FileStatusChanged { file_id });
-        } else {
-            // Batch event is more appropriate when many files changed
-            self.emit_read_model_event(ReadModelEvent::StatusBatchChanged);
-        }
+        self.emit_read_model_event(ReadModelEvent::FileStatusChanged { file_id });
         Ok(())
     }
 

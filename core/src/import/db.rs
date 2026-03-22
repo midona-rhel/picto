@@ -208,8 +208,12 @@ impl SqliteDatabase {
         for (hash, &fid) in result.hashes.iter().zip(&result.file_ids) {
             hash_index.insert(hash.clone(), fid);
         }
-        // Only add the collection to the status bitmap — members are hidden
+        // Only add the collection to the status bitmap — members are excluded
         bitmaps.insert(&BitmapKey::Status(0), result.collection_id as u32);
+        // Mark members in CollectionMember bitmap so sidebar counts exclude them
+        for &fid in &result.file_ids {
+            bitmaps.insert(&BitmapKey::CollectionMember, fid as u32);
+        }
 
         self.emit_read_model_event(ReadModelEvent::StatusBatchChanged);
 

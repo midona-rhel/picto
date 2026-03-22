@@ -45,6 +45,9 @@ pub enum BitmapKey {
     SmartFolder(i64),
     /// Union of all tagged file_ids — files that have at least one effective tag
     Tagged,
+    /// Entities that are members of a collection (parent_collection_id IS NOT NULL).
+    /// Used to exclude members from sidebar counts.
+    CollectionMember,
 }
 
 /// Compaction threshold — when the WAL exceeds this size, the next flush
@@ -82,6 +85,7 @@ fn category_of(key: &BitmapKey) -> BitmapCategory {
             BitmapCategory::Tags
         }
         BitmapKey::Folder(_) | BitmapKey::SmartFolder(_) => BitmapCategory::Folders,
+        BitmapKey::CollectionMember => BitmapCategory::Status,
     }
 }
 
@@ -972,6 +976,9 @@ fn serialize_key(key: &BitmapKey) -> Vec<u8> {
         }
         BitmapKey::Tagged => {
             buf.push(7);
+        }
+        BitmapKey::CollectionMember => {
+            buf.push(8);
         }
     }
     buf
