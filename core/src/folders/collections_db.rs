@@ -395,11 +395,11 @@ pub(crate) fn sync_collection_aggregate_metadata(
 
     // Inherit created_at from the earliest member and updated_at from the latest
     // so the collection sorts alongside its children in date-based views.
+    // Use the member entity's created_at (which holds the original post date
+    // from gallery-dl metadata), not file.imported_at (which is always now()).
     let earliest_date: Option<String> = conn.query_row(
-        "SELECT MIN(COALESCE(f.imported_at, me_member.created_at))
+        "SELECT MIN(me_member.created_at)
          FROM media_entity me_member
-         JOIN entity_file ef ON ef.entity_id = me_member.entity_id
-         JOIN file f ON f.file_id = ef.file_id
          WHERE me_member.kind = 'single'
            AND me_member.parent_collection_id = ?1",
         [collection_id],
