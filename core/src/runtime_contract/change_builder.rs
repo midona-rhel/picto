@@ -470,7 +470,6 @@ impl ChangeImpact {
             .folder_membership_changed(vec![collection_id])
             .extra_grid_scopes(vec![
                 format!("collection:{collection_id}"),
-                "system:active".into(),
                 "folder:all".into(),
             ])
     }

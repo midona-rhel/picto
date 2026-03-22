@@ -571,7 +571,8 @@ pub async fn create_collection(
             collection_id,
         )
         .status_changed()
-        .sidebar_counts_from(&state.db),
+        .sidebar_counts_from(&state.db)
+        .extra_grid_scopes(vec!["system:active".into()]),
     );
     Ok(collection_id)
 }
@@ -653,7 +654,8 @@ pub async fn add_collection_members(
                 input.id,
             )
             .status_changed()
-            .sidebar_counts_from(&state.db),
+            .sidebar_counts_from(&state.db)
+            .extra_grid_scopes(vec!["system:active".into()]),
         );
     }
     Ok(added)
@@ -707,7 +709,8 @@ pub async fn remove_collection_members(
                 input.id,
             )
             .status_changed()
-            .sidebar_counts_from(&state.db),
+            .sidebar_counts_from(&state.db)
+            .extra_grid_scopes(vec!["system:active".into()]),
         );
     }
     Ok(removed)
