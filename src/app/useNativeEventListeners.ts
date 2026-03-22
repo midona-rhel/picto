@@ -17,7 +17,7 @@ import { useLogStore } from '../state/logStore';
 import { runBestEffort } from '../shared/lib/asyncOps';
 import type { ResourceKey } from '../shared/types/backendState';
 import type { ManualImportProgressEvent, MediaExportProgressEvent } from '../shared/types/api/events';
-import { openSettingsWindow } from '../platform/api';
+import { windowController } from '../controllers/windowController';
 
 /**
  * Consolidates all native event listeners and runtime init/teardown
@@ -63,7 +63,7 @@ export function useNativeEventListeners(): void {
 
   useEffect(() => {
     const unlisten = listen('menu:open-settings', () => {
-      runBestEffort('menu.openSettingsWindow', openSettingsWindow());
+      runBestEffort('menu.openSettingsWindow', windowController.openSettings());
     });
     return () => { runBestEffort('menu.unlistenOpenSettings', unlisten.then((fn) => fn())); };
   }, []);

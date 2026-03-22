@@ -9,10 +9,12 @@ import {
   Textarea,
 } from '@mantine/core';
 import { IconPlus, IconX } from '@tabler/icons-react';
-import { api, getCurrentWindow } from '#desktop/api';
+import { getCurrentWindow } from '#desktop/api';
 import { notifyError, notifySuccess } from '../../../shared/lib/notify';
 import { SubscriptionGroupsPanel } from './SubscriptionGroupsPanel';
 import { CreateSubscriptionGroupModal } from './CreateSubscriptionGroupModal';
+import { subscriptionsController } from '../../../controllers/subscriptionsController';
+import { windowController } from '../../../controllers/windowController';
 import type {
   CredentialDomain,
   CredentialHealth,
@@ -178,9 +180,9 @@ export function SubscriptionsWindow() {
   const loadCredentialData = useCallback(async () => {
     try {
       const [siteCatalog, storedCreds, health] = await Promise.all([
-        api.subscriptions.getSites(),
-        api.subscriptions.listCredentials(),
-        api.subscriptions.listCredentialHealth(),
+        subscriptionsController.getSites(),
+        subscriptionsController.listCredentials(),
+        subscriptionsController.listCredentialHealth(),
       ]);
       setSites(siteCatalog);
       setCredentials(storedCreds);
@@ -285,7 +287,7 @@ export function SubscriptionsWindow() {
       const parsedRule34 = isBooruApiCredential
         ? parseBooruApiCredential(credentialForm.booruApiRaw)
         : null;
-      await api.subscriptions.setCredential({
+      await subscriptionsController.setCredential({
         site_category: credentialForm.siteCategory,
         credential_type: credentialForm.credentialType,
         display_name: credentialForm.displayName || null,
@@ -310,7 +312,7 @@ export function SubscriptionsWindow() {
 
   const deleteCredential = async (siteCategory: string) => {
     try {
-      await api.subscriptions.deleteCredential(siteCategory);
+      await subscriptionsController.deleteCredential(siteCategory);
       notifySuccess('Credential removed');
       await loadCredentialData();
     } catch (error) {
@@ -322,7 +324,7 @@ export function SubscriptionsWindow() {
     getCurrentWindow().close().catch(() => {});
   };
   const openDownloadSettings = () => {
-    api.os.openSettingsWindow().catch(() => {});
+    windowController.openSettings().catch(() => {});
   };
 
   return (
@@ -445,7 +447,7 @@ export function SubscriptionsWindow() {
                 Twitter/X requires two browser cookies. To get them:
               </Text>
               <Text size="xs" c="dimmed" component="ol" style={{ margin: 0, paddingLeft: 16 }}>
-                <li>Log into <span role="button" style={{ color: 'var(--color-primary)', cursor: 'pointer' }} onClick={() => api.os.openExternalUrl('https://x.com')}>x.com</span> in your browser</li>
+                <li>Log into <span role="button" style={{ color: 'var(--color-primary)', cursor: 'pointer' }} onClick={() => windowController.openExternal('https://x.com')}>x.com</span> in your browser</li>
                 <li>Open DevTools (F12) → Application → Cookies → x.com</li>
                 <li>Copy the values for <code>auth_token</code> and <code>ct0</code></li>
               </Text>
@@ -485,7 +487,7 @@ export function SubscriptionsWindow() {
                 FurAffinity requires browser cookies. To get them:
               </Text>
               <Text size="xs" c="dimmed" component="ol" style={{ margin: 0, paddingLeft: 16 }}>
-                <li>Log into <span role="button" style={{ color: 'var(--color-primary)', cursor: 'pointer' }} onClick={() => api.os.openExternalUrl('https://www.furaffinity.net')}>furaffinity.net</span> in your browser</li>
+                <li>Log into <span role="button" style={{ color: 'var(--color-primary)', cursor: 'pointer' }} onClick={() => windowController.openExternal('https://www.furaffinity.net')}>furaffinity.net</span> in your browser</li>
                 <li>Open DevTools (F12) → Application → Cookies → furaffinity.net</li>
                 <li>Copy cookies <code>a</code> and <code>b</code> and paste below</li>
               </Text>
@@ -507,12 +509,12 @@ export function SubscriptionsWindow() {
               <Text size="xs" c="dimmed" component="ol" style={{ margin: 0, paddingLeft: 16 }}>
                 {isRule34Category(credentialForm.siteCategory) ? (
                   <>
-                    <li>Go to <span role="button" style={{ color: 'var(--color-primary)', cursor: 'pointer' }} onClick={() => api.os.openExternalUrl('https://rule34.xxx/index.php?page=account&s=options')}>rule34.xxx account settings</span></li>
+                    <li>Go to <span role="button" style={{ color: 'var(--color-primary)', cursor: 'pointer' }} onClick={() => windowController.openExternal('https://rule34.xxx/index.php?page=account&s=options')}>rule34.xxx account settings</span></li>
                     <li>Log in, scroll to your API credentials</li>
                   </>
                 ) : (
                   <>
-                    <li>Go to <span role="button" style={{ color: 'var(--color-primary)', cursor: 'pointer' }} onClick={() => api.os.openExternalUrl('https://gelbooru.com/index.php?page=account&s=options')}>Gelbooru account settings</span></li>
+                    <li>Go to <span role="button" style={{ color: 'var(--color-primary)', cursor: 'pointer' }} onClick={() => windowController.openExternal('https://gelbooru.com/index.php?page=account&s=options')}>Gelbooru account settings</span></li>
                     <li>Log in, scroll to your API credentials</li>
                   </>
                 )}
@@ -539,9 +541,9 @@ export function SubscriptionsWindow() {
                 onClick={async () => {
                   try {
                     setPixivOAuthBusy(true);
-                    const challenge = await api.subscriptions.pixivOAuthStart();
-                    const { code, phpsessid } = await api.subscriptions.pixivOAuthPopup(challenge.login_url);
-                    await api.subscriptions.pixivOAuthExchange(code, challenge.code_verifier, phpsessid);
+                    const challenge = await subscriptionsController.pixivOAuthStart();
+                    const { code, phpsessid } = await subscriptionsController.pixivOAuthPopup(challenge.login_url);
+                    await subscriptionsController.pixivOAuthExchange(code, challenge.code_verifier, phpsessid);
                     notifySuccess('Pixiv authorized successfully');
                     setCredentialModalOpen(false);
                     await loadCredentialData();

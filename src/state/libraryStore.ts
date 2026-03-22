@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { api, libraryHost } from '#desktop/api';
+import { libraryController } from '../controllers/libraryController';
 
 export interface LibraryInfo {
   path: string;
@@ -42,7 +42,7 @@ export const useLibraryStore = create<LibraryState>((set) => ({
   switching: false,
 
   loadConfig: async () => {
-    const config = await libraryHost.getConfig();
+    const config = await libraryController.getConfig();
     const existsMap = config.existsMap ?? {};
     const metaMap = config.libraryMeta ?? {};
     const libraries: LibraryInfo[] = (config.libraryHistory ?? []).map((p) => ({
@@ -58,55 +58,55 @@ export const useLibraryStore = create<LibraryState>((set) => ({
   },
 
   switchLibrary: async (path) => {
-    await libraryHost.switch(path);
+    await libraryController.switch(path);
   },
 
   createLibrary: async (name, savePath) => {
-    await libraryHost.create(name, savePath);
+    await libraryController.create(name, savePath);
   },
 
   openLibrary: async () => {
-    await libraryHost.open();
+    await libraryController.open();
   },
 
   removeLibrary: async (path) => {
-    await libraryHost.remove(path);
+    await libraryController.remove(path);
     await useLibraryStore.getState().loadConfig();
   },
 
   deleteLibrary: async (path) => {
-    await libraryHost.delete(path);
+    await libraryController.delete(path);
     await useLibraryStore.getState().loadConfig();
   },
 
   togglePin: async (path) => {
-    await libraryHost.togglePin(path);
+    await libraryController.togglePin(path);
     await useLibraryStore.getState().loadConfig();
   },
 
   renameLibrary: async (path, newName) => {
-    await libraryHost.rename(path, newName);
+    await libraryController.rename(path, newName);
     await useLibraryStore.getState().loadConfig();
   },
 
   relocateLibrary: async (oldPath) => {
-    await libraryHost.relocate(oldPath);
+    await libraryController.relocate(oldPath);
     await useLibraryStore.getState().loadConfig();
   },
 
   setLibraryIcon: async (path, icon) => {
-    await libraryHost.setMeta(path, { icon });
+    await libraryController.setMeta(path, { icon });
     await useLibraryStore.getState().loadConfig();
   },
 
   setLibraryColor: async (path, color) => {
-    await libraryHost.setMeta(path, { color });
+    await libraryController.setMeta(path, { color });
     await useLibraryStore.getState().loadConfig();
   },
 
   getLibraryInfo: async () => {
     try {
-      return await api.library.getInfo();
+      return await libraryController.getInfo();
     } catch {
       return null;
     }

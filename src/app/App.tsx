@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { IconDownload, IconLayoutSidebar, IconSettings } from '@tabler/icons-react';
 import { useHotkeys } from '@mantine/hooks';
-import { api } from '#desktop/api';
 import { useNavigationStore } from '../state/navigationStore';
 import { useSettingsStore, type AppSettings } from '../state/settingsStore';
 import { useExportActionStore } from '../state/exportActionStore';
@@ -23,6 +22,7 @@ import { useAppBootstrap } from './useAppBootstrap';
 import { useCommandPalette } from './useCommandPalette';
 import { useInspectorState } from '../features/inspector/hooks/useInspectorState';
 import { useGridFeatureState } from '../features/grid/hooks/useGridFeatureState';
+import { windowController } from '../controllers/windowController';
 import { UpdateBanner } from '#ui/UpdateBanner';
 import styles from './App.module.css';
 
@@ -181,12 +181,12 @@ function App() {
       updateSetting('showInspector', true);
     }
   }, [panelsVisible, updateSetting]);
-  const openSubscriptionsWindow = useCallback(() => {
-    api.os.openSubscriptionsWindow().catch(() => {});
+  const handleOpenSubscriptions = useCallback(() => {
+    windowController.openSubscriptions().catch(() => {});
   }, []);
 
-  const openSettingsWindow = useCallback(() => {
-    api.os.openSettingsWindow().catch(() => {});
+  const handleOpenSettings = useCallback(() => {
+    windowController.openSettings().catch(() => {});
   }, []);
 
   // ── Command Palette ──────────
@@ -345,12 +345,12 @@ function App() {
           <div style={{ flex: 1 }} />
           <div className={styles.titlebarLeftActions}>
             <KbdTooltip label="Settings" shortcut="Mod+,">
-              <button className={`${styles.panelToggleBtn} no-drag-region`} onClick={openSettingsWindow}>
+              <button className={`${styles.panelToggleBtn} no-drag-region`} onClick={handleOpenSettings}>
                 <IconSettings size={16} />
               </button>
             </KbdTooltip>
             <KbdTooltip label="Subscriptions" shortcut="Mod+Shift+S">
-              <button className={`${styles.panelToggleBtn} no-drag-region`} onClick={openSubscriptionsWindow}>
+              <button className={`${styles.panelToggleBtn} no-drag-region`} onClick={handleOpenSubscriptions}>
                 <IconDownload size={16} />
               </button>
             </KbdTooltip>

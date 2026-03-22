@@ -1,7 +1,7 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { useGlobalKeydown } from '../hooks/useGlobalKeydown';
 import { IconExternalLink, IconLink, IconPlus, IconX } from '@tabler/icons-react';
-import { api } from '#desktop/api';
+import { windowController } from '../../controllers/windowController';
 import { KbdTooltip } from './KbdTooltip';
 import styles from './UrlListEditor.module.css';
 
@@ -157,7 +157,7 @@ export function UrlListEditor({ urls, onChange, readOnly }: UrlListEditorProps) 
             <div
               key={idx}
               className={styles.urlPopoverRow}
-              onClick={() => url.trim() && api.os.openExternalUrl(url.trim())}
+              onClick={() => url.trim() && windowController.openExternal(url.trim())}
             >
               {url}
             </div>
@@ -196,7 +196,7 @@ export function UrlListEditor({ urls, onChange, readOnly }: UrlListEditorProps) 
                 <KbdTooltip label="Open link">
                   <button
                     className={styles.urlActionBtn}
-                    onClick={() => api.os.openExternalUrl(url.trim())}
+                    onClick={() => windowController.openExternal(url.trim())}
                   >
                     <IconExternalLink size={13} />
                   </button>

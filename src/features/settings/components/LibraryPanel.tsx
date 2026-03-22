@@ -2,7 +2,8 @@ import { useCallback, useEffect, useState } from 'react';
 import { Text, TextInput } from '@mantine/core';
 import { IconFolderOpen, IconPlus } from '@tabler/icons-react';
 import { useLibraryStore, type LibraryInfo } from '../../../state/libraryStore';
-import { save as showSaveDialog, api } from '#desktop/api';
+import { save as showSaveDialog } from '#desktop/api';
+import { windowController } from '../../../controllers/windowController';
 import { TextButton } from '../../../shared/components/TextButton';
 import { StateBlock } from '../../../shared/components/state';
 import styles from './Settings.module.css';
@@ -55,7 +56,7 @@ export function LibraryPanel() {
   };
 
   const handleRevealInFinder = (libPath: string) => {
-    api.os.openExternalUrl(`file://${libPath}`);
+    windowController.openExternal(`file://${libPath}`);
   };
 
   if (loading) {

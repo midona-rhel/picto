@@ -38,8 +38,8 @@ export const smartFoldersController = {
     eagerSidebarRefresh();
     registerUndoAction({
       label,
-      undo: async () => { if (created?.id) { await api.smartFolders.delete(created.id); eagerSidebarRefresh(); } },
-      redo: async () => { created = await api.smartFolders.create(folder); eagerSidebarRefresh(); },
+      backward: async () => { if (created?.id) { await api.smartFolders.delete(created.id); eagerSidebarRefresh(); } },
+      forward: async () => { created = await api.smartFolders.create(folder); eagerSidebarRefresh(); },
     });
     return created;
   },
@@ -50,8 +50,8 @@ export const smartFoldersController = {
     if (beforeData) {
       registerUndoAction({
         label: 'Update smart folder',
-        undo: async () => { await api.smartFolders.update(id, beforeData); eagerSidebarRefresh(); },
-        redo: async () => { await api.smartFolders.update(id, folder); eagerSidebarRefresh(); },
+        backward: async () => { await api.smartFolders.update(id, beforeData); eagerSidebarRefresh(); },
+        forward: async () => { await api.smartFolders.update(id, folder); eagerSidebarRefresh(); },
       });
     }
     return updated;
@@ -66,8 +66,8 @@ export const smartFoldersController = {
     if (snapshotData) {
       registerUndoAction({
         label: 'Delete smart folder',
-        undo: async () => { await api.smartFolders.create(snapshotData); eagerSidebarRefresh(); },
-        redo: async () => { /* ID differs after re-creation — cannot reliably re-delete */ },
+        backward: async () => { await api.smartFolders.create(snapshotData); eagerSidebarRefresh(); },
+        forward: async () => { /* ID differs after re-creation — cannot reliably re-delete */ },
       });
     }
   },
@@ -84,11 +84,11 @@ export const smartFoldersController = {
     if (snapshots && snapshots.length > 0) {
       registerUndoAction({
         label: `Delete ${ids.length} smart folder${ids.length === 1 ? '' : 's'}`,
-        undo: async () => {
+        backward: async () => {
           for (const snap of snapshots) { await api.smartFolders.create(snap); }
           eagerSidebarRefresh();
         },
-        redo: async () => { /* best-effort: IDs will differ after re-creation */ },
+        forward: async () => { /* best-effort: IDs will differ after re-creation */ },
       });
     }
   },
@@ -146,8 +146,8 @@ export const smartFoldersController = {
 
     registerUndoAction({
       label: 'Move smart folder',
-      undo: async () => { await api.smartFolders.move(draggedId, oldParentId, oldSiblingMoves); eagerSidebarRefresh(); },
-      redo: async () => { await api.smartFolders.move(draggedId, newParentId, newSiblingMoves); eagerSidebarRefresh(); },
+      backward: async () => { await api.smartFolders.move(draggedId, oldParentId, oldSiblingMoves); eagerSidebarRefresh(); },
+      forward: async () => { await api.smartFolders.move(draggedId, newParentId, newSiblingMoves); eagerSidebarRefresh(); },
     });
   },
 
@@ -157,8 +157,8 @@ export const smartFoldersController = {
     if (previousMoves) {
       registerUndoAction({
         label: 'Reorder smart folders',
-        undo: async () => { await api.smartFolders.reorder(parentId, previousMoves); eagerSidebarRefresh(); },
-        redo: async () => { await api.smartFolders.reorder(parentId, moves); eagerSidebarRefresh(); },
+        backward: async () => { await api.smartFolders.reorder(parentId, previousMoves); eagerSidebarRefresh(); },
+        forward: async () => { await api.smartFolders.reorder(parentId, moves); eagerSidebarRefresh(); },
       });
     }
   },
