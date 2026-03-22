@@ -109,7 +109,8 @@ function stableSelectionKey(spec: SelectionQuerySpec): string {
 function fetchMetadata(hash: string): Promise<EntityAllMetadata> {
   const existing = metadataInflight.get(hash);
   if (existing) return existing;
-  const request = queryApi.file.getAllMetadata(hash).finally(() => metadataInflight.delete(hash));
+  const request = queryApi.file.getAllMetadata(hash)
+    .finally(() => metadataInflight.delete(hash));
   metadataInflight.set(hash, request);
   return request;
 }
@@ -124,7 +125,7 @@ export const entityController = {
   },
 
   prefetchMetadata(hash: string): void {
-    void fetchMetadata(hash);
+    fetchMetadata(hash).catch(() => {});
   },
 
   async prefetchMetadataBatch(hashes: string[]): Promise<void> {
@@ -196,19 +197,26 @@ export const entityController = {
   },
 
   async setStatusSelection(selection: SelectionQuerySpec, status: string) {
-    const selectionCount = selection.hashes?.length ?? 0;
-    const hashes = selection.hashes?.length
-      ? selection.hashes
+    const isExplicit = (selection.hashes?.length ?? 0) > 0;
+    const hashes = isExplicit
+      ? selection.hashes!
       : await queryApi.selection.resolveHashes(selection);
     const previousStatus = scopeExpectedStatus();
     // Eager BEFORE the backend call
     eagerInvalidateMany(hashes);
-    const eagerCount = selectionCount > 0
-      ? selectionCount
+    const eagerCount = isExplicit
+      ? hashes.length
       : scopeCount(previousStatus);
     eagerAdjustSystemCounts(eagerCount, previousStatus, status);
     if (statusLeavesScope(status)) {
-      useGridMetadataStore.getState().queueRemovals(hashes);
+      if (!isExplicit) {
+        // Virtual select-all: clear the entire grid rather than trying to
+        // match individual hashes (resolveHashes expands collections to
+        // members, which don't match the grid's cover-file hashes).
+        useGridMetadataStore.getState().queueClearAll();
+      } else {
+        useGridMetadataStore.getState().queueRemovals(hashes);
+      }
     } else if (statusEntersScope(status)) {
       Promise.all(hashes.map((h) => queryApi.file.get(h))).then((entities) => {
         const valid = entities.filter((e): e is NonNullable<typeof e> => e != null);

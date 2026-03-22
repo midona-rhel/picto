@@ -71,6 +71,8 @@ interface CacheState {
   markMetadataChanged: (hash: string) => void;
   clearChangedMetadataMarks: () => void;
   queueRemovals: (hashes: string[]) => void;
+  /** Clear all items from the grid (virtual select-all trash/delete). */
+  queueClearAll: () => void;
   drainRemovals: () => { hashes: Set<string>; clearAll: boolean };
   queueInsertions: (entities: EntitySlim[]) => void;
   drainInsertions: () => EntitySlim[];
@@ -185,6 +187,10 @@ export const useGridMetadataStore = create<CacheState>((set, get) => ({
       for (const hash of hashes) next.add(hash);
       return { pendingRemovals: next };
     });
+  },
+
+  queueClearAll: () => {
+    set({ pendingClearAll: true });
   },
 
   drainRemovals: () => {
