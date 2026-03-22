@@ -12,7 +12,7 @@ pub use common::{ok_null, to_json};
 macro_rules! call {
     ($func:path, $state:expr, $args:expr) => {{
         let input =
-            serde_json::from_value($args.clone()).map_err(|e| format!("Invalid args: {e}"))?;
+            serde_json::from_value($args).map_err(|e| format!("Invalid args: {e}"))?;
         let output = $func($state, input).await?;
         to_json(&output)
     }};
