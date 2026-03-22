@@ -95,6 +95,10 @@ pub fn emit_state_changed(origin: &str, impact: ChangeImpact) {
         subscription_ids: impact.subscription_ids,
         query_ids: impact.query_ids,
         credential_categories: impact.credential_categories,
+        folder_parent_changes: impact.folder_parent_changes,
+        folder_order_changes: impact.folder_order_changes,
+        smart_folder_parent_changes: impact.smart_folder_parent_changes,
+        smart_folder_order_changes: impact.smart_folder_order_changes,
     };
 
     let event = StateChangedEvent {

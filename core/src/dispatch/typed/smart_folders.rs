@@ -158,18 +158,21 @@ pub async fn move_smart_folder(
             return Err("A smart folder cannot be moved under one of its descendants".to_string());
         }
     }
+    let sibling_order = input.sibling_order;
     crate::smart_folders::service::SmartFolderService::move_smart_folder(
         &state.db,
         input.smart_folder_id,
         input.new_parent_id,
-        input.sibling_order,
+        sibling_order.clone(),
     )
     .await?;
     crate::events::emit_state_changed(
         "move_smart_folder",
         crate::runtime_contract::change_builder::ChangeImpact::new()
             .add_domains(&[crate::runtime_contract::state_change::Domain::SmartFolders, crate::runtime_contract::state_change::Domain::Sidebar])
-        .smart_folder_ids(vec![input.smart_folder_id]),
+            .smart_folder_ids(vec![input.smart_folder_id])
+            .smart_folder_parent_changes(vec![(input.smart_folder_id, input.new_parent_id)])
+            .smart_folder_order_changes(sibling_order),
     );
     Ok(())
 }
@@ -211,6 +214,7 @@ pub async fn reorder_smart_folders(
     input: ReorderSmartFoldersInput,
 ) -> Result<(), String> {
     let sfids: Vec<i64> = input.moves.iter().map(|(id, _)| *id).collect();
+    let order_changes = input.moves.clone();
     crate::smart_folders::service::SmartFolderService::reorder_smart_folders(
         &state.db,
         input.parent_id,
@@ -221,7 +225,8 @@ pub async fn reorder_smart_folders(
         "reorder_smart_folders",
         crate::runtime_contract::change_builder::ChangeImpact::new()
             .add_domains(&[crate::runtime_contract::state_change::Domain::SmartFolders, crate::runtime_contract::state_change::Domain::Sidebar])
-        .smart_folder_ids(sfids),
+            .smart_folder_ids(sfids)
+            .smart_folder_order_changes(order_changes),
     );
     Ok(())
 }

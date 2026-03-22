@@ -119,6 +119,22 @@ pub struct StateChanges {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub credential_categories: Option<Vec<String>>,
+    /// Folder tree parent changes: [[folder_id, new_parent_id | null], ...]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional, type = "Array<[number, number | null]>")]
+    pub folder_parent_changes: Option<Vec<(i64, Option<i64>)>>,
+    /// Folder tree order changes: [[folder_id, new_sort_order], ...]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional, type = "Array<[number, number]>")]
+    pub folder_order_changes: Option<Vec<(i64, i64)>>,
+    /// Smart folder tree parent changes: [[sf_id, new_parent_id | null], ...]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional, type = "Array<[number, number | null]>")]
+    pub smart_folder_parent_changes: Option<Vec<(i64, Option<i64>)>>,
+    /// Smart folder tree order changes: [[sf_id, new_sort_order], ...]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional, type = "Array<[number, number]>")]
+    pub smart_folder_order_changes: Option<Vec<(i64, i64)>>,
 }
 
 /// O(1) bitmap-derived sidebar counts.

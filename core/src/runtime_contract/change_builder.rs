@@ -30,6 +30,10 @@ pub struct ChangeImpact {
     pub subscription_ids: Option<Vec<i64>>,
     pub query_ids: Option<Vec<i64>>,
     pub credential_categories: Option<Vec<String>>,
+    pub folder_parent_changes: Option<Vec<(i64, Option<i64>)>>,
+    pub folder_order_changes: Option<Vec<(i64, i64)>>,
+    pub smart_folder_parent_changes: Option<Vec<(i64, Option<i64>)>>,
+    pub smart_folder_order_changes: Option<Vec<(i64, i64)>>,
 }
 
 impl ChangeImpact {
@@ -118,6 +122,26 @@ impl ChangeImpact {
         for cat in cats {
             if !merged.contains(&cat) { merged.push(cat); }
         }
+        self
+    }
+
+    pub fn folder_parent_changes(mut self, changes: Vec<(i64, Option<i64>)>) -> Self {
+        self.folder_parent_changes = Some(changes);
+        self
+    }
+
+    pub fn folder_order_changes(mut self, changes: Vec<(i64, i64)>) -> Self {
+        self.folder_order_changes = Some(changes);
+        self
+    }
+
+    pub fn smart_folder_parent_changes(mut self, changes: Vec<(i64, Option<i64>)>) -> Self {
+        self.smart_folder_parent_changes = Some(changes);
+        self
+    }
+
+    pub fn smart_folder_order_changes(mut self, changes: Vec<(i64, i64)>) -> Self {
+        self.smart_folder_order_changes = Some(changes);
         self
     }
 

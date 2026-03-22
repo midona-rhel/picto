@@ -116,6 +116,10 @@ fn state_changed_event_contract() {
             subscription_ids: None,
             query_ids: None,
             credential_categories: None,
+            folder_parent_changes: None,
+            folder_order_changes: None,
+            smart_folder_parent_changes: None,
+            smart_folder_order_changes: None,
         },
         sidebar_counts: None,
     };
