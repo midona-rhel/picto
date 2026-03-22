@@ -99,22 +99,26 @@ export function useInspectorFetch(
 
   useEffect(() => {
     if (selectionSummarySpec) {
-      // Virtual selection (Select All): check if scope is a folder
-      const scopeSpec = selectionSummarySpec.scope;
-      if (scopeSpec?.kind === 'folder' && scopeSpec.folder_id) {
-        foldersController.list()
-          .then((folders) => {
-            const folder = folders.find((f: { folder_id: number }) => f.folder_id === scopeSpec.folder_id);
-            if (folder) {
-              setFileFolders([{ folder_id: folder.folder_id, folder_name: folder.name }]);
-            } else {
-              setFileFolders([]);
+      // Virtual selection (Select All): resolve hashes and compute shared folders
+      entityController.resolveSelectionHashes(selectionSummarySpec)
+        .then((hashes) => {
+          const sample = hashes.slice(0, 200);
+          if (sample.length === 0) { setFileFolders([]); return; }
+          return Promise.all(sample.map((h) =>
+            foldersController.getFileFolders(h).catch(() => [] as FolderMembership[]),
+          )).then((allFolders) => {
+            if (allFolders.length === 0) { setFileFolders([]); return; }
+            const firstIds = new Set(allFolders[0].map((f) => f.folder_id));
+            for (let i = 1; i < allFolders.length; i++) {
+              const ids = new Set(allFolders[i].map((f) => f.folder_id));
+              for (const id of firstIds) {
+                if (!ids.has(id)) firstIds.delete(id);
+              }
             }
-          })
-          .catch(() => setFileFolders([]));
-      } else {
-        setFileFolders([]);
-      }
+            setFileFolders(allFolders[0].filter((f) => firstIds.has(f.folder_id)));
+          });
+        })
+        .catch(() => setFileFolders([]));
       return;
     }
     if (selectedCollection) {
@@ -132,9 +136,14 @@ export function useInspectorFetch(
         .then(setFileFolders)
         .catch(() => setFileFolders([]));
     } else if (selectedImages.length > 1) {
-      // Multi-file: compute shared folders (folders ALL selected files belong to)
-      const hashes = selectedImages.slice(0, 200).map((i) => i.hash); // cap for perf
-      Promise.all(hashes.map((h) => foldersController.getFileFolders(h).catch(() => [] as FolderMembership[])))
+      // Multi-select: compute shared folders (folders ALL selected items belong to)
+      // For collections, use entity_id; for files, use hash
+      const items = selectedImages.slice(0, 200);
+      Promise.all(items.map((img) =>
+        img.is_collection && img.entity_id
+          ? foldersController.getEntityFolders(img.entity_id).catch(() => [] as FolderMembership[])
+          : foldersController.getFileFolders(img.hash).catch(() => [] as FolderMembership[]),
+      ))
         .then((allFolders) => {
           if (allFolders.length === 0) { setFileFolders([]); return; }
           // Intersect: only keep folders present in ALL files
@@ -188,7 +197,9 @@ export function useInspectorFetch(
 
   useEffect(() => {
     if (selectionSummarySpec) {
-      setFileTags([]);
+      // Tags are owned by the summary effect — don't clear them here.
+      // Clearing causes data loss when Ctrl+A is pressed twice (same key
+      // means the summary effect won't re-fire to restore tags).
       setFileMetadata(null);
       setCollectionSummary(null);
       return;
@@ -225,37 +236,79 @@ export function useInspectorFetch(
           setCollectionSummary(null);
           setFileTags(metadata.tags);
         } else {
-          // Multi-file: use backend SelectionSummary instead of N individual fetches
-          const spec: SelectionQuerySpec = {
-            mode: 'explicit_hashes',
-            hashes: selectedImages.map((i) => i.hash),
-            scope: { kind: 'system', system_key: 'all' },
-            filters: {},
-            sort: {},
-            excluded_hashes: null,
-            included_hashes: null,
-          };
-          const summary = await getOrStartSelectionSummary(spec);
-          if (requestIdRef.current !== requestId) return;
-          // Clear single/collection data atomically with new multi-selection data
-          setCollectionSummary(null);
-          setFileMetadata(null);
-          setNotes('');
-          setSourceUrls([]);
-          setSelectionSummary(summary);
-          setFileTags(
-            (summary.shared_tags ?? []).map((t) => {
-              const parsed = parseTagString(t.tag);
-              return {
-                raw_tag: t.tag,
-                display_tag: t.tag,
-                namespace: parsed.namespace,
-                subtag: parsed.subtag,
-                source: 'selection_summary',
-                read_only: false,
-              } satisfies ResolvedTagInfo;
-            }),
-          );
+          // Multi-selection: check if any are collections
+          const collections = selectedImages.filter((i) => i.is_collection && i.entity_id);
+
+          if (collections.length > 0 && collections.length === selectedImages.length) {
+            // All collections: fetch each summary and merge shared tags/folders/size
+            const summaries = await Promise.all(
+              collections.map((c) => collectionsController.getSummary(c.entity_id!)),
+            );
+            if (requestIdRef.current !== requestId) return;
+
+            // Shared tags: tags present in ALL collections
+            const tagSets = summaries.map((s) => new Set(s.tags ?? []));
+            const sharedTagNames = tagSets.length > 0
+              ? [...tagSets[0]].filter((tag) => tagSets.every((set) => set.has(tag)))
+              : [];
+
+            setCollectionSummary(null);
+            setFileMetadata(null);
+            setNotes('');
+            setSourceUrls([]);
+            setSelectionSummary({
+              selected_count: collections.length,
+              stats: {
+                total_size_bytes: summaries.reduce((sum, s) => sum + (s.total_size_bytes ?? 0), 0),
+                rating_stats: { shared: null },
+              },
+              shared_tags: sharedTagNames.map((tag) => ({ tag })),
+            } as SelectionSummary);
+            setFileTags(
+              sharedTagNames.map((tag) => {
+                const parsed = parseTagString(tag);
+                return {
+                  raw_tag: tag,
+                  display_tag: tag,
+                  namespace: parsed.namespace,
+                  subtag: parsed.subtag,
+                  source: 'selection_summary',
+                  read_only: false,
+                } satisfies ResolvedTagInfo;
+              }),
+            );
+          } else {
+            // Multi-file (or mixed): use backend SelectionSummary
+            const spec: SelectionQuerySpec = {
+              mode: 'explicit_hashes',
+              hashes: selectedImages.map((i) => i.hash),
+              scope: { kind: 'system', system_key: 'all' },
+              filters: {},
+              sort: {},
+              excluded_hashes: null,
+              included_hashes: null,
+            };
+            const summary = await getOrStartSelectionSummary(spec);
+            if (requestIdRef.current !== requestId) return;
+            setCollectionSummary(null);
+            setFileMetadata(null);
+            setNotes('');
+            setSourceUrls([]);
+            setSelectionSummary(summary);
+            setFileTags(
+              (summary.shared_tags ?? []).map((t) => {
+                const parsed = parseTagString(t.tag);
+                return {
+                  raw_tag: t.tag,
+                  display_tag: t.tag,
+                  namespace: parsed.namespace,
+                  subtag: parsed.subtag,
+                  source: 'selection_summary',
+                  read_only: false,
+                } satisfies ResolvedTagInfo;
+              }),
+            );
+          }
         }
       } catch (err) {
         if (requestIdRef.current === requestId) {
@@ -267,7 +320,7 @@ export function useInspectorFetch(
       }
     };
 
-    doFetch();
+    doFetch().catch(() => {}); // errors handled inside doFetch's try/catch
   }, [selectedHashesKey, selectionSummarySpec, selectedCollection, mapCollectionTags]);
 
   const refreshMetadata = useCallback(() => {
