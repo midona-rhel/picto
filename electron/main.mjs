@@ -1,6 +1,13 @@
 import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, nativeTheme, protocol, screen } from 'electron';
 
 app.commandLine.appendSwitch('disable-features', 'AutofillServerCommunication');
+
+// Single instance guard — prevent multiple Picto processes from running.
+// If another instance is already running, focus its window and quit this one.
+const gotLock = app.requestSingleInstanceLock();
+if (!gotLock) {
+  app.quit();
+}
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -230,6 +237,15 @@ process.on('uncaughtException', (err) => {
 });
 process.on('unhandledRejection', (reason) => {
   console.error('[main] Unhandled promise rejection:', reason);
+});
+
+app.on('second-instance', () => {
+  // Another instance tried to launch — focus the existing main window.
+  const win = windowManager.getWindow('main');
+  if (win && !win.isDestroyed()) {
+    if (win.isMinimized()) win.restore();
+    win.focus();
+  }
 });
 
 app.whenReady().then(async () => {
