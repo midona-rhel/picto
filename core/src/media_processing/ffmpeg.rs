@@ -4,9 +4,14 @@
 //! Binary paths are resolved by `ffmpeg_path.rs`.
 
 use std::path::Path;
-use std::process::Command;
+use std::time::Duration;
+
+use tokio::process::Command;
 
 use crate::constants::MimeType;
+
+const FFPROBE_TIMEOUT: Duration = Duration::from_secs(30);
+const FFMPEG_FRAME_TIMEOUT: Duration = Duration::from_secs(60);
 
 // --- Error type ---
 
@@ -24,6 +29,8 @@ pub enum FfmpegError {
     Image(#[from] image::ImageError),
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
+    #[error("ffmpeg timed out after {0:?}")]
+    Timeout(Duration),
 }
 
 pub type FfmpegResult<T> = Result<T, FfmpegError>;
@@ -31,20 +38,23 @@ pub type FfmpegResult<T> = Result<T, FfmpegError>;
 // --- Internal helpers — run ffprobe/ffmpeg ---
 
 /// Run ffprobe and return parsed JSON output.
-fn run_ffprobe(path: &Path) -> FfmpegResult<serde_json::Value> {
+/// Uses `kill_on_drop(true)` so the process is killed if the future is dropped.
+async fn run_ffprobe(path: &Path) -> FfmpegResult<serde_json::Value> {
     let bin = super::ffmpeg_path::ffprobe_path().map_err(FfmpegError::Process)?;
 
-    let output = Command::new(bin.as_path())
-        .args([
-            "-v",
-            "quiet",
-            "-print_format",
-            "json",
-            "-show_format",
-            "-show_streams",
-        ])
+    let mut cmd = Command::new(bin.as_path());
+    cmd.args(["-v", "quiet", "-print_format", "json", "-show_format", "-show_streams"])
         .arg(path)
-        .output()
+        .kill_on_drop(true);
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    }
+
+    let output = tokio::time::timeout(FFPROBE_TIMEOUT, cmd.output())
+        .await
+        .map_err(|_| FfmpegError::Timeout(FFPROBE_TIMEOUT))?
         .map_err(|e| FfmpegError::Process(format!("failed to run ffprobe: {e}")))?;
 
     if !output.status.success() {
@@ -60,7 +70,8 @@ fn run_ffprobe(path: &Path) -> FfmpegResult<serde_json::Value> {
 }
 
 /// Run ffmpeg to extract a single frame as JPEG bytes.
-fn run_ffmpeg_frame(
+/// Uses `kill_on_drop(true)` so the process is killed if the future is dropped.
+async fn run_ffmpeg_frame(
     path: &Path,
     seek_secs: f64,
     target_w: u32,
@@ -68,37 +79,27 @@ fn run_ffmpeg_frame(
 ) -> FfmpegResult<Vec<u8>> {
     let bin = super::ffmpeg_path::ffmpeg_path().map_err(FfmpegError::Process)?;
 
-    // Build the scale filter: scale down to fit within target_w x target_h, maintaining
-    // aspect ratio. Only scale down, never up (min with input dimensions).
     let vf = format!(
         "scale='min({target_w},iw)':'min({target_h},ih)':force_original_aspect_ratio=decrease"
     );
 
     let mut cmd = Command::new(bin.as_path());
+    cmd.kill_on_drop(true);
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+    }
     cmd.args(["-v", "quiet"]);
-
-    // Pre-seek (before -i) for fast seeking to nearest keyframe
     if seek_secs > 0.01 {
         cmd.args(["-ss", &format!("{seek_secs:.3}")]);
     }
-
     cmd.arg("-i").arg(path);
-    cmd.args([
-        "-frames:v",
-        "1",
-        "-vf",
-        &vf,
-        "-f",
-        "image2pipe",
-        "-c:v",
-        "mjpeg",
-        "-q:v",
-        "4", // JPEG quality (2=best, 31=worst; 4 ≈ 82% quality)
-        "-",
-    ]);
+    cmd.args(["-frames:v", "1", "-vf", &vf, "-f", "image2pipe", "-c:v", "mjpeg", "-q:v", "4", "-"]);
 
-    let output = cmd
-        .output()
+    let output = tokio::time::timeout(FFMPEG_FRAME_TIMEOUT, cmd.output())
+        .await
+        .map_err(|_| FfmpegError::Timeout(FFMPEG_FRAME_TIMEOUT))?
         .map_err(|e| FfmpegError::Process(format!("failed to run ffmpeg: {e}")))?;
 
     if !output.status.success() || output.stdout.is_empty() {
@@ -145,8 +146,8 @@ pub struct VideoProperties {
 }
 
 /// Extract video properties from a file.
-pub fn get_video_properties(path: &Path) -> FfmpegResult<VideoProperties> {
-    let probe = run_ffprobe(path)?;
+pub async fn get_video_properties(path: &Path) -> FfmpegResult<VideoProperties> {
+    let probe = run_ffprobe(path).await?;
 
     let video = find_stream(&probe, "video").ok_or(FfmpegError::NoVideoStream)?;
 
@@ -253,8 +254,8 @@ fn apply_rotation(video: &serde_json::Value, width: u32, height: u32) -> (u32, u
 // --- Audio properties ---
 
 /// Get audio duration in milliseconds.
-pub fn get_audio_duration_ms(path: &Path) -> FfmpegResult<u64> {
-    let probe = run_ffprobe(path)?;
+pub async fn get_audio_duration_ms(path: &Path) -> FfmpegResult<u64> {
+    let probe = run_ffprobe(path).await?;
 
     let audio = find_stream(&probe, "audio").ok_or(FfmpegError::NoAudioStream)?;
 
@@ -270,8 +271,8 @@ pub fn get_audio_duration_ms(path: &Path) -> FfmpegResult<u64> {
 // --- MIME detection ---
 
 /// Determine MIME type using ffprobe's format probing.
-pub fn get_mime(path: &Path) -> FfmpegResult<MimeType> {
-    let probe = run_ffprobe(path)?;
+pub async fn get_mime(path: &Path) -> FfmpegResult<MimeType> {
+    let probe = run_ffprobe(path).await?;
 
     let format_name = probe["format"]["format_name"]
         .as_str()
@@ -370,8 +371,8 @@ fn map_ffmpeg_format_to_mime(format_name: &str, has_video: bool, has_audio: bool
 // --- Animation detection ---
 
 /// Check if a file is animated (has more than 1 frame).
-pub fn file_is_animated(path: &Path) -> bool {
-    match get_video_properties(path) {
+pub async fn file_is_animated(path: &Path) -> bool {
+    match get_video_properties(path).await {
         Ok(props) => props.num_frames > 1,
         Err(_) => false,
     }
@@ -383,7 +384,7 @@ pub fn file_is_animated(path: &Path) -> bool {
 ///
 /// `percentage_in` is 0-100, indicating where in the video to grab the frame.
 /// `target_resolution` is the bounding box to resize into.
-pub fn render_video_thumbnail(
+pub async fn render_video_thumbnail(
     path: &Path,
     target_resolution: (u32, u32),
     percentage_in: u32,
@@ -397,7 +398,7 @@ pub fn render_video_thumbnail(
     };
 
     let (tw, th) = target_resolution;
-    run_ffmpeg_frame(path, seek_secs, tw, th)
+    run_ffmpeg_frame(path, seek_secs, tw, th).await
 }
 
 // --- Tests ---

@@ -189,6 +189,8 @@ export function createWindowManager({
                 backgroundColor: themeBg,
               }
             : {
+                minWidth: 1000,
+                minHeight: 600,
                 ...(isMac
                   ? {
                       frame: true,

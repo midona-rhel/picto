@@ -54,7 +54,7 @@ fn adapter_for(mime: MimeType) -> MediaAdapterKind {
     }
 }
 
-pub(crate) fn populate_file_info(path: &Path, info: &mut FileInfo) {
+pub(crate) async fn populate_file_info(path: &Path, info: &mut FileInfo) {
     match adapter_for(info.mime) {
         MediaAdapterKind::Archive => {
             let is_epub = info.mime == MimeType::ApplicationEpub;
@@ -129,7 +129,7 @@ pub(crate) fn populate_file_info(path: &Path, info: &mut FileInfo) {
             }
         }
         MediaAdapterKind::Video => {
-            if let Ok(props) = ffmpeg::get_video_properties(path) {
+            if let Ok(props) = ffmpeg::get_video_properties(path).await {
                 info.width = Some(props.width);
                 info.height = Some(props.height);
                 info.duration_ms = Some(props.duration_ms);
@@ -152,7 +152,7 @@ pub(crate) fn populate_file_info(path: &Path, info: &mut FileInfo) {
             }
         }
         MediaAdapterKind::Audio => {
-            if let Ok(dur_ms) = ffmpeg::get_audio_duration_ms(path) {
+            if let Ok(dur_ms) = ffmpeg::get_audio_duration_ms(path).await {
                 info.duration_ms = Some(dur_ms);
             }
         }
@@ -160,7 +160,7 @@ pub(crate) fn populate_file_info(path: &Path, info: &mut FileInfo) {
     }
 }
 
-pub(crate) fn generate_thumbnail_with_adapter(
+pub(crate) async fn generate_thumbnail_with_adapter(
     path: &Path,
     target_resolution: (u32, u32),
     mime: MimeType,
@@ -218,12 +218,12 @@ pub(crate) fn generate_thumbnail_with_adapter(
         MediaAdapterKind::Animation => generate_image_thumbnail(path, target_resolution),
         MediaAdapterKind::Video | MediaAdapterKind::Audio => {
             let dur = duration_ms.filter(|&ms| ms > 0);
-            match ffmpeg::render_video_thumbnail(path, target_resolution, percentage_in, dur) {
+            match ffmpeg::render_video_thumbnail(path, target_resolution, percentage_in, dur).await {
                 Ok(bytes) => Ok((bytes, "jpg".into())),
                 Err(_) => {
                     if percentage_in > 0 {
                         if let Ok(bytes) =
-                            ffmpeg::render_video_thumbnail(path, target_resolution, 0, dur)
+                            ffmpeg::render_video_thumbnail(path, target_resolution, 0, dur).await
                         {
                             return Ok((bytes, "jpg".into()));
                         }

@@ -70,7 +70,7 @@ pub fn get_thumbnail_resolution(
     (tw, th)
 }
 
-pub fn generate_thumbnail_bytes(
+pub async fn generate_thumbnail_bytes(
     path: &Path,
     target_resolution: (u32, u32),
     mime: crate::constants::MimeType,
@@ -86,6 +86,7 @@ pub fn generate_thumbnail_bytes(
         num_frames,
         percentage_in,
     )
+    .await
 }
 
 fn fast_resize(img: &image::DynamicImage, tw: u32, th: u32) -> FileResult<image::DynamicImage> {

@@ -247,7 +247,7 @@ function EditableUrlList({ urls, onChange, readOnly, fieldId, activePopover, onP
 }
 
 export const PANEL_MIN_WIDTH = 200;
-export const PANEL_MAX_WIDTH = 600;
+export const PANEL_MAX_WIDTH = 400;
 export const PANEL_DEFAULT_WIDTH = 250;
 
 // Hydrus-style namespace sort order: most specific first

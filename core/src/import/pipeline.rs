@@ -124,7 +124,7 @@ impl<'a> ImportPipeline<'a> {
             return Err(ImportError::AlreadyImported(hex_hash));
         }
 
-        let file_info = media_processing::get_file_info(path, None)?;
+        let file_info = media_processing::get_file_info(path, None).await?;
         let mime_string = file_info.mime.mime_string().to_string();
 
         if media_processing::is_image(file_info.mime) {
@@ -139,7 +139,7 @@ impl<'a> ImportPipeline<'a> {
             media_processing::generate_thumbnail_bytes(
                 path, options.thumbnail_dimensions, file_info.mime,
                 file_info.duration_ms, file_info.num_frames, 35,
-            ).ok()
+            ).await.ok()
         };
 
         // Write blobs now (idempotent, safe to write before DB)
@@ -235,7 +235,7 @@ impl<'a> ImportPipeline<'a> {
             return Err(ImportError::AlreadyImported(hex_hash));
         }
 
-        let file_info = match media_processing::get_file_info(path, None) {
+        let file_info = match media_processing::get_file_info(path, None).await {
             Ok(info) => {
                 info!(hash = %hex_hash, mime = %info.mime.mime_string(), "Detected MIME type");
                 info
@@ -268,6 +268,7 @@ impl<'a> ImportPipeline<'a> {
                 file_info.num_frames,
                 35,
             )
+            .await
             .ok()
         };
         let t_thumb = t0.elapsed();
@@ -413,7 +414,7 @@ impl<'a> ImportPipeline<'a> {
                     None,
                     None,
                     35,
-                ) {
+                ).await {
                     let _ = self.blob_store.write_thumbnail(&work.hex_hash, &thumb_bytes, &thumb_ext);
                 }
             }

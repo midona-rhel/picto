@@ -493,7 +493,8 @@ async fn generate_thumbnail_inner(
     let bs = blob_store.clone();
 
     let (regenerated_thumbnail, has_thumbnail) =
-        tokio::task::spawn_blocking(move || -> Result<(bool, bool), String> {
+        tokio::spawn(async move {
+            let result: Result<(bool, bool), String> = (async {
             if force {
                 bs.delete_thumbnail(&h)
                     .map_err(|e| format!("Delete thumbnail failed: {}", e))?;
@@ -515,7 +516,7 @@ async fn generate_thumbnail_inner(
                 }
             }
 
-            let info = match crate::media_processing::get_file_info(&original.0, None) {
+            let info = match crate::media_processing::get_file_info(&original.0, None).await {
                 Ok(info) => info,
                 Err(e) => {
                     tracing::debug!(hash = %h, error = %e, "thumbnail skipped: file info failed");
@@ -529,7 +530,7 @@ async fn generate_thumbnail_inner(
                 info.duration_ms,
                 info.num_frames,
                 35,
-            ) {
+            ).await {
                 Ok(result) => result,
                 Err(e) => {
                     tracing::debug!(hash = %h, mime = ?info.mime, error = %e, "thumbnail skipped: no adapter");
@@ -541,6 +542,8 @@ async fn generate_thumbnail_inner(
                 .map_err(|e| format!("Thumbnail write failed: {}", e))?;
 
             Ok((true, true))
+            }).await;
+            result
         })
         .await
         .map_err(|e| format!("Thumbnail task failed: {}", e))??;

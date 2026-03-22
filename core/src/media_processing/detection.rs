@@ -202,7 +202,7 @@ fn looks_like_svg(bytes: &[u8]) -> bool {
         || has_match(b"<!DOCTYPE SVG")
 }
 
-pub fn get_mime(path: &Path) -> FileResult<MimeType> {
+pub async fn get_mime(path: &Path) -> FileResult<MimeType> {
     let size = std::fs::metadata(path)
         .map_err(|e| FileError::NotFound(format!("{}: {}", path.display(), e)))?
         .len();
@@ -246,13 +246,13 @@ pub fn get_mime(path: &Path) -> FileResult<MimeType> {
                     });
                 }
                 MimeType::UndeterminedJxl => {
-                    return Ok(if ffmpeg::file_is_animated(path) {
+                    return Ok(if ffmpeg::file_is_animated(path).await {
                         MimeType::AnimationJxl
                     } else {
                         MimeType::ImageJxl
                     });
                 }
-                MimeType::UndeterminedMp4 | MimeType::UndeterminedWm => match ffmpeg::get_mime(path) {
+                MimeType::UndeterminedMp4 | MimeType::UndeterminedWm => match ffmpeg::get_mime(path).await {
                     Ok(detected) if detected != MimeType::ApplicationUnknown => return Ok(detected),
                     _ => {
                         return Ok(if mime == MimeType::UndeterminedMp4 {
@@ -289,7 +289,7 @@ pub fn get_mime(path: &Path) -> FileResult<MimeType> {
         .unwrap_or("")
         .to_lowercase();
     if !matches!(ext.as_str(), "txt" | "log" | "json") {
-        if let Ok(ffmpeg_mime) = ffmpeg::get_mime(path) {
+        if let Ok(ffmpeg_mime) = ffmpeg::get_mime(path).await {
             if ffmpeg_mime != MimeType::ApplicationUnknown {
                 return Ok(ffmpeg_mime);
             }

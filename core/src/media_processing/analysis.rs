@@ -13,7 +13,7 @@ fn definitely_has_audio(mime: MimeType) -> bool {
     mime.is_audio() || mime == MimeType::ApplicationFlash
 }
 
-pub fn get_file_info(path: &Path, mime: Option<MimeType>) -> FileResult<FileInfo> {
+pub async fn get_file_info(path: &Path, mime: Option<MimeType>) -> FileResult<FileInfo> {
     let file_size = std::fs::metadata(path)
         .map_err(|e| FileError::NotFound(format!("{}: {}", path.display(), e)))?
         .len();
@@ -24,7 +24,7 @@ pub fn get_file_info(path: &Path, mime: Option<MimeType>) -> FileResult<FileInfo
 
     let mime = match mime {
         Some(m) => m,
-        None => get_mime(path)?,
+        None => get_mime(path).await?,
     };
 
     if !is_allowed_mime(mime) {
@@ -45,7 +45,7 @@ pub fn get_file_info(path: &Path, mime: Option<MimeType>) -> FileResult<FileInfo
         has_audio: definitely_has_audio(mime),
     };
 
-    populate_file_info(path, &mut info);
+    populate_file_info(path, &mut info).await;
     Ok(info)
 }
 
