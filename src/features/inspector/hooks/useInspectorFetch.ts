@@ -64,7 +64,7 @@ export function useInspectorFetch(
   const selectedHashesKey = selectedImages.map((i) => i.hash).sort().join(',');
   const selectionSummaryKey = selectionSummarySpec ? JSON.stringify(selectionSummarySpec) : '';
   const firstImage = selectedImages.length === 1 ? selectedImages[0] : null;
-  const selectedCollectionId = firstImage?.is_collection ? (firstImage.entity_id ?? null) : null;
+  const selectedCollectionId = firstImage?.kind === 'collection' ? (firstImage.entity_id ?? null) : null;
   const selectedCollectionName = selectedCollectionId != null
     ? (firstImage!.name ?? `Collection ${selectedCollectionId}`)
     : null;
@@ -100,7 +100,7 @@ export function useInspectorFetch(
   useEffect(() => {
     if (selectionSummarySpec) {
       // Virtual selection (Select All): resolve hashes and compute shared folders
-      entityController.resolveSelectionHashes(selectionSummarySpec)
+      entityController.resolveSelectionEntityHashes(selectionSummarySpec)
         .then((hashes) => {
           const sample = hashes.slice(0, 200);
           if (sample.length === 0) { setFileFolders([]); return; }
@@ -140,7 +140,7 @@ export function useInspectorFetch(
       // For collections, use entity_id; for files, use hash
       const items = selectedImages.slice(0, 200);
       Promise.all(items.map((img) =>
-        img.is_collection && img.entity_id
+        img.kind === 'collection' && img.entity_id
           ? foldersController.getEntityFolders(img.entity_id).catch(() => [] as FolderMembership[])
           : foldersController.getFileFolders(img.hash).catch(() => [] as FolderMembership[]),
       ))
@@ -237,7 +237,7 @@ export function useInspectorFetch(
           setFileTags(metadata.tags);
         } else {
           // Multi-selection: check if any are collections
-          const collections = selectedImages.filter((i) => i.is_collection && i.entity_id);
+          const collections = selectedImages.filter((i) => i.kind === 'collection' && i.entity_id);
 
           if (collections.length > 0 && collections.length === selectedImages.length) {
             // All collections: fetch each summary and merge shared tags/folders/size

@@ -106,7 +106,7 @@ impl ImportService {
                     .await?;
                     let next_impact =
                         crate::runtime_contract::change_builder::ChangeImpact::file_lifecycle(db)
-                            .file_hashes(vec![surviving_hash.clone()]);
+                            .entity_hashes(vec![surviving_hash.clone()]);
                     combined_impact = Some(match combined_impact.take() {
                         Some(current) => current.merge(next_impact),
                         None => next_impact,
@@ -332,7 +332,13 @@ impl ImportService {
                     .chain(skipped_hashes.iter().cloned())
                     .collect();
                 if !membership_hashes.is_empty() {
-                    db.add_entities_to_folder_batch(folder_id, &membership_hashes)
+                    let membership_entity_ids: Vec<i64> = db
+                        .resolve_entity_hashes_batch(&membership_hashes)
+                        .await?
+                        .into_iter()
+                        .map(|(_, entity_id)| entity_id)
+                        .collect();
+                    db.add_entities_to_folder_batch(folder_id, &membership_entity_ids)
                         .await?;
                     touched_folder_ids.insert(folder_id);
                 }
@@ -344,12 +350,12 @@ impl ImportService {
                 let mut impact = ChangeImpact::new();
                 if !imported_hashes.is_empty() {
                     impact = impact.merge(
-                        ChangeImpact::file_lifecycle(db).file_hashes(imported_hashes.clone()),
+                        ChangeImpact::file_lifecycle(db).entity_hashes(imported_hashes.clone()),
                     );
                 }
                 if let Some(folder_id) = target_folder_id {
                     impact = impact.merge(
-                        ChangeImpact::folder_file_change(folder_id).file_hashes(
+                        ChangeImpact::folder_file_change(folder_id).entity_hashes(
                             imported_hashes
                                 .iter()
                                 .cloned()
@@ -468,7 +474,7 @@ async fn build_import_result(
 
 async fn emit_file_imported(db: &SqliteDatabase, hash: &str) {
     if let Ok(Some(record)) = db.get_file_by_hash(hash).await {
-        let slim = crate::types::FileInfoSlim::from(record);
+        let slim = crate::types::FileGridInfo::from(record);
         crate::events::emit(crate::events::event_names::FILE_IMPORTED, &slim);
     }
 }

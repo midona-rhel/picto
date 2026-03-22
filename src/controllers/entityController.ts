@@ -45,7 +45,7 @@ function scopeExpectedStatus(): string | null {
   if (scope === 'system:trash') return 'trash';
   // collections don't filter by status
   if (scope.startsWith('collection:')) return null;
-  // system:all, system:untagged, system:uncategorized, folder:*, smart:* → all show active
+  // system:active, system:untagged, system:uncategorized, folder:*, smart:* → all show active
   return 'active';
 }
 
@@ -116,8 +116,8 @@ function fetchMetadata(hash: string): Promise<EntityAllMetadata> {
 }
 
 export const entityController = {
-  getEntity(hash: string): Promise<EntityDetails | null> {
-    return queryApi.file.get(hash);
+  getEntityDetails(hash: string): Promise<EntityDetails | null> {
+    return queryApi.file.getDetails(hash);
   },
 
   getMetadata(hash: string): Promise<EntityAllMetadata> {
@@ -154,8 +154,8 @@ export const entityController = {
     return request;
   },
 
-  resolveSelectionHashes(spec: SelectionQuerySpec): Promise<string[]> {
-    return queryApi.selection.resolveHashes(spec);
+  resolveSelectionEntityHashes(spec: SelectionQuerySpec): Promise<string[]> {
+    return queryApi.selection.resolveEntityHashes(spec);
   },
 
   findSimilar(hash: string) {
@@ -188,8 +188,8 @@ export const entityController = {
     if (statusLeavesScope(status)) {
       useGridMetadataStore.getState().queueRemovals([hash]);
     } else if (statusEntersScope(status)) {
-      queryApi.file.getSlim(hash).then((entity) => {
-        if (entity) useGridMetadataStore.getState().queueInsertions([entity]);
+      queryApi.file.getGridItems([hash]).then((entities) => {
+        if (entities.length > 0) useGridMetadataStore.getState().queueInsertions(entities);
       });
     }
     const result = await commandApi.file.setStatus(hash, status);
@@ -200,7 +200,7 @@ export const entityController = {
     const isExplicit = (selection.hashes?.length ?? 0) > 0;
     const hashes = isExplicit
       ? selection.hashes!
-      : await queryApi.selection.resolveHashes(selection);
+      : await queryApi.selection.resolveEntityHashes(selection);
     const previousStatus = scopeExpectedStatus();
     // Eager BEFORE the backend call
     eagerInvalidateMany(hashes);
@@ -211,16 +211,14 @@ export const entityController = {
     if (statusLeavesScope(status)) {
       if (!isExplicit) {
         // Virtual select-all: clear the entire grid rather than trying to
-        // match individual hashes (resolveHashes expands collections to
-        // members, which don't match the grid's cover-file hashes).
+        // match individual entity hashes from a broad selection.
         useGridMetadataStore.getState().queueClearAll();
       } else {
         useGridMetadataStore.getState().queueRemovals(hashes);
       }
     } else if (statusEntersScope(status)) {
-      Promise.all(hashes.map((h) => queryApi.file.getSlim(h))).then((entities) => {
-        const valid = entities.filter((e): e is NonNullable<typeof e> => e != null);
-        if (valid.length > 0) useGridMetadataStore.getState().queueInsertions(valid);
+      queryApi.file.getGridItems(hashes).then((entities) => {
+        if (entities.length > 0) useGridMetadataStore.getState().queueInsertions(entities);
       });
     }
     const result = await commandApi.file.setStatusSelection(selection, status);
@@ -230,7 +228,7 @@ export const entityController = {
   async updateSelectionRating(selection: SelectionQuerySpec, rating: number | null) {
     const hashes = selection.hashes?.length
       ? selection.hashes
-      : await queryApi.selection.resolveHashes(selection);
+      : await queryApi.selection.resolveEntityHashes(selection);
     eagerInvalidateMany(hashes);
     const result = await commandApi.selection.updateRating(selection, rating);
     return result;
@@ -239,7 +237,7 @@ export const entityController = {
   async setSelectionSourceUrls(selection: SelectionQuerySpec, urls: string[]) {
     const hashes = selection.hashes?.length
       ? selection.hashes
-      : await queryApi.selection.resolveHashes(selection);
+      : await queryApi.selection.resolveEntityHashes(selection);
     eagerInvalidateMany(hashes);
     const result = await commandApi.selection.setSourceUrls(selection, urls);
     return result;
@@ -248,7 +246,7 @@ export const entityController = {
   async setSelectionNotes(selection: SelectionQuerySpec, notes: Record<string, string>) {
     const hashes = selection.hashes?.length
       ? selection.hashes
-      : await queryApi.selection.resolveHashes(selection);
+      : await queryApi.selection.resolveEntityHashes(selection);
     eagerInvalidateMany(hashes);
     const result = await commandApi.selection.setNotes(selection, notes);
     return result;
@@ -264,7 +262,7 @@ export const entityController = {
   async deleteSelection(selection: SelectionQuerySpec) {
     const hashes = selection.hashes?.length
       ? selection.hashes
-      : await queryApi.selection.resolveHashes(selection);
+      : await queryApi.selection.resolveEntityHashes(selection);
     eagerInvalidateMany(hashes);
     useGridMetadataStore.getState().queueRemovals(hashes);
     const result = await commandApi.file.deleteSelection(selection);

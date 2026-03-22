@@ -157,6 +157,7 @@ impl GalleryDlRunner {
         let config_path = temp_dir.join("config.json");
         let config_json = serde_json::to_string_pretty(&config)
             .map_err(|e| format!("Config serialization error: {e}"))?;
+        info!(config = %config_json, "gallery-dl config written to {}", config_path.display());
         tokio::fs::write(&config_path, &config_json)
             .await
             .map_err(|e| format!("Config write error: {e}"))?;
@@ -199,7 +200,7 @@ impl GalleryDlRunner {
             elapsed_ms = run_start.elapsed().as_millis(),
             "Spawning gallery-dl"
         );
-        debug!(binary = %self.binary_path.display(), args = ?args, "gallery-dl command");
+        info!(binary = %self.binary_path.display(), args = ?args, "gallery-dl command");
 
         // 4. Spawn subprocess
         let mut cmd = tokio::process::Command::new(&self.binary_path);
@@ -272,26 +273,43 @@ impl GalleryDlRunner {
             }
         });
 
-        let stderr_cancel = opts.cancel.clone();
         let stderr_handle = tokio::spawn(async move {
             let mut output = String::new();
             let mut had_download_errors = false;
+            // Keep recent warning lines to attach as context when a [download][error] fires.
+            let mut recent_warnings: Vec<String> = Vec::new();
             if let Some(err) = child_stderr {
                 let mut reader = BufReader::new(err).lines();
                 while let Ok(Some(line)) = reader.next_line().await {
                     let trimmed = line.trim();
                     if trimmed.is_empty() { continue; }
-                    // Detect failed downloads — gallery-dl emits "[download][error]" after exhausting retries.
-                    // Immediately cancel the run so we don't advance past skipped files.
+
                     if trimmed.contains("[download][error]") {
-                        warn!(line = trimmed, "gallery-dl: download failed — cancelling run");
                         had_download_errors = true;
-                        stderr_cancel.cancel();
-                    } else if trimmed.contains("[warning]") && trimmed.contains("(") {
-                        debug!(line = trimmed, "gallery-dl: retry warning");
+                        let context = if recent_warnings.is_empty() {
+                            "no prior warnings".to_string()
+                        } else {
+                            recent_warnings.join(" | ")
+                        };
+                        warn!(
+                            line = trimmed,
+                            context = %context,
+                            "gallery-dl: download failed"
+                        );
+                        recent_warnings.clear();
+                    } else if trimmed.contains("[error]") {
+                        warn!(line = trimmed, "gallery-dl error");
+                    } else if trimmed.contains("[warning]") {
+                        info!(line = trimmed, "gallery-dl warning");
+                        recent_warnings.push(trimmed.to_string());
+                        // Cap buffer so a long retry storm doesn't eat memory
+                        if recent_warnings.len() > 10 {
+                            recent_warnings.remove(0);
+                        }
                     } else {
                         info!(line = trimmed, "gallery-dl stderr");
                     }
+
                     output.push_str(&line);
                     output.push('\n');
                 }

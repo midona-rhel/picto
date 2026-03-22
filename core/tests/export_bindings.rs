@@ -38,6 +38,7 @@ fn export_all_bindings() {
 
     picto_core::dispatch::typed::grid::GetGridPageSlimInput::export().unwrap();
     picto_core::dispatch::typed::grid::GetEntityInput::export().unwrap();
+    picto_core::dispatch::typed::grid::GetEntitiesInput::export().unwrap();
     picto_core::dispatch::typed::grid::GetEntitiesMetadataBatchInput::export().unwrap();
 
     picto_core::dispatch::typed::media_io::ResolveFilePathInput::export().unwrap();

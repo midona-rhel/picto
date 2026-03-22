@@ -835,17 +835,15 @@ impl SqliteDatabase {
     pub async fn add_entities_to_folder_batch(
         &self,
         folder_id: i64,
-        hashes: &[String],
+        entity_ids: &[i64],
     ) -> Result<usize, String> {
-        if hashes.is_empty() {
+        if entity_ids.is_empty() {
             return Ok(0);
         }
-        let resolved = self.resolve_hashes_batch(hashes).await?;
-        let all_ids: Vec<i64> = resolved.iter().map(|(_, id)| *id).collect();
         // Only allow adding active (status=1) entities to folders
         let entity_ids: Vec<i64> = self
             .with_read_conn({
-                let ids = all_ids;
+                let ids = entity_ids.to_vec();
                 move |conn| {
                     let mut active = Vec::new();
                     for &eid in &ids {
@@ -902,18 +900,14 @@ impl SqliteDatabase {
     pub async fn remove_entities_from_folder_batch(
         &self,
         folder_id: i64,
-        hashes: &[String],
+        entity_ids: &[i64],
     ) -> Result<usize, String> {
-        if hashes.is_empty() {
+        if entity_ids.is_empty() {
             return Ok(0);
         }
-        // resolve_hashes_batch automatically expands collection covers to
-        // include the collection entity_id + all member entity_ids.
-        let resolved = self.resolve_hashes_batch(hashes).await?;
-        let all_ids: Vec<i64> = resolved.iter().map(|(_, id)| *id).collect();
         let entity_ids: Vec<i64> = self
             .with_read_conn({
-                let ids = all_ids;
+                let ids = entity_ids.to_vec();
                 move |conn| {
                     let mut active = Vec::new();
                     for &eid in &ids {
@@ -1121,7 +1115,7 @@ impl SqliteDatabase {
                 all_hashes.push(h.clone());
             }
         }
-        let resolved = self.resolve_hashes_batch(&all_hashes).await?;
+        let resolved = self.resolve_entity_hashes_batch(&all_hashes).await?;
         let hash_to_id: std::collections::HashMap<String, i64> = resolved.into_iter().collect();
 
         struct ResolvedMove {

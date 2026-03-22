@@ -156,7 +156,7 @@ export const useDomainStore = create<DomainState>((set, get) => ({
         ? namespaceSummary.reduce((sum, row) => sum + (typeof row.count === 'number' ? row.count : 0), 0)
         : 0;
 
-      const allNode = nodes.find((n) => n.id === 'system:all' || n.id === 'system:all_files');
+      const allNode = nodes.find((n) => n.id === 'system:active' || n.id === 'system:active_files');
       const inboxNode = nodes.find((n) => n.id === 'system:inbox');
       const uncategorizedNode = nodes.find(
         (n) => n.id === 'system:uncategorized' || n.id === 'system:uncategorized_files',

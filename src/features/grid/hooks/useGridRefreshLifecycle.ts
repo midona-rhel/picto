@@ -88,7 +88,7 @@ export function useGridRefreshLifecycle(args: {
   }, [dispatch, pendingRemovals, pendingClearAll]);
 
   // Eager insertions: controller queues entities that entered the current scope
-  // (e.g. restore from trash while viewing system:all). Prepend to visible grid.
+  // (e.g. restore from trash while viewing system:active). Prepend to visible grid.
   useEffect(() => {
     if (pendingInsertions.length === 0) return;
     const entities = useGridMetadataStore.getState().drainInsertions();

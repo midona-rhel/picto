@@ -54,7 +54,7 @@ async fn seed_sidebar_normalizes_legacy_all_files_node() {
                  (node_id, kind, parent_id, name, icon, color, sort_order, count,
                   freshness, epoch, selectable, expanded_by_default, meta_json, updated_at)
                  VALUES
-                 ('system:all_files', 'system', 'system:library', 'All Files', 'IconPhoto', NULL,
+                 ('system:active_files', 'system', 'system:library', 'All Files', 'IconPhoto', NULL,
                   1, 7, 'stale', 0, 1, 0, NULL, datetime('now'))",
                 [],
             )?;
@@ -72,17 +72,17 @@ async fn seed_sidebar_normalizes_legacy_all_files_node() {
     assert!(
         nodes
             .iter()
-            .any(|node| node.node_id == "system:all" && node.name == "All Active"),
+            .any(|node| node.node_id == "system:active" && node.name == "All Active"),
         "canonical all-active node should exist after normalization",
     );
     assert!(
-        !nodes.iter().any(|node| node.node_id == "system:all_files"),
+        !nodes.iter().any(|node| node.node_id == "system:active_files"),
         "legacy all-files alias should be removed after normalization",
     );
 }
 
 #[tokio::test]
-async fn resolve_hashes_batch_returns_file_ids() {
+async fn resolve_entity_hashes_batch_returns_entity_ids() {
     let harness = common::TestHarness::new().await;
 
     let fid1 = harness.insert_test_file("hash_a", "a.png", 1).await;
@@ -91,7 +91,7 @@ async fn resolve_hashes_batch_returns_file_ids() {
 
     let resolved = harness
         .db
-        .resolve_hashes_batch(&[
+        .resolve_entity_hashes_batch(&[
             "hash_a".to_string(),
             "hash_b".to_string(),
             "nonexistent".to_string(),
@@ -256,7 +256,7 @@ async fn remove_files_from_folder_batch_correctness() {
 
     let removed = harness
         .db
-        .remove_entities_from_folder_batch(folder_id, &["hash_fa".into(), "hash_fb".into()])
+        .remove_entities_from_folder_batch(folder_id, &[f1, f2])
         .await
         .expect("remove files batch");
     assert_eq!(removed, 2, "Should have removed 2 files");

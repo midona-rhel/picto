@@ -111,7 +111,7 @@ export function DetailWindow({ hash }: DetailWindowProps) {
   }, [resetToolbarTimer]);
 
   useEffect(() => {
-    entityController.getEntity(hash).then((raw) => {
+    entityController.getEntityDetails(hash).then((raw) => {
       if (!raw) return;
       setImage(toMasonryItem(raw));
     }).catch((err) => {
@@ -325,7 +325,7 @@ export function DetailWindow({ hash }: DetailWindowProps) {
   }, [alwaysOnTop]);
 
   const handleCopyPath = useCallback(async () => {
-    if (!currentImage || currentImage.is_collection) return;
+    if (!currentImage || currentImage.kind === 'collection') return;
     try {
       const path = await entityController.resolvePath(currentImage.hash);
       await writeText(path);

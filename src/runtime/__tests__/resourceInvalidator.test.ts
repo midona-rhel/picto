@@ -49,7 +49,7 @@ describe('planRefreshTargets', () => {
     const result = keys(makeEvent(makeChanges({ status_changed: true })));
     expect(result).toContain('sidebar/tree');
     expect(result).toContain('selection/current');
-    expect(result).toContain('grid/system:all');
+    expect(result).toContain('grid/system:active');
     expect(result).toContain('grid/system:inbox');
     expect(result).toContain('grid/system:trash');
     expect(result).toContain('grid/system:untagged');
@@ -70,22 +70,22 @@ describe('planRefreshTargets', () => {
 
   // --- tags_changed ---
 
-  it('tags_changed with file_hashes yields selection/current + metadata keys, no grid/system:all', () => {
+  it('tags_changed with entity_hashes yields selection/current + metadata keys, no grid/system:active', () => {
     const result = keys(makeEvent(makeChanges({
       tags_changed: true,
-      file_hashes: ['abc', 'def'],
+      entity_hashes: ['abc', 'def'],
     })));
     expect(result).toContain('selection/current');
     expect(result).toContain('grid/system:untagged');
     expect(result).toContain('metadata/hash:abc');
     expect(result).toContain('metadata/hash:def');
-    expect(result).not.toContain('grid/system:all');
+    expect(result).not.toContain('grid/system:active');
   });
 
-  it('tags_changed without file_hashes yields selection/current + grid/system:all', () => {
+  it('tags_changed without entity_hashes yields selection/current + grid/system:active', () => {
     const result = keys(makeEvent(makeChanges({ tags_changed: true })));
     expect(result).toContain('selection/current');
-    expect(result).toContain('grid/system:all');
+    expect(result).toContain('grid/system:active');
     expect(result).toContain('grid/system:untagged');
   });
 
@@ -93,7 +93,7 @@ describe('planRefreshTargets', () => {
     const result = keys(makeEvent(makeChanges({
       domains: ['sidebar', 'smart_folders'] as Domain[],
       tag_changes: { added: ['artist:abc'] },
-      file_hashes: ['abc'],
+      entity_hashes: ['abc'],
       extra_grid_scopes: ['smart:all'],
     })));
     expect(result).toContain('selection/current');
@@ -101,16 +101,16 @@ describe('planRefreshTargets', () => {
     expect(result).toContain('grid/smart:all');
     expect(result).toContain('sidebar/tree');
     expect(result).toContain('metadata/hash:abc');
-    expect(result).not.toContain('grid/system:all');
+    expect(result).not.toContain('grid/system:active');
   });
 
   // --- tag_structure_changed ---
 
-  it('tag_structure_changed yields sidebar/tree, selection/current, grid/system:all, grid/smart:all', () => {
+  it('tag_structure_changed yields sidebar/tree, selection/current, grid/system:active, grid/smart:all', () => {
     const result = keys(makeEvent(makeChanges({ tag_structure_changed: true })));
     expect(result).toContain('sidebar/tree');
     expect(result).toContain('selection/current');
-    expect(result).toContain('grid/system:all');
+    expect(result).toContain('grid/system:active');
     expect(result).toContain('grid/smart:all');
   });
 
@@ -137,7 +137,7 @@ describe('planRefreshTargets', () => {
   it('media_fields_changed yields selection/current and hash metadata keys', () => {
     const result = keys(makeEvent(makeChanges({
       media_fields_changed: ['rating'],
-      file_hashes: ['h1'],
+      entity_hashes: ['h1'],
     })));
     expect(result).toContain('selection/current');
     expect(result).toContain('metadata/hash:h1');
@@ -147,7 +147,7 @@ describe('planRefreshTargets', () => {
     const result = keys(makeEvent(makeChanges({
       domains: ['sidebar', 'smart_folders'] as Domain[],
       media_fields_changed: ['rating'],
-      file_hashes: ['h1'],
+      entity_hashes: ['h1'],
       extra_grid_scopes: ['smart:all'],
     })));
     expect(result).toContain('selection/current');
@@ -159,7 +159,7 @@ describe('planRefreshTargets', () => {
   it('derivative_fields_changed yields selection/current and hash metadata keys', () => {
     const result = keys(makeEvent(makeChanges({
       derivative_fields_changed: ['thumbnail'],
-      file_hashes: ['h1'],
+      entity_hashes: ['h1'],
     })));
     expect(result).toContain('selection/current');
     expect(result).toContain('metadata/hash:h1');
@@ -172,12 +172,12 @@ describe('planRefreshTargets', () => {
     expect(result).toContain('sidebar/tree');
   });
 
-  // --- file_hashes ---
+  // --- entity_hashes ---
 
-  it('file_hashes yields metadata/hash:{hash} for each hash', () => {
+  it('entity_hashes yields metadata/hash:{hash} for each hash', () => {
     const result = keys(makeEvent(makeChanges({
       domains: ['files'] as Domain[],
-      file_hashes: ['h1', 'h2', 'h3'],
+      entity_hashes: ['h1', 'h2', 'h3'],
     })));
     expect(result).toContain('metadata/hash:h1');
     expect(result).toContain('metadata/hash:h2');
@@ -275,15 +275,15 @@ describe('planRefreshTargets', () => {
     const result = keys(makeEvent(makeChanges({
       status_changed: true,
       tags_changed: true,
-      file_hashes: ['h1'],
+      entity_hashes: ['h1'],
     })));
     // From status_changed
     expect(result).toContain('sidebar/tree');
-    expect(result).toContain('grid/system:all');
+    expect(result).toContain('grid/system:active');
     expect(result).toContain('grid/system:inbox');
-    // From tags_changed (with file_hashes → no extra grid/system:all)
+    // From tags_changed (with entity_hashes → no extra grid/system:active)
     expect(result).toContain('selection/current');
-    // From file_hashes
+    // From entity_hashes
     expect(result).toContain('metadata/hash:h1');
   });
 
@@ -308,12 +308,12 @@ describe('refreshTargetMatchesGridScope', () => {
     expect(refreshTargetMatchesGridScope('grid/folder:5', 'folder:10')).toBe(false);
   });
 
-  it('system:all is a wildcard only for system scopes', () => {
-    expect(refreshTargetMatchesGridScope('grid/system:all', 'system:inbox')).toBe(true);
-    expect(refreshTargetMatchesGridScope('grid/system:all', 'system:uncategorized')).toBe(true);
-    expect(refreshTargetMatchesGridScope('grid/system:all', 'folder:5')).toBe(false);
-    expect(refreshTargetMatchesGridScope('grid/system:all', 'smart:3')).toBe(false);
-    expect(refreshTargetMatchesGridScope('grid/system:all', 'collection:7')).toBe(false);
+  it('system:active is a wildcard only for system scopes', () => {
+    expect(refreshTargetMatchesGridScope('grid/system:active', 'system:inbox')).toBe(true);
+    expect(refreshTargetMatchesGridScope('grid/system:active', 'system:uncategorized')).toBe(true);
+    expect(refreshTargetMatchesGridScope('grid/system:active', 'folder:5')).toBe(false);
+    expect(refreshTargetMatchesGridScope('grid/system:active', 'smart:3')).toBe(false);
+    expect(refreshTargetMatchesGridScope('grid/system:active', 'collection:7')).toBe(false);
   });
 
   it('folder:all matches any folder:N scope', () => {

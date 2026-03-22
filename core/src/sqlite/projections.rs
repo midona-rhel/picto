@@ -91,8 +91,8 @@ fn build_projections_batch_chunk(
             current_slim = Some(FileMetadataSlim {
                 file_id,
                 entity_id: file_id,
-                is_collection: false,
-                collection_item_count: None,
+                kind: "single".to_string(),
+                member_count: None,
                 hash: row.get(1)?,
                 thumbnail_hash: row.get(1)?,
                 name: row.get(2)?,

@@ -1,4 +1,4 @@
-import type { EntitySlim as ApiEntitySlim } from '../../shared/types/api';
+import type { EntityGridItem as ApiEntityGridItem } from '../../shared/types/api';
 
 export const isEditableTarget = (target: EventTarget | null): boolean => {
   if (!(target instanceof HTMLElement)) return false;
@@ -29,9 +29,9 @@ export const mediaMimeForFilename = (filename: string) => {
 
 export const isVideoMime = (mime: string) => mime.startsWith('video/');
 
-export type EntitySlim = ApiEntitySlim;
+export type EntityGridItem = ApiEntityGridItem;
 
-export type MediaItem = EntitySlim;
+export type MediaItem = EntityGridItem;
 
 // Extended type for Masonic grid with computed aspect ratio
 export interface MasonryItem extends MediaItem {

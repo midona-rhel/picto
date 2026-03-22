@@ -1,7 +1,7 @@
 //! View preferences orchestration — per-scope layout, sort, and display
 //! settings (tile size, label visibility, thumbnail fit).
 //!
-//! Each scope (e.g. `"system:all"`, `"folder:5"`) can have independent
+//! Each scope (e.g. `"system:active"`, `"folder:5"`) can have independent
 //! view preferences stored in `sqlite::view_prefs`.
 
 use crate::sqlite::SqliteDatabase;

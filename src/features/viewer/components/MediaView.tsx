@@ -81,7 +81,7 @@ export function MediaView({ images, currentIndex, onNavigate, onClose, onStateCh
   }, [images.length]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const currentImage = images[currentIndex];
-  const isCollection = !!(currentImage?.is_collection && currentImage?.entity_id != null);
+  const isCollection = !!(currentImage?.kind === 'collection' && currentImage?.entity_id != null);
   const isVideo = currentImage ? isVideoMime(currentImage.mime) : false;
 
   const stripMode = isCollection;
@@ -552,7 +552,7 @@ export function MediaView({ images, currentIndex, onNavigate, onClose, onStateCh
       if (matchesShortcut(e, openDefaultKeys)) {
         e.preventDefault();
         const img = currentImageRef.current;
-        if (img && !img.is_collection) {
+        if (img && img.kind !== 'collection') {
           runCriticalAction('Open Failed', 'detail.openDefaultFromShortcut', entityController.openDefault(img.hash));
         }
         return;
@@ -560,7 +560,7 @@ export function MediaView({ images, currentIndex, onNavigate, onClose, onStateCh
       if (matchesShortcut(e, revealKeys)) {
         e.preventDefault();
         const img = currentImageRef.current;
-        if (img && !img.is_collection) {
+        if (img && img.kind !== 'collection') {
           runCriticalAction('Reveal Failed', 'detail.revealFromShortcut', entityController.revealInFolder(img.hash));
         }
         return;
@@ -568,7 +568,7 @@ export function MediaView({ images, currentIndex, onNavigate, onClose, onStateCh
       if (matchesShortcut(e, newWindowKeys)) {
         e.preventDefault();
         const img = currentImageRef.current;
-        if (img && !img.is_collection) {
+        if (img && img.kind !== 'collection') {
           runCriticalAction(
             'New Window Failed',
             'detail.openInNewWindowFromShortcut',

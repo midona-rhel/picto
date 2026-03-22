@@ -145,32 +145,32 @@ pub fn delete_sidebar_node(conn: &Connection, node_id: &str) -> rusqlite::Result
 
 fn normalize_root_library_scope(conn: &Connection) -> rusqlite::Result<()> {
     let has_all: i64 = conn.query_row(
-        "SELECT EXISTS(SELECT 1 FROM sidebar_node WHERE node_id = 'system:all')",
+        "SELECT EXISTS(SELECT 1 FROM sidebar_node WHERE node_id = 'system:active')",
         [],
         |row| row.get(0),
     )?;
     let has_all_files: i64 = conn.query_row(
-        "SELECT EXISTS(SELECT 1 FROM sidebar_node WHERE node_id = 'system:all_files')",
+        "SELECT EXISTS(SELECT 1 FROM sidebar_node WHERE node_id = 'system:active_files')",
         [],
         |row| row.get(0),
     )?;
 
     if has_all != 0 && has_all_files != 0 {
         conn.execute(
-            "DELETE FROM sidebar_node WHERE node_id = 'system:all_files'",
+            "DELETE FROM sidebar_node WHERE node_id = 'system:active_files'",
             [],
         )?;
     } else if has_all == 0 && has_all_files != 0 {
         conn.execute(
             "UPDATE sidebar_node
-             SET node_id = 'system:all', name = 'All Active'
-             WHERE node_id = 'system:all_files'",
+             SET node_id = 'system:active', name = 'All Active'
+             WHERE node_id = 'system:active_files'",
             [],
         )?;
     }
 
     conn.execute(
-        "UPDATE sidebar_node SET name = 'All Active' WHERE node_id = 'system:all'",
+        "UPDATE sidebar_node SET name = 'All Active' WHERE node_id = 'system:active'",
         [],
     )?;
 
@@ -199,7 +199,7 @@ pub fn seed_sidebar_if_empty(conn: &Connection) -> rusqlite::Result<()> {
             updated_at: Some(now.clone()),
         },
         SidebarNode {
-            node_id: "system:all".into(),
+            node_id: "system:active".into(),
             kind: "system".into(),
             parent_id: Some("system:library".into()),
             name: "All Active".into(),

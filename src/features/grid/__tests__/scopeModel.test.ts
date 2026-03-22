@@ -42,7 +42,7 @@ describe('deriveGridScopeKey', () => {
     })).toBe('smart:abc');
   });
 
-  it('returns explicit system scopes before falling back to system:all', () => {
+  it('returns explicit system scopes before falling back to system:active', () => {
     expect(deriveGridScopeKey({
       currentView: 'images',
       activeFolderId: null,
@@ -57,7 +57,7 @@ describe('deriveGridScopeKey', () => {
       activeCollectionId: null,
       activeSmartFolderId: null,
       activeStatusFilter: null,
-    })).toBe('system:all');
+    })).toBe('system:active');
   });
 
   it('treats random as the canonical all-scope with random ordering', () => {
@@ -67,7 +67,7 @@ describe('deriveGridScopeKey', () => {
       activeCollectionId: null,
       activeSmartFolderId: null,
       activeStatusFilter: 'random',
-    })).toBe('system:all');
+    })).toBe('system:active');
   });
 });
 

@@ -244,7 +244,7 @@ export function drawCanvasBaseLayer({
     let bx = pos.x;
     let by = drawY;
     let bw = pos.w;
-    if (isContain && !image.is_collection && image.aspectRatio) {
+    if (isContain && image.kind !== 'collection' && image.aspectRatio) {
       const rect = getContainRect(image.aspectRatio, pos.x, drawY, pos.w, imgH);
       bx = rect.x;
       by = rect.y;
@@ -254,7 +254,7 @@ export function drawCanvasBaseLayer({
     const ext = mimeToExt(image.mime);
     const isVideo = image.mime.startsWith('video/');
     const isAnimated = image.mime === 'image/gif' && (image.num_frames ?? 0) > 1;
-    const isCollection = image.is_collection === true;
+    const isCollection = image.kind === 'collection';
     const showBadge = !isCollection && showExtensionLabel && ext && !isHiddenBadgeType(ext);
 
     if (showBadge) {
@@ -269,7 +269,7 @@ export function drawCanvasBaseLayer({
     }
 
     if (isCollection) {
-      const itemCount = Math.max(0, image.collection_item_count ?? 0);
+      const itemCount = Math.max(0, image.member_count ?? 0);
       drawBadge(ctx, `${itemCount.toLocaleString()} items`, bx + 5, by + imgH - BADGE_H - 5);
     }
   }
@@ -360,7 +360,7 @@ export function drawCanvasOverlayLayer({
   const { startIdx, visibleIndices, visibleIterEnd, scrollTop, cssH, th, br } = visible;
 
   const hoveredImg = hoveredIdx != null ? imgs[hoveredIdx] : null;
-  if (hoveredIdx != null && !isScrolling && hoveredImg && !hoveredImg.is_collection && !isVideoMime(hoveredImg.mime)) {
+  if (hoveredIdx != null && !isScrolling && hoveredImg && hoveredImg.kind !== 'collection' && !isVideoMime(hoveredImg.mime)) {
     const pos = positions[hoveredIdx];
     if (pos) {
       const drawY = pos.y - scrollTop;

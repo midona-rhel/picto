@@ -70,7 +70,12 @@ pub struct DominantColorDto {
 
 #[derive(Debug, Serialize)]
 pub struct EntityDetails {
+    pub entity_id: i64,
+    pub kind: String,
     pub hash: String,
+    pub thumbnail_hash: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub member_count: Option<i64>,
     pub name: Option<String>,
     pub size: i64,
     pub mime: String,
@@ -110,8 +115,13 @@ impl From<FileRecord> for EntityDetails {
             .notes
             .as_deref()
             .and_then(|s| serde_json::from_str(s).ok());
+        let hash = f.hash.clone();
         Self {
-            hash: f.hash,
+            entity_id: f.file_id,
+            kind: "single".to_string(),
+            hash,
+            thumbnail_hash: f.hash,
+            member_count: None,
             name: f.name,
             size: f.size,
             mime: f.mime,
@@ -137,14 +147,14 @@ impl From<FileRecord> for EntityDetails {
 
 /// Slim entity info for grid display — omits heavy fields.
 #[derive(Debug, Serialize)]
-pub struct EntitySlim {
+pub struct EntityGridItem {
     pub entity_id: i64,
-    pub is_collection: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub collection_item_count: Option<i64>,
+    pub kind: String,
     pub hash: String,
     /// Hash for thumbnail/media asset URLs. For collections, this is the cover file's hash.
     pub thumbnail_hash: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub member_count: Option<i64>,
     pub name: Option<String>,
     pub size: i64,
     pub mime: String,
@@ -163,9 +173,10 @@ pub struct EntitySlim {
     pub dominant_color_hex: Option<String>,
 }
 
-impl From<FileMetadataSlim> for EntitySlim {
+impl From<FileMetadataSlim> for EntityGridItem {
     fn from(f: FileMetadataSlim) -> Self {
-        let has_thumbnail = if f.is_collection {
+        let is_collection = f.kind == "collection";
+        let has_thumbnail = if is_collection {
             // Collection has thumbnail if a cover hash was resolved (non-empty)
             !f.hash.is_empty()
         } else {
@@ -177,10 +188,10 @@ impl From<FileMetadataSlim> for EntitySlim {
             } else {
                 f.file_id
             },
-            is_collection: f.is_collection,
-            collection_item_count: f.collection_item_count,
+            kind: f.kind,
             hash: f.hash,
             thumbnail_hash: f.thumbnail_hash,
+            member_count: f.member_count,
             name: f.name,
             size: f.size,
             mime: f.mime,
@@ -199,15 +210,15 @@ impl From<FileMetadataSlim> for EntitySlim {
     }
 }
 
-impl From<crate::sqlite::files::FileRecord> for EntitySlim {
+impl From<crate::sqlite::files::FileRecord> for EntityGridItem {
     fn from(f: crate::sqlite::files::FileRecord) -> Self {
         let has_thumbnail = f.mime.starts_with("image/") || f.mime.starts_with("video/");
         Self {
             entity_id: f.file_id,
-            is_collection: false,
-            collection_item_count: None,
+            kind: "single".to_string(),
             thumbnail_hash: f.hash.clone(),
             hash: f.hash,
+            member_count: None,
             name: f.name,
             size: f.size,
             mime: f.mime,
@@ -331,7 +342,7 @@ pub struct GridPageSlimQuery {
 
 #[derive(Debug, Serialize)]
 pub struct GridPageSlimResponse {
-    pub items: Vec<EntitySlim>,
+    pub items: Vec<EntityGridItem>,
     pub next_cursor: Option<String>,
     pub has_more: bool,
     /// Total count of items matching the current filter (for scroll height estimation).
@@ -427,10 +438,10 @@ pub struct EntityMetadataBatchResponse {
 }
 
 pub type EntityInfo = EntityDetails;
-pub type EntityInfoSlim = EntitySlim;
+pub type EntityGridInfo = EntityGridItem;
 pub type FileAllMetadata = EntityAllMetadata;
 pub type FileInfo = EntityInfo;
-pub type FileInfoSlim = EntityInfoSlim;
+pub type FileGridInfo = EntityGridInfo;
 
 #[derive(Debug, Clone, Deserialize, TS)]
 #[ts(export_to = "../../src/shared/types/generated/commands/")]

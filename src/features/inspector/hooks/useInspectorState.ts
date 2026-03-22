@@ -101,7 +101,7 @@ export function useInspectorState({
     setImageName(name);
     if (saveNameTimer.current) clearTimeout(saveNameTimer.current);
     const selected = selectedImageRef.current;
-    if (selected?.is_collection && selected.entity_id != null) {
+    if (selected?.kind === 'collection' && selected.entity_id != null) {
       const collectionId = selected.entity_id;
       const nextName = (name || '').trim() || (selected.name ?? `Collection ${collectionId}`);
       const beforeName = selected.name ?? `Collection ${collectionId}`;

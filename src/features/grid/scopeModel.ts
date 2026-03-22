@@ -25,9 +25,9 @@ export function deriveGridScopeKey(input: ActiveGridScopeInput): string | null {
   if (input.activeCollectionId != null) return `collection:${input.activeCollectionId}`;
   if (input.activeFolderId != null) return `folder:${input.activeFolderId}`;
   if (input.activeSmartFolderId) return `smart:${input.activeSmartFolderId}`;
-  if (input.activeStatusFilter === 'random') return 'system:all';
+  if (input.activeStatusFilter === 'random') return 'system:active';
   if (input.activeStatusFilter) return `system:${input.activeStatusFilter}`;
-  return 'system:all';
+  return 'system:active';
 }
 
 export function deriveActiveGridScopeCount(input: ActiveGridScopeCountInput): number | null {

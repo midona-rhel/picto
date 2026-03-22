@@ -7,7 +7,7 @@
 
 import { create } from 'zustand';
 import { entityController } from '../controllers/entityController';
-import type { EntitySlim } from '../shared/types/api';
+import type { EntityGridItem } from '../shared/types/api';
 
 interface FileMetadataSlim {
   hash: string;
@@ -57,11 +57,11 @@ interface CacheState {
   pendingClearAll: boolean;
 
   // Pending insertions — entities that should be inserted/updated in the visible
-  // grid (e.g. restore to active while viewing system:all).
-  pendingInsertions: EntitySlim[];
+  // grid (e.g. restore to active while viewing system:active).
+  pendingInsertions: EntityGridItem[];
 
   // Active grid scope — used by the grid refresh applier for scope-aware grid target filtering.
-  // e.g. "folder:5", "system:inbox", "system:all"
+  // e.g. "folder:5", "system:inbox", "system:active"
   activeGridScope: string | null;
 
   // Actions
@@ -74,8 +74,8 @@ interface CacheState {
   /** Clear all items from the grid (virtual select-all trash/delete). */
   queueClearAll: () => void;
   drainRemovals: () => { hashes: Set<string>; clearAll: boolean };
-  queueInsertions: (entities: EntitySlim[]) => void;
-  drainInsertions: () => EntitySlim[];
+  queueInsertions: (entities: EntityGridItem[]) => void;
+  drainInsertions: () => EntityGridItem[];
   setActiveGridScope: (scope: string | null) => void;
   /** Scoped grid replace — only bumps refresh if the given scope matches the active scope. */
   requestScopedReplace: (scope: string) => void;
@@ -201,7 +201,7 @@ export const useGridMetadataStore = create<CacheState>((set, get) => ({
     return { hashes: pendingRemovals, clearAll: pendingClearAll };
   },
 
-  queueInsertions: (entities: EntitySlim[]) => {
+  queueInsertions: (entities: EntityGridItem[]) => {
     set((s) => ({ pendingInsertions: [...s.pendingInsertions, ...entities] }));
   },
 

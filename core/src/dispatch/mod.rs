@@ -139,8 +139,9 @@ async fn dispatch_inner(command: &str, args: serde_json::Value) -> Result<String
         // ── Grid ──────────────────────────────────────────────
         "get_grid_page_slim" => call!(typed::grid::get_grid_page_slim, &state, args),
         "get_grid_outline" => call!(typed::grid::get_grid_outline, &state, args),
-        "get_entity" => call!(typed::grid::get_entity, &state, args),
-        "get_entity_slim" => call!(typed::grid::get_entity_slim, &state, args),
+        "get_entity_details" => call!(typed::grid::get_entity_details, &state, args),
+        "get_entity_grid_item" => call!(typed::grid::get_entity_grid_item, &state, args),
+        "get_entity_grid_items" => call!(typed::grid::get_entity_grid_items, &state, args),
         "get_entities_metadata_batch" => {
             call!(typed::grid::get_entities_metadata_batch, &state, args)
         }
@@ -171,8 +172,8 @@ async fn dispatch_inner(command: &str, args: serde_json::Value) -> Result<String
         "add_tags_selection" => call!(typed::selection::add_tags_selection, &state, args),
         "remove_tags_selection" => call!(typed::selection::remove_tags_selection, &state, args),
         "get_selection_summary" => call!(typed::selection::get_selection_summary, &state, args),
-        "resolve_selection_hashes" => {
-            call!(typed::selection::resolve_selection_hashes, &state, args)
+        "resolve_selection_entity_hashes" => {
+            call!(typed::selection::resolve_selection_entity_hashes, &state, args)
         }
         "update_selection_metadata" => {
             call!(typed::selection::update_selection_metadata, &state, args)

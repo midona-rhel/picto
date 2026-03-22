@@ -501,7 +501,7 @@ async fn drain_deferred_work_batch(
         crate::events::emit_state_changed(
             "deferred_work_batch",
             ChangeImpact::new()
-                .file_hashes(hashes)
+                .entity_hashes(hashes)
                 .derivative_fields_changed(&fields)
                 .smart_folder_scopes_changed_for_derivative_fields(&fields),
         );

@@ -87,7 +87,11 @@ pub async fn get_entities_metadata_batch(
                 hash.clone(),
                 EntityAllMetadata {
                     entity: EntityDetails {
+                        entity_id: slim.entity_id,
+                        kind: slim.kind,
                         hash: slim.hash,
+                        thumbnail_hash: slim.thumbnail_hash,
+                        member_count: slim.member_count,
                         name: slim.name,
                         size: slim.size,
                         mime: slim.mime,

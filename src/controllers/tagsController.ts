@@ -77,7 +77,7 @@ export const tagsController = {
   async addToSelection(selection: SelectionQuerySpec, tags: string[]) {
     const hashes = selection.hashes?.length
       ? selection.hashes
-      : await entityController.resolveSelectionHashes(selection);
+      : await entityController.resolveSelectionEntityHashes(selection);
     entityController.noteManyMetadataChanged(hashes);
     await api.selection.addTags(selection, tags);
     const spec = structuredClone(selection), t = [...tags];
@@ -91,7 +91,7 @@ export const tagsController = {
   async removeFromSelection(selection: SelectionQuerySpec, tags: string[]) {
     const hashes = selection.hashes?.length
       ? selection.hashes
-      : await entityController.resolveSelectionHashes(selection);
+      : await entityController.resolveSelectionEntityHashes(selection);
     entityController.noteManyMetadataChanged(hashes);
     await api.selection.removeTags(selection, tags);
     const spec = structuredClone(selection), t = [...tags];

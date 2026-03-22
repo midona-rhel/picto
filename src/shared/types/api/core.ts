@@ -7,13 +7,12 @@
 
 // ─── Grid & Pagination ──────────────────────────────────────────────────────
 
-export interface EntitySlim {
-  entity_id?: number;
-  is_collection?: boolean;
-  collection_item_count?: number | null;
+export type MediaEntityKind = 'single' | 'collection';
+
+export interface EntityBase {
+  entity_id: number;
+  kind: MediaEntityKind;
   hash: string;
-  /** Hash used for thumbnail/media URLs. For collections, this is the cover file's hash. */
-  thumbnail_hash: string;
   name: string | null;
   mime: string;
   size: number;
@@ -24,26 +23,35 @@ export interface EntitySlim {
   has_audio: boolean;
   status: string;
   rating: number | null;
-  source_urls: string[] | null;
   date_added: string;
   has_thumbnail: boolean;
+}
+
+export interface EntityGridItem extends EntityBase {
+  /** Hash used for thumbnail/media URLs. For collections, this is the cover file's hash. */
+  thumbnail_hash: string;
+  member_count: number | null;
   dominant_color_hex?: string | null;
-  tags?: string[];
+}
+
+export interface EntityDetails extends EntityBase {
+  thumbnail_hash: string;
+  member_count: number | null;
+  source_urls: string[] | null;
+  dominant_color_hex?: string | null;
   dominant_colors?: { hex: string; l: number; a: number; b: number }[] | null;
   notes?: Record<string, string> | null;
 }
 
-export interface EntityDetails extends EntitySlim {}
-
 export interface GridPageSlimResponse {
-  items: EntitySlim[];
+  items: EntityGridItem[];
   next_cursor: string | null;
   has_more: boolean;
   total_count: number | null;
 }
 
 export interface GridOutlineResponse {
-  items: EntitySlim[];
+  items: EntityGridItem[];
   total_count: number | null;
 }
 

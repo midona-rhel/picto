@@ -63,8 +63,12 @@ async fn collection_members_hidden_from_general_scopes() {
         "standalone must appear in all"
     );
     // Members should be collapsed: the collection entity replaces individual members
-    // The collection entity appears as a single item with is_collection=true
-    let collection_items: Vec<_> = all_res.items.iter().filter(|i| i.is_collection).collect();
+    // The collection entity appears as a single item with kind=collection
+    let collection_items: Vec<_> = all_res
+        .items
+        .iter()
+        .filter(|i| i.kind == "collection")
+        .collect();
     assert!(
         !collection_items.is_empty(),
         "collection entity must appear in all scope"

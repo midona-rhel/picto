@@ -105,11 +105,10 @@ pub fn build_config(opts: &RunOptions, _temp_dir: &Path) -> serde_json::Value {
     output.insert("progress".into(), serde_json::Value::Bool(false));
     root.insert("output".into(), serde_json::Value::Object(output));
 
-    // Strip non-ASCII characters (emoji, CJK, etc.) from filenames to avoid
-    // Windows OSError [Errno 22] on paths with unsupported Unicode.
-    // The "ascii" mode replaces all non-ASCII with underscores.
-    // See: https://github.com/mikf/gallery-dl/issues/478
-    //      https://github.com/mikf/gallery-dl/issues/3450
+    // Restrict filenames to ASCII-safe characters: [0-9A-Za-z_.] only.
+    // Replaces everything else (colons, emoji, CJK, etc.) with underscores.
+    // Fixes: macOS NotADirectoryError from `:` in filenames (HFS+ path separator),
+    //        Windows OSError [Errno 22] from unsupported Unicode.
     {
         let extractor = root.get_mut("extractor").and_then(|v| v.as_object_mut());
         if let Some(ext) = extractor {

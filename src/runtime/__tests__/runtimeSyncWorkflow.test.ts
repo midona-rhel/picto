@@ -57,7 +57,7 @@ describe('multi-step state-change workflows', () => {
       // Step 1: status_changed (inbox → active)
       makeEvent(makeChanges({ status_changed: true }), {}, 1),
       // Step 2: tags_changed on specific files
-      makeEvent(makeChanges({ tags_changed: true, file_hashes: ['abc'] }), {}, 2),
+      makeEvent(makeChanges({ tags_changed: true, entity_hashes: ['abc'] }), {}, 2),
       // Step 3: folder_membership_changed
       makeEvent(makeChanges({ folder_membership_changed: [5] }), {}, 3),
     ];
@@ -66,7 +66,7 @@ describe('multi-step state-change workflows', () => {
 
     // From status_changed
     expect(targets).toContain('sidebar/tree');
-    expect(targets).toContain('grid/system:all');
+    expect(targets).toContain('grid/system:active');
     expect(targets).toContain('grid/system:inbox');
     expect(targets).toContain('grid/system:trash');
 
@@ -84,7 +84,7 @@ describe('multi-step state-change workflows', () => {
     const hashes = Array.from({ length: 20 }, (_, i) => `hash_${i}`);
     const receipt = makeEvent(makeChanges({
       tags_changed: true,
-      file_hashes: hashes,
+      entity_hashes: hashes,
     }));
 
     const targets = keys(receipt);
@@ -120,7 +120,7 @@ describe('multi-step state-change workflows', () => {
     expect(targets).toContain('sidebar/counts');
     // Also from status_changed
     expect(targets).toContain('sidebar/tree');
-    expect(targets).toContain('grid/system:all');
+    expect(targets).toContain('grid/system:active');
   });
 
   it('collection delete targets folder and system scopes', () => {
@@ -133,7 +133,7 @@ describe('multi-step state-change workflows', () => {
     const targets = keys(receipt);
     expect(targets).toContain('grid/collection:42');
     expect(targets).toContain('grid/folder:10');
-    expect(targets).toContain('grid/system:all');
+    expect(targets).toContain('grid/system:active');
     expect(targets).toContain('sidebar/tree');
   });
 
@@ -145,7 +145,7 @@ describe('multi-step state-change workflows', () => {
 
     const targets = keys(receipt);
     expect(targets).toContain('sidebar/tree');
-    expect(targets).toContain('grid/system:all');
+    expect(targets).toContain('grid/system:active');
     expect(targets).toContain('grid/smart:all');
     expect(targets).toContain('selection/current');
   });
@@ -169,16 +169,16 @@ describe('multi-step state-change workflows', () => {
 
   it('eager metadata invalidation followed by backend event should not produce duplicate metadata keys', () => {
     // Controller eagerly invalidates hash_a via eagerInvalidate()
-    // Backend event then arrives with hash_a in file_hashes
+    // Backend event then arrives with hash_a in entity_hashes
     // Both produce metadata/hash:hash_a — but Set deduplicates
     const event1 = makeEvent(makeChanges({
       tags_changed: true,
-      file_hashes: ['hash_a'],
+      entity_hashes: ['hash_a'],
     }), {}, 1);
 
     const event2 = makeEvent(makeChanges({
       tags_changed: true,
-      file_hashes: ['hash_a'],
+      entity_hashes: ['hash_a'],
     }), {}, 2);
 
     const targets = accumulateRefreshTargets([event1, event2]);
@@ -189,11 +189,11 @@ describe('multi-step state-change workflows', () => {
   });
 
   it('subscription import with exact file hashes produces targeted, not broad, refresh', () => {
-    // PBI-561 now includes file_hashes in subscription imports
+    // PBI-561 now includes entity_hashes in subscription imports
     const receipt = makeEvent(makeChanges({
       status_changed: true,
       domains: ['sidebar', 'files', 'smart_folders'] as Domain[],
-      file_hashes: ['sub_h1', 'sub_h2'],
+      entity_hashes: ['sub_h1', 'sub_h2'],
       extra_grid_scopes: ['system:inbox'],
     }), { sidebar_counts: { all_active: 52, inbox: 5, trash: 1 } }, 1);
 
@@ -209,6 +209,6 @@ describe('multi-step state-change workflows', () => {
 
     // Grid scopes (from status_changed + extra)
     expect(targets).toContain('grid/system:inbox');
-    expect(targets).toContain('grid/system:all');
+    expect(targets).toContain('grid/system:active');
   });
 });

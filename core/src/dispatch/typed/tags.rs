@@ -3,7 +3,19 @@
 use serde::Deserialize;
 use ts_rs::TS;
 
+use crate::sqlite::EntityExpansionMode;
 use crate::state::AppState;
+
+fn descendant_hashes(top_level_hashes: &[String], effective_hashes: &[(String, i64)]) -> Vec<String> {
+    let top_level: std::collections::HashSet<&str> =
+        top_level_hashes.iter().map(String::as_str).collect();
+    effective_hashes
+        .iter()
+        .map(|(hash, _)| hash)
+        .filter(|hash| !top_level.contains(hash.as_str()))
+        .cloned()
+        .collect()
+}
 
 // ─── Input structs ─────────────────────────────────────────────────────────
 
@@ -172,16 +184,23 @@ pub async fn add_tags(state: &AppState, input: AddTagsInput) -> Result<(), Strin
     if input.tag_strings.is_empty() || input.hashes.is_empty() {
         return Ok(());
     }
-    // add_tags_batch uses resolve_hashes_batch internally which expands
-    // collection hashes to collection entity + all member entity_ids.
+    let resolved = state
+        .db
+        .resolve_entity_hashes_with_expansion(
+            &input.hashes,
+            EntityExpansionMode::EntityAndDescendants,
+        )
+        .await?;
+    let entity_ids: Vec<i64> = resolved.iter().map(|(_, id)| *id).collect();
     state
         .db
-        .add_tags_batch(&input.hashes, &input.tag_strings)
+        .add_tags_batch_by_entity_ids(entity_ids, input.tag_strings.clone(), "local".to_string())
         .await?;
     crate::events::emit_state_changed(
         "add_tags",
         crate::runtime_contract::change_builder::ChangeImpact::batch_tags()
-            .file_hashes(input.hashes)
+            .entity_hashes(input.hashes.clone())
+            .member_hashes(descendant_hashes(&input.hashes, &resolved))
             .tags_added(input.tag_strings),
     );
     Ok(())
@@ -191,16 +210,23 @@ pub async fn remove_tags(state: &AppState, input: RemoveTagsInput) -> Result<(),
     if input.tag_strings.is_empty() || input.hashes.is_empty() {
         return Ok(());
     }
-    // remove_tags_batch uses resolve_hashes_batch internally which expands
-    // collection hashes to collection entity + all member entity_ids.
+    let resolved = state
+        .db
+        .resolve_entity_hashes_with_expansion(
+            &input.hashes,
+            EntityExpansionMode::EntityAndDescendants,
+        )
+        .await?;
+    let entity_ids: Vec<i64> = resolved.iter().map(|(_, id)| *id).collect();
     state
         .db
-        .remove_tags_batch(&input.hashes, &input.tag_strings)
+        .remove_tags_batch_by_entity_ids(entity_ids, input.tag_strings.clone())
         .await?;
     crate::events::emit_state_changed(
         "remove_tags",
         crate::runtime_contract::change_builder::ChangeImpact::batch_tags()
-            .file_hashes(input.hashes)
+            .entity_hashes(input.hashes.clone())
+            .member_hashes(descendant_hashes(&input.hashes, &resolved))
             .tags_removed(input.tag_strings),
     );
     Ok(())
@@ -348,7 +374,7 @@ pub async fn merge_tags(state: &AppState, input: MergeTagsInput) -> Result<(), S
     crate::events::emit_state_changed(
         "merge_tags",
         crate::runtime_contract::change_builder::ChangeImpact::tag_structure_change()
-            .file_hashes(affected_hashes)
+            .entity_hashes(affected_hashes)
             .tags_removed(vec![input.from_tag.clone()])
             .tags_added(vec![input.to_tag.clone()]),
     );
@@ -413,7 +439,7 @@ pub async fn rename_tag(
         Vec::new()
     };
     let mut impact = crate::runtime_contract::change_builder::ChangeImpact::tag_structure_change()
-        .file_hashes(affected_hashes);
+        .entity_hashes(affected_hashes);
     if let Some(old_tag) = old_tag_string {
         impact = impact
             .tags_removed(vec![old_tag])
@@ -458,7 +484,7 @@ pub async fn delete_tag(
         Vec::new()
     };
     let mut impact = crate::runtime_contract::change_builder::ChangeImpact::tag_structure_change()
-        .file_hashes(affected_hashes);
+        .entity_hashes(affected_hashes);
     if let Some(tag) = tag_string {
         impact = impact.tags_removed(vec![tag]);
     }

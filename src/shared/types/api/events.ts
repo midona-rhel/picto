@@ -37,9 +37,10 @@ export interface OpenDetailWindowEvent {
 
 export interface FileImportedEvent {
   entity_id: number;
-  is_collection: boolean;
-  collection_item_count?: number | null;
+  kind: 'single' | 'collection';
+  member_count?: number | null;
   hash: string;
+  thumbnail_hash: string;
   name?: string | null;
   size: number;
   mime: string;

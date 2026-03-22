@@ -4,6 +4,7 @@
 use serde::Deserialize;
 use ts_rs::TS;
 
+use crate::sqlite::EntityExpansionMode;
 use crate::state::AppState;
 use crate::types::*;
 
@@ -208,7 +209,7 @@ pub async fn set_entity_status(
     let mut impact = crate::runtime_contract::change_builder::ChangeImpact::new()
         .status_changed()
         .status_sensitive_grid_scopes_changed()
-        .file_hashes(hashes.clone());
+        .entity_hashes(hashes.clone());
     if !folder_ids.is_empty() {
         impact = impact.folder_ids(folder_ids);
     }
@@ -220,16 +221,19 @@ pub async fn set_entity_status(
 ///
 /// Fast path: bulk SQL delete in one transaction. Blob cleanup is deferred to background.
 pub async fn delete_entities(state: &AppState, input: DeleteFilesInput) -> Result<usize, String> {
-    // 1. Resolve all entity IDs (resolve_hashes_batch expands collections to members)
     let all_ids: Vec<i64> = if let Some(ref hashes) = input.hashes {
-        let pairs = state.db.resolve_hashes_batch(hashes).await?;
+        let pairs = state
+            .db
+            .resolve_entity_hashes_with_expansion(hashes, EntityExpansionMode::EntityAndDescendants)
+            .await?;
         pairs.into_iter().map(|(_, fid)| fid).collect()
     } else if let Some(ref selection) = input.selection {
         let bitmap = resolve_selection_bitmap(state, &selection).await?;
-        let mut ids: Vec<i64> = bitmap.iter().map(|id| id as i64).collect();
-        // Expand collections in the selection
-        ids = state.db.expand_collection_members(ids).await?;
-        ids
+        let ids: Vec<i64> = bitmap.iter().map(|id| id as i64).collect();
+        state
+            .db
+            .expand_entity_ids(ids, EntityExpansionMode::EntityAndDescendants)
+            .await?
     } else {
         return Err("Either hashes or selection must be provided".into());
     };
@@ -356,7 +360,7 @@ pub async fn delete_entities(state: &AppState, input: DeleteFilesInput) -> Resul
             .collect::<Vec<_>>();
         let mut impact =
             crate::runtime_contract::change_builder::ChangeImpact::file_lifecycle(&state.db)
-                .file_hashes(all_hashes);
+                .entity_hashes(all_hashes);
         if !folder_ids.is_empty() {
             impact = impact
                 .folder_ids(folder_ids.clone())
@@ -391,7 +395,7 @@ pub(crate) async fn resolve_selection_bitmap(
     match &selection.mode {
         SelectionMode::ExplicitHashes => {
             let hashes = selection.hashes.clone().unwrap_or_default();
-            let pairs = state.db.resolve_hashes_batch(&hashes).await?;
+            let pairs = state.db.resolve_entity_hashes_batch(&hashes).await?;
             let mut bm = roaring::RoaringBitmap::new();
             for (_, fid) in pairs {
                 bm.insert(fid as u32);
@@ -416,7 +420,7 @@ pub(crate) async fn collect_folder_ids_for_hashes(
     if limited_hashes.is_empty() {
         return Vec::new();
     }
-    let resolved = match state.db.resolve_hashes_batch(&limited_hashes).await {
+    let resolved = match state.db.resolve_entity_hashes_batch(&limited_hashes).await {
         Ok(v) => v,
         Err(_) => return Vec::new(),
     };

@@ -130,7 +130,7 @@ export function useGridContextMenu({
       ? (rightClickedHash && !wasAlreadySelected ? rightClickedHash : [...state.selectedHashes][0])
       : rightClickedHash;
     const singleImage = singleHash ? (state.images.find((img) => img.hash === singleHash) ?? null) : null;
-    const singleIsCollection = singleImage?.is_collection === true;
+    const singleIsCollection = singleImage?.kind === 'collection';
     const singleCollectionId = singleImage?.entity_id ?? null;
 
     const items = buildGridImageContextMenu({

@@ -10,7 +10,7 @@ use picto_core::folders::db::NewFolder;
 use picto_core::scope::resolver::{resolve_scope, scope_count, ScopeFilter};
 use picto_core::types::*;
 
-/// Business rule: `system:all` = active only (status=1).
+/// Business rule: `system:active` = active only (status=1).
 /// Inbox and trash are excluded.
 #[tokio::test]
 async fn scope_contract_system_all_excludes_inbox_and_trash() {
@@ -27,15 +27,15 @@ async fn scope_contract_system_all_excludes_inbox_and_trash() {
 
     assert!(
         bm.contains(f_active as u32),
-        "active file must be in system:all"
+        "active file must be in system:active"
     );
     assert!(
         !bm.contains(f_inbox as u32),
-        "inbox file must NOT be in system:all"
+        "inbox file must NOT be in system:active"
     );
     assert!(
         !bm.contains(f_trash as u32),
-        "trash file must NOT be in system:all"
+        "trash file must NOT be in system:active"
     );
     assert_eq!(bm.len(), 1);
 }
@@ -544,8 +544,8 @@ async fn scope_contract_scope_count_agrees_with_resolve_scope() {
         .unwrap();
 
     let cases: Vec<(&str, ScopeFilter)> = vec![
-        ("system:all", ScopeFilter::default()),
-        ("system:all_files", ScopeFilter::default()),
+        ("system:active", ScopeFilter::default()),
+        ("system:active_files", ScopeFilter::default()),
         (
             "system:inbox",
             ScopeFilter {

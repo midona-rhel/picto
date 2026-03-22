@@ -19,7 +19,7 @@ export function planRefreshTargets(event: StateChangedEvent): Set<ResourceKey> {
     keys.add('sidebar/tree');
     keys.add('selection/current');
     scopes.push(
-      'system:all',
+      'system:active',
       'system:inbox',
       'system:trash',
       'system:untagged',
@@ -36,15 +36,15 @@ export function planRefreshTargets(event: StateChangedEvent): Set<ResourceKey> {
   if (hasTagMembershipChange) {
     keys.add('selection/current');
     scopes.push('system:untagged');
-    if (!changes.file_hashes) {
-      scopes.push('system:all');
+    if (!changes.entity_hashes) {
+      scopes.push('system:active');
     }
   }
 
   if (changes.tag_structure_changed) {
     keys.add('sidebar/tree');
     keys.add('selection/current');
-    scopes.push('system:all', 'smart:all');
+    scopes.push('system:active', 'smart:all');
   }
 
   if (changes.folder_membership_changed) {
@@ -86,8 +86,14 @@ export function planRefreshTargets(event: StateChangedEvent): Set<ResourceKey> {
 
   // --- Entity-reference rules ---
 
-  if (changes.file_hashes) {
-    for (const hash of changes.file_hashes) {
+  if (changes.entity_hashes) {
+    for (const hash of changes.entity_hashes) {
+      keys.add(`metadata/hash:${hash}`);
+    }
+  }
+
+  if (changes.member_hashes) {
+    for (const hash of changes.member_hashes) {
       keys.add(`metadata/hash:${hash}`);
     }
   }
@@ -146,7 +152,7 @@ export function refreshTargetMatchesGridScope(
   if (scope === activeScope) return true;
   if (activeScope.startsWith('folder:') && scope === 'folder:all') return true;
   if (activeScope.startsWith('smart:') && scope === 'smart:all') return true;
-  if (activeScope.startsWith('system:') && scope === 'system:all') return true;
+  if (activeScope.startsWith('system:') && scope === 'system:active') return true;
 
   return false;
 }

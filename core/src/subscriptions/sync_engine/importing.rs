@@ -160,19 +160,19 @@ impl<'a> SubscriptionSyncEngine<'a> {
                 if !is_collection_member {
                     if surviving_hash == imported.hex_hash {
                         if let Ok(Some(record)) = self.db.get_file_by_hash(&surviving_hash).await {
-                            let slim = crate::types::FileInfoSlim::from(record);
+                            let slim = crate::types::FileGridInfo::from(record);
                             crate::events::emit(crate::events::event_names::FILE_IMPORTED, &slim);
                         }
                     }
 
                     // Only refresh inbox scope — imported files are status=0 (inbox),
-                    // they should not appear in system:all until reviewed.
+                    // they should not appear in system:active until reviewed.
                     crate::events::emit_state_changed(
                         "subscription_import",
                         crate::runtime_contract::change_builder::ChangeImpact::new()
                             .status_changed()
                             .sidebar_counts_from(self.db)
-                            .file_hashes(vec![surviving_hash.clone()])
+                            .entity_hashes(vec![surviving_hash.clone()])
                             .extra_grid_scopes(vec!["system:inbox".into()]),
                     );
                 }
@@ -313,7 +313,7 @@ impl<'a> SubscriptionSyncEngine<'a> {
                 crate::runtime_contract::change_builder::ChangeImpact::new()
                     .status_changed()
                     .sidebar_counts_from(self.db)
-                    .file_hashes(vec![file_hash])
+                    .entity_hashes(vec![file_hash])
                     .extra_grid_scopes(vec!["system:inbox".into()]),
             );
             return;
@@ -434,7 +434,7 @@ impl<'a> SubscriptionSyncEngine<'a> {
                 let impact = crate::runtime_contract::change_builder::ChangeImpact::collection_membership_change(
                     result.collection_id,
                 )
-                .file_hashes(vec![result.collection_hash])
+                .entity_hashes(vec![result.collection_hash])
                 .status_changed()
                 .sidebar_counts_from(self.db)
                 .extra_grid_scopes(vec!["system:inbox".into()]);

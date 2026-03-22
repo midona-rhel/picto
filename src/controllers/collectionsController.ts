@@ -45,9 +45,8 @@ async function eagerInsertIfViewingCollection(collectionId: number, hashes: stri
   const scope = useGridMetadataStore.getState().activeGridScope;
   if (scope !== `collection:${collectionId}`) return;
   const { queryApi } = await import('#desktop/api');
-  const entities = await Promise.all(hashes.map((h) => queryApi.file.getSlim(h)));
-  const valid = entities.filter((e): e is NonNullable<typeof e> => e != null);
-  if (valid.length > 0) useGridMetadataStore.getState().queueInsertions(valid);
+  const entities = await queryApi.file.getGridItems(hashes);
+  if (entities.length > 0) useGridMetadataStore.getState().queueInsertions(entities);
 }
 
 function eagerRemoveIfViewingCollection(collectionId: number, hashes: string[]) {
@@ -180,10 +179,9 @@ export const collectionsController = {
     // Insert freed members into the grid as individual tiles
     if (memberHashes.length > 0) {
       const { queryApi } = await import('#desktop/api');
-      Promise.all(memberHashes.map((h) => queryApi.file.getSlim(h))).then((entities) => {
-        const valid = entities.filter((e): e is NonNullable<typeof e> => e != null);
-        if (valid.length > 0) {
-          useGridMetadataStore.getState().queueInsertions(valid);
+      queryApi.file.getGridItems(memberHashes).then((entities) => {
+        if (entities.length > 0) {
+          useGridMetadataStore.getState().queueInsertions(entities);
         }
       });
     }
@@ -236,5 +234,6 @@ export const collectionsController = {
   },
 
   // tagAdd/tagRemove removed — collection tags use tagsController.addToHashes/removeFromHashes
-  // with the collection's own hash. resolve_hashes_batch expands to collection entity + members.
+  // with the collection's own hash. Backend tag commands explicitly apply
+  // entity-and-descendant expansion for collection targets.
 };

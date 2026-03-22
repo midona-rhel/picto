@@ -67,7 +67,7 @@ pub fn set_view_pref(conn: &Connection, pref: &ViewPref) -> rusqlite::Result<()>
     Ok(())
 }
 
-/// Get view pref for scope with fallback to system:all.
+/// Get view pref for scope with fallback to system:active.
 pub fn get_view_pref_with_fallback(
     conn: &Connection,
     scope: &str,
@@ -75,8 +75,8 @@ pub fn get_view_pref_with_fallback(
     if let Some(pref) = get_view_pref(conn, scope)? {
         return Ok(Some(pref));
     }
-    if scope != "system:all" {
-        return get_view_pref(conn, "system:all");
+    if scope != "system:active" {
+        return get_view_pref(conn, "system:active");
     }
     Ok(None)
 }

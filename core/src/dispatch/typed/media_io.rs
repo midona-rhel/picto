@@ -8,6 +8,7 @@ use ts_rs::TS;
 
 use crate::blob_store::mime_to_extension;
 use crate::runtime_contract::state_change::MediaDerivativeField;
+use crate::sqlite::EntityExpansionMode;
 use crate::state::AppState;
 use crate::types::SelectionQuerySpec;
 
@@ -520,11 +521,12 @@ pub async fn resolve_file_paths_batch(
     state: &AppState,
     input: ResolveFilePathsBatchInput,
 ) -> Result<serde_json::Value, String> {
-    // resolve_hashes_batch expands collections to member file hashes
-    let resolved = state.db.resolve_hashes_batch(&input.hashes).await?;
+    let resolved = state
+        .db
+        .resolve_entity_hashes_with_expansion(&input.hashes, EntityExpansionMode::DescendantsOnly)
+        .await?;
     let mut paths = Vec::with_capacity(resolved.len());
     for (hash, _) in &resolved {
-        if hash.is_empty() { continue; } // skip collection entity (no file)
         if let Ok(p) = resolve_file_path_inner(&state.db, &state.blob_store, hash).await {
             paths.push(p);
         }
@@ -621,7 +623,7 @@ pub async fn ensure_thumbnail(
         crate::events::emit_state_changed(
             "ensure_thumbnail",
             crate::runtime_contract::change_builder::ChangeImpact::new()
-                .file_hashes(vec![input.hash.clone()])
+                .entity_hashes(vec![input.hash.clone()])
                 .derivative_fields_changed(&[MediaDerivativeField::Thumbnail]),
         );
     }
@@ -637,7 +639,7 @@ pub async fn regenerate_thumbnail(
         crate::events::emit_state_changed(
             "regenerate_thumbnail",
             crate::runtime_contract::change_builder::ChangeImpact::new()
-                .file_hashes(vec![input.hash.clone()])
+                .entity_hashes(vec![input.hash.clone()])
                 .derivative_fields_changed(&[MediaDerivativeField::Thumbnail]),
         );
     }
@@ -668,7 +670,7 @@ pub async fn regenerate_thumbnails_batch(
         crate::events::emit_state_changed(
             "regenerate_thumbnails_batch",
             crate::runtime_contract::change_builder::ChangeImpact::new()
-                .file_hashes(changed_hashes)
+                .entity_hashes(changed_hashes)
                 .derivative_fields_changed(&[MediaDerivativeField::Thumbnail]),
         );
     }
@@ -690,7 +692,7 @@ pub async fn reanalyze_file_colors(
     crate::events::emit_state_changed(
         "reanalyze_file_colors",
         crate::runtime_contract::change_builder::ChangeImpact::new()
-            .file_hashes(vec![input.hash.clone()])
+            .entity_hashes(vec![input.hash.clone()])
             .derivative_fields_changed(&[MediaDerivativeField::DominantColorHex])
             .smart_folder_scopes_changed_for_derivative_fields(&[
                 MediaDerivativeField::DominantColorHex,

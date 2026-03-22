@@ -7,7 +7,7 @@
 use super::normalize;
 use crate::sqlite::SqliteDatabase;
 use crate::tags::db::FileTagInfo;
-use crate::types::{tag_display_key, FileInfoSlim, TagInfo};
+use crate::types::{tag_display_key, FileGridInfo, TagInfo};
 
 fn file_tag_to_tag_info(t: &FileTagInfo) -> TagInfo {
     TagInfo {
@@ -87,7 +87,7 @@ pub async fn find_files_by_tags(
     tag_strings: Vec<String>,
     limit: Option<usize>,
     offset: Option<usize>,
-) -> Result<Vec<FileInfoSlim>, String> {
+) -> Result<Vec<FileGridInfo>, String> {
     if tag_strings.is_empty() {
         return Ok(Vec::new());
     }
@@ -103,7 +103,7 @@ pub async fn find_files_by_tags(
     }
 
     let files = db.batch_get_metadata_slim(page_hashes).await?;
-    Ok(files.into_iter().map(FileInfoSlim::from).collect())
+    Ok(files.into_iter().map(FileGridInfo::from).collect())
 }
 
 pub async fn add_tags(

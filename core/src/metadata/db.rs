@@ -189,8 +189,8 @@ impl SqliteDatabase {
                     let slim = FileMetadataSlim {
                         file_id: fallback.file_id,
                         entity_id: fallback.file_id,
-                        is_collection: false,
-                        collection_item_count: None,
+                        kind: "single".to_string(),
+                        member_count: None,
                         thumbnail_hash: file.hash.clone(),
                         hash: file.hash,
                         name: file.name,

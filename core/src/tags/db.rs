@@ -832,30 +832,6 @@ impl SqliteDatabase {
         Ok(())
     }
 
-    /// Batch add tags to multiple files.
-    pub async fn add_tags_batch(
-        &self,
-        hashes: &[String],
-        tag_strings: &[String],
-    ) -> Result<(), String> {
-        for hash in hashes {
-            self.add_tags_by_strings(hash, tag_strings).await?;
-        }
-        Ok(())
-    }
-
-    /// Batch remove tags from multiple files.
-    pub async fn remove_tags_batch(
-        &self,
-        hashes: &[String],
-        tag_strings: &[String],
-    ) -> Result<(), String> {
-        for hash in hashes {
-            self.remove_tags_by_strings(hash, tag_strings).await?;
-        }
-        Ok(())
-    }
-
     /// Find files by tags using bitmap intersection.
     pub async fn find_files_by_tags(
         &self,

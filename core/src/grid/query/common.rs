@@ -4,11 +4,11 @@ use serde::Serialize;
 
 use crate::sqlite::files::GridFilters;
 use crate::sqlite::SqliteDatabase;
-use crate::types::{EntitySlim, GridPageSlimQuery};
+use crate::types::{EntityGridItem, GridPageSlimQuery};
 
 #[derive(Debug, Serialize)]
 pub struct GridOutlineResponse {
-    pub items: Vec<EntitySlim>,
+    pub items: Vec<EntityGridItem>,
     pub total_count: Option<i64>,
 }
 

@@ -76,7 +76,8 @@ pub fn emit_state_changed(origin: &str, impact: ChangeImpact) {
 
     let changes = StateChanges {
         domains: impact.domains,
-        file_hashes: impact.file_hashes,
+        entity_hashes: impact.entity_hashes,
+        member_hashes: impact.member_hashes,
         folder_ids: impact.folder_ids,
         smart_folder_ids: impact.smart_folder_ids,
         compiler_batch_done: impact.compiler_batch_done,

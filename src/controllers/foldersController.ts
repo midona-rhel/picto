@@ -130,9 +130,8 @@ export const foldersController = {
     if (count > 0) useDomainStore.getState().adjustFolderCount(folderId, count);
     await api.folders.addFiles(folderId, hashes, selection);
     if (useNavigationStore.getState().activeFolderId === folderId && hashes.length > 0) {
-      Promise.all(hashes.map((h) => queryApi.file.getSlim(h))).then((entities) => {
-        const valid = entities.filter((e): e is NonNullable<typeof e> => e != null);
-        if (valid.length > 0) useGridMetadataStore.getState().queueInsertions(valid);
+      queryApi.file.getGridItems(hashes).then((entities) => {
+        if (entities.length > 0) useGridMetadataStore.getState().queueInsertions(entities);
       });
     }
     if (hashes.length > 0 && !selection) {
@@ -143,9 +142,8 @@ export const foldersController = {
           await api.folders.addFiles(folderId, hashes);
           useDomainStore.getState().adjustFolderCount(folderId, count);
           if (useNavigationStore.getState().activeFolderId === folderId) {
-            Promise.all(hashes.map((h) => queryApi.file.get(h))).then((entities) => {
-              const valid = entities.filter((e): e is NonNullable<typeof e> => e != null);
-              if (valid.length > 0) useGridMetadataStore.getState().queueInsertions(valid);
+            queryApi.file.getGridItems(hashes).then((entities) => {
+              if (entities.length > 0) useGridMetadataStore.getState().queueInsertions(entities);
             });
           }
         },
@@ -165,9 +163,8 @@ export const foldersController = {
           await api.folders.addFiles(folderId, hashes);
           useDomainStore.getState().adjustFolderCount(folderId, count);
           if (useNavigationStore.getState().activeFolderId === folderId) {
-            Promise.all(hashes.map((h) => queryApi.file.get(h))).then((entities) => {
-              const valid = entities.filter((e): e is NonNullable<typeof e> => e != null);
-              if (valid.length > 0) useGridMetadataStore.getState().queueInsertions(valid);
+            queryApi.file.getGridItems(hashes).then((entities) => {
+              if (entities.length > 0) useGridMetadataStore.getState().queueInsertions(entities);
             });
           }
         },

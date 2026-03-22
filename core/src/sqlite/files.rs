@@ -17,10 +17,10 @@ pub struct FileMetadataSlim {
     pub file_id: i64,
     #[serde(default)]
     pub entity_id: i64,
+    #[serde(default = "default_single_kind")]
+    pub kind: String,
     #[serde(default)]
-    pub is_collection: bool,
-    #[serde(default)]
-    pub collection_item_count: Option<i64>,
+    pub member_count: Option<i64>,
     pub hash: String,
     pub thumbnail_hash: String,
     pub name: Option<String>,
@@ -44,6 +44,10 @@ pub struct FileMetadataSlim {
     pub date_created: Option<String>,
     #[serde(skip)]
     pub date_modified: Option<String>,
+}
+
+fn default_single_kind() -> String {
+    "single".to_string()
 }
 
 /// Full file record from the database.
@@ -570,8 +574,8 @@ fn entity_sort_expr(sort_field: &str) -> &'static str {
 pub(crate) const ENTITY_SLIM_SELECT_PUB: &str = ENTITY_SLIM_SELECT;
 const ENTITY_SLIM_SELECT: &str =
     "me.entity_id,
-     (me.kind = 'collection') AS is_collection,
-     CASE WHEN me.kind = 'collection' THEN me.cached_item_count ELSE NULL END AS collection_item_count,
+     me.kind AS kind,
+     CASE WHEN me.kind = 'collection' THEN me.cached_item_count ELSE NULL END AS member_count,
      CASE
          WHEN me.kind = 'collection' THEN COALESCE(me.hash, '')
          ELSE COALESCE(f.hash, cover_f.hash, '')
@@ -638,8 +642,8 @@ pub(crate) fn row_to_entity_slim_pub(row: &rusqlite::Row) -> rusqlite::Result<Fi
 fn row_to_entity_slim(row: &rusqlite::Row) -> rusqlite::Result<FileMetadataSlim> {
     Ok(FileMetadataSlim {
         entity_id: row.get(0)?,
-        is_collection: row.get::<_, i64>(1)? != 0,
-        collection_item_count: row.get(2)?,
+        kind: row.get(1)?,
+        member_count: row.get(2)?,
         hash: row.get(3)?,
         thumbnail_hash: row.get(4)?,
         name: row.get(5)?,
@@ -787,7 +791,7 @@ pub fn list_files_slim(
 }
 
 /// Get a single entity (file or collection) as a grid-compatible slim record by hash.
-pub fn get_entity_slim_by_hash(
+pub fn get_entity_grid_item_by_hash(
     conn: &Connection,
     hash: &str,
 ) -> rusqlite::Result<Option<FileMetadataSlim>> {
@@ -800,6 +804,37 @@ pub fn get_entity_slim_by_hash(
         ENTITY_SLIM_SELECT, ENTITY_SLIM_FROM
     );
     conn.query_row(&sql, [hash], row_to_entity_slim).optional()
+}
+
+pub fn get_entity_grid_items_by_hashes(
+    conn: &Connection,
+    hashes: &[String],
+) -> rusqlite::Result<Vec<FileMetadataSlim>> {
+    if hashes.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let placeholders = std::iter::repeat_n("?", hashes.len())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let sql = format!(
+        "SELECT {}{} WHERE CASE
+            WHEN me.kind = 'collection' THEN me.hash IN ({})
+            ELSE f.hash IN ({})
+         END",
+        ENTITY_SLIM_SELECT,
+        ENTITY_SLIM_FROM,
+        placeholders,
+        placeholders,
+    );
+    let params: Vec<&dyn rusqlite::types::ToSql> = hashes
+        .iter()
+        .chain(hashes.iter())
+        .map(|hash| hash as &dyn rusqlite::types::ToSql)
+        .collect();
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map(params.as_slice(), row_to_entity_slim)?;
+    rows.collect()
 }
 
 /// Batch get full file records by hashes.
@@ -1092,8 +1127,8 @@ pub fn list_files_slim_by_collection_rank(
         Ok(FileMetadataSlim {
             file_id: row.get(14)?,
             entity_id: row.get(15)?,
-            is_collection: false,
-            collection_item_count: None,
+            kind: "single".to_string(),
+            member_count: None,
             hash: row.get(0)?,
             thumbnail_hash: row.get(0)?,
             name: row.get(1)?,
@@ -1379,7 +1414,11 @@ impl SqliteDatabase {
                 use rusqlite::OptionalExtension;
                 conn.query_row(
                     "SELECT
+                         me.entity_id,
+                         me.kind,
                          me.hash,
+                         COALESCE(cover_f.hash, me.hash, '') AS thumbnail_hash,
+                         me.cached_item_count,
                          me.name,
                          me.cached_total_size_bytes,
                          COALESCE(cover_f.mime, 'application/x-collection'),
@@ -1395,26 +1434,30 @@ impl SqliteDatabase {
                     [&h],
                     |row| {
                         Ok(crate::types::EntityDetails {
-                            hash: row.get::<_, String>(0)?,
-                            name: row.get(1)?,
-                            size: row.get(2)?,
-                            mime: row.get(3)?,
-                            width: row.get(4)?,
-                            height: row.get(5)?,
+                            entity_id: row.get(0)?,
+                            kind: row.get(1)?,
+                            hash: row.get::<_, String>(2)?,
+                            thumbnail_hash: row.get(3)?,
+                            member_count: row.get(4)?,
+                            name: row.get(5)?,
+                            size: row.get(6)?,
+                            mime: row.get(7)?,
+                            width: row.get(8)?,
+                            height: row.get(9)?,
                             duration_ms: None,
                             num_frames: None,
                             has_audio: false,
-                            status: crate::types::status_to_string(row.get::<_, i64>(6)?).to_string(),
-                            rating: row.get(7)?,
+                            status: crate::types::status_to_string(row.get::<_, i64>(10)?).to_string(),
+                            rating: row.get(11)?,
                             view_count: 0,
                             source_urls: None,
-                            imported_at: row.get::<_, Option<String>>(8)?.unwrap_or_default(),
+                            imported_at: row.get::<_, Option<String>>(12)?.unwrap_or_default(),
                             has_thumbnail: true,
                             dominant_color_hex: None,
                             dominant_colors: None,
                             notes: None,
-                            created_at: row.get(8)?,
-                            updated_at: row.get(9)?,
+                            created_at: row.get(12)?,
+                            updated_at: row.get(13)?,
                         })
                     },
                 )
@@ -1630,12 +1673,21 @@ impl SqliteDatabase {
         Ok(())
     }
 
-    pub async fn get_entity_slim_by_hash(
+    pub async fn get_entity_grid_item_by_hash(
         &self,
         hash: &str,
     ) -> Result<Option<FileMetadataSlim>, String> {
         let h = hash.to_string();
-        self.with_read_conn(move |conn| get_entity_slim_by_hash(conn, &h))
+        self.with_read_conn(move |conn| get_entity_grid_item_by_hash(conn, &h))
+            .await
+    }
+
+    pub async fn get_entity_grid_items_by_hashes(
+        &self,
+        hashes: &[String],
+    ) -> Result<Vec<FileMetadataSlim>, String> {
+        let owned = hashes.to_vec();
+        self.with_read_conn(move |conn| get_entity_grid_items_by_hashes(conn, &owned))
             .await
     }
 
@@ -1674,8 +1726,8 @@ impl SqliteDatabase {
                     .map(|r| FileMetadataSlim {
                         file_id: r.file_id,
                         entity_id: r.file_id,
-                        is_collection: false,
-                        collection_item_count: None,
+                        kind: "single".to_string(),
+                        member_count: None,
                         thumbnail_hash: r.hash.clone(),
                         hash: r.hash,
                         name: r.name,

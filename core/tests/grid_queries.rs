@@ -163,7 +163,7 @@ async fn folder_scope_total_count_excludes_hidden_collection_members() {
 
     assert_eq!(result.items.len(), 1);
     assert_eq!(result.total_count, Some(1));
-    assert!(result.items[0].is_collection);
+    assert_eq!(result.items[0].kind, "collection");
     assert_eq!(result.items[0].hash, "folder_member");
 }
 

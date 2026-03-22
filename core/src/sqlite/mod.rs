@@ -27,6 +27,7 @@ use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex};
 
 pub use read_model::{DerivedArtifact, PublishedArtifacts, ReadModelBatchResult, ReadModelEvent};
+pub use resolve::EntityExpansionMode;
 
 /// Main library database handle.
 pub struct SqliteDatabase {

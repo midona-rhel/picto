@@ -6,6 +6,7 @@ use serde::Deserialize;
 use ts_rs::TS;
 
 use crate::runtime_contract::state_change::MediaMetadataField;
+use crate::sqlite::EntityExpansionMode;
 use crate::state::AppState;
 
 // ─── Input structs ─────────────────────────────────────────────────────────
@@ -36,6 +37,34 @@ pub struct UpdateMediaEntityMetadataInput {
 
 use super::super::common::deserialize_some;
 
+async fn expanded_entity_hashes_for_write(
+    state: &AppState,
+    hash: &str,
+) -> Result<Vec<String>, String> {
+    state
+        .db
+        .resolve_entity_hashes_with_expansion(
+            &[hash.to_string()],
+            EntityExpansionMode::EntityAndDescendants,
+        )
+        .await
+        .map(|pairs| {
+            pairs
+                .into_iter()
+                .map(|(entity_hash, _)| entity_hash)
+                .filter(|entity_hash| !entity_hash.is_empty())
+                .collect::<Vec<_>>()
+        })
+}
+
+fn descendant_hashes(top_level_hash: &str, effective_hashes: &[String]) -> Vec<String> {
+    effective_hashes
+        .iter()
+        .filter(|hash| hash.as_str() != top_level_hash)
+        .cloned()
+        .collect()
+}
+
 // ─── Handlers ──────────────────────────────────────────────────────────────
 
 pub async fn get_media_entity_metadata(
@@ -57,14 +86,13 @@ pub async fn update_media_entity_metadata(
     let mut affected_hashes = vec![hash.clone()];
 
     if let Some(rating) = input.rating {
-        // resolve_hashes_batch expands collections to entity + members.
-        let resolved = state.db.resolve_hashes_batch(&[hash.clone()]).await?;
-        for (h, _) in &resolved {
+        let resolved = expanded_entity_hashes_for_write(state, &hash).await?;
+        for h in &resolved {
             if !h.is_empty() {
                 state.db.update_rating(h, rating).await?;
             }
         }
-        affected_hashes = resolved.into_iter().map(|(h, _)| h).filter(|h| !h.is_empty()).collect();
+        affected_hashes = resolved;
         if affected_hashes.is_empty() {
             affected_hashes = vec![hash.clone()];
         }
@@ -78,7 +106,11 @@ pub async fn update_media_entity_metadata(
 
     if let Some(notes) = input.notes {
         let json = serde_json::to_string(&notes).map_err(|e| e.to_string())?;
-        state.db.set_notes(&hash, Some(&json)).await?;
+        let resolved = expanded_entity_hashes_for_write(state, &hash).await?;
+        for target_hash in &resolved {
+            state.db.set_notes(target_hash, Some(&json)).await?;
+        }
+        affected_hashes = resolved;
         changed_fields.push(MediaMetadataField::Notes);
     }
 
@@ -88,10 +120,14 @@ pub async fn update_media_entity_metadata(
         } else {
             Some(serde_json::to_string(urls).map_err(|e| e.to_string())?)
         };
-        state
-            .db
-            .set_source_urls(&hash, urls_json.as_deref())
-            .await?;
+        let resolved = expanded_entity_hashes_for_write(state, &hash).await?;
+        for target_hash in &resolved {
+            state
+                .db
+                .set_source_urls(target_hash, urls_json.as_deref())
+                .await?;
+        }
+        affected_hashes = resolved;
         changed_fields.push(MediaMetadataField::SourceUrls);
     }
 
@@ -100,7 +136,8 @@ pub async fn update_media_entity_metadata(
     }
 
     let impact = crate::runtime_contract::change_builder::ChangeImpact::new()
-        .file_hashes(affected_hashes)
+        .entity_hashes(vec![hash.clone()])
+        .member_hashes(descendant_hashes(&hash, &affected_hashes))
         .media_fields_changed(&changed_fields)
         .smart_folder_scopes_changed_for_media_fields(&changed_fields);
     crate::events::emit_state_changed("update_media_entity_metadata", impact);

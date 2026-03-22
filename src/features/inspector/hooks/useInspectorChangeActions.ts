@@ -27,8 +27,8 @@ export function useInspectorChangeActions(
       if (selectionSummarySpec) {
         await tagsController.addToSelection(selectionSummarySpec, tagsSnapshot);
       } else {
-        // Collections are media entities — resolve_hashes_batch expands
-        // collection covers to include collection entity + all members.
+        // Collections are media entities — backend tag commands explicitly
+        // apply entity-and-descendant expansion for collection targets.
         const hashes = selectedImages.map((img) => img.hash);
         if (hashes.length === 0) return;
         setFileTags((prev) => {
@@ -149,7 +149,8 @@ export function useInspectorChangeActions(
         return;
       }
 
-      // Backend folder operations expand collections transparently via resolve_hashes_batch.
+      // Backend folder operations explicitly apply entity-and-descendant
+      // expansion for collection targets.
       const hashes = selectedImages.map((img) => img.hash);
       const hashesSnapshot = [...hashes];
       if (hashesSnapshot.length === 0) return;

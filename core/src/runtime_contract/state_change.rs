@@ -48,7 +48,10 @@ pub struct StateChanges {
     pub domains: Vec<Domain>,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
-    pub file_hashes: Option<Vec<String>>,
+    pub entity_hashes: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub member_hashes: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional, type = "Array<number>")]
     pub folder_ids: Option<Vec<i64>>,

@@ -97,7 +97,8 @@ fn state_changed_event_contract() {
         origin: "add_tags".into(),
         changes: StateChanges {
             domains: vec![Domain::Tags, Domain::Files],
-            file_hashes: Some(vec!["abc123".into()]),
+            entity_hashes: Some(vec!["abc123".into()]),
+            member_hashes: None,
             folder_ids: None,
             smart_folder_ids: None,
             compiler_batch_done: None,
@@ -128,7 +129,7 @@ fn state_changed_event_contract() {
     assert_eq!(json["origin"], "add_tags");
     assert!(json["changes"]["domains"].is_array());
     assert_eq!(json["changes"]["domains"].as_array().unwrap().len(), 2);
-    assert_eq!(json["changes"]["file_hashes"][0], "abc123");
+    assert_eq!(json["changes"]["entity_hashes"][0], "abc123");
     assert!(json.get("changes").unwrap().get("folder_ids").is_none());
     assert!(json
         .get("changes")
@@ -279,7 +280,7 @@ async fn collection_membership_preset_refreshes_collection_and_system_scopes() {
         .map(|v| v.as_str().unwrap().to_string())
         .collect();
     assert!(scopes.contains(&"collection:42".to_string()));
-    assert!(scopes.contains(&"system:all".to_string()));
+    assert!(scopes.contains(&"system:active".to_string()));
     assert!(scopes.contains(&"folder:all".to_string()));
 }
 
@@ -310,7 +311,7 @@ async fn collection_delete_preset_marks_affected_folder_membership() {
         .map(|v| v.as_str().unwrap().to_string())
         .collect();
     assert!(scopes.contains(&"collection:42".to_string()));
-    assert!(scopes.contains(&"system:all".to_string()));
+    assert!(scopes.contains(&"system:active".to_string()));
 }
 
 #[tokio::test]
@@ -319,10 +320,10 @@ async fn merged_change_impact_emits_one_combined_delta() {
     harness.drain_events();
 
     let impact = ChangeImpact::file_lifecycle(&harness.db)
-        .file_hashes(vec!["hash_a".into()])
+        .entity_hashes(vec!["hash_a".into()])
         .merge(
             ChangeImpact::folder_file_change(9)
-                .file_hashes(vec!["hash_b".into()])
+                .entity_hashes(vec!["hash_b".into()])
                 .extra_grid_scopes(vec!["collection:4".into()]),
         )
         .merge(
@@ -336,7 +337,7 @@ async fn merged_change_impact_emits_one_combined_delta() {
     assert!(!evts.is_empty());
     let payload: serde_json::Value = serde_json::from_str(&evts.last().unwrap().1).unwrap();
 
-    let hashes: Vec<String> = payload["changes"]["file_hashes"]
+    let hashes: Vec<String> = payload["changes"]["entity_hashes"]
         .as_array()
         .unwrap()
         .iter()
@@ -384,9 +385,9 @@ async fn folder_watch_style_delta_includes_both_file_and_membership_changes() {
     harness.drain_events();
 
     let impact = ChangeImpact::file_lifecycle(&harness.db)
-        .file_hashes(vec!["imported_hash".into()])
+        .entity_hashes(vec!["imported_hash".into()])
         .merge(
-            ChangeImpact::folder_file_change(17).file_hashes(vec!["skipped_hash".into()]),
+            ChangeImpact::folder_file_change(17).entity_hashes(vec!["skipped_hash".into()]),
         );
     events::emit_state_changed("watch_folder_import", impact);
 
@@ -404,7 +405,7 @@ async fn folder_watch_style_delta_includes_both_file_and_membership_changes() {
     assert!(domains.contains(&"sidebar".to_string()));
     assert!(domains.contains(&"smart_folders".to_string()));
 
-    let hashes: Vec<String> = payload["changes"]["file_hashes"]
+    let hashes: Vec<String> = payload["changes"]["entity_hashes"]
         .as_array()
         .unwrap()
         .iter()
@@ -539,13 +540,13 @@ async fn folder_reorder_emits_order_changes_without_parent() {
 }
 
 #[tokio::test]
-async fn merge_tags_emission_includes_file_hashes_and_tag_details() {
+async fn merge_tags_emission_includes_entity_hashes_and_tag_details() {
     let harness = common::TestHarness::new().await;
     harness.drain_events();
 
-    // Simulate what merge_tags now emits: tag_structure_change + file_hashes + tags_added/removed
+    // Simulate what merge_tags now emits: tag_structure_change + entity_hashes + tags_added/removed
     let impact = ChangeImpact::tag_structure_change()
-        .file_hashes(vec!["hash_a".into(), "hash_b".into()])
+        .entity_hashes(vec!["hash_a".into(), "hash_b".into()])
         .tags_removed(vec!["artist:old_name".into()])
         .tags_added(vec!["artist:new_name".into()]);
     events::emit_state_changed("merge_tags", impact);
@@ -553,10 +554,10 @@ async fn merge_tags_emission_includes_file_hashes_and_tag_details() {
     let evts = harness.find_events("runtime/state_changed");
     let payload: serde_json::Value = serde_json::from_str(&evts.last().unwrap().1).unwrap();
 
-    // Must include file_hashes
-    let hashes: Vec<String> = payload["changes"]["file_hashes"]
+    // Must include entity_hashes
+    let hashes: Vec<String> = payload["changes"]["entity_hashes"]
         .as_array()
-        .expect("merge_tags must emit file_hashes")
+        .expect("merge_tags must emit entity_hashes")
         .iter()
         .map(|v| v.as_str().unwrap().to_string())
         .collect();
@@ -599,7 +600,7 @@ async fn backfill_deferred_emits_only_actually_changed_derivative_fields() {
     fields.push(MediaDerivativeField::Thumbnail);
     fields.push(MediaDerivativeField::Phash);
     let impact = ChangeImpact::new()
-        .file_hashes(vec!["hash_x".into()])
+        .entity_hashes(vec!["hash_x".into()])
         .derivative_fields_changed(&fields)
         .smart_folder_scopes_changed_for_derivative_fields(&fields);
     events::emit_state_changed("backfill_missing_deferred", impact);
@@ -628,22 +629,22 @@ async fn backfill_deferred_emits_only_actually_changed_derivative_fields() {
 }
 
 #[tokio::test]
-async fn delete_tag_emission_includes_file_hashes_and_tags_removed() {
+async fn delete_tag_emission_includes_entity_hashes_and_tags_removed() {
     let harness = common::TestHarness::new().await;
     harness.drain_events();
 
-    // Simulate what delete_tag now emits: tag_structure_change + file_hashes + tags_removed
+    // Simulate what delete_tag now emits: tag_structure_change + entity_hashes + tags_removed
     let impact = ChangeImpact::tag_structure_change()
-        .file_hashes(vec!["hash_1".into(), "hash_2".into()])
+        .entity_hashes(vec!["hash_1".into(), "hash_2".into()])
         .tags_removed(vec!["artist:deleted_tag".into()]);
     events::emit_state_changed("delete_tag", impact);
 
     let evts = harness.find_events("runtime/state_changed");
     let payload: serde_json::Value = serde_json::from_str(&evts.last().unwrap().1).unwrap();
 
-    let hashes: Vec<String> = payload["changes"]["file_hashes"]
+    let hashes: Vec<String> = payload["changes"]["entity_hashes"]
         .as_array()
-        .expect("delete_tag must emit file_hashes")
+        .expect("delete_tag must emit entity_hashes")
         .iter()
         .map(|v| v.as_str().unwrap().to_string())
         .collect();
@@ -665,13 +666,13 @@ async fn delete_tag_emission_includes_file_hashes_and_tags_removed() {
 }
 
 #[tokio::test]
-async fn rename_tag_emission_includes_file_hashes_and_tag_names() {
+async fn rename_tag_emission_includes_entity_hashes_and_tag_names() {
     let harness = common::TestHarness::new().await;
     harness.drain_events();
 
-    // Simulate what rename_tag now emits: tag_structure_change + file_hashes + old/new tag names
+    // Simulate what rename_tag now emits: tag_structure_change + entity_hashes + old/new tag names
     let impact = ChangeImpact::tag_structure_change()
-        .file_hashes(vec!["hash_x".into()])
+        .entity_hashes(vec!["hash_x".into()])
         .tags_removed(vec!["character:old_name".into()])
         .tags_added(vec!["character:new_name".into()]);
     events::emit_state_changed("rename_tag", impact);
@@ -679,9 +680,9 @@ async fn rename_tag_emission_includes_file_hashes_and_tag_names() {
     let evts = harness.find_events("runtime/state_changed");
     let payload: serde_json::Value = serde_json::from_str(&evts.last().unwrap().1).unwrap();
 
-    let hashes: Vec<String> = payload["changes"]["file_hashes"]
+    let hashes: Vec<String> = payload["changes"]["entity_hashes"]
         .as_array()
-        .expect("rename_tag must emit file_hashes")
+        .expect("rename_tag must emit entity_hashes")
         .iter()
         .map(|v| v.as_str().unwrap().to_string())
         .collect();

@@ -3,7 +3,7 @@
 
 use crate::sqlite::files::{populate_grid_filter, FileMetadataSlim};
 use crate::sqlite::SqliteDatabase;
-use crate::types::{EntitySlim, GridPageSlimQuery, GridPageSlimResponse};
+use crate::types::{EntityGridItem, GridPageSlimQuery, GridPageSlimResponse};
 
 use super::common::{GridOutlineResponse, QueryInputs};
 
@@ -106,9 +106,9 @@ pub(super) async fn get_similar_page(
         })
         .collect();
 
-    let ordered_items: Vec<EntitySlim> = page_ids
+    let ordered_items: Vec<EntityGridItem> = page_ids
         .iter()
-        .filter_map(|eid| id_to_row.get(eid).cloned().map(EntitySlim::from))
+        .filter_map(|eid| id_to_row.get(eid).cloned().map(EntityGridItem::from))
         .collect();
 
     let next_offset = offset + ordered_items.len();
@@ -135,7 +135,7 @@ async fn resolve_hashes_to_entity_ids(
     if hashes.is_empty() {
         return Ok(Vec::new());
     }
-    let resolved = db.resolve_hashes_batch(hashes).await?;
+    let resolved = db.resolve_entity_hashes_batch(hashes).await?;
     let hash_to_id: std::collections::HashMap<String, i64> = resolved.into_iter().collect();
     Ok(hashes
         .iter()

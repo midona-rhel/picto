@@ -46,7 +46,7 @@ export function useNativeEventListeners(): void {
         useStateChangeStore.getState().queueRefreshTargets([
           'sidebar/tree' as ResourceKey,
           'sidebar/counts' as ResourceKey,
-          'grid/system:all' as ResourceKey,
+          'grid/system:active' as ResourceKey,
           'selection/current' as ResourceKey,
         ]);
         useLibraryStore.getState().setSwitching(false);

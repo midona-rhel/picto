@@ -334,7 +334,7 @@ pub async fn ai_tag_apply(state: &AppState, input: AiTagApplyInput) -> Result<us
             crate::runtime_contract::change_builder::ChangeImpact::new()
                 .tags_changed()
                 .all_smart_folder_scopes_changed()
-                .file_hashes(input.hashes),
+                .entity_hashes(input.hashes),
         );
     }
 

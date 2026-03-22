@@ -440,7 +440,7 @@ Backend receipt contains:
 
 Frontend dependency rules know:
 
-- `system:all`, `system:trash`, `system:inbox`, `system:uncategorized`,
+- `system:active`, `system:trash`, `system:inbox`, `system:uncategorized`,
   `system:untagged`, affected folder scopes, and smart folders may all be stale
 - selected entity metadata is stale
 - sidebar tree/counts are stale

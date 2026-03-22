@@ -151,7 +151,7 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
   const activeSortOrder = smartFolderPredicate ? (smartFolderSortOrder ?? 'desc') : sortOrder;
   const items: ContextMenuEntry[] = [];
   const imageLookup = imagesRef.current.length > 0 ? imagesRef.current : state.images;
-  const hasAnyStillImages = imageLookup.some((entry) => entry.is_collection !== true && !entry.mime.startsWith('video/'));
+  const hasAnyStillImages = imageLookup.some((entry) => entry.kind !== 'collection' && !entry.mime.startsWith('video/'));
   const grayscaleChecked = useNavigationImageAdjustmentsStore.getState().grayscaleEnabled;
 
   if (singleHash) {
@@ -238,8 +238,8 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
       return new Set(stateRef.current.selectedHashes);
     })();
     const selectedImages = stateRef.current.images.filter((img) => selectedHashSet.has(img.hash));
-    const selCollections = selectedImages.filter((img) => img.is_collection);
-    const selSingles = selectedImages.filter((img) => !img.is_collection);
+    const selCollections = selectedImages.filter((img) => img.kind === 'collection');
+    const selSingles = selectedImages.filter((img) => img.kind !== 'collection');
 
     if (selCollections.length === 0 && selSingles.length >= 2) {
       items.push({
@@ -598,7 +598,7 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
         const hashes = (effectiveVirtual
           ? state.images.filter(i => !effectiveVirtual.excludedHashes.has(i.hash))
           : state.images.filter(i => state.selectedHashes.has(i.hash))
-        ).filter(i => !i.is_collection).map(i => i.hash);
+        ).filter(i => i.kind !== 'collection').map(i => i.hash);
         if (hashes.length === 0) return;
         try {
           const folder = await foldersController.create({ name: 'New Folder' });
@@ -617,7 +617,7 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
       : effectiveSize === 1 && singleHash
         ? state.images.filter(i => i.hash === singleHash)
         : state.images.filter(i => state.selectedHashes.has(i.hash))
-    ).filter(i => !i.is_collection).map(i => i.hash);
+    ).filter(i => i.kind !== 'collection').map(i => i.hash);
     if (regenHashes.length > 0) {
       items.push({ type: 'separator' });
       items.push({

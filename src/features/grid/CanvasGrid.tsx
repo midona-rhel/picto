@@ -578,7 +578,7 @@ export function CanvasGrid({
     if (!image) return;
 
     if (isZoomButtonHit(e.clientX, e.clientY, idx)) {
-      if (!isVideoMime(image.mime) && !image.is_collection) showHoverPreview(image);
+      if (!isVideoMime(image.mime) && image.kind !== 'collection') showHoverPreview(image);
       return;
     }
 

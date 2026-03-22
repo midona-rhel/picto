@@ -13,6 +13,7 @@ const scanFiles = [
 const sourceExt = /\.(ts|tsx)$/;
 
 const bannedTokens = [
+  'EntitySlim',
   'ImageItem',
   'FileAllMetadata',
   'FileMetadataBatchResponse',
@@ -62,7 +63,7 @@ if (offenders.length > 0) {
   for (const offender of offenders) {
     console.error(` - ${offender.file}:${offender.line} (${offender.token})`);
   }
-  console.error('Use canonical DTO names: EntitySlim, EntityDetails, EntityMetadataBatchResponse.');
+  console.error('Use canonical DTO names: EntityGridItem, EntityDetails, EntityMetadataBatchResponse.');
   process.exit(1);
 }
 

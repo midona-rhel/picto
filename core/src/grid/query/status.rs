@@ -1,7 +1,7 @@
 use crate::sqlite::bitmaps::BitmapKey;
 use crate::sqlite::SqliteDatabase;
 use crate::types::{
-    parse_file_status, EntitySlim, GridPageSlimQuery, GridPageSlimResponse, GridSystemScopeKey,
+    parse_file_status, EntityGridItem, GridPageSlimQuery, GridPageSlimResponse, GridSystemScopeKey,
 };
 
 use super::common::{GridOutlineResponse, QueryInputs};
@@ -20,7 +20,7 @@ pub(super) async fn get_status_outline(
 
     Ok(GridOutlineResponse {
         total_count: Some(rows.len() as i64),
-        items: rows.into_iter().map(EntitySlim::from).collect(),
+        items: rows.into_iter().map(EntityGridItem::from).collect(),
     })
 }
 
@@ -43,7 +43,7 @@ pub(super) async fn get_status_page(
             None
         };
         return Ok(GridPageSlimResponse {
-            items: rows.into_iter().map(EntitySlim::from).collect(),
+            items: rows.into_iter().map(EntityGridItem::from).collect(),
             next_cursor,
             has_more,
             total_count: None,
@@ -64,7 +64,7 @@ pub(super) async fn get_status_page(
     };
 
     Ok(GridPageSlimResponse {
-        items: rows.into_iter().map(EntitySlim::from).collect(),
+        items: rows.into_iter().map(EntityGridItem::from).collect(),
         next_cursor,
         has_more,
         total_count,

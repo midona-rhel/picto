@@ -186,7 +186,7 @@ export const useStateChangeStore = create<StateChangeStoreState>((set, get) => (
           latestChangeOrigin = item.origin;
           // Capture explicit insertion scopes from events with entity hashes.
           // This tells the frontend which grid views should receive new tiles.
-          if (item.changes.file_hashes?.length && item.changes.extra_grid_scopes?.length) {
+          if (item.changes.entity_hashes?.length && item.changes.extra_grid_scopes?.length) {
             latestInsertionScopes = item.changes.extra_grid_scopes;
           }
         }

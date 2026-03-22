@@ -147,13 +147,13 @@ pub async fn merge_existing_import_target(
     if any_change || ownership_change {
         let hash = hex_hash.to_string();
         let mut impact = if status_restored {
-            ChangeImpact::file_lifecycle(db).file_hashes(vec![hash.clone()])
+            ChangeImpact::file_lifecycle(db).entity_hashes(vec![hash.clone()])
         } else if tags_changed {
             ChangeImpact::file_tags(hash.clone())
         } else if metadata_changed {
             ChangeImpact::file_metadata(hash.clone())
         } else {
-            ChangeImpact::new().file_hashes(vec![hash.clone()])
+            ChangeImpact::new().entity_hashes(vec![hash.clone()])
         };
 
         if status_restored && tags_changed {
@@ -162,7 +162,7 @@ pub async fn merge_existing_import_target(
 
         if ownership_change {
             impact = impact.add_domains(&[Domain::Subscriptions, Domain::Sidebar]);
-            let hashes = impact.file_hashes.get_or_insert_with(Vec::new);
+            let hashes = impact.entity_hashes.get_or_insert_with(Vec::new);
             if !hashes.iter().any(|hash| hash == hex_hash) {
                 hashes.push(hash);
             }

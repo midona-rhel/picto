@@ -15,9 +15,12 @@ import {
 import type { MasonryItem } from '../shared';
 
 function makeImages(...hashes: string[]): MasonryItem[] {
-  return hashes.map(hash => ({
+  return hashes.map((hash, index) => ({
+    entity_id: index + 1,
+    kind: 'single',
     hash,
     thumbnail_hash: hash,
+    member_count: null,
     name: hash,
     mime: 'image/jpeg',
     size: 1000,
@@ -28,7 +31,6 @@ function makeImages(...hashes: string[]): MasonryItem[] {
     has_audio: false,
     status: 'active',
     rating: null,
-    source_urls: null,
     date_added: '2025-01-01T00:00:00Z',
     has_thumbnail: true,
     aspectRatio: 1,

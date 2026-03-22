@@ -1,5 +1,5 @@
 use crate::sqlite::SqliteDatabase;
-use crate::types::{EntitySlim, GridPageSlimQuery, GridPageSlimResponse};
+use crate::types::{EntityGridItem, GridPageSlimQuery, GridPageSlimResponse};
 
 use super::common::{GridOutlineResponse, QueryInputs};
 
@@ -35,7 +35,7 @@ pub(super) async fn get_collection_outline(
 
     Ok(GridOutlineResponse {
         total_count: Some(rows.len() as i64),
-        items: rows.into_iter().map(EntitySlim::from).collect(),
+        items: rows.into_iter().map(EntityGridItem::from).collect(),
     })
 }
 
@@ -91,7 +91,7 @@ pub(super) async fn get_collection_page(
     };
 
     Ok(GridPageSlimResponse {
-        items: rows.into_iter().map(EntitySlim::from).collect(),
+        items: rows.into_iter().map(EntityGridItem::from).collect(),
         next_cursor,
         has_more,
         total_count,

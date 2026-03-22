@@ -3,7 +3,19 @@
 use serde::Deserialize;
 use ts_rs::TS;
 
+use crate::sqlite::EntityExpansionMode;
 use crate::state::AppState;
+
+fn descendant_hashes(top_level_hashes: &[String], effective_hashes: &[(String, i64)]) -> Vec<String> {
+    let top_level: std::collections::HashSet<&str> =
+        top_level_hashes.iter().map(String::as_str).collect();
+    effective_hashes
+        .iter()
+        .map(|(hash, _)| hash)
+        .filter(|hash| !top_level.contains(hash.as_str()))
+        .cloned()
+        .collect()
+}
 
 // ─── Input structs ─────────────────────────────────────────────────────────
 
@@ -437,15 +449,18 @@ pub async fn add_files_to_folder(
     state: &AppState,
     input: AddFilesToFolderInput,
 ) -> Result<usize, String> {
-    // resolve_hashes_batch (called inside add_entities_to_folder_batch) automatically
-    // expands collection cover hashes to include the collection + all member entity_ids.
     let hashes = resolve_folder_op_hashes(state, input.hashes, input.selection).await?;
     if hashes.is_empty() {
         return Ok(0);
     }
+    let resolved = state
+        .db
+        .resolve_entity_hashes_with_expansion(&hashes, EntityExpansionMode::EntityAndDescendants)
+        .await?;
+    let entity_ids: Vec<i64> = resolved.iter().map(|(_, id)| *id).collect();
     let count = state
         .db
-        .add_entities_to_folder_batch(input.folder_id, &hashes)
+        .add_entities_to_folder_batch(input.folder_id, &entity_ids)
         .await?;
     if count > 0 {
         crate::events::emit_state_changed(
@@ -453,7 +468,8 @@ pub async fn add_files_to_folder(
             crate::runtime_contract::change_builder::ChangeImpact::folder_file_change(
                 input.folder_id,
             )
-            .file_hashes(hashes),
+            .entity_hashes(hashes.clone())
+            .member_hashes(descendant_hashes(&hashes, &resolved)),
         );
     }
     Ok(count)
@@ -467,9 +483,14 @@ pub async fn remove_files_from_folder(
     if hashes.is_empty() {
         return Ok(0);
     }
+    let resolved = state
+        .db
+        .resolve_entity_hashes_with_expansion(&hashes, EntityExpansionMode::EntityAndDescendants)
+        .await?;
+    let entity_ids: Vec<i64> = resolved.iter().map(|(_, id)| *id).collect();
     let count = state
         .db
-        .remove_entities_from_folder_batch(input.folder_id, &hashes)
+        .remove_entities_from_folder_batch(input.folder_id, &entity_ids)
         .await?;
     if count > 0 {
         crate::events::emit_state_changed(
@@ -477,7 +498,8 @@ pub async fn remove_files_from_folder(
             crate::runtime_contract::change_builder::ChangeImpact::folder_file_change(
                 input.folder_id,
             )
-            .file_hashes(hashes),
+            .entity_hashes(hashes.clone())
+            .member_hashes(descendant_hashes(&hashes, &resolved)),
         );
     }
     Ok(count)
@@ -572,7 +594,7 @@ pub async fn update_collection(
     if input.tags.is_some() {
         impact = impact.tags_changed();
         if !member_hashes.is_empty() {
-            impact = impact.file_hashes(member_hashes);
+            impact = impact.entity_hashes(member_hashes);
         }
     }
     crate::events::emit_state_changed("update_collection", impact);
@@ -611,7 +633,7 @@ pub async fn add_collection_members(
         // Members are now hidden inside a collection — remove them from status bitmaps
         let resolved = state
             .db
-            .resolve_hashes_batch(&input.hashes)
+            .resolve_entity_hashes_batch(&input.hashes)
             .await
             .unwrap_or_default();
         {
@@ -644,7 +666,7 @@ pub async fn remove_collection_members(
     // Resolve member file_ids before removal (they'll be orphaned after)
     let resolved = state
         .db
-        .resolve_hashes_batch(&input.hashes)
+        .resolve_entity_hashes_batch(&input.hashes)
         .await
         .unwrap_or_default();
     let removed = state
@@ -763,7 +785,7 @@ pub async fn delete_collection(
     // Clone before moving into impact — needed for color backfill below.
     let backfill_hashes = member_hashes.clone();
     if !member_hashes.is_empty() {
-        impact = impact.file_hashes(member_hashes);
+        impact = impact.entity_hashes(member_hashes);
     }
     crate::events::emit_state_changed("delete_collection", impact);
 

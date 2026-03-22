@@ -378,13 +378,13 @@ export function InspectorPanel({
   const setFilterBarOpen = useFilterStore((s) => s.setFilterBarOpen);
 
   const rawSelectedImage = selectedImages.length === 1 ? selectedImages[0] : null;
-  const rawSelectedCollection = rawSelectedImage?.is_collection ? collectionSummary : null;
+  const rawSelectedCollection = rawSelectedImage?.kind === 'collection' ? collectionSummary : null;
 
   // Detect whether data has loaded for the current selection to avoid flicker.
   // When switching between file ↔ collection, selectedImage changes immediately
   // but fileMetadata/collectionSummary lag behind the async fetch.
   const dataReady = rawSelectedImage
-    ? rawSelectedImage.is_collection
+    ? rawSelectedImage.kind === 'collection'
       ? !!rawSelectedCollection
       : !!fileMetadata
     : true; // no selection = always "ready" (empty state)
@@ -498,7 +498,7 @@ export function InspectorPanel({
     let hashes: string[];
 
     if (selectionSummarySpec) {
-      hashes = await entityController.resolveSelectionHashes(selectionSummarySpec);
+      hashes = await entityController.resolveSelectionEntityHashes(selectionSummarySpec);
     } else {
       hashes = selectedImages.map((i) => i.hash);
     }
@@ -507,7 +507,7 @@ export function InspectorPanel({
 
     // Expand collections: resolve member hashes so AI tagger processes
     // all children, not just the cover file.
-    const collections = selectedImages.filter((i) => i.is_collection && typeof i.entity_id === 'number');
+    const collections = selectedImages.filter((i) => i.kind === 'collection' && typeof i.entity_id === 'number');
     if (collections.length > 0) {
       const memberHashArrays = await Promise.all(
         collections.map((c) => collectionsController.listMemberHashes(c.entity_id!)),
@@ -641,7 +641,7 @@ export function InspectorPanel({
   );
 
   const renderProperties = () => {
-    const isCollection = !!selectedImage?.is_collection;
+  const isCollection = selectedImage?.kind === 'collection';
     const isMulti = !selectedImage;
     const rating = isMulti
       ? displayedRating
@@ -676,7 +676,7 @@ export function InspectorPanel({
 
           {/* Collection-specific: items, total size, types */}
           {isCollection && selectedCollection && (() => {
-            const itemCount = selectedCollection.image_count ?? selectedImage?.collection_item_count ?? 0;
+            const itemCount = selectedCollection.image_count ?? selectedImage?.member_count ?? 0;
             const totalSize = selectedCollection.total_size_bytes;
             const mimeSummary = selectedCollection.mime_breakdown?.length
               ? selectedCollection.mime_breakdown
@@ -755,9 +755,9 @@ export function InspectorPanel({
               <GlassImagePreview images={selectedImage ? [selectedImage] : selectedImages} />
 
               <ColorPalette
-                colors={(!selectedImage?.is_collection ? fileMetadata?.entity.dominant_colors : null) ?? []}
-                onFindSimilarColor={selectedImage && !selectedImage.is_collection ? handleFindSimilarColor : undefined}
-                onReanalyzeColors={selectedImage && !selectedImage.is_collection ? onReanalyzeColors : undefined}
+                colors={(selectedImage?.kind !== 'collection' ? fileMetadata?.entity.dominant_colors : null) ?? []}
+                onFindSimilarColor={selectedImage && selectedImage.kind !== 'collection' ? handleFindSimilarColor : undefined}
+                onReanalyzeColors={selectedImage && selectedImage.kind !== 'collection' ? onReanalyzeColors : undefined}
               />
 
               <div className={styles.fieldStack}>
@@ -774,8 +774,8 @@ export function InspectorPanel({
                     readOnly
                   />
                 )}
-                <EditableTextField value={notes} onChange={onUpdateNotes} placeholder="Notes" readOnly={!!selectedImage?.is_collection} multiline />
-                <EditableUrlList urls={sourceUrls} onChange={handleUrlChange} readOnly={!!selectedImage?.is_collection} fieldId="urls" activePopover={activePopover} onPopover={setActivePopover} />
+                <EditableTextField value={notes} onChange={onUpdateNotes} placeholder="Notes" readOnly={selectedImage?.kind === 'collection'} multiline />
+                <EditableUrlList urls={sourceUrls} onChange={handleUrlChange} readOnly={selectedImage?.kind === 'collection'} fieldId="urls" activePopover={activePopover} onPopover={setActivePopover} />
               </div>
 
               {renderTags()}

@@ -70,7 +70,7 @@ export function useGridExportActions(args: {
     const visibleByHash = new Map(stateRef.current.images.map((image) => [image.hash, image]));
     const hashes = [...stateRef.current.selectedHashes].filter((hash) => {
       const image = visibleByHash.get(hash);
-      return image?.is_collection !== true;
+      return image?.kind !== 'collection';
     });
     if (hashes.length === 0) return null;
     return { hashes, selection: null, total: hashes.length };

@@ -54,14 +54,13 @@ export function useGridLiveInsertion(args: {
 
       const nextItem = toMasonryItem({
         ...event,
-        thumbnail_hash: event.hash,
+        member_count: event.member_count ?? null,
         name: event.name ?? null,
         width: event.width ?? null,
         height: event.height ?? null,
         duration_ms: event.duration_ms ?? null,
         num_frames: event.num_frames ?? null,
         rating: event.rating ?? null,
-        source_urls: null,
       });
       const currentImages = stateRef.current.images;
       if (currentImages.some((image) => image.hash === nextItem.hash)) return;

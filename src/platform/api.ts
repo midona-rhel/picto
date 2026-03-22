@@ -18,7 +18,7 @@ import type {
   EntityAllMetadata,
   EntityDetails,
   EntityMetadataBatchResponse,
-  EntitySlim,
+  EntityGridItem,
   GridOutlineResponse,
   GridPageSlimResponse, GridPageSlimQuery,
   EnsureThumbnailResponse, ReanalyzeFileColorsResponse,
@@ -111,10 +111,12 @@ function normalizeSmartFolder(r: Record<string, unknown>): SmartFolder {
 }
 
 const entityApi = {
-  get: (hash: string) =>
-    invokeTyped('get_entity', { hash }) as Promise<EntityDetails | null>,
-  getSlim: (hash: string) =>
-    invokeTyped('get_entity_slim', { hash }) as Promise<EntitySlim | null>,
+  getDetails: (hash: string) =>
+    invokeTyped('get_entity_details', { hash }) as Promise<EntityDetails | null>,
+  getGridItem: (hash: string) =>
+    invokeTyped('get_entity_grid_item', { hash }) as Promise<EntityGridItem | null>,
+  getGridItems: (hashes: string[]) =>
+    invokeTyped('get_entity_grid_items', { hashes }) as Promise<EntityGridItem[]>,
   getAllMetadata: (hash: string) =>
     invokeTyped('get_media_entity_metadata', { hash }) as Promise<EntityAllMetadata>,
   setStatus: (hash: string, status: string) =>
@@ -226,8 +228,8 @@ export const api = {
   selection: {
     getSummary: (selection: SelectionQuerySpec) =>
       invokeTyped('get_selection_summary', { selection } as never) as Promise<SelectionSummary>,
-    resolveHashes: (selection: SelectionQuerySpec) =>
-      invoke<string[]>('resolve_selection_hashes', { selection }),
+    resolveEntityHashes: (selection: SelectionQuerySpec) =>
+      invoke<string[]>('resolve_selection_entity_hashes', { selection }),
     addTags: (selection: SelectionQuerySpec, tagStrings: string[]) =>
       invokeTyped('add_tags_selection', { selection, tag_strings: tagStrings } as never),
     removeTags: (selection: SelectionQuerySpec, tagStrings: string[]) =>
@@ -526,7 +528,7 @@ export const api = {
     getNamespaceValues: (namespace: string) =>
       invokeTyped('companion_get_namespace_values', { namespace }) as Promise<CompanionNamespaceValue[]>,
     getFilesByTag: (tag: string) =>
-      invokeTyped('companion_get_files_by_tag', { tag }) as Promise<EntitySlim[]>,
+      invokeTyped('companion_get_files_by_tag', { tag }) as Promise<EntityGridItem[]>,
   },
 };
 
@@ -537,27 +539,28 @@ export const queryApi = {
     getEntitiesMetadataBatch: api.grid.getEntitiesMetadataBatch,
   },
   entity: {
-    get: api.entity.get,
+    getDetails: api.entity.getDetails,
     getAllMetadata: api.entity.getAllMetadata,
     resolvePath: api.entity.resolvePath,
     resolveThumbnailPath: api.entity.resolveThumbnailPath,
   },
   files: {
-    get: api.files.get,
+    getDetails: api.files.getDetails,
     getAllMetadata: api.files.getAllMetadata,
     resolvePath: api.files.resolvePath,
     resolveThumbnailPath: api.files.resolveThumbnailPath,
   },
   file: {
-    get: api.file.get,
-    getSlim: api.file.getSlim,
+    getDetails: api.file.getDetails,
+    getGridItem: api.file.getGridItem,
+    getGridItems: api.file.getGridItems,
     getAllMetadata: api.file.getAllMetadata,
     resolvePath: api.file.resolvePath,
     resolveThumbnailPath: api.file.resolveThumbnailPath,
   },
   selection: {
     getSummary: api.selection.getSummary,
-    resolveHashes: api.selection.resolveHashes,
+    resolveEntityHashes: api.selection.resolveEntityHashes,
   },
   duplicates: {
     findSimilar: api.duplicates.findSimilar,

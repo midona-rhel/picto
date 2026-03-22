@@ -23,6 +23,12 @@ pub struct GetEntityInput {
 
 #[derive(Debug, Deserialize, TS)]
 #[ts(export_to = "../../src/shared/types/generated/commands/")]
+pub struct GetEntitiesInput {
+    pub hashes: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct GetEntitiesMetadataBatchInput {
     pub hashes: Vec<String>,
 }
@@ -44,9 +50,15 @@ pub async fn get_grid_page_slim(
         .iter()
         .filter(|item| {
             let is_media = item.mime.starts_with("image/") || item.mime.starts_with("video/");
-            is_media && (item.dominant_color_hex.is_none() || item.is_collection)
+            is_media && (item.dominant_color_hex.is_none() || item.kind == "collection")
         })
-        .map(|item| item.hash.clone())
+        .map(|item| {
+            if item.kind == "collection" {
+                item.thumbnail_hash.clone()
+            } else {
+                item.hash.clone()
+            }
+        })
         .filter(|h| !h.is_empty())
         .collect();
     if !backfill_hashes.is_empty() {
@@ -68,7 +80,7 @@ pub async fn get_grid_outline(
     serde_json::to_value(&result).map_err(|e| e.to_string())
 }
 
-pub async fn get_entity(
+pub async fn get_entity_details(
     state: &AppState,
     input: GetEntityInput,
 ) -> Result<serde_json::Value, String> {
@@ -77,12 +89,24 @@ pub async fn get_entity(
     serde_json::to_value(&result).map_err(|e| e.to_string())
 }
 
-pub async fn get_entity_slim(
+pub async fn get_entity_grid_item(
     state: &AppState,
     input: GetEntityInput,
 ) -> Result<serde_json::Value, String> {
-    let slim = state.db.get_entity_slim_by_hash(&input.hash).await?;
-    let result = slim.map(crate::types::EntitySlim::from);
+    let grid_item = state.db.get_entity_grid_item_by_hash(&input.hash).await?;
+    let result = grid_item.map(crate::types::EntityGridItem::from);
+    serde_json::to_value(&result).map_err(|e| e.to_string())
+}
+
+pub async fn get_entity_grid_items(
+    state: &AppState,
+    input: GetEntitiesInput,
+) -> Result<serde_json::Value, String> {
+    let items = state.db.get_entity_grid_items_by_hashes(&input.hashes).await?;
+    let result: Vec<crate::types::EntityGridItem> = items
+        .into_iter()
+        .map(crate::types::EntityGridItem::from)
+        .collect();
     serde_json::to_value(&result).map_err(|e| e.to_string())
 }
 

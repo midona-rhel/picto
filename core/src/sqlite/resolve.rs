@@ -1,5 +1,12 @@
 use super::SqliteDatabase;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EntityExpansionMode {
+    EntityOnly,
+    DescendantsOnly,
+    EntityAndDescendants,
+}
+
 impl SqliteDatabase {
     /// Pre-warm the hash index cache with the most recently imported active files.
     /// Called once after library open so the first grid page has zero cache misses.
@@ -119,14 +126,12 @@ impl SqliteDatabase {
         Ok(results)
     }
 
-    /// Batch resolve hashes → (hash, entity_id) pairs.
+    /// Batch resolve top-level entity hashes → (hash, entity_id) pairs.
     ///
-    /// Checks file table first, then falls back to media_entity.hash for
-    /// collection entities. If a resolved entity is a collection, the result
-    /// set automatically includes ALL member entity_ids — so every operation
-    /// that goes through this function transparently applies to collections
-    /// and their children.
-    pub async fn resolve_hashes_batch(
+    /// This does not expand collection members. Callers must opt into
+    /// descendant expansion explicitly through `expand_entity_ids` or
+    /// `resolve_entity_hashes_with_expansion`.
+    pub async fn resolve_entity_hashes_batch(
         &self,
         hashes: &[String],
     ) -> Result<Vec<(String, i64)>, String> {
@@ -144,7 +149,7 @@ impl SqliteDatabase {
         if !misses.is_empty() {
             let hash_index = self.hash_index.clone();
             let db_results = self
-                .with_read_conn_labeled("hash_index/resolve_hashes_batch", move |conn| {
+                .with_read_conn_labeled("hash_index/resolve_entity_hashes_batch", move |conn| {
                     let mut batch = Vec::new();
                     let mut still_missing = Vec::new();
 
@@ -203,43 +208,6 @@ impl SqliteDatabase {
             results.extend(db_results);
         }
 
-        // Collection expansion: for any resolved entity_id that is a collection,
-        // include all member entity_ids so actions propagate to children.
-        let entity_ids: Vec<i64> = results.iter().map(|(_, id)| *id).collect();
-        if !entity_ids.is_empty() {
-            let extra = self
-                .with_read_conn(move |conn| {
-                    let mut expanded: Vec<(String, i64)> = Vec::new();
-                    for &eid in &entity_ids {
-                        let is_collection: bool = conn
-                            .query_row(
-                                "SELECT kind = 'collection' FROM media_entity WHERE entity_id = ?1",
-                                [eid],
-                                |row| row.get(0),
-                            )
-                            .unwrap_or(false);
-                        if is_collection {
-                            let member_fids =
-                                crate::folders::collections_db::get_collection_member_file_ids(
-                                    conn, eid,
-                                )?;
-                            for member_fid in member_fids {
-                                if let Ok(hash) = conn.query_row(
-                                    "SELECT hash FROM file WHERE file_id = ?1",
-                                    [member_fid],
-                                    |row| row.get::<_, String>(0),
-                                ) {
-                                    expanded.push((hash, member_fid));
-                                }
-                            }
-                        }
-                    }
-                    Ok(expanded)
-                })
-                .await?;
-            results.extend(extra);
-        }
-
         // Dedup by entity_id
         let mut seen = std::collections::HashSet::new();
         results.retain(|(_, id)| seen.insert(*id));
@@ -247,14 +215,57 @@ impl SqliteDatabase {
         Ok(results)
     }
 
-    /// Expand a list of entity_ids to include collection member entity_ids.
-    /// Used by selection batch operations.
-    pub async fn expand_collection_members(&self, entity_ids: Vec<i64>) -> Result<Vec<i64>, String> {
+    pub async fn resolve_entity_hashes_for_ids(
+        &self,
+        entity_ids: &[i64],
+    ) -> Result<Vec<(String, i64)>, String> {
+        if entity_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let ids = entity_ids.to_vec();
+        self.with_read_conn(move |conn| {
+            let mut resolved = Vec::new();
+            for &entity_id in &ids {
+                if let Ok(hash) = conn.query_row(
+                    "SELECT hash FROM file WHERE file_id = ?1",
+                    [entity_id],
+                    |row| row.get::<_, String>(0),
+                ) {
+                    resolved.push((hash, entity_id));
+                    continue;
+                }
+                if let Ok(hash) = conn.query_row(
+                    "SELECT hash FROM media_entity WHERE entity_id = ?1",
+                    [entity_id],
+                    |row| row.get::<_, String>(0),
+                ) {
+                    resolved.push((hash, entity_id));
+                }
+            }
+            Ok(resolved)
+        })
+        .await
+    }
+
+    /// Expand a list of entity_ids according to the explicit expansion mode.
+    pub async fn expand_entity_ids(
+        &self,
+        entity_ids: Vec<i64>,
+        expansion: EntityExpansionMode,
+    ) -> Result<Vec<i64>, String> {
         if entity_ids.is_empty() {
             return Ok(entity_ids);
         }
+        if expansion == EntityExpansionMode::EntityOnly {
+            let mut ids = entity_ids;
+            ids.sort_unstable();
+            ids.dedup();
+            return Ok(ids);
+        }
+
         self.with_read_conn(move |conn| {
-            let mut expanded = entity_ids.clone();
+            let mut expanded = Vec::new();
             for &eid in &entity_ids {
                 let is_collection: bool = conn
                     .query_row(
@@ -263,6 +274,9 @@ impl SqliteDatabase {
                         |row| row.get(0),
                     )
                     .unwrap_or(false);
+                if !is_collection || expansion == EntityExpansionMode::EntityAndDescendants {
+                    expanded.push(eid);
+                }
                 if is_collection {
                     let member_fids =
                         crate::folders::collections_db::get_collection_member_file_ids(conn, eid)?;
@@ -274,6 +288,21 @@ impl SqliteDatabase {
             Ok(expanded)
         })
         .await
+    }
+
+    pub async fn resolve_entity_hashes_with_expansion(
+        &self,
+        hashes: &[String],
+        expansion: EntityExpansionMode,
+    ) -> Result<Vec<(String, i64)>, String> {
+        let base = self.resolve_entity_hashes_batch(hashes).await?;
+        if expansion == EntityExpansionMode::EntityOnly {
+            return Ok(base);
+        }
+        let ids = self
+            .expand_entity_ids(base.iter().map(|(_, id)| *id).collect(), expansion)
+            .await?;
+        self.resolve_entity_hashes_for_ids(&ids).await
     }
 
 }

@@ -103,7 +103,7 @@ export function useCanvasPointerInteractions(args: {
 
   // ── Hover helpers ────────────────────────────────────────────────────
   const showHoverPreview = useCallback((image: MasonryItem | undefined) => {
-    if (!image || isVideoMime(image.mime) || image.is_collection) return;
+    if (!image || isVideoMime(image.mime) || image.kind === 'collection') return;
     if (hoverHideTimerRef.current) {
       clearTimeout(hoverHideTimerRef.current);
       hoverHideTimerRef.current = null;
@@ -128,7 +128,7 @@ export function useCanvasPointerInteractions(args: {
 
     if (idx != null && isZoomButtonHit(e.clientX, e.clientY, idx)) {
       const image = imagesRef.current[idx];
-      const isPreviewable = image && !isVideoMime(image.mime) && !image.is_collection;
+      const isPreviewable = image && !isVideoMime(image.mime) && image.kind !== 'collection';
       if (hoverHideTimerRef.current) {
         clearTimeout(hoverHideTimerRef.current);
         hoverHideTimerRef.current = null;
@@ -443,7 +443,7 @@ export function useCanvasPointerInteractions(args: {
         // For native OS drag, expand collection counts to total files
         const nativeFileCount = hashes.reduce((sum, h) => {
           const img = imagesRef.current.find((i) => i.hash === h);
-          return sum + (img?.is_collection && img.collection_item_count ? img.collection_item_count : 1);
+          return sum + (img?.kind === 'collection' && img.member_count ? img.member_count : 1);
         }, 0);
         icon.onload = () => doStartDrag(createDragIcon(icon, nativeFileCount));
         icon.onerror = () => doStartDrag();

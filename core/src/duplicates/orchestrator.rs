@@ -421,7 +421,7 @@ impl DuplicateOrchestrator {
         db.emit_read_model_event(ReadModelEvent::DuplicateChanged);
 
         let mut impact = ChangeImpact::file_lifecycle(db)
-            .file_hashes(vec![winner_hash.clone(), loser_hash.clone()]);
+            .entity_hashes(vec![winner_hash.clone(), loser_hash.clone()]);
         if !affected_folder_ids.is_empty() {
             impact = impact.folder_membership_changed(affected_folder_ids.clone());
         }
@@ -545,7 +545,7 @@ impl DuplicateOrchestrator {
         db.emit_read_model_event(ReadModelEvent::DuplicateChanged);
 
         let mut impact = ChangeImpact::file_lifecycle(db)
-            .file_hashes(vec![keep_hash.to_string(), delete_hash.to_string()]);
+            .entity_hashes(vec![keep_hash.to_string(), delete_hash.to_string()]);
         if !affected_folder_ids.is_empty() {
             impact = impact.folder_membership_changed(affected_folder_ids);
         }

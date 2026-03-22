@@ -518,7 +518,13 @@ async fn import_file_into_folder(
         .chain(skipped_hashes.iter().cloned())
         .collect();
     if !membership_hashes.is_empty() {
-        db.add_entities_to_folder_batch(folder_id, &membership_hashes)
+        let membership_entity_ids: Vec<i64> = db
+            .resolve_entity_hashes_batch(&membership_hashes)
+            .await?
+            .into_iter()
+            .map(|(_, entity_id)| entity_id)
+            .collect();
+        db.add_entities_to_folder_batch(folder_id, &membership_entity_ids)
             .await?;
         service::refresh_sidebar_projection_for_folder_ids(db, &[folder_id]).await?;
     }
@@ -526,7 +532,7 @@ async fn import_file_into_folder(
     let mut impact: Option<ChangeImpact> = None;
     if !imported_hashes.is_empty() {
         let next = ChangeImpact::file_lifecycle(db)
-            .file_hashes(imported_hashes.clone())
+            .entity_hashes(imported_hashes.clone())
             .merge(ChangeImpact::folder_file_change(folder_id));
         impact = Some(match impact.take() {
             Some(current) => current.merge(next),
@@ -535,7 +541,7 @@ async fn import_file_into_folder(
     }
     if !skipped_hashes.is_empty() {
         let next = ChangeImpact::new()
-            .file_hashes(skipped_hashes.clone())
+            .entity_hashes(skipped_hashes.clone())
             .merge(ChangeImpact::folder_file_change(folder_id));
         impact = Some(match impact.take() {
             Some(current) => current.merge(next),
@@ -586,7 +592,7 @@ async fn maybe_auto_merge(
 
 async fn emit_file_imported(db: &SqliteDatabase, hash: &str) {
     if let Ok(Some(record)) = db.get_file_by_hash(hash).await {
-        let slim = crate::types::FileInfoSlim::from(record);
+        let slim = crate::types::FileGridInfo::from(record);
         crate::events::emit(crate::events::event_names::FILE_IMPORTED, &slim);
     }
 }

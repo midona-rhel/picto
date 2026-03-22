@@ -37,13 +37,13 @@ async fn sidebar_counts_stay_consistent_across_state_changes() {
     harness.bitmaps_mark_trash(t1);
 
     // 1. Initial counts
-    assert_eq!(get_count(&harness.db, "system:all").await, 3);
+    assert_eq!(get_count(&harness.db, "system:active").await, 3);
     assert_eq!(get_count(&harness.db, "system:inbox").await, 2);
     assert_eq!(get_count(&harness.db, "system:trash").await, 1);
 
     // 2. Accept inbox file → all increases, inbox decreases
     harness.db.update_file_status("sc_i1", 1).await.unwrap();
-    assert_eq!(get_count(&harness.db, "system:all").await, 4);
+    assert_eq!(get_count(&harness.db, "system:active").await, 4);
     assert_eq!(get_count(&harness.db, "system:inbox").await, 1);
 
     // 3. Tag a file → untagged decreases
@@ -85,10 +85,10 @@ async fn sidebar_counts_stay_consistent_across_state_changes() {
     );
 
     // 5. Trash a file → all decreases, trash increases
-    let all_before = get_count(&harness.db, "system:all").await;
+    let all_before = get_count(&harness.db, "system:active").await;
     let trash_before = get_count(&harness.db, "system:trash").await;
     harness.db.update_file_status("sc_a3", 2).await.unwrap();
-    assert_eq!(get_count(&harness.db, "system:all").await, all_before - 1);
+    assert_eq!(get_count(&harness.db, "system:active").await, all_before - 1);
     assert_eq!(
         get_count(&harness.db, "system:trash").await,
         trash_before + 1
@@ -96,7 +96,7 @@ async fn sidebar_counts_stay_consistent_across_state_changes() {
 
     // 6. Cross-check: scope_count agrees with resolve_scope for all system scopes
     let scope_checks = vec![
-        ("system:all", GridSystemScopeKey::All),
+        ("system:active", GridSystemScopeKey::All),
         ("system:inbox", GridSystemScopeKey::Inbox),
         ("system:trash", GridSystemScopeKey::Trash),
         ("system:untagged", GridSystemScopeKey::Untagged),

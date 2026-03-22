@@ -64,6 +64,7 @@ export type { UpdateSelectionMetadataInput } from './UpdateSelectionMetadataInpu
 // Re-export generated input types — grid
 export type { GetGridPageSlimInput } from './GetGridPageSlimInput';
 export type { GetEntityInput } from './GetEntityInput';
+export type { GetEntitiesInput } from './GetEntitiesInput';
 export type { GetEntitiesMetadataBatchInput } from './GetEntitiesMetadataBatchInput';
 
 // Re-export generated input types — files_metadata
@@ -204,6 +205,7 @@ import type { GetSelectionSummaryInput } from './GetSelectionSummaryInput';
 import type { UpdateSelectionMetadataInput } from './UpdateSelectionMetadataInput';
 import type { GetGridPageSlimInput } from './GetGridPageSlimInput';
 import type { GetEntityInput } from './GetEntityInput';
+import type { GetEntitiesInput } from './GetEntitiesInput';
 import type { GetEntitiesMetadataBatchInput } from './GetEntitiesMetadataBatchInput';
 import type { GetMediaEntityMetadataInput } from './GetMediaEntityMetadataInput';
 import type { GetFileTagsDisplayInput } from './GetFileTagsDisplayInput';
@@ -326,8 +328,9 @@ export interface TypedCommandMap {
   update_selection_metadata: { input: UpdateSelectionMetadataInput; output: number };
   // grid
   get_grid_page_slim: { input: GetGridPageSlimInput; output: unknown };
-  get_entity: { input: GetEntityInput; output: unknown };
-  get_entity_slim: { input: GetEntityInput; output: unknown };
+  get_entity_details: { input: GetEntityInput; output: unknown };
+  get_entity_grid_item: { input: GetEntityInput; output: unknown };
+  get_entity_grid_items: { input: GetEntitiesInput; output: unknown };
   get_entities_metadata_batch: { input: GetEntitiesMetadataBatchInput; output: unknown };
   get_file_count: { input: Record<string, never>; output: unknown };
   // files_metadata

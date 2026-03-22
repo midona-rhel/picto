@@ -30,7 +30,7 @@ const scopeDir = path.join(coreDir, 'scope');
 // These are terms that, when used in a comment, suggest the author is
 // restating scope semantics that should live in scope::resolver.
 const SCOPE_RULE_PATTERNS = [
-  // Scope identity definitions: "system:all means ...", "system:inbox includes ..."
+  // Scope identity definitions: "system:active means ...", "system:inbox includes ..."
   /\bsystem:(all|inbox|trash|untagged|uncategorized)\b.*\b(means|equals|includes|excludes)\b/i,
   // Scope membership definitions: "untagged means active items ..."
   /\b(untagged|uncategorized)\s+(means|equals|is defined as)\b/i,

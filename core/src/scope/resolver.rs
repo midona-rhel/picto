@@ -299,8 +299,8 @@ async fn resolve_status(
 /// Canonical count for a system scope — synchronous, used by sidebar compiler.
 ///
 /// Encodes the same business rules as `resolve_scope` / `resolve_status`:
-/// - `system:all` = active (status=1)
-/// - `system:all_files` = active (status=1) legacy alias
+/// - `system:active` = active (status=1)
+/// - `system:active_files` = active (status=1) legacy alias
 /// - `system:inbox` = inbox (status=0)
 /// - `system:trash` = trash (status=2)
 /// - `system:untagged` = active (status=1) minus Tagged
@@ -311,7 +311,7 @@ pub fn scope_count(
     scope_key: &str,
 ) -> rusqlite::Result<i64> {
     match scope_key {
-        "system:all" | "system:all_files" => Ok(bitmaps.len(&BitmapKey::Status(1)) as i64),
+        "system:active" | "system:active_files" => Ok(bitmaps.len(&BitmapKey::Status(1)) as i64),
         "system:inbox" => Ok(bitmaps.len(&BitmapKey::Status(0)) as i64),
         "system:trash" => Ok(bitmaps.len(&BitmapKey::Status(2)) as i64),
         "system:untagged" => {

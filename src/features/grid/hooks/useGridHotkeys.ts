@@ -216,7 +216,7 @@ export function useGridHotkeys({
         if (hashes.length !== 1) return;
         const hash = hashes[0];
         const img = s.images.find((i) => i.hash === hash);
-        if (!img || img.is_collection) return;
+        if (!img || img.kind === 'collection') return;
         entityController.findSimilar(hash)
           .then((result) => {
             if (result.items.length === 0) {

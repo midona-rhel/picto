@@ -633,7 +633,7 @@ Example resource keys:
 
 - `sidebar/tree`
 - `sidebar/counts`
-- `grid/system:all`
+- `grid/system:active`
 - `grid/system:inbox`
 - `grid/system:untagged`
 - `grid/system:uncategorized`

@@ -10,7 +10,8 @@ use crate::runtime_contract::state_change::{
 #[derive(Debug, Clone, Default)]
 pub struct ChangeImpact {
     pub domains: Vec<Domain>,
-    pub file_hashes: Option<Vec<String>>,
+    pub entity_hashes: Option<Vec<String>>,
+    pub member_hashes: Option<Vec<String>>,
     pub folder_ids: Option<Vec<i64>>,
     pub smart_folder_ids: Option<Vec<i64>>,
     pub compiler_batch_done: Option<bool>,
@@ -68,8 +69,13 @@ impl ChangeImpact {
         self
     }
 
-    pub fn file_hashes(mut self, hashes: Vec<String>) -> Self {
-        self.file_hashes = Some(hashes);
+    pub fn entity_hashes(mut self, hashes: Vec<String>) -> Self {
+        self.entity_hashes = Some(hashes);
+        self
+    }
+
+    pub fn member_hashes(mut self, hashes: Vec<String>) -> Self {
+        self.member_hashes = Some(hashes);
         self
     }
 
@@ -148,8 +154,17 @@ impl ChangeImpact {
     pub fn merge(mut self, other: Self) -> Self {
         self = self.add_domains(&other.domains);
 
-        if let Some(hashes) = other.file_hashes {
-            let merged = self.file_hashes.get_or_insert_with(Vec::new);
+        if let Some(hashes) = other.entity_hashes {
+            let merged = self.entity_hashes.get_or_insert_with(Vec::new);
+            for hash in hashes {
+                if !merged.contains(&hash) {
+                    merged.push(hash);
+                }
+            }
+        }
+
+        if let Some(hashes) = other.member_hashes {
+            let merged = self.member_hashes.get_or_insert_with(Vec::new);
             for hash in hashes {
                 if !merged.contains(&hash) {
                     merged.push(hash);
@@ -265,7 +280,7 @@ impl ChangeImpact {
     pub fn status_sensitive_grid_scopes_changed(mut self) -> Self {
         self = self.add_domains(&[Domain::Sidebar, Domain::SmartFolders]);
         self.merge_extra_grid_scopes(vec![
-            "system:all".into(),
+            "system:active".into(),
             "system:inbox".into(),
             "system:trash".into(),
             "system:untagged".into(),
@@ -405,14 +420,14 @@ impl ChangeImpact {
     }
 
     pub fn file_metadata(hash: String) -> Self {
-        Self::new().file_hashes(vec![hash]).media_metadata_changed()
+        Self::new().entity_hashes(vec![hash]).media_metadata_changed()
     }
 
     pub fn file_tags(hash: String) -> Self {
         Self::new()
             .domains(&[Domain::Tags, Domain::Files, Domain::Selection])
             .tags_changed()
-            .file_hashes(vec![hash])
+            .entity_hashes(vec![hash])
             .extra_grid_scopes(vec!["system:untagged".into()])
             .all_smart_folder_scopes_changed()
     }
@@ -446,7 +461,7 @@ impl ChangeImpact {
     pub fn collection_update(collection_id: i64) -> Self {
         Self::new().extra_grid_scopes(vec![
             format!("collection:{collection_id}"),
-            "system:all".into(),
+            "system:active".into(),
         ])
     }
 
@@ -455,7 +470,7 @@ impl ChangeImpact {
             .folder_membership_changed(vec![collection_id])
             .extra_grid_scopes(vec![
                 format!("collection:{collection_id}"),
-                "system:all".into(),
+                "system:active".into(),
                 "folder:all".into(),
             ])
     }
@@ -463,7 +478,7 @@ impl ChangeImpact {
     pub fn collection_delete(collection_id: i64, folder_ids: Vec<i64>) -> Self {
         let mut impact = Self::new().extra_grid_scopes(vec![
             format!("collection:{collection_id}"),
-            "system:all".into(),
+            "system:active".into(),
         ]);
         if !folder_ids.is_empty() {
             impact = impact.folder_membership_changed(folder_ids);
@@ -485,7 +500,7 @@ impl ChangeImpact {
         let mut impact = Self::new();
         impact.compiler_batch_done = Some(true);
         if smart_folders_rebuilt {
-            impact = impact.extra_grid_scopes(vec!["system:all".into()]);
+            impact = impact.extra_grid_scopes(vec!["system:active".into()]);
         }
         impact
     }
