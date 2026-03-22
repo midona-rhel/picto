@@ -1,5 +1,5 @@
 import { api } from '#desktop/api';
-import { canStartTaskFamily, isTaskFamilyRunning, useTaskStore, type TaskProgress } from '../state/taskStore';
+import { canStartTaskFamily, isTaskFamilyRunning } from '../state/taskStore';
 import type {
   CredentialDomain,
   CredentialHealth,
@@ -87,15 +87,14 @@ export const subscriptionsController = {
     return api.groups.delete(id, deleteFiles);
   },
 
-  runGroup(id: string) {
+  async runGroup(id: string) {
     const check = canStartTaskFamily('subscription_run');
-    if (!check.allowed) return Promise.reject(new Error(check.reason ?? 'Subscription run blocked'));
-    useTaskStore.getState().startFamily('subscription_run');
-    return api.groups.run(id);
+    if (!check.allowed) throw new Error(check.reason ?? 'Subscription run blocked');
+    await api.groups.run(id);
   },
 
-  stopGroup(id: string) {
-    return api.groups.stop(id);
+  async stopGroup(id: string) {
+    await api.groups.stop(id);
   },
 
   setGroupSchedule(id: string, schedule: string) {
@@ -112,13 +111,8 @@ export const subscriptionsController = {
     return isTaskFamilyRunning('subscription_run');
   },
 
-  updateProgress(progress: TaskProgress) {
-    const store = useTaskStore.getState();
-    if (!store.familyProgress.subscription_run.running) {
-      store.startFamily('subscription_run');
-    }
-    store.updateFamilyProgress('subscription_run', progress);
-  },
+  // Subscription run progress is tracked entirely via backend RuntimeTask events.
+  // No local familyProgress tracking needed.
 
   getRunning(): Promise<string[]> {
     return api.subscriptions.getRunning();
@@ -153,15 +147,14 @@ export const subscriptionsController = {
     return api.subscriptions.pause(id, paused);
   },
 
-  run(id: string) {
+  async run(id: string) {
     const check = canStartTaskFamily('subscription_run');
-    if (!check.allowed) return Promise.reject(new Error(check.reason ?? 'Subscription run blocked'));
-    useTaskStore.getState().startFamily('subscription_run');
-    return api.subscriptions.run(id);
+    if (!check.allowed) throw new Error(check.reason ?? 'Subscription run blocked');
+    await api.subscriptions.run(id);
   },
 
-  stop(id: string) {
-    return api.subscriptions.stop(id);
+  async stop(id: string) {
+    await api.subscriptions.stop(id);
   },
 
   reset(id: string) {
@@ -194,7 +187,6 @@ export const subscriptionsController = {
   runQuery(subscriptionId: string, queryId: string) {
     const check = canStartTaskFamily('subscription_run');
     if (!check.allowed) return Promise.reject(new Error(check.reason ?? 'Subscription run blocked'));
-    useTaskStore.getState().startFamily('subscription_run');
     return api.subscriptions.runQuery(subscriptionId, queryId);
   },
 
