@@ -50,10 +50,16 @@ function scopeExpectedStatus(): string | null {
 }
 
 /** Does the target status NOT match the current grid scope?
- *  If so, the item leaves the scope (remove from grid). */
+ *  If so, the item leaves the scope (remove from grid).
+ *  Trashing always leaves non-trash scopes (folders, smart folders, etc.). */
 function statusLeavesScope(targetStatus: string): boolean {
   const expected = scopeExpectedStatus();
-  if (expected === null) return false; // scope doesn't filter by status
+  if (expected === null) {
+    // Scope doesn't filter by status (folder, smart folder, tag view).
+    // Trashing still removes items from these views since trashed
+    // items are only visible in the trash scope.
+    return targetStatus === 'trash';
+  }
   return targetStatus !== expected;
 }
 
