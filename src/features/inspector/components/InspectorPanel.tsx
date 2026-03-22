@@ -17,6 +17,7 @@ import { KbdTooltip } from '../../../shared/components/KbdTooltip';
 import { useNavigationStore } from '../../../state/navigationStore';
 import { useFilterStore } from '../../../state/filterStore';
 import { entityController } from '../../../controllers/entityController';
+import { collectionsController } from '../../../controllers/collectionsController';
 import { formatFileSize, formatDuration, formatDateTime, getFileExtension } from '../../../shared/lib/formatters';
 import type { MediaItem } from '../../grid/shared';
 import { GlassImagePreview } from '../../../shared/components/GlassImagePreview';
@@ -497,10 +498,25 @@ export function InspectorPanel({
     let hashes: string[];
 
     if (selectionSummarySpec) {
-      // Virtual Select All: resolve all hashes from the backend
       hashes = await entityController.resolveSelectionHashes(selectionSummarySpec);
     } else {
       hashes = selectedImages.map((i) => i.hash);
+    }
+
+    if (hashes.length === 0) return;
+
+    // Expand collections: resolve member hashes so AI tagger processes
+    // all children, not just the cover file.
+    const collections = selectedImages.filter((i) => i.is_collection && typeof i.entity_id === 'number');
+    if (collections.length > 0) {
+      const memberHashArrays = await Promise.all(
+        collections.map((c) => collectionsController.listMemberHashes(c.entity_id!)),
+      );
+      const memberHashes = memberHashArrays.flat();
+      const allHashes = new Set([...hashes, ...memberHashes]);
+      // Remove collection cover hashes (they're not real images)
+      for (const c of collections) allHashes.delete(c.hash);
+      hashes = [...allHashes];
     }
 
     if (hashes.length === 0) return;
