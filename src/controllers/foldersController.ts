@@ -130,7 +130,7 @@ export const foldersController = {
     if (count > 0) useDomainStore.getState().adjustFolderCount(folderId, count);
     await api.folders.addFiles(folderId, hashes, selection);
     if (useNavigationStore.getState().activeFolderId === folderId && hashes.length > 0) {
-      Promise.all(hashes.map((h) => queryApi.file.get(h))).then((entities) => {
+      Promise.all(hashes.map((h) => queryApi.file.getSlim(h))).then((entities) => {
         const valid = entities.filter((e): e is NonNullable<typeof e> => e != null);
         if (valid.length > 0) useGridMetadataStore.getState().queueInsertions(valid);
       });

@@ -188,7 +188,7 @@ export const entityController = {
     if (statusLeavesScope(status)) {
       useGridMetadataStore.getState().queueRemovals([hash]);
     } else if (statusEntersScope(status)) {
-      queryApi.file.get(hash).then((entity) => {
+      queryApi.file.getSlim(hash).then((entity) => {
         if (entity) useGridMetadataStore.getState().queueInsertions([entity]);
       });
     }
@@ -218,7 +218,7 @@ export const entityController = {
         useGridMetadataStore.getState().queueRemovals(hashes);
       }
     } else if (statusEntersScope(status)) {
-      Promise.all(hashes.map((h) => queryApi.file.get(h))).then((entities) => {
+      Promise.all(hashes.map((h) => queryApi.file.getSlim(h))).then((entities) => {
         const valid = entities.filter((e): e is NonNullable<typeof e> => e != null);
         if (valid.length > 0) useGridMetadataStore.getState().queueInsertions(valid);
       });

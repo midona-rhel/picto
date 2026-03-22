@@ -45,7 +45,7 @@ async function eagerInsertIfViewingCollection(collectionId: number, hashes: stri
   const scope = useGridMetadataStore.getState().activeGridScope;
   if (scope !== `collection:${collectionId}`) return;
   const { queryApi } = await import('#desktop/api');
-  const entities = await Promise.all(hashes.map((h) => queryApi.file.get(h)));
+  const entities = await Promise.all(hashes.map((h) => queryApi.file.getSlim(h)));
   const valid = entities.filter((e): e is NonNullable<typeof e> => e != null);
   if (valid.length > 0) useGridMetadataStore.getState().queueInsertions(valid);
 }
@@ -179,7 +179,8 @@ export const collectionsController = {
     await this.delete(collectionId);
     // Insert freed members into the grid as individual tiles
     if (memberHashes.length > 0) {
-      Promise.all(memberHashes.map((h) => entityController.getEntity(h))).then((entities) => {
+      const { queryApi } = await import('#desktop/api');
+      Promise.all(memberHashes.map((h) => queryApi.file.getSlim(h))).then((entities) => {
         const valid = entities.filter((e): e is NonNullable<typeof e> => e != null);
         if (valid.length > 0) {
           useGridMetadataStore.getState().queueInsertions(valid);
