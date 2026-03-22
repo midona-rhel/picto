@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { Select } from '@mantine/core';
 import { IconSortAscending, IconSortDescending } from '@tabler/icons-react';
 import { cmSelectInput, cmSelectDropdown, cmSelectOption, cmComboboxProps } from './cmSelectStyles';
@@ -6,9 +7,10 @@ export function SortByRow({ field, order, onFieldChange, onOrderChange }: {
   field: string; order: string;
   onFieldChange: (f: string) => void; onOrderChange: (o: string) => void;
 }) {
-  const effectiveField = field || 'date_added';
-  const effectiveOrder = order || 'desc';
-  const handleFieldChange = (v: string | null) => { if (v) onFieldChange(v); };
+  const [localField, setLocalField] = useState(field || 'date_added');
+  const [localOrder, setLocalOrder] = useState(order || 'desc');
+  const handleFieldChange = (v: string | null) => { if (v) { setLocalField(v); onFieldChange(v); } };
+  const handleOrderChange = (o: string) => { setLocalOrder(o); onOrderChange(o); };
   const btnStyle = (active: boolean): React.CSSProperties => ({
     display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
     width: 28, height: 26, borderRadius: 5, cursor: 'pointer', border: 'none',
@@ -21,7 +23,7 @@ export function SortByRow({ field, order, onFieldChange, onOrderChange }: {
       <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
         <Select
           size="xs"
-          value={effectiveField}
+          value={localField}
           onChange={handleFieldChange}
           data={[
             { value: 'date_added', label: 'Date Added' },
@@ -47,10 +49,10 @@ export function SortByRow({ field, order, onFieldChange, onOrderChange }: {
             background: 'var(--color-black-05, rgba(0, 0, 0, 0.05))', borderRadius: 6,
             padding: 1,
           }}>
-            <button style={btnStyle(effectiveOrder === 'asc')} onClick={() => onOrderChange('asc')}>
+            <button style={btnStyle(localOrder === 'asc')} onClick={() => handleOrderChange('asc')}>
               <IconSortAscending size={16} />
             </button>
-            <button style={btnStyle(effectiveOrder === 'desc')} onClick={() => onOrderChange('desc')}>
+            <button style={btnStyle(localOrder === 'desc')} onClick={() => handleOrderChange('desc')}>
               <IconSortDescending size={16} />
             </button>
           </div>

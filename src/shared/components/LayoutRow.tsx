@@ -29,12 +29,12 @@ export function LayoutRow({ viewMode, onChange }: { viewMode: GridViewMode; onCh
         withCheckIcon={false}
         leftSection={<ModeIcon mode={local} size={14} />}
         leftSectionPointerEvents="none"
-        leftSectionWidth={36}
+        leftSectionWidth={24}
         rightSectionWidth={20}
         comboboxProps={cmComboboxProps}
         styles={{
-          input: { ...cmSelectInput, paddingLeft: 33 },
-          wrapper: { width: 120 },
+          input: { ...cmSelectInput, paddingLeft: 30 },
+          wrapper: { width: 130 },
           dropdown: cmSelectDropdown,
           option: cmSelectOption,
           section: { color: 'var(--color-text-primary)' },
