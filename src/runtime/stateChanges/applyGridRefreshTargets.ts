@@ -1,7 +1,7 @@
 import { useStateChangeStore } from './stateChangeStore';
 import { useGridMetadataStore } from '../../state/gridMetadataStore';
 import { noteMetadataChanged } from '#features/grid/data';
-import { queryApi } from '../../platform/api';
+import { entityController } from '../../controllers/entityController';
 import { refreshTargetMatchesGridScope } from './planRefreshTargets';
 import type { ResourceKey } from '../../shared/types/backendState';
 
@@ -93,7 +93,7 @@ export function startApplyingGridRefreshTargets(): void {
             console.log(
               `[grid-insert] Inserting ${hashesToInsert.length} tile(s) — origin=${changeOrigin} activeScope=${activeScope} insertionScopes=${JSON.stringify(insertionScopes)}`,
             );
-            queryApi.file.getGridItems(hashesToInsert).then((entities) => {
+            entityController.getGridItems(hashesToInsert).then((entities) => {
               if (entities.length > 0) {
                 useGridMetadataStore.getState().queueInsertions(entities);
               }

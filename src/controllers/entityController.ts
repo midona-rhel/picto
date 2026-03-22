@@ -8,6 +8,7 @@ import { markEagerInvalidated } from '../runtime/stateChanges/applyGridRefreshTa
 import type {
   EntityAllMetadata,
   EntityDetails,
+  EntityGridItem,
   EntityMetadataBatchResponse,
   GridPageSlimQuery,
   GridPageSlimResponse,
@@ -139,6 +140,10 @@ export const entityController = {
 
   getMetadataBatch(hashes: string[]): Promise<EntityMetadataBatchResponse> {
     return queryApi.grid.getEntitiesMetadataBatch(hashes);
+  },
+
+  getGridItems(hashes: string[]): Promise<EntityGridItem[]> {
+    return queryApi.file.getGridItems(hashes);
   },
 
   getGridPage(query: GridPageSlimQuery): Promise<GridPageSlimResponse> {

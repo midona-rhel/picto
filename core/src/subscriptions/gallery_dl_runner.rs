@@ -44,7 +44,7 @@ use std::process::Stdio;
 
 use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, info, warn};
+use tracing::{info, warn};
 
 use crate::credential_store::SiteCredential;
 
@@ -273,6 +273,9 @@ impl GalleryDlRunner {
             }
         });
 
+        let download_failed_cancel = CancellationToken::new();
+        let download_failed_signal = download_failed_cancel.clone();
+
         let stderr_handle = tokio::spawn(async move {
             let mut output = String::new();
             let mut had_download_errors = false;
@@ -294,15 +297,17 @@ impl GalleryDlRunner {
                         warn!(
                             line = trimmed,
                             context = %context,
-                            "gallery-dl: download failed"
+                            "gallery-dl: download failed after all retries — stopping query"
                         );
                         recent_warnings.clear();
+                        // All retries exhausted for a file — abort the run.
+                        download_failed_signal.cancel();
+                        break;
                     } else if trimmed.contains("[error]") {
                         warn!(line = trimmed, "gallery-dl error");
                     } else if trimmed.contains("[warning]") {
                         info!(line = trimmed, "gallery-dl warning");
                         recent_warnings.push(trimmed.to_string());
-                        // Cap buffer so a long retry storm doesn't eat memory
                         if recent_warnings.len() > 10 {
                             recent_warnings.remove(0);
                         }
@@ -322,7 +327,7 @@ impl GalleryDlRunner {
 
         let status = tokio::select! {
             _ = opts.cancel.cancelled() => {
-                info!(pid = ?child_pid, "Gallery-dl cancelled, killing subprocess");
+                info!(pid = ?child_pid, "Gallery-dl cancelled by user, killing subprocess");
                 // On Windows, child.kill() only terminates the direct process, not
                 // the tree (gallery-dl may run through a Python wrapper). Use
                 // taskkill /F /T to kill the full process tree.
@@ -379,6 +384,35 @@ impl GalleryDlRunner {
                         warn!("gallery-dl didn't exit within 2s after kill — abandoning");
                         std::process::ExitStatus::default()
                     }
+                }
+            }
+            _ = download_failed_cancel.cancelled() => {
+                warn!(pid = ?child_pid, "Gallery-dl download failed after all retries — killing subprocess");
+                #[cfg(not(target_os = "windows"))]
+                {
+                    let _ = child.kill().await;
+                }
+                #[cfg(target_os = "windows")]
+                {
+                    if let Some(pid) = child_pid {
+                        use std::os::windows::process::CommandExt;
+                        let _ = tokio::process::Command::new("taskkill")
+                            .args(["/F", "/T", "/PID", &pid.to_string()])
+                            .creation_flags(0x08000000)
+                            .stdout(Stdio::null())
+                            .stderr(Stdio::null())
+                            .output()
+                            .await;
+                    } else {
+                        let _ = child.kill().await;
+                    }
+                }
+                match tokio::time::timeout(
+                    std::time::Duration::from_secs(2),
+                    child.wait(),
+                ).await {
+                    Ok(Ok(s)) => s,
+                    _ => std::process::ExitStatus::default(),
                 }
             }
             result = child.wait() => {
