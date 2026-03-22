@@ -31,7 +31,7 @@ function countMatches(text, re) {
 // Undo registration now lives in controllers, not UI files.
 // Each controller must have at least N registerUndoAction calls for its domain.
 const DOMAIN_MIN_COUNTS = [
-  { file: 'src/controllers/filesController.ts', min: 10 },
+  { file: 'src/controllers/entityController.ts', min: 10 },
   { file: 'src/controllers/tagsController.ts', min: 8 },
   { file: 'src/controllers/foldersController.ts', min: 8 },
   { file: 'src/controllers/collectionsController.ts', min: 6 },
