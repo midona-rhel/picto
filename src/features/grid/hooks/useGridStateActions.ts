@@ -43,22 +43,21 @@ export function useGridStateActions({
     const { virtualAllSelection, selectedHashes, images } = state;
     const inTrash = statusFilter === 'trash';
 
-    dispatch({ type: 'CLEAR_SELECTION' });
-
+    // Build spec BEFORE clearing selection
     if (inTrash) {
-      // Permanent delete — no undo
       const spec = virtualAllSelection
         ? selectVirtualSpec(state)!
         : buildExplicitSelectionSpec([...selectedHashes]);
+      dispatch({ type: 'CLEAR_SELECTION' });
       entityController.permanentDeleteSelection(spec)
         .then((count) => notifyInfo(`${plural(count)} permanently deleted`, 'Deleted'))
         .catch((err) => notifyError(err, 'Delete Failed'));
       return;
     }
 
-    // Move to trash — controller owns undo
     if (virtualAllSelection) {
       const spec = selectVirtualSpec(state)!;
+      dispatch({ type: 'CLEAR_SELECTION' });
       entityController.trashSelection(spec)
         .then((n) => notifyInfo(`Moved ${plural(n)} to trash`, 'Moved to Trash'))
         .catch((err) => notifyError(err, 'Delete Failed'));
@@ -70,6 +69,7 @@ export function useGridStateActions({
         status: images.find((img) => img.hash === hash)?.status ?? (statusFilter ?? 'active'),
       }));
       const spec = buildExplicitSelectionSpec(hashes);
+      dispatch({ type: 'CLEAR_SELECTION' });
       entityController.trashSelection(spec, previousStatuses)
         .then((n) => notifyInfo(`Moved ${plural(n)} to trash`, 'Moved to Trash'))
         .catch((err) => notifyError(err, 'Delete Failed'));
