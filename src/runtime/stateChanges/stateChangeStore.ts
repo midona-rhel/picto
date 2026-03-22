@@ -28,6 +28,9 @@ export interface StateChangeStoreState {
   refreshTargetVersion: number;
   sidebarCounts: SidebarCounts | null;
   lastChangeOrigin: string | null;
+  /** The explicit grid scopes from the last event with entity hashes.
+   *  Used to gate eager tile insertion — only insert when viewing a matching scope. */
+  lastInsertionScopes: string[] | null;
 
   // Actions
   ensureInitialized: () => Promise<void>;
@@ -97,6 +100,7 @@ export const useStateChangeStore = create<StateChangeStoreState>((set, get) => (
   refreshTargetVersion: 0,
   sidebarCounts: null,
   lastChangeOrigin: null,
+  lastInsertionScopes: null,
 
   ensureInitialized: async () => {
     if (get().initialized || isInitializing) return;
@@ -151,6 +155,7 @@ export const useStateChangeStore = create<StateChangeStoreState>((set, get) => (
       refreshTargetVersion: 0,
       sidebarCounts: null,
       lastChangeOrigin: null,
+      lastInsertionScopes: null,
     });
   },
 
@@ -168,6 +173,7 @@ export const useStateChangeStore = create<StateChangeStoreState>((set, get) => (
         let maxSeq = state.lastSeq;
         let latestSidebarCounts = state.sidebarCounts;
         let latestChangeOrigin = state.lastChangeOrigin;
+        let latestInsertionScopes = state.lastInsertionScopes;
         for (const item of batch) {
           if (item.seq <= maxSeq) continue;
           maxSeq = item.seq;
@@ -178,6 +184,11 @@ export const useStateChangeStore = create<StateChangeStoreState>((set, get) => (
           }
           if (item.sidebar_counts) latestSidebarCounts = item.sidebar_counts;
           latestChangeOrigin = item.origin;
+          // Capture explicit insertion scopes from events with entity hashes.
+          // This tells the frontend which grid views should receive new tiles.
+          if (item.changes.file_hashes?.length && item.changes.extra_grid_scopes?.length) {
+            latestInsertionScopes = item.changes.extra_grid_scopes;
+          }
         }
         if (maxSeq <= state.lastSeq) return;
         set({
@@ -187,6 +198,7 @@ export const useStateChangeStore = create<StateChangeStoreState>((set, get) => (
           refreshTargetVersion: state.refreshTargetVersion + 1,
           sidebarCounts: latestSidebarCounts,
           lastChangeOrigin: latestChangeOrigin,
+          lastInsertionScopes: latestInsertionScopes,
         });
       }, 50);
     }

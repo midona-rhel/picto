@@ -41,7 +41,6 @@ export function startApplyingGridRefreshTargets(): void {
 
     // Phase 1: Collect hashes not already handled eagerly by controllers.
     const newHashes: string[] = [];
-    let hasMatchingGridScope = false;
 
     for (const key of state.pendingRefreshTargets) {
       if (key.startsWith('metadata/hash:')) {
@@ -50,10 +49,16 @@ export function startApplyingGridRefreshTargets(): void {
           newHashes.push(hash);
         }
       }
-      if (key.startsWith('grid/') && refreshTargetMatchesGridScope(key, activeScope)) {
-        hasMatchingGridScope = true;
-      }
     }
+
+    // Check if the current grid scope matches the backend's explicit insertion
+    // scopes (extra_grid_scopes). This is the ONLY signal for whether new tiles
+    // should be eagerly inserted — NOT the broader set from status_changed.
+    const insertionScopes = state.lastInsertionScopes;
+    const scopeMatchesInsertion = insertionScopes != null && activeScope != null
+      && insertionScopes.some((scope) =>
+        refreshTargetMatchesGridScope(`grid/${scope}`, activeScope),
+      );
 
     // Phase 2: Apply targets.
     for (const key of state.pendingRefreshTargets) {
@@ -81,13 +86,12 @@ export function startApplyingGridRefreshTargets(): void {
           || changeOrigin === 'watch_folder_import'
           || changeOrigin === 'watch_folder_membership'
           || changeOrigin === 'manual_import';
-        if (isBackgroundOrigin && hasMatchingGridScope && newHashes.length > 0) {
+        if (isBackgroundOrigin && scopeMatchesInsertion && newHashes.length > 0) {
           const hashesToInsert = [...newHashes];
           newHashes.length = 0;
-          Promise.all(hashesToInsert.map((h) => queryApi.file.getSlim(h))).then((entities) => {
-            const valid = entities.filter((e): e is NonNullable<typeof e> => e != null);
-            if (valid.length > 0) {
-              useGridMetadataStore.getState().queueInsertions(valid);
+          queryApi.file.getGridItems(hashesToInsert).then((entities) => {
+            if (entities.length > 0) {
+              useGridMetadataStore.getState().queueInsertions(entities);
             }
           });
         }
