@@ -44,9 +44,11 @@ import { notifyError, notifySuccess } from '../../lib/notify';
 import { useSettingsStore } from '../../../state/settingsStore';
 import { useNavigationImageAdjustmentsStore } from '../../../state/navigationImageAdjustmentsStore';
 import type { MediaItem } from '../../../features/grid/shared';
-import { api, copyFileToClipboard, copyImageToClipboard, reverseImageSearch } from '#desktop/api';
+import { copyFileToClipboard, copyImageToClipboard, reverseImageSearch } from '#desktop/api';
+import { filesController } from '../../../controllers/filesController';
+import { foldersController } from '../../../controllers/foldersController';
+import { collectionsController } from '../../../controllers/collectionsController';
 import { useNavigationStore } from '../../../state/navigationStore';
-import { bustThumbnailCache } from '../../lib/mediaUrl';
 
 interface BuildGridImageContextMenuArgs {
   contextPoint: { x: number; y: number };
@@ -194,7 +196,7 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
         label: 'Open With Default App',
         icon: <IconExternalLink />,
         shortcut: isMac ? '\u21E7Enter' : 'Shift+Enter',
-        onClick: () => api.files.openDefault(singleHash).catch(err => {
+        onClick: () => filesController.openDefault(singleHash).catch(err => {
           notifyError(err, 'Open Failed');
         }),
       });
@@ -203,7 +205,7 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
         label: isMac ? 'Reveal in Finder' : 'Reveal in Explorer',
         icon: <IconFolderOpen />,
         shortcut: isMac ? '\u2318Enter' : 'Ctrl+Enter',
-        onClick: () => api.files.revealInFolder(singleHash).catch(err => {
+        onClick: () => filesController.revealInFolder(singleHash).catch(err => {
           notifyError(err, 'Reveal Failed');
         }),
       });
@@ -214,7 +216,7 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
         shortcut: isMac ? '\u2318O' : 'Ctrl+O',
         onClick: async () => {
           const img = stateRef.current.images.find(i => i.hash === singleHash);
-          api.files.openInNewWindow(singleHash, img?.width, img?.height).catch(err => {
+          filesController.openInNewWindow(singleHash, img?.width, img?.height).catch(err => {
             notifyError(err, 'New Window Failed');
           });
         },
@@ -233,15 +235,15 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
       onClick: () => {
         if (freshHash && collectionEntityId) {
           dispatch({ type: 'CLEAR_SELECTION' });
-          api.collections.removeMembers({ id: collectionEntityId, hashes: [freshHash] })
+          collectionsController.removeMembers({ id: collectionEntityId, hashes: [freshHash] })
             .then(() => {
               registerUndoAction({
                 label: 'Remove from collection',
                 undo: async () => {
-                  await api.collections.addMembers({ id: collectionEntityId, hashes: [freshHash] });
+                  await collectionsController.addMembers({ id: collectionEntityId, hashes: [freshHash] });
                 },
                 redo: async () => {
-                  await api.collections.removeMembers({ id: collectionEntityId, hashes: [freshHash] });
+                  await collectionsController.removeMembers({ id: collectionEntityId, hashes: [freshHash] });
                 },
               });
             })
@@ -292,14 +294,14 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
           }
           try {
             const name = collectionName.trim();
-            const id = await api.collections.create({ name });
-            const added = await api.collections.addMembers({ id, hashes: memberHashes });
+            const id = await collectionsController.create({ name });
+            const added = await collectionsController.addMembers({ id, hashes: memberHashes });
             registerUndoAction({
               label: `Create collection "${name}"`,
-              undo: async () => { await api.collections.delete(id); },
+              undo: async () => { await collectionsController.delete(id); },
               redo: async () => {
-                const newId = await api.collections.create({ name });
-                await api.collections.addMembers({ id: newId, hashes: memberHashes });
+                const newId = await collectionsController.create({ name });
+                await collectionsController.addMembers({ id: newId, hashes: memberHashes });
               },
             });
             notifySuccess(`Created collection with ${added} item${added === 1 ? '' : 's'}`, 'Collections');
@@ -320,11 +322,11 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
           if (targetId == null) return;
           const hashes = selSingles.map((img) => img.hash);
           try {
-            const added = await api.collections.addMembers({ id: targetId, hashes });
+            const added = await collectionsController.addMembers({ id: targetId, hashes });
             registerUndoAction({
               label: `Add ${added} item${added === 1 ? '' : 's'} to collection`,
-              undo: async () => { await api.collections.removeMembers({ id: targetId, hashes }); },
-              redo: async () => { await api.collections.addMembers({ id: targetId, hashes }); },
+              undo: async () => { await collectionsController.removeMembers({ id: targetId, hashes }); },
+              redo: async () => { await collectionsController.addMembers({ id: targetId, hashes }); },
             });
             notifySuccess(`Added ${added} item${added === 1 ? '' : 's'} to collection`, 'Collections');
           } catch (err) {
@@ -347,15 +349,15 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
             // Move members from each non-target collection into target
             for (const other of others) {
               if (other.entity_id == null) continue;
-              const memberHashes = await api.collections.listMemberHashes(other.entity_id);
+              const memberHashes = await collectionsController.listMemberHashes(other.entity_id);
               if (memberHashes.length > 0) {
-                await api.collections.addMembers({ id: targetId, hashes: memberHashes });
+                await collectionsController.addMembers({ id: targetId, hashes: memberHashes });
               }
-              await api.collections.delete(other.entity_id);
+              await collectionsController.delete(other.entity_id);
             }
             // Also add any loose singles
             if (selSingles.length > 0) {
-              await api.collections.addMembers({ id: targetId, hashes: selSingles.map((img) => img.hash) });
+              await collectionsController.addMembers({ id: targetId, hashes: selSingles.map((img) => img.hash) });
             }
             notifySuccess(`Merged ${others.length + 1} collections into "${target.name ?? 'Untitled'}"`, 'Collections');
             navigateToCollection({ id: targetId, name: target.name ?? 'Untitled' });
@@ -375,15 +377,15 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
         onClick: async () => {
           if (singleCollectionId == null) return;
           try {
-            const memberHashes = await api.collections.listMemberHashes(singleCollectionId);
+            const memberHashes = await collectionsController.listMemberHashes(singleCollectionId);
             const collectionName = singleImage?.name ?? 'Untitled';
-            await api.collections.delete(singleCollectionId);
+            await collectionsController.delete(singleCollectionId);
             registerUndoAction({
               label: `Split collection "${collectionName}"`,
               undo: async () => {
-                const newId = await api.collections.create({ name: collectionName });
+                const newId = await collectionsController.create({ name: collectionName });
                 if (memberHashes.length > 0) {
-                  await api.collections.addMembers({ id: newId, hashes: memberHashes });
+                  await collectionsController.addMembers({ id: newId, hashes: memberHashes });
                 }
               },
               redo: async () => {
@@ -453,7 +455,7 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
             if (!added) return;
             const hashes = Array.from(effectiveSelectedHashes);
             if (hashes.length === 0) return;
-            api.folders.addFiles(fId, hashes)
+            foldersController.addFiles(fId, hashes)
               .then(() => notifySuccess(`${hashes.length} file(s) added to folder`, 'Added'))
               .catch(err => notifyError(err, 'Add Failed'));
           },
@@ -479,7 +481,7 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
           for (const item of selected) {
             if (item.is_collection && item.entity_id != null) {
               try {
-                const members = await api.collections.listMemberHashes(item.entity_id);
+                const members = await collectionsController.listMemberHashes(item.entity_id);
                 allHashes.push(...members);
               } catch { /* skip */ }
             } else {
@@ -536,7 +538,7 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
       icon: <IconCopy />,
       shortcut: isMac ? '\u2318C' : 'Ctrl+C',
       onClick: () => {
-        api.files.resolvePath(singleHash).then(copyFileToClipboard)
+        filesController.resolvePath(singleHash).then(copyFileToClipboard)
           .then(() => notifySuccess('File copied to clipboard', 'Copied'))
           .catch(err => notifyError(err, 'Copy Failed'));
       },
@@ -548,7 +550,7 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
       shortcut: isMac ? '\u2318\u2325C' : 'Ctrl+Alt+C',
       onClick: async () => {
         try {
-          const path = await api.files.resolvePath(singleHash);
+          const path = await filesController.resolvePath(singleHash);
           await navigator.clipboard.writeText(path);
           notifySuccess('File path copied to clipboard', 'Copied');
         } catch (err) {
@@ -585,7 +587,7 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
           label: 'Copy Thumbnail',
           icon: <IconPhoto />,
           onClick: () => {
-            api.files.resolveThumbnailPath(singleHash).then(copyImageToClipboard)
+            filesController.resolveThumbnailPath(singleHash).then(copyImageToClipboard)
               .then(() => notifySuccess('Thumbnail copied to clipboard', 'Copied'))
               .catch(err => notifyError(err, 'Copy Failed'));
           },
@@ -629,7 +631,7 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
         icon: e.icon,
         onClick: () => {
           notifyInfo(`Uploading to ${e.label}`);
-          api.files.resolvePath(singleHash).then(path => reverseImageSearch(path, e.key))
+          filesController.resolvePath(singleHash).then(path => reverseImageSearch(path, e.key))
             .catch(err => notifyError(err, 'Search Failed'));
         },
       }));
@@ -652,7 +654,7 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
       icon: <IconSearch />,
       onClick: async () => {
         try {
-          const result = await api.duplicates.findSimilar(singleHash);
+          const result = await filesController.findSimilar(singleHash);
           if (result.items.length === 0) {
             notifyInfo('No visually similar images found');
             return;
@@ -673,7 +675,7 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
       label: 'New Subfolder',
       icon: <IconFolderPlus />,
       onClick: () => {
-        void api.folders.create({ name: 'New Folder', parent_id: folderId })
+        void foldersController.create({ name: 'New Folder', parentId: folderId })
           .then(() => notifySuccess('Subfolder created', 'Folders'))
           .catch((err) => notifyError(err, 'Create Subfolder Failed'));
       },
@@ -692,8 +694,8 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
         ).filter(i => !i.is_collection).map(i => i.hash);
         if (hashes.length === 0) return;
         try {
-          const folder = await api.folders.create({ name: 'New Folder' });
-          await api.folders.addFiles(folder.folder_id, hashes);
+          const folder = await foldersController.create({ name: 'New Folder' });
+          await foldersController.addFiles(folder.folder_id, hashes);
           notifySuccess(`Created folder with ${hashes.length} file(s)`, 'Folder Created');
         } catch (err) {
           notifyError(err, 'Create Folder Failed');
@@ -718,10 +720,9 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
         shortcut: isMac ? '\u2318\u21E7T' : 'Ctrl+Shift+T',
         onClick: () => {
           notifyInfo(`Regenerating ${regenHashes.length} thumbnail(s)`);
-          api.files.regenerateThumbnailsBatch(regenHashes)
+          filesController.regenerateThumbnailsBatch(regenHashes)
             .then(r => {
               notifySuccess(`Regenerated ${r.regenerated} thumbnail(s)`, 'Thumbnails');
-              bustThumbnailCache(regenHashes);
             })
             .catch(err => notifyError(err, 'Regenerate Failed'));
         },
@@ -740,9 +741,9 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
 
   if (folderId) {
     const sortAndReload = (sortBy: string, dir: string) =>
-      api.folders.sortItems(folderId, sortBy, dir);
+      foldersController.sortItems(folderId, sortBy, dir);
     const reverseAndReload = (hashes?: string[]) =>
-      api.folders.reverseItems(folderId, hashes);
+      foldersController.reverseItems(folderId, hashes);
     items.push({
       type: 'submenu',
       label: 'Sort by',
@@ -837,18 +838,7 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
       onClick: () => {
         if (freshHash && folderId) {
           dispatch({ type: 'CLEAR_SELECTION' });
-          api.folders.removeFiles(folderId, [freshHash])
-            .then(() => {
-              registerUndoAction({
-                label: 'Remove from folder',
-                undo: async () => {
-                  await api.folders.addFiles(folderId, [freshHash]);
-                        },
-                redo: async () => {
-                  await api.folders.removeFiles(folderId, [freshHash]);
-                        },
-              });
-            })
+          foldersController.removeFiles(folderId, [freshHash])
             .catch(err => notifyError(err, 'Remove from Folder Failed'));
         } else {
           handleRemoveFromFolder();
@@ -867,15 +857,15 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
     const doRestore = () => {
       if (freshSingleHash) {
         dispatch({ type: 'CLEAR_SELECTION' });
-        api.files.setStatus(freshSingleHash, 'active')
+        filesController.setStatus(freshSingleHash, 'active')
           .then(() => {
             registerUndoAction({
               label: 'Restore item',
               undo: async () => {
-                await api.files.setStatus(freshSingleHash, 'trash');
+                await filesController.setStatus(freshSingleHash, 'trash');
                     },
               redo: async () => {
-                await api.files.setStatus(freshSingleHash, 'active');
+                await filesController.setStatus(freshSingleHash, 'active');
                     },
             });
           })
@@ -889,19 +879,19 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
       if (freshSingleHash) {
         dispatch({ type: 'CLEAR_SELECTION' });
         if (inTrash) {
-          api.files.deleteMany([freshSingleHash])
+          filesController.deleteMany([freshSingleHash])
             .catch(err => notifyError(err, 'Delete Failed'));
         } else {
           const previousStatus = imagesRef.current.find((img) => img.hash === freshSingleHash)?.status ?? (statusFilter ?? 'active');
-          api.files.setStatus(freshSingleHash, 'trash')
+          filesController.setStatus(freshSingleHash, 'trash')
             .then(() => {
               registerUndoAction({
                 label: 'Move to trash',
                 undo: async () => {
-                  await api.files.setStatus(freshSingleHash, previousStatus);
+                  await filesController.setStatus(freshSingleHash, previousStatus);
                         },
                 redo: async () => {
-                  await api.files.setStatus(freshSingleHash, 'trash');
+                  await filesController.setStatus(freshSingleHash, 'trash');
                         },
               });
             })

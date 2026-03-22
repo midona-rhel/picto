@@ -1,10 +1,10 @@
 import { useEffect, useRef } from 'react';
 import { useHotkeys } from '@mantine/hooks';
 import { notifyInfo } from '../../../shared/lib/notify';
-import { api } from '#desktop/api';
+import { filesController } from '../../../controllers/filesController';
+import { foldersController } from '../../../controllers/foldersController';
 import { notifyError, notifySuccess } from '../../../shared/lib/notify';
 import { FolderPickerService } from '../../../shared/services/folderPickerService';
-import { bustThumbnailCache } from '../../../shared/lib/mediaUrl';
 import type { AppSettings } from '../../../state/settingsStore';
 import { useNavigationStore } from '../../../state/navigationStore';
 import type { GridRuntimeAction, GridRuntimeState, GridViewMode } from '../runtime';
@@ -129,7 +129,7 @@ export function useGridHotkeys({
     [
       'mod+shift+n',
       () => {
-        api.folders.create({ name: 'New Folder' })
+        foldersController.create({ name: 'New Folder' })
 
           .catch((err) => notifyError(err, 'Create Folder Failed'));
       },
@@ -138,7 +138,7 @@ export function useGridHotkeys({
       'alt+n',
       () => {
         if (!folderId) return;
-        api.folders.create({ name: 'New Folder', parent_id: folderId })
+        foldersController.create({ name: 'New Folder', parentId: folderId })
 
           .catch((err) => notifyError(err, 'Create Subfolder Failed'));
       },
@@ -163,7 +163,7 @@ export function useGridHotkeys({
                   .filter((i) => !s.virtualAllSelection!.excludedHashes.has(i.hash))
                   .map((i) => i.hash)
               : [...s.selectedHashes];
-            api.folders.addFiles(fId, hashes)
+            foldersController.addFiles(fId, hashes)
               .then(() => {
                 notifySuccess(`${hashes.length} file(s) added to folder`, 'Added');
               })
@@ -183,7 +183,7 @@ export function useGridHotkeys({
               .map((i) => i.hash)
           : [...s.selectedHashes];
         if (hashes.length === 0) return;
-        api.folders.addFiles(lastUsedFolder.id, hashes)
+        foldersController.addFiles(lastUsedFolder.id, hashes)
           .then(() => {
             notifySuccess(`${hashes.length} file(s) added to "${lastUsedFolder!.name}"`, 'Added');
           })
@@ -201,10 +201,9 @@ export function useGridHotkeys({
           : [...s.selectedHashes];
         if (hashes.length === 0) return;
         notifyInfo(`Regenerating ${hashes.length} thumbnail(s)`);
-        api.file.regenerateThumbnailsBatch(hashes)
+        filesController.regenerateThumbnailsBatch(hashes)
           .then((r) => {
             notifySuccess(`Regenerated ${r.regenerated} thumbnail(s)`, 'Thumbnails');
-            bustThumbnailCache(hashes);
           })
           .catch((err) => notifyError(err, 'Regenerate Failed'));
       },
@@ -218,7 +217,7 @@ export function useGridHotkeys({
         const hash = hashes[0];
         const img = s.images.find((i) => i.hash === hash);
         if (!img || img.is_collection) return;
-        api.duplicates.findSimilar(hash)
+        filesController.findSimilar(hash)
           .then((result) => {
             if (result.items.length === 0) {
               notifyInfo('No visually similar images found');

@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { IconAntennaBars5, IconFolder, IconChevronRight } from '@tabler/icons-react';
 import { mediaThumbnailUrl } from '../../../shared/lib/mediaUrl';
-import { api } from '#desktop/api';
+import { foldersController } from '../../../controllers/foldersController';
 import { notifyError, notifySuccess } from '../../../shared/lib/notify';
 import { useDomainStore } from '../../../state/domainStore';
 import { useImportActionStore } from '../../../state/importActionStore';
@@ -131,7 +131,7 @@ export function SubfolderGrid({ folderId, targetSize, totalImageCount, onOpenFol
     Promise.all(
       toFetch.map(async (f) => {
         try {
-          const hash = await api.folders.getCoverHash(f.folderId);
+          const hash = await foldersController.getCoverHash(f.folderId);
           return [f.folderId, hash] as [number, string | null];
         } catch {
           return [f.folderId, null] as [number, string | null];
@@ -186,19 +186,15 @@ export function SubfolderGrid({ folderId, targetSize, totalImageCount, onOpenFol
     tile?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
   }, [childFolders, onSelectedSubfolderChange]);
 
-  const refreshSidebar = useCallback(() => {
-  }, []);
-
   const createSubfolderInCurrentFolder = useCallback(async () => {
     try {
-      const created = await api.folders.create({ name: 'New Folder', parent_id: folderId });
+      const created = await foldersController.create({ name: 'New Folder', parentId: folderId });
       pendingRenameFolderIdRef.current = created.folder_id;
-      refreshSidebar();
       notifySuccess('Subfolder created', 'Folders');
     } catch (err) {
       notifyError(err, 'Create Subfolder Failed');
     }
-  }, [folderId, refreshSidebar]);
+  }, [folderId]);
 
   const startRenameFolder = useCallback((folder: ChildFolder) => {
     setRenamingFolderId(folder.folderId);
@@ -214,15 +210,14 @@ export function SubfolderGrid({ folderId, targetSize, totalImageCount, onOpenFol
       return;
     }
     try {
-      await api.folders.update({ folder_id: renamingFolderId, name: trimmed });
-      refreshSidebar();
+      await foldersController.rename(renamingFolderId, trimmed, folder.name);
       notifySuccess('Folder renamed', 'Folders');
     } catch (err) {
       notifyError(err, 'Rename Folder Failed');
     } finally {
       setRenamingFolderId(null);
     }
-  }, [childFolders, refreshSidebar, renameValue, renamingFolderId]);
+  }, [childFolders, renameValue, renamingFolderId]);
 
   const cancelRename = useCallback(() => {
     setRenamingFolderId(null);
@@ -230,23 +225,29 @@ export function SubfolderGrid({ folderId, targetSize, totalImageCount, onOpenFol
 
   const applyColor = useCallback(async (folderIds: number[], color: string | null) => {
     try {
-      await Promise.all(folderIds.map((id) => api.folders.update({ folder_id: id, color: color === null ? '' : (color ?? undefined) })));
-      refreshSidebar();
+      const prev = folderIds.map((id) => {
+        const f = childFolders.find((cf) => cf.folderId === id);
+        return { id, color: f?.color ?? null };
+      });
+      await foldersController.applyColor(folderIds, color, prev);
       notifySuccess(`Updated color for ${folderIds.length} folder${folderIds.length === 1 ? '' : 's'}`, 'Folders');
     } catch (err) {
       notifyError(err, 'Update Folder Color Failed');
     }
-  }, [refreshSidebar]);
+  }, [childFolders]);
 
   const applyIcon = useCallback(async (folderIds: number[], icon: string | null) => {
     try {
-      await Promise.all(folderIds.map((id) => api.folders.update({ folder_id: id, icon: icon === null ? '' : (icon ?? undefined) })));
-      refreshSidebar();
+      const prev = folderIds.map((id) => {
+        const f = childFolders.find((cf) => cf.folderId === id);
+        return { id, icon: f?.icon ?? null };
+      });
+      await foldersController.applyIcon(folderIds, icon, prev);
       notifySuccess(`Updated icon for ${folderIds.length} folder${folderIds.length === 1 ? '' : 's'}`, 'Folders');
     } catch (err) {
       notifyError(err, 'Update Folder Icon Failed');
     }
-  }, [refreshSidebar]);
+  }, [childFolders]);
 
   const openAutoTagsEditor = useCallback((folder: ChildFolder) => {
     const original = [...folder.autoTags];
@@ -263,21 +264,20 @@ export function SubfolderGrid({ folderId, targetSize, totalImageCount, onOpenFol
         const next = Array.from(new Set(draft)).sort();
         const prev = Array.from(new Set(original)).sort();
         if (JSON.stringify(next) === JSON.stringify(prev)) return;
-        void api.folders.update({ folder_id: folder.folderId, auto_tags: next })
-          .then(() => {
-            notifySuccess('Folder auto-tags updated', 'Folders');
-          })
-          .catch((error) => {
-            notifyError(error, 'Update Folder Auto-Tags Failed');
-          });
+        void foldersController.updateAutoTags(folder.folderId, next, prev)
+          .then(() => { notifySuccess('Folder auto-tags updated', 'Folders'); })
+          .catch((error) => { notifyError(error, 'Update Folder Auto-Tags Failed'); });
       },
     });
   }, []);
 
   const deleteFolders = useCallback(async (folderIds: number[]) => {
     try {
-      await Promise.all(folderIds.map((id) => api.folders.delete(id)));
-      refreshSidebar();
+      const snapshots = folderIds.map((id) => {
+        const f = childFolders.find((cf) => cf.folderId === id);
+        return { name: f?.name ?? '', parentId: folderId };
+      });
+      await foldersController.deleteBatch(folderIds, snapshots);
       setSelectedIds((prev) => {
         const next = new Set(prev);
         for (const id of folderIds) next.delete(id);
@@ -290,7 +290,7 @@ export function SubfolderGrid({ folderId, targetSize, totalImageCount, onOpenFol
     } catch (err) {
       notifyError(err, 'Delete Folder Failed');
     }
-  }, [onSelectedSubfolderChange, refreshSidebar, selectedSubfolderId]);
+  }, [childFolders, folderId, onSelectedSubfolderChange, selectedSubfolderId]);
 
   const handleTileClick = useCallback((e: React.MouseEvent, folder: ChildFolder, index: number) => {
     if (renamingFolderId === folder.folderId) return;
@@ -421,7 +421,7 @@ export function SubfolderGrid({ folderId, targetSize, totalImageCount, onOpenFol
         importFolderHere: () => useImportActionStore.getState().requestImportFolderDialog(folder.folderId),
         watchActions: {
           attachOrEdit: () => useFolderWatchActionStore.getState().requestOpen(folder.folderId),
-          remove: folder.watchPath ? () => api.folders.clearWatchConfig(folder.folderId) : undefined,
+          remove: folder.watchPath ? () => foldersController.clearWatchConfig(folder.folderId) : undefined,
           attached: !!folder.watchPath,
         },
         iconAndColor: {

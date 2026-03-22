@@ -1,9 +1,12 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { api } from '#desktop/api';
+import { filesController } from '../../../controllers/filesController';
+import { foldersController } from '../../../controllers/foldersController';
+import { collectionsController } from '../../../controllers/collectionsController';
+import { useStateChangeStore } from '../../../runtime/stateChanges/stateChangeStore';
 import {
   getOrStartSelectionSummary,
-  invalidateMetadata,
-  invalidateSelectionSummary,
+  noteMetadataChanged,
+  noteSelectionSummaryChanged,
   type EntityAllMetadata,
   type ResolvedTagInfo,
   type SelectionQuerySpec,
@@ -13,6 +16,7 @@ import type { MediaItem } from '#features/grid/types';
 import { parseTagString } from '../../../shared/lib/tagParsing';
 import type { CollectionSummary } from '../../../shared/types/api';
 import type { FolderMembership } from './useInspectorData';
+import { inspectorNeedsRefresh } from '../inspectorRefreshScope';
 
 export interface InspectorFetchState {
   fileTags: ResolvedTagInfo[];
@@ -23,7 +27,7 @@ export interface InspectorFetchState {
   sourceUrls: string[];
   notes: string;
 
-  // Setters (needed by mutations hook)
+  // Setters (needed by inspector change actions)
   setFileTags: React.Dispatch<React.SetStateAction<ResolvedTagInfo[]>>;
   setFileMetadata: React.Dispatch<React.SetStateAction<EntityAllMetadata | null>>;
   setCollectionSummary: React.Dispatch<React.SetStateAction<CollectionSummary | null>>;
@@ -46,6 +50,7 @@ export function useInspectorFetch(
   selectedImages: MediaItem[],
   selectionSummarySpec: SelectionQuerySpec | null,
 ): InspectorFetchState {
+  const refreshTargetVersion = useStateChangeStore((state) => state.refreshTargetVersion);
   const [fileTags, setFileTags] = useState<ResolvedTagInfo[]>([]);
   const [fileMetadata, setFileMetadata] = useState<EntityAllMetadata | null>(null);
   const [collectionSummary, setCollectionSummary] = useState<CollectionSummary | null>(null);
@@ -97,7 +102,7 @@ export function useInspectorFetch(
       // Virtual selection (Select All): check if scope is a folder
       const scopeSpec = selectionSummarySpec.scope;
       if (scopeSpec?.kind === 'folder' && scopeSpec.folder_id) {
-        api.folders.list()
+        foldersController.list()
           .then((folders) => {
             const folder = folders.find((f: { folder_id: number }) => f.folder_id === scopeSpec.folder_id);
             if (folder) {
@@ -113,7 +118,7 @@ export function useInspectorFetch(
       return;
     }
     if (selectedCollection) {
-      api.folders.getEntityFolders(selectedCollection.id)
+      foldersController.getEntityFolders(selectedCollection.id)
         .then(setFileFolders)
         .catch(() => setFileFolders([]));
       return;
@@ -123,13 +128,13 @@ export function useInspectorFetch(
       return;
     }
     if (selectedImages.length === 1) {
-      api.folders.getFileFolders(selectedImages[0].hash)
+      foldersController.getFileFolders(selectedImages[0].hash)
         .then(setFileFolders)
         .catch(() => setFileFolders([]));
     } else if (selectedImages.length > 1) {
       // Multi-file: compute shared folders (folders ALL selected files belong to)
       const hashes = selectedImages.slice(0, 200).map((i) => i.hash); // cap for perf
-      Promise.all(hashes.map((h) => api.folders.getFileFolders(h).catch(() => [] as FolderMembership[])))
+      Promise.all(hashes.map((h) => foldersController.getFileFolders(h).catch(() => [] as FolderMembership[])))
         .then((allFolders) => {
           if (allFolders.length === 0) { setFileFolders([]); return; }
           // Intersect: only keep folders present in ALL files
@@ -201,7 +206,7 @@ export function useInspectorFetch(
     const doFetch = async () => {
       try {
         if (selectedCollection) {
-          const summary = await api.collections.getSummary(selectedCollection.id);
+          const summary = await collectionsController.getSummary(selectedCollection.id);
           if (requestIdRef.current !== requestId) return;
           // Set new data and clear old atomically — avoids flicker frame
           setCollectionSummary(summary);
@@ -213,7 +218,7 @@ export function useInspectorFetch(
         }
 
         if (selectedImages.length === 1) {
-          const metadata = await api.files.getAllMetadata(selectedImages[0].hash);
+          const metadata = await filesController.getMetadata(selectedImages[0].hash);
           if (requestIdRef.current !== requestId) return;
           // Set new data and clear old atomically — avoids flicker frame
           setFileMetadata(metadata);
@@ -267,7 +272,7 @@ export function useInspectorFetch(
 
   const refreshMetadata = useCallback(() => {
     if (selectedCollection) {
-      api.collections.getSummary(selectedCollection.id)
+      collectionsController.getSummary(selectedCollection.id)
         .then((summary) => {
           setCollectionSummary(summary);
           setFileMetadata(null);
@@ -278,10 +283,10 @@ export function useInspectorFetch(
         .catch(() => {});
       return;
     }
-    for (const img of selectedImages) invalidateMetadata(img.hash);
+    for (const img of selectedImages) noteMetadataChanged(img.hash);
 
     if (selectedImages.length === 1) {
-      api.files.getAllMetadata(selectedImages[0].hash)
+      filesController.getMetadata(selectedImages[0].hash)
         .then((metadata) => {
           setFileMetadata(metadata);
           setFileTags(metadata.tags);
@@ -318,7 +323,7 @@ export function useInspectorFetch(
   const refreshVirtualSelectionSummary = useCallback(() => {
     if (!selectionSummarySpec) return;
     const requestId = ++requestIdRef.current;
-    invalidateSelectionSummary(selectionSummaryKey);
+    noteSelectionSummaryChanged(selectionSummaryKey);
     setSelectionSummary(null);
     getOrStartSelectionSummary(selectionSummarySpec)
       .then((summary) => {
@@ -343,6 +348,31 @@ export function useInspectorFetch(
         console.error('Failed to refresh selection summary:', err);
       });
   }, [selectionSummaryKey, selectionSummarySpec]);
+
+  useEffect(() => {
+    const refreshTargets = useStateChangeStore.getState().lastPlannedRefreshTargets;
+    if (!inspectorNeedsRefresh({
+      selectedHashes: selectedImages.map((image) => image.hash),
+      hasVirtualSelection: Boolean(selectionSummarySpec),
+      hasSelectedCollection: Boolean(selectedCollection),
+    }, refreshTargets)) {
+      return;
+    }
+
+    if (selectionSummarySpec) {
+      refreshVirtualSelectionSummary();
+      return;
+    }
+
+    refreshMetadata();
+  }, [
+    refreshTargetVersion,
+    selectedImages,
+    selectionSummarySpec,
+    selectedCollection,
+    refreshMetadata,
+    refreshVirtualSelectionSummary,
+  ]);
 
   return {
     fileTags, fileMetadata, collectionSummary, selectionSummary,

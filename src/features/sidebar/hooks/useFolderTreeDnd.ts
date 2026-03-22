@@ -7,8 +7,7 @@ import {
   type DragEndEvent,
   type DragMoveEvent,
 } from '@dnd-kit/core';
-import { api } from '#desktop/api';
-import { registerUndoAction } from '../../../shared/controllers/undoRedoController';
+import { foldersController } from '../../../controllers/foldersController';
 import type { SidebarNodeDto } from '../../../shared/types/sidebar';
 import {
   type TreeNode,
@@ -98,20 +97,16 @@ export function useFolderTreeDnd({ nodeMap, folderNodes, setCollapsedNodes }: Us
     const draggedOldParentNodeId = draggedNode.parent_id ?? null;
     const oldParentFolderId = draggedOldParentNodeId ? parseFolderId(draggedOldParentNodeId) : null;
     const oldSiblingMoves = buildSiblingMovesForParent(draggedOldParentNodeId);
-    let redoParentFolderId: number | null = oldParentFolderId;
-    let redoSiblingMoves: [number, number][] = [];
 
     try {
       if (indicator.position === 'inside') {
         // PBI-057: Atomic reparent — use moveFolder with empty sibling order.
         const targetFolderId = parseFolderId(targetNode.id);
         if (targetFolderId == null) return;
-        redoParentFolderId = targetFolderId;
-        redoSiblingMoves = [];
-        await api.folders.moveFolder(draggedFolderId, targetFolderId, []);
+        const undoParams = { oldParentId: oldParentFolderId, oldSiblingMoves };
+        await foldersController.move(draggedFolderId, targetFolderId, [], undoParams);
         setCollapsedNodes((prev) => { const next = new Set(prev); next.delete(targetNode.id); return next; });
       } else {
-        // PBI-057: Atomic reparent + reorder in single transaction.
         const targetParentId = targetNode.parent_id;
         const newParentFolderId = targetParentId ? parseFolderId(targetParentId) : null;
 
@@ -129,20 +124,9 @@ export function useFolderTreeDnd({ nodeMap, folderNodes, setCollapsedNodes }: Us
           const folderId = parseInt(n.id.replace('folder:', ''), 10);
           return [folderId, (i + 1) * 1000];
         });
-        redoParentFolderId = newParentFolderId;
-        redoSiblingMoves = moves;
-        await api.folders.moveFolder(draggedFolderId, newParentFolderId, moves);
+        const undoParams = { oldParentId: oldParentFolderId, oldSiblingMoves };
+        await foldersController.move(draggedFolderId, newParentFolderId, moves, undoParams);
       }
-
-      registerUndoAction({
-        label: 'Move folder',
-        undo: async () => {
-          await api.folders.moveFolder(draggedFolderId, oldParentFolderId, oldSiblingMoves);
-        },
-        redo: async () => {
-          await api.folders.moveFolder(draggedFolderId, redoParentFolderId, redoSiblingMoves);
-        },
-      });
     } catch (err) {
       console.error('Folder DnD failed:', err);
     }

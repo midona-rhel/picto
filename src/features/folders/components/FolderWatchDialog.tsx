@@ -4,7 +4,6 @@ import { open } from '#desktop/api';
 import { notifyError, notifySuccess } from '../../../shared/lib/notify';
 import { useDomainStore } from '../../../state/domainStore';
 import { useFolderWatchActionStore } from '../../../state/folderWatchActionStore';
-import { useTaskStore } from '../../../state/taskStore';
 import { getFolderWatchMeta, parseFolderId } from '../../sidebar/lib/folderTreeData';
 import { glassModalStyles } from '../../../shared/styles/glassModal';
 import { foldersController } from '../../../controllers/foldersController';
@@ -78,9 +77,6 @@ export function FolderWatchDialog() {
     }
     setSaving(true);
     try {
-      if (importExistingNow) {
-        useTaskStore.getState().startFamily('import', 'Adding files');
-      }
       await foldersController.setWatchConfig({
         folder_id: folderId,
         watch_path: watchPath.trim(),
@@ -89,15 +85,9 @@ export function FolderWatchDialog() {
         watch_import_status_mode: statusMode,
         import_existing_now: importExistingNow,
       });
-      if (importExistingNow) {
-        useTaskStore.getState().finishFamily('import');
-      }
       notifySuccess('Watched folder saved', 'Folders');
       handleClose();
     } catch (error) {
-      if (importExistingNow) {
-        useTaskStore.getState().failFamily('import');
-      }
       notifyError(error, 'Save Watched Folder Failed');
     } finally {
       setSaving(false);
