@@ -467,9 +467,9 @@ async fn subscription_batch_delta_merges_collection_and_file_changes() {
     assert!(scopes.contains(&"folder:all".to_string()));
 }
 
-#[test]
-fn folder_move_emits_parent_and_order_changes() {
-    let harness = TestHarness::new();
+#[tokio::test]
+async fn folder_move_emits_parent_and_order_changes() {
+    let harness = common::TestHarness::new().await;
 
     let impact = ChangeImpact::new()
         .add_domains(&[Domain::Folders, Domain::Sidebar])
@@ -493,9 +493,9 @@ fn folder_move_emits_parent_and_order_changes() {
     assert_eq!(order_changes[0][1], 0);
 }
 
-#[test]
-fn smart_folder_move_emits_parent_and_order_changes() {
-    let harness = TestHarness::new();
+#[tokio::test]
+async fn smart_folder_move_emits_parent_and_order_changes() {
+    let harness = common::TestHarness::new().await;
 
     let impact = ChangeImpact::new()
         .add_domains(&[Domain::SmartFolders, Domain::Sidebar])
@@ -519,9 +519,9 @@ fn smart_folder_move_emits_parent_and_order_changes() {
     assert_eq!(order_changes[1][1], 1);
 }
 
-#[test]
-fn folder_reorder_emits_order_changes_without_parent() {
-    let harness = TestHarness::new();
+#[tokio::test]
+async fn folder_reorder_emits_order_changes_without_parent() {
+    let harness = common::TestHarness::new().await;
 
     let impact = ChangeImpact::new()
         .add_domains(&[Domain::Folders, Domain::Sidebar])
