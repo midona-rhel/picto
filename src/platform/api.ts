@@ -113,6 +113,8 @@ function normalizeSmartFolder(r: Record<string, unknown>): SmartFolder {
 const entityApi = {
   get: (hash: string) =>
     invokeTyped('get_entity', { hash }) as Promise<EntityDetails | null>,
+  getSlim: (hash: string) =>
+    invokeTyped('get_entity_slim', { hash }) as Promise<EntitySlim | null>,
   getAllMetadata: (hash: string) =>
     invokeTyped('get_media_entity_metadata', { hash }) as Promise<EntityAllMetadata>,
   setStatus: (hash: string, status: string) =>
@@ -548,6 +550,7 @@ export const queryApi = {
   },
   file: {
     get: api.file.get,
+    getSlim: api.file.getSlim,
     getAllMetadata: api.file.getAllMetadata,
     resolvePath: api.file.resolvePath,
     resolveThumbnailPath: api.file.resolveThumbnailPath,

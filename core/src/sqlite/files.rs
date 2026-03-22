@@ -786,6 +786,22 @@ pub fn list_files_slim(
     rows.collect()
 }
 
+/// Get a single entity (file or collection) as a grid-compatible slim record by hash.
+pub fn get_entity_slim_by_hash(
+    conn: &Connection,
+    hash: &str,
+) -> rusqlite::Result<Option<FileMetadataSlim>> {
+    use rusqlite::OptionalExtension;
+    let sql = format!(
+        "SELECT {}{} WHERE CASE
+            WHEN me.kind = 'collection' THEN me.hash = ?1
+            ELSE f.hash = ?1
+         END",
+        ENTITY_SLIM_SELECT, ENTITY_SLIM_FROM
+    );
+    conn.query_row(&sql, [hash], row_to_entity_slim).optional()
+}
+
 /// Batch get full file records by hashes.
 pub fn batch_get_by_hashes(
     conn: &Connection,
@@ -1612,6 +1628,15 @@ impl SqliteDatabase {
 
         self.emit_read_model_event(ReadModelEvent::FileDeleted { file_id });
         Ok(())
+    }
+
+    pub async fn get_entity_slim_by_hash(
+        &self,
+        hash: &str,
+    ) -> Result<Option<FileMetadataSlim>, String> {
+        let h = hash.to_string();
+        self.with_read_conn(move |conn| get_entity_slim_by_hash(conn, &h))
+            .await
     }
 
     pub async fn list_files_slim(

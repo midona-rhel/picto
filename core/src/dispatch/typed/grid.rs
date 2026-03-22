@@ -77,6 +77,15 @@ pub async fn get_entity(
     serde_json::to_value(&result).map_err(|e| e.to_string())
 }
 
+pub async fn get_entity_slim(
+    state: &AppState,
+    input: GetEntityInput,
+) -> Result<serde_json::Value, String> {
+    let slim = state.db.get_entity_slim_by_hash(&input.hash).await?;
+    let result = slim.map(crate::types::EntitySlim::from);
+    serde_json::to_value(&result).map_err(|e| e.to_string())
+}
+
 pub async fn get_entities_metadata_batch(
     state: &AppState,
     input: GetEntitiesMetadataBatchInput,

@@ -1,7 +1,7 @@
 import { useStateChangeStore } from './stateChangeStore';
 import { useGridMetadataStore } from '../../state/gridMetadataStore';
 import { noteMetadataChanged } from '#features/grid/data';
-import { entityController } from '../../controllers/entityController';
+import { queryApi } from '../../platform/api';
 import { refreshTargetMatchesGridScope } from './planRefreshTargets';
 import type { ResourceKey } from '../../shared/types/backendState';
 
@@ -84,7 +84,7 @@ export function startApplyingGridRefreshTargets(): void {
         if (isBackgroundOrigin && hasMatchingGridScope && newHashes.length > 0) {
           const hashesToInsert = [...newHashes];
           newHashes.length = 0;
-          Promise.all(hashesToInsert.map((h) => entityController.getEntity(h))).then((entities) => {
+          Promise.all(hashesToInsert.map((h) => queryApi.file.getSlim(h))).then((entities) => {
             const valid = entities.filter((e): e is NonNullable<typeof e> => e != null);
             if (valid.length > 0) {
               useGridMetadataStore.getState().queueInsertions(valid);

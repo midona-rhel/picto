@@ -327,6 +327,7 @@ export interface TypedCommandMap {
   // grid
   get_grid_page_slim: { input: GetGridPageSlimInput; output: unknown };
   get_entity: { input: GetEntityInput; output: unknown };
+  get_entity_slim: { input: GetEntityInput; output: unknown };
   get_entities_metadata_batch: { input: GetEntitiesMetadataBatchInput; output: unknown };
   get_file_count: { input: Record<string, never>; output: unknown };
   // files_metadata

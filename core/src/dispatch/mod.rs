@@ -140,6 +140,7 @@ async fn dispatch_inner(command: &str, args: serde_json::Value) -> Result<String
         "get_grid_page_slim" => call!(typed::grid::get_grid_page_slim, &state, args),
         "get_grid_outline" => call!(typed::grid::get_grid_outline, &state, args),
         "get_entity" => call!(typed::grid::get_entity, &state, args),
+        "get_entity_slim" => call!(typed::grid::get_entity_slim, &state, args),
         "get_entities_metadata_batch" => {
             call!(typed::grid::get_entities_metadata_batch, &state, args)
         }
