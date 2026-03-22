@@ -244,7 +244,7 @@ impl ImportService {
                 service::refresh_sidebar_projection_for_folder_ids(db, &created_folder_ids).await?;
                 crate::events::emit_state_changed(
                     "import_folder_structure",
-                    ChangeImpact::sidebar(Domain::Folders).folder_ids(created_folder_ids.clone()),
+                    ChangeImpact::new().add_domains(&[Domain::Folders, Domain::Sidebar]).folder_ids(created_folder_ids.clone()),
                 );
             }
         }

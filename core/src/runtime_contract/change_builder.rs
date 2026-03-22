@@ -401,14 +401,6 @@ impl ChangeImpact {
             .all_smart_folder_scopes_changed()
     }
 
-    pub fn sidebar(domain: Domain) -> Self {
-        Self::new().domains(&[domain, Domain::Sidebar])
-    }
-
-    pub fn subscriptions_sidebar() -> Self {
-        Self::sidebar(Domain::Subscriptions)
-    }
-
     pub fn folder_file_change(folder_id: i64) -> Self {
         Self::new()
             .add_domain(Domain::Folders)

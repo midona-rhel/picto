@@ -158,9 +158,8 @@ pub async fn reorder_sidebar_nodes(
         }
     }
     state.db.reorder_sidebar_nodes(input.moves).await?;
-    let mut impact = crate::runtime_contract::change_builder::ChangeImpact::sidebar(
-        crate::runtime_contract::state_change::Domain::Sidebar,
-    );
+    let mut impact = crate::runtime_contract::change_builder::ChangeImpact::new()
+        .add_domain(crate::runtime_contract::state_change::Domain::Sidebar);
     if !folder_ids.is_empty() {
         impact = impact.add_domain(crate::runtime_contract::state_change::Domain::Folders)
             .folder_ids(folder_ids);

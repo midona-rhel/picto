@@ -179,7 +179,8 @@ pub async fn create_group(
     let gid: i64 = group.id.parse().unwrap_or(0);
     crate::events::emit_state_changed(
         "create_group",
-        crate::runtime_contract::change_builder::ChangeImpact::subscriptions_sidebar()
+        crate::runtime_contract::change_builder::ChangeImpact::new()
+            .add_domains(&[crate::runtime_contract::state_change::Domain::Subscriptions, crate::runtime_contract::state_change::Domain::Sidebar])
             .group_ids(vec![gid]),
     );
     Ok(serde_json::to_value(&group).map_err(|e| e.to_string())?)
@@ -191,7 +192,8 @@ pub async fn delete_group(state: &AppState, input: DeleteGroupInput) -> Result<(
         .await?;
     crate::events::emit_state_changed(
         "delete_group",
-        crate::runtime_contract::change_builder::ChangeImpact::subscriptions_sidebar()
+        crate::runtime_contract::change_builder::ChangeImpact::new()
+            .add_domains(&[crate::runtime_contract::state_change::Domain::Subscriptions, crate::runtime_contract::state_change::Domain::Sidebar])
             .group_ids(vec![gid]),
     );
     Ok(())
@@ -202,7 +204,8 @@ pub async fn rename_group(state: &AppState, input: RenameGroupInput) -> Result<(
     crate::subscriptions::group_service::rename_group(&state.db, input.id, input.name).await?;
     crate::events::emit_state_changed(
         "rename_group",
-        crate::runtime_contract::change_builder::ChangeImpact::subscriptions_sidebar()
+        crate::runtime_contract::change_builder::ChangeImpact::new()
+            .add_domains(&[crate::runtime_contract::state_change::Domain::Subscriptions, crate::runtime_contract::state_change::Domain::Sidebar])
             .group_ids(vec![gid]),
     );
     Ok(())
@@ -217,7 +220,8 @@ pub async fn set_group_schedule(
         .await?;
     crate::events::emit_state_changed(
         "set_group_schedule",
-        crate::runtime_contract::change_builder::ChangeImpact::subscriptions_sidebar()
+        crate::runtime_contract::change_builder::ChangeImpact::new()
+            .add_domain(crate::runtime_contract::state_change::Domain::Subscriptions)
             .group_ids(vec![gid]),
     );
     Ok(())
@@ -237,7 +241,8 @@ pub async fn run_group(state: &AppState, input: RunGroupInput) -> Result<(), Str
     .await?;
     crate::events::emit_state_changed(
         "run_group",
-        crate::runtime_contract::change_builder::ChangeImpact::subscriptions_sidebar()
+        crate::runtime_contract::change_builder::ChangeImpact::new()
+            .add_domain(crate::runtime_contract::state_change::Domain::Subscriptions)
             .group_ids(vec![gid]),
     );
     Ok(())
@@ -253,7 +258,8 @@ pub async fn stop_group(state: &AppState, input: StopGroupInput) -> Result<(), S
     .await?;
     crate::events::emit_state_changed(
         "stop_group",
-        crate::runtime_contract::change_builder::ChangeImpact::subscriptions_sidebar()
+        crate::runtime_contract::change_builder::ChangeImpact::new()
+            .add_domain(crate::runtime_contract::state_change::Domain::Subscriptions)
             .group_ids(vec![gid]),
     );
     Ok(())
@@ -316,7 +322,8 @@ pub async fn create_subscription(
     let sid: i64 = sub.id.parse().unwrap_or(0);
     crate::events::emit_state_changed(
         "create_subscription",
-        crate::runtime_contract::change_builder::ChangeImpact::subscriptions_sidebar()
+        crate::runtime_contract::change_builder::ChangeImpact::new()
+            .add_domains(&[crate::runtime_contract::state_change::Domain::Subscriptions, crate::runtime_contract::state_change::Domain::Sidebar])
             .subscription_ids(vec![sid]),
     );
     Ok(serde_json::to_value(&sub).map_err(|e| e.to_string())?)
@@ -332,7 +339,8 @@ pub async fn delete_subscription(
             .await?;
     crate::events::emit_state_changed(
         "delete_subscription",
-        crate::runtime_contract::change_builder::ChangeImpact::subscriptions_sidebar()
+        crate::runtime_contract::change_builder::ChangeImpact::new()
+            .add_domains(&[crate::runtime_contract::state_change::Domain::Subscriptions, crate::runtime_contract::state_change::Domain::Sidebar])
             .subscription_ids(vec![sid]),
     );
     Ok(serde_json::to_value(&count).map_err(|e| e.to_string())?)
@@ -346,7 +354,8 @@ pub async fn pause_subscription(
     crate::subscriptions::service::pause_subscription(&state.db, input.id, input.paused).await?;
     crate::events::emit_state_changed(
         "pause_subscription",
-        crate::runtime_contract::change_builder::ChangeImpact::subscriptions_sidebar()
+        crate::runtime_contract::change_builder::ChangeImpact::new()
+            .add_domain(crate::runtime_contract::state_change::Domain::Subscriptions)
             .subscription_ids(vec![sid]),
     );
     Ok(())
@@ -365,7 +374,8 @@ pub async fn add_subscription_query(
     let qid: i64 = query.id.parse().unwrap_or(0);
     crate::events::emit_state_changed(
         "add_subscription_query",
-        crate::runtime_contract::change_builder::ChangeImpact::subscriptions_sidebar()
+        crate::runtime_contract::change_builder::ChangeImpact::new()
+            .add_domain(crate::runtime_contract::state_change::Domain::Subscriptions)
             .query_ids(vec![qid]),
     );
     Ok(serde_json::to_value(&query).map_err(|e| e.to_string())?)
@@ -379,7 +389,8 @@ pub async fn delete_subscription_query(
     crate::subscriptions::service::delete_subscription_query(&state.db, input.id).await?;
     crate::events::emit_state_changed(
         "delete_subscription_query",
-        crate::runtime_contract::change_builder::ChangeImpact::subscriptions_sidebar()
+        crate::runtime_contract::change_builder::ChangeImpact::new()
+            .add_domain(crate::runtime_contract::state_change::Domain::Subscriptions)
             .query_ids(vec![qid]),
     );
     Ok(())
@@ -403,7 +414,8 @@ pub async fn edit_subscription_query(
         .await?;
     crate::events::emit_state_changed(
         "edit_subscription_query",
-        crate::runtime_contract::change_builder::ChangeImpact::subscriptions_sidebar()
+        crate::runtime_contract::change_builder::ChangeImpact::new()
+            .add_domain(crate::runtime_contract::state_change::Domain::Subscriptions)
             .query_ids(vec![input.id]),
     );
     Ok(())
@@ -430,7 +442,8 @@ pub async fn set_subscription_auto_collections(
         .await?;
     crate::events::emit_state_changed(
         "set_subscription_auto_collections",
-        crate::runtime_contract::change_builder::ChangeImpact::subscriptions_sidebar()
+        crate::runtime_contract::change_builder::ChangeImpact::new()
+            .add_domain(crate::runtime_contract::state_change::Domain::Subscriptions)
             .subscription_ids(vec![sub_id]),
     );
     Ok(())
@@ -445,7 +458,8 @@ pub async fn pause_subscription_query(
         .await?;
     crate::events::emit_state_changed(
         "pause_subscription_query",
-        crate::runtime_contract::change_builder::ChangeImpact::subscriptions_sidebar()
+        crate::runtime_contract::change_builder::ChangeImpact::new()
+            .add_domain(crate::runtime_contract::state_change::Domain::Subscriptions)
             .query_ids(vec![qid]),
     );
     Ok(())
@@ -491,7 +505,8 @@ pub async fn reset_subscription(
     .await?;
     crate::events::emit_state_changed(
         "reset_subscription",
-        crate::runtime_contract::change_builder::ChangeImpact::subscriptions_sidebar()
+        crate::runtime_contract::change_builder::ChangeImpact::new()
+            .add_domain(crate::runtime_contract::state_change::Domain::Subscriptions)
             .subscription_ids(vec![sid]),
     );
     Ok(())
@@ -523,7 +538,8 @@ pub async fn rename_subscription(
     crate::subscriptions::service::rename_subscription(&state.db, input.id, input.name).await?;
     crate::events::emit_state_changed(
         "rename_subscription",
-        crate::runtime_contract::change_builder::ChangeImpact::subscriptions_sidebar()
+        crate::runtime_contract::change_builder::ChangeImpact::new()
+            .add_domains(&[crate::runtime_contract::state_change::Domain::Subscriptions, crate::runtime_contract::state_change::Domain::Sidebar])
             .subscription_ids(vec![sid]),
     );
     Ok(())
@@ -629,7 +645,8 @@ pub async fn set_credential(state: &AppState, input: SetCredentialInput) -> Resu
 
     crate::events::emit_state_changed(
         "set_credential",
-        crate::runtime_contract::change_builder::ChangeImpact::subscriptions_sidebar()
+        crate::runtime_contract::change_builder::ChangeImpact::new()
+            .add_domain(crate::runtime_contract::state_change::Domain::Subscriptions)
             .credential_categories(vec![site_category]),
     );
 
@@ -658,7 +675,8 @@ pub async fn delete_credential(
     }
     crate::events::emit_state_changed(
         "delete_credential",
-        crate::runtime_contract::change_builder::ChangeImpact::subscriptions_sidebar()
+        crate::runtime_contract::change_builder::ChangeImpact::new()
+            .add_domain(crate::runtime_contract::state_change::Domain::Subscriptions)
             .credential_categories(vec![canonical]),
     );
     Ok(())

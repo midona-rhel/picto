@@ -273,9 +273,8 @@ pub async fn move_folder(state: &AppState, input: MoveFolderInput) -> Result<(),
         .await?;
     crate::events::emit_state_changed(
         "move_folder",
-        crate::runtime_contract::change_builder::ChangeImpact::sidebar(
-            crate::runtime_contract::state_change::Domain::Folders,
-        )
+        crate::runtime_contract::change_builder::ChangeImpact::new()
+            .add_domains(&[crate::runtime_contract::state_change::Domain::Folders, crate::runtime_contract::state_change::Domain::Sidebar])
         .folder_ids(vec![input.folder_id]),
     );
     Ok(())
@@ -295,9 +294,8 @@ pub async fn create_folder(
     .await?;
     crate::events::emit_state_changed(
         "create_folder",
-        crate::runtime_contract::change_builder::ChangeImpact::sidebar(
-            crate::runtime_contract::state_change::Domain::Folders,
-        )
+        crate::runtime_contract::change_builder::ChangeImpact::new()
+            .add_domains(&[crate::runtime_contract::state_change::Domain::Folders, crate::runtime_contract::state_change::Domain::Sidebar])
         .folder_ids(vec![folder.folder_id]),
     );
     Ok(folder)
@@ -315,9 +313,8 @@ pub async fn update_folder(state: &AppState, input: UpdateFolderInput) -> Result
     .await?;
     crate::events::emit_state_changed(
         "update_folder",
-        crate::runtime_contract::change_builder::ChangeImpact::sidebar(
-            crate::runtime_contract::state_change::Domain::Folders,
-        )
+        crate::runtime_contract::change_builder::ChangeImpact::new()
+            .add_domains(&[crate::runtime_contract::state_change::Domain::Folders, crate::runtime_contract::state_change::Domain::Sidebar])
         .folder_ids(vec![input.folder_id]),
     );
     Ok(())
@@ -375,10 +372,9 @@ pub async fn set_folder_watch_config(
 
     crate::events::emit_state_changed(
         "set_folder_watch_config",
-        crate::runtime_contract::change_builder::ChangeImpact::sidebar(
-            crate::runtime_contract::state_change::Domain::Folders,
-        )
-        .folder_ids(vec![input.folder_id]),
+        crate::runtime_contract::change_builder::ChangeImpact::new()
+            .add_domain(crate::runtime_contract::state_change::Domain::Folders)
+            .folder_ids(vec![input.folder_id]),
     );
     Ok(())
 }
@@ -393,10 +389,9 @@ pub async fn clear_folder_watch_config(
         .send(crate::folders::watch::FolderWatchCommand::Reload);
     crate::events::emit_state_changed(
         "clear_folder_watch_config",
-        crate::runtime_contract::change_builder::ChangeImpact::sidebar(
-            crate::runtime_contract::state_change::Domain::Folders,
-        )
-        .folder_ids(vec![input.folder_id]),
+        crate::runtime_contract::change_builder::ChangeImpact::new()
+            .add_domain(crate::runtime_contract::state_change::Domain::Folders)
+            .folder_ids(vec![input.folder_id]),
     );
     Ok(())
 }
@@ -424,9 +419,8 @@ pub async fn update_folder_parent(
         .await?;
     crate::events::emit_state_changed(
         "update_folder_parent",
-        crate::runtime_contract::change_builder::ChangeImpact::sidebar(
-            crate::runtime_contract::state_change::Domain::Folders,
-        )
+        crate::runtime_contract::change_builder::ChangeImpact::new()
+            .add_domains(&[crate::runtime_contract::state_change::Domain::Folders, crate::runtime_contract::state_change::Domain::Sidebar])
         .folder_ids(vec![input.folder_id]),
     );
     Ok(())
@@ -487,9 +481,8 @@ pub async fn reorder_folders(state: &AppState, input: ReorderFoldersInput) -> Re
     state.db.reorder_folders(input.moves).await?;
     crate::events::emit_state_changed(
         "reorder_folders",
-        crate::runtime_contract::change_builder::ChangeImpact::sidebar(
-            crate::runtime_contract::state_change::Domain::Folders,
-        )
+        crate::runtime_contract::change_builder::ChangeImpact::new()
+            .add_domains(&[crate::runtime_contract::state_change::Domain::Folders, crate::runtime_contract::state_change::Domain::Sidebar])
         .folder_ids(fids),
     );
     Ok(())

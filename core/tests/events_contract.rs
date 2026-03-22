@@ -162,7 +162,8 @@ async fn folder_sidebar_preset_emits_sidebar_state_change() {
     let harness = common::TestHarness::new().await;
     harness.drain_events();
 
-    let impact = ChangeImpact::sidebar(Domain::Folders);
+    let impact = ChangeImpact::new()
+        .add_domains(&[Domain::Folders, Domain::Sidebar]);
     events::emit_state_changed("test_folder_sidebar", impact);
 
     let evts = harness.find_events("runtime/state_changed");
