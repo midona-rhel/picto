@@ -2,6 +2,7 @@ import { queryApi } from '#desktop/api';
 import { commandApi } from '#desktop/api';
 import { bustThumbnailCache } from '../shared/lib/mediaUrl';
 import { useGridMetadataStore } from '../state/gridMetadataStore';
+import { useDomainStore } from '../state/domainStore';
 import { registerUndoAction } from '../shared/controllers/undoRedoController';
 import { markEagerInvalidated } from '../runtime/stateChanges/applyGridRefreshTargets';
 import type {
@@ -64,6 +65,28 @@ function statusEntersScope(targetStatus: string): boolean {
   return targetStatus === expected;
 }
 
+/** Eagerly adjust system sidebar counts (inbox/active/trash) by the number of
+ *  top-level items moved, so the sidebar reflects the change instantly. The
+ *  backend event's sidebar_counts will reconcile with the true bitmap count. */
+function eagerAdjustSystemCounts(count: number, fromStatus: string | null, toStatus: string): void {
+  if (count <= 0 || fromStatus === toStatus) return;
+  const store = useDomainStore.getState();
+  const s = {
+    all_active: store.allActiveCount,
+    inbox: store.inboxCount,
+    trash: store.trashCount,
+  };
+  // Decrement source
+  if (fromStatus === 'active') s.all_active -= count;
+  else if (fromStatus === 'inbox') s.inbox -= count;
+  else if (fromStatus === 'trash') s.trash -= count;
+  // Increment target
+  if (toStatus === 'active') s.all_active += count;
+  else if (toStatus === 'inbox') s.inbox += count;
+  else if (toStatus === 'trash') s.trash += count;
+  store.applySidebarCounts(s);
+}
+
 function stableSelectionKey(spec: SelectionQuerySpec): string {
   return JSON.stringify(spec);
 }
@@ -124,7 +147,6 @@ export const filesController = {
   },
 
   noteMetadataChanged(hash: string): void {
-    console.log('[filesController.noteMetadataChanged]', hash);
     eagerInvalidate(hash);
   },
   noteManyMetadataChanged(hashes: string[]): void {
@@ -143,13 +165,13 @@ export const filesController = {
   },
 
   async setStatus(hash: string, status: string) {
+    const previousStatus = scopeExpectedStatus();
     const result = await commandApi.file.setStatus(hash, status);
     eagerInvalidate(hash);
+    eagerAdjustSystemCounts(1, previousStatus, status);
     if (statusLeavesScope(status)) {
       useGridMetadataStore.getState().queueRemovals([hash]);
     } else if (statusEntersScope(status)) {
-      // Item is entering the current scope (e.g. undo trash while viewing system:all).
-      // Fetch its full entity data so the grid can display it.
       queryApi.file.get(hash).then((entity) => {
         if (entity) useGridMetadataStore.getState().queueInsertions([entity]);
       });
@@ -158,15 +180,15 @@ export const filesController = {
   },
 
   async setStatusSelection(selection: SelectionQuerySpec, status: string) {
-    // Resolve virtual selections to explicit hashes before the operation
-    // so we can do targeted grid updates instead of broad clear.
     const hashes = selection.hashes?.length
       ? selection.hashes
       : await queryApi.selection.resolveHashes(selection);
+    const previousStatus = scopeExpectedStatus();
     const result = await commandApi.file.setStatusSelection(selection, status);
     const leaves = statusLeavesScope(status);
     const enters = statusEntersScope(status);
     eagerInvalidateMany(hashes);
+    eagerAdjustSystemCounts(hashes.length, previousStatus, status);
     if (leaves) {
       useGridMetadataStore.getState().queueRemovals(hashes);
     } else if (enters) {
