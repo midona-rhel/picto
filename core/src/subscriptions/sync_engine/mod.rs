@@ -74,7 +74,6 @@ pub(super) struct PendingCollection {
     pub category: String,
     pub post_id: String,
     pub preferred_name: String,
-    pub expected: u32,
     pub members: Vec<PendingMember>,
     pub queue_id: Option<i64>,
 }
@@ -389,7 +388,6 @@ impl<'a> SubscriptionSyncEngine<'a> {
                         category,
                         post_id,
                         preferred_name,
-                        expected: page_count,
                         members: Vec::new(),
                         queue_id: None,
                     });

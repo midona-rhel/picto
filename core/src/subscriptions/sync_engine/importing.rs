@@ -17,7 +17,7 @@ use super::SubscriptionSyncEngine;
 
 #[derive(Debug, Clone)]
 pub(super) struct ImportOutcome {
-    pub hex_hash: String,
+    pub _hex_hash: String,
     pub imported_new: bool,
 }
 
@@ -61,7 +61,7 @@ impl<'a> SubscriptionSyncEngine<'a> {
             )
             .await?;
             return Ok(ImportOutcome {
-                hex_hash,
+                _hex_hash: hex_hash,
                 imported_new: false,
             });
         }
@@ -162,7 +162,7 @@ impl<'a> SubscriptionSyncEngine<'a> {
                 }
 
                 Ok(ImportOutcome {
-                    hex_hash: surviving_hash,
+                    _hex_hash: surviving_hash,
                     imported_new: true,
                 })
             }
@@ -179,7 +179,7 @@ impl<'a> SubscriptionSyncEngine<'a> {
                     .await?;
                 }
                 Ok(ImportOutcome {
-                    hex_hash: hash,
+                    _hex_hash: hash,
                     imported_new: false,
                 })
             }

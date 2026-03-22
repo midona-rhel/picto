@@ -179,6 +179,17 @@ export function GeneralPanel() {
             allowDeselect={false}
           />
         </SettingsRow>
+        <SettingsRow label="Collection view default" separator>
+          <Select
+            size="xs" w={140} value={settings.stripDefaultFitMode}
+            onChange={(v) => v && updateSetting('stripDefaultFitMode', v as 'horizontal' | 'vertical')}
+            data={[
+              { value: 'horizontal', label: 'Fit Horizontal' },
+              { value: 'vertical', label: 'Fit Vertical' },
+            ]}
+            allowDeselect={false}
+          />
+        </SettingsRow>
       </SettingsBlock>
 
       {/* Features */}

@@ -89,6 +89,8 @@ export interface CoreRuntimeEventPayloadMap {
   'open-detail-window': OpenDetailWindowEvent;
   'duplicate-auto-merge-finished': DuplicateAutoMergeFinishedEvent;
 
+  'log': { level: string; target: string; message: string; timestamp: string };
+
   // Runtime contract (authoritative)
   'runtime/mutation_committed': MutationReceipt;
   'runtime/task_upserted': TaskUpsertedEvent;

@@ -2,6 +2,7 @@
   "_comment": "Intentional asymmetries between Rust dispatch commands and TypeScript API commands",
   "rust_only": [
     "resolve_duplicate_pair",
+    "resolve_file_paths_batch",
     "set_subscription_auto_collections",
     "active", "inbox", "inherit", "add", "remove",
     "aliases", "implications",

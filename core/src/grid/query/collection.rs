@@ -107,7 +107,7 @@ async fn collection_member_ids(
 async fn collection_member_snapshot(
     db: &SqliteDatabase,
     query: &GridPageSlimQuery,
-    inputs: &QueryInputs,
+    _inputs: &QueryInputs,
 ) -> Result<(Vec<i64>, Option<i64>), String> {
     let collection_id = query
         .scope
