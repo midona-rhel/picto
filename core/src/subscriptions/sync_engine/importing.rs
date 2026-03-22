@@ -342,78 +342,54 @@ impl<'a> SubscriptionSyncEngine<'a> {
 
                 // Enqueue deferred work in priority order so the collection
                 // tile renders as fast as possible:
-                //   1. Cover thumbnail + cover dominant colors
+                //   1. Cover thumbnail + cover dominant colors + phash
                 //   2. All member dominant colors
                 //   3. All member thumbnails
-                //   4. All phashes
-                // Since deferred_work processes by work_id ASC, insertion
-                // order determines processing order.
+                //   4. All member phashes
+                // Single batch insert — work_id ASC determines processing order.
+                {
+                    let mut batch: Vec<(String, Vec<media_derivatives::DeferredWorkType>)> =
+                        Vec::new();
 
-                // Phase 1: cover (index 0) — thumbnail + colors
-                if let Some((hash, mime, _)) = deferred_specs.first() {
-                    if imported_hashes.contains(hash.as_str()) {
-                        let mut cover_types = vec![
-                            media_derivatives::DeferredWorkType::Thumbnail,
-                            media_derivatives::DeferredWorkType::DominantColors,
-                        ];
-                        if mime.starts_with("image/") {
-                            cover_types.push(media_derivatives::DeferredWorkType::Phash);
+                    // Phase 1: cover (index 0) — thumbnail + colors + phash
+                    if let Some((hash, mime, _)) = deferred_specs.first() {
+                        if imported_hashes.contains(hash.as_str()) {
+                            let mut types = vec![
+                                media_derivatives::DeferredWorkType::Thumbnail,
+                                media_derivatives::DeferredWorkType::DominantColors,
+                            ];
+                            if mime.starts_with("image/") {
+                                types.push(media_derivatives::DeferredWorkType::Phash);
+                            }
+                            batch.push((hash.clone(), types));
                         }
-                        let _ = self
-                            .db
-                            .enqueue_deferred_jobs(hash, &cover_types)
-                            .await;
                     }
-                }
 
-                // Phase 2: all member dominant colors (skip cover)
-                for (hash, mime, _) in deferred_specs.iter().skip(1) {
-                    if !imported_hashes.contains(hash.as_str()) {
-                        continue;
+                    // Phase 2: all member dominant colors (skip cover)
+                    for (hash, mime, _) in deferred_specs.iter().skip(1) {
+                        if !imported_hashes.contains(hash.as_str()) { continue; }
+                        if mime.starts_with("image/") {
+                            batch.push((hash.clone(), vec![media_derivatives::DeferredWorkType::DominantColors]));
+                        }
                     }
-                    if mime.starts_with("image/") {
-                        let _ = self
-                            .db
-                            .enqueue_deferred_jobs(
-                                hash,
-                                &[media_derivatives::DeferredWorkType::DominantColors],
-                            )
-                            .await;
-                    }
-                }
 
-                // Phase 3: all member thumbnails (skip cover)
-                for (hash, mime, needs_thumbnail) in deferred_specs.iter().skip(1) {
-                    if !imported_hashes.contains(hash.as_str()) {
-                        continue;
+                    // Phase 3: all member thumbnails (skip cover)
+                    for (hash, mime, needs_thumbnail) in deferred_specs.iter().skip(1) {
+                        if !imported_hashes.contains(hash.as_str()) { continue; }
+                        if *needs_thumbnail && (mime.starts_with("image/") || mime.starts_with("video/")) {
+                            batch.push((hash.clone(), vec![media_derivatives::DeferredWorkType::Thumbnail]));
+                        }
                     }
-                    if *needs_thumbnail
-                        && (mime.starts_with("image/") || mime.starts_with("video/"))
-                    {
-                        let _ = self
-                            .db
-                            .enqueue_deferred_jobs(
-                                hash,
-                                &[media_derivatives::DeferredWorkType::Thumbnail],
-                            )
-                            .await;
-                    }
-                }
 
-                // Phase 4: all member phashes (skip cover)
-                for (hash, mime, _) in deferred_specs.iter().skip(1) {
-                    if !imported_hashes.contains(hash.as_str()) {
-                        continue;
+                    // Phase 4: all member phashes (skip cover)
+                    for (hash, mime, _) in deferred_specs.iter().skip(1) {
+                        if !imported_hashes.contains(hash.as_str()) { continue; }
+                        if mime.starts_with("image/") {
+                            batch.push((hash.clone(), vec![media_derivatives::DeferredWorkType::Phash]));
+                        }
                     }
-                    if mime.starts_with("image/") {
-                        let _ = self
-                            .db
-                            .enqueue_deferred_jobs(
-                                hash,
-                                &[media_derivatives::DeferredWorkType::Phash],
-                            )
-                            .await;
-                    }
+
+                    let _ = self.db.enqueue_deferred_jobs_batch(batch).await;
                 }
                 let _ = self
                     .db

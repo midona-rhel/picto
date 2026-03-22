@@ -550,6 +550,23 @@ impl SqliteDatabase {
         .await
     }
 
+    /// Enqueue deferred jobs for multiple hashes in a single DB connection.
+    pub async fn enqueue_deferred_jobs_batch(
+        &self,
+        items: Vec<(String, Vec<DeferredWorkType>)>,
+    ) -> Result<(), String> {
+        if items.is_empty() {
+            return Ok(());
+        }
+        self.with_conn_labeled("deferred_work/enqueue_batch", move |conn| {
+            for (hash, work_types) in &items {
+                enqueue_deferred_jobs_sync(conn, hash, work_types)?;
+            }
+            Ok(())
+        })
+        .await
+    }
+
     pub async fn reset_running_deferred_work(&self) -> Result<usize, String> {
         self.with_conn_labeled("deferred_work/reset_running", reset_running_deferred_work_sync)
             .await
