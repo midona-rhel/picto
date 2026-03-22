@@ -1,7 +1,6 @@
 import { useCallback, useRef } from 'react';
 import { filesController } from '../../../controllers/filesController';
 import { tagsController } from '../../../controllers/tagsController';
-import { collectionsController } from '../../../controllers/collectionsController';
 import { foldersController } from '../../../controllers/foldersController';
 import {
   getMetadata,
@@ -178,7 +177,7 @@ export function useInspectorChangeActions(
           // Virtual Select All: let the backend resolve all hashes from the selection
           await foldersController.removeFiles(folderId, [], selectionSummarySpec);
         } else {
-          const hashes = await collectionsController.expandToMemberHashes(selectedImages);
+          const hashes = selectedImages.map((img) => img.hash);
           if (hashes.length === 0) return;
           // foldersController.removeFiles owns undo registration.
           await foldersController.removeFiles(folderId, hashes);

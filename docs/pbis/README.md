@@ -61,7 +61,9 @@
 - PBI-558-consolidate-settings-window-library-and-shared-platform-helpers.md
 - PBI-559-move-undo-redo-ownership-into-controllers.md
 - PBI-564-eliminate-remaining-ui-owned-undo-redo-registrations.md
+- PBI-565-collapse-redundant-controller-and-backend-access-surfaces.md
 - PBI-560-finalize-runtime-state-change-contract-and-combined-delta-emission.md
 - PBI-561-tighten-backend-files-tags-media-and-import-state-changes.md
 - PBI-562-tighten-backend-folders-smart-folders-subscriptions-and-watch-state-changes.md
+- PBI-566-audit-and-complete-backend-state-change-coverage.md
 - PBI-563-consume-state-changes-through-targeted-frontend-refresh-and-reconciliation.md

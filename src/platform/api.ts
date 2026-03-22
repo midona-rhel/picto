@@ -514,10 +514,6 @@ export const api = {
         name: params.name,
         tags: params.tags,
       } as never) as unknown as Promise<void>,
-    addTags: (id: number, tags: string[]) =>
-      invokeTyped('add_collection_tags', { id, tags } as never) as unknown as Promise<void>,
-    removeTags: (id: number, tags: string[]) =>
-      invokeTyped('remove_collection_tags', { id, tags } as never) as unknown as Promise<void>,
     delete: (id: number) =>
       invokeTyped('delete_collection', { id }) as unknown as Promise<void>,
     listMemberHashes: (id: number) =>

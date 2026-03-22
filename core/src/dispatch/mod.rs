@@ -248,8 +248,6 @@ async fn dispatch_inner(command: &str, args: serde_json::Value) -> Result<String
         "get_collection_summary" => call!(typed::folders::get_collection_summary, &state, args),
         "create_collection" => call!(typed::folders::create_collection, &state, args),
         "update_collection" => call!(typed::folders::update_collection, &state, args),
-        "add_collection_tags" => call!(typed::folders::add_collection_tags, &state, args),
-        "remove_collection_tags" => call!(typed::folders::remove_collection_tags, &state, args),
         "reorder_collection_members" => {
             call!(typed::folders::reorder_collection_members, &state, args)
         }
