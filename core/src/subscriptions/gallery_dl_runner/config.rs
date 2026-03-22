@@ -96,10 +96,11 @@ pub fn build_config(opts: &RunOptions, _temp_dir: &Path) -> serde_json::Value {
     output.insert("progress".into(), serde_json::Value::Bool(false));
     root.insert("output".into(), serde_json::Value::Object(output));
 
-    // On Windows, force gallery-dl to replace illegal filename characters
-    // (? * < > | " etc.) with underscores. Without this, the path printed
-    // to stdout may not match the actual file on disk.
-    #[cfg(target_os = "windows")]
+    // Strip non-ASCII characters (emoji, CJK, etc.) from filenames to avoid
+    // Windows OSError [Errno 22] on paths with unsupported Unicode.
+    // The "ascii" mode replaces all non-ASCII with underscores.
+    // See: https://github.com/mikf/gallery-dl/issues/478
+    //      https://github.com/mikf/gallery-dl/issues/3450
     {
         let extractor = root
             .get_mut("extractor")
@@ -107,7 +108,7 @@ pub fn build_config(opts: &RunOptions, _temp_dir: &Path) -> serde_json::Value {
         if let Some(ext) = extractor {
             ext.insert(
                 "path-restrict".into(),
-                serde_json::Value::String("windows".into()),
+                serde_json::Value::String("ascii".into()),
             );
         }
     }

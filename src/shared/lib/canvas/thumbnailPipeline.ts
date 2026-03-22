@@ -57,6 +57,7 @@ export class ThumbnailPipeline {
   private accessCounter = 0;
   private scrollState: CanvasScrollState = createIdleCanvasScrollState();
   private destroyed = false;
+  private failedHashes = new Set<string>();
   private loadedHashes = new Set<string>();
   private inFlight = new Map<string, ThumbnailInFlightItem>();
   private cacheHitCount = 0;
@@ -125,6 +126,7 @@ export class ThumbnailPipeline {
 
   ensure(hash: string, args: EnsureThumbnailArgs = {}): void {
     if (this.destroyed) return;
+    if (this.failedHashes.has(hash)) return;
 
     const entry = this.getOrCreateEntry(hash);
     const request = buildRequest(hash, args);
@@ -502,13 +504,19 @@ export class ThumbnailPipeline {
   private queueRepairRetry(entry: ThumbnailPipelineEntry, item: ThumbnailQueueItem): void {
     entry.retryQueued = true;
     void api.file.ensureThumbnail(item.hash)
-      .catch(() => {})
-      .finally(() => {
+      .then(() => {
+        // Backend generated the thumbnail — retry loading it once
         const retryEntry = this.cache.get(item.hash);
         if (!retryEntry || retryEntry.thumb) return;
         retryEntry.retryQueued = false;
         this.resetEntry(retryEntry);
         this.ensure(item.hash, { y: item.y });
+      })
+      .catch(() => {
+        // Backend can't generate thumbnail (hash not in DB) — stop retrying
+        this.failedHashes.add(item.hash);
+        const retryEntry = this.cache.get(item.hash);
+        if (retryEntry) this.markError(retryEntry);
       });
   }
 }
