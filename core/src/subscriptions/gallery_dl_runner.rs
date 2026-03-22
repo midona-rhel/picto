@@ -13,6 +13,25 @@
 //! - `gallery_dl/extractor/e621.py` — nested tags dict
 
 mod adapters;
+
+/// Convert a path string to a `PathBuf`, prefixing `\\?\` on Windows to
+/// bypass the 260-character MAX_PATH limitation. Without this, `is_file()`
+/// and `fs::read()` silently fail on long gallery-dl download paths.
+fn to_long_path(raw: &str) -> PathBuf {
+    #[cfg(target_os = "windows")]
+    {
+        let p = raw.replace('/', "\\");
+        if p.starts_with("\\\\?\\") {
+            PathBuf::from(p)
+        } else {
+            PathBuf::from(format!("\\\\?\\{}", p))
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        PathBuf::from(raw)
+    }
+}
 mod config;
 mod failure;
 mod filesystem;
@@ -212,7 +231,7 @@ impl GalleryDlRunner {
                     if trimmed.is_empty() {
                         continue;
                     }
-                    let path = PathBuf::from(&trimmed);
+                    let path = to_long_path(&trimmed);
                     let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
                     if ext == "json" {
                         tracing::trace!(path = %trimmed, "gallery-dl stdout: skipping json sidecar");
