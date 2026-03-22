@@ -495,13 +495,33 @@ async fn generate_thumbnail_inner(
     hash: &str,
     force: bool,
 ) -> Result<EnsureThumbnailResult, String> {
-    let file = db
-        .get_file_by_hash(hash)
-        .await?
-        .ok_or_else(|| format!("File not found in database: {}", hash))?;
+    // For collection hashes, resolve to the cover file's hash.
+    let effective_hash;
+    let file = match db.get_file_by_hash(hash).await? {
+        Some(f) => f,
+        None => {
+            // May be a collection entity hash — find its cover file
+            let entity_id = db.resolve_hash(hash).await
+                .map_err(|_| format!("Entity not found for hash: {}", hash))?;
+            let cover_hash = db.with_read_conn(move |conn| {
+                conn.query_row(
+                    "SELECT f.hash FROM media_entity me
+                     JOIN file f ON f.file_id = me.cover_file_id
+                     WHERE me.entity_id = ?1 AND me.kind = 'collection'",
+                    [entity_id],
+                    |row| row.get::<_, String>(0),
+                )
+            }).await
+            .map_err(|_| format!("Collection has no cover file: {}", hash))?;
+            effective_hash = cover_hash;
+            db.get_file_by_hash(&effective_hash).await?
+                .ok_or_else(|| format!("Cover file not found: {}", effective_hash))?
+        }
+    };
 
     let ext = mime_to_extension(&file.mime).to_string();
-    let h = hash.to_string();
+    // Use file's actual hash for blob operations (collection hash → cover file hash)
+    let h = file.hash.clone();
     let bs = blob_store.clone();
 
     let (regenerated_thumbnail, has_thumbnail) =
