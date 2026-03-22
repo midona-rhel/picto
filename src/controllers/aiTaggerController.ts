@@ -28,10 +28,6 @@ export const aiTaggerController = {
     return api.aiTagger.status();
   },
 
-  getStatus(): Promise<AiTaggerStatus> {
-    return api.aiTagger.status();
-  },
-
   downloadModel(model: string) {
     const check = canStartTaskFamily('ai_tagger');
     if (!check.allowed) return Promise.reject(new Error(check.reason ?? 'Model download blocked'));

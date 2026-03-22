@@ -21,7 +21,7 @@ export function AiTaggingPanel() {
       setLoading(true);
       const [s, st] = await Promise.all([
         settingsController.get(),
-        aiTaggerController.getStatus(),
+        aiTaggerController.status(),
       ]);
       setSettings(s);
       setStatus(st);
@@ -40,7 +40,7 @@ export function AiTaggingPanel() {
       await settingsController.save(next);
       // Refresh status when toggles change
       if ('aiTaggerWd14Enabled' in patch || 'aiTaggerE621Enabled' in patch) {
-        const st = await aiTaggerController.getStatus();
+        const st = await aiTaggerController.status();
         setStatus(st);
       }
     } catch (err) {
@@ -54,7 +54,7 @@ export function AiTaggingPanel() {
     try {
       await aiTaggerController.downloadModel(slug);
       const poll = setInterval(async () => {
-        const st = await aiTaggerController.getStatus();
+        const st = await aiTaggerController.status();
         setStatus(st);
         const model = st.models.find((m) => m.slug === slug);
         if (model?.downloaded) {
@@ -79,7 +79,7 @@ export function AiTaggingPanel() {
   const handleDelete = async (slug: string) => {
     try {
       await aiTaggerController.deleteModel(slug);
-      const st = await aiTaggerController.getStatus();
+      const st = await aiTaggerController.status();
       setStatus(st);
     } catch (err) {
       console.error('Model delete failed:', err);

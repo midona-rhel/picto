@@ -39,13 +39,9 @@ export function noteManyMetadataChanged(hashes: string[]): void {
   filesController.noteManyMetadataChanged(hashes);
 }
 
-/** No-op — no cache to pin. */
-export function pinMetadata(hash: string): void {
-  filesController.pinMetadata(hash);
-}
-export function unpinMetadata(hash: string): void {
-  filesController.unpinMetadata(hash);
-}
+/** No-op — pin/unpin is a legacy concept with no backing cache. */
+export function pinMetadata(_hash: string): void {}
+export function unpinMetadata(_hash: string): void {}
 
 export function getOrStartSelectionSummary(spec: SelectionQuerySpec): Promise<SelectionSummary> {
   return filesController.getSelectionSummary(spec);

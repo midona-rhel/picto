@@ -44,7 +44,7 @@ function inferCollectionName(memberNames: string[]): string {
 async function eagerInsertIfViewingCollection(collectionId: number, hashes: string[]) {
   const scope = useGridMetadataStore.getState().activeGridScope;
   if (scope !== `collection:${collectionId}`) return;
-  const { queryApi } = await import('#desktop/queryApi');
+  const { queryApi } = await import('#desktop/api');
   const entities = await Promise.all(hashes.map((h) => queryApi.file.get(h)));
   const valid = entities.filter((e): e is NonNullable<typeof e> => e != null);
   if (valid.length > 0) useGridMetadataStore.getState().queueInsertions(valid);
@@ -115,13 +115,6 @@ export const collectionsController = {
     return api.collections.reorderMembers(id, hashes);
   },
 
-  async addTags(id: number, tags: string[]) {
-    return api.collections.addTags(id, tags);
-  },
-
-  async removeTags(id: number, tags: string[]) {
-    return api.collections.removeTags(id, tags);
-  },
 
   // ── Workflow methods (own backend calls + eager consequences + undo) ──
 
@@ -233,25 +226,6 @@ export const collectionsController = {
     });
   },
 
-  /** Add tags to a collection with undo. */
-  async tagAdd(id: number, tags: string[]): Promise<void> {
-    const t = [...tags];
-    await this.addTags(id, t);
-    registerUndoAction({
-      label: `Add ${t.length} tag${t.length === 1 ? '' : 's'}`,
-      backward: async () => { await this.removeTags(id, t); },
-      forward: async () => { await this.addTags(id, t); },
-    });
-  },
-
-  /** Remove tags from a collection with undo. */
-  async tagRemove(id: number, tags: string[]): Promise<void> {
-    const t = [...tags];
-    await this.removeTags(id, t);
-    registerUndoAction({
-      label: `Remove ${t.length} tag${t.length === 1 ? '' : 's'}`,
-      backward: async () => { await this.addTags(id, t); },
-      forward: async () => { await this.removeTags(id, t); },
-    });
-  },
+  // tagAdd/tagRemove removed — collection tags use tagsController.addToHashes/removeFromHashes
+  // with the collection's own hash. resolve_hashes_batch expands to collection entity + members.
 };

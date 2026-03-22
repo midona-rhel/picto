@@ -120,10 +120,6 @@ export const subscriptionsController = {
     store.updateFamilyProgress('subscription_run', progress);
   },
 
-  finishRun() {
-    useTaskStore.getState().finishFamily('subscription_run');
-  },
-
   getRunning(): Promise<string[]> {
     return api.subscriptions.getRunning();
   },

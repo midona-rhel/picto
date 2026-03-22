@@ -1,5 +1,5 @@
 import { api } from '#desktop/api';
-import { queryApi } from '#desktop/queryApi';
+import { queryApi } from '#desktop/api';
 import { registerUndoAction } from '../shared/controllers/undoRedoController';
 import { useTaskStore } from '../state/taskStore';
 import { useGridMetadataStore } from '../state/gridMetadataStore';

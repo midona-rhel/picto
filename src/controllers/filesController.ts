@@ -1,5 +1,5 @@
-import { queryApi } from '#desktop/queryApi';
-import { commandApi } from '#desktop/commandApi';
+import { queryApi } from '#desktop/api';
+import { commandApi } from '#desktop/api';
 import { bustThumbnailCache } from '../shared/lib/mediaUrl';
 import { useGridMetadataStore } from '../state/gridMetadataStore';
 import { registerUndoAction } from '../shared/controllers/undoRedoController';
@@ -128,12 +128,8 @@ export const filesController = {
     eagerInvalidate(hash);
   },
   noteManyMetadataChanged(hashes: string[]): void {
-    console.log('[filesController.noteManyMetadataChanged]', hashes);
     eagerInvalidateMany(hashes);
   },
-  pinMetadata(_hash: string): void {},
-  unpinMetadata(_hash: string): void {},
-
   noteSelectionSummaryChanged(): void {
     selectionInflight.clear();
   },
