@@ -640,6 +640,16 @@ impl<'a> SubscriptionSyncEngine<'a> {
         if cancel.is_cancelled() {
             progress.cancelled = true;
         }
+        // If any file downloads failed after retries, stop the run and don't
+        // advance the cursor — we don't want to skip files permanently.
+        if run_summary.had_download_errors && !progress.cancelled {
+            warn!(
+                "gallery-dl had download errors — stopping run to avoid skipping files"
+            );
+            progress.cancelled = true;
+            progress.failure_kind = Some("download_error".to_string());
+            progress.errors.push("Download failed for one or more files — run stopped to avoid skipping content".to_string());
+        }
         if run_summary.exit_code != 0 && !progress.cancelled {
             let failure_kind = gallery_dl_runner::classify_failure(&run_summary.stderr_output);
             let failure_kind_str = match failure_kind {

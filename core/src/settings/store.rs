@@ -124,7 +124,7 @@ fn default_true() -> bool {
     true
 }
 fn default_sub_abort_threshold() -> u32 {
-    50
+    10
 }
 fn default_sub_inbox_pause_limit() -> u32 {
     1000

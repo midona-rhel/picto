@@ -35,9 +35,16 @@ pub fn resolve_finished_status_text(status: &str, failure_kind: Option<&str>) ->
     if status == "cancelled" && failure_kind == Some("inbox_full") {
         return "Paused (Inbox full)";
     }
-    match status {
-        "succeeded" => "Completed",
-        "cancelled" => "Cancelled",
+    if status == "cancelled" && failure_kind == Some("download_error") {
+        return "Stopped (Download failed)";
+    }
+    match (status, failure_kind) {
+        ("succeeded", _) => "Completed",
+        ("cancelled", _) => "Cancelled",
+        (_, Some("unauthorized")) => "Failed (Unauthorized)",
+        (_, Some("expired")) => "Failed (Credentials expired)",
+        (_, Some("rate_limited")) => "Failed (Rate limited)",
+        (_, Some("network")) => "Failed (Network error)",
         _ => "Failed",
     }
 }

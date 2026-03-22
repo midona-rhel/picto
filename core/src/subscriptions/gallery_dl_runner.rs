@@ -88,6 +88,8 @@ pub struct RunSummary {
     pub exit_code: i32,
     pub stderr_output: String,
     pub temp_dir: PathBuf,
+    /// True if any individual file download failed after all retries.
+    pub had_download_errors: bool,
 }
 
 /// A single file downloaded by gallery-dl, paired with its parsed metadata.
@@ -272,15 +274,27 @@ impl GalleryDlRunner {
 
         let stderr_handle = tokio::spawn(async move {
             let mut output = String::new();
+            let mut had_download_errors = false;
             if let Some(err) = child_stderr {
                 let mut reader = BufReader::new(err).lines();
                 while let Ok(Some(line)) = reader.next_line().await {
-                    info!(line, "gallery-dl stderr");
+                    let trimmed = line.trim();
+                    if trimmed.is_empty() { continue; }
+                    // Detect failed downloads — gallery-dl emits "[download][error]" after exhausting retries
+                    if trimmed.contains("[download][error]") {
+                        warn!(line = trimmed, "gallery-dl: download failed after retries");
+                        had_download_errors = true;
+                    } else if trimmed.contains("[warning]") && trimmed.contains("(") {
+                        // Retry warnings — only log at debug level to reduce noise
+                        debug!(line = trimmed, "gallery-dl: retry warning");
+                    } else {
+                        info!(line = trimmed, "gallery-dl stderr");
+                    }
                     output.push_str(&line);
                     output.push('\n');
                 }
             }
-            output
+            (output, had_download_errors)
         });
 
         let child_pid = child.id();
@@ -341,10 +355,11 @@ impl GalleryDlRunner {
 
         let exit_code = status.code().unwrap_or(-1);
         let _ = stdout_handle.await;
-        let stderr = stderr_handle.await.unwrap_or_default();
+        let (stderr, had_download_errors) = stderr_handle.await.unwrap_or_default();
 
         info!(
             exit_code,
+            had_download_errors,
             elapsed_ms = run_start.elapsed().as_millis(),
             "gallery-dl finished"
         );
@@ -353,6 +368,7 @@ impl GalleryDlRunner {
 
         Ok(RunSummary {
             exit_code,
+            had_download_errors,
             stderr_output: stderr,
             temp_dir,
         })
