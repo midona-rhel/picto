@@ -22,20 +22,13 @@ pub fn resolve_query_name(query_id: i64, query_text: &str, display_name: Option<
     format!("Query {query_id}")
 }
 
-const DEFAULT_BATCH_SIZE: u32 = 100;
-
 pub fn effective_query_post_limit(global_batch_size: u32, subscription_limit: u32) -> Option<u32> {
-    let global = if global_batch_size == 0 {
-        DEFAULT_BATCH_SIZE
-    } else {
-        global_batch_size
-    };
-    let local = if subscription_limit == 0 {
-        global
-    } else {
-        subscription_limit
-    };
-    Some(local.min(global).max(1))
+    match (global_batch_size, subscription_limit) {
+        (0, 0) => None, // no limits → gallery-dl runs until source is exhausted
+        (0, local) => Some(local),
+        (global, 0) => Some(global),
+        (global, local) => Some(local.min(global)),
+    }
 }
 
 pub fn resolve_finished_status_text(status: &str, failure_kind: Option<&str>) -> &'static str {
@@ -133,10 +126,15 @@ mod tests {
     }
 
     #[test]
-    fn effective_query_post_limit_never_returns_none() {
-        // Even if global batch size is 0, fall back to default (100)
-        assert_eq!(effective_query_post_limit(0, 0), Some(100));
+    fn effective_query_post_limit_none_when_both_zero() {
+        // Both 0 = unlimited: gallery-dl runs until source exhaustion / inbox cap
+        assert_eq!(effective_query_post_limit(0, 0), None);
+    }
+
+    #[test]
+    fn effective_query_post_limit_uses_subscription_limit_without_global_cap() {
         assert_eq!(effective_query_post_limit(0, 50), Some(50));
+        assert_eq!(effective_query_post_limit(0, 500), Some(500));
     }
 
     #[test]
@@ -203,8 +201,14 @@ mod tests {
     #[test]
     fn range_start_from_cursor_computes_next_offset() {
         assert_eq!(range_start_from_cursor(None, Some("range_offset")), 1);
-        assert_eq!(range_start_from_cursor(Some("100"), Some("range_offset")), 101);
-        assert_eq!(range_start_from_cursor(Some("200"), Some("range_offset")), 201);
+        assert_eq!(
+            range_start_from_cursor(Some("100"), Some("range_offset")),
+            101
+        );
+        assert_eq!(
+            range_start_from_cursor(Some("200"), Some("range_offset")),
+            201
+        );
         // Non range_offset strategies always start at 1
         assert_eq!(range_start_from_cursor(Some("100"), Some("tag_id_lt")), 1);
         assert_eq!(range_start_from_cursor(Some("100"), None), 1);

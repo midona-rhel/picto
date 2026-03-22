@@ -15,7 +15,7 @@ use crate::subscriptions::db::{get_subscription, get_subscription_query};
 use crate::subscriptions::policy::{
     effective_query_post_limit, resolve_finished_status_text, resolve_query_name,
 };
-use crate::subscriptions::progress::{SubscriptionProgressEvent, list_runtime_progress_from_tasks};
+use crate::subscriptions::progress::{list_runtime_progress_from_tasks, SubscriptionProgressEvent};
 use crate::subscriptions::runtime_tasks::{
     publish_cancelling, publish_finished, publish_panic, publish_start,
     schedule_progress_snapshot_clear,
@@ -147,9 +147,15 @@ impl SubscriptionRunOrchestrator {
         let sub_name_guard = sub_name.clone();
 
         tokio::spawn(async move {
-            tracing::info!(elapsed_ms = run_clock.elapsed().as_millis(), "orchestrator: outer spawn entered");
+            tracing::info!(
+                elapsed_ms = run_clock.elapsed().as_millis(),
+                "orchestrator: outer spawn entered"
+            );
             let inner = tokio::spawn(async move {
-                tracing::info!(elapsed_ms = run_clock.elapsed().as_millis(), "orchestrator: inner spawn entered");
+                tracing::info!(
+                    elapsed_ms = run_clock.elapsed().as_millis(),
+                    "orchestrator: inner spawn entered"
+                );
                 let mut total_errors = 0usize;
                 let mut last_error: Option<String> = None;
                 let mut last_failure_kind: Option<String> = None;
@@ -161,7 +167,10 @@ impl SubscriptionRunOrchestrator {
                 let mut last_metadata_error: Option<String> = None;
 
                 let engine_result = SubscriptionSyncEngine::new(&db, &blob_store, &app_settings);
-                tracing::info!(elapsed_ms = run_clock.elapsed().as_millis(), "orchestrator: engine created");
+                tracing::info!(
+                    elapsed_ms = run_clock.elapsed().as_millis(),
+                    "orchestrator: engine created"
+                );
                 match engine_result {
                     Ok(engine) => {
                         let mut engine = engine
@@ -173,7 +182,10 @@ impl SubscriptionRunOrchestrator {
                                 auto_merge_require_matching_dimensions,
                             )
                             .with_auto_collections(sub.auto_collections);
-                        tracing::info!(elapsed_ms = run_clock.elapsed().as_millis(), "orchestrator: starting queries");
+                        tracing::info!(
+                            elapsed_ms = run_clock.elapsed().as_millis(),
+                            "orchestrator: starting queries"
+                        );
                         for query in &queries {
                             if cancel.is_cancelled() {
                                 was_cancelled = true;
@@ -182,45 +194,112 @@ impl SubscriptionRunOrchestrator {
                             if query.paused {
                                 continue;
                             }
-                            let subscription_limit = if query.completed_initial_run {
-                                sub.periodic_post_limit as u32
-                            } else {
-                                sub.initial_post_limit as u32
-                            };
-                            let post_limit = effective_query_post_limit(
-                                app_settings.sub_batch_size,
-                                subscription_limit,
-                            );
-                            let result = engine
-                                .sync_query(
-                                    sub_id,
-                                    query.query_id,
-                                    &query.query_text,
-                                    query.display_name.as_deref(),
-                                    &site_id,
-                                    post_limit,
-                                    query.completed_initial_run,
-                                    query.resume_cursor.as_deref(),
-                                    query.resume_strategy.as_deref(),
-                                    cancel.clone(),
-                                )
-                                .await;
-                            total_downloaded += result.files_downloaded;
-                            total_skipped += result.files_skipped;
-                            total_metadata_validated += result.metadata_validated;
-                            total_metadata_invalid += result.metadata_invalid;
-                            total_errors += result.errors.len();
-                            if let Some(e) = result.errors.last() {
-                                last_error = Some(e.clone());
-                            }
-                            if let Some(e) = result.last_metadata_error {
-                                last_metadata_error = Some(e);
-                            }
-                            if let Some(kind) = result.failure_kind {
-                                last_failure_kind = Some(kind);
-                            }
-                            if result.cancelled {
-                                was_cancelled = true;
+
+                            // Continuation loop: if initial pagination needs multiple
+                            // batches (e.g. global batch size caps a single run), keep
+                            // re-running the query with the updated cursor until done.
+                            let mut chunk_index = 0u32;
+                            loop {
+                                let current_query = db
+                                    .get_subscription_query(query.query_id)
+                                    .await
+                                    .ok()
+                                    .flatten()
+                                    .unwrap_or_else(|| query.clone());
+
+                                let subscription_limit =
+                                    if current_query.completed_initial_run {
+                                        sub.periodic_post_limit as u32
+                                    } else {
+                                        sub.initial_post_limit as u32
+                                    };
+                                let post_limit = effective_query_post_limit(
+                                    app_settings.sub_batch_size,
+                                    subscription_limit,
+                                );
+                                tracing::info!(
+                                    query_id = query.query_id,
+                                    chunk_index,
+                                    post_limit = ?post_limit,
+                                    subscription_limit,
+                                    global_batch_size = app_settings.sub_batch_size,
+                                    completed_initial_run = current_query.completed_initial_run,
+                                    resume_cursor = ?current_query.resume_cursor,
+                                    "orchestrator: starting query chunk"
+                                );
+                                let result = engine
+                                    .sync_query(
+                                        sub_id,
+                                        current_query.query_id,
+                                        &current_query.query_text,
+                                        current_query.display_name.as_deref(),
+                                        &site_id,
+                                        post_limit,
+                                        current_query.completed_initial_run,
+                                        current_query.resume_cursor.as_deref(),
+                                        current_query.resume_strategy.as_deref(),
+                                        cancel.clone(),
+                                    )
+                                    .await;
+
+                                // files_downloaded / files_skipped are cumulative
+                                // (include prior DB values), so use the last result.
+                                total_downloaded = total_downloaded
+                                    .max(result.files_downloaded);
+                                total_skipped = total_skipped
+                                    .max(result.files_skipped);
+                                total_metadata_validated +=
+                                    result.metadata_validated;
+                                total_metadata_invalid += result.metadata_invalid;
+                                total_errors += result.errors.len();
+                                if let Some(e) = result.errors.last() {
+                                    last_error = Some(e.clone());
+                                }
+                                if let Some(e) = result.last_metadata_error {
+                                    last_metadata_error = Some(e);
+                                }
+                                if let Some(kind) = result.failure_kind {
+                                    last_failure_kind = Some(kind);
+                                }
+                                if result.cancelled {
+                                    was_cancelled = true;
+                                    break;
+                                }
+
+                                // Check if this query needs another pagination chunk
+                                let refreshed = db
+                                    .get_subscription_query(query.query_id)
+                                    .await
+                                    .ok()
+                                    .flatten();
+                                let needs_continuation = refreshed
+                                    .as_ref()
+                                    .is_some_and(|q| {
+                                        !q.completed_initial_run
+                                            && q.resume_cursor
+                                                .as_ref()
+                                                .is_some_and(|c| !c.is_empty())
+                                    });
+                                if !needs_continuation {
+                                    tracing::info!(
+                                        query_id = query.query_id,
+                                        chunk_index,
+                                        completed_initial_run = refreshed.as_ref().map(|q| q.completed_initial_run),
+                                        resume_cursor = ?refreshed.as_ref().and_then(|q| q.resume_cursor.as_deref()),
+                                        downloaded = result.files_downloaded,
+                                        skipped = result.files_skipped,
+                                        "orchestrator: query finished (no more chunks needed)"
+                                    );
+                                    break;
+                                }
+                                chunk_index += 1;
+                                tracing::info!(
+                                    query_id = query.query_id,
+                                    chunk_index,
+                                    next_cursor = ?refreshed.as_ref().and_then(|q| q.resume_cursor.as_deref()),
+                                    downloaded = result.files_downloaded,
+                                    "orchestrator: initial pagination continuing to next chunk"
+                                );
                             }
                         }
                     }
@@ -386,12 +465,6 @@ impl SubscriptionRunOrchestrator {
         let query_name_str = query_name.clone();
         let site_id =
             crate::subscriptions::gallery_dl_runner::canonical_site_id(&sub.site_id).to_string();
-        let query_text = query.query_text.clone();
-        let query_display_name = query.display_name.clone();
-        let completed_initial_run = query.completed_initial_run;
-        let resume_cursor = query.resume_cursor.clone();
-        let resume_strategy = query.resume_strategy.clone();
-
         let app_settings = settings.get();
         let auto_merge_enabled = app_settings.duplicate_auto_merge_enabled;
         let auto_merge_distance = if auto_merge_enabled {
@@ -403,13 +476,6 @@ impl SubscriptionRunOrchestrator {
         };
         let auto_merge_require_matching_dimensions =
             app_settings.duplicate_auto_merge_require_matching_dimensions;
-        let subscription_limit = if completed_initial_run {
-            sub.periodic_post_limit as u32
-        } else {
-            sub.initial_post_limit as u32
-        };
-        let post_limit =
-            effective_query_post_limit(app_settings.sub_batch_size, subscription_limit);
 
         let running_subs_guard = running_subs.clone();
         let sub_id_guard = sub_id_str.clone();
@@ -444,31 +510,104 @@ impl SubscriptionRunOrchestrator {
                                     auto_merge_require_matching_dimensions,
                                 )
                                 .with_auto_collections(sub.auto_collections);
-                            let result = engine
-                                .sync_query(
-                                    sub_id,
-                                    qid,
-                                    &query_text,
-                                    query_display_name.as_deref(),
-                                    &site_id,
-                                    post_limit,
-                                    completed_initial_run,
-                                    resume_cursor.as_deref(),
-                                    resume_strategy.as_deref(),
-                                    cancel,
-                                )
-                                .await;
-                            let err = result.errors.last().cloned();
+
+                            let mut total_downloaded = 0usize;
+                            let mut total_skipped = 0usize;
+                            let mut total_errors = 0usize;
+                            let mut last_error: Option<String> = None;
+                            let mut was_cancelled = false;
+                            let mut failure_kind: Option<String> = None;
+                            let mut metadata_validated = 0usize;
+                            let mut metadata_invalid = 0usize;
+                            let mut last_metadata_error: Option<String> = None;
+
+                            // Continuation loop for initial pagination
+                            loop {
+                                let current_query = db
+                                    .get_subscription_query(qid)
+                                    .await
+                                    .ok()
+                                    .flatten();
+                                let cq = match current_query {
+                                    Some(q) => q,
+                                    None => break,
+                                };
+
+                                let subscription_limit = if cq.completed_initial_run {
+                                    sub.periodic_post_limit as u32
+                                } else {
+                                    sub.initial_post_limit as u32
+                                };
+                                let post_limit = effective_query_post_limit(
+                                    app_settings.sub_batch_size,
+                                    subscription_limit,
+                                );
+
+                                let result = engine
+                                    .sync_query(
+                                        sub_id,
+                                        qid,
+                                        &cq.query_text,
+                                        cq.display_name.as_deref(),
+                                        &site_id,
+                                        post_limit,
+                                        cq.completed_initial_run,
+                                        cq.resume_cursor.as_deref(),
+                                        cq.resume_strategy.as_deref(),
+                                        cancel.clone(),
+                                    )
+                                    .await;
+
+                                total_downloaded = total_downloaded.max(result.files_downloaded);
+                                total_skipped = total_skipped.max(result.files_skipped);
+                                metadata_validated += result.metadata_validated;
+                                metadata_invalid += result.metadata_invalid;
+                                total_errors += result.errors.len();
+                                if let Some(e) = result.errors.last() {
+                                    last_error = Some(e.clone());
+                                }
+                                if let Some(e) = result.last_metadata_error {
+                                    last_metadata_error = Some(e);
+                                }
+                                if let Some(kind) = result.failure_kind {
+                                    failure_kind = Some(kind);
+                                }
+                                if result.cancelled {
+                                    was_cancelled = true;
+                                    break;
+                                }
+
+                                // Check if query needs another pagination chunk
+                                let refreshed = db
+                                    .get_subscription_query(qid)
+                                    .await
+                                    .ok()
+                                    .flatten();
+                                let needs_continuation = refreshed.as_ref().is_some_and(|q| {
+                                    !q.completed_initial_run
+                                        && q.resume_cursor
+                                            .as_ref()
+                                            .is_some_and(|c| !c.is_empty())
+                                });
+                                if !needs_continuation {
+                                    break;
+                                }
+                                tracing::info!(
+                                    query_id = qid,
+                                    "orchestrator: initial pagination continuing to next chunk"
+                                );
+                            }
+
                             (
-                                result.files_downloaded,
-                                result.files_skipped,
-                                result.errors.len(),
-                                err,
-                                result.cancelled,
-                                result.failure_kind,
-                                result.metadata_validated,
-                                result.metadata_invalid,
-                                result.last_metadata_error,
+                                total_downloaded,
+                                total_skipped,
+                                total_errors,
+                                last_error,
+                                was_cancelled,
+                                failure_kind,
+                                metadata_validated,
+                                metadata_invalid,
+                                last_metadata_error,
                             )
                         }
                         Err(e) => (

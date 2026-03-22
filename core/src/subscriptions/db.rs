@@ -1,6 +1,6 @@
 //! Subscription + query + file + credential-domain CRUD.
 
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
 use crate::sqlite::SqliteDatabase;
@@ -252,6 +252,7 @@ pub fn reset_query_progress(conn: &Connection, query_id: i64) -> rusqlite::Resul
     conn.execute(
         "UPDATE subscription_query
          SET files_found = 0,
+             posts_found = 0,
              last_check_time = NULL,
              completed_initial_run = 0,
              resume_cursor = NULL,
@@ -271,6 +272,7 @@ pub fn reset_subscription_state(
     let queries_reset = tx.execute(
         "UPDATE subscription_query
          SET files_found = 0,
+             posts_found = 0,
              last_check_time = NULL,
              completed_initial_run = 0,
              resume_cursor = NULL,
@@ -684,11 +686,16 @@ impl SqliteDatabase {
         posts_found: i64,
     ) -> Result<(), String> {
         let lct = last_check_time.to_string();
-        self.with_conn(move |conn| update_query_progress(conn, query_id, &lct, files_found, posts_found))
-            .await
+        self.with_conn(move |conn| {
+            update_query_progress(conn, query_id, &lct, files_found, posts_found)
+        })
+        .await
     }
 
-    pub async fn get_subscription_query(&self, query_id: i64) -> Result<Option<SubscriptionQuery>, String> {
+    pub async fn get_subscription_query(
+        &self,
+        query_id: i64,
+    ) -> Result<Option<SubscriptionQuery>, String> {
         self.with_read_conn(move |conn| get_subscription_query(conn, query_id))
             .await
     }

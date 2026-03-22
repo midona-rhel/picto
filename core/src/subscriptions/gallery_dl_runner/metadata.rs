@@ -1,7 +1,6 @@
-use super::ParsedMetadata;
 use super::adapters::adapter_for_json;
+use super::ParsedMetadata;
 use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
-
 
 fn normalize_created_at(raw: &str) -> Option<String> {
     let trimmed = raw.trim();
@@ -39,7 +38,14 @@ fn normalize_created_at(raw: &str) -> Option<String> {
 }
 
 fn parse_created_at(json: &serde_json::Value) -> Option<String> {
-    for key in ["created_at", "date", "create_date", "published_at", "published", "upload_date"] {
+    for key in [
+        "created_at",
+        "date",
+        "create_date",
+        "published_at",
+        "published",
+        "upload_date",
+    ] {
         let Some(val) = json.get(key) else { continue };
         if let Some(s) = val.as_str() {
             if let Some(normalized) = normalize_created_at(s) {
@@ -133,6 +139,12 @@ pub fn parse_metadata(json: &serde_json::Value) -> ParsedMetadata {
                 .and_then(|v| v.as_str())
                 .filter(|s| !s.is_empty())
         })
+        .or_else(|| {
+            // Kemono/Coomer posts may use "subject" instead of "title"
+            json.get("subject")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+        })
         .map(String::from);
 
     let post_id = json
@@ -165,6 +177,18 @@ pub fn parse_metadata(json: &serde_json::Value) -> ParsedMetadata {
         .or_else(|| json.get("page_count"))
         .and_then(|v| v.as_u64())
         .and_then(|n| u32::try_from(n).ok());
+
+    tracing::debug!(
+        category = category.as_deref().unwrap_or("?"),
+        post_id = post_id.as_deref().unwrap_or("?"),
+        title = title.as_deref().unwrap_or("(none)"),
+        raw_title = json.get("title").and_then(|v| v.as_str()).unwrap_or("(missing)"),
+        raw_subject = json.get("subject").and_then(|v| v.as_str()).unwrap_or("(missing)"),
+        tags = tags.len(),
+        page_num = ?page_num,
+        page_count = ?page_count,
+        "parse_metadata: resolved fields"
+    );
 
     ParsedMetadata {
         tags,

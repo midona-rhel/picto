@@ -50,15 +50,15 @@ use crate::credential_store::SiteCredential;
 
 use self::config::build_config;
 
-pub use failure::{FailureKind, classify_failure};
+pub use failure::{classify_failure, FailureKind};
 pub use filesystem::cleanup_temp_dir;
 pub use metadata::{extract_creator_identifier, parse_metadata, parse_tags};
 pub use metadata_validation::{
-    SiteMetadataSchema, SiteMetadataValidationResult, get_site_metadata_schema,
-    validate_site_metadata,
+    get_site_metadata_schema, validate_site_metadata, SiteMetadataSchema,
+    SiteMetadataValidationResult,
 };
 pub use sites::{
-    SITES, SiteEntry, build_url, canonical_site_id, extract_domain, site_by_id, substitute_query,
+    build_url, canonical_site_id, extract_domain, site_by_id, substitute_query, SiteEntry, SITES,
 };
 
 pub struct RunOptions {
@@ -138,7 +138,10 @@ impl GalleryDlRunner {
     ) -> Result<RunSummary, String> {
         let run_start = std::time::Instant::now();
         self.ensure_runtime_dependencies().await?;
-        info!(elapsed_ms = run_start.elapsed().as_millis(), "gallery-dl: deps checked");
+        info!(
+            elapsed_ms = run_start.elapsed().as_millis(),
+            "gallery-dl: deps checked"
+        );
 
         // 1. Create temp download directory
         let temp_dir =
@@ -280,10 +283,54 @@ impl GalleryDlRunner {
             output
         });
 
+        let child_pid = child.id();
+        info!(pid = ?child_pid, "gallery-dl subprocess spawned");
+
         let status = tokio::select! {
             _ = opts.cancel.cancelled() => {
-                info!("Gallery-dl cancelled, killing subprocess");
-                let _ = child.kill().await;
+                info!(pid = ?child_pid, "Gallery-dl cancelled, killing subprocess");
+                // On Windows, child.kill() only terminates the direct process, not
+                // the tree (gallery-dl may run through a Python wrapper). Use
+                // taskkill /F /T to kill the full process tree.
+                #[cfg(target_os = "windows")]
+                {
+                    if let Some(pid) = child_pid {
+                        info!(pid, "Windows: killing process tree via taskkill /F /T");
+                        use std::os::windows::process::CommandExt;
+                        let kill_result = tokio::process::Command::new("taskkill")
+                            .args(["/F", "/T", "/PID", &pid.to_string()])
+                            .creation_flags(0x08000000)
+                            .stdout(Stdio::null())
+                            .stderr(Stdio::piped())
+                            .output()
+                            .await;
+                        match &kill_result {
+                            Ok(output) => {
+                                let code = output.status.code().unwrap_or(-1);
+                                if code != 0 {
+                                    let stderr = String::from_utf8_lossy(&output.stderr);
+                                    warn!(pid, exit_code = code, stderr = %stderr,
+                                        "taskkill returned non-zero; falling back to child.kill()");
+                                    let _ = child.kill().await;
+                                } else {
+                                    info!(pid, "taskkill succeeded");
+                                }
+                            }
+                            Err(e) => {
+                                warn!(pid, error = %e,
+                                    "taskkill failed to execute; falling back to child.kill()");
+                                let _ = child.kill().await;
+                            }
+                        }
+                    } else {
+                        warn!("gallery-dl child has no PID; falling back to child.kill()");
+                        let _ = child.kill().await;
+                    }
+                }
+                #[cfg(not(target_os = "windows"))]
+                {
+                    let _ = child.kill().await;
+                }
                 child.wait().await
                     .map_err(|e| format!("Failed to wait for gallery-dl after kill: {e}"))?
             }
@@ -296,7 +343,11 @@ impl GalleryDlRunner {
         let _ = stdout_handle.await;
         let stderr = stderr_handle.await.unwrap_or_default();
 
-        info!(exit_code, elapsed_ms = run_start.elapsed().as_millis(), "gallery-dl finished");
+        info!(
+            exit_code,
+            elapsed_ms = run_start.elapsed().as_millis(),
+            "gallery-dl finished"
+        );
 
         let _ = tokio::fs::remove_file(&config_path).await;
 
