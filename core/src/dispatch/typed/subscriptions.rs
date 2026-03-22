@@ -736,5 +736,12 @@ pub async fn pixiv_oauth_exchange(
         .upsert_credential_domain("pixiv", "oauth_token", Some("Pixiv"))
         .await?;
 
+    crate::events::emit_state_changed(
+        "pixiv_oauth_exchange",
+        crate::runtime_contract::change_builder::ChangeImpact::new()
+            .add_domain(crate::runtime_contract::state_change::Domain::Subscriptions)
+            .credential_categories(vec!["pixiv".to_string()]),
+    );
+
     Ok(serde_json::json!({ "ok": true }))
 }

@@ -355,6 +355,9 @@ pub async fn set_folder_watch_config(
     .await?;
 
     if input.import_existing_now {
+        // import_existing_for_folder_watch emits its own final combined delta
+        // that includes both the imported files and folder membership changes.
+        // No separate watch-config emission needed — one combined action.
         crate::folders::watch::import_existing_for_folder_watch(
             &state.db,
             &state.blob_store,
@@ -364,18 +367,19 @@ pub async fn set_folder_watch_config(
             &input.watch_import_status_mode,
         )
         .await?;
+    } else {
+        crate::events::emit_state_changed(
+            "set_folder_watch_config",
+            crate::runtime_contract::change_builder::ChangeImpact::new()
+                .add_domain(crate::runtime_contract::state_change::Domain::Folders)
+                .folder_ids(vec![input.folder_id]),
+        );
     }
 
     let _ = state
         .folder_watch_commands
         .send(crate::folders::watch::FolderWatchCommand::Reload);
 
-    crate::events::emit_state_changed(
-        "set_folder_watch_config",
-        crate::runtime_contract::change_builder::ChangeImpact::new()
-            .add_domain(crate::runtime_contract::state_change::Domain::Folders)
-            .folder_ids(vec![input.folder_id]),
-    );
     Ok(())
 }
 
