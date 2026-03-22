@@ -11,7 +11,7 @@ export type { Store } from './store';
 
 import { invoke, listen } from './ipc';
 import type { UnlistenFn } from './ipc';
-import type { RuntimeSnapshot } from '../shared/types/generated/runtime-contract';
+import type { RuntimeSnapshot } from '../shared/types/backendState';
 import type { CoreRuntimeEventPayloadMap } from '../shared/types/api/events';
 
 import type {
@@ -47,6 +47,26 @@ export function listenRuntimeEvent<K extends keyof CoreRuntimeEventPayloadMap>(
   handler: (payload: CoreRuntimeEventPayloadMap[K]) => void,
 ): Promise<UnlistenFn> {
   return listen<CoreRuntimeEventPayloadMap[K]>(eventName, (e) => handler(e.payload));
+}
+
+export function getRuntimeSnapshot(): Promise<RuntimeSnapshot> {
+  return api.runtime.getSnapshot();
+}
+
+export function openExternalUrl(url: string): Promise<void> {
+  return api.os.openExternalUrl(url);
+}
+
+export function openSettingsWindow(): Promise<void> {
+  return api.os.openSettingsWindow();
+}
+
+export function openSubscriptionsWindow(): Promise<void> {
+  return api.os.openSubscriptionsWindow();
+}
+
+export function openLibraryManager(): Promise<void> {
+  return invoke<void>('open_library_manager');
 }
 
 // ─── Typed command dispatch (PBI-234) ──────────────────────────────────────
@@ -509,5 +529,102 @@ export const api = {
       invokeTyped('companion_get_namespace_values', { namespace }) as Promise<CompanionNamespaceValue[]>,
     getFilesByTag: (tag: string) =>
       invokeTyped('companion_get_files_by_tag', { tag }) as Promise<EntitySlim[]>,
+  },
+};
+
+export const queryApi = {
+  grid: {
+    getPageSlim: api.grid.getPageSlim,
+    getOutline: api.grid.getOutline,
+    getEntitiesMetadataBatch: api.grid.getEntitiesMetadataBatch,
+  },
+  entity: {
+    get: api.entity.get,
+    getAllMetadata: api.entity.getAllMetadata,
+    resolvePath: api.entity.resolvePath,
+    resolveThumbnailPath: api.entity.resolveThumbnailPath,
+  },
+  files: {
+    get: api.files.get,
+    getAllMetadata: api.files.getAllMetadata,
+    resolvePath: api.files.resolvePath,
+    resolveThumbnailPath: api.files.resolveThumbnailPath,
+  },
+  file: {
+    get: api.file.get,
+    getAllMetadata: api.file.getAllMetadata,
+    resolvePath: api.file.resolvePath,
+    resolveThumbnailPath: api.file.resolveThumbnailPath,
+  },
+  selection: {
+    getSummary: api.selection.getSummary,
+    resolveHashes: api.selection.resolveHashes,
+  },
+  duplicates: {
+    findSimilar: api.duplicates.findSimilar,
+  },
+  runtime: {
+    getSnapshot: api.runtime.getSnapshot,
+  },
+};
+
+export const commandApi = {
+  entity: {
+    setStatus: api.entity.setStatus,
+    setStatusSelection: api.entity.setStatusSelection,
+    deleteMany: api.entity.deleteMany,
+    deleteSelection: api.entity.deleteSelection,
+    updateRating: api.entity.updateRating,
+    setName: api.entity.setName,
+    setSourceUrls: api.entity.setSourceUrls,
+    setNotes: api.entity.setNotes,
+    openDefault: api.entity.openDefault,
+    revealInFolder: api.entity.revealInFolder,
+    openInNewWindow: api.entity.openInNewWindow,
+    ensureThumbnail: api.entity.ensureThumbnail,
+    regenerateThumbnail: api.entity.regenerateThumbnail,
+    reanalyzeColors: api.entity.reanalyzeColors,
+    regenerateThumbnailsBatch: api.entity.regenerateThumbnailsBatch,
+  },
+  files: {
+    setStatus: api.files.setStatus,
+    setStatusSelection: api.files.setStatusSelection,
+    deleteMany: api.files.deleteMany,
+    deleteSelection: api.files.deleteSelection,
+    updateRating: api.files.updateRating,
+    setName: api.files.setName,
+    setSourceUrls: api.files.setSourceUrls,
+    setNotes: api.files.setNotes,
+    openDefault: api.files.openDefault,
+    revealInFolder: api.files.revealInFolder,
+    openInNewWindow: api.files.openInNewWindow,
+    ensureThumbnail: api.files.ensureThumbnail,
+    regenerateThumbnail: api.files.regenerateThumbnail,
+    reanalyzeColors: api.files.reanalyzeColors,
+    regenerateThumbnailsBatch: api.files.regenerateThumbnailsBatch,
+  },
+  file: {
+    setStatus: api.file.setStatus,
+    setStatusSelection: api.file.setStatusSelection,
+    deleteMany: api.file.deleteMany,
+    deleteSelection: api.file.deleteSelection,
+    updateRating: api.file.updateRating,
+    setName: api.file.setName,
+    setSourceUrls: api.file.setSourceUrls,
+    setNotes: api.file.setNotes,
+    openDefault: api.file.openDefault,
+    revealInFolder: api.file.revealInFolder,
+    openInNewWindow: api.file.openInNewWindow,
+    ensureThumbnail: api.file.ensureThumbnail,
+    regenerateThumbnail: api.file.regenerateThumbnail,
+    reanalyzeColors: api.file.reanalyzeColors,
+    regenerateThumbnailsBatch: api.file.regenerateThumbnailsBatch,
+  },
+  selection: {
+    addTags: api.selection.addTags,
+    removeTags: api.selection.removeTags,
+    updateRating: api.selection.updateRating,
+    setNotes: api.selection.setNotes,
+    setSourceUrls: api.selection.setSourceUrls,
   },
 };

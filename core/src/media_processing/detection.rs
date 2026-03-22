@@ -13,7 +13,10 @@ type HeaderRule = &'static [HeaderPair];
 static HEADERS_AND_MIME: &[(HeaderRule, MimeType)] = &[
     (&[(&[0], &[b"\xff\xd8"])], MimeType::ImageJpeg),
     (&[(&[0], &[b"\x89PNG"])], MimeType::UndeterminedPng),
-    (&[(&[0], &[b"GIF87a", b"GIF89a"])], MimeType::UndeterminedGif),
+    (
+        &[(&[0], &[b"GIF87a", b"GIF89a"])],
+        MimeType::UndeterminedGif,
+    ),
     (&[(&[8], &[b"WEBP"])], MimeType::UndeterminedWebp),
     (&[(&[0], &[b"II*\x00", b"MM\x00*"])], MimeType::ImageTiff),
     (&[(&[0], &[b"BM"])], MimeType::ImageBmp),
@@ -23,10 +26,16 @@ static HEADERS_AND_MIME: &[(HeaderRule, MimeType)] = &[
     ),
     (&[(&[0], &[b"qoif"])], MimeType::ImageQoi),
     (
-        &[(&[0], &[b"\xff\x0a", b"\x00\x00\x00\x0cJXL \x0d\x0a\x87\x0a"])],
+        &[(
+            &[0],
+            &[b"\xff\x0a", b"\x00\x00\x00\x0cJXL \x0d\x0a\x87\x0a"],
+        )],
         MimeType::UndeterminedJxl,
     ),
-    (&[(&[0], &[b"CWS", b"FWS", b"ZWS"])], MimeType::ApplicationFlash),
+    (
+        &[(&[0], &[b"CWS", b"FWS", b"ZWS"])],
+        MimeType::ApplicationFlash,
+    ),
     (&[(&[0], &[b"FLV"])], MimeType::VideoFlv),
     (&[(&[0], &[b"%PDF"])], MimeType::ApplicationPdf),
     (
@@ -86,16 +95,34 @@ static HEADERS_AND_MIME: &[(HeaderRule, MimeType)] = &[
     (&[(&[4], &[b"ftypmif1"])], MimeType::ImageHeif),
     (&[(&[4], &[b"ftypmsf1"])], MimeType::ImageHeifSequence),
     (
-        &[(&[4], &[b"ftypmp4", b"ftypisom", b"ftypM4V", b"ftypMSNV", b"ftypavc1", b"ftypavc1", b"ftypFACE", b"ftypdash"])],
+        &[(
+            &[4],
+            &[
+                b"ftypmp4",
+                b"ftypisom",
+                b"ftypM4V",
+                b"ftypMSNV",
+                b"ftypavc1",
+                b"ftypavc1",
+                b"ftypFACE",
+                b"ftypdash",
+            ],
+        )],
         MimeType::UndeterminedMp4,
     ),
     (&[(&[4], &[b"ftypqt"])], MimeType::VideoMov),
     (&[(&[0], &[b"fLaC"])], MimeType::AudioFlac),
-    (&[(&[0], &[b"RIFF"]), (&[8], &[b"WAVE"])], MimeType::AudioWave),
+    (
+        &[(&[0], &[b"RIFF"]), (&[8], &[b"WAVE"])],
+        MimeType::AudioWave,
+    ),
     (&[(&[0], &[b"wvpk"])], MimeType::AudioWavpack),
     (&[(&[8], &[b"AVI "])], MimeType::VideoAvi),
     (
-        &[(&[0], &[b"\x30\x26\xb2\x75\x8e\x66\xcf\x11\xa6\xd9\x00\xaa\x00\x62\xce\x6c"])],
+        &[(
+            &[0],
+            &[b"\x30\x26\xb2\x75\x8e\x66\xcf\x11\xa6\xd9\x00\xaa\x00\x62\xce\x6c"],
+        )],
         MimeType::UndeterminedWm,
     ),
     (
@@ -103,10 +130,22 @@ static HEADERS_AND_MIME: &[(HeaderRule, MimeType)] = &[
         MimeType::ApplicationWindowsExe,
     ),
     (
-        &[(&[0], &[b"\x31\xbe\x00\x00", b"PO^Q", b"\xfe\x37\x00\x23", b"\xdb\xa5\x2d\x00\x00\x00", b"\xdb\xa5\x2d\x00"])],
+        &[(
+            &[0],
+            &[
+                b"\x31\xbe\x00\x00",
+                b"PO^Q",
+                b"\xfe\x37\x00\x23",
+                b"\xdb\xa5\x2d\x00\x00\x00",
+                b"\xdb\xa5\x2d\x00",
+            ],
+        )],
         MimeType::ApplicationDoc,
     ),
-    (&[(&[0], &[b"\xed\xde\xad\x0b", b"\x0b\xad\xde\xad"])], MimeType::ApplicationPpt),
+    (
+        &[(&[0], &[b"\xed\xde\xad\x0b", b"\x0b\xad\xde\xad"])],
+        MimeType::ApplicationPpt,
+    ),
     (
         &[(&[0], &[b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"])],
         MimeType::UndeterminedOle,
@@ -252,16 +291,20 @@ pub async fn get_mime(path: &Path) -> FileResult<MimeType> {
                         MimeType::ImageJxl
                     });
                 }
-                MimeType::UndeterminedMp4 | MimeType::UndeterminedWm => match ffmpeg::get_mime(path).await {
-                    Ok(detected) if detected != MimeType::ApplicationUnknown => return Ok(detected),
-                    _ => {
-                        return Ok(if mime == MimeType::UndeterminedMp4 {
-                            MimeType::VideoMp4
-                        } else {
-                            MimeType::VideoWmv
-                        });
+                MimeType::UndeterminedMp4 | MimeType::UndeterminedWm => {
+                    match ffmpeg::get_mime(path).await {
+                        Ok(detected) if detected != MimeType::ApplicationUnknown => {
+                            return Ok(detected)
+                        }
+                        _ => {
+                            return Ok(if mime == MimeType::UndeterminedMp4 {
+                                MimeType::VideoMp4
+                            } else {
+                                MimeType::VideoWmv
+                            });
+                        }
                     }
-                },
+                }
                 MimeType::UndeterminedOle => return Ok(MimeType::ApplicationDoc),
                 _ => return Ok(mime),
             }

@@ -1,5 +1,5 @@
-use serde_json::Value;
 use super::SiteAdapter;
+use serde_json::Value;
 
 pub(super) static ADAPTER: PixivAdapter = PixivAdapter;
 

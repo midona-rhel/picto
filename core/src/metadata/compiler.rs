@@ -1,8 +1,8 @@
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use crate::sqlite::SqliteDatabase;
 use crate::sqlite::projections;
+use crate::sqlite::SqliteDatabase;
 
 pub(crate) async fn compile_metadata_projections(
     db: &Arc<SqliteDatabase>,

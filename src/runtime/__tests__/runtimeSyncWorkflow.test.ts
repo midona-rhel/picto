@@ -1,46 +1,46 @@
 /**
- * PBI-516: Workflow tests for runtime mutation → resource staleness.
+ * PBI-516: Workflow tests for runtime state change → refresh target planning.
  *
- * Verifies that multi-step mutation sequences accumulate the correct
- * set of stale resources, and that batch operations scale correctly.
+ * Verifies that multi-step state-change sequences accumulate the correct
+ * set of refresh targets, and that batch operations scale correctly.
  */
 
 import { describe, it, expect } from 'vitest';
-import { deriveStaleResources, gridResourceMatchesScope } from '../resourceInvalidator';
-import type { MutationReceipt, MutationFacts, ResourceKey } from '../../shared/types/generated/runtime-contract';
+import { planRefreshTargets, refreshTargetMatchesGridScope } from '../stateChanges/planRefreshTargets';
+import type { StateChangedEvent, StateChanges, ResourceKey } from '../../shared/types/backendState';
 
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-function makeFacts(overrides: Partial<MutationFacts> = {}): MutationFacts {
+function makeChanges(overrides: Partial<StateChanges> = {}): StateChanges {
   return { domains: [], ...overrides };
 }
 
-function makeReceipt(
-  facts: MutationFacts,
-  extras: Partial<Pick<MutationReceipt, 'sidebar_counts'>> = {},
+function makeEvent(
+  changes: StateChanges,
+  extras: Partial<Pick<StateChangedEvent, 'sidebar_counts'>> = {},
   seq = 1,
-): MutationReceipt {
+): StateChangedEvent {
   return {
     seq,
     ts: '2026-01-01T00:00:00Z',
-    origin_command: 'test',
-    facts,
+    origin: 'test',
+    changes,
     ...extras,
   };
 }
 
-function keys(receipt: MutationReceipt): Set<ResourceKey> {
-  return deriveStaleResources(receipt);
+function keys(event: StateChangedEvent): Set<ResourceKey> {
+  return planRefreshTargets(event);
 }
 
-/** Accumulate stale resources across a sequence of receipts. */
-function accumulateStale(receipts: MutationReceipt[]): Set<ResourceKey> {
+/** Accumulate refresh targets across a sequence of state-changed events. */
+function accumulateRefreshTargets(events: StateChangedEvent[]): Set<ResourceKey> {
   const all = new Set<ResourceKey>();
-  for (const r of receipts) {
-    for (const k of deriveStaleResources(r)) {
+  for (const event of events) {
+    for (const k of planRefreshTargets(event)) {
       all.add(k);
     }
   }
@@ -48,105 +48,105 @@ function accumulateStale(receipts: MutationReceipt[]): Set<ResourceKey> {
 }
 
 // ---------------------------------------------------------------------------
-// Multi-step mutation workflows
+// Multi-step state-change workflows
 // ---------------------------------------------------------------------------
 
-describe('multi-step mutation workflows', () => {
-  it('full lifecycle: inbox → active → tag → folder produces correct cumulative staleness', () => {
-    const receipts: MutationReceipt[] = [
+describe('multi-step state-change workflows', () => {
+  it('full lifecycle: inbox → active → tag → folder produces correct cumulative refresh targets', () => {
+    const events: StateChangedEvent[] = [
       // Step 1: status_changed (inbox → active)
-      makeReceipt(makeFacts({ status_changed: true }), {}, 1),
+      makeEvent(makeChanges({ status_changed: true }), {}, 1),
       // Step 2: tags_changed on specific files
-      makeReceipt(makeFacts({ tags_changed: true, file_hashes: ['abc'] }), {}, 2),
+      makeEvent(makeChanges({ tags_changed: true, file_hashes: ['abc'] }), {}, 2),
       // Step 3: folder_membership_changed
-      makeReceipt(makeFacts({ folder_membership_changed: [5] }), {}, 3),
+      makeEvent(makeChanges({ folder_membership_changed: [5] }), {}, 3),
     ];
 
-    const stale = accumulateStale(receipts);
+    const targets = accumulateRefreshTargets(events);
 
     // From status_changed
-    expect(stale).toContain('sidebar/tree');
-    expect(stale).toContain('grid/system:all');
-    expect(stale).toContain('grid/system:inbox');
-    expect(stale).toContain('grid/system:trash');
+    expect(targets).toContain('sidebar/tree');
+    expect(targets).toContain('grid/system:all');
+    expect(targets).toContain('grid/system:inbox');
+    expect(targets).toContain('grid/system:trash');
 
     // From tags_changed
-    expect(stale).toContain('selection/current');
-    expect(stale).toContain('metadata/hash:abc');
-    expect(stale).toContain('grid/system:untagged');
+    expect(targets).toContain('selection/current');
+    expect(targets).toContain('metadata/hash:abc');
+    expect(targets).toContain('grid/system:untagged');
 
     // From folder_membership_changed
-    expect(stale).toContain('grid/folder:5');
-    expect(stale).toContain('grid/system:uncategorized');
+    expect(targets).toContain('grid/folder:5');
+    expect(targets).toContain('grid/system:uncategorized');
   });
 
   it('batch tag change on N files produces all N metadata keys', () => {
     const hashes = Array.from({ length: 20 }, (_, i) => `hash_${i}`);
-    const receipt = makeReceipt(makeFacts({
+    const receipt = makeEvent(makeChanges({
       tags_changed: true,
       file_hashes: hashes,
     }));
 
-    const stale = keys(receipt);
+    const targets = keys(receipt);
 
     for (const h of hashes) {
-      expect(stale).toContain(`metadata/hash:${h}` as ResourceKey);
+      expect(targets).toContain(`metadata/hash:${h}` as ResourceKey);
     }
-    expect(stale).toContain('selection/current');
-    expect(stale).toContain('grid/system:untagged');
+    expect(targets).toContain('selection/current');
+    expect(targets).toContain('grid/system:untagged');
   });
 
-  it('smart folder predicate change invalidates specific smart scope', () => {
-    const receipt = makeReceipt(makeFacts({
+  it('smart folder predicate change targets a specific smart scope', () => {
+    const receipt = makeEvent(makeChanges({
       smart_folder_ids: [42],
     }));
 
-    const stale = keys(receipt);
-    expect(stale).toContain('grid/smart:42');
-    expect(stale).toContain('selection/current');
+    const targets = keys(receipt);
+    expect(targets).toContain('grid/smart:42');
+    expect(targets).toContain('selection/current');
 
     // Should match any active smart scope
-    expect(gridResourceMatchesScope('grid/smart:42', 'smart:42')).toBe(true);
-    expect(gridResourceMatchesScope('grid/smart:42', 'smart:99')).toBe(false);
+    expect(refreshTargetMatchesGridScope('grid/smart:42', 'smart:42')).toBe(true);
+    expect(refreshTargetMatchesGridScope('grid/smart:42', 'smart:99')).toBe(false);
   });
 
   it('sidebar_counts in receipt produces sidebar/counts key', () => {
-    const receipt = makeReceipt(
-      makeFacts({ status_changed: true }),
+    const receipt = makeEvent(
+      makeChanges({ status_changed: true }),
       { sidebar_counts: { all_active: 50, inbox: 3, trash: 1 } },
     );
 
-    const stale = keys(receipt);
-    expect(stale).toContain('sidebar/counts');
+    const targets = keys(receipt);
+    expect(targets).toContain('sidebar/counts');
     // Also from status_changed
-    expect(stale).toContain('sidebar/tree');
-    expect(stale).toContain('grid/system:all');
+    expect(targets).toContain('sidebar/tree');
+    expect(targets).toContain('grid/system:all');
   });
 
-  it('collection delete invalidates folder and system scopes', () => {
-    const receipt = makeReceipt(makeFacts({
+  it('collection delete targets folder and system scopes', () => {
+    const receipt = makeEvent(makeChanges({
       folder_membership_changed: [10],
       status_changed: true,
       extra_grid_scopes: ['collection:42'],
     }));
 
-    const stale = keys(receipt);
-    expect(stale).toContain('grid/collection:42');
-    expect(stale).toContain('grid/folder:10');
-    expect(stale).toContain('grid/system:all');
-    expect(stale).toContain('sidebar/tree');
+    const targets = keys(receipt);
+    expect(targets).toContain('grid/collection:42');
+    expect(targets).toContain('grid/folder:10');
+    expect(targets).toContain('grid/system:all');
+    expect(targets).toContain('sidebar/tree');
   });
 
   it('compiler_batch_done + tag_structure_changed merges cleanly', () => {
-    const receipt = makeReceipt(makeFacts({
+    const receipt = makeEvent(makeChanges({
       compiler_batch_done: true,
       tag_structure_changed: true,
     }));
 
-    const stale = keys(receipt);
-    expect(stale).toContain('sidebar/tree');
-    expect(stale).toContain('grid/system:all');
-    expect(stale).toContain('grid/smart:all');
-    expect(stale).toContain('selection/current');
+    const targets = keys(receipt);
+    expect(targets).toContain('sidebar/tree');
+    expect(targets).toContain('grid/system:all');
+    expect(targets).toContain('grid/smart:all');
+    expect(targets).toContain('selection/current');
   });
 });

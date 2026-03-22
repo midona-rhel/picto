@@ -1,12 +1,12 @@
 use std::sync::Arc;
 
 use crate::scope::resolver::scope_count;
-use crate::sqlite::SqliteDatabase;
 use crate::sqlite::bitmaps::BitmapKey;
+use crate::sqlite::SqliteDatabase;
 
 use super::db::{
-    SidebarNode, delete_sidebar_node, seed_sidebar_if_empty, update_sidebar_count,
-    upsert_sidebar_nodes_batch,
+    delete_sidebar_node, seed_sidebar_if_empty, update_sidebar_count, upsert_sidebar_nodes_batch,
+    SidebarNode,
 };
 
 pub(crate) async fn compile_sidebar(db: &Arc<SqliteDatabase>) -> Result<(), String> {
@@ -50,10 +50,11 @@ pub(crate) async fn compile_sidebar(db: &Arc<SqliteDatabase>) -> Result<(), Stri
             let local_predicate =
                 serde_json::from_str::<serde_json::Value>(&smart_folder.predicate_json)
                     .unwrap_or_else(|_| serde_json::json!({ "groups": [] }));
-            let has_effective_rules = crate::smart_folders::db::has_local_rules(&effective_predicate);
-            let local_rules = serde_json::from_value::<crate::smart_folders::db::SmartFolderPredicate>(
-                local_predicate.clone(),
-            )
+            let has_effective_rules =
+                crate::smart_folders::db::has_local_rules(&effective_predicate);
+            let local_rules = serde_json::from_value::<
+                crate::smart_folders::db::SmartFolderPredicate,
+            >(local_predicate.clone())
             .unwrap_or(crate::smart_folders::db::SmartFolderPredicate { groups: Vec::new() });
             nodes.push(SidebarNode {
                 node_id,

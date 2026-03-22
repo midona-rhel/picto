@@ -1,12 +1,12 @@
 //! Folder CRUD + manual ordering with gap-based ranking.
 
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 
+use crate::sqlite::bitmaps::BitmapKey;
 use crate::sqlite::ReadModelEvent;
 use crate::sqlite::SqliteDatabase;
-use crate::sqlite::bitmaps::BitmapKey;
 
 /// Gap between position_rank values for folder file ordering.
 const RANK_GAP: i64 = 1 << 20; // ~1M
@@ -403,10 +403,16 @@ fn reorder_entity(
             // Gap exhausted — redistribute all ranks then re-fetch the
             // anchor entities' new ranks so the midpoint is correct.
             redistribute_ranks(conn, folder_id)?;
-            let fresh_p = after_eid
-                .and_then(|eid| get_entity_rank_in_folder(conn, folder_id, eid).ok().flatten());
-            let fresh_n = before_eid
-                .and_then(|eid| get_entity_rank_in_folder(conn, folder_id, eid).ok().flatten());
+            let fresh_p = after_eid.and_then(|eid| {
+                get_entity_rank_in_folder(conn, folder_id, eid)
+                    .ok()
+                    .flatten()
+            });
+            let fresh_n = before_eid.and_then(|eid| {
+                get_entity_rank_in_folder(conn, folder_id, eid)
+                    .ok()
+                    .flatten()
+            });
             (fresh_p.or(Some(p)), fresh_n.or(Some(n)))
         }
         other => other,
@@ -837,20 +843,27 @@ impl SqliteDatabase {
         let resolved = self.resolve_hashes_batch(hashes).await?;
         let all_ids: Vec<i64> = resolved.iter().map(|(_, id)| *id).collect();
         // Only allow adding active (status=1) entities to folders
-        let entity_ids: Vec<i64> = self.with_read_conn({
-            let ids = all_ids;
-            move |conn| {
-                let mut active = Vec::new();
-                for &eid in &ids {
-                    let status: Option<i64> = conn.query_row(
-                        "SELECT status FROM media_entity WHERE entity_id = ?1",
-                        [eid], |r| r.get(0),
-                    ).ok();
-                    if status == Some(1) { active.push(eid); }
+        let entity_ids: Vec<i64> = self
+            .with_read_conn({
+                let ids = all_ids;
+                move |conn| {
+                    let mut active = Vec::new();
+                    for &eid in &ids {
+                        let status: Option<i64> = conn
+                            .query_row(
+                                "SELECT status FROM media_entity WHERE entity_id = ?1",
+                                [eid],
+                                |r| r.get(0),
+                            )
+                            .ok();
+                        if status == Some(1) {
+                            active.push(eid);
+                        }
+                    }
+                    Ok(active)
                 }
-                Ok(active)
-            }
-        }).await?;
+            })
+            .await?;
         if entity_ids.is_empty() {
             return Ok(0);
         }
@@ -897,20 +910,27 @@ impl SqliteDatabase {
         let resolved = self.resolve_hashes_batch(hashes).await?;
         let all_ids: Vec<i64> = resolved.iter().map(|(_, id)| *id).collect();
         // Only allow removing active (status=1) entities from folders
-        let entity_ids: Vec<i64> = self.with_read_conn({
-            let ids = all_ids;
-            move |conn| {
-                let mut active = Vec::new();
-                for &eid in &ids {
-                    let status: Option<i64> = conn.query_row(
-                        "SELECT status FROM media_entity WHERE entity_id = ?1",
-                        [eid], |r| r.get(0),
-                    ).ok();
-                    if status == Some(1) { active.push(eid); }
+        let entity_ids: Vec<i64> = self
+            .with_read_conn({
+                let ids = all_ids;
+                move |conn| {
+                    let mut active = Vec::new();
+                    for &eid in &ids {
+                        let status: Option<i64> = conn
+                            .query_row(
+                                "SELECT status FROM media_entity WHERE entity_id = ?1",
+                                [eid],
+                                |r| r.get(0),
+                            )
+                            .ok();
+                        if status == Some(1) {
+                            active.push(eid);
+                        }
+                    }
+                    Ok(active)
                 }
-                Ok(active)
-            }
-        }).await?;
+            })
+            .await?;
         if entity_ids.is_empty() {
             return Ok(0);
         }
@@ -1139,13 +1159,15 @@ impl SqliteDatabase {
         self.with_conn(move |conn| {
             for rm in &resolved_moves {
                 let prev_rank = match rm.after_id {
-                    Some(eid) => get_entity_rank_in_folder(conn, folder_id, eid)?
-                        .or(Some(2_147_483_647)),
+                    Some(eid) => {
+                        get_entity_rank_in_folder(conn, folder_id, eid)?.or(Some(2_147_483_647))
+                    }
                     None => None,
                 };
                 let next_rank = match rm.before_id {
-                    Some(eid) => get_entity_rank_in_folder(conn, folder_id, eid)?
-                        .or(Some(2_147_483_647)),
+                    Some(eid) => {
+                        get_entity_rank_in_folder(conn, folder_id, eid)?.or(Some(2_147_483_647))
+                    }
                     None => None,
                 };
 
@@ -1155,22 +1177,28 @@ impl SqliteDatabase {
                 let (prev_rank, next_rank) = match (prev_rank, next_rank) {
                     (Some(pr), None) => {
                         let after_eid = rm.after_id.unwrap();
-                        let nr = get_next_rank_in_folder(
-                            conn, folder_id, pr, after_eid, rm.entity_id,
-                        )?;
+                        let nr =
+                            get_next_rank_in_folder(conn, folder_id, pr, after_eid, rm.entity_id)?;
                         (Some(pr), nr)
                     }
                     (None, Some(nr)) => {
                         let before_eid = rm.before_id.unwrap();
-                        let pr = get_prev_rank_in_folder(
-                            conn, folder_id, nr, before_eid, rm.entity_id,
-                        )?;
+                        let pr =
+                            get_prev_rank_in_folder(conn, folder_id, nr, before_eid, rm.entity_id)?;
                         (pr, Some(nr))
                     }
                     other => other,
                 };
 
-                reorder_entity(conn, folder_id, rm.entity_id, prev_rank, next_rank, rm.after_id, rm.before_id)?;
+                reorder_entity(
+                    conn,
+                    folder_id,
+                    rm.entity_id,
+                    prev_rank,
+                    next_rank,
+                    rm.after_id,
+                    rm.before_id,
+                )?;
             }
             Ok(())
         })

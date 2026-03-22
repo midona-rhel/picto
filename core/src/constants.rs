@@ -235,7 +235,6 @@ impl MimeType {
     pub fn is_audio(&self) -> bool {
         audios().contains(self)
     }
-
 }
 
 // --- File type groupings ---

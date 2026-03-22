@@ -1,7 +1,7 @@
 //! Centralized runtime state registry.
 //!
 //! Owns the global monotonic sequence counter (shared with `events.rs`) and the
-//! in-memory task registry. All task mutations emit events so the frontend can
+//! in-memory task registry. All task updates emit events so the frontend can
 //! stay in sync.
 
 use std::collections::HashMap;

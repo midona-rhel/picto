@@ -4,8 +4,8 @@ mod fallback;
 mod pixiv;
 mod twitter;
 
-use serde_json::Value;
 use super::sites::canonical_site_id;
+use serde_json::Value;
 
 pub(super) trait SiteAdapter: Sync {
     fn parse_tags(&self, json: &Value) -> Vec<(String, String)>;

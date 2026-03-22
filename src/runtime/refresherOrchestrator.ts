@@ -1,15 +1,15 @@
-import { startSidebarRefresher, stopSidebarRefresher } from './resourceRefreshers/sidebarRefresher';
-import { startGridRefresher, stopGridRefresher } from './resourceRefreshers/gridRefresher';
-import { startSelectionRefresher, stopSelectionRefresher } from './resourceRefreshers/selectionRefresher';
+import { startApplyingSidebarRefreshTargets, stopApplyingSidebarRefreshTargets } from './stateChanges/applySidebarRefreshTargets';
+import { startApplyingGridRefreshTargets, stopApplyingGridRefreshTargets } from './stateChanges/applyGridRefreshTargets';
+import { startApplyingSelectionRefreshTargets, stopApplyingSelectionRefreshTargets } from './stateChanges/applySelectionRefreshTargets';
 
-export function startAllRefreshers(): void {
-  startSidebarRefresher();
-  startGridRefresher();
-  startSelectionRefresher();
+export function startAllStateChangeAppliers(): void {
+  startApplyingSidebarRefreshTargets();
+  startApplyingGridRefreshTargets();
+  startApplyingSelectionRefreshTargets();
 }
 
-export function stopAllRefreshers(): void {
-  stopSidebarRefresher();
-  stopGridRefresher();
-  stopSelectionRefresher();
+export function stopAllStateChangeAppliers(): void {
+  stopApplyingSidebarRefreshTargets();
+  stopApplyingGridRefreshTargets();
+  stopApplyingSelectionRefreshTargets();
 }

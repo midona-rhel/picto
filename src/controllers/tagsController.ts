@@ -1,5 +1,6 @@
 import { api } from '#desktop/api';
 import { filesController } from './filesController';
+import { registerUndoAction } from '../shared/controllers/undoRedoController';
 import { useTagListStore } from '../state/tagListStore';
 import type {
   DeleteTagResult,
@@ -50,67 +51,156 @@ export const tagsController = {
 
   // ── Tag management writes ──
 
-  async rename(tagId: number, newName: string): Promise<RenameTagResult> {
+  /** @internal */ async _rename(tagId: number, newName: string): Promise<RenameTagResult> {
     const result = await api.tags.rename(tagId, newName);
     if (!result.merged_into) {
       const { namespace, subtag } = parseTagName(newName);
       useTagListStore.getState().queueRename(tagId, namespace, subtag);
     } else {
-      // Rename caused a merge — source tag is gone
       useTagListStore.getState().queueRemoval(tagId);
     }
     return result;
   },
-
-  async delete(tagId: number): Promise<DeleteTagResult> {
+  /** @internal */ async _delete(tagId: number): Promise<DeleteTagResult> {
     const result = await api.tags.delete(tagId);
     useTagListStore.getState().queueRemoval(tagId);
     return result;
   },
-
-  async merge(fromTag: string, toTag: string) {
+  /** @internal */ async _merge(fromTag: string, toTag: string) {
     const result = await api.tags.merge(fromTag, toTag);
-    // Source tag is absorbed — remove it from the visible list.
     const { namespace, subtag } = parseTagName(fromTag);
     useTagListStore.getState().queueRemovalByName(namespace, subtag);
     return result;
   },
-
-  async manageAlias(from: string, to?: string) {
+  /** @internal */ async _manageAlias(from: string, to?: string) {
     return api.tags.manageAlias(from, to);
   },
-
-  async manageImplication(child: string, parent: string, action: 'add' | 'remove') {
+  /** @internal */ async _manageImplication(child: string, parent: string, action: 'add' | 'remove') {
     return api.tags.manageImplication(child, parent, action);
   },
 
-  // ── Per-file tag writes (eagerly invalidate affected metadata) ──
+  // ── Per-file tag writes (internal — used by undo closures) ──
 
-  async addToHashes(hashes: string[], tags: string[]) {
+  /** @internal */ async _addToHashes(hashes: string[], tags: string[]) {
     const result = await api.tags.add(hashes, tags);
     filesController.noteManyMetadataChanged(hashes);
     return result;
   },
-
-  async removeFromHashes(hashes: string[], tags: string[]) {
+  /** @internal */ async _removeFromHashes(hashes: string[], tags: string[]) {
     const result = await api.tags.remove(hashes, tags);
     filesController.noteManyMetadataChanged(hashes);
     return result;
   },
+  /** @internal */ async _addToSelection(selection: SelectionQuerySpec, tags: string[]) {
+    const result = await api.selection.addTags(selection, tags);
+    if (selection.hashes?.length) filesController.noteManyMetadataChanged(selection.hashes);
+    return result;
+  },
+  /** @internal */ async _removeFromSelection(selection: SelectionQuerySpec, tags: string[]) {
+    const result = await api.selection.removeTags(selection, tags);
+    if (selection.hashes?.length) filesController.noteManyMetadataChanged(selection.hashes);
+    return result;
+  },
+
+  // ── Public tag write methods (own undo) ──
+
+  async addToHashes(hashes: string[], tags: string[]) {
+    await this._addToHashes(hashes, tags);
+    const h = [...hashes], t = [...tags];
+    registerUndoAction({
+      label: `Add ${t.length} tag${t.length === 1 ? '' : 's'}`,
+      backward: async () => { await this._removeFromHashes(h, t); },
+      forward: async () => { await this._addToHashes(h, t); },
+    });
+  },
+
+  async removeFromHashes(hashes: string[], tags: string[]) {
+    await this._removeFromHashes(hashes, tags);
+    const h = [...hashes], t = [...tags];
+    registerUndoAction({
+      label: `Remove ${t.length} tag${t.length === 1 ? '' : 's'}`,
+      backward: async () => { await this._addToHashes(h, t); },
+      forward: async () => { await this._removeFromHashes(h, t); },
+    });
+  },
 
   async addToSelection(selection: SelectionQuerySpec, tags: string[]) {
-    const result = await api.selection.addTags(selection, tags);
-    if (selection.hashes?.length) {
-      filesController.noteManyMetadataChanged(selection.hashes);
+    await this._addToSelection(selection, tags);
+    const spec = structuredClone(selection), t = [...tags];
+    registerUndoAction({
+      label: `Add ${t.length} tag${t.length === 1 ? '' : 's'}`,
+      backward: async () => { await this._removeFromSelection(spec, t); },
+      forward: async () => { await this._addToSelection(spec, t); },
+    });
+  },
+
+  async removeFromSelection(selection: SelectionQuerySpec, tags: string[]) {
+    await this._removeFromSelection(selection, tags);
+    const spec = structuredClone(selection), t = [...tags];
+    registerUndoAction({
+      label: `Remove ${t.length} tag${t.length === 1 ? '' : 's'}`,
+      backward: async () => { await this._addToSelection(spec, t); },
+      forward: async () => { await this._removeFromSelection(spec, t); },
+    });
+  },
+
+  async rename(tagId: number, newName: string, oldName: string): Promise<RenameTagResult> {
+    const result = await this._rename(tagId, newName);
+    if (!result.merged_into) {
+      registerUndoAction({
+        label: 'Rename tag',
+        backward: async () => { await this._rename(tagId, oldName); },
+        forward: async () => { await this._rename(tagId, newName); },
+      });
     }
     return result;
   },
 
-  async removeFromSelection(selection: SelectionQuerySpec, tags: string[]) {
-    const result = await api.selection.removeTags(selection, tags);
-    if (selection.hashes?.length) {
-      filesController.noteManyMetadataChanged(selection.hashes);
-    }
+  async deleteTag(tagId: number, tagDisplay: string, affectedHashes: string[]): Promise<DeleteTagResult> {
+    const result = await this._delete(tagId);
+    const h = [...affectedHashes], display = tagDisplay;
+    registerUndoAction({
+      label: `Delete tag "${display}"`,
+      backward: async () => {
+        if (h.length > 0) await this._addToHashes(h, [display]);
+      },
+      forward: async () => {
+        const found = await this.getPaginated({ search: display, limit: 10 });
+        const match = found.find((t) => `${t.namespace ? t.namespace + ':' : ''}${t.subtag}` === display);
+        if (match) await this._delete(match.tag_id);
+      },
+    });
     return result;
+  },
+
+  async mergeTag(fromTag: string, toTag: string, sourceHashes: string[], sourceOnlyHashes: string[]) {
+    await this._merge(fromTag, toTag);
+    registerUndoAction({
+      label: `Merge tag "${fromTag}" into "${toTag}"`,
+      backward: async () => {
+        if (sourceHashes.length > 0) await this._addToHashes(sourceHashes, [fromTag]);
+        if (sourceOnlyHashes.length > 0) await this._removeFromHashes(sourceOnlyHashes, [toTag]);
+      },
+      forward: async () => { await this._merge(fromTag, toTag); },
+    });
+  },
+
+  async setAlias(from: string, to: string) {
+    await this._manageAlias(from, to);
+    registerUndoAction({
+      label: `Set alias "${from}"`,
+      backward: async () => { await this._manageAlias(from); },
+      forward: async () => { await this._manageAlias(from, to); },
+    });
+  },
+
+  async setImplication(child: string, parent: string, action: 'add' | 'remove') {
+    await this._manageImplication(child, parent, action);
+    const inverse = action === 'add' ? 'remove' : 'add';
+    registerUndoAction({
+      label: action === 'add' ? `Add implication "${parent}"` : `Remove implication "${parent}"`,
+      backward: async () => { await this._manageImplication(child, parent, inverse); },
+      forward: async () => { await this._manageImplication(child, parent, action); },
+    });
   },
 };

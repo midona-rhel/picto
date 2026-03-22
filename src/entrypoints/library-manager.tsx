@@ -1,10 +1,11 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { MantineProvider, createTheme, rem } from '@mantine/core';
-import { api, getCurrentWindow } from '#desktop/api';
+import { getCurrentWindow } from '#desktop/api';
 import { IconX } from '@tabler/icons-react';
 import { LibraryPanel } from '#features/settings/components';
 import { useThemeSync, useDerivedColorScheme } from '../shared/hooks/useThemeSync';
+import { settingsController } from '../controllers/settingsController';
 import '@mantine/core/styles.css';
 import '../shared/styles/globals.css';
 
@@ -80,7 +81,9 @@ const theme = createTheme({
 });
 
 // Sync color scheme + theme from settings before React hydrates
-(api.settings.get() as Promise<{ colorScheme?: string; theme?: string }>)
+(
+  settingsController.get() as Promise<{ colorScheme?: string; theme?: string }>
+)
   .then((settings) => {
     const t = settings?.theme ?? (settings?.colorScheme === 'light' ? 'light' : 'dark');
     const scheme = t === 'auto' ? 'dark' : (t === 'light' || t === 'lightgray') ? 'light' : 'dark';

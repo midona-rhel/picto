@@ -4,12 +4,12 @@
 //! Delegates to `sqlite::smart_folders` for storage and bitmap compilation.
 
 use crate::smart_folders::db::{
-    SmartFolder, SmartFolderPredicate, build_effective_predicate_for_smart_folder,
-    collect_descendant_smart_folder_ids, compile_predicate, get_smart_folder,
-    get_smart_folder_chain, has_local_rules,
+    build_effective_predicate_for_smart_folder, collect_descendant_smart_folder_ids,
+    compile_predicate, get_smart_folder, get_smart_folder_chain, has_local_rules, SmartFolder,
+    SmartFolderPredicate,
 };
-use crate::sqlite::SqliteDatabase;
 use crate::sqlite::bitmaps::BitmapKey;
+use crate::sqlite::SqliteDatabase;
 
 async fn build_smart_folder_sidebar_node(
     db: &SqliteDatabase,
@@ -18,7 +18,13 @@ async fn build_smart_folder_sidebar_node(
     let smart_folder_id = sf.smart_folder_id;
     let predicate_json = sf.predicate_json.clone();
     let bitmaps = db.bitmaps.clone();
-    let (effective_predicate, inherited_predicates, has_effective_rules, has_local_predicate_rules, count) = db
+    let (
+        effective_predicate,
+        inherited_predicates,
+        has_effective_rules,
+        has_local_predicate_rules,
+        count,
+    ) = db
         .with_read_conn(move |conn| {
             let effective = build_effective_predicate_for_smart_folder(conn, smart_folder_id)?;
             let chain = get_smart_folder_chain(conn, smart_folder_id)?;
@@ -27,16 +33,21 @@ async fn build_smart_folder_sidebar_node(
             } else {
                 chain[..chain.len() - 1]
                     .iter()
-                    .filter_map(|folder| serde_json::from_str::<serde_json::Value>(&folder.predicate_json).ok())
+                    .filter_map(|folder| {
+                        serde_json::from_str::<serde_json::Value>(&folder.predicate_json).ok()
+                    })
                     .collect()
             };
-            let local = serde_json::from_str::<crate::smart_folders::db::SmartFolderPredicate>(&predicate_json)
-                .unwrap_or(crate::smart_folders::db::SmartFolderPredicate { groups: Vec::new() });
+            let local = serde_json::from_str::<crate::smart_folders::db::SmartFolderPredicate>(
+                &predicate_json,
+            )
+            .unwrap_or(crate::smart_folders::db::SmartFolderPredicate { groups: Vec::new() });
             let compiled = compile_predicate(conn, &effective, &bitmaps)?;
             let count = compiled.len() as i64;
             bitmaps.set(BitmapKey::SmartFolder(smart_folder_id), compiled);
             Ok::<_, rusqlite::Error>((
-                serde_json::to_value(&effective).unwrap_or_else(|_| serde_json::json!({ "groups": [] })),
+                serde_json::to_value(&effective)
+                    .unwrap_or_else(|_| serde_json::json!({ "groups": [] })),
                 inherited,
                 has_local_rules(&effective),
                 has_local_rules(&local),

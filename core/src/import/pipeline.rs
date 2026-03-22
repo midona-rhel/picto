@@ -5,13 +5,13 @@
 
 use std::path::{Path, PathBuf};
 
-use tracing::{info, warn, debug};
+use tracing::{debug, info, warn};
 
+use super::db as sqlite_import;
 use crate::blob_store::BlobStore;
 use crate::media_processing;
 use crate::sqlite::SqliteDatabase;
 use crate::tags::normalize as tags;
-use super::db as sqlite_import;
 
 #[derive(thiserror::Error, Debug)]
 pub enum ImportError {
@@ -120,7 +120,12 @@ impl<'a> ImportPipeline<'a> {
         let hash = media_processing::get_hash_from_bytes(&file_data);
         let hex_hash = hex::encode(&hash);
 
-        if self.db.file_exists(&hex_hash).await.map_err(ImportError::Db)? {
+        if self
+            .db
+            .file_exists(&hex_hash)
+            .await
+            .map_err(ImportError::Db)?
+        {
             return Err(ImportError::AlreadyImported(hex_hash));
         }
 
@@ -129,7 +134,9 @@ impl<'a> ImportPipeline<'a> {
 
         if media_processing::is_image(file_info.mime) {
             if let Ok(true) = media_processing::is_decompression_bomb(path) {
-                return Err(ImportError::UnsupportedFile("Decompression bomb".to_string()));
+                return Err(ImportError::UnsupportedFile(
+                    "Decompression bomb".to_string(),
+                ));
             }
         }
 
@@ -137,22 +144,36 @@ impl<'a> ImportPipeline<'a> {
             None
         } else {
             media_processing::generate_thumbnail_bytes(
-                path, options.thumbnail_dimensions, file_info.mime,
-                file_info.duration_ms, file_info.num_frames, 35,
-            ).await.ok()
+                path,
+                options.thumbnail_dimensions,
+                file_info.mime,
+                file_info.duration_ms,
+                file_info.num_frames,
+                35,
+            )
+            .await
+            .ok()
         };
 
         // Write blobs now (idempotent, safe to write before DB)
         let blob_ext = crate::blob_store::mime_to_extension(&mime_string);
-        self.blob_store.write_original(&hex_hash, &file_data, Some(blob_ext))?;
+        self.blob_store
+            .write_original(&hex_hash, &file_data, Some(blob_ext))?;
         if let Some((ref thumb_bytes, ref thumb_ext)) = thumbnail_result {
-            let _ = self.blob_store.write_thumbnail(&hex_hash, thumb_bytes, thumb_ext);
+            let _ = self
+                .blob_store
+                .write_thumbnail(&hex_hash, thumb_bytes, thumb_ext);
         }
 
         let name = options.name.clone().or_else(|| {
-            path.file_stem().and_then(|s| s.to_str()).map(|s| s.to_string())
+            path.file_stem()
+                .and_then(|s| s.to_str())
+                .map(|s| s.to_string())
         });
-        let notes_json = options.notes.as_ref().map(|n| serde_json::to_string(n).unwrap_or_default());
+        let notes_json = options
+            .notes
+            .as_ref()
+            .map(|n| serde_json::to_string(n).unwrap_or_default());
 
         let mut tag_tuples = Vec::new();
         for (ns, st) in &options.tags {
@@ -175,7 +196,11 @@ impl<'a> ImportPipeline<'a> {
                 has_audio: file_info.has_audio,
                 status: options.initial_status,
                 notes: notes_json,
-                source_urls: if options.source_urls.is_empty() { None } else { Some(options.source_urls.clone()) },
+                source_urls: if options.source_urls.is_empty() {
+                    None
+                } else {
+                    Some(options.source_urls.clone())
+                },
                 created_at: options.created_at.clone().or_else(|| {
                     std::fs::metadata(path).ok().and_then(|meta| {
                         let ts = meta.created().or_else(|_| meta.modified()).ok()?;
@@ -406,7 +431,9 @@ impl<'a> ImportPipeline<'a> {
         // Thumbnail (for files that skipped it in the fast path)
         if work.needs_thumbnail && is_image {
             let ext = crate::blob_store::mime_to_extension(&work.mime_string);
-            if let Ok(Some((blob_path, _))) = self.blob_store.find_original(&work.hex_hash, Some(ext)) {
+            if let Ok(Some((blob_path, _))) =
+                self.blob_store.find_original(&work.hex_hash, Some(ext))
+            {
                 if let Ok((thumb_bytes, thumb_ext)) = media_processing::generate_thumbnail_bytes(
                     &blob_path,
                     media_processing::DEFAULT_THUMBNAIL_DIMENSIONS,
@@ -414,8 +441,12 @@ impl<'a> ImportPipeline<'a> {
                     None,
                     None,
                     35,
-                ).await {
-                    let _ = self.blob_store.write_thumbnail(&work.hex_hash, &thumb_bytes, &thumb_ext);
+                )
+                .await
+                {
+                    let _ =
+                        self.blob_store
+                            .write_thumbnail(&work.hex_hash, &thumb_bytes, &thumb_ext);
                 }
             }
         }

@@ -11,8 +11,8 @@ pub use common::{ok_null, to_json};
 /// Deserialize args, call a handler function, serialize its output.
 macro_rules! call {
     ($func:path, $state:expr, $args:expr) => {{
-        let input = serde_json::from_value($args.clone())
-            .map_err(|e| format!("Invalid args: {e}"))?;
+        let input =
+            serde_json::from_value($args.clone()).map_err(|e| format!("Invalid args: {e}"))?;
         let output = $func($state, input).await?;
         to_json(&output)
     }};
@@ -20,31 +20,82 @@ macro_rules! call {
 
 /// Commands that mutate state. Logged at `info!` level; everything else is `debug!`.
 const WRITE_COMMANDS: &[&str] = &[
-    "import_files", "import_folder", "set_entity_status", "delete_entities", "wipe_image_data",
-    "add_tags", "remove_tags", "manage_tag_alias", "manage_tag_implication", "merge_tags",
-    "rename_tag", "delete_tag",
-    "add_tags_selection", "remove_tags_selection", "update_selection_metadata",
-    "scan_duplicates", "resolve_duplicate_pair", "update_duplicate_settings",
-    "create_smart_folder", "update_smart_folder", "delete_smart_folder", "move_smart_folder",
+    "import_files",
+    "import_folder",
+    "set_entity_status",
+    "delete_entities",
+    "wipe_image_data",
+    "add_tags",
+    "remove_tags",
+    "manage_tag_alias",
+    "manage_tag_implication",
+    "merge_tags",
+    "rename_tag",
+    "delete_tag",
+    "add_tags_selection",
+    "remove_tags_selection",
+    "update_selection_metadata",
+    "scan_duplicates",
+    "resolve_duplicate_pair",
+    "update_duplicate_settings",
+    "create_smart_folder",
+    "update_smart_folder",
+    "delete_smart_folder",
+    "move_smart_folder",
     "reorder_smart_folders",
-    "create_folder", "update_folder", "delete_folder", "move_folder", "update_folder_parent",
-    "add_entities_to_folder", "remove_entities_from_folder", "reorder_folders", "reorder_folder_items",
-    "set_folder_watch_config", "clear_folder_watch_config",
-    "create_collection", "update_collection", "delete_collection",
-    "add_collection_members", "remove_collection_members", "reorder_collection_members",
+    "create_folder",
+    "update_folder",
+    "delete_folder",
+    "move_folder",
+    "update_folder_parent",
+    "add_entities_to_folder",
+    "remove_entities_from_folder",
+    "reorder_folders",
+    "reorder_folder_items",
+    "set_folder_watch_config",
+    "clear_folder_watch_config",
+    "create_collection",
+    "update_collection",
+    "delete_collection",
+    "add_collection_members",
+    "remove_collection_members",
+    "reorder_collection_members",
     "list_collection_member_hashes",
-    "save_settings", "reorder_sidebar_nodes", "set_view_prefs", "set_zoom_factor",
+    "save_settings",
+    "reorder_sidebar_nodes",
+    "set_view_prefs",
+    "set_zoom_factor",
     "update_media_entity_metadata",
-    "create_group", "delete_group", "rename_group", "set_group_schedule", "run_group", "stop_group",
-    "create_subscription", "delete_subscription", "pause_subscription",
-    "add_subscription_query", "delete_subscription_query", "edit_subscription_query", "pause_subscription_query", "set_subscription_auto_collections",
-    "run_subscription", "stop_subscription", "reset_subscription", "rename_subscription",
+    "create_group",
+    "delete_group",
+    "rename_group",
+    "set_group_schedule",
+    "run_group",
+    "stop_group",
+    "create_subscription",
+    "delete_subscription",
+    "pause_subscription",
+    "add_subscription_query",
+    "delete_subscription_query",
+    "edit_subscription_query",
+    "pause_subscription_query",
+    "set_subscription_auto_collections",
+    "run_subscription",
+    "stop_subscription",
+    "reset_subscription",
+    "rename_subscription",
     "run_subscription_query",
-    "set_credential", "delete_credential",
-    "pixiv_oauth_start", "pixiv_oauth_exchange",
-    "export_file", "export_media", "regenerate_thumbnail", "regenerate_thumbnails_batch",
+    "set_credential",
+    "delete_credential",
+    "pixiv_oauth_start",
+    "pixiv_oauth_exchange",
+    "export_file",
+    "export_media",
+    "regenerate_thumbnail",
+    "regenerate_thumbnails_batch",
     "reanalyze_file_colors",
-    "ai_tag_apply", "ai_tagger_download_model",
+    "ai_tag_apply",
+    "ai_tagger_download_model",
     "close_library",
 ];
 
@@ -89,7 +140,9 @@ async fn dispatch_inner(command: &str, args: serde_json::Value) -> Result<String
         "get_grid_page_slim" => call!(typed::grid::get_grid_page_slim, &state, args),
         "get_grid_outline" => call!(typed::grid::get_grid_outline, &state, args),
         "get_entity" => call!(typed::grid::get_entity, &state, args),
-        "get_entities_metadata_batch" => call!(typed::grid::get_entities_metadata_batch, &state, args),
+        "get_entities_metadata_batch" => {
+            call!(typed::grid::get_entities_metadata_batch, &state, args)
+        }
 
         // ── Tags ──────────────────────────────────────────────
         "search_tags" => call!(typed::tags::search_tags, &state, args),
@@ -106,15 +159,23 @@ async fn dispatch_inner(command: &str, args: serde_json::Value) -> Result<String
         "get_namespace_summary" => call!(typed::tags::get_namespace_summary, &state, args),
         "rename_tag" => call!(typed::tags::rename_tag, &state, args),
         "delete_tag" => call!(typed::tags::delete_tag, &state, args),
-        "companion_get_namespace_values" => call!(typed::tags::companion_get_namespace_values, &state, args),
-        "companion_get_files_by_tag" => call!(typed::tags::companion_get_files_by_tag, &state, args),
+        "companion_get_namespace_values" => {
+            call!(typed::tags::companion_get_namespace_values, &state, args)
+        }
+        "companion_get_files_by_tag" => {
+            call!(typed::tags::companion_get_files_by_tag, &state, args)
+        }
 
         // ── Selection ─────────────────────────────────────────
         "add_tags_selection" => call!(typed::selection::add_tags_selection, &state, args),
         "remove_tags_selection" => call!(typed::selection::remove_tags_selection, &state, args),
         "get_selection_summary" => call!(typed::selection::get_selection_summary, &state, args),
-        "resolve_selection_hashes" => call!(typed::selection::resolve_selection_hashes, &state, args),
-        "update_selection_metadata" => call!(typed::selection::update_selection_metadata, &state, args),
+        "resolve_selection_hashes" => {
+            call!(typed::selection::resolve_selection_hashes, &state, args)
+        }
+        "update_selection_metadata" => {
+            call!(typed::selection::update_selection_metadata, &state, args)
+        }
 
         // ── Duplicates ────────────────────────────────────────
         "find_similar" => call!(typed::duplicates::find_similar, &state, args),
@@ -123,7 +184,9 @@ async fn dispatch_inner(command: &str, args: serde_json::Value) -> Result<String
         "resolve_duplicate_pair" => call!(typed::duplicates::resolve_duplicate_pair, &state, args),
         "get_duplicate_count" => call!(typed::duplicates::get_duplicate_count, &state, args),
         "get_duplicate_settings" => call!(typed::duplicates::get_duplicate_settings, &state, args),
-        "update_duplicate_settings" => call!(typed::duplicates::update_duplicate_settings, &state, args),
+        "update_duplicate_settings" => {
+            call!(typed::duplicates::update_duplicate_settings, &state, args)
+        }
 
         // ── Smart Folders ─────────────────────────────────────
         "list_smart_folders" => call!(typed::smart_folders::list_smart_folders, &state, args),
@@ -135,8 +198,16 @@ async fn dispatch_inner(command: &str, args: serde_json::Value) -> Result<String
         "reorder_smart_folders" => call!(typed::smart_folders::reorder_smart_folders, &state, args),
 
         // ── Media Metadata ────────────────────────────────────
-        "get_media_entity_metadata" => call!(typed::media_metadata::get_media_entity_metadata, &state, args),
-        "update_media_entity_metadata" => call!(typed::media_metadata::update_media_entity_metadata, &state, args),
+        "get_media_entity_metadata" => call!(
+            typed::media_metadata::get_media_entity_metadata,
+            &state,
+            args
+        ),
+        "update_media_entity_metadata" => call!(
+            typed::media_metadata::update_media_entity_metadata,
+            &state,
+            args
+        ),
         "get_storage_stats" => call!(typed::media_metadata::get_storage_stats, &state, args),
 
         // ── System ────────────────────────────────────────────
@@ -162,11 +233,15 @@ async fn dispatch_inner(command: &str, args: serde_json::Value) -> Result<String
         "create_folder" => call!(typed::folders::create_folder, &state, args),
         "update_folder" => call!(typed::folders::update_folder, &state, args),
         "set_folder_watch_config" => call!(typed::folders::set_folder_watch_config, &state, args),
-        "clear_folder_watch_config" => call!(typed::folders::clear_folder_watch_config, &state, args),
+        "clear_folder_watch_config" => {
+            call!(typed::folders::clear_folder_watch_config, &state, args)
+        }
         "delete_folder" => call!(typed::folders::delete_folder, &state, args),
         "update_folder_parent" => call!(typed::folders::update_folder_parent, &state, args),
         "add_entities_to_folder" => call!(typed::folders::add_files_to_folder, &state, args),
-        "remove_entities_from_folder" => call!(typed::folders::remove_files_from_folder, &state, args),
+        "remove_entities_from_folder" => {
+            call!(typed::folders::remove_files_from_folder, &state, args)
+        }
         "reorder_folders" => call!(typed::folders::reorder_folders, &state, args),
         "reorder_folder_items" => call!(typed::folders::reorder_folder_items, &state, args),
         "get_collections" => call!(typed::folders::get_collections, &state, args),
@@ -175,15 +250,23 @@ async fn dispatch_inner(command: &str, args: serde_json::Value) -> Result<String
         "update_collection" => call!(typed::folders::update_collection, &state, args),
         "add_collection_tags" => call!(typed::folders::add_collection_tags, &state, args),
         "remove_collection_tags" => call!(typed::folders::remove_collection_tags, &state, args),
-        "reorder_collection_members" => call!(typed::folders::reorder_collection_members, &state, args),
+        "reorder_collection_members" => {
+            call!(typed::folders::reorder_collection_members, &state, args)
+        }
         "add_collection_members" => call!(typed::folders::add_collection_members, &state, args),
-        "remove_collection_members" => call!(typed::folders::remove_collection_members, &state, args),
+        "remove_collection_members" => {
+            call!(typed::folders::remove_collection_members, &state, args)
+        }
         "delete_collection" => call!(typed::folders::delete_collection, &state, args),
-        "list_collection_member_hashes" => call!(typed::folders::list_collection_member_hashes, &state, args),
+        "list_collection_member_hashes" => {
+            call!(typed::folders::list_collection_member_hashes, &state, args)
+        }
 
         // ── Media I/O ─────────────────────────────────────────
         "resolve_file_path" => call!(typed::media_io::resolve_file_path, &state, args),
-        "resolve_file_paths_batch" => call!(typed::media_io::resolve_file_paths_batch, &state, args),
+        "resolve_file_paths_batch" => {
+            call!(typed::media_io::resolve_file_paths_batch, &state, args)
+        }
         "open_file_default" => call!(typed::media_io::open_file_default, &state, args),
         "reveal_in_folder" => call!(typed::media_io::reveal_in_folder, &state, args),
         "export_file" => call!(typed::media_io::export_file, &state, args),
@@ -192,7 +275,9 @@ async fn dispatch_inner(command: &str, args: serde_json::Value) -> Result<String
         "resolve_thumbnail_path" => call!(typed::media_io::resolve_thumbnail_path, &state, args),
         "ensure_thumbnail" => call!(typed::media_io::ensure_thumbnail, &state, args),
         "regenerate_thumbnail" => call!(typed::media_io::regenerate_thumbnail, &state, args),
-        "regenerate_thumbnails_batch" => call!(typed::media_io::regenerate_thumbnails_batch, &state, args),
+        "regenerate_thumbnails_batch" => {
+            call!(typed::media_io::regenerate_thumbnails_batch, &state, args)
+        }
         "reanalyze_file_colors" => call!(typed::media_io::reanalyze_file_colors, &state, args),
         // ── Media Lifecycle ───────────────────────────────────
         "import_files" => call!(typed::media_lifecycle::import_files, &state, args),
@@ -210,26 +295,56 @@ async fn dispatch_inner(command: &str, args: serde_json::Value) -> Result<String
         "run_group" => call!(typed::subscriptions::run_group, &state, args),
         "stop_group" => call!(typed::subscriptions::stop_group, &state, args),
         "get_sites" => call!(typed::subscriptions::get_sites, &state, args),
-        "get_site_metadata_schema" => call!(typed::subscriptions::get_site_metadata_schema, &state, args),
-        "validate_site_metadata" => call!(typed::subscriptions::validate_site_metadata, &state, args),
+        "get_site_metadata_schema" => {
+            call!(typed::subscriptions::get_site_metadata_schema, &state, args)
+        }
+        "validate_site_metadata" => {
+            call!(typed::subscriptions::validate_site_metadata, &state, args)
+        }
         "get_subscriptions" => call!(typed::subscriptions::get_subscriptions, &state, args),
         "create_subscription" => call!(typed::subscriptions::create_subscription, &state, args),
         "delete_subscription" => call!(typed::subscriptions::delete_subscription, &state, args),
         "pause_subscription" => call!(typed::subscriptions::pause_subscription, &state, args),
-        "add_subscription_query" => call!(typed::subscriptions::add_subscription_query, &state, args),
-        "delete_subscription_query" => call!(typed::subscriptions::delete_subscription_query, &state, args),
-        "edit_subscription_query" => call!(typed::subscriptions::edit_subscription_query, &state, args),
-        "pause_subscription_query" => call!(typed::subscriptions::pause_subscription_query, &state, args),
-        "set_subscription_auto_collections" => call!(typed::subscriptions::set_subscription_auto_collections, &state, args),
+        "add_subscription_query" => {
+            call!(typed::subscriptions::add_subscription_query, &state, args)
+        }
+        "delete_subscription_query" => call!(
+            typed::subscriptions::delete_subscription_query,
+            &state,
+            args
+        ),
+        "edit_subscription_query" => {
+            call!(typed::subscriptions::edit_subscription_query, &state, args)
+        }
+        "pause_subscription_query" => {
+            call!(typed::subscriptions::pause_subscription_query, &state, args)
+        }
+        "set_subscription_auto_collections" => call!(
+            typed::subscriptions::set_subscription_auto_collections,
+            &state,
+            args
+        ),
         "run_subscription" => call!(typed::subscriptions::run_subscription, &state, args),
         "stop_subscription" => call!(typed::subscriptions::stop_subscription, &state, args),
         "reset_subscription" => call!(typed::subscriptions::reset_subscription, &state, args),
-        "get_running_subscriptions" => call!(typed::subscriptions::get_running_subscriptions, &state, args),
-        "get_running_subscription_progress" => call!(typed::subscriptions::get_running_subscription_progress, &state, args),
+        "get_running_subscriptions" => call!(
+            typed::subscriptions::get_running_subscriptions,
+            &state,
+            args
+        ),
+        "get_running_subscription_progress" => call!(
+            typed::subscriptions::get_running_subscription_progress,
+            &state,
+            args
+        ),
         "rename_subscription" => call!(typed::subscriptions::rename_subscription, &state, args),
-        "run_subscription_query" => call!(typed::subscriptions::run_subscription_query, &state, args),
+        "run_subscription_query" => {
+            call!(typed::subscriptions::run_subscription_query, &state, args)
+        }
         "list_credentials" => call!(typed::subscriptions::list_credentials, &state, args),
-        "list_credential_health" => call!(typed::subscriptions::list_credential_health, &state, args),
+        "list_credential_health" => {
+            call!(typed::subscriptions::list_credential_health, &state, args)
+        }
         "set_credential" => call!(typed::subscriptions::set_credential, &state, args),
         "delete_credential" => call!(typed::subscriptions::delete_credential, &state, args),
         "pixiv_oauth_start" => call!(typed::subscriptions::pixiv_oauth_start, &state, args),
@@ -237,7 +352,9 @@ async fn dispatch_inner(command: &str, args: serde_json::Value) -> Result<String
 
         // ── AI Tagger ──────────────────────────────────────
         "ai_tagger_status" => call!(typed::ai_tagger::ai_tagger_status, &state, args),
-        "ai_tagger_download_model" => call!(typed::ai_tagger::ai_tagger_download_model, &state, args),
+        "ai_tagger_download_model" => {
+            call!(typed::ai_tagger::ai_tagger_download_model, &state, args)
+        }
         "ai_tagger_delete_model" => call!(typed::ai_tagger::ai_tagger_delete_model, &state, args),
         "ai_tag_predict" => call!(typed::ai_tagger::ai_tag_predict, &state, args),
         "ai_tag_apply" => call!(typed::ai_tagger::ai_tag_apply, &state, args),

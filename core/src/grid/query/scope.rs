@@ -89,7 +89,6 @@ pub(super) async fn get_scoped_page(
     })
 }
 
-
 async fn get_scoped_ids(
     db: &SqliteDatabase,
     query: &GridPageSlimQuery,
@@ -138,7 +137,13 @@ async fn list_scoped_rows(
         let fid = query
             .scope
             .folder_id
-            .or_else(|| query.filters.folder_ids.as_ref().and_then(|ids| ids.first().copied()))
+            .or_else(|| {
+                query
+                    .filters
+                    .folder_ids
+                    .as_ref()
+                    .and_then(|ids| ids.first().copied())
+            })
             .expect("single folder id required");
         db.with_read_conn(move |conn| {
             crate::sqlite::files::list_files_slim_by_folder_rank(

@@ -60,7 +60,10 @@ pub fn collection_group_parts(
     Some((category, post_id, preferred_name))
 }
 
-pub fn validate_metadata_for_site(_site_id: &str, _metadata: &ParsedMetadata) -> Result<(), String> {
+pub fn validate_metadata_for_site(
+    _site_id: &str,
+    _metadata: &ParsedMetadata,
+) -> Result<(), String> {
     // Import policy accepts all metadata — the job of the importer is to
     // correctly extract whatever tags/fields the source provides, not to
     // reject posts for missing optional fields like creator or rating.

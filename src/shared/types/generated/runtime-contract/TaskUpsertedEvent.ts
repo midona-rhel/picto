@@ -5,6 +5,6 @@ import type { RuntimeTask } from "./RuntimeTask";
  * Sequenced envelope for `runtime/task_upserted` events.
  *
  * Carries a monotonic sequence number so the frontend can detect
- * ordering and gaps, matching the `MutationReceipt` pattern.
+ * ordering and gaps, matching the `StateChangedEvent` pattern.
  */
 export type TaskUpsertedEvent = { seq: number, task: RuntimeTask, };

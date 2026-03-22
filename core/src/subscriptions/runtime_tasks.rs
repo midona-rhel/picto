@@ -3,7 +3,7 @@
 //! The subscription domain should publish progress through one adapter instead
 //! of duplicating `RuntimeTask` shaping in every controller and monitor loop.
 
-use tokio::time::{Duration, sleep};
+use tokio::time::{sleep, Duration};
 
 use crate::runtime_contract::task::{RuntimeTask, TaskProgress, TaskStatus};
 use crate::subscriptions::progress::SubscriptionProgressEvent;

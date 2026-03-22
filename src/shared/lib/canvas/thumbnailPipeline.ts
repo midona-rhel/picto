@@ -1,4 +1,4 @@
-import { api } from '#desktop/api';
+import { filesController } from '../../../controllers/filesController';
 import { mediaFileUrl, mediaThumbnailUrl } from '../mediaUrl';
 import { decodeThumbnailInWorker, getThumbnailDecodeWorkerStats } from './thumbnailDecodeClient';
 import { enqueueMediaQosTask, type MediaQosLane, type MediaQosTaskHandle } from '../mediaQosScheduler';
@@ -503,7 +503,7 @@ export class ThumbnailPipeline {
 
   private queueRepairRetry(entry: ThumbnailPipelineEntry, item: ThumbnailQueueItem): void {
     entry.retryQueued = true;
-    void api.file.ensureThumbnail(item.hash)
+    void filesController.ensureThumbnail(item.hash)
       .then(() => {
         // Backend generated the thumbnail — retry loading it once
         const retryEntry = this.cache.get(item.hash);

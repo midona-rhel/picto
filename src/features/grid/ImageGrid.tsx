@@ -309,7 +309,7 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [navigationScopeKey]);
 
-  // Refs for values that change frequently but shouldn't invalidate handleImageClick
+  // Refs for values that change frequently but shouldn't recreate handleImageClick
   const imagesRef = useRef(activeGridImages);
   imagesRef.current = activeGridImages;
   const lastClickedHashRef = useRef(state.lastClickedHash);

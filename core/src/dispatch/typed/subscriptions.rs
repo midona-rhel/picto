@@ -176,9 +176,9 @@ pub async fn create_group(
     let group =
         crate::subscriptions::group_service::create_group(&state.db, input.name, input.schedule)
             .await?;
-    crate::events::emit_mutation(
+    crate::events::emit_state_changed(
         "create_group",
-        crate::runtime_contract::mutation_builder::MutationImpact::subscriptions_sidebar(),
+        crate::runtime_contract::change_builder::ChangeImpact::subscriptions_sidebar(),
     );
     Ok(serde_json::to_value(&group).map_err(|e| e.to_string())?)
 }
@@ -186,18 +186,18 @@ pub async fn create_group(
 pub async fn delete_group(state: &AppState, input: DeleteGroupInput) -> Result<(), String> {
     crate::subscriptions::group_service::delete_group(&state.db, &state.blob_store, input.id)
         .await?;
-    crate::events::emit_mutation(
+    crate::events::emit_state_changed(
         "delete_group",
-        crate::runtime_contract::mutation_builder::MutationImpact::subscriptions_sidebar(),
+        crate::runtime_contract::change_builder::ChangeImpact::subscriptions_sidebar(),
     );
     Ok(())
 }
 
 pub async fn rename_group(state: &AppState, input: RenameGroupInput) -> Result<(), String> {
     crate::subscriptions::group_service::rename_group(&state.db, input.id, input.name).await?;
-    crate::events::emit_mutation(
+    crate::events::emit_state_changed(
         "rename_group",
-        crate::runtime_contract::mutation_builder::MutationImpact::subscriptions_sidebar(),
+        crate::runtime_contract::change_builder::ChangeImpact::subscriptions_sidebar(),
     );
     Ok(())
 }
@@ -208,9 +208,9 @@ pub async fn set_group_schedule(
 ) -> Result<(), String> {
     crate::subscriptions::group_service::set_group_schedule(&state.db, input.id, input.schedule)
         .await?;
-    crate::events::emit_mutation(
+    crate::events::emit_state_changed(
         "set_group_schedule",
-        crate::runtime_contract::mutation_builder::MutationImpact::subscriptions_sidebar(),
+        crate::runtime_contract::change_builder::ChangeImpact::subscriptions_sidebar(),
     );
     Ok(())
 }
@@ -226,9 +226,9 @@ pub async fn run_group(state: &AppState, input: RunGroupInput) -> Result<(), Str
         &state.settings,
     )
     .await?;
-    crate::events::emit_mutation(
+    crate::events::emit_state_changed(
         "run_group",
-        crate::runtime_contract::mutation_builder::MutationImpact::subscriptions_sidebar(),
+        crate::runtime_contract::change_builder::ChangeImpact::subscriptions_sidebar(),
     );
     Ok(())
 }
@@ -240,9 +240,9 @@ pub async fn stop_group(state: &AppState, input: StopGroupInput) -> Result<(), S
         input.id,
     )
     .await?;
-    crate::events::emit_mutation(
+    crate::events::emit_state_changed(
         "stop_group",
-        crate::runtime_contract::mutation_builder::MutationImpact::subscriptions_sidebar(),
+        crate::runtime_contract::change_builder::ChangeImpact::subscriptions_sidebar(),
     );
     Ok(())
 }
@@ -301,9 +301,9 @@ pub async fn create_subscription(
         input.periodic_post_limit,
     )
     .await?;
-    crate::events::emit_mutation(
+    crate::events::emit_state_changed(
         "create_subscription",
-        crate::runtime_contract::mutation_builder::MutationImpact::subscriptions_sidebar(),
+        crate::runtime_contract::change_builder::ChangeImpact::subscriptions_sidebar(),
     );
     Ok(serde_json::to_value(&sub).map_err(|e| e.to_string())?)
 }
@@ -315,9 +315,9 @@ pub async fn delete_subscription(
     let count =
         crate::subscriptions::service::delete_subscription(&state.db, &state.blob_store, input.id)
             .await?;
-    crate::events::emit_mutation(
+    crate::events::emit_state_changed(
         "delete_subscription",
-        crate::runtime_contract::mutation_builder::MutationImpact::subscriptions_sidebar(),
+        crate::runtime_contract::change_builder::ChangeImpact::subscriptions_sidebar(),
     );
     Ok(serde_json::to_value(&count).map_err(|e| e.to_string())?)
 }
@@ -327,9 +327,9 @@ pub async fn pause_subscription(
     input: PauseSubscriptionInput,
 ) -> Result<(), String> {
     crate::subscriptions::service::pause_subscription(&state.db, input.id, input.paused).await?;
-    crate::events::emit_mutation(
+    crate::events::emit_state_changed(
         "pause_subscription",
-        crate::runtime_contract::mutation_builder::MutationImpact::subscriptions_sidebar(),
+        crate::runtime_contract::change_builder::ChangeImpact::subscriptions_sidebar(),
     );
     Ok(())
 }
@@ -344,9 +344,9 @@ pub async fn add_subscription_query(
         input.query_text,
     )
     .await?;
-    crate::events::emit_mutation(
+    crate::events::emit_state_changed(
         "add_subscription_query",
-        crate::runtime_contract::mutation_builder::MutationImpact::subscriptions_sidebar(),
+        crate::runtime_contract::change_builder::ChangeImpact::subscriptions_sidebar(),
     );
     Ok(serde_json::to_value(&query).map_err(|e| e.to_string())?)
 }
@@ -356,9 +356,9 @@ pub async fn delete_subscription_query(
     input: DeleteSubscriptionQueryInput,
 ) -> Result<(), String> {
     crate::subscriptions::service::delete_subscription_query(&state.db, input.id).await?;
-    crate::events::emit_mutation(
+    crate::events::emit_state_changed(
         "delete_subscription_query",
-        crate::runtime_contract::mutation_builder::MutationImpact::subscriptions_sidebar(),
+        crate::runtime_contract::change_builder::ChangeImpact::subscriptions_sidebar(),
     );
     Ok(())
 }
@@ -379,9 +379,9 @@ pub async fn edit_subscription_query(
         .db
         .update_subscription_query(input.id, input.query_text, input.display_name)
         .await?;
-    crate::events::emit_mutation(
+    crate::events::emit_state_changed(
         "edit_subscription_query",
-        crate::runtime_contract::mutation_builder::MutationImpact::subscriptions_sidebar(),
+        crate::runtime_contract::change_builder::ChangeImpact::subscriptions_sidebar(),
     );
     Ok(())
 }
@@ -405,9 +405,9 @@ pub async fn set_subscription_auto_collections(
         .db
         .set_subscription_auto_collections(sub_id, input.auto_collections)
         .await?;
-    crate::events::emit_mutation(
+    crate::events::emit_state_changed(
         "set_subscription_auto_collections",
-        crate::runtime_contract::mutation_builder::MutationImpact::subscriptions_sidebar(),
+        crate::runtime_contract::change_builder::ChangeImpact::subscriptions_sidebar(),
     );
     Ok(())
 }
@@ -418,9 +418,9 @@ pub async fn pause_subscription_query(
 ) -> Result<(), String> {
     crate::subscriptions::service::pause_subscription_query(&state.db, input.id, input.paused)
         .await?;
-    crate::events::emit_mutation(
+    crate::events::emit_state_changed(
         "pause_subscription_query",
-        crate::runtime_contract::mutation_builder::MutationImpact::subscriptions_sidebar(),
+        crate::runtime_contract::change_builder::ChangeImpact::subscriptions_sidebar(),
     );
     Ok(())
 }
@@ -462,9 +462,9 @@ pub async fn reset_subscription(
         input.id,
     )
     .await?;
-    crate::events::emit_mutation(
+    crate::events::emit_state_changed(
         "reset_subscription",
-        crate::runtime_contract::mutation_builder::MutationImpact::subscriptions_sidebar(),
+        crate::runtime_contract::change_builder::ChangeImpact::subscriptions_sidebar(),
     );
     Ok(())
 }
@@ -492,9 +492,9 @@ pub async fn rename_subscription(
     input: RenameSubscriptionInput,
 ) -> Result<(), String> {
     crate::subscriptions::service::rename_subscription(&state.db, input.id, input.name).await?;
-    crate::events::emit_mutation(
+    crate::events::emit_state_changed(
         "rename_subscription",
-        crate::runtime_contract::mutation_builder::MutationImpact::subscriptions_sidebar(),
+        crate::runtime_contract::change_builder::ChangeImpact::subscriptions_sidebar(),
     );
     Ok(())
 }

@@ -1,20 +1,25 @@
 import { create } from 'zustand';
 
-export interface UndoRedoAction {
+export interface UndoableAction {
   id: string;
   label: string;
-  undo: () => Promise<void>;
-  redo: () => Promise<void>;
+  /** The action that was performed (called on redo). */
+  forward: () => Promise<void>;
+  /** The inverse of the action (called on undo). */
+  backward: () => Promise<void>;
 }
 
+/** @deprecated — use UndoableAction instead. Kept for migration compatibility. */
+export type UndoRedoAction = UndoableAction;
+
 interface UndoRedoState {
-  undoStack: UndoRedoAction[];
-  redoStack: UndoRedoAction[];
+  undoStack: UndoableAction[];
+  redoStack: UndoableAction[];
   inFlight: boolean;
   lastError: string | null;
-  pushAction: (action: UndoRedoAction) => void;
-  undo: () => Promise<UndoRedoAction | null>;
-  redo: () => Promise<UndoRedoAction | null>;
+  pushAction: (action: UndoableAction) => void;
+  undo: () => Promise<UndoableAction | null>;
+  redo: () => Promise<UndoableAction | null>;
   clear: () => void;
 }
 
@@ -44,7 +49,7 @@ export const useUndoRedoStore = create<UndoRedoState>((set, get) => ({
     const action = undoStack[undoStack.length - 1];
     set({ inFlight: true, lastError: null });
     try {
-      await action.undo();
+      await action.backward();
       set((state) => ({
         undoStack: state.undoStack.slice(0, -1),
         redoStack: [...state.redoStack, action],
@@ -64,7 +69,7 @@ export const useUndoRedoStore = create<UndoRedoState>((set, get) => ({
     const action = redoStack[redoStack.length - 1];
     set({ inFlight: true, lastError: null });
     try {
-      await action.redo();
+      await action.forward();
       set((state) => ({
         redoStack: state.redoStack.slice(0, -1),
         undoStack: [...state.undoStack, action],
@@ -87,4 +92,3 @@ export const useUndoRedoStore = create<UndoRedoState>((set, get) => ({
     });
   },
 }));
-

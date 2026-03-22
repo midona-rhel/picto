@@ -2,15 +2,12 @@ use std::path::Path;
 
 use tracing::{debug, warn};
 
-use super::{ParsedMetadata, parse_metadata};
+use super::{parse_metadata, ParsedMetadata};
 
 /// Parse the sidecar JSON for a single file path (streaming import).
 /// Gallery-dl writes `{filename}.{ext}.json` — e.g., `image.jpg` → `image.jpg.json`.
 pub(super) fn parse_sidecar_for_file(file_path: &Path) -> ParsedMetadata {
-    let ext = file_path
-        .extension()
-        .and_then(|e| e.to_str())
-        .unwrap_or("");
+    let ext = file_path.extension().and_then(|e| e.to_str()).unwrap_or("");
     let sidecar_path = file_path.with_extension(format!("{ext}.json"));
 
     if sidecar_path.is_file() {

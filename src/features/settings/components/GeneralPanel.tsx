@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Text, Loader, Select, NumberInput, Switch } from '@mantine/core';
-import { api } from '#desktop/api';
+import { settingsController } from '../../../controllers/settingsController';
+import { statsController } from '../../../controllers/statsController';
 import { useSettingsStore, themeToColorScheme, type ReverseSearchEngine } from '../../../state/settingsStore';
 import { formatFileSize } from '../../../shared/lib/formatters';
 import { runCriticalAction } from '../../../shared/lib/asyncOps';
@@ -59,7 +60,7 @@ export function GeneralPanel() {
     if (!value) return;
     setZoom(value);
     const factor = Number(value) / 100;
-    runCriticalAction('Zoom Failed', 'settings.setZoomFactor', api.settings.setZoomFactor(factor));
+    runCriticalAction('Zoom Failed', 'settings.setZoomFactor', settingsController.setZoomFactor(factor));
   };
 
   const [stats, setStats] = useState<FileStats | null>(null);
@@ -74,7 +75,7 @@ export function GeneralPanel() {
     try {
       setStatsLoading(true);
       setStatsError(null);
-      const result = await api.stats.getImageStorageStats();
+      const result = await statsController.getImageStorageStats();
       setStats(result);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);

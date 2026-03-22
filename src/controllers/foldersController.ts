@@ -65,8 +65,8 @@ export const foldersController = {
     eagerSidebarRefresh();
     registerUndoAction({
       label: 'Create folder',
-      undo: async () => { await api.folders.delete(folder.folder_id); eagerSidebarRefresh(); },
-      redo: async () => { await api.folders.create({ name: folder.name, parent_id: params.parentId ?? null, icon: params.icon, color: params.color }); eagerSidebarRefresh(); },
+      backward: async () => { await api.folders.delete(folder.folder_id); eagerSidebarRefresh(); },
+      forward: async () => { await api.folders.create({ name: folder.name, parent_id: params.parentId ?? null, icon: params.icon, color: params.color }); eagerSidebarRefresh(); },
     });
     return folder;
   },
@@ -77,8 +77,8 @@ export const foldersController = {
     eagerSidebarRefresh();
     registerUndoAction({
       label: 'Rename folder',
-      undo: async () => { await api.folders.update({ folder_id: folderId, name: oldName }); eagerSidebarRefresh(); },
-      redo: async () => { await api.folders.update({ folder_id: folderId, name: newName }); eagerSidebarRefresh(); },
+      backward: async () => { await api.folders.update({ folder_id: folderId, name: oldName }); eagerSidebarRefresh(); },
+      forward: async () => { await api.folders.update({ folder_id: folderId, name: newName }); eagerSidebarRefresh(); },
     });
   },
 
@@ -97,7 +97,7 @@ export const foldersController = {
       let recreatedId: number | null = null;
       registerUndoAction({
         label: `Delete folder "${snapshot.name}"`,
-        undo: async () => {
+        backward: async () => {
           const recreated = await api.folders.create({
             name: snapshot.name, parent_id: snapshot.parentId,
             icon: snapshot.icon ?? undefined, color: snapshot.color ?? undefined,
@@ -108,7 +108,7 @@ export const foldersController = {
           }
           eagerSidebarRefresh();
         },
-        redo: async () => { await api.folders.delete(recreatedId ?? folderId); eagerSidebarRefresh(); },
+        forward: async () => { await api.folders.delete(recreatedId ?? folderId); eagerSidebarRefresh(); },
       });
     }
   },
@@ -122,13 +122,13 @@ export const foldersController = {
     }
     registerUndoAction({
       label: `Delete ${folderIds.length} folder${folderIds.length === 1 ? '' : 's'}`,
-      undo: async () => {
+      backward: async () => {
         for (const snap of snapshots) {
           await api.folders.create({ name: snap.name, parent_id: snap.parentId });
         }
         eagerSidebarRefresh();
       },
-      redo: async () => { /* best-effort */ },
+      forward: async () => { /* best-effort */ },
     });
   },
 
@@ -141,8 +141,8 @@ export const foldersController = {
     if (hashes.length > 0 && !selection) {
       registerUndoAction({
         label: `Add ${hashes.length} to folder`,
-        undo: async () => { await api.folders.removeFiles(folderId, hashes); eagerSidebarRefresh(); eagerGridRemove(folderId, hashes); },
-        redo: async () => { await api.folders.addFiles(folderId, hashes); eagerSidebarRefresh(); eagerGridRefresh(folderId); },
+        backward: async () => { await api.folders.removeFiles(folderId, hashes); eagerSidebarRefresh(); eagerGridRemove(folderId, hashes); },
+        forward: async () => { await api.folders.addFiles(folderId, hashes); eagerSidebarRefresh(); eagerGridRefresh(folderId); },
       });
     }
   },
@@ -154,8 +154,8 @@ export const foldersController = {
     if (hashes.length > 0 && !selection) {
       registerUndoAction({
         label: `Remove ${hashes.length} file${hashes.length === 1 ? '' : 's'} from folder`,
-        undo: async () => { await api.folders.addFiles(folderId, hashes); eagerSidebarRefresh(); eagerGridRefresh(folderId); },
-        redo: async () => { await api.folders.removeFiles(folderId, hashes); eagerSidebarRefresh(); eagerGridRemove(folderId, hashes); },
+        backward: async () => { await api.folders.addFiles(folderId, hashes); eagerSidebarRefresh(); eagerGridRefresh(folderId); },
+        forward: async () => { await api.folders.removeFiles(folderId, hashes); eagerSidebarRefresh(); eagerGridRemove(folderId, hashes); },
       });
     }
   },
@@ -185,8 +185,8 @@ export const foldersController = {
     if (previousMoves) {
       registerUndoAction({
         label: 'Reorder folders',
-        undo: async () => { await api.folders.reorder(previousMoves); eagerSidebarRefresh(); },
-        redo: async () => { await api.folders.reorder(moves); eagerSidebarRefresh(); },
+        backward: async () => { await api.folders.reorder(previousMoves); eagerSidebarRefresh(); },
+        forward: async () => { await api.folders.reorder(moves); eagerSidebarRefresh(); },
       });
     }
   },
@@ -202,8 +202,8 @@ export const foldersController = {
     if (undoParams) {
       registerUndoAction({
         label: 'Move folder',
-        undo: async () => { await api.folders.moveFolder(folderId, undoParams.oldParentId, undoParams.oldSiblingMoves); eagerSidebarRefresh(); },
-        redo: async () => { await api.folders.moveFolder(folderId, newParentId, siblingOrder); eagerSidebarRefresh(); },
+        backward: async () => { await api.folders.moveFolder(folderId, undoParams.oldParentId, undoParams.oldSiblingMoves); eagerSidebarRefresh(); },
+        forward: async () => { await api.folders.moveFolder(folderId, newParentId, siblingOrder); eagerSidebarRefresh(); },
       });
     }
   },
@@ -216,11 +216,11 @@ export const foldersController = {
     eagerSidebarRefresh();
     registerUndoAction({
       label: ids.length > 1 ? 'Change folder icons' : 'Change folder icon',
-      undo: async () => {
+      backward: async () => {
         await Promise.all(previousValues.map((e) => api.folders.update({ folder_id: e.id, icon: e.icon === null ? '' : (e.icon ?? undefined) })));
         eagerSidebarRefresh();
       },
-      redo: async () => {
+      forward: async () => {
         await Promise.all(ids.map((id) => api.folders.update({ folder_id: id, icon: value })));
         eagerSidebarRefresh();
       },
@@ -233,11 +233,11 @@ export const foldersController = {
     eagerSidebarRefresh();
     registerUndoAction({
       label: ids.length > 1 ? 'Change folder colors' : 'Change folder color',
-      undo: async () => {
+      backward: async () => {
         await Promise.all(previousValues.map((e) => api.folders.update({ folder_id: e.id, color: e.color === null ? '' : (e.color ?? undefined) })));
         eagerSidebarRefresh();
       },
-      redo: async () => {
+      forward: async () => {
         await Promise.all(ids.map((id) => api.folders.update({ folder_id: id, color: value })));
         eagerSidebarRefresh();
       },
@@ -249,8 +249,8 @@ export const foldersController = {
     eagerSidebarRefresh();
     registerUndoAction({
       label: 'Update folder auto-tags',
-      undo: async () => { await api.folders.update({ folder_id: folderId, auto_tags: prev }); eagerSidebarRefresh(); },
-      redo: async () => { await api.folders.update({ folder_id: folderId, auto_tags: next }); eagerSidebarRefresh(); },
+      backward: async () => { await api.folders.update({ folder_id: folderId, auto_tags: prev }); eagerSidebarRefresh(); },
+      forward: async () => { await api.folders.update({ folder_id: folderId, auto_tags: next }); eagerSidebarRefresh(); },
     });
   },
 

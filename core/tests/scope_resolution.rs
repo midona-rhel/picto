@@ -25,9 +25,18 @@ async fn scope_contract_system_all_excludes_inbox_and_trash() {
     let filter = ScopeFilter::default();
     let bm = resolve_scope(&harness.db, &filter).await.unwrap();
 
-    assert!(bm.contains(f_active as u32), "active file must be in system:all");
-    assert!(!bm.contains(f_inbox as u32), "inbox file must NOT be in system:all");
-    assert!(!bm.contains(f_trash as u32), "trash file must NOT be in system:all");
+    assert!(
+        bm.contains(f_active as u32),
+        "active file must be in system:all"
+    );
+    assert!(
+        !bm.contains(f_inbox as u32),
+        "inbox file must NOT be in system:all"
+    );
+    assert!(
+        !bm.contains(f_trash as u32),
+        "trash file must NOT be in system:all"
+    );
     assert_eq!(bm.len(), 1);
 }
 
@@ -106,8 +115,14 @@ async fn scope_contract_untagged_means_active_without_tags() {
     };
     let bm = resolve_scope(&harness.db, &filter).await.unwrap();
 
-    assert!(bm.contains(f2 as u32), "untagged active f2 should be included");
-    assert!(bm.contains(f3 as u32), "untagged active f3 should be included");
+    assert!(
+        bm.contains(f2 as u32),
+        "untagged active f2 should be included"
+    );
+    assert!(
+        bm.contains(f3 as u32),
+        "untagged active f3 should be included"
+    );
     assert!(!bm.contains(f1 as u32), "tagged f1 must NOT be in untagged");
     assert!(!bm.contains(f4 as u32), "inbox f4 must NOT be in untagged");
     assert_eq!(bm.len(), 2);
@@ -154,7 +169,10 @@ async fn scope_contract_uncategorized_means_active_without_folder() {
     };
     let bm = resolve_scope(&harness.db, &filter).await.unwrap();
 
-    assert!(!bm.contains(f1 as u32), "f1 is in a folder — not uncategorized");
+    assert!(
+        !bm.contains(f1 as u32),
+        "f1 is in a folder — not uncategorized"
+    );
     assert!(bm.contains(f2 as u32), "f2 is active and uncategorized");
     assert!(bm.contains(f3 as u32), "f3 is active and uncategorized");
     assert!(!bm.contains(f4 as u32), "f4 is inbox — not uncategorized");
@@ -300,8 +318,16 @@ async fn scope_contract_folder_default_union() {
         })
         .await
         .unwrap();
-    harness.db.add_entities_to_folder_batch(fa.folder_id, &["fu_1".to_string(), "fu_3".to_string()]).await.unwrap();
-    harness.db.add_entities_to_folder_batch(fb.folder_id, &["fu_2".to_string(), "fu_3".to_string()]).await.unwrap();
+    harness
+        .db
+        .add_entities_to_folder_batch(fa.folder_id, &["fu_1".to_string(), "fu_3".to_string()])
+        .await
+        .unwrap();
+    harness
+        .db
+        .add_entities_to_folder_batch(fb.folder_id, &["fu_2".to_string(), "fu_3".to_string()])
+        .await
+        .unwrap();
 
     let filter = ScopeFilter {
         scope: GridScopeSpec::default(),
@@ -351,8 +377,16 @@ async fn scope_contract_folder_intersection() {
         })
         .await
         .unwrap();
-    harness.db.add_entities_to_folder_batch(fa.folder_id, &["fint_1".to_string(), "fint_3".to_string()]).await.unwrap();
-    harness.db.add_entities_to_folder_batch(fb.folder_id, &["fint_2".to_string(), "fint_3".to_string()]).await.unwrap();
+    harness
+        .db
+        .add_entities_to_folder_batch(fa.folder_id, &["fint_1".to_string(), "fint_3".to_string()])
+        .await
+        .unwrap();
+    harness
+        .db
+        .add_entities_to_folder_batch(fb.folder_id, &["fint_2".to_string(), "fint_3".to_string()])
+        .await
+        .unwrap();
 
     let filter = ScopeFilter {
         scope: GridScopeSpec::default(),
@@ -400,8 +434,16 @@ async fn scope_contract_folder_exclusion() {
         })
         .await
         .unwrap();
-    harness.db.add_entities_to_folder_batch(fa.folder_id, &["fex_1".to_string(), "fex_3".to_string()]).await.unwrap();
-    harness.db.add_entities_to_folder_batch(fb.folder_id, &["fex_2".to_string(), "fex_3".to_string()]).await.unwrap();
+    harness
+        .db
+        .add_entities_to_folder_batch(fa.folder_id, &["fex_1".to_string(), "fex_3".to_string()])
+        .await
+        .unwrap();
+    harness
+        .db
+        .add_entities_to_folder_batch(fb.folder_id, &["fex_2".to_string(), "fex_3".to_string()])
+        .await
+        .unwrap();
 
     let filter = ScopeFilter {
         scope: GridScopeSpec::default(),
@@ -461,7 +503,10 @@ async fn scope_contract_grid_and_selection_same_scope() {
     let grid_bm = resolve_scope(&harness.db, &grid_filter).await.unwrap();
     let sel_bm = resolve_scope(&harness.db, &sel_filter).await.unwrap();
 
-    assert_eq!(grid_bm, sel_bm, "grid and selection must resolve identical bitmaps");
+    assert_eq!(
+        grid_bm, sel_bm,
+        "grid and selection must resolve identical bitmaps"
+    );
     assert_eq!(grid_bm.len(), 2);
     assert!(grid_bm.contains(f1 as u32));
     assert!(grid_bm.contains(f3 as u32));
@@ -492,17 +537,15 @@ async fn scope_contract_scope_count_agrees_with_resolve_scope() {
         })
         .await
         .unwrap();
-    harness.db.add_entities_to_folder_batch(folder.folder_id, &["cnt_2".to_string()]).await.unwrap();
+    harness
+        .db
+        .add_entities_to_folder_batch(folder.folder_id, &["cnt_2".to_string()])
+        .await
+        .unwrap();
 
     let cases: Vec<(&str, ScopeFilter)> = vec![
-        (
-            "system:all",
-            ScopeFilter::default(),
-        ),
-        (
-            "system:all_files",
-            ScopeFilter::default(),
-        ),
+        ("system:all", ScopeFilter::default()),
+        ("system:all_files", ScopeFilter::default()),
         (
             "system:inbox",
             ScopeFilter {

@@ -27,7 +27,11 @@ async fn lifecycle_inbox_to_active_to_trash_to_restore() {
     let all_res = picto_core::grid::query::get_grid_page_slim(&harness.db, all_q)
         .await
         .unwrap();
-    assert_eq!(all_res.items.len(), 0, "file must not be in all while inbox");
+    assert_eq!(
+        all_res.items.len(),
+        0,
+        "file must not be in all while inbox"
+    );
 
     // 2. Accept to active (status=1) — auto-syncs bitmaps
     harness.db.update_file_status("lc_hash", 1).await.unwrap();
@@ -42,7 +46,11 @@ async fn lifecycle_inbox_to_active_to_trash_to_restore() {
     let inbox_res = picto_core::grid::query::get_grid_page_slim(&harness.db, inbox_q)
         .await
         .unwrap();
-    assert_eq!(inbox_res.items.len(), 0, "file must not be in inbox after accept");
+    assert_eq!(
+        inbox_res.items.len(),
+        0,
+        "file must not be in inbox after accept"
+    );
 
     // 3. Trash (status=2)
     harness.db.update_file_status("lc_hash", 2).await.unwrap();
@@ -57,7 +65,11 @@ async fn lifecycle_inbox_to_active_to_trash_to_restore() {
     let all_res = picto_core::grid::query::get_grid_page_slim(&harness.db, all_q)
         .await
         .unwrap();
-    assert_eq!(all_res.items.len(), 0, "file must not be in all while trashed");
+    assert_eq!(
+        all_res.items.len(),
+        0,
+        "file must not be in all while trashed"
+    );
 
     // 4. Restore to active (status=1)
     harness.db.update_file_status("lc_hash", 1).await.unwrap();
@@ -66,11 +78,19 @@ async fn lifecycle_inbox_to_active_to_trash_to_restore() {
     let all_res = picto_core::grid::query::get_grid_page_slim(&harness.db, all_q)
         .await
         .unwrap();
-    assert_eq!(all_res.items.len(), 1, "file should be back in all after restore");
+    assert_eq!(
+        all_res.items.len(),
+        1,
+        "file should be back in all after restore"
+    );
 
     let trash_q = common::system_query(GridSystemScopeKey::Trash, 10);
     let trash_res = picto_core::grid::query::get_grid_page_slim(&harness.db, trash_q)
         .await
         .unwrap();
-    assert_eq!(trash_res.items.len(), 0, "file must not be in trash after restore");
+    assert_eq!(
+        trash_res.items.len(),
+        0,
+        "file must not be in trash after restore"
+    );
 }

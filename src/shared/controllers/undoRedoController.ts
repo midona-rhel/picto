@@ -1,13 +1,19 @@
 import { notifyInfo } from '../lib/notify';
-import { useUndoRedoStore, type UndoRedoAction } from '../../state/undoRedoStore';
+import { useUndoRedoStore } from '../../state/undoRedoStore';
 
 let actionCounter = 0;
 
-export function registerUndoAction(input: Omit<UndoRedoAction, 'id'>): void {
+export function registerUndoAction(input: {
+  label: string;
+  forward: () => Promise<void> | void;
+  backward: () => Promise<void> | void;
+}): void {
   actionCounter += 1;
   useUndoRedoStore.getState().pushAction({
     id: `undo-${Date.now()}-${actionCounter}`,
-    ...input,
+    label: input.label,
+    forward: async () => { await input.forward(); },
+    backward: async () => { await input.backward(); },
   });
 }
 

@@ -5,13 +5,13 @@
 
 use std::collections::{BTreeSet, HashSet};
 
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 
+use crate::sqlite::bitmaps::BitmapKey;
 use crate::sqlite::ReadModelEvent;
 use crate::sqlite::SqliteDatabase;
-use crate::sqlite::bitmaps::BitmapKey;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CollectionRecord {
@@ -421,7 +421,13 @@ pub(crate) fn sync_collection_aggregate_metadata(
              created_at = COALESCE(?3, created_at),
              updated_at = COALESCE(?4, updated_at)
          WHERE entity_id = ?5 AND kind = 'collection'",
-        params![merged_rating, derived_status, earliest_date, latest_modified, collection_id],
+        params![
+            merged_rating,
+            derived_status,
+            earliest_date,
+            latest_modified,
+            collection_id
+        ],
     )?;
 
     // 5) Ensure collection appears anywhere its members already lived (folder replacement semantics).
@@ -462,11 +468,13 @@ pub(crate) fn sync_collection_aggregate_metadata(
     crate::tags::db::rebuild_tag_counts(conn)?;
 
     // Auto-delete empty collections (no members left)
-    let item_count: i64 = conn.query_row(
-        "SELECT COALESCE(cached_item_count, 0) FROM media_entity WHERE entity_id = ?1",
-        [collection_id],
-        |row| row.get(0),
-    ).unwrap_or(0);
+    let item_count: i64 = conn
+        .query_row(
+            "SELECT COALESCE(cached_item_count, 0) FROM media_entity WHERE entity_id = ?1",
+            [collection_id],
+            |row| row.get(0),
+        )
+        .unwrap_or(0);
     if item_count == 0 {
         conn.execute(
             "UPDATE media_entity SET parent_collection_id = NULL, collection_ordinal = NULL, updated_at = CURRENT_TIMESTAMP
@@ -555,11 +563,13 @@ pub fn handle_cover_file_deletion(
     sync_collection_aggregate_metadata(conn, collection_id)?;
 
     // If no members remain, delete the collection entity
-    let count: i64 = conn.query_row(
-        "SELECT COALESCE(cached_item_count, 0) FROM media_entity WHERE entity_id = ?1",
-        [collection_id],
-        |row| row.get(0),
-    ).unwrap_or(0);
+    let count: i64 = conn
+        .query_row(
+            "SELECT COALESCE(cached_item_count, 0) FROM media_entity WHERE entity_id = ?1",
+            [collection_id],
+            |row| row.get(0),
+        )
+        .unwrap_or(0);
 
     if count == 0 {
         // Orphan any remaining references before delete
@@ -731,7 +741,9 @@ pub fn get_collection_summary(
         let rows = notes_stmt.query_map([collection_id], |row| row.get::<_, String>(0))?;
         for row in rows {
             if let Ok(notes_json) = row {
-                if let Ok(map) = serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(&notes_json) {
+                if let Ok(map) =
+                    serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(&notes_json)
+                {
                     if let Some(desc) = map.get("description").and_then(|v| v.as_str()) {
                         let trimmed = desc.trim();
                         if !trimmed.is_empty() && seen.insert(trimmed.to_string()) {
@@ -1126,10 +1138,7 @@ impl SqliteDatabase {
         self.with_read_conn(list_collections).await
     }
 
-    pub async fn create_collection(
-        &self,
-        name: &str,
-    ) -> Result<i64, String> {
+    pub async fn create_collection(&self, name: &str) -> Result<i64, String> {
         let n = name.to_string();
         self.with_conn(move |conn| create_collection(conn, &n))
             .await
@@ -1299,7 +1308,7 @@ impl SqliteDatabase {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sqlite::files::{NewFile, insert_file};
+    use crate::sqlite::files::{insert_file, NewFile};
 
     #[test]
     fn collection_crud_roundtrip() {
@@ -1462,40 +1471,40 @@ mod tests {
         let now = chrono::Utc::now().to_rfc3339();
         let collection_id = db
             .with_conn(move |conn| {
-            let mk_file = |hash: &str| NewFile {
-                hash: hash.to_string(),
-                name: Some(hash.to_string()),
-                size: 1234,
-                mime: "image/jpeg".to_string(),
-                width: Some(100),
-                height: Some(80),
-                duration_ms: None,
-                num_frames: None,
-                has_audio: false,
-                status: 1,
-                imported_at: now.clone(),
-                entity_created_at: None,
-                notes: None,
-                source_urls_json: None,
-                dominant_color_hex: None,
-                dominant_palette_blob: None,
-            };
+                let mk_file = |hash: &str| NewFile {
+                    hash: hash.to_string(),
+                    name: Some(hash.to_string()),
+                    size: 1234,
+                    mime: "image/jpeg".to_string(),
+                    width: Some(100),
+                    height: Some(80),
+                    duration_ms: None,
+                    num_frames: None,
+                    has_audio: false,
+                    status: 1,
+                    imported_at: now.clone(),
+                    entity_created_at: None,
+                    notes: None,
+                    source_urls_json: None,
+                    dominant_color_hex: None,
+                    dominant_palette_blob: None,
+                };
 
-            let file_a_id = insert_file(conn, &mk_file("hash_a"))?;
-            let _file_b_id = insert_file(conn, &mk_file("hash_b"))?;
-            let keep_tag = crate::tags::db::get_or_create_tag(conn, "", "keep")?;
-            crate::tags::db::tag_entity(conn, file_a_id, keep_tag, "local")?;
+                let file_a_id = insert_file(conn, &mk_file("hash_a"))?;
+                let _file_b_id = insert_file(conn, &mk_file("hash_b"))?;
+                let keep_tag = crate::tags::db::get_or_create_tag(conn, "", "keep")?;
+                crate::tags::db::tag_entity(conn, file_a_id, keep_tag, "local")?;
 
-            let collection_id = create_collection(conn, "C")?;
-            add_collection_members_by_hashes(
-                conn,
-                collection_id,
-                &["hash_a".to_string(), "hash_b".to_string()],
-            )?;
-            Ok(collection_id)
-        })
-        .await
-        .unwrap();
+                let collection_id = create_collection(conn, "C")?;
+                add_collection_members_by_hashes(
+                    conn,
+                    collection_id,
+                    &["hash_a".to_string(), "hash_b".to_string()],
+                )?;
+                Ok(collection_id)
+            })
+            .await
+            .unwrap();
         db.update_collection(
             collection_id,
             None,
@@ -1511,7 +1520,11 @@ mod tests {
         let summary = db.get_collection_summary(collection_id).await.unwrap();
         assert_eq!(
             summary.tags,
-            vec!["artist:alice".to_string(), "keep".to_string(), "landscape".to_string()]
+            vec![
+                "artist:alice".to_string(),
+                "keep".to_string(),
+                "landscape".to_string()
+            ]
         );
 
         let tags_a = db

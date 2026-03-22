@@ -1,5 +1,5 @@
-use serde_json::Value;
 use super::SiteAdapter;
+use serde_json::Value;
 
 pub(super) static ADAPTER: TwitterAdapter = TwitterAdapter;
 
@@ -7,11 +7,13 @@ pub(super) struct TwitterAdapter;
 
 impl SiteAdapter for TwitterAdapter {
     fn collect_source_urls(&self, json: &Value) -> Vec<String> {
-        let author = json.get("author")
+        let author = json
+            .get("author")
             .and_then(|a| a.get("name"))
             .and_then(|v| v.as_str())
             .unwrap_or("");
-        let tweet_id = json.get("tweet_id")
+        let tweet_id = json
+            .get("tweet_id")
             .and_then(|v| v.as_u64())
             .map(|n| n.to_string())
             .unwrap_or_default();

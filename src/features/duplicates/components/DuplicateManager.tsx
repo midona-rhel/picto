@@ -12,13 +12,13 @@ import {
   IconX,
   IconCheck,
 } from '@tabler/icons-react';
-import { api } from '#desktop/api';
+import { filesController } from '../../../controllers/filesController';
+import { duplicatesController } from '../../../controllers/duplicatesController';
 import { formatDateTime } from '../../../shared/lib/formatters';
 import { mediaFileUrl, mediaThumbnailUrl } from '../../../shared/lib/mediaUrl';
 import { isImagePreloaded, queueImageDecode } from '../../../shared/lib/useImagePreloader';
 import type { DuplicatePairDto, DuplicatePairsResponse, ResolveDuplicateAction } from '../../../shared/types/api';
 import { useDomainStore } from '../../../state/domainStore';
-import { registerUndoAction } from '../../../shared/controllers/undoRedoController';
 import { useGlobalKeydown } from '../../../shared/hooks/useGlobalKeydown';
 import { useImageZoom } from '../../viewer/hooks/useImageZoom';
 import { useNavigatorRenderer } from '../../viewer/hooks/useNavigatorRenderer';
@@ -180,7 +180,7 @@ export function DuplicateManager() {
   /** Push the live duplicate count to the sidebar immediately (bypasses compiler lag). */
   const refreshDuplicateCount = useCallback(async () => {
     try {
-      const { count } = await api.duplicates.getCount();
+      const { count } = await duplicatesController.getCount();
       useDomainStore.getState().setDuplicatesCount(count);
     } catch {
       // Non-critical — event bridge will eventually sync
@@ -190,7 +190,7 @@ export function DuplicateManager() {
   const loadPairs = useCallback(async () => {
     try {
       setLoading(true);
-      const result: DuplicatePairsResponse = await api.duplicates.getPairs(null, 200, 'detected');
+      const result: DuplicatePairsResponse = await duplicatesController.getPairs(null, 200, 'detected');
       setPairs(result.items);
       setTotalPairs(result.total);
       setNextCursor(result.next_cursor);
@@ -213,7 +213,7 @@ export function DuplicateManager() {
     if (!hasMore || !nextCursor || loadingMore) return;
     try {
       setLoadingMore(true);
-      const result: DuplicatePairsResponse = await api.duplicates.getPairs(nextCursor, 200, 'detected');
+      const result: DuplicatePairsResponse = await duplicatesController.getPairs(nextCursor, 200, 'detected');
       setPairs((prev) => [...prev, ...result.items]);
       setNextCursor(result.next_cursor);
       setHasMore(result.has_more);
@@ -234,7 +234,7 @@ export function DuplicateManager() {
 
     const loadFileInfo = async () => {
       try {
-        const batch = await api.grid.getEntitiesMetadataBatch([
+        const batch = await filesController.getMetadataBatch([
           currentPair.hash_a,
           currentPair.hash_b,
         ]);
@@ -309,29 +309,13 @@ export function DuplicateManager() {
       try {
         setProcessing(true);
         const pairSnapshot = currentPair;
-        await api.duplicates.resolvePair(action, currentPair.hash_a, currentPair.hash_b);
+        await duplicatesController.resolvePair(action, currentPair.hash_a, currentPair.hash_b);
 
-        if (action === 'keep_left' || action === 'keep_right' || action === 'not_duplicate' || action === 'keep_both') {
+        if (action === 'keep_left' || action === 'keep_right') {
           const loserHash = action === 'keep_left'
             ? pairSnapshot.hash_b
-            : action === 'keep_right'
-              ? pairSnapshot.hash_a
-              : null;
-          registerUndoAction({
-            label: `Resolve duplicate (${action})`,
-            undo: async () => {
-              if (loserHash) {
-                await api.files.setStatus(loserHash, 'active');
-              }
-              // Re-scan to re-detect/open the pair state.
-              await api.duplicates.scan();
-              await loadPairs();
-            },
-            redo: async () => {
-              await api.duplicates.resolvePair(action, pairSnapshot.hash_a, pairSnapshot.hash_b);
-              await loadPairs();
-            },
-          });
+            : pairSnapshot.hash_a;
+          await filesController.changeStatus(loserHash, 'trash', 'active', 'Resolve duplicate');
         }
 
         setPairs((prev) => {
@@ -408,7 +392,7 @@ export function DuplicateManager() {
   const scanForDuplicates = useCallback(async () => {
     try {
       setScanning(true);
-      const result = await api.duplicates.scan();
+      const result = await duplicatesController.scan();
       if (result.reviewable_detected_new > 0) {
         notifyInfo(
           `Found ${result.reviewable_detected_new} new duplicate pair(s) (${result.reviewable_detected_total} in review queue)`,
@@ -449,10 +433,10 @@ export function DuplicateManager() {
     const timer = setInterval(async () => {
       if (scanningRef.current || processingRef.current) return;
       try {
-        const result = await api.duplicates.scan();
+        const result = await duplicatesController.scan();
         void refreshDuplicateCount();
         if (result.reviewable_detected_total > 0) {
-          const fresh = await api.duplicates.getPairs(null, 200, 'detected');
+          const fresh = await duplicatesController.getPairs(null, 200, 'detected');
           setPairs(fresh.items);
           setTotalPairs(fresh.total);
           setNextCursor(fresh.next_cursor);

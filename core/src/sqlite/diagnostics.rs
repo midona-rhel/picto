@@ -82,11 +82,7 @@ impl SqliteDatabase {
     }
 
     /// Run a read-only closure on a pooled reader connection with a diagnostic label.
-    pub async fn with_read_conn_labeled<F, R>(
-        &self,
-        label: &'static str,
-        f: F,
-    ) -> Result<R, String>
+    pub async fn with_read_conn_labeled<F, R>(&self, label: &'static str, f: F) -> Result<R, String>
     where
         F: FnOnce(&Connection) -> rusqlite::Result<R> + Send + 'static,
         R: Send + 'static,
@@ -148,11 +144,7 @@ impl SqliteDatabase {
     }
 
     /// Run a synchronous transactional closure with a diagnostic label.
-    pub async fn with_conn_mut_labeled<F, R>(
-        &self,
-        label: &'static str,
-        f: F,
-    ) -> Result<R, String>
+    pub async fn with_conn_mut_labeled<F, R>(&self, label: &'static str, f: F) -> Result<R, String>
     where
         F: FnOnce(&mut Connection) -> rusqlite::Result<R> + Send + 'static,
         R: Send + 'static,

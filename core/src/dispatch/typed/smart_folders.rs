@@ -76,7 +76,9 @@ pub async fn create_smart_folder(
             })
             .await?;
         if !exists {
-            return Err(format!("Invalid smart folder parent id: {target_parent_id}"));
+            return Err(format!(
+                "Invalid smart folder parent id: {target_parent_id}"
+            ));
         }
     }
     let result = crate::smart_folders::service::SmartFolderService::create_smart_folder(
@@ -84,10 +86,10 @@ pub async fn create_smart_folder(
         input.folder,
     )
     .await?;
-    crate::events::emit_mutation(
+    crate::events::emit_state_changed(
         "create_smart_folder",
-        crate::runtime_contract::mutation_builder::MutationImpact::sidebar(
-            crate::runtime_contract::mutation::Domain::SmartFolders,
+        crate::runtime_contract::change_builder::ChangeImpact::sidebar(
+            crate::runtime_contract::state_change::Domain::SmartFolders,
         ),
     );
     Ok(serde_json::to_value(&result).map_err(|e| e.to_string())?)
@@ -124,13 +126,13 @@ pub async fn update_smart_folder(
             input.folder,
         )
         .await?;
-    let mut impact = crate::runtime_contract::mutation_builder::MutationImpact::sidebar(
-        crate::runtime_contract::mutation::Domain::SmartFolders,
+    let mut impact = crate::runtime_contract::change_builder::ChangeImpact::sidebar(
+        crate::runtime_contract::state_change::Domain::SmartFolders,
     );
     if predicate_changed {
         impact = impact.smart_folder_ids(vec![sf_id]);
     }
-    crate::events::emit_mutation("update_smart_folder", impact);
+    crate::events::emit_state_changed("update_smart_folder", impact);
     Ok(serde_json::to_value(&result).map_err(|e| e.to_string())?)
 }
 
@@ -163,10 +165,10 @@ pub async fn move_smart_folder(
         input.sibling_order,
     )
     .await?;
-    crate::events::emit_mutation(
+    crate::events::emit_state_changed(
         "move_smart_folder",
-        crate::runtime_contract::mutation_builder::MutationImpact::sidebar(
-            crate::runtime_contract::mutation::Domain::SmartFolders,
+        crate::runtime_contract::change_builder::ChangeImpact::sidebar(
+            crate::runtime_contract::state_change::Domain::SmartFolders,
         )
         .smart_folder_ids(vec![input.smart_folder_id]),
     );
@@ -183,10 +185,10 @@ pub async fn delete_smart_folder(
         .map_err(|_| format!("Invalid smart folder id: {}", input.id))?;
     crate::smart_folders::service::SmartFolderService::delete_smart_folder(&state.db, input.id)
         .await?;
-    crate::events::emit_mutation(
+    crate::events::emit_state_changed(
         "delete_smart_folder",
-        crate::runtime_contract::mutation_builder::MutationImpact::sidebar(
-            crate::runtime_contract::mutation::Domain::SmartFolders,
+        crate::runtime_contract::change_builder::ChangeImpact::sidebar(
+            crate::runtime_contract::state_change::Domain::SmartFolders,
         )
         .smart_folder_ids(vec![sf_id]),
     );
@@ -215,10 +217,10 @@ pub async fn reorder_smart_folders(
         input.moves,
     )
     .await?;
-    crate::events::emit_mutation(
+    crate::events::emit_state_changed(
         "reorder_smart_folders",
-        crate::runtime_contract::mutation_builder::MutationImpact::sidebar(
-            crate::runtime_contract::mutation::Domain::SmartFolders,
+        crate::runtime_contract::change_builder::ChangeImpact::sidebar(
+            crate::runtime_contract::state_change::Domain::SmartFolders,
         ),
     );
     Ok(())

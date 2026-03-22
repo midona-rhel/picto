@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { api } from '#desktop/api';
+import { libraryController } from '../../../controllers/libraryController';
 import { notifySuccess, notifyError } from '../../../shared/lib/notify';
 import { TextButton } from '../../../shared/components/TextButton';
 import { ConfirmModal } from '../../../shared/components/ConfirmModal';
@@ -22,7 +22,7 @@ export function DangerZonePanel() {
   const handleWipeImageData = async () => {
     try {
       setWiping(true);
-      await api.library.wipeImageData();
+      await libraryController.wipeImageData();
       notifySuccess('All images and review queue entries were removed. Subscription groups were kept.', 'Image Data Cleared');
       setConfirmWipeOpened(false);
       setTimeout(() => window.location.reload(), 150);

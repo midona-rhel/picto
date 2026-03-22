@@ -29,11 +29,12 @@ pub struct GetEntitiesMetadataBatchInput {
 
 // ─── Handlers ──────────────────────────────────────────────────────────────
 
-pub async fn get_grid_page_slim(state: &AppState, input: GetGridPageSlimInput) -> Result<serde_json::Value, String> {
+pub async fn get_grid_page_slim(
+    state: &AppState,
+    input: GetGridPageSlimInput,
+) -> Result<serde_json::Value, String> {
     let started = Instant::now();
-    let result =
-        crate::grid::query::get_grid_page_slim(&state.db, input.query)
-            .await?;
+    let result = crate::grid::query::get_grid_page_slim(&state.db, input.query).await?;
     crate::perf::record_grid_page_slim(started.elapsed().as_secs_f64() * 1000.0);
 
     // Backfill missing thumbnails and dominant colors in the background.
@@ -59,7 +60,10 @@ pub async fn get_grid_page_slim(state: &AppState, input: GetGridPageSlimInput) -
     serde_json::to_value(&result).map_err(|e| e.to_string())
 }
 
-pub async fn get_grid_outline(state: &AppState, input: GetGridPageSlimInput) -> Result<serde_json::Value, String> {
+pub async fn get_grid_outline(
+    state: &AppState,
+    input: GetGridPageSlimInput,
+) -> Result<serde_json::Value, String> {
     let result = crate::grid::query::get_grid_outline(&state.db, input.query).await?;
     serde_json::to_value(&result).map_err(|e| e.to_string())
 }
@@ -77,10 +81,7 @@ pub async fn get_entities_metadata_batch(
     state: &AppState,
     input: GetEntitiesMetadataBatchInput,
 ) -> Result<serde_json::Value, String> {
-    let result = crate::grid::metadata::get_entities_metadata_batch(
-        &state.db,
-        input.hashes,
-    )
-    .await?;
+    let result =
+        crate::grid::metadata::get_entities_metadata_batch(&state.db, input.hashes).await?;
     serde_json::to_value(&result).map_err(|e| e.to_string())
 }

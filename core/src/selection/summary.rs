@@ -6,13 +6,11 @@ use std::collections::HashSet;
 use chrono::Utc;
 
 use crate::selection::helpers::{
-    sample_hashes_from_entity_bitmap, selection_bitmap_for_all_results, summarize_entity_stats_from_bitmap,
-    summarize_hashes_bulk, summarize_tags_from_bitmap,
+    sample_hashes_from_entity_bitmap, selection_bitmap_for_all_results,
+    summarize_entity_stats_from_bitmap, summarize_hashes_bulk, summarize_tags_from_bitmap,
 };
 use crate::sqlite::SqliteDatabase;
-use crate::types::{
-    SelectionMode, SelectionQuerySpec, SelectionSummary, SelectionSummaryStats,
-};
+use crate::types::{SelectionMode, SelectionQuerySpec, SelectionSummary, SelectionSummaryStats};
 
 pub async fn get_selection_summary(
     db: &SqliteDatabase,
@@ -25,7 +23,16 @@ pub async fn get_selection_summary(
         .into_iter()
         .collect();
 
-    let (total_count, mut sample_hashes, shared_tags, top_tags, total_size_bytes, mime_counts, rating_stats_val, pending) = match &selection.mode {
+    let (
+        total_count,
+        mut sample_hashes,
+        shared_tags,
+        top_tags,
+        total_size_bytes,
+        mime_counts,
+        rating_stats_val,
+        pending,
+    ) = match &selection.mode {
         SelectionMode::ExplicitHashes => {
             let hashes = selection.hashes.clone().unwrap_or_default();
             let filtered: Vec<String> = hashes
@@ -44,7 +51,8 @@ pub async fn get_selection_summary(
 
             let (shared, top) = summarize_tags_from_bitmap(db, &filtered_bm).await?;
 
-            let (size, mimes, rstats) = summarize_entity_stats_from_bitmap(db, &filtered_bm).await?;
+            let (size, mimes, rstats) =
+                summarize_entity_stats_from_bitmap(db, &filtered_bm).await?;
             (
                 total,
                 sample,

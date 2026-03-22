@@ -1,11 +1,11 @@
 //! File CRUD operations.
 
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
+use super::bitmaps::BitmapKey;
 use super::ReadModelEvent;
 use super::SqliteDatabase;
-use super::bitmaps::BitmapKey;
 
 /// Default visibility clause: active (1) only, excludes inbox (0) and trash (2).
 const DEFAULT_VISIBILITY_CLAUSE: &str = "status = 1";
@@ -287,11 +287,7 @@ pub fn set_source_urls(
     Ok(())
 }
 
-pub fn set_date_created(
-    conn: &Connection,
-    file_id: i64,
-    created_at: &str,
-) -> rusqlite::Result<()> {
+pub fn set_date_created(conn: &Connection, file_id: i64, created_at: &str) -> rusqlite::Result<()> {
     conn.execute(
         "UPDATE media_entity
          SET created_at = ?1, updated_at = CURRENT_TIMESTAMP
@@ -309,10 +305,7 @@ pub fn set_date_added(conn: &Connection, file_id: i64, imported_at: &str) -> rus
     Ok(())
 }
 
-pub fn touch_date_modified(
-    conn: &Connection,
-    entity_id: i64,
-) -> rusqlite::Result<()> {
+pub fn touch_date_modified(conn: &Connection, entity_id: i64) -> rusqlite::Result<()> {
     let now = chrono::Utc::now().to_rfc3339();
     conn.execute(
         "UPDATE media_entity SET updated_at = ?1 WHERE entity_id = ?2",
@@ -538,12 +531,8 @@ fn entity_sort_expr(sort_field: &str) -> &'static str {
                   ELSE COALESCE(f.name, me.name, '')
              END"
         }
-        "date_created" => {
-            "me.created_at"
-        }
-        "date_modified" => {
-            "me.updated_at"
-        }
+        "date_created" => "me.created_at",
+        "date_modified" => "me.updated_at",
         "mime" => {
             "CASE WHEN me.kind = 'collection'
                   THEN COALESCE(cover_f.mime, 'application/x-collection')
@@ -1264,21 +1253,41 @@ pub fn aggregate_media_type_breakdown(conn: &Connection) -> rusqlite::Result<Med
          GROUP BY category",
     )?;
     let mut b = MediaTypeBreakdown {
-        images: 0, images_size: 0,
-        videos: 0, videos_size: 0,
-        audio: 0, audio_size: 0,
-        other: 0, other_size: 0,
+        images: 0,
+        images_size: 0,
+        videos: 0,
+        videos_size: 0,
+        audio: 0,
+        audio_size: 0,
+        other: 0,
+        other_size: 0,
     };
     let rows = stmt.query_map([], |row| {
-        Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?, row.get::<_, i64>(2)?))
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, i64>(1)?,
+            row.get::<_, i64>(2)?,
+        ))
     })?;
     for row in rows {
         let (cat, count, size) = row?;
         match cat.as_str() {
-            "image" => { b.images = count; b.images_size = size; }
-            "video" => { b.videos = count; b.videos_size = size; }
-            "audio" => { b.audio = count; b.audio_size = size; }
-            _ => { b.other = count; b.other_size = size; }
+            "image" => {
+                b.images = count;
+                b.images_size = size;
+            }
+            "video" => {
+                b.videos = count;
+                b.videos_size = size;
+            }
+            "audio" => {
+                b.audio = count;
+                b.audio_size = size;
+            }
+            _ => {
+                b.other = count;
+                b.other_size = size;
+            }
         }
     }
     Ok(b)
@@ -1393,10 +1402,7 @@ impl SqliteDatabase {
         Ok(())
     }
 
-    pub async fn filter_visible_entity_ids(
-        &self,
-        entity_ids: &[i64],
-    ) -> Result<Vec<i64>, String> {
+    pub async fn filter_visible_entity_ids(&self, entity_ids: &[i64]) -> Result<Vec<i64>, String> {
         let ids = entity_ids.to_vec();
         self.with_read_conn(move |conn| filter_visible_entity_ids(conn, &ids))
             .await
@@ -1619,11 +1625,7 @@ impl SqliteDatabase {
             .await
     }
 
-    pub async fn set_date_created(
-        &self,
-        hash: &str,
-        created_at: &str,
-    ) -> Result<(), String> {
+    pub async fn set_date_created(&self, hash: &str, created_at: &str) -> Result<(), String> {
         let file_id = self.resolve_hash(hash).await?;
         let created_at = created_at.to_string();
         self.with_conn(move |conn| set_date_created(conn, file_id, &created_at))
@@ -1676,7 +1678,7 @@ impl SqliteDatabase {
 
 #[cfg(test)]
 mod tests {
-    use super::{NewFile, insert_file, save_file_colors};
+    use super::{insert_file, save_file_colors, NewFile};
     use rusqlite::Connection;
 
     #[test]
@@ -1768,9 +1770,11 @@ mod tests {
         assert_eq!(stored_created_at, entity_created_at);
 
         let stored_imported_at: String = conn
-            .query_row("SELECT imported_at FROM file WHERE file_id = ?1", [file_id], |row| {
-                row.get(0)
-            })
+            .query_row(
+                "SELECT imported_at FROM file WHERE file_id = ?1",
+                [file_id],
+                |row| row.get(0),
+            )
             .unwrap();
         assert_eq!(stored_imported_at, imported_at);
     }

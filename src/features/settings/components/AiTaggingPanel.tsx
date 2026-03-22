@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Badge, Loader, Slider, Switch, Text } from '@mantine/core';
-import { api } from '#desktop/api';
+import { aiTaggerController } from '../../../controllers/aiTaggerController';
+import { settingsController } from '../../../controllers/settingsController';
 import type { AppSettings, AiTaggerStatus, AiTaggerModelStatus } from '../../../shared/types/api';
 import { TextButton } from '../../../shared/components/TextButton';
 import { SettingsBlock, SettingsRow } from './ui';
@@ -19,8 +20,8 @@ export function AiTaggingPanel() {
     try {
       setLoading(true);
       const [s, st] = await Promise.all([
-        api.settings.get(),
-        api.aiTagger.status(),
+        settingsController.get(),
+        aiTaggerController.getStatus(),
       ]);
       setSettings(s);
       setStatus(st);
@@ -36,10 +37,10 @@ export function AiTaggingPanel() {
     const next = { ...settings, ...patch };
     setSettings(next);
     try {
-      await api.settings.save(next);
+      await settingsController.save(next);
       // Refresh status when toggles change
       if ('aiTaggerWd14Enabled' in patch || 'aiTaggerE621Enabled' in patch) {
-        const st = await api.aiTagger.status();
+        const st = await aiTaggerController.getStatus();
         setStatus(st);
       }
     } catch (err) {
@@ -51,9 +52,9 @@ export function AiTaggingPanel() {
   const handleDownload = async (slug: string) => {
     setDownloading((prev) => new Set(prev).add(slug));
     try {
-      await api.aiTagger.downloadModel(slug);
+      await aiTaggerController.downloadModel(slug);
       const poll = setInterval(async () => {
-        const st = await api.aiTagger.status();
+        const st = await aiTaggerController.getStatus();
         setStatus(st);
         const model = st.models.find((m) => m.slug === slug);
         if (model?.downloaded) {
@@ -77,8 +78,8 @@ export function AiTaggingPanel() {
 
   const handleDelete = async (slug: string) => {
     try {
-      await api.aiTagger.deleteModel(slug);
-      const st = await api.aiTagger.status();
+      await aiTaggerController.deleteModel(slug);
+      const st = await aiTaggerController.getStatus();
       setStatus(st);
     } catch (err) {
       console.error('Model delete failed:', err);

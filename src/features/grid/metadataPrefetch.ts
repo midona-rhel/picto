@@ -2,7 +2,7 @@
  * Thin metadata pass-through — dedupes in-flight requests only.
  * No LRU cache. Backend (SQLite) is the single source of truth.
  */
-import { api } from '#desktop/api';
+import { filesController } from '../../controllers/filesController';
 import type {
   EntityAllMetadata,
   ResolvedTagInfo,
@@ -16,67 +16,45 @@ export type { EntityAllMetadata, ResolvedTagInfo, SelectionQuerySpec, SelectionS
 // In-flight dedup only — no result caching
 // ---------------------------------------------------------------------------
 
-const inflight = new Map<string, Promise<EntityAllMetadata>>();
-
-function fetchSingle(hash: string): Promise<EntityAllMetadata> {
-  const existing = inflight.get(hash);
-  if (existing) return existing;
-  const p = api.file.getAllMetadata(hash).finally(() => inflight.delete(hash));
-  inflight.set(hash, p);
-  return p;
-}
-
 /** Fire-and-forget prefetch for a single hash. */
 export function prefetchMetadata(hash: string): void {
-  void fetchSingle(hash);
+  filesController.prefetchMetadata(hash);
 }
 
 /** Batch prefetch — hits the projection-backed batch endpoint. */
 export async function prefetchMetadataBatch(hashes: string[]): Promise<void> {
-  const unique = [...new Set(hashes)].filter(Boolean);
-  if (unique.length === 0) return;
-  const MAX_BATCH = 200;
-  for (let i = 0; i < unique.length; i += MAX_BATCH) {
-    await api.grid.getEntitiesMetadataBatch(unique.slice(i, i + MAX_BATCH));
-  }
+  await filesController.prefetchMetadataBatch(hashes);
 }
 
 /** Get metadata for a hash — returns a fresh fetch every time. */
 export function getMetadata(hash: string): Promise<EntityAllMetadata> {
-  return fetchSingle(hash);
+  return filesController.getMetadata(hash);
 }
 
-/** No-op — no cache to invalidate. */
-export function invalidateMetadata(_hash: string): void {}
-export function invalidateManyMetadata(_hashes: string[]): void {}
+/** No-op — backend remains the source of truth. */
+export function noteMetadataChanged(hash: string): void {
+  filesController.noteMetadataChanged(hash);
+}
+export function noteManyMetadataChanged(hashes: string[]): void {
+  filesController.noteManyMetadataChanged(hashes);
+}
 
 /** No-op — no cache to pin. */
-export function pinMetadata(_hash: string): void {}
-export function unpinMetadata(_hash: string): void {}
-
-// ---------------------------------------------------------------------------
-// Selection summary — simple in-flight dedup
-// ---------------------------------------------------------------------------
-
-const selectionInflight = new Map<string, Promise<SelectionSummary>>();
-
-function stableKey(spec: SelectionQuerySpec): string {
-  return JSON.stringify(spec);
+export function pinMetadata(hash: string): void {
+  filesController.pinMetadata(hash);
+}
+export function unpinMetadata(hash: string): void {
+  filesController.unpinMetadata(hash);
 }
 
 export function getOrStartSelectionSummary(spec: SelectionQuerySpec): Promise<SelectionSummary> {
-  const key = stableKey(spec);
-  const existing = selectionInflight.get(key);
-  if (existing) return existing;
-  const p = api.selection.getSummary(spec).finally(() => selectionInflight.delete(key));
-  selectionInflight.set(key, p);
-  return p;
+  return filesController.getSelectionSummary(spec);
 }
 
-export function invalidateSelectionSummary(_selectionKey?: string): void {
-  selectionInflight.clear();
+export function noteSelectionSummaryChanged(_selectionKey?: string): void {
+  filesController.noteSelectionSummaryChanged();
 }
 
 export function getMetadataCacheDebugStats() {
-  return { entries: inflight.size, bytes: 0, budgetBytes: 0 };
+  return { entries: 0, bytes: 0, budgetBytes: 0 };
 }

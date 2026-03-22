@@ -8,8 +8,8 @@ use std::collections::{HashMap, HashSet};
 
 use tracing::warn;
 
-use crate::runtime_contract::mutation::Domain;
-use crate::runtime_contract::mutation_builder::MutationImpact;
+use crate::runtime_contract::change_builder::ChangeImpact;
+use crate::runtime_contract::state_change::Domain;
 use crate::sqlite::SqliteDatabase;
 
 #[derive(Debug, Clone)]
@@ -21,7 +21,7 @@ pub struct ExistingImportMergeRequest {
     pub name: Option<String>,
     pub note_entries: HashMap<String, String>,
     pub subscription_id: Option<i64>,
-    pub mutation_name: &'static str,
+    pub change_origin: &'static str,
 }
 
 pub async fn merge_existing_import_target(
@@ -147,17 +147,17 @@ pub async fn merge_existing_import_target(
     if any_change || ownership_change {
         let hash = hex_hash.to_string();
         let mut impact = if status_restored {
-            MutationImpact::file_lifecycle(db).file_hashes(vec![hash.clone()])
+            ChangeImpact::file_lifecycle(db).file_hashes(vec![hash.clone()])
         } else if tags_changed {
-            MutationImpact::file_tags(hash.clone())
+            ChangeImpact::file_tags(hash.clone())
         } else if metadata_changed {
-            MutationImpact::file_metadata(hash.clone())
+            ChangeImpact::file_metadata(hash.clone())
         } else {
-            MutationImpact::new().file_hashes(vec![hash.clone()])
+            ChangeImpact::new().file_hashes(vec![hash.clone()])
         };
 
         if status_restored && tags_changed {
-            impact = impact.tags_changed();
+            impact = impact.tags_changed().all_smart_folder_scopes_changed();
         }
 
         if ownership_change {
@@ -167,7 +167,7 @@ pub async fn merge_existing_import_target(
                 hashes.push(hash);
             }
         }
-        crate::events::emit_mutation(request.mutation_name, impact);
+        crate::events::emit_state_changed(request.change_origin, impact);
     }
 
     Ok(any_change || ownership_change)

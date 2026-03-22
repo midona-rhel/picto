@@ -13,7 +13,6 @@ use serde_json::json;
 use super::read_model::{DerivedArtifact, PublishedArtifacts};
 use super::SqliteDatabase;
 
-
 struct ManifestState {
     published_epoch: u64,
     published_artifact_versions: HashMap<String, u64>,
@@ -258,7 +257,6 @@ impl Manifest {
 pub fn bitmap_payload_from_manifest(manifest: &Manifest) -> Option<String> {
     manifest.published_artifact_payload_json("bitmaps")
 }
-
 
 pub async fn publish_pending(
     db: &Arc<SqliteDatabase>,

@@ -46,16 +46,15 @@ pub fn generate_challenge() -> PixivOAuthChallenge {
 /// `code_verifier` is the PKCE verifier from `generate_challenge`.
 pub async fn exchange_code(code: &str, code_verifier: &str) -> Result<String, String> {
     // Extract just the code value if the user pasted a full URL or extra params
-    let clean_code = code
-        .rsplit('=')
-        .next()
-        .unwrap_or(code)
-        .trim();
+    let clean_code = code.rsplit('=').next().unwrap_or(code).trim();
 
     let client = reqwest::Client::new();
     let resp = client
         .post("https://oauth.secure.pixiv.net/auth/token")
-        .header("User-Agent", "PixivAndroidApp/5.0.234 (Android 11; Pixel 5)")
+        .header(
+            "User-Agent",
+            "PixivAndroidApp/5.0.234 (Android 11; Pixel 5)",
+        )
         .form(&[
             ("client_id", CLIENT_ID),
             ("client_secret", CLIENT_SECRET),
@@ -75,12 +74,15 @@ pub async fn exchange_code(code: &str, code_verifier: &str) -> Result<String, St
         .map_err(|e| format!("Pixiv OAuth response parse error: {e}"))?;
 
     if let Some(err) = data.get("error").and_then(|v| v.as_str()) {
-        let detail = data.get("errors")
+        let detail = data
+            .get("errors")
             .or_else(|| data.get("message"))
             .map(|v| format!(" — {v}"))
             .unwrap_or_default();
         if err == "invalid_request" || err == "invalid_grant" {
-            return Err(format!("Code expired or invalid. Please try again.{detail}"));
+            return Err(format!(
+                "Code expired or invalid. Please try again.{detail}"
+            ));
         }
         return Err(format!("Pixiv OAuth error: {err}{detail}"));
     }

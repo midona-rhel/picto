@@ -1,53 +1,52 @@
 /**
  * PBI-303: Contract tests for the derived resource dependency map.
  *
- * Each mutation fact type must always yield the same deterministic set
- * of stale ResourceKeys. These tests document that contract.
+ * Each state-change field must always yield the same deterministic set
+ * of refresh targets. These tests document that contract.
  */
 
 import { describe, it, expect } from 'vitest';
-import { deriveStaleResources, gridResourceMatchesScope } from '../resourceInvalidator';
-import type { MutationReceipt, MutationFacts, ResourceKey } from '../../shared/types/generated/runtime-contract';
-import type { Domain } from '../../shared/types/generated/runtime-contract/Domain';
+import { planRefreshTargets, refreshTargetMatchesGridScope } from '../stateChanges/planRefreshTargets';
+import type { StateChangedEvent, StateChanges, ResourceKey, Domain } from '../../shared/types/backendState';
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-function makeFacts(overrides: Partial<MutationFacts> = {}): MutationFacts {
+function makeChanges(overrides: Partial<StateChanges> = {}): StateChanges {
   return { domains: [], ...overrides };
 }
 
-function makeReceipt(
-  facts: MutationFacts,
-  extras: Partial<Pick<MutationReceipt, 'sidebar_counts'>> = {},
-): MutationReceipt {
+function makeEvent(
+  changes: StateChanges,
+  extras: Partial<Pick<StateChangedEvent, 'sidebar_counts'>> = {},
+): StateChangedEvent {
   return {
     seq: 1,
     ts: '2026-01-01T00:00:00Z',
-    origin_command: 'test',
-    facts,
+    origin: 'test',
+    changes,
     ...extras,
   };
 }
 
-function keys(receipt: MutationReceipt): Set<ResourceKey> {
-  return deriveStaleResources(receipt);
+function keys(event: StateChangedEvent): Set<ResourceKey> {
+  return planRefreshTargets(event);
 }
 
-function keyArray(receipt: MutationReceipt): ResourceKey[] {
-  return [...keys(receipt)].sort();
+function keyArray(event: StateChangedEvent): ResourceKey[] {
+  return [...keys(event)].sort();
 }
 
 // ---------------------------------------------------------------------------
-// deriveStaleResources — fact-driven rules
+// planRefreshTargets — fact-driven rules
 // ---------------------------------------------------------------------------
 
-describe('deriveStaleResources', () => {
+describe('planRefreshTargets', () => {
   // --- status_changed ---
 
   it('status_changed yields sidebar/tree, selection/current, and status-sensitive grid scopes', () => {
-    const result = keys(makeReceipt(makeFacts({ status_changed: true })));
+    const result = keys(makeEvent(makeChanges({ status_changed: true })));
     expect(result).toContain('sidebar/tree');
     expect(result).toContain('selection/current');
     expect(result).toContain('grid/system:all');
@@ -59,7 +58,7 @@ describe('deriveStaleResources', () => {
   });
 
   it('status_changed with folder_ids includes folder grid scopes', () => {
-    const result = keys(makeReceipt(makeFacts({
+    const result = keys(makeEvent(makeChanges({
       status_changed: true,
       folder_ids: [10, 20],
     })));
@@ -72,7 +71,7 @@ describe('deriveStaleResources', () => {
   // --- tags_changed ---
 
   it('tags_changed with file_hashes yields selection/current + metadata keys, no grid/system:all', () => {
-    const result = keys(makeReceipt(makeFacts({
+    const result = keys(makeEvent(makeChanges({
       tags_changed: true,
       file_hashes: ['abc', 'def'],
     })));
@@ -84,16 +83,31 @@ describe('deriveStaleResources', () => {
   });
 
   it('tags_changed without file_hashes yields selection/current + grid/system:all', () => {
-    const result = keys(makeReceipt(makeFacts({ tags_changed: true })));
+    const result = keys(makeEvent(makeChanges({ tags_changed: true })));
     expect(result).toContain('selection/current');
     expect(result).toContain('grid/system:all');
     expect(result).toContain('grid/system:untagged');
   });
 
+  it('tag_changes without tags_changed still yields the tag refresh targets', () => {
+    const result = keys(makeEvent(makeChanges({
+      domains: ['sidebar', 'smart_folders'] as Domain[],
+      tag_changes: { added: ['artist:abc'] },
+      file_hashes: ['abc'],
+      extra_grid_scopes: ['smart:all'],
+    })));
+    expect(result).toContain('selection/current');
+    expect(result).toContain('grid/system:untagged');
+    expect(result).toContain('grid/smart:all');
+    expect(result).toContain('sidebar/tree');
+    expect(result).toContain('metadata/hash:abc');
+    expect(result).not.toContain('grid/system:all');
+  });
+
   // --- tag_structure_changed ---
 
   it('tag_structure_changed yields sidebar/tree, selection/current, grid/system:all, grid/smart:all', () => {
-    const result = keys(makeReceipt(makeFacts({ tag_structure_changed: true })));
+    const result = keys(makeEvent(makeChanges({ tag_structure_changed: true })));
     expect(result).toContain('sidebar/tree');
     expect(result).toContain('selection/current');
     expect(result).toContain('grid/system:all');
@@ -103,7 +117,7 @@ describe('deriveStaleResources', () => {
   // --- folder_membership_changed ---
 
   it('folder_membership_changed yields sidebar/tree, selection/current, grid/folder:{id}', () => {
-    const result = keys(makeReceipt(makeFacts({
+    const result = keys(makeEvent(makeChanges({
       folder_membership_changed: [5, 15],
     })));
     expect(result).toContain('sidebar/tree');
@@ -116,21 +130,52 @@ describe('deriveStaleResources', () => {
   // --- view_prefs_changed ---
 
   it('view_prefs_changed yields view-prefs/current only', () => {
-    const result = keyArray(makeReceipt(makeFacts({ view_prefs_changed: true })));
+    const result = keyArray(makeEvent(makeChanges({ view_prefs_changed: true })));
     expect(result).toEqual(['view-prefs/current']);
+  });
+
+  it('media_fields_changed yields selection/current and hash metadata keys', () => {
+    const result = keys(makeEvent(makeChanges({
+      media_fields_changed: ['rating'],
+      file_hashes: ['h1'],
+    })));
+    expect(result).toContain('selection/current');
+    expect(result).toContain('metadata/hash:h1');
+  });
+
+  it('smart-folder-sensitive media fields can also yield smart:all and sidebar/tree', () => {
+    const result = keys(makeEvent(makeChanges({
+      domains: ['sidebar', 'smart_folders'] as Domain[],
+      media_fields_changed: ['rating'],
+      file_hashes: ['h1'],
+      extra_grid_scopes: ['smart:all'],
+    })));
+    expect(result).toContain('selection/current');
+    expect(result).toContain('metadata/hash:h1');
+    expect(result).toContain('grid/smart:all');
+    expect(result).toContain('sidebar/tree');
+  });
+
+  it('derivative_fields_changed yields selection/current and hash metadata keys', () => {
+    const result = keys(makeEvent(makeChanges({
+      derivative_fields_changed: ['thumbnail'],
+      file_hashes: ['h1'],
+    })));
+    expect(result).toContain('selection/current');
+    expect(result).toContain('metadata/hash:h1');
   });
 
   // --- compiler_batch_done ---
 
   it('compiler_batch_done yields sidebar/tree', () => {
-    const result = keys(makeReceipt(makeFacts({ compiler_batch_done: true })));
+    const result = keys(makeEvent(makeChanges({ compiler_batch_done: true })));
     expect(result).toContain('sidebar/tree');
   });
 
   // --- file_hashes ---
 
   it('file_hashes yields metadata/hash:{hash} for each hash', () => {
-    const result = keys(makeReceipt(makeFacts({
+    const result = keys(makeEvent(makeChanges({
       domains: ['files'] as Domain[],
       file_hashes: ['h1', 'h2', 'h3'],
     })));
@@ -142,7 +187,7 @@ describe('deriveStaleResources', () => {
   // --- folder_ids without membership change ---
 
   it('folder_ids without membership change yields grid/folder:{id}', () => {
-    const result = keys(makeReceipt(makeFacts({
+    const result = keys(makeEvent(makeChanges({
       folder_ids: [7, 8],
     })));
     expect(result).toContain('grid/folder:7');
@@ -153,7 +198,7 @@ describe('deriveStaleResources', () => {
   });
 
   it('folder_ids with folder_membership_changed does not duplicate grid scopes', () => {
-    const result = keys(makeReceipt(makeFacts({
+    const result = keys(makeEvent(makeChanges({
       folder_membership_changed: [7],
       folder_ids: [7],
     })));
@@ -165,7 +210,7 @@ describe('deriveStaleResources', () => {
   // --- smart_folder_ids ---
 
   it('smart_folder_ids yields selection/current + grid/smart:{id}', () => {
-    const result = keys(makeReceipt(makeFacts({
+    const result = keys(makeEvent(makeChanges({
       smart_folder_ids: [3, 9],
     })));
     expect(result).toContain('selection/current');
@@ -176,7 +221,7 @@ describe('deriveStaleResources', () => {
   // --- extra_grid_scopes ---
 
   it('extra_grid_scopes yields grid/{scope} for each', () => {
-    const result = keys(makeReceipt(makeFacts({
+    const result = keys(makeEvent(makeChanges({
       extra_grid_scopes: ['collection:42', 'system:recently_viewed'],
     })));
     expect(result).toContain('grid/collection:42');
@@ -186,29 +231,29 @@ describe('deriveStaleResources', () => {
   // --- sidebar_counts ---
 
   it('sidebar_counts present yields sidebar/counts', () => {
-    const result = keys(makeReceipt(
-      makeFacts({}),
+    const result = keys(makeEvent(
+      makeChanges({}),
       { sidebar_counts: { all_active: 100, inbox: 5, trash: 2 } },
     ));
     expect(result).toContain('sidebar/counts');
   });
 
   it('sidebar_counts absent does not yield sidebar/counts', () => {
-    const result = keys(makeReceipt(makeFacts({})));
+    const result = keys(makeEvent(makeChanges({})));
     expect(result).not.toContain('sidebar/counts');
   });
 
   // --- Domain fallbacks ---
 
   it('Domain::Sidebar without fact flags yields sidebar/tree', () => {
-    const result = keys(makeReceipt(makeFacts({
+    const result = keys(makeEvent(makeChanges({
       domains: ['sidebar'] as Domain[],
     })));
     expect(result).toContain('sidebar/tree');
   });
 
   it('Domain::Selection without fact flags yields selection/current', () => {
-    const result = keys(makeReceipt(makeFacts({
+    const result = keys(makeEvent(makeChanges({
       domains: ['selection'] as Domain[],
     })));
     expect(result).toContain('selection/current');
@@ -216,7 +261,7 @@ describe('deriveStaleResources', () => {
 
   it('Domain::Sidebar fallback does NOT fire if sidebar/tree already set by facts', () => {
     // tag_structure_changed already sets sidebar/tree — domain fallback skipped
-    const result = keys(makeReceipt(makeFacts({
+    const result = keys(makeEvent(makeChanges({
       domains: ['sidebar'] as Domain[],
       tag_structure_changed: true,
     })));
@@ -227,7 +272,7 @@ describe('deriveStaleResources', () => {
   // --- Combined facts ---
 
   it('status_changed + tags_changed combines both rule outputs', () => {
-    const result = keys(makeReceipt(makeFacts({
+    const result = keys(makeEvent(makeChanges({
       status_changed: true,
       tags_changed: true,
       file_hashes: ['h1'],
@@ -245,56 +290,56 @@ describe('deriveStaleResources', () => {
   // --- Empty facts ---
 
   it('empty facts with no domains yields empty set', () => {
-    const result = keys(makeReceipt(makeFacts({})));
+    const result = keys(makeEvent(makeChanges({})));
     expect(result.size).toBe(0);
   });
 });
 
 // ---------------------------------------------------------------------------
-// gridResourceMatchesScope
+// refreshTargetMatchesGridScope
 // ---------------------------------------------------------------------------
 
-describe('gridResourceMatchesScope', () => {
+describe('refreshTargetMatchesGridScope', () => {
   it('exact scope match returns true', () => {
-    expect(gridResourceMatchesScope('grid/folder:5', 'folder:5')).toBe(true);
+    expect(refreshTargetMatchesGridScope('grid/folder:5', 'folder:5')).toBe(true);
   });
 
   it('mismatched scope returns false', () => {
-    expect(gridResourceMatchesScope('grid/folder:5', 'folder:10')).toBe(false);
+    expect(refreshTargetMatchesGridScope('grid/folder:5', 'folder:10')).toBe(false);
   });
 
   it('system:all is a wildcard only for system scopes', () => {
-    expect(gridResourceMatchesScope('grid/system:all', 'system:inbox')).toBe(true);
-    expect(gridResourceMatchesScope('grid/system:all', 'system:uncategorized')).toBe(true);
-    expect(gridResourceMatchesScope('grid/system:all', 'folder:5')).toBe(false);
-    expect(gridResourceMatchesScope('grid/system:all', 'smart:3')).toBe(false);
-    expect(gridResourceMatchesScope('grid/system:all', 'collection:7')).toBe(false);
+    expect(refreshTargetMatchesGridScope('grid/system:all', 'system:inbox')).toBe(true);
+    expect(refreshTargetMatchesGridScope('grid/system:all', 'system:uncategorized')).toBe(true);
+    expect(refreshTargetMatchesGridScope('grid/system:all', 'folder:5')).toBe(false);
+    expect(refreshTargetMatchesGridScope('grid/system:all', 'smart:3')).toBe(false);
+    expect(refreshTargetMatchesGridScope('grid/system:all', 'collection:7')).toBe(false);
   });
 
   it('folder:all matches any folder:N scope', () => {
-    expect(gridResourceMatchesScope('grid/folder:all', 'folder:99')).toBe(true);
+    expect(refreshTargetMatchesGridScope('grid/folder:all', 'folder:99')).toBe(true);
   });
 
   it('folder:all does not match smart scopes', () => {
-    expect(gridResourceMatchesScope('grid/folder:all', 'smart:1')).toBe(false);
+    expect(refreshTargetMatchesGridScope('grid/folder:all', 'smart:1')).toBe(false);
   });
 
   it('smart:all matches any smart:N scope', () => {
-    expect(gridResourceMatchesScope('grid/smart:all', 'smart:42')).toBe(true);
+    expect(refreshTargetMatchesGridScope('grid/smart:all', 'smart:42')).toBe(true);
   });
 
   it('smart:all does not match folder scopes', () => {
-    expect(gridResourceMatchesScope('grid/smart:all', 'folder:1')).toBe(false);
+    expect(refreshTargetMatchesGridScope('grid/smart:all', 'folder:1')).toBe(false);
   });
 
   it('null activeScope matches everything', () => {
-    expect(gridResourceMatchesScope('grid/folder:5', null)).toBe(true);
-    expect(gridResourceMatchesScope('grid/system:inbox', null)).toBe(true);
+    expect(refreshTargetMatchesGridScope('grid/folder:5', null)).toBe(true);
+    expect(refreshTargetMatchesGridScope('grid/system:inbox', null)).toBe(true);
   });
 
   it('non-grid keys return false', () => {
-    expect(gridResourceMatchesScope('sidebar/tree', 'folder:5')).toBe(false);
-    expect(gridResourceMatchesScope('selection/current', null)).toBe(false);
-    expect(gridResourceMatchesScope('metadata/hash:abc', null)).toBe(false);
+    expect(refreshTargetMatchesGridScope('sidebar/tree', 'folder:5')).toBe(false);
+    expect(refreshTargetMatchesGridScope('selection/current', null)).toBe(false);
+    expect(refreshTargetMatchesGridScope('metadata/hash:abc', null)).toBe(false);
   });
 });

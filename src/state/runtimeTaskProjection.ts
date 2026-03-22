@@ -1,4 +1,4 @@
-import type { RuntimeTask } from '../shared/types/generated/runtime-contract';
+import type { RuntimeTask } from '../shared/types/backendState';
 import type { GroupProgressEvent } from '../shared/types/api';
 
 export interface RuntimeTaskProjection {

@@ -3,7 +3,7 @@ import { Loader, Modal } from '@mantine/core';
 import { useMantineColorScheme } from '@mantine/core';
 import { glassModalStyles } from '../../../shared/styles/glassModal';
 import Dagre from '@dagrejs/dagre';
-import { api } from '#desktop/api';
+import { tagsController } from '../../../controllers/tagsController';
 import { getNamespaceColor } from '../../../shared/lib/namespaceColors';
 import { useNavigationStore } from '../../../state/navigationStore';
 import classes from './TagRelationsModal.module.css';
@@ -221,8 +221,8 @@ export function TagRelationsModal({ opened, onClose, tag }: TagRelationsModalPro
     setAliases([]);
 
     Promise.all([
-      api.tags.getRelations(tag.tag_id, 'aliases').catch(() => []),
-      api.tags.getRelations(tag.tag_id, 'implications').catch(() => []),
+      tagsController.getRelations(tag.tag_id, 'aliases').catch(() => []),
+      tagsController.getRelations(tag.tag_id, 'implications').catch(() => []),
     ]).then(([sibs, rels]) => {
       const p = rels.filter((r) => r.relation === 'parent');
       const c = rels.filter((r) => r.relation === 'child');

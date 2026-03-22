@@ -64,7 +64,11 @@ async fn tag_search_direct_then_alias_then_implication() {
         },
     };
     let bm = resolve_scope(&harness.db, &filter_color).await.unwrap();
-    assert_eq!(bm.len(), 2, "implication: red implies color, so f1+f2 match color");
+    assert_eq!(
+        bm.len(),
+        2,
+        "implication: red implies color, so f1+f2 match color"
+    );
     assert!(bm.contains(f1 as u32));
     assert!(bm.contains(f2 as u32));
 

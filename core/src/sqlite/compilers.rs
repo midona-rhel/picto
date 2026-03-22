@@ -9,11 +9,11 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc;
 
-use super::SqliteDatabase;
 #[cfg(test)]
 use super::bitmaps::BitmapKey;
 use super::publish;
 use super::read_model::{DerivedArtifact, ReadModelBatchResult, ReadModelEvent};
+use super::SqliteDatabase;
 use crate::metadata::compiler::compile_metadata_projections;
 use crate::sidebar::compiler::compile_sidebar;
 use crate::smart_folders::compiler::{compile_all_smart_folders, compile_smart_folder};
@@ -213,8 +213,7 @@ pub async fn start_compiler_loop(
             || !plan.dirty_tag_ids.is_empty()
             || plan.rebuild_all
             || !plan.dirty_file_ids.is_empty();
-        if scope_affected {
-        }
+        if scope_affected {}
 
         on_batch_done(ReadModelBatchResult {
             smart_folders_rebuilt,
@@ -235,7 +234,10 @@ async fn run_compilers(
     if plan.rebuild_status_bitmaps || plan.rebuild_all {
         let t = std::time::Instant::now();
         compile_status_bitmaps(db).await?;
-        tracing::debug!(elapsed_ms = t.elapsed().as_secs_f64() * 1000.0, "compiled status bitmaps");
+        tracing::debug!(
+            elapsed_ms = t.elapsed().as_secs_f64() * 1000.0,
+            "compiled status bitmaps"
+        );
         dirty_artifacts.insert(DerivedArtifact::Files);
     }
 
@@ -243,14 +245,21 @@ async fn run_compilers(
     if plan.rebuild_all {
         let t = std::time::Instant::now();
         compile_all_tag_bitmaps(db).await?;
-        tracing::debug!(elapsed_ms = t.elapsed().as_secs_f64() * 1000.0, "compiled all tag bitmaps");
+        tracing::debug!(
+            elapsed_ms = t.elapsed().as_secs_f64() * 1000.0,
+            "compiled all tag bitmaps"
+        );
         dirty_artifacts.insert(DerivedArtifact::Tags);
     } else if !plan.dirty_tag_ids.is_empty() {
         let t = std::time::Instant::now();
         for &tag_id in &plan.dirty_tag_ids {
             compile_tag_bitmap(db, tag_id).await?;
         }
-        tracing::debug!(elapsed_ms = t.elapsed().as_secs_f64() * 1000.0, count = plan.dirty_tag_ids.len(), "compiled dirty tag bitmaps");
+        tracing::debug!(
+            elapsed_ms = t.elapsed().as_secs_f64() * 1000.0,
+            count = plan.dirty_tag_ids.len(),
+            "compiled dirty tag bitmaps"
+        );
         dirty_artifacts.insert(DerivedArtifact::Tags);
     }
 
@@ -258,7 +267,10 @@ async fn run_compilers(
     if plan.rebuild_tag_graph || plan.rebuild_all {
         let t = std::time::Instant::now();
         compile_tag_graph(db).await?;
-        tracing::debug!(elapsed_ms = t.elapsed().as_secs_f64() * 1000.0, "compiled tag graph");
+        tracing::debug!(
+            elapsed_ms = t.elapsed().as_secs_f64() * 1000.0,
+            "compiled tag graph"
+        );
         dirty_artifacts.insert(DerivedArtifact::TagGraph);
     }
 
@@ -271,7 +283,10 @@ async fn run_compilers(
             plan.rebuild_all || plan.rebuild_tag_graph,
         )
         .await?;
-        tracing::debug!(elapsed_ms = t.elapsed().as_secs_f64() * 1000.0, "compiled effective tags");
+        tracing::debug!(
+            elapsed_ms = t.elapsed().as_secs_f64() * 1000.0,
+            "compiled effective tags"
+        );
         dirty_artifacts.insert(DerivedArtifact::EffectiveTags);
     }
 
@@ -283,7 +298,10 @@ async fn run_compilers(
     {
         let t = std::time::Instant::now();
         compile_tagged_bitmap(db).await?;
-        tracing::debug!(elapsed_ms = t.elapsed().as_secs_f64() * 1000.0, "compiled tagged bitmap");
+        tracing::debug!(
+            elapsed_ms = t.elapsed().as_secs_f64() * 1000.0,
+            "compiled tagged bitmap"
+        );
         dirty_artifacts.insert(DerivedArtifact::Tags);
     }
 
@@ -296,7 +314,10 @@ async fn run_compilers(
             plan.rebuild_all || plan.rebuild_tag_graph,
         )
         .await?;
-        tracing::debug!(elapsed_ms = t.elapsed().as_secs_f64() * 1000.0, "compiled metadata projections");
+        tracing::debug!(
+            elapsed_ms = t.elapsed().as_secs_f64() * 1000.0,
+            "compiled metadata projections"
+        );
         dirty_artifacts.insert(DerivedArtifact::MetadataProjection);
     }
 
@@ -304,14 +325,21 @@ async fn run_compilers(
     if plan.rebuild_all_smart_folders || plan.rebuild_all {
         let t = std::time::Instant::now();
         compile_all_smart_folders(db).await?;
-        tracing::debug!(elapsed_ms = t.elapsed().as_secs_f64() * 1000.0, "compiled all smart folders");
+        tracing::debug!(
+            elapsed_ms = t.elapsed().as_secs_f64() * 1000.0,
+            "compiled all smart folders"
+        );
         dirty_artifacts.insert(DerivedArtifact::SmartFolders);
     } else if !plan.dirty_smart_folder_ids.is_empty() {
         let t = std::time::Instant::now();
         for &sf_id in &plan.dirty_smart_folder_ids {
             compile_smart_folder(db, sf_id).await?;
         }
-        tracing::debug!(elapsed_ms = t.elapsed().as_secs_f64() * 1000.0, count = plan.dirty_smart_folder_ids.len(), "compiled dirty smart folders");
+        tracing::debug!(
+            elapsed_ms = t.elapsed().as_secs_f64() * 1000.0,
+            count = plan.dirty_smart_folder_ids.len(),
+            "compiled dirty smart folders"
+        );
         dirty_artifacts.insert(DerivedArtifact::SmartFolders);
     }
 
@@ -319,7 +347,10 @@ async fn run_compilers(
     if plan.rebuild_sidebar || plan.rebuild_all {
         let t = std::time::Instant::now();
         compile_sidebar(db).await?;
-        tracing::debug!(elapsed_ms = t.elapsed().as_secs_f64() * 1000.0, "compiled sidebar");
+        tracing::debug!(
+            elapsed_ms = t.elapsed().as_secs_f64() * 1000.0,
+            "compiled sidebar"
+        );
         dirty_artifacts.insert(DerivedArtifact::Sidebar);
     }
 

@@ -9,8 +9,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use ts_rs::TS;
 
-use crate::sqlite::files::{FileMetadataSlim, FileRecord};
 use crate::smart_folders::db::SmartFolderPredicate;
+use crate::sqlite::files::{FileMetadataSlim, FileRecord};
 
 pub fn parse_file_status(status: &str) -> Result<i64, String> {
     match status {
@@ -374,10 +374,7 @@ mod grid_query_tests {
         assert_eq!(parsed.filters.excluded_folder_ids, Some(vec![99]));
         assert_eq!(parsed.filters.folder_match_mode.as_deref(), Some("all"));
         assert_eq!(parsed.scope.collection_entity_id, Some(7));
-        assert_eq!(
-            parsed.scope.kind,
-            super::GridScopeKind::Collection,
-        );
+        assert_eq!(parsed.scope.kind, super::GridScopeKind::Collection,);
         assert_eq!(
             parsed.filters.search_tags,
             Some(vec!["series:test".to_string()])

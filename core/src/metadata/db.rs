@@ -1,8 +1,8 @@
 //! Metadata-owned projection reads and repair helpers.
 
-use crate::sqlite::SqliteDatabase;
 use crate::sqlite::files::{FileMetadataSlim, FileRecord};
 use crate::sqlite::projections::build_projections_batch;
+use crate::sqlite::SqliteDatabase;
 use crate::tags::db::FileTagInfo;
 use rusqlite::params_from_iter;
 use serde::{Deserialize, Serialize};

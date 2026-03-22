@@ -2,8 +2,8 @@
 
 use rusqlite::Connection;
 
-use super::CURRENT_VERSION;
 use super::support::{has_column, repair_collection_entity_file_links, table_exists};
+use super::CURRENT_VERSION;
 pub fn run_migrations(conn: &Connection, from_version: i64) -> rusqlite::Result<()> {
     if from_version < 2 {
         // V2: Add display_order column to smart_folder for drag-reorder persistence.
@@ -559,13 +559,17 @@ pub fn run_migrations(conn: &Connection, from_version: i64) -> rusqlite::Result<
         if table_exists(conn, "flow")? {
             if !table_exists(conn, "subscription_group")? {
                 conn.execute_batch("ALTER TABLE flow RENAME TO subscription_group")?;
-                conn.execute_batch("ALTER TABLE subscription_group RENAME COLUMN flow_id TO group_id")?;
+                conn.execute_batch(
+                    "ALTER TABLE subscription_group RENAME COLUMN flow_id TO group_id",
+                )?;
             } else {
                 // DDL already created subscription_group; drop stale v4-created flow table.
                 conn.execute_batch("DROP TABLE IF EXISTS flow")?;
             }
         }
-        if has_column(conn, "subscription", "flow_id")? && !has_column(conn, "subscription", "group_id")? {
+        if has_column(conn, "subscription", "flow_id")?
+            && !has_column(conn, "subscription", "group_id")?
+        {
             conn.execute_batch("ALTER TABLE subscription RENAME COLUMN flow_id TO group_id")?;
         }
     }

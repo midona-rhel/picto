@@ -20,8 +20,17 @@ pub fn build_config(opts: &RunOptions, _temp_dir: &Path) -> serde_json::Value {
     // Only for booru sites that support it — enabling globally causes extra
     // HTTP requests on sites like Kemono/Coomer that don't have tag categories.
     let tags_true = serde_json::Value::Bool(true);
-    for booru in ["gelbooru", "danbooru", "rule34", "safebooru", "yandere", "konachan",
-                  "sankaku", "idolcomplex", "3dbooru"] {
+    for booru in [
+        "gelbooru",
+        "danbooru",
+        "rule34",
+        "safebooru",
+        "yandere",
+        "konachan",
+        "sankaku",
+        "idolcomplex",
+        "3dbooru",
+    ] {
         let site_obj = extractor
             .entry(booru)
             .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()));
@@ -102,9 +111,7 @@ pub fn build_config(opts: &RunOptions, _temp_dir: &Path) -> serde_json::Value {
     // See: https://github.com/mikf/gallery-dl/issues/478
     //      https://github.com/mikf/gallery-dl/issues/3450
     {
-        let extractor = root
-            .get_mut("extractor")
-            .and_then(|v| v.as_object_mut());
+        let extractor = root.get_mut("extractor").and_then(|v| v.as_object_mut());
         if let Some(ext) = extractor {
             ext.insert(
                 "path-restrict".into(),

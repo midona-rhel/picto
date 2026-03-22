@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
-import { api } from '#desktop/api';
 import type { ViewPrefsPatch } from '../types/api';
 import type { AppSettings } from '../../state/settingsStore';
 import type { GridViewMode } from '#features/grid/types';
 import { deriveGridScopeKey } from '#features/grid/scopeModel';
+import { settingsController } from '../../controllers/settingsController';
 
 export type ThumbnailFitMode = 'contain' | 'cover';
 
@@ -124,7 +124,7 @@ export function useScopedGridPreferences({
     saveViewPrefsTimer.current = setTimeout(() => {
       const mergedPatch = pendingViewPrefsPatch.current;
       pendingViewPrefsPatch.current = {};
-      void api.settings.setViewPrefs(gridScopeKey, mergedPatch).catch((e) => {
+      void settingsController.setViewPrefs(gridScopeKey, mergedPatch).catch((e) => {
         console.error('Failed to persist view prefs:', e);
       });
     }, 180);
@@ -158,7 +158,7 @@ export function useScopedGridPreferences({
       saveViewPrefsTimer.current = null;
     }
 
-    void api.settings.getViewPrefs(gridScopeKey)
+    void settingsController.getViewPrefs(gridScopeKey)
       .then((pref) => {
         if (viewPrefsLoadSeq.current !== seq) return;
         const nextViewMode =

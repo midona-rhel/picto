@@ -16,7 +16,6 @@ pub enum ChannelOrder {
     Bgr,
 }
 
-
 /// A known tagger model that can be downloaded and used for inference.
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export_to = "../../src/shared/types/generated/commands/")]
@@ -75,7 +74,7 @@ pub fn model_dir(models_root: &std::path::Path, slug: &str) -> std::path::PathBu
 pub fn is_model_downloaded(models_root: &std::path::Path, slug: &str) -> bool {
     let dir = model_dir(models_root, slug);
     let has_onnx = dir.join("model.onnx").exists();
-    let has_labels = dir.join("selected_tags.csv").exists()
-        || dir.join("tags-selected.csv").exists();
+    let has_labels =
+        dir.join("selected_tags.csv").exists() || dir.join("tags-selected.csv").exists();
     has_onnx && has_labels
 }

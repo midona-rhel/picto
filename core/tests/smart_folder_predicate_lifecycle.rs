@@ -3,7 +3,9 @@
 mod common;
 
 use picto_core::scope::resolver::{resolve_scope, ScopeFilter};
-use picto_core::smart_folders::db::{MatchMode, PredicateRule, SmartFolderPredicate, SmartRuleGroup};
+use picto_core::smart_folders::db::{
+    MatchMode, PredicateRule, SmartFolderPredicate, SmartRuleGroup,
+};
 use picto_core::types::*;
 
 #[tokio::test]
@@ -96,7 +98,11 @@ async fn smart_folder_predicate_changes_update_membership() {
         filters: GridFilterSpec::default(),
     };
     let bm = resolve_scope(&harness.db, &filter).await.unwrap();
-    assert_eq!(bm.len(), 3, "any(landscape, portrait) should match f1, f2, f3");
+    assert_eq!(
+        bm.len(),
+        3,
+        "any(landscape, portrait) should match f1, f2, f3"
+    );
     assert!(bm.contains(f1 as u32));
     assert!(bm.contains(f2 as u32));
     assert!(bm.contains(f3 as u32));
@@ -135,8 +141,15 @@ async fn smart_folder_predicate_changes_update_membership() {
         filters: GridFilterSpec::default(),
     };
     let bm = resolve_scope(&harness.db, &filter).await.unwrap();
-    assert_eq!(bm.len(), 2, "after excluding nature, f2 drops out: f1 + f3 remain");
+    assert_eq!(
+        bm.len(),
+        2,
+        "after excluding nature, f2 drops out: f1 + f3 remain"
+    );
     assert!(bm.contains(f1 as u32));
     assert!(bm.contains(f3 as u32));
-    assert!(!bm.contains(f2 as u32), "f2 has nature tag, must be excluded");
+    assert!(
+        !bm.contains(f2 as u32),
+        "f2 has nature tag, must be excluded"
+    );
 }

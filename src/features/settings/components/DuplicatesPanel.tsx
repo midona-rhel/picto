@@ -1,9 +1,8 @@
 import { useEffect, useState } from 'react';
 import { Loader, NumberInput, Switch, Text } from '@mantine/core';
-import { api } from '#desktop/api';
+import { duplicatesController } from '../../../controllers/duplicatesController';
 import type { DuplicateSettings } from '../../../shared/types/api';
 import { SettingsBlock, SettingsRow } from './ui';
-import { registerUndoAction } from '../../../shared/controllers/undoRedoController';
 
 const MIN_SIMILARITY = 95;
 const MAX_SIMILARITY = 100;
@@ -20,7 +19,7 @@ export function DuplicatesPanel() {
   const loadSettings = async () => {
     try {
       setLoading(true);
-      const data = await api.duplicates.getSettings();
+      const data = await duplicatesController.getSettings();
       setSettings(data);
     } catch (err) {
       console.error('Failed to load duplicate settings:', err);
@@ -37,18 +36,7 @@ export function DuplicatesPanel() {
     setSettings(next);
     try {
       setSaving(true);
-      await api.duplicates.updateSettings(patch);
-      registerUndoAction({
-        label: 'Update duplicate settings',
-        undo: async () => {
-          await api.duplicates.updateSettings(previous);
-          setSettings(previous);
-        },
-        redo: async () => {
-          await api.duplicates.updateSettings(next);
-          setSettings(next);
-        },
-      });
+      await duplicatesController.updateSettings(patch, previous);
     } catch (err) {
       console.error('Failed to save duplicate settings:', err);
       // Reload server truth if save failed.

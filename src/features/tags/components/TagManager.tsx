@@ -23,7 +23,6 @@ import { useInlineRename } from '../../../shared/hooks/useInlineRename';
 import { useNavigationStore } from '../../../state/navigationStore';
 import { ContextMenu, useContextMenu, type ContextMenuEntry } from '../../../shared/components/ContextMenu';
 import { TagRelationsModal } from './TagRelationsModal';
-import { registerUndoAction } from '../../../shared/controllers/undoRedoController';
 import { buildTagContextMenu } from '../../../shared/components/context-actions/tagActions';
 import { useTagListStore } from '../../../state/tagListStore';
 import classes from './TagManager.module.css';
@@ -118,15 +117,8 @@ export function TagManager() {
       const tagId = parseInt(id);
       try {
         const oldTag = tags.find((t) => t.tag_id === tagId);
-        const oldDisplay = oldTag ? formatTagDisplay(oldTag.namespace, oldTag.subtag) : null;
-        const result = await tagsController.rename(tagId, newName);
-        if (oldDisplay && oldDisplay !== newName && !result.merged_into) {
-          registerUndoAction({
-            label: 'Rename tag',
-            undo: async () => { await tagsController.rename(tagId, oldDisplay); },
-            redo: async () => { await tagsController.rename(tagId, newName); },
-          });
-      }
+        const oldDisplay = oldTag ? formatTagDisplay(oldTag.namespace, oldTag.subtag) : '';
+        await tagsController.rename(tagId, newName, oldDisplay);
       notifySuccess(`Renamed to "${newName}"`, 'Tag Renamed');
     } catch (err) {
       notifyError(err);
@@ -189,7 +181,11 @@ export function TagManager() {
       return formatted === tagDisplay || c.display === tagDisplay;
     });
     if (!exact) return;
-    await tagsController.delete(exact.tag_id);
+    let affectedHashes: string[] = [];
+    try {
+      affectedHashes = await tagsController.findFilesByTags([tagDisplay]);
+    } catch { /* best effort */ }
+    await tagsController.deleteTag(exact.tag_id, tagDisplay, affectedHashes);
   }, []);
 
   useEffect(() => {
@@ -293,7 +289,10 @@ export function TagManager() {
           });
           if (batch.length === 0) break;
           for (const tag of batch) {
-            await tagsController.delete(tag.tag_id);
+            const tagFullName = formatTagDisplay(tag.namespace, tag.subtag);
+            let affectedHashes: string[] = [];
+            try { affectedHashes = await tagsController.findFilesByTags([tagFullName]); } catch { /* best effort */ }
+            await tagsController.deleteTag(tag.tag_id, tagFullName, affectedHashes);
           }
           deleted += batch.length;
         }
@@ -301,13 +300,16 @@ export function TagManager() {
       } else {
         const toDelete = tags.filter(t => selectedTagIds.has(t.tag_id));
         for (const tag of toDelete) {
-          await tagsController.delete(tag.tag_id);
+          const tagFullName = formatTagDisplay(tag.namespace, tag.subtag);
+          let affectedHashes: string[] = [];
+          try { affectedHashes = await tagsController.findFilesByTags([tagFullName]); } catch { /* best effort */ }
+          await tagsController.deleteTag(tag.tag_id, tagFullName, affectedHashes);
         }
         notifySuccess(`Deleted ${toDelete.length} tag${toDelete.length !== 1 ? 's' : ''}`);
       }
       setSelectAll(false);
       setSelectedTagIds(new Set());
-      // Each tagsController.delete() already signals queueRemoval — tags
+      // Each tagsController.deleteTag() already signals queueRemoval — tags
       // disappear eagerly from the list via the tagListStore subscription.
     } catch (err) {
       notifyError(err);
@@ -357,26 +359,12 @@ export function TagManager() {
             await handleDeleteSelected();
           } else {
             try {
-              // Capture files with this tag for undo restore
               const tagFullName = tag.namespace ? `${tag.namespace}:${tag.subtag}` : tag.subtag;
               let affectedHashes: string[] = [];
               try {
                 affectedHashes = await tagsController.findFilesByTags([tagFullName]);
               } catch { /* best effort */ }
-              await tagsController.delete(tag.tag_id);
-              registerUndoAction({
-                label: `Delete tag "${display}"`,
-                undo: async () => {
-                  if (affectedHashes.length > 0) {
-                    await tagsController.addToHashes(affectedHashes, [tagFullName]);
-                  }
-                },
-                redo: async () => {
-                  const found = await tagsController.getPaginated({ search: tag.subtag, limit: 10 });
-                  const match = found.find(t => t.subtag === tag.subtag && t.namespace === tag.namespace);
-                  if (match) await tagsController.delete(match.tag_id);
-                },
-              });
+              await tagsController.deleteTag(tag.tag_id, tagFullName, affectedHashes);
               notifySuccess(`"${display}" deleted`);
               setSelectedTagIds(new Set());
             } catch (err) {
@@ -465,22 +453,9 @@ export function TagManager() {
         fetchAllHashesForTag(sourceDisplay),
         fetchAllHashesForTag(targetDisplay),
       ]);
-      await tagsController.merge(
-        sourceDisplay,
-        targetDisplay,
-      );
       const targetSet = new Set(targetHashes);
       const sourceOnly = sourceHashes.filter((h) => !targetSet.has(h));
-      registerUndoAction({
-        label: `Merge tag "${sourceDisplay}" into "${targetDisplay}"`,
-        undo: async () => {
-          if (sourceHashes.length > 0) await tagsController.addToHashes(sourceHashes, [sourceDisplay]);
-          if (sourceOnly.length > 0) await tagsController.removeFromHashes(sourceOnly, [targetDisplay]);
-        },
-        redo: async () => {
-          await tagsController.merge(sourceDisplay, targetDisplay);
-        },
-      });
+      await tagsController.mergeTag(sourceDisplay, targetDisplay, sourceHashes, sourceOnly);
       notifySuccess(
         `"${sourceDisplay}" merged into "${targetDisplay}"`,
         'Tags Merged',
@@ -510,28 +485,13 @@ export function TagManager() {
     const targetDisplay = formatTagDisplay(relationTarget.namespace, relationTarget.subtag);
     try {
       if (relationModal.type === 'alias') {
-        await tagsController.manageAlias(sourceDisplay, targetDisplay);
-        registerUndoAction({
-          label: `Set alias "${sourceDisplay}"`,
-          undo: async () => { await tagsController.manageAlias(sourceDisplay); },
-          redo: async () => { await tagsController.manageAlias(sourceDisplay, targetDisplay); },
-        });
+        await tagsController.setAlias(sourceDisplay, targetDisplay);
         notifySuccess(`"${sourceDisplay}" now resolves to "${targetDisplay}"`, 'Alias Added');
       } else if (relationModal.type === 'implication') {
-        await tagsController.manageImplication(sourceDisplay, targetDisplay, 'add');
-        registerUndoAction({
-          label: `Add implication "${targetDisplay}"`,
-          undo: async () => { await tagsController.manageImplication(sourceDisplay, targetDisplay, 'remove'); },
-          redo: async () => { await tagsController.manageImplication(sourceDisplay, targetDisplay, 'add'); },
-        });
+        await tagsController.setImplication(sourceDisplay, targetDisplay, 'add');
         notifySuccess(`"${sourceDisplay}" now implies "${targetDisplay}"`, 'Implication Added');
       } else {
-        await tagsController.manageImplication(targetDisplay, sourceDisplay, 'add');
-        registerUndoAction({
-          label: `Add implied-by relation "${targetDisplay}"`,
-          undo: async () => { await tagsController.manageImplication(targetDisplay, sourceDisplay, 'remove'); },
-          redo: async () => { await tagsController.manageImplication(targetDisplay, sourceDisplay, 'add'); },
-        });
+        await tagsController.setImplication(targetDisplay, sourceDisplay, 'add');
         notifySuccess(`"${targetDisplay}" now implies "${sourceDisplay}"`, 'Reverse Implication Added');
       }
       setRelationModal(null);

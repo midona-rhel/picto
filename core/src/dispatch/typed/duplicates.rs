@@ -67,7 +67,10 @@ pub struct FindSimilarInput {
 
 // ─── Handlers ──────────────────────────────────────────────────────────────
 
-pub async fn find_similar(state: &AppState, input: FindSimilarInput) -> Result<serde_json::Value, String> {
+pub async fn find_similar(
+    state: &AppState,
+    input: FindSimilarInput,
+) -> Result<serde_json::Value, String> {
     let result = crate::duplicates::orchestrator::DuplicateOrchestrator::find_similar(
         &state.db,
         &state.blob_store,
@@ -77,7 +80,10 @@ pub async fn find_similar(state: &AppState, input: FindSimilarInput) -> Result<s
     serde_json::to_value(&result).map_err(|e| e.to_string())
 }
 
-pub async fn scan_duplicates(state: &AppState, input: ScanDuplicatesInput) -> Result<serde_json::Value, String> {
+pub async fn scan_duplicates(
+    state: &AppState,
+    input: ScanDuplicatesInput,
+) -> Result<serde_json::Value, String> {
     let effective_threshold = input.threshold.or_else(|| {
         let s = state.settings.get();
         Some(crate::settings::store::similarity_pct_to_distance(
@@ -100,7 +106,10 @@ pub async fn scan_duplicates(state: &AppState, input: ScanDuplicatesInput) -> Re
     Ok(serde_json::to_value(&result).map_err(|e| e.to_string())?)
 }
 
-pub async fn get_duplicate_pairs(state: &AppState, input: GetDuplicatePairsInput) -> Result<serde_json::Value, String> {
+pub async fn get_duplicate_pairs(
+    state: &AppState,
+    input: GetDuplicatePairsInput,
+) -> Result<serde_json::Value, String> {
     let max_distance = match input.status.as_deref() {
         None | Some("detected") => {
             let s = state.settings.get();
@@ -121,7 +130,10 @@ pub async fn get_duplicate_pairs(state: &AppState, input: GetDuplicatePairsInput
     Ok(serde_json::to_value(&result).map_err(|e| e.to_string())?)
 }
 
-pub async fn resolve_duplicate_pair(state: &AppState, input: ResolveDuplicatePairInput) -> Result<serde_json::Value, String> {
+pub async fn resolve_duplicate_pair(
+    state: &AppState,
+    input: ResolveDuplicatePairInput,
+) -> Result<serde_json::Value, String> {
     let result = crate::duplicates::orchestrator::DuplicateOrchestrator::resolve_duplicate_pair(
         &state.db,
         &state.blob_store,
@@ -133,14 +145,20 @@ pub async fn resolve_duplicate_pair(state: &AppState, input: ResolveDuplicatePai
     Ok(serde_json::to_value(&result).map_err(|e| e.to_string())?)
 }
 
-pub async fn get_duplicate_count(state: &AppState, _input: serde_json::Value) -> Result<serde_json::Value, String> {
+pub async fn get_duplicate_count(
+    state: &AppState,
+    _input: serde_json::Value,
+) -> Result<serde_json::Value, String> {
     let count =
         crate::duplicates::orchestrator::DuplicateOrchestrator::get_duplicate_count(&state.db)
             .await?;
     Ok(serde_json::json!({ "count": count }))
 }
 
-pub async fn get_duplicate_settings(state: &AppState, _input: serde_json::Value) -> Result<serde_json::Value, String> {
+pub async fn get_duplicate_settings(
+    state: &AppState,
+    _input: serde_json::Value,
+) -> Result<serde_json::Value, String> {
     let s = state.settings.get();
     Ok(serde_json::json!({
         "duplicateDetectSimilarityPct": s.duplicate_detect_similarity_pct,
@@ -152,7 +170,10 @@ pub async fn get_duplicate_settings(state: &AppState, _input: serde_json::Value)
     }))
 }
 
-pub async fn update_duplicate_settings(state: &AppState, input: UpdateDuplicateSettingsInput) -> Result<serde_json::Value, String> {
+pub async fn update_duplicate_settings(
+    state: &AppState,
+    input: UpdateDuplicateSettingsInput,
+) -> Result<serde_json::Value, String> {
     let mut s = state.settings.get();
     if let Some(v) = input.duplicate_detect_similarity_pct {
         s.duplicate_detect_similarity_pct = v.clamp(95, 100);

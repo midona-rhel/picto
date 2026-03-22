@@ -4,7 +4,7 @@
 
 use super::files::FileMetadataSlim;
 use crate::tags::db::FileTagInfo;
-use rusqlite::{Connection, params};
+use rusqlite::{params, Connection};
 
 /// Batch build projections for multiple files using a single JOIN query.
 pub fn build_projections_batch(

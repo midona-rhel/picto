@@ -11,6 +11,7 @@
   "ts_only": [
     "open_settings_window",
     "open_subscriptions_window",
+    "open_library_manager",
     "pixiv_oauth_popup"
   ]
 }

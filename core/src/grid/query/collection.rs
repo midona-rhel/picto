@@ -82,8 +82,10 @@ pub(super) async fn get_collection_page(
     }
 
     let next_cursor = if has_more {
-        rows.last()
-            .and_then(|row| row.position_rank.map(|rank| format!("{}\0{}", rank, row.file_id)))
+        rows.last().and_then(|row| {
+            row.position_rank
+                .map(|rank| format!("{}\0{}", rank, row.file_id))
+        })
     } else {
         None
     };

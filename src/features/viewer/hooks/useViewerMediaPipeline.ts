@@ -1,5 +1,5 @@
 import { useState, useEffect, useLayoutEffect, useRef, useCallback, type MutableRefObject, type RefObject, type SyntheticEvent } from 'react';
-import { api } from '#desktop/api';
+import { filesController } from '../../../controllers/filesController';
 import { mediaFileUrl, mediaThumbnailUrl } from '../../../shared/lib/mediaUrl';
 import { useImagePreloader, queueImageDecode, isImagePreloaded } from '../../../shared/lib/useImagePreloader';
 import { useImageLoadState } from './useImageLoadState';
@@ -106,7 +106,7 @@ export function useViewerMediaPipeline({
     setDisplayThumbUrl('');
     void (async () => {
       try {
-        await api.file.ensureThumbnail(currentImage.hash);
+        await filesController.ensureThumbnail(currentImage.hash);
       } catch (error) {
         logBestEffortError(ensureThumbLogContext, error);
       }
@@ -156,7 +156,7 @@ export function useViewerMediaPipeline({
     for (const thumbTask of plan.thumbs) {
       const thumbUrl = mediaThumbnailUrl(thumbTask.hash);
       if (isImagePreloaded(thumbUrl)) continue;
-      void api.file.ensureThumbnail(thumbTask.hash)
+      void filesController.ensureThumbnail(thumbTask.hash)
         .catch((error) => {
           logBestEffortError(preloadThumbLogContext, error);
         })

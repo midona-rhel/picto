@@ -1,4 +1,4 @@
-//! Selection mutations — batch operations on file selections.
+//! Selection batch updates — bulk operations on file selections.
 //!
 //! Supports both `ExplicitHashes` (user-picked files) and `AllResults`
 //! (current grid scope) selection modes.
@@ -33,8 +33,7 @@ async fn collect_file_ids(
             Ok(file_ids)
         }
         SelectionMode::AllResults => {
-            let (_base_bm, filtered_bm) =
-                selection_bitmap_for_all_results(db, selection).await?;
+            let (_base_bm, filtered_bm) = selection_bitmap_for_all_results(db, selection).await?;
             let file_ids: Vec<i64> = filtered_bm.iter().map(|id| id as i64).collect();
             Ok(file_ids)
         }

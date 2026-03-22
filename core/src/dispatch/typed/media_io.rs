@@ -7,6 +7,7 @@ use serde::Deserialize;
 use ts_rs::TS;
 
 use crate::blob_store::mime_to_extension;
+use crate::runtime_contract::state_change::MediaDerivativeField;
 use crate::state::AppState;
 use crate::types::SelectionQuerySpec;
 
@@ -188,7 +189,11 @@ fn reveal_in_folder_os(path: &str) -> Result<(), String> {
 
 fn sanitize_file_stem(name: &str, fallback: &str) -> String {
     let trimmed = name.trim();
-    let raw = if trimmed.is_empty() { fallback } else { trimmed };
+    let raw = if trimmed.is_empty() {
+        fallback
+    } else {
+        trimmed
+    };
     let cleaned_raw = raw
         .chars()
         .map(|ch| match ch {
@@ -197,9 +202,7 @@ fn sanitize_file_stem(name: &str, fallback: &str) -> String {
             c => c,
         })
         .collect::<String>();
-    let cleaned = cleaned_raw
-        .trim()
-        .trim_matches('.');
+    let cleaned = cleaned_raw.trim().trim_matches('.');
     if cleaned.is_empty() {
         fallback.to_string()
     } else {
@@ -325,7 +328,9 @@ async fn resolve_export_hashes(
         return Ok(hashes);
     }
     if let Some(selection) = selection {
-        let bitmap = crate::dispatch::typed::media_lifecycle::resolve_selection_bitmap(state, &selection).await?;
+        let bitmap =
+            crate::dispatch::typed::media_lifecycle::resolve_selection_bitmap(state, &selection)
+                .await?;
         let file_ids: Vec<i64> = bitmap.iter().map(|id| id as i64).collect();
         let pairs = state.db.resolve_ids_batch(&file_ids).await?;
         return Ok(pairs.into_iter().map(|(_, hash)| hash).collect());
@@ -340,16 +345,23 @@ fn file_name_for_progress(path: &Path) -> String {
         .unwrap_or_else(|| path.to_string_lossy().into_owned())
 }
 
-async fn export_media_inner(state: &AppState, input: ExportMediaInput) -> Result<ExportMediaResult, String> {
+async fn export_media_inner(
+    state: &AppState,
+    input: ExportMediaInput,
+) -> Result<ExportMediaResult, String> {
     let hashes = resolve_export_hashes(state, input.hashes, input.selection).await?;
     let total = hashes.len();
     let output_dir = PathBuf::from(&input.output_dir);
 
     // Reject export paths inside the library directory.
     if let Ok(canonical) = output_dir.canonicalize().or_else(|_| {
-        output_dir.parent()
+        output_dir
+            .parent()
             .and_then(|p| p.canonicalize().ok())
-            .ok_or(std::io::Error::new(std::io::ErrorKind::NotFound, "no parent"))
+            .ok_or(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "no parent",
+            ))
     }) {
         if canonical.starts_with(&state.library_root) {
             return Err(format!(
@@ -567,6 +579,15 @@ async fn reanalyze_file_colors_inner(
     if !file.mime.starts_with("image/") {
         db.set_file_colors(hash, Vec::new(), None).await?;
         db.emit_read_model_event(crate::sqlite::ReadModelEvent::RebuildAll);
+        crate::events::emit_state_changed(
+            "reanalyze_file_colors",
+            crate::runtime_contract::change_builder::ChangeImpact::new()
+                .file_hashes(vec![hash.to_string()])
+                .derivative_fields_changed(&[MediaDerivativeField::DominantColorHex])
+                .smart_folder_scopes_changed_for_derivative_fields(&[
+                    MediaDerivativeField::DominantColorHex,
+                ]),
+        );
         return Ok(ReanalyzeFileColorsResult {
             colors_extracted: 0,
             dominant_color_hex: None,
@@ -585,8 +606,8 @@ async fn reanalyze_file_colors_inner(
 
             let bytes = std::fs::read(&original.0)
                 .map_err(|e| format!("Failed to read original file: {}", e))?;
-            let img =
-                image::load_from_memory(&bytes).map_err(|e| format!("Image decode failed: {}", e))?;
+            let img = image::load_from_memory(&bytes)
+                .map_err(|e| format!("Image decode failed: {}", e))?;
             let extracted = crate::media_processing::colors::extract_dominant_colors(&img, 8);
             Ok(extracted
                 .iter()
@@ -602,6 +623,15 @@ async fn reanalyze_file_colors_inner(
     db.set_file_colors(hash, colors, dominant_color_hex.clone())
         .await?;
     db.emit_read_model_event(crate::sqlite::ReadModelEvent::RebuildAll);
+    crate::events::emit_state_changed(
+        "reanalyze_file_colors",
+        crate::runtime_contract::change_builder::ChangeImpact::new()
+            .file_hashes(vec![hash.to_string()])
+            .derivative_fields_changed(&[MediaDerivativeField::DominantColorHex])
+            .smart_folder_scopes_changed_for_derivative_fields(&[
+                MediaDerivativeField::DominantColorHex,
+            ]),
+    );
 
     Ok(ReanalyzeFileColorsResult {
         colors_extracted,
@@ -617,7 +647,10 @@ pub async fn backfill_missing_deferred(
     hashes: &[String],
 ) {
     use crate::blob_store::mime_to_extension;
-    let mut any_changed = false;
+    use std::collections::HashSet;
+    let mut thumb_hashes: Vec<String> = Vec::new();
+    let mut phash_hashes: Vec<String> = Vec::new();
+    let mut color_hashes: Vec<String> = Vec::new();
     for hash in hashes {
         let file = match db.get_file_by_hash(hash).await {
             Ok(Some(f)) => f,
@@ -629,10 +662,14 @@ pub async fn backfill_missing_deferred(
 
         // Generate thumbnail if missing (uses the existing ensure_thumbnail path
         // which handles MIME detection, ffmpeg for video, etc.)
-        let has_thumb = blob_store.find_thumbnail_path(hash).ok().flatten().is_some();
+        let has_thumb = blob_store
+            .find_thumbnail_path(hash)
+            .ok()
+            .flatten()
+            .is_some();
         if !has_thumb {
             if ensure_thumbnail_inner(db, blob_store, hash).await.is_ok() {
-                any_changed = true;
+                thumb_hashes.push(hash.clone());
             }
         }
 
@@ -647,12 +684,12 @@ pub async fn backfill_missing_deferred(
                     .map_err(|e| format!("{e}"))?
                     .ok_or_else(|| "not found".to_string())?;
                 let bytes = std::fs::read(&original.0).map_err(|e| format!("{e}"))?;
-                crate::duplicates::phash::compute_phash_base64(&bytes)
-                    .map_err(|e| format!("{e}"))
-            }).await;
+                crate::duplicates::phash::compute_phash_base64(&bytes).map_err(|e| format!("{e}"))
+            })
+            .await;
             if let Ok(Ok(phash_b64)) = phash_result {
                 let _ = db.set_phash(hash, &phash_b64).await;
-                any_changed = true;
+                phash_hashes.push(hash.clone());
             }
         }
 
@@ -661,37 +698,72 @@ pub async fn backfill_missing_deferred(
             let ext = mime_to_extension(&file.mime).to_string();
             let h = hash.clone();
             let bs = blob_store.clone();
-            let colors = match tokio::task::spawn_blocking(move || -> Result<Vec<(String, f32, f32, f32)>, String> {
-                let original = bs
-                    .find_original(&h, Some(&ext))
-                    .map_err(|e| format!("{e}"))?
-                    .ok_or_else(|| "not found".to_string())?;
-                let bytes = std::fs::read(&original.0).map_err(|e| format!("{e}"))?;
-                let img = image::load_from_memory(&bytes).map_err(|e| format!("{e}"))?;
-                let extracted = crate::media_processing::colors::extract_dominant_colors(&img, 8);
-                Ok(extracted.iter().map(|c| (c.hex.clone(), c.l as f32, c.a as f32, c.b as f32)).collect())
-            }).await {
+            let colors = match tokio::task::spawn_blocking(
+                move || -> Result<Vec<(String, f32, f32, f32)>, String> {
+                    let original = bs
+                        .find_original(&h, Some(&ext))
+                        .map_err(|e| format!("{e}"))?
+                        .ok_or_else(|| "not found".to_string())?;
+                    let bytes = std::fs::read(&original.0).map_err(|e| format!("{e}"))?;
+                    let img = image::load_from_memory(&bytes).map_err(|e| format!("{e}"))?;
+                    let extracted =
+                        crate::media_processing::colors::extract_dominant_colors(&img, 8);
+                    Ok(extracted
+                        .iter()
+                        .map(|c| (c.hex.clone(), c.l as f32, c.a as f32, c.b as f32))
+                        .collect())
+                },
+            )
+            .await
+            {
                 Ok(Ok(c)) => c,
                 _ => continue,
             };
             let dominant = colors.first().map(|(hex, _, _, _)| hex.clone());
             if db.set_file_colors(hash, colors, dominant).await.is_ok() {
-                any_changed = true;
+                color_hashes.push(hash.clone());
             }
         }
     }
+    let any_changed = !thumb_hashes.is_empty() || !phash_hashes.is_empty() || !color_hashes.is_empty();
     if any_changed {
         db.emit_read_model_event(crate::sqlite::ReadModelEvent::RebuildAll);
+        // Deduplicate all changed hashes
+        let mut all_hashes_set = HashSet::new();
+        for h in thumb_hashes.iter().chain(phash_hashes.iter()).chain(color_hashes.iter()) {
+            all_hashes_set.insert(h.clone());
+        }
+        let mut all_hashes: Vec<String> = all_hashes_set.into_iter().collect();
+        all_hashes.sort();
+        if !all_hashes.is_empty() {
+            let mut fields = Vec::new();
+            if !thumb_hashes.is_empty() { fields.push(MediaDerivativeField::Thumbnail); }
+            if !color_hashes.is_empty() { fields.push(MediaDerivativeField::DominantColorHex); }
+            if !phash_hashes.is_empty() { fields.push(MediaDerivativeField::Phash); }
+            crate::events::emit_state_changed(
+                "backfill_missing_deferred",
+                crate::runtime_contract::change_builder::ChangeImpact::new()
+                    .file_hashes(all_hashes)
+                    .derivative_fields_changed(&fields)
+                    .smart_folder_scopes_changed_for_derivative_fields(&fields),
+            );
+        }
     }
 }
 
 // ─── Handlers ──────────────────────────────────────────────────────────────
 
-pub async fn resolve_file_path(state: &AppState, input: ResolveFilePathInput) -> Result<String, String> {
+pub async fn resolve_file_path(
+    state: &AppState,
+    input: ResolveFilePathInput,
+) -> Result<String, String> {
     resolve_file_path_inner(&state.db, &state.blob_store, &input.hash).await
 }
 
-pub async fn resolve_file_paths_batch(state: &AppState, input: ResolveFilePathsBatchInput) -> Result<serde_json::Value, String> {
+pub async fn resolve_file_paths_batch(
+    state: &AppState,
+    input: ResolveFilePathsBatchInput,
+) -> Result<serde_json::Value, String> {
     let mut paths = Vec::with_capacity(input.hashes.len());
     for hash in &input.hashes {
         if let Ok(p) = resolve_file_path_inner(&state.db, &state.blob_store, hash).await {
@@ -701,7 +773,10 @@ pub async fn resolve_file_paths_batch(state: &AppState, input: ResolveFilePathsB
     serde_json::to_value(&paths).map_err(|e| e.to_string())
 }
 
-pub async fn open_file_default(state: &AppState, input: OpenFileDefaultInput) -> Result<(), String> {
+pub async fn open_file_default(
+    state: &AppState,
+    input: OpenFileDefaultInput,
+) -> Result<(), String> {
     let path = resolve_file_path_inner(&state.db, &state.blob_store, &input.hash).await?;
     open::that(&path).map_err(|e| format!("Failed to open file: {}", e))?;
     Ok(())
@@ -719,7 +794,10 @@ pub async fn export_file(state: &AppState, input: ExportFileInput) -> Result<(),
         // dest may not exist yet — canonicalize parent instead
         dest.parent()
             .and_then(|p| p.canonicalize().ok())
-            .ok_or(std::io::Error::new(std::io::ErrorKind::NotFound, "no parent"))
+            .ok_or(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "no parent",
+            ))
     }) {
         if canonical.starts_with(&state.library_root) {
             return Err(format!(
@@ -735,12 +813,18 @@ pub async fn export_file(state: &AppState, input: ExportFileInput) -> Result<(),
     Ok(())
 }
 
-pub async fn export_media(state: &AppState, input: ExportMediaInput) -> Result<serde_json::Value, String> {
+pub async fn export_media(
+    state: &AppState,
+    input: ExportMediaInput,
+) -> Result<serde_json::Value, String> {
     let result = export_media_inner(state, input).await?;
     serde_json::to_value(result).map_err(|e| e.to_string())
 }
 
-pub async fn open_in_new_window(_state: &AppState, input: OpenInNewWindowInput) -> Result<(), String> {
+pub async fn open_in_new_window(
+    _state: &AppState,
+    input: OpenInNewWindowInput,
+) -> Result<(), String> {
     crate::events::emit(
         crate::events::event_names::OPEN_DETAIL_WINDOW,
         &crate::events::OpenDetailWindowEvent {
@@ -752,7 +836,10 @@ pub async fn open_in_new_window(_state: &AppState, input: OpenInNewWindowInput) 
     Ok(())
 }
 
-pub async fn resolve_thumbnail_path(state: &AppState, input: ResolveThumbnailPathInput) -> Result<String, String> {
+pub async fn resolve_thumbnail_path(
+    state: &AppState,
+    input: ResolveThumbnailPathInput,
+) -> Result<String, String> {
     let bs = state.blob_store.clone();
     let hash = input.hash;
     let result = tokio::task::spawn_blocking(move || {
@@ -766,31 +853,65 @@ pub async fn resolve_thumbnail_path(state: &AppState, input: ResolveThumbnailPat
     result
 }
 
-pub async fn ensure_thumbnail(state: &AppState, input: EnsureThumbnailInput) -> Result<serde_json::Value, String> {
+pub async fn ensure_thumbnail(
+    state: &AppState,
+    input: EnsureThumbnailInput,
+) -> Result<serde_json::Value, String> {
     let result = ensure_thumbnail_inner(&state.db, &state.blob_store, &input.hash).await?;
+    if result.regenerated_thumbnail {
+        crate::events::emit_state_changed(
+            "ensure_thumbnail",
+            crate::runtime_contract::change_builder::ChangeImpact::new()
+                .file_hashes(vec![input.hash.clone()])
+                .derivative_fields_changed(&[MediaDerivativeField::Thumbnail]),
+        );
+    }
     serde_json::to_value(&result).map_err(|e| e.to_string())
 }
 
-pub async fn regenerate_thumbnail(state: &AppState, input: RegenerateThumbnailInput) -> Result<serde_json::Value, String> {
-    let result =
-        generate_thumbnail_inner(&state.db, &state.blob_store, &input.hash, true).await?;
+pub async fn regenerate_thumbnail(
+    state: &AppState,
+    input: RegenerateThumbnailInput,
+) -> Result<serde_json::Value, String> {
+    let result = generate_thumbnail_inner(&state.db, &state.blob_store, &input.hash, true).await?;
+    if result.regenerated_thumbnail {
+        crate::events::emit_state_changed(
+            "regenerate_thumbnail",
+            crate::runtime_contract::change_builder::ChangeImpact::new()
+                .file_hashes(vec![input.hash.clone()])
+                .derivative_fields_changed(&[MediaDerivativeField::Thumbnail]),
+        );
+    }
     serde_json::to_value(&result).map_err(|e| e.to_string())
 }
 
-pub async fn regenerate_thumbnails_batch(state: &AppState, input: RegenerateThumbnailsBatchInput) -> Result<serde_json::Value, String> {
+pub async fn regenerate_thumbnails_batch(
+    state: &AppState,
+    input: RegenerateThumbnailsBatchInput,
+) -> Result<serde_json::Value, String> {
     let mut regenerated = 0usize;
     let mut errors = 0usize;
+    let mut changed_hashes = Vec::new();
     for hash in &input.hashes {
         match generate_thumbnail_inner(&state.db, &state.blob_store, hash, true).await {
             Ok(r) => {
                 if r.regenerated_thumbnail {
                     regenerated += 1;
+                    changed_hashes.push(hash.clone());
                 }
             }
             Err(_) => {
                 errors += 1;
             }
         }
+    }
+    if !changed_hashes.is_empty() {
+        crate::events::emit_state_changed(
+            "regenerate_thumbnails_batch",
+            crate::runtime_contract::change_builder::ChangeImpact::new()
+                .file_hashes(changed_hashes)
+                .derivative_fields_changed(&[MediaDerivativeField::Thumbnail]),
+        );
     }
     Ok(serde_json::json!({
         "total": input.hashes.len(),
@@ -799,8 +920,10 @@ pub async fn regenerate_thumbnails_batch(state: &AppState, input: RegenerateThum
     }))
 }
 
-pub async fn reanalyze_file_colors(state: &AppState, input: ReanalyzeFileColorsInput) -> Result<serde_json::Value, String> {
-    let result =
-        reanalyze_file_colors_inner(&state.db, &state.blob_store, &input.hash).await?;
+pub async fn reanalyze_file_colors(
+    state: &AppState,
+    input: ReanalyzeFileColorsInput,
+) -> Result<serde_json::Value, String> {
+    let result = reanalyze_file_colors_inner(&state.db, &state.blob_store, &input.hash).await?;
     serde_json::to_value(&result).map_err(|e| e.to_string())
 }

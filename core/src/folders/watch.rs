@@ -12,9 +12,9 @@ use crate::blob_store::BlobStore;
 use crate::duplicates::orchestrator::DuplicateOrchestrator;
 use crate::events::{self, ManualImportProgressEvent};
 use crate::folders::service;
-use crate::import::existing::{ExistingImportMergeRequest, merge_existing_import_target};
+use crate::import::existing::{merge_existing_import_target, ExistingImportMergeRequest};
 use crate::import::pipeline::{ImportError, ImportOptions, ImportPipeline};
-use crate::runtime_contract::mutation_builder::MutationImpact;
+use crate::runtime_contract::change_builder::ChangeImpact;
 use crate::sqlite::SqliteDatabase;
 
 const WATCH_DEBOUNCE: Duration = Duration::from_millis(700);
@@ -220,7 +220,10 @@ impl FolderWatchRuntime {
             self.watchers.insert(root_path, watcher);
         }
 
-        tracing::info!(folders = self.configs.len(), "folder watch: reload complete");
+        tracing::info!(
+            folders = self.configs.len(),
+            "folder watch: reload complete"
+        );
     }
 
     fn enqueue(&mut self, raw: RawWatchEvent) {
@@ -334,7 +337,10 @@ fn collect_existing_paths(root_path: &Path, recursive: bool) -> Result<Vec<PathB
             let entry = entry
                 .map_err(|err| format!("Failed to read entry in {}: {err}", root_path.display()))?;
             let path = entry.path();
-            if path.is_file() && !should_ignore_path(&path) && crate::media_processing::has_supported_extension(&path) {
+            if path.is_file()
+                && !should_ignore_path(&path)
+                && crate::media_processing::has_supported_extension(&path)
+            {
                 files.push(path);
             }
         }
@@ -492,7 +498,7 @@ async fn import_file_into_folder(
                     name: None,
                     note_entries: Default::default(),
                     subscription_id: None,
-                    mutation_name: "watch_folder_existing",
+                    change_origin: "watch_folder_existing",
                 },
             )
             .await?;
@@ -512,16 +518,33 @@ async fn import_file_into_folder(
         service::refresh_sidebar_projection_for_folder_ids(db, &[folder_id]).await?;
     }
 
+    let mut impact: Option<ChangeImpact> = None;
     if !imported_hashes.is_empty() {
-        crate::events::emit_mutation(
-            "watch_folder_import",
-            MutationImpact::file_lifecycle(db).folder_ids(vec![folder_id]),
-        );
-    } else if !skipped_hashes.is_empty() {
-        crate::events::emit_mutation(
-            "watch_folder_membership",
-            MutationImpact::folder_file_change(folder_id),
-        );
+        let next = ChangeImpact::file_lifecycle(db)
+            .file_hashes(imported_hashes.clone())
+            .merge(ChangeImpact::folder_file_change(folder_id));
+        impact = Some(match impact.take() {
+            Some(current) => current.merge(next),
+            None => next,
+        });
+    }
+    if !skipped_hashes.is_empty() {
+        let next = ChangeImpact::new()
+            .file_hashes(skipped_hashes.clone())
+            .merge(ChangeImpact::folder_file_change(folder_id));
+        impact = Some(match impact.take() {
+            Some(current) => current.merge(next),
+            None => next,
+        });
+    }
+
+    if let Some(impact) = impact {
+        let origin = if !imported_hashes.is_empty() {
+            "watch_folder_import"
+        } else {
+            "watch_folder_membership"
+        };
+        crate::events::emit_state_changed(origin, impact);
     }
 
     Ok(())

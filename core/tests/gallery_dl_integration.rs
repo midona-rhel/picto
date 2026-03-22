@@ -6,10 +6,20 @@ use picto_core::subscriptions::gallery_dl_runner::{self, site_by_id, SITES};
 #[test]
 fn test_site_registry_coverage() {
     let required = [
-        "danbooru", "e621", "gelbooru", "yandere", "rule34", "pixiv", "safebooru",
+        "danbooru",
+        "e621",
+        "gelbooru",
+        "yandere",
+        "rule34",
+        "pixiv",
+        "safebooru",
     ];
     for id in required {
-        assert!(site_by_id(id).is_some(), "Required site '{}' missing from registry", id);
+        assert!(
+            site_by_id(id).is_some(),
+            "Required site '{}' missing from registry",
+            id
+        );
     }
 
     for site in SITES {

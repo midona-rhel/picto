@@ -5,7 +5,7 @@ use crate::sqlite::SqliteDatabase;
 use crate::tags::db::FileTagInfo;
 use crate::tags::normalize;
 use crate::types::{
-    DominantColorDto, EntityAllMetadata, EntityDetails, ResolvedTagInfo, TagInfo, tag_display_key,
+    tag_display_key, DominantColorDto, EntityAllMetadata, EntityDetails, ResolvedTagInfo, TagInfo,
 };
 
 pub fn file_tag_to_resolved_info(t: FileTagInfo) -> ResolvedTagInfo {

@@ -7,8 +7,8 @@ pub mod bitmaps;
 pub mod compilers;
 pub mod files;
 pub mod hash_index;
-pub mod publish;
 pub mod projections;
+pub mod publish;
 pub mod read_model;
 pub mod schema;
 

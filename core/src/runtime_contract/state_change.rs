@@ -1,7 +1,7 @@
-//! Mutation contract types — emitted via `runtime/mutation_committed` events.
+//! State-change contract types — emitted via `runtime/state_changed` events.
 //!
-//! `MutationReceipt` is the primary event the frontend subscribes to.
-//! It carries sequencing metadata, what changed (`MutationFacts`), and
+//! `StateChangedEvent` is the primary event the frontend subscribes to.
+//! It carries sequencing metadata, what changed (`StateChanges`), and
 //! optional O(1) sidebar counts.
 
 use serde::Serialize;
@@ -21,17 +21,17 @@ pub enum Domain {
     Subscriptions,
 }
 
-/// The primary mutation description emitted via `runtime/mutation_committed`.
+/// The primary state-change description emitted via `runtime/state_changed`.
 ///
-/// The frontend derives stale resources from `facts` directly.
+/// The frontend derives stale resources from `changes` directly.
 #[derive(Debug, Clone, Serialize, TS)]
 #[ts(export_to = "../../src/shared/types/generated/runtime-contract/")]
-pub struct MutationReceipt {
+pub struct StateChangedEvent {
     #[ts(type = "number")]
     pub seq: u64,
     pub ts: String,
-    pub origin_command: String,
-    pub facts: MutationFacts,
+    pub origin: String,
+    pub changes: StateChanges,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub sidebar_counts: Option<SidebarCounts>,
@@ -40,11 +40,11 @@ pub struct MutationReceipt {
 /// What actually changed — domain flags, affected entity IDs, and change descriptors.
 ///
 /// Change descriptors (`status_changed`, `tags_changed`, etc.) tell the system
-/// *what kind* of mutation happened. The frontend derives stale resources
-/// from these facts directly.
+/// *what kind* of state change happened. The frontend derives stale resources
+/// from these changes directly.
 #[derive(Debug, Clone, Default, Serialize, TS)]
 #[ts(export_to = "../../src/shared/types/generated/runtime-contract/")]
-pub struct MutationFacts {
+pub struct StateChanges {
     pub domains: Vec<Domain>,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
@@ -66,6 +66,10 @@ pub struct MutationFacts {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub tags_changed: Option<bool>,
+    /// Exact tag additions/removals when available.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub tag_changes: Option<TagChangeDetails>,
     /// Tag hierarchy, aliases, merges, or renames changed.
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
@@ -78,6 +82,22 @@ pub struct MutationFacts {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub view_prefs_changed: Option<bool>,
+    /// Generic media metadata changed (name, rating, notes, urls, etc.).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub media_metadata_changed: Option<bool>,
+    /// Exact media metadata fields that changed when available.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub media_fields_changed: Option<Vec<MediaMetadataField>>,
+    /// Deferred media derivatives changed (thumbnail, colors, phash, analysis).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub media_derivatives_changed: Option<bool>,
+    /// Exact derived media fields that changed when available.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub derivative_fields_changed: Option<Vec<MediaDerivativeField>>,
     /// Grid scopes not derivable from other fact fields (e.g. `collection:{id}`).
     /// The frontend includes these when deriving stale grid resources.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -95,4 +115,36 @@ pub struct SidebarCounts {
     pub inbox: i64,
     #[ts(type = "number")]
     pub trash: i64,
+}
+
+#[derive(Debug, Clone, Default, Serialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/runtime-contract/")]
+pub struct TagChangeDetails {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub added: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub removed: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/runtime-contract/")]
+#[serde(rename_all = "snake_case")]
+pub enum MediaMetadataField {
+    Name,
+    Rating,
+    Notes,
+    SourceUrls,
+    CreatedAt,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/runtime-contract/")]
+#[serde(rename_all = "snake_case")]
+pub enum MediaDerivativeField {
+    Thumbnail,
+    DominantColorHex,
+    Phash,
+    Analysis,
 }

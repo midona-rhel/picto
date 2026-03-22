@@ -31,7 +31,9 @@ pub async fn get_file_info(path: &Path, mime: Option<MimeType>) -> FileResult<Fi
         return Err(match mime {
             MimeType::TextHtml => FileError::UnsupportedFile("Looks like HTML".to_string()),
             MimeType::ApplicationJson => FileError::UnsupportedFile("Looks like JSON".to_string()),
-            MimeType::ApplicationUnknown => FileError::UnsupportedFile("Unknown filetype!".to_string()),
+            MimeType::ApplicationUnknown => {
+                FileError::UnsupportedFile("Unknown filetype!".to_string())
+            }
             _ => FileError::UnsupportedFile("Filetype is not permitted!".to_string()),
         });
     }
@@ -79,7 +81,8 @@ pub(crate) fn get_animation_properties(
             Ok((w, h, total_delay_ms, frame_count))
         }
         MimeType::AnimationWebp => {
-            let decoder = image::codecs::webp::WebPDecoder::new(reader).map_err(FileError::Image)?;
+            let decoder =
+                image::codecs::webp::WebPDecoder::new(reader).map_err(FileError::Image)?;
             let (w, h) = image::ImageDecoder::dimensions(&decoder);
             let mut frame_count = 0u32;
             let mut total_delay_ms = 0u64;

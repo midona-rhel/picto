@@ -4,7 +4,7 @@ use std::path::Path;
 use sha2::{Digest, Sha256};
 use tracing::{info, warn};
 
-use crate::import::existing::{ExistingImportMergeRequest, merge_existing_import_target};
+use crate::import::existing::{merge_existing_import_target, ExistingImportMergeRequest};
 use crate::import::pipeline::{ImportError, ImportOptions, ImportPipeline};
 use crate::subscriptions::gallery_dl_runner::ParsedMetadata;
 use crate::subscriptions::import_policy::{
@@ -30,7 +30,15 @@ impl<'a> SubscriptionSyncEngine<'a> {
         gallery_url: &str,
         is_collection_member: bool,
     ) -> Result<ImportOutcome, String> {
-        self.import_item_inner(file_path, metadata, subscription_id, gallery_url, is_collection_member, false).await
+        self.import_item_inner(
+            file_path,
+            metadata,
+            subscription_id,
+            gallery_url,
+            is_collection_member,
+            false,
+        )
+        .await
     }
 
     async fn import_item_inner(
@@ -152,11 +160,12 @@ impl<'a> SubscriptionSyncEngine<'a> {
                         }
                     }
 
-                    crate::events::emit_mutation(
+                    crate::events::emit_state_changed(
                         "subscription_import",
-                        crate::runtime_contract::mutation_builder::MutationImpact::file_lifecycle(
+                        crate::runtime_contract::change_builder::ChangeImpact::file_lifecycle(
                             self.db,
                         )
+                        .file_hashes(vec![surviving_hash.clone()])
                         .extra_grid_scopes(vec!["system:inbox".into()]),
                     );
                 }
@@ -209,11 +218,18 @@ impl<'a> SubscriptionSyncEngine<'a> {
         let member_count = pc.members.len();
 
         self.set_phase("importing");
-        self.emit_progress_force(sub_id_str, progress,
-            &format!("Importing {} files for '{}'...", member_count, pc.preferred_name));
+        self.emit_progress_force(
+            sub_id_str,
+            progress,
+            &format!(
+                "Importing {} files for '{}'...",
+                member_count, pc.preferred_name
+            ),
+        );
 
         let pipeline = ImportPipeline::new(self.db, self.blob_store);
-        let mut prepared: Vec<crate::import::pipeline::PreparedFile> = Vec::with_capacity(pc.members.len());
+        let mut prepared: Vec<crate::import::pipeline::PreparedFile> =
+            Vec::with_capacity(pc.members.len());
 
         // Phase 1: prepare all files (hash, MIME, blob write — no DB)
         for (i, member) in pc.members.iter().enumerate() {
@@ -249,10 +265,14 @@ impl<'a> SubscriptionSyncEngine<'a> {
                 Err(crate::import::pipeline::ImportError::AlreadyImported(_)) => {
                     // Was counted as downloaded during stash, move to skipped
                     progress.files_skipped += 1;
-                    if progress.files_downloaded > 0 { progress.files_downloaded -= 1; }
+                    if progress.files_downloaded > 0 {
+                        progress.files_downloaded -= 1;
+                    }
                 }
                 Err(e) => {
-                    progress.errors.push(format!("Prepare error for post {}: {e}", pc.post_id));
+                    progress
+                        .errors
+                        .push(format!("Prepare error for post {}: {e}", pc.post_id));
                 }
             }
         }
@@ -264,10 +284,12 @@ impl<'a> SubscriptionSyncEngine<'a> {
         // Single-member "collection" — import as standalone file
         if prepared.len() < 2 {
             let pf = prepared.remove(0);
+            let file_hash = pf.hex_hash.clone();
             let _ = self.db.import_file(pf.db_opts).await;
-            crate::events::emit_mutation(
+            crate::events::emit_state_changed(
                 "subscription_import",
-                crate::runtime_contract::mutation_builder::MutationImpact::file_lifecycle(self.db)
+                crate::runtime_contract::change_builder::ChangeImpact::file_lifecycle(self.db)
+                    .file_hashes(vec![file_hash])
                     .extra_grid_scopes(vec!["system:inbox".into()]),
             );
             return;
@@ -275,14 +297,31 @@ impl<'a> SubscriptionSyncEngine<'a> {
 
         // Phase 2: one atomic DB transaction — insert all files + create collection
         self.set_phase("creating_collection");
-        self.emit_progress_force(sub_id_str, progress,
-            &format!("Creating collection '{}' ({} items)", pc.preferred_name, prepared.len()));
+        self.emit_progress_force(
+            sub_id_str,
+            progress,
+            &format!(
+                "Creating collection '{}' ({} items)",
+                pc.preferred_name,
+                prepared.len()
+            ),
+        );
         let db_opts: Vec<_> = prepared.into_iter().map(|pf| pf.db_opts).collect();
-        match self.db.import_collection_batch(db_opts, &pc.preferred_name).await {
+        match self
+            .db
+            .import_collection_batch(db_opts, &pc.preferred_name)
+            .await
+        {
             Ok(result) => {
-                let _ = self.db.upsert_subscription_post_collection(
-                    subscription_id, &pc.category, &pc.post_id, result.collection_id,
-                ).await;
+                let _ = self
+                    .db
+                    .upsert_subscription_post_collection(
+                        subscription_id,
+                        &pc.category,
+                        &pc.post_id,
+                        result.collection_id,
+                    )
+                    .await;
                 changed_collection_ids.push(result.collection_id);
 
                 // Mark download queue entry as complete
@@ -290,14 +329,20 @@ impl<'a> SubscriptionSyncEngine<'a> {
                     let _ = self.db.mark_queue_complete(qid).await;
                 }
 
-                crate::events::emit_mutation(
-                    "subscription_collection_import",
-                    crate::runtime_contract::mutation_builder::MutationImpact::file_lifecycle(self.db)
-                        .extra_grid_scopes(vec!["system:inbox".into()]),
-                );
+                let impact = crate::runtime_contract::change_builder::ChangeImpact::collection_membership_change(
+                    result.collection_id,
+                )
+                .file_hashes(result.hashes)
+                .extra_grid_scopes(vec!["system:inbox".into()])
+                .merge(crate::runtime_contract::change_builder::ChangeImpact::file_lifecycle(
+                    self.db,
+                ));
+                crate::events::emit_state_changed("subscription_collection_import", impact);
             }
             Err(e) => {
-                progress.errors.push(format!("Collection batch commit failed: {e}"));
+                progress
+                    .errors
+                    .push(format!("Collection batch commit failed: {e}"));
             }
         }
     }
@@ -355,7 +400,7 @@ impl<'a> SubscriptionSyncEngine<'a> {
                 name: desired_name,
                 note_entries,
                 subscription_id: Some(subscription_id),
-                mutation_name: "subscription_import",
+                change_origin: "subscription_import",
             },
         )
         .await

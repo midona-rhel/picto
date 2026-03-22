@@ -1,4 +1,4 @@
-//! Workflow test: sidebar counts update correctly after lifecycle/tag/folder mutations.
+//! Workflow test: sidebar counts update correctly after lifecycle/tag/folder changes.
 
 mod common;
 
@@ -19,7 +19,7 @@ async fn get_count(
 }
 
 #[tokio::test]
-async fn sidebar_counts_stay_consistent_across_mutations() {
+async fn sidebar_counts_stay_consistent_across_state_changes() {
     let harness = common::TestHarness::new().await;
 
     // Insert files: 3 active, 2 inbox, 1 trash
@@ -89,7 +89,10 @@ async fn sidebar_counts_stay_consistent_across_mutations() {
     let trash_before = get_count(&harness.db, "system:trash").await;
     harness.db.update_file_status("sc_a3", 2).await.unwrap();
     assert_eq!(get_count(&harness.db, "system:all").await, all_before - 1);
-    assert_eq!(get_count(&harness.db, "system:trash").await, trash_before + 1);
+    assert_eq!(
+        get_count(&harness.db, "system:trash").await,
+        trash_before + 1
+    );
 
     // 6. Cross-check: scope_count agrees with resolve_scope for all system scopes
     let scope_checks = vec![

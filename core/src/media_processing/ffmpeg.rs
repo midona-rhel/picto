@@ -43,9 +43,16 @@ async fn run_ffprobe(path: &Path) -> FfmpegResult<serde_json::Value> {
     let bin = super::ffmpeg_path::ffprobe_path().map_err(FfmpegError::Process)?;
 
     let mut cmd = Command::new(bin.as_path());
-    cmd.args(["-v", "quiet", "-print_format", "json", "-show_format", "-show_streams"])
-        .arg(path)
-        .kill_on_drop(true);
+    cmd.args([
+        "-v",
+        "quiet",
+        "-print_format",
+        "json",
+        "-show_format",
+        "-show_streams",
+    ])
+    .arg(path)
+    .kill_on_drop(true);
     #[cfg(target_os = "windows")]
     {
         use std::os::windows::process::CommandExt;
@@ -95,7 +102,19 @@ async fn run_ffmpeg_frame(
         cmd.args(["-ss", &format!("{seek_secs:.3}")]);
     }
     cmd.arg("-i").arg(path);
-    cmd.args(["-frames:v", "1", "-vf", &vf, "-f", "image2pipe", "-c:v", "mjpeg", "-q:v", "4", "-"]);
+    cmd.args([
+        "-frames:v",
+        "1",
+        "-vf",
+        &vf,
+        "-f",
+        "image2pipe",
+        "-c:v",
+        "mjpeg",
+        "-q:v",
+        "4",
+        "-",
+    ]);
 
     let output = tokio::time::timeout(FFMPEG_FRAME_TIMEOUT, cmd.output())
         .await

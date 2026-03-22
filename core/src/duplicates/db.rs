@@ -42,7 +42,6 @@ pub fn insert_duplicate_counted(
     Ok(changed > 0)
 }
 
-
 /// Keyset-paginated query for duplicate pairs.
 /// Cursor format: "distance,file_id_a,file_id_b" (or None for first page).
 pub fn get_duplicate_pairs_paginated(
@@ -250,7 +249,9 @@ pub fn reset_stale_merged_pairs(conn: &Connection) -> rusqlite::Result<usize> {
 const KV_LAST_DUP_SCAN_AT: &str = "last_duplicate_scan_at";
 const KV_LAST_DUP_SCAN_THRESHOLD: &str = "last_duplicate_scan_threshold";
 
-pub fn get_last_duplicate_scan(conn: &Connection) -> rusqlite::Result<(Option<String>, Option<u32>)> {
+pub fn get_last_duplicate_scan(
+    conn: &Connection,
+) -> rusqlite::Result<(Option<String>, Option<u32>)> {
     use rusqlite::OptionalExtension;
     let ts: Option<String> = conn
         .query_row(
@@ -296,5 +297,4 @@ impl SqliteDatabase {
         self.with_conn(move |conn| insert_duplicate(conn, id_a, id_b, distance))
             .await
     }
-
 }

@@ -131,7 +131,9 @@ fn test_mime_detection_audio() {
 #[test]
 fn test_file_is_animated() {
     let video = test_video();
-    assert!(picto_core::media_processing::ffmpeg::file_is_animated(video));
+    assert!(picto_core::media_processing::ffmpeg::file_is_animated(
+        video
+    ));
 }
 
 #[test]
@@ -172,9 +174,13 @@ fn test_render_video_thumbnail() {
 fn test_render_video_thumbnail_at_start() {
     let video = test_video();
 
-    let bytes =
-        picto_core::media_processing::ffmpeg::render_video_thumbnail(video, (200, 200), 0, Some(2000))
-            .expect("render_video_thumbnail at start failed");
+    let bytes = picto_core::media_processing::ffmpeg::render_video_thumbnail(
+        video,
+        (200, 200),
+        0,
+        Some(2000),
+    )
+    .expect("render_video_thumbnail at start failed");
 
     assert!(bytes.len() > 100);
     assert_eq!(bytes[0], 0xFF);
@@ -184,9 +190,11 @@ fn test_render_video_thumbnail_at_start() {
 #[test]
 fn test_file_info_video() {
     let video = test_video();
-    let info =
-        picto_core::media_processing::get_file_info(video, Some(picto_core::constants::MimeType::VideoMp4))
-            .expect("get_file_info failed");
+    let info = picto_core::media_processing::get_file_info(
+        video,
+        Some(picto_core::constants::MimeType::VideoMp4),
+    )
+    .expect("get_file_info failed");
 
     assert_eq!(info.width, Some(640));
     assert_eq!(info.height, Some(480));
@@ -198,9 +206,11 @@ fn test_file_info_video() {
 #[test]
 fn test_file_info_audio() {
     let audio = test_audio();
-    let info =
-        picto_core::media_processing::get_file_info(audio, Some(picto_core::constants::MimeType::AudioMp3))
-            .expect("get_file_info failed");
+    let info = picto_core::media_processing::get_file_info(
+        audio,
+        Some(picto_core::constants::MimeType::AudioMp3),
+    )
+    .expect("get_file_info failed");
 
     assert!(info.duration_ms.is_some());
     let dur = info.duration_ms.unwrap();

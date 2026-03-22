@@ -173,4 +173,3 @@ fn read_ooxml_entry_bytes(path: &Path, entry_path: &str) -> FileResult<Vec<u8>> 
 
     Ok(buf)
 }
-

@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { NumberInput, Switch, Text, Loader, Select } from '@mantine/core';
-import { api } from '#desktop/api';
+import { settingsController } from '../../../controllers/settingsController';
 import { SettingsBlock, SettingsRow } from './ui';
 
 interface AppSettings {
@@ -21,7 +21,7 @@ export function DownloadServicesPanel() {
 
   const loadSettings = async () => {
     try {
-      const result = await api.settings.get() as AppSettings;
+      const result = await settingsController.get() as AppSettings;
       setSettings(result);
     } catch (err) {
       console.error('Failed to load settings:', err);
@@ -33,7 +33,7 @@ export function DownloadServicesPanel() {
     const updated = { ...settings, ...patch };
     setSettings(updated);
     try {
-      await api.settings.save(updated);
+      await settingsController.save(updated);
     } catch (err) {
       console.error('Failed to save settings:', err);
     }

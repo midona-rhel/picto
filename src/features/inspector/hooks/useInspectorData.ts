@@ -2,7 +2,7 @@ import type { EntityAllMetadata, ResolvedTagInfo, SelectionQuerySpec, SelectionS
 import type { MediaItem } from '#features/grid/types';
 import type { CollectionSummary } from '../../../shared/types/api';
 import { useInspectorFetch } from './useInspectorFetch';
-import { useInspectorMutations } from './useInspectorMutations';
+import { useInspectorChangeActions } from './useInspectorChangeActions';
 
 export interface FolderMembership {
   folder_id: number;
@@ -34,7 +34,7 @@ export function useInspectorData(
   selectionSummarySpec: SelectionQuerySpec | null,
 ): InspectorData {
   const fetch = useInspectorFetch(selectedImages, selectionSummarySpec);
-  const mutations = useInspectorMutations(selectedImages, selectionSummarySpec, fetch);
+  const changeActions = useInspectorChangeActions(selectedImages, selectionSummarySpec, fetch);
 
   return {
     fileTags: fetch.fileTags,
@@ -45,6 +45,6 @@ export function useInspectorData(
     sourceUrls: fetch.sourceUrls,
     notes: fetch.notes,
     refreshMetadata: fetch.refreshMetadata,
-    ...mutations,
+    ...changeActions,
   };
 }

@@ -3,13 +3,13 @@
 use std::collections::HashSet;
 
 use roaring::RoaringBitmap;
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
+use crate::sqlite::bitmaps::{BitmapKey, BitmapStore};
 use crate::sqlite::ReadModelEvent;
 use crate::sqlite::SqliteDatabase;
-use crate::sqlite::bitmaps::{BitmapKey, BitmapStore};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SmartFolder {
@@ -253,8 +253,7 @@ pub fn get_smart_folder_chain(
         if !visited.insert(id) {
             return Err(rusqlite::Error::InvalidQuery);
         }
-        let folder =
-            get_smart_folder(conn, id)?.ok_or(rusqlite::Error::QueryReturnedNoRows)?;
+        let folder = get_smart_folder(conn, id)?.ok_or(rusqlite::Error::QueryReturnedNoRows)?;
         current_id = folder.parent_id;
         chain.push(folder);
     }
@@ -906,7 +905,8 @@ impl SqliteDatabase {
             .with_read_conn(move |conn| collect_descendant_smart_folder_ids(conn, smart_folder_id))
             .await?;
         for descendant_id in &descendants {
-            self.bitmaps.remove_key(&BitmapKey::SmartFolder(*descendant_id));
+            self.bitmaps
+                .remove_key(&BitmapKey::SmartFolder(*descendant_id));
         }
         self.with_conn(move |conn| delete_smart_folder(conn, smart_folder_id))
             .await
@@ -921,8 +921,7 @@ impl SqliteDatabase {
 
         let bitmaps = self.bitmaps.clone();
         self.with_read_conn(move |conn| {
-            get_smart_folder(conn, smart_folder_id)?
-                .ok_or(rusqlite::Error::QueryReturnedNoRows)?;
+            get_smart_folder(conn, smart_folder_id)?.ok_or(rusqlite::Error::QueryReturnedNoRows)?;
             let pred = build_effective_predicate_for_smart_folder(conn, smart_folder_id)?;
             let result = compile_predicate(conn, &pred, &bitmaps)?;
             Ok(result.len() as i64)

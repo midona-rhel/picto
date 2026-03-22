@@ -7,12 +7,9 @@ use crate::runtime_contract::task::{RuntimeTask, TaskKind, TaskProgress, TaskSta
 /// Download a tagger model (ONNX + labels CSV) to the given directory.
 ///
 /// Emits `runtime/task_upserted` events for progress tracking.
-pub async fn download_model(
-    slug: &str,
-    models_root: &Path,
-) -> Result<(), String> {
-    let model_info = super::models::find_model(slug)
-        .ok_or_else(|| format!("Unknown model: {slug}"))?;
+pub async fn download_model(slug: &str, models_root: &Path) -> Result<(), String> {
+    let model_info =
+        super::models::find_model(slug).ok_or_else(|| format!("Unknown model: {slug}"))?;
 
     let model_dir = super::models::model_dir(models_root, slug);
     std::fs::create_dir_all(&model_dir)
@@ -55,12 +52,7 @@ pub async fn download_model(
 }
 
 /// Stream-download a URL to a file, reporting progress.
-async fn download_file(
-    url: &str,
-    dest: &Path,
-    task_id: &str,
-    slug: &str,
-) -> Result<(), String> {
+async fn download_file(url: &str, dest: &Path, task_id: &str, slug: &str) -> Result<(), String> {
     let client = reqwest::Client::new();
     let resp = client
         .get(url)
@@ -114,16 +106,13 @@ async fn download_file(
         }
     }
 
-    file.flush().await.map_err(|e| format!("Flush error: {e}"))?;
+    file.flush()
+        .await
+        .map_err(|e| format!("Flush error: {e}"))?;
     Ok(())
 }
 
-fn emit_task(
-    task_id: &str,
-    slug: &str,
-    status: TaskStatus,
-    progress: Option<TaskProgress>,
-) {
+fn emit_task(task_id: &str, slug: &str, status: TaskStatus, progress: Option<TaskProgress>) {
     let task = RuntimeTask {
         task_id: task_id.to_string(),
         kind: TaskKind::ModelDownload,

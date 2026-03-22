@@ -116,8 +116,11 @@ async function checkGeneratedFilesExist() {
 // Runtime contract types that must be generated from Rust (PBI-325).
 const RUNTIME_CONTRACT_FILES = [
   'Domain.ts',
-  'MutationFacts.ts',
-  'MutationReceipt.ts',
+  'TagChangeDetails.ts',
+  'MediaMetadataField.ts',
+  'MediaDerivativeField.ts',
+  'StateChanges.ts',
+  'StateChangedEvent.ts',
   'RuntimeSnapshot.ts',
   'RuntimeTask.ts',
   'SidebarCounts.ts',

@@ -90,15 +90,21 @@ pub async fn ai_tagger_status(
     let models = vec![
         AiTaggerModelStatus {
             slug: WD14_SLUG.into(),
-            label: all_models.iter().find(|m| m.slug == WD14_SLUG)
-                .map(|m| m.label.clone()).unwrap_or_else(|| WD14_SLUG.into()),
+            label: all_models
+                .iter()
+                .find(|m| m.slug == WD14_SLUG)
+                .map(|m| m.label.clone())
+                .unwrap_or_else(|| WD14_SLUG.into()),
             enabled: settings.ai_tagger_wd14_enabled,
             downloaded: crate::ai_tagger::models::is_model_downloaded(&models_root, WD14_SLUG),
         },
         AiTaggerModelStatus {
             slug: E621_SLUG.into(),
-            label: all_models.iter().find(|m| m.slug == E621_SLUG)
-                .map(|m| m.label.clone()).unwrap_or_else(|| E621_SLUG.into()),
+            label: all_models
+                .iter()
+                .find(|m| m.slug == E621_SLUG)
+                .map(|m| m.label.clone())
+                .unwrap_or_else(|| E621_SLUG.into()),
             enabled: settings.ai_tagger_e621_enabled,
             downloaded: crate::ai_tagger::models::is_model_downloaded(&models_root, E621_SLUG),
         },
@@ -168,14 +174,22 @@ pub async fn ai_tag_predict(
             models.iter().map(|s| s.as_str()).collect()
         } else {
             let mut s = Vec::new();
-            if settings.ai_tagger_wd14_enabled { s.push(WD14_SLUG); }
-            if settings.ai_tagger_e621_enabled { s.push(E621_SLUG); }
+            if settings.ai_tagger_wd14_enabled {
+                s.push(WD14_SLUG);
+            }
+            if settings.ai_tagger_e621_enabled {
+                s.push(E621_SLUG);
+            }
             s
         }
     } else {
         let mut s = Vec::new();
-        if settings.ai_tagger_wd14_enabled { s.push(WD14_SLUG); }
-        if settings.ai_tagger_e621_enabled { s.push(E621_SLUG); }
+        if settings.ai_tagger_wd14_enabled {
+            s.push(WD14_SLUG);
+        }
+        if settings.ai_tagger_e621_enabled {
+            s.push(E621_SLUG);
+        }
         s
     };
 
@@ -211,7 +225,11 @@ pub async fn ai_tag_predict(
         let mut all_tags: Vec<TagPrediction> = Vec::new();
         let mut errors: Vec<String> = Vec::new();
 
-        tracing::info!(hash, bytes = image_bytes.len(), "ai_tag_predict: read original image");
+        tracing::info!(
+            hash,
+            bytes = image_bytes.len(),
+            "ai_tag_predict: read original image"
+        );
 
         {
             let mut guard = state.ai_taggers.lock().await;
@@ -219,7 +237,11 @@ pub async fn ai_tag_predict(
                 if let Some(session) = guard.get_mut(*slug) {
                     match session.predict(&image_bytes, &thresholds) {
                         Ok(tags) => {
-                            tracing::info!(slug, tags = tags.len(), "ai_tag_predict: model produced tags");
+                            tracing::info!(
+                                slug,
+                                tags = tags.len(),
+                                "ai_tag_predict: model produced tags"
+                            );
                             all_tags.extend(tags);
                         }
                         Err(e) => {
@@ -235,31 +257,36 @@ pub async fn ai_tag_predict(
 
         // Deduplicate: if both models predict the same tag, keep highest confidence
         all_tags.sort_by(|a, b| {
-            a.namespace.cmp(&b.namespace)
-                .then(a.tag.cmp(&b.tag))
-                .then(b.confidence.partial_cmp(&a.confidence).unwrap_or(std::cmp::Ordering::Equal))
+            a.namespace.cmp(&b.namespace).then(a.tag.cmp(&b.tag)).then(
+                b.confidence
+                    .partial_cmp(&a.confidence)
+                    .unwrap_or(std::cmp::Ordering::Equal),
+            )
         });
         all_tags.dedup_by(|a, b| a.namespace == b.namespace && a.tag == b.tag);
 
         // Re-sort by confidence descending
         all_tags.sort_by(|a, b| {
-            b.confidence.partial_cmp(&a.confidence).unwrap_or(std::cmp::Ordering::Equal)
+            b.confidence
+                .partial_cmp(&a.confidence)
+                .unwrap_or(std::cmp::Ordering::Equal)
         });
 
         predictions.push(FilePrediction {
             hash: hash.clone(),
             tags: all_tags,
-            error: if errors.is_empty() { None } else { Some(errors.join("; ")) },
+            error: if errors.is_empty() {
+                None
+            } else {
+                Some(errors.join("; "))
+            },
         });
     }
 
     Ok(AiTagPredictOutput { predictions })
 }
 
-pub async fn ai_tag_apply(
-    state: &AppState,
-    input: AiTagApplyInput,
-) -> Result<usize, String> {
+pub async fn ai_tag_apply(state: &AppState, input: AiTagApplyInput) -> Result<usize, String> {
     if input.hashes.is_empty() || input.tags.is_empty() {
         return Ok(0);
     }
@@ -270,7 +297,9 @@ pub async fn ai_tag_apply(
             if let Some((ns, st)) = crate::tags::normalize::parse_tag(tag_str) {
                 match state.db.tag_entity(hash, &ns, &st, "ai").await {
                     Ok(_) => count += 1,
-                    Err(e) => tracing::warn!(hash, tag = tag_str, error = %e, "ai_tag_apply: failed"),
+                    Err(e) => {
+                        tracing::warn!(hash, tag = tag_str, error = %e, "ai_tag_apply: failed")
+                    }
                 }
             }
         }
@@ -300,10 +329,11 @@ pub async fn ai_tag_apply(
             Ok(())
         }).await?;
 
-        crate::events::emit_mutation(
+        crate::events::emit_state_changed(
             "ai_tag_apply",
-            crate::runtime_contract::mutation_builder::MutationImpact::new()
+            crate::runtime_contract::change_builder::ChangeImpact::new()
                 .tags_changed()
+                .all_smart_folder_scopes_changed()
                 .file_hashes(input.hashes),
         );
     }
@@ -315,7 +345,10 @@ pub async fn ai_tag_apply(
 
 /// Read the original image bytes for a hash from the blob store.
 async fn read_original_image(state: &AppState, hash: &str) -> Result<Vec<u8>, String> {
-    let file = state.db.get_file_by_hash(hash).await?
+    let file = state
+        .db
+        .get_file_by_hash(hash)
+        .await?
         .ok_or_else(|| format!("File not found: {hash}"))?;
     let ext = crate::blob_store::mime_to_extension(&file.mime).to_string();
     let bs = state.blob_store.clone();
@@ -329,7 +362,9 @@ async fn read_original_image(state: &AppState, hash: &str) -> Result<Vec<u8>, St
 }
 
 fn models_root_for(state: &AppState) -> std::path::PathBuf {
-    state.library_root.parent()
+    state
+        .library_root
+        .parent()
         .unwrap_or(&state.library_root)
         .join("models")
 }
@@ -348,7 +383,9 @@ async fn ensure_session(state: &AppState, slug: &str) -> Result<(), String> {
         .ok_or_else(|| format!("Unknown model: {slug}"))?;
 
     if !crate::ai_tagger::models::is_model_downloaded(&models_root, slug) {
-        return Err(format!("Model '{slug}' is not downloaded. Please download it first."));
+        return Err(format!(
+            "Model '{slug}' is not downloaded. Please download it first."
+        ));
     }
 
     let model_dir = crate::ai_tagger::models::model_dir(&models_root, slug);
@@ -432,14 +469,11 @@ pub async fn auto_tag_imported(state: &AppState, hashes: &[String]) {
 
         // Deduplicate (keep highest confidence)
         all_tags.sort_by(|a, b| {
-            a.namespace
-                .cmp(&b.namespace)
-                .then(a.tag.cmp(&b.tag))
-                .then(
-                    b.confidence
-                        .partial_cmp(&a.confidence)
-                        .unwrap_or(std::cmp::Ordering::Equal),
-                )
+            a.namespace.cmp(&b.namespace).then(a.tag.cmp(&b.tag)).then(
+                b.confidence
+                    .partial_cmp(&a.confidence)
+                    .unwrap_or(std::cmp::Ordering::Equal),
+            )
         });
         all_tags.dedup_by(|a, b| a.namespace == b.namespace && a.tag == b.tag);
 

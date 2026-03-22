@@ -464,7 +464,11 @@ impl BitmapStore {
         let cat = category_of(key);
         let mut cats = crate::poison::write_or_recover(&self.categories, "bitmaps::insert");
         if let Some(store) = cats.get_mut(&cat) {
-            store.bitmaps.entry(key.clone()).or_default().insert(file_id);
+            store
+                .bitmaps
+                .entry(key.clone())
+                .or_default()
+                .insert(file_id);
             store.dirty_keys.insert(key.clone());
         }
     }
@@ -674,10 +678,7 @@ fn compact_category(store: &mut CategoryStore) -> io::Result<()> {
 }
 
 /// Append dirty keys to this category's WAL file.
-fn append_wal_for_category(
-    store: &CategoryStore,
-    dirty: &HashSet<BitmapKey>,
-) -> io::Result<()> {
+fn append_wal_for_category(store: &CategoryStore, dirty: &HashSet<BitmapKey>) -> io::Result<()> {
     if dirty.is_empty() {
         return Ok(());
     }
@@ -691,11 +692,7 @@ fn append_wal_for_category(
         let key_bytes = serialize_key(key);
         let key_len = key_bytes.len() as u32;
 
-        let bitmap = store
-            .bitmaps
-            .get(key)
-            .cloned()
-            .unwrap_or_default();
+        let bitmap = store.bitmaps.get(key).cloned().unwrap_or_default();
 
         let bm_size = bitmap.serialized_size();
         buf.extend_from_slice(&key_len.to_le_bytes());
@@ -703,9 +700,9 @@ fn append_wal_for_category(
         buf.extend_from_slice(&(bm_size as u64).to_le_bytes());
         let start = buf.len();
         buf.resize(start + bm_size, 0);
-        bitmap.serialize_into(&mut buf[start..]).map_err(|e| {
-            io::Error::new(io::ErrorKind::Other, format!("bitmap serialize: {e}"))
-        })?;
+        bitmap
+            .serialize_into(&mut buf[start..])
+            .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("bitmap serialize: {e}")))?;
         entry_count += 1;
     }
 
@@ -759,9 +756,9 @@ fn save_to_file(map: &HashMap<BitmapKey, RoaringBitmap>, path: &Path) -> io::Res
         buf.extend_from_slice(&(bm_size as u64).to_le_bytes());
         let start = buf.len();
         buf.resize(start + bm_size, 0);
-        bitmap.serialize_into(&mut buf[start..]).map_err(|e| {
-            io::Error::new(io::ErrorKind::Other, format!("bitmap serialize: {e}"))
-        })?;
+        bitmap
+            .serialize_into(&mut buf[start..])
+            .map_err(|e| io::Error::new(io::ErrorKind::Other, format!("bitmap serialize: {e}")))?;
     }
 
     if let Some(parent) = path.parent() {
@@ -913,7 +910,9 @@ fn parse_version_from_active_file(name: &str) -> Option<u64> {
 #[cfg(test)]
 fn parse_version_from_category_file(name: &str) -> Option<u64> {
     // Pattern: <stem>.v<N>.bin or <stem>.v<N>.wal
-    let name = name.strip_suffix(".bin").or_else(|| name.strip_suffix(".wal"))?;
+    let name = name
+        .strip_suffix(".bin")
+        .or_else(|| name.strip_suffix(".wal"))?;
     let dot_v = name.rfind(".v")?;
     let version_str = &name[dot_v + 2..];
     version_str.parse().ok()
@@ -1165,8 +1164,7 @@ mod tests {
             store.insert(&BitmapKey::Tag(1), 20);
             // Force a snapshot via clear + re-insert
             {
-                let mut cats =
-                    crate::poison::write_or_recover(&store.categories, "test");
+                let mut cats = crate::poison::write_or_recover(&store.categories, "test");
                 if let Some(s) = cats.get_mut(&BitmapCategory::Tags) {
                     s.full_rewrite_needed = true;
                 }
@@ -1247,9 +1245,7 @@ mod tests {
             "folders": "folders.v2.bin"
         })
         .to_string();
-        let deleted = store
-            .prune_artifacts(&[keep_v3, keep_v2])
-            .unwrap();
+        let deleted = store.prune_artifacts(&[keep_v3, keep_v2]).unwrap();
 
         // v1 files (3 .bin + 1 .wal = 4) should be deleted
         assert_eq!(deleted, 4);
@@ -1362,18 +1358,15 @@ mod tests {
     #[test]
     fn version_parsing() {
         assert_eq!(parse_version_from_active_file("bitmaps.v5.bin"), Some(5));
-        assert_eq!(parse_version_from_active_file("bitmaps.v123.bin"), Some(123));
+        assert_eq!(
+            parse_version_from_active_file("bitmaps.v123.bin"),
+            Some(123)
+        );
         assert_eq!(parse_version_from_active_file("bitmaps.bin"), None);
         assert_eq!(parse_version_from_active_file("other.v5.bin"), None);
 
-        assert_eq!(
-            parse_version_from_category_file("tags.v5.bin"),
-            Some(5)
-        );
-        assert_eq!(
-            parse_version_from_category_file("status.v12.wal"),
-            Some(12)
-        );
+        assert_eq!(parse_version_from_category_file("tags.v5.bin"), Some(5));
+        assert_eq!(parse_version_from_category_file("status.v12.wal"), Some(12));
         assert_eq!(parse_version_from_category_file("tags.bin"), None);
     }
 
@@ -1437,8 +1430,14 @@ mod tests {
 
         // Tags should advance to v2, status and folders stay at v1
         assert!(bitmaps_dir.join("tags.v2.bin").exists());
-        assert!(!bitmaps_dir.join("status.v2.bin").exists(), "Status should NOT be rewritten");
-        assert!(!bitmaps_dir.join("folders.v2.bin").exists(), "Folders should NOT be rewritten");
+        assert!(
+            !bitmaps_dir.join("status.v2.bin").exists(),
+            "Status should NOT be rewritten"
+        );
+        assert!(
+            !bitmaps_dir.join("folders.v2.bin").exists(),
+            "Folders should NOT be rewritten"
+        );
 
         // Parse payload to verify per-category versions
         let parsed: serde_json::Value = serde_json::from_str(&payload2).unwrap();
@@ -1492,14 +1491,22 @@ mod tests {
         // payload3 refs: status.v3, tags.v2, folders.v1
         // Keep payload3 (current) and payload2 (previous)
         let store = BitmapStore::open_with_active_file(dir.path(), Some(&payload3));
-        let deleted = store.prune_artifacts(&[payload3.clone(), payload2.clone()]).unwrap();
+        let deleted = store
+            .prune_artifacts(&[payload3.clone(), payload2.clone()])
+            .unwrap();
 
         // Only tags.v1.bin should be deleted — everything else is referenced
         assert!(bitmaps_dir.join("status.v3.bin").exists());
-        assert!(bitmaps_dir.join("status.v1.bin").exists(), "status.v1 kept by payload2");
+        assert!(
+            bitmaps_dir.join("status.v1.bin").exists(),
+            "status.v1 kept by payload2"
+        );
         assert!(bitmaps_dir.join("tags.v2.bin").exists());
         assert!(bitmaps_dir.join("folders.v1.bin").exists());
-        assert!(!bitmaps_dir.join("tags.v1.bin").exists(), "tags.v1 not in any payload");
+        assert!(
+            !bitmaps_dir.join("tags.v1.bin").exists(),
+            "tags.v1 not in any payload"
+        );
         assert_eq!(deleted, 1);
     }
 

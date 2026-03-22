@@ -8,8 +8,11 @@
  */
 
 export type { Domain } from './Domain';
-export type { MutationFacts } from './MutationFacts';
-export type { MutationReceipt } from './MutationReceipt';
+export type { TagChangeDetails } from './TagChangeDetails';
+export type { MediaMetadataField } from './MediaMetadataField';
+export type { MediaDerivativeField } from './MediaDerivativeField';
+export type { StateChanges } from './StateChanges';
+export type { StateChangedEvent } from './StateChangedEvent';
 export type { RuntimeSnapshot } from './RuntimeSnapshot';
 export type { RuntimeTask } from './RuntimeTask';
 export type { SidebarCounts } from './SidebarCounts';

@@ -2,7 +2,10 @@
 
 use rusqlite::Connection;
 
-use super::support::{has_column, repair_collection_entity_file_links, seed_artifact_manifest, seed_manifest, table_exists};
+use super::support::{
+    has_column, repair_collection_entity_file_links, seed_artifact_manifest, seed_manifest,
+    table_exists,
+};
 /// Reconcile schema drift for databases that may already report CURRENT_VERSION
 /// but are missing tables/columns introduced in newer builds.
 pub fn reconcile_schema(conn: &Connection) -> rusqlite::Result<()> {
@@ -82,9 +85,7 @@ pub fn reconcile_schema(conn: &Connection) -> rusqlite::Result<()> {
         && !has_column(conn, "subscription", "group_id")?
     {
         conn.execute_batch("ALTER TABLE subscription RENAME COLUMN flow_id TO group_id")?;
-        tracing::warn!(
-            "Reconciled subscription schema: renamed subscription.flow_id to group_id"
-        );
+        tracing::warn!("Reconciled subscription schema: renamed subscription.flow_id to group_id");
     }
 
     // Some legacy DBs still have `subscription.site_plugin_id` but not `site_id`.
@@ -183,9 +184,7 @@ pub fn reconcile_schema(conn: &Connection) -> rusqlite::Result<()> {
             conn.execute_batch(
                 "ALTER TABLE credential_health ADD COLUMN last_checked_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP",
             )?;
-            tracing::warn!(
-                "Reconciled credential schema: added credential_health.last_checked_at"
-            );
+            tracing::warn!("Reconciled credential schema: added credential_health.last_checked_at");
         }
         if !has_column(conn, "credential_health", "last_error")? {
             conn.execute_batch("ALTER TABLE credential_health ADD COLUMN last_error TEXT")?;
@@ -272,9 +271,7 @@ pub fn reconcile_schema(conn: &Connection) -> rusqlite::Result<()> {
     seed_artifact_manifest(conn)?;
 
     if table_exists(conn, "folder")? && !has_column(conn, "folder", "auto_tags")? {
-        conn.execute_batch(
-            "ALTER TABLE folder ADD COLUMN auto_tags TEXT NOT NULL DEFAULT '[]'",
-        )?;
+        conn.execute_batch("ALTER TABLE folder ADD COLUMN auto_tags TEXT NOT NULL DEFAULT '[]'")?;
         tracing::warn!("Reconciled folder schema: added auto_tags");
     }
     if table_exists(conn, "folder")? && !has_column(conn, "folder", "watch_path")? {
@@ -319,15 +316,20 @@ pub fn reconcile_schema(conn: &Connection) -> rusqlite::Result<()> {
         )?;
     }
 
-    if table_exists(conn, "subscription")? && !has_column(conn, "subscription", "auto_collections")? {
+    if table_exists(conn, "subscription")? && !has_column(conn, "subscription", "auto_collections")?
+    {
         conn.execute_batch(
             "ALTER TABLE subscription ADD COLUMN auto_collections INTEGER NOT NULL DEFAULT 1",
         )?;
         tracing::warn!("Reconciled subscription schema: added auto_collections");
     }
 
-    if table_exists(conn, "subscription_query")? && !has_column(conn, "subscription_query", "posts_found")? {
-        conn.execute_batch("ALTER TABLE subscription_query ADD COLUMN posts_found INTEGER NOT NULL DEFAULT 0")?;
+    if table_exists(conn, "subscription_query")?
+        && !has_column(conn, "subscription_query", "posts_found")?
+    {
+        conn.execute_batch(
+            "ALTER TABLE subscription_query ADD COLUMN posts_found INTEGER NOT NULL DEFAULT 0",
+        )?;
         tracing::warn!("Reconciled subscription_query schema: added posts_found");
     }
 

@@ -1,12 +1,12 @@
 //! Tag CRUD, file tagging, search (FTS5), alias/implication operations.
 
-use rusqlite::{Connection, OptionalExtension, params, params_from_iter};
+use rusqlite::{params, params_from_iter, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 
+use crate::sqlite::bitmaps::BitmapKey;
 use crate::sqlite::ReadModelEvent;
 use crate::sqlite::SqliteDatabase;
-use crate::sqlite::bitmaps::BitmapKey;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TagRecord {

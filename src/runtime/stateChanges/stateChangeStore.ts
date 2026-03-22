@@ -1,7 +1,7 @@
 import { create } from 'zustand';
-import { listenRuntimeEvent, api, type UnlistenFn } from '#desktop/api';
+import { listenRuntimeEvent, getRuntimeSnapshot, type UnlistenFn } from '#desktop/api';
 import type {
-  MutationReceipt,
+  StateChangedEvent,
   RuntimeTask,
   RuntimeSnapshot,
   TaskKind,
@@ -9,33 +9,35 @@ import type {
   TaskRemovedEvent,
   SidebarCounts,
   ResourceKey,
-} from '../shared/types/generated/runtime-contract';
-import { deriveStaleResources } from '../runtime/resourceInvalidator';
-import { logBestEffortError } from '../shared/lib/asyncOps';
+} from '../../shared/types/backendState';
+import { planRefreshTargets } from './planRefreshTargets';
+import { logBestEffortError } from '../../shared/lib/asyncOps';
 
 // ---------------------------------------------------------------------------
 // State shape
 // ---------------------------------------------------------------------------
 
-export interface RuntimeSyncState {
+export interface StateChangeStoreState {
   initialized: boolean;
 
-  // --- Resource invalidation ---
+  // --- Refresh targets waiting to be applied ---
   lastSeq: number;
   tasksById: Map<string, RuntimeTask>;
-  staleResources: Set<ResourceKey>;
+  pendingRefreshTargets: Set<ResourceKey>;
+  lastPlannedRefreshTargets: Set<ResourceKey>;
+  refreshTargetVersion: number;
   sidebarCounts: SidebarCounts | null;
-  lastOriginCommand: string | null;
+  lastChangeOrigin: string | null;
 
   // Actions
   ensureInitialized: () => Promise<void>;
   teardown: () => void;
-  applyMutationReceipt: (receipt: MutationReceipt) => void;
+  applyStateChangedEvent: (event: StateChangedEvent) => void;
   applyTaskUpsert: (task: RuntimeTask) => void;
   applyTaskRemoved: (taskId: string) => void;
   refreshSnapshot: () => Promise<void>;
-  markResourceFresh: (key: ResourceKey) => void;
-  markResourcesStale: (keys: Iterable<ResourceKey>) => void;
+  markRefreshTargetHandled: (key: ResourceKey) => void;
+  queueRefreshTargets: (keys: Iterable<ResourceKey>) => void;
 
   // Selectors
   getTasksByKind: (kind: TaskKind) => RuntimeTask[];
@@ -52,10 +54,10 @@ let lastEventTs = 0;
 let isInitializing = false;
 const taskLingerTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
-// Mutation receipt batching — coalesce rapid-fire events (e.g. bulk import)
-// into a single store update to avoid redundant deriveStaleResources calls.
-let pendingReceipts: MutationReceipt[] = [];
-let receiptFlushTimer: ReturnType<typeof setTimeout> | null = null;
+// State-changed batching — coalesce rapid-fire events (e.g. bulk import)
+// into a single store update to avoid redundant refresh-target planning.
+let pendingStateChanges: StateChangedEvent[] = [];
+let stateChangeFlushTimer: ReturnType<typeof setTimeout> | null = null;
 
 const WATCHDOG_POLL_MS = 1000;
 const WATCHDOG_STALE_MS = 30000;
@@ -65,11 +67,11 @@ function clearTimers() {
     clearInterval(watchdogTimer);
     watchdogTimer = null;
   }
-  if (receiptFlushTimer) {
-    clearTimeout(receiptFlushTimer);
-    receiptFlushTimer = null;
+  if (stateChangeFlushTimer) {
+    clearTimeout(stateChangeFlushTimer);
+    stateChangeFlushTimer = null;
   }
-  pendingReceipts.length = 0;
+  pendingStateChanges.length = 0;
   for (const timer of taskLingerTimers.values()) clearTimeout(timer);
   taskLingerTimers.clear();
 }
@@ -86,13 +88,15 @@ function lingerMs(task: RuntimeTask): number {
 // Store
 // ---------------------------------------------------------------------------
 
-export const useRuntimeSyncStore = create<RuntimeSyncState>((set, get) => ({
+export const useStateChangeStore = create<StateChangeStoreState>((set, get) => ({
   initialized: false,
   lastSeq: 0,
   tasksById: new Map(),
-  staleResources: new Set(),
+  pendingRefreshTargets: new Set(),
+  lastPlannedRefreshTargets: new Set(),
+  refreshTargetVersion: 0,
   sidebarCounts: null,
-  lastOriginCommand: null,
+  lastChangeOrigin: null,
 
   ensureInitialized: async () => {
     if (get().initialized || isInitializing) return;
@@ -103,8 +107,8 @@ export const useRuntimeSyncStore = create<RuntimeSyncState>((set, get) => ({
 
       // 2. Subscribe to runtime events
       const listeners = await Promise.all([
-        listenRuntimeEvent('runtime/mutation_committed', (receipt) => {
-          get().applyMutationReceipt(receipt);
+        listenRuntimeEvent('runtime/state_changed', (event) => {
+          get().applyStateChangedEvent(event);
         }),
         listenRuntimeEvent('runtime/task_upserted', (event: TaskUpsertedEvent) => {
           get().applyTaskUpsert(event.task);
@@ -124,7 +128,7 @@ export const useRuntimeSyncStore = create<RuntimeSyncState>((set, get) => ({
 
       set({ initialized: true });
     } catch (error) {
-      logBestEffortError('runtimeSyncStore.ensureInitialized', error);
+      logBestEffortError('stateChangeStore.ensureInitialized', error);
       for (const fn of unlisteners) fn();
       unlisteners = [];
       clearTimers();
@@ -142,39 +146,47 @@ export const useRuntimeSyncStore = create<RuntimeSyncState>((set, get) => ({
       initialized: false,
       lastSeq: 0,
       tasksById: new Map(),
-      staleResources: new Set(),
+      pendingRefreshTargets: new Set(),
+      lastPlannedRefreshTargets: new Set(),
+      refreshTargetVersion: 0,
       sidebarCounts: null,
-      lastOriginCommand: null,
+      lastChangeOrigin: null,
     });
   },
 
-  applyMutationReceipt: (receipt) => {
+  applyStateChangedEvent: (event) => {
     lastEventTs = Date.now();
-    pendingReceipts.push(receipt);
-    if (!receiptFlushTimer) {
-      receiptFlushTimer = setTimeout(() => {
-        receiptFlushTimer = null;
-        const batch = pendingReceipts.splice(0);
+    pendingStateChanges.push(event);
+    if (!stateChangeFlushTimer) {
+      stateChangeFlushTimer = setTimeout(() => {
+        stateChangeFlushTimer = null;
+        const batch = pendingStateChanges.splice(0);
         if (batch.length === 0) return;
         const state = get();
-        const merged = new Set(state.staleResources);
+        const merged = new Set(state.pendingRefreshTargets);
+        const batchTargets = new Set<ResourceKey>();
         let maxSeq = state.lastSeq;
         let latestSidebarCounts = state.sidebarCounts;
-        let latestOriginCommand = state.lastOriginCommand;
-        for (const r of batch) {
-          if (r.seq <= maxSeq) continue;
-          maxSeq = r.seq;
-          const newStale = deriveStaleResources(r);
-          for (const key of newStale) merged.add(key);
-          if (r.sidebar_counts) latestSidebarCounts = r.sidebar_counts;
-          latestOriginCommand = r.origin_command;
+        let latestChangeOrigin = state.lastChangeOrigin;
+        for (const item of batch) {
+          if (item.seq <= maxSeq) continue;
+          maxSeq = item.seq;
+          const nextTargets = planRefreshTargets(item);
+          for (const key of nextTargets) {
+            merged.add(key);
+            batchTargets.add(key);
+          }
+          if (item.sidebar_counts) latestSidebarCounts = item.sidebar_counts;
+          latestChangeOrigin = item.origin;
         }
         if (maxSeq <= state.lastSeq) return;
         set({
           lastSeq: maxSeq,
-          staleResources: merged,
+          pendingRefreshTargets: merged,
+          lastPlannedRefreshTargets: batchTargets,
+          refreshTargetVersion: state.refreshTargetVersion + 1,
           sidebarCounts: latestSidebarCounts,
-          lastOriginCommand: latestOriginCommand,
+          lastChangeOrigin: latestChangeOrigin,
         });
       }, 50);
     }
@@ -224,7 +236,7 @@ export const useRuntimeSyncStore = create<RuntimeSyncState>((set, get) => ({
 
   refreshSnapshot: async () => {
     try {
-      const snapshot: RuntimeSnapshot = await api.runtime.getSnapshot();
+      const snapshot: RuntimeSnapshot = await getRuntimeSnapshot();
       lastEventTs = Date.now();
       set((state) => {
         const tasksById = new Map<string, RuntimeTask>();
@@ -237,24 +249,24 @@ export const useRuntimeSyncStore = create<RuntimeSyncState>((set, get) => ({
         };
       });
     } catch (error) {
-      logBestEffortError('runtimeSyncStore.refreshSnapshot', error);
+      logBestEffortError('stateChangeStore.refreshSnapshot', error);
     }
   },
 
-  markResourceFresh: (key) => {
+  markRefreshTargetHandled: (key) => {
     set((state) => {
-      if (!state.staleResources.has(key)) return {};
-      const staleResources = new Set(state.staleResources);
-      staleResources.delete(key);
-      return { staleResources };
+      if (!state.pendingRefreshTargets.has(key)) return {};
+      const pendingRefreshTargets = new Set(state.pendingRefreshTargets);
+      pendingRefreshTargets.delete(key);
+      return { pendingRefreshTargets };
     });
   },
 
-  markResourcesStale: (keys) => {
+  queueRefreshTargets: (keys) => {
     set((state) => {
-      const staleResources = new Set(state.staleResources);
-      for (const key of keys) staleResources.add(key);
-      return { staleResources };
+      const pendingRefreshTargets = new Set(state.pendingRefreshTargets);
+      for (const key of keys) pendingRefreshTargets.add(key);
+      return { pendingRefreshTargets };
     });
   },
 

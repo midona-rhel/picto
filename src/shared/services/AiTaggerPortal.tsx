@@ -2,12 +2,12 @@ import { useState, useEffect, useCallback, useRef, useLayoutEffect, useMemo } fr
 import { Checkbox, Loader } from '@mantine/core';
 import { IconPin, IconPinFilled, IconSparkles, IconCheck } from '@tabler/icons-react';
 import { TextButton } from '#ui/TextButton';
-import { api } from '#desktop/api';
 import { OverlayShell } from '#ui/OverlayShell';
 import { NamespaceTagChip } from '#ui/NamespaceTagChip';
 import { registerAiTaggerOpenHandler, type AiTaggerRequest } from './aiTaggerService';
 import type { AiTagPrediction } from '../types/api';
 import st from './AiTaggerPortal.module.css';
+import { aiTaggerController } from '../../controllers/aiTaggerController';
 
 const WD14_SLUG = 'wd14-swinv2-v3';
 const E621_SLUG = 'z3d-e621-convnext';
@@ -82,7 +82,7 @@ function AiTaggerPanel({
   const [e621Available, setE621Available] = useState(false);
 
   useEffect(() => {
-    void api.aiTagger.status().then((st) => {
+    void aiTaggerController.status().then((st) => {
       const wd14 = st.models.find((m) => m.slug.startsWith('wd14'));
       const e621 = st.models.find((m) => m.slug.startsWith('z3d-e621'));
       setWd14Available(wd14?.downloaded === true);
@@ -179,7 +179,7 @@ function AiTaggerPanel({
       for (let i = 0; i < hashes.length; i++) {
         setProgress({ done: i, total });
         const hash = hashes[i];
-        const result = await api.aiTagger.predict([hash], [slug]);
+        const result = await aiTaggerController.predict([hash], [slug]);
         const newTags: AiTagPrediction[] = [];
         for (const pred of result.predictions) {
           for (const tag of pred.tags) newTags.push(tag);
@@ -274,7 +274,7 @@ function AiTaggerPanel({
           }
         }
         if (tagsForFile.length > 0) {
-          await api.aiTagger.apply([hash], tagsForFile);
+          await aiTaggerController.apply([hash], tagsForFile);
         }
       }
       await onApply([]); // signal completion (for refresh)

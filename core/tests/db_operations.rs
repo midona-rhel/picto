@@ -64,9 +64,15 @@ async fn seed_sidebar_normalizes_legacy_all_files_node() {
         .await
         .expect("normalize legacy sidebar node");
 
-    let nodes = harness.db.get_sidebar_tree().await.expect("get sidebar tree");
+    let nodes = harness
+        .db
+        .get_sidebar_tree()
+        .await
+        .expect("get sidebar tree");
     assert!(
-        nodes.iter().any(|node| node.node_id == "system:all" && node.name == "All Active"),
+        nodes
+            .iter()
+            .any(|node| node.node_id == "system:all" && node.name == "All Active"),
         "canonical all-active node should exist after normalization",
     );
     assert!(
@@ -146,10 +152,9 @@ async fn tag_table_query_returns_seeded_tags() {
         .await
         .expect("get_all_tags_with_counts");
     assert!(!tags.is_empty(), "should return seeded tag");
-    assert!(
-        tags.iter()
-            .any(|t| t.subtag == "alice" && t.namespace == "character")
-    );
+    assert!(tags
+        .iter()
+        .any(|t| t.subtag == "alice" && t.namespace == "character"));
 }
 
 #[tokio::test]

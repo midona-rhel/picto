@@ -128,9 +128,19 @@ pub async fn selection_bitmap_for_all_results(
         let ids = base_ids;
         let gf = grid_filters;
         db.with_read_conn(move |conn| {
-            let rows = list_files_slim_by_ids(conn, &ids, ids.len() as i64 + 1, "date_added", "desc", None, gf.as_ref(), None)?;
+            let rows = list_files_slim_by_ids(
+                conn,
+                &ids,
+                ids.len() as i64 + 1,
+                "date_added",
+                "desc",
+                None,
+                gf.as_ref(),
+                None,
+            )?;
             Ok(rows.into_iter().map(|r| r.entity_id).collect::<Vec<_>>())
-        }).await?
+        })
+        .await?
     } else {
         base_ids
     };
@@ -152,10 +162,20 @@ pub async fn selection_bitmap_for_all_results(
     Ok((base, filtered))
 }
 
-fn build_grid_filters_from_selection(filters: &crate::types::GridFilterSpec) -> Option<crate::sqlite::files::GridFilters> {
+fn build_grid_filters_from_selection(
+    filters: &crate::types::GridFilterSpec,
+) -> Option<crate::sqlite::files::GridFilters> {
     let has_any = filters.rating_min.is_some()
-        || filters.mime_prefixes.as_ref().map(|v| !v.is_empty()).unwrap_or(false)
-        || filters.search_text.as_ref().map(|s| !s.trim().is_empty()).unwrap_or(false)
+        || filters
+            .mime_prefixes
+            .as_ref()
+            .map(|v| !v.is_empty())
+            .unwrap_or(false)
+        || filters
+            .search_text
+            .as_ref()
+            .map(|s| !s.trim().is_empty())
+            .unwrap_or(false)
         || filters.collections_only == Some(true);
     if !has_any {
         return None;

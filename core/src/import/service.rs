@@ -11,10 +11,10 @@ use crate::blob_store::BlobStore;
 use crate::duplicates::orchestrator::DuplicateOrchestrator;
 use crate::events::{self, ManualImportProgressEvent};
 use crate::folders::service;
-use crate::import::existing::{ExistingImportMergeRequest, merge_existing_import_target};
+use crate::import::existing::{merge_existing_import_target, ExistingImportMergeRequest};
 use crate::import::pipeline::{ImportOptions, ImportPipeline};
-use crate::runtime_contract::mutation::Domain;
-use crate::runtime_contract::mutation_builder::MutationImpact;
+use crate::runtime_contract::change_builder::ChangeImpact;
+use crate::runtime_contract::state_change::Domain;
 use crate::sqlite::SqliteDatabase;
 use crate::tags::normalize;
 use crate::types::{ImportBatchResult, ImportResult};
@@ -77,6 +77,7 @@ impl ImportService {
             skipped: Vec::new(),
             errors: Vec::new(),
         };
+        let mut combined_impact: Option<ChangeImpact> = None;
 
         let total = file_paths.len();
         for (index, path) in file_paths.iter().enumerate() {
@@ -98,12 +99,13 @@ impl ImportService {
                     if surviving_hash == imported.hex_hash {
                         emit_file_imported(db, &surviving_hash).await;
                     }
-                    crate::events::emit_mutation(
-                        "manual_import",
-                        crate::runtime_contract::mutation_builder::MutationImpact::file_lifecycle(
-                            db,
-                        ),
-                    );
+                    let next_impact =
+                        crate::runtime_contract::change_builder::ChangeImpact::file_lifecycle(db)
+                            .file_hashes(vec![surviving_hash.clone()]);
+                    combined_impact = Some(match combined_impact.take() {
+                        Some(current) => current.merge(next_impact),
+                        None => next_impact,
+                    });
                     batch
                         .imported
                         .push(build_import_result(db, imported, &surviving_hash).await);
@@ -124,7 +126,7 @@ impl ImportService {
                             name: options.name.clone(),
                             note_entries: options.notes.clone().unwrap_or_default(),
                             subscription_id: None,
-                            mutation_name: "manual_import_existing",
+                            change_origin: "manual_import_existing",
                         },
                     )
                     .await?;
@@ -157,6 +159,10 @@ impl ImportService {
             errors = batch.errors.len(),
             "import batch complete"
         );
+
+        if let Some(impact) = combined_impact {
+            crate::events::emit_state_changed("manual_import", impact);
+        }
 
         Ok(batch)
     }
@@ -195,6 +201,7 @@ impl ImportService {
         let mut folder_cache = HashMap::<PathBuf, i64>::new();
         let mut created_folder_ids = Vec::<i64>::new();
         let mut touched_folder_ids = HashSet::<i64>::new();
+        let mut combined_impact: Option<ChangeImpact> = None;
 
         if preserve_structure {
             let root_name = root_path
@@ -235,9 +242,9 @@ impl ImportService {
 
             if !created_folder_ids.is_empty() {
                 service::refresh_sidebar_projection_for_folder_ids(db, &created_folder_ids).await?;
-                crate::events::emit_mutation(
+                crate::events::emit_state_changed(
                     "import_folder_structure",
-                    MutationImpact::sidebar(Domain::Folders).folder_ids(created_folder_ids.clone()),
+                    ChangeImpact::sidebar(Domain::Folders).folder_ids(created_folder_ids.clone()),
                 );
             }
         }
@@ -297,7 +304,7 @@ impl ImportService {
                             name: None,
                             note_entries: HashMap::new(),
                             subscription_id: None,
-                            mutation_name: "import_folder_existing",
+                            change_origin: "import_folder_existing",
                         },
                     )
                     .await?;
@@ -322,19 +329,30 @@ impl ImportService {
                 }
             }
 
-            if !imported_hashes.is_empty() {
-                let mut impact = MutationImpact::file_lifecycle(db);
-                if let Some(folder_id) = target_folder_id {
-                    impact = impact.folder_ids(vec![folder_id]);
-                }
-                crate::events::emit_mutation("import_folder", impact);
-            } else if let Some(folder_id) = target_folder_id {
-                if !skipped_hashes.is_empty() {
-                    crate::events::emit_mutation(
-                        "import_folder_membership",
-                        MutationImpact::folder_file_change(folder_id),
+            if !imported_hashes.is_empty()
+                || (!skipped_hashes.is_empty() && target_folder_id.is_some())
+            {
+                let mut impact = ChangeImpact::new();
+                if !imported_hashes.is_empty() {
+                    impact = impact.merge(
+                        ChangeImpact::file_lifecycle(db).file_hashes(imported_hashes.clone()),
                     );
                 }
+                if let Some(folder_id) = target_folder_id {
+                    impact = impact.merge(
+                        ChangeImpact::folder_file_change(folder_id).file_hashes(
+                            imported_hashes
+                                .iter()
+                                .cloned()
+                                .chain(skipped_hashes.iter().cloned())
+                                .collect(),
+                        ),
+                    );
+                }
+                combined_impact = Some(match combined_impact.take() {
+                    Some(current) => current.merge(impact),
+                    None => impact,
+                });
             }
 
             let current_file = file_path
@@ -364,6 +382,10 @@ impl ImportService {
             folders = created_folder_ids.len(),
             "folder import batch complete"
         );
+
+        if let Some(impact) = combined_impact {
+            crate::events::emit_state_changed("import_folder", impact);
+        }
 
         Ok(batch)
     }

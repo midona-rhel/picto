@@ -20,7 +20,7 @@ import { Modal } from '@mantine/core';
 import { IconCheck, IconEqual, IconLayoutSidebar, IconLayersIntersect, IconLayersUnion, IconMinus, IconPin, IconPinFilled, IconPlus } from '@tabler/icons-react';
 import { OverlayShell } from '../../../shared/components/OverlayShell';
 import { useVirtualizer } from '@tanstack/react-virtual';
-import { api } from '#desktop/api';
+import { tagsController } from '../../../controllers/tagsController';
 import { getNamespaceColor } from '../../../shared/lib/namespaceColors';
 import { parseTagString } from '../../../shared/lib/tagParsing';
 import { registerTagSelectOpenHandler } from './tagSelectService';
@@ -159,7 +159,7 @@ function TagSelectPanelInner({
 
   // Initial fetch
   useEffect(() => {
-    api.tags.getAll()
+    tagsController.getAll()
       .then((tuples) => {
         const entries: TagEntry[] = tuples.map(([display, namespace, count]) => {
           const parsed = parseTagString(display);
@@ -180,7 +180,7 @@ function TagSelectPanelInner({
     }
     if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
     searchTimerRef.current = setTimeout(() => {
-      api.tags.search(search.trim(), 200)
+      tagsController.search(search.trim(), 200)
         .then((results) => {
           const countMap = new Map(allTags.map((t) => [t.display, t.count]));
           setSearchResults(

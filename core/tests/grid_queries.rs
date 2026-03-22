@@ -99,12 +99,9 @@ async fn grid_page_slim_collection_scope_returns_only_collection_members() {
             ..Default::default()
         },
     };
-    let reordered = picto_core::grid::query::get_grid_page_slim(
-        &harness.db,
-        reordered_query,
-    )
-    .await
-    .expect("grid page after reorder");
+    let reordered = picto_core::grid::query::get_grid_page_slim(&harness.db, reordered_query)
+        .await
+        .expect("grid page after reorder");
 
     assert_eq!(reordered.items.len(), 2);
     assert_eq!(reordered.items[0].hash, "c333");
@@ -115,7 +112,9 @@ async fn grid_page_slim_collection_scope_returns_only_collection_members() {
 async fn folder_scope_total_count_excludes_hidden_collection_members() {
     let harness = common::TestHarness::new().await;
 
-    let member_entity_id = harness.insert_test_file("folder_member", "member.png", 1).await;
+    let member_entity_id = harness
+        .insert_test_file("folder_member", "member.png", 1)
+        .await;
 
     let folder = harness
         .db
@@ -264,8 +263,22 @@ async fn grid_page_slim_folder_filters_support_any_all_and_reject() {
         .await
         .expect("create folder B");
 
-    harness.db.add_entities_to_folder_batch(fa.folder_id, &["f_any_1".to_string(), "f_any_3".to_string()]).await.expect("add f1,f3->A");
-    harness.db.add_entities_to_folder_batch(fb.folder_id, &["f_any_2".to_string(), "f_any_3".to_string()]).await.expect("add f2,f3->B");
+    harness
+        .db
+        .add_entities_to_folder_batch(
+            fa.folder_id,
+            &["f_any_1".to_string(), "f_any_3".to_string()],
+        )
+        .await
+        .expect("add f1,f3->A");
+    harness
+        .db
+        .add_entities_to_folder_batch(
+            fb.folder_id,
+            &["f_any_2".to_string(), "f_any_3".to_string()],
+        )
+        .await
+        .expect("add f2,f3->B");
 
     let any_query = GridPageSlimQuery {
         limit: Some(20),

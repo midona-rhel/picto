@@ -3,10 +3,10 @@
 use rusqlite::Connection;
 
 use crate::sqlite::bitmaps::BitmapKey;
-use crate::sqlite::ReadModelEvent;
 use crate::sqlite::files::{self, NewFile};
-use crate::tags::db as tags_db;
+use crate::sqlite::ReadModelEvent;
 use crate::sqlite::SqliteDatabase;
+use crate::tags::db as tags_db;
 
 /// Options for importing a file.
 pub struct ImportOptions {

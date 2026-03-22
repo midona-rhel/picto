@@ -149,10 +149,10 @@ pub async fn reorder_sidebar_nodes(
     input: ReorderSidebarNodesInput,
 ) -> Result<(), String> {
     state.db.reorder_sidebar_nodes(input.moves).await?;
-    crate::events::emit_mutation(
+    crate::events::emit_state_changed(
         "reorder_sidebar_nodes",
-        crate::runtime_contract::mutation_builder::MutationImpact::sidebar(
-            crate::runtime_contract::mutation::Domain::Sidebar,
+        crate::runtime_contract::change_builder::ChangeImpact::sidebar(
+            crate::runtime_contract::state_change::Domain::Sidebar,
         ),
     );
     Ok(())
@@ -179,9 +179,9 @@ pub async fn set_view_prefs(
         input.patch,
     )
     .await?;
-    crate::events::emit_mutation(
+    crate::events::emit_state_changed(
         "set_view_prefs",
-        crate::runtime_contract::mutation_builder::MutationImpact::view_prefs_change(),
+        crate::runtime_contract::change_builder::ChangeImpact::view_prefs_change(),
     );
     Ok(serde_json::to_value(&result).map_err(|e| e.to_string())?)
 }

@@ -233,26 +233,30 @@ export const filesController = {
     return result;
   },
 
-  async setName(hash: string, name: string | null) {
+  /** @internal — used by undo closures. External callers use rename(). */
+  async _setName(hash: string, name: string | null) {
     const result = await commandApi.file.setName(hash, name);
     eagerInvalidate(hash);
     return result;
   },
 
-  async batchRename(items: Array<{ hash: string; name: string | null }>) {
+  /** @internal — used by undo closures. External callers use batchRename(). */
+  async _batchRename(items: Array<{ hash: string; name: string | null }>) {
     for (const item of items) {
       await commandApi.file.setName(item.hash, item.name);
     }
     eagerInvalidateMany(items.map((i) => i.hash));
   },
 
-  async setSourceUrls(hash: string, urls: string[]) {
+  /** @internal — used by undo closures. */
+  async _setSourceUrls(hash: string, urls: string[]) {
     const result = await commandApi.file.setSourceUrls(hash, urls);
     eagerInvalidate(hash);
     return result;
   },
 
-  async setNotes(hash: string, notes: Record<string, string>) {
+  /** @internal — used by undo closures. */
+  async _setNotes(hash: string, notes: Record<string, string>) {
     const result = await commandApi.file.setNotes(hash, notes);
     eagerInvalidate(hash);
     return result;
@@ -307,7 +311,7 @@ export const filesController = {
       const prev = [...previousStatuses];
       registerUndoAction({
         label: `Move ${count} item${count === 1 ? '' : 's'} to trash`,
-        undo: async () => {
+        backward: async () => {
           const buckets = new Map<string, string[]>();
           for (const item of prev) {
             const bucket = buckets.get(item.status || 'active');
@@ -318,15 +322,15 @@ export const filesController = {
             await this.setStatusSelection({ ...specSnapshot, mode: 'explicit_hashes', hashes }, status);
           }
         },
-        redo: async () => { await this.setStatusSelection(specSnapshot, 'trash'); },
+        forward: async () => { await this.setStatusSelection(specSnapshot, 'trash'); },
       });
     } else {
       // Virtual all-selection: undo restores them all to the scope's expected status.
       const undoStatus = scopeExpectedStatus() ?? 'active';
       registerUndoAction({
         label: `Move ${count} item${count === 1 ? '' : 's'} to trash`,
-        undo: async () => { await this.setStatusSelection(specSnapshot, undoStatus); },
-        redo: async () => { await this.setStatusSelection(specSnapshot, 'trash'); },
+        backward: async () => { await this.setStatusSelection(specSnapshot, undoStatus); },
+        forward: async () => { await this.setStatusSelection(specSnapshot, 'trash'); },
       });
     }
     return count;
@@ -347,8 +351,8 @@ export const filesController = {
     const specSnapshot = structuredClone(spec);
     registerUndoAction({
       label: `Restore ${count} item${count === 1 ? '' : 's'}`,
-      undo: async () => { await this.setStatusSelection(specSnapshot, 'trash'); },
-      redo: async () => { await this.setStatusSelection(specSnapshot, 'active'); },
+      backward: async () => { await this.setStatusSelection(specSnapshot, 'trash'); },
+      forward: async () => { await this.setStatusSelection(specSnapshot, 'active'); },
     });
     return count;
   },
@@ -358,8 +362,8 @@ export const filesController = {
     await this.setStatus(hash, status);
     registerUndoAction({
       label: status === 'active' ? 'Accept inbox item' : 'Reject inbox item',
-      undo: async () => { await this.setStatus(hash, 'inbox'); },
-      redo: async () => { await this.setStatus(hash, status); },
+      backward: async () => { await this.setStatus(hash, 'inbox'); },
+      forward: async () => { await this.setStatus(hash, status); },
     });
   },
 
@@ -370,8 +374,8 @@ export const filesController = {
     const verb = status === 'active' ? 'Accept' : 'Reject';
     registerUndoAction({
       label: `${verb} ${count} item${count === 1 ? '' : 's'}`,
-      undo: async () => { await this.setStatusSelection(specSnapshot, 'inbox'); },
-      redo: async () => { await this.setStatusSelection(specSnapshot, status); },
+      backward: async () => { await this.setStatusSelection(specSnapshot, 'inbox'); },
+      forward: async () => { await this.setStatusSelection(specSnapshot, status); },
     });
     return count;
   },
@@ -389,8 +393,8 @@ export const filesController = {
         const prev = new Map(previousRatings);
         registerUndoAction({
           label: `Rate ${hashes.length} item${hashes.length === 1 ? '' : 's'}`,
-          undo: async () => { await Promise.all(hashes.map((h) => this.updateRating(h, prev.get(h) ?? null))); },
-          redo: async () => { await Promise.all(hashes.map((h) => this.updateRating(h, rating))); },
+          backward: async () => { await Promise.all(hashes.map((h) => this.updateRating(h, prev.get(h) ?? null))); },
+          forward: async () => { await Promise.all(hashes.map((h) => this.updateRating(h, rating))); },
         });
       }
     } else {
@@ -398,9 +402,81 @@ export const filesController = {
       const specSnapshot = structuredClone(spec);
       registerUndoAction({
         label: `Rate all to ${rating ?? 0} stars`,
-        undo: async () => { await this.updateSelectionRating(specSnapshot, null); },
-        redo: async () => { await this.updateSelectionRating(specSnapshot, rating); },
+        backward: async () => { await this.updateSelectionRating(specSnapshot, null); },
+        forward: async () => { await this.updateSelectionRating(specSnapshot, rating); },
       });
     }
+  },
+
+  /** Rename a file. Registers undo. */
+  async rename(hash: string, newName: string | null, oldName: string | null): Promise<void> {
+    await this._setName(hash, newName);
+    registerUndoAction({
+      label: 'Rename file',
+      backward: async () => { await this._setName(hash, oldName); },
+      forward: async () => { await this._setName(hash, newName); },
+    });
+  },
+
+  /** Batch rename files. Registers undo. */
+  async batchRename(
+    items: Array<{ hash: string; name: string | null }>,
+    previousNames: Array<{ hash: string; name: string | null }>,
+  ): Promise<void> {
+    await this._batchRename(items);
+    const itemsSnapshot = [...items];
+    const prevSnapshot = [...previousNames];
+    registerUndoAction({
+      label: `Rename ${items.length} file${items.length === 1 ? '' : 's'}`,
+      backward: async () => { await this._batchRename(prevSnapshot); },
+      forward: async () => { await this._batchRename(itemsSnapshot); },
+    });
+  },
+
+  /** Set source URLs. Registers undo. */
+  async setSourceUrls(hash: string, urls: string[], previousUrls: string[]): Promise<void> {
+    await this._setSourceUrls(hash, urls);
+    registerUndoAction({
+      label: 'Update source URLs',
+      backward: async () => { await this._setSourceUrls(hash, previousUrls); },
+      forward: async () => { await this._setSourceUrls(hash, urls); },
+    });
+  },
+
+  /** Set notes. Registers undo. */
+  async setNotes(hash: string, notes: Record<string, string>, previousNotes: Record<string, string>): Promise<void> {
+    await this._setNotes(hash, notes);
+    registerUndoAction({
+      label: 'Update notes',
+      backward: async () => { await this._setNotes(hash, previousNotes); },
+      forward: async () => { await this._setNotes(hash, notes); },
+    });
+  },
+
+  /** Change status of a single item. Registers undo. */
+  async changeStatus(hash: string, targetStatus: string, previousStatus: string, label: string): Promise<void> {
+    await this.setStatus(hash, targetStatus);
+    registerUndoAction({
+      label,
+      backward: async () => { await this.setStatus(hash, previousStatus); },
+      forward: async () => { await this.setStatus(hash, targetStatus); },
+    });
+  },
+
+  /** Change status of a selection (explicit hashes). Registers undo. */
+  async changeStatusSelection(
+    spec: SelectionQuerySpec,
+    targetStatus: string,
+    previousStatus: string,
+  ): Promise<number> {
+    const count = Number(await this.setStatusSelection(spec, targetStatus) ?? 0);
+    const specSnapshot = structuredClone(spec);
+    const statusLabel = targetStatus === 'inbox' ? 'Inbox' : targetStatus === 'trash' ? 'Trash' : 'Active';
+    registerUndoAction({
+      label: `Move ${count} item${count === 1 ? '' : 's'} to ${statusLabel}`,
+      backward: async () => { await this.setStatusSelection(specSnapshot, previousStatus); },
+      forward: async () => { await this.setStatusSelection(specSnapshot, targetStatus); },
+    });
+    return count;
   },
 };

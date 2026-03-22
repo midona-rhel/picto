@@ -3,7 +3,7 @@
 //! The sidebar tree is a pre-compiled projection — counts maintained by the
 //! compiler system (O(1) via bitmap .len()), never computed on the read path.
 
-use rusqlite::{Connection, params};
+use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 
 use crate::sqlite::SqliteDatabase;
@@ -156,7 +156,10 @@ fn normalize_root_library_scope(conn: &Connection) -> rusqlite::Result<()> {
     )?;
 
     if has_all != 0 && has_all_files != 0 {
-        conn.execute("DELETE FROM sidebar_node WHERE node_id = 'system:all_files'", [])?;
+        conn.execute(
+            "DELETE FROM sidebar_node WHERE node_id = 'system:all_files'",
+            [],
+        )?;
     } else if has_all == 0 && has_all_files != 0 {
         conn.execute(
             "UPDATE sidebar_node

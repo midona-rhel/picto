@@ -39,15 +39,13 @@ pub fn start_native_drag(
         if handle_bytes.len() < std::mem::size_of::<*mut std::ffi::c_void>() {
             return Err(Error::from_reason("Invalid window handle buffer"));
         }
-        let view_ptr =
-            unsafe { *(handle_bytes.as_ptr() as *const *mut std::ffi::c_void) };
+        let view_ptr = unsafe { *(handle_bytes.as_ptr() as *const *mut std::ffi::c_void) };
 
         let c_paths: Vec<CString> = file_paths
             .iter()
             .filter_map(|p| CString::new(p.as_str()).ok())
             .collect();
-        let c_ptrs: Vec<*const std::ffi::c_char> =
-            c_paths.iter().map(|p| p.as_ptr()).collect();
+        let c_ptrs: Vec<*const std::ffi::c_char> = c_paths.iter().map(|p| p.as_ptr()).collect();
 
         unsafe {
             picto_start_file_drag(
@@ -63,7 +61,13 @@ pub fn start_native_drag(
 
     #[cfg(not(target_os = "macos"))]
     {
-        let _ = (window_handle, file_paths, icon_rgba, icon_width, icon_height);
+        let _ = (
+            window_handle,
+            file_paths,
+            icon_rgba,
+            icon_width,
+            icon_height,
+        );
     }
 
     Ok(())

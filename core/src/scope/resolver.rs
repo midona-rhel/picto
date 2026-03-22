@@ -238,16 +238,11 @@ async fn resolve_tag_search(
     .await
 }
 
-fn resolve_folder(
-    db: &SqliteDatabase,
-    filter: &ScopeFilter,
-) -> Result<RoaringBitmap, String> {
+fn resolve_folder(db: &SqliteDatabase, filter: &ScopeFilter) -> Result<RoaringBitmap, String> {
     let include_folders = filter.folder_ids().unwrap_or_default();
     let exclude_folders = filter.excluded_folder_ids().unwrap_or_default();
-    let match_mode = parse_include_match_mode(
-        filter.folder_match_mode().as_deref(),
-        IncludeMatchMode::Any,
-    );
+    let match_mode =
+        parse_include_match_mode(filter.folder_match_mode().as_deref(), IncludeMatchMode::Any);
     let active = db.bitmaps.get(&BitmapKey::Status(1));
 
     let mut result = if include_folders.is_empty() {

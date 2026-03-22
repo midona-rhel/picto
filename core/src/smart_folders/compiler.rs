@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
-use crate::sqlite::SqliteDatabase;
 use crate::sqlite::bitmaps::BitmapKey;
+use crate::sqlite::SqliteDatabase;
 
 use super::db::{
     build_effective_predicate_for_smart_folder, compile_predicate, get_smart_folder,
@@ -53,7 +53,10 @@ pub(crate) async fn compile_smart_folder(
     let bitmaps = db.bitmaps.clone();
     db.with_read_conn(move |conn| {
         if get_smart_folder(conn, smart_folder_id)?.is_none() {
-            tracing::debug!(smart_folder_id, "Smart folder no longer exists, skipping compilation");
+            tracing::debug!(
+                smart_folder_id,
+                "Smart folder no longer exists, skipping compilation"
+            );
             bitmaps.remove_key(&BitmapKey::SmartFolder(smart_folder_id));
             return Ok(());
         }

@@ -1,7 +1,8 @@
 import { create } from 'zustand';
-import { api } from '#desktop/api';
 import type { SidebarNodeDto, SidebarFreshness } from '../shared/types/sidebar';
 import type { SmartFolderPredicate } from '../shared/types/api';
+import { sidebarController } from '../controllers/sidebarController';
+import { tagsController } from '../controllers/tagsController';
 
 interface SmartFolderSummary {
   id: string;
@@ -46,7 +47,7 @@ interface DomainState {
 
   // Actions
   fetchSidebarTree: () => Promise<void>;
-  invalidate: () => void;
+  requestRefresh: () => void;
   applySidebarCounts: (counts: { all_active: number; inbox: number; trash: number }) => void;
   setDuplicatesCount: (count: number) => void;
 }
@@ -117,12 +118,12 @@ export const useDomainStore = create<DomainState>((set, get) => ({
 
     try {
       const tree = await withTimeout(
-        api.sidebar.getTree(),
+        sidebarController.getTree(),
         SIDEBAR_FETCH_STUCK_TIMEOUT_MS,
         { nodes: [], tree_epoch: 0, generated_at: new Date(0).toISOString() },
       );
       const [namespaceSummary] = await Promise.all([
-        withTimeout(api.tags.getNamespaceSummary(), SIDEBAR_OPTIONAL_QUERY_TIMEOUT_MS, []),
+        withTimeout(tagsController.getNamespaceSummary(), SIDEBAR_OPTIONAL_QUERY_TIMEOUT_MS, []),
       ]);
       const nodes = tree.nodes;
       const tagsCount = Array.isArray(namespaceSummary)
@@ -207,8 +208,8 @@ export const useDomainStore = create<DomainState>((set, get) => ({
     }
   },
 
-  invalidate: () => {
-    // Coalesce repeated sidebar refresh requests from event storms and chained mutations.
+  requestRefresh: () => {
+    // Coalesce repeated sidebar refresh requests from event storms and chained state changes.
     if (sidebarRefreshTimer) clearTimeout(sidebarRefreshTimer);
     sidebarRefreshTimer = setTimeout(() => {
       sidebarRefreshTimer = null;

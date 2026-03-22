@@ -42,9 +42,9 @@ pub async fn start_workers(
                 rx,
                 |result| {
                     crate::events::emit("runtime/read_model_published", &result.published);
-                    crate::events::emit_mutation(
+                    crate::events::emit_state_changed(
                         "compiler_batch_done",
-                        crate::runtime_contract::mutation_builder::MutationImpact::compiler_publish(
+                        crate::runtime_contract::change_builder::ChangeImpact::compiler_publish(
                             result.smart_folders_rebuilt,
                         ),
                     );

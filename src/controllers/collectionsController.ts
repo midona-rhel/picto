@@ -148,8 +148,8 @@ export const collectionsController = {
     const count = await this.addMembers({ id, hashes });
     registerUndoAction({
       label: `Create collection "${name}"`,
-      undo: async () => { await this.delete(id); },
-      redo: async () => {
+      backward: async () => { await this.delete(id); },
+      forward: async () => {
         const newId = await this.create({ name });
         await this.addMembers({ id: newId, hashes });
       },
@@ -165,8 +165,8 @@ export const collectionsController = {
     const count = Number(await this.addMembers({ id: targetId, hashes }) ?? hashes.length);
     registerUndoAction({
       label: `Add ${count} item${count === 1 ? '' : 's'} to collection`,
-      undo: async () => { await this.removeMembers({ id: targetId, hashes }); },
-      redo: async () => { await this.addMembers({ id: targetId, hashes }); },
+      backward: async () => { await this.removeMembers({ id: targetId, hashes }); },
+      forward: async () => { await this.addMembers({ id: targetId, hashes }); },
     });
     return count;
   },
@@ -199,13 +199,13 @@ export const collectionsController = {
     await this.delete(collectionId);
     registerUndoAction({
       label: `Split collection "${collectionName}"`,
-      undo: async () => {
+      backward: async () => {
         const newId = await this.create({ name: collectionName });
         if (memberHashes.length > 0) {
           await this.addMembers({ id: newId, hashes: memberHashes });
         }
       },
-      redo: async () => {
+      forward: async () => {
         // Re-split: find the restored collection and delete it again
         const list = await this.list();
         const match = list.find((c) => c.name === collectionName);
@@ -216,12 +216,55 @@ export const collectionsController = {
   },
 
   /** Remove a single member from a collection with undo. */
-  async removeMemberWithUndo(collectionId: number, hash: string): Promise<void> {
+  async removeMember(collectionId: number, hash: string): Promise<void> {
     await this.removeMembers({ id: collectionId, hashes: [hash] });
     registerUndoAction({
       label: 'Remove from collection',
-      undo: async () => { await this.addMembers({ id: collectionId, hashes: [hash] }); },
-      redo: async () => { await this.removeMembers({ id: collectionId, hashes: [hash] }); },
+      backward: async () => { await this.addMembers({ id: collectionId, hashes: [hash] }); },
+      forward: async () => { await this.removeMembers({ id: collectionId, hashes: [hash] }); },
+    });
+  },
+
+  /** Remove multiple members from a collection with undo. */
+  async removeMembersBatch(collectionId: number, hashes: string[]): Promise<void> {
+    const h = [...hashes];
+    await this.removeMembers({ id: collectionId, hashes: h });
+    registerUndoAction({
+      label: `Remove ${h.length} from collection`,
+      backward: async () => { await this.addMembers({ id: collectionId, hashes: h }); },
+      forward: async () => { await this.removeMembers({ id: collectionId, hashes: h }); },
+    });
+  },
+
+  /** Rename a collection with undo. */
+  async rename(id: number, newName: string, oldName: string): Promise<void> {
+    await this.update({ id, name: newName });
+    registerUndoAction({
+      label: 'Rename collection',
+      backward: async () => { await this.update({ id, name: oldName }); },
+      forward: async () => { await this.update({ id, name: newName }); },
+    });
+  },
+
+  /** Add tags to a collection with undo. */
+  async tagAdd(id: number, tags: string[]): Promise<void> {
+    const t = [...tags];
+    await this.addTags(id, t);
+    registerUndoAction({
+      label: `Add ${t.length} tag${t.length === 1 ? '' : 's'}`,
+      backward: async () => { await this.removeTags(id, t); },
+      forward: async () => { await this.addTags(id, t); },
+    });
+  },
+
+  /** Remove tags from a collection with undo. */
+  async tagRemove(id: number, tags: string[]): Promise<void> {
+    const t = [...tags];
+    await this.removeTags(id, t);
+    registerUndoAction({
+      label: `Remove ${t.length} tag${t.length === 1 ? '' : 's'}`,
+      backward: async () => { await this.addTags(id, t); },
+      forward: async () => { await this.removeTags(id, t); },
     });
   },
 };

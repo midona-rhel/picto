@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { api } from '#desktop/api';
-import { registerUndoAction } from '../../../shared/controllers/undoRedoController';
+import { filesController } from '../../../controllers/filesController';
+import { collectionsController } from '../../../controllers/collectionsController';
 
 import { useInspectorData, type InspectorData } from './useInspectorData';
 import type { MediaItem } from '../../grid/shared';
@@ -107,14 +107,7 @@ export function useInspectorState({
       const beforeName = selected.name ?? `Collection ${collectionId}`;
       saveNameTimer.current = setTimeout(() => {
         if (beforeName === nextName) return;
-        api.collections.update({ id: collectionId, name: nextName })
-          .then(() => {
-            registerUndoAction({
-              label: 'Rename collection',
-              undo: () => api.collections.update({ id: collectionId, name: beforeName }),
-              redo: () => api.collections.update({ id: collectionId, name: nextName }),
-            });
-          })
+        collectionsController.rename(collectionId, nextName, beforeName)
           .catch((e: unknown) => {
             console.error('Failed to save collection name:', e);
           });
@@ -136,14 +129,7 @@ export function useInspectorState({
         pendingNameChangeRef.current = null;
         return;
       }
-      api.files.setName(hash, nextName)
-        .then(() => {
-          registerUndoAction({
-            label: 'Rename file',
-            undo: () => api.files.setName(hash, before),
-            redo: () => api.files.setName(hash, nextName),
-          });
-        })
+      filesController.rename(hash, nextName, before)
         .catch((e: unknown) => {
           console.error('Failed to save name:', e);
         })

@@ -2,9 +2,9 @@ import { useState, useEffect } from 'react';
 import { Modal, Select, Stack, Text, TextInput } from '@mantine/core';
 import { TextButton } from '../../../shared/components/TextButton';
 import { glassModalStyles } from '../../../shared/styles/glassModal';
-import { api } from '#desktop/api';
 import { notifySuccess, notifyError } from '../../../shared/lib/notify';
 import { SCHEDULE_OPTIONS } from '../types';
+import { subscriptionsController } from '../../../controllers/subscriptionsController';
 
 export function CreateSubscriptionGroupModal({
   opened,
@@ -30,7 +30,7 @@ export function CreateSubscriptionGroupModal({
     if (!name.trim()) return;
     try {
       setLoading(true);
-      await api.groups.create(name.trim(), schedule !== 'manual' ? schedule : undefined);
+      await subscriptionsController.createGroup(name.trim(), schedule !== 'manual' ? schedule : undefined);
 
       notifySuccess(`"${name.trim()}" created. Add one or more subscriptions or queries to this group.`, 'Subscription Group Created');
       onCreated?.();

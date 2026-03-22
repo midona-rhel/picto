@@ -3,7 +3,6 @@ import { Modal, Stack, Group, TextInput, Text, ScrollArea } from '@mantine/core'
 import { IconArrowRight } from '@tabler/icons-react';
 import { glassModalStyles } from '../styles/glassModal';
 import { TextButton } from './TextButton';
-import { registerUndoAction } from '../controllers/undoRedoController';
 import { notifySuccess, notifyError } from '../lib/notify';
 import { filesController } from '../../controllers/filesController';
 import type { MasonryItem } from '../../features/grid/shared';
@@ -113,20 +112,8 @@ export function BatchRenameDialog({ opened, onClose, images }: BatchRenameDialog
     try {
       await filesController.batchRename(
         toRename.map((item) => ({ hash: item.hash, name: item.after || null })),
+        toRename.map((item) => ({ hash: item.hash, name: item.before || null })),
       );
-      registerUndoAction({
-        label: `Batch rename ${toRename.length} file(s)`,
-        undo: async () => {
-          await filesController.batchRename(
-            toRename.map((item) => ({ hash: item.hash, name: item.before || null })),
-          );
-        },
-        redo: async () => {
-          await filesController.batchRename(
-            toRename.map((item) => ({ hash: item.hash, name: item.after || null })),
-          );
-        },
-      });
       notifySuccess(`Renamed ${toRename.length} file(s)`, 'Batch Rename');
       onClose();
     } catch (err) {

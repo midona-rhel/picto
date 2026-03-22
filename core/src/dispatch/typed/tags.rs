@@ -181,10 +181,11 @@ pub async fn add_tags(state: &AppState, input: AddTagsInput) -> Result<(), Strin
         .db
         .add_tags_batch(&expanded, &input.tag_strings)
         .await?;
-    crate::events::emit_mutation(
+    crate::events::emit_state_changed(
         "add_tags",
-        crate::runtime_contract::mutation_builder::MutationImpact::batch_tags()
-            .file_hashes(expanded),
+        crate::runtime_contract::change_builder::ChangeImpact::batch_tags()
+            .file_hashes(expanded)
+            .tags_added(input.tag_strings),
     );
     Ok(())
 }
@@ -202,10 +203,11 @@ pub async fn remove_tags(state: &AppState, input: RemoveTagsInput) -> Result<(),
         .db
         .remove_tags_batch(&expanded, &input.tag_strings)
         .await?;
-    crate::events::emit_mutation(
+    crate::events::emit_state_changed(
         "remove_tags",
-        crate::runtime_contract::mutation_builder::MutationImpact::batch_tags()
-            .file_hashes(expanded),
+        crate::runtime_contract::change_builder::ChangeImpact::batch_tags()
+            .file_hashes(expanded)
+            .tags_removed(input.tag_strings),
     );
     Ok(())
 }
@@ -243,9 +245,9 @@ pub async fn manage_tag_alias(state: &AppState, input: ManageTagAliasInput) -> R
         state.db.remove_alias(&from_ns, &from_st, "local").await?;
     }
 
-    crate::events::emit_mutation(
+    crate::events::emit_state_changed(
         "manage_tag_alias",
-        crate::runtime_contract::mutation_builder::MutationImpact::tag_structure_change(),
+        crate::runtime_contract::change_builder::ChangeImpact::tag_structure_change(),
     );
     Ok(())
 }
@@ -287,9 +289,9 @@ pub async fn manage_tag_implication(
         _ => return Err(format!("Invalid action: {}", input.action)),
     }
 
-    crate::events::emit_mutation(
+    crate::events::emit_state_changed(
         "manage_tag_implication",
-        crate::runtime_contract::mutation_builder::MutationImpact::tag_structure_change(),
+        crate::runtime_contract::change_builder::ChangeImpact::tag_structure_change(),
     );
     Ok(())
 }
@@ -328,14 +330,27 @@ pub async fn merge_tags(state: &AppState, input: MergeTagsInput) -> Result<(), S
     state
         .db
         .emit_read_model_event(ReadModelEvent::TagChanged { tag_id: to_id });
-    for file_id in affected_file_ids {
+    for file_id in &affected_file_ids {
         state
             .db
-            .emit_read_model_event(ReadModelEvent::FileTagsChanged { file_id });
+            .emit_read_model_event(ReadModelEvent::FileTagsChanged { file_id: *file_id });
     }
-    crate::events::emit_mutation(
+    // Resolve affected file_ids → hashes for exact state change emission
+    let affected_hashes: Vec<String> = if !affected_file_ids.is_empty() {
+        state.db.resolve_ids_batch(&affected_file_ids).await
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(_, hash)| hash)
+            .collect()
+    } else {
+        Vec::new()
+    };
+    crate::events::emit_state_changed(
         "merge_tags",
-        crate::runtime_contract::mutation_builder::MutationImpact::tag_structure_change(),
+        crate::runtime_contract::change_builder::ChangeImpact::tag_structure_change()
+            .file_hashes(affected_hashes)
+            .tags_removed(vec![input.from_tag.clone()])
+            .tags_added(vec![input.to_tag.clone()]),
     );
     Ok(())
 }
@@ -367,14 +382,44 @@ pub async fn rename_tag(
     state: &AppState,
     input: RenameTagInput,
 ) -> Result<serde_json::Value, String> {
+    // Look up the old tag string before the rename mutates it
+    let old_tag_string: Option<String> = state.db.with_read_conn({
+        let tag_id = input.tag_id;
+        move |conn| {
+            use rusqlite::OptionalExtension;
+            conn.query_row(
+                "SELECT namespace, subtag FROM tag WHERE tag_id = ?1",
+                rusqlite::params![tag_id],
+                |row| {
+                    let ns: String = row.get(0)?;
+                    let st: String = row.get(1)?;
+                    Ok(crate::tags::normalize::combine_tag(&ns, &st))
+                },
+            ).optional()
+        }
+    }).await.unwrap_or(None);
+
     let (affected_file_ids, merged_into) = state
         .db
         .rename_tag_by_id(input.tag_id, &input.new_name)
         .await?;
-    crate::events::emit_mutation(
-        "rename_tag",
-        crate::runtime_contract::mutation_builder::MutationImpact::tag_structure_change(),
-    );
+    let affected_hashes: Vec<String> = if !affected_file_ids.is_empty() {
+        state.db.resolve_ids_batch(&affected_file_ids).await
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(_, hash)| hash)
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let mut impact = crate::runtime_contract::change_builder::ChangeImpact::tag_structure_change()
+        .file_hashes(affected_hashes);
+    if let Some(old_tag) = old_tag_string {
+        impact = impact
+            .tags_removed(vec![old_tag])
+            .tags_added(vec![input.new_name.clone()]);
+    }
+    crate::events::emit_state_changed("rename_tag", impact);
     Ok(serde_json::json!({
         "affected_files": affected_file_ids.len(),
         "merged_into": merged_into,
@@ -385,11 +430,39 @@ pub async fn delete_tag(
     state: &AppState,
     input: DeleteTagInput,
 ) -> Result<serde_json::Value, String> {
+    // Look up the tag string before deletion removes it
+    let tag_string: Option<String> = state.db.with_read_conn({
+        let tag_id = input.tag_id;
+        move |conn| {
+            use rusqlite::OptionalExtension;
+            conn.query_row(
+                "SELECT namespace, subtag FROM tag WHERE tag_id = ?1",
+                rusqlite::params![tag_id],
+                |row| {
+                    let ns: String = row.get(0)?;
+                    let st: String = row.get(1)?;
+                    Ok(crate::tags::normalize::combine_tag(&ns, &st))
+                },
+            ).optional()
+        }
+    }).await.unwrap_or(None);
+
     let affected_file_ids = state.db.delete_tag_by_id(input.tag_id).await?;
-    crate::events::emit_mutation(
-        "delete_tag",
-        crate::runtime_contract::mutation_builder::MutationImpact::tag_structure_change(),
-    );
+    let affected_hashes: Vec<String> = if !affected_file_ids.is_empty() {
+        state.db.resolve_ids_batch(&affected_file_ids).await
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(_, hash)| hash)
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let mut impact = crate::runtime_contract::change_builder::ChangeImpact::tag_structure_change()
+        .file_hashes(affected_hashes);
+    if let Some(tag) = tag_string {
+        impact = impact.tags_removed(vec![tag]);
+    }
+    crate::events::emit_state_changed("delete_tag", impact);
     Ok(serde_json::json!({
         "affected_files": affected_file_ids.len(),
     }))

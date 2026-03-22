@@ -97,7 +97,11 @@ pub(super) async fn get_similar_page(
     let id_to_row: std::collections::HashMap<i64, FileMetadataSlim> = rows
         .into_iter()
         .map(|r| {
-            let eid = if r.entity_id > 0 { r.entity_id } else { r.file_id };
+            let eid = if r.entity_id > 0 {
+                r.entity_id
+            } else {
+                r.file_id
+            };
             (eid, r)
         })
         .collect();

@@ -174,31 +174,42 @@ pub(crate) async fn generate_thumbnail_with_adapter(
     match adapter_for(mime) {
         MediaAdapterKind::Archive => {
             let is_epub = mime == MimeType::ApplicationEpub;
-            as_jpg(archive::generate_thumbnail_from_archive(path, target_resolution, is_epub))
+            as_jpg(archive::generate_thumbnail_from_archive(
+                path,
+                target_resolution,
+                is_epub,
+            ))
         }
-        MediaAdapterKind::ClipStudio => {
-            as_jpg(specialty::generate_thumbnail_from_clip(path, target_resolution))
-        }
-        MediaAdapterKind::Krita => {
-            as_jpg(specialty::generate_thumbnail_from_krita(path, target_resolution))
-        }
-        MediaAdapterKind::PaintDotNet => {
-            as_jpg(specialty::generate_thumbnail_from_paint_net(path, target_resolution))
-        }
-        MediaAdapterKind::Procreate => {
-            as_jpg(specialty::generate_thumbnail_from_procreate(path, target_resolution))
-        }
+        MediaAdapterKind::ClipStudio => as_jpg(specialty::generate_thumbnail_from_clip(
+            path,
+            target_resolution,
+        )),
+        MediaAdapterKind::Krita => as_jpg(specialty::generate_thumbnail_from_krita(
+            path,
+            target_resolution,
+        )),
+        MediaAdapterKind::PaintDotNet => as_jpg(specialty::generate_thumbnail_from_paint_net(
+            path,
+            target_resolution,
+        )),
+        MediaAdapterKind::Procreate => as_jpg(specialty::generate_thumbnail_from_procreate(
+            path,
+            target_resolution,
+        )),
         MediaAdapterKind::Svg => as_jpg(svg::generate_thumbnail_from_svg(path, target_resolution)),
         MediaAdapterKind::Pdf => Err(FileError::Thumbnail(
             "PDF thumbnail generation not supported".to_string(),
         )),
-        MediaAdapterKind::OfficePptx => {
-            as_jpg(office::generate_thumbnail_from_office(path, target_resolution))
-        }
+        MediaAdapterKind::OfficePptx => as_jpg(office::generate_thumbnail_from_office(
+            path,
+            target_resolution,
+        )),
         MediaAdapterKind::Flash => Err(FileError::Thumbnail(
             "Flash thumbnails not supported".to_string(),
         )),
-        MediaAdapterKind::Psd | MediaAdapterKind::Image => generate_image_thumbnail(path, target_resolution),
+        MediaAdapterKind::Psd | MediaAdapterKind::Image => {
+            generate_image_thumbnail(path, target_resolution)
+        }
         MediaAdapterKind::Ugoira => {
             let frame_index = num_frames
                 .map(|nf| {
@@ -218,7 +229,8 @@ pub(crate) async fn generate_thumbnail_with_adapter(
         MediaAdapterKind::Animation => generate_image_thumbnail(path, target_resolution),
         MediaAdapterKind::Video | MediaAdapterKind::Audio => {
             let dur = duration_ms.filter(|&ms| ms > 0);
-            match ffmpeg::render_video_thumbnail(path, target_resolution, percentage_in, dur).await {
+            match ffmpeg::render_video_thumbnail(path, target_resolution, percentage_in, dur).await
+            {
                 Ok(bytes) => Ok((bytes, "jpg".into())),
                 Err(_) => {
                     if percentage_in > 0 {

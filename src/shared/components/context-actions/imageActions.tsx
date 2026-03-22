@@ -39,7 +39,6 @@ import type { GridRuntimeAction, GridRuntimeState, GridViewMode } from '../../..
 import { FolderPickerService } from '../../services/folderPickerService';
 import { AiTaggerService } from '../../services/aiTaggerService';
 import { IconSparkles } from '@tabler/icons-react';
-import { registerUndoAction } from '../../controllers/undoRedoController';
 import { notifyError, notifySuccess } from '../../lib/notify';
 import { useSettingsStore } from '../../../state/settingsStore';
 import { useNavigationImageAdjustmentsStore } from '../../../state/navigationImageAdjustmentsStore';
@@ -223,7 +222,7 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
       onClick: () => {
         if (freshHash && collectionEntityId) {
           dispatch({ type: 'CLEAR_SELECTION' });
-          collectionsController.removeMemberWithUndo(collectionEntityId, freshHash)
+          collectionsController.removeMember(collectionEntityId, freshHash)
             .catch(err => notifyError(err, 'Remove from Collection Failed'));
         } else {
           handleRemoveFromCollection();
@@ -765,18 +764,7 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
     const doRestore = () => {
       if (freshSingleHash) {
         dispatch({ type: 'CLEAR_SELECTION' });
-        filesController.setStatus(freshSingleHash, 'active')
-          .then(() => {
-            registerUndoAction({
-              label: 'Restore item',
-              undo: async () => {
-                await filesController.setStatus(freshSingleHash, 'trash');
-                    },
-              redo: async () => {
-                await filesController.setStatus(freshSingleHash, 'active');
-                    },
-            });
-          })
+        filesController.changeStatus(freshSingleHash, 'active', 'trash', 'Restore item')
           .catch(err => notifyError(err, 'Restore Failed'));
       } else {
         handleRestoreSelected();
@@ -791,18 +779,7 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
             .catch(err => notifyError(err, 'Delete Failed'));
         } else {
           const previousStatus = imagesRef.current.find((img) => img.hash === freshSingleHash)?.status ?? (statusFilter ?? 'active');
-          filesController.setStatus(freshSingleHash, 'trash')
-            .then(() => {
-              registerUndoAction({
-                label: 'Move to trash',
-                undo: async () => {
-                  await filesController.setStatus(freshSingleHash, previousStatus);
-                        },
-                redo: async () => {
-                  await filesController.setStatus(freshSingleHash, 'trash');
-                        },
-              });
-            })
+          filesController.changeStatus(freshSingleHash, 'trash', previousStatus, 'Move to trash')
             .catch(err => notifyError(err, 'Delete Failed'));
         }
       } else {

@@ -2,7 +2,6 @@ import { useCallback } from 'react';
 import { filesController } from '../../../controllers/filesController';
 import { foldersController } from '../../../controllers/foldersController';
 import { collectionsController } from '../../../controllers/collectionsController';
-import { registerUndoAction } from '../../../shared/controllers/undoRedoController';
 import { notifyError, notifyInfo } from '../../../shared/lib/notify';
 import type { GridRuntimeAction, GridRuntimeState } from '../runtime';
 import {
@@ -145,13 +144,6 @@ export function useGridStateActions({
     if (hashes.length === 0) return;
     dispatch({ type: 'CLEAR_SELECTION' });
     foldersController.removeFiles(folderId, hashes)
-      .then(() => {
-        registerUndoAction({
-          label: `Remove ${hashes.length} from folder`,
-          undo: async () => { await foldersController.addFiles(folderId, hashes); },
-          redo: async () => { await foldersController.removeFiles(folderId, hashes); },
-        });
-      })
       .catch((err) => notifyError(err, 'Remove from Folder Failed'));
   }, [folderId, stateRef, dispatch]);
 
@@ -161,14 +153,7 @@ export function useGridStateActions({
     const hashes = [...effective];
     if (hashes.length === 0) return;
     dispatch({ type: 'CLEAR_SELECTION' });
-    collectionsController.removeMembers({ id: collectionEntityId, hashes })
-      .then(() => {
-        registerUndoAction({
-          label: `Remove ${hashes.length} from collection`,
-          undo: async () => { await collectionsController.addMembers({ id: collectionEntityId, hashes }); },
-          redo: async () => { await collectionsController.removeMembers({ id: collectionEntityId, hashes }); },
-        });
-      })
+    collectionsController.removeMembersBatch(collectionEntityId, hashes)
       .catch((err) => notifyError(err, 'Remove from Collection Failed'));
   }, [collectionEntityId, stateRef, dispatch]);
 

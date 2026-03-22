@@ -1,4 +1,4 @@
-import type { MutationReceipt, TaskUpsertedEvent, TaskRemovedEvent } from '../generated/runtime-contract';
+import type { StateChangedEvent, TaskUpsertedEvent, TaskRemovedEvent } from '../backendState';
 
 // ─── Event Payloads ─────────────────────────────────────────────────────────
 // Typed interfaces for all backend events. Single source of truth — all
@@ -76,7 +76,7 @@ export interface MediaExportProgressEvent {
  * Core runtime event contract.
  * Keep in sync with `core/src/events.rs::event_names`.
  *
- * Authoritative events: `runtime/mutation_committed`, `runtime/task_upserted`,
+ * Authoritative events: `runtime/state_changed`, `runtime/task_upserted`,
  * `runtime/task_removed`. All domain state (subscriptions, groups) is
  * derived from task events via `applyTaskUpsert`.
  */
@@ -92,7 +92,7 @@ export interface CoreRuntimeEventPayloadMap {
   'log': { level: string; target: string; message: string; timestamp: string };
 
   // Runtime contract (authoritative)
-  'runtime/mutation_committed': MutationReceipt;
+  'runtime/state_changed': StateChangedEvent;
   'runtime/task_upserted': TaskUpsertedEvent;
   'runtime/task_removed': TaskRemovedEvent;
 }

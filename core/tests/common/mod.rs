@@ -8,9 +8,9 @@ use std::sync::{Arc, Mutex};
 use tempfile::TempDir;
 
 use picto_core::events;
-use picto_core::sqlite::SqliteDatabase;
 use picto_core::sqlite::bitmaps::BitmapKey;
 use picto_core::sqlite::files::NewFile;
+use picto_core::sqlite::SqliteDatabase;
 
 // ---------------------------------------------------------------------------
 // Test Harness

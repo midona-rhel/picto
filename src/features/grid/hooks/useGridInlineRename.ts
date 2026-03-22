@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { registerUndoAction } from '../../../shared/controllers/undoRedoController';
 import { notifyError } from '../../../shared/lib/notify';
-import { api } from '#desktop/api';
+import { filesController } from '../../../controllers/filesController';
 import type { MediaItem } from '../shared';
 
 export function useGridInlineRename(args: {
@@ -55,16 +54,8 @@ export function useGridInlineRename(args: {
     const after = renameValue.trim() || null;
     setRenamingHash(null);
     if (after === before) return;
-    api.files
-      .setName(hash, after)
-      .then(() => {
-        registerUndoAction({
-          label: 'Rename file',
-          undo: () => api.files.setName(hash, before),
-          redo: () => api.files.setName(hash, after),
-        });
-      })
-      .catch((err) => notifyError(err, 'Rename Failed'));
+    filesController.rename(hash, after, before)
+      .catch((err: unknown) => notifyError(err, 'Rename Failed'));
   }, [renameValue, stateRef]);
 
   useEffect(() => {

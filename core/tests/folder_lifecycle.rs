@@ -55,7 +55,11 @@ async fn folder_create_add_subfolder_move_files() {
     let parent_res = picto_core::grid::query::get_grid_page_slim(&harness.db, parent_query)
         .await
         .unwrap();
-    assert_eq!(parent_res.items.len(), 3, "parent folder should have 3 files");
+    assert_eq!(
+        parent_res.items.len(),
+        3,
+        "parent folder should have 3 files"
+    );
 
     // 3. Create subfolder under parent
     let child = harness
@@ -102,7 +106,11 @@ async fn folder_create_add_subfolder_move_files() {
     let parent_res = picto_core::grid::query::get_grid_page_slim(&harness.db, parent_query)
         .await
         .unwrap();
-    assert_eq!(parent_res.items.len(), 2, "parent should have 2 files after move");
+    assert_eq!(
+        parent_res.items.len(),
+        2,
+        "parent should have 2 files after move"
+    );
 
     // Child should have 1 file
     let child_query = GridPageSlimQuery {

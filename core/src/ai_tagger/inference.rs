@@ -60,7 +60,12 @@ pub struct TaggerSession {
 
 impl TaggerSession {
     /// Create a new tagger session, loading the ONNX model and labels from disk.
-    pub fn load(model_dir: &Path, slug: &str, input_size: u32, channel_order: ChannelOrder) -> Result<Self, String> {
+    pub fn load(
+        model_dir: &Path,
+        slug: &str,
+        input_size: u32,
+        channel_order: ChannelOrder,
+    ) -> Result<Self, String> {
         let model_path = model_dir.join("model.onnx");
         // Labels CSV may be named differently per model
         let labels_path = ["selected_tags.csv", "tags-selected.csv"]
@@ -78,7 +83,13 @@ impl TaggerSession {
 
         tracing::info!(slug, labels = labels.len(), "AI tagger session loaded");
 
-        Ok(Self { session, labels, input_size, channel_order, slug: slug.to_string() })
+        Ok(Self {
+            session,
+            labels,
+            input_size,
+            channel_order,
+            slug: slug.to_string(),
+        })
     }
 
     pub fn slug(&self) -> &str {
@@ -107,7 +118,8 @@ impl TaggerSession {
             "Model I/O names"
         );
 
-        let outputs = self.session
+        let outputs = self
+            .session
             .run(ort::inputs![input_value])
             .map_err(|e| format!("Inference failed: {e}"))?;
 
@@ -139,7 +151,12 @@ impl TaggerSession {
         let min_val = logits.iter().copied().fold(f32::INFINITY, f32::min);
         let outputs_are_probabilities = min_val >= 0.0 && max_val <= 1.0;
 
-        tracing::info!(min_val, max_val, outputs_are_probabilities, "Output value range");
+        tracing::info!(
+            min_val,
+            max_val,
+            outputs_are_probabilities,
+            "Output value range"
+        );
 
         let mut predictions = Vec::new();
         for (i, &logit) in logits.iter().enumerate() {
@@ -147,7 +164,11 @@ impl TaggerSession {
                 break;
             }
             // Use sigmoid only if outputs are logits; skip if already probabilities
-            let confidence = if outputs_are_probabilities { logit } else { sigmoid(logit) };
+            let confidence = if outputs_are_probabilities {
+                logit
+            } else {
+                sigmoid(logit)
+            };
             let label = &self.labels[i];
             let threshold = thresholds.for_namespace(&label.namespace);
 
@@ -161,7 +182,9 @@ impl TaggerSession {
         }
 
         predictions.sort_by(|a, b| {
-            b.confidence.partial_cmp(&a.confidence).unwrap_or(std::cmp::Ordering::Equal)
+            b.confidence
+                .partial_cmp(&a.confidence)
+                .unwrap_or(std::cmp::Ordering::Equal)
         });
 
         Ok(predictions)
@@ -193,8 +216,8 @@ fn preprocess_image(
     input_size: u32,
     channel_order: ChannelOrder,
 ) -> Result<ndarray::Array4<f32>, String> {
-    let img = image::load_from_memory(image_bytes)
-        .map_err(|e| format!("Failed to decode image: {e}"))?;
+    let img =
+        image::load_from_memory(image_bytes).map_err(|e| format!("Failed to decode image: {e}"))?;
 
     let rgb = img.to_rgb8();
     let (w, h) = (rgb.width(), rgb.height());
@@ -240,7 +263,8 @@ fn sigmoid(x: f32) -> f32 {
 }
 
 /// Map of model slug → loaded TaggerSession, behind an async mutex.
-pub type SharedTaggerSessions = Arc<tokio::sync::Mutex<std::collections::HashMap<String, TaggerSession>>>;
+pub type SharedTaggerSessions =
+    Arc<tokio::sync::Mutex<std::collections::HashMap<String, TaggerSession>>>;
 
 /// Create a new empty sessions map.
 pub fn new_shared_sessions() -> SharedTaggerSessions {

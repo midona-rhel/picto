@@ -93,5 +93,4 @@ impl SqliteDatabase {
     pub async fn set_view_pref(&self, pref: ViewPref) -> Result<(), String> {
         self.with_conn(move |conn| set_view_pref(conn, &pref)).await
     }
-
 }

@@ -3,7 +3,6 @@ import { emitTo, listen } from '#desktop/api';
 import { filesController } from '../../../controllers/filesController';
 import { tagsController } from '../../../controllers/tagsController';
 import { notifyError, notifySuccess } from '../../../shared/lib/notify';
-import { registerUndoAction } from '../../../shared/controllers/undoRedoController';
 import { logBestEffortError, runBestEffort } from '../../../shared/lib/asyncOps';
 import type { MasonryItem } from '../shared';
 import type { GridRuntimeState } from '../runtime';
@@ -149,11 +148,6 @@ export function useGridItemActions({
       const tagsSnapshot = [...copiedTags];
       const hashesSnapshot = [...hashesToPaste];
       await tagsController.addToHashes(hashesSnapshot, tagsSnapshot);
-      registerUndoAction({
-        label: `Paste ${tagsSnapshot.length} tag${tagsSnapshot.length === 1 ? '' : 's'}`,
-        undo: () => tagsController.removeFromHashes(hashesSnapshot, tagsSnapshot),
-        redo: () => tagsController.addToHashes(hashesSnapshot, tagsSnapshot),
-      });
       notifySuccess(
         `Applied ${copiedTags.length} tag(s) to ${hashesToPaste.length} file(s)`,
         'Tags Pasted',

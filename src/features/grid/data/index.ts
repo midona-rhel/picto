@@ -2,12 +2,12 @@ export {
   prefetchMetadata,
   prefetchMetadataBatch,
   getMetadata,
-  invalidateMetadata,
-  invalidateManyMetadata,
+  noteMetadataChanged,
+  noteManyMetadataChanged,
   pinMetadata,
   unpinMetadata,
   getOrStartSelectionSummary,
-  invalidateSelectionSummary,
+  noteSelectionSummaryChanged,
   getMetadataCacheDebugStats,
 } from '../metadataPrefetch';
 

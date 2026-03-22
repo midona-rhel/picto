@@ -80,7 +80,10 @@ pub async fn check_scheduled_groups(
     let groups = match db.list_groups().await {
         Ok(f) => f,
         Err(e) => {
-            warn_scheduler_failure("list_groups", format!("Scheduler: failed to list groups: {e}"));
+            warn_scheduler_failure(
+                "list_groups",
+                format!("Scheduler: failed to list groups: {e}"),
+            );
             return;
         }
     };
@@ -145,23 +148,21 @@ pub async fn check_scheduled_groups(
                 schedule = %group.schedule,
                 "Scheduler: running overdue group"
             );
-            if let Err(e) = crate::subscriptions::group_orchestrator::SubscriptionGroupOrchestrator::run_group(
-                db,
-                blob_store,
-                rate_limiter,
-                running_subs,
-                sub_terminal_statuses,
-                group_id_str,
-                settings,
-            )
-            .await
+            if let Err(e) =
+                crate::subscriptions::group_orchestrator::SubscriptionGroupOrchestrator::run_group(
+                    db,
+                    blob_store,
+                    rate_limiter,
+                    running_subs,
+                    sub_terminal_statuses,
+                    group_id_str,
+                    settings,
+                )
+                .await
             {
                 warn_scheduler_failure(
                     "run_group",
-                    format!(
-                        "Scheduler: failed to start group {}: {}",
-                        group.group_id, e
-                    ),
+                    format!("Scheduler: failed to start group {}: {}", group.group_id, e),
                 );
             }
         }

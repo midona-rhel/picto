@@ -1,5 +1,5 @@
+use super::{push_unique_url, SiteAdapter};
 use serde_json::Value;
-use super::{SiteAdapter, push_unique_url};
 
 pub(super) static ADAPTER: DanbooruAdapter = DanbooruAdapter;
 

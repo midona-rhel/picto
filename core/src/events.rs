@@ -8,8 +8,8 @@
 //! This prevents deadlocks if a callback triggers a nested emit or if a slow
 //! handler blocks new registrations.
 
-use std::sync::{Arc, Mutex, OnceLock};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 
 type EventCallback = Arc<dyn Fn(&str, &str) + Send + Sync>;
 static EVENT_CB: OnceLock<Mutex<EventCallback>> = OnceLock::new();
@@ -62,19 +62,19 @@ pub fn emit_empty(name: &str) {
 }
 
 // SEQ counter lives in runtime_state — single source of truth.
-use crate::runtime_contract::mutation_builder::MutationImpact;
+use crate::runtime_contract::change_builder::ChangeImpact;
 
-/// Emit a `runtime/mutation_committed` event with a `MutationReceipt`.
+/// Emit a `runtime/state_changed` event with a `StateChangedEvent`.
 ///
-/// Builds `MutationFacts` from the impact and emits the receipt.
-/// The frontend derives stale resources from `facts` directly.
-pub fn emit_mutation(origin: &str, impact: MutationImpact) {
-    use crate::runtime_contract::mutation::{MutationFacts, MutationReceipt};
+/// Builds `StateChanges` from the impact and emits the event.
+/// The frontend derives stale resources from `changes` directly.
+pub fn emit_state_changed(origin: &str, impact: ChangeImpact) {
+    use crate::runtime_contract::state_change::{StateChangedEvent, StateChanges};
 
     let seq = crate::runtime_state::next_seq();
     let ts = chrono::Utc::now().to_rfc3339();
 
-    let facts = MutationFacts {
+    let changes = StateChanges {
         domains: impact.domains,
         file_hashes: impact.file_hashes,
         folder_ids: impact.folder_ids,
@@ -82,26 +82,31 @@ pub fn emit_mutation(origin: &str, impact: MutationImpact) {
         compiler_batch_done: impact.compiler_batch_done,
         status_changed: impact.status_changed,
         tags_changed: impact.tags_changed,
+        tag_changes: impact.tag_changes,
         tag_structure_changed: impact.tag_structure_changed,
         folder_membership_changed: impact.folder_membership_changed,
         view_prefs_changed: impact.view_prefs_changed,
+        media_metadata_changed: impact.media_metadata_changed,
+        media_fields_changed: impact.media_fields_changed,
+        media_derivatives_changed: impact.media_derivatives_changed,
+        derivative_fields_changed: impact.derivative_fields_changed,
         extra_grid_scopes: impact.extra_grid_scopes,
     };
 
-    let receipt = MutationReceipt {
+    let event = StateChangedEvent {
         seq,
         ts,
-        origin_command: origin.to_string(),
-        facts,
+        origin: origin.to_string(),
+        changes,
         sidebar_counts: impact.sidebar_counts,
     };
 
-    emit(event_names::RUNTIME_MUTATION_COMMITTED, &receipt);
+    emit(event_names::RUNTIME_STATE_CHANGED, &event);
 }
 
 pub mod event_names {
     // --- Runtime contract (authoritative) ---
-    pub const RUNTIME_MUTATION_COMMITTED: &str = "runtime/mutation_committed";
+    pub const RUNTIME_STATE_CHANGED: &str = "runtime/state_changed";
     pub const RUNTIME_TASK_UPSERTED: &str = "runtime/task_upserted";
     pub const RUNTIME_TASK_REMOVED: &str = "runtime/task_removed";
 
@@ -124,7 +129,11 @@ use tracing_subscriber::Layer;
 pub struct EventEmitLayer;
 
 impl<S: tracing::Subscriber> Layer<S> for EventEmitLayer {
-    fn on_event(&self, event: &tracing::Event<'_>, _ctx: tracing_subscriber::layer::Context<'_, S>) {
+    fn on_event(
+        &self,
+        event: &tracing::Event<'_>,
+        _ctx: tracing_subscriber::layer::Context<'_, S>,
+    ) {
         if !LOG_FORWARDING_ENABLED.load(Ordering::Relaxed) {
             return;
         }
@@ -167,7 +176,8 @@ impl tracing::field::Visit for MessageVisitor {
             if !self.message.is_empty() {
                 self.message.push(' ');
             }
-            self.message.push_str(&format!("{}={:?}", field.name(), value));
+            self.message
+                .push_str(&format!("{}={:?}", field.name(), value));
         }
     }
 
@@ -178,7 +188,8 @@ impl tracing::field::Visit for MessageVisitor {
             if !self.message.is_empty() {
                 self.message.push(' ');
             }
-            self.message.push_str(&format!("{}={}", field.name(), value));
+            self.message
+                .push_str(&format!("{}={}", field.name(), value));
         }
     }
 
@@ -186,21 +197,24 @@ impl tracing::field::Visit for MessageVisitor {
         if !self.message.is_empty() {
             self.message.push(' ');
         }
-        self.message.push_str(&format!("{}={}", field.name(), value));
+        self.message
+            .push_str(&format!("{}={}", field.name(), value));
     }
 
     fn record_u64(&mut self, field: &tracing::field::Field, value: u64) {
         if !self.message.is_empty() {
             self.message.push(' ');
         }
-        self.message.push_str(&format!("{}={}", field.name(), value));
+        self.message
+            .push_str(&format!("{}={}", field.name(), value));
     }
 
     fn record_bool(&mut self, field: &tracing::field::Field, value: bool) {
         if !self.message.is_empty() {
             self.message.push(' ');
         }
-        self.message.push_str(&format!("{}={}", field.name(), value));
+        self.message
+            .push_str(&format!("{}={}", field.name(), value));
     }
 }
 

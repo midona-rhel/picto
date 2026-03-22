@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use serde::Deserialize;
 use ts_rs::TS;
 
+use crate::runtime_contract::state_change::MediaMetadataField;
 use crate::state::AppState;
 
 // ─── Input structs ─────────────────────────────────────────────────────────
@@ -41,11 +42,9 @@ pub async fn get_media_entity_metadata(
     state: &AppState,
     input: GetMediaEntityMetadataInput,
 ) -> Result<serde_json::Value, String> {
-    let result = crate::metadata::query::MetadataQuery::get_entity_all_metadata(
-        &state.db,
-        input.hash,
-    )
-    .await?;
+    let result =
+        crate::metadata::query::MetadataQuery::get_entity_all_metadata(&state.db, input.hash)
+            .await?;
     serde_json::to_value(&result).map_err(|e| e.to_string())
 }
 
@@ -54,6 +53,8 @@ pub async fn update_media_entity_metadata(
     input: UpdateMediaEntityMetadataInput,
 ) -> Result<(), String> {
     let hash = input.hash;
+    let mut changed_fields = Vec::new();
+    let mut affected_hashes = vec![hash.clone()];
 
     if let Some(rating) = input.rating {
         // Cascade rating to collection members
@@ -64,15 +65,19 @@ pub async fn update_media_entity_metadata(
         for h in &hashes {
             state.db.update_rating(h, rating).await?;
         }
+        affected_hashes = hashes;
+        changed_fields.push(MediaMetadataField::Rating);
     }
 
     if let Some(name) = input.name {
         state.db.set_file_name(&hash, name.as_deref()).await?;
+        changed_fields.push(MediaMetadataField::Name);
     }
 
     if let Some(notes) = input.notes {
         let json = serde_json::to_string(&notes).map_err(|e| e.to_string())?;
         state.db.set_notes(&hash, Some(&json)).await?;
+        changed_fields.push(MediaMetadataField::Notes);
     }
 
     if let Some(ref urls) = input.source_urls {
@@ -85,10 +90,18 @@ pub async fn update_media_entity_metadata(
             .db
             .set_source_urls(&hash, urls_json.as_deref())
             .await?;
+        changed_fields.push(MediaMetadataField::SourceUrls);
     }
 
-    let impact = crate::runtime_contract::mutation_builder::MutationImpact::file_metadata(hash);
-    crate::events::emit_mutation("update_media_entity_metadata", impact);
+    if changed_fields.is_empty() {
+        return Ok(());
+    }
+
+    let impact = crate::runtime_contract::change_builder::ChangeImpact::new()
+        .file_hashes(affected_hashes)
+        .media_fields_changed(&changed_fields)
+        .smart_folder_scopes_changed_for_media_fields(&changed_fields);
+    crate::events::emit_state_changed("update_media_entity_metadata", impact);
     Ok(())
 }
 
@@ -106,8 +119,17 @@ pub async fn get_storage_stats(
 
     let mut result = serde_json::to_value(&stats).map_err(|e| e.to_string())?;
     let obj = result.as_object_mut().ok_or("expected object")?;
-    obj.insert("breakdown".to_string(), serde_json::to_value(&breakdown).map_err(|e| e.to_string())?);
-    obj.insert("originals_disk".to_string(), serde_json::Value::Number(originals_disk.into()));
-    obj.insert("thumbnails_disk".to_string(), serde_json::Value::Number(thumbnails_disk.into()));
+    obj.insert(
+        "breakdown".to_string(),
+        serde_json::to_value(&breakdown).map_err(|e| e.to_string())?,
+    );
+    obj.insert(
+        "originals_disk".to_string(),
+        serde_json::Value::Number(originals_disk.into()),
+    );
+    obj.insert(
+        "thumbnails_disk".to_string(),
+        serde_json::Value::Number(thumbnails_disk.into()),
+    );
     Ok(result)
 }

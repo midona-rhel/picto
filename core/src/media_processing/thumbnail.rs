@@ -292,7 +292,8 @@ fn extract_icc_from_png(data: &[u8]) -> Option<Vec<u8>> {
     let mut pos = 8; // skip PNG signature
 
     while pos + 12 <= data.len() {
-        let chunk_len = u32::from_be_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]]) as usize;
+        let chunk_len =
+            u32::from_be_bytes([data[pos], data[pos + 1], data[pos + 2], data[pos + 3]]) as usize;
         let chunk_type = &data[pos + 4..pos + 8];
         let chunk_data_start = pos + 8;
         let chunk_data_end = chunk_data_start + chunk_len;

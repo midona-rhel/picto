@@ -262,4 +262,3 @@ fn read_zip_entry_string(
 // and belong in the file identification pipeline (files.rs), not here.
 // They are omitted because they are called during MIME detection which is
 // already ported in files.rs.
-

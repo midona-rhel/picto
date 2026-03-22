@@ -1,18 +1,21 @@
-import type { MutationReceipt, MutationFacts, ResourceKey } from '../shared/types/generated/runtime-contract';
+import type { StateChangedEvent, StateChanges, ResourceKey } from '../../shared/types/backendState';
 
 /**
- * Derive the set of resource keys that a MutationReceipt invalidates.
- * Operates entirely from `receipt.facts` — does NOT read `receipt.invalidate`.
+ * Plan the set of refresh targets implied by a state change.
+ * Operates entirely from `event.changes`.
  * Pure function — no side effects, fully testable.
  */
-export function deriveStaleResources(receipt: MutationReceipt): Set<ResourceKey> {
+export function planRefreshTargets(event: StateChangedEvent): Set<ResourceKey> {
   const keys = new Set<ResourceKey>();
-  const facts = receipt.facts;
+  const changes = event.changes;
   const scopes: string[] = [];
+  const hasTagMembershipChange = changes.tags_changed || Boolean(changes.tag_changes);
+  const hasMediaFieldChange = changes.media_metadata_changed || Boolean(changes.media_fields_changed?.length);
+  const hasDerivativeFieldChange = changes.media_derivatives_changed || Boolean(changes.derivative_fields_changed?.length);
 
   // --- Fact-driven rules ---
 
-  if (facts.status_changed) {
+  if (changes.status_changed) {
     keys.add('sidebar/tree');
     keys.add('selection/current');
     scopes.push(
@@ -23,92 +26,96 @@ export function deriveStaleResources(receipt: MutationReceipt): Set<ResourceKey>
       'system:uncategorized',
       'smart:all',
     );
-    if (facts.folder_ids) {
-      for (const id of facts.folder_ids) {
+    if (changes.folder_ids) {
+      for (const id of changes.folder_ids) {
         scopes.push(`folder:${id}`);
       }
     }
   }
 
-  if (facts.tags_changed) {
+  if (hasTagMembershipChange) {
     keys.add('selection/current');
     scopes.push('system:untagged');
-    if (!facts.file_hashes) {
+    if (!changes.file_hashes) {
       scopes.push('system:all');
     }
   }
 
-  if (facts.tag_structure_changed) {
+  if (changes.tag_structure_changed) {
     keys.add('sidebar/tree');
     keys.add('selection/current');
     scopes.push('system:all', 'smart:all');
   }
 
-  if (facts.folder_membership_changed) {
+  if (changes.folder_membership_changed) {
     keys.add('sidebar/tree');
     keys.add('selection/current');
     scopes.push('system:uncategorized');
-    for (const id of facts.folder_membership_changed) {
+    for (const id of changes.folder_membership_changed) {
       scopes.push(`folder:${id}`);
     }
   }
 
-  if (facts.view_prefs_changed) {
+  if (changes.view_prefs_changed) {
     keys.add('view-prefs/current');
+  }
+
+  if (hasMediaFieldChange || hasDerivativeFieldChange) {
+    keys.add('selection/current');
   }
 
   // --- Domain-driven rules (fallback for patterns without fact flags) ---
 
-  if (!keys.has('sidebar/tree') && hasDomain(facts, 'sidebar')) {
+  if (!keys.has('sidebar/tree') && hasDomain(changes, 'sidebar')) {
     keys.add('sidebar/tree');
   }
 
-  if (!keys.has('selection/current') && hasDomain(facts, 'selection')) {
+  if (!keys.has('selection/current') && hasDomain(changes, 'selection')) {
     keys.add('selection/current');
   }
 
-  if (hasDomain(facts, 'subscriptions')) {
+  if (hasDomain(changes, 'subscriptions')) {
     keys.add('subscriptions/list');
   }
 
   // compiler_batch_done refreshes sidebar tree only if Domain::Sidebar is present
   // (handled by the domain-driven rule above).
-  if (facts.compiler_batch_done) {
+  if (changes.compiler_batch_done) {
     keys.add('sidebar/tree');
   }
 
   // --- Entity-reference rules ---
 
-  if (facts.file_hashes) {
-    for (const hash of facts.file_hashes) {
+  if (changes.file_hashes) {
+    for (const hash of changes.file_hashes) {
       keys.add(`metadata/hash:${hash}`);
     }
   }
 
   // Folder IDs without folder_membership_changed → grid refresh for those
   // folder scopes only (e.g., reorder within a folder).
-  if (!facts.folder_membership_changed && facts.folder_ids) {
-    for (const id of facts.folder_ids) {
+  if (!changes.folder_membership_changed && changes.folder_ids) {
+    for (const id of changes.folder_ids) {
       scopes.push(`folder:${id}`);
     }
   }
 
-  if (facts.smart_folder_ids) {
+  if (changes.smart_folder_ids) {
     keys.add('selection/current');
-    for (const id of facts.smart_folder_ids) {
+    for (const id of changes.smart_folder_ids) {
       scopes.push(`smart:${id}`);
     }
   }
 
   // --- Extra grid scopes (non-derivable from other facts) ---
 
-  if (facts.extra_grid_scopes) {
-    scopes.push(...facts.extra_grid_scopes);
+  if (changes.extra_grid_scopes) {
+    scopes.push(...changes.extra_grid_scopes);
   }
 
   // --- Sidebar counts ---
 
-  if (receipt.sidebar_counts) {
+  if (event.sidebar_counts) {
     keys.add('sidebar/counts');
   }
 
@@ -121,15 +128,14 @@ export function deriveStaleResources(receipt: MutationReceipt): Set<ResourceKey>
   return keys;
 }
 
-function hasDomain(facts: MutationFacts, domain: string): boolean {
-  return facts.domains.includes(domain as MutationFacts['domains'][number]);
+function hasDomain(changes: StateChanges, domain: string): boolean {
+  return changes.domains.includes(domain as StateChanges['domains'][number]);
 }
 
 /**
- * Check whether a grid resource key matches the currently active scope.
- * Scope-aware grid invalidation filter for resource refresh.
+ * Check whether a grid refresh target matches the currently active scope.
  */
-export function gridResourceMatchesScope(
+export function refreshTargetMatchesGridScope(
   resourceKey: ResourceKey,
   activeScope: string | null,
 ): boolean {

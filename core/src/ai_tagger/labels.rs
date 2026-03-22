@@ -29,8 +29,8 @@ pub struct LabelEntry {
 /// The output order matches the model's output tensor indices, so
 /// `labels[i]` corresponds to `output[i]` from inference.
 pub fn parse_labels_csv(path: &Path) -> Result<Vec<LabelEntry>, String> {
-    let content = std::fs::read_to_string(path)
-        .map_err(|e| format!("Failed to read labels CSV: {e}"))?;
+    let content =
+        std::fs::read_to_string(path).map_err(|e| format!("Failed to read labels CSV: {e}"))?;
 
     let mut labels = Vec::new();
     let mut lines = content.lines();

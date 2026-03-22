@@ -58,7 +58,8 @@ pub fn find_queue_entry(
          WHERE subscription_id = ?1 AND category = ?2 AND post_id = ?3 AND status = 'pending'",
         params![subscription_id, category, post_id],
         |row| row.get(0),
-    ).optional()
+    )
+    .optional()
 }
 
 pub fn add_queue_item(
@@ -188,7 +189,15 @@ impl SqliteDatabase {
             if let Some(qid) = find_queue_entry(conn, subscription_id, &cat, &pid)? {
                 Ok(qid)
             } else {
-                create_queue_entry(conn, subscription_id, query_id, &pid, &cat, pname.as_deref(), expected_count)
+                create_queue_entry(
+                    conn,
+                    subscription_id,
+                    query_id,
+                    &pid,
+                    &cat,
+                    pname.as_deref(),
+                    expected_count,
+                )
             }
         })
         .await
@@ -210,7 +219,10 @@ impl SqliteDatabase {
             .await
     }
 
-    pub async fn mark_all_pending_stale_for_subscription(&self, subscription_id: i64) -> Result<(), String> {
+    pub async fn mark_all_pending_stale_for_subscription(
+        &self,
+        subscription_id: i64,
+    ) -> Result<(), String> {
         self.with_conn(move |conn| mark_all_pending_stale(conn, subscription_id))
             .await
     }

@@ -9,7 +9,9 @@ use picto_core::types::*;
 async fn folder_filtered_selection_summary_uses_entity_aggregate_stats() {
     let harness = common::TestHarness::new().await;
 
-    let member_entity_id = harness.insert_test_file("member_hash", "member.png", 1).await;
+    let member_entity_id = harness
+        .insert_test_file("member_hash", "member.png", 1)
+        .await;
     let solo_entity_id = harness.insert_test_file("solo_hash", "solo.png", 1).await;
 
     let folder = harness

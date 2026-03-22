@@ -113,10 +113,13 @@ fn export_all_bindings() {
 
     // events
     // runtime_contract
-    picto_core::runtime_contract::mutation::Domain::export().unwrap();
-    picto_core::runtime_contract::mutation::MutationReceipt::export().unwrap();
-    picto_core::runtime_contract::mutation::MutationFacts::export().unwrap();
-    picto_core::runtime_contract::mutation::SidebarCounts::export().unwrap();
+    picto_core::runtime_contract::state_change::Domain::export().unwrap();
+    picto_core::runtime_contract::state_change::TagChangeDetails::export().unwrap();
+    picto_core::runtime_contract::state_change::MediaMetadataField::export().unwrap();
+    picto_core::runtime_contract::state_change::MediaDerivativeField::export().unwrap();
+    picto_core::runtime_contract::state_change::StateChangedEvent::export().unwrap();
+    picto_core::runtime_contract::state_change::StateChanges::export().unwrap();
+    picto_core::runtime_contract::state_change::SidebarCounts::export().unwrap();
     picto_core::runtime_contract::snapshot::RuntimeSnapshot::export().unwrap();
     picto_core::runtime_contract::task::RuntimeTask::export().unwrap();
     picto_core::runtime_contract::task::TaskKind::export().unwrap();

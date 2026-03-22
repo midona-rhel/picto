@@ -14,10 +14,9 @@ import {
 import { useDomainStore } from '../../../state/domainStore';
 import { useNavigationStore } from '../../../state/navigationStore';
 import { useLibraryStore } from '../../../state/libraryStore';
-import { api } from '#desktop/api';
+import { filesController } from '../../../controllers/filesController';
 import { SidebarJobStatus } from '../../layout/components/SidebarJobStatus';
 import { imageDrag } from '../../../shared/lib/imageDrag';
-import { registerUndoAction } from '../../../shared/controllers/undoRedoController';
 import { FolderTree } from './FolderTree';
 import { LibrarySwitcher } from './LibrarySwitcher';
 import { SmartFolderList } from './SmartFolderList';
@@ -50,15 +49,7 @@ export function Sidebar({ onSmartFolderUpdated }: SidebarProps) {
       excluded_hashes: null,
       included_hashes: null,
     };
-    api.files.setStatusSelection(spec, status)
-      .then(() => {
-        const statusLabel = status === 'inbox' ? 'Inbox' : status === 'trash' ? 'Trash' : 'Active';
-        registerUndoAction({
-          label: `Move ${hashes.length} item${hashes.length === 1 ? '' : 's'} to ${statusLabel}`,
-          undo: async () => { await api.files.setStatusSelection(spec, prevStatus); },
-          redo: async () => { await api.files.setStatusSelection(spec, status); },
-        });
-      })
+    filesController.changeStatusSelection(spec, status, prevStatus)
       .catch((err) => console.error('Status drop failed:', err));
   }, [activeStatusFilter]);
 
