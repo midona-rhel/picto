@@ -1,10 +1,9 @@
-use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use chrono::{Duration as ChronoDuration, Utc};
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 
 use crate::blob_store::{mime_to_extension, BlobStore};
 use crate::runtime_contract::change_builder::ChangeImpact;
@@ -12,7 +11,6 @@ use crate::runtime_contract::state_change::MediaDerivativeField;
 use crate::sqlite::{ReadModelEvent, SqliteDatabase};
 
 const DEFERRED_WORK_TICK: std::time::Duration = std::time::Duration::from_secs(5);
-const DEFERRED_WORK_BATCH_SIZE: i64 = 32;
 const MAX_BACKOFF_SECS: i64 = 60 * 60;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -109,22 +107,39 @@ fn reset_running_deferred_work_sync(conn: &Connection) -> rusqlite::Result<usize
     )
 }
 
-fn claim_deferred_work_batch_sync(
+/// Claim all pending jobs for the next available hash.
+/// Returns all work items for that single hash so they can be processed together.
+fn claim_next_hash_jobs_sync(
     conn: &mut Connection,
-    limit: i64,
 ) -> rusqlite::Result<Vec<DeferredWorkItem>> {
     let tx = conn.transaction()?;
     let now = Utc::now().to_rfc3339();
+
+    // Find the next hash that has pending work
+    let next_hash: Option<String> = {
+        let mut stmt = tx.prepare(
+            "SELECT hash FROM deferred_work
+             WHERE status = 'pending' AND available_at <= ?1
+             ORDER BY work_id ASC LIMIT 1",
+        )?;
+        stmt.query_row([&now], |row| row.get(0))
+            .optional()?
+    };
+
+    let Some(hash) = next_hash else {
+        tx.commit()?;
+        return Ok(Vec::new());
+    };
+
+    // Claim ALL jobs for this hash
     let mut stmt = tx.prepare(
         "SELECT work_id, hash, work_type, attempt_count
          FROM deferred_work
-         WHERE status = 'pending'
-           AND available_at <= ?1
-         ORDER BY available_at ASC, work_id ASC
-         LIMIT ?2",
+         WHERE hash = ?1 AND status = 'pending' AND available_at <= ?2
+         ORDER BY work_id ASC",
     )?;
     let raw_items = stmt
-        .query_map(params![now, limit], |row| {
+        .query_map(params![hash, now], |row| {
             Ok((
                 row.get::<_, i64>(0)?,
                 row.get::<_, String>(1)?,
@@ -143,8 +158,7 @@ fn claim_deferred_work_batch_sync(
         };
         tx.execute(
             "UPDATE deferred_work
-             SET status = 'running',
-                 updated_at = ?2
+             SET status = 'running', updated_at = ?2
              WHERE work_id = ?1",
             params![work_id, now],
         )?;
@@ -442,7 +456,8 @@ async fn process_deferred_work_item(
         }
     }
 
-    match item.work_type {
+    let started = std::time::Instant::now();
+    let result = match item.work_type {
         DeferredWorkType::Thumbnail => {
             let result = ensure_thumbnail(db, blob_store, &item.hash, false).await?;
             Ok(result.regenerated_thumbnail.then_some(MediaDerivativeField::Thumbnail))
@@ -455,27 +470,49 @@ async fn process_deferred_work_item(
             let changed = ensure_phash(db, blob_store, &item.hash, false).await?;
             Ok(changed.then_some(MediaDerivativeField::Phash))
         }
+    };
+    let elapsed_ms = started.elapsed().as_millis();
+    if elapsed_ms > 100 {
+        info!(
+            hash = %item.hash,
+            work_type = item.work_type.as_str(),
+            elapsed_ms = elapsed_ms as u64,
+            "Deferred work item completed (slow)"
+        );
+    } else {
+        debug!(
+            hash = %item.hash,
+            work_type = item.work_type.as_str(),
+            elapsed_ms = elapsed_ms as u64,
+            "Deferred work item completed"
+        );
     }
+    result
 }
 
-async fn drain_deferred_work_batch(
+/// Process all deferred work for a single image, then emit immediately.
+/// Returns the number of jobs processed (0 = nothing pending).
+async fn drain_next_image(
     db: &SqliteDatabase,
     blob_store: &Arc<BlobStore>,
 ) -> Result<usize, String> {
-    let jobs = db.claim_deferred_work_batch(DEFERRED_WORK_BATCH_SIZE).await?;
+    let jobs = db.claim_next_hash_jobs().await?;
     if jobs.is_empty() {
         return Ok(0);
     }
 
-    let mut changed_hashes = BTreeSet::new();
+    let image_started = std::time::Instant::now();
+    let hash = jobs[0].hash.clone();
+    let job_count = jobs.len();
     let mut fields: Vec<MediaDerivativeField> = Vec::new();
+    let mut any_changed = false;
 
     for job in &jobs {
         match process_deferred_work_item(db, blob_store, job).await {
             Ok(changed_field) => {
                 db.complete_deferred_work(job.work_id).await?;
                 if let Some(field) = changed_field {
-                    changed_hashes.insert(job.hash.clone());
+                    any_changed = true;
                     if !fields.contains(&field) {
                         fields.push(field);
                     }
@@ -495,19 +532,28 @@ async fn drain_deferred_work_batch(
         }
     }
 
-    if !changed_hashes.is_empty() && !fields.is_empty() {
-        let hashes: Vec<String> = changed_hashes.into_iter().collect();
+    let image_elapsed_ms = image_started.elapsed().as_millis() as u64;
+    info!(
+        hash = %hash,
+        jobs = job_count,
+        elapsed_ms = image_elapsed_ms,
+        changed = any_changed,
+        "Deferred work: image complete"
+    );
+
+    // Emit immediately for this one image so the grid updates right away.
+    if any_changed && !fields.is_empty() {
         db.emit_read_model_event(ReadModelEvent::RebuildAll);
         crate::events::emit_state_changed(
             "deferred_work_batch",
             ChangeImpact::new()
-                .entity_hashes(hashes)
+                .entity_hashes(vec![hash])
                 .derivative_fields_changed(&fields)
                 .smart_folder_scopes_changed_for_derivative_fields(&fields),
         );
     }
 
-    Ok(jobs.len())
+    Ok(job_count)
 }
 
 pub async fn start_deferred_work_loop(
@@ -520,8 +566,8 @@ pub async fn start_deferred_work_loop(
     }
 
     loop {
-        match drain_deferred_work_batch(&db, &blob_store).await {
-            Ok(processed) if processed as i64 >= DEFERRED_WORK_BATCH_SIZE => continue,
+        match drain_next_image(&db, &blob_store).await {
+            Ok(processed) if processed > 0 => continue, // More images may be waiting
             Ok(_) => {}
             Err(error) => warn!(error = %error, "Deferred work drain failed"),
         }
@@ -572,9 +618,9 @@ impl SqliteDatabase {
             .await
     }
 
-    async fn claim_deferred_work_batch(&self, limit: i64) -> Result<Vec<DeferredWorkItem>, String> {
-        self.with_conn_mut_labeled("deferred_work/claim_batch", move |conn| {
-            claim_deferred_work_batch_sync(conn, limit)
+    async fn claim_next_hash_jobs(&self) -> Result<Vec<DeferredWorkItem>, String> {
+        self.with_conn_mut_labeled("deferred_work/claim_next_hash", move |conn| {
+            claim_next_hash_jobs_sync(conn)
         })
         .await
     }
