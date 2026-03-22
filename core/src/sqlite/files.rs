@@ -377,6 +377,12 @@ pub(crate) fn delete_file_inner(conn: &Connection, file_id: i64) -> rusqlite::Re
         )
         .optional()?;
     if let Some(entity_id) = entity_id {
+        // Decrement tag file_count for all tags on this entity before deletion
+        conn.execute(
+            "UPDATE tag SET file_count = MAX(0, file_count - 1)
+             WHERE tag_id IN (SELECT tag_id FROM entity_tag_raw WHERE entity_id = ?1)",
+            [entity_id],
+        )?;
         conn.execute("DELETE FROM media_entity WHERE entity_id = ?1", [entity_id])?;
     }
     conn.execute("DELETE FROM file WHERE file_id = ?1", [file_id])?;
