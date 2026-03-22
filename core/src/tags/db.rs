@@ -421,7 +421,7 @@ pub fn get_tags_paginated(
                     "SELECT t.tag_id, t.namespace, t.subtag, t.file_count
                      FROM tag_fts fts
                      JOIN tag t ON t.tag_id = fts.rowid
-                     WHERE tag_fts MATCH ?1 AND t.file_count > 0 AND t.namespace = ?2
+                     WHERE tag_fts MATCH ?1 AND t.namespace = ?2
                      ORDER BY t.subtag ASC, t.tag_id ASC
                      LIMIT ?3"
                         .to_string(),
@@ -431,7 +431,7 @@ pub fn get_tags_paginated(
                     "SELECT t.tag_id, t.namespace, t.subtag, t.file_count
                      FROM tag_fts fts
                      JOIN tag t ON t.tag_id = fts.rowid
-                     WHERE tag_fts MATCH ?1 AND t.file_count > 0
+                     WHERE tag_fts MATCH ?1
                      ORDER BY t.subtag ASC, t.tag_id ASC
                      LIMIT ?2"
                         .to_string(),
@@ -475,19 +475,18 @@ pub fn get_tags_paginated(
 
     let sql = match (has_ns, has_cursor) {
         (false, false) => "SELECT tag_id, namespace, subtag, file_count FROM tag
-             WHERE file_count > 0
              ORDER BY subtag ASC, tag_id ASC LIMIT ?1"
             .to_string(),
         (false, true) => "SELECT tag_id, namespace, subtag, file_count FROM tag
-             WHERE file_count > 0 AND (subtag, tag_id) > (?1, ?2)
+             WHERE (subtag, tag_id) > (?1, ?2)
              ORDER BY subtag ASC, tag_id ASC LIMIT ?3"
             .to_string(),
         (true, false) => "SELECT tag_id, namespace, subtag, file_count FROM tag
-             WHERE file_count > 0 AND namespace = ?1
+             WHERE namespace = ?1
              ORDER BY subtag ASC, tag_id ASC LIMIT ?2"
             .to_string(),
         (true, true) => "SELECT tag_id, namespace, subtag, file_count FROM tag
-             WHERE file_count > 0 AND namespace = ?1 AND (subtag, tag_id) > (?2, ?3)
+             WHERE namespace = ?1 AND (subtag, tag_id) > (?2, ?3)
              ORDER BY subtag ASC, tag_id ASC LIMIT ?4"
             .to_string(),
     };
