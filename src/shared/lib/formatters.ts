@@ -30,13 +30,15 @@ export function formatDateTime(isoString: string): string {
 }
 
 export function getFileExtension(name: string | null, mime: string | null): string {
-  if (name) {
-    const dotIdx = name.lastIndexOf('.');
-    if (dotIdx > 0) return name.slice(dotIdx + 1).toUpperCase();
-  }
+  // Prefer MIME type (detected from file bytes) over filename extension
+  // because subscription downloads often have incorrect or missing extensions.
   if (mime) {
     const sub = mime.split('/').pop();
     if (sub) return sub.toUpperCase();
+  }
+  if (name) {
+    const dotIdx = name.lastIndexOf('.');
+    if (dotIdx > 0) return name.slice(dotIdx + 1).toUpperCase();
   }
   return 'Unknown';
 }
