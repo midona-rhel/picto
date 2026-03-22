@@ -2,7 +2,7 @@
   "name": "picto",
   "productName": "Picto",
   "private": true,
-  "version": "0.4.8-alpha",
+  "version": "0.5.0-alpha",
   "description": "Media library manager",
   "author": "Picto <noreply@picto.app>",
   "type": "module",
