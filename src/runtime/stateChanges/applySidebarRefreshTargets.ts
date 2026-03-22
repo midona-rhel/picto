@@ -30,9 +30,14 @@ export function startApplyingSidebarRefreshTargets(): void {
     }
 
     if (needsTreeRefresh) {
-      // Controllers perform targeted sidebar mutations eagerly (patchFolderNode,
-      // removeFolderNode, adjustFolderCount, insertFolderNode, etc.).
-      // The sidebar/tree target is consumed without a broad refetch.
+      const changeOrigin = useStateChangeStore.getState().lastChangeOrigin;
+      if (changeOrigin === 'compiler_batch_done') {
+        // Compiler rebuilt counts (uncategorized, untagged, smart folders, etc.)
+        // that no controller handles eagerly. Re-fetch the sidebar tree.
+        useDomainStore.getState().requestRefresh();
+      }
+      // For controller-initiated changes, the controller already did targeted
+      // sidebar mutations (patchFolderNode, adjustFolderCount, etc.).
       useStateChangeStore.getState().markRefreshTargetHandled('sidebar/tree');
     }
   });
