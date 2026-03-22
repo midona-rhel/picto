@@ -8,11 +8,15 @@ use crate::sqlite::SqliteDatabase;
 pub(crate) async fn compile_status_bitmaps(db: &Arc<SqliteDatabase>) -> Result<(), String> {
     let bitmaps = db.bitmaps.clone();
     db.with_read_conn(move |conn| {
-        // Build status bitmaps (all entities — members included for bitmap correctness)
+        // Build status bitmaps — exclude collection members (they are not
+        // top-level entities visible in system scopes).
         for status in 0..=2i64 {
             let mut bitmap = RoaringBitmap::new();
             let mut stmt = conn.prepare_cached(
-                "SELECT entity_id FROM media_entity WHERE status = ?1",
+                "SELECT me.entity_id
+                 FROM media_entity me
+                 WHERE me.status = ?1
+                   AND (me.kind = 'collection' OR me.parent_collection_id IS NULL)",
             )?;
             let rows = stmt.query_map([status], |row| row.get::<_, i64>(0))?;
             for row in rows {

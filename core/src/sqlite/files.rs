@@ -1341,10 +1341,13 @@ impl SqliteDatabase {
         &self,
         hash: &str,
     ) -> Result<Option<crate::types::EntityDetails>, String> {
-        Ok(self
-            .get_file_by_hash(hash)
-            .await?
-            .map(crate::types::EntityDetails::from))
+        // Try file table first (singles)
+        if let Some(record) = self.get_file_by_hash(hash).await? {
+            return Ok(Some(crate::types::EntityDetails::from(record)));
+        }
+        // Collection hashes don't have file rows — return None gracefully.
+        // The caller should handle missing entities without crashing.
+        Ok(None)
     }
 
     pub async fn file_exists(&self, hash: &str) -> Result<bool, String> {
@@ -1393,15 +1396,18 @@ impl SqliteDatabase {
         }
         self.bitmaps.insert(&BitmapKey::Status(status), fid_u32);
 
-        // Cascade status to collection members (they move with the collection).
-        // The CollectionMember bitmap ensures sidebar counts exclude them.
-        for (member_fid, _) in &member_files {
-            let m = *member_fid as u32;
-            for s in 0..=2i64 {
-                self.bitmaps.remove(&BitmapKey::Status(s), m);
-            }
-            self.bitmaps.insert(&BitmapKey::Status(status), m);
-            self.bitmaps.insert(&BitmapKey::CollectionMember, m);
+        // Cascade DB status to collection members (they move with the collection).
+        // Don't add members to status bitmaps — the compiler excludes them.
+        if !member_files.is_empty() {
+            let member_ids: Vec<i64> = member_files.iter().map(|(fid, _)| *fid).collect();
+            let s = status;
+            self.with_conn(move |conn| {
+                for mid in &member_ids {
+                    update_status(conn, *mid, s)?;
+                }
+                Ok(())
+            })
+            .await?;
         }
 
         if member_files.is_empty() {

@@ -494,16 +494,11 @@ impl ChangeImpact {
 pub fn sidebar_counts_from_bitmaps(db: &crate::sqlite::SqliteDatabase) -> SidebarCounts {
     use crate::sqlite::bitmaps::BitmapKey;
 
-    // Exclude collection members from sidebar counts — they are not
-    // visible as top-level tiles in system scopes.
-    let members = db.bitmaps.get(&BitmapKey::CollectionMember);
-    let count = |status: i64| -> i64 {
-        let status_bm = db.bitmaps.get(&BitmapKey::Status(status));
-        (&status_bm - &members).len() as i64
-    };
+    // Status bitmaps already exclude collection members (the compiler
+    // filters them out). Direct bitmap reads give tile-level counts.
     SidebarCounts {
-        all_active: count(1),
-        inbox: count(0),
-        trash: count(2),
+        all_active: db.bitmaps.len(&BitmapKey::Status(1)) as i64,
+        inbox: db.bitmaps.len(&BitmapKey::Status(0)) as i64,
+        trash: db.bitmaps.len(&BitmapKey::Status(2)) as i64,
     }
 }

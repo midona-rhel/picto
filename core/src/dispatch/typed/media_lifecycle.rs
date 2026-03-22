@@ -194,10 +194,13 @@ pub async fn set_entity_status(
         tracing::warn!(error = %err, "failed to refresh sidebar after set_entity_status");
     }
 
-    let mut impact = crate::runtime_contract::change_builder::ChangeImpact::file_lifecycle(
-        &state.db,
-    )
-    .file_hashes(hashes.clone());
+    // Don't include sidebar_counts — the bitmaps haven't been rebuilt by the
+    // compiler yet and would include stale member counts. The frontend's eager
+    // count is correct; the compiler will emit authoritative counts on rebuild.
+    let mut impact = crate::runtime_contract::change_builder::ChangeImpact::new()
+        .status_changed()
+        .status_sensitive_grid_scopes_changed()
+        .file_hashes(hashes.clone());
     if !folder_ids.is_empty() {
         impact = impact.folder_ids(folder_ids);
     }
