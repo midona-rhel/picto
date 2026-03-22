@@ -206,6 +206,11 @@ pub async fn enqueue_import_derivatives(
     mime: &str,
     needs_thumbnail: bool,
 ) -> Result<(), String> {
+    // Skip collection entities — they don't have their own file data.
+    // Thumbnails come from the cover file which is enqueued separately.
+    if mime == "application/x-collection" {
+        return Ok(());
+    }
     let mut work_types = Vec::new();
     if needs_thumbnail && (mime.starts_with("image/") || mime.starts_with("video/")) {
         work_types.push(DeferredWorkType::Thumbnail);
@@ -272,7 +277,10 @@ pub async fn ensure_thumbnail(
                     )
                 })
                 .await
-                .map_err(|_| format!("Collection has no cover file: {}", hash))?;
+                .map_err(|_| {
+                    // Collection cover not set yet — skip silently, don't retry
+                    format!("Collection has no cover file: {}", hash)
+                })?;
             effective_hash = cover_hash;
             db.get_file_by_hash(&effective_hash)
                 .await?
