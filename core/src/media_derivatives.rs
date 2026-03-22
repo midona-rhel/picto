@@ -498,6 +498,16 @@ async fn drain_next_image(
     let mut fields: Vec<MediaDerivativeField> = Vec::new();
     let mut any_changed = false;
 
+    // Sort jobs: thumbnail first (so colors can use the thumbnail file),
+    // then colors, then phash. This ensures the thumbnail exists on disk
+    // before color extraction tries to read it.
+    let mut jobs = jobs;
+    jobs.sort_by_key(|j| match j.work_type {
+        DeferredWorkType::Thumbnail => 0,
+        DeferredWorkType::DominantColors => 1,
+        DeferredWorkType::Phash => 2,
+    });
+
     // Pre-load and decode the original image once if both thumbnail and phash
     // are in the job set. Avoids decoding the full original twice (~4s saved
     // per 22MP image).
