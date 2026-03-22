@@ -84,16 +84,6 @@ pub struct PreparedFile {
     pub has_thumbnail: bool,
 }
 
-/// Work that can be processed in the background after the fast import path.
-pub struct DeferredImportWork {
-    pub hex_hash: String,
-    pub file_data: Vec<u8>,
-    pub thumbnail_data: Option<Vec<u8>>,
-    pub mime: crate::constants::MimeType,
-    pub mime_string: String,
-    pub needs_thumbnail: bool,
-}
-
 pub struct ImportPipeline<'a> {
     db: &'a SqliteDatabase,
     blob_store: &'a BlobStore,
@@ -228,13 +218,13 @@ impl<'a> ImportPipeline<'a> {
 
     /// Import a single file from disk.
     ///
-    /// Returns the imported file metadata and optional deferred work that can
-    /// be processed in the background (dominant colors, phash).
+    /// Returns the imported file metadata. Deferred derivatives are queued by
+    /// the caller after the surviving hash is known.
     pub async fn import_file(
         &self,
         path: &Path,
         options: &ImportOptions,
-    ) -> ImportResult<(ImportedFile, Option<DeferredImportWork>)> {
+    ) -> ImportResult<ImportedFile> {
         let t0 = std::time::Instant::now();
 
         let file_data = tokio::fs::read(path).await?;
@@ -372,20 +362,6 @@ impl<'a> ImportPipeline<'a> {
         }
         let t_db = t0.elapsed();
 
-        let is_image = media_processing::is_image(file_info.mime);
-        let deferred = if is_image {
-            Some(DeferredImportWork {
-                hex_hash: hex_hash.clone(),
-                file_data,
-                thumbnail_data: thumbnail_result.as_ref().map(|(b, _)| b.clone()),
-                mime: file_info.mime,
-                mime_string: mime_string.clone(),
-                needs_thumbnail: options.skip_thumbnail,
-            })
-        } else {
-            None
-        };
-
         debug!(
             hash = %hex_hash,
             size = file_size,
@@ -410,80 +386,13 @@ impl<'a> ImportPipeline<'a> {
             "File imported successfully"
         );
 
-        Ok((
-            ImportedFile {
-                hex_hash,
-                mime: mime_string,
-                size: file_size,
-                has_thumbnail: thumbnail_result.is_some(),
-                tags_applied,
-            },
-            deferred,
-        ))
-    }
-
-    /// Process deferred import work (dominant colors, phash).
-    /// Safe to call from a background worker.
-    pub async fn process_deferred(&self, work: DeferredImportWork) {
-        let t0 = std::time::Instant::now();
-        let is_image = media_processing::is_image(work.mime);
-
-        // Thumbnail (for files that skipped it in the fast path)
-        if work.needs_thumbnail && is_image {
-            let ext = crate::blob_store::mime_to_extension(&work.mime_string);
-            if let Ok(Some((blob_path, _))) =
-                self.blob_store.find_original(&work.hex_hash, Some(ext))
-            {
-                if let Ok((thumb_bytes, thumb_ext)) = media_processing::generate_thumbnail_bytes(
-                    &blob_path,
-                    media_processing::DEFAULT_THUMBNAIL_DIMENSIONS,
-                    work.mime,
-                    None,
-                    None,
-                    35,
-                )
-                .await
-                {
-                    let _ =
-                        self.blob_store
-                            .write_thumbnail(&work.hex_hash, &thumb_bytes, &thumb_ext);
-                }
-            }
-        }
-
-        // Dominant colors
-        if is_image {
-            if let Ok(img) = image::load_from_memory(&work.file_data) {
-                let colors = media_processing::colors::extract_dominant_colors(&img, 8);
-                if !colors.is_empty() {
-                    let hex = Some(colors[0].hex.clone());
-                    let lab: Vec<(String, f32, f32, f32)> = colors
-                        .iter()
-                        .map(|c| (c.hex.clone(), c.l as f32, c.a as f32, c.b as f32))
-                        .collect();
-                    let _ = self.db.set_file_colors(&work.hex_hash, lab, hex).await;
-                }
-            }
-        }
-
-        // Phash
-        if is_image {
-            let phash_data = work.thumbnail_data.as_deref().unwrap_or(&work.file_data);
-            match crate::duplicates::phash::compute_phash_base64(phash_data) {
-                Ok(phash_b64) => {
-                    let _ = self.db.set_phash(&work.hex_hash, &phash_b64).await;
-                }
-                Err(e) => {
-                    warn!(hash = %work.hex_hash, error = %e, "Deferred phash failed (non-fatal)");
-                }
-            }
-        }
-
-        debug!(
-            hash = %work.hex_hash,
-            elapsed_ms = t0.elapsed().as_millis() as u64,
-            "Deferred import work complete"
-        );
+        Ok(ImportedFile {
+            hex_hash,
+            mime: mime_string,
+            size: file_size,
+            has_thumbnail: thumbnail_result.is_some(),
+            tags_applied,
+        })
     }
 
     /// Import multiple files from a list of paths.
@@ -491,7 +400,7 @@ impl<'a> ImportPipeline<'a> {
         &self,
         paths: &[PathBuf],
         options: &ImportOptions,
-    ) -> Vec<Result<(ImportedFile, Option<DeferredImportWork>), ImportError>> {
+    ) -> Vec<Result<ImportedFile, ImportError>> {
         let mut results = Vec::new();
         for path in paths {
             results.push(self.import_file(path, options).await);

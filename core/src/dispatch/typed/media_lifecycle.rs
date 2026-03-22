@@ -346,64 +346,129 @@ pub async fn set_entity_status(
     }
 }
 
-/// Permanently delete entities by hash. For collections: deletes collection + all members.
+/// Permanently delete entities by hash. For collections: flattens and deletes all members.
+///
+/// Fast path: bulk SQL delete in one transaction. Blob cleanup is deferred to background.
 pub async fn delete_entities(state: &AppState, input: DeleteFilesInput) -> Result<usize, String> {
-    // Collect entity IDs from the bitmap (includes both file_ids and collection entity_ids)
+    // 1. Resolve all entity IDs (resolve_hashes_batch expands collections to members)
     let all_ids: Vec<i64> = if let Some(ref hashes) = input.hashes {
         let pairs = state.db.resolve_hashes_batch(hashes).await?;
         pairs.into_iter().map(|(_, fid)| fid).collect()
     } else if let Some(ref selection) = input.selection {
         let bitmap = resolve_selection_bitmap(state, &selection).await?;
-        bitmap.iter().map(|id| id as i64).collect()
+        let mut ids: Vec<i64> = bitmap.iter().map(|id| id as i64).collect();
+        // Expand collections in the selection
+        ids = state.db.expand_collection_members(ids).await?;
+        ids
     } else {
         return Err("Either hashes or selection must be provided".into());
     };
 
-    // Expand to include collection members
-    let expanded = state.db.expand_collection_members(all_ids.clone()).await?;
+    if all_ids.is_empty() {
+        return Ok(0);
+    }
 
-    // Resolve all expanded IDs to hashes for blob deletion
-    let all_hash_pairs = state.db.resolve_ids_batch(&expanded).await?;
-    let all_hashes: Vec<String> = all_hash_pairs.iter().map(|(_, h)| h.clone()).collect();
-
+    // 2. Collect hashes for blob cleanup (before we delete the DB records)
+    let all_hash_pairs = state.db.resolve_ids_batch(&all_ids).await?;
+    let blob_hashes: Vec<String> = all_hash_pairs.iter().map(|(_, h)| h.clone()).collect();
     let count = all_ids.len();
-    let folder_ids = collect_folder_ids_for_hashes(state, &all_hashes, count).await;
+    let folder_ids = collect_folder_ids_for_hashes(state, &blob_hashes, count).await;
 
-    // Find and delete collection entities first (by checking which IDs are collections)
-    let collection_ids = state.db.with_read_conn({
+    // 3. Find collection entity_ids (for state-change event scopes)
+    let collection_ids: Vec<i64> = state.db.with_read_conn({
         let ids = all_ids.clone();
         move |conn| {
             let mut cids = Vec::new();
-            for &id in &ids {
-                // Check if this ID is a collection entity directly
-                let is_coll: bool = conn.query_row(
-                    "SELECT COUNT(*) > 0 FROM media_entity WHERE entity_id = ?1 AND kind = 'collection'",
-                    [id],
-                    |row| row.get(0),
-                ).unwrap_or(false);
-                if is_coll { cids.push(id); }
-                // Also check if it's a cover file for a collection
-                if let Ok(Some(cid)) = crate::folders::collections_db::find_collection_for_cover_file(conn, id) {
-                    if !cids.contains(&cid) { cids.push(cid); }
+            for chunk in ids.chunks(999) {
+                let placeholders = std::iter::repeat_n("?", chunk.len()).collect::<Vec<_>>().join(",");
+                let sql = format!(
+                    "SELECT entity_id FROM media_entity WHERE entity_id IN ({placeholders}) AND kind = 'collection'"
+                );
+                let mut stmt = conn.prepare(&sql)?;
+                let rows = stmt.query_map(
+                    rusqlite::params_from_iter(chunk.iter()),
+                    |row| row.get::<_, i64>(0),
+                )?;
+                for row in rows {
+                    cids.push(row?);
                 }
             }
             Ok(cids)
         }
     }).await?;
 
-    // Delete collections (orphans members, then we delete the orphaned files below)
-    for cid in &collection_ids {
-        if let Err(e) = state.db.delete_collection(*cid).await {
-            tracing::warn!(collection_id = cid, error = %e, "delete_entities: failed to delete collection");
+    // 4. Bulk delete all entities + cascading metadata in one transaction
+    let _deleted = state.db.with_conn_mut({
+        let ids = all_ids.clone();
+        move |conn| {
+            let tx = conn.transaction()?;
+            let mut total = 0usize;
+            for chunk in ids.chunks(999) {
+                let placeholders = std::iter::repeat_n("?", chunk.len()).collect::<Vec<_>>().join(",");
+
+                // Remove from folders
+                let folder_sql = format!(
+                    "DELETE FROM folder_entity WHERE entity_id IN ({placeholders})"
+                );
+                tx.execute(&folder_sql, rusqlite::params_from_iter(chunk.iter())).ok();
+
+                // Remove tags
+                let tag_sql = format!(
+                    "DELETE FROM entity_tag_raw WHERE entity_id IN ({placeholders})"
+                );
+                tx.execute(&tag_sql, rusqlite::params_from_iter(chunk.iter()))?;
+
+                // Orphan collection members (set parent_collection_id = NULL)
+                let orphan_sql = format!(
+                    "UPDATE media_entity SET parent_collection_id = NULL, collection_ordinal = NULL
+                     WHERE parent_collection_id IN ({placeholders})"
+                );
+                tx.execute(&orphan_sql, rusqlite::params_from_iter(chunk.iter())).ok();
+
+                // Delete entity_file mappings
+                let ef_sql = format!(
+                    "DELETE FROM entity_file WHERE entity_id IN ({placeholders})"
+                );
+                tx.execute(&ef_sql, rusqlite::params_from_iter(chunk.iter()))?;
+
+                // Delete the file rows
+                let file_sql = format!(
+                    "DELETE FROM file WHERE file_id IN ({placeholders})"
+                );
+                tx.execute(&file_sql, rusqlite::params_from_iter(chunk.iter())).ok();
+
+                // Delete media entities
+                let me_sql = format!(
+                    "DELETE FROM media_entity WHERE entity_id IN ({placeholders})"
+                );
+                let changed = tx.execute(&me_sql, rusqlite::params_from_iter(chunk.iter()))?;
+                total += changed;
+            }
+            tx.commit()?;
+            Ok(total)
         }
+    }).await?;
+
+    // 5. Clean up bitmaps (remove from all status bitmaps)
+    for &id in &all_ids {
+        let eid = id as u32;
+        state.db.bitmaps.remove(&crate::sqlite::bitmaps::BitmapKey::Status(0), eid);
+        state.db.bitmaps.remove(&crate::sqlite::bitmaps::BitmapKey::Status(1), eid);
+        state.db.bitmaps.remove(&crate::sqlite::bitmaps::BitmapKey::Status(2), eid);
     }
 
-    // Delete all individual files (including orphaned collection members)
-    for (_, hash) in &all_hash_pairs {
-        if let Err(e) = state.db.delete_file_by_hash(hash).await {
-            tracing::warn!(hash, error = %e, "delete_entities: failed to delete file");
-        }
-        let _ = state.blob_store.delete(hash);
+    // 6. Defer blob cleanup to background (don't block the UI)
+    let all_hashes = blob_hashes.clone();
+    {
+        let blob_store = state.blob_store.clone();
+        let hashes = blob_hashes;
+        tokio::spawn(async move {
+            for hash in &hashes {
+                let _ = blob_store.delete(hash);
+                let _ = blob_store.delete_thumbnail(hash);
+            }
+            tracing::info!(count = hashes.len(), "deferred blob cleanup complete");
+        });
     }
 
     if count > 0 {

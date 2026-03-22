@@ -363,6 +363,24 @@ CREATE TABLE IF NOT EXISTS download_queue_item (
 CREATE INDEX IF NOT EXISTS idx_dqi_queue ON download_queue_item(queue_id);
 
 -- ═══════════════════════════════════════════════════
+-- DEFERRED WORK (persistent derivative queue)
+-- ═══════════════════════════════════════════════════
+CREATE TABLE IF NOT EXISTS deferred_work (
+    work_id        INTEGER PRIMARY KEY,
+    hash           TEXT NOT NULL,
+    work_type      TEXT NOT NULL CHECK(work_type IN ('thumbnail', 'dominant_colors', 'phash')),
+    status         TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'running')),
+    attempt_count  INTEGER NOT NULL DEFAULT 0,
+    available_at   TEXT NOT NULL,
+    last_error     TEXT,
+    created_at     TEXT NOT NULL,
+    updated_at     TEXT NOT NULL,
+    UNIQUE(hash, work_type)
+);
+CREATE INDEX IF NOT EXISTS idx_deferred_work_ready
+    ON deferred_work(status, available_at, work_id);
+
+-- ═══════════════════════════════════════════════════
 -- CREDENTIALS (domain list; actual secrets in OS keychain)
 -- ═══════════════════════════════════════════════════
 CREATE TABLE IF NOT EXISTS credential_domain (
@@ -492,5 +510,5 @@ CREATE TABLE IF NOT EXISTS kv_settings (
 
 -- Schema version
 CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL);
-INSERT OR IGNORE INTO schema_version (version) VALUES (35);
+INSERT OR IGNORE INTO schema_version (version) VALUES (37);
 "#;

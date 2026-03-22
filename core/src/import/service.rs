@@ -13,6 +13,7 @@ use crate::events::{self, ManualImportProgressEvent};
 use crate::folders::service;
 use crate::import::existing::{merge_existing_import_target, ExistingImportMergeRequest};
 use crate::import::pipeline::{ImportOptions, ImportPipeline};
+use crate::media_derivatives;
 use crate::runtime_contract::change_builder::ChangeImpact;
 use crate::runtime_contract::state_change::Domain;
 use crate::sqlite::SqliteDatabase;
@@ -83,10 +84,7 @@ impl ImportService {
         for (index, path) in file_paths.iter().enumerate() {
             let result = pipeline.import_file(path, &options).await;
             match result {
-                Ok((imported, deferred)) => {
-                    if let Some(work) = deferred {
-                        pipeline.process_deferred(work).await;
-                    }
+                Ok(imported) => {
                     let surviving_hash = maybe_auto_merge(
                         db,
                         blob_store,
@@ -99,6 +97,13 @@ impl ImportService {
                     if surviving_hash == imported.hex_hash {
                         emit_file_imported(db, &surviving_hash).await;
                     }
+                    media_derivatives::enqueue_import_derivatives(
+                        db,
+                        &surviving_hash,
+                        &imported.mime,
+                        options.skip_thumbnail,
+                    )
+                    .await?;
                     let next_impact =
                         crate::runtime_contract::change_builder::ChangeImpact::file_lifecycle(db)
                             .file_hashes(vec![surviving_hash.clone()]);
@@ -271,10 +276,7 @@ impl ImportService {
             let mut skipped_hashes = Vec::<String>::new();
 
             match pipeline.import_file(file_path, &options).await {
-                Ok((imported, deferred)) => {
-                    if let Some(work) = deferred {
-                        pipeline.process_deferred(work).await;
-                    }
+                Ok(imported) => {
                     let surviving_hash = maybe_auto_merge(
                         db,
                         blob_store,
@@ -288,6 +290,13 @@ impl ImportService {
                     if surviving_hash == imported.hex_hash {
                         emit_file_imported(db, &surviving_hash).await;
                     }
+                    media_derivatives::enqueue_import_derivatives(
+                        db,
+                        &surviving_hash,
+                        &imported.mime,
+                        options.skip_thumbnail,
+                    )
+                    .await?;
                     batch
                         .imported
                         .push(build_import_result(db, imported, &surviving_hash).await);

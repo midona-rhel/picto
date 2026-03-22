@@ -825,6 +825,24 @@ pub fn run_migrations(conn: &Connection, from_version: i64) -> rusqlite::Result<
             conn.execute_batch("DROP TABLE IF EXISTS collection_tag;")?;
         }
     }
+    if from_version < 37 {
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS deferred_work (
+                work_id        INTEGER PRIMARY KEY,
+                hash           TEXT NOT NULL,
+                work_type      TEXT NOT NULL CHECK(work_type IN ('thumbnail', 'dominant_colors', 'phash')),
+                status         TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'running')),
+                attempt_count  INTEGER NOT NULL DEFAULT 0,
+                available_at   TEXT NOT NULL,
+                last_error     TEXT,
+                created_at     TEXT NOT NULL,
+                updated_at     TEXT NOT NULL,
+                UNIQUE(hash, work_type)
+            );
+            CREATE INDEX IF NOT EXISTS idx_deferred_work_ready
+                ON deferred_work(status, available_at, work_id);",
+        )?;
+    }
 
     conn.execute("UPDATE schema_version SET version = ?1", [CURRENT_VERSION])?;
     Ok(())

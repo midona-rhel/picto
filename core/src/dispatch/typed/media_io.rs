@@ -107,17 +107,8 @@ pub struct ExportMediaResult {
 
 // ─── Private result structs ────────────────────────────────────────────────
 
-#[derive(Debug, serde::Serialize)]
-struct EnsureThumbnailResult {
-    regenerated_thumbnail: bool,
-    has_thumbnail: bool,
-}
-
-#[derive(Debug, serde::Serialize)]
-struct ReanalyzeFileColorsResult {
-    colors_extracted: usize,
-    dominant_color_hex: Option<String>,
-}
+type EnsureThumbnailResult = crate::media_derivatives::EnsureThumbnailResult;
+type ReanalyzeFileColorsResult = crate::media_derivatives::ReanalyzeFileColorsResult;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ExportFormat {
@@ -484,7 +475,7 @@ async fn ensure_thumbnail_inner(
     blob_store: &std::sync::Arc<crate::blob_store::BlobStore>,
     hash: &str,
 ) -> Result<EnsureThumbnailResult, String> {
-    generate_thumbnail_inner(db, blob_store, hash, false).await
+    crate::media_derivatives::ensure_thumbnail(db, blob_store, hash, false).await
 }
 
 /// Core thumbnail generation. When `force` is true, deletes existing thumbnail
@@ -495,95 +486,7 @@ async fn generate_thumbnail_inner(
     hash: &str,
     force: bool,
 ) -> Result<EnsureThumbnailResult, String> {
-    // For collection hashes, resolve to the cover file's hash.
-    let effective_hash;
-    let file = match db.get_file_by_hash(hash).await? {
-        Some(f) => f,
-        None => {
-            // May be a collection entity hash — find its cover file
-            let entity_id = db.resolve_hash(hash).await
-                .map_err(|_| format!("Entity not found for hash: {}", hash))?;
-            let cover_hash = db.with_read_conn(move |conn| {
-                conn.query_row(
-                    "SELECT f.hash FROM media_entity me
-                     JOIN file f ON f.file_id = me.cover_file_id
-                     WHERE me.entity_id = ?1 AND me.kind = 'collection'",
-                    [entity_id],
-                    |row| row.get::<_, String>(0),
-                )
-            }).await
-            .map_err(|_| format!("Collection has no cover file: {}", hash))?;
-            effective_hash = cover_hash;
-            db.get_file_by_hash(&effective_hash).await?
-                .ok_or_else(|| format!("Cover file not found: {}", effective_hash))?
-        }
-    };
-
-    let ext = mime_to_extension(&file.mime).to_string();
-    // Use file's actual hash for blob operations (collection hash → cover file hash)
-    let h = file.hash.clone();
-    let bs = blob_store.clone();
-
-    let (regenerated_thumbnail, has_thumbnail) =
-        tokio::spawn(async move {
-            let result: Result<(bool, bool), String> = (async {
-            if force {
-                bs.delete_thumbnail(&h)
-                    .map_err(|e| format!("Delete thumbnail failed: {}", e))?;
-            }
-
-            let original = bs
-                .find_original(&h, Some(&ext))
-                .map_err(|e| format!("Blob error: {}", e))?
-                .ok_or_else(|| format!("Original file not found for hash {}", h))?;
-
-            if !force {
-                let thumb_exists = bs
-                    .find_thumbnail_path(&h)
-                    .map_err(|e| format!("Thumbnail lookup failed: {}", e))?
-                    .is_some();
-
-                if thumb_exists {
-                    return Ok((false, true));
-                }
-            }
-
-            let info = match crate::media_processing::get_file_info(&original.0, None).await {
-                Ok(info) => info,
-                Err(e) => {
-                    tracing::debug!(hash = %h, error = %e, "thumbnail skipped: file info failed");
-                    return Ok((false, false));
-                }
-            };
-            let (thumb_bytes, thumb_ext) = match crate::media_processing::generate_thumbnail_bytes(
-                &original.0,
-                crate::media_processing::DEFAULT_THUMBNAIL_DIMENSIONS,
-                info.mime,
-                info.duration_ms,
-                info.num_frames,
-                35,
-            ).await {
-                Ok(result) => result,
-                Err(e) => {
-                    tracing::debug!(hash = %h, mime = ?info.mime, error = %e, "thumbnail skipped: no adapter");
-                    return Ok((false, false));
-                }
-            };
-
-            bs.write_thumbnail(&h, &thumb_bytes, &thumb_ext)
-                .map_err(|e| format!("Thumbnail write failed: {}", e))?;
-
-            Ok((true, true))
-            }).await;
-            result
-        })
-        .await
-        .map_err(|e| format!("Thumbnail task failed: {}", e))??;
-
-    Ok(EnsureThumbnailResult {
-        regenerated_thumbnail,
-        has_thumbnail,
-    })
+    crate::media_derivatives::ensure_thumbnail(db, blob_store, hash, force).await
 }
 
 async fn reanalyze_file_colors_inner(
@@ -591,184 +494,17 @@ async fn reanalyze_file_colors_inner(
     blob_store: &std::sync::Arc<crate::blob_store::BlobStore>,
     hash: &str,
 ) -> Result<ReanalyzeFileColorsResult, String> {
-    let file = db
-        .get_file_by_hash(hash)
-        .await?
-        .ok_or_else(|| format!("File not found in database: {}", hash))?;
-
-    if !file.mime.starts_with("image/") {
-        db.set_file_colors(hash, Vec::new(), None).await?;
-        db.emit_read_model_event(crate::sqlite::ReadModelEvent::RebuildAll);
-        crate::events::emit_state_changed(
-            "reanalyze_file_colors",
-            crate::runtime_contract::change_builder::ChangeImpact::new()
-                .file_hashes(vec![hash.to_string()])
-                .derivative_fields_changed(&[MediaDerivativeField::DominantColorHex])
-                .smart_folder_scopes_changed_for_derivative_fields(&[
-                    MediaDerivativeField::DominantColorHex,
-                ]),
-        );
-        return Ok(ReanalyzeFileColorsResult {
-            colors_extracted: 0,
-            dominant_color_hex: None,
-        });
-    }
-
-    let ext = mime_to_extension(&file.mime).to_string();
-    let h = hash.to_string();
-    let bs = blob_store.clone();
-    let colors =
-        tokio::task::spawn_blocking(move || -> Result<Vec<(String, f32, f32, f32)>, String> {
-            let original = bs
-                .find_original(&h, Some(&ext))
-                .map_err(|e| format!("Blob error: {}", e))?
-                .ok_or_else(|| format!("Original file not found for hash {}", h))?;
-
-            let bytes = std::fs::read(&original.0)
-                .map_err(|e| format!("Failed to read original file: {}", e))?;
-            let img = image::load_from_memory(&bytes)
-                .map_err(|e| format!("Image decode failed: {}", e))?;
-            let extracted = crate::media_processing::colors::extract_dominant_colors(&img, 8);
-            Ok(extracted
-                .iter()
-                .map(|c| (c.hex.clone(), c.l as f32, c.a as f32, c.b as f32))
-                .collect())
-        })
-        .await
-        .map_err(|e| format!("Color extraction task failed: {}", e))??;
-
-    let dominant_color_hex = colors.first().map(|(hex, _, _, _)| hex.clone());
-    let colors_extracted = colors.len();
-
-    db.set_file_colors(hash, colors, dominant_color_hex.clone())
-        .await?;
-    db.emit_read_model_event(crate::sqlite::ReadModelEvent::RebuildAll);
-    crate::events::emit_state_changed(
-        "reanalyze_file_colors",
-        crate::runtime_contract::change_builder::ChangeImpact::new()
-            .file_hashes(vec![hash.to_string()])
-            .derivative_fields_changed(&[MediaDerivativeField::DominantColorHex])
-            .smart_folder_scopes_changed_for_derivative_fields(&[
-                MediaDerivativeField::DominantColorHex,
-            ]),
-    );
-
-    Ok(ReanalyzeFileColorsResult {
-        colors_extracted,
-        dominant_color_hex,
-    })
+    crate::media_derivatives::reanalyze_file_colors(db, blob_store, hash).await
 }
 
 /// Background-backfill missing thumbnails and dominant colors.
-/// Fire-and-forget — errors are silently ignored per-file.
+/// Fire-and-forget enqueue — the deferred-work worker owns execution.
 pub async fn backfill_missing_deferred(
     db: &crate::sqlite::SqliteDatabase,
     blob_store: &std::sync::Arc<crate::blob_store::BlobStore>,
     hashes: &[String],
 ) {
-    use crate::blob_store::mime_to_extension;
-    use std::collections::HashSet;
-    let mut thumb_hashes: Vec<String> = Vec::new();
-    let mut phash_hashes: Vec<String> = Vec::new();
-    let mut color_hashes: Vec<String> = Vec::new();
-    for hash in hashes {
-        let file = match db.get_file_by_hash(hash).await {
-            Ok(Some(f)) => f,
-            _ => continue,
-        };
-        if !file.mime.starts_with("image/") && !file.mime.starts_with("video/") {
-            continue;
-        }
-
-        // Generate thumbnail if missing (uses the existing ensure_thumbnail path
-        // which handles MIME detection, ffmpeg for video, etc.)
-        let has_thumb = blob_store
-            .find_thumbnail_path(hash)
-            .ok()
-            .flatten()
-            .is_some();
-        if !has_thumb {
-            if ensure_thumbnail_inner(db, blob_store, hash).await.is_ok() {
-                thumb_hashes.push(hash.clone());
-            }
-        }
-
-        // Compute phash if missing (images only)
-        if file.phash.is_none() && file.mime.starts_with("image/") {
-            let ext = mime_to_extension(&file.mime).to_string();
-            let h = hash.clone();
-            let bs = blob_store.clone();
-            let phash_result = tokio::task::spawn_blocking(move || -> Result<String, String> {
-                let original = bs
-                    .find_original(&h, Some(&ext))
-                    .map_err(|e| format!("{e}"))?
-                    .ok_or_else(|| "not found".to_string())?;
-                let bytes = std::fs::read(&original.0).map_err(|e| format!("{e}"))?;
-                crate::duplicates::phash::compute_phash_base64(&bytes).map_err(|e| format!("{e}"))
-            })
-            .await;
-            if let Ok(Ok(phash_b64)) = phash_result {
-                let _ = db.set_phash(hash, &phash_b64).await;
-                phash_hashes.push(hash.clone());
-            }
-        }
-
-        // Extract dominant colors if missing
-        if file.dominant_color_hex.is_none() && file.mime.starts_with("image/") {
-            let ext = mime_to_extension(&file.mime).to_string();
-            let h = hash.clone();
-            let bs = blob_store.clone();
-            let colors = match tokio::task::spawn_blocking(
-                move || -> Result<Vec<(String, f32, f32, f32)>, String> {
-                    let original = bs
-                        .find_original(&h, Some(&ext))
-                        .map_err(|e| format!("{e}"))?
-                        .ok_or_else(|| "not found".to_string())?;
-                    let bytes = std::fs::read(&original.0).map_err(|e| format!("{e}"))?;
-                    let img = image::load_from_memory(&bytes).map_err(|e| format!("{e}"))?;
-                    let extracted =
-                        crate::media_processing::colors::extract_dominant_colors(&img, 8);
-                    Ok(extracted
-                        .iter()
-                        .map(|c| (c.hex.clone(), c.l as f32, c.a as f32, c.b as f32))
-                        .collect())
-                },
-            )
-            .await
-            {
-                Ok(Ok(c)) => c,
-                _ => continue,
-            };
-            let dominant = colors.first().map(|(hex, _, _, _)| hex.clone());
-            if db.set_file_colors(hash, colors, dominant).await.is_ok() {
-                color_hashes.push(hash.clone());
-            }
-        }
-    }
-    let any_changed = !thumb_hashes.is_empty() || !phash_hashes.is_empty() || !color_hashes.is_empty();
-    if any_changed {
-        db.emit_read_model_event(crate::sqlite::ReadModelEvent::RebuildAll);
-        // Deduplicate all changed hashes
-        let mut all_hashes_set = HashSet::new();
-        for h in thumb_hashes.iter().chain(phash_hashes.iter()).chain(color_hashes.iter()) {
-            all_hashes_set.insert(h.clone());
-        }
-        let mut all_hashes: Vec<String> = all_hashes_set.into_iter().collect();
-        all_hashes.sort();
-        if !all_hashes.is_empty() {
-            let mut fields = Vec::new();
-            if !thumb_hashes.is_empty() { fields.push(MediaDerivativeField::Thumbnail); }
-            if !color_hashes.is_empty() { fields.push(MediaDerivativeField::DominantColorHex); }
-            if !phash_hashes.is_empty() { fields.push(MediaDerivativeField::Phash); }
-            crate::events::emit_state_changed(
-                "backfill_missing_deferred",
-                crate::runtime_contract::change_builder::ChangeImpact::new()
-                    .file_hashes(all_hashes)
-                    .derivative_fields_changed(&fields)
-                    .smart_folder_scopes_changed_for_derivative_fields(&fields),
-            );
-        }
-    }
+    crate::media_derivatives::enqueue_missing_deferred(db, blob_store, hashes).await;
 }
 
 // ─── Handlers ──────────────────────────────────────────────────────────────
@@ -945,5 +681,17 @@ pub async fn reanalyze_file_colors(
     input: ReanalyzeFileColorsInput,
 ) -> Result<serde_json::Value, String> {
     let result = reanalyze_file_colors_inner(&state.db, &state.blob_store, &input.hash).await?;
+    state
+        .db
+        .emit_read_model_event(crate::sqlite::ReadModelEvent::RebuildAll);
+    crate::events::emit_state_changed(
+        "reanalyze_file_colors",
+        crate::runtime_contract::change_builder::ChangeImpact::new()
+            .file_hashes(vec![input.hash.clone()])
+            .derivative_fields_changed(&[MediaDerivativeField::DominantColorHex])
+            .smart_folder_scopes_changed_for_derivative_fields(&[
+                MediaDerivativeField::DominantColorHex,
+            ]),
+    );
     serde_json::to_value(&result).map_err(|e| e.to_string())
 }

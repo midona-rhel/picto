@@ -359,6 +359,23 @@ pub fn reconcile_schema(conn: &Connection) -> rusqlite::Result<()> {
          CREATE INDEX IF NOT EXISTS idx_dqi_queue ON download_queue_item(queue_id);",
     )?;
 
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS deferred_work (
+             work_id        INTEGER PRIMARY KEY,
+             hash           TEXT NOT NULL,
+             work_type      TEXT NOT NULL CHECK(work_type IN ('thumbnail', 'dominant_colors', 'phash')),
+             status         TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending', 'running')),
+             attempt_count  INTEGER NOT NULL DEFAULT 0,
+             available_at   TEXT NOT NULL,
+             last_error     TEXT,
+             created_at     TEXT NOT NULL,
+             updated_at     TEXT NOT NULL,
+             UNIQUE(hash, work_type)
+         );
+         CREATE INDEX IF NOT EXISTS idx_deferred_work_ready
+             ON deferred_work(status, available_at, work_id);",
+    )?;
+
     // Data reconciliation: some upgraded builds may have illegal collection rows
     // still linked through entity_file, which corrupts collection tile rendering.
     repair_collection_entity_file_links(conn)?;

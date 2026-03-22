@@ -133,6 +133,19 @@ pub async fn start_workers(
         });
     }
 
+    // ── Deferred media work queue ─────────────────────
+    {
+        let deferred_db = db.clone();
+        let deferred_blob = blob_store.clone();
+        let deferred_cancel = cancel.clone();
+        let handle = tokio::spawn(crate::media_derivatives::start_deferred_work_loop(
+            deferred_db,
+            deferred_blob,
+            deferred_cancel,
+        ));
+        handles.push(("deferred_work", handle));
+    }
+
     // ── Folder watch worker ────────────────────────────
     {
         let watch_db = db.clone();

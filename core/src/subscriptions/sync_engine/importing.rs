@@ -6,6 +6,7 @@ use tracing::{info, warn};
 
 use crate::import::existing::{merge_existing_import_target, ExistingImportMergeRequest};
 use crate::import::pipeline::{ImportError, ImportOptions, ImportPipeline};
+use crate::media_derivatives;
 use crate::subscriptions::gallery_dl_runner::ParsedMetadata;
 use crate::subscriptions::import_policy::{
     generated_subscription_name, normalized_title, preferred_import_name,
@@ -108,11 +109,7 @@ impl<'a> SubscriptionSyncEngine<'a> {
 
         let pipeline = ImportPipeline::new(self.db, self.blob_store);
         match pipeline.import_file(file_path, &options).await {
-            Ok((imported, deferred)) => {
-                // Run deferred work (dominant colors, phash, thumbnail generation).
-                if let Some(work) = deferred {
-                    pipeline.process_deferred(work).await;
-                }
+            Ok(imported) => {
                 info!(hash = %imported.hex_hash, tags = options.tags.len(), "Import success");
 
                 let mut surviving_hash = imported.hex_hash.clone();
@@ -149,6 +146,14 @@ impl<'a> SubscriptionSyncEngine<'a> {
                 {
                     warn!(error = %e, "Failed to record subscription-file mapping");
                 }
+
+                let _ = media_derivatives::enqueue_import_derivatives(
+                    self.db,
+                    &surviving_hash,
+                    &imported.mime,
+                    options.skip_thumbnail,
+                )
+                .await;
 
                 // Collection members: suppress individual events — the collection
                 // materialization step emits its own event once all pages are grouped.
@@ -230,6 +235,7 @@ impl<'a> SubscriptionSyncEngine<'a> {
         let pipeline = ImportPipeline::new(self.db, self.blob_store);
         let mut prepared: Vec<crate::import::pipeline::PreparedFile> =
             Vec::with_capacity(pc.members.len());
+        let mut deferred_specs: Vec<(String, String, bool)> = Vec::with_capacity(pc.members.len());
 
         // Phase 1: prepare all files (hash, MIME, blob write — no DB)
         for (i, member) in pc.members.iter().enumerate() {
@@ -260,6 +266,11 @@ impl<'a> SubscriptionSyncEngine<'a> {
             match pipeline.prepare_file(&member.file_path, &options).await {
                 Ok(pf) => {
                     // files_downloaded already incremented during stashing
+                    deferred_specs.push((
+                        pf.hex_hash.clone(),
+                        pf.db_opts.mime.clone(),
+                        options.skip_thumbnail,
+                    ));
                     prepared.push(pf);
                 }
                 Err(crate::import::pipeline::ImportError::AlreadyImported(_)) => {
@@ -285,7 +296,16 @@ impl<'a> SubscriptionSyncEngine<'a> {
         if prepared.len() < 2 {
             let pf = prepared.remove(0);
             let file_hash = pf.hex_hash.clone();
-            let _ = self.db.import_file(pf.db_opts).await;
+            let file_mime = pf.db_opts.mime.clone();
+            if self.db.import_file(pf.db_opts).await.is_ok() {
+                let _ = media_derivatives::enqueue_import_derivatives(
+                    self.db,
+                    &file_hash,
+                    &file_mime,
+                    false,
+                )
+                .await;
+            }
             crate::events::emit_state_changed(
                 "subscription_import",
                 crate::runtime_contract::change_builder::ChangeImpact::file_lifecycle(self.db)
@@ -313,6 +333,20 @@ impl<'a> SubscriptionSyncEngine<'a> {
             .await
         {
             Ok(result) => {
+                let imported_hashes: HashSet<&str> =
+                    result.hashes.iter().map(|hash| hash.as_str()).collect();
+                for (hash, mime, needs_thumbnail) in deferred_specs {
+                    if !imported_hashes.contains(hash.as_str()) {
+                        continue;
+                    }
+                    let _ = media_derivatives::enqueue_import_derivatives(
+                        self.db,
+                        &hash,
+                        &mime,
+                        needs_thumbnail,
+                    )
+                    .await;
+                }
                 let _ = self
                     .db
                     .upsert_subscription_post_collection(

@@ -39,6 +39,7 @@ fn schema_init_creates_all_tables() {
         "schema_version",
         "artifact_manifest_meta",
         "artifact_manifest_entry",
+        "deferred_work",
     ];
 
     for table in &expected_tables {

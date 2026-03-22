@@ -14,6 +14,7 @@ use crate::events::{self, ManualImportProgressEvent};
 use crate::folders::service;
 use crate::import::existing::{merge_existing_import_target, ExistingImportMergeRequest};
 use crate::import::pipeline::{ImportError, ImportOptions, ImportPipeline};
+use crate::media_derivatives;
 use crate::runtime_contract::change_builder::ChangeImpact;
 use crate::sqlite::SqliteDatabase;
 
@@ -468,10 +469,7 @@ async fn import_file_into_folder(
     let mut skipped_hashes = Vec::<String>::new();
 
     match pipeline.import_file(path, &options).await {
-        Ok((imported, deferred)) => {
-            if let Some(work) = deferred {
-                pipeline.process_deferred(work).await;
-            }
+        Ok(imported) => {
             let surviving_hash = maybe_auto_merge(
                 db,
                 blob_store,
@@ -484,6 +482,13 @@ async fn import_file_into_folder(
             if surviving_hash == imported.hex_hash {
                 emit_file_imported(db, &surviving_hash).await;
             }
+            media_derivatives::enqueue_import_derivatives(
+                db,
+                &surviving_hash,
+                &imported.mime,
+                options.skip_thumbnail,
+            )
+            .await?;
             imported_hashes.push(surviving_hash);
         }
         Err(ImportError::AlreadyImported(hash)) => {

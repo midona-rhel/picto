@@ -850,8 +850,3 @@ fn should_continue_initial_pagination(
     }
     next_resume_cursor.is_some_and(|cursor| !cursor.trim().is_empty())
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-}

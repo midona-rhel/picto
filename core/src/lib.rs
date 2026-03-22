@@ -10,6 +10,7 @@ pub mod folders;
 pub mod grid;
 pub mod import;
 pub mod metadata;
+pub mod media_derivatives;
 pub mod scope;
 pub mod selection;
 pub mod settings;
