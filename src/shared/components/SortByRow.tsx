@@ -13,13 +13,14 @@ export function SortByRow({ field, order, onFieldChange, onOrderChange }: {
   const handleOrderChange = (o: string) => { setLocalOrder(o); onOrderChange(o); };
   const btnStyle = (active: boolean): React.CSSProperties => ({
     display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-    width: 28, height: 26, borderRadius: 5, cursor: 'pointer', border: 'none',
-    background: active ? 'var(--color-black-10, rgba(0, 0, 0, 0.1))' : 'transparent',
-    color: active ? 'var(--color-text-primary)' : 'var(--mantine-color-dimmed)',
+    width: 26, height: 24, borderRadius: 4, cursor: 'pointer', border: 'none',
+    background: active ? 'rgba(255, 255, 255, 0.12)' : 'transparent',
+    color: active ? 'var(--color-text-primary)' : 'var(--color-text-primary)',
+    opacity: active ? 1 : 0.4,
   });
   return (
     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-      <span style={{ color: 'var(--mantine-color-text)', fontSize: 'var(--mantine-font-size-sm)' }}>Sort by</span>
+      <span style={{ color: 'var(--color-text-primary)', fontSize: 'var(--mantine-font-size-sm)' }}>Sort by</span>
       <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
         <Select
           size="xs"
@@ -45,15 +46,15 @@ export function SortByRow({ field, order, onFieldChange, onOrderChange }: {
           }}
         />
         <div style={{
-            display: 'flex', alignItems: 'center', gap: 0,
-            background: 'var(--color-black-05, rgba(0, 0, 0, 0.05))', borderRadius: 6,
-            padding: 1,
+            display: 'flex', alignItems: 'center', gap: 1,
+            background: 'rgba(0, 0, 0, 0.15)', borderRadius: 6,
+            padding: 2,
           }}>
             <button style={btnStyle(localOrder === 'asc')} onClick={() => handleOrderChange('asc')}>
-              <IconSortAscending size={16} />
+              <IconSortAscending size={14} />
             </button>
             <button style={btnStyle(localOrder === 'desc')} onClick={() => handleOrderChange('desc')}>
-              <IconSortDescending size={16} />
+              <IconSortDescending size={14} />
             </button>
           </div>
       </div>

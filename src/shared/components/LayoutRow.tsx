@@ -15,7 +15,7 @@ export function LayoutRow({ viewMode, onChange }: { viewMode: GridViewMode; onCh
   const handleChange = (v: string | null) => { if (v) { setLocal(v as GridViewMode); onChange(v as GridViewMode); } };
   return (
     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-      <span style={{ color: 'var(--mantine-color-text)', fontSize: 'var(--mantine-font-size-sm)' }}>Layout</span>
+      <span style={{ color: 'var(--color-text-primary)', fontSize: 'var(--mantine-font-size-sm)' }}>Layout</span>
       <Select
         size="xs"
         value={local}
