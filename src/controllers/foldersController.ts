@@ -126,9 +126,9 @@ export const foldersController = {
   // ── Membership ─────────────────────────────────────────────────────────────
 
   async addFiles(folderId: number, hashes: string[], selection?: SelectionQuerySpec) {
-    await api.folders.addFiles(folderId, hashes, selection);
     const count = hashes.length;
     if (count > 0) useDomainStore.getState().adjustFolderCount(folderId, count);
+    await api.folders.addFiles(folderId, hashes, selection);
     if (useNavigationStore.getState().activeFolderId === folderId && hashes.length > 0) {
       Promise.all(hashes.map((h) => queryApi.file.get(h))).then((entities) => {
         const valid = entities.filter((e): e is NonNullable<typeof e> => e != null);
@@ -154,10 +154,10 @@ export const foldersController = {
   },
 
   async removeFiles(folderId: number, hashes: string[], selection?: SelectionQuerySpec) {
-    await api.folders.removeFiles(folderId, hashes, selection);
     const count = hashes.length;
     if (count > 0) useDomainStore.getState().adjustFolderCount(folderId, -count);
     eagerGridRemove(folderId, hashes);
+    await api.folders.removeFiles(folderId, hashes, selection);
     if (hashes.length > 0 && !selection) {
       registerUndoAction({
         label: `Remove ${hashes.length} item${hashes.length === 1 ? '' : 's'} from folder`,

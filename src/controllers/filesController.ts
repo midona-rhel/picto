@@ -175,7 +175,7 @@ export const filesController = {
 
   async setStatus(hash: string, status: string) {
     const previousStatus = scopeExpectedStatus();
-    const result = await commandApi.file.setStatus(hash, status);
+    // Eager BEFORE the backend call
     eagerInvalidate(hash);
     eagerAdjustSystemCounts(1, previousStatus, status);
     if (statusLeavesScope(status)) {
@@ -185,38 +185,31 @@ export const filesController = {
         if (entity) useGridMetadataStore.getState().queueInsertions([entity]);
       });
     }
+    const result = await commandApi.file.setStatus(hash, status);
     return result;
   },
 
   async setStatusSelection(selection: SelectionQuerySpec, status: string) {
-    // The original selection count is the number of top-level items the user
-    // selected (e.g. 1 collection = 1). resolveHashes may expand collections
-    // to include member files, but the eager sidebar count should reflect the
-    // user-visible selection, not the expanded set.
     const selectionCount = selection.hashes?.length ?? 0;
     const hashes = selection.hashes?.length
       ? selection.hashes
       : await queryApi.selection.resolveHashes(selection);
     const previousStatus = scopeExpectedStatus();
-    const result = await commandApi.file.setStatusSelection(selection, status);
-    const leaves = statusLeavesScope(status);
-    const enters = statusEntersScope(status);
+    // Eager BEFORE the backend call
     eagerInvalidateMany(hashes);
-    // For explicit selection, use the original selection size (top-level items,
-    // not expanded collection members). For virtual select-all, use the current
-    // scope count — the entire scope is being moved.
     const eagerCount = selectionCount > 0
       ? selectionCount
       : scopeCount(previousStatus);
     eagerAdjustSystemCounts(eagerCount, previousStatus, status);
-    if (leaves) {
+    if (statusLeavesScope(status)) {
       useGridMetadataStore.getState().queueRemovals(hashes);
-    } else if (enters) {
+    } else if (statusEntersScope(status)) {
       Promise.all(hashes.map((h) => queryApi.file.get(h))).then((entities) => {
         const valid = entities.filter((e): e is NonNullable<typeof e> => e != null);
         if (valid.length > 0) useGridMetadataStore.getState().queueInsertions(valid);
       });
     }
+    const result = await commandApi.file.setStatusSelection(selection, status);
     return result;
   },
 
