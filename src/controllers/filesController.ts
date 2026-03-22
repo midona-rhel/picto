@@ -65,6 +65,15 @@ function statusEntersScope(targetStatus: string): boolean {
   return targetStatus === expected;
 }
 
+/** Get the current count for a system scope status. */
+function scopeCount(status: string | null): number {
+  const store = useDomainStore.getState();
+  if (status === 'active') return store.allActiveCount;
+  if (status === 'inbox') return store.inboxCount;
+  if (status === 'trash') return store.trashCount;
+  return 0;
+}
+
 /** Eagerly adjust system sidebar counts (inbox/active/trash) by the number of
  *  top-level items moved, so the sidebar reflects the change instantly. The
  *  backend event's sidebar_counts will reconcile with the true bitmap count. */
@@ -180,6 +189,11 @@ export const filesController = {
   },
 
   async setStatusSelection(selection: SelectionQuerySpec, status: string) {
+    // The original selection count is the number of top-level items the user
+    // selected (e.g. 1 collection = 1). resolveHashes may expand collections
+    // to include member files, but the eager sidebar count should reflect the
+    // user-visible selection, not the expanded set.
+    const selectionCount = selection.hashes?.length ?? 0;
     const hashes = selection.hashes?.length
       ? selection.hashes
       : await queryApi.selection.resolveHashes(selection);
@@ -188,7 +202,13 @@ export const filesController = {
     const leaves = statusLeavesScope(status);
     const enters = statusEntersScope(status);
     eagerInvalidateMany(hashes);
-    eagerAdjustSystemCounts(hashes.length, previousStatus, status);
+    // For explicit selection, use the original selection size (top-level items,
+    // not expanded collection members). For virtual select-all, use the current
+    // scope count — the entire scope is being moved.
+    const eagerCount = selectionCount > 0
+      ? selectionCount
+      : scopeCount(previousStatus);
+    eagerAdjustSystemCounts(eagerCount, previousStatus, status);
     if (leaves) {
       useGridMetadataStore.getState().queueRemovals(hashes);
     } else if (enters) {

@@ -28,17 +28,15 @@ function countMatches(text, re) {
   return count;
 }
 
+// Undo registration now lives in controllers, not UI files.
+// Each controller must have at least N registerUndoAction calls for its domain.
 const DOMAIN_MIN_COUNTS = [
-  { file: 'src/features/grid/ImageGrid.tsx', min: 1 },
-  { file: 'src/features/grid/hooks/useGridMutationActions.ts', min: 7 },
-  { file: 'src/features/grid/hooks/useGridItemActions.ts', min: 1 },
-  { file: 'src/features/tags/components/TagManager.tsx', min: 5 },
-  { file: 'src/features/sidebar/hooks/useFolderTreeActions.ts', min: 10 },
-  { file: 'src/features/sidebar/hooks/useFolderTreeDnd.ts', min: 1 },
-  { file: 'src/features/sidebar/components/SmartFolderList.tsx', min: 4 },
-  { file: 'src/features/smart-folders/components/SmartFolderModal.tsx', min: 2 },
-  { file: 'src/features/settings/components/DuplicatesPanel.tsx', min: 1 },
-  { file: 'src/features/duplicates/components/DuplicateManager.tsx', min: 1 },
+  { file: 'src/controllers/filesController.ts', min: 10 },
+  { file: 'src/controllers/tagsController.ts', min: 8 },
+  { file: 'src/controllers/foldersController.ts', min: 8 },
+  { file: 'src/controllers/collectionsController.ts', min: 6 },
+  { file: 'src/controllers/smartFoldersController.ts', min: 5 },
+  { file: 'src/controllers/duplicatesController.ts', min: 1 },
 ];
 
 const ROUTING_CHECKS = [

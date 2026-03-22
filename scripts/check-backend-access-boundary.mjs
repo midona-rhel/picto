@@ -19,16 +19,19 @@ const API_IMPORT_PATTERNS = [
   // Raw api object
   /import\s*\{[^}]*\bapi\b[^}]*\}\s*from\s*['"]#desktop\/api['"]/g,
   /import\s*\{[^}]*\bapi\b[^}]*\}\s*from\s*['"][^'"]*platform\/api['"]/g,
-  // queryApi / commandApi from barrel re-export
+  // queryApi / commandApi
   /import\s*\{[^}]*\bqueryApi\b[^}]*\}\s*from\s*['"]#desktop\/api['"]/g,
   /import\s*\{[^}]*\bqueryApi\b[^}]*\}\s*from\s*['"][^'"]*platform\/api['"]/g,
   /import\s*\{[^}]*\bcommandApi\b[^}]*\}\s*from\s*['"]#desktop\/api['"]/g,
   /import\s*\{[^}]*\bcommandApi\b[^}]*\}\s*from\s*['"][^'"]*platform\/api['"]/g,
-  // queryApi / commandApi from their own modules
-  /import\b.*from\s*['"]#desktop\/queryApi['"]/g,
-  /import\b.*from\s*['"][^'"]*platform\/queryApi['"]/g,
-  /import\b.*from\s*['"]#desktop\/commandApi['"]/g,
-  /import\b.*from\s*['"][^'"]*platform\/commandApi['"]/g,
+  // libraryHost — must go through libraryController
+  /import\s*\{[^}]*\blibraryHost\b[^}]*\}\s*from\s*['"]#desktop\/api['"]/g,
+  /import\s*\{[^}]*\blibraryHost\b[^}]*\}\s*from\s*['"][^'"]*platform['"]/g,
+  // Raw platform window functions — must go through windowController
+  /import\s*\{[^}]*\bopenExternalUrl\b[^}]*\}\s*from\s*['"][^'"]*platform\/api['"]/g,
+  /import\s*\{[^}]*\bopenSettingsWindow\b[^}]*\}\s*from\s*['"][^'"]*platform\/api['"]/g,
+  /import\s*\{[^}]*\bopenSubscriptionsWindow\b[^}]*\}\s*from\s*['"][^'"]*platform\/api['"]/g,
+  /import\s*\{[^}]*\bopenLibraryManager\b[^}]*\}\s*from\s*['"][^'"]*platform\/api['"]/g,
 ];
 
 async function walk(dir) {
