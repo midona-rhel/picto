@@ -86,9 +86,11 @@ fn get_collection_cached_tags(
     collection_id: i64,
 ) -> rusqlite::Result<Vec<String>> {
     let mut stmt = conn.prepare_cached(
-        "SELECT tag FROM collection_tag
-         WHERE collection_entity_id = ?1
-         ORDER BY tag COLLATE NOCASE",
+        "SELECT CASE WHEN t.namespace = '' THEN t.subtag ELSE t.namespace || ':' || t.subtag END
+         FROM entity_tag_raw etr
+         JOIN tag t ON t.tag_id = etr.tag_id
+         WHERE etr.entity_id = ?1
+         ORDER BY 1 COLLATE NOCASE",
     )?;
     let rows = stmt.query_map([collection_id], |row| row.get::<_, String>(0))?;
     rows.collect()
@@ -298,27 +300,7 @@ pub(crate) fn sync_collection_aggregate_metadata(
         [collection_id],
     )?;
 
-    // 2) Keep collection tag chips in sync with mirrored member tags.
-    conn.execute(
-        "DELETE FROM collection_tag WHERE collection_entity_id = ?1",
-        [collection_id],
-    )?;
-    conn.execute(
-        "INSERT OR IGNORE INTO collection_tag (collection_entity_id, tag)
-         SELECT
-            ?1,
-            CASE
-                WHEN COALESCE(t.namespace, '') = '' THEN t.subtag
-                ELSE t.namespace || ':' || t.subtag
-            END
-         FROM media_entity me_member
-         JOIN entity_tag_raw etr ON etr.entity_id = me_member.entity_id
-         JOIN tag t ON t.tag_id = etr.tag_id
-         WHERE me_member.kind = 'single'
-           AND me_member.parent_collection_id = ?1
-         GROUP BY t.namespace, t.subtag",
-        [collection_id],
-    )?;
+    // collection_tag removed — tags live in entity_tag_raw.
 
     // 3) Merge source URLs from all member files into a derived cache.
     let mut url_stmt = conn.prepare_cached(
@@ -497,7 +479,17 @@ pub fn create_collection(conn: &Connection, name: &str) -> rusqlite::Result<i64>
          VALUES ('collection', ?1, ?2, 1, ?3, ?3)",
         params![name, "", now],
     )?;
-    Ok(conn.last_insert_rowid())
+    let entity_id = conn.last_insert_rowid();
+    // Generate stable hash identity for this collection entity.
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(format!("collection:{entity_id}").as_bytes());
+    let hash = hex::encode(hasher.finalize());
+    conn.execute(
+        "UPDATE media_entity SET hash = ?1 WHERE entity_id = ?2",
+        params![hash, entity_id],
+    )?;
+    Ok(entity_id)
 }
 
 pub fn update_collection_name(
@@ -622,9 +614,11 @@ pub fn list_collections(conn: &Connection) -> rusqlite::Result<Vec<CollectionRec
     }
 
     let mut tag_stmt = conn.prepare_cached(
-        "SELECT tag FROM collection_tag
-         WHERE collection_entity_id = ?1
-         ORDER BY tag COLLATE NOCASE",
+        "SELECT CASE WHEN t.namespace = '' THEN t.subtag ELSE t.namespace || ':' || t.subtag END
+         FROM entity_tag_raw etr
+         JOIN tag t ON t.tag_id = etr.tag_id
+         WHERE etr.entity_id = ?1
+         ORDER BY 1 COLLATE NOCASE",
     )?;
     for collection in &mut collections {
         let tags = tag_stmt.query_map([collection.id], |row| row.get::<_, String>(0))?;
@@ -689,9 +683,11 @@ pub fn get_collection_summary(
     )?;
 
     let mut tag_stmt = conn.prepare_cached(
-        "SELECT tag FROM collection_tag
-         WHERE collection_entity_id = ?1
-         ORDER BY tag COLLATE NOCASE",
+        "SELECT CASE WHEN t.namespace = '' THEN t.subtag ELSE t.namespace || ':' || t.subtag END
+         FROM entity_tag_raw etr
+         JOIN tag t ON t.tag_id = etr.tag_id
+         WHERE etr.entity_id = ?1
+         ORDER BY 1 COLLATE NOCASE",
     )?;
     let tags = tag_stmt
         .query_map([collection_id], |row| row.get::<_, String>(0))?

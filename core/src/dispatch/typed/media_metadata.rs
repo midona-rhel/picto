@@ -57,15 +57,17 @@ pub async fn update_media_entity_metadata(
     let mut affected_hashes = vec![hash.clone()];
 
     if let Some(rating) = input.rating {
-        // Cascade rating to collection members
-        let hashes = state
-            .db
-            .expand_hashes_for_collections(&[hash.clone()])
-            .await?;
-        for h in &hashes {
-            state.db.update_rating(h, rating).await?;
+        // resolve_hashes_batch expands collections to entity + members.
+        let resolved = state.db.resolve_hashes_batch(&[hash.clone()]).await?;
+        for (h, _) in &resolved {
+            if !h.is_empty() {
+                state.db.update_rating(h, rating).await?;
+            }
         }
-        affected_hashes = hashes;
+        affected_hashes = resolved.into_iter().map(|(h, _)| h).filter(|h| !h.is_empty()).collect();
+        if affected_hashes.is_empty() {
+            affected_hashes = vec![hash.clone()];
+        }
         changed_fields.push(MediaMetadataField::Rating);
     }
 

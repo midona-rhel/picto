@@ -1,6 +1,6 @@
 //! Historical schema upgrade steps, grouped behind one deterministic runner.
 
-use rusqlite::Connection;
+use rusqlite::{params, Connection};
 
 use super::support::{has_column, repair_collection_entity_file_links, table_exists};
 use super::CURRENT_VERSION;
@@ -764,6 +764,68 @@ pub fn run_migrations(conn: &Connection, from_version: i64) -> rusqlite::Result<
             CREATE INDEX IF NOT EXISTS idx_dqi_queue ON download_queue_item(queue_id);",
         )?;
     }
+    // ── V36: Collection entity hash identity + drop collection_tag ──
+    if from_version < 36 {
+        // 1. Add hash column to media_entity
+        if !has_column(conn, "media_entity", "hash")? {
+            conn.execute_batch("ALTER TABLE media_entity ADD COLUMN hash TEXT;")?;
+        }
+        conn.execute_batch(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_media_entity_hash ON media_entity(hash) WHERE hash IS NOT NULL;",
+        )?;
+
+        // 2. Backfill hashes for existing collections
+        {
+            let mut stmt =
+                conn.prepare("SELECT entity_id FROM media_entity WHERE kind = 'collection'")?;
+            let ids: Vec<i64> = stmt
+                .query_map([], |row| row.get(0))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            let mut update =
+                conn.prepare("UPDATE media_entity SET hash = ?1 WHERE entity_id = ?2")?;
+            for id in ids {
+                use sha2::{Digest, Sha256};
+                let mut hasher = Sha256::new();
+                hasher.update(format!("collection:{id}").as_bytes());
+                let hash = hex::encode(hasher.finalize());
+                update.execute(params![hash, id])?;
+            }
+        }
+
+        // 3. Migrate collection_tag → entity_tag_raw, then drop
+        if table_exists(conn, "collection_tag")? {
+            let mut stmt = conn.prepare(
+                "SELECT collection_entity_id, tag FROM collection_tag",
+            )?;
+            let rows: Vec<(i64, String)> = stmt
+                .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            for (entity_id, tag) in rows {
+                if let Some((ns, st)) = crate::tags::normalize::parse_tag(&tag) {
+                    let tag_id: i64 = match conn.query_row(
+                        "SELECT tag_id FROM tag WHERE namespace = ?1 AND subtag = ?2",
+                        params![ns, st],
+                        |row| row.get(0),
+                    ) {
+                        Ok(id) => id,
+                        Err(_) => {
+                            conn.execute(
+                                "INSERT INTO tag (namespace, subtag) VALUES (?1, ?2)",
+                                params![ns, st],
+                            )?;
+                            conn.last_insert_rowid()
+                        }
+                    };
+                    conn.execute(
+                        "INSERT OR IGNORE INTO entity_tag_raw (entity_id, tag_id, source) VALUES (?1, ?2, 'local')",
+                        params![entity_id, tag_id],
+                    )?;
+                }
+            }
+            conn.execute_batch("DROP TABLE IF EXISTS collection_tag;")?;
+        }
+    }
+
     conn.execute("UPDATE schema_version SET version = ?1", [CURRENT_VERSION])?;
     Ok(())
 }

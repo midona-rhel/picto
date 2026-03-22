@@ -12,7 +12,6 @@ fn schema_init_creates_all_tables() {
         "file_color",
         "media_entity",
         "entity_file",
-        "collection_tag",
         "tag",
         "entity_tag_raw",
         "tag_alias",
@@ -154,7 +153,7 @@ fn migrations_are_idempotent_from_v1() {
     }
 
     // Verify V10 collection/entity schema artifacts.
-    for table in &["media_entity", "entity_file", "collection_tag"] {
+    for table in &["media_entity", "entity_file"] {
         let exists: bool = conn
             .query_row(
                 "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type='table' AND name=?1",

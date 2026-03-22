@@ -345,7 +345,6 @@ pub fn wipe_all_files(conn: &Connection) -> rusqlite::Result<()> {
     conn.execute("DELETE FROM subscription_entity", [])?;
     conn.execute("DELETE FROM entity_tag_raw", [])?;
     conn.execute("DELETE FROM file", [])?;
-    conn.execute("DELETE FROM collection_tag", [])?;
     conn.execute("DELETE FROM entity_file", [])?;
     conn.execute("DELETE FROM media_entity", [])?;
     Ok(())
@@ -556,7 +555,7 @@ const ENTITY_SLIM_SELECT: &str =
      (me.kind = 'collection') AS is_collection,
      CASE WHEN me.kind = 'collection' THEN me.cached_item_count ELSE NULL END AS collection_item_count,
      CASE
-         WHEN me.kind = 'collection' THEN COALESCE(cover_f.hash, '')
+         WHEN me.kind = 'collection' THEN COALESCE(me.hash, '')
          ELSE COALESCE(f.hash, cover_f.hash, '')
      END AS hash,
      CASE

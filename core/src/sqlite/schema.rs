@@ -16,7 +16,7 @@ mod tests;
 
 use support::{seed_artifact_manifest, seed_manifest};
 
-pub const CURRENT_VERSION: i64 = 35;
+pub const CURRENT_VERSION: i64 = 36;
 
 pub fn apply_pragmas(conn: &Connection) -> rusqlite::Result<()> {
     conn.execute_batch(ddl::PRAGMA_SQL)

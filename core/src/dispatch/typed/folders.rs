@@ -267,15 +267,18 @@ pub async fn get_entity_folders(
 }
 
 pub async fn move_folder(state: &AppState, input: MoveFolderInput) -> Result<(), String> {
+    let sibling_order = input.sibling_order;
     state
         .db
-        .move_folder(input.folder_id, input.new_parent_id, input.sibling_order)
+        .move_folder(input.folder_id, input.new_parent_id, sibling_order.clone())
         .await?;
     crate::events::emit_state_changed(
         "move_folder",
         crate::runtime_contract::change_builder::ChangeImpact::new()
             .add_domains(&[crate::runtime_contract::state_change::Domain::Folders, crate::runtime_contract::state_change::Domain::Sidebar])
-        .folder_ids(vec![input.folder_id]),
+            .folder_ids(vec![input.folder_id])
+            .folder_parent_changes(vec![(input.folder_id, input.new_parent_id)])
+            .folder_order_changes(sibling_order),
     );
     Ok(())
 }
@@ -482,12 +485,14 @@ pub async fn remove_files_from_folder(
 
 pub async fn reorder_folders(state: &AppState, input: ReorderFoldersInput) -> Result<(), String> {
     let fids: Vec<i64> = input.moves.iter().map(|(id, _)| *id).collect();
+    let order_changes = input.moves.clone();
     state.db.reorder_folders(input.moves).await?;
     crate::events::emit_state_changed(
         "reorder_folders",
         crate::runtime_contract::change_builder::ChangeImpact::new()
             .add_domains(&[crate::runtime_contract::state_change::Domain::Folders, crate::runtime_contract::state_change::Domain::Sidebar])
-        .folder_ids(fids),
+            .folder_ids(fids)
+            .folder_order_changes(order_changes),
     );
     Ok(())
 }

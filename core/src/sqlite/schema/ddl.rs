@@ -83,6 +83,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS file_fts USING fts5(
 CREATE TABLE IF NOT EXISTS media_entity (
     entity_id    INTEGER PRIMARY KEY,
     kind         TEXT NOT NULL CHECK(kind IN ('single','collection')),
+    hash         TEXT,
     parent_collection_id INTEGER REFERENCES media_entity(entity_id) ON DELETE SET NULL,
     collection_ordinal   INTEGER,
     cover_file_id        INTEGER REFERENCES file(file_id) ON DELETE SET NULL,
@@ -95,6 +96,7 @@ CREATE TABLE IF NOT EXISTS media_entity (
     created_at   TEXT,
     updated_at   TEXT
 );
+CREATE UNIQUE INDEX IF NOT EXISTS idx_media_entity_hash ON media_entity(hash) WHERE hash IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_media_entity_kind    ON media_entity(kind);
 CREATE INDEX IF NOT EXISTS idx_media_entity_updated ON media_entity(updated_at);
 CREATE INDEX IF NOT EXISTS idx_media_entity_status_entity_id ON media_entity(status, entity_id DESC);
@@ -155,13 +157,7 @@ BEGIN
 END;
 
 -- collection_member table removed — membership is tracked via media_entity.parent_collection_id
-
-CREATE TABLE IF NOT EXISTS collection_tag (
-    collection_entity_id INTEGER NOT NULL REFERENCES media_entity(entity_id) ON DELETE CASCADE,
-    tag                  TEXT NOT NULL,
-    PRIMARY KEY (collection_entity_id, tag)
-);
-CREATE INDEX IF NOT EXISTS idx_collection_tag_tag ON collection_tag(tag COLLATE NOCASE);
+-- collection_tag table removed (V36) — tags use entity_tag_raw like everything else
 
 CREATE TABLE IF NOT EXISTS collection_source_url (
     collection_entity_id INTEGER NOT NULL REFERENCES media_entity(entity_id) ON DELETE CASCADE,

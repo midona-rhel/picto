@@ -247,58 +247,26 @@ impl SqliteDatabase {
         Ok(results)
     }
 
-    /// Expand hashes to include collection member hashes. If any hash belongs to
-    /// a collection cover file, the member files' hashes are appended.
-    pub async fn expand_hashes_for_collections(
-        &self,
-        hashes: &[String],
-    ) -> Result<Vec<String>, String> {
-        if hashes.is_empty() {
-            return Ok(Vec::new());
-        }
-        let resolved = self.resolve_hashes_batch(hashes).await?;
-        let mut all_hashes: Vec<String> = hashes.to_vec();
-        for (_, fid) in &resolved {
-            let fid = *fid;
-            let members = self
-                .with_read_conn(move |conn| {
-                    crate::folders::collections_db::get_cover_collection_member_files(conn, fid)
-                })
-                .await?;
-            for (_, member_hash) in members {
-                all_hashes.push(member_hash);
-            }
-        }
-        all_hashes.sort_unstable();
-        all_hashes.dedup();
-        Ok(all_hashes)
-    }
-
-    /// Expand a list of file_ids (== entity_ids for singles) to include collection
-    /// member file_ids. Any file_id that is a collection cover gets its member
-    /// file_ids appended. Non-collection file_ids pass through unchanged.
-    pub async fn expand_collection_members(&self, file_ids: Vec<i64>) -> Result<Vec<i64>, String> {
-        if file_ids.is_empty() {
-            return Ok(file_ids);
+    /// Expand a list of entity_ids to include collection member entity_ids.
+    /// Used by selection batch operations.
+    pub async fn expand_collection_members(&self, entity_ids: Vec<i64>) -> Result<Vec<i64>, String> {
+        if entity_ids.is_empty() {
+            return Ok(entity_ids);
         }
         self.with_read_conn(move |conn| {
-            let mut expanded = file_ids.clone();
-            for &fid in &file_ids {
-                // Check if this file_id is a cover file for a collection
-                let members =
-                    crate::folders::collections_db::get_cover_collection_member_files(conn, fid)?;
-                if !members.is_empty() {
-                    for (member_fid, _) in members {
-                        expanded.push(member_fid);
-                    }
-                } else {
-                    // Also check if this ID is a collection entity directly
-                    // (status bitmaps include collection entity_ids)
-                    let direct_members =
-                        crate::folders::collections_db::get_collection_member_file_ids(conn, fid)?;
-                    for member_fid in direct_members {
-                        expanded.push(member_fid);
-                    }
+            let mut expanded = entity_ids.clone();
+            for &eid in &entity_ids {
+                let is_collection: bool = conn
+                    .query_row(
+                        "SELECT kind = 'collection' FROM media_entity WHERE entity_id = ?1",
+                        [eid],
+                        |row| row.get(0),
+                    )
+                    .unwrap_or(false);
+                if is_collection {
+                    let member_fids =
+                        crate::folders::collections_db::get_collection_member_file_ids(conn, eid)?;
+                    expanded.extend(member_fids);
                 }
             }
             expanded.sort_unstable();
@@ -308,80 +276,4 @@ impl SqliteDatabase {
         .await
     }
 
-    /// Given a list of hashes (some may be collection cover hashes), expand any
-    /// collection hashes to include the collection's member file hashes AND keep
-    /// the original hash (so the collection entity itself is also included).
-    pub async fn expand_collection_hashes_to_members(
-        &self,
-        hashes: &[String],
-    ) -> Result<Vec<String>, String> {
-        if hashes.is_empty() {
-            return Ok(Vec::new());
-        }
-        let hashes = hashes.to_vec();
-        self.with_read_conn(move |conn| {
-            let mut result: Vec<String> = Vec::new();
-            for hash in &hashes {
-                let file_id: Option<i64> = conn
-                    .query_row(
-                        "SELECT file_id FROM file WHERE hash = ?1",
-                        [hash],
-                        |row| row.get(0),
-                    )
-                    .ok();
-                let Some(fid) = file_id else {
-                    result.push(hash.clone());
-                    continue;
-                };
-                let collection_id =
-                    crate::folders::collections_db::find_collection_for_cover_file(conn, fid)?;
-                if let Some(cid) = collection_id {
-                    result.push(hash.clone());
-                    let member_hashes =
-                        crate::folders::collections_db::list_collection_member_hashes(conn, cid)?;
-                    result.extend(member_hashes);
-                } else {
-                    result.push(hash.clone());
-                }
-            }
-            result.sort_unstable();
-            result.dedup();
-            Ok(result)
-        })
-        .await
-    }
-
-    /// Given cover file hashes, find the collection entity_ids they belong to.
-    pub async fn find_collection_entity_ids_for_cover_hashes(
-        &self,
-        hashes: &[String],
-    ) -> Result<Vec<i64>, String> {
-        if hashes.is_empty() {
-            return Ok(Vec::new());
-        }
-        let hashes = hashes.to_vec();
-        self.with_read_conn(move |conn| {
-            let mut ids = Vec::new();
-            for hash in &hashes {
-                let file_id: Option<i64> = conn
-                    .query_row(
-                        "SELECT file_id FROM file WHERE hash = ?1",
-                        [hash],
-                        |row| row.get(0),
-                    )
-                    .ok();
-                if let Some(fid) = file_id {
-                    if let Ok(Some(cid)) =
-                        crate::folders::collections_db::find_collection_for_cover_file(conn, fid)
-                    {
-                        ids.push(cid);
-                    }
-                }
-            }
-            ids.sort_unstable();
-            ids.dedup();
-            Ok(ids)
-        })
-        .await
-    }
 }
