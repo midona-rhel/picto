@@ -257,17 +257,8 @@ export function useInspectorChangeActions(
         return;
       }
 
-      // For collections, use member hashes so the backend adds members
-      // and sync_collection_aggregate_metadata adds the collection tile.
-      let hashes: string[] = [];
-      for (const img of selectedImages) {
-        if (img.is_collection && img.entity_id != null) {
-          const members = await collectionsController.listMemberHashes(img.entity_id);
-          hashes.push(...members);
-        } else {
-          hashes.push(img.hash);
-        }
-      }
+      // Expand collections to member hashes for folder assignment.
+      const hashes = await collectionsController.expandToMemberHashes(selectedImages);
       const hashesSnapshot = [...hashes];
       if (hashesSnapshot.length === 0) return;
       await Promise.all(
@@ -316,17 +307,7 @@ export function useInspectorChangeActions(
           // Virtual Select All: let the backend resolve all hashes from the selection
           await foldersController.removeFiles(folderId, [], selectionSummarySpec);
         } else {
-          // For collections, use member hashes so the backend removes members
-          // and sync_collection_aggregate_metadata updates the collection tile.
-          let hashes: string[] = [];
-          for (const img of selectedImages) {
-            if (img.is_collection && img.entity_id != null) {
-              const members = await collectionsController.listMemberHashes(img.entity_id);
-              hashes.push(...members);
-            } else {
-              hashes.push(img.hash);
-            }
-          }
+          const hashes = await collectionsController.expandToMemberHashes(selectedImages);
           if (hashes.length === 0) return;
           await foldersController.removeFiles(folderId, hashes);
           registerUndoAction({

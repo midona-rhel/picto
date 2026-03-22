@@ -16,6 +16,8 @@ import { WindowControls } from '../../layout/components/WindowControls';
 import { KbdTooltip } from '../../../shared/components/KbdTooltip';
 import { useNavigationStore } from '../../../state/navigationStore';
 import { useFilterStore } from '../../../state/filterStore';
+import { filesController } from '../../../controllers/filesController';
+import { collectionsController } from '../../../controllers/collectionsController';
 import { formatFileSize, formatDuration, formatDateTime, getFileExtension } from '../../../shared/lib/formatters';
 import type { MediaItem } from '../../grid/shared';
 import { GlassImagePreview } from '../../../shared/components/GlassImagePreview';
@@ -35,7 +37,7 @@ import type {
 import type { CollectionSummary } from '../../../shared/types/api';
 import type { FolderMembership } from '../hooks/useInspectorData';
 import { AiTaggerService } from '../../../shared/services/aiTaggerService';
-import { api } from '#desktop/api';
+import { windowController } from '../../../controllers/windowController';
 
 import styles from './InspectorPanel.module.css';
 
@@ -232,7 +234,7 @@ function EditableUrlList({ urls, onChange, readOnly, fieldId, activePopover, onP
               <span
                 key={idx}
                 className={styles.hoverPopoverLink}
-                onClick={() => api.os.openExternalUrl(url)}
+                onClick={() => windowController.openExternal(url)}
               >
                 {url}
               </span>
@@ -316,7 +318,7 @@ interface InspectorPanelProps {
   sourceUrls: string[];
   notes: string;
 
-  // Mutation callbacks (from useInspectorData hook)
+  // Change callbacks (from useInspectorData hook)
   onAddTags: (tags: string[]) => Promise<void>;
   onRemoveTags: (tags: string[]) => Promise<void>;
   onUpdateRating: (rating: number) => Promise<void>;
@@ -497,12 +499,9 @@ export function InspectorPanel({
 
     if (selectionSummarySpec) {
       // Virtual Select All: resolve all hashes from the backend
-      hashes = await api.selection.resolveHashes(selectionSummarySpec);
-    } else if (selectedImages.length === 1 && selectedImages[0]?.is_collection && selectedImages[0].entity_id != null) {
-      // Single collection: tag all member files
-      hashes = await api.collections.listMemberHashes(selectedImages[0].entity_id);
+      hashes = await filesController.resolveSelectionHashes(selectionSummarySpec);
     } else {
-      hashes = selectedImages.map((i) => i.hash);
+      hashes = await collectionsController.expandToMemberHashes(selectedImages);
     }
 
     if (hashes.length === 0) return;

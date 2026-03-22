@@ -97,19 +97,7 @@ interface BuildGridImageContextMenuArgs {
   effectiveSize: number;
 }
 
-const GENERATED_NAME_RE = /^(?:[a-f0-9]{24,}|image[_-]?\d+|img[_-]?\d+|file[_-]?\d+)$/i;
-function isGeneratedName(name: string): boolean {
-  return GENERATED_NAME_RE.test(name.trim());
-}
-
-function normalizeNameBase(name: string): string {
-  return name
-    .trim()
-    .replace(/\.[a-z0-9]{2,5}$/i, '')
-    .replace(/(?:[\s._-]|\s*\(\s*)\d+\s*\)?$/g, '')
-    .trim()
-    .toLowerCase();
-}
+// Smart naming helpers moved to collectionsController.
 
 export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): ContextMenuEntry[] {
   const {
@@ -235,18 +223,7 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
       onClick: () => {
         if (freshHash && collectionEntityId) {
           dispatch({ type: 'CLEAR_SELECTION' });
-          collectionsController.removeMembers({ id: collectionEntityId, hashes: [freshHash] })
-            .then(() => {
-              registerUndoAction({
-                label: 'Remove from collection',
-                undo: async () => {
-                  await collectionsController.addMembers({ id: collectionEntityId, hashes: [freshHash] });
-                },
-                redo: async () => {
-                  await collectionsController.removeMembers({ id: collectionEntityId, hashes: [freshHash] });
-                },
-              });
-            })
+          collectionsController.removeMemberWithUndo(collectionEntityId, freshHash)
             .catch(err => notifyError(err, 'Remove from Collection Failed'));
         } else {
           handleRemoveFromCollection();
@@ -266,53 +243,23 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
     const selSingles = selectedImages.filter((img) => !img.is_collection);
 
     if (selCollections.length === 0 && selSingles.length >= 2) {
-      // Only images selected → Create Collection
       items.push({
         type: 'item',
         label: 'Create Collection',
         icon: <IconFolderPlus />,
         onClick: async () => {
-          const memberHashes = selSingles.map((img) => img.hash);
-          if (memberHashes.length === 0) return;
-          const now = new Date();
-          const fallbackName = `Collection ${now.toLocaleDateString()} ${now.toLocaleTimeString()}`;
-          const memberNames = selSingles
-            .map((img) => (img.name ?? '').trim())
-            .filter((n) => n.length > 0);
-          const allGenerated = memberNames.length > 0 && memberNames.every(isGeneratedName);
-          const normalizedBases = memberNames.map(normalizeNameBase).filter(Boolean);
-          const uniqueBases = new Set(normalizedBases);
-          const sharedBaseName = uniqueBases.size === 1 && normalizedBases.length > 0
-            ? memberNames.find((n) => normalizeNameBase(n) === normalizedBases[0]) ?? fallbackName
-            : null;
-
-          let collectionName = fallbackName;
-          if (sharedBaseName) {
-            collectionName = sharedBaseName;
-          } else if (!allGenerated && memberNames.length > 0) {
-            collectionName = memberNames[0];
-          }
           try {
-            const name = collectionName.trim();
-            const id = await collectionsController.create({ name });
-            const added = await collectionsController.addMembers({ id, hashes: memberHashes });
-            registerUndoAction({
-              label: `Create collection "${name}"`,
-              undo: async () => { await collectionsController.delete(id); },
-              redo: async () => {
-                const newId = await collectionsController.create({ name });
-                await collectionsController.addMembers({ id: newId, hashes: memberHashes });
-              },
-            });
-            notifySuccess(`Created collection with ${added} item${added === 1 ? '' : 's'}`, 'Collections');
-            navigateToCollection({ id, name });
+            const result = await collectionsController.createFromSelection(
+              selSingles.map((img) => ({ hash: img.hash, name: img.name })),
+            );
+            notifySuccess(`Created collection with ${result.count} item${result.count === 1 ? '' : 's'}`, 'Collections');
+            navigateToCollection({ id: result.id, name: result.name });
           } catch (err) {
             notifyError(err, 'Create Collection Failed');
           }
         },
       });
     } else if (selCollections.length === 1 && selSingles.length > 0) {
-      // 1 collection + images → Merge into Collection
       items.push({
         type: 'item',
         label: 'Merge into Collection',
@@ -320,47 +267,31 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
         onClick: async () => {
           const targetId = selCollections[0].entity_id;
           if (targetId == null) return;
-          const hashes = selSingles.map((img) => img.hash);
           try {
-            const added = await collectionsController.addMembers({ id: targetId, hashes });
-            registerUndoAction({
-              label: `Add ${added} item${added === 1 ? '' : 's'} to collection`,
-              undo: async () => { await collectionsController.removeMembers({ id: targetId, hashes }); },
-              redo: async () => { await collectionsController.addMembers({ id: targetId, hashes }); },
-            });
-            notifySuccess(`Added ${added} item${added === 1 ? '' : 's'} to collection`, 'Collections');
+            const count = await collectionsController.mergeInto(targetId, selSingles.map((img) => img.hash));
+            notifySuccess(`Added ${count} item${count === 1 ? '' : 's'} to collection`, 'Collections');
           } catch (err) {
             notifyError(err, 'Merge Failed');
           }
         },
       });
     } else if (selCollections.length >= 2) {
-      // 2+ collections → Merge Collections
       items.push({
         type: 'item',
         label: 'Merge Collections',
         icon: <IconGitMerge />,
         onClick: async () => {
           const target = selCollections[0];
-          const targetId = target.entity_id;
-          if (targetId == null) return;
-          const others = selCollections.slice(1);
+          if (target.entity_id == null) return;
+          const others = selCollections.slice(1).filter((c) => c.entity_id != null) as Array<{ entity_id: number }>;
           try {
-            // Move members from each non-target collection into target
-            for (const other of others) {
-              if (other.entity_id == null) continue;
-              const memberHashes = await collectionsController.listMemberHashes(other.entity_id);
-              if (memberHashes.length > 0) {
-                await collectionsController.addMembers({ id: targetId, hashes: memberHashes });
-              }
-              await collectionsController.delete(other.entity_id);
-            }
-            // Also add any loose singles
-            if (selSingles.length > 0) {
-              await collectionsController.addMembers({ id: targetId, hashes: selSingles.map((img) => img.hash) });
-            }
+            await collectionsController.mergeCollections(
+              { entity_id: target.entity_id, name: target.name ?? 'Untitled' },
+              others,
+              selSingles.map((img) => img.hash),
+            );
             notifySuccess(`Merged ${others.length + 1} collections into "${target.name ?? 'Untitled'}"`, 'Collections');
-            navigateToCollection({ id: targetId, name: target.name ?? 'Untitled' });
+            navigateToCollection({ id: target.entity_id, name: target.name ?? 'Untitled' });
           } catch (err) {
             notifyError(err, 'Merge Collections Failed');
           }
@@ -377,22 +308,10 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
         onClick: async () => {
           if (singleCollectionId == null) return;
           try {
-            const memberHashes = await collectionsController.listMemberHashes(singleCollectionId);
-            const collectionName = singleImage?.name ?? 'Untitled';
-            await collectionsController.delete(singleCollectionId);
-            registerUndoAction({
-              label: `Split collection "${collectionName}"`,
-              undo: async () => {
-                const newId = await collectionsController.create({ name: collectionName });
-                if (memberHashes.length > 0) {
-                  await collectionsController.addMembers({ id: newId, hashes: memberHashes });
-                }
-              },
-              redo: async () => {
-                // Find the re-created collection by searching for it
-                // Best-effort: just notify if the collection can't be found
-              },
-            });
+            const memberHashes = await collectionsController.split(
+              singleCollectionId,
+              singleImage?.name ?? 'Untitled',
+            );
             if (memberHashes.length > 0) {
               dispatch({ type: 'SELECT_HASHES', hashes: new Set(memberHashes) });
             }
@@ -403,7 +322,6 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
         },
       });
     }
-    // Only add separator if we actually added collection-related items
     const addedCollectionItems = selCollections.length > 0 || (selCollections.length === 0 && selSingles.length >= 2) || singleIsCollection;
     if (addedCollectionItems) {
       items.push({ type: 'separator' });
@@ -477,17 +395,7 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
         );
         // Expand collections to member hashes
         const expandAndOpen = async () => {
-          const allHashes: string[] = [];
-          for (const item of selected) {
-            if (item.is_collection && item.entity_id != null) {
-              try {
-                const members = await collectionsController.listMemberHashes(item.entity_id);
-                allHashes.push(...members);
-              } catch { /* skip */ }
-            } else {
-              allHashes.push(item.hash);
-            }
-          }
+          const allHashes = await collectionsController.expandToMemberHashes(selected);
           if (allHashes.length === 0) return;
           AiTaggerService.open({
             anchorEl: anchor,

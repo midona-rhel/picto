@@ -244,20 +244,6 @@ export function SmartFolderList({ onFolderUpdated }: SmartFolderListProps) {
     openModal();
   }, [openModal]);
 
-  const buildSiblingMovesForParent = useCallback((parentId: string | null): [number, number][] => {
-    const siblings = folders
-      .filter((folder) => {
-        const folderParent = folder.parent_id != null ? String(folder.parent_id) : null;
-        return folderParent === parentId;
-      })
-      .sort((a, b) => {
-        const aOrder = a.display_order ?? Number.MAX_SAFE_INTEGER;
-        const bOrder = b.display_order ?? Number.MAX_SAFE_INTEGER;
-        if (aOrder !== bOrder) return aOrder - bOrder;
-        return a.id.localeCompare(b.id, undefined, { numeric: true });
-      });
-    return siblings.map((folder, index) => [parseInt(folder.id, 10), (index + 1) * 1000]);
-  }, [folders]);
 
   const [activeId, setActiveId] = useState<string | null>(null);
   const [dropIndicator, setDropIndicator] = useState<SmartFolderDropIndicator | null>(null);
@@ -317,44 +303,24 @@ export function SmartFolderList({ onFolderUpdated }: SmartFolderListProps) {
     if (!draggedNode || !targetNode) return;
 
     const draggedId = parseInt(draggedNode.id, 10);
-    const oldParentId = draggedNode.parent_id ? parseInt(draggedNode.parent_id, 10) : null;
-    const oldSiblingMoves = buildSiblingMovesForParent(draggedNode.parent_id ?? null);
-
-    let redoSiblingMoves: [number, number][] = [];
+    const targetId = parseInt(targetNode.id, 10);
 
     try {
+      // Controller owns all sibling computation, undo snapshots, and backend call
+      await smartFoldersController.moveToPosition(
+        draggedId,
+        targetId,
+        indicator.position,
+        folders.map((f) => ({ id: f.id, parent_id: f.parent_id, display_order: f.display_order ?? null })),
+      );
       if (indicator.position === 'inside') {
-        const newParentId = parseInt(targetNode.id, 10);
-        const siblingNodes = folders
-          .filter((folder) => folder.parent_id === newParentId && folder.id !== draggedNode.id)
-          .sort((a, b) => (a.display_order ?? 0) - (b.display_order ?? 0));
-        const reordered = [...siblingNodes, folders.find((folder) => folder.id === draggedNode.id)!];
-        redoSiblingMoves = reordered.map((folder, index) => [parseInt(folder.id, 10), (index + 1) * 1000]);
-        const undoParams = { oldParentId: oldParentId, oldSiblingMoves };
-        await smartFoldersController.move(draggedId, newParentId, redoSiblingMoves, undoParams);
-        setCollapsedNodes((prev) => {
-          const next = new Set(prev);
-          next.delete(targetNode.id);
-          return next;
-        });
-      } else {
-        const targetParentId = targetNode.parent_id ? parseInt(targetNode.parent_id, 10) : null;
-        const siblingNodes = folders
-          .filter((folder) => folder.parent_id === targetParentId && folder.id !== draggedNode.id)
-          .sort((a, b) => (a.display_order ?? 0) - (b.display_order ?? 0));
-        const targetIdx = siblingNodes.findIndex((folder) => folder.id === targetNode.id);
-        const insertIdx = indicator.position === 'before' ? targetIdx : targetIdx + 1;
-        const reordered = [...siblingNodes];
-        reordered.splice(insertIdx, 0, folders.find((folder) => folder.id === draggedNode.id)!);
-        redoSiblingMoves = reordered.map((folder, index) => [parseInt(folder.id, 10), (index + 1) * 1000]);
-        const undoParams = { oldParentId: oldParentId, oldSiblingMoves };
-        await smartFoldersController.move(draggedId, targetParentId, redoSiblingMoves, undoParams);
+        setCollapsedNodes((prev) => { const next = new Set(prev); next.delete(targetNode.id); return next; });
       }
       await refreshSidebarAndGrid();
     } catch (error) {
       console.error('Smart folder DnD failed:', error);
     }
-  }, [buildSiblingMovesForParent, dropIndicator, folders, nodeMap, refreshSidebarAndGrid]);
+  }, [dropIndicator, folders, nodeMap, refreshSidebarAndGrid]);
 
   const handleDragCancel = useCallback(() => {
     setActiveId(null);
