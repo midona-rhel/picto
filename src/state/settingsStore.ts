@@ -80,7 +80,7 @@ const DEFAULTS: AppSettings = {
   stripDefaultFitMode: 'horizontal',
   stripScrollSpeed: 108,
   stripScrollEnabled: true,
-  smoothZoomEnabled: true,
+  smoothZoomEnabled: false,
 };
 
 interface SettingsState {
