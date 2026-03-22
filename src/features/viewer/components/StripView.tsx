@@ -570,16 +570,21 @@ export function StripView({
     setActiveVideo(null);
   }, [activeVideo, masonryImages, positions]);
 
-  // Dismiss video when scrolling far from it
-  useEffect(() => {
-    if (activeVideo == null || !positions[activeVideo]) return;
-    const pos = positions[activeVideo];
-    const st = scrollTopRef.current;
-    const vh = viewportHeightRef.current;
-    if (pos.y + pos.h < st - vh || pos.y > st + vh * 2) {
+  // Dismiss video the moment it leaves the viewport
+  const handleScrollWithVideoDismiss = useCallback(() => {
+    handleScroll();
+    if (activeVideoRef.current == null) return;
+    const pos = positions[activeVideoRef.current];
+    if (!pos) { setActiveVideo(null); return; }
+    const el = scrollRef.current;
+    if (!el) return;
+    const st = el.scrollTop;
+    const vh = el.clientHeight;
+    // Off screen: bottom of tile above viewport top, or top of tile below viewport bottom
+    if (pos.y + pos.h < st || pos.y > st + vh) {
       setActiveVideo(null);
     }
-  });
+  }, [handleScroll, positions]);
 
   // Video overlay position
   const videoSettings = useSettingsStore(s => s.settings);
@@ -588,7 +593,7 @@ export function StripView({
 
   return (
     <div className={styles.stripView}>
-      <div ref={scrollRef} className={styles.scrollContainer} onScroll={handleScroll} onClick={handleClick}>
+      <div ref={scrollRef} className={styles.scrollContainer} onScroll={handleScrollWithVideoDismiss} onClick={handleClick}>
         <div style={{ height: totalHeight, position: 'relative' }}>
           <canvas
             ref={canvasRef}
