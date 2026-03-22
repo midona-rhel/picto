@@ -27,7 +27,7 @@ export function LayoutRow({ viewMode, onChange }: { viewMode: GridViewMode; onCh
         ]}
         allowDeselect={false}
         withCheckIcon={false}
-        leftSection={<span style={{ marginLeft: 5, display: 'inline-flex' }}><ModeIcon mode={local} size={14} /></span>}
+        leftSection={<ModeIcon mode={local} size={14} />}
         leftSectionPointerEvents="none"
         leftSectionWidth={36}
         rightSectionWidth={20}
