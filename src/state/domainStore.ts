@@ -50,6 +50,8 @@ interface DomainState {
   requestRefresh: () => void;
   applySidebarCounts: (counts: { all_active: number; inbox: number; trash: number }) => void;
   setDuplicatesCount: (count: number) => void;
+  /** Eagerly adjust the sidebar tag count (e.g. +1 on create, -1 on delete). */
+  adjustTagsCount: (delta: number) => void;
   /** Targeted folder count adjustment — avoids full tree refetch. */
   adjustFolderCount: (folderId: number, delta: number) => void;
   /** Targeted smart folder count update — avoids full tree refetch. */
@@ -250,6 +252,8 @@ export const useDomainStore = create<DomainState>((set, get) => ({
   },
 
   setDuplicatesCount: (count) => set({ duplicatesCount: count }),
+
+  adjustTagsCount: (delta: number) => set((s) => ({ tagsCount: Math.max(0, s.tagsCount + delta) })),
 
   adjustFolderCount: (folderId, delta) => {
     const fid = String(folderId);

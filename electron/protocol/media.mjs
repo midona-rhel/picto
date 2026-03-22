@@ -1,6 +1,7 @@
 import fs from 'node:fs/promises';
 import { createReadStream } from 'node:fs';
 import { Readable } from 'node:stream';
+import { forwardWarn } from '../services/logForwarder.mjs';
 
 export function isValidHash(value) {
   return typeof value === 'string' && value.length === 64 && /^[a-fA-F0-9]+$/.test(value);
@@ -131,7 +132,7 @@ export function createMediaProtocolService({
     protocol.handle('media', async (request) => {
       const parsed = parseMediaUrl(request.url);
       if (!parsed || !isValidHash(parsed.hash)) {
-        if (isDev) console.warn('[media] Failed to parse:', request.url);
+        forwardWarn('media', `Failed to parse: ${request.url}`);
         return new Response('Invalid media URL', {
           status: 400,
           headers: { 'Content-Type': 'text/plain', 'Cache-Control': 'no-store' },
@@ -158,7 +159,7 @@ export function createMediaProtocolService({
           } catch {}
         }
         if (!stat) {
-          if (isDev) console.warn('[media] 404:', parsed.kind, parsed.hash.slice(0, 12), filePath);
+          forwardWarn('media', `404: ${parsed.kind} ${parsed.hash.slice(0, 12)} ${filePath}`);
           return new Response('Not found', {
             status: 404,
             headers: { 'Content-Type': 'text/plain', 'Cache-Control': 'no-store' },

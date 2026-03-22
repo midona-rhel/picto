@@ -2,6 +2,7 @@ import { api } from '#desktop/api';
 import { filesController } from './filesController';
 import { registerUndoAction } from '../shared/controllers/undoRedoController';
 import { useTagListStore } from '../state/tagListStore';
+import { useDomainStore } from '../state/domainStore';
 import type {
   DeleteTagResult,
   NamespaceSummary,
@@ -114,6 +115,7 @@ export const tagsController = {
   async deleteTag(tagId: number, tagDisplay: string, affectedHashes: string[]): Promise<DeleteTagResult> {
     const result = await api.tags.delete(tagId);
     useTagListStore.getState().queueRemoval(tagId);
+    useDomainStore.getState().adjustTagsCount(-1);
     const h = [...affectedHashes], display = tagDisplay;
     registerUndoAction({
       label: `Delete tag "${display}"`,
@@ -133,6 +135,7 @@ export const tagsController = {
     await api.tags.merge(fromTag, toTag);
     const { namespace, subtag } = parseTagName(fromTag);
     useTagListStore.getState().queueRemovalByName(namespace, subtag);
+    useDomainStore.getState().adjustTagsCount(-1);
     registerUndoAction({
       label: `Merge tag "${fromTag}" into "${toTag}"`,
       backward: async () => {

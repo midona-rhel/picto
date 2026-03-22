@@ -23,6 +23,7 @@ import {
 } from './globalConfig.mjs';
 import { createMediaProtocolService, isValidHash } from './protocol/media.mjs';
 import { createWindowManager } from './windows/windowManager.mjs';
+import { setMainWindow } from './services/logForwarder.mjs';
 import { createMenuManager } from './windows/menu.mjs';
 import { createLibraryHostService } from './services/libraryHostService.mjs';
 import { registerIpcHandlers } from './ipc/registerHandlers.mjs';
@@ -229,7 +230,8 @@ async function bootstrapApplication() {
   console.info('[main] app menu built');
 
   console.info('[main] creating main window');
-  windowManager.createWindow('main');
+  const mainWin = windowManager.createWindow('main');
+  setMainWindow(mainWin);
   console.info('[main] main window creation requested');
 }
 

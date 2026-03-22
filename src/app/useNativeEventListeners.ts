@@ -165,7 +165,7 @@ export function useNativeEventListeners(): void {
     };
   }, []);
 
-  // Backend log forwarding
+  // Backend log forwarding (Rust tracing events)
   useEffect(() => {
     const unlisten = listen<{ level: string; target: string; message: string; timestamp: string }>('log', (event) => {
       const { level, target, message, timestamp } = event.payload;
@@ -177,6 +177,20 @@ export function useNativeEventListeners(): void {
       });
     });
     return () => { runBestEffort('log.unlisten', unlisten.then((fn) => fn())); };
+  }, []);
+
+  // Main process log forwarding (Electron media protocol, etc.)
+  useEffect(() => {
+    const unlisten = listen<{ level: string; target: string; message: string; timestamp: string }>('picto:log', (event) => {
+      const { level, target, message, timestamp } = event.payload;
+      useLogStore.getState().addEntry({
+        level: level as 'TRACE' | 'DEBUG' | 'INFO' | 'WARN' | 'ERROR',
+        target,
+        message,
+        timestamp,
+      });
+    });
+    return () => { runBestEffort('log.unlistenMainProcess', unlisten.then((fn) => fn())); };
   }, []);
 
   // Auto-updater status listener
