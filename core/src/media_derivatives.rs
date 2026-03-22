@@ -377,17 +377,24 @@ pub async fn reanalyze_file_colors(
         });
     }
 
-    let ext = mime_to_extension(&file.mime).to_string();
     let hash_owned = hash.to_string();
     let bs = blob_store.clone();
+    let ext = mime_to_extension(&file.mime).to_string();
     let colors = tokio::task::spawn_blocking(
         move || -> Result<Vec<(String, f32, f32, f32)>, String> {
-            let original = bs
-                .find_original(&hash_owned, Some(&ext))
-                .map_err(|e| format!("Blob error: {}", e))?
-                .ok_or_else(|| format!("Original file not found for hash {}", hash_owned))?;
-            let bytes = std::fs::read(&original.0)
-                .map_err(|e| format!("Failed to read original file: {}", e))?;
+            // Prefer the thumbnail for color extraction — it's a small WebP
+            // that decodes in milliseconds vs seconds for a full 22MP original.
+            let bytes = if let Ok(Some(thumb_path)) = bs.find_thumbnail_path(&hash_owned) {
+                std::fs::read(&thumb_path)
+                    .map_err(|e| format!("Failed to read thumbnail: {}", e))?
+            } else {
+                let original = bs
+                    .find_original(&hash_owned, Some(&ext))
+                    .map_err(|e| format!("Blob error: {}", e))?
+                    .ok_or_else(|| format!("Original file not found for hash {}", hash_owned))?;
+                std::fs::read(&original.0)
+                    .map_err(|e| format!("Failed to read original file: {}", e))?
+            };
             let img =
                 image::load_from_memory(&bytes).map_err(|e| format!("Image decode failed: {}", e))?;
             let extracted = crate::media_processing::colors::extract_dominant_colors(&img, 8);
