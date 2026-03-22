@@ -51,7 +51,7 @@ export const smartFoldersController = {
       registerUndoAction({
         label: 'Delete smart folder',
         undo: async () => { await api.smartFolders.create(snapshotData); eagerSidebarRefresh(); },
-        redo: async () => { await api.smartFolders.delete(id); eagerSidebarRefresh(); },
+        redo: async () => { /* ID differs after re-creation — cannot reliably re-delete */ },
       });
     }
   },

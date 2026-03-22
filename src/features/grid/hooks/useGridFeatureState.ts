@@ -5,9 +5,8 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
-import { api } from '#desktop/api';
 import { useFilterStore, mimeFilterToResult, type FilterLogicMode } from '../../../state/filterStore';
-import { useDomainStore } from '../../../state/domainStore';
+import { foldersController } from '../../../controllers/foldersController';
 import type { SmartFolder } from '#features/smart-folders/types';
 import type { TagFilterLogicMode } from '#features/tags/types';
 import type { MediaItem } from '#features/grid/types';
@@ -99,26 +98,23 @@ export function useGridFeatureState({
 
   const handleSmartFolderUpdated = useCallback(async () => {
     if (!activeSmartFolder?.id) return;
-    try {
-      useDomainStore.getState().invalidate();
-      setSmartFolderRefresh((c) => c + 1);
-    } catch (e) {
-      console.error('Failed to refresh active smart folder:', e);
-    }
+    // Sidebar refresh is owned by smartFoldersController — only bump
+    // the grid re-query counter here.
+    setSmartFolderRefresh((c) => c + 1);
   }, [activeSmartFolder?.id]);
 
   // --- Folder sort actions ---
   const handleSortFolderAction = useCallback((sortBy: string, direction: string) => {
     const fid = activeFolderId;
     if (!fid) return;
-    api.folders.sortItems(fid, sortBy, direction)
+    foldersController.sortItems(fid, sortBy, direction)
       .catch((e) => console.error('Failed to sort folder items:', e));
   }, [activeFolderId]);
 
   const handleReverseFolderAction = useCallback(() => {
     const fid = activeFolderId;
     if (!fid) return;
-    api.folders.reverseItems(fid)
+    foldersController.reverseItems(fid)
       .catch((e) => console.error('Failed to reverse folder items:', e));
   }, [activeFolderId]);
 
@@ -127,7 +123,7 @@ export function useGridFeatureState({
     if (!fid) return;
     const hashes = selectedImages.map((img) => img.hash);
     if (hashes.length === 0) return;
-    api.folders.reverseItems(fid, hashes)
+    foldersController.reverseItems(fid, hashes)
       .catch((e) => console.error('Failed to reverse selected folder items:', e));
   }, [activeFolderId, selectedImages]);
 

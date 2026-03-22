@@ -25,11 +25,6 @@ import { useStateChangeStore } from '../../../runtime/stateChanges/stateChangeSt
 import { useSubscriptionProgressStore } from '../../../state/taskStore';
 import { subscriptionsController } from '../../../controllers/subscriptionsController';
 import type { SubscriptionGroupInfo, SubscriptionGroupsPanelProps, SitePluginInfo, SubProgress } from '../types';
-import type {
-  SubscriptionGroupInfo as BackendSubscriptionGroupInfo,
-  SubscriptionInfo as BackendSubscriptionInfo,
-  SubscriptionQueryInfo as BackendSubscriptionQueryInfo,
-} from '../../../shared/types/api/core';
 import { SCHEDULE_OPTIONS } from '../types';
 import {
   canonicalSiteId,
@@ -68,52 +63,6 @@ const SITE_QUERY_HELP: Record<string, { description: string; example: string }> 
   konachan:       { description: 'Enter space-separated booru tags.', example: 'landscape' },
   safebooru:      { description: 'Enter space-separated booru tags.', example: '1girl smile' },
 };
-
-function normalizeQuery(query: BackendSubscriptionQueryInfo): SubscriptionGroupInfo['subscriptions'][number]['queries'][number] {
-  const q = query as BackendSubscriptionQueryInfo & { posts_found?: number; last_seen_id?: string | null };
-  return {
-    id: q.id,
-    query_text: q.query_text,
-    display_name: q.display_name,
-    paused: q.paused,
-    last_check_time: q.last_check_time,
-    files_found: q.files_found,
-    posts_found: q.posts_found ?? q.files_found,
-    completed_initial_run: q.completed_initial_run,
-    last_seen_id: q.last_seen_id ?? null,
-    resume_cursor: q.resume_cursor ?? null,
-    resume_strategy: q.resume_strategy ?? null,
-  };
-}
-
-function normalizeSubscription(sub: BackendSubscriptionInfo): SubscriptionGroupInfo['subscriptions'][number] {
-  const s = sub as BackendSubscriptionInfo & { site_plugin_id?: string; auto_collections?: boolean };
-  return {
-    id: s.id,
-    name: s.name,
-    site_id: s.site_id,
-    site_plugin_id: s.site_plugin_id ?? s.site_id,
-    paused: s.paused,
-    group_id: s.group_id,
-    initial_post_limit: s.initial_post_limit,
-    periodic_post_limit: s.periodic_post_limit,
-    auto_collections: s.auto_collections ?? true,
-    created_at: s.created_at,
-    total_files: s.total_files,
-    queries: s.queries.map(normalizeQuery),
-  };
-}
-
-function normalizeGroup(group: BackendSubscriptionGroupInfo): SubscriptionGroupInfo {
-  return {
-    id: group.id,
-    name: group.name,
-    schedule: group.schedule,
-    created_at: group.created_at,
-    total_files: group.total_files,
-    subscriptions: group.subscriptions.map(normalizeSubscription),
-  };
-}
 
 function QueryInfoTooltip({ siteId, sites }: { siteId: string; sites: SitePluginInfo[] }) {
   const si = sites.find((s) => s.id === siteId);
@@ -222,7 +171,7 @@ export function SubscriptionGroupsPanel({
         subscriptionsController.getSites(),
         subscriptionsController.listCredentials().catch(() => []),
       ]);
-      setSubscriptionGroups(subscriptionGroupsData.map(normalizeGroup));
+      setSubscriptionGroups(subscriptionGroupsData);
       setSites(sitesData);
       const siteKeys = new Set<string>();
       for (const row of creds) {
@@ -380,7 +329,7 @@ export function SubscriptionGroupsPanel({
   const handleReset = async (subscriptionGroup: SubscriptionGroupInfo) => {
     try {
       for (const sub of subscriptionGroup.subscriptions) {
-        await subscriptionsController.resetSubscription(sub.id);
+        await subscriptionsController.reset(sub.id);
       }
       notifySuccess(`"${subscriptionGroup.name}" reset. Next run starts fresh.`, 'Reset Complete');
       await loadData();
@@ -443,7 +392,7 @@ export function SubscriptionGroupsPanel({
     const defaultQuery = 'new_query';
     try {
       const siteName = sites.find((s) => s.id === defaultSite)?.name ?? defaultSite;
-      await subscriptionsController.createSubscription({
+      await subscriptionsController.create({
         name: `${siteName}: ${defaultQuery}`,
         site_id: defaultSite,
         queries: [defaultQuery],
@@ -614,7 +563,7 @@ export function SubscriptionGroupsPanel({
                                 await subscriptionsController.addQuery(existingSub.id, q.queryText);
                               } else {
                                 const siteName = sites.find((s) => s.id === newSiteId)?.name ?? newSiteId;
-                                await subscriptionsController.createSubscription({
+                                await subscriptionsController.create({
                                   name: `${siteName}: ${q.queryText}`,
                                   site_id: newSiteId,
                                   queries: [q.queryText],
