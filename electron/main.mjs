@@ -11,7 +11,7 @@ if (!gotLock) {
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { initialize, invoke, onNativeEvent, openLibrary, closeLibrary, startNativeDrag } from './nativeClient.mjs';
+import { initRuntime, initialize, invoke, onNativeEvent, openLibrary, closeLibrary, startNativeDrag } from './nativeClient.mjs';
 import {
   addLibraryToHistory,
   getCachedConfig,
@@ -191,6 +191,7 @@ async function resolveInitialLibrary(config) {
 
 async function bootstrapApplication() {
   console.info('[main] app.whenReady begin');
+  initRuntime();
   await mediaProtocol.registerMediaProtocol();
   console.info('[main] media protocol registered');
   console.info('[main] IPC handlers registered');

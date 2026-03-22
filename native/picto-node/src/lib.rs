@@ -83,6 +83,12 @@ struct EventData {
 
 static EVENT_CB: OnceLock<Mutex<ThreadsafeFunction<EventData>>> = OnceLock::new();
 
+/// Initialize tracing and runtime. Called once at process startup.
+#[napi]
+pub fn init_runtime() {
+    picto_core::state::init_tracing();
+}
+
 #[napi]
 pub async fn healthcheck() -> String {
     "ok".to_string()

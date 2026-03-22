@@ -12,6 +12,10 @@ try {
   );
 }
 
+export function initRuntime() {
+  binding.initRuntime();
+}
+
 export async function initialize(libraryPath) {
   return binding.initialize(libraryPath);
 }

@@ -41,12 +41,12 @@ fn state_lock() -> &'static RwLock<Option<Arc<AppState>>> {
     STATE.get_or_init(|| RwLock::new(None))
 }
 
-/// Open a library, closing any previously open library first.
-///
-/// `library_root` is the path to the library directory
-/// (e.g. `~/.local/share/picto/library` or a `.library/` folder).
-pub async fn open_library(library_root: PathBuf) -> Result<Arc<AppState>, String> {
-    {
+/// Initialize tracing subscriber once per process.
+/// Safe to call multiple times — subsequent calls are no-ops.
+pub fn init_tracing() {
+    use std::sync::Once;
+    static TRACING_INIT: Once = Once::new();
+    TRACING_INIT.call_once(|| {
         use tracing_subscriber::prelude::*;
         let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
             .unwrap_or_else(|_| "picto=info".parse().unwrap());
@@ -57,8 +57,14 @@ pub async fn open_library(library_root: PathBuf) -> Result<Arc<AppState>, String
             .with(crate::events::EventEmitLayer)
             .try_init();
         crate::events::enable_log_forwarding();
-    }
+    });
+}
 
+/// Open a library, closing any previously open library first.
+///
+/// `library_root` is the path to the library directory
+/// (e.g. `~/.local/share/picto/library` or a `.library/` folder).
+pub async fn open_library(library_root: PathBuf) -> Result<Arc<AppState>, String> {
     close_library_inner().await;
 
     std::fs::create_dir_all(&library_root)
