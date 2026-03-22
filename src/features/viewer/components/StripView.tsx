@@ -15,6 +15,7 @@ import {
   type CanvasScrollPhase,
   type CanvasScrollState,
 } from '../../../shared/lib/canvas/scrollState';
+import { useSettingsStore } from '../../../state/settingsStore';
 import styles from './StripView.module.css';
 
 const GAP = 12;
@@ -476,15 +477,23 @@ export function StripView({
   }, [images.length, positions, initialIndex]);
 
   // ─── Keyboard scrolling ─────────────────────────────────────
+  const stripScrollSpeed = useSettingsStore(s => s.settings.stripScrollSpeed);
+  const stripScrollEnabled = useSettingsStore(s => s.settings.stripScrollEnabled);
+
   useEffect(() => {
+    if (!stripScrollEnabled) return;
+
     const scrollDir = { current: 0 };
     let rafId = 0;
     let holdStart = 0;
+    const ACCEL_MS = 400;
+    const MIN_PX = 6;
+    const maxPx = stripScrollSpeed;
 
     const tick = () => {
       if (scrollDir.current !== 0 && scrollRef.current) {
-        const t = Math.min(1, (performance.now() - holdStart) / 600);
-        const speed = 4 + 32 * (1 - (1 - t) * (1 - t));
+        const t = Math.min(1, (performance.now() - holdStart) / ACCEL_MS);
+        const speed = MIN_PX + (maxPx - MIN_PX) * (1 - (1 - t) * (1 - t));
         scrollRef.current.scrollBy({ top: scrollDir.current * speed, behavior: 'instant' });
       }
       if (scrollDir.current !== 0) rafId = requestAnimationFrame(tick);
@@ -507,7 +516,7 @@ export function StripView({
     window.addEventListener('keydown', onDown);
     window.addEventListener('keyup', onUp);
     return () => { window.removeEventListener('keydown', onDown); window.removeEventListener('keyup', onUp); cancelAnimationFrame(rafId); };
-  }, []);
+  }, [stripScrollEnabled, stripScrollSpeed]);
 
   return (
     <div className={styles.stripView}>

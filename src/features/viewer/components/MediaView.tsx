@@ -268,6 +268,31 @@ export function MediaView({ images, currentIndex, onNavigate, onClose, onStateCh
   const navigateRef = useRef(navigate);
   navigateRef.current = navigate;
 
+  // Smooth zoom animation for media view
+  const smoothZoomRafRef = useRef(0);
+  const smoothZoomEnabled = useSettingsStore(s => s.settings.smoothZoomEnabled);
+  const smoothZoomEnabledRef = useRef(smoothZoomEnabled);
+  smoothZoomEnabledRef.current = smoothZoomEnabled;
+
+  const smoothZoomTo = useCallback((targetScale: number) => {
+    if (!smoothZoomEnabledRef.current) {
+      zoomToRef.current(targetScale);
+      return;
+    }
+    cancelAnimationFrame(smoothZoomRafRef.current);
+    const startScale = zoomState.scale;
+    const startTime = performance.now();
+    const duration = 200;
+    const tick = () => {
+      const t = Math.min(1, (performance.now() - startTime) / duration);
+      const eased = 1 - (1 - t) * (1 - t); // ease-out
+      const current = startScale + (targetScale - startScale) * eased;
+      zoomToRef.current(current);
+      if (t < 1) smoothZoomRafRef.current = requestAnimationFrame(tick);
+    };
+    smoothZoomRafRef.current = requestAnimationFrame(tick);
+  }, [zoomState.scale]);
+
   const controlsRef = useRef<MediaViewControls | null>(null);
   if (!controlsRef.current) {
     controlsRef.current = {
@@ -288,7 +313,7 @@ export function MediaView({ images, currentIndex, onNavigate, onClose, onStateCh
           }
           return;
         }
-        zoomToRef.current(scale);
+        smoothZoomTo(scale);
       },
       fitToWindow: () => {
         if (stripModeRef.current) {

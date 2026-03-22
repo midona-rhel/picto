@@ -37,6 +37,12 @@ export interface AppSettings {
   showNavigator: boolean;
   hideTagNamespace: boolean;
   stripDefaultFitMode: 'horizontal' | 'vertical';
+  /** Strip view keyboard scroll speed: pixels per frame at max velocity. */
+  stripScrollSpeed: number;
+  /** Enable keyboard scrolling in strip view. */
+  stripScrollEnabled: boolean;
+  /** Enable smooth zoom transitions in media view. */
+  smoothZoomEnabled: boolean;
 }
 
 /** Derive Mantine color scheme from a Theme value. */
@@ -72,6 +78,9 @@ const DEFAULTS: AppSettings = {
   showNavigator: true,
   hideTagNamespace: false,
   stripDefaultFitMode: 'horizontal',
+  stripScrollSpeed: 108,
+  stripScrollEnabled: true,
+  smoothZoomEnabled: true,
 };
 
 interface SettingsState {
