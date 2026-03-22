@@ -2,7 +2,6 @@ import { useStateChangeStore } from './stateChangeStore';
 import { useDomainStore } from '../../state/domainStore';
 
 let unsub: (() => void) | null = null;
-let debounceTimer: ReturnType<typeof setTimeout> | null = null;
 let prevStaleRef: Set<unknown> | null = null;
 
 export function startApplyingSidebarRefreshTargets(): void {
@@ -24,7 +23,6 @@ export function startApplyingSidebarRefreshTargets(): void {
 
     if (needsCountsRefresh) {
       const counts = useStateChangeStore.getState().sidebarCounts;
-      console.log('[sidebar-refresh] sidebar/counts queued, applying', counts);
       if (counts) {
         useDomainStore.getState().applySidebarCounts(counts);
       }
@@ -32,13 +30,10 @@ export function startApplyingSidebarRefreshTargets(): void {
     }
 
     if (needsTreeRefresh) {
-      console.log('[sidebar-refresh] sidebar/tree queued, scheduling refresh');
-      if (debounceTimer) clearTimeout(debounceTimer);
-      debounceTimer = setTimeout(() => {
-        useDomainStore.getState().requestRefresh();
-        useStateChangeStore.getState().markRefreshTargetHandled('sidebar/tree');
-        debounceTimer = null;
-      }, 120);
+      // Use the same requestRefresh() as controller eager updates so both
+      // paths share the same 120ms debounce timer — no double-fetch.
+      useDomainStore.getState().requestRefresh();
+      useStateChangeStore.getState().markRefreshTargetHandled('sidebar/tree');
     }
   });
 }
@@ -47,10 +42,6 @@ export function stopApplyingSidebarRefreshTargets(): void {
   if (unsub) {
     unsub();
     unsub = null;
-  }
-  if (debounceTimer) {
-    clearTimeout(debounceTimer);
-    debounceTimer = null;
   }
   prevStaleRef = null;
 }

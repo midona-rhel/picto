@@ -7,7 +7,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { planRefreshTargets, refreshTargetMatchesGridScope } from '../stateChanges/planRefreshTargets';
-import type { StateChangedEvent, StateChanges, ResourceKey } from '../../shared/types/backendState';
+import type { StateChangedEvent, StateChanges, ResourceKey, Domain } from '../../shared/types/backendState';
 
 
 // ---------------------------------------------------------------------------
@@ -148,5 +148,71 @@ describe('multi-step state-change workflows', () => {
     expect(targets).toContain('grid/system:all');
     expect(targets).toContain('grid/smart:all');
     expect(targets).toContain('selection/current');
+  });
+
+  it('eager controller + backend event produce identical sidebar/tree targets (reconciliation)', () => {
+    // Simulate: controller does eagerSidebarRefresh() (produces sidebar/tree)
+    // Then backend event arrives with folder_membership_changed
+    const controllerEvent = makeEvent(makeChanges({
+      domains: ['sidebar', 'folders'] as Domain[],
+      folder_membership_changed: [5],
+    }), {}, 1);
+
+    const backendEvent = makeEvent(makeChanges({
+      domains: ['sidebar', 'folders'] as Domain[],
+      folder_membership_changed: [5],
+    }), { sidebar_counts: { all_active: 100, inbox: 3, trash: 1 } }, 2);
+
+    const targets = accumulateRefreshTargets([controllerEvent, backendEvent]);
+
+    // sidebar/tree appears once in the set (deduped)
+    expect(targets).toContain('sidebar/tree');
+    expect(targets).toContain('sidebar/counts');
+    // Both paths share the same requestRefresh() debounce timer → single fetch
+  });
+
+  it('eager metadata invalidation followed by backend event should not produce duplicate metadata keys', () => {
+    // Controller eagerly invalidates hash_a via eagerInvalidate()
+    // Backend event then arrives with hash_a in file_hashes
+    // Both produce metadata/hash:hash_a — but Set deduplicates
+    const event1 = makeEvent(makeChanges({
+      tags_changed: true,
+      file_hashes: ['hash_a'],
+    }), {}, 1);
+
+    const event2 = makeEvent(makeChanges({
+      tags_changed: true,
+      file_hashes: ['hash_a'],
+    }), {}, 2);
+
+    const targets = accumulateRefreshTargets([event1, event2]);
+
+    // Set naturally deduplicates — only one metadata/hash:hash_a entry
+    const metadataKeys = [...targets].filter(k => k.startsWith('metadata/hash:'));
+    expect(metadataKeys).toEqual(['metadata/hash:hash_a']);
+  });
+
+  it('subscription import with exact file hashes produces targeted, not broad, refresh', () => {
+    // PBI-561 now includes file_hashes in subscription imports
+    const receipt = makeEvent(makeChanges({
+      status_changed: true,
+      domains: ['sidebar', 'files', 'smart_folders'] as Domain[],
+      file_hashes: ['sub_h1', 'sub_h2'],
+      extra_grid_scopes: ['system:inbox'],
+    }), { sidebar_counts: { all_active: 52, inbox: 5, trash: 1 } }, 1);
+
+    const targets = keys(receipt);
+
+    // Per-hash metadata (targeted)
+    expect(targets).toContain('metadata/hash:sub_h1');
+    expect(targets).toContain('metadata/hash:sub_h2');
+
+    // Sidebar
+    expect(targets).toContain('sidebar/tree');
+    expect(targets).toContain('sidebar/counts');
+
+    // Grid scopes (from status_changed + extra)
+    expect(targets).toContain('grid/system:inbox');
+    expect(targets).toContain('grid/system:all');
   });
 });

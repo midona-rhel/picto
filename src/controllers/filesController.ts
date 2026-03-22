@@ -3,6 +3,7 @@ import { commandApi } from '#desktop/commandApi';
 import { bustThumbnailCache } from '../shared/lib/mediaUrl';
 import { useGridMetadataStore } from '../state/gridMetadataStore';
 import { registerUndoAction } from '../shared/controllers/undoRedoController';
+import { markEagerInvalidated } from '../runtime/stateChanges/applyGridRefreshTargets';
 import type {
   EntityAllMetadata,
   EntityDetails,
@@ -22,6 +23,7 @@ function eagerInvalidate(hash: string): void {
   metadataInflight.delete(hash);
   useGridMetadataStore.getState().dropCachedMetadata(hash);
   useGridMetadataStore.getState().markMetadataChanged(hash);
+  markEagerInvalidated(hash);
 }
 
 function eagerInvalidateMany(hashes: string[]): void {
@@ -29,6 +31,7 @@ function eagerInvalidateMany(hashes: string[]): void {
     metadataInflight.delete(hash);
     useGridMetadataStore.getState().dropCachedMetadata(hash);
     useGridMetadataStore.getState().markMetadataChanged(hash);
+    markEagerInvalidated(hash);
   }
 }
 
