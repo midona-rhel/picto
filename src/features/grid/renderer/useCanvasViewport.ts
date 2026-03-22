@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type RefObject } from 'react';
+import { useSettingsStore } from '../../../state/settingsStore';
 import {
   CANVAS_SCROLL_IDLE_DELAY_MS,
   classifyCanvasScrollPhase,
@@ -64,6 +65,10 @@ export function useCanvasViewport(args: {
     dismissHoverPreviewRef,
     dismissVideoScrubRef,
   } = args;
+
+  const smoothScrollEnabled = useSettingsStore(s => s.settings.smoothScrollEnabled);
+  const smoothScrollEnabledRef = useRef(smoothScrollEnabled);
+  smoothScrollEnabledRef.current = smoothScrollEnabled;
 
   const { ref: measureContainerRef, width: containerWidth } = useMeasuredContainerWidth();
   const containerElRef = useRef<HTMLDivElement | null>(null);
@@ -154,8 +159,7 @@ export function useCanvasViewport(args: {
     let scrollIdleTimer = 0;
     let lastMeasuredScrollTop = initialMetrics.localScrollTop;
     let lastMeasuredAt = performance.now();
-    const enableCoarseWheelSmoothing =
-      typeof navigator !== 'undefined' && !/Mac/i.test(navigator.userAgent);
+    const isNonMac = typeof navigator !== 'undefined' && !/Mac/i.test(navigator.userAgent);
     let wheelTargetScrollTop = scrollElement.scrollTop;
     let wheelAnimStartTop = scrollElement.scrollTop;
     let wheelAnimStartTime = 0;
@@ -227,7 +231,7 @@ export function useCanvasViewport(args: {
     };
 
     const onWheel = (event: WheelEvent) => {
-      if (!enableCoarseWheelSmoothing || frozen || event.ctrlKey || Math.abs(event.deltaX) > Math.abs(event.deltaY)) {
+      if (!isNonMac || !smoothScrollEnabledRef.current || frozen || event.ctrlKey || Math.abs(event.deltaX) > Math.abs(event.deltaY)) {
         return;
       }
 

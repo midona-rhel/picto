@@ -190,13 +190,13 @@ export function GeneralPanel() {
             allowDeselect={false}
           />
         </SettingsRow>
-        <SettingsRow label="Collection scroll speed" separator>
-          <NumberInput size="xs" value={settings.stripScrollSpeed} onChange={(v) => { const n = Number(v); if (Number.isFinite(n) && n >= 10 && n <= 300) updateSetting('stripScrollSpeed', n); }} min={10} max={300} step={10} w={80} />
+        <SettingsRow label="Scroll speed" separator>
+          <NumberInput size="xs" value={settings.scrollSpeed} onChange={(v) => { const n = Number(v); if (Number.isFinite(n) && n >= 10 && n <= 300) updateSetting('scrollSpeed', n); }} min={10} max={300} step={10} w={80} />
         </SettingsRow>
-        <SettingsRow label="Collection keyboard scroll" separator>
+        <SettingsRow label="Smooth scroll" separator>
           <Switch
-            checked={settings.stripScrollEnabled}
-            onChange={(e) => updateSetting('stripScrollEnabled', e.currentTarget.checked)}
+            checked={settings.smoothScrollEnabled}
+            onChange={(e) => updateSetting('smoothScrollEnabled', e.currentTarget.checked)}
           />
         </SettingsRow>
         <SettingsRow label="Smooth zoom" separator>

@@ -37,10 +37,10 @@ export interface AppSettings {
   showNavigator: boolean;
   hideTagNamespace: boolean;
   stripDefaultFitMode: 'horizontal' | 'vertical';
-  /** Strip view keyboard scroll speed: pixels per frame at max velocity. */
-  stripScrollSpeed: number;
-  /** Enable keyboard scrolling in strip view. */
-  stripScrollEnabled: boolean;
+  /** Keyboard/wheel scroll speed: pixels per frame at max velocity. */
+  scrollSpeed: number;
+  /** Enable smooth keyboard scrolling (strip view) and wheel scrolling (grid). */
+  smoothScrollEnabled: boolean;
   /** Enable smooth zoom transitions in media view. */
   smoothZoomEnabled: boolean;
 }
@@ -78,8 +78,8 @@ const DEFAULTS: AppSettings = {
   showNavigator: true,
   hideTagNamespace: false,
   stripDefaultFitMode: 'horizontal',
-  stripScrollSpeed: 108,
-  stripScrollEnabled: false,
+  scrollSpeed: 108,
+  smoothScrollEnabled: false,
   smoothZoomEnabled: false,
 };
 

@@ -506,18 +506,18 @@ export function StripView({
   }, [images.length, positions, initialIndex]);
 
   // ─── Keyboard scrolling ─────────────────────────────────────
-  const stripScrollSpeed = useSettingsStore(s => s.settings.stripScrollSpeed);
-  const stripScrollEnabled = useSettingsStore(s => s.settings.stripScrollEnabled);
+  const scrollSpeed = useSettingsStore(s => s.settings.scrollSpeed);
+  const smoothScrollEnabled = useSettingsStore(s => s.settings.smoothScrollEnabled);
 
   useEffect(() => {
-    if (!stripScrollEnabled) return;
+    if (!smoothScrollEnabled) return;
 
     const scrollDir = { current: 0 };
     let rafId = 0;
     let holdStart = 0;
     const ACCEL_MS = 400;
     const MIN_PX = 6;
-    const maxPx = stripScrollSpeed;
+    const maxPx = scrollSpeed;
 
     const tick = () => {
       if (scrollDir.current !== 0 && scrollRef.current) {
@@ -545,7 +545,7 @@ export function StripView({
     window.addEventListener('keydown', onDown);
     window.addEventListener('keyup', onUp);
     return () => { window.removeEventListener('keydown', onDown); window.removeEventListener('keyup', onUp); cancelAnimationFrame(rafId); };
-  }, [stripScrollEnabled, stripScrollSpeed]);
+  }, [smoothScrollEnabled, scrollSpeed]);
 
   // ─── Click to play video ──────────────────────────────────
   const handleClick = useCallback((e: React.MouseEvent) => {
