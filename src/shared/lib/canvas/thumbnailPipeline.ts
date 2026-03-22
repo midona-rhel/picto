@@ -182,7 +182,6 @@ export class ThumbnailPipeline {
     for (const hash of hashes) {
       const entry = this.cache.get(hash);
       if (!entry || !entry.thumb) continue;
-      console.log(`[pipeline] EVICT ${hash.slice(0, 8)} state=${entry.state} animateIn=${entry.animateIn}`);
       entry.thumb.close();
       entry.thumb = null;
       entry.animateIn = false;
@@ -383,7 +382,6 @@ export class ThumbnailPipeline {
       // Fresh load or re-load after eviction: always fade in from now.
       entry.animateIn = true;
       entry.revealStartedAt = this.nextRevealSlot();
-      console.log(`[pipeline] LOADED ${hash.slice(0, 8)} animateIn=true revealAt=${entry.revealStartedAt.toFixed(0)} now=${performance.now().toFixed(0)}`);
     }
     entry.retryQueued = false;
     entry.sourceKind = sourceKind;

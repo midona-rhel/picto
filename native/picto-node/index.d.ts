@@ -8,6 +8,8 @@
  * On non-macOS platforms this is a no-op (use Electron's startDrag instead).
  */
 export declare function startNativeDrag(windowHandle: Buffer, filePaths: Array<string>, iconRgba: Buffer, iconWidth: number, iconHeight: number): void
+/** Initialize tracing and runtime. Called once at process startup. */
+export declare function initRuntime(): void
 export declare function healthcheck(): Promise<string>
 /** Open a library at the given path. Closes any previously open library first. */
 export declare function openLibrary(libraryPath: string): Promise<void>

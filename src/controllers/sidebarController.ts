@@ -1,3 +1,6 @@
+/** Sidebar tree structure reads and reordering.
+ *  Kept separate: layout-level concern shared by folders + smart folders,
+ *  doesn't belong in either domain controller. */
 import { api } from '#desktop/api';
 import type { SidebarTreeResponse } from '../shared/types/api';
 

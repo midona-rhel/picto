@@ -1,9 +1,56 @@
-# Active Alpha PBIs
+# Active PBIs
 
-This folder contains the currently active PBIs for `v0.1.0-alpha.*`.
-
-Promotion rules:
-
-1. Keep only release-critical work here.
-2. Move completed PBIs out after verification.
-3. Move de-scoped PBIs back to `../archive/`.
+- PBI-201-site-metadata-validation-3dbooru.md
+- PBI-202-site-metadata-validation-artstation.md
+- PBI-203-site-metadata-validation-sankaku.md
+- PBI-204-site-metadata-validation-idolcomplex.md
+- PBI-206-site-metadata-validation-deviantart.md
+- PBI-207-site-metadata-validation-patreon.md
+- PBI-208-site-metadata-validation-nijie.md
+- PBI-209-site-metadata-validation-tumblr.md
+- PBI-210-site-metadata-validation-fantia.md
+- PBI-211-site-metadata-validation-fanbox.md
+- PBI-212-site-metadata-validation-webtoons.md
+- PBI-213-site-metadata-validation-kemono-party.md
+- PBI-214-site-metadata-validation-coomer-party.md
+- PBI-215-site-metadata-validation-seiso-party.md
+- PBI-216-site-metadata-validation-baraag.md
+- PBI-217-site-metadata-validation-pawoo.md
+- PBI-218-site-metadata-validation-hentaifoundry.md
+- PBI-219-site-metadata-validation-yandere.md
+- PBI-222-site-metadata-validation-furaffinity.md
+- PBI-223-site-metadata-validation-instagram.md
+- PBI-224-site-metadata-validation-framework-and-api-contract.md
+- PBI-227-first-run-onboarding-and-library-creation-guidance.md
+- PBI-231-windows-collection-and-reorder-fixes.md
+- PBI-252-subscription-setup-help-text-and-query-guidance.md
+- PBI-254-user-guide-in-readme-or-docs.md
+- PBI-517-frontend-render-optimization-react-memo-audit.md
+- PBI-518-shared-zoomable-image-component-extraction.md
+- PBI-519-frontend-and-ipc-test-coverage-expansion.md
+- PBI-520-smart-folder-compiler-selective-rebuild.md
+- PBI-521-frontend-large-component-decomposition.md
+- PBI-523-collection-view-context-preservation.md
+- PBI-524-independent-category-versioned-flush.md
+- PBI-525-structured-error-types-dispatch-boundary.md
+- PBI-526-poison-recovery-alerting-self-healing.md
+- PBI-527-write-connection-contention-monitoring.md
+- PBI-528-bitmap-flush-crash-recovery-verification.md
+- PBI-529-frontend-error-feedback-system.md
+- PBI-530-baseline-accessibility-interactive-elements.md
+- PBI-533-async-event-serialization-bulk-operations.md
+- PBI-534-tracing-subscriber-initialization-placement.md
+- PBI-535-slow-query-observability-suppression-gap.md
+- PBI-536-main-view-model-dependency-decomposition.md
+- PBI-537-grid-metadata-store-lru-eviction.md
+- PBI-538-event-driven-watchdog-refresh.md
+- PBI-541-complete-undo-redo-coverage.md
+- PBI-541-date-field-naming-consistency.md
+- PBI-542-windows-platform-bugs.md
+- PBI-543-subscription-stop-reset-post-limit.md
+- PBI-544-collection-bugs.md
+- PBI-545-deferred-work-queue.md
+- PBI-546-delete-performance.md
+- PBI-547-strip-view-and-settings-bugs.md
+- PBI-548-orphaned-media-entities.md
+- PBI-549-controller-and-state-change-program-index.md

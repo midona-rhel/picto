@@ -27,10 +27,12 @@ export const libraryController = {
     return libraryHost.switch(path);
   },
 
+  /** Remove library from history only — files stay on disk. */
   remove(path: string): Promise<void> {
     return libraryHost.remove(path);
   },
 
+  /** Permanently delete library folder from disk (irreversible). */
   delete(path: string): Promise<void> {
     return libraryHost.delete(path);
   },

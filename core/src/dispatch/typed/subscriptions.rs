@@ -1,4 +1,49 @@
 //! Handler functions for subscription and group operations.
+//!
+//! ## State-change classification (PBI-566 audit)
+//!
+//! Every handler in this module is classified as either:
+//! - **state-changed**: emits `runtime/state_changed` with entity IDs after completing
+//! - **task-only**: spawns async work; state changes emitted by the sync engine, not this handler
+//! - **read-only**: returns data, no state mutation
+//!
+//! ### state-changed handlers (emit entity IDs)
+//! - `create_group` → group_ids
+//! - `delete_group` → group_ids
+//! - `rename_group` → group_ids
+//! - `set_group_schedule` → group_ids
+//! - `create_subscription` → subscription_ids
+//! - `delete_subscription` → subscription_ids
+//! - `pause_subscription` → subscription_ids
+//! - `rename_subscription` → subscription_ids
+//! - `reset_subscription` → subscription_ids
+//! - `set_subscription_auto_collections` → subscription_ids
+//! - `add_subscription_query` → query_ids
+//! - `delete_subscription_query` → query_ids
+//! - `edit_subscription_query` → query_ids
+//! - `pause_subscription_query` → query_ids
+//! - `set_credential` → credential_categories
+//! - `delete_credential` → credential_categories
+//! - `pixiv_oauth_exchange` → credential_categories
+//!
+//! ### task-only handlers (no state_changed emit — sync engine owns lifecycle)
+//! - `run_group`
+//! - `stop_group`
+//! - `run_subscription`
+//! - `stop_subscription`
+//! - `run_subscription_query`
+//!
+//! ### read-only handlers
+//! - `get_sites`
+//! - `get_site_metadata_schema`
+//! - `validate_site_metadata`
+//! - `get_subscriptions`
+//! - `get_running_subscriptions`
+//! - `get_running_subscription_progress`
+//! - `list_credentials`
+//! - `list_credential_health`
+//! - `pixiv_oauth_start`
+//! - `pixiv_oauth_popup`
 
 use serde::Deserialize;
 use ts_rs::TS;
@@ -227,8 +272,9 @@ pub async fn set_group_schedule(
     Ok(())
 }
 
+/// Task-only: spawns async group run (all child subscriptions).
+/// State changes emitted per-subscription by the sync engine.
 pub async fn run_group(state: &AppState, input: RunGroupInput) -> Result<(), String> {
-    let gid: i64 = input.id.parse().unwrap_or(0);
     crate::subscriptions::group_orchestrator::SubscriptionGroupOrchestrator::run_group(
         &state.db,
         &state.blob_store,
@@ -239,29 +285,17 @@ pub async fn run_group(state: &AppState, input: RunGroupInput) -> Result<(), Str
         &state.settings,
     )
     .await?;
-    crate::events::emit_state_changed(
-        "run_group",
-        crate::runtime_contract::change_builder::ChangeImpact::new()
-            .add_domain(crate::runtime_contract::state_change::Domain::Subscriptions)
-            .group_ids(vec![gid]),
-    );
     Ok(())
 }
 
+/// Task-only: cancels all running subscriptions in a group.
 pub async fn stop_group(state: &AppState, input: StopGroupInput) -> Result<(), String> {
-    let gid: i64 = input.id.parse().unwrap_or(0);
     crate::subscriptions::group_orchestrator::SubscriptionGroupOrchestrator::stop_group(
         &state.db,
         &state.running_subscriptions,
         input.id,
     )
     .await?;
-    crate::events::emit_state_changed(
-        "stop_group",
-        crate::runtime_contract::change_builder::ChangeImpact::new()
-            .add_domain(crate::runtime_contract::state_change::Domain::Subscriptions)
-            .group_ids(vec![gid]),
-    );
     Ok(())
 }
 
@@ -465,6 +499,9 @@ pub async fn pause_subscription_query(
     Ok(())
 }
 
+/// Task-only: spawns an async subscription run. State changes are emitted by
+/// the sync engine as files are imported, not by this dispatch handler.
+/// Progress is tracked via runtime/task_upserted events.
 pub async fn run_subscription(state: &AppState, input: RunSubscriptionInput) -> Result<(), String> {
     crate::subscriptions::run_orchestrator::SubscriptionRunOrchestrator::run_subscription(
         &state.db,
@@ -479,6 +516,8 @@ pub async fn run_subscription(state: &AppState, input: RunSubscriptionInput) -> 
     Ok(())
 }
 
+/// Task-only: cancels a running subscription via CancellationToken.
+/// The sync engine emits its own terminal state change when it finishes.
 pub async fn stop_subscription(
     state: &AppState,
     input: StopSubscriptionInput,
@@ -545,6 +584,7 @@ pub async fn rename_subscription(
     Ok(())
 }
 
+/// Task-only: spawns an async query run. State changes emitted by sync engine.
 pub async fn run_subscription_query(
     state: &AppState,
     input: RunSubscriptionQueryInput,

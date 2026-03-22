@@ -1,3 +1,5 @@
+/** Companion panel — tag namespace browsing and file-by-tag queries.
+ *  Kept separate: read-only cross-cut that doesn't belong in tagsController. */
 import { api } from '#desktop/api';
 import type { CompanionNamespaceValue, EntitySlim } from '../shared/types/api';
 

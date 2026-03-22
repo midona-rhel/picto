@@ -149,8 +149,6 @@ export async function initSettingsStore(): Promise<void> {
     for (const key of Object.keys(DEFAULTS) as (keyof AppSettings)[]) {
       void storeInstance.onKeyChange(key, (val) => {
         if (val !== null && val !== undefined) {
-          const current = useSettingsStore.getState().settings[key];
-          console.log('[settings] onKeyChange:', key, '| new:', val, '| current:', current);
           useSettingsStore.setState((state) => ({
             settings: { ...state.settings, [key]: val },
           }));

@@ -614,7 +614,7 @@ export function StripView({
               onClick={(e) => e.stopPropagation()}
             >
               <VideoPlayer
-                src={mediaFileUrl(activeImg.hash, activeImg.mime)}
+                src={mediaFileUrl(activeImg.thumbnail_hash || activeImg.hash, activeImg.mime)}
                 autoPlay={videoSettings.videoAutoPlay}
                 loop={videoSettings.videoLoop}
                 muted={videoSettings.videoMuted}

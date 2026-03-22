@@ -467,6 +467,77 @@ async fn subscription_batch_delta_merges_collection_and_file_changes() {
     assert!(scopes.contains(&"folder:all".to_string()));
 }
 
+#[test]
+fn folder_move_emits_parent_and_order_changes() {
+    let harness = TestHarness::new();
+
+    let impact = ChangeImpact::new()
+        .add_domains(&[Domain::Folders, Domain::Sidebar])
+        .folder_ids(vec![10])
+        .folder_parent_changes(vec![(10, Some(5))])
+        .folder_order_changes(vec![(10, 0), (11, 1), (12, 2)]);
+    events::emit_state_changed("move_folder", impact);
+
+    let evts = harness.find_events("runtime/state_changed");
+    assert_eq!(evts.len(), 1);
+    let payload: serde_json::Value = serde_json::from_str(&evts[0].1).unwrap();
+
+    let parent_changes = payload["changes"]["folder_parent_changes"].as_array().unwrap();
+    assert_eq!(parent_changes.len(), 1);
+    assert_eq!(parent_changes[0][0], 10);
+    assert_eq!(parent_changes[0][1], 5);
+
+    let order_changes = payload["changes"]["folder_order_changes"].as_array().unwrap();
+    assert_eq!(order_changes.len(), 3);
+    assert_eq!(order_changes[0][0], 10);
+    assert_eq!(order_changes[0][1], 0);
+}
+
+#[test]
+fn smart_folder_move_emits_parent_and_order_changes() {
+    let harness = TestHarness::new();
+
+    let impact = ChangeImpact::new()
+        .add_domains(&[Domain::SmartFolders, Domain::Sidebar])
+        .smart_folder_ids(vec![20])
+        .smart_folder_parent_changes(vec![(20, None)])
+        .smart_folder_order_changes(vec![(20, 0), (21, 1)]);
+    events::emit_state_changed("move_smart_folder", impact);
+
+    let evts = harness.find_events("runtime/state_changed");
+    assert_eq!(evts.len(), 1);
+    let payload: serde_json::Value = serde_json::from_str(&evts[0].1).unwrap();
+
+    let parent_changes = payload["changes"]["smart_folder_parent_changes"].as_array().unwrap();
+    assert_eq!(parent_changes.len(), 1);
+    assert_eq!(parent_changes[0][0], 20);
+    assert!(parent_changes[0][1].is_null());
+
+    let order_changes = payload["changes"]["smart_folder_order_changes"].as_array().unwrap();
+    assert_eq!(order_changes.len(), 2);
+    assert_eq!(order_changes[1][0], 21);
+    assert_eq!(order_changes[1][1], 1);
+}
+
+#[test]
+fn folder_reorder_emits_order_changes_without_parent() {
+    let harness = TestHarness::new();
+
+    let impact = ChangeImpact::new()
+        .add_domains(&[Domain::Folders, Domain::Sidebar])
+        .folder_ids(vec![10, 11, 12])
+        .folder_order_changes(vec![(10, 2), (11, 0), (12, 1)]);
+    events::emit_state_changed("reorder_folders", impact);
+
+    let evts = harness.find_events("runtime/state_changed");
+    assert_eq!(evts.len(), 1);
+    let payload: serde_json::Value = serde_json::from_str(&evts[0].1).unwrap();
+
+    assert!(payload["changes"]["folder_parent_changes"].is_null());
+    let order_changes = payload["changes"]["folder_order_changes"].as_array().unwrap();
+    assert_eq!(order_changes.len(), 3);
+}
+
 #[tokio::test]
 async fn merge_tags_emission_includes_file_hashes_and_tag_details() {
     let harness = common::TestHarness::new().await;

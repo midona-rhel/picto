@@ -76,52 +76,25 @@ A PBI is not done because code compiled. It is only done when:
 - its manual validation checklist passes
 - its public naming is clearer than what it replaced
 
-## PBI Set
+## Program Status
+This document is now a retained program summary, not a child-index.
 
-- [PBI-551: Centralize Long-Running Task Orchestration](./PBI-551-centralize-long-running-task-orchestration.md)
-- [PBI-552: Consolidate Files Controller And Direct Entity UI Updates](./PBI-552-consolidate-files-controller-and-direct-entity-ui-updates.md)
-- [PBI-553: Consolidate Tags Controller And Tag-Driven Consequences](./PBI-553-consolidate-tags-controller-and-tag-driven-consequences.md)
-- [PBI-554: Consolidate Folders Controller And Folder Watch Flow](./PBI-554-consolidate-folders-controller-and-folder-watch-flow.md)
-- [PBI-555: Consolidate Collections Controller](./PBI-555-consolidate-collections-controller.md)
-- [PBI-556: Consolidate Smart Folders Controller And Tree Actions](./PBI-556-consolidate-smart-folders-controller-and-tree-actions.md)
-- [PBI-557: Consolidate Subscriptions Controller And Window Flows](./PBI-557-consolidate-subscriptions-controller-and-window-flows.md)
-- [PBI-558: Consolidate Settings, Window, Library, And Shared Platform Helpers](./PBI-558-consolidate-settings-window-library-and-shared-platform-helpers.md)
-- [PBI-559: Move Undo/Redo Ownership Into Controllers](./PBI-559-move-undo-redo-ownership-into-controllers.md)
-- [PBI-564: Eliminate Remaining UI-Owned Undo/Redo Registrations](./PBI-564-eliminate-remaining-ui-owned-undo-redo-registrations.md)
-- [PBI-560: Finalize Runtime State-Change Contract And Combined Delta Emission](./PBI-560-finalize-runtime-state-change-contract-and-combined-delta-emission.md)
-- [PBI-561: Tighten Backend Files, Tags, Media, And Import State Changes](./PBI-561-tighten-backend-files-tags-media-and-import-state-changes.md)
-- [PBI-562: Tighten Backend Folders, Smart Folders, Subscriptions, And Watch State Changes](./PBI-562-tighten-backend-folders-smart-folders-subscriptions-and-watch-state-changes.md)
-- [PBI-563: Consume State Changes Through Targeted Frontend Refresh And Reconciliation](./PBI-563-consume-state-changes-through-targeted-frontend-refresh-and-reconciliation.md)
+The original controller/state-change child PBIs that used to sit under this program were completed and removed from `active-alpha` as they were closed. Do not treat missing historical child PBIs as missing work by default. If new follow-up work is discovered, create a fresh PBI for that specific gap instead of resurrecting the old link farm.
 
-## Recommended Execution Order
-Recommended, not mandatory:
+What already landed from this program:
 
-1. PBI-551
-2. PBI-552
-3. PBI-553
-4. PBI-554
-5. PBI-555
-6. PBI-556
-7. PBI-557
-8. PBI-558
-9. PBI-559
-10. PBI-564
-11. PBI-560
-12. PBI-561
-13. PBI-562
-14. PBI-563
+- raw backend access was pushed behind controller/platform boundaries
+- controller ownership was expanded across the main frontend domains
+- long-running task orchestration was centralized
+- `runtime/state_changed` became the main committed backend state event
+- broad fallback refresh paths were reduced in favor of targeted reconciliation
+- folder/smart-folder/subscription/watch state-change payloads were tightened and cleaned up
 
-If an engineer can prove a better order with fewer merge conflicts and the same architectural safety, they should use it.
+What this file is for now:
 
-## Existing Partial Progress
-This program is not starting from zero. Known partial progress already exists:
-
-- raw backend access has already been reduced substantially in many frontend files
-- some controller files already exist
-- some `runtime/state_changed` detail work already landed
-- watched-folder import and some subscription flows already batch parts of their backend deltas more cleanly than before
-
-This should not be used as a reason to weaken the PBIs. It only means some PBIs may begin in a “partially implemented” state and should finish the slice properly.
+- preserve the architectural intent of the program
+- define the bar for future related PBIs
+- prevent the codebase from drifting back toward mixed backend access and vague refresh behavior
 
 ## Program-Level Done Definition
 The full program is only done when:

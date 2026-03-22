@@ -4,8 +4,6 @@ export {
   getMetadata,
   noteMetadataChanged,
   noteManyMetadataChanged,
-  pinMetadata,
-  unpinMetadata,
   getOrStartSelectionSummary,
   noteSelectionSummaryChanged,
   getMetadataCacheDebugStats,

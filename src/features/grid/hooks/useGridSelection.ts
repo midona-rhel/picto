@@ -7,7 +7,7 @@ import {
   buildGridSortSpec,
   type GridQueryInput,
 } from '../gridQuery';
-import { getOrStartSelectionSummary, pinMetadata, unpinMetadata } from '../metadataPrefetch';
+import { getOrStartSelectionSummary } from '../metadataPrefetch';
 import { selectedImagesPreview as selectImagesPreview, virtualSelectionSpec as selectVirtualSpec } from '../runtime';
 import type { GridRuntimeAction, GridRuntimeState } from '../runtime';
 import type { MasonryItem } from '../shared';
@@ -120,20 +120,6 @@ export function useGridSelection({
     state.virtualAllSelectedCount,
     dispatch,
   ]);
-
-  const pinnedHashesRef = useRef<Set<string>>(new Set());
-  useEffect(() => {
-    const nextPinned = state.virtualAllSelection
-      ? new Set<string>()
-      : new Set(state.selectedHashes);
-    for (const hash of pinnedHashesRef.current) {
-      if (!nextPinned.has(hash)) unpinMetadata(hash);
-    }
-    for (const hash of nextPinned) {
-      if (!pinnedHashesRef.current.has(hash)) pinMetadata(hash);
-    }
-    pinnedHashesRef.current = nextPinned;
-  }, [state.selectedHashes, state.virtualAllSelection]);
 
   return {
     activateVirtualSelectAll,
