@@ -275,6 +275,7 @@ pub async fn ensure_thumbnail(
 
     let (regenerated_thumbnail, has_thumbnail) = tokio::spawn(async move {
         let result: Result<(bool, bool), String> = (async {
+            let t0 = std::time::Instant::now();
             if force {
                 bs.delete_thumbnail(&effective_hash)
                     .map_err(|e| format!("Delete thumbnail failed: {}", e))?;
@@ -294,6 +295,7 @@ pub async fn ensure_thumbnail(
                     return Ok((false, true));
                 }
             }
+            let t_lookup = t0.elapsed().as_millis() as u64;
 
             let info = match crate::media_processing::get_file_info(&original.0, None).await {
                 Ok(info) => info,
@@ -302,6 +304,8 @@ pub async fn ensure_thumbnail(
                     return Ok((false, false));
                 }
             };
+            let t_info = t0.elapsed().as_millis() as u64;
+
             let (thumb_bytes, thumb_ext) = match crate::media_processing::generate_thumbnail_bytes(
                 &original.0,
                 crate::media_processing::DEFAULT_THUMBNAIL_DIMENSIONS,
@@ -318,9 +322,22 @@ pub async fn ensure_thumbnail(
                     return Ok((false, false));
                 }
             };
+            let t_generate = t0.elapsed().as_millis() as u64;
 
             bs.write_thumbnail(&effective_hash, &thumb_bytes, &thumb_ext)
                 .map_err(|e| format!("Thumbnail write failed: {}", e))?;
+            let t_write = t0.elapsed().as_millis() as u64;
+
+            info!(
+                hash = %effective_hash,
+                lookup_ms = t_lookup,
+                file_info_ms = t_info - t_lookup,
+                generate_ms = t_generate - t_info,
+                write_ms = t_write - t_generate,
+                total_ms = t_write,
+                thumb_size = thumb_bytes.len(),
+                "thumbnail: timing breakdown"
+            );
             Ok((true, true))
         })
         .await;
@@ -363,12 +380,14 @@ pub async fn reanalyze_file_colors(
     let ext = mime_to_extension(&file.mime).to_string();
     let colors = tokio::task::spawn_blocking(
         move || -> Result<Vec<(String, f32, f32, f32)>, String> {
-            // Prefer the thumbnail for color extraction — it's a small WebP
-            // that decodes in milliseconds vs seconds for a full 22MP original.
+            let t0 = std::time::Instant::now();
+            let used_thumbnail;
             let bytes = if let Ok(Some(thumb_path)) = bs.find_thumbnail_path(&hash_owned) {
+                used_thumbnail = true;
                 std::fs::read(&thumb_path)
                     .map_err(|e| format!("Failed to read thumbnail: {}", e))?
             } else {
+                used_thumbnail = false;
                 let original = bs
                     .find_original(&hash_owned, Some(&ext))
                     .map_err(|e| format!("Blob error: {}", e))?
@@ -376,9 +395,22 @@ pub async fn reanalyze_file_colors(
                 std::fs::read(&original.0)
                     .map_err(|e| format!("Failed to read original file: {}", e))?
             };
+            let t_read = t0.elapsed().as_millis() as u64;
             let img =
                 image::load_from_memory(&bytes).map_err(|e| format!("Image decode failed: {}", e))?;
+            let t_decode = t0.elapsed().as_millis() as u64;
             let extracted = crate::media_processing::colors::extract_dominant_colors(&img, 8);
+            let t_extract = t0.elapsed().as_millis() as u64;
+            tracing::info!(
+                hash = %hash_owned,
+                used_thumbnail,
+                read_ms = t_read,
+                decode_ms = t_decode - t_read,
+                extract_ms = t_extract - t_decode,
+                total_ms = t_extract,
+                colors = extracted.len(),
+                "colors: timing breakdown"
+            );
             Ok(extracted
                 .iter()
                 .map(|c| (c.hex.clone(), c.l as f32, c.a as f32, c.b as f32))
@@ -472,7 +504,7 @@ async fn drain_next_image(
     let has_thumbnail = jobs.iter().any(|j| j.work_type == DeferredWorkType::Thumbnail);
     let has_phash = jobs.iter().any(|j| j.work_type == DeferredWorkType::Phash);
     let shared_decoded: Option<Arc<image::DynamicImage>> = if has_thumbnail && has_phash {
-        // Read + decode once on a blocking thread, share the result.
+        let decode_started = std::time::Instant::now();
         let file = db.get_file_by_hash(&hash).await.ok().flatten();
         if let Some(ref file) = file {
             if file.mime.starts_with("image/") {
@@ -487,6 +519,12 @@ async fn drain_next_image(
                 .await
                 .ok()
                 .flatten();
+                info!(
+                    hash = %hash,
+                    elapsed_ms = decode_started.elapsed().as_millis() as u64,
+                    success = decoded.is_some(),
+                    "Deferred work: shared decode"
+                );
                 decoded.map(Arc::new)
             } else {
                 None
@@ -519,9 +557,19 @@ async fn drain_next_image(
                 // Use the shared pre-decoded image if available, otherwise fall back.
                 if let Some(ref img) = shared_decoded {
                     let img_ref = img.clone();
+                    let job_hash = job.hash.clone();
                     let phash_result = tokio::task::spawn_blocking(move || {
-                        crate::duplicates::phash::compute_phash_base64_from_image(&img_ref)
-                            .map_err(|e| format!("{e}"))
+                        let t0 = std::time::Instant::now();
+                        let result = crate::duplicates::phash::compute_phash_base64_from_image(&img_ref)
+                            .map_err(|e| format!("{e}"));
+                        let hash_ms = t0.elapsed().as_millis() as u64;
+                        tracing::info!(
+                            hash = %job_hash,
+                            hash_ms,
+                            shared_decode = true,
+                            "phash: timing breakdown"
+                        );
+                        result
                     })
                     .await
                     .map_err(|e| format!("Phash task failed: {e}"))?;
@@ -541,12 +589,15 @@ async fn drain_next_image(
             }
         };
 
-        let elapsed_ms = started.elapsed().as_millis();
-        if elapsed_ms > 100 {
-            info!(hash = %job.hash, work_type = job.work_type.as_str(), elapsed_ms = elapsed_ms as u64, "Deferred work item completed (slow)");
-        } else {
-            debug!(hash = %job.hash, work_type = job.work_type.as_str(), elapsed_ms = elapsed_ms as u64, "Deferred work item completed");
-        }
+        let elapsed_ms = started.elapsed().as_millis() as u64;
+        let ok = result.is_ok();
+        info!(
+            hash = %job.hash,
+            step = job.work_type.as_str(),
+            elapsed_ms,
+            ok,
+            "Deferred work step"
+        );
 
         match result {
             Ok(changed_field) => {
