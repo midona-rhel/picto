@@ -26,6 +26,10 @@ pub struct ChangeImpact {
     pub media_derivatives_changed: Option<bool>,
     pub derivative_fields_changed: Option<Vec<MediaDerivativeField>>,
     pub extra_grid_scopes: Option<Vec<String>>,
+    pub group_ids: Option<Vec<i64>>,
+    pub subscription_ids: Option<Vec<i64>>,
+    pub query_ids: Option<Vec<i64>>,
+    pub credential_categories: Option<Vec<String>>,
 }
 
 impl ChangeImpact {
@@ -81,6 +85,38 @@ impl ChangeImpact {
             if !merged.contains(&id) {
                 merged.push(id);
             }
+        }
+        self
+    }
+
+    pub fn group_ids(mut self, ids: Vec<i64>) -> Self {
+        let merged = self.group_ids.get_or_insert_with(Vec::new);
+        for id in ids {
+            if !merged.contains(&id) { merged.push(id); }
+        }
+        self
+    }
+
+    pub fn subscription_ids(mut self, ids: Vec<i64>) -> Self {
+        let merged = self.subscription_ids.get_or_insert_with(Vec::new);
+        for id in ids {
+            if !merged.contains(&id) { merged.push(id); }
+        }
+        self
+    }
+
+    pub fn query_ids(mut self, ids: Vec<i64>) -> Self {
+        let merged = self.query_ids.get_or_insert_with(Vec::new);
+        for id in ids {
+            if !merged.contains(&id) { merged.push(id); }
+        }
+        self
+    }
+
+    pub fn credential_categories(mut self, cats: Vec<String>) -> Self {
+        let merged = self.credential_categories.get_or_insert_with(Vec::new);
+        for cat in cats {
+            if !merged.contains(&cat) { merged.push(cat); }
         }
         self
     }
@@ -161,6 +197,19 @@ impl ChangeImpact {
 
         if let Some(scopes) = other.extra_grid_scopes {
             self = self.extra_grid_scopes(scopes);
+        }
+
+        if let Some(ids) = other.group_ids {
+            self = self.group_ids(ids);
+        }
+        if let Some(ids) = other.subscription_ids {
+            self = self.subscription_ids(ids);
+        }
+        if let Some(ids) = other.query_ids {
+            self = self.query_ids(ids);
+        }
+        if let Some(cats) = other.credential_categories {
+            self = self.credential_categories(cats);
         }
 
         if other.sidebar_counts.is_some() {

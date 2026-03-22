@@ -103,6 +103,22 @@ pub struct StateChanges {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub extra_grid_scopes: Option<Vec<String>>,
+    /// Subscription group IDs that changed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional, type = "Array<number>")]
+    pub group_ids: Option<Vec<i64>>,
+    /// Subscription IDs that changed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional, type = "Array<number>")]
+    pub subscription_ids: Option<Vec<i64>>,
+    /// Subscription query IDs that changed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional, type = "Array<number>")]
+    pub query_ids: Option<Vec<i64>>,
+    /// Credential site categories that changed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub credential_categories: Option<Vec<String>>,
 }
 
 /// O(1) bitmap-derived sidebar counts.

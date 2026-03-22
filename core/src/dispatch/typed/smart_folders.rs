@@ -90,7 +90,8 @@ pub async fn create_smart_folder(
         "create_smart_folder",
         crate::runtime_contract::change_builder::ChangeImpact::sidebar(
             crate::runtime_contract::state_change::Domain::SmartFolders,
-        ),
+        )
+        .smart_folder_ids(vec![result.smart_folder_id]),
     );
     Ok(serde_json::to_value(&result).map_err(|e| e.to_string())?)
 }
@@ -128,9 +129,10 @@ pub async fn update_smart_folder(
         .await?;
     let mut impact = crate::runtime_contract::change_builder::ChangeImpact::sidebar(
         crate::runtime_contract::state_change::Domain::SmartFolders,
-    );
+    )
+    .smart_folder_ids(vec![sf_id]);
     if predicate_changed {
-        impact = impact.smart_folder_ids(vec![sf_id]);
+        impact = impact.extra_grid_scopes(vec![format!("smart:{sf_id}")]);
     }
     crate::events::emit_state_changed("update_smart_folder", impact);
     Ok(serde_json::to_value(&result).map_err(|e| e.to_string())?)
@@ -190,7 +192,8 @@ pub async fn delete_smart_folder(
         crate::runtime_contract::change_builder::ChangeImpact::sidebar(
             crate::runtime_contract::state_change::Domain::SmartFolders,
         )
-        .smart_folder_ids(vec![sf_id]),
+        .smart_folder_ids(vec![sf_id])
+        .extra_grid_scopes(vec![format!("smart:{sf_id}")]),
     );
     Ok(())
 }
@@ -211,6 +214,7 @@ pub async fn reorder_smart_folders(
     state: &AppState,
     input: ReorderSmartFoldersInput,
 ) -> Result<(), String> {
+    let sfids: Vec<i64> = input.moves.iter().map(|(id, _)| *id).collect();
     crate::smart_folders::service::SmartFolderService::reorder_smart_folders(
         &state.db,
         input.parent_id,
@@ -221,7 +225,8 @@ pub async fn reorder_smart_folders(
         "reorder_smart_folders",
         crate::runtime_contract::change_builder::ChangeImpact::sidebar(
             crate::runtime_contract::state_change::Domain::SmartFolders,
-        ),
+        )
+        .smart_folder_ids(sfids),
     );
     Ok(())
 }

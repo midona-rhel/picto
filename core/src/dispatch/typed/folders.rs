@@ -297,7 +297,8 @@ pub async fn create_folder(
         "create_folder",
         crate::runtime_contract::change_builder::ChangeImpact::sidebar(
             crate::runtime_contract::state_change::Domain::Folders,
-        ),
+        )
+        .folder_ids(vec![folder.folder_id]),
     );
     Ok(folder)
 }
@@ -435,10 +436,13 @@ pub async fn add_files_to_folder(
     state: &AppState,
     input: AddFilesToFolderInput,
 ) -> Result<usize, String> {
-    let hashes = resolve_folder_op_hashes(state, input.hashes, input.selection).await?;
-    if hashes.is_empty() {
+    let raw_hashes = resolve_folder_op_hashes(state, input.hashes, input.selection).await?;
+    if raw_hashes.is_empty() {
         return Ok(0);
     }
+    // Expand any collection hashes to their member file hashes so that
+    // dragging a collection tile to a folder adds the member files.
+    let hashes = state.db.expand_collection_hashes_to_members(&raw_hashes).await?;
     let count = state
         .db
         .add_entities_to_folder_batch(input.folder_id, &hashes)
@@ -448,7 +452,8 @@ pub async fn add_files_to_folder(
             "add_files_to_folder",
             crate::runtime_contract::change_builder::ChangeImpact::folder_file_change(
                 input.folder_id,
-            ),
+            )
+            .file_hashes(hashes),
         );
     }
     Ok(count)
@@ -471,19 +476,22 @@ pub async fn remove_files_from_folder(
             "remove_files_from_folder",
             crate::runtime_contract::change_builder::ChangeImpact::folder_file_change(
                 input.folder_id,
-            ),
+            )
+            .file_hashes(hashes),
         );
     }
     Ok(count)
 }
 
 pub async fn reorder_folders(state: &AppState, input: ReorderFoldersInput) -> Result<(), String> {
+    let fids: Vec<i64> = input.moves.iter().map(|(id, _)| *id).collect();
     state.db.reorder_folders(input.moves).await?;
     crate::events::emit_state_changed(
         "reorder_folders",
         crate::runtime_contract::change_builder::ChangeImpact::sidebar(
             crate::runtime_contract::state_change::Domain::Folders,
-        ),
+        )
+        .folder_ids(fids),
     );
     Ok(())
 }

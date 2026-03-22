@@ -112,6 +112,10 @@ fn state_changed_event_contract() {
             media_derivatives_changed: None,
             derivative_fields_changed: None,
             extra_grid_scopes: None,
+            group_ids: None,
+            subscription_ids: None,
+            query_ids: None,
+            credential_categories: None,
         },
         sidebar_counts: None,
     };

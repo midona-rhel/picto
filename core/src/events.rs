@@ -91,6 +91,10 @@ pub fn emit_state_changed(origin: &str, impact: ChangeImpact) {
         media_derivatives_changed: impact.media_derivatives_changed,
         derivative_fields_changed: impact.derivative_fields_changed,
         extra_grid_scopes: impact.extra_grid_scopes,
+        group_ids: impact.group_ids,
+        subscription_ids: impact.subscription_ids,
+        query_ids: impact.query_ids,
+        credential_categories: impact.credential_categories,
     };
 
     let event = StateChangedEvent {
