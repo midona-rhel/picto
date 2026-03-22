@@ -11,6 +11,8 @@ import { useSyncExternalStore } from 'react';
 export interface ImageDragState {
   hashes: string[];
   thumbnailUrls: string[];
+  /** Total file count — for collections, this includes all member files. */
+  fileCount: number;
   x: number;
   y: number;
   dropTargetFolderId: number | null;
@@ -49,8 +51,8 @@ export const imageDrag = {
   setSelectedHashes(hashes: Set<string>) { _selectedHashesRef = hashes; },
   getSelectedHashes() { return _selectedHashesRef; },
 
-  start(hashes: string[], thumbnailUrls: string[], x: number, y: number) {
-    _state = { hashes, thumbnailUrls, x, y, dropTargetFolderId: null, dropTargetStatus: null };
+  start(hashes: string[], thumbnailUrls: string[], x: number, y: number, fileCount?: number) {
+    _state = { hashes, thumbnailUrls, fileCount: fileCount ?? hashes.length, x, y, dropTargetFolderId: null, dropTargetStatus: null };
     document.body.style.userSelect = 'none';
     document.body.style.cursor = 'grabbing';
     _notify();

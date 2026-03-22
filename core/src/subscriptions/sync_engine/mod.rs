@@ -587,44 +587,19 @@ impl<'a> SubscriptionSyncEngine<'a> {
             }
         }
 
-        // Finalize any incomplete collections (gallery-dl exited before all pages arrived).
-        // If cancelled, mark queue entries as stale instead of importing.
-        info!(
-            query_id,
-            total_items,
-            pending_collections = pending_collections.len(),
-            downloaded = progress.files_downloaded,
-            skipped = progress.files_skipped,
-            errors = progress.errors.len(),
-            cancelled = progress.cancelled,
-            "sync_query: gallery-dl stream ended, finalizing"
-        );
-        if !progress.cancelled {
-            for (_, pc) in pending_collections {
-                self.materialize_collection(
-                    pc,
-                    subscription_id,
-                    &sub_id_str,
-                    &mut progress,
-                    &mut changed_collection_ids,
-                )
-                .await;
-            }
-        } else {
-            // Mark all pending queue entries as stale for potential later recovery
-            let _ = self
-                .db
-                .mark_all_pending_stale_for_subscription(subscription_id)
-                .await;
-        }
-
-        // Wait for gallery-dl to finish
+        // Wait for gallery-dl to finish BEFORE finalizing collections — we need
+        // the cancel token and run summary to decide whether to materialize.
         let run_summary = match runner_handle.await {
             Ok(Ok(s)) => s,
             Ok(Err(e)) => {
                 progress.errors.push(format!("gallery-dl failed: {e}"));
                 progress.failure_kind = Some("unknown".to_string());
                 self.update_credential_health(site_id, "error", Some(&e))
+                    .await;
+                // Don't materialize incomplete collections on runner failure
+                let _ = self
+                    .db
+                    .mark_all_pending_stale_for_subscription(subscription_id)
                     .await;
                 return progress;
             }
@@ -633,6 +608,10 @@ impl<'a> SubscriptionSyncEngine<'a> {
                     .errors
                     .push(format!("gallery-dl task panicked: {e}"));
                 progress.failure_kind = Some("unknown".to_string());
+                let _ = self
+                    .db
+                    .mark_all_pending_stale_for_subscription(subscription_id)
+                    .await;
                 return progress;
             }
         };
@@ -685,6 +664,39 @@ impl<'a> SubscriptionSyncEngine<'a> {
             self.update_credential_health(site_id, "valid", None).await;
         }
 
+        // Finalize pending collections — only after we know the full run outcome.
+        // If cancelled or errored, mark queue entries as stale instead of materializing
+        // incomplete collections.
+        info!(
+            query_id,
+            total_items,
+            pending_collections = pending_collections.len(),
+            downloaded = progress.files_downloaded,
+            skipped = progress.files_skipped,
+            errors = progress.errors.len(),
+            cancelled = progress.cancelled,
+            "sync_query: finalizing pending collections"
+        );
+        if !progress.cancelled {
+            for (_, pc) in pending_collections {
+                self.materialize_collection(
+                    pc,
+                    subscription_id,
+                    &sub_id_str,
+                    &mut progress,
+                    &mut changed_collection_ids,
+                )
+                .await;
+            }
+        } else {
+            // Cancelled or errored — don't materialize incomplete collections.
+            // Mark queue entries as stale for potential later recovery.
+            let _ = self
+                .db
+                .mark_all_pending_stale_for_subscription(subscription_id)
+                .await;
+        }
+
         // Emit one merged state change for the completed import phase.
         let mut impact: Option<crate::runtime_contract::change_builder::ChangeImpact> = None;
         let mut origin = "subscription_import";
@@ -706,9 +718,10 @@ impl<'a> SubscriptionSyncEngine<'a> {
             });
         }
         if progress.files_downloaded > 0 {
-            let next =
-                crate::runtime_contract::change_builder::ChangeImpact::file_lifecycle(self.db)
-                    .extra_grid_scopes(vec!["system:inbox".into()]);
+            let next = crate::runtime_contract::change_builder::ChangeImpact::new()
+                .status_changed()
+                .sidebar_counts_from(self.db)
+                .extra_grid_scopes(vec!["system:inbox".into()]);
             impact = Some(match impact.take() {
                 Some(current) => current.merge(next),
                 None => next,
@@ -726,23 +739,14 @@ impl<'a> SubscriptionSyncEngine<'a> {
         self.set_phase("finalizing");
         self.emit_progress_force(&sub_id_str, &progress, "Finalizing...");
         let completed_cleanly = run_summary.exit_code == 0 && !progress.cancelled;
-        let range_end = post_limit.map(|limit| range_start.saturating_add(limit).saturating_sub(1));
-        let next_resume_cursor = resume_strategy
-            .as_deref()
-            .map(|strategy| match strategy {
-                "range_offset" => range_end.map(|end| end.to_string()),
-                "tag_id_lt" => {
-                    let mut min_id: Option<u64> = None;
-                    for pid in &all_post_ids {
-                        if let Ok(n) = pid.parse::<u64>() {
-                            min_id = Some(min_id.map_or(n, |cur| cur.min(n)));
-                        }
-                    }
-                    min_id.map(|id| id.to_string())
-                }
-                _ => None,
-            })
-            .flatten();
+        // Resume cursor based on ACTUAL posts processed, not the theoretical range end.
+        // This prevents skipping posts that weren't downloaded due to errors or cancellation.
+        let next_resume_cursor = compute_incremental_cursor(
+            resume_strategy.as_deref(),
+            range_start,
+            progress.posts_processed,
+            &all_post_ids,
+        );
         let unique_post_count = all_post_ids.len();
         let continue_initial_pagination = should_continue_initial_pagination(
             completed_initial_run,
@@ -820,15 +824,20 @@ impl<'a> SubscriptionSyncEngine<'a> {
     }
 }
 
-/// Compute the resume cursor incrementally based on posts processed so far.
+/// Compute the resume cursor based on posts actually processed in THIS run.
+/// `posts_this_run` must be the count of new posts processed (not accumulated total).
+/// Returns None if nothing was processed — caller should not advance the cursor.
 fn compute_incremental_cursor(
     resume_strategy: Option<&str>,
     range_start: u32,
-    posts_processed: usize,
+    posts_this_run: usize,
     all_post_ids: &std::collections::HashSet<String>,
 ) -> Option<String> {
+    if posts_this_run == 0 {
+        return None; // Don't advance cursor if nothing was downloaded
+    }
     match resume_strategy {
-        Some("range_offset") => Some((range_start as usize + posts_processed).to_string()),
+        Some("range_offset") => Some((range_start as usize + posts_this_run - 1).to_string()),
         Some("tag_id_lt") => {
             let mut min_id: Option<u64> = None;
             for pid in all_post_ids {

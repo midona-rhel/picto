@@ -41,11 +41,11 @@ impl SubscriptionRunOrchestrator {
         } else {
             format!("Subscription {id}")
         };
-        let map = running_subs.lock().await;
-        match map.get(&id) {
+        let mut map = running_subs.lock().await;
+        match map.remove(&id) {
             Some(token) => {
-                token.cancel();
                 drop(map);
+                token.cancel();
                 publish_cancelling(&id, &resolved_name);
                 Ok(())
             }

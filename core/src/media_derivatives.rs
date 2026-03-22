@@ -430,6 +430,18 @@ async fn process_deferred_work_item(
     blob_store: &Arc<BlobStore>,
     item: &DeferredWorkItem,
 ) -> Result<Option<MediaDerivativeField>, String> {
+    // If the file/entity no longer exists (deleted between enqueue and processing),
+    // skip silently — returning Ok(None) so the job is completed and removed.
+    let file_exists = db.get_file_by_hash(&item.hash).await.ok().flatten().is_some();
+    if !file_exists {
+        // Could be a collection hash — check entity table too.
+        let entity_exists = db.resolve_hash(&item.hash).await.is_ok();
+        if !entity_exists {
+            debug!(hash = %item.hash, work_type = item.work_type.as_str(), "Deferred work skipped: entity no longer exists");
+            return Ok(None);
+        }
+    }
+
     match item.work_type {
         DeferredWorkType::Thumbnail => {
             let result = ensure_thumbnail(db, blob_store, &item.hash, false).await?;

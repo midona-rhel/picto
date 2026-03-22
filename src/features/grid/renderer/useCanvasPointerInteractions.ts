@@ -372,7 +372,13 @@ export function useCanvasPointerInteractions(args: {
         }
 
         // Start custom pointer-based drag (DragGhost + elementFromPoint)
-        const thumbUrls = hashes.slice(0, 3).map((h) => mediaThumbnailUrl(h));
+        // Use thumbnail_hash for drag ghost (collections have synthetic hashes with no thumbnail)
+        const thumbUrls = hashes.slice(0, 3).map((h) => {
+          const img = imagesRef.current.find((i) => i.hash === h);
+          return mediaThumbnailUrl(img?.thumbnail_hash || h);
+        });
+        // Inside the app, count = number of entities being dragged (collection = 1 entity).
+        // Native OS drag expands collections to member files with a different count.
         imageDrag.start(hashes, thumbUrls, moveEvent.clientX, moveEvent.clientY);
       }
 
@@ -434,7 +440,12 @@ export function useCanvasPointerInteractions(args: {
               if (sessionId != null) imageDrag.clearNativeDragSession(sessionId);
             });
         };
-        icon.onload = () => doStartDrag(createDragIcon(icon, hashes.length));
+        // For native OS drag, expand collection counts to total files
+        const nativeFileCount = hashes.reduce((sum, h) => {
+          const img = imagesRef.current.find((i) => i.hash === h);
+          return sum + (img?.is_collection && img.collection_item_count ? img.collection_item_count : 1);
+        }, 0);
+        icon.onload = () => doStartDrag(createDragIcon(icon, nativeFileCount));
         icon.onerror = () => doStartDrag();
         icon.src = thumbnailUrl;
       }

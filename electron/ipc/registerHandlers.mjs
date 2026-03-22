@@ -351,9 +351,12 @@ export function registerIpcHandlers({
         icon = null;
       }
     }
-    // Fallback: load first file's thumbnail from disk
+    // Fallback: load first resolved file's thumbnail from disk
+    // Use the basename of the first file path (which is the file hash) for thumbnail lookup
     if (!icon) {
-      const thumbPath = buildBlobPath('thumb', hashes[0], 'jpg');
+      const firstPath = filePaths[0] || '';
+      const firstHash = firstPath.split('/').pop()?.replace(/\.[^.]+$/, '') || hashes[0];
+      const thumbPath = buildBlobPath('thumb', firstHash, 'jpg');
       try {
         icon = nativeImage.createFromPath(thumbPath);
         if (!icon.isEmpty()) {

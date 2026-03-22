@@ -272,6 +272,7 @@ impl GalleryDlRunner {
             }
         });
 
+        let stderr_cancel = opts.cancel.clone();
         let stderr_handle = tokio::spawn(async move {
             let mut output = String::new();
             let mut had_download_errors = false;
@@ -280,12 +281,13 @@ impl GalleryDlRunner {
                 while let Ok(Some(line)) = reader.next_line().await {
                     let trimmed = line.trim();
                     if trimmed.is_empty() { continue; }
-                    // Detect failed downloads — gallery-dl emits "[download][error]" after exhausting retries
+                    // Detect failed downloads — gallery-dl emits "[download][error]" after exhausting retries.
+                    // Immediately cancel the run so we don't advance past skipped files.
                     if trimmed.contains("[download][error]") {
-                        warn!(line = trimmed, "gallery-dl: download failed after retries");
+                        warn!(line = trimmed, "gallery-dl: download failed — cancelling run");
                         had_download_errors = true;
+                        stderr_cancel.cancel();
                     } else if trimmed.contains("[warning]") && trimmed.contains("(") {
-                        // Retry warnings — only log at debug level to reduce noise
                         debug!(line = trimmed, "gallery-dl: retry warning");
                     } else {
                         info!(line = trimmed, "gallery-dl stderr");
@@ -345,8 +347,21 @@ impl GalleryDlRunner {
                 {
                     let _ = child.kill().await;
                 }
-                child.wait().await
-                    .map_err(|e| format!("Failed to wait for gallery-dl after kill: {e}"))?
+                // Short timeout on wait — if the process doesn't die in 2s, move on
+                match tokio::time::timeout(
+                    std::time::Duration::from_secs(2),
+                    child.wait(),
+                ).await {
+                    Ok(Ok(s)) => s,
+                    Ok(Err(e)) => {
+                        warn!(error = %e, "gallery-dl wait failed after kill");
+                        std::process::ExitStatus::default()
+                    }
+                    Err(_) => {
+                        warn!("gallery-dl didn't exit within 2s after kill — abandoning");
+                        std::process::ExitStatus::default()
+                    }
+                }
             }
             result = child.wait() => {
                 result.map_err(|e| format!("Gallery-dl process error: {e}"))?

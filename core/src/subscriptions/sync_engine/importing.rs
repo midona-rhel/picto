@@ -165,13 +165,15 @@ impl<'a> SubscriptionSyncEngine<'a> {
                         }
                     }
 
+                    // Only refresh inbox scope — imported files are status=0 (inbox),
+                    // they should not appear in system:all until reviewed.
                     crate::events::emit_state_changed(
                         "subscription_import",
-                        crate::runtime_contract::change_builder::ChangeImpact::file_lifecycle(
-                            self.db,
-                        )
-                        .file_hashes(vec![surviving_hash.clone()])
-                        .extra_grid_scopes(vec!["system:inbox".into()]),
+                        crate::runtime_contract::change_builder::ChangeImpact::new()
+                            .status_changed()
+                            .sidebar_counts_from(self.db)
+                            .file_hashes(vec![surviving_hash.clone()])
+                            .extra_grid_scopes(vec!["system:inbox".into()]),
                     );
                 }
 
@@ -308,7 +310,9 @@ impl<'a> SubscriptionSyncEngine<'a> {
             }
             crate::events::emit_state_changed(
                 "subscription_import",
-                crate::runtime_contract::change_builder::ChangeImpact::file_lifecycle(self.db)
+                crate::runtime_contract::change_builder::ChangeImpact::new()
+                    .status_changed()
+                    .sidebar_counts_from(self.db)
                     .file_hashes(vec![file_hash])
                     .extra_grid_scopes(vec!["system:inbox".into()]),
             );
@@ -335,17 +339,81 @@ impl<'a> SubscriptionSyncEngine<'a> {
             Ok(result) => {
                 let imported_hashes: HashSet<&str> =
                     result.hashes.iter().map(|hash| hash.as_str()).collect();
-                for (hash, mime, needs_thumbnail) in deferred_specs {
+
+                // Enqueue deferred work in priority order so the collection
+                // tile renders as fast as possible:
+                //   1. Cover thumbnail + cover dominant colors
+                //   2. All member dominant colors
+                //   3. All member thumbnails
+                //   4. All phashes
+                // Since deferred_work processes by work_id ASC, insertion
+                // order determines processing order.
+
+                // Phase 1: cover (index 0) — thumbnail + colors
+                if let Some((hash, mime, _)) = deferred_specs.first() {
+                    if imported_hashes.contains(hash.as_str()) {
+                        let mut cover_types = vec![
+                            media_derivatives::DeferredWorkType::Thumbnail,
+                            media_derivatives::DeferredWorkType::DominantColors,
+                        ];
+                        if mime.starts_with("image/") {
+                            cover_types.push(media_derivatives::DeferredWorkType::Phash);
+                        }
+                        let _ = self
+                            .db
+                            .enqueue_deferred_jobs(hash, &cover_types)
+                            .await;
+                    }
+                }
+
+                // Phase 2: all member dominant colors (skip cover)
+                for (hash, mime, _) in deferred_specs.iter().skip(1) {
                     if !imported_hashes.contains(hash.as_str()) {
                         continue;
                     }
-                    let _ = media_derivatives::enqueue_import_derivatives(
-                        self.db,
-                        &hash,
-                        &mime,
-                        needs_thumbnail,
-                    )
-                    .await;
+                    if mime.starts_with("image/") {
+                        let _ = self
+                            .db
+                            .enqueue_deferred_jobs(
+                                hash,
+                                &[media_derivatives::DeferredWorkType::DominantColors],
+                            )
+                            .await;
+                    }
+                }
+
+                // Phase 3: all member thumbnails (skip cover)
+                for (hash, mime, needs_thumbnail) in deferred_specs.iter().skip(1) {
+                    if !imported_hashes.contains(hash.as_str()) {
+                        continue;
+                    }
+                    if *needs_thumbnail
+                        && (mime.starts_with("image/") || mime.starts_with("video/"))
+                    {
+                        let _ = self
+                            .db
+                            .enqueue_deferred_jobs(
+                                hash,
+                                &[media_derivatives::DeferredWorkType::Thumbnail],
+                            )
+                            .await;
+                    }
+                }
+
+                // Phase 4: all member phashes (skip cover)
+                for (hash, mime, _) in deferred_specs.iter().skip(1) {
+                    if !imported_hashes.contains(hash.as_str()) {
+                        continue;
+                    }
+                    if mime.starts_with("image/") {
+                        let _ = self
+                            .db
+                            .enqueue_deferred_jobs(
+                                hash,
+                                &[media_derivatives::DeferredWorkType::Phash],
+                            )
+                            .await;
+                    }
                 }
                 let _ = self
                     .db
@@ -366,11 +434,10 @@ impl<'a> SubscriptionSyncEngine<'a> {
                 let impact = crate::runtime_contract::change_builder::ChangeImpact::collection_membership_change(
                     result.collection_id,
                 )
-                .file_hashes(result.hashes)
-                .extra_grid_scopes(vec!["system:inbox".into()])
-                .merge(crate::runtime_contract::change_builder::ChangeImpact::file_lifecycle(
-                    self.db,
-                ));
+                .file_hashes(vec![result.collection_hash])
+                .status_changed()
+                .sidebar_counts_from(self.db)
+                .extra_grid_scopes(vec!["system:inbox".into()]);
                 crate::events::emit_state_changed("subscription_collection_import", impact);
             }
             Err(e) => {

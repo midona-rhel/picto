@@ -473,11 +473,19 @@ pub(crate) fn sync_collection_aggregate_metadata(
 }
 
 pub fn create_collection(conn: &Connection, name: &str) -> rusqlite::Result<i64> {
+    create_collection_with_status(conn, name, 1)
+}
+
+pub fn create_collection_with_status(
+    conn: &Connection,
+    name: &str,
+    status: i64,
+) -> rusqlite::Result<i64> {
     let now = chrono::Utc::now().to_rfc3339();
     conn.execute(
         "INSERT INTO media_entity (kind, name, description, status, created_at, updated_at)
-         VALUES ('collection', ?1, ?2, 1, ?3, ?3)",
-        params![name, "", now],
+         VALUES ('collection', ?1, ?2, ?3, ?4, ?4)",
+        params![name, "", status, now],
     )?;
     let entity_id = conn.last_insert_rowid();
     // Generate stable hash identity for this collection entity.

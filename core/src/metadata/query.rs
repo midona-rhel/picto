@@ -60,18 +60,28 @@ impl MetadataQuery {
         db: &SqliteDatabase,
         hash: String,
     ) -> Result<EntityAllMetadata, String> {
-        let entity = db
-            .get_entity_details_by_hash(&hash)
-            .await?
-            .ok_or_else(|| format!("Entity not found: {}", hash))?;
-        let local_tags = db.get_entity_tags(&hash).await?;
+        let entity = match db.get_entity_details_by_hash(&hash).await? {
+            Some(e) => e,
+            None => {
+                // Collection hashes don't have file rows — not an error.
+                tracing::debug!(hash = %hash, "get_entity_all_metadata: no file entity (may be a collection)");
+                return Err(format!("Entity not found: {}", hash));
+            }
+        };
+        let local_tags = db.get_entity_tags(&hash).await.unwrap_or_default();
 
         let tags: Vec<ResolvedTagInfo> = local_tags
             .into_iter()
             .map(file_tag_to_resolved_info)
             .collect();
 
-        let file_id = db.resolve_hash(&hash).await?;
+        let file_id = match db.resolve_hash(&hash).await {
+            Ok(id) => id,
+            Err(_) => {
+                tracing::debug!(hash = %hash, "get_entity_all_metadata: hash not resolvable");
+                return Err(format!("Entity not found: {}", hash));
+            }
+        };
 
         let fid_for_colors = file_id;
         let colors = db

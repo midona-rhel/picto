@@ -8,7 +8,7 @@ export function DragGhost() {
   const drag = useImageDrag();
   if (!drag) return null;
 
-  const count = drag.hashes.length;
+  const count = drag.fileCount;
   const thumbs = drag.thumbnailUrls;
   const stackCount = Math.min(thumbs.length, 3);
 

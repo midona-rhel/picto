@@ -520,8 +520,11 @@ pub async fn resolve_file_paths_batch(
     state: &AppState,
     input: ResolveFilePathsBatchInput,
 ) -> Result<serde_json::Value, String> {
-    let mut paths = Vec::with_capacity(input.hashes.len());
-    for hash in &input.hashes {
+    // resolve_hashes_batch expands collections to member file hashes
+    let resolved = state.db.resolve_hashes_batch(&input.hashes).await?;
+    let mut paths = Vec::with_capacity(resolved.len());
+    for (hash, _) in &resolved {
+        if hash.is_empty() { continue; } // skip collection entity (no file)
         if let Ok(p) = resolve_file_path_inner(&state.db, &state.blob_store, hash).await {
             paths.push(p);
         }

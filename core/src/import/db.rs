@@ -178,8 +178,8 @@ impl SqliteDatabase {
                     }
                 }
 
-                // Create collection entity
-                let collection_id = crate::folders::collections_db::create_collection(conn, &cname)?;
+                // Create collection entity with inbox status (matches member files)
+                let collection_id = crate::folders::collections_db::create_collection_with_status(conn, &cname, 0)?;
 
                 // Assign members (set parent_collection_id + ordinal)
                 for (ordinal, &fid) in file_ids.iter().enumerate() {
@@ -196,8 +196,15 @@ impl SqliteDatabase {
                 // Sync collection metadata (cover, count, size, tags, dates)
                 crate::folders::collections_db::sync_collection_aggregate_metadata(conn, collection_id)?;
 
+                let collection_hash: String = conn.query_row(
+                    "SELECT hash FROM media_entity WHERE entity_id = ?1",
+                    [collection_id],
+                    |row| row.get(0),
+                )?;
+
                 Ok(BatchCollectionResult {
                     collection_id,
+                    collection_hash,
                     file_ids,
                     hashes,
                 })
@@ -223,6 +230,7 @@ impl SqliteDatabase {
 
 pub struct BatchCollectionResult {
     pub collection_id: i64,
+    pub collection_hash: String,
     pub file_ids: Vec<i64>,
     pub hashes: Vec<String>,
 }
