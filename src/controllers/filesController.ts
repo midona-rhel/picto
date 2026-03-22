@@ -217,8 +217,8 @@ export const filesController = {
     const hashes = selection.hashes?.length
       ? selection.hashes
       : await queryApi.selection.resolveHashes(selection);
-    const result = await commandApi.selection.updateRating(selection, rating);
     eagerInvalidateMany(hashes);
+    const result = await commandApi.selection.updateRating(selection, rating);
     return result;
   },
 
@@ -226,8 +226,8 @@ export const filesController = {
     const hashes = selection.hashes?.length
       ? selection.hashes
       : await queryApi.selection.resolveHashes(selection);
-    const result = await commandApi.selection.setSourceUrls(selection, urls);
     eagerInvalidateMany(hashes);
+    const result = await commandApi.selection.setSourceUrls(selection, urls);
     return result;
   },
 
@@ -235,15 +235,15 @@ export const filesController = {
     const hashes = selection.hashes?.length
       ? selection.hashes
       : await queryApi.selection.resolveHashes(selection);
-    const result = await commandApi.selection.setNotes(selection, notes);
     eagerInvalidateMany(hashes);
+    const result = await commandApi.selection.setNotes(selection, notes);
     return result;
   },
 
   async deleteMany(hashes: string[]) {
-    const result = await commandApi.file.deleteMany(hashes);
     eagerInvalidateMany(hashes);
     useGridMetadataStore.getState().queueRemovals(hashes);
+    const result = await commandApi.file.deleteMany(hashes);
     return result;
   },
 
@@ -251,15 +251,15 @@ export const filesController = {
     const hashes = selection.hashes?.length
       ? selection.hashes
       : await queryApi.selection.resolveHashes(selection);
-    const result = await commandApi.file.deleteSelection(selection);
     eagerInvalidateMany(hashes);
     useGridMetadataStore.getState().queueRemovals(hashes);
+    const result = await commandApi.file.deleteSelection(selection);
     return result;
   },
 
   async updateRating(hash: string, rating: number | null) {
-    const result = await commandApi.file.updateRating(hash, rating);
     eagerInvalidate(hash);
+    const result = await commandApi.file.updateRating(hash, rating);
     return result;
   },
 
@@ -281,21 +281,21 @@ export const filesController = {
   },
 
   async regenerateThumbnail(hash: string) {
-    const result = await commandApi.file.regenerateThumbnail(hash);
     eagerInvalidate(hash);
+    const result = await commandApi.file.regenerateThumbnail(hash);
     return result;
   },
 
   async regenerateThumbnailsBatch(hashes: string[]) {
-    const result = await commandApi.file.regenerateThumbnailsBatch(hashes);
     bustThumbnailCache(hashes);
     eagerInvalidateMany(hashes);
+    const result = await commandApi.file.regenerateThumbnailsBatch(hashes);
     return result;
   },
 
   async reanalyzeColors(hash: string) {
-    const result = await commandApi.file.reanalyzeColors(hash);
     eagerInvalidate(hash);
+    const result = await commandApi.file.reanalyzeColors(hash);
     return result;
   },
 
@@ -412,8 +412,8 @@ export const filesController = {
 
   /** Rename a file. Registers undo (suppressed during undo/redo execution). */
   async rename(hash: string, newName: string | null, oldName: string | null): Promise<void> {
-    await commandApi.file.setName(hash, newName);
     eagerInvalidate(hash);
+    await commandApi.file.setName(hash, newName);
     registerUndoAction({
       label: 'Rename file',
       backward: async () => { await this.rename(hash, oldName, newName); },
@@ -426,10 +426,10 @@ export const filesController = {
     items: Array<{ hash: string; name: string | null }>,
     previousNames: Array<{ hash: string; name: string | null }>,
   ): Promise<void> {
+    eagerInvalidateMany(items.map((i) => i.hash));
     for (const item of items) {
       await commandApi.file.setName(item.hash, item.name);
     }
-    eagerInvalidateMany(items.map((i) => i.hash));
     const itemsSnapshot = [...items];
     const prevSnapshot = [...previousNames];
     registerUndoAction({
@@ -441,8 +441,8 @@ export const filesController = {
 
   /** Set source URLs. Registers undo (suppressed during undo/redo). */
   async setSourceUrls(hash: string, urls: string[], previousUrls: string[]): Promise<void> {
-    await commandApi.file.setSourceUrls(hash, urls);
     eagerInvalidate(hash);
+    await commandApi.file.setSourceUrls(hash, urls);
     registerUndoAction({
       label: 'Update source URLs',
       backward: async () => { await this.setSourceUrls(hash, previousUrls, urls); },
@@ -452,8 +452,8 @@ export const filesController = {
 
   /** Set notes. Registers undo (suppressed during undo/redo). */
   async setNotes(hash: string, notes: Record<string, string>, previousNotes: Record<string, string>): Promise<void> {
-    await commandApi.file.setNotes(hash, notes);
     eagerInvalidate(hash);
+    await commandApi.file.setNotes(hash, notes);
     registerUndoAction({
       label: 'Update notes',
       backward: async () => { await this.setNotes(hash, previousNotes, notes); },

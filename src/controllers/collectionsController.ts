@@ -84,30 +84,30 @@ export const collectionsController = {
   },
 
   async delete(id: number) {
-    const result = await api.collections.delete(id);
     useCollectionListStore.getState().queueRemoval(id);
+    const result = await api.collections.delete(id);
     return result;
   },
 
   async update(params: { id: number; name?: string; tags?: string[] }) {
-    const result = await api.collections.update(params);
     if (params.name != null) {
       useCollectionListStore.getState().queueUpdate(params.id, params.name);
     }
+    const result = await api.collections.update(params);
     return result;
   },
 
   async addMembers(params: { id: number; hashes: string[] }) {
-    const result = await api.collections.addMembers(params);
     filesController.noteManyMetadataChanged(params.hashes);
     void eagerInsertIfViewingCollection(params.id, params.hashes);
+    const result = await api.collections.addMembers(params);
     return result;
   },
 
   async removeMembers(params: { id: number; hashes: string[] }) {
-    const result = await api.collections.removeMembers(params);
     eagerRemoveIfViewingCollection(params.id, params.hashes);
     filesController.noteManyMetadataChanged(params.hashes);
+    const result = await api.collections.removeMembers(params);
     return result;
   },
 

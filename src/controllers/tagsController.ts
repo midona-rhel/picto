@@ -53,8 +53,8 @@ export const tagsController = {
   // ── Tag management writes ──
 
   async addToHashes(hashes: string[], tags: string[]) {
-    await api.tags.add(hashes, tags);
     filesController.noteManyMetadataChanged(hashes);
+    await api.tags.add(hashes, tags);
     const h = [...hashes], t = [...tags];
     registerUndoAction({
       label: `Add ${t.length} tag${t.length === 1 ? '' : 's'}`,
@@ -64,8 +64,8 @@ export const tagsController = {
   },
 
   async removeFromHashes(hashes: string[], tags: string[]) {
-    await api.tags.remove(hashes, tags);
     filesController.noteManyMetadataChanged(hashes);
+    await api.tags.remove(hashes, tags);
     const h = [...hashes], t = [...tags];
     registerUndoAction({
       label: `Remove ${t.length} tag${t.length === 1 ? '' : 's'}`,
@@ -78,8 +78,8 @@ export const tagsController = {
     const hashes = selection.hashes?.length
       ? selection.hashes
       : await filesController.resolveSelectionHashes(selection);
-    await api.selection.addTags(selection, tags);
     filesController.noteManyMetadataChanged(hashes);
+    await api.selection.addTags(selection, tags);
     const spec = structuredClone(selection), t = [...tags];
     registerUndoAction({
       label: `Add ${t.length} tag${t.length === 1 ? '' : 's'}`,
@@ -92,8 +92,8 @@ export const tagsController = {
     const hashes = selection.hashes?.length
       ? selection.hashes
       : await filesController.resolveSelectionHashes(selection);
-    await api.selection.removeTags(selection, tags);
     filesController.noteManyMetadataChanged(hashes);
+    await api.selection.removeTags(selection, tags);
     const spec = structuredClone(selection), t = [...tags];
     registerUndoAction({
       label: `Remove ${t.length} tag${t.length === 1 ? '' : 's'}`,
@@ -119,9 +119,9 @@ export const tagsController = {
   },
 
   async deleteTag(tagId: number, tagDisplay: string, affectedHashes: string[]): Promise<DeleteTagResult> {
-    const result = await api.tags.delete(tagId);
     useTagListStore.getState().queueRemoval(tagId);
     useDomainStore.getState().adjustTagsCount(-1);
+    const result = await api.tags.delete(tagId);
     const h = [...affectedHashes], display = tagDisplay;
     registerUndoAction({
       label: `Delete tag "${display}"`,
@@ -138,10 +138,10 @@ export const tagsController = {
   },
 
   async mergeTag(fromTag: string, toTag: string, sourceHashes: string[], sourceOnlyHashes: string[]) {
-    await api.tags.merge(fromTag, toTag);
     const { namespace, subtag } = parseTagName(fromTag);
     useTagListStore.getState().queueRemovalByName(namespace, subtag);
     useDomainStore.getState().adjustTagsCount(-1);
+    await api.tags.merge(fromTag, toTag);
     registerUndoAction({
       label: `Merge tag "${fromTag}" into "${toTag}"`,
       backward: async () => {

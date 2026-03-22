@@ -65,8 +65,8 @@ export const foldersController = {
 
   async rename(folderId: number, newName: string, oldName: string) {
     if (oldName === newName) return;
-    await api.folders.update({ folder_id: folderId, name: newName });
     useDomainStore.getState().patchFolderNode(folderId, { name: newName });
+    await api.folders.update({ folder_id: folderId, name: newName });
     registerUndoAction({
       label: 'Rename folder',
       backward: async () => { await api.folders.update({ folder_id: folderId, name: oldName }); useDomainStore.getState().patchFolderNode(folderId, { name: oldName }); },
@@ -79,8 +79,8 @@ export const foldersController = {
   },
 
   async delete(folderId: number, snapshot?: { name: string; parentId: number | null; icon: string | null; color: string | null; files: string[] } | null) {
-    await api.folders.delete(folderId);
     useDomainStore.getState().removeFolderNode(folderId);
+    await api.folders.delete(folderId);
     if (useNavigationStore.getState().activeFolderId === folderId) {
       useNavigationStore.getState().navigateTo('images');
     }
@@ -105,8 +105,8 @@ export const foldersController = {
   },
 
   async deleteBatch(folderIds: number[], snapshots: Array<{ name: string; parentId: number | null }>) {
-    await Promise.all(folderIds.map((id) => api.folders.delete(id)));
     for (const id of folderIds) useDomainStore.getState().removeFolderNode(id);
+    await Promise.all(folderIds.map((id) => api.folders.delete(id)));
     const nav = useNavigationStore.getState();
     if (nav.activeFolderId != null && folderIds.includes(nav.activeFolderId)) {
       nav.navigateTo('images');
@@ -201,8 +201,8 @@ export const foldersController = {
   // ── Folder ordering ────────────────────────────────────────────────────────
 
   async reorder(moves: [number, number][], previousMoves?: [number, number][]) {
-    await api.folders.reorder(moves);
     useDomainStore.getState().reorderFolderNodes(moves);
+    await api.folders.reorder(moves);
     if (previousMoves) {
       registerUndoAction({
         label: 'Reorder folders',
@@ -218,9 +218,9 @@ export const foldersController = {
     siblingOrder: [number, number][],
     undoParams?: { oldParentId: number | null; oldSiblingMoves: [number, number][] },
   ) {
-    await api.folders.moveFolder(folderId, newParentId, siblingOrder);
     useDomainStore.getState().moveFolderNode(folderId, newParentId);
     useDomainStore.getState().reorderFolderNodes(siblingOrder);
+    await api.folders.moveFolder(folderId, newParentId, siblingOrder);
     if (undoParams) {
       registerUndoAction({
         label: 'Move folder',
@@ -242,8 +242,8 @@ export const foldersController = {
 
   async applyIcon(ids: number[], icon: string | null, previousValues: Array<{ id: number; icon: string | null }>) {
     const value = icon === null ? '' : (icon ?? undefined);
-    await Promise.all(ids.map((id) => api.folders.update({ folder_id: id, icon: value })));
     for (const id of ids) useDomainStore.getState().patchFolderNode(id, { icon });
+    await Promise.all(ids.map((id) => api.folders.update({ folder_id: id, icon: value })));
     registerUndoAction({
       label: ids.length > 1 ? 'Change folder icons' : 'Change folder icon',
       backward: async () => {
@@ -259,8 +259,8 @@ export const foldersController = {
 
   async applyColor(ids: number[], color: string | null, previousValues: Array<{ id: number; color: string | null }>) {
     const value = color === null ? '' : (color ?? undefined);
-    await Promise.all(ids.map((id) => api.folders.update({ folder_id: id, color: value })));
     for (const id of ids) useDomainStore.getState().patchFolderNode(id, { color });
+    await Promise.all(ids.map((id) => api.folders.update({ folder_id: id, color: value })));
     registerUndoAction({
       label: ids.length > 1 ? 'Change folder colors' : 'Change folder color',
       backward: async () => {

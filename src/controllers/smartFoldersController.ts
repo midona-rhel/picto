@@ -144,9 +144,9 @@ export const smartFoldersController = {
       newSiblingMoves = reordered.map((f, i) => [parseInt(f.id, 10), (i + 1) * 1000]);
     }
 
-    await api.smartFolders.move(draggedId, newParentId, newSiblingMoves);
     useDomainStore.getState().moveSmartFolderNode(draggedId, newParentId);
     useDomainStore.getState().reorderSmartFolderNodes(newSiblingMoves);
+    await api.smartFolders.move(draggedId, newParentId, newSiblingMoves);
 
     registerUndoAction({
       label: 'Move smart folder',
@@ -164,8 +164,8 @@ export const smartFoldersController = {
   },
 
   async reorder(parentId: number | null, moves: [number, number][], previousMoves?: [number, number][]) {
-    await api.smartFolders.reorder(parentId, moves);
     useDomainStore.getState().reorderSmartFolderNodes(moves);
+    await api.smartFolders.reorder(parentId, moves);
     if (previousMoves) {
       registerUndoAction({
         label: 'Reorder smart folders',
