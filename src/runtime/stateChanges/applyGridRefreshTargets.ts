@@ -39,6 +39,16 @@ export function startApplyingGridRefreshTargets(): void {
     const handledTargets: ResourceKey[] = [];
     const activeScope = useGridMetadataStore.getState().activeGridScope;
 
+    // Diagnostic: log every state change that reaches the applier
+    const origin = state.lastChangeOrigin;
+    const gridKeys = [...state.pendingRefreshTargets].filter((k) => k.startsWith('grid/'));
+    const hashKeys = [...state.pendingRefreshTargets].filter((k) => k.startsWith('metadata/hash:'));
+    if (gridKeys.length > 0 || hashKeys.length > 0) {
+      console.log(
+        `[grid-applier] origin=${origin} activeScope=${activeScope} gridKeys=${gridKeys.length} hashKeys=${hashKeys.length} insertionScopes=${JSON.stringify(state.lastInsertionScopes)}`,
+      );
+    }
+
     // Phase 1: Collect hashes not already handled eagerly by controllers.
     const newHashes: string[] = [];
 
