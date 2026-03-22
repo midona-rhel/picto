@@ -50,7 +50,7 @@ pub async fn merge_existing_import_target(
             if is_merge_loser {
                 tracing::info!(hash = %hex_hash, "skipping status restore: file is loser in confirmed duplicate merge");
             } else {
-                db.update_file_status(hex_hash, status).await?;
+                db.set_entity_status_by_hash(hex_hash, status).await?;
                 any_change = true;
                 status_restored = true;
             }

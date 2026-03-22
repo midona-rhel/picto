@@ -231,23 +231,34 @@ pub fn filter_visible_entity_ids(
     rows.collect()
 }
 
-pub fn update_status(conn: &Connection, file_id: i64, status: i64) -> rusqlite::Result<()> {
+/// Update the status of an entity by its resolved ID.
+/// The ID may be a file_id (for single entities) or an entity_id (for collections).
+/// For single entities: updates both the `file` and `media_entity` tables.
+/// For collections: updates `media_entity` directly (no `file` row).
+/// Does NOT cascade to collection members — the caller handles that.
+pub fn update_entity_status(conn: &Connection, id: i64, status: i64) -> rusqlite::Result<()> {
+    // Try updating the file table (single entities have a file row)
     conn.execute(
         "UPDATE file SET status = ?1 WHERE file_id = ?2",
-        params![status, file_id],
+        params![status, id],
     )?;
-    conn.execute(
+    // Update the media_entity — either via entity_file link (singles) or directly (collections)
+    let affected = conn.execute(
         "UPDATE media_entity
          SET status = ?1, updated_at = CURRENT_TIMESTAMP
          WHERE entity_id IN (
              SELECT entity_id FROM entity_file WHERE file_id = ?2
          )",
-        params![status, file_id],
+        params![status, id],
     )?;
-    for collection_id in
-        crate::folders::collections_db::get_parent_collection_ids_for_file_ids(conn, &[file_id])?
-    {
-        crate::folders::collections_db::sync_collection_aggregate_metadata(conn, collection_id)?;
+    if affected == 0 {
+        // No entity_file link — this is a collection entity, update directly
+        conn.execute(
+            "UPDATE media_entity
+             SET status = ?1, updated_at = CURRENT_TIMESTAMP
+             WHERE entity_id = ?2",
+            params![status, id],
+        )?;
     }
     Ok(())
 }
@@ -1345,9 +1356,56 @@ impl SqliteDatabase {
         if let Some(record) = self.get_file_by_hash(hash).await? {
             return Ok(Some(crate::types::EntityDetails::from(record)));
         }
-        // Collection hashes don't have file rows — return None gracefully.
-        // The caller should handle missing entities without crashing.
-        Ok(None)
+        // Fall back to media_entity.hash (collections)
+        let h = hash.to_string();
+        let result = self
+            .with_read_conn(move |conn| {
+                use rusqlite::OptionalExtension;
+                conn.query_row(
+                    "SELECT
+                         me.hash,
+                         me.name,
+                         me.cached_total_size_bytes,
+                         COALESCE(cover_f.mime, 'application/x-collection'),
+                         cover_f.width,
+                         cover_f.height,
+                         me.status,
+                         me.rating,
+                         me.created_at,
+                         me.updated_at
+                     FROM media_entity me
+                     LEFT JOIN file cover_f ON cover_f.file_id = me.cover_file_id
+                     WHERE me.hash = ?1",
+                    [&h],
+                    |row| {
+                        Ok(crate::types::EntityDetails {
+                            hash: row.get::<_, String>(0)?,
+                            name: row.get(1)?,
+                            size: row.get(2)?,
+                            mime: row.get(3)?,
+                            width: row.get(4)?,
+                            height: row.get(5)?,
+                            duration_ms: None,
+                            num_frames: None,
+                            has_audio: false,
+                            status: crate::types::status_to_string(row.get::<_, i64>(6)?).to_string(),
+                            rating: row.get(7)?,
+                            view_count: 0,
+                            source_urls: None,
+                            imported_at: row.get::<_, Option<String>>(8)?.unwrap_or_default(),
+                            has_thumbnail: true,
+                            dominant_color_hex: None,
+                            dominant_colors: None,
+                            notes: None,
+                            created_at: row.get(8)?,
+                            updated_at: row.get(9)?,
+                        })
+                    },
+                )
+                .optional()
+            })
+            .await?;
+        Ok(result)
     }
 
     pub async fn file_exists(&self, hash: &str) -> Result<bool, String> {
@@ -1374,47 +1432,48 @@ impl SqliteDatabase {
         }
     }
 
-    pub async fn update_file_status(&self, hash: &str, status: i64) -> Result<(), String> {
-        let file_id = self.resolve_hash(hash).await?;
-        let fid = file_id;
+    /// Set status on an entity by hash. For collections, cascades to members.
+    /// The hash always identifies a media_entity (entity_id = file_id for singles).
+    /// Member status changes don't affect sidebar counts (compiler excludes members from bitmaps).
+    pub async fn set_entity_status_by_hash(&self, hash: &str, status: i64) -> Result<(), String> {
+        let entity_id = self.resolve_hash(hash).await?;
+        let eid = entity_id;
 
-        // Collect member file_ids BEFORE the status update (for bitmap sync)
-        let member_files = self
+        // Check if this entity is a collection — if so, collect members for cascade
+        let member_entity_ids = self
             .with_read_conn(move |conn| {
-                crate::folders::collections_db::get_cover_collection_member_files(conn, fid)
+                crate::folders::collections_db::get_cover_collection_member_files(conn, eid)
             })
             .await?;
 
-        let fid = file_id;
-        self.with_conn(move |conn| update_status(conn, fid, status))
+        // Update the entity's own status
+        let eid = entity_id;
+        self.with_conn(move |conn| update_entity_status(conn, eid, status))
             .await?;
 
-        // Update status bitmaps for the target file
-        let fid_u32 = file_id as u32;
+        // Update status bitmap for the entity (compiler excludes members, so
+        // only top-level entities should be in the bitmap)
+        let eid_u32 = entity_id as u32;
         for s in 0..=2i64 {
-            self.bitmaps.remove(&BitmapKey::Status(s), fid_u32);
+            self.bitmaps.remove(&BitmapKey::Status(s), eid_u32);
         }
-        self.bitmaps.insert(&BitmapKey::Status(status), fid_u32);
+        self.bitmaps.insert(&BitmapKey::Status(status), eid_u32);
 
-        // Cascade DB status to collection members (they move with the collection).
-        // Don't add members to status bitmaps — the compiler excludes them.
-        if !member_files.is_empty() {
-            let member_ids: Vec<i64> = member_files.iter().map(|(fid, _)| *fid).collect();
+        // Cascade status to collection members in DB only (not bitmaps —
+        // the compiler excludes members from status bitmaps)
+        if !member_entity_ids.is_empty() {
+            let member_ids: Vec<i64> = member_entity_ids.iter().map(|(id, _)| *id).collect();
             let s = status;
             self.with_conn(move |conn| {
                 for mid in &member_ids {
-                    update_status(conn, *mid, s)?;
+                    update_entity_status(conn, *mid, s)?;
                 }
                 Ok(())
             })
             .await?;
         }
 
-        if member_files.is_empty() {
-            self.emit_read_model_event(ReadModelEvent::FileStatusChanged { file_id });
-        } else {
-            self.emit_read_model_event(ReadModelEvent::StatusBatchChanged);
-        }
+        self.emit_read_model_event(ReadModelEvent::FileStatusChanged { file_id: entity_id });
         Ok(())
     }
 

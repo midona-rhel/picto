@@ -165,7 +165,7 @@ pub async fn set_entity_status(
     // Resolve to hashes — single hash or selection.
     // For explicit selections, use the provided hashes (top-level items).
     // For virtual select-all, resolve from bitmap.
-    // update_file_status handles collection member cascade internally.
+    // set_entity_status_by_hash handles collection member cascade internally.
     let hashes: Vec<String> = if let Some(hash) = input.hash {
         vec![hash]
     } else if let Some(ref selection) = input.selection {
@@ -186,10 +186,10 @@ pub async fn set_entity_status(
         return Ok(0);
     }
 
-    // Use the same update_file_status path for every hash — it handles
+    // Use the same set_entity_status_by_hash path for every hash — it handles
     // collection member cascade and CollectionMember bitmap correctly.
     for hash in &hashes {
-        state.db.update_file_status(hash, status).await?;
+        state.db.set_entity_status_by_hash(hash, status).await?;
     }
 
     let folder_ids = collect_folder_ids_for_hashes(state, &hashes, 200).await;
