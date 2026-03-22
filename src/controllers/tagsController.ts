@@ -1,5 +1,5 @@
 import { api } from '#desktop/api';
-import { filesController } from './filesController';
+import { entityController } from './entityController';
 import { registerUndoAction } from '../shared/controllers/undoRedoController';
 import { useTagListStore } from '../state/tagListStore';
 import { useDomainStore } from '../state/domainStore';
@@ -53,7 +53,7 @@ export const tagsController = {
   // ── Tag management writes ──
 
   async addToHashes(hashes: string[], tags: string[]) {
-    filesController.noteManyMetadataChanged(hashes);
+    entityController.noteManyMetadataChanged(hashes);
     await api.tags.add(hashes, tags);
     const h = [...hashes], t = [...tags];
     registerUndoAction({
@@ -64,7 +64,7 @@ export const tagsController = {
   },
 
   async removeFromHashes(hashes: string[], tags: string[]) {
-    filesController.noteManyMetadataChanged(hashes);
+    entityController.noteManyMetadataChanged(hashes);
     await api.tags.remove(hashes, tags);
     const h = [...hashes], t = [...tags];
     registerUndoAction({
@@ -77,8 +77,8 @@ export const tagsController = {
   async addToSelection(selection: SelectionQuerySpec, tags: string[]) {
     const hashes = selection.hashes?.length
       ? selection.hashes
-      : await filesController.resolveSelectionHashes(selection);
-    filesController.noteManyMetadataChanged(hashes);
+      : await entityController.resolveSelectionHashes(selection);
+    entityController.noteManyMetadataChanged(hashes);
     await api.selection.addTags(selection, tags);
     const spec = structuredClone(selection), t = [...tags];
     registerUndoAction({
@@ -91,8 +91,8 @@ export const tagsController = {
   async removeFromSelection(selection: SelectionQuerySpec, tags: string[]) {
     const hashes = selection.hashes?.length
       ? selection.hashes
-      : await filesController.resolveSelectionHashes(selection);
-    filesController.noteManyMetadataChanged(hashes);
+      : await entityController.resolveSelectionHashes(selection);
+    entityController.noteManyMetadataChanged(hashes);
     await api.selection.removeTags(selection, tags);
     const spec = structuredClone(selection), t = [...tags];
     registerUndoAction({

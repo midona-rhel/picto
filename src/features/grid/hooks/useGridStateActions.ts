@@ -1,5 +1,5 @@
 import { useCallback } from 'react';
-import { filesController } from '../../../controllers/filesController';
+import { entityController } from '../../../controllers/entityController';
 import { foldersController } from '../../../controllers/foldersController';
 import { collectionsController } from '../../../controllers/collectionsController';
 import { notifyError, notifyInfo } from '../../../shared/lib/notify';
@@ -50,7 +50,7 @@ export function useGridStateActions({
       const spec = virtualAllSelection
         ? selectVirtualSpec(state)!
         : buildExplicitSelectionSpec([...selectedHashes]);
-      filesController.permanentDeleteSelection(spec)
+      entityController.permanentDeleteSelection(spec)
         .then((count) => notifyInfo(`${plural(count)} permanently deleted`, 'Deleted'))
         .catch((err) => notifyError(err, 'Delete Failed'));
       return;
@@ -59,7 +59,7 @@ export function useGridStateActions({
     // Move to trash — controller owns undo
     if (virtualAllSelection) {
       const spec = selectVirtualSpec(state)!;
-      filesController.trashSelection(spec)
+      entityController.trashSelection(spec)
         .then((n) => notifyInfo(`Moved ${plural(n)} to trash`, 'Moved to Trash'))
         .catch((err) => notifyError(err, 'Delete Failed'));
     } else {
@@ -70,7 +70,7 @@ export function useGridStateActions({
         status: images.find((img) => img.hash === hash)?.status ?? (statusFilter ?? 'active'),
       }));
       const spec = buildExplicitSelectionSpec(hashes);
-      filesController.trashSelection(spec, previousStatuses)
+      entityController.trashSelection(spec, previousStatuses)
         .then((n) => notifyInfo(`Moved ${plural(n)} to trash`, 'Moved to Trash'))
         .catch((err) => notifyError(err, 'Delete Failed'));
     }
@@ -82,7 +82,7 @@ export function useGridStateActions({
 
     if (virtualAllSelection) {
       const spec = selectVirtualSpec(stateRef.current)!;
-      filesController.rateSelection(spec, normalizedRating)
+      entityController.rateSelection(spec, normalizedRating)
         .catch((err) => notifyError(err, 'Rating Failed'));
       return;
     }
@@ -95,7 +95,7 @@ export function useGridStateActions({
       prevRatings.set(hash, img?.rating ?? null);
     }
     const spec = buildExplicitSelectionSpec(hashes);
-    filesController.rateSelection(spec, normalizedRating, prevRatings)
+    entityController.rateSelection(spec, normalizedRating, prevRatings)
       .catch((err) => notifyError(err, 'Rating Failed'));
   }, [stateRef]);
 
@@ -110,13 +110,13 @@ export function useGridStateActions({
       ? selectVirtualSpec(state)!
       : buildExplicitSelectionSpec([...selectedHashes]);
 
-    filesController.restoreSelection(spec)
+    entityController.restoreSelection(spec)
       .then((n) => notifyInfo(`Restored ${plural(n)}`, 'Restored'))
       .catch((err) => notifyError(err, 'Restore Failed'));
   }, [stateRef, dispatch]);
 
   const handleInboxAction = useCallback((hash: string, status: 'active' | 'trash') => {
-    filesController.inboxAction(hash, status)
+    entityController.inboxAction(hash, status)
       .catch((err) => notifyError(err, status === 'active' ? 'Accept Failed' : 'Reject Failed'));
   }, []);
 
@@ -132,7 +132,7 @@ export function useGridStateActions({
       : buildExplicitSelectionSpec([...selectedHashes]);
     const past = status === 'active' ? 'Accepted' : 'Rejected';
 
-    filesController.inboxSelectionAction(spec, status)
+    entityController.inboxSelectionAction(spec, status)
       .then((n) => notifyInfo(`${past} ${plural(n)}`, past))
       .catch((err) => notifyError(err, `${status === 'active' ? 'Accept' : 'Reject'} Failed`));
   }, [dispatch, stateRef]);

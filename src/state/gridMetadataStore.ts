@@ -6,7 +6,7 @@
  */
 
 import { create } from 'zustand';
-import { filesController } from '../controllers/filesController';
+import { entityController } from '../controllers/entityController';
 import type { EntitySlim } from '../shared/types/api';
 
 interface FileMetadataSlim {
@@ -99,7 +99,7 @@ export const useGridMetadataStore = create<CacheState>((set, get) => ({
 
     if (missing.length > 0) {
       try {
-        const resp = await filesController.getMetadataBatch(missing);
+        const resp = await entityController.getMetadataBatch(missing);
         const results: ResolvedMetadata[] = Object.values(resp.items ?? {}).map(meta => ({
           file: {
             hash: meta.entity.hash,

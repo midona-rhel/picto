@@ -44,7 +44,7 @@ import { useSettingsStore } from '../../../state/settingsStore';
 import { useNavigationImageAdjustmentsStore } from '../../../state/navigationImageAdjustmentsStore';
 import type { MediaItem } from '../../../features/grid/shared';
 import { copyFileToClipboard, copyImageToClipboard, reverseImageSearch } from '#desktop/api';
-import { filesController } from '../../../controllers/filesController';
+import { entityController } from '../../../controllers/entityController';
 import { foldersController } from '../../../controllers/foldersController';
 import { collectionsController } from '../../../controllers/collectionsController';
 import { useNavigationStore } from '../../../state/navigationStore';
@@ -183,7 +183,7 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
         label: 'Open With Default App',
         icon: <IconExternalLink />,
         shortcut: isMac ? '\u21E7Enter' : 'Shift+Enter',
-        onClick: () => filesController.openDefault(singleHash).catch(err => {
+        onClick: () => entityController.openDefault(singleHash).catch(err => {
           notifyError(err, 'Open Failed');
         }),
       });
@@ -192,7 +192,7 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
         label: isMac ? 'Reveal in Finder' : 'Reveal in Explorer',
         icon: <IconFolderOpen />,
         shortcut: isMac ? '\u2318Enter' : 'Ctrl+Enter',
-        onClick: () => filesController.revealInFolder(singleHash).catch(err => {
+        onClick: () => entityController.revealInFolder(singleHash).catch(err => {
           notifyError(err, 'Reveal Failed');
         }),
       });
@@ -203,7 +203,7 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
         shortcut: isMac ? '\u2318O' : 'Ctrl+O',
         onClick: async () => {
           const img = stateRef.current.images.find(i => i.hash === singleHash);
-          filesController.openInNewWindow(singleHash, img?.width, img?.height).catch(err => {
+          entityController.openInNewWindow(singleHash, img?.width, img?.height).catch(err => {
             notifyError(err, 'New Window Failed');
           });
         },
@@ -445,7 +445,7 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
       icon: <IconCopy />,
       shortcut: isMac ? '\u2318C' : 'Ctrl+C',
       onClick: () => {
-        filesController.resolvePath(singleHash).then(copyFileToClipboard)
+        entityController.resolvePath(singleHash).then(copyFileToClipboard)
           .then(() => notifySuccess('File copied to clipboard', 'Copied'))
           .catch(err => notifyError(err, 'Copy Failed'));
       },
@@ -457,7 +457,7 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
       shortcut: isMac ? '\u2318\u2325C' : 'Ctrl+Alt+C',
       onClick: async () => {
         try {
-          const path = await filesController.resolvePath(singleHash);
+          const path = await entityController.resolvePath(singleHash);
           await navigator.clipboard.writeText(path);
           notifySuccess('File path copied to clipboard', 'Copied');
         } catch (err) {
@@ -494,7 +494,7 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
           label: 'Copy Thumbnail',
           icon: <IconPhoto />,
           onClick: () => {
-            filesController.resolveThumbnailPath(singleHash).then(copyImageToClipboard)
+            entityController.resolveThumbnailPath(singleHash).then(copyImageToClipboard)
               .then(() => notifySuccess('Thumbnail copied to clipboard', 'Copied'))
               .catch(err => notifyError(err, 'Copy Failed'));
           },
@@ -538,7 +538,7 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
         icon: e.icon,
         onClick: () => {
           notifyInfo(`Uploading to ${e.label}`);
-          filesController.resolvePath(singleHash).then(path => reverseImageSearch(path, e.key))
+          entityController.resolvePath(singleHash).then(path => reverseImageSearch(path, e.key))
             .catch(err => notifyError(err, 'Search Failed'));
         },
       }));
@@ -561,7 +561,7 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
       icon: <IconSearch />,
       onClick: async () => {
         try {
-          const result = await filesController.findSimilar(singleHash);
+          const result = await entityController.findSimilar(singleHash);
           if (result.items.length === 0) {
             notifyInfo('No visually similar images found');
             return;
@@ -627,7 +627,7 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
         shortcut: isMac ? '\u2318\u21E7T' : 'Ctrl+Shift+T',
         onClick: () => {
           notifyInfo(`Regenerating ${regenHashes.length} thumbnail(s)`);
-          filesController.regenerateThumbnailsBatch(regenHashes)
+          entityController.regenerateThumbnailsBatch(regenHashes)
             .then(r => {
               notifySuccess(`Regenerated ${r.regenerated} thumbnail(s)`, 'Thumbnails');
             })
@@ -764,7 +764,7 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
     const doRestore = () => {
       if (freshSingleHash) {
         dispatch({ type: 'CLEAR_SELECTION' });
-        filesController.changeStatus(freshSingleHash, 'active', 'trash', 'Restore item')
+        entityController.changeStatus(freshSingleHash, 'active', 'trash', 'Restore item')
           .catch(err => notifyError(err, 'Restore Failed'));
       } else {
         handleRestoreSelected();
@@ -775,11 +775,11 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
       if (freshSingleHash) {
         dispatch({ type: 'CLEAR_SELECTION' });
         if (inTrash) {
-          filesController.deleteMany([freshSingleHash])
+          entityController.deleteMany([freshSingleHash])
             .catch(err => notifyError(err, 'Delete Failed'));
         } else {
           const previousStatus = imagesRef.current.find((img) => img.hash === freshSingleHash)?.status ?? (statusFilter ?? 'active');
-          filesController.changeStatus(freshSingleHash, 'trash', previousStatus, 'Move to trash')
+          entityController.changeStatus(freshSingleHash, 'trash', previousStatus, 'Move to trash')
             .catch(err => notifyError(err, 'Delete Failed'));
         }
       } else {

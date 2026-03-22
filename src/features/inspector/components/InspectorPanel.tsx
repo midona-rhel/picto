@@ -16,7 +16,7 @@ import { WindowControls } from '../../layout/components/WindowControls';
 import { KbdTooltip } from '../../../shared/components/KbdTooltip';
 import { useNavigationStore } from '../../../state/navigationStore';
 import { useFilterStore } from '../../../state/filterStore';
-import { filesController } from '../../../controllers/filesController';
+import { entityController } from '../../../controllers/entityController';
 import { formatFileSize, formatDuration, formatDateTime, getFileExtension } from '../../../shared/lib/formatters';
 import type { MediaItem } from '../../grid/shared';
 import { GlassImagePreview } from '../../../shared/components/GlassImagePreview';
@@ -498,7 +498,7 @@ export function InspectorPanel({
 
     if (selectionSummarySpec) {
       // Virtual Select All: resolve all hashes from the backend
-      hashes = await filesController.resolveSelectionHashes(selectionSummarySpec);
+      hashes = await entityController.resolveSelectionHashes(selectionSummarySpec);
     } else {
       hashes = selectedImages.map((i) => i.hash);
     }

@@ -14,7 +14,7 @@ import {
 import { useDomainStore } from '../../../state/domainStore';
 import { useNavigationStore } from '../../../state/navigationStore';
 import { useLibraryStore } from '../../../state/libraryStore';
-import { filesController } from '../../../controllers/filesController';
+import { entityController } from '../../../controllers/entityController';
 import { SidebarJobStatus } from '../../layout/components/SidebarJobStatus';
 import { imageDrag } from '../../../shared/lib/imageDrag';
 import { FolderTree } from './FolderTree';
@@ -49,7 +49,7 @@ export function Sidebar({ onSmartFolderUpdated }: SidebarProps) {
       excluded_hashes: null,
       included_hashes: null,
     };
-    filesController.changeStatusSelection(spec, status, prevStatus)
+    entityController.changeStatusSelection(spec, status, prevStatus)
       .catch((err) => console.error('Status drop failed:', err));
   }, [activeStatusFilter]);
 

@@ -1,7 +1,7 @@
 import { useStateChangeStore } from './stateChangeStore';
 import { useGridMetadataStore } from '../../state/gridMetadataStore';
 import { noteMetadataChanged } from '#features/grid/data';
-import { filesController } from '../../controllers/filesController';
+import { entityController } from '../../controllers/entityController';
 import { refreshTargetMatchesGridScope } from './planRefreshTargets';
 import type { ResourceKey } from '../../shared/types/backendState';
 
@@ -77,7 +77,7 @@ export function startApplyingGridRefreshTargets(): void {
         if (hasMatchingGridScope && newHashes.length > 0) {
           const hashesToInsert = [...newHashes];
           newHashes.length = 0; // only insert once per batch
-          Promise.all(hashesToInsert.map((h) => filesController.getEntity(h))).then((entities) => {
+          Promise.all(hashesToInsert.map((h) => entityController.getEntity(h))).then((entities) => {
             const valid = entities.filter((e): e is NonNullable<typeof e> => e != null);
             if (valid.length > 0) {
               useGridMetadataStore.getState().queueInsertions(valid);

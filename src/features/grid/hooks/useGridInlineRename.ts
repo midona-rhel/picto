@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { notifyError } from '../../../shared/lib/notify';
-import { filesController } from '../../../controllers/filesController';
+import { entityController } from '../../../controllers/entityController';
 import type { MediaItem } from '../shared';
 
 export function useGridInlineRename(args: {
@@ -54,7 +54,7 @@ export function useGridInlineRename(args: {
     const after = renameValue.trim() || null;
     setRenamingHash(null);
     if (after === before) return;
-    filesController.rename(hash, after, before)
+    entityController.rename(hash, after, before)
       .catch((err: unknown) => notifyError(err, 'Rename Failed'));
   }, [renameValue, stateRef]);
 

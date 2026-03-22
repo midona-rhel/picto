@@ -108,7 +108,7 @@ function fetchMetadata(hash: string): Promise<EntityAllMetadata> {
   return request;
 }
 
-export const filesController = {
+export const entityController = {
   getEntity(hash: string): Promise<EntityDetails | null> {
     return queryApi.file.get(hash);
   },

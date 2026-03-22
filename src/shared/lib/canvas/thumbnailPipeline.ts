@@ -1,4 +1,4 @@
-import { filesController } from '../../../controllers/filesController';
+import { entityController } from '../../../controllers/entityController';
 import { mediaFileUrl, mediaThumbnailUrl } from '../mediaUrl';
 import { decodeThumbnailInWorker, getThumbnailDecodeWorkerStats } from './thumbnailDecodeClient';
 import { enqueueMediaQosTask, type MediaQosLane, type MediaQosTaskHandle } from '../mediaQosScheduler';
@@ -501,7 +501,7 @@ export class ThumbnailPipeline {
 
   private queueRepairRetry(entry: ThumbnailPipelineEntry, item: ThumbnailQueueItem): void {
     entry.retryQueued = true;
-    void filesController.ensureThumbnail(item.hash)
+    void entityController.ensureThumbnail(item.hash)
       .then(() => {
         // Backend generated the thumbnail — retry loading it once
         const retryEntry = this.cache.get(item.hash);

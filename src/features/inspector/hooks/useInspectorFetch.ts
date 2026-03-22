@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { filesController } from '../../../controllers/filesController';
+import { entityController } from '../../../controllers/entityController';
 import { foldersController } from '../../../controllers/foldersController';
 import { collectionsController } from '../../../controllers/collectionsController';
 import { useStateChangeStore } from '../../../runtime/stateChanges/stateChangeStore';
@@ -218,7 +218,7 @@ export function useInspectorFetch(
         }
 
         if (selectedImages.length === 1) {
-          const metadata = await filesController.getMetadata(selectedImages[0].hash);
+          const metadata = await entityController.getMetadata(selectedImages[0].hash);
           if (requestIdRef.current !== requestId) return;
           // Set new data and clear old atomically — avoids flicker frame
           setFileMetadata(metadata);
@@ -286,7 +286,7 @@ export function useInspectorFetch(
     for (const img of selectedImages) noteMetadataChanged(img.hash);
 
     if (selectedImages.length === 1) {
-      filesController.getMetadata(selectedImages[0].hash)
+      entityController.getMetadata(selectedImages[0].hash)
         .then((metadata) => {
           setFileMetadata(metadata);
           setFileTags(metadata.tags);

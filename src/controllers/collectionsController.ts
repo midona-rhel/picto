@@ -1,5 +1,5 @@
 import { api } from '#desktop/api';
-import { filesController } from './filesController';
+import { entityController } from './entityController';
 import { registerUndoAction } from '../shared/controllers/undoRedoController';
 import { useCollectionListStore } from '../state/collectionListStore';
 import { useGridMetadataStore } from '../state/gridMetadataStore';
@@ -98,7 +98,7 @@ export const collectionsController = {
   },
 
   async addMembers(params: { id: number; hashes: string[] }) {
-    filesController.noteManyMetadataChanged(params.hashes);
+    entityController.noteManyMetadataChanged(params.hashes);
     void eagerInsertIfViewingCollection(params.id, params.hashes);
     const result = await api.collections.addMembers(params);
     return result;
@@ -106,7 +106,7 @@ export const collectionsController = {
 
   async removeMembers(params: { id: number; hashes: string[] }) {
     eagerRemoveIfViewingCollection(params.id, params.hashes);
-    filesController.noteManyMetadataChanged(params.hashes);
+    entityController.noteManyMetadataChanged(params.hashes);
     const result = await api.collections.removeMembers(params);
     return result;
   },

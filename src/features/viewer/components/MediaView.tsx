@@ -1,5 +1,5 @@
 import { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo } from 'react';
-import { filesController } from '../../../controllers/filesController';
+import { entityController } from '../../../controllers/entityController';
 import { IconCheck, IconX } from '@tabler/icons-react';
 import { KbdTooltip } from '../../../shared/components/KbdTooltip';
 import { MediaItem, isVideoMime, toMasonryItem } from '../../grid/shared';
@@ -95,7 +95,7 @@ export function MediaView({ images, currentIndex, onNavigate, onClose, onStateCh
     if (collectionLoadingRef.current) return;
     collectionLoadingRef.current = true;
     try {
-      const resp = await filesController.getGridPage({
+      const resp = await entityController.getGridPage({
         limit: COLLECTION_PAGE_SIZE,
         cursor,
         scope: {
@@ -530,7 +530,7 @@ export function MediaView({ images, currentIndex, onNavigate, onClose, onStateCh
         if (digit >= 0 && digit <= 5) {
           e.preventDefault();
           const hash = currentHashRef.current;
-          if (hash) void filesController.updateRating(hash, digit);
+          if (hash) void entityController.updateRating(hash, digit);
           return;
         }
       }
@@ -544,7 +544,7 @@ export function MediaView({ images, currentIndex, onNavigate, onClose, onStateCh
           if (inboxAction) {
             inboxAction(hash, 'trash');
           } else {
-            runCriticalAction('Delete Failed', 'detail.trashFromShortcut', filesController.setStatus(hash, 'trash'));
+            runCriticalAction('Delete Failed', 'detail.trashFromShortcut', entityController.setStatus(hash, 'trash'));
           }
         }
         return;
@@ -553,7 +553,7 @@ export function MediaView({ images, currentIndex, onNavigate, onClose, onStateCh
         e.preventDefault();
         const img = currentImageRef.current;
         if (img && !img.is_collection) {
-          runCriticalAction('Open Failed', 'detail.openDefaultFromShortcut', filesController.openDefault(img.hash));
+          runCriticalAction('Open Failed', 'detail.openDefaultFromShortcut', entityController.openDefault(img.hash));
         }
         return;
       }
@@ -561,7 +561,7 @@ export function MediaView({ images, currentIndex, onNavigate, onClose, onStateCh
         e.preventDefault();
         const img = currentImageRef.current;
         if (img && !img.is_collection) {
-          runCriticalAction('Reveal Failed', 'detail.revealFromShortcut', filesController.revealInFolder(img.hash));
+          runCriticalAction('Reveal Failed', 'detail.revealFromShortcut', entityController.revealInFolder(img.hash));
         }
         return;
       }
@@ -572,7 +572,7 @@ export function MediaView({ images, currentIndex, onNavigate, onClose, onStateCh
           runCriticalAction(
             'New Window Failed',
             'detail.openInNewWindowFromShortcut',
-            filesController.openInNewWindow(img.hash, img.width, img.height),
+            entityController.openInNewWindow(img.hash, img.width, img.height),
           );
         }
         return;
@@ -584,7 +584,7 @@ export function MediaView({ images, currentIndex, onNavigate, onClose, onStateCh
           runCriticalAction(
             'Regenerate Failed',
             'detail.regenerateThumbnailFromShortcut',
-            filesController.regenerateThumbnail(hash),
+            entityController.regenerateThumbnail(hash),
           );
         }
         return;

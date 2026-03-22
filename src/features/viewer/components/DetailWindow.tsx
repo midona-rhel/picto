@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { filesController } from '../../../controllers/filesController';
+import { entityController } from '../../../controllers/entityController';
 import { getCurrentWindow } from '#desktop/api';
 import { PhysicalSize } from '#desktop/api';
 import { listen, emit } from '#desktop/api';
@@ -111,7 +111,7 @@ export function DetailWindow({ hash }: DetailWindowProps) {
   }, [resetToolbarTimer]);
 
   useEffect(() => {
-    filesController.getEntity(hash).then((raw) => {
+    entityController.getEntity(hash).then((raw) => {
       if (!raw) return;
       setImage(toMasonryItem(raw));
     }).catch((err) => {
@@ -327,7 +327,7 @@ export function DetailWindow({ hash }: DetailWindowProps) {
   const handleCopyPath = useCallback(async () => {
     if (!currentImage || currentImage.is_collection) return;
     try {
-      const path = await filesController.resolvePath(currentImage.hash);
+      const path = await entityController.resolvePath(currentImage.hash);
       await writeText(path);
     } catch (error) {
       notifyError(error, 'Copy Failed');

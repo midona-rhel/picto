@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { filesController } from '../../../controllers/filesController';
+import { entityController } from '../../../controllers/entityController';
 import { collectionsController } from '../../../controllers/collectionsController';
 
 import { useInspectorData, type InspectorData } from './useInspectorData';
@@ -129,7 +129,7 @@ export function useInspectorState({
         pendingNameChangeRef.current = null;
         return;
       }
-      filesController.rename(hash, nextName, before)
+      entityController.rename(hash, nextName, before)
         .catch((e: unknown) => {
           console.error('Failed to save name:', e);
         })

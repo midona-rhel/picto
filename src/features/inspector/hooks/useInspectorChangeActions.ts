@@ -1,5 +1,5 @@
 import { useCallback, useRef } from 'react';
-import { filesController } from '../../../controllers/filesController';
+import { entityController } from '../../../controllers/entityController';
 import { tagsController } from '../../../controllers/tagsController';
 import { foldersController } from '../../../controllers/foldersController';
 import {
@@ -73,14 +73,14 @@ export function useInspectorChangeActions(
         const prevRatings = hashes.length > 0
           ? new Map(await Promise.all(hashes.map(async (hash) => [hash, (await getMetadata(hash)).entity.rating ?? null] as [string, number | null])))
           : undefined;
-        await filesController.rateSelection(selectionSummarySpec, normalizedRating, prevRatings);
+        await entityController.rateSelection(selectionSummarySpec, normalizedRating, prevRatings);
       } else {
         if (hashes.length === 0) return;
         const prevRatings = new Map(
           await Promise.all(hashes.map(async (hash) => [hash, (await getMetadata(hash)).entity.rating ?? null] as [string, number | null])),
         );
         const spec = { mode: 'explicit_hashes' as const, hashes, scope: {} as any, filters: {} as any, sort: {} as any };
-        await filesController.rateSelection(spec, normalizedRating, prevRatings);
+        await entityController.rateSelection(spec, normalizedRating, prevRatings);
       }
     },
     [selectedImages, selectionSummarySpec],
@@ -90,7 +90,7 @@ export function useInspectorChangeActions(
     async (urls: string[]) => {
       setSourceUrls(urls);
       if (selectionSummarySpec) {
-        await filesController.setSelectionSourceUrls(selectionSummarySpec, urls);
+        await entityController.setSelectionSourceUrls(selectionSummarySpec, urls);
       } else {
         const hashes = selectedImages.map((img) => img.hash);
         if (hashes.length === 0) return;
@@ -98,7 +98,7 @@ export function useInspectorChangeActions(
         for (const hash of hashes) {
           const meta = await getMetadata(hash);
           const prev = [...(meta.entity.source_urls ?? [])];
-          await filesController.setSourceUrls(hash, urls, prev);
+          await entityController.setSourceUrls(hash, urls, prev);
         }
       }
     },
@@ -118,14 +118,14 @@ export function useInspectorChangeActions(
         const prevObj: Record<string, string> = {};
         if (prevNotes) prevObj.description = prevNotes;
         if (selectionSummarySpec) {
-          filesController.setSelectionNotes(selectionSummarySpec, notesObj)
+          entityController.setSelectionNotes(selectionSummarySpec, notesObj)
             .then(() => { committedNotesRef.current = text; })
             .catch((e) => console.error('Failed to save notes:', e));
         } else {
           if (selectedImages.length === 0) return;
           const hashes = selectedImages.map((img) => img.hash);
           // Controller owns undo for per-hash notes.
-          Promise.all(hashes.map((hash) => filesController.setNotes(hash, notesObj, prevObj)))
+          Promise.all(hashes.map((hash) => entityController.setNotes(hash, notesObj, prevObj)))
             .then(() => { committedNotesRef.current = text; })
             .catch((e) => console.error('Failed to save notes:', e));
         }
@@ -198,7 +198,7 @@ export function useInspectorChangeActions(
       const hash = selectedImages[0].hash;
 
       // reanalyzeColors already handles cache invalidation via eagerInvalidate
-      await filesController.reanalyzeColors(hash);
+      await entityController.reanalyzeColors(hash);
 
       const metadata = await getMetadata(hash);
       setFileMetadata(metadata);

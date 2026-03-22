@@ -12,7 +12,7 @@ import {
   IconX,
   IconCheck,
 } from '@tabler/icons-react';
-import { filesController } from '../../../controllers/filesController';
+import { entityController } from '../../../controllers/entityController';
 import { duplicatesController } from '../../../controllers/duplicatesController';
 import { formatDateTime } from '../../../shared/lib/formatters';
 import { mediaFileUrl, mediaThumbnailUrl } from '../../../shared/lib/mediaUrl';
@@ -234,7 +234,7 @@ export function DuplicateManager() {
 
     const loadFileInfo = async () => {
       try {
-        const batch = await filesController.getMetadataBatch([
+        const batch = await entityController.getMetadataBatch([
           currentPair.hash_a,
           currentPair.hash_b,
         ]);
@@ -315,7 +315,7 @@ export function DuplicateManager() {
           const loserHash = action === 'keep_left'
             ? pairSnapshot.hash_b
             : pairSnapshot.hash_a;
-          await filesController.changeStatus(loserHash, 'trash', 'active', 'Resolve duplicate');
+          await entityController.changeStatus(loserHash, 'trash', 'active', 'Resolve duplicate');
         }
 
         setPairs((prev) => {

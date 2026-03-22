@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { useHotkeys } from '@mantine/hooks';
 import { notifyInfo } from '../../../shared/lib/notify';
-import { filesController } from '../../../controllers/filesController';
+import { entityController } from '../../../controllers/entityController';
 import { foldersController } from '../../../controllers/foldersController';
 import { notifyError, notifySuccess } from '../../../shared/lib/notify';
 import { FolderPickerService } from '../../../shared/services/folderPickerService';
@@ -201,7 +201,7 @@ export function useGridHotkeys({
           : [...s.selectedHashes];
         if (hashes.length === 0) return;
         notifyInfo(`Regenerating ${hashes.length} thumbnail(s)`);
-        filesController.regenerateThumbnailsBatch(hashes)
+        entityController.regenerateThumbnailsBatch(hashes)
           .then((r) => {
             notifySuccess(`Regenerated ${r.regenerated} thumbnail(s)`, 'Thumbnails');
           })
@@ -217,7 +217,7 @@ export function useGridHotkeys({
         const hash = hashes[0];
         const img = s.images.find((i) => i.hash === hash);
         if (!img || img.is_collection) return;
-        filesController.findSimilar(hash)
+        entityController.findSimilar(hash)
           .then((result) => {
             if (result.items.length === 0) {
               notifyInfo('No visually similar images found');

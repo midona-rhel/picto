@@ -2,7 +2,7 @@
  * Thin metadata pass-through — dedupes in-flight requests only.
  * No LRU cache. Backend (SQLite) is the single source of truth.
  */
-import { filesController } from '../../controllers/filesController';
+import { entityController } from '../../controllers/entityController';
 import type {
   EntityAllMetadata,
   ResolvedTagInfo,
@@ -18,33 +18,33 @@ export type { EntityAllMetadata, ResolvedTagInfo, SelectionQuerySpec, SelectionS
 
 /** Fire-and-forget prefetch for a single hash. */
 export function prefetchMetadata(hash: string): void {
-  filesController.prefetchMetadata(hash);
+  entityController.prefetchMetadata(hash);
 }
 
 /** Batch prefetch — hits the projection-backed batch endpoint. */
 export async function prefetchMetadataBatch(hashes: string[]): Promise<void> {
-  await filesController.prefetchMetadataBatch(hashes);
+  await entityController.prefetchMetadataBatch(hashes);
 }
 
 /** Get metadata for a hash — returns a fresh fetch every time. */
 export function getMetadata(hash: string): Promise<EntityAllMetadata> {
-  return filesController.getMetadata(hash);
+  return entityController.getMetadata(hash);
 }
 
 /** No-op — backend remains the source of truth. */
 export function noteMetadataChanged(hash: string): void {
-  filesController.noteMetadataChanged(hash);
+  entityController.noteMetadataChanged(hash);
 }
 export function noteManyMetadataChanged(hashes: string[]): void {
-  filesController.noteManyMetadataChanged(hashes);
+  entityController.noteManyMetadataChanged(hashes);
 }
 
 export function getOrStartSelectionSummary(spec: SelectionQuerySpec): Promise<SelectionSummary> {
-  return filesController.getSelectionSummary(spec);
+  return entityController.getSelectionSummary(spec);
 }
 
 export function noteSelectionSummaryChanged(_selectionKey?: string): void {
-  filesController.noteSelectionSummaryChanged();
+  entityController.noteSelectionSummaryChanged();
 }
 
 export function getMetadataCacheDebugStats() {

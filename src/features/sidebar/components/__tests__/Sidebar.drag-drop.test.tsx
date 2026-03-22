@@ -18,8 +18,8 @@ const {
   gridGetPageSlimMock: vi.fn(),
 }));
 
-vi.mock('../../../../controllers/filesController', () => ({
-  filesController: {
+vi.mock('../../../../controllers/entityController', () => ({
+  entityController: {
     setStatusSelection: setStatusSelectionMock,
   },
 }));

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef } from 'react';
-import { filesController } from '../../../controllers/filesController';
+import { entityController } from '../../../controllers/entityController';
 import { prefetchMetadataBatch } from '#features/grid/data';
 import type { GridRuntimeAction } from '../runtime/gridRuntimeReducer';
 import type { GridRuntimeState } from '../runtime/gridRuntimeState';
@@ -113,7 +113,7 @@ export function useGridData({
       // so layout computes exact height — no estimation, no scrollbar flicker.
       const prefetchCap = Math.max(500, minItems);
       while (hasMore && allImages.length < prefetchCap) {
-        const page = await filesController.getGridPage(toFetchGridPageArgs(query, cursor, PAGE_SIZE));
+        const page = await entityController.getGridPage(toFetchGridPageArgs(query, cursor, PAGE_SIZE));
         allImages.push(...page.items.map(toMasonryItem));
         totalCount = page.total_count ?? totalCount;
         cursor = page.next_cursor;
@@ -205,7 +205,7 @@ export function useGridData({
 
     const generation = generationRef.current;
     try {
-      const page = await filesController.getGridPage(toFetchGridPageArgs(query, cursor, PAGE_SIZE));
+      const page = await entityController.getGridPage(toFetchGridPageArgs(query, cursor, PAGE_SIZE));
       if (generation !== generationRef.current) return;
 
       const items = page.items.map(toMasonryItem);

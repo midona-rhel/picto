@@ -4,7 +4,7 @@ import { IconArrowRight } from '@tabler/icons-react';
 import { glassModalStyles } from '../styles/glassModal';
 import { TextButton } from './TextButton';
 import { notifySuccess, notifyError } from '../lib/notify';
-import { filesController } from '../../controllers/filesController';
+import { entityController } from '../../controllers/entityController';
 import type { MasonryItem } from '../../features/grid/shared';
 import classes from './BatchRenameDialog.module.css';
 
@@ -110,7 +110,7 @@ export function BatchRenameDialog({ opened, onClose, images }: BatchRenameDialog
 
     setSaving(true);
     try {
-      await filesController.batchRename(
+      await entityController.batchRename(
         toRename.map((item) => ({ hash: item.hash, name: item.after || null })),
         toRename.map((item) => ({ hash: item.hash, name: item.before || null })),
       );

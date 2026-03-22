@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef } from 'react';
 import { emitTo, listen } from '#desktop/api';
-import { filesController } from '../../../controllers/filesController';
+import { entityController } from '../../../controllers/entityController';
 import { tagsController } from '../../../controllers/tagsController';
 import { notifyError, notifySuccess } from '../../../shared/lib/notify';
 import { logBestEffortError, runBestEffort } from '../../../shared/lib/asyncOps';
@@ -51,7 +51,7 @@ export function useGridItemActions({
 
   const handleOpenWithDefaultApp = useCallback(() => {
     if (!singleSelectedHash) return;
-    filesController.openDefault(singleSelectedHash).catch((err) => {
+    entityController.openDefault(singleSelectedHash).catch((err) => {
       notifyError(err, 'Open Failed');
     });
   }, [singleSelectedHash]);
@@ -59,7 +59,7 @@ export function useGridItemActions({
   const handleOpenInNewWindow = useCallback(async () => {
     if (!singleSelectedHash) return;
     const img = state.images.find((i) => i.hash === singleSelectedHash);
-    filesController.openInNewWindow(singleSelectedHash, img?.width, img?.height).catch((err) => {
+    entityController.openInNewWindow(singleSelectedHash, img?.width, img?.height).catch((err) => {
       notifyError(err, 'New Window Failed');
     });
   }, [singleSelectedHash, state.images]);
@@ -106,7 +106,7 @@ export function useGridItemActions({
 
   const handleRevealInFolder = useCallback(() => {
     if (!singleSelectedHash) return;
-    filesController.revealInFolder(singleSelectedHash).catch((err) => {
+    entityController.revealInFolder(singleSelectedHash).catch((err) => {
       notifyError(err, 'Reveal Failed');
     });
   }, [singleSelectedHash]);
@@ -114,7 +114,7 @@ export function useGridItemActions({
   const handleCopyFilePath = useCallback(async () => {
     if (!singleSelectedHash) return;
     try {
-      const path = await filesController.resolvePath(singleSelectedHash);
+      const path = await entityController.resolvePath(singleSelectedHash);
       await navigator.clipboard.writeText(path);
       notifySuccess('File path copied to clipboard', 'Copied');
     } catch (err) {
