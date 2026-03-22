@@ -75,8 +75,11 @@ export const tagsController = {
   },
 
   async addToSelection(selection: SelectionQuerySpec, tags: string[]) {
+    const hashes = selection.hashes?.length
+      ? selection.hashes
+      : await filesController.resolveSelectionHashes(selection);
     await api.selection.addTags(selection, tags);
-    if (selection.hashes?.length) filesController.noteManyMetadataChanged(selection.hashes);
+    filesController.noteManyMetadataChanged(hashes);
     const spec = structuredClone(selection), t = [...tags];
     registerUndoAction({
       label: `Add ${t.length} tag${t.length === 1 ? '' : 's'}`,
@@ -86,8 +89,11 @@ export const tagsController = {
   },
 
   async removeFromSelection(selection: SelectionQuerySpec, tags: string[]) {
+    const hashes = selection.hashes?.length
+      ? selection.hashes
+      : await filesController.resolveSelectionHashes(selection);
     await api.selection.removeTags(selection, tags);
-    if (selection.hashes?.length) filesController.noteManyMetadataChanged(selection.hashes);
+    filesController.noteManyMetadataChanged(hashes);
     const spec = structuredClone(selection), t = [...tags];
     registerUndoAction({
       label: `Remove ${t.length} tag${t.length === 1 ? '' : 's'}`,
