@@ -5,9 +5,9 @@ import { cmSelectInput, cmSelectDropdown, cmSelectOption, cmComboboxProps } from
 import type { GridViewMode } from '../../features/grid/runtime';
 
 function ModeIcon({ mode, size = 14 }: { mode: GridViewMode; size?: number }) {
-  if (mode === 'grid') return <IconBorderAll size={size} />;
-  if (mode === 'justified') return <IconLayoutBoard size={size} style={{ transform: 'rotate(-90deg)' }} />;
-  return <IconLayoutBoard size={size} />;
+  if (mode === 'grid') return <IconBorderAll size={size} fill="none" />;
+  if (mode === 'justified') return <IconLayoutBoard size={size} fill="none" style={{ transform: 'rotate(-90deg)' }} />;
+  return <IconLayoutBoard size={size} fill="none" />;
 }
 
 export function LayoutRow({ viewMode, onChange }: { viewMode: GridViewMode; onChange: (m: GridViewMode) => void }) {
