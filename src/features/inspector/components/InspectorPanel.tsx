@@ -17,7 +17,6 @@ import { KbdTooltip } from '../../../shared/components/KbdTooltip';
 import { useNavigationStore } from '../../../state/navigationStore';
 import { useFilterStore } from '../../../state/filterStore';
 import { filesController } from '../../../controllers/filesController';
-import { collectionsController } from '../../../controllers/collectionsController';
 import { formatFileSize, formatDuration, formatDateTime, getFileExtension } from '../../../shared/lib/formatters';
 import type { MediaItem } from '../../grid/shared';
 import { GlassImagePreview } from '../../../shared/components/GlassImagePreview';
@@ -501,7 +500,7 @@ export function InspectorPanel({
       // Virtual Select All: resolve all hashes from the backend
       hashes = await filesController.resolveSelectionHashes(selectionSummarySpec);
     } else {
-      hashes = await collectionsController.expandToMemberHashes(selectedImages);
+      hashes = selectedImages.map((i) => i.hash);
     }
 
     if (hashes.length === 0) return;

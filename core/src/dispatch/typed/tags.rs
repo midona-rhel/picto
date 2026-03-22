@@ -177,10 +177,22 @@ pub async fn add_tags(state: &AppState, input: AddTagsInput) -> Result<(), Strin
         .db
         .expand_hashes_for_collections(&input.hashes)
         .await?;
+    // Tag all file entities by hash
     state
         .db
         .add_tags_batch(&expanded, &input.tag_strings)
         .await?;
+    // Also tag collection entities directly (they have no file hash)
+    let collection_ids = state
+        .db
+        .find_collection_entity_ids_for_cover_hashes(&input.hashes)
+        .await?;
+    if !collection_ids.is_empty() {
+        state
+            .db
+            .add_tags_batch_by_entity_ids(collection_ids, input.tag_strings.clone(), "local".to_string())
+            .await?;
+    }
     crate::events::emit_state_changed(
         "add_tags",
         crate::runtime_contract::change_builder::ChangeImpact::batch_tags()
@@ -199,10 +211,22 @@ pub async fn remove_tags(state: &AppState, input: RemoveTagsInput) -> Result<(),
         .db
         .expand_hashes_for_collections(&input.hashes)
         .await?;
+    // Remove tags from all file entities by hash
     state
         .db
         .remove_tags_batch(&expanded, &input.tag_strings)
         .await?;
+    // Also remove tags from collection entities directly (they have no file hash)
+    let collection_ids = state
+        .db
+        .find_collection_entity_ids_for_cover_hashes(&input.hashes)
+        .await?;
+    if !collection_ids.is_empty() {
+        state
+            .db
+            .remove_tags_batch_by_entity_ids(collection_ids, input.tag_strings.clone())
+            .await?;
+    }
     crate::events::emit_state_changed(
         "remove_tags",
         crate::runtime_contract::change_builder::ChangeImpact::batch_tags()

@@ -83,8 +83,13 @@ impl SqliteDatabase {
         Ok(results)
     }
 
-    /// Batch resolve hashes → file_ids. Checks cache first, then DB for misses.
-    /// Returns results in arbitrary order; missing hashes are silently skipped.
+    /// Batch resolve hashes → (hash, entity_id) pairs. Checks cache first, then DB.
+    ///
+    /// **Collection awareness**: if a hash belongs to a collection's cover file,
+    /// the result set automatically includes the collection entity_id AND all
+    /// member entity_ids. This means every operation that goes through this
+    /// function (folder add/remove, tag add/remove, etc.) transparently applies
+    /// to collections and their children. No special-casing needed per handler.
     pub async fn resolve_hashes_batch(
         &self,
         hashes: &[String],
@@ -127,6 +132,47 @@ impl SqliteDatabase {
                 .await?;
             results.extend(db_results);
         }
+
+        // Collection expansion: for any resolved file_id that is a collection
+        // cover, also include the collection entity_id and all member entity_ids.
+        let file_ids: Vec<i64> = results.iter().map(|(_, fid)| *fid).collect();
+        if !file_ids.is_empty() {
+            let extra = self
+                .with_read_conn(move |conn| {
+                    let mut expanded: Vec<(String, i64)> = Vec::new();
+                    for &fid in &file_ids {
+                        if let Ok(Some(collection_id)) =
+                            crate::folders::collections_db::find_collection_for_cover_file(conn, fid)
+                        {
+                            // Add the collection entity itself (use empty hash — it has no file)
+                            expanded.push((String::new(), collection_id));
+                            // Add all member entity_ids
+                            let member_fids =
+                                crate::folders::collections_db::get_collection_member_file_ids(
+                                    conn,
+                                    collection_id,
+                                )?;
+                            for member_fid in member_fids {
+                                // Resolve member file_id → hash for the result set
+                                if let Ok(hash) = conn.query_row(
+                                    "SELECT hash FROM file WHERE file_id = ?1",
+                                    [member_fid],
+                                    |row| row.get::<_, String>(0),
+                                ) {
+                                    expanded.push((hash, member_fid));
+                                }
+                            }
+                        }
+                    }
+                    Ok(expanded)
+                })
+                .await?;
+            results.extend(extra);
+        }
+
+        // Dedup by entity_id (keep first occurrence of each id)
+        let mut seen = std::collections::HashSet::new();
+        results.retain(|(_, id)| seen.insert(*id));
 
         Ok(results)
     }
@@ -188,6 +234,83 @@ impl SqliteDatabase {
             expanded.sort_unstable();
             expanded.dedup();
             Ok(expanded)
+        })
+        .await
+    }
+
+    /// Given a list of hashes (some may be collection cover hashes), expand any
+    /// collection hashes to include the collection's member file hashes AND keep
+    /// the original hash (so the collection entity itself is also included).
+    pub async fn expand_collection_hashes_to_members(
+        &self,
+        hashes: &[String],
+    ) -> Result<Vec<String>, String> {
+        if hashes.is_empty() {
+            return Ok(Vec::new());
+        }
+        let hashes = hashes.to_vec();
+        self.with_read_conn(move |conn| {
+            let mut result: Vec<String> = Vec::new();
+            for hash in &hashes {
+                let file_id: Option<i64> = conn
+                    .query_row(
+                        "SELECT file_id FROM file WHERE hash = ?1",
+                        [hash],
+                        |row| row.get(0),
+                    )
+                    .ok();
+                let Some(fid) = file_id else {
+                    result.push(hash.clone());
+                    continue;
+                };
+                let collection_id =
+                    crate::folders::collections_db::find_collection_for_cover_file(conn, fid)?;
+                if let Some(cid) = collection_id {
+                    result.push(hash.clone());
+                    let member_hashes =
+                        crate::folders::collections_db::list_collection_member_hashes(conn, cid)?;
+                    result.extend(member_hashes);
+                } else {
+                    result.push(hash.clone());
+                }
+            }
+            result.sort_unstable();
+            result.dedup();
+            Ok(result)
+        })
+        .await
+    }
+
+    /// Given cover file hashes, find the collection entity_ids they belong to.
+    pub async fn find_collection_entity_ids_for_cover_hashes(
+        &self,
+        hashes: &[String],
+    ) -> Result<Vec<i64>, String> {
+        if hashes.is_empty() {
+            return Ok(Vec::new());
+        }
+        let hashes = hashes.to_vec();
+        self.with_read_conn(move |conn| {
+            let mut ids = Vec::new();
+            for hash in &hashes {
+                let file_id: Option<i64> = conn
+                    .query_row(
+                        "SELECT file_id FROM file WHERE hash = ?1",
+                        [hash],
+                        |row| row.get(0),
+                    )
+                    .ok();
+                if let Some(fid) = file_id {
+                    if let Ok(Some(cid)) =
+                        crate::folders::collections_db::find_collection_for_cover_file(conn, fid)
+                    {
+                        ids.push(cid);
+                    }
+                }
+            }
+            ids.sort_unstable();
+            ids.dedup();
+            Ok(ids)
         })
         .await
     }

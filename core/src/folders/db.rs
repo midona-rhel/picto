@@ -907,9 +907,10 @@ impl SqliteDatabase {
         if hashes.is_empty() {
             return Ok(0);
         }
+        // resolve_hashes_batch automatically expands collection covers to
+        // include the collection entity_id + all member entity_ids.
         let resolved = self.resolve_hashes_batch(hashes).await?;
         let all_ids: Vec<i64> = resolved.iter().map(|(_, id)| *id).collect();
-        // Only allow removing active (status=1) entities from folders
         let entity_ids: Vec<i64> = self
             .with_read_conn({
                 let ids = all_ids;

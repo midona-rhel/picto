@@ -39,6 +39,17 @@ export function startApplyingGridRefreshTargets(): void {
     const changeOrigin = state.lastChangeOrigin;
     const handledTargets: ResourceKey[] = [];
 
+    // Phase 1: Collect affected hashes from metadata targets.
+    // These are the exact files the backend told us changed.
+    const affectedHashes: string[] = [];
+
+    for (const key of state.pendingRefreshTargets) {
+      if (key.startsWith('metadata/hash:')) {
+        affectedHashes.push(key.slice('metadata/hash:'.length));
+      }
+    }
+
+    // Phase 2: Apply targets.
     for (const key of state.pendingRefreshTargets) {
       // Metadata hash refresh target
       if (key.startsWith('metadata/hash:')) {
@@ -65,8 +76,18 @@ export function startApplyingGridRefreshTargets(): void {
           && key === 'grid/system:inbox';
 
         if (matches && !skipInboxReplace) {
-          useGridMetadataStore.getState().clearMetadataCache();
-          useGridMetadataStore.getState().bumpGridRefresh();
+          if (affectedHashes.length > 0) {
+            // Targeted: the backend gave us exact hashes. The per-hash
+            // metadata/hash:* targets already handle metadata invalidation.
+            // The controller already handled membership changes eagerly
+            // (queueRemovals/queueInsertions). No broad refresh needed.
+          } else {
+            // No specific hashes from the backend — true fallback.
+            // This should be rare with PBI-561/562 providing exact hashes
+            // for all normal flows.
+            useGridMetadataStore.getState().clearMetadataCache();
+            useGridMetadataStore.getState().bumpGridRefresh();
+          }
         }
         handledTargets.push(key);
       }

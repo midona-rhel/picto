@@ -25,13 +25,14 @@ export function useInspectorChangeActions(
     async (tags: string[]) => {
       if (tags.length === 0) return;
       const tagsSnapshot = [...tags];
+      console.log('[inspector.onAddTags]', { tagsSnapshot, selectionSummarySpec: !!selectionSummarySpec, selectedCollection: !!selectedCollection, selectedImages: selectedImages.length });
       if (selectionSummarySpec) {
         await tagsController.addToSelection(selectionSummarySpec, tagsSnapshot);
       } else if (selectedCollection) {
         await collectionsController.tagAdd(selectedCollection.id, tagsSnapshot);
       } else {
         const hashes = selectedImages.map((img) => img.hash);
-        if (hashes.length === 0) return;
+        if (hashes.length === 0) { console.log('[inspector.onAddTags] no hashes, returning'); return; }
         // Optimistic: add chips immediately
         setFileTags((prev) => {
           const existing = new Set(prev.map((t) => t.raw_tag));
@@ -55,16 +56,21 @@ export function useInspectorChangeActions(
     async (tags: string[]) => {
       if (tags.length === 0) return;
       const tagsSnapshot = [...tags];
+      console.log('[inspector.onRemoveTags]', { tagsSnapshot, selectionSummarySpec: !!selectionSummarySpec, selectedCollection: !!selectedCollection, selectedImages: selectedImages.length, hashes: selectedImages.map(i => i.hash) });
       if (selectionSummarySpec) {
+        console.log('[inspector.onRemoveTags] selection path');
         await tagsController.removeFromSelection(selectionSummarySpec, tagsSnapshot);
       } else if (selectedCollection) {
+        console.log('[inspector.onRemoveTags] collection path, id=', selectedCollection.id);
         await collectionsController.tagRemove(selectedCollection.id, tagsSnapshot);
       } else {
         const hashes = selectedImages.map((img) => img.hash);
-        if (hashes.length === 0) return;
+        if (hashes.length === 0) { console.log('[inspector.onRemoveTags] no hashes'); return; }
+        console.log('[inspector.onRemoveTags] hashes path', hashes);
         // Optimistic: remove chips immediately
         setFileTags((prev) => prev.filter((t) => !tags.includes(t.raw_tag)));
         await tagsController.removeFromHashes(hashes, tagsSnapshot);
+        console.log('[inspector.onRemoveTags] done');
       }
     },
     [selectedImages, selectionSummarySpec, selectedCollection, setFileTags],
@@ -143,6 +149,7 @@ export function useInspectorChangeActions(
     async (folderIds: number[]) => {
       const folderIdsSnapshot = [...folderIds];
       if (folderIdsSnapshot.length === 0) return;
+      console.log('[inspector.onAddToFolders]', { folderIds, selectedImages: selectedImages.length, hashes: selectedImages.map(i => i.hash) });
 
       if (selectionSummarySpec) {
         // Virtual Select All: let the backend resolve all hashes
@@ -155,7 +162,7 @@ export function useInspectorChangeActions(
       }
 
       // Expand collections to member hashes for folder assignment.
-      const hashes = await collectionsController.expandToMemberHashes(selectedImages);
+      const hashes = selectedImages.map((img) => img.hash);
       const hashesSnapshot = [...hashes];
       if (hashesSnapshot.length === 0) return;
       // foldersController.addFiles owns undo registration.
@@ -175,6 +182,7 @@ export function useInspectorChangeActions(
 
   const onRemoveFromFolder = useCallback(
     async (folderId: number) => {
+      console.log('[inspector.onRemoveFromFolder]', { folderId, selectedImages: selectedImages.length, hashes: selectedImages.map(i => i.hash) });
       // Optimistic: update UI immediately
       setFileFolders((prev) => prev.filter((f) => f.folder_id !== folderId));
       try {
@@ -182,7 +190,7 @@ export function useInspectorChangeActions(
           // Virtual Select All: let the backend resolve all hashes from the selection
           await foldersController.removeFiles(folderId, [], selectionSummarySpec);
         } else {
-          const hashes = await collectionsController.expandToMemberHashes(selectedImages);
+          const hashes = selectedImages.map((img) => img.hash);
           if (hashes.length === 0) return;
           // foldersController.removeFiles owns undo registration.
           await foldersController.removeFiles(folderId, hashes);

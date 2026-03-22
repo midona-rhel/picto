@@ -436,13 +436,12 @@ pub async fn add_files_to_folder(
     state: &AppState,
     input: AddFilesToFolderInput,
 ) -> Result<usize, String> {
-    let raw_hashes = resolve_folder_op_hashes(state, input.hashes, input.selection).await?;
-    if raw_hashes.is_empty() {
+    // resolve_hashes_batch (called inside add_entities_to_folder_batch) automatically
+    // expands collection cover hashes to include the collection + all member entity_ids.
+    let hashes = resolve_folder_op_hashes(state, input.hashes, input.selection).await?;
+    if hashes.is_empty() {
         return Ok(0);
     }
-    // Expand any collection hashes to their member file hashes so that
-    // dragging a collection tile to a folder adds the member files.
-    let hashes = state.db.expand_collection_hashes_to_members(&raw_hashes).await?;
     let count = state
         .db
         .add_entities_to_folder_batch(input.folder_id, &hashes)

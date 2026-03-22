@@ -50,6 +50,18 @@ interface DomainState {
   requestRefresh: () => void;
   applySidebarCounts: (counts: { all_active: number; inbox: number; trash: number }) => void;
   setDuplicatesCount: (count: number) => void;
+  /** Targeted folder count adjustment — avoids full tree refetch. */
+  adjustFolderCount: (folderId: number, delta: number) => void;
+  /** Targeted smart folder count update — avoids full tree refetch. */
+  setSmartFolderCount: (smartFolderId: number, count: number) => void;
+  /** Patch a folder node's properties in-place. */
+  patchFolderNode: (folderId: number, patch: { name?: string; icon?: string | null; color?: string | null }) => void;
+  /** Remove a folder node from the sidebar tree. */
+  removeFolderNode: (folderId: number) => void;
+  /** Patch a smart folder's properties in-place. */
+  patchSmartFolder: (sfId: number, patch: { name?: string; icon?: string | null; color?: string | null }) => void;
+  /** Remove a smart folder from the sidebar tree. */
+  removeSmartFolder: (sfId: number) => void;
 }
 
 const SIDEBAR_REFRESH_DEBOUNCE_MS = 120;
@@ -226,4 +238,69 @@ export const useDomainStore = create<DomainState>((set, get) => ({
   },
 
   setDuplicatesCount: (count) => set({ duplicatesCount: count }),
+
+  adjustFolderCount: (folderId, delta) => {
+    const fid = String(folderId);
+    set((s) => ({
+      folderNodes: s.folderNodes.map((n) =>
+        n.id === `folder:${fid}` ? { ...n, count: (n.count ?? 0) + delta } : n,
+      ),
+      sidebarNodes: s.sidebarNodes.map((n) =>
+        n.id === `folder:${fid}` ? { ...n, count: (n.count ?? 0) + delta } : n,
+      ),
+    }));
+  },
+
+  setSmartFolderCount: (smartFolderId, count) => {
+    const sfid = String(smartFolderId);
+    set((s) => ({
+      smartFolders: s.smartFolders.map((sf) =>
+        sf.id === sfid ? { ...sf, count } : sf,
+      ),
+      smartFolderCounts: { ...s.smartFolderCounts, [sfid]: count },
+    }));
+  },
+
+  patchFolderNode: (folderId, patch) => {
+    const fid = `folder:${folderId}`;
+    set((s) => ({
+      folderNodes: s.folderNodes.map((n) =>
+        n.id === fid ? { ...n, ...patch } : n,
+      ),
+      sidebarNodes: s.sidebarNodes.map((n) =>
+        n.id === fid ? { ...n, ...patch } : n,
+      ),
+    }));
+  },
+
+  removeFolderNode: (folderId) => {
+    const fid = `folder:${folderId}`;
+    set((s) => ({
+      folderNodes: s.folderNodes.filter((n) => n.id !== fid),
+      sidebarNodes: s.sidebarNodes.filter((n) => n.id !== fid),
+    }));
+  },
+
+  patchSmartFolder: (sfId, patch) => {
+    const id = String(sfId);
+    set((s) => ({
+      smartFolders: s.smartFolders.map((sf) =>
+        sf.id === id ? { ...sf, ...patch } : sf,
+      ),
+      sidebarNodes: s.sidebarNodes.map((n) =>
+        n.id === `smart:${id}` ? { ...n, ...patch } : n,
+      ),
+    }));
+  },
+
+  removeSmartFolder: (sfId) => {
+    const id = String(sfId);
+    set((s) => ({
+      smartFolders: s.smartFolders.filter((sf) => sf.id !== id),
+      smartFolderCounts: Object.fromEntries(
+        Object.entries(s.smartFolderCounts).filter(([k]) => k !== id),
+      ),
+      sidebarNodes: s.sidebarNodes.filter((n) => n.id !== `smart:${id}`),
+    }));
+  },
 }));

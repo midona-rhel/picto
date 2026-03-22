@@ -124,9 +124,11 @@ export const filesController = {
   },
 
   noteMetadataChanged(hash: string): void {
+    console.log('[filesController.noteMetadataChanged]', hash);
     eagerInvalidate(hash);
   },
   noteManyMetadataChanged(hashes: string[]): void {
+    console.log('[filesController.noteManyMetadataChanged]', hashes);
     eagerInvalidateMany(hashes);
   },
   pinMetadata(_hash: string): void {},
@@ -160,55 +162,50 @@ export const filesController = {
   },
 
   async setStatusSelection(selection: SelectionQuerySpec, status: string) {
+    // Resolve virtual selections to explicit hashes before the operation
+    // so we can do targeted grid updates instead of broad clear.
+    const hashes = selection.hashes?.length
+      ? selection.hashes
+      : await queryApi.selection.resolveHashes(selection);
     const result = await commandApi.file.setStatusSelection(selection, status);
     const leaves = statusLeavesScope(status);
     const enters = statusEntersScope(status);
-    if (selection.hashes?.length) {
-      eagerInvalidateMany(selection.hashes);
-      if (leaves) {
-        useGridMetadataStore.getState().queueRemovals(selection.hashes);
-      } else if (enters) {
-        // Fetch entities for insertion into the grid.
-        Promise.all(selection.hashes.map((h) => queryApi.file.get(h))).then((entities) => {
-          const valid = entities.filter((e): e is NonNullable<typeof e> => e != null);
-          if (valid.length > 0) useGridMetadataStore.getState().queueInsertions(valid);
-        });
-      }
-    } else if (leaves) {
-      useGridMetadataStore.getState().queueClearAll();
+    eagerInvalidateMany(hashes);
+    if (leaves) {
+      useGridMetadataStore.getState().queueRemovals(hashes);
+    } else if (enters) {
+      Promise.all(hashes.map((h) => queryApi.file.get(h))).then((entities) => {
+        const valid = entities.filter((e): e is NonNullable<typeof e> => e != null);
+        if (valid.length > 0) useGridMetadataStore.getState().queueInsertions(valid);
+      });
     }
     return result;
   },
 
   async updateSelectionRating(selection: SelectionQuerySpec, rating: number | null) {
+    const hashes = selection.hashes?.length
+      ? selection.hashes
+      : await queryApi.selection.resolveHashes(selection);
     const result = await commandApi.selection.updateRating(selection, rating);
-    // Rating changes don't remove items — just invalidate metadata for re-fetch.
-    if (selection.hashes?.length) {
-      eagerInvalidateMany(selection.hashes);
-    } else {
-      // Virtual all: mark every visible tile as changed so they re-fetch metadata.
-      useGridMetadataStore.getState().clearMetadataCache();
-    }
+    eagerInvalidateMany(hashes);
     return result;
   },
 
   async setSelectionSourceUrls(selection: SelectionQuerySpec, urls: string[]) {
+    const hashes = selection.hashes?.length
+      ? selection.hashes
+      : await queryApi.selection.resolveHashes(selection);
     const result = await commandApi.selection.setSourceUrls(selection, urls);
-    if (selection.hashes?.length) {
-      eagerInvalidateMany(selection.hashes);
-    } else {
-      useGridMetadataStore.getState().clearMetadataCache();
-    }
+    eagerInvalidateMany(hashes);
     return result;
   },
 
   async setSelectionNotes(selection: SelectionQuerySpec, notes: Record<string, string>) {
+    const hashes = selection.hashes?.length
+      ? selection.hashes
+      : await queryApi.selection.resolveHashes(selection);
     const result = await commandApi.selection.setNotes(selection, notes);
-    if (selection.hashes?.length) {
-      eagerInvalidateMany(selection.hashes);
-    } else {
-      useGridMetadataStore.getState().clearMetadataCache();
-    }
+    eagerInvalidateMany(hashes);
     return result;
   },
 
@@ -220,13 +217,12 @@ export const filesController = {
   },
 
   async deleteSelection(selection: SelectionQuerySpec) {
+    const hashes = selection.hashes?.length
+      ? selection.hashes
+      : await queryApi.selection.resolveHashes(selection);
     const result = await commandApi.file.deleteSelection(selection);
-    if (selection.hashes?.length) {
-      eagerInvalidateMany(selection.hashes);
-      useGridMetadataStore.getState().queueRemovals(selection.hashes);
-    } else {
-      useGridMetadataStore.getState().queueClearAll();
-    }
+    eagerInvalidateMany(hashes);
+    useGridMetadataStore.getState().queueRemovals(hashes);
     return result;
   },
 

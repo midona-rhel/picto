@@ -394,7 +394,7 @@ export function buildGridImageContextMenu(args: BuildGridImageContextMenuArgs): 
         );
         // Expand collections to member hashes
         const expandAndOpen = async () => {
-          const allHashes = await collectionsController.expandToMemberHashes(selected);
+          const allHashes = selected.map((img) => img.hash);
           if (allHashes.length === 0) return;
           AiTaggerService.open({
             anchorEl: anchor,

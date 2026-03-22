@@ -62,11 +62,12 @@ export const foldersController = {
       icon: params.icon,
       color: params.color,
     });
-    eagerSidebarRefresh();
+    // Structural change — backend event reconciles with authoritative tree
+    useDomainStore.getState().requestRefresh();
     registerUndoAction({
       label: 'Create folder',
-      backward: async () => { await api.folders.delete(folder.folder_id); eagerSidebarRefresh(); },
-      forward: async () => { await api.folders.create({ name: folder.name, parent_id: params.parentId ?? null, icon: params.icon, color: params.color }); eagerSidebarRefresh(); },
+      backward: async () => { await api.folders.delete(folder.folder_id); useDomainStore.getState().removeFolderNode(folder.folder_id); },
+      forward: async () => { await api.folders.create({ name: folder.name, parent_id: params.parentId ?? null, icon: params.icon, color: params.color }); useDomainStore.getState().requestRefresh(); },
     });
     return folder;
   },
@@ -74,11 +75,11 @@ export const foldersController = {
   async rename(folderId: number, newName: string, oldName: string) {
     if (oldName === newName) return;
     await api.folders.update({ folder_id: folderId, name: newName });
-    eagerSidebarRefresh();
+    useDomainStore.getState().patchFolderNode(folderId, { name: newName });
     registerUndoAction({
       label: 'Rename folder',
-      backward: async () => { await api.folders.update({ folder_id: folderId, name: oldName }); eagerSidebarRefresh(); },
-      forward: async () => { await api.folders.update({ folder_id: folderId, name: newName }); eagerSidebarRefresh(); },
+      backward: async () => { await api.folders.update({ folder_id: folderId, name: oldName }); useDomainStore.getState().patchFolderNode(folderId, { name: oldName }); },
+      forward: async () => { await api.folders.update({ folder_id: folderId, name: newName }); useDomainStore.getState().patchFolderNode(folderId, { name: newName }); },
     });
   },
 
@@ -135,27 +136,33 @@ export const foldersController = {
   // ── Membership ─────────────────────────────────────────────────────────────
 
   async addFiles(folderId: number, hashes: string[], selection?: SelectionQuerySpec) {
+    console.log('[foldersController.addFiles]', { folderId, hashes, hasSelection: !!selection });
     await api.folders.addFiles(folderId, hashes, selection);
-    eagerSidebarRefresh();
+    console.log('[foldersController.addFiles] backend succeeded');
+    const count = hashes.length || 0;
+    if (count > 0) useDomainStore.getState().adjustFolderCount(folderId, count);
     eagerGridRefresh(folderId);
     if (hashes.length > 0 && !selection) {
       registerUndoAction({
         label: `Add ${hashes.length} to folder`,
-        backward: async () => { await api.folders.removeFiles(folderId, hashes); eagerSidebarRefresh(); eagerGridRemove(folderId, hashes); },
-        forward: async () => { await api.folders.addFiles(folderId, hashes); eagerSidebarRefresh(); eagerGridRefresh(folderId); },
+        backward: async () => { await api.folders.removeFiles(folderId, hashes); useDomainStore.getState().adjustFolderCount(folderId, -count); eagerGridRemove(folderId, hashes); },
+        forward: async () => { await api.folders.addFiles(folderId, hashes); useDomainStore.getState().adjustFolderCount(folderId, count); eagerGridRefresh(folderId); },
       });
     }
   },
 
   async removeFiles(folderId: number, hashes: string[], selection?: SelectionQuerySpec) {
+    console.log('[foldersController.removeFiles]', { folderId, hashes, hasSelection: !!selection });
     await api.folders.removeFiles(folderId, hashes, selection);
-    eagerSidebarRefresh();
+    console.log('[foldersController.removeFiles] backend succeeded');
+    const count = hashes.length || 0;
+    if (count > 0) useDomainStore.getState().adjustFolderCount(folderId, -count);
     eagerGridRemove(folderId, hashes);
     if (hashes.length > 0 && !selection) {
       registerUndoAction({
         label: `Remove ${hashes.length} file${hashes.length === 1 ? '' : 's'} from folder`,
-        backward: async () => { await api.folders.addFiles(folderId, hashes); eagerSidebarRefresh(); eagerGridRefresh(folderId); },
-        forward: async () => { await api.folders.removeFiles(folderId, hashes); eagerSidebarRefresh(); eagerGridRemove(folderId, hashes); },
+        backward: async () => { await api.folders.addFiles(folderId, hashes); useDomainStore.getState().adjustFolderCount(folderId, count); eagerGridRefresh(folderId); },
+        forward: async () => { await api.folders.removeFiles(folderId, hashes); useDomainStore.getState().adjustFolderCount(folderId, -count); eagerGridRemove(folderId, hashes); },
       });
     }
   },

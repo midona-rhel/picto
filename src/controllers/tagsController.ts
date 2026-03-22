@@ -52,7 +52,9 @@ export const tagsController = {
   // ── Tag management writes ──
 
   async addToHashes(hashes: string[], tags: string[]) {
+    console.log('[tagsController.addToHashes]', { hashes, tags });
     await api.tags.add(hashes, tags);
+    console.log('[tagsController.addToHashes] backend succeeded, invalidating metadata');
     filesController.noteManyMetadataChanged(hashes);
     const h = [...hashes], t = [...tags];
     registerUndoAction({
@@ -63,7 +65,9 @@ export const tagsController = {
   },
 
   async removeFromHashes(hashes: string[], tags: string[]) {
+    console.log('[tagsController.removeFromHashes]', { hashes, tags });
     await api.tags.remove(hashes, tags);
+    console.log('[tagsController.removeFromHashes] backend succeeded, invalidating metadata');
     filesController.noteManyMetadataChanged(hashes);
     const h = [...hashes], t = [...tags];
     registerUndoAction({

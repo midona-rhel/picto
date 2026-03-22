@@ -72,19 +72,6 @@ export const collectionsController = {
     return api.collections.listMemberHashes(id);
   },
 
-  /** Expand a list of items (some of which may be collections) into flat member hashes. */
-  async expandToMemberHashes(items: Array<{ hash: string; is_collection?: boolean; entity_id?: number | null }>): Promise<string[]> {
-    const hashes: string[] = [];
-    for (const item of items) {
-      if (item.is_collection && item.entity_id != null) {
-        const members = await api.collections.listMemberHashes(item.entity_id);
-        hashes.push(...members);
-      } else {
-        hashes.push(item.hash);
-      }
-    }
-    return hashes;
-  },
 
   // ── Atomic writes ──
 
