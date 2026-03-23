@@ -1,6 +1,6 @@
 //! Sidebar tree reads.
 
-use rusqlite::{params, Connection};
+use rusqlite::Connection;
 
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct SidebarNode {

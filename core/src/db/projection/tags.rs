@@ -2,8 +2,6 @@
 //! Rebuilds Status, Tag, ImpliedTag, EffectiveTag, Tagged, and
 //! CollectionMember bitmaps from authoritative tables.
 
-use std::sync::Arc;
-
 use roaring::RoaringBitmap;
 use rusqlite::Connection;
 

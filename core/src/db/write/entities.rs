@@ -3,7 +3,7 @@
 
 use rusqlite::{params, Connection};
 
-use crate::db::types::{EntityChange, EntityKind, ExpansionMode, StatusChange};
+use crate::db::types::{EntityChange, ExpansionMode, StatusChange};
 
 /// Insert a new single entity + its backing file record.
 /// Returns the assigned entity_id.

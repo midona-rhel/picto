@@ -3,7 +3,7 @@
 //! This is the ONLY module allowed to reference old table names.
 //! No runtime code depends on this module after migration completes.
 
-use rusqlite::{params, Connection};
+use rusqlite::Connection;
 
 /// Old schema version that triggers migration.
 const OLD_SCHEMA_MAX_VERSION: i64 = 99;
@@ -31,7 +31,27 @@ pub fn is_new_schema(conn: &Connection) -> bool {
 pub fn migrate(conn: &Connection) -> Result<MigrationResult, String> {
     let mut result = MigrationResult::default();
 
-    // Create new tables (they use IF NOT EXISTS so safe to run)
+    // Disable FK checks during migration to avoid intermediate constraint violations.
+    conn.execute_batch("PRAGMA foreign_keys = OFF;")
+        .map_err(|e| format!("Failed to disable FK: {e}"))?;
+
+    // Tables that exist in both old and new schemas with different column layouts.
+    // Rename them out of the way before creating the new versions.
+    let overlapping = [
+        "folder", "tag", "smart_folder", "media_entity",
+        "subscription_group", "subscription", "subscription_query",
+        "subscription_entity", "subscription_post_collection",
+        "download_queue", "download_queue_item",
+        "credential_domain", "credential_health",
+        "duplicate", "file_color", "sidebar_node",
+        "view_pref", "kv_settings", "manifest",
+        "deferred_work",
+    ];
+    for table in &overlapping {
+        let _ = conn.execute(&format!("ALTER TABLE {table} RENAME TO _old_{table}"), []);
+    }
+
+    // Create all new tables from scratch.
     conn.execute_batch(crate::db::core::schema::LIBRARY_DDL)
         .map_err(|e| format!("Failed to create new schema: {e}"))?;
 
@@ -47,7 +67,7 @@ pub fn migrate(conn: &Connection) -> Result<MigrationResult, String> {
         .map_err(|e| format!("Failed to migrate files: {e}"))?;
     result.files_migrated = file_count;
 
-    // ── Step 2: media_entity ← media_entity (old) ─────────────────
+    // ── Step 2: media_entity ← _old_media_entity ───────────────────
     // Singles
     let singles = conn
         .execute(
@@ -59,7 +79,7 @@ pub fn migrate(conn: &Connection) -> Result<MigrationResult, String> {
                     COALESCE(f.imported_at, me.created_at, datetime('now')),
                     COALESCE(me.updated_at, datetime('now')),
                     me.parent_collection_id, me.collection_ordinal
-             FROM media_entity me
+             FROM _old_media_entity me
              LEFT JOIN entity_file ef ON ef.entity_id = me.entity_id
              LEFT JOIN file f ON f.file_id = ef.file_id
              WHERE me.kind = 'single'",
@@ -68,17 +88,17 @@ pub fn migrate(conn: &Connection) -> Result<MigrationResult, String> {
         .map_err(|e| format!("Failed to migrate single entities: {e}"))?;
     result.singles_migrated = singles;
 
-    // Collections
+    // Collections — primary_member_entity_id is NULL here, recomputed in step 6.
     let collections = conn
         .execute(
-            "INSERT OR IGNORE INTO media_entity (entity_id, entity_hash, entity_kind, status, name, notes, rating, date_created, date_added, date_modified, member_count, total_size_bytes, primary_member_entity_id)
+            "INSERT OR IGNORE INTO media_entity (entity_id, entity_hash, entity_kind, status, name, notes, rating, date_created, date_added, date_modified, member_count, total_size_bytes)
              SELECT me.entity_id, COALESCE(me.hash, hex(randomblob(32))), 'collection', COALESCE(me.status, 0),
                     me.name, me.description, me.rating,
                     COALESCE(me.created_at, datetime('now')),
                     COALESCE(me.created_at, datetime('now')),
                     COALESCE(me.updated_at, datetime('now')),
-                    me.cached_item_count, me.cached_total_size_bytes, me.cover_file_id
-             FROM media_entity me
+                    me.cached_item_count, me.cached_total_size_bytes
+             FROM _old_media_entity me
              WHERE me.kind = 'collection'",
             [],
         )
@@ -91,14 +111,19 @@ pub fn migrate(conn: &Connection) -> Result<MigrationResult, String> {
             "INSERT OR IGNORE INTO single_media_entity (entity_id, file_id)
              SELECT ef.entity_id, ef.file_id
              FROM entity_file ef
-             JOIN media_entity me ON me.entity_id = ef.entity_id
+             JOIN _old_media_entity me ON me.entity_id = ef.entity_id
              WHERE me.kind = 'single'",
             [],
         )
         .map_err(|e| format!("Failed to migrate single_media_entity: {e}"))?;
     result.bridges_migrated = bridges;
 
-    // ── Step 4: entity_tag ← entity_tag_raw ───────────────────────
+    // ── Step 4: tag ← _old_tag, entity_tag ← entity_tag_raw ────────
+    let _ = conn.execute(
+        "INSERT OR IGNORE INTO tag (tag_id, namespace, subtag, file_count)
+         SELECT tag_id, namespace, subtag, file_count FROM _old_tag",
+        [],
+    );
     let tags = conn
         .execute(
             "INSERT OR IGNORE INTO entity_tag (entity_id, tag_id, source)
@@ -108,7 +133,13 @@ pub fn migrate(conn: &Connection) -> Result<MigrationResult, String> {
         .map_err(|e| format!("Failed to migrate entity_tag: {e}"))?;
     result.tags_migrated = tags;
 
-    // ── Step 5: folder_member ← folder_entity ─────────────────────
+    // ── Step 5: folder ← _old_folder, folder_member ← folder_entity
+    let _ = conn.execute(
+        "INSERT OR IGNORE INTO folder (folder_id, name, parent_id, icon, color, sort_order, auto_tags, watch_path, watch_enabled, watch_subfolders, watch_import_status_mode, date_added, date_modified)
+         SELECT folder_id, name, parent_id, icon, color, sort_order, auto_tags, watch_path, watch_enabled, watch_subfolders, watch_import_status_mode, COALESCE(created_at, datetime('now')), COALESCE(updated_at, datetime('now'))
+         FROM _old_folder",
+        [],
+    );
     let folder_members = conn
         .execute(
             "INSERT OR IGNORE INTO folder_member (folder_id, entity_id, position_rank)
@@ -153,32 +184,119 @@ pub fn migrate(conn: &Connection) -> Result<MigrationResult, String> {
     )
     .map_err(|e| format!("Failed to recompute collection aggregates: {e}"))?;
 
-    // ── Step 8: Migrate file_color ────────────────────────────────
-    // file_color references media_file.file_id which has same IDs as old file.file_id
-    // so the FK should be valid after media_file migration.
+    // ── Step 8: smart_folder ← _old_smart_folder ────────────────────
+    let _ = conn.execute(
+        "INSERT OR IGNORE INTO smart_folder (smart_folder_id, name, parent_id, icon, color, predicate_json, sort_field, sort_order, display_order, date_added, date_modified)
+         SELECT smart_folder_id, name, parent_id, icon, color, predicate_json, sort_field, sort_order, display_order, COALESCE(created_at, datetime('now')), COALESCE(updated_at, datetime('now'))
+         FROM _old_smart_folder",
+        [],
+    );
 
-    // ── Step 9: Migrate subscription tables ───────────────────────
-    // subscription_group, subscription, subscription_query already match new schema
-    // shape (same column names). subscription_entity uses entity_id FK.
-    // These tables are kept as-is since the new schema matches.
+    // ── Step 9: subscription tables ← _old_subscription_* ─────────
+    let _ = conn.execute(
+        "INSERT OR IGNORE INTO subscription_group (group_id, name, schedule, date_added)
+         SELECT group_id, name, schedule, COALESCE(created_at, datetime('now'))
+         FROM _old_subscription_group",
+        [],
+    );
+    let _ = conn.execute(
+        "INSERT OR IGNORE INTO subscription (subscription_id, name, site_id, paused, group_id, initial_post_limit, periodic_post_limit, auto_collections, date_added)
+         SELECT subscription_id, name, site_id, paused, group_id, initial_post_limit, periodic_post_limit, COALESCE(auto_collections, 1), COALESCE(created_at, datetime('now'))
+         FROM _old_subscription",
+        [],
+    );
+    let _ = conn.execute(
+        "INSERT OR IGNORE INTO subscription_query (query_id, subscription_id, query_text, display_name, paused, last_check_time, files_found, posts_found, completed_initial_run, resume_cursor, resume_strategy)
+         SELECT query_id, subscription_id, query_text, display_name, paused, last_check_time, files_found, COALESCE(posts_found, files_found), completed_initial_run, resume_cursor, resume_strategy
+         FROM _old_subscription_query",
+        [],
+    );
+    let _ = conn.execute(
+        "INSERT OR IGNORE INTO subscription_entity (subscription_id, entity_id)
+         SELECT subscription_id, entity_id FROM _old_subscription_entity",
+        [],
+    );
+    let _ = conn.execute(
+        "INSERT OR IGNORE INTO subscription_post_collection (subscription_id, site_id, post_id, collection_entity_id, date_added, date_modified)
+         SELECT subscription_id, site_id, post_id, collection_entity_id, COALESCE(created_at, datetime('now')), COALESCE(updated_at, datetime('now'))
+         FROM _old_subscription_post_collection",
+        [],
+    );
 
-    // ── Step 10: Drop old tables ──────────────────────────────────
-    let old_tables = [
-        "entity_file",
-        "entity_tag_raw",
-        "folder_entity",
-        "entity_metadata_projection",
-        "artifact_manifest_meta",
-        "artifact_manifest_entry",
-        "mutation_action",
-        "collection_source_url",
-        "file_fts",
+    // ── Step 10: file_color ← _old_file_color ─────────────────────
+    let _ = conn.execute(
+        "INSERT OR IGNORE INTO file_color (rowid, file_id, hex, l, a, b)
+         SELECT rowid, file_id, hex, l, a, b FROM _old_file_color",
+        [],
+    );
+
+    // ── Step 11: credentials ← _old_credential_* ─────────────────
+    let _ = conn.execute(
+        "INSERT OR IGNORE INTO credential_domain (site_category, credential_type, display_name, date_added)
+         SELECT site_category, credential_type, display_name, COALESCE(created_at, datetime('now'))
+         FROM _old_credential_domain",
+        [],
+    );
+    let _ = conn.execute(
+        "INSERT OR IGNORE INTO credential_health (site_category, health_status, last_checked_at, last_error)
+         SELECT site_category, health_status, last_checked_at, last_error FROM _old_credential_health",
+        [],
+    );
+
+    // ── Step 12: duplicates ← _old_duplicate ──────────────────────
+    let _ = conn.execute(
+        "INSERT OR IGNORE INTO duplicate (file_id_a, file_id_b, distance, status, decision_at, decision_source, decision_reason, winner_file_id, loser_file_id)
+         SELECT file_id_a, file_id_b, distance, status, decision_at, decision_source, decision_reason, winner_file_id, loser_file_id FROM _old_duplicate",
+        [],
+    );
+
+    // ── Step 13: settings ← _old_kv_settings, _old_view_pref ─────
+    let _ = conn.execute(
+        "INSERT OR IGNORE INTO kv_settings (key, value) SELECT key, value FROM _old_kv_settings",
+        [],
+    );
+    let _ = conn.execute(
+        "INSERT OR IGNORE INTO view_pref (scope, sort_field, sort_dir, layout, tile_size, show_name, show_resolution, show_extension, show_label, thumbnail_fit)
+         SELECT scope, sort_field, sort_dir, layout, tile_size, show_name, show_resolution, show_extension, show_label, thumbnail_fit FROM _old_view_pref",
+        [],
+    );
+
+    // ── Step 14: deferred_work_item ← _old_deferred_work ──────────
+    let _ = conn.execute(
+        "INSERT OR IGNORE INTO deferred_work_item (work_id, entity_hash, work_type, status, attempt_count, available_at, last_error, queued_at)
+         SELECT work_id, hash, work_type, status, attempt_count, available_at, last_error, COALESCE(created_at, datetime('now'))
+         FROM _old_deferred_work",
+        [],
+    );
+
+    // ── Step 15: Drop ALL old/renamed tables ──────────────────────
+    let tables_to_drop = [
+        // Renamed old tables
+        "_old_folder", "_old_tag", "_old_smart_folder", "_old_media_entity",
+        "_old_subscription_group", "_old_subscription", "_old_subscription_query",
+        "_old_subscription_entity", "_old_subscription_post_collection",
+        "_old_download_queue", "_old_download_queue_item",
+        "_old_credential_domain", "_old_credential_health",
+        "_old_duplicate", "_old_file_color", "_old_sidebar_node",
+        "_old_view_pref", "_old_kv_settings", "_old_manifest",
+        "_old_deferred_work",
+        // Original old-only tables
+        "file", "entity_file", "entity_tag_raw", "folder_entity",
+        "entity_metadata_projection", "artifact_manifest_meta",
+        "artifact_manifest_entry", "mutation_action",
+        "collection_source_url", "file_fts",
+        "entity_tag_implied", "tag_ancestor", "tag_alias",
+        "tag_implication", "tag_display",
     ];
-    for table in &old_tables {
+    for table in &tables_to_drop {
         let _ = conn.execute(&format!("DROP TABLE IF EXISTS {table}"), []);
     }
 
-    // ── Step 11: Set new schema version ───────────────────────────
+    // ── Step 16: Re-enable FK checks ──────────────────────────────
+    conn.execute_batch("PRAGMA foreign_keys = ON;")
+        .map_err(|e| format!("Failed to re-enable FK: {e}"))?;
+
+    // ── Step 17: Set new schema version ───────────────────────────
     conn.execute("DELETE FROM schema_version", [])
         .map_err(|e| format!("Failed to clear schema_version: {e}"))?;
     conn.execute(

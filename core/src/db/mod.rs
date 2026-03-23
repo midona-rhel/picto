@@ -87,10 +87,10 @@ impl LibraryDatabase {
         Ok(db)
     }
 
-    // ── Write operations ─────────────────────────────────────────
+    // ── Internal connection access (crate-private) ─────────────────
 
-    /// Execute a write operation with the write connection.
-    pub fn with_write<F, R>(&self, f: F) -> Result<R, String>
+    /// Execute a write operation. Only accessible within db/.
+    fn with_write<F, R>(&self, f: F) -> Result<R, String>
     where
         F: FnOnce(&Connection) -> rusqlite::Result<R>,
     {
@@ -98,8 +98,8 @@ impl LibraryDatabase {
         f(&conn).map_err(|e| e.to_string())
     }
 
-    /// Execute a read operation with the read connection.
-    pub fn with_read<F, R>(&self, f: F) -> Result<R, String>
+    /// Execute a read operation. Only accessible within db/.
+    fn with_read<F, R>(&self, f: F) -> Result<R, String>
     where
         F: FnOnce(&Connection) -> rusqlite::Result<R>,
     {
@@ -281,60 +281,32 @@ impl LibraryDatabase {
 
     // ── Query operations ─────────────────────────────────────────
 
-    pub fn query_grid_all_active(
+    /// Single entry point for all grid queries. Routes by scope, applies filters.
+    /// Pre-resolves bitmap-backed scopes (SmartFolder) before passing to the query builder.
+    pub fn query_entity_view(
         &self,
-        limit: i64,
-        offset: i64,
-        sort_field: &str,
-        sort_dir: &str,
-    ) -> Result<query::grid::EntityViewPage, String> {
-        self.with_read(|conn| query::grid::query_all_active(conn, limit, offset, sort_field, sort_dir))
-    }
-
-    pub fn query_grid_inbox(
-        &self,
-        limit: i64,
-        offset: i64,
-        sort_field: &str,
-        sort_dir: &str,
-    ) -> Result<query::grid::EntityViewPage, String> {
-        self.with_read(|conn| query::grid::query_inbox(conn, limit, offset, sort_field, sort_dir))
-    }
-
-    pub fn query_grid_trash(
-        &self,
-        limit: i64,
-        offset: i64,
-        sort_field: &str,
-        sort_dir: &str,
-    ) -> Result<query::grid::EntityViewPage, String> {
-        self.with_read(|conn| query::grid::query_trash(conn, limit, offset, sort_field, sort_dir))
-    }
-
-    pub fn query_grid_folder(
-        &self,
-        folder_id: i64,
-        limit: i64,
-        offset: i64,
-        sort_field: &str,
-        sort_dir: &str,
-    ) -> Result<query::grid::EntityViewPage, String> {
-        self.with_read(|conn| query::grid::query_folder(conn, folder_id, limit, offset, sort_field, sort_dir))
-    }
-
-    pub fn query_collection_members(
-        &self,
-        collection_entity_id: i64,
-        limit: i64,
-        offset: i64,
-    ) -> Result<query::grid::EntityViewPage, String> {
-        self.with_read(|conn| query::grid::query_collection_members(conn, collection_entity_id, limit, offset))
+        view_query: &types::EntityViewQuery,
+    ) -> Result<types::EntityViewPage, String> {
+        // Pre-resolve SmartFolder bitmap to entity_ids (doesn't need DB connection)
+        let preresolved = match view_query.base_scope.kind {
+            types::ScopeKind::SmartFolder => {
+                let sf_id = view_query.base_scope.id.unwrap_or(0);
+                let bitmap = self.bitmaps.get(
+                    &projection::bitmaps::BitmapKey::SmartFolder(sf_id),
+                );
+                Some(bitmap.iter().map(|id| id as i64).collect::<Vec<_>>())
+            }
+            _ => None,
+        };
+        self.with_read(|conn| {
+            query::grid::query_entity_view(conn, view_query, preresolved.as_deref())
+        })
     }
 
     pub fn get_entity_details(
         &self,
         entity_hash: &str,
-    ) -> Result<Option<query::details::EntityDetails>, String> {
+    ) -> Result<Option<types::EntityDetails>, String> {
         self.with_read(|conn| query::details::get_entity_details(conn, entity_hash))
     }
 

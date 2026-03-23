@@ -1,51 +1,9 @@
 //! Entity detail queries — returns EntityDetails for inspector/detail panel.
 //! Fully independent from EntityGridItem.
 
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{Connection, OptionalExtension};
 
-use crate::db::types::EntityKind;
-
-/// Full detail payload for the inspector panel.
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct EntityDetails {
-    pub entity_hash: String,
-    pub entity_kind: EntityKind,
-    pub name: Option<String>,
-    pub mime_type: String,
-    pub size_bytes: i64,
-    pub pixel_width: Option<i64>,
-    pub pixel_height: Option<i64>,
-    pub duration_ms: Option<i64>,
-    pub frame_count: Option<i64>,
-    pub has_audio: bool,
-    pub status: i64,
-    pub rating: Option<i64>,
-    pub notes: Option<String>,
-    pub source_urls: Option<Vec<String>>,
-    pub date_created: String,
-    pub date_added: String,
-    pub date_modified: String,
-    pub dominant_color_hex: Option<String>,
-    pub perceptual_hash: Option<String>,
-    pub tags: Vec<TagInfo>,
-    pub folders: Vec<FolderInfo>,
-    pub member_count: Option<i64>,
-    pub total_size_bytes: Option<i64>,
-}
-
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct TagInfo {
-    pub tag_id: i64,
-    pub namespace: String,
-    pub subtag: String,
-    pub source: String,
-}
-
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct FolderInfo {
-    pub folder_id: i64,
-    pub name: String,
-}
+use crate::db::types::{EntityKind, EntityDetails, TagInfo, FolderInfo};
 
 /// Get full details for an entity by hash.
 pub fn get_entity_details(

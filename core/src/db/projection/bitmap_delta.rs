@@ -5,8 +5,8 @@
 //! If either is missing or corrupt, a full rebuild from authoritative
 //! tables is performed — bitmaps are fully disposable.
 
-use std::io::{Read, Write};
-use std::path::{Path, PathBuf};
+use std::io::Write;
+use std::path::Path;
 
 use super::bitmaps::{BitmapDelta, BitmapKey, BitmapStore};
 
