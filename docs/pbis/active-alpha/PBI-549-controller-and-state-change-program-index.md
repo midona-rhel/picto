@@ -96,6 +96,8 @@ What this file is for now:
 - define the bar for future related PBIs
 - prevent the codebase from drifting back toward mixed backend access and vague refresh behavior
 
+For the greenfield reset set that starts at `PBI-567`, [PBI-572-cross-layer-naming-contract.md](./docs/pbis/active-alpha/PBI-572-cross-layer-naming-contract.md) is the naming prerequisite, [PBI-579-cross-layer-testing-rules.md](./docs/pbis/active-alpha/PBI-579-cross-layer-testing-rules.md) is the testing prerequisite, and [PBI-580-cross-layer-comment-rules.md](./docs/pbis/active-alpha/PBI-580-cross-layer-comment-rules.md) is the comment-discipline prerequisite. Do not treat naming, test shape, or comment discipline as cleanup after the fact in that reset line.
+
 ## Program-Level Done Definition
 The full program is only done when:
 

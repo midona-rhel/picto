@@ -1,0 +1,141 @@
+# PBI-575: Greenfield subscriptions engine and recovery reset
+
+## Priority
+P1
+
+## AI-generated caveat
+This document is based on an in-repo audit of the current subscriptions CRUD, run orchestration, gallery-dl runner, and runtime progress/state handling. It is intentionally decisive. The main goal is to stop treating too many failures as opaque and terminal.
+
+## Problem
+The current subscription system works, but too much of its runtime behavior is still modeled as “run something, maybe fail, maybe stop.”
+
+Current problems:
+- subscriptions still expose a large CRUD and control surface instead of one bounded subsystem
+- gallery-dl failures are classified too coarsely and mainly survive as short-lived status strings
+- retryable and non-retryable outcomes are not modeled strongly enough
+- broken queries, broken credentials, extractor changes, rate limits, and transient network problems are not persisted as first-class issues
+- subscription import still feels adjacent to ingest instead of explicitly delegating to the ingest pipeline
+
+## Product model to encode
+The subscription subsystem should reflect these truths:
+- subscription definitions are persistent domain records
+- subscription runs are task executions over those definitions
+- query and site failures should produce persisted issues, not just log lines
+- most failures are recoverable, retryable, or reviewable, not globally “unrecoverable”
+- gallery-dl is an implementation detail behind one subscription runtime
+- imported media flows through the normal ingest pipeline
+
+## Locked decisions
+
+### 1. Split definition state from runtime state
+Model subscriptions as:
+- definition records
+- run attempts
+- persisted issues
+- progress snapshots
+- credential health
+
+Do not collapse all of that into the subscription row itself.
+
+### 2. Persist issues from gallery-dl and runtime failures
+When a run encounters a meaningful problem, persist a structured issue record.
+
+The issue model should capture:
+- subscription or query identity
+- site category
+- issue kind
+- severity
+- recoverability
+- first seen / last seen timestamps
+- retry policy or next suggested retry time
+- short machine-readable classification
+- operator-facing message
+- retained log excerpt or structured detail payload
+
+### 3. Recoverable failures stay recoverable
+The system must distinguish at least:
+- credential/auth blocked
+- rate limited / backoff required
+- transient network failure
+- extractor/schema drift
+- metadata validation failure
+- import-side failure
+- user cancelled
+- permanently invalid definition
+
+Do not flatten all of these into one generic failure status.
+
+### 4. Gallery-dl logs are classification input
+The runtime must use gallery-dl stderr/stdout and run context to classify failures.
+
+That means:
+- keep structured run logs or retained excerpts
+- classify failures into persisted issue kinds
+- allow later review and retry without losing the reason
+
+### 5. Subscription import delegates to ingest
+Downloaded items from subscriptions must go through the main ingest pipeline.
+
+Subscriptions are not allowed to keep their own special import semantics once the ingest reset lands.
+
+### 6. Subscription control surface must shrink
+The public subsystem should collapse around:
+- definition CRUD
+- query CRUD
+- run control
+- issue review
+- progress/runtime reads
+- credential management
+
+Do not keep multiplying narrow transport commands around the same conceptual operations.
+
+## Required subsystem shape
+
+### Main engine categories
+The subsystem should expose clear categories such as:
+- `subscriptions.query_definitions(...)`
+- `subscriptions.mutate_definition(...)`
+- `subscriptions.run_control(...)`
+- `subscriptions.get_runtime_state(...)`
+- `subscriptions.list_issues(...)`
+- `subscriptions.resolve_issue(...)`
+- `subscriptions.credentials(...)`
+
+### Persisted runtime records
+The new runtime model should include explicit records such as:
+- `subscription_run`
+- `subscription_query_run`
+- `subscription_issue`
+- `subscription_issue_event`
+- credential-health rows
+
+Exact table names can be improved, but the separation is not optional.
+
+## Relationship to other reset PBIs
+- PBI-573 defines ingest, which subscriptions must feed into
+- PBI-576 defines deferred/background task ownership
+- PBI-568 defines the engine boundary this subsystem must sit behind
+- PBI-569 defines media delivery, which subscriptions do not own
+
+This PBI must follow the cross-layer naming contract in [PBI-572-cross-layer-naming-contract.md](./docs/pbis/active-alpha/PBI-572-cross-layer-naming-contract.md).
+This PBI must follow the cross-layer testing rules in [PBI-579-cross-layer-testing-rules.md](./docs/pbis/active-alpha/PBI-579-cross-layer-testing-rules.md).
+This PBI must follow the cross-layer comment rules in [PBI-580-cross-layer-comment-rules.md](./docs/pbis/active-alpha/PBI-580-cross-layer-comment-rules.md).
+
+## Acceptance criteria
+This PBI is complete only when:
+- subscriptions are modeled as one bounded subsystem instead of scattered handlers
+- gallery-dl failures produce persisted structured issues
+- recoverable vs blocked vs terminal outcomes are explicit
+- runtime logs are retained enough to explain failures later
+- subscription downloads go through the shared ingest pipeline
+- the public subscription control surface is materially smaller and clearer than the current transport surface
+
+## Tests
+Required tests:
+- auth failure becomes persisted blocked issue
+- rate limit becomes persisted retryable issue with backoff semantics
+- transient network error becomes retryable issue
+- extractor drift / metadata mismatch becomes reviewable issue
+- successful run clears or resolves matching transient issues
+- subscription import uses the ingest pipeline
+- run progress and issue review survive process restart
