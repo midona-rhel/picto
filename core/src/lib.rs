@@ -3,6 +3,9 @@
 //! This crate contains all database, import, tag, folder, subscription,
 //! and media processing logic. It is consumed by the napi-rs addon (Electron).
 
+// ── Database boundary ──────────────────────────────
+pub mod db;
+
 // ── Domain modules ──────────────────────────────────
 pub mod ai_tagger;
 pub mod duplicates;
