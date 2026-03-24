@@ -1,6 +1,6 @@
 import { useMemo } from 'react';
 
-import { useTaskStore } from '../../../state/taskStore';
+import { useTaskStore } from '../../../state-legacy/taskStore';
 import styles from './MainViewProgressBar.module.css';
 
 export function MainViewProgressBar() {

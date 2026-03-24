@@ -1,7 +1,8 @@
 import { useMemo, useRef } from 'react';
-import { useSettingsStore } from '../../../state/settingsStore';
+import { useSettingsStore } from '../../../state-legacy/settingsStore';
 import { useScopedDisplay } from '../../../shared/contexts/ScopedDisplayContext';
-import { useDomainStore } from '../../../state/domainStore';
+import { useAtomValue } from 'jotai';
+import { folderNodesAtom } from '../../../state/sidebar';
 
 export function useGridDisplayState(args: {
   displayFolderId: number | null;
@@ -10,7 +11,7 @@ export function useGridDisplayState(args: {
   const { settings: globalSettings, updateSetting } = useSettingsStore();
   const scopedCtx = useScopedDisplay();
   const scopedOpts = scopedCtx?.displayOptions;
-  const folderNodes = useDomainStore((s) => s.folderNodes);
+  const folderNodes = useAtomValue(folderNodesAtom);
 
   const displaySettings = useMemo(() => ({
     ...globalSettings,

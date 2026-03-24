@@ -5,7 +5,7 @@ import { glassModalStyles } from '../../../shared/styles/glassModal';
 import Dagre from '@dagrejs/dagre';
 import { tagsController } from '../../../controllers/tagsController';
 import { getNamespaceColor } from '../../../shared/lib/namespaceColors';
-import { useNavigationStore } from '../../../state/navigationStore';
+import { useNavigationStore } from '../../../state-legacy/navigationStore';
 import classes from './TagRelationsModal.module.css';
 
 import type { TagRelation } from '../../../shared/types/api';

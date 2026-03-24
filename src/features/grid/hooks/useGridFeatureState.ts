@@ -5,7 +5,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
-import { useFilterStore, mimeFilterToResult, type FilterLogicMode } from '../../../state/filterStore';
+import { useFilterStore, mimeFilterToResult, type FilterLogicMode } from '../../../state-legacy/filterStore';
 import { foldersController } from '../../../controllers/foldersController';
 import type { SmartFolder } from '#features/smart-folders/types';
 import type { TagFilterLogicMode } from '#features/tags/types';

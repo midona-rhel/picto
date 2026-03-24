@@ -2,8 +2,9 @@ import { useEffect, useMemo, useState } from 'react';
 import { Button, Group, Modal, Select, Stack, Switch, Text, TextInput } from '@mantine/core';
 import { open } from '#desktop/api';
 import { notifyError, notifySuccess } from '../../../shared/lib/notify';
-import { useDomainStore } from '../../../state/domainStore';
-import { useFolderWatchActionStore } from '../../../state/folderWatchActionStore';
+import { useAtomValue } from 'jotai';
+import { folderNodesAtom } from '../../../state/sidebar';
+import { useFolderWatchActionStore } from '../../../state-legacy/folderWatchActionStore';
 import { getFolderWatchMeta, parseFolderId } from '../../sidebar/lib/folderTreeData';
 import { glassModalStyles } from '../../../shared/styles/glassModal';
 import { foldersController } from '../../../controllers/foldersController';
@@ -11,7 +12,7 @@ import { foldersController } from '../../../controllers/foldersController';
 type WatchImportStatusMode = 'inherit' | 'inbox' | 'active';
 
 export function FolderWatchDialog() {
-  const folderNodes = useDomainStore((s) => s.folderNodes);
+  const folderNodes = useAtomValue(folderNodesAtom);
   const requestToken = useFolderWatchActionStore((s) => s.requestToken);
   const handledToken = useFolderWatchActionStore((s) => s.handledToken);
   const requestedFolderId = useFolderWatchActionStore((s) => s.folderId);

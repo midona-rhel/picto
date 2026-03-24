@@ -85,6 +85,7 @@ Use this order for the frontend program:
 
 8. Activate shared UI/component/styling consolidation:
 - `PBI-571`
+- execute it surface-by-surface with visual confirmation between slices, starting with the sidebar family
 
 Some implementation work can overlap, but activation should generally follow this order.
 

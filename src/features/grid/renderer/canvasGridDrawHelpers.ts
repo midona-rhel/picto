@@ -21,7 +21,7 @@ import {
   THUMBNAIL_PIPELINE_REVEAL_MS,
   THUMBNAIL_PIPELINE_SOURCE_EDGE,
 } from '../../../shared/lib/canvas/thumbnailPipelinePolicy';
-import { getNavigationImageAdjustment } from '../../../state/navigationImageAdjustmentsStore';
+import { getNavigationImageAdjustment } from '../../../state-legacy/navigationImageAdjustmentsStore';
 
 interface ThemeLike {
   primaryColor: string;

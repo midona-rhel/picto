@@ -1,5 +1,5 @@
 import { api } from '#desktop/api';
-import { canStartTaskFamily, useTaskStore, type TaskProgress } from '../state/taskStore';
+import { canStartTaskFamily, useTaskStore, type TaskProgress } from '../state-legacy/taskStore';
 
 export const importController = {
   canStart(): { allowed: boolean; reason?: string } {

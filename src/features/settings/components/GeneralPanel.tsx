@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { Text, Loader, Select, NumberInput, Switch } from '@mantine/core';
 import { settingsController } from '../../../controllers/settingsController';
 import { statsController } from '../../../controllers/statsController';
-import { useSettingsStore, themeToColorScheme, type ReverseSearchEngine } from '../../../state/settingsStore';
+import { useSettingsStore, themeToColorScheme, type ReverseSearchEngine } from '../../../state-legacy/settingsStore';
 import { formatFileSize } from '../../../shared/lib/formatters';
 import { runCriticalAction } from '../../../shared/lib/asyncOps';
 import { TextButton } from '../../../shared/components/TextButton';

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { useLogStore, type LogEntry } from '../../../state/logStore';
+import { useLogStore, type LogEntry } from '../../../state-legacy/logStore';
 import st from './LogPanel.module.css';
 
 const LEVELS = ['ERROR', 'WARN', 'INFO', 'DEBUG', 'TRACE'] as const;

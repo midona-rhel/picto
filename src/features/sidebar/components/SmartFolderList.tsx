@@ -19,8 +19,8 @@ import { DynamicIcon, DEFAULT_FOLDER_ICON } from '../../smart-folders/components
 import type { SmartFolder } from '../../smart-folders/components/types';
 import { folderToRust } from '../../smart-folders/components/types';
 import { smartFoldersController } from '../../../controllers/smartFoldersController';
-import { useDomainStore } from '../../../state/domainStore';
-import { useNavigationStore } from '../../../state/navigationStore';
+import { useDomainStore } from '../../../state-legacy/domainStore';
+import { useNavigationStore } from '../../../state-legacy/navigationStore';
 import { SidebarSection } from './SidebarSection';
 import { SidebarItem } from './SidebarItem';
 import { buildSmartFolderItemMenu } from '../../../shared/components/context-actions/smartFolderActions';

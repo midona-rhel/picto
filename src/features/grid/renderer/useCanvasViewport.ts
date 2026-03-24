@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type RefObject } from 'react';
-import { useSettingsStore } from '../../../state/settingsStore';
+import { useSettingsStore } from '../../../state-legacy/settingsStore';
 import {
   CANVAS_SCROLL_IDLE_DELAY_MS,
   classifyCanvasScrollPhase,

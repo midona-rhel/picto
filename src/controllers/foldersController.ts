@@ -1,10 +1,12 @@
 import { api } from '#desktop/api';
 import { queryApi } from '#desktop/api';
 import { registerUndoAction } from '../shared/controllers/undoRedoController';
-import { useTaskStore } from '../state/taskStore';
-import { useGridMetadataStore } from '../state/gridMetadataStore';
-import { useDomainStore } from '../state/domainStore';
-import { useNavigationStore } from '../state/navigationStore';
+import { useTaskStore } from '../state-legacy/taskStore';
+import { useGridMetadataStore } from '../state-legacy/gridMetadataStore';
+import { useNavigationStore } from '../state-legacy/navigationStore';
+import { store } from '../state/store';
+import { insertFolderNodeAtom, removeFolderNodeAtom, patchFolderNodeAtom, adjustFolderCountAtom, reorderFolderNodesAtom, moveFolderNodeAtom } from '../state/sidebar';
+import type { SidebarNodeDto } from '../shared/types/sidebar';
 import type { Folder, FolderMembership, SelectionQuerySpec } from '../shared/types/api';
 import type { FolderReorderMove } from '../shared/types/api';
 
@@ -51,13 +53,39 @@ export const foldersController = {
       icon: params.icon,
       color: params.color,
     });
-    useDomainStore.getState().insertFolderNode(folder.folder_id, params.name, params.parentId ?? null, params.icon, params.color);
+    store.set(insertFolderNodeAtom, {
+      id: `folder:${folder.folder_id}`,
+      kind: 'folder',
+      name: params.name,
+      parent_id: params.parentId != null ? `folder:${params.parentId}` : null,
+      icon: params.icon ?? null,
+      color: params.color ?? null,
+      count: 0,
+      sort_order: null,
+      freshness: 'fresh',
+      selectable: true,
+      expanded_by_default: false,
+      meta: null,
+    } as SidebarNodeDto);
     registerUndoAction({
       label: 'Create folder',
-      backward: async () => { await api.folders.delete(folder.folder_id); useDomainStore.getState().removeFolderNode(folder.folder_id); },
+      backward: async () => { await api.folders.delete(folder.folder_id); store.set(removeFolderNodeAtom, folder.folder_id); },
       forward: async () => {
         const re = await api.folders.create({ name: folder.name, parent_id: params.parentId ?? null, icon: params.icon, color: params.color });
-        useDomainStore.getState().insertFolderNode(re.folder_id, re.name, params.parentId ?? null, params.icon, params.color);
+        store.set(insertFolderNodeAtom, {
+          id: `folder:${re.folder_id}`,
+          kind: 'folder',
+          name: re.name,
+          parent_id: params.parentId != null ? `folder:${params.parentId}` : null,
+          icon: params.icon ?? null,
+          color: params.color ?? null,
+          count: 0,
+          sort_order: null,
+          freshness: 'fresh',
+          selectable: true,
+          expanded_by_default: false,
+          meta: null,
+        } as SidebarNodeDto);
       },
     });
     return folder;
@@ -65,12 +93,12 @@ export const foldersController = {
 
   async rename(folderId: number, newName: string, oldName: string) {
     if (oldName === newName) return;
-    useDomainStore.getState().patchFolderNode(folderId, { name: newName });
+    store.set(patchFolderNodeAtom, { folderId, patch: { name: newName } });
     await api.folders.update({ folder_id: folderId, name: newName });
     registerUndoAction({
       label: 'Rename folder',
-      backward: async () => { await api.folders.update({ folder_id: folderId, name: oldName }); useDomainStore.getState().patchFolderNode(folderId, { name: oldName }); },
-      forward: async () => { await api.folders.update({ folder_id: folderId, name: newName }); useDomainStore.getState().patchFolderNode(folderId, { name: newName }); },
+      backward: async () => { await api.folders.update({ folder_id: folderId, name: oldName }); store.set(patchFolderNodeAtom, { folderId, patch: { name: oldName } }); },
+      forward: async () => { await api.folders.update({ folder_id: folderId, name: newName }); store.set(patchFolderNodeAtom, { folderId, patch: { name: newName } }); },
     });
   },
 
@@ -79,7 +107,7 @@ export const foldersController = {
   },
 
   async delete(folderId: number, snapshot?: { name: string; parentId: number | null; icon: string | null; color: string | null; files: string[] } | null) {
-    useDomainStore.getState().removeFolderNode(folderId);
+    store.set(removeFolderNodeAtom, folderId);
     await api.folders.delete(folderId);
     if (useNavigationStore.getState().activeFolderId === folderId) {
       useNavigationStore.getState().navigateTo('images');
@@ -97,15 +125,28 @@ export const foldersController = {
           if (snapshot.files.length > 0) {
             await api.folders.addFiles(recreated.folder_id, snapshot.files);
           }
-          useDomainStore.getState().insertFolderNode(recreated.folder_id, snapshot.name, snapshot.parentId, snapshot.icon, snapshot.color);
+          store.set(insertFolderNodeAtom, {
+            id: `folder:${recreated.folder_id}`,
+            kind: 'folder',
+            name: snapshot.name,
+            parent_id: snapshot.parentId != null ? `folder:${snapshot.parentId}` : null,
+            icon: snapshot.icon ?? null,
+            color: snapshot.color ?? null,
+            count: 0,
+            sort_order: null,
+            freshness: 'fresh',
+            selectable: true,
+            expanded_by_default: false,
+            meta: null,
+          } as SidebarNodeDto);
         },
-        forward: async () => { await api.folders.delete(recreatedId ?? folderId); useDomainStore.getState().removeFolderNode(recreatedId ?? folderId); },
+        forward: async () => { await api.folders.delete(recreatedId ?? folderId); store.set(removeFolderNodeAtom, recreatedId ?? folderId); },
       });
     }
   },
 
   async deleteBatch(folderIds: number[], snapshots: Array<{ name: string; parentId: number | null }>) {
-    for (const id of folderIds) useDomainStore.getState().removeFolderNode(id);
+    for (const id of folderIds) store.set(removeFolderNodeAtom, id);
     await Promise.all(folderIds.map((id) => api.folders.delete(id)));
     const nav = useNavigationStore.getState();
     if (nav.activeFolderId != null && folderIds.includes(nav.activeFolderId)) {
@@ -116,7 +157,20 @@ export const foldersController = {
       backward: async () => {
         for (const snap of snapshots) {
           const re = await api.folders.create({ name: snap.name, parent_id: snap.parentId });
-          useDomainStore.getState().insertFolderNode(re.folder_id, snap.name, snap.parentId);
+          store.set(insertFolderNodeAtom, {
+            id: `folder:${re.folder_id}`,
+            kind: 'folder',
+            name: snap.name,
+            parent_id: snap.parentId != null ? `folder:${snap.parentId}` : null,
+            icon: null,
+            color: null,
+            count: 0,
+            sort_order: null,
+            freshness: 'fresh',
+            selectable: true,
+            expanded_by_default: false,
+            meta: null,
+          } as SidebarNodeDto);
         }
       },
       forward: async () => { /* best-effort */ },
@@ -127,7 +181,7 @@ export const foldersController = {
 
   async addFiles(folderId: number, hashes: string[], selection?: SelectionQuerySpec) {
     const count = hashes.length;
-    if (count > 0) useDomainStore.getState().adjustFolderCount(folderId, count);
+    if (count > 0) store.set(adjustFolderCountAtom, { folderId, delta: count });
     await api.folders.addFiles(folderId, hashes, selection);
     if (useNavigationStore.getState().activeFolderId === folderId && hashes.length > 0) {
       queryApi.file.getGridItems(hashes).then((entities) => {
@@ -137,10 +191,10 @@ export const foldersController = {
     if (hashes.length > 0 && !selection) {
       registerUndoAction({
         label: `Add ${hashes.length} to folder`,
-        backward: async () => { await api.folders.removeFiles(folderId, hashes); useDomainStore.getState().adjustFolderCount(folderId, -count); eagerGridRemove(folderId, hashes); },
+        backward: async () => { await api.folders.removeFiles(folderId, hashes); store.set(adjustFolderCountAtom, { folderId, delta: -count }); eagerGridRemove(folderId, hashes); },
         forward: async () => {
           await api.folders.addFiles(folderId, hashes);
-          useDomainStore.getState().adjustFolderCount(folderId, count);
+          store.set(adjustFolderCountAtom, { folderId, delta: count });
           if (useNavigationStore.getState().activeFolderId === folderId) {
             queryApi.file.getGridItems(hashes).then((entities) => {
               if (entities.length > 0) useGridMetadataStore.getState().queueInsertions(entities);
@@ -153,7 +207,7 @@ export const foldersController = {
 
   async removeFiles(folderId: number, hashes: string[], selection?: SelectionQuerySpec) {
     const count = hashes.length;
-    if (count > 0) useDomainStore.getState().adjustFolderCount(folderId, -count);
+    if (count > 0) store.set(adjustFolderCountAtom, { folderId, delta: -count });
     eagerGridRemove(folderId, hashes);
     await api.folders.removeFiles(folderId, hashes, selection);
     if (hashes.length > 0 && !selection) {
@@ -161,7 +215,7 @@ export const foldersController = {
         label: `Remove ${hashes.length} item${hashes.length === 1 ? '' : 's'} from folder`,
         backward: async () => {
           await api.folders.addFiles(folderId, hashes);
-          useDomainStore.getState().adjustFolderCount(folderId, count);
+          store.set(adjustFolderCountAtom, { folderId, delta: count });
           if (useNavigationStore.getState().activeFolderId === folderId) {
             queryApi.file.getGridItems(hashes).then((entities) => {
               if (entities.length > 0) useGridMetadataStore.getState().queueInsertions(entities);
@@ -170,7 +224,7 @@ export const foldersController = {
         },
         forward: async () => {
           await api.folders.removeFiles(folderId, hashes);
-          useDomainStore.getState().adjustFolderCount(folderId, -count);
+          store.set(adjustFolderCountAtom, { folderId, delta: -count });
           eagerGridRemove(folderId, hashes);
         },
       });
@@ -198,13 +252,13 @@ export const foldersController = {
   // ── Folder ordering ────────────────────────────────────────────────────────
 
   async reorder(moves: [number, number][], previousMoves?: [number, number][]) {
-    useDomainStore.getState().reorderFolderNodes(moves);
+    store.set(reorderFolderNodesAtom, moves);
     await api.folders.reorder(moves);
     if (previousMoves) {
       registerUndoAction({
         label: 'Reorder folders',
-        backward: async () => { await api.folders.reorder(previousMoves); useDomainStore.getState().reorderFolderNodes(previousMoves); },
-        forward: async () => { await api.folders.reorder(moves); useDomainStore.getState().reorderFolderNodes(moves); },
+        backward: async () => { await api.folders.reorder(previousMoves); store.set(reorderFolderNodesAtom, previousMoves); },
+        forward: async () => { await api.folders.reorder(moves); store.set(reorderFolderNodesAtom, moves); },
       });
     }
   },
@@ -215,21 +269,21 @@ export const foldersController = {
     siblingOrder: [number, number][],
     undoParams?: { oldParentId: number | null; oldSiblingMoves: [number, number][] },
   ) {
-    useDomainStore.getState().moveFolderNode(folderId, newParentId);
-    useDomainStore.getState().reorderFolderNodes(siblingOrder);
+    store.set(moveFolderNodeAtom, { folderId, newParentId });
+    store.set(reorderFolderNodesAtom, siblingOrder);
     await api.folders.moveFolder(folderId, newParentId, siblingOrder);
     if (undoParams) {
       registerUndoAction({
         label: 'Move folder',
         backward: async () => {
           await api.folders.moveFolder(folderId, undoParams.oldParentId, undoParams.oldSiblingMoves);
-          useDomainStore.getState().moveFolderNode(folderId, undoParams.oldParentId);
-          useDomainStore.getState().reorderFolderNodes(undoParams.oldSiblingMoves);
+          store.set(moveFolderNodeAtom, { folderId, newParentId: undoParams.oldParentId });
+          store.set(reorderFolderNodesAtom, undoParams.oldSiblingMoves);
         },
         forward: async () => {
           await api.folders.moveFolder(folderId, newParentId, siblingOrder);
-          useDomainStore.getState().moveFolderNode(folderId, newParentId);
-          useDomainStore.getState().reorderFolderNodes(siblingOrder);
+          store.set(moveFolderNodeAtom, { folderId, newParentId });
+          store.set(reorderFolderNodesAtom, siblingOrder);
         },
       });
     }
@@ -239,34 +293,34 @@ export const foldersController = {
 
   async applyIcon(ids: number[], icon: string | null, previousValues: Array<{ id: number; icon: string | null }>) {
     const value = icon === null ? '' : (icon ?? undefined);
-    for (const id of ids) useDomainStore.getState().patchFolderNode(id, { icon });
+    for (const id of ids) store.set(patchFolderNodeAtom, { folderId: id, patch: { icon } });
     await Promise.all(ids.map((id) => api.folders.update({ folder_id: id, icon: value })));
     registerUndoAction({
       label: ids.length > 1 ? 'Change folder icons' : 'Change folder icon',
       backward: async () => {
         await Promise.all(previousValues.map((e) => api.folders.update({ folder_id: e.id, icon: e.icon === null ? '' : (e.icon ?? undefined) })));
-        for (const e of previousValues) useDomainStore.getState().patchFolderNode(e.id, { icon: e.icon });
+        for (const e of previousValues) store.set(patchFolderNodeAtom, { folderId: e.id, patch: { icon: e.icon } });
       },
       forward: async () => {
         await Promise.all(ids.map((id) => api.folders.update({ folder_id: id, icon: value })));
-        for (const id of ids) useDomainStore.getState().patchFolderNode(id, { icon });
+        for (const id of ids) store.set(patchFolderNodeAtom, { folderId: id, patch: { icon } });
       },
     });
   },
 
   async applyColor(ids: number[], color: string | null, previousValues: Array<{ id: number; color: string | null }>) {
     const value = color === null ? '' : (color ?? undefined);
-    for (const id of ids) useDomainStore.getState().patchFolderNode(id, { color });
+    for (const id of ids) store.set(patchFolderNodeAtom, { folderId: id, patch: { color } });
     await Promise.all(ids.map((id) => api.folders.update({ folder_id: id, color: value })));
     registerUndoAction({
       label: ids.length > 1 ? 'Change folder colors' : 'Change folder color',
       backward: async () => {
         await Promise.all(previousValues.map((e) => api.folders.update({ folder_id: e.id, color: e.color === null ? '' : (e.color ?? undefined) })));
-        for (const e of previousValues) useDomainStore.getState().patchFolderNode(e.id, { color: e.color });
+        for (const e of previousValues) store.set(patchFolderNodeAtom, { folderId: e.id, patch: { color: e.color } });
       },
       forward: async () => {
         await Promise.all(ids.map((id) => api.folders.update({ folder_id: id, color: value })));
-        for (const id of ids) useDomainStore.getState().patchFolderNode(id, { color });
+        for (const id of ids) store.set(patchFolderNodeAtom, { folderId: id, patch: { color } });
       },
     });
   },

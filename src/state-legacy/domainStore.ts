@@ -218,6 +218,13 @@ export const useDomainStore = create<DomainState>((set, get) => ({
         treeEpoch: tree.tree_epoch,
         loading: false,
       });
+
+      // Hydrate the Jotai sidebar atoms (new state owner for this slice).
+      const { store: jotaiStore } = await import('../state/store');
+      const { sidebarNodesAtom, sidebarEpochAtom, tagsCountAtom } = await import('../state/sidebar');
+      jotaiStore.set(sidebarNodesAtom, nodes);
+      jotaiStore.set(sidebarEpochAtom, tree.tree_epoch);
+      jotaiStore.set(tagsCountAtom, tagsCount);
     } catch (e) {
       console.error('Failed to fetch sidebar tree:', e);
       set({ loading: false });

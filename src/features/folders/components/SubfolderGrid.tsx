@@ -3,9 +3,10 @@ import { IconAntennaBars5, IconFolder, IconChevronRight } from '@tabler/icons-re
 import { mediaThumbnailUrl } from '../../../shared/lib/mediaUrl';
 import { foldersController } from '../../../controllers/foldersController';
 import { notifyError, notifySuccess } from '../../../shared/lib/notify';
-import { useDomainStore } from '../../../state/domainStore';
-import { useImportActionStore } from '../../../state/importActionStore';
-import { useFolderWatchActionStore } from '../../../state/folderWatchActionStore';
+import { useAtomValue } from 'jotai';
+import { folderNodesAtom } from '../../../state/sidebar';
+import { useImportActionStore } from '../../../state-legacy/importActionStore';
+import { useFolderWatchActionStore } from '../../../state-legacy/folderWatchActionStore';
 import type { SidebarNodeDto } from '../../../shared/types/sidebar';
 import { ContextMenu, ContextMenuEntry, useContextMenu } from '../../../shared/components/ContextMenu';
 import {
@@ -72,7 +73,7 @@ function deriveChildFolders(folderNodes: SidebarNodeDto[], parentFolderId: numbe
 }
 
 export function SubfolderGrid({ folderId, targetSize, totalImageCount, onOpenFolder, selectedSubfolderId, onSelectedSubfolderChange, paused = false }: SubfolderGridProps) {
-  const folderNodes = useDomainStore(s => s.folderNodes);
+  const folderNodes = useAtomValue(folderNodesAtom);
   const [expanded, setExpanded] = useState(true);
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const lastClickedIndexRef = useRef<number | null>(null);

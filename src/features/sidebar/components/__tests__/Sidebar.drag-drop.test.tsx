@@ -2,9 +2,9 @@ import { fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Sidebar } from '../Sidebar';
 import { imageDrag } from '../../../../shared/lib/imageDrag';
-import { useDomainStore } from '../../../../state/domainStore';
-import { useNavigationStore } from '../../../../state/navigationStore';
-import { useGridMetadataStore } from '../../../../state/gridMetadataStore';
+import { useDomainStore } from '../../../../state-legacy/domainStore';
+import { useNavigationStore } from '../../../../state-legacy/navigationStore';
+import { useGridMetadataStore } from '../../../../state-legacy/gridMetadataStore';
 
 const {
   setStatusSelectionMock,

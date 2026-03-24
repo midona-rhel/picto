@@ -1,8 +1,8 @@
 import { api } from '#desktop/api';
 import { entityController } from './entityController';
 import { registerUndoAction } from '../shared/controllers/undoRedoController';
-import { useTagListStore } from '../state/tagListStore';
-import { useDomainStore } from '../state/domainStore';
+import { useTagListStore } from '../state-legacy/tagListStore';
+import { useDomainStore } from '../state-legacy/domainStore';
 import type {
   DeleteTagResult,
   NamespaceSummary,

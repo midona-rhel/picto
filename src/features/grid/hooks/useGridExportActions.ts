@@ -2,8 +2,8 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { open } from '#desktop/api';
 import { exportController } from '../../../controllers/exportController';
-import { useExportActionStore } from '../../../state/exportActionStore';
-import { useTaskStore } from '../../../state/taskStore';
+import { useExportActionStore } from '../../../state-legacy/exportActionStore';
+import { useTaskStore } from '../../../state-legacy/taskStore';
 import { notifyError, notifySuccess, notifyWarning } from '../../../shared/lib/notify';
 import { virtualSelectionSpec } from '../runtime/gridRuntimeSelectors';
 import type { ExportMediaInput, SelectionQuerySpec as ExportSelectionQuerySpec } from '../../../shared/types/generated/commands';

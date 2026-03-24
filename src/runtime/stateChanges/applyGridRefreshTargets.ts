@@ -1,5 +1,5 @@
 import { useStateChangeStore } from './stateChangeStore';
-import { useGridMetadataStore } from '../../state/gridMetadataStore';
+import { useGridMetadataStore } from '../../state-legacy/gridMetadataStore';
 import { noteMetadataChanged } from '#features/grid/data';
 import { entityController } from '../../controllers/entityController';
 import { refreshTargetMatchesGridScope } from './planRefreshTargets';

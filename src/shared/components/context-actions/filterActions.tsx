@@ -1,5 +1,5 @@
 import type { ContextMenuEntry } from '../ContextMenu';
-import type { MimeFilterKey } from '../../../state/filterStore';
+import type { MimeFilterKey } from '../../../state-legacy/filterStore';
 import type { ReactNode } from 'react';
 
 export interface RatingOption {

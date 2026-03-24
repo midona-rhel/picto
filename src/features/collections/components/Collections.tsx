@@ -21,7 +21,7 @@ import {
 import { glassModalStyles } from '../../../shared/styles/glassModal';
 import { useDisclosure } from "@mantine/hooks";
 import { notifySuccess, notifyError } from '../../../shared/lib/notify';
-import { useNavigationStore } from '../../../state/navigationStore';
+import { useNavigationStore } from '../../../state-legacy/navigationStore';
 import {
   IconPlus,
   IconSearch,
@@ -45,7 +45,7 @@ import {
 } from '../../../shared/components/media-card';
 import { collectionsController } from '../../../controllers/collectionsController';
 import { companionController } from '../../../controllers/companionController';
-import { useCollectionListStore } from '../../../state/collectionListStore';
+import { useCollectionListStore } from '../../../state-legacy/collectionListStore';
 import type { CollectionInfo as BackendCollectionInfo } from '../../../shared/types/api';
 
 interface Collection {

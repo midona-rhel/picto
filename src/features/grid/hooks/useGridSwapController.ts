@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type Dispatch } from 'react';
-import { useNavigationStore } from '../../../state/navigationStore';
+import { useNavigationStore } from '../../../state-legacy/navigationStore';
 import { resolveGridEmptyContext } from '../gridEmptyContext';
 import type { GridReplacePayload } from './useGridData';
 import type { ViewerHostController } from '../../viewer/hooks/useViewerHost';

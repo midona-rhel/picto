@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Text, TextInput } from '@mantine/core';
 import { IconFolderOpen, IconPlus } from '@tabler/icons-react';
-import { useLibraryStore, type LibraryInfo } from '../../../state/libraryStore';
+import { useLibraryStore, type LibraryInfo } from '../../../state-legacy/libraryStore';
 import { save as showSaveDialog } from '#desktop/api';
 import { windowController } from '../../../controllers/windowController';
 import { TextButton } from '../../../shared/components/TextButton';

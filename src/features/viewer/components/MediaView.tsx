@@ -8,8 +8,8 @@ import { StripView } from './StripView';
 import {
   DEFAULT_NAVIGATION_IMAGE_ADJUSTMENT,
   useNavigationImageAdjustmentsStore,
-} from '../../../state/navigationImageAdjustmentsStore';
-import { useSettingsStore } from '../../../state/settingsStore';
+} from '../../../state-legacy/navigationImageAdjustmentsStore';
+import { useSettingsStore } from '../../../state-legacy/settingsStore';
 import { mediaFileUrl, mediaThumbnailUrl } from '../../../shared/lib/mediaUrl';
 import { useImageZoom, type ImageSize, type ZoomState } from '../hooks/useImageZoom';
 import { useNavigatorDrag } from '../hooks/useNavigatorDrag';

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, type Dispatch } from 'react';
-import { useGridMetadataStore } from '../../../state/gridMetadataStore';
-import { useNavigationStore } from '../../../state/navigationStore';
+import { useGridMetadataStore } from '../../../state-legacy/gridMetadataStore';
+import { useNavigationStore } from '../../../state-legacy/navigationStore';
 import type { GridRuntimeAction } from '../runtime';
 import { toMasonryItem, type MasonryItem } from '../shared';
 import type { SmartFolderPredicate } from '../../smart-folders/components/types';

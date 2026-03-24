@@ -1,8 +1,9 @@
 import { queryApi } from '#desktop/api';
 import { commandApi } from '#desktop/api';
 import { bustThumbnailCache } from '../shared/lib/mediaUrl';
-import { useGridMetadataStore } from '../state/gridMetadataStore';
-import { useDomainStore } from '../state/domainStore';
+import { useGridMetadataStore } from '../state-legacy/gridMetadataStore';
+import { store as jotaiStore } from '../state/store';
+import { scopeCountsAtom, applySidebarCountsAtom } from '../state/sidebar';
 import { registerUndoAction } from '../shared/controllers/undoRedoController';
 import { markEagerInvalidated } from '../runtime/stateChanges/applyGridRefreshTargets';
 import type {
@@ -74,10 +75,10 @@ function statusEntersScope(targetStatus: string): boolean {
 
 /** Get the current count for a system scope status. */
 function scopeCount(status: string | null): number {
-  const store = useDomainStore.getState();
-  if (status === 'active') return store.allActiveCount;
-  if (status === 'inbox') return store.inboxCount;
-  if (status === 'trash') return store.trashCount;
+  const counts = jotaiStore.get(scopeCountsAtom);
+  if (status === 'active') return counts.active;
+  if (status === 'inbox') return counts.inbox;
+  if (status === 'trash') return counts.trash;
   return 0;
 }
 
@@ -86,21 +87,14 @@ function scopeCount(status: string | null): number {
  *  backend event's sidebar_counts will reconcile with the true bitmap count. */
 function eagerAdjustSystemCounts(count: number, fromStatus: string | null, toStatus: string): void {
   if (count <= 0 || fromStatus === toStatus) return;
-  const store = useDomainStore.getState();
-  const s = {
-    active: store.allActiveCount,
-    inbox: store.inboxCount,
-    trash: store.trashCount,
-  };
-  // Decrement source
-  if (fromStatus === 'active') s.active -= count;
-  else if (fromStatus === 'inbox') s.inbox -= count;
-  else if (fromStatus === 'trash') s.trash -= count;
-  // Increment target
-  if (toStatus === 'active') s.active += count;
-  else if (toStatus === 'inbox') s.inbox += count;
-  else if (toStatus === 'trash') s.trash += count;
-  store.applySidebarCounts(s);
+  const counts = { ...jotaiStore.get(scopeCountsAtom) };
+  if (fromStatus === 'active') counts.active -= count;
+  else if (fromStatus === 'inbox') counts.inbox -= count;
+  else if (fromStatus === 'trash') counts.trash -= count;
+  if (toStatus === 'active') counts.active += count;
+  else if (toStatus === 'inbox') counts.inbox += count;
+  else if (toStatus === 'trash') counts.trash += count;
+  jotaiStore.set(applySidebarCountsAtom, counts);
 }
 
 function stableSelectionKey(spec: SelectionQuerySpec): string {

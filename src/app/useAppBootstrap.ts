@@ -4,9 +4,11 @@ import { useMantineColorScheme } from '@mantine/core';
 import { useHotkeys } from '@mantine/hooks';
 import { getCurrentWindow, setTheme as setAppTheme } from '#desktop/api';
 
-import { deriveNavigationTitle, useNavigationStore } from '../state/navigationStore';
-import { useDomainStore } from '../state/domainStore';
-import { useSettingsStore } from '../state/settingsStore';
+import { deriveNavigationTitle, useNavigationStore } from '../state-legacy/navigationStore';
+import { useAtomValue } from 'jotai';
+import { folderNodesAtom } from '../state/sidebar';
+import { useDomainStore } from '../state-legacy/domainStore';
+import { useSettingsStore } from '../state-legacy/settingsStore';
 import { performRedo, performUndo } from '../shared/controllers/undoRedoController';
 import { runBestEffort } from '../shared/lib/asyncOps';
 import { useGlobalKeydown } from '../shared/hooks/useGlobalKeydown';
@@ -29,7 +31,7 @@ export function useAppBootstrap(): AppBootstrap {
   const filterTags = useNavigationStore((state) => state.filterTags);
   const similarHashes = useNavigationStore((state) => state.similarHashes);
   const smartFolders = useDomainStore((state) => state.smartFolders);
-  const folderNodes = useDomainStore((state) => state.folderNodes);
+  const folderNodes = useAtomValue(folderNodesAtom);
   const collectionTitles = useNavigationStore((state) => state.collectionTitles);
   const activeFolderLabel = useMemo(
     () => (activeFolderId != null ? folderNodes.find((node) => node.id === `folder:${activeFolderId}`)?.name ?? null : null),

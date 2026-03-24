@@ -21,7 +21,7 @@ import { SortByRow } from '../../../shared/components/SortByRow';
 import { LayoutRow } from '../../../shared/components/LayoutRow';
 import { KbdTooltip } from '../../../shared/components/KbdTooltip';
 import { ContextMenu, useContextMenu, type ContextMenuEntry } from '../../../shared/components/ContextMenu';
-import { useFilterStore, useActiveFilterCount } from '../../../state/filterStore';
+import { useFilterStore, useActiveFilterCount } from '../../../state-legacy/filterStore';
 import type { MediaViewState, MediaViewControls } from '../../viewer/components/MediaView';
 import type { GridViewMode } from '../../grid/runtime';
 import { useGlobalKeydown } from '../../../shared/hooks/useGlobalKeydown';

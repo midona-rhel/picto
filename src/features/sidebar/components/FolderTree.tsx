@@ -7,8 +7,9 @@ import {
 } from '@dnd-kit/core';
 import { useSortable, SortableContext, verticalListSortingStrategy } from '@dnd-kit/sortable';
 
-import { useDomainStore } from '../../../state/domainStore';
-import { useNavigationStore } from '../../../state/navigationStore';
+import { useAtomValue } from 'jotai';
+import { folderNodesAtom } from '../../../state/sidebar';
+import { useNavigationStore } from '../../../state-legacy/navigationStore';
 import { ContextMenu, useContextMenu, type ContextMenuEntry } from '../../../shared/components/ContextMenu';
 import {
   buildFolderMultiMenu,
@@ -69,7 +70,7 @@ function SortableFolderRow({
 }
 
 export function FolderTree() {
-  const folderNodes = useDomainStore((s) => s.folderNodes);
+  const folderNodes = useAtomValue(folderNodesAtom);
   const { activeFolderId, navigateToFolder, setActiveFolderId } = useNavigationStore();
 
   const tree = buildFolderTree(folderNodes);

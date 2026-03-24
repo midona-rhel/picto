@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { IconDownload, IconLayoutSidebar, IconSettings } from '@tabler/icons-react';
 import { useHotkeys } from '@mantine/hooks';
-import { useNavigationStore } from '../state/navigationStore';
-import { useSettingsStore, type AppSettings } from '../state/settingsStore';
-import { useExportActionStore } from '../state/exportActionStore';
-import { useDomainStore } from '../state/domainStore';
+import { useNavigationStore } from '../state-legacy/navigationStore';
+import { useSettingsStore, type AppSettings } from '../state-legacy/settingsStore';
+import { useExportActionStore } from '../state-legacy/exportActionStore';
+import { useDomainStore } from '../state-legacy/domainStore';
 import { CommandPalette, LogPanel } from '#features/app/components';
 import { GridViewMode, ImageGridControls, FilterBar, InspectorPanel, DragGhost } from '#features/grid/components';
 import { MainViewModelProvider, MainViewRouter, CreateSubscriptionGroupModal, WindowControls } from '#features/layout/components';

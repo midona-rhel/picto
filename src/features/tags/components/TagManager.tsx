@@ -20,11 +20,11 @@ import { tagsController } from '../../../controllers/tagsController';
 import { notifySuccess, notifyError } from '../../../shared/lib/notify';
 import { getNamespaceColor } from '../../../shared/lib/namespaceColors';
 import { useInlineRename } from '../../../shared/hooks/useInlineRename';
-import { useNavigationStore } from '../../../state/navigationStore';
+import { useNavigationStore } from '../../../state-legacy/navigationStore';
 import { ContextMenu, useContextMenu, type ContextMenuEntry } from '../../../shared/components/ContextMenu';
 import { TagRelationsModal } from './TagRelationsModal';
 import { buildTagContextMenu } from '../../../shared/components/context-actions/tagActions';
-import { useTagListStore } from '../../../state/tagListStore';
+import { useTagListStore } from '../../../state-legacy/tagListStore';
 import classes from './TagManager.module.css';
 
 interface TagRecord {

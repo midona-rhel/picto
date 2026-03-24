@@ -1,6 +1,6 @@
 import { api } from '#desktop/api';
 import type { ExportMediaInput, ExportMediaResult } from '../shared/types/generated/commands';
-import { canStartTaskFamily, useTaskStore, type TaskProgress } from '../state/taskStore';
+import { canStartTaskFamily, useTaskStore, type TaskProgress } from '../state-legacy/taskStore';
 
 export const exportController = {
   canStart(): { allowed: boolean; reason?: string } {

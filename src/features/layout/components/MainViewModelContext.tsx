@@ -1,5 +1,5 @@
 import { createContext, useContext, type ReactNode } from 'react';
-import type { AppSettings } from '../../../state/settingsStore';
+import type { AppSettings } from '../../../state-legacy/settingsStore';
 import type { SmartFolderPredicate } from '../../smart-folders/components/types';
 import type { GridViewMode, MediaViewControls, MediaViewState } from '#features/grid/components';
 import type { MediaItem, SelectionQuerySpec } from '#features/grid/types';

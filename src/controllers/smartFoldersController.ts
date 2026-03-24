@@ -1,7 +1,7 @@
 import { api } from '#desktop/api';
 import { registerUndoAction } from '../shared/controllers/undoRedoController';
-import { useDomainStore } from '../state/domainStore';
-import { useNavigationStore } from '../state/navigationStore';
+import { useDomainStore } from '../state-legacy/domainStore';
+import { useNavigationStore } from '../state-legacy/navigationStore';
 import type { SmartFolder, SmartFolderIpcInput, SmartFolderPredicate } from '../shared/types/api';
 
 /** Compute current sibling ordering for a parent (used for undo snapshots). */

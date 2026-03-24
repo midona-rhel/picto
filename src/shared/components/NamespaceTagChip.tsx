@@ -4,7 +4,7 @@ import { IconX } from '@tabler/icons-react';
 import { useComputedColorScheme } from '@mantine/core';
 import { namespaceChipStyle, chipStyleFromRgb } from '../lib/namespaceColors';
 import { extractNamespace as extractNamespaceFromTag } from '../lib/tagParsing';
-import { useSettingsStore } from '../../state/settingsStore';
+import { useSettingsStore } from '../../state-legacy/settingsStore';
 import { KbdTooltip } from './KbdTooltip';
 
 interface NamespaceTagChipProps {

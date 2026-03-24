@@ -22,7 +22,7 @@ import {
   IconCheck,
 } from '@tabler/icons-react';
 import { useStateChangeStore } from '../../../runtime/stateChanges/stateChangeStore';
-import { useSubscriptionProgressStore } from '../../../state/taskStore';
+import { useSubscriptionProgressStore } from '../../../state-legacy/taskStore';
 import { subscriptionsController } from '../../../controllers/subscriptionsController';
 import type { SubscriptionGroupInfo, SubscriptionGroupsPanelProps, SitePluginInfo, SubProgress } from '../types';
 import { SCHEDULE_OPTIONS } from '../types';

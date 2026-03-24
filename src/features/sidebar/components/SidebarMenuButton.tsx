@@ -3,13 +3,13 @@ import { IconMenu2 } from '@tabler/icons-react';
 import { getCurrentWindow } from '#desktop/api';
 import { windowController } from '../../../controllers/windowController';
 import { libraryController } from '../../../controllers/libraryController';
-import { useImportActionStore } from '../../../state/importActionStore';
-import { useExportActionStore } from '../../../state/exportActionStore';
+import { useImportActionStore } from '../../../state-legacy/importActionStore';
+import { useExportActionStore } from '../../../state-legacy/exportActionStore';
 import { KbdTooltip } from '../../../shared/components/KbdTooltip';
 import { ContextMenu, type ContextMenuEntry, useContextMenu } from '../../../shared/components/ContextMenu';
-import { useNavigationStore } from '../../../state/navigationStore';
+import { useNavigationStore } from '../../../state-legacy/navigationStore';
 import { performRedo, performUndo } from '../../../shared/controllers/undoRedoController';
-import { useUndoRedoStore } from '../../../state/undoRedoStore';
+import { useUndoRedoStore } from '../../../state-legacy/undoRedoStore';
 import styles from './SidebarMenuButton.module.css';
 
 export function SidebarMenuButton() {

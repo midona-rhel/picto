@@ -17,7 +17,7 @@ import {
   type CanvasScrollPhase,
   type CanvasScrollState,
 } from '../../../shared/lib/canvas/scrollState';
-import { useSettingsStore } from '../../../state/settingsStore';
+import { useSettingsStore } from '../../../state-legacy/settingsStore';
 import styles from './StripView.module.css';
 
 const GAP = 12;

@@ -5,7 +5,7 @@ import { ToastStack } from '#ui/ToastStack';
 import { SubscriptionsWindow } from '#features/subscriptions/components';
 import { useThemeSync, useDerivedColorScheme } from '../shared/hooks/useThemeSync';
 import { useStateChangeStore } from '../runtime/stateChanges/stateChangeStore';
-import { useSubscriptionProgressStore } from '../state/taskStore';
+import { useSubscriptionProgressStore } from '../state-legacy/taskStore';
 import { settingsController } from '../controllers/settingsController';
 import '@mantine/core/styles.css';
 import '../shared/styles/globals.css';

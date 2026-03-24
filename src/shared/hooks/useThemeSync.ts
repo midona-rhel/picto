@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { initSettingsStore, themeToColorScheme, useSettingsStore } from '../../state/settingsStore';
+import { initSettingsStore, themeToColorScheme, useSettingsStore } from '../../state-legacy/settingsStore';
 
 /**
  * Unified theme sync hook — initializes settings store and keeps

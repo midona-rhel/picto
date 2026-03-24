@@ -18,7 +18,7 @@ import { formatDateTime } from '../../../shared/lib/formatters';
 import { mediaFileUrl, mediaThumbnailUrl } from '../../../shared/lib/mediaUrl';
 import { isImagePreloaded, queueImageDecode } from '../../../shared/lib/useImagePreloader';
 import type { DuplicatePairDto, DuplicatePairsResponse, ResolveDuplicateAction } from '../../../shared/types/api';
-import { useDomainStore } from '../../../state/domainStore';
+import { useDomainStore } from '../../../state-legacy/domainStore';
 import { useGlobalKeydown } from '../../../shared/hooks/useGlobalKeydown';
 import { useImageZoom } from '../../viewer/hooks/useImageZoom';
 import { useNavigatorRenderer } from '../../viewer/hooks/useNavigatorRenderer';

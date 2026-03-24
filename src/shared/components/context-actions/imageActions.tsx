@@ -40,14 +40,14 @@ import { FolderPickerService } from '../../services/folderPickerService';
 import { AiTaggerService } from '../../services/aiTaggerService';
 import { IconSparkles } from '@tabler/icons-react';
 import { notifyError, notifySuccess } from '../../lib/notify';
-import { useSettingsStore } from '../../../state/settingsStore';
-import { useNavigationImageAdjustmentsStore } from '../../../state/navigationImageAdjustmentsStore';
+import { useSettingsStore } from '../../../state-legacy/settingsStore';
+import { useNavigationImageAdjustmentsStore } from '../../../state-legacy/navigationImageAdjustmentsStore';
 import type { MediaItem } from '../../../features/grid/shared';
 import { copyFileToClipboard, copyImageToClipboard, reverseImageSearch } from '#desktop/api';
 import { entityController } from '../../../controllers/entityController';
 import { foldersController } from '../../../controllers/foldersController';
 import { collectionsController } from '../../../controllers/collectionsController';
-import { useNavigationStore } from '../../../state/navigationStore';
+import { useNavigationStore } from '../../../state-legacy/navigationStore';
 
 interface BuildGridImageContextMenuArgs {
   contextPoint: { x: number; y: number };

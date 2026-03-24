@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import type { ViewPrefsPatch } from '../types/api';
-import type { AppSettings } from '../../state/settingsStore';
+import type { AppSettings } from '../../state-legacy/settingsStore';
 import type { GridViewMode } from '#features/grid/types';
 import { deriveGridScopeKey } from '#features/grid/scopeModel';
 import { settingsController } from '../../controllers/settingsController';

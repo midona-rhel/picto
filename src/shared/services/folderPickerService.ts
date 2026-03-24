@@ -1,5 +1,5 @@
 // PBI-037: Imperative service singleton — no React exports.
-import type { FilterLogicMode } from '../../state/filterStore';
+import type { FilterLogicMode } from '../../state-legacy/filterStore';
 
 export interface FolderPickerRequest {
   anchorEl: HTMLElement;

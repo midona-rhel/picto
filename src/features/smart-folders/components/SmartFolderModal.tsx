@@ -10,7 +10,7 @@ import { createDefaultGroup, predicateToRust, folderToRust } from './types';
 import { IconPicker } from './IconPicker';
 import { FolderColorPicker } from './FolderColorPicker';
 import { DynamicIcon, DEFAULT_FOLDER_ICON } from './iconRegistry';
-import { useDomainStore } from '../../../state/domainStore';
+import { useDomainStore } from '../../../state-legacy/domainStore';
 
 interface SmartFolderModalProps {
   opened: boolean;

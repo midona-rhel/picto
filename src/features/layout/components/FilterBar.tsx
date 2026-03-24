@@ -15,7 +15,7 @@ import {
   useActiveFilterCount,
   type FilterLogicMode,
   type MimeFilterKey,
-} from '../../../state/filterStore';
+} from '../../../state-legacy/filterStore';
 import { ContextMenu, useContextMenu, type ContextMenuEntry } from '../../../shared/components/ContextMenu';
 import { TagSelectService } from '../../tags/components/tagSelectService';
 import type { TagFilterLogicMode } from '../../tags/components/tagSelectTypes';

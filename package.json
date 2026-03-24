@@ -135,7 +135,8 @@
     }
   },
   "dependencies": {
-    "electron-updater": "^6.8.3"
+    "electron-updater": "^6.8.3",
+    "jotai": "^2.18.1"
   },
   "devDependencies": {
     "@dagrejs/dagre": "^2.0.4",
@@ -148,10 +149,6 @@
     "@mantine/notifications": "^8.3.14",
     "@tabler/icons-react": "^3.36.1",
     "@tanstack/react-virtual": "^3.13.18",
-    "dayjs": "^1.11.19",
-    "react": "^18.2.0",
-    "react-dom": "^18.2.0",
-    "zustand": "^5.0.11",
     "@testing-library/dom": "^10.4.1",
     "@testing-library/jest-dom": "^6.2.0",
     "@testing-library/react": "^14.1.2",
@@ -161,16 +158,20 @@
     "@types/react-dom": "^18.2.18",
     "@vitejs/plugin-react": "^4.2.1",
     "concurrently": "^9.2.1",
+    "dayjs": "^1.11.19",
     "electron": "^37.2.0",
     "electron-builder": "^26.0.12",
     "jsdom": "^24.0.0",
     "nodemon": "^3.1.14",
     "postcss": "^8.5.6",
     "postcss-preset-mantine": "^1.18.0",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
     "tsx": "^4.20.3",
     "typescript": "^5.3.3",
     "vite": "^5.0.12",
     "vitest": "^1.2.1",
-    "wait-on": "^8.0.5"
+    "wait-on": "^8.0.5",
+    "zustand": "^5.0.11"
   }
 }

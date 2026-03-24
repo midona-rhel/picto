@@ -71,6 +71,18 @@ The target is:
 - fewer giant feature stylesheets
 - clearer ownership
 
+### 5. Rebuild in small verified slices
+This PBI must not be executed as one broad frontend sweep.
+
+The required rollout shape is:
+- migrate one surface family at a time
+- finish its local shared primitives and styling ownership
+- get visual confirmation that it still looks and behaves the same
+- only then move to the next surface
+
+The default starting slice is:
+- sidebar and all sidebar-owned items/components
+
 ## Required frontend UI shape
 
 ### Shared primitives
@@ -96,7 +108,11 @@ Use:
 Reduce `globals.css` to true globals only.
 
 ## Implementation changes
-- audit repeated components across sidebar, inspector, settings, tags, subscriptions, viewer, and shared surfaces
+- execute the work in patch-sized surface slices, not one broad refactor
+- start with sidebar and sidebar-owned items/components
+- after each slice, do visual parity confirmation before moving to the next surface
+- then continue through inspector, settings, tags, subscriptions, viewer, and other shared surfaces
+- audit repeated components across each slice before extracting shared primitives from it
 - extract one canonical implementation per repeated pattern
 - centralize design tokens for spacing, typography, colors, surface states, and interaction states
 - reduce or split giant feature stylesheets where shared primitives should own the styling
@@ -111,6 +127,7 @@ Reduce `globals.css` to true globals only.
 - naming and comments in the affected UI surface are clearer and current
 - shared UI primitives are the default abstraction layer for repeated patterns
 - duplicated styling and duplicated UI logic are materially reduced
+- each migrated surface was completed in a bounded slice with visual parity checked before the next slice started
 
 ## Tests
 - visual smoke/regression tests for main surfaces
@@ -118,6 +135,7 @@ Reduce `globals.css` to true globals only.
 - interaction parity checks for sidebar, inspector, settings, tags, subscriptions, and viewer
 - CSS size and usage audit before vs after
 - duplication audit for canonicalized component families
+- per-slice visual confirmation notes or artifacts, starting with the sidebar slice
 
 This PBI must follow the cross-layer naming contract in [PBI-572-cross-layer-naming-contract.md](./docs/pbis/active-alpha/PBI-572-cross-layer-naming-contract.md).
 This PBI must follow the cross-layer testing rules in [PBI-579-cross-layer-testing-rules.md](./docs/pbis/active-alpha/PBI-579-cross-layer-testing-rules.md).

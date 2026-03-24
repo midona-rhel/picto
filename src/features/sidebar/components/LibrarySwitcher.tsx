@@ -18,7 +18,7 @@ import {
 import { DynamicIcon, DEFAULT_FOLDER_ICON } from '../../smart-folders/components/iconRegistry';
 import { IconPicker } from '../../smart-folders/components/IconPicker';
 import { FolderColorPicker } from '../../smart-folders/components/FolderColorPicker';
-import { useLibraryStore } from '../../../state/libraryStore';
+import { useLibraryStore } from '../../../state-legacy/libraryStore';
 import { save as showSaveDialog } from '#desktop/api';
 import styles from './LibrarySwitcher.module.css';
 

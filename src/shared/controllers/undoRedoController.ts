@@ -1,5 +1,5 @@
 import { notifyInfo } from '../lib/notify';
-import { useUndoRedoStore } from '../../state/undoRedoStore';
+import { useUndoRedoStore } from '../../state-legacy/undoRedoStore';
 
 let actionCounter = 0;
 

@@ -1,8 +1,8 @@
 import { api } from '#desktop/api';
 import { entityController } from './entityController';
 import { registerUndoAction } from '../shared/controllers/undoRedoController';
-import { useCollectionListStore } from '../state/collectionListStore';
-import { useGridMetadataStore } from '../state/gridMetadataStore';
+import { useCollectionListStore } from '../state-legacy/collectionListStore';
+import { useGridMetadataStore } from '../state-legacy/gridMetadataStore';
 import type { CollectionSummary, CollectionInfo } from '../shared/types/api';
 
 // ── Smart naming helpers ──

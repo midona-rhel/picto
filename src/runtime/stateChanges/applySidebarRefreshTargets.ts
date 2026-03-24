@@ -1,5 +1,7 @@
 import { useStateChangeStore } from './stateChangeStore';
-import { useDomainStore } from '../../state/domainStore';
+import { store as jotaiStore } from '../../state/store';
+import { applySidebarCountsAtom } from '../../state/sidebar';
+import { useDomainStore } from '../../state-legacy/domainStore';
 
 let unsub: (() => void) | null = null;
 let prevStaleRef: Set<unknown> | null = null;
@@ -24,7 +26,7 @@ export function startApplyingSidebarRefreshTargets(): void {
     if (needsCountsRefresh) {
       const counts = useStateChangeStore.getState().sidebarCounts;
       if (counts) {
-        useDomainStore.getState().applySidebarCounts(counts);
+        jotaiStore.set(applySidebarCountsAtom, counts);
       }
       useStateChangeStore.getState().markRefreshTargetHandled('sidebar/counts');
     }

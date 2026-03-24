@@ -5,8 +5,8 @@ import { entityController } from '../../../controllers/entityController';
 import { foldersController } from '../../../controllers/foldersController';
 import { notifyError, notifySuccess } from '../../../shared/lib/notify';
 import { FolderPickerService } from '../../../shared/services/folderPickerService';
-import type { AppSettings } from '../../../state/settingsStore';
-import { useNavigationStore } from '../../../state/navigationStore';
+import type { AppSettings } from '../../../state-legacy/settingsStore';
+import { useNavigationStore } from '../../../state-legacy/navigationStore';
 import type { GridRuntimeAction, GridRuntimeState, GridViewMode } from '../runtime';
 
 let lastUsedFolder: { id: number; name: string } | null = null;

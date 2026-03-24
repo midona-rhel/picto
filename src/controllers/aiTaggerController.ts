@@ -1,6 +1,6 @@
 import { api } from '#desktop/api';
 import type { AiTagPredictOutput, AiTaggerStatus } from '../shared/types/api';
-import { canStartTaskFamily, isTaskFamilyRunning, useTaskStore, type TaskProgress } from '../state/taskStore';
+import { canStartTaskFamily, isTaskFamilyRunning, useTaskStore, type TaskProgress } from '../state-legacy/taskStore';
 
 export const aiTaggerController = {
   canStart(): { allowed: boolean; reason?: string } {

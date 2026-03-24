@@ -6,7 +6,7 @@ import type { MasonryItem } from '../shared';
 import type { LayoutItem } from '../layoutMath';
 import type { ThumbnailPipeline } from '../../../shared/lib/canvas/thumbnailPipeline';
 import type { CanvasScrollDirection, CanvasScrollPhase } from '../../../shared/lib/canvas/scrollState';
-import { useNavigationImageAdjustmentsStore } from '../../../state/navigationImageAdjustmentsStore';
+import { useNavigationImageAdjustmentsStore } from '../../../state-legacy/navigationImageAdjustmentsStore';
 
 /** Persistent state for throttled bitmap eviction (survives across frames). */
 const evictState = {

@@ -1,8 +1,9 @@
 import { useState, useEffect, useRef, useLayoutEffect, useCallback, useMemo } from 'react';
 import { OverlayShell } from '#ui/OverlayShell';
 import { IconCheck, IconChevronDown, IconChevronRight, IconEqual, IconLayersIntersect, IconLayersUnion, IconMinus, IconPin, IconPinFilled } from '@tabler/icons-react';
-import { useDomainStore } from '../../state/domainStore';
-import type { FilterLogicMode } from '../../state/filterStore';
+import { useAtomValue } from 'jotai';
+import { folderNodesAtom } from '../../state/sidebar';
+import type { FilterLogicMode } from '../../state-legacy/filterStore';
 import { DynamicIcon } from '#features/smart-folders/components';
 import { buildFolderTree, parseFolderId, type TreeNode } from '#features/sidebar/lib/folderTreeData';
 import { registerFolderPickerOpenHandler, type FolderPickerRequest } from './folderPickerService';
@@ -129,7 +130,7 @@ function FolderPickerPanel({
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [filterTab, setFilterTab] = useState<FilterTab>('all');
 
-  const folderNodes = useDomainStore((s) => s.folderNodes);
+  const folderNodes = useAtomValue(folderNodesAtom);
   const countMap = useMemo(() => {
     const m = new Map<number, number>();
     for (const node of folderNodes) {

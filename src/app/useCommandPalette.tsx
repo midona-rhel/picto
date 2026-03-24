@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
 import { IconFolder, IconFolderQuestion, IconFolderStar, IconPhoto, IconInbox, IconTag, IconTrash, IconCopy } from '@tabler/icons-react';
-import { useNavigationStore } from '../state/navigationStore';
-import { useDomainStore } from '../state/domainStore';
+import { useNavigationStore } from '../state-legacy/navigationStore';
+import { useAtomValue } from 'jotai';
+import { folderNodesAtom } from '../state/sidebar';
+import { useDomainStore } from '../state-legacy/domainStore';
 import { SHORTCUT_DEFS, formatKeysDisplay, getShortcut, matchesShortcutDef, parseShortcutKeys } from '../shared/lib/shortcuts';
 import type { CommandAction } from '#features/app/components';
 
@@ -9,7 +11,8 @@ export function useCommandPalette() {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [paletteMode, setPaletteMode] = useState<'all' | 'navigation'>('all');
   const { canGoBack, canGoForward, goBack, goForward, navigateToFolder, navigateToSmartFolder, navigateTo } = useNavigationStore();
-  const { smartFolders, folderNodes } = useDomainStore();
+  const folderNodes = useAtomValue(folderNodesAtom);
+  const { smartFolders } = useDomainStore();
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {

@@ -4,8 +4,8 @@ import { getCurrentWebview, open } from '#desktop/api';
 import type { DragDropPayload } from '../../../shared/types/api';
 import { importController } from '../../../controllers/importController';
 import { foldersController } from '../../../controllers/foldersController';
-import { useImportActionStore } from '../../../state/importActionStore';
-import { useTaskStore } from '../../../state/taskStore';
+import { useImportActionStore } from '../../../state-legacy/importActionStore';
+import { useTaskStore } from '../../../state-legacy/taskStore';
 import { imageDrag } from '../../../shared/lib/imageDrag';
 
 export function useGridImportActions(args: {

@@ -1,5 +1,5 @@
 import { IconDownload, IconRefresh, IconX } from '@tabler/icons-react';
-import { useUpdaterStore } from '../../state/updaterStore';
+import { useUpdaterStore } from '../../state-legacy/updaterStore';
 import { formatFileSize } from '../lib/formatters';
 import styles from './UpdateBanner.module.css';
 

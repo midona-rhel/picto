@@ -13,7 +13,7 @@ import {
 } from '@tabler/icons-react';
 import { toMasonryItem, isVideoMime, type MasonryItem } from '../../grid/shared';
 import { VideoPlayer } from './VideoPlayer';
-import { useSettingsStore } from '../../../state/settingsStore';
+import { useSettingsStore } from '../../../state-legacy/settingsStore';
 import { mediaFileUrl, mediaThumbnailUrl } from '../../../shared/lib/mediaUrl';
 import { useImageZoom, type ImageSize, type ZoomState } from '../hooks/useImageZoom';
 import { useNavigatorDrag } from '../hooks/useNavigatorDrag';

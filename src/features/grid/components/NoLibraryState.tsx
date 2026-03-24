@@ -1,7 +1,7 @@
 import { IconFolderPlus, IconFolderOpen } from '@tabler/icons-react';
 import { StateActions, StateBlock } from '../../../shared/components/state';
 import { TextButton } from '../../../shared/components/TextButton';
-import { useLibraryStore } from '../../../state/libraryStore';
+import { useLibraryStore } from '../../../state-legacy/libraryStore';
 import { save as showSaveDialog } from '#desktop/api';
 
 export function NoLibraryState() {

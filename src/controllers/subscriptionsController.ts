@@ -1,5 +1,5 @@
 import { api } from '#desktop/api';
-import { canStartTaskFamily, isTaskFamilyRunning } from '../state/taskStore';
+import { canStartTaskFamily, isTaskFamilyRunning } from '../state-legacy/taskStore';
 import type {
   CredentialDomain,
   CredentialHealth,

@@ -11,9 +11,10 @@ import {
   IconArrowsShuffle,
 } from '@tabler/icons-react';
 
-import { useDomainStore } from '../../../state/domainStore';
-import { useNavigationStore } from '../../../state/navigationStore';
-import { useLibraryStore } from '../../../state/libraryStore';
+import { useAtomValue } from 'jotai';
+import { scopeCountsAtom, tagsCountAtom } from '../../../state/sidebar';
+import { useNavigationStore } from '../../../state-legacy/navigationStore';
+import { useLibraryStore } from '../../../state-legacy/libraryStore';
 import { entityController } from '../../../controllers/entityController';
 import { SidebarJobStatus } from '../../layout/components/SidebarJobStatus';
 import { imageDrag } from '../../../shared/lib/imageDrag';
@@ -30,7 +31,8 @@ interface SidebarProps {
 export function Sidebar({ onSmartFolderUpdated }: SidebarProps) {
   const libraryPath = useLibraryStore((s) => s.currentPath);
   const noLibrary = !libraryPath;
-  const { allActiveCount, inboxCount, uncategorizedCount, trashCount, untaggedCount, tagsCount, duplicatesCount } = useDomainStore();
+  const { active: allActiveCount, inbox: inboxCount, trash: trashCount, uncategorized: uncategorizedCount, untagged: untaggedCount, duplicates: duplicatesCount } = useAtomValue(scopeCountsAtom);
+  const tagsCount = useAtomValue(tagsCountAtom);
   const { currentView, activeSmartFolderId, activeFolderId, activeStatusFilter, navigateTo } = useNavigationStore();
 
   const isAllActiveScope = !activeSmartFolderId && activeFolderId == null && !activeStatusFilter && currentView === 'images';

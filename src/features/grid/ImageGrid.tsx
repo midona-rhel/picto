@@ -18,9 +18,10 @@ import { transitionOpacity, transitionCss, isTransitionFrozen } from './runtime/
 import { GridDialogsLayer } from './components/GridDialogsLayer';
 import { GridErrorState } from './components/GridErrorState';
 import { NoLibraryState } from './components/NoLibraryState';
-import { useNavigationStore } from '../../state/navigationStore';
-import { useLibraryStore } from '../../state/libraryStore';
-import { useDomainStore } from '../../state/domainStore';
+import { useNavigationStore } from '../../state-legacy/navigationStore';
+import { useLibraryStore } from '../../state-legacy/libraryStore';
+import { useAtomValue } from 'jotai';
+import { folderNodesAtom } from '../../state/sidebar';
 import type { MediaViewState, MediaViewControls } from '../../features/viewer/hooks/useViewerHost';
 import type { ViewerHostController } from '../../features/viewer/hooks/useViewerHost';
 import { useGridData } from './hooks/useGridData';
@@ -183,7 +184,7 @@ export function ImageGrid({ searchTags, excludedSearchTags, tagMatchMode, smartF
   } = useGridDisplayState({
     displayFolderId: state.displayFolderId,
   });
-  const folderNodes = useDomainStore((s) => s.folderNodes);
+  const folderNodes = useAtomValue(folderNodesAtom);
   // Track whether the first load has completed so we don't show "No images"
   // while the DB query is still in flight.
   const initialLoadDone = useRef(false);
