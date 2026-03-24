@@ -105,7 +105,9 @@ This program is executed through these child PBIs:
 12. [PBI-593-greenfield-frontend-inspector-and-selection-surface-rebuild.md](./docs/pbis/active-alpha/PBI-593-greenfield-frontend-inspector-and-selection-surface-rebuild.md)
 13. [PBI-585-greenfield-frontend-media-consumption-reset.md](./docs/pbis/active-alpha/PBI-585-greenfield-frontend-media-consumption-reset.md)
 14. [PBI-586-greenfield-frontend-feature-module-architecture-reset.md](./docs/pbis/active-alpha/PBI-586-greenfield-frontend-feature-module-architecture-reset.md)
-15. [PBI-571-frontend-shared-component-and-styling-system-reset.md](./docs/pbis/active-alpha/PBI-571-frontend-shared-component-and-styling-system-reset.md)
+15. [PBI-595-greenfield-frontend-manager-navigation-and-surface-reset.md](./docs/pbis/active-alpha/PBI-595-greenfield-frontend-manager-navigation-and-surface-reset.md)
+16. [PBI-596-greenfield-random-active-image-view-contract.md](./docs/pbis/active-alpha/PBI-596-greenfield-random-active-image-view-contract.md)
+17. [PBI-571-frontend-shared-component-and-styling-system-reset.md](./docs/pbis/active-alpha/PBI-571-frontend-shared-component-and-styling-system-reset.md)
 
 ## Two tracks
 Run the frontend reset in two parallel tracks:
@@ -193,7 +195,13 @@ Use this order for the frontend program:
 7. Rebuild the remaining frontend module structure:
 - `PBI-586`
 
-8. Consolidate shared UI and styling only after the rebuilt surfaces are stable:
+8. Rebuild manager navigation and manager-style tool surfaces:
+- `PBI-595`
+
+9. Add the random active-image view once the rebuilt grid/query path is stable:
+- `PBI-596`
+
+10. Consolidate shared UI and styling only after the rebuilt surfaces are stable:
 - `PBI-571`
 
 Contract and verification work may overlap as part of Track B.
@@ -214,7 +222,7 @@ Rebuilt live product slices in Track A should follow this order strictly.
 - `PBI-588` locks the frontend rebuild contract
 - `PBI-589` moves the legacy frontend out of the active source tree
 - `PBI-590` defines how rebuilt slices are checked against legacy visuals and behavior
-- `PBI-571`, `PBI-581` through `PBI-593` execute the frontend rebuild in slices
+- `PBI-571`, `PBI-581` through `PBI-596` execute the frontend rebuild in slices
 
 This PBI must follow the cross-layer naming contract in [PBI-572-cross-layer-naming-contract.md](./docs/pbis/active-alpha/PBI-572-cross-layer-naming-contract.md).
 This PBI must follow the cross-layer testing rules in [PBI-579-cross-layer-testing-rules.md](./docs/pbis/active-alpha/PBI-579-cross-layer-testing-rules.md).

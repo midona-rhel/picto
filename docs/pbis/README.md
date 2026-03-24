@@ -69,7 +69,8 @@
 - 6. Activate rebuilt core entity flow only when shell/grid/inspector parity gates and backend contract gates align
 - 7. Activate media/platform layers: PBI-569, PBI-585, PBI-576
 - 8. Activate downstream subsystems: PBI-573, PBI-574, PBI-575, PBI-577
-- 9. Activate frontend structural cleanup: PBI-586, then PBI-571
+- 9. Activate manager navigation and random view follow-ups: PBI-595, PBI-596
+- 10. Activate frontend structural cleanup: PBI-586, then PBI-571
 
 - Reset program:
 - PBI-567-greenfield-library-database-reset.md
@@ -97,3 +98,5 @@
 - PBI-591-greenfield-frontend-shell-and-sidebar-rebuild.md
 - PBI-592-greenfield-frontend-grid-screen-rebuild.md
 - PBI-593-greenfield-frontend-inspector-and-selection-surface-rebuild.md
+- PBI-595-greenfield-frontend-manager-navigation-and-surface-reset.md
+- PBI-596-greenfield-random-active-image-view-contract.md

@@ -16,6 +16,10 @@ export const sidebarLoadingAtom = atom(false);
 
 // ── Derived: node kind filters ───────────────────────────────────
 
+export const systemNodesAtom = atom((get) =>
+  get(sidebarNodesAtom).filter((n) => n.kind === 'system' && n.id !== 'system:all'),
+);
+
 export const folderNodesAtom = atom((get) =>
   get(sidebarNodesAtom).filter((n) => n.kind === 'folder'),
 );

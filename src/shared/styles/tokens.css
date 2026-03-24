@@ -44,7 +44,7 @@
   --font-weight-bold: 600;
   --font-size-xs: 10px;
   --font-size-sm: 12px;
-  --font-size-md: 12px;
+  --font-size-md: 13px;
   --font-size-lg: 14px;
   --font-size-xl: 16px;
 
@@ -65,6 +65,19 @@
   /* ── Shadows ─────────────────────────────────────────────── */
   --shadow-1: 0 1px 3px var(--color-black-10);
   --shadow-2: 0 4px 12px var(--color-black-30);
+  --shadow-panel: 0 3px 12px rgba(0, 0, 0, 0.3), 0 0 0 1px rgba(0, 0, 0, 0.5);
+
+  /* ── Glass panel surface ────────────────────────────────── */
+  --glass-bg: rgba(24, 25, 28, 0.92);
+  --glass-blur: blur(13px) brightness(0.7);
+  --glass-border-top: 1px solid rgba(255, 255, 255, 0.25);
+  --glass-border-side: 1px solid rgba(255, 255, 255, 0.15);
+  --glass-border-bottom: 1px solid rgba(255, 255, 255, 0.10);
+
+  /* ── Menu/overlay specific ──────────────────────────────── */
+  --color-negative: #ff4757;
+  --color-menu-hover: rgba(255, 255, 255, 0.08);
+  --color-menu-separator: rgba(255, 255, 255, 0.10);
 
   /* ── Motion ──────────────────────────────────────────────── */
   --ease-default: cubic-bezier(0.4, 0, 0.22, 1);
@@ -72,14 +85,21 @@
   --duration-fast: 50ms;
   --duration-normal: 200ms;
 
-  /* ── Layers ──────────────────────────────────────────────── */
+  /* ── Layers (ordered scale, nothing else sets z-index) ──── */
   --layer-base: 0;
-  --layer-overlay: 1000;
-  --layer-menu: 10000;
-  --layer-tooltip: 10001;
+  --layer-sidebar-row: 1;
+  --layer-sidebar-expand: 2;
+  --layer-sidebar-rename: 10;
+  --layer-overlay: 100;
+  --layer-modal-backdrop: 200;
+  --layer-modal: 201;
+  --layer-menu-backdrop: 300;
+  --layer-menu: 301;
+  --layer-tooltip: 400;
+  --layer-drag-overlay: 500;
 
   /* ── Sidebar-specific (reference application-matched) ────────────────────── */
-  --sidebar-width: 280px;
+  --sidebar-width: 290px;
   --sidebar-row-height: 26px;
   --sidebar-indent: 18px;
   --sidebar-icon-size: 16px;

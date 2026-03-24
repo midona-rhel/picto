@@ -1,92 +1,158 @@
 /**
  * Sidebar feature root — assembles the sidebar from state atoms.
  *
- * Visual structure matches the legacy sidebar (reference application-style):
- *   1. System scope rows (flat, no section header)
- *   2. "Folders" collapsible section with + button and nested folder tree
- *   3. "Smart Folders" collapsible section with + button and smart folder list
+ * All nodes are driven by the backend sidebar tree. No frontend-invented nodes.
+ * Manager surfaces (Tags, Random) are out of scope — see PBI-595, PBI-596.
  */
 
-import { useEffect, useState, useCallback, useMemo } from 'react';
+import { useEffect, useMemo, useCallback } from 'react';
 import { useAtomValue, useSetAtom } from 'jotai';
 import {
-  IconPhoto,
-  IconInbox,
-  IconFolderQuestion,
-  IconTrash,
-  IconBookmarkQuestion,
-  IconBookmark,
-  IconCopy,
-  IconArrowsShuffle,
-  IconFolder,
-  IconFolderOpen,
+  IconFolder, IconFolderOpen, IconFolderPlus, IconFolderSymlink,
+  IconFolderMinus, IconCopy, IconUpload,
+  IconPhoto, IconInbox, IconFolderQuestion, IconTrash,
+  IconBookmarkQuestion, IconClock,
 } from '@tabler/icons-react';
+import type { Icon as TablerIcon } from '@tabler/icons-react';
 import {
-  sidebarNodesAtom,
-  scopeCountsAtom,
-  folderNodesAtom,
-  smartFolderNodesAtom,
-  sidebarLoadingAtom,
+  IconNewSubfolder, IconRename, IconSort, IconExpand, IconCollapse,
+  IconExpandAll, IconChangeIcon, IconAutoTags, IconWatchFolder,
+} from '../../shared/ui/icons/sidebar-menu-icons';
+import {
+  sidebarNodesAtom, systemNodesAtom, folderNodesAtom,
+  smartFolderNodesAtom, sidebarLoadingAtom,
 } from '../../state/sidebar';
 import { activeNodeIdAtom } from '../../state/navigation';
 import { sidebarController } from '../../controllers/sidebarController';
+import { foldersController } from '../../controllers/foldersController';
+import { smartFoldersController } from '../../controllers/smartFoldersController';
 import { SidebarRow } from '../../shared/ui/SidebarRow';
+import { ContextMenu, useContextMenu, type MenuEntry } from '../../shared/ui/ContextMenu';
+import { ColorPicker } from '../../shared/ui/ColorPicker';
+// TODO: wire IconPicker into "Change Icon..." submenu
+// import { IconPicker } from '../../shared/ui/IconPicker';
 import { DynamicIcon } from '../../shared/ui/DynamicIcon';
+import { useInlineRename } from '../../shared/hooks/useInlineRename';
+import { usePersistedSet } from '../../shared/hooks/usePersistedSet';
 import type { SidebarNodeDto } from '../../shared/types/canonical';
 import styles from './Sidebar.module.css';
 
-const ICON_SIZE = 19;
+const IC = 19;
+const FILL = { stroke: 1.2, fill: 'currentColor', fillOpacity: 0.15 } as const;
+
+const SYSTEM_ICONS: Record<string, TablerIcon> = {
+  'system:active':        IconPhoto,
+  'system:inbox':         IconInbox,
+  'system:uncategorized': IconFolderQuestion,
+  'system:untagged':      IconBookmarkQuestion,
+  'system:recent_viewed': IconClock,
+  'system:duplicates':    IconCopy,
+  'system:trash':         IconTrash,
+};
+
+const PRIMARY_SCOPES = new Set([
+  'system:active', 'system:inbox', 'system:uncategorized',
+  'system:untagged', 'system:trash',
+]);
+
+const LABEL_OVERRIDES: Record<string, string> = {
+  'system:active': 'All',
+};
 
 export function Sidebar() {
   const nodes = useAtomValue(sidebarNodesAtom);
-  const counts = useAtomValue(scopeCountsAtom);
+  const systemNodes = useAtomValue(systemNodesAtom);
   const folderNodes = useAtomValue(folderNodesAtom);
   const smartFolderNodes = useAtomValue(smartFolderNodesAtom);
   const loading = useAtomValue(sidebarLoadingAtom);
   const activeNodeId = useAtomValue(activeNodeIdAtom);
   const setActiveNodeId = useSetAtom(activeNodeIdAtom);
 
-  const [collapsedSections, setCollapsedSections] = useState<Set<string>>(new Set());
-  const [collapsedFolders, setCollapsedFolders] = useState<Set<string>>(new Set());
+  const [collapsed, toggleCollapse] = usePersistedSet('picto-sidebar-collapsed');
+  const contextMenu = useContextMenu();
 
-  useEffect(() => {
-    sidebarController.ensureLoaded();
-  }, []);
+  const folderRename = useInlineRename({
+    onCommit: (id, name) => {
+      const numId = parseFolderId(id);
+      if (numId != null) foldersController.rename(numId, name);
+    },
+  });
 
-  const toggleSection = useCallback((key: string) => {
-    setCollapsedSections((prev) => {
-      const next = new Set(prev);
-      if (next.has(key)) next.delete(key);
-      else next.add(key);
-      return next;
-    });
-  }, []);
+  useEffect(() => { sidebarController.ensureLoaded(); }, []);
 
-  const toggleFolder = useCallback((nodeId: string) => {
-    setCollapsedFolders((prev) => {
-      const next = new Set(prev);
-      if (next.has(nodeId)) next.delete(nodeId);
-      else next.add(nodeId);
-      return next;
-    });
-  }, []);
+  const navigate = useCallback((id: string) => setActiveNodeId(id), [setActiveNodeId]);
 
-  const navigate = useCallback((nodeId: string) => {
-    setActiveNodeId(nodeId);
-  }, [setActiveNodeId]);
-
-  const folderRenderList = useMemo(
-    () => buildTreeRenderList(folderNodes, 'section:folders', collapsedFolders),
-    [folderNodes, collapsedFolders],
+  const primaryNodes = useMemo(
+    () => systemNodes.filter((n) => PRIMARY_SCOPES.has(n.id)),
+    [systemNodes],
+  );
+  const secondaryNodes = useMemo(
+    () => systemNodes.filter((n) => !PRIMARY_SCOPES.has(n.id)),
+    [systemNodes],
+  );
+  const folderList = useMemo(
+    () => buildTreeRenderList(folderNodes, 'section:folders', collapsed),
+    [folderNodes, collapsed],
+  );
+  const smartList = useMemo(
+    () => buildTreeRenderList(smartFolderNodes, 'section:smart_folders', collapsed),
+    [smartFolderNodes, collapsed],
   );
 
-  const smartFolderRenderList = useMemo(
-    () => buildTreeRenderList(smartFolderNodes, 'section:smart_folders', collapsedFolders),
-    [smartFolderNodes, collapsedFolders],
-  );
+  // ── Context menu builders ──────────────────────────────────────
 
-  const foldersExpanded = !collapsedSections.has('folders');
-  const smartFoldersExpanded = !collapsedSections.has('smart_folders');
+  const openFolderMenu = useCallback((e: React.MouseEvent, node: SidebarNodeDto) => {
+    const folderId = parseFolderId(node.id);
+    if (folderId == null) return;
+    const isExpanded = !collapsed.has(node.id);
+    const entries: MenuEntry[] = [
+      { label: 'New Folder', icon: <IconFolderPlus size={14} />, action: () => foldersController.create('New Folder') },
+      { label: 'New Subfolder', icon: <IconNewSubfolder size={14} />, action: () => foldersController.create('New Folder', folderId) },
+      { separator: true },
+      { label: 'Rename', icon: <IconRename size={14} />, action: () => folderRename.startRename(node.id, node.name) },
+      { label: 'Set Auto-Tags...', icon: <IconAutoTags size={14} />, action: () => { /* TODO: auto-tags editor */ } },
+      { separator: true },
+      { label: 'Import Folder Here...', icon: <IconFolderPlus size={14} />, action: () => { /* TODO: import */ } },
+      { label: 'Attach Watched Folder...', icon: <IconWatchFolder size={14} />, action: () => { /* TODO: watch config */ } },
+      { separator: true },
+      { label: 'Sort', icon: <IconSort size={14} />, action: () => { /* TODO: sort submenu */ } },
+      { label: isExpanded ? 'Collapse Folder' : 'Expand Folder', icon: isExpanded ? <IconCollapse size={14} /> : <IconExpand size={14} />, action: () => toggleCollapse(node.id) },
+      { label: 'Expand/Collapse All', icon: <IconExpandAll size={14} />, action: () => { /* TODO: toggle all folders */ } },
+      { separator: true },
+      { label: 'Change Icon...', icon: <IconChangeIcon size={14} />, action: () => { /* TODO: open icon picker as submenu */ } },
+      { custom: true, key: 'folder-color', render: () => (
+        <ColorPicker value={node.color ?? null} onChange={(_hex) => { /* TODO: foldersController.applyColor(folderId, hex) */ }} />
+      ) },
+      { separator: true },
+      { label: 'Duplicate', icon: <IconCopy size={14} />, action: () => { /* TODO */ } },
+      { label: 'Export...', icon: <IconUpload size={14} />, action: () => { /* TODO */ } },
+      { label: 'Move', icon: <IconFolderSymlink size={14} />, action: () => { /* TODO */ } },
+      { separator: true },
+      { label: 'Remove Folder', icon: <IconFolderMinus size={14} />, danger: true, action: () => foldersController.delete(folderId) },
+    ];
+    contextMenu.open(e, entries);
+  }, [contextMenu, folderRename, collapsed, toggleCollapse]);
+
+  const openSmartFolderMenu = useCallback((e: React.MouseEvent, node: SidebarNodeDto) => {
+    const sfId = parseSmartFolderId(node.id);
+    if (sfId == null) return;
+    const entries: MenuEntry[] = [
+      { label: 'Edit Smart Folder...', icon: <IconFolderOpen size={14} />, action: () => { /* TODO: edit modal */ } },
+      { label: 'New Child Smart Folder', icon: <IconFolderPlus size={14} />, action: () => { /* TODO */ } },
+      { separator: true },
+      { label: 'Rename', icon: <IconRename size={14} />, action: () => folderRename.startRename(node.id, node.name) },
+      { separator: true },
+      { label: 'Change Icon...', icon: <IconChangeIcon size={14} />, action: () => { /* TODO: open icon picker as submenu */ } },
+      { custom: true, key: 'sf-color', render: () => (
+        <ColorPicker value={node.color ?? null} onChange={(_hex) => { /* TODO: smartFoldersController.applyColor(sfId, hex) */ }} />
+      ) },
+      { separator: true },
+      { label: 'Duplicate', icon: <IconCopy size={14} />, action: () => { /* TODO */ } },
+      { separator: true },
+      { label: 'Delete', icon: <IconFolderMinus size={14} />, danger: true, action: () => smartFoldersController.delete(sfId) },
+    ];
+    contextMenu.open(e, entries);
+  }, [contextMenu, folderRename]);
 
   return (
     <div className={styles.root}>
@@ -95,132 +161,128 @@ export function Sidebar() {
           <div className={styles.loadingMessage}>Loading…</div>
         )}
 
-        {/* System scopes — flat rows, filled semi-transparent icons */}
-        <SidebarRow
-          icon={<IconPhoto size={ICON_SIZE} stroke={1.5} fill="currentColor" fillOpacity={0.15} />}
-          label="All Active"
-          count={counts.active}
-          active={activeNodeId === 'system:active'}
-          onClick={() => navigate('system:active')}
-        />
-        <SidebarRow
-          icon={<IconInbox size={ICON_SIZE} stroke={1.5} fill="currentColor" fillOpacity={0.15} />}
-          label="Inbox"
-          count={counts.inbox}
-          active={activeNodeId === 'system:inbox'}
-          onClick={() => navigate('system:inbox')}
-        />
-        <SidebarRow
-          icon={<IconFolderQuestion size={ICON_SIZE} stroke={1.5} fill="currentColor" fillOpacity={0.15} />}
-          label="Uncategorized"
-          count={counts.uncategorized}
-          active={activeNodeId === 'system:uncategorized'}
-          onClick={() => navigate('system:uncategorized')}
-        />
-        <SidebarRow
-          icon={<IconBookmarkQuestion size={ICON_SIZE} stroke={1.5} fill="currentColor" fillOpacity={0.15} />}
-          label="Untagged"
-          count={counts.untagged}
-          active={activeNodeId === 'system:untagged'}
-          onClick={() => navigate('system:untagged')}
-        />
-        <SidebarRow
-          icon={<IconBookmark size={ICON_SIZE} stroke={1.5} fill="currentColor" fillOpacity={0.15} />}
-          label="Tag Manager"
-          active={activeNodeId === 'system:tags'}
-          onClick={() => navigate('system:tags')}
-        />
-        <SidebarRow
-          icon={<IconArrowsShuffle size={ICON_SIZE} stroke={1.5} fill="currentColor" fillOpacity={0.15} />}
-          label="Random"
-          active={activeNodeId === 'system:random'}
-          onClick={() => navigate('system:random')}
-        />
-        <SidebarRow
-          icon={<IconCopy size={ICON_SIZE} stroke={1.5} fill="currentColor" fillOpacity={0.15} />}
-          label="Duplicates"
-          count={counts.duplicates}
-          active={activeNodeId === 'system:duplicates'}
-          onClick={() => navigate('system:duplicates')}
-        />
-        <SidebarRow
-          icon={<IconTrash size={ICON_SIZE} stroke={1.5} fill="currentColor" fillOpacity={0.15} />}
-          label="Trash"
-          count={counts.trash}
-          active={activeNodeId === 'system:trash'}
-          onClick={() => navigate('system:trash')}
-        />
-
-        {/* Folders section with + button */}
-        <SidebarRow
-          variant="section"
-          label="Folders"
-          expanded={foldersExpanded}
-          onToggle={() => toggleSection('folders')}
-          onAdd={() => { /* TODO: folder create modal */ }}
-        />
-        {foldersExpanded && folderRenderList.map(({ node, indent, hasChildren }) => {
-          const isExpanded = !collapsedFolders.has(node.id);
-          const folderColor = node.color ?? undefined;
-          const FolderIcn = node.icon
-            ? () => <DynamicIcon name={node.icon!} size={ICON_SIZE} color={node.color} filled />
-            : () => (isExpanded && hasChildren)
-              ? <IconFolderOpen size={ICON_SIZE} color={folderColor} stroke={1.5} fill={folderColor ?? 'currentColor'} fillOpacity={0.15} />
-              : <IconFolder size={ICON_SIZE} color={folderColor} stroke={1.5} fill={folderColor ?? 'currentColor'} fillOpacity={0.15} />;
-
+        {/* Primary system scopes */}
+        {primaryNodes.map((node) => {
+          const ScopeIcon = SYSTEM_ICONS[node.id];
           return (
             <SidebarRow
               key={node.id}
-              variant="folder"
-              icon={<FolderIcn />}
-              label={node.name}
+              icon={ScopeIcon ? <ScopeIcon size={IC} {...FILL} /> : undefined}
+              label={LABEL_OVERRIDES[node.id] ?? node.name}
               count={node.count}
-              countStale={node.freshness !== 'exact' && node.freshness !== 'fresh'}
               active={activeNodeId === node.id}
-              indent={indent}
-              hasChildren={hasChildren}
-              expanded={isExpanded}
-              onToggleExpand={() => toggleFolder(node.id)}
-              onClick={() => navigate(node.id)}
+              onClick={() => node.selectable && navigate(node.id)}
             />
           );
         })}
 
-        {/* Smart Folders section with + button */}
+        {/* Secondary system scopes */}
+        {secondaryNodes.length > 0 && (
+          <>
+            <div className={styles.separator} />
+            {secondaryNodes.map((node) => {
+              const ScopeIcon = SYSTEM_ICONS[node.id];
+              return (
+                <SidebarRow
+                  key={node.id}
+                  icon={ScopeIcon ? <ScopeIcon size={IC} {...FILL} /> : undefined}
+                  label={LABEL_OVERRIDES[node.id] ?? node.name}
+                  active={activeNodeId === node.id}
+                  onClick={() => node.selectable && navigate(node.id)}
+                />
+              );
+            })}
+          </>
+        )}
+
+        {/* Folders */}
         <SidebarRow
-          variant="section"
-          label="Smart Folders"
-          expanded={smartFoldersExpanded}
-          onToggle={() => toggleSection('smart_folders')}
+          variant="section" label="Folders"
+          expanded={!collapsed.has('folders')}
+          onToggle={() => toggleCollapse('folders')}
+          onAdd={() => foldersController.create('New Folder')}
+        />
+        {!collapsed.has('folders') && folderList.map(({ node, indent, hasChildren }) => (
+          <SidebarRow
+            key={node.id} variant="folder"
+            icon={<NodeIcon node={node} expanded={!collapsed.has(node.id) && hasChildren} />}
+            label={folderRename.renamingId === node.id ? undefined : node.name}
+            count={folderRename.renamingId === node.id ? undefined : node.count}
+            countStale={node.freshness !== 'exact' && node.freshness !== 'fresh'}
+            active={activeNodeId === node.id} indent={indent}
+            hasChildren={hasChildren} expanded={!collapsed.has(node.id)}
+            onToggleExpand={() => toggleCollapse(node.id)}
+            onClick={() => navigate(node.id)}
+            onContextMenu={(e) => openFolderMenu(e, node)}
+          >
+            {folderRename.renamingId === node.id && (
+              <input
+                ref={folderRename.inputRef}
+                className={styles.renameInput}
+                value={folderRename.renameValue}
+                onChange={(e) => folderRename.setRenameValue(e.target.value)}
+                onKeyDown={folderRename.handleKeyDown}
+                onBlur={folderRename.commitRename}
+              />
+            )}
+          </SidebarRow>
+        ))}
+
+        {/* Smart Folders */}
+        <SidebarRow
+          variant="section" label="Smart Folders"
+          expanded={!collapsed.has('smart_folders')}
+          onToggle={() => toggleCollapse('smart_folders')}
           onAdd={() => { /* TODO: smart folder create modal */ }}
         />
-        {smartFoldersExpanded && smartFolderRenderList.map(({ node, indent, hasChildren }) => {
-          const isExpanded = !collapsedFolders.has(node.id);
-          const iconName = node.icon ?? (isExpanded && hasChildren ? 'IconFolderOpen' : 'IconFolder');
-
-          return (
-            <SidebarRow
-              key={node.id}
-              variant="smart_folder"
-              icon={<DynamicIcon name={iconName} size={ICON_SIZE} color={node.color} filled />}
-              label={node.name}
-              count={node.count}
-              countStale={node.freshness !== 'exact' && node.freshness !== 'fresh'}
-              active={activeNodeId === node.id}
-              indent={indent}
-              hasChildren={hasChildren}
-              expanded={isExpanded}
-              onToggleExpand={() => toggleFolder(node.id)}
-              onClick={() => navigate(node.id)}
-            />
-          );
-        })}
+        {!collapsed.has('smart_folders') && smartList.map(({ node, indent, hasChildren }) => (
+          <SidebarRow
+            key={node.id} variant="smart_folder"
+            icon={<NodeIcon node={node} expanded={!collapsed.has(node.id) && hasChildren} />}
+            label={node.name} count={node.count}
+            countStale={node.freshness !== 'exact' && node.freshness !== 'fresh'}
+            active={activeNodeId === node.id} indent={indent}
+            hasChildren={hasChildren} expanded={!collapsed.has(node.id)}
+            onToggleExpand={() => toggleCollapse(node.id)}
+            onClick={() => navigate(node.id)}
+            onContextMenu={(e) => openSmartFolderMenu(e, node)}
+          />
+        ))}
       </div>
+
+      {/* Context menu portal */}
+      {contextMenu.state && (
+        <ContextMenu
+          entries={contextMenu.state.entries}
+          position={contextMenu.state.position}
+          onClose={contextMenu.close}
+        />
+      )}
     </div>
   );
 }
 
-// ── Tree rendering helper ────────────────────────────────────────
+// ── Helpers ──────────────────────────────────────────────────────
+
+function NodeIcon({ node, expanded }: { node: SidebarNodeDto; expanded: boolean }) {
+  if (node.icon) {
+    return <DynamicIcon name={node.icon} size={IC} color={node.color} filled />;
+  }
+  const color = node.color ?? undefined;
+  const Icon = expanded ? IconFolderOpen : IconFolder;
+  return <Icon size={IC} color={color} stroke={1.2} fill={color ?? 'currentColor'} fillOpacity={0.15} />;
+}
+
+function parseFolderId(nodeId: string): number | null {
+  if (!nodeId.startsWith('folder:')) return null;
+  const n = parseInt(nodeId.slice(7), 10);
+  return isNaN(n) ? null : n;
+}
+
+function parseSmartFolderId(nodeId: string): string | null {
+  if (!nodeId.startsWith('smart:')) return null;
+  return nodeId.slice(6);
+}
 
 interface TreeRenderNode {
   node: SidebarNodeDto;
@@ -234,32 +296,21 @@ function buildTreeRenderList(
   collapsed: Set<string>,
 ): TreeRenderNode[] {
   const childrenMap = new Map<string, SidebarNodeDto[]>();
-
   for (const node of nodes) {
-    const parentKey = node.parent_id ?? rootParentId;
-    if (!childrenMap.has(parentKey)) childrenMap.set(parentKey, []);
-    childrenMap.get(parentKey)!.push(node);
+    const key = node.parent_id ?? rootParentId;
+    if (!childrenMap.has(key)) childrenMap.set(key, []);
+    childrenMap.get(key)!.push(node);
   }
-
   for (const children of childrenMap.values()) {
-    children.sort((a, b) =>
-      (a.sort_order ?? 999) - (b.sort_order ?? 999) || a.name.localeCompare(b.name),
-    );
+    children.sort((a, b) => (a.sort_order ?? 999) - (b.sort_order ?? 999) || a.name.localeCompare(b.name));
   }
-
   const result: TreeRenderNode[] = [];
-
-  function walk(parentId: string, indent: number) {
-    const children = childrenMap.get(parentId) ?? [];
-    for (const node of children) {
-      const nodeChildren = childrenMap.get(node.id) ?? [];
-      result.push({ node, indent, hasChildren: nodeChildren.length > 0 });
-      if (!collapsed.has(node.id)) {
-        walk(node.id, indent + 1);
-      }
+  (function walk(parentId: string, indent: number) {
+    for (const node of childrenMap.get(parentId) ?? []) {
+      const kids = childrenMap.get(node.id) ?? [];
+      result.push({ node, indent, hasChildren: kids.length > 0 });
+      if (!collapsed.has(node.id)) walk(node.id, indent + 1);
     }
-  }
-
-  walk(rootParentId, 0);
+  })(rootParentId, 0);
   return result;
 }

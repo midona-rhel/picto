@@ -41,6 +41,8 @@ This slice does not own:
 - the rebuilt grid screen
 - the rebuilt inspector
 - media/viewer logic
+- long-term manager navigation and manager-surface ownership for tags, duplicates, and subscriptions
+- the long-term random active-image view contract
 
 ## Required shape
 - a clean new app shell root in `src/app/**`
@@ -50,6 +52,10 @@ This slice does not own:
 - runtime settle path for sidebar count/tree refresh
 - one shared sidebar row primitive or row family, not separate legacy-style row implementations for each sidebar subsection
 - styling for the rebuilt shell/sidebar follows the CSS architecture contract in [PBI-594-greenfield-frontend-css-architecture-contract.md](./docs/pbis/active-alpha/PBI-594-greenfield-frontend-css-architecture-contract.md)
+
+Follow-up work that should not be treated as hidden scope here:
+- manager navigation and manager surfaces belong to [PBI-595-greenfield-frontend-manager-navigation-and-surface-reset.md](./docs/pbis/active-alpha/PBI-595-greenfield-frontend-manager-navigation-and-surface-reset.md)
+- the random active-image view contract belongs to [PBI-596-greenfield-random-active-image-view-contract.md](./docs/pbis/active-alpha/PBI-596-greenfield-random-active-image-view-contract.md)
 
 ## Start gate
 This PBI may start only when:

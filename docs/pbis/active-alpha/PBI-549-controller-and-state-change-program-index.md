@@ -145,6 +145,8 @@ Use this as the main activation path for the reset set:
 - `PBI-577` duplicates/rejected-media
 
 8. Activate frontend structure cleanup after the boundary is stable:
+- `PBI-595` manager navigation and manager surfaces
+- `PBI-596` random active-image view contract
 - `PBI-586` frontend feature/module architecture
 - `PBI-571` frontend shared component/styling system
 

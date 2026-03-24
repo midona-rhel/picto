@@ -13,7 +13,7 @@ pub fn compile_sidebar(conn: &Connection) {
     // System scopes
     let system_nodes = [
         ("system:library", "system", None, "Library", Some("IconPhoto"), true, true),
-        ("system:all", "system", Some("system:library"), "All Images", Some("IconPhoto"), true, false),
+        ("system:active", "system", Some("system:library"), "All Active", Some("IconPhoto"), true, false),
         ("system:inbox", "system", Some("system:library"), "Inbox", Some("IconInbox"), true, false),
         ("system:uncategorized", "system", Some("system:library"), "Uncategorized", Some("IconFolderQuestion"), true, false),
         ("system:untagged", "system", Some("system:library"), "Untagged", Some("IconTag"), true, false),
@@ -29,7 +29,7 @@ pub fn compile_sidebar(conn: &Connection) {
     }
 
     // System scope counts (top-level only, excludes collection members)
-    for (node_id, status) in [("system:all", 1i64), ("system:inbox", 0), ("system:trash", 2)] {
+    for (node_id, status) in [("system:active", 1i64), ("system:inbox", 0), ("system:trash", 2)] {
         let count: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM media_entity WHERE status = ?1 AND parent_collection_entity_id IS NULL",

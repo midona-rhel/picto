@@ -1,0 +1,27 @@
+/*
+ * Shared surface styles.
+ *
+ * Glass panel tokens are defined in tokens.css (--glass-*).
+ * Any floating surface (context menu, modal, picker, dropdown)
+ * should apply these tokens directly in its own CSS module:
+ *
+ *   background: var(--glass-bg);
+ *   backdrop-filter: var(--glass-blur);
+ *   -webkit-backdrop-filter: var(--glass-blur);
+ *   border-top: var(--glass-border-top);
+ *   border-right: var(--glass-border-side);
+ *   border-bottom: var(--glass-border-bottom);
+ *   border-left: var(--glass-border-side);
+ *   border-radius: var(--radius-lg);
+ *   box-shadow: var(--shadow-panel);
+ *
+ * Do not hardcode rgba values — use the tokens.
+ */
+
+/* App-level border (wraps the entire window) */
+.appBorder {
+  border-top: var(--glass-border-top);
+  border-right: var(--glass-border-side);
+  border-bottom: var(--glass-border-bottom);
+  border-left: var(--glass-border-side);
+}

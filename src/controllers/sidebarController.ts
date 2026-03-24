@@ -29,14 +29,15 @@ export const sidebarController = {
     }
   },
 
-  /** Load the sidebar tree exactly once. Safe to call from StrictMode effects. */
+  /** Load the sidebar tree exactly once. Safe to call from StrictMode effects.
+   *  Resets the guard on failure so a retry is possible. */
   ensureLoaded() {
     if (initialFetchDone) return;
     if (initialFetchPromise) return;
-    initialFetchDone = true;
-    initialFetchPromise = this.fetchTree().finally(() => {
-      initialFetchPromise = null;
-    });
+    initialFetchPromise = this.fetchTree()
+      .then(() => { initialFetchDone = true; })
+      .catch(() => { /* allow retry on next call */ })
+      .finally(() => { initialFetchPromise = null; });
   },
 
   /** Reorder sidebar nodes. */

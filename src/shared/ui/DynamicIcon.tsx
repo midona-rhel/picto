@@ -120,7 +120,7 @@ interface DynamicIconProps {
   filled?: boolean;
 }
 
-export function DynamicIcon({ name, size = 16, color, stroke = 1.5, filled }: DynamicIconProps) {
+export function DynamicIcon({ name, size = 16, color, stroke = 1.2, filled }: DynamicIconProps) {
   const Icon = ICON_MAP[name] ?? IconFolder;
   if (filled) {
     return (

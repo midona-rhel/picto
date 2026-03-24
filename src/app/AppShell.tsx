@@ -10,6 +10,7 @@ import { useAtomValue } from 'jotai';
 import { Sidebar } from '../features/sidebar/Sidebar';
 import { activeNodeIdAtom } from '../state/navigation';
 import { startSidebarSettle } from '../runtime/sidebarSettle';
+import { zoomController } from '../controllers/zoomController';
 import styles from './AppShell.module.css';
 
 // Start sidebar runtime settle once at module load
@@ -26,6 +27,18 @@ export function AppShell() {
 
   useEffect(() => {
     ensureSidebarSettle();
+  }, []);
+
+  // Zoom keyboard shortcuts: Cmd+= / Cmd+- / Cmd+0
+  useEffect(() => {
+    function handleKeyDown(e: KeyboardEvent) {
+      if (!e.metaKey && !e.ctrlKey) return;
+      if (e.key === '=' || e.key === '+') { e.preventDefault(); zoomController.zoomIn(); }
+      else if (e.key === '-') { e.preventDefault(); zoomController.zoomOut(); }
+      else if (e.key === '0') { e.preventDefault(); zoomController.resetZoom(); }
+    }
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
 
   return (

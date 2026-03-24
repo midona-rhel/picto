@@ -1,4 +1,5 @@
 @import '../shared/styles/tokens.css';
+@import '../shared/styles/surfaces.css';
 
 *, *::before, *::after {
   box-sizing: border-box;

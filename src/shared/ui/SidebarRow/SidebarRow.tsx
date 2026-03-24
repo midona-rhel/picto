@@ -46,7 +46,7 @@ function SectionRow({ label, expanded, onToggle, onAdd }: SectionProps) {
 interface RowProps {
   variant?: 'system' | 'folder' | 'smart_folder';
   icon?: ReactNode;
-  label: string;
+  label?: string;
   count?: number | null;
   countStale?: boolean;
   active?: boolean;
@@ -57,6 +57,7 @@ interface RowProps {
   onToggleExpand?: () => void;
   onClick?: () => void;
   onContextMenu?: (e: React.MouseEvent) => void;
+  children?: ReactNode;
 }
 
 function StandardRow({
@@ -72,6 +73,7 @@ function StandardRow({
   onToggleExpand,
   onClick,
   onContextMenu,
+  children,
 }: RowProps) {
   const cls = [
     styles.row,
@@ -99,7 +101,7 @@ function StandardRow({
         </div>
       )}
       {icon && <span className={styles.icon}>{icon}</span>}
-      <span className={styles.label}>{label}</span>
+      {children ?? (label != null && <span className={styles.label}>{label}</span>)}
       {count != null && (
         <span className={`${styles.count} ${countStale ? styles.stale : ''}`}>
           {count.toLocaleString()}

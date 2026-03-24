@@ -1,0 +1,159 @@
+/* Context menu — reusable glass panel with search. */
+
+.backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: var(--layer-menu-backdrop);
+}
+
+.menu {
+  --cm-icon-size: 16px;
+
+  position: fixed;
+  z-index: var(--layer-menu);
+  width: 260px;
+  max-height: calc(100vh - 16px);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  user-select: none;
+  -webkit-user-select: none;
+  font-size: var(--font-size-sm);
+
+  /* Glass surface — tokens from surfaces.css */
+  background: var(--glass-bg);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  border-top: var(--glass-border-top);
+  border-right: var(--glass-border-side);
+  border-bottom: var(--glass-border-bottom);
+  border-left: var(--glass-border-side);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-panel);
+}
+
+/* Search */
+.searchArea {
+  position: relative;
+  height: 36px;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--color-menu-separator);
+}
+
+.searchIcon {
+  position: absolute;
+  left: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--color-text-tertiary);
+  pointer-events: none;
+}
+
+.searchInput {
+  width: 100%;
+  height: 36px;
+  line-height: 36px;
+  padding: 0 12px 0 36px;
+  background: none;
+  border: none;
+  outline: none;
+  color: var(--color-text-primary);
+  font-size: var(--font-size-sm);
+  font-family: var(--font-family);
+  caret-color: var(--color-text-primary);
+}
+
+.searchInput::placeholder {
+  color: var(--color-text-tertiary);
+}
+
+/* Items */
+.items {
+  overflow-y: auto;
+  padding: 3px 0;
+}
+
+.item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  margin: 0 3px;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  color: var(--color-text-primary);
+  line-height: 1.4;
+  font-size: var(--font-size-sm);
+  transition: background var(--duration-fast) var(--ease-default);
+}
+
+.item:hover,
+.focused {
+  background: var(--color-menu-hover);
+}
+
+.disabled {
+  opacity: 0.4;
+  cursor: default;
+  pointer-events: none;
+}
+
+.danger {
+  color: var(--color-negative);
+}
+
+.danger:hover,
+.danger.focused {
+  background: color-mix(in srgb, var(--color-negative) 12%, transparent);
+}
+
+.iconSlot {
+  width: var(--cm-icon-size);
+  height: var(--cm-icon-size);
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--color-text-secondary);
+}
+
+/* Force all SVGs inside items to consistent size and stroke */
+.item svg {
+  width: var(--cm-icon-size) !important;
+  height: var(--cm-icon-size) !important;
+  stroke-width: 1.5 !important;
+}
+
+.label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.shortcut {
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-xs);
+  flex-shrink: 0;
+  margin-left: 12px;
+  font-family: var(--font-family);
+}
+
+.separator {
+  height: 1px;
+  background: var(--color-menu-separator);
+  margin: 3px 6px;
+}
+
+.customItem {
+  padding: 4px 8px;
+  margin: 0 3px;
+}
+
+.empty {
+  text-align: center;
+  color: var(--color-text-tertiary);
+  padding: 8px 12px;
+  font-size: var(--font-size-sm);
+}
