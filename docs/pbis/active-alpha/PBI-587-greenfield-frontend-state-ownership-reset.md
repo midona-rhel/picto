@@ -8,13 +8,14 @@ This document is about frontend state ownership and view-model shape. It is not 
 
 ## Lifecycle
 - `Implemented` when migrated frontend slices have one clear state-ownership model in code.
-- `Activatable` when `PBI-581` and `PBI-582` are implemented enough for the intended slice.
+- `Activatable` when `PBI-581`, `PBI-582`, and `PBI-588` are implemented enough for the intended slice.
 - `Activated` when the intended frontend flows use the new state-owned path by default.
 - `Legacy removed` when replaced ad hoc local state, duplicated selectors, and overlapping view-model paths are deleted for that slice.
 
 Activation depends on:
 - [PBI-581-greenfield-frontend-api-layer-reset.md](./docs/pbis/active-alpha/PBI-581-greenfield-frontend-api-layer-reset.md)
 - [PBI-582-greenfield-frontend-controller-boundary-reset.md](./docs/pbis/active-alpha/PBI-582-greenfield-frontend-controller-boundary-reset.md)
+- [PBI-588-greenfield-frontend-architecture-contract-reset.md](./docs/pbis/active-alpha/PBI-588-greenfield-frontend-architecture-contract-reset.md)
 
 ## Problem
 Frontend state is still too loose, too duplicated, and too hard to reason about.
@@ -25,6 +26,7 @@ Current problems:
 - view-model shape is not consistent enough across grid, inspector, sidebar, and dialogs
 - local optimistic state and authoritative settled state are not clearly separated
 - selectors and derived state logic are duplicated across features
+- legacy Zustand stores and new Jotai slices are still easy to leave alive in parallel
 
 ## Product model to encode
 The frontend should have one clear answer for each migrated slice:
@@ -37,6 +39,8 @@ The frontend should have one clear answer for each migrated slice:
 Controllers should trigger domain actions.
 Runtime should settle backend-confirmed state.
 State ownership should define what the frontend stores between those two steps.
+Jotai is the intended long-term owner for migrated frontend state.
+For rebuilt slices, that ownership lives only in the new `src/state/**` tree, not alongside legacy store ownership in the active path.
 
 ## Required shape
 - one explicit state owner per migrated slice
@@ -44,6 +48,7 @@ State ownership should define what the frontend stores between those two steps.
 - derived state is centralized and reusable
 - transient UI state is separated from domain state
 - duplicated stores, duplicated selectors, and duplicated visible-state builders are reduced aggressively
+- each activated slice removes overlapping legacy ownership instead of leaving dual-live state behind
 
 ## Implementation changes
 - define one state-ownership model for the migrated slices
@@ -51,12 +56,14 @@ State ownership should define what the frontend stores between those two steps.
 - remove duplicate state caches that only exist because ownership is unclear
 - make the boundary between domain state, derived state, and transient UI state explicit
 - keep state logic out of random feature components
+- retire legacy Zustand ownership slice-by-slice once the Jotai owner is active
 
 ## Acceptance criteria
 - migrated slices have one explainable state owner
 - the same visible state is no longer rebuilt or stored in several competing places
 - domain state, derived state, and transient UI state are clearly separated
 - view-model hooks for migrated slices become thinner because ownership is clearer
+- the activated slice has no overlapping live legacy owner left behind
 
 ## Tests
 - state-ownership tests for migrated slices

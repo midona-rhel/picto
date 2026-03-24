@@ -119,22 +119,31 @@ Use this as the main activation path for the reset set:
 - `PBI-568` backend engine
 - `PBI-578` bulk entity target and selection
 
-3. Activate the core entity flow:
-- `PBI-581`, `PBI-582`, `PBI-587`, `PBI-583`, and `PBI-584` activate the frontend core entity flow
-- then activate `PBI-567`, `PBI-568`, and `PBI-578` together for core entity reads/writes
+3. Lock the frontend architecture contract:
+- `PBI-588`
 
-4. Activate media and long-running platform layers:
+4. Lock the frontend rebuild boundary and quarantine the old frontend:
+- `PBI-588`
+- `PBI-589`
+- `PBI-590`
+
+5. Rebuild the core entity flow in two aligned tracks:
+- Track A: `PBI-591`, `PBI-592`, `PBI-593`
+- Track B: `PBI-581`, `PBI-582`, `PBI-587`, `PBI-583`, `PBI-584`, plus the matching backend contract work in `PBI-568` and `PBI-578`
+- then activate `PBI-567`, `PBI-568`, and `PBI-578` together for core entity reads/writes once the rebuilt shell/grid/inspector slices and the query/selection/state gates are met
+
+6. Activate media and long-running platform layers:
 - `PBI-569` media delivery
 - `PBI-585` frontend media consumption
 - `PBI-576` deferred work/background processing
 
-5. Activate ingest and downstream subsystems on top of the new foundations:
+7. Activate ingest and downstream subsystems on top of the new foundations:
 - `PBI-573` ingest/import
 - `PBI-574` export jobs
 - `PBI-575` subscriptions
 - `PBI-577` duplicates/rejected-media
 
-6. Activate frontend structure cleanup after the boundary is stable:
+8. Activate frontend structure cleanup after the boundary is stable:
 - `PBI-586` frontend feature/module architecture
 - `PBI-571` frontend shared component/styling system
 

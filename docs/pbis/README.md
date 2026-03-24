@@ -63,10 +63,13 @@
 - Reset activation order:
 - 1. Activate prerequisites: PBI-572, PBI-579, PBI-580
 - 2. Implement foundations: PBI-567, PBI-568, PBI-578
-- 3. Activate frontend core entity flow: PBI-581, PBI-582, PBI-587, PBI-583, PBI-584, then activate PBI-567/PBI-568/PBI-578 together
-- 4. Activate media/platform layers: PBI-569, PBI-585, PBI-576
-- 5. Activate downstream subsystems: PBI-573, PBI-574, PBI-575, PBI-577
-- 6. Activate frontend structural cleanup: PBI-586, then PBI-571
+- 3. Lock frontend architecture: PBI-588
+- 4. Quarantine the old frontend and build the parity/reference harness: PBI-589, PBI-590
+- 5. Run Track A and Track B in parallel for the rebuilt core entity flow: Track A = PBI-591, PBI-592, PBI-593; Track B = PBI-581, PBI-582, PBI-587, PBI-583, PBI-584 plus matching backend contract work in PBI-568/PBI-578
+- 6. Activate rebuilt core entity flow only when shell/grid/inspector parity gates and backend contract gates align
+- 7. Activate media/platform layers: PBI-569, PBI-585, PBI-576
+- 8. Activate downstream subsystems: PBI-573, PBI-574, PBI-575, PBI-577
+- 9. Activate frontend structural cleanup: PBI-586, then PBI-571
 
 - Reset program:
 - PBI-567-greenfield-library-database-reset.md
@@ -87,3 +90,9 @@
 - PBI-585-greenfield-frontend-media-consumption-reset.md
 - PBI-586-greenfield-frontend-feature-module-architecture-reset.md
 - PBI-587-greenfield-frontend-state-ownership-reset.md
+- PBI-588-greenfield-frontend-architecture-contract-reset.md
+- PBI-589-greenfield-frontend-legacy-quarantine-and-workspace-reset.md
+- PBI-590-greenfield-frontend-reference-fixtures-and-parity-harness.md
+- PBI-591-greenfield-frontend-shell-and-sidebar-rebuild.md
+- PBI-592-greenfield-frontend-grid-screen-rebuild.md
+- PBI-593-greenfield-frontend-inspector-and-selection-surface-rebuild.md

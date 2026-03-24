@@ -7,8 +7,8 @@ P1
 This document is about `src/runtime/**` and the authoritative state-change/reconciliation layer. It is not the controller PBI, not the frontend state-ownership PBI, and not the UI-structure PBI.
 
 ## Lifecycle
-- `Implemented` when one runtime reconciliation layer exists for the intended slice.
-- `Activatable` when `PBI-568` emits the intended state-change information and `PBI-581`/`PBI-582`/`PBI-587` are implemented for the intended slice.
+- `Implemented` when one runtime settle layer exists for the intended slice.
+- `Activatable` when `PBI-568` emits the intended state-change information, the runtime event contract is locked, and `PBI-581`/`PBI-582`/`PBI-587` are implemented for the intended slice.
 - `Activated` when the intended live flows reconcile through runtime/state-change logic by default.
 - `Legacy removed` when replaced broad fallback invalidation paths are deleted for that slice.
 
@@ -17,6 +17,7 @@ Activation depends on:
 - [PBI-581-greenfield-frontend-api-layer-reset.md](./docs/pbis/active-alpha/PBI-581-greenfield-frontend-api-layer-reset.md)
 - [PBI-582-greenfield-frontend-controller-boundary-reset.md](./docs/pbis/active-alpha/PBI-582-greenfield-frontend-controller-boundary-reset.md)
 - [PBI-587-greenfield-frontend-state-ownership-reset.md](./docs/pbis/active-alpha/PBI-587-greenfield-frontend-state-ownership-reset.md)
+- [PBI-588-greenfield-frontend-architecture-contract-reset.md](./docs/pbis/active-alpha/PBI-588-greenfield-frontend-architecture-contract-reset.md)
 
 ## Problem
 Runtime reconciliation is still too mixed with feature logic and too dependent on fallback refresh behavior.
@@ -26,6 +27,7 @@ Current problems:
 - resource invalidation and state-change application are harder to follow than they should be
 - some domains still rely on broad refresh behavior where authoritative event data should drive the update
 - runtime settle behavior is not cleanly landing into one owned frontend state model
+- runtime/event semantics are still too easy to expand ad hoc per feature
 
 ## Product model to encode
 The runtime layer should own:
@@ -35,16 +37,20 @@ The runtime layer should own:
 
 Controllers should do the local visible step. Runtime should do the authoritative settle step.
 Frontend state ownership should define where that settled state lives.
+Runtime should not become a second state owner and should not carry arbitrary feature-local behavior.
+Runtime for rebuilt slices must also stop relying on legacy frontend state/store paths as normal correctness behavior.
 
 ## Implementation changes
 - centralize state-change application logic in runtime-owned modules
 - reduce broad fallback invalidation in the migrated slices
 - make state-change contracts explicit per migrated slice
+- lock which runtime event fields the migrated slice is allowed to depend on
 
 ## Acceptance criteria
 - migrated slices reconcile primarily through runtime/state-change logic
 - broad fallback invalidation is no longer the normal correctness path in those slices
 - runtime ownership of authoritative settle behavior is explicit
+- runtime is settle-only for activated slices
 
 ## Tests
 - state-change application tests

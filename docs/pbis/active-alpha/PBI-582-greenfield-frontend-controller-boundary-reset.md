@@ -25,6 +25,8 @@ Current problems:
 - undo/redo ownership is not consistently controller-owned
 - controllers are not yet the obvious place to look for domain behavior
 - controllers and state ownership are still blurred in some slices
+- some controllers still know too much about UI-side stores and eager patching details
+- the current tree still encourages controllers to patch around legacy architectural damage instead of fronting a clean rebuilt UI
 
 ## Product model to encode
 Controllers should own:
@@ -36,24 +38,29 @@ Controllers should own:
 
 Feature code should not own those responsibilities.
 Controllers should not become the long-term owner of all visible state either. That belongs in the state-ownership layer for migrated slices.
+Controllers also should not know several frontend store internals just to make one action appear correct.
 
 ## Required shape
 - one clear controller surface per domain
 - controller methods describe domain actions, not transport mechanics
 - controllers depend on the API layer, not raw transport
 - feature code consumes controllers/view-model hooks only
+- controllers write one intended state path per migrated slice
+- rebuilt controllers do not coordinate with legacy store implementations as a normal behavior path
 
 ## Implementation changes
 - collapse repeated single-vs-batch flows into one controller path where possible
 - move target construction out of feature code
 - remove duplicated command semantics from hooks and feature components
 - make controller boundaries explicit in the main frontend domains
+- remove controller knowledge of several store implementations for the same migrated slice
 
 ## Acceptance criteria
 - intended frontend slices use controllers as the only backend-facing layer
 - duplicated feature-level command logic is materially reduced
 - controller method names are domain-led and clear
 - undo/redo ownership is controller-led where applicable
+- controllers for activated slices are action-only and no longer serve as store patch coordinators
 
 ## Tests
 - controller behavior tests for migrated domains

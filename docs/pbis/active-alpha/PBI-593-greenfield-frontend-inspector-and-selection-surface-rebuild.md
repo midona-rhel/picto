@@ -1,0 +1,53 @@
+# PBI-593: Greenfield frontend inspector and selection surface rebuild
+
+## Priority
+P1
+
+## AI-generated caveat
+This document is about rebuilding the inspector and selection-driven side surface in the new frontend. It exists separately because the current inspector is large, stateful, and tightly coupled to old selection/media wiring.
+
+## Lifecycle
+- `Implemented` when the rebuilt inspector and selection surface exist in the new `src/**` tree.
+- `Activatable` when the rebuilt grid/selection path and fixture parity harness are ready.
+- `Activated` when the rebuilt inspector is the live path.
+- `Legacy removed` when the matching legacy inspector path is deleted.
+
+Activation depends on:
+- [PBI-590-greenfield-frontend-reference-fixtures-and-parity-harness.md](./docs/pbis/active-alpha/PBI-590-greenfield-frontend-reference-fixtures-and-parity-harness.md)
+- [PBI-592-greenfield-frontend-grid-screen-rebuild.md](./docs/pbis/active-alpha/PBI-592-greenfield-frontend-grid-screen-rebuild.md)
+- [PBI-582-greenfield-frontend-controller-boundary-reset.md](./docs/pbis/active-alpha/PBI-582-greenfield-frontend-controller-boundary-reset.md)
+- [PBI-587-greenfield-frontend-state-ownership-reset.md](./docs/pbis/active-alpha/PBI-587-greenfield-frontend-state-ownership-reset.md)
+
+## Problem
+The current inspector mixes:
+- selection state
+- metadata loading
+- inline editing
+- folder/tag actions
+- media detail state
+- visual layout
+
+That should be rebuilt as a smaller, clearer surface after the rebuilt grid exists.
+
+## Product model to encode
+The rebuilt inspector should:
+- consume the rebuilt selection state
+- consume canonical entity details and selection summary shapes
+- keep selection-driven actions controller-owned
+- keep layout and rendering separate from data ownership
+
+## Acceptance criteria
+- the rebuilt inspector uses the rebuilt selection state
+- metadata and selection summary behavior are stable
+- tag/folder/notes/rating/source-url actions remain correct
+- parity is confirmed against the reference harness
+- the rebuilt inspector no longer depends on the legacy inspector architecture
+
+## Tests
+- fixture rendering tests for single-item, multi-item, collection, and virtual-selection states
+- interaction tests for the main inspector actions
+- parity checklist and visual confirmation notes
+
+This PBI must follow the cross-layer naming contract in [PBI-572-cross-layer-naming-contract.md](./docs/pbis/active-alpha/PBI-572-cross-layer-naming-contract.md).
+This PBI must follow the cross-layer testing rules in [PBI-579-cross-layer-testing-rules.md](./docs/pbis/active-alpha/PBI-579-cross-layer-testing-rules.md).
+This PBI must follow the cross-layer comment rules in [PBI-580-cross-layer-comment-rules.md](./docs/pbis/active-alpha/PBI-580-cross-layer-comment-rules.md).

@@ -4,7 +4,7 @@
 P1
 
 ## AI-generated caveat
-This document is about the shared UI system specifically. It is not the whole frontend re-engineer. The goal is to make shared UI primitives and styling ownership explicit after the frontend architecture PBIs have stabilized the surrounding layers.
+This document is about the shared UI system specifically. It is not the whole frontend re-engineer. The goal is to make shared UI primitives and styling ownership explicit after the rebuilt frontend surfaces have stabilized.
 
 ## Lifecycle
 - `Implemented` when the shared UI primitives, component consolidation, and styling cleanup exist in code.
@@ -14,6 +14,9 @@ This document is about the shared UI system specifically. It is not the whole fr
 
 Activation depends on:
 - [PBI-586-greenfield-frontend-feature-module-architecture-reset.md](./docs/pbis/active-alpha/PBI-586-greenfield-frontend-feature-module-architecture-reset.md)
+- [PBI-591-greenfield-frontend-shell-and-sidebar-rebuild.md](./docs/pbis/active-alpha/PBI-591-greenfield-frontend-shell-and-sidebar-rebuild.md)
+- [PBI-592-greenfield-frontend-grid-screen-rebuild.md](./docs/pbis/active-alpha/PBI-592-greenfield-frontend-grid-screen-rebuild.md)
+- [PBI-593-greenfield-frontend-inspector-and-selection-surface-rebuild.md](./docs/pbis/active-alpha/PBI-593-greenfield-frontend-inspector-and-selection-surface-rebuild.md)
 
 ## Problem
 The frontend is visually strong and feature-rich, but the internal UI structure is still far messier than it needs to be.

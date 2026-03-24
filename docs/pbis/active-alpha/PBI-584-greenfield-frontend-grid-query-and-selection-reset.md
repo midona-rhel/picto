@@ -4,11 +4,11 @@
 P1
 
 ## AI-generated caveat
-This document is about the frontend grid/query/selection path specifically. It exists because that slice is too important and too subtle to bury inside a generic frontend-boundary PBI.
+This document is about the canonical query/selection/data contract for the rebuilt grid path. It is not the visual/UI rebuild PBI for the grid screen itself.
 
 ## Lifecycle
-- `Implemented` when the frontend grid/query/selection path has one clear canonical model in code.
-- `Activatable` when `PBI-568`, `PBI-578`, `PBI-581`, `PBI-583`, and `PBI-587` are implemented enough for the real grid/query/selection flow.
+- `Implemented` when the frontend app-shell/grid/query/selection path has one clear canonical model in code.
+- `Activatable` when `PBI-568`, `PBI-578`, `PBI-581`, `PBI-583`, `PBI-587`, and `PBI-588` are implemented enough for the real grid/query/selection flow.
 - `Activated` when the live grid and selection-driven entity actions use the canonical query/target model by default.
 - `Legacy removed` when replaced slim/grid-page selection paths for that slice are deleted.
 
@@ -18,35 +18,55 @@ Activation depends on:
 - [PBI-581-greenfield-frontend-api-layer-reset.md](./docs/pbis/active-alpha/PBI-581-greenfield-frontend-api-layer-reset.md)
 - [PBI-583-greenfield-frontend-runtime-reconciliation-reset.md](./docs/pbis/active-alpha/PBI-583-greenfield-frontend-runtime-reconciliation-reset.md)
 - [PBI-587-greenfield-frontend-state-ownership-reset.md](./docs/pbis/active-alpha/PBI-587-greenfield-frontend-state-ownership-reset.md)
+- [PBI-588-greenfield-frontend-architecture-contract-reset.md](./docs/pbis/active-alpha/PBI-588-greenfield-frontend-architecture-contract-reset.md)
 
 ## Problem
-The grid and selection path is still split between old view models and new canonical backend semantics.
+The app-shell/grid/query/selection path is still split between old view models and new canonical backend semantics.
 
 Current problems:
+- `App.tsx` still assembles too much grid-related state
+- `MainViewRouter.tsx` still passes a very wide grid prop surface
+- `ImageGrid.tsx` is still the place where route input, query building, pagination, selection, viewer bridging, and rendering meet
 - `get_grid_page_slim` still anchors important frontend behavior
 - selection semantics still carry old `SelectionQuerySpec` behavior that does not line up cleanly with canonical backend targets
 - bulk actions are still easy to get wrong when they originate from filtered or virtual grid selections
 - grid-visible state and selection state are still not clearly owned enough
 
 ## Product model to encode
-The frontend grid path should:
+The rebuilt grid path should:
 - build one canonical typed entity-view query
 - drive selection actions through the same canonical target semantics
 - keep top-level grouped grid semantics aligned with what backend bulk actions will target
+- provide the stable data/selection contract that the rebuilt grid UI can depend on
+
+The visual/UI rebuild of the grid screen is tracked separately in:
+- [PBI-592-greenfield-frontend-grid-screen-rebuild.md](./docs/pbis/active-alpha/PBI-592-greenfield-frontend-grid-screen-rebuild.md)
 
 ## Implementation changes
+- move broad grid assembly out of `App.tsx`
+- stop passing the current giant prop bag from `MainViewRouter.tsx` into `ImageGrid`
+- split the current grid into:
+  - screen/root composition
+  - query input
+  - selection
+  - results/pagination
+  - viewer bridge
+  - runtime settle adapter
+  - renderer/presentational layer
 - migrate frontend grid data flow away from slim/grid-page legacy contract
 - align virtual selection and select-all behavior with canonical backend targets
 - remove duplicated selection translation logic where possible
 - make grouped top-level selection semantics explicit and testable
 
 ## Acceptance criteria
-- the main grid uses the canonical entity-view query model
+- the rebuilt grid data path uses the canonical entity-view query model
 - selection-driven entity actions target what the user actually selected
 - virtual selection/select-all semantics are stable and explicit
-- slim/grid-page legacy dependence is materially reduced or removed for the activated slice
+- slim/grid-page legacy dependence is materially reduced or removed for the rebuilt slice
+- the rebuilt grid UI can depend on this contract without legacy translation helpers
 
 ## Tests
+- app-shell to grid-root boundary tests
 - grid query construction tests
 - selection-target translation tests
 - grouped selection behavior tests
