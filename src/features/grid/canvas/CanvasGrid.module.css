@@ -1,0 +1,27 @@
+/* Canvas grid — stacked canvases with scroll container. */
+
+.container {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-gutter: stable;
+}
+
+.canvasWrap {
+  position: relative;
+}
+
+.baseCanvas,
+.overlayCanvas {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  pointer-events: none;
+}
+
+.overlayCanvas {
+  pointer-events: auto;
+}

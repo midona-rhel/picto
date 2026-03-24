@@ -34,6 +34,7 @@ The frontend API layer should:
 - own request/response normalization between transport and frontend model
 - stop leaking old transport names into controllers and features
 - act as Track B's frontend contract boundary for activated slices
+- expose typed reconcile/delta helpers where the runtime needs backend truth to settle a live slice
 
 ## Required shape
 - one clear API-layer boundary under `src/platform/**`
@@ -41,11 +42,13 @@ The frontend API layer should:
 - typed contract files are treated as transport types, not frontend domain truth
 - target-building helpers live here or in one dedicated frontend adapter helper layer, not scattered across features
 - the rebuilt frontend uses this API layer only; it does not call into legacy feature/runtime adapters
+- query reconciliation calls and typed settle response decoding live here, not in runtime or features
 
 ## Implementation changes
 - reduce `src/platform/api.ts` into clearer submodules if needed
 - separate canonical API methods from legacy compatibility methods
 - centralize `EntityTarget`/query conversion in one owned place
+- add typed API methods for query reconciliation and any sidebar-delta support that is not fully event-carried
 - remove direct `invoke` usage outside the API layer
 - mark legacy compatibility helpers as isolated and removable
 
@@ -53,6 +56,7 @@ The frontend API layer should:
 - frontend code outside the API layer does not know transport command names
 - canonical backend commands have first-class API methods
 - target/query conversion is centralized
+- query reconcile request/response shapes are centralized
 - legacy API shims are clearly isolated and removable
 - activated slices do not depend on legacy grid/media/path helpers
 - the rebuilt frontend does not need legacy API facades in its normal runtime path

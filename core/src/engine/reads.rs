@@ -1,6 +1,9 @@
 //! Entity read surface.
 
-use crate::db::types::{EntityDetails, EntityGridItem, EntityViewPage, EntityViewQuery};
+use crate::db::types::{
+    EntityDetails, EntityGridItem, EntityViewPage, EntityViewQuery,
+    EntityViewReconcileRequest, EntityViewReconcileResult,
+};
 
 use super::ApplicationEngine;
 
@@ -24,5 +27,39 @@ impl ApplicationEngine {
         entity_hashes: &[String],
     ) -> Result<Vec<EntityGridItem>, String> {
         self.db.get_entity_grid_items(entity_hashes)
+    }
+
+    /// Reconcile the current grid view after a state change.
+    ///
+    /// Three result kinds:
+    /// - PatchRows: metadata_only=true, all visible hashes still present → patch in place
+    /// - ReplaceWindow: membership changed → rerun query for loaded window size, return page
+    /// - FullRefreshRequired: only for truly unrecoverable cases
+    pub fn reconcile_entity_view(
+        &self,
+        req: EntityViewReconcileRequest,
+    ) -> Result<EntityViewReconcileResult, String> {
+        if req.visible_hashes.is_empty() {
+            return Ok(EntityViewReconcileResult::NoChange);
+        }
+
+        if req.metadata_only {
+            // Metadata/derivative-only: patch visible rows if all still present.
+            let current_items = self.db.get_entity_grid_items(&req.visible_hashes)?;
+            if current_items.len() != req.visible_hashes.len() {
+                return Ok(EntityViewReconcileResult::FullRefreshRequired);
+            }
+            return Ok(EntityViewReconcileResult::PatchRows { items: current_items });
+        }
+
+        // Membership may have changed. Rerun the query for the current loaded
+        // window size (visible_hashes.len()) and return the replacement page.
+        let window_size = req.visible_hashes.len() as i64;
+        let mut requery = req.query;
+        requery.page.limit = window_size;
+        requery.page.cursor = None; // Always from the start — loaded prefix model
+
+        let page = self.db.query_entity_view(&requery)?;
+        Ok(EntityViewReconcileResult::ReplaceWindow { page })
     }
 }

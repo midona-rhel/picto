@@ -99,15 +99,16 @@ This program is executed through these child PBIs:
 6. [PBI-582-greenfield-frontend-controller-boundary-reset.md](./docs/pbis/active-alpha/PBI-582-greenfield-frontend-controller-boundary-reset.md)
 7. [PBI-587-greenfield-frontend-state-ownership-reset.md](./docs/pbis/active-alpha/PBI-587-greenfield-frontend-state-ownership-reset.md)
 8. [PBI-583-greenfield-frontend-runtime-reconciliation-reset.md](./docs/pbis/active-alpha/PBI-583-greenfield-frontend-runtime-reconciliation-reset.md)
-9. [PBI-591-greenfield-frontend-shell-and-sidebar-rebuild.md](./docs/pbis/active-alpha/PBI-591-greenfield-frontend-shell-and-sidebar-rebuild.md)
-10. [PBI-584-greenfield-frontend-grid-query-and-selection-reset.md](./docs/pbis/active-alpha/PBI-584-greenfield-frontend-grid-query-and-selection-reset.md)
-11. [PBI-592-greenfield-frontend-grid-screen-rebuild.md](./docs/pbis/active-alpha/PBI-592-greenfield-frontend-grid-screen-rebuild.md)
-12. [PBI-593-greenfield-frontend-inspector-and-selection-surface-rebuild.md](./docs/pbis/active-alpha/PBI-593-greenfield-frontend-inspector-and-selection-surface-rebuild.md)
-13. [PBI-585-greenfield-frontend-media-consumption-reset.md](./docs/pbis/active-alpha/PBI-585-greenfield-frontend-media-consumption-reset.md)
-14. [PBI-586-greenfield-frontend-feature-module-architecture-reset.md](./docs/pbis/active-alpha/PBI-586-greenfield-frontend-feature-module-architecture-reset.md)
-15. [PBI-595-greenfield-frontend-manager-navigation-and-surface-reset.md](./docs/pbis/active-alpha/PBI-595-greenfield-frontend-manager-navigation-and-surface-reset.md)
-16. [PBI-596-greenfield-random-active-image-view-contract.md](./docs/pbis/active-alpha/PBI-596-greenfield-random-active-image-view-contract.md)
-17. [PBI-571-frontend-shared-component-and-styling-system-reset.md](./docs/pbis/active-alpha/PBI-571-frontend-shared-component-and-styling-system-reset.md)
+9. [PBI-597-greenfield-entity-view-reconciliation-and-sidebar-delta-contract.md](./docs/pbis/active-alpha/PBI-597-greenfield-entity-view-reconciliation-and-sidebar-delta-contract.md)
+10. [PBI-591-greenfield-frontend-shell-and-sidebar-rebuild.md](./docs/pbis/active-alpha/PBI-591-greenfield-frontend-shell-and-sidebar-rebuild.md)
+11. [PBI-584-greenfield-frontend-grid-query-and-selection-reset.md](./docs/pbis/active-alpha/PBI-584-greenfield-frontend-grid-query-and-selection-reset.md)
+12. [PBI-592-greenfield-frontend-grid-screen-rebuild.md](./docs/pbis/active-alpha/PBI-592-greenfield-frontend-grid-screen-rebuild.md)
+13. [PBI-593-greenfield-frontend-inspector-and-selection-surface-rebuild.md](./docs/pbis/active-alpha/PBI-593-greenfield-frontend-inspector-and-selection-surface-rebuild.md)
+14. [PBI-585-greenfield-frontend-media-consumption-reset.md](./docs/pbis/active-alpha/PBI-585-greenfield-frontend-media-consumption-reset.md)
+15. [PBI-586-greenfield-frontend-feature-module-architecture-reset.md](./docs/pbis/active-alpha/PBI-586-greenfield-frontend-feature-module-architecture-reset.md)
+16. [PBI-595-greenfield-frontend-manager-navigation-and-surface-reset.md](./docs/pbis/active-alpha/PBI-595-greenfield-frontend-manager-navigation-and-surface-reset.md)
+17. [PBI-596-greenfield-random-active-image-view-contract.md](./docs/pbis/active-alpha/PBI-596-greenfield-random-active-image-view-contract.md)
+18. [PBI-571-frontend-shared-component-and-styling-system-reset.md](./docs/pbis/active-alpha/PBI-571-frontend-shared-component-and-styling-system-reset.md)
 
 ## Two tracks
 Run the frontend reset in two parallel tracks:
@@ -158,6 +159,7 @@ Track B sequence:
 - [PBI-587-greenfield-frontend-state-ownership-reset.md](./docs/pbis/active-alpha/PBI-587-greenfield-frontend-state-ownership-reset.md)
 - [PBI-583-greenfield-frontend-runtime-reconciliation-reset.md](./docs/pbis/active-alpha/PBI-583-greenfield-frontend-runtime-reconciliation-reset.md)
 - [PBI-584-greenfield-frontend-grid-query-and-selection-reset.md](./docs/pbis/active-alpha/PBI-584-greenfield-frontend-grid-query-and-selection-reset.md)
+- [PBI-597-greenfield-entity-view-reconciliation-and-sidebar-delta-contract.md](./docs/pbis/active-alpha/PBI-597-greenfield-entity-view-reconciliation-and-sidebar-delta-contract.md)
 
 Rules:
 - Track B PBIs may run in parallel
@@ -183,6 +185,7 @@ Use this order for the frontend program:
 - `PBI-587`
 - `PBI-583`
 - `PBI-584`
+- `PBI-597`
 
 5. Rebuild the first live product slice:
 - `PBI-591` app shell and sidebar
@@ -209,7 +212,7 @@ Rebuilt live product slices in Track A should follow this order strictly.
 
 ## Alignment gates
 - `Gate 1`: the new shell/sidebar slice may activate only when `PBI-591` has parity confirmation against `PBI-590` fixtures and does not depend on legacy runtime/store modules
-- `Gate 2`: the new grid slice may activate only when `PBI-584` query/selection semantics are locked and `PBI-592` has parity confirmation against `PBI-590` fixtures
+- `Gate 2`: the new grid slice may activate only when `PBI-584` query/selection semantics are locked, `PBI-597` query reconciliation/sidebar delta rules are implemented enough for the live path, and `PBI-592` has parity confirmation against `PBI-590` fixtures
 - `Gate 3`: the new inspector/media slice may activate only when `PBI-593` and `PBI-585` have parity confirmation and the media contract from `PBI-569` is stable
 - `Gate 4`: legacy cleanup for a slice may happen only when the rebuilt slice is live, parity-checked, and no longer depends on legacy transport or state paths
 
@@ -222,7 +225,7 @@ Rebuilt live product slices in Track A should follow this order strictly.
 - `PBI-588` locks the frontend rebuild contract
 - `PBI-589` moves the legacy frontend out of the active source tree
 - `PBI-590` defines how rebuilt slices are checked against legacy visuals and behavior
-- `PBI-571`, `PBI-581` through `PBI-596` execute the frontend rebuild in slices
+- `PBI-571`, `PBI-581` through `PBI-597` execute the frontend rebuild in slices
 
 This PBI must follow the cross-layer naming contract in [PBI-572-cross-layer-naming-contract.md](./docs/pbis/active-alpha/PBI-572-cross-layer-naming-contract.md).
 This PBI must follow the cross-layer testing rules in [PBI-579-cross-layer-testing-rules.md](./docs/pbis/active-alpha/PBI-579-cross-layer-testing-rules.md).
@@ -237,4 +240,5 @@ This program index is complete only when:
 - parity/reference checkpoints are explicit
 - the activation order is explicit
 - dependencies on backend and media delivery are explicit
+- query reconciliation and sidebar delta rules are explicit
 - the two-track model and activation gates are explicit

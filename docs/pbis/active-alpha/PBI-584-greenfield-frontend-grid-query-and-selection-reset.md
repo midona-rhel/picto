@@ -31,6 +31,8 @@ Current problems:
 - selection semantics still carry old `SelectionQuerySpec` behavior that does not line up cleanly with canonical backend targets
 - bulk actions are still easy to get wrong when they originate from filtered or virtual grid selections
 - grid-visible state and selection state are still not clearly owned enough
+- runtime/grid settle still lacks a clean answer for “does the current query/window change?”
+- the frontend still cannot know final placement/membership of changed entities from event hashes alone
 
 ## Product model to encode
 The rebuilt grid path should:
@@ -38,6 +40,13 @@ The rebuilt grid path should:
 - drive selection actions through the same canonical target semantics
 - keep top-level grouped grid semantics aligned with what backend bulk actions will target
 - provide the stable data/selection contract that the rebuilt grid UI can depend on
+- keep the current `EntityViewQuery` in frontend-owned state
+- treat visible-window settlement as backend-owned truth via a typed reconcile call, not frontend guesswork
+
+Locked decision:
+- the backend should not generally track the frontend’s live grid/session state
+- the frontend owns the current query, current visible window/anchor state, and back/forward history
+- the backend owns whether a change affects that query and how the visible window should settle
 
 The visual/UI rebuild of the grid screen is tracked separately in:
 - [PBI-592-greenfield-frontend-grid-screen-rebuild.md](./docs/pbis/active-alpha/PBI-592-greenfield-frontend-grid-screen-rebuild.md)
@@ -57,6 +66,7 @@ The visual/UI rebuild of the grid screen is tracked separately in:
 - align virtual selection and select-all behavior with canonical backend targets
 - remove duplicated selection translation logic where possible
 - make grouped top-level selection semantics explicit and testable
+- define the reconcile contract between current query/window state and backend state-change facts
 
 ## Acceptance criteria
 - the rebuilt grid data path uses the canonical entity-view query model
@@ -64,6 +74,7 @@ The visual/UI rebuild of the grid screen is tracked separately in:
 - virtual selection/select-all semantics are stable and explicit
 - slim/grid-page legacy dependence is materially reduced or removed for the rebuilt slice
 - the rebuilt grid UI can depend on this contract without legacy translation helpers
+- current query state, visible-window state, and backend reconcile semantics are explicit and testable
 
 ## Tests
 - app-shell to grid-root boundary tests
@@ -71,6 +82,7 @@ The visual/UI rebuild of the grid screen is tracked separately in:
 - selection-target translation tests
 - grouped selection behavior tests
 - integration tests for filtered selection -> action -> runtime settle
+- reconcile-decision tests for current query vs state-change scope impact
 
 This PBI must follow the cross-layer naming contract in [PBI-572-cross-layer-naming-contract.md](./docs/pbis/active-alpha/PBI-572-cross-layer-naming-contract.md).
 This PBI must follow the cross-layer testing rules in [PBI-579-cross-layer-testing-rules.md](./docs/pbis/active-alpha/PBI-579-cross-layer-testing-rules.md).

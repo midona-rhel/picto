@@ -4,7 +4,7 @@
 //! transport event.
 
 use crate::runtime_contract::state_change::{
-    Domain, MediaDerivativeField, MediaMetadataField, SidebarCounts, TagChangeDetails,
+    Domain, MediaDerivativeField, MediaMetadataField, SidebarCounts, SidebarNodePatch, TagChangeDetails,
 };
 
 #[derive(Debug, Clone, Default)]
@@ -35,6 +35,8 @@ pub struct ChangeImpact {
     pub folder_order_changes: Option<Vec<(i64, i64)>>,
     pub smart_folder_parent_changes: Option<Vec<(i64, Option<i64>)>>,
     pub smart_folder_order_changes: Option<Vec<(i64, i64)>>,
+    pub sidebar_node_patches: Option<Vec<SidebarNodePatch>>,
+    pub smart_folder_counts: Option<Vec<(i64, i64)>>,
 }
 
 impl ChangeImpact {
@@ -151,6 +153,17 @@ impl ChangeImpact {
         self
     }
 
+    pub fn sidebar_node_patch(mut self, patch: SidebarNodePatch) -> Self {
+        self.sidebar_node_patches.get_or_insert_with(Vec::new).push(patch);
+        self
+    }
+
+    pub fn sidebar_node_patches(mut self, patches: Vec<SidebarNodePatch>) -> Self {
+        let merged = self.sidebar_node_patches.get_or_insert_with(Vec::new);
+        merged.extend(patches);
+        self
+    }
+
     pub fn merge(mut self, other: Self) -> Self {
         self = self.add_domains(&other.domains);
 
@@ -253,6 +266,14 @@ impl ChangeImpact {
 
         if other.sidebar_counts.is_some() {
             self.sidebar_counts = other.sidebar_counts;
+        }
+
+        if let Some(patches) = other.sidebar_node_patches {
+            self = self.sidebar_node_patches(patches);
+        }
+
+        if let Some(counts) = other.smart_folder_counts {
+            self = self.smart_folder_counts(counts);
         }
 
         self
@@ -495,24 +516,42 @@ impl ChangeImpact {
         Self::new().view_prefs_changed()
     }
 
-    pub fn compiler_publish(smart_folders_rebuilt: bool) -> Self {
+    pub fn smart_folder_counts(mut self, counts: Vec<(i64, i64)>) -> Self {
+        self.smart_folder_counts = Some(counts);
+        self
+    }
+
+    pub fn compiler_publish(smart_folders_rebuilt: bool, sf_counts: Vec<(i64, i64)>) -> Self {
         let mut impact = Self::new();
         impact.compiler_batch_done = Some(true);
         if smart_folders_rebuilt {
             impact = impact.extra_grid_scopes(vec!["system:active".into()]);
         }
+        if !sf_counts.is_empty() {
+            impact = impact.smart_folder_counts(sf_counts);
+        }
         impact
     }
 }
 
+/// Compute sidebar counts from bitmap catalog.
+///
+/// active/inbox/trash/untagged are O(1) bitmap reads.
+/// uncategorized/duplicates are set to -1 (unknown) here because they
+/// require SQL queries that need an async connection. The compiler
+/// publish path or explicit sidebar refresh provides those.
 pub fn sidebar_counts_from_bitmaps(db: &crate::sqlite::SqliteDatabase) -> SidebarCounts {
     use crate::sqlite::bitmaps::BitmapKey;
 
-    // Status bitmaps already exclude collection members (the compiler
-    // filters them out). Direct bitmap reads give tile-level counts.
+    let active = db.bitmaps.len(&BitmapKey::Status(1)) as i64;
+    let inbox = db.bitmaps.len(&BitmapKey::Status(0)) as i64;
+    let trash = db.bitmaps.len(&BitmapKey::Status(2)) as i64;
+    let tagged = db.bitmaps.len(&BitmapKey::Tagged) as i64;
+    let untagged = active.saturating_sub(tagged);
+
     SidebarCounts {
-        active: db.bitmaps.len(&BitmapKey::Status(1)) as i64,
-        inbox: db.bitmaps.len(&BitmapKey::Status(0)) as i64,
-        trash: db.bitmaps.len(&BitmapKey::Status(2)) as i64,
+        active, inbox, trash, untagged,
+        uncategorized: -1, // -1 = unknown, frontend should keep existing value
+        duplicates: -1,    // -1 = unknown
     }
 }

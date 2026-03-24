@@ -169,8 +169,8 @@ pub async fn start_compiler_loop(
             || plan.rebuild_all
             || !plan.dirty_smart_folder_ids.is_empty();
 
-        let dirty_artifacts = match run_compilers(&db_ref, &plan).await {
-            Ok(dirty_artifacts) => dirty_artifacts,
+        let (dirty_artifacts, sf_counts) = match run_compilers(&db_ref, &plan).await {
+            Ok(result) => result,
             Err(e) => {
                 tracing::error!(
                     rebuild_status = plan.rebuild_status_bitmaps,
@@ -219,6 +219,7 @@ pub async fn start_compiler_loop(
             smart_folders_rebuilt,
             scope_affected,
             published,
+            smart_folder_counts: sf_counts,
         });
     }
 }
@@ -226,7 +227,7 @@ pub async fn start_compiler_loop(
 async fn run_compilers(
     db: &Arc<SqliteDatabase>,
     plan: &CompilerPlan,
-) -> Result<BTreeSet<DerivedArtifact>, String> {
+) -> Result<(BTreeSet<DerivedArtifact>, Vec<(i64, i64)>), String> {
     let start = std::time::Instant::now();
     let mut dirty_artifacts = BTreeSet::new();
 
@@ -343,6 +344,27 @@ async fn run_compilers(
         dirty_artifacts.insert(DerivedArtifact::SmartFolders);
     }
 
+    // Collect smart folder counts after compilation
+    let sf_counts = if plan.rebuild_all_smart_folders || plan.rebuild_all {
+        // All SF bitmaps were rebuilt — get all IDs and their counts
+        let all_ids = db.with_read_conn(|conn| {
+            conn.prepare("SELECT smart_folder_id FROM smart_folder")
+                .and_then(|mut stmt| {
+                    stmt.query_map([], |row| row.get::<_, i64>(0))
+                        .map(|rows| rows.flatten().collect::<Vec<_>>())
+                })
+        }).await.unwrap_or_default();
+        all_ids.iter()
+            .map(|&id| (id, db.bitmaps.len(&super::bitmaps::BitmapKey::SmartFolder(id)) as i64))
+            .collect()
+    } else if !plan.dirty_smart_folder_ids.is_empty() {
+        plan.dirty_smart_folder_ids.iter()
+            .map(|&id| (id, db.bitmaps.len(&super::bitmaps::BitmapKey::SmartFolder(id)) as i64))
+            .collect()
+    } else {
+        Vec::new()
+    };
+
     // 7. Sidebar compiler
     if plan.rebuild_sidebar || plan.rebuild_all {
         let t = std::time::Instant::now();
@@ -357,10 +379,11 @@ async fn run_compilers(
     tracing::debug!(
         elapsed_ms = start.elapsed().as_secs_f64() * 1000.0,
         artifacts = ?dirty_artifacts,
+        sf_counts = sf_counts.len(),
         "compiler batch complete"
     );
 
-    Ok(dirty_artifacts)
+    Ok((dirty_artifacts, sf_counts))
 }
 
 #[cfg(test)]

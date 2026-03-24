@@ -65,7 +65,7 @@
 - 2. Implement foundations: PBI-567, PBI-568, PBI-578
 - 3. Lock frontend architecture and styling contracts: PBI-588, PBI-594
 - 4. Quarantine the old frontend and build the parity/reference harness: PBI-589, PBI-590
-- 5. Run Track A and Track B in parallel for the rebuilt core entity flow: Track A = PBI-591, PBI-592, PBI-593; Track B = PBI-581, PBI-582, PBI-587, PBI-583, PBI-584 plus matching backend contract work in PBI-568/PBI-578
+- 5. Run Track A and Track B in parallel for the rebuilt core entity flow: Track A = PBI-591, PBI-592, PBI-593; Track B = PBI-581, PBI-582, PBI-587, PBI-583, PBI-584, PBI-597 plus matching backend contract work in PBI-568/PBI-578
 - 6. Activate rebuilt core entity flow only when shell/grid/inspector parity gates and backend contract gates align
 - 7. Activate media/platform layers: PBI-569, PBI-585, PBI-576
 - 8. Activate downstream subsystems: PBI-573, PBI-574, PBI-575, PBI-577
@@ -100,3 +100,4 @@
 - PBI-593-greenfield-frontend-inspector-and-selection-surface-rebuild.md
 - PBI-595-greenfield-frontend-manager-navigation-and-surface-reset.md
 - PBI-596-greenfield-random-active-image-view-contract.md
+- PBI-597-greenfield-entity-view-reconciliation-and-sidebar-delta-contract.md

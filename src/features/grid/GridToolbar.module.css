@@ -1,0 +1,139 @@
+/* Grid toolbar — rendered in titlebar right section. */
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 100%;
+  padding: 0 8px;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+  -webkit-app-region: no-drag;
+}
+
+.count {
+  font-variant-numeric: tabular-nums;
+  font-family: var(--font-family-mono);
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-xs);
+}
+
+.spacer {
+  flex: 1;
+}
+
+.viewModes {
+  display: flex;
+  gap: 1px;
+  background: var(--color-border-secondary);
+  border-radius: var(--radius-sm);
+  padding: 1px;
+}
+
+.viewModeBtn {
+  appearance: none;
+  border: none;
+  background: transparent;
+  padding: 0;
+  width: 24px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 3px;
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+}
+
+.viewModeBtn:hover {
+  color: var(--color-text-primary);
+}
+
+.viewModeActive {
+  background: var(--color-surface-active);
+  color: var(--color-text-primary);
+}
+
+.zoomGroup {
+  display: flex;
+  align-items: center;
+}
+
+.zoomSlider {
+  width: 80px;
+  height: 3px;
+  appearance: none;
+  background: var(--color-border-primary);
+  border-radius: 2px;
+  outline: none;
+  cursor: pointer;
+}
+
+.zoomSlider::-webkit-slider-thumb {
+  appearance: none;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--color-text-secondary);
+  cursor: pointer;
+}
+
+.zoomSlider::-webkit-slider-thumb:hover {
+  background: var(--color-text-primary);
+}
+
+.sortGroup {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.sortSelect {
+  appearance: none;
+  background: none;
+  border: none;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+  font-family: var(--font-family);
+  cursor: pointer;
+  padding: 2px 4px;
+  border-radius: var(--radius-sm);
+}
+
+.sortSelect:hover {
+  color: var(--color-text-primary);
+  background: var(--color-surface-hover);
+}
+
+.sortDirBtn {
+  appearance: none;
+  border: none;
+  background: none;
+  padding: 0;
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-sm);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+}
+
+.sortDirBtn:hover {
+  color: var(--color-text-primary);
+  background: var(--color-surface-hover);
+}
+
+.loadingDot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--color-primary);
+  animation: pulse 1s ease-in-out infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 0.3; }
+  50% { opacity: 1; }
+}

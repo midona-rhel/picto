@@ -94,7 +94,7 @@ pub struct EntityGridItem {
 }
 
 /// A page of grid results.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct EntityViewPage {
     pub items: Vec<EntityGridItem>,
     pub next_cursor: Option<String>,
@@ -278,6 +278,45 @@ pub struct TagInfo {
 pub struct FolderInfo {
     pub folder_id: i64,
     pub name: String,
+}
+
+// ── Grid reconcile types ─────────────────────────────────────────
+
+/// Request from the frontend to reconcile the current grid view.
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct EntityViewReconcileRequest {
+    /// The query that produced the current visible grid.
+    pub query: EntityViewQuery,
+    /// Entity hashes currently visible in the frontend grid.
+    pub visible_hashes: Vec<String>,
+    /// If true, the frontend asserts that only metadata/derivative fields changed
+    /// (no membership or ordering change). The backend can safely return PatchRows
+    /// if all visible hashes are still present.
+    /// If false, membership may have changed — backend must prove the window is
+    /// unchanged before returning PatchRows.
+    #[serde(default)]
+    pub metadata_only: bool,
+}
+
+/// What the backend determined about the current view after a change.
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum EntityViewReconcileResult {
+    /// Nothing visible changed — frontend can keep its current state.
+    NoChange,
+    /// Some visible rows have updated metadata/derivatives.
+    /// Frontend should patch these rows in place.
+    PatchRows {
+        items: Vec<EntityGridItem>,
+    },
+    /// Membership or order changed. The backend re-ran the query for
+    /// the loaded window size and returns the correct replacement page.
+    /// Frontend should swap items, next_cursor, and total_count.
+    ReplaceWindow {
+        page: EntityViewPage,
+    },
+    /// Truly unsupported case — frontend should call loadFirstPage.
+    FullRefreshRequired,
 }
 
 /// Partial metadata patch for entities.

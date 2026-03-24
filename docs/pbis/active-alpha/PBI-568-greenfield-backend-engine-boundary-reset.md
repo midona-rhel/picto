@@ -47,6 +47,21 @@ The backend engine should reflect these application rules:
 - the engine coordinates bounded services; it does not force every subsystem to be one big database-shaped module
 - transport code only deserializes input, calls the engine, and serializes output
 
+### Event aggregation rule
+For one completed backend action, the normal path is:
+- compute the full committed impact
+- merge sub-step impacts into one `ChangeImpact`
+- emit one final self-describing `runtime/state_changed`
+
+Do not emit several `runtime/state_changed` events for one logical action just because multiple subsystems were touched.
+
+Additional `runtime/state_changed` events are allowed only when they represent a later distinct async phase, such as:
+- compiler/projection follow-up work
+- deferred derivative completion
+- subscription/import batch completion that commits after the original action
+
+The engine should aggregate first and emit once. Separate later phases should emit their own later events honestly as separate committed work.
+
 ## Locked decisions
 
 ### 1. One entity-centric engine surface
@@ -58,6 +73,7 @@ Locked rule:
 
 Keep these public categories:
 - `query_entity_view(query)`
+- `reconcile_entity_view(request)`
 - `get_entity_details(entity_hash)`
 - `get_entity_grid_items(entity_hashes)`
 - `patch_media_entities(target, patch)`
@@ -76,6 +92,7 @@ Concrete engine surface:
 ```rust
 // Entity reads
 fn query_entity_view(&self, query: EntityViewQuery) -> Result<EntityViewPage>;
+fn reconcile_entity_view(&self, request: EntityViewReconcileRequest) -> Result<EntityViewReconcileResult>;
 fn get_entity_details(&self, entity_hash: &str) -> Result<Option<EntityDetails>>;
 fn get_entity_grid_items(&self, entity_hashes: &[String]) -> Result<Vec<EntityGridItem>>;
 
@@ -172,6 +189,35 @@ Keep one secondary batch grid-item query:
 - `get_entity_grid_items(entity_hashes)`
 
 That secondary query exists only for targeted reconciliation and eager insertion paths. It is not the main way to drive the grid.
+
+### 2a. Query reconciliation is backend-owned truth, not frontend guesswork
+The backend should not keep durable per-window frontend session state, but it should own query membership and ordering truth.
+
+Locked rule:
+- the frontend owns the current `EntityViewQuery`, current visible window/anchor state, and back/forward state
+- the backend owns whether a state change affects that query and how the visible window should settle
+
+Use a typed reconcile API:
+
+```ts
+type EntityViewReconcileRequest = {
+  query: EntityViewQuery;
+  visible_entity_hashes?: string[] | null;
+  anchor?: string | null;
+  seq?: number | null;
+};
+
+type EntityViewReconcileResult =
+  | { kind: 'no_change' }
+  | { kind: 'patch_rows'; items: EntityGridItem[] }
+  | { kind: 'replace_window'; page: EntityViewPage }
+  | { kind: 'full_refresh_required' };
+```
+
+The exact payload can tighten, but the behavior is locked:
+- the frontend must not infer final placement of newly matching entities from events alone
+- the backend must answer whether the current visible query/window changed
+- deep sorted/paged grids should reconcile through this backend result, not by frontend re-sorting
 
 ### 3. One patch model for entity metadata writes
 Entity metadata writes become one patch command:

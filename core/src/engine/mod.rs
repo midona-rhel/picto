@@ -79,13 +79,18 @@ impl ApplicationEngine {
             impact.extra_grid_scopes = Some(change.extra_grid_scopes.clone());
         }
 
-        // Sidebar counts from bitmaps
-        let counts = crate::runtime_contract::state_change::SidebarCounts {
-            inbox: self.db.bitmap_len(&crate::db::projection::bitmaps::BitmapKey::Status(0)) as i64,
-            active: self.db.bitmap_len(&crate::db::projection::bitmaps::BitmapKey::Status(1)) as i64,
-            trash: self.db.bitmap_len(&crate::db::projection::bitmaps::BitmapKey::Status(2)) as i64,
-        };
-        impact.sidebar_counts = Some(counts);
+        // Sidebar counts — SQL-based via get_scope_counts (includes uncategorized/untagged).
+        // Duplicates is a manager-owned count, not a scope count — left as -1.
+        if let Ok(sc) = self.db.get_scope_counts() {
+            impact.sidebar_counts = Some(crate::runtime_contract::state_change::SidebarCounts {
+                active: sc.active,
+                inbox: sc.inbox,
+                trash: sc.trash,
+                uncategorized: sc.uncategorized,
+                untagged: sc.untagged,
+                duplicates: -1, // Manager-owned, not scope data
+            });
+        }
 
         crate::events::emit_state_changed(&change.origin, impact);
 

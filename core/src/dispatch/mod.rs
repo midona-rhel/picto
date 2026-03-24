@@ -199,6 +199,12 @@ async fn dispatch_inner(command: &str, args: serde_json::Value) -> Result<String
             let result = state.engine.query_entity_view(query)?;
             return to_json(&result);
         }
+        "reconcile_entity_view" => {
+            let req: crate::db::types::EntityViewReconcileRequest = serde_json::from_value(args)
+                .map_err(|e| format!("Invalid args: {e}"))?;
+            let result = state.engine.reconcile_entity_view(req)?;
+            return to_json(&result);
+        }
         "get_entity_details" => {
             let input: GetHashInput = serde_json::from_value(args)
                 .map_err(|e| format!("Invalid args: {e}"))?;

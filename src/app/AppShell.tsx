@@ -9,25 +9,30 @@ import { useEffect } from 'react';
 import { useAtomValue, useSetAtom } from 'jotai';
 import { IconLayoutSidebar } from '@tabler/icons-react';
 import { Sidebar } from '../features/sidebar/Sidebar';
-import { activeNodeIdAtom, sidebarCollapsedAtom, toggleSidebarAtom } from '../state/navigation';
+import { GridScreen } from '../features/grid/GridScreen';
+import { GridToolbar } from '../features/grid/GridToolbar';
+import { sidebarCollapsedAtom, toggleSidebarAtom } from '../state/navigation';
+import { gridActiveAtom } from '../state/grid';
 import { startSidebarSettle } from '../runtime/sidebarSettle';
+import { startGridSettle } from '../runtime/gridSettle';
 import { zoomController } from '../controllers/zoomController';
 import styles from './AppShell.module.css';
 
 let settleStarted = false;
-function ensureSidebarSettle() {
+function ensureSettle() {
   if (!settleStarted) {
     settleStarted = true;
     startSidebarSettle();
+    startGridSettle();
   }
 }
 
 export function AppShell() {
-  const activeNodeId = useAtomValue(activeNodeIdAtom);
   const sidebarCollapsed = useAtomValue(sidebarCollapsedAtom);
+  const gridActive = useAtomValue(gridActiveAtom);
   const toggleSidebar = useSetAtom(toggleSidebarAtom);
 
-  useEffect(() => { ensureSidebarSettle(); }, []);
+  useEffect(() => { ensureSettle(); }, []);
 
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
@@ -53,7 +58,7 @@ export function AppShell() {
           </div>
         </div>
         <div className={styles.titlebarRight}>
-          {/* Grid controls will go here in PBI-592 */}
+          {gridActive && <GridToolbar />}
         </div>
       </div>
 
@@ -65,7 +70,7 @@ export function AppShell() {
           </div>
         )}
         <div className={styles.main}>
-          <span>{activeNodeId}</span>
+          <GridScreen />
         </div>
       </div>
     </div>

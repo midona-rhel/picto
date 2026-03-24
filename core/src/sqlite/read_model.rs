@@ -59,4 +59,7 @@ pub struct ReadModelBatchResult {
     pub smart_folders_rebuilt: bool,
     pub scope_affected: bool,
     pub published: PublishedArtifacts,
+    /// Smart folder count deltas: (smart_folder_id, new_count).
+    /// Populated when smart folder bitmaps are recompiled.
+    pub smart_folder_counts: Vec<(i64, i64)>,
 }

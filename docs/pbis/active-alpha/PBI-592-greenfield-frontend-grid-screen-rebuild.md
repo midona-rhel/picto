@@ -17,6 +17,7 @@ Activation depends on:
 - [PBI-584-greenfield-frontend-grid-query-and-selection-reset.md](./docs/pbis/active-alpha/PBI-584-greenfield-frontend-grid-query-and-selection-reset.md)
 - [PBI-587-greenfield-frontend-state-ownership-reset.md](./docs/pbis/active-alpha/PBI-587-greenfield-frontend-state-ownership-reset.md)
 - [PBI-583-greenfield-frontend-runtime-reconciliation-reset.md](./docs/pbis/active-alpha/PBI-583-greenfield-frontend-runtime-reconciliation-reset.md)
+- [PBI-597-greenfield-entity-view-reconciliation-and-sidebar-delta-contract.md](./docs/pbis/active-alpha/PBI-597-greenfield-entity-view-reconciliation-and-sidebar-delta-contract.md)
 
 ## Problem
 The current grid screen is spread across:
@@ -37,6 +38,12 @@ The rebuilt grid screen should have:
 - one results/pagination model
 - one renderer boundary
 - one viewer bridge
+
+The rebuilt grid screen should not treat runtime changes as “always refetch the whole current grid”.
+It should:
+- ignore unrelated state-change events
+- patch simple visible-row updates when possible
+- ask the backend to reconcile the current query/window when membership or ordering may have changed
 
 The rebuilt grid screen should also avoid inventing its own isolated visual primitives when equivalent ones already exist elsewhere in the rebuilt frontend.
 If the grid tile preview is the same rounded media preview used by inspector or viewer-adjacent UI, it should be one shared preview family with small variants.
@@ -63,6 +70,7 @@ Do not start [PBI-593-greenfield-frontend-inspector-and-selection-surface-rebuil
 - parity is confirmed against the reference harness
 - the rebuilt grid no longer depends on the legacy `ImageGrid.tsx` architecture
 - tile/chrome primitives that are visually/functionally equivalent to inspector or preview surfaces are shared instead of re-implemented
+- grid runtime settle is query-aware and does not rely on broad refetch as the normal correctness path
 - finishing this PBI means the rebuilt grid slice becomes the active default path before the next rebuilt live slice starts
 - temporary TODOs are allowed only for cross-PBI boundaries already named in the dependency list; they do not allow the next Track A PBI to start early
 

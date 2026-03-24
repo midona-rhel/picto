@@ -208,24 +208,40 @@ impl SmartFolderService {
         Ok(())
     }
 
-    pub async fn delete_smart_folder(db: &SqliteDatabase, id: String) -> Result<(), String> {
+    /// Delete a smart folder. Returns (promoted_child_ids, deleted_folder_parent_id).
+    pub async fn delete_smart_folder(
+        db: &SqliteDatabase,
+        id: String,
+    ) -> Result<(Vec<i64>, Option<i64>), String> {
         let sf_id: i64 = id
             .parse()
             .map_err(|_| format!("Invalid smart folder id: {}", id))?;
+        // Capture the parent before deletion so we know where children are promoted to
+        let parent_id: Option<i64> = db
+            .with_read_conn(move |conn| {
+                use rusqlite::OptionalExtension;
+                let result: Option<Option<i64>> = conn.query_row(
+                    "SELECT parent_id FROM smart_folder WHERE smart_folder_id = ?1",
+                    [sf_id],
+                    |row| row.get(0),
+                )
+                .optional()?;
+                Ok(result.flatten())
+            })
+            .await?;
         let promoted_ids = db.delete_smart_folder(sf_id).await?;
-        // Also remove the sidebar_node row so the folder vanishes immediately
         let node_id = format!("smart:{}", sf_id);
         db.with_conn(move |conn| {
             crate::sidebar::db::delete_sidebar_node(conn, &node_id)?;
             Ok(())
         })
         .await?;
-        for promoted_id in promoted_ids {
+        for promoted_id in &promoted_ids {
             db.emit_read_model_event(crate::sqlite::ReadModelEvent::SmartFolderChanged {
-                smart_folder_id: promoted_id,
+                smart_folder_id: *promoted_id,
             });
         }
-        Ok(())
+        Ok((promoted_ids, parent_id))
     }
 
     pub async fn count_smart_folder(

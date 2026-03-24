@@ -307,11 +307,26 @@ pub async fn create_folder(
         input.color,
     )
     .await?;
+    let upsert = crate::runtime_contract::state_change::SidebarNodePatch {
+        node_id: format!("folder:{}", folder.folder_id),
+        removed: None,
+        upsert: Some(true),
+        kind: Some("folder".into()),
+        parent_id: Some(folder.parent_id.map(|pid| format!("folder:{pid}")).or(Some("section:folders".into()))),
+        name: Some(folder.name.clone()),
+        icon: Some(folder.icon.clone()),
+        color: Some(folder.color.clone()),
+        sort_order: Some(folder.sort_order),
+        count: Some(Some(0)), // New folder starts with 0 items
+        selectable: Some(true),
+        freshness: Some("exact".into()),
+    };
     crate::events::emit_state_changed(
         "create_folder",
         crate::runtime_contract::change_builder::ChangeImpact::new()
             .add_domains(&[crate::runtime_contract::state_change::Domain::Folders, crate::runtime_contract::state_change::Domain::Sidebar])
-        .folder_ids(vec![folder.folder_id]),
+            .folder_ids(vec![folder.folder_id])
+            .sidebar_node_patch(upsert),
     );
     Ok(folder)
 }
@@ -320,17 +335,26 @@ pub async fn update_folder(state: &AppState, input: UpdateFolderInput) -> Result
     crate::folders::service::update_folder(
         &state.db,
         input.folder_id,
-        input.name,
-        input.icon,
-        input.color,
+        input.name.clone(),
+        input.icon.clone(),
+        input.color.clone(),
         input.auto_tags,
     )
     .await?;
+    let patch = crate::runtime_contract::state_change::SidebarNodePatch {
+        node_id: format!("folder:{}", input.folder_id),
+        removed: None, upsert: None, kind: None, parent_id: None,
+        name: input.name,
+        icon: Some(input.icon),
+        color: Some(input.color),
+        sort_order: None, count: None, selectable: None, freshness: None,
+    };
     crate::events::emit_state_changed(
         "update_folder",
         crate::runtime_contract::change_builder::ChangeImpact::new()
             .add_domains(&[crate::runtime_contract::state_change::Domain::Folders, crate::runtime_contract::state_change::Domain::Sidebar])
-        .folder_ids(vec![input.folder_id]),
+            .folder_ids(vec![input.folder_id])
+            .sidebar_node_patch(patch),
     );
     Ok(())
 }
@@ -417,6 +441,13 @@ pub async fn clear_folder_watch_config(
 
 pub async fn delete_folder(state: &AppState, input: DeleteFolderInput) -> Result<(), String> {
     crate::folders::service::delete_folder(&state.db, input.folder_id).await?;
+    let patch = crate::runtime_contract::state_change::SidebarNodePatch {
+        node_id: format!("folder:{}", input.folder_id),
+        removed: Some(true),
+        upsert: None, kind: None, parent_id: None, name: None,
+        icon: None, color: None, sort_order: None, count: None,
+        selectable: None, freshness: None,
+    };
     crate::events::emit_state_changed(
         "delete_folder",
         crate::runtime_contract::change_builder::ChangeImpact::new()
@@ -425,7 +456,8 @@ pub async fn delete_folder(state: &AppState, input: DeleteFolderInput) -> Result
                 crate::runtime_contract::state_change::Domain::Sidebar,
                 crate::runtime_contract::state_change::Domain::Selection,
             ])
-            .folder_ids(vec![input.folder_id]),
+            .folder_ids(vec![input.folder_id])
+            .sidebar_node_patch(patch),
     );
     Ok(())
 }
@@ -436,11 +468,20 @@ pub async fn update_folder_parent(
 ) -> Result<(), String> {
     crate::folders::service::update_folder_parent(&state.db, input.folder_id, input.new_parent_id)
         .await?;
+    let patch = crate::runtime_contract::state_change::SidebarNodePatch {
+        node_id: format!("folder:{}", input.folder_id),
+        removed: None, upsert: None, kind: None,
+        parent_id: Some(input.new_parent_id.map(|pid| format!("folder:{pid}")).or(Some("section:folders".into()))),
+        name: None, icon: None, color: None, sort_order: None,
+        count: None, selectable: None, freshness: None,
+    };
     crate::events::emit_state_changed(
         "update_folder_parent",
         crate::runtime_contract::change_builder::ChangeImpact::new()
             .add_domains(&[crate::runtime_contract::state_change::Domain::Folders, crate::runtime_contract::state_change::Domain::Sidebar])
-        .folder_ids(vec![input.folder_id]),
+            .folder_ids(vec![input.folder_id])
+            .folder_parent_changes(vec![(input.folder_id, input.new_parent_id)])
+            .sidebar_node_patch(patch),
     );
     Ok(())
 }

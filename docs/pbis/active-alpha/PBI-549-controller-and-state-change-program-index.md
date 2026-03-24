@@ -17,6 +17,7 @@ Replace the current mixed backend access and coarse refresh model with one coher
 - long-running tasks are tracked and gated centrally
 - backend emits one final `runtime/state_changed` event per completed action
 - `runtime/state_changed` is self-describing enough that the frontend can update the right state without broad “invalidate everything” fallbacks
+- query-visible grid settlement and sidebar settlement should be targeted by default, not broad-fetch by default
 
 ## Program Rules
 
@@ -39,6 +40,7 @@ The engineer implementing a PBI must actively look for:
 - overly broad state updates in the same slice
 - controller methods that should collapse into fewer, clearer methods
 - backend state-change details that are still too vague for the affected slice
+- slices that still only know “some hash changed” when they really need scope/query impact details
 - near-duplicate API or controller calls that differ only by tiny input-shape or naming variations
 
 If two calls are effectively the same operation with slightly different parameter spelling, target type, or naming, prefer collapsing them into one clearer API/controller surface instead of preserving both.
@@ -64,6 +66,22 @@ Bad:
 The domain is already expressed by the controller name. Do not repeat it in every method unless it disambiguates a genuinely different aggregate inside the same controller.
 
 Do not reopen unrelated domains. Do improve the local slice if the improvement is clearly part of the same architectural problem.
+
+### 2b. One merged event per completed action
+The normal backend state-change rule is:
+- do the mutation
+- compute the committed effects
+- merge them into one `ChangeImpact`
+- emit one final `runtime/state_changed`
+
+Do not emit several `runtime/state_changed` events for one logical user action just because several subsystems or projections were touched.
+
+Additional state-change events are correct only when they represent later distinct async follow-up work, such as:
+- compiler/projection completion
+- deferred derivative completion
+- later import/subscription batch completion
+
+This rule exists to keep runtime settle coherent and to prevent frontend slices from rebuilding broad “just refresh again” logic around event bursts.
 
 ### 3. Completion requires proof
 A PBI is not done because code compiled. It is only done when:
@@ -164,6 +182,7 @@ What already landed from this program:
 - long-running task orchestration was centralized
 - `runtime/state_changed` became the main committed backend state event
 - broad fallback refresh paths were reduced in favor of targeted reconciliation
+- the next reset bar is query-aware grid reconciliation and exact sidebar delta application instead of whole-surface refetch as the normal path
 - folder/smart-folder/subscription/watch state-change payloads were tightened and cleaned up
 
 What this file is for now:
@@ -185,4 +204,6 @@ The full program is only done when:
 - backend emits one final self-describing `runtime/state_changed` event per completed action
 - deferred media derivatives emit authoritative state changes
 - frontend state reconciliation is targeted and no longer relies on broad fallback invalidation for normal correctness
+- grid-visible settlement uses current query plus backend reconciliation instead of frontend guesswork from hashes alone
+- sidebar settlement applies direct count/tree deltas or an explicit fallback, not unconditional “fetch the whole tree”
 - redundant near-duplicate backend and controller calls in migrated domains have been collapsed into clearer canonical operations

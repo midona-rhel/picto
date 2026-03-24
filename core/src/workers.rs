@@ -46,6 +46,7 @@ pub async fn start_workers(
                         "compiler_batch_done",
                         crate::runtime_contract::change_builder::ChangeImpact::compiler_publish(
                             result.smart_folders_rebuilt,
+                            result.smart_folder_counts,
                         ),
                     );
                 },

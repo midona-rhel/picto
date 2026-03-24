@@ -138,9 +138,74 @@ pub struct StateChanges {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional, type = "Array<[number, number]>")]
     pub smart_folder_order_changes: Option<Vec<(i64, i64)>>,
+    /// Sidebar node patches — partial updates, creates, or deletes for exact settle.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub sidebar_node_patches: Option<Vec<SidebarNodePatch>>,
+    /// Smart folder count deltas: [[sf_id, new_count], ...]
+    /// Emitted from compiler publish when smart folder bitmaps are recomputed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional, type = "Array<[number, number]>")]
+    pub smart_folder_counts: Option<Vec<(i64, i64)>>,
 }
 
-/// O(1) bitmap-derived sidebar counts.
+/// Sidebar node patch — carries partial updates, removals, or rendering-sufficient
+/// upserts for sidebar nodes. The frontend can apply these as exact deltas
+/// without fetching the whole tree.
+///
+/// Note: upserts are rendering-sufficient, not full SidebarNodeDto clones.
+/// They carry enough data to render the node (kind, parent, name, icon, color,
+/// sort_order, count, selectable, freshness) but omit `meta` and
+/// `expanded_by_default` which are not needed for initial rendering.
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/runtime-contract/")]
+pub struct SidebarNodePatch {
+    pub node_id: String,
+    /// If true, the node was removed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub removed: Option<bool>,
+    /// If true, this is a full node upsert (insert-or-replace). All fields are set.
+    /// If false or absent, this is a partial patch on an existing node.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub upsert: Option<bool>,
+    /// Node kind — required for upserts (folder, smart_folder, system, section).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub kind: Option<String>,
+    /// Parent node ID — required for upserts. Absent = not patching parent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional, type = "string | null")]
+    pub parent_id: Option<Option<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub name: Option<String>,
+    /// Icon: None = not in patch, Some(None) = clear, Some(Some(v)) = set.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional, type = "string | null")]
+    pub icon: Option<Option<String>>,
+    /// Color: None = not in patch, Some(None) = clear, Some(Some(v)) = set.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional, type = "string | null")]
+    pub color: Option<Option<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional, type = "number | null")]
+    pub sort_order: Option<Option<i64>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional, type = "number | null")]
+    pub count: Option<Option<i64>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub selectable: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub freshness: Option<String>,
+}
+
+/// Sidebar system scope counts — bitmap-derived where possible.
+/// active/inbox/trash/untagged are O(1) bitmap reads.
+/// uncategorized and duplicates require SQL but are still fast.
 #[derive(Debug, Clone, Default, Serialize, TS)]
 #[ts(export_to = "../../src/shared/types/generated/runtime-contract/")]
 pub struct SidebarCounts {
@@ -150,6 +215,12 @@ pub struct SidebarCounts {
     pub inbox: i64,
     #[ts(type = "number")]
     pub trash: i64,
+    #[ts(type = "number")]
+    pub uncategorized: i64,
+    #[ts(type = "number")]
+    pub untagged: i64,
+    #[ts(type = "number")]
+    pub duplicates: i64,
 }
 
 #[derive(Debug, Clone, Default, Serialize, TS)]

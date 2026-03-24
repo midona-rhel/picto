@@ -100,6 +100,8 @@ pub fn emit_state_changed(origin: &str, impact: ChangeImpact) {
         folder_order_changes: impact.folder_order_changes,
         smart_folder_parent_changes: impact.smart_folder_parent_changes,
         smart_folder_order_changes: impact.smart_folder_order_changes,
+        sidebar_node_patches: impact.sidebar_node_patches,
+        smart_folder_counts: impact.smart_folder_counts,
     };
 
     let event = StateChangedEvent {

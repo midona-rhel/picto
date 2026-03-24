@@ -49,6 +49,7 @@ This slice does not own:
 - new state ownership under `src/state/**` for shell/sidebar concerns
 - controller-owned actions for folder/smart-folder/sidebar interactions
 - runtime settle path for sidebar count/tree refresh
+- sidebar runtime settle should apply exact count/tree deltas as the normal correctness path; whole-tree fetch is fallback only
 - one shared sidebar row primitive or row family, not separate legacy-style row implementations for each sidebar subsection
 - styling for the rebuilt shell/sidebar follows the CSS architecture contract in [PBI-594-greenfield-frontend-css-architecture-contract.md](./docs/pbis/active-alpha/PBI-594-greenfield-frontend-css-architecture-contract.md)
 
@@ -72,6 +73,7 @@ Do not start [PBI-592-greenfield-frontend-grid-screen-rebuild.md](./docs/pbis/ac
 - parity is confirmed against the reference harness
 - the rebuilt shell/sidebar keeps current visuals and interaction behavior closely enough for product continuity
 - repeated sidebar UI parts are merged into one canonical row family where behavior is materially the same
+- sidebar settlement is targeted by default instead of relying on full-tree refetch as normal behavior
 - finishing this PBI means the rebuilt shell/sidebar slice becomes the active default path before the next rebuilt live slice starts
 - temporary TODOs are allowed only for cross-PBI boundaries already named in the dependency list; they do not allow the next Track A PBI to start early
 

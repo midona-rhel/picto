@@ -42,6 +42,12 @@ State ownership should define what the frontend stores between those two steps.
 Jotai is the intended long-term owner for migrated frontend state.
 For rebuilt slices, that ownership lives only in the new `src/state/**` tree, not alongside legacy store ownership in the active path.
 
+For the rebuilt grid/sidebar path specifically:
+- frontend state owns the current `EntityViewQuery`
+- frontend state owns the current visible-window or anchor information needed for reconcile
+- frontend state owns the current sidebar node tree and counts
+- runtime may settle this state, but runtime does not own it
+
 ## Required shape
 - one explicit state owner per migrated slice
 - view-model hooks read from owned state instead of rebuilding equivalent state ad hoc
@@ -57,6 +63,7 @@ For rebuilt slices, that ownership lives only in the new `src/state/**` tree, no
 - make the boundary between domain state, derived state, and transient UI state explicit
 - keep state logic out of random feature components
 - retire legacy Zustand ownership slice-by-slice once the Jotai owner is active
+- make current query/window state explicit enough that runtime can reconcile without ad hoc feature-local caches
 
 ## Acceptance criteria
 - migrated slices have one explainable state owner
@@ -64,6 +71,7 @@ For rebuilt slices, that ownership lives only in the new `src/state/**` tree, no
 - domain state, derived state, and transient UI state are clearly separated
 - view-model hooks for migrated slices become thinner because ownership is clearer
 - the activated slice has no overlapping live legacy owner left behind
+- current query/window state for the rebuilt grid is owned explicitly enough to support backend reconciliation
 
 ## Tests
 - state-ownership tests for migrated slices
