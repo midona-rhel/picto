@@ -98,6 +98,9 @@
   --layer-tooltip: 400;
   --layer-drag-overlay: 500;
 
+  /* ── Titlebar ────────────────────────────────────────────── */
+  --titlebar-height: 48px;
+
   /* ── Sidebar-specific (reference application-matched) ────────────────────── */
   --sidebar-width: 290px;
   --sidebar-row-height: 26px;

@@ -73,14 +73,26 @@ export function Sidebar() {
 
   const folderRename = useInlineRename({
     onCommit: (id, name) => {
-      const numId = parseFolderId(id);
-      if (numId != null) foldersController.rename(numId, name);
+      const fid = parseFolderId(id);
+      if (fid != null) { foldersController.rename(fid, name); return; }
+      // TODO: smart folder rename — backend requires full SmartFolder struct for update_smart_folder
     },
   });
 
   useEffect(() => { sidebarController.ensureLoaded(); }, []);
 
   const navigate = useCallback((id: string) => setActiveNodeId(id), [setActiveNodeId]);
+
+  const toggleCollapseAll = useCallback(() => {
+    // If any folder is expanded, collapse all. Otherwise expand all.
+    const folderIds = folderNodes.map((n) => n.id);
+    const anyExpanded = folderIds.some((id) => !collapsed.has(id));
+    if (anyExpanded) {
+      folderIds.forEach((id) => { if (!collapsed.has(id)) toggleCollapse(id); });
+    } else {
+      folderIds.forEach((id) => { if (collapsed.has(id)) toggleCollapse(id); });
+    }
+  }, [folderNodes, collapsed, toggleCollapse]);
 
   const primaryNodes = useMemo(
     () => systemNodes.filter((n) => PRIMARY_SCOPES.has(n.id)),
@@ -105,28 +117,31 @@ export function Sidebar() {
     const folderId = parseFolderId(node.id);
     if (folderId == null) return;
     const isExpanded = !collapsed.has(node.id);
+    const hasChildren = folderList.some(({ node: n }) => n.parent_id === node.id);
     const entries: MenuEntry[] = [
       { label: 'New Folder', icon: <IconFolderPlus size={14} />, action: () => foldersController.create('New Folder') },
       { label: 'New Subfolder', icon: <IconNewSubfolder size={14} />, action: () => foldersController.create('New Folder', folderId) },
       { separator: true },
       { label: 'Rename', icon: <IconRename size={14} />, action: () => folderRename.startRename(node.id, node.name) },
-      { label: 'Set Auto-Tags...', icon: <IconAutoTags size={14} />, action: () => { /* TODO: auto-tags editor */ } },
+      { label: 'Set Auto-Tags...', icon: <IconAutoTags size={14} />, action: () => { /* TODO: needs auto-tags editor panel */ } },
       { separator: true },
-      { label: 'Import Folder Here...', icon: <IconFolderPlus size={14} />, action: () => { /* TODO: import */ } },
-      { label: 'Attach Watched Folder...', icon: <IconWatchFolder size={14} />, action: () => { /* TODO: watch config */ } },
+      { label: 'Import Folder Here...', icon: <IconFolderPlus size={14} />, action: () => { /* TODO: needs import dialog */ } },
+      { label: 'Attach Watched Folder...', icon: <IconWatchFolder size={14} />, action: () => { /* TODO: needs watch config dialog */ } },
       { separator: true },
-      { label: 'Sort', icon: <IconSort size={14} />, action: () => { /* TODO: sort submenu */ } },
-      { label: isExpanded ? 'Collapse Folder' : 'Expand Folder', icon: isExpanded ? <IconCollapse size={14} /> : <IconExpand size={14} />, action: () => toggleCollapse(node.id) },
-      { label: 'Expand/Collapse All', icon: <IconExpandAll size={14} />, action: () => { /* TODO: toggle all folders */ } },
+      { label: 'Sort', icon: <IconSort size={14} />, action: () => { /* TODO: needs sort submenu */ } },
+      { label: isExpanded ? 'Collapse Folder' : 'Expand Folder', icon: isExpanded ? <IconCollapse size={14} /> : <IconExpand size={14} />,
+        action: () => { if (hasChildren) toggleCollapse(node.id); },
+        disabled: !hasChildren },
+      { label: 'Expand/Collapse All', icon: <IconExpandAll size={14} />, action: () => toggleCollapseAll() },
       { separator: true },
-      { label: 'Change Icon...', icon: <IconChangeIcon size={14} />, action: () => { /* TODO: open icon picker as submenu */ } },
+      { label: 'Change Icon...', icon: <IconChangeIcon size={14} />, action: () => { /* TODO: needs icon picker submenu */ } },
       { custom: true, key: 'folder-color', render: () => (
-        <ColorPicker value={node.color ?? null} onChange={(_hex) => { /* TODO: foldersController.applyColor(folderId, hex) */ }} />
+        <ColorPicker value={node.color ?? null} onChange={(hex) => foldersController.applyColor(folderId, hex)} />
       ) },
       { separator: true },
-      { label: 'Duplicate', icon: <IconCopy size={14} />, action: () => { /* TODO */ } },
-      { label: 'Export...', icon: <IconUpload size={14} />, action: () => { /* TODO */ } },
-      { label: 'Move', icon: <IconFolderSymlink size={14} />, action: () => { /* TODO */ } },
+      { label: 'Duplicate', icon: <IconCopy size={14} />, action: () => { /* TODO: needs folder duplicate API */ } },
+      { label: 'Export...', icon: <IconUpload size={14} />, action: () => { /* TODO: needs export dialog */ } },
+      { label: 'Move', icon: <IconFolderSymlink size={14} />, action: () => { /* TODO: needs folder destination picker */ } },
       { separator: true },
       { label: 'Remove Folder', icon: <IconFolderMinus size={14} />, danger: true, action: () => foldersController.delete(folderId) },
     ];
@@ -137,17 +152,19 @@ export function Sidebar() {
     const sfId = parseSmartFolderId(node.id);
     if (sfId == null) return;
     const entries: MenuEntry[] = [
-      { label: 'Edit Smart Folder...', icon: <IconFolderOpen size={14} />, action: () => { /* TODO: edit modal */ } },
-      { label: 'New Child Smart Folder', icon: <IconFolderPlus size={14} />, action: () => { /* TODO */ } },
+      { label: 'Edit Smart Folder...', icon: <IconFolderOpen size={14} />, action: () => { /* TODO: needs smart folder edit modal */ } },
+      { label: 'New Child Smart Folder', icon: <IconFolderPlus size={14} />, action: () => { /* TODO: needs smart folder create modal */ } },
       { separator: true },
       { label: 'Rename', icon: <IconRename size={14} />, action: () => folderRename.startRename(node.id, node.name) },
       { separator: true },
-      { label: 'Change Icon...', icon: <IconChangeIcon size={14} />, action: () => { /* TODO: open icon picker as submenu */ } },
+      { label: 'Change Icon...', icon: <IconChangeIcon size={14} />, action: () => { /* TODO: needs icon picker submenu */ } },
       { custom: true, key: 'sf-color', render: () => (
-        <ColorPicker value={node.color ?? null} onChange={(_hex) => { /* TODO: smartFoldersController.applyColor(sfId, hex) */ }} />
+        <ColorPicker value={node.color ?? null} onChange={(_hex) => {
+          // TODO: smart folder color — backend requires full SmartFolder struct for update_smart_folder
+        }} />
       ) },
       { separator: true },
-      { label: 'Duplicate', icon: <IconCopy size={14} />, action: () => { /* TODO */ } },
+      { label: 'Duplicate', icon: <IconCopy size={14} />, action: () => { /* TODO: needs smart folder duplicate API */ } },
       { separator: true },
       { label: 'Delete', icon: <IconFolderMinus size={14} />, danger: true, action: () => smartFoldersController.delete(sfId) },
     ];
@@ -283,6 +300,14 @@ function parseSmartFolderId(nodeId: string): string | null {
   if (!nodeId.startsWith('smart:')) return null;
   return nodeId.slice(6);
 }
+
+// TODO: restore parseSmartFolderIdNum when smart folder partial update is available
+// function parseSmartFolderIdNum(nodeId: string): number | null {
+//   const s = parseSmartFolderId(nodeId);
+//   if (s == null) return null;
+//   const n = parseInt(s, 10);
+//   return isNaN(n) ? null : n;
+// }
 
 interface TreeRenderNode {
   node: SidebarNodeDto;

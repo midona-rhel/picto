@@ -35,6 +35,14 @@ export function renameFolder(folderId: number, name: string): Promise<void> {
   return invoke<void>('update_folder', { folder_id: folderId, name });
 }
 
+export function updateFolder(folderId: number, patch: {
+  name?: string;
+  icon?: string | null;
+  color?: string | null;
+}): Promise<void> {
+  return invoke<void>('update_folder', { folder_id: folderId, ...patch });
+}
+
 export function moveFolder(
   folderId: number,
   newParentId: number | null,
@@ -52,6 +60,10 @@ export function moveFolder(
 export function deleteSmartFolder(id: string): Promise<void> {
   return invoke<void>('delete_smart_folder', { id });
 }
+
+// NOTE: update_smart_folder requires a full SmartFolder struct.
+// No partial patch command exists. Rename/color/icon for smart folders
+// are blocked until the backend adds partial update support.
 
 export function moveSmartFolder(
   smartFolderId: number,

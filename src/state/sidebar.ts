@@ -106,3 +106,24 @@ export const patchFolderNodeAtom = atom(
     );
   },
 );
+
+// ── Smart folder write atoms ─────────────────────────────────────
+
+export const removeSmartFolderNodeAtom = atom(
+  null,
+  (get, set, sfId: number) => {
+    const sid = `smart:${sfId}`;
+    set(sidebarNodesAtom, get(sidebarNodesAtom).filter((n) => n.id !== sid));
+  },
+);
+
+export const patchSmartFolderNodeAtom = atom(
+  null,
+  (get, set, { sfId, patch }: { sfId: number; patch: Partial<SidebarNodeDto> }) => {
+    const sid = `smart:${sfId}`;
+    set(
+      sidebarNodesAtom,
+      get(sidebarNodesAtom).map((n) => (n.id === sid ? { ...n, ...patch } : n)),
+    );
+  },
+);

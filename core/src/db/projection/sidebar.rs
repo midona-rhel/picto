@@ -1,5 +1,6 @@
 //! Sidebar node projection compilation.
 //! Builds the sidebar_node table from authoritative data.
+//! Matches the live sidebar contract from core/src/sidebar/db.rs.
 
 use rusqlite::{params, Connection};
 
@@ -10,21 +11,38 @@ pub fn compile_sidebar(conn: &Connection) {
 
     let now = chrono::Utc::now().to_rfc3339();
 
-    // System scopes
-    let system_nodes = [
-        ("system:library", "system", None, "Library", Some("IconPhoto"), true, true),
-        ("system:active", "system", Some("system:library"), "All Active", Some("IconPhoto"), true, false),
-        ("system:inbox", "system", Some("system:library"), "Inbox", Some("IconInbox"), true, false),
-        ("system:uncategorized", "system", Some("system:library"), "Uncategorized", Some("IconFolderQuestion"), true, false),
-        ("system:untagged", "system", Some("system:library"), "Untagged", Some("IconTag"), true, false),
-        ("system:trash", "system", Some("system:library"), "Trash", Some("IconTrash"), true, false),
+    // Section nodes (non-selectable structural containers)
+    let sections = [
+        ("system:library", "Library", 0i64, true),
+        ("section:folders", "Folders", 10, true),
+        ("section:smart_folders", "Smart Folders", 20, true),
     ];
 
-    for (id, kind, parent, name, icon, selectable, expanded) in &system_nodes {
+    for (id, name, sort_order, expanded) in &sections {
         let _ = conn.execute(
-            "INSERT OR REPLACE INTO sidebar_node (node_id, kind, parent_id, name, icon, selectable, expanded_by_default, freshness, epoch, date_modified)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'fresh', 1, ?8)",
-            params![id, kind, parent, name, icon, *selectable as i64, *expanded as i64, now],
+            "INSERT OR REPLACE INTO sidebar_node (node_id, kind, parent_id, name, sort_order, count, selectable, expanded_by_default, freshness, epoch, date_modified)
+             VALUES (?1, 'section', NULL, ?2, ?3, NULL, 0, ?4, 'fresh', 1, ?5)",
+            params![id, name, sort_order, *expanded as i64, now],
+        );
+    }
+
+    // System scope nodes (children of system:library)
+    //                       (id,                    name,              icon,                sort, selectable)
+    let system_nodes: &[(&str, &str, &str, i64, bool)] = &[
+        ("system:active",        "All Active",        "IconPhoto",          1, true),
+        ("system:inbox",         "Inbox",             "IconInbox",          2, true),
+        ("system:uncategorized", "Uncategorized",     "IconFolderQuestion", 3, true),
+        ("system:untagged",      "Untagged",          "IconTagOff",         4, true),
+        ("system:recent_viewed", "Recently Viewed",   "IconEye",            5, true),
+        ("system:duplicates",    "Duplicates",        "IconCopy",           6, true),
+        ("system:trash",         "Trash",             "IconTrash",          7, true),
+    ];
+
+    for (id, name, icon, sort_order, selectable) in system_nodes {
+        let _ = conn.execute(
+            "INSERT OR REPLACE INTO sidebar_node (node_id, kind, parent_id, name, icon, sort_order, count, selectable, expanded_by_default, freshness, epoch, date_modified)
+             VALUES (?1, 'system', 'system:library', ?2, ?3, ?4, 0, ?5, 0, 'stale', 1, ?6)",
+            params![id, name, icon, sort_order, *selectable as i64, now],
         );
     }
 
@@ -77,7 +95,17 @@ pub fn compile_sidebar(conn: &Connection) {
         .unwrap_or(0);
     let _ = conn.execute("UPDATE sidebar_node SET count = ?1 WHERE node_id = 'system:untagged'", [untagged]);
 
-    // Folder nodes
+    // Duplicates count
+    let duplicates: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM duplicate WHERE status = 'detected'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap_or(0);
+    let _ = conn.execute("UPDATE sidebar_node SET count = ?1 WHERE node_id = 'system:duplicates'", [duplicates]);
+
+    // Folder nodes (children of section:folders)
     let folders: Vec<(i64, String, Option<i64>, Option<String>, Option<String>, Option<i64>)> = conn
         .prepare("SELECT folder_id, name, parent_id, icon, color, sort_order FROM folder ORDER BY sort_order, name")
         .and_then(|mut stmt| {
@@ -88,7 +116,9 @@ pub fn compile_sidebar(conn: &Connection) {
 
     for (fid, name, parent_id, icon, color, sort_order) in &folders {
         let node_id = format!("folder:{fid}");
-        let parent = parent_id.map(|pid| format!("folder:{pid}"));
+        let parent = parent_id
+            .map(|pid| format!("folder:{pid}"))
+            .unwrap_or_else(|| "section:folders".into());
         let count: i64 = conn
             .query_row(
                 "SELECT COUNT(DISTINCT COALESCE(me.parent_collection_entity_id, me.entity_id))
@@ -99,14 +129,18 @@ pub fn compile_sidebar(conn: &Connection) {
                 |row| row.get(0),
             )
             .unwrap_or(0);
+        let meta = serde_json::json!({
+            "folder_id": fid,
+            "auto_tags": serde_json::Value::Null,
+        });
         let _ = conn.execute(
-            "INSERT OR REPLACE INTO sidebar_node (node_id, kind, parent_id, name, icon, color, sort_order, count, selectable, freshness, epoch, date_modified)
-             VALUES (?1, 'folder', ?2, ?3, ?4, ?5, ?6, ?7, 1, 'fresh', 1, ?8)",
-            params![node_id, parent, name, icon, color, sort_order, count, now],
+            "INSERT OR REPLACE INTO sidebar_node (node_id, kind, parent_id, name, icon, color, sort_order, count, selectable, freshness, epoch, meta_json, date_modified)
+             VALUES (?1, 'folder', ?2, ?3, ?4, ?5, ?6, ?7, 1, 'fresh', 1, ?8, ?9)",
+            params![node_id, parent, name, icon, color, sort_order, count, meta.to_string(), now],
         );
     }
 
-    // Smart folder nodes
+    // Smart folder nodes (children of section:smart_folders)
     let smart_folders: Vec<(i64, String, Option<i64>, Option<String>, Option<String>, Option<i64>, String)> = conn
         .prepare("SELECT smart_folder_id, name, parent_id, icon, color, display_order, predicate_json FROM smart_folder ORDER BY display_order, name")
         .and_then(|mut stmt| {
@@ -117,10 +151,13 @@ pub fn compile_sidebar(conn: &Connection) {
 
     for (sfid, name, parent_id, icon, color, display_order, predicate_json) in &smart_folders {
         let node_id = format!("smart:{sfid}");
-        let parent = parent_id.map(|pid| format!("smart:{pid}"));
+        let parent = parent_id
+            .map(|pid| format!("smart:{pid}"))
+            .unwrap_or_else(|| "section:smart_folders".into());
         let meta = serde_json::json!({
-            "predicate": serde_json::from_str::<serde_json::Value>(predicate_json).unwrap_or_default(),
+            "smart_folder_id": sfid,
             "parent_id": parent_id,
+            "predicate": serde_json::from_str::<serde_json::Value>(predicate_json).unwrap_or_default(),
         });
         let _ = conn.execute(
             "INSERT OR REPLACE INTO sidebar_node (node_id, kind, parent_id, name, icon, color, sort_order, count, selectable, freshness, epoch, meta_json, date_modified)

@@ -25,8 +25,7 @@ The current app shell and sidebar are tightly tied to the old frontend architect
 
 ## Product model to encode
 This slice owns:
-- app shell layout
-- titlebar/window controls composition
+- app shell layout (sidebar + main content flex layout, sidebar collapse toggle)
 - sidebar system scopes
 - folder tree
 - smart folder tree

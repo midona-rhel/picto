@@ -1,8 +1,82 @@
-/* App shell layout — sidebar + main content area. */
+/* App shell layout — titlebar + sidebar + main content. */
 
 .shell {
   display: flex;
+  flex-direction: column;
   height: 100%;
+  overflow: hidden;
+}
+
+/* Titlebar — fixed drag region, split into sidebar/main colored sections */
+.titlebar {
+  flex-shrink: 0;
+  height: var(--titlebar-height);
+  display: flex;
+  -webkit-app-region: drag;
+}
+
+.titlebarLeft {
+  width: var(--sidebar-width);
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  padding-left: 74px; /* macOS traffic light offset */
+  padding-right: 8px;
+  background: var(--color-surface-1);
+  border-right: 1px solid var(--color-border-primary);
+}
+
+.titlebarLeftCollapsed {
+  width: auto;
+  padding-left: 74px;
+  padding-right: 8px;
+  display: flex;
+  align-items: center;
+}
+
+.titlebarRight {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  padding: 0 8px;
+  background: var(--color-bg-app);
+  box-shadow: 0 1px 0 0 var(--color-border-secondary);
+}
+
+.titlebarActions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  -webkit-app-region: no-drag;
+}
+
+.toggleBtn {
+  appearance: none;
+  border: none;
+  background: transparent;
+  padding: 0;
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-sm);
+  color: var(--color-text-primary);
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+  transition: background var(--duration-fast) var(--ease-default);
+}
+
+.toggleBtn:hover {
+  background: var(--color-surface-hover);
+}
+
+/* Body — sidebar + main below titlebar */
+.body {
+  flex: 1;
+  display: flex;
+  min-height: 0;
   overflow: hidden;
 }
 
