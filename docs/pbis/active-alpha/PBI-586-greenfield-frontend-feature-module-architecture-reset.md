@@ -47,16 +47,32 @@ It should be easy to answer:
 - where shared UI primitives live
 - where feature-specific behavior lives
 
+It should also make this explicit:
+- modules are organized by actual ownership, not by the accidental legacy screen where a UI piece first appeared
+- equivalent UI parts should move into shared primitive families instead of staying trapped under old feature folders
+
 ## Implementation changes
 - define and land a target module layout for the migrated slices
 - move files so ownership becomes clearer
 - remove overlapping helper modules where one owned home is enough
 - stop letting feature folders duplicate shared concerns
+- move equivalent UI parts into shared homes even when that breaks legacy feature-folder boundaries
+
+## Start gate
+This PBI may start only when:
+- the rebuilt shell/sidebar slice from [PBI-591-greenfield-frontend-shell-and-sidebar-rebuild.md](./docs/pbis/active-alpha/PBI-591-greenfield-frontend-shell-and-sidebar-rebuild.md) is `Activated`
+- the rebuilt grid slice from [PBI-592-greenfield-frontend-grid-screen-rebuild.md](./docs/pbis/active-alpha/PBI-592-greenfield-frontend-grid-screen-rebuild.md) is `Activated`
+- the rebuilt inspector slice from [PBI-593-greenfield-frontend-inspector-and-selection-surface-rebuild.md](./docs/pbis/active-alpha/PBI-593-greenfield-frontend-inspector-and-selection-surface-rebuild.md) is `Activated`
+- the rebuilt media slice from [PBI-585-greenfield-frontend-media-consumption-reset.md](./docs/pbis/active-alpha/PBI-585-greenfield-frontend-media-consumption-reset.md) is `Activated`
+
+## Next rule
+Do not start [PBI-571-frontend-shared-component-and-styling-system-reset.md](./docs/pbis/active-alpha/PBI-571-frontend-shared-component-and-styling-system-reset.md) until this PBI is `Activated`.
 
 ## Acceptance criteria
 - migrated slices have a clear and explainable module structure
 - ownership boundaries are materially clearer than before
 - duplicated or overlapping module responsibilities are reduced
+- legacy feature boundaries are not preserved when they block obvious UI consolidation
 - new contributors can tell where a change belongs without guessing across several folders
 
 ## Tests

@@ -1,0 +1,220 @@
+/* Canonical sidebar row — reference application-matched dimensions. */
+
+.row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  height: var(--sidebar-row-height);
+  line-height: var(--sidebar-row-height);
+  padding: 0;
+  cursor: default;
+  user-select: none;
+  color: var(--color-text-primary);
+  font-size: var(--font-size-md);
+}
+
+/* Background highlight via ::before — left edge follows indent via --row-inset */
+.row::before {
+  content: "";
+  position: absolute;
+  z-index: 0;
+  top: 0;
+  right: 0;
+  bottom: 1px;
+  left: var(--row-inset, 1px);
+  border-radius: 5px;
+  opacity: 0;
+  transition: opacity var(--duration-fast) var(--ease-default);
+  pointer-events: none;
+}
+
+.row:hover::before {
+  background: var(--color-surface-hover);
+  opacity: 1;
+}
+
+.active::before {
+  background: var(--color-surface-active) !important;
+  opacity: 1 !important;
+}
+
+.dropTarget::before {
+  background: var(--color-surface-drop) !important;
+  border: 1px solid var(--color-primary) !important;
+  opacity: 1 !important;
+}
+
+/* Icon */
+.icon {
+  position: relative;
+  z-index: 1;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--sidebar-row-height);
+  height: var(--sidebar-row-height);
+  margin-left: 2px;
+  opacity: 0.75;
+}
+
+.row:hover .icon,
+.active .icon {
+  opacity: 1;
+}
+
+/* Label */
+.label {
+  position: relative;
+  z-index: 1;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-regular);
+  line-height: var(--sidebar-row-height);
+}
+
+/* Count badge */
+.count {
+  position: relative;
+  z-index: 1;
+  flex-shrink: 0;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+  font-variant-numeric: tabular-nums slashed-zero;
+  font-family: var(--font-family-mono);
+  padding: 0 4px 0 4px;
+  text-align: right;
+  line-height: var(--sidebar-row-height);
+  display: inline-flex;
+  align-items: center;
+}
+
+.stale {
+  opacity: 0.5;
+}
+
+/* Section header */
+.section {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 22px;
+  padding: 0 0 0 0;
+  margin: 6px 0 1px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.sectionTitleRow {
+  display: flex;
+  align-items: center;
+  height: 22px;
+  padding: 0 4px;
+  margin-left: 1px;
+  border-radius: 4px;
+  transition: all var(--duration-normal) var(--ease-default);
+}
+
+.section:hover .sectionTitleRow {
+  background: var(--color-surface-hover);
+}
+
+.sectionTitle {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-tertiary);
+  white-space: pre;
+  line-height: 22px;
+}
+
+.section:hover .sectionTitle {
+  color: var(--color-text-primary);
+}
+
+.sectionArrow {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 3px;
+  opacity: 0;
+  transition: opacity var(--duration-normal) var(--ease-default);
+  color: var(--color-text-secondary);
+}
+
+.section:hover .sectionArrow {
+  opacity: 0.9;
+}
+
+.sectionArrowExpanded {
+  transform: rotate(90deg);
+}
+
+/* Section add button */
+.sectionAddBtn {
+  appearance: none;
+  border: none;
+  background: none;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  margin-right: 0;
+  border-radius: 0;
+  color: var(--color-text-secondary);
+  opacity: 0;
+  cursor: pointer;
+  transition: opacity var(--duration-normal) var(--ease-default);
+}
+
+.section:hover .sectionAddBtn {
+  opacity: 0.85;
+}
+
+.sectionAddBtn:hover {
+  opacity: 1 !important;
+  color: var(--color-text-primary);
+}
+
+/* Folder expand/collapse triangle */
+.expandArrow {
+  position: absolute;
+  z-index: 2;
+  left: -18px;
+  top: 0;
+  width: 16px;
+  height: var(--sidebar-row-height);
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  cursor: pointer;
+  opacity: 0.7;
+  transition: opacity var(--duration-normal) var(--ease-default);
+}
+
+.expandArrow:hover {
+  opacity: 1;
+}
+
+.triangle {
+  display: inline-block;
+  width: 0;
+  height: 0;
+  border-left: 3.5px solid transparent;
+  border-right: 3.5px solid transparent;
+  border-top: 5px solid var(--color-text-secondary);
+  transition: transform var(--duration-normal) var(--ease-default);
+  margin-right: -2px;
+}
+
+.expanded {
+  transform: rotate(0deg);
+}
+
+.collapsed {
+  transform: rotate(-90deg);
+}

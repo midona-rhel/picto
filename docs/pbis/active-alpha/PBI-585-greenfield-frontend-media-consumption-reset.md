@@ -37,6 +37,14 @@ Frontend media consumption should:
 - migrate viewer/grid/preview surfaces to media URLs/handles
 - remove path-based assumptions from migrated slices
 
+## Start gate
+This PBI may start only when:
+- [PBI-593-greenfield-frontend-inspector-and-selection-surface-rebuild.md](./docs/pbis/active-alpha/PBI-593-greenfield-frontend-inspector-and-selection-surface-rebuild.md) is `Activated`
+- the media delivery contract from [PBI-569-greenfield-media-delivery-service.md](./docs/pbis/active-alpha/PBI-569-greenfield-media-delivery-service.md) is stable for the intended viewer/grid/preview flow
+
+## Next rule
+Do not start [PBI-586-greenfield-frontend-feature-module-architecture-reset.md](./docs/pbis/active-alpha/PBI-586-greenfield-frontend-feature-module-architecture-reset.md) until this PBI is `Activated`.
+
 ## Acceptance criteria
 - migrated media surfaces consume media delivery outputs by default
 - path-shaped media assumptions are removed from those slices

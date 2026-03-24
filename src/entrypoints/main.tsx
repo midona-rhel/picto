@@ -1,11 +1,17 @@
-import React from 'react';
-import ReactDOM from 'react-dom/client';
+import { StrictMode } from 'react';
+import { createRoot } from 'react-dom/client';
+import { Provider, getDefaultStore } from 'jotai';
+import { AppShell } from '../app/AppShell';
+import '../app/globals.css';
 
-ReactDOM.createRoot(document.getElementById('root')!).render(
-  <React.StrictMode>
-    <div style={{ padding: 32, fontFamily: 'system-ui', color: '#ccc', background: '#1a1a1e', minHeight: '100vh' }}>
-      <h1>Picto</h1>
-      <p>Frontend rebuild in progress. Legacy reference at <code>legacy/frontend/</code></p>
-    </div>
-  </React.StrictMode>,
+// One store for the entire app. Controllers and runtime settle mutate
+// this same instance via getDefaultStore(), so Provider must use it too.
+const store = getDefaultStore();
+
+createRoot(document.getElementById('root')!).render(
+  <StrictMode>
+    <Provider store={store}>
+      <AppShell />
+    </Provider>
+  </StrictMode>,
 );

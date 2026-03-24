@@ -52,6 +52,8 @@ The new frontend exists for:
 - new state ownership
 - new component boundaries
 - new backend contract usage
+- aggressively reduced UI duplication
+- a clean styling model based on tokens, shared primitives, and component-owned CSS Modules
 
 ## Frontend target architecture
 The rebuilt frontend should end up with these layers:
@@ -69,6 +71,7 @@ The new frontend must not depend on legacy runtime/store/controller code as part
 
 This architecture is locked by:
 - [PBI-588-greenfield-frontend-architecture-contract-reset.md](./docs/pbis/active-alpha/PBI-588-greenfield-frontend-architecture-contract-reset.md)
+- [PBI-594-greenfield-frontend-css-architecture-contract.md](./docs/pbis/active-alpha/PBI-594-greenfield-frontend-css-architecture-contract.md)
 
 Feature code should not directly own:
 - backend command names
@@ -78,23 +81,31 @@ Feature code should not directly own:
 - path-based media assumptions
 - repeated shell/component implementations that should be shared
 
+Equivalent rebuilt UI parts should be merged aggressively.
+The frontend program should not preserve separate legacy components when they are really one UI family with minor variants.
+Examples:
+- grid preview tile and inspector preview can become one preview component family
+- sidebar rows can become one row family with tree/collapse/drag variants
+- repeated rounded image cards, panel headers, and property rows should collapse into shared primitives
+
 ## Child PBIs
 This program is executed through these child PBIs:
 
 1. [PBI-588-greenfield-frontend-architecture-contract-reset.md](./docs/pbis/active-alpha/PBI-588-greenfield-frontend-architecture-contract-reset.md)
-2. [PBI-589-greenfield-frontend-legacy-quarantine-and-workspace-reset.md](./docs/pbis/active-alpha/PBI-589-greenfield-frontend-legacy-quarantine-and-workspace-reset.md)
-3. [PBI-590-greenfield-frontend-reference-fixtures-and-parity-harness.md](./docs/pbis/active-alpha/PBI-590-greenfield-frontend-reference-fixtures-and-parity-harness.md)
-4. [PBI-581-greenfield-frontend-api-layer-reset.md](./docs/pbis/active-alpha/PBI-581-greenfield-frontend-api-layer-reset.md)
-5. [PBI-582-greenfield-frontend-controller-boundary-reset.md](./docs/pbis/active-alpha/PBI-582-greenfield-frontend-controller-boundary-reset.md)
-6. [PBI-587-greenfield-frontend-state-ownership-reset.md](./docs/pbis/active-alpha/PBI-587-greenfield-frontend-state-ownership-reset.md)
-7. [PBI-583-greenfield-frontend-runtime-reconciliation-reset.md](./docs/pbis/active-alpha/PBI-583-greenfield-frontend-runtime-reconciliation-reset.md)
-8. [PBI-591-greenfield-frontend-shell-and-sidebar-rebuild.md](./docs/pbis/active-alpha/PBI-591-greenfield-frontend-shell-and-sidebar-rebuild.md)
-9. [PBI-584-greenfield-frontend-grid-query-and-selection-reset.md](./docs/pbis/active-alpha/PBI-584-greenfield-frontend-grid-query-and-selection-reset.md)
-10. [PBI-592-greenfield-frontend-grid-screen-rebuild.md](./docs/pbis/active-alpha/PBI-592-greenfield-frontend-grid-screen-rebuild.md)
-11. [PBI-593-greenfield-frontend-inspector-and-selection-surface-rebuild.md](./docs/pbis/active-alpha/PBI-593-greenfield-frontend-inspector-and-selection-surface-rebuild.md)
-12. [PBI-585-greenfield-frontend-media-consumption-reset.md](./docs/pbis/active-alpha/PBI-585-greenfield-frontend-media-consumption-reset.md)
-13. [PBI-586-greenfield-frontend-feature-module-architecture-reset.md](./docs/pbis/active-alpha/PBI-586-greenfield-frontend-feature-module-architecture-reset.md)
-14. [PBI-571-frontend-shared-component-and-styling-system-reset.md](./docs/pbis/active-alpha/PBI-571-frontend-shared-component-and-styling-system-reset.md)
+2. [PBI-594-greenfield-frontend-css-architecture-contract.md](./docs/pbis/active-alpha/PBI-594-greenfield-frontend-css-architecture-contract.md)
+3. [PBI-589-greenfield-frontend-legacy-quarantine-and-workspace-reset.md](./docs/pbis/active-alpha/PBI-589-greenfield-frontend-legacy-quarantine-and-workspace-reset.md)
+4. [PBI-590-greenfield-frontend-reference-fixtures-and-parity-harness.md](./docs/pbis/active-alpha/PBI-590-greenfield-frontend-reference-fixtures-and-parity-harness.md)
+5. [PBI-581-greenfield-frontend-api-layer-reset.md](./docs/pbis/active-alpha/PBI-581-greenfield-frontend-api-layer-reset.md)
+6. [PBI-582-greenfield-frontend-controller-boundary-reset.md](./docs/pbis/active-alpha/PBI-582-greenfield-frontend-controller-boundary-reset.md)
+7. [PBI-587-greenfield-frontend-state-ownership-reset.md](./docs/pbis/active-alpha/PBI-587-greenfield-frontend-state-ownership-reset.md)
+8. [PBI-583-greenfield-frontend-runtime-reconciliation-reset.md](./docs/pbis/active-alpha/PBI-583-greenfield-frontend-runtime-reconciliation-reset.md)
+9. [PBI-591-greenfield-frontend-shell-and-sidebar-rebuild.md](./docs/pbis/active-alpha/PBI-591-greenfield-frontend-shell-and-sidebar-rebuild.md)
+10. [PBI-584-greenfield-frontend-grid-query-and-selection-reset.md](./docs/pbis/active-alpha/PBI-584-greenfield-frontend-grid-query-and-selection-reset.md)
+11. [PBI-592-greenfield-frontend-grid-screen-rebuild.md](./docs/pbis/active-alpha/PBI-592-greenfield-frontend-grid-screen-rebuild.md)
+12. [PBI-593-greenfield-frontend-inspector-and-selection-surface-rebuild.md](./docs/pbis/active-alpha/PBI-593-greenfield-frontend-inspector-and-selection-surface-rebuild.md)
+13. [PBI-585-greenfield-frontend-media-consumption-reset.md](./docs/pbis/active-alpha/PBI-585-greenfield-frontend-media-consumption-reset.md)
+14. [PBI-586-greenfield-frontend-feature-module-architecture-reset.md](./docs/pbis/active-alpha/PBI-586-greenfield-frontend-feature-module-architecture-reset.md)
+15. [PBI-571-frontend-shared-component-and-styling-system-reset.md](./docs/pbis/active-alpha/PBI-571-frontend-shared-component-and-styling-system-reset.md)
 
 ## Two tracks
 Run the frontend reset in two parallel tracks:
@@ -121,11 +132,42 @@ Track B owns:
 
 Track B exists so Track A can rebuild against stable rules and stable checkpoints instead of inventing architecture while coding.
 
+## Execution rules
+Track A owns rebuilt live product slices and must run serially.
+
+Track A sequence:
+- [PBI-591-greenfield-frontend-shell-and-sidebar-rebuild.md](./docs/pbis/active-alpha/PBI-591-greenfield-frontend-shell-and-sidebar-rebuild.md)
+- [PBI-592-greenfield-frontend-grid-screen-rebuild.md](./docs/pbis/active-alpha/PBI-592-greenfield-frontend-grid-screen-rebuild.md)
+- [PBI-593-greenfield-frontend-inspector-and-selection-surface-rebuild.md](./docs/pbis/active-alpha/PBI-593-greenfield-frontend-inspector-and-selection-surface-rebuild.md)
+- [PBI-585-greenfield-frontend-media-consumption-reset.md](./docs/pbis/active-alpha/PBI-585-greenfield-frontend-media-consumption-reset.md)
+- [PBI-586-greenfield-frontend-feature-module-architecture-reset.md](./docs/pbis/active-alpha/PBI-586-greenfield-frontend-feature-module-architecture-reset.md)
+- [PBI-571-frontend-shared-component-and-styling-system-reset.md](./docs/pbis/active-alpha/PBI-571-frontend-shared-component-and-styling-system-reset.md)
+
+Rules:
+- do not start the next Track A PBI until the current Track A PBI is `Activated`
+- Track A “done enough to move on” means `Activated`, not merely `Implemented`
+- temporary TODOs are allowed only for cross-PBI boundaries already named in the dependency list; they do not allow the next Track A PBI to start early
+
+Track B owns contract, state, runtime, and verification stabilization and may overlap.
+
+Track B sequence:
+- [PBI-581-greenfield-frontend-api-layer-reset.md](./docs/pbis/active-alpha/PBI-581-greenfield-frontend-api-layer-reset.md)
+- [PBI-582-greenfield-frontend-controller-boundary-reset.md](./docs/pbis/active-alpha/PBI-582-greenfield-frontend-controller-boundary-reset.md)
+- [PBI-587-greenfield-frontend-state-ownership-reset.md](./docs/pbis/active-alpha/PBI-587-greenfield-frontend-state-ownership-reset.md)
+- [PBI-583-greenfield-frontend-runtime-reconciliation-reset.md](./docs/pbis/active-alpha/PBI-583-greenfield-frontend-runtime-reconciliation-reset.md)
+- [PBI-584-greenfield-frontend-grid-query-and-selection-reset.md](./docs/pbis/active-alpha/PBI-584-greenfield-frontend-grid-query-and-selection-reset.md)
+
+Rules:
+- Track B PBIs may run in parallel
+- a Track A PBI may start only when all of its Track B dependencies are at least `Implemented` and review-clean
+- Track B overlap exists to satisfy the next Track A start gate, not to justify starting rebuilt live slices early
+
 ## Activation order
 Use this order for the frontend program:
 
 1. Lock the rebuild contract:
 - `PBI-588`
+- `PBI-594`
 
 2. Quarantine the old frontend out of `src/**`:
 - `PBI-589`
@@ -154,7 +196,8 @@ Use this order for the frontend program:
 8. Consolidate shared UI and styling only after the rebuilt surfaces are stable:
 - `PBI-571`
 
-Some implementation work can overlap, but activation should generally follow this order.
+Contract and verification work may overlap as part of Track B.
+Rebuilt live product slices in Track A should follow this order strictly.
 
 ## Alignment gates
 - `Gate 1`: the new shell/sidebar slice may activate only when `PBI-591` has parity confirmation against `PBI-590` fixtures and does not depend on legacy runtime/store modules
@@ -182,6 +225,7 @@ This program index is complete only when:
 - the frontend reset is explicitly a rebuild, not another in-place migration
 - the legacy frontend and the rebuilt frontend have separate ownership boundaries
 - each major frontend rebuild problem has its own executable child PBI
+- equivalent UI parts are allowed and expected to be merged instead of being preserved as separate legacy-shaped components
 - parity/reference checkpoints are explicit
 - the activation order is explicit
 - dependencies on backend and media delivery are explicit

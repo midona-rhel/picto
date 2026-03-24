@@ -119,8 +119,9 @@ Use this as the main activation path for the reset set:
 - `PBI-568` backend engine
 - `PBI-578` bulk entity target and selection
 
-3. Lock the frontend architecture contract:
+3. Lock the frontend architecture and styling contracts:
 - `PBI-588`
+- `PBI-594`
 
 4. Lock the frontend rebuild boundary and quarantine the old frontend:
 - `PBI-588`

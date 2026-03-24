@@ -40,6 +40,15 @@ Each rebuilt slice should have:
 - one parity checklist per rebuilt slice
 - one screenshot or visual confirmation workflow per rebuilt slice
 
+## Start gate
+This PBI may start only when:
+- [PBI-589-greenfield-frontend-legacy-quarantine-and-workspace-reset.md](./docs/pbis/active-alpha/PBI-589-greenfield-frontend-legacy-quarantine-and-workspace-reset.md) is `Implemented`
+
+## Next rule
+Do not start [PBI-591-greenfield-frontend-shell-and-sidebar-rebuild.md](./docs/pbis/active-alpha/PBI-591-greenfield-frontend-shell-and-sidebar-rebuild.md) until this PBI is review-clean and `Activatable`.
+
+Fixture contracts must match the backend/frontend canonical shapes exactly before the next rebuilt live slice starts.
+
 ## Rules
 - fixture data is for rebuilding and visual verification, not the long-term data layer
 - parity should check:

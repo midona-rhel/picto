@@ -38,6 +38,10 @@ Use this frontend shape for the rebuilt active frontend:
 - `src/features/**` contains feature roots and feature composition
 - `src/shared/components/**` contains presentational UI and reusable primitives
 
+Use this styling rule:
+- the rebuilt frontend styling model is locked by [PBI-594-greenfield-frontend-css-architecture-contract.md](./docs/pbis/active-alpha/PBI-594-greenfield-frontend-css-architecture-contract.md)
+- rebuilt slices must use tokens, shared primitives, and component-owned CSS Modules instead of copying legacy CSS structure into the new tree
+
 Use this workspace rule:
 - the legacy frontend must live outside `src/**`
 - the rebuilt active frontend owns `src/**`
@@ -48,6 +52,16 @@ Use this component rule:
 - leaf UI components receive small intentional props
 - leaf UI components should not know backend contract shapes
 - large prop bags across feature boundaries are a design smell and must be reduced
+- visually and functionally equivalent UI pieces should be merged into one canonical implementation even if the legacy frontend split them across different features
+- rebuilt slices should prefer one reusable primitive plus thin wrappers over several near-identical components with different names
+
+Use this consolidation rule:
+- do not preserve legacy component boundaries just because they existed before
+- if two surfaces are the same thing with different labels or small behavior flags, rebuild them as one component family
+- examples:
+  - grid tile preview and inspector preview should share one image/media preview primitive if they look and behave the same
+  - sidebar rows should share one row primitive with options for tree nesting, collapse state, drag target state, and selection state
+  - repeated rounded image cards, property rows, and panel sections should collapse into one canonical UI family
 
 Use this ownership rule:
 - controllers own user actions and optimistic intent only
@@ -77,6 +91,7 @@ Track B owns:
 
 Track A is not allowed to redesign against moving contracts from Track B.
 Track A is also not allowed to “borrow” the legacy frontend architecture into the new active path.
+Track A is expected to collapse duplicate legacy UI implementations when the rebuilt UI can preserve the same product behavior with fewer primitives.
 
 ## Required checkpoints
 ### Track A
@@ -103,6 +118,7 @@ Track A is also not allowed to “borrow” the legacy frontend architecture int
 - the frontend architecture is decision-complete before more broad rebuild work continues
 - the layer rules are explicit and non-overlapping
 - the legacy-vs-new workspace rule is explicit
+- the rebuild explicitly allows aggressive consolidation of equivalent UI parts
 - the two-track model is explicit
 - checkpoints and activation gates are explicit
 - later frontend PBIs can reference this document instead of reinventing architecture

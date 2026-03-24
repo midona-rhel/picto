@@ -14,6 +14,7 @@ This document is about the shared UI system specifically. It is not the whole fr
 
 Activation depends on:
 - [PBI-586-greenfield-frontend-feature-module-architecture-reset.md](./docs/pbis/active-alpha/PBI-586-greenfield-frontend-feature-module-architecture-reset.md)
+- [PBI-594-greenfield-frontend-css-architecture-contract.md](./docs/pbis/active-alpha/PBI-594-greenfield-frontend-css-architecture-contract.md)
 - [PBI-591-greenfield-frontend-shell-and-sidebar-rebuild.md](./docs/pbis/active-alpha/PBI-591-greenfield-frontend-shell-and-sidebar-rebuild.md)
 - [PBI-592-greenfield-frontend-grid-screen-rebuild.md](./docs/pbis/active-alpha/PBI-592-greenfield-frontend-grid-screen-rebuild.md)
 - [PBI-593-greenfield-frontend-inspector-and-selection-surface-rebuild.md](./docs/pbis/active-alpha/PBI-593-greenfield-frontend-inspector-and-selection-surface-rebuild.md)
@@ -37,6 +38,7 @@ The shared UI system should reflect these truths:
 - giant feature stylesheets should shrink materially
 - component families should be obvious and reusable
 - visual primitives should form a stable UI layer that feature code composes instead of re-creating
+- styling ownership should already follow the CSS architecture contract from [PBI-594-greenfield-frontend-css-architecture-contract.md](./docs/pbis/active-alpha/PBI-594-greenfield-frontend-css-architecture-contract.md)
 
 ## Locked decisions
 
@@ -59,6 +61,11 @@ This applies to:
 - context menu patterns
 - preview card shells
 - repeated button and icon-button variants
+- sidebar rows that differ only by tree depth, collapse affordance, drag target affordance, or node kind
+- media/image preview surfaces that differ only by surrounding chrome
+
+Legacy feature ownership is not a reason to keep things separate.
+If the tile preview, inspector preview, quick preview, or empty-preview shell are the same visual object with small behavior differences, they should be one component family.
 
 ### 3. Centralize styling around tokens and primitives
 The styling model should be:
@@ -97,6 +104,8 @@ Create or consolidate clear shared primitives for:
 - picker/list rows
 - media card and preview containers
 - modal and overlay shells
+- sidebar row/tree row primitives
+- reusable preview/image/media frame primitives
 
 ### Feature composition
 Features should compose those primitives instead of redefining them.
@@ -110,6 +119,15 @@ Use:
 
 Reduce `globals.css` to true globals only.
 
+## Start gate
+This PBI may start only when:
+- [PBI-586-greenfield-frontend-feature-module-architecture-reset.md](./docs/pbis/active-alpha/PBI-586-greenfield-frontend-feature-module-architecture-reset.md) is `Activated`
+- the rebuilt shell, grid, inspector, and media surfaces are stable enough that shared extraction will not fight ongoing architectural churn
+
+## Next rule
+This is the last frontend cleanup and consolidation stage.
+Execute it surface-by-surface; do not start a later rebuilt live slice from this sequence because there is none.
+
 ## Implementation changes
 - execute the work in patch-sized surface slices, not one broad refactor
 - start with sidebar and sidebar-owned items/components
@@ -117,6 +135,7 @@ Reduce `globals.css` to true globals only.
 - then continue through inspector, settings, tags, subscriptions, viewer, and other shared surfaces
 - audit repeated components across each slice before extracting shared primitives from it
 - extract one canonical implementation per repeated pattern
+- prefer one configurable primitive over several almost-identical feature components
 - centralize design tokens for spacing, typography, colors, surface states, and interaction states
 - reduce or split giant feature stylesheets where shared primitives should own the styling
 - remove dead comments, stale naming, and duplicated UI logic while preserving current behavior
@@ -125,12 +144,15 @@ Reduce `globals.css` to true globals only.
 ## Acceptance criteria
 - current visuals remain effectively the same
 - repeated component patterns have canonical implementations
+- visually/functionally equivalent UI parts have been merged even when they came from different legacy features
 - giant feature stylesheets are materially reduced
 - `globals.css` is reduced to true globals
 - naming and comments in the affected UI surface are clearer and current
 - shared UI primitives are the default abstraction layer for repeated patterns
 - duplicated styling and duplicated UI logic are materially reduced
 - each migrated surface was completed in a bounded slice with visual parity checked before the next slice started
+- finishing this PBI means the consolidated shared UI and styling system becomes the active default path before any further frontend cleanup expands scope
+- temporary TODOs are allowed only for cross-PBI boundaries already named in the dependency list; they do not allow the next Track A PBI to start early
 
 ## Tests
 - visual smoke/regression tests for main surfaces

@@ -36,12 +36,28 @@ The rebuilt inspector should:
 - keep selection-driven actions controller-owned
 - keep layout and rendering separate from data ownership
 
+The rebuilt inspector should not preserve a separate legacy preview implementation if the same visual object already exists in the rebuilt grid or viewer surface.
+If the inspector preview is just the same rounded media preview with different surrounding controls, it should share that preview primitive.
+Its styling should follow the CSS architecture contract in [PBI-594-greenfield-frontend-css-architecture-contract.md](./docs/pbis/active-alpha/PBI-594-greenfield-frontend-css-architecture-contract.md) instead of rebuilding inspector-specific copies of shared visual primitives.
+
+## Start gate
+This PBI may start only when:
+- [PBI-592-greenfield-frontend-grid-screen-rebuild.md](./docs/pbis/active-alpha/PBI-592-greenfield-frontend-grid-screen-rebuild.md) is `Activated`
+- canonical selection, entity-details, and selection-summary behavior is stable
+- preview and media primitive-family decisions for the rebuilt slice are already locked
+
+## Next rule
+Do not start [PBI-585-greenfield-frontend-media-consumption-reset.md](./docs/pbis/active-alpha/PBI-585-greenfield-frontend-media-consumption-reset.md) until this PBI is `Activated`.
+
 ## Acceptance criteria
 - the rebuilt inspector uses the rebuilt selection state
 - metadata and selection summary behavior are stable
 - tag/folder/notes/rating/source-url actions remain correct
 - parity is confirmed against the reference harness
 - the rebuilt inspector no longer depends on the legacy inspector architecture
+- preview and row primitives that are equivalent to rebuilt grid/sidebar/UI primitives are shared instead of rebuilt separately
+- finishing this PBI means the rebuilt inspector slice becomes the active default path before the next rebuilt live slice starts
+- temporary TODOs are allowed only for cross-PBI boundaries already named in the dependency list; they do not allow the next Track A PBI to start early
 
 ## Tests
 - fixture rendering tests for single-item, multi-item, collection, and virtual-selection states

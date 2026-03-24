@@ -1,0 +1,86 @@
+/*
+ * Design tokens — single source of truth for all visual values.
+ * Derived from the reference application-matched design system (legacy globals.css).
+ */
+
+:root {
+  /* ── Colors ─────────────────────────────────────────────── */
+  --color-primary: #3297FF;
+  --color-primary-10: rgba(50, 151, 255, 0.10);
+  --color-primary-20: rgba(50, 151, 255, 0.20);
+  --color-primary-30: rgba(50, 151, 255, 0.30);
+  --color-primary-50: rgba(50, 151, 255, 0.50);
+  --color-primary-60: rgba(50, 151, 255, 0.60);
+
+  /* ── Surfaces ───────────────────────────────────────────── */
+  --color-bg-app: rgb(24, 25, 27);
+  --color-surface-1: rgb(36, 37, 40);
+  --color-surface-2: #2a2a2e;
+  --color-surface-hover: rgba(248, 249, 251, 0.05);
+  --color-surface-active: rgba(248, 249, 251, 0.10);
+  --color-surface-drop: var(--color-primary-30);
+
+  /* ── Text ────────────────────────────────────────────────── */
+  --color-text-primary: rgba(255, 255, 255, 1.0);
+  --color-text-secondary: rgba(255, 255, 255, 0.72);
+  --color-text-tertiary: rgba(255, 255, 255, 0.50);
+  --color-text-disabled: rgba(255, 255, 255, 0.22);
+
+  /* ── Borders ─────────────────────────────────────────────── */
+  --color-border-primary: rgba(255, 255, 255, 0.14);
+  --color-border-secondary: rgba(255, 255, 255, 0.08);
+  --color-border-focus: var(--color-primary-60);
+
+  /* ── Black overlays ──────────────────────────────────────── */
+  --color-black-10: rgba(0, 0, 0, 0.10);
+  --color-black-20: rgba(0, 0, 0, 0.20);
+  --color-black-30: rgba(0, 0, 0, 0.30);
+
+  /* ── Typography ──────────────────────────────────────────── */
+  --font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-family-mono: 'SF Mono', 'Cascadia Code', 'Fira Code', ui-monospace, monospace;
+  --font-weight-regular: 400;
+  --font-weight-medium: 500;
+  --font-weight-bold: 600;
+  --font-size-xs: 10px;
+  --font-size-sm: 12px;
+  --font-size-md: 12px;
+  --font-size-lg: 14px;
+  --font-size-xl: 16px;
+
+  /* ── Spacing ─────────────────────────────────────────────── */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+
+  /* ── Radius ──────────────────────────────────────────────── */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+
+  /* ── Shadows ─────────────────────────────────────────────── */
+  --shadow-1: 0 1px 3px var(--color-black-10);
+  --shadow-2: 0 4px 12px var(--color-black-30);
+
+  /* ── Motion ──────────────────────────────────────────────── */
+  --ease-default: cubic-bezier(0.4, 0, 0.22, 1);
+  --ease-standard: cubic-bezier(0.4, 0, 0.2, 1);
+  --duration-fast: 50ms;
+  --duration-normal: 200ms;
+
+  /* ── Layers ──────────────────────────────────────────────── */
+  --layer-base: 0;
+  --layer-overlay: 1000;
+  --layer-menu: 10000;
+  --layer-tooltip: 10001;
+
+  /* ── Sidebar-specific (reference application-matched) ────────────────────── */
+  --sidebar-width: 280px;
+  --sidebar-row-height: 26px;
+  --sidebar-indent: 18px;
+  --sidebar-icon-size: 16px;
+}

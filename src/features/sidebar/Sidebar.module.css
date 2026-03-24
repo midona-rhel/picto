@@ -1,0 +1,26 @@
+/* Sidebar feature layout — composition only, no row styling. */
+
+.root {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+  font-size: var(--font-size-md);
+  background: var(--color-surface-1);
+}
+
+.scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+  padding: var(--space-2) 2px var(--space-6) 16px;
+}
+
+
+.loadingMessage {
+  padding: var(--space-4);
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-sm);
+}

@@ -38,10 +38,23 @@ The rebuilt grid screen should have:
 - one renderer boundary
 - one viewer bridge
 
+The rebuilt grid screen should also avoid inventing its own isolated visual primitives when equivalent ones already exist elsewhere in the rebuilt frontend.
+If the grid tile preview is the same rounded media preview used by inspector or viewer-adjacent UI, it should be one shared preview family with small variants.
+Its styling should follow the CSS architecture contract in [PBI-594-greenfield-frontend-css-architecture-contract.md](./docs/pbis/active-alpha/PBI-594-greenfield-frontend-css-architecture-contract.md) instead of recreating feature-owned CSS for shared primitives.
+
 The rebuilt grid screen should not depend on:
 - the legacy `ImageGrid.tsx` architecture
 - legacy slim-grid contracts
 - giant prop bags from the app shell
+
+## Start gate
+This PBI may start only when:
+- [PBI-591-greenfield-frontend-shell-and-sidebar-rebuild.md](./docs/pbis/active-alpha/PBI-591-greenfield-frontend-shell-and-sidebar-rebuild.md) is `Activated`
+- [PBI-584-greenfield-frontend-grid-query-and-selection-reset.md](./docs/pbis/active-alpha/PBI-584-greenfield-frontend-grid-query-and-selection-reset.md), [PBI-583-greenfield-frontend-runtime-reconciliation-reset.md](./docs/pbis/active-alpha/PBI-583-greenfield-frontend-runtime-reconciliation-reset.md), and [PBI-587-greenfield-frontend-state-ownership-reset.md](./docs/pbis/active-alpha/PBI-587-greenfield-frontend-state-ownership-reset.md) are `Implemented` and review-clean for the grid path
+- grid parity fixtures are complete enough to compare real grid states
+
+## Next rule
+Do not start [PBI-593-greenfield-frontend-inspector-and-selection-surface-rebuild.md](./docs/pbis/active-alpha/PBI-593-greenfield-frontend-inspector-and-selection-surface-rebuild.md) until this PBI is `Activated`.
 
 ## Acceptance criteria
 - the rebuilt grid screen is a clean feature root
@@ -49,6 +62,9 @@ The rebuilt grid screen should not depend on:
 - selection-driven actions target what the user actually selected
 - parity is confirmed against the reference harness
 - the rebuilt grid no longer depends on the legacy `ImageGrid.tsx` architecture
+- tile/chrome primitives that are visually/functionally equivalent to inspector or preview surfaces are shared instead of re-implemented
+- finishing this PBI means the rebuilt grid slice becomes the active default path before the next rebuilt live slice starts
+- temporary TODOs are allowed only for cross-PBI boundaries already named in the dependency list; they do not allow the next Track A PBI to start early
 
 ## Tests
 - fixture rendering tests for grid states
