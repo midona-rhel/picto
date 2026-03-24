@@ -46,7 +46,7 @@ describe('sidebar applier reconciliation', () => {
         status_changed: true,
         domains: ['sidebar', 'files', 'smart_folders'] as Domain[],
       }),
-      { sidebar_counts: { all_active: 50, inbox: 3, trash: 1 } },
+      { sidebar_counts: { active: 50, inbox: 3, trash: 1 } },
     ));
     expect(result).toContain('sidebar/tree');
     expect(result).toContain('sidebar/counts');
@@ -114,7 +114,7 @@ describe('grid scope refresh targeting', () => {
         domains: ['sidebar', 'files', 'smart_folders'] as Domain[],
         extra_grid_scopes: ['system:inbox'],
       }),
-      { sidebar_counts: { all_active: 50, inbox: 4, trash: 1 } },
+      { sidebar_counts: { active: 50, inbox: 4, trash: 1 } },
       'subscription_import',
     ));
     expect(result).toContain('grid/system:inbox');

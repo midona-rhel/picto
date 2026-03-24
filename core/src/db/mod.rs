@@ -188,6 +188,15 @@ impl LibraryDatabase {
         self.with_write(|conn| write::collections::remove_members(conn, collection_id, member_entity_ids))
     }
 
+    pub fn reorder_collection_members(
+        &self,
+        collection_id: i64,
+        ordered_entity_ids: &[i64],
+    ) -> Result<(), String> {
+        let ids = ordered_entity_ids.to_vec();
+        self.with_write(move |conn| write::collections::reorder_members(conn, collection_id, &ids))
+    }
+
     pub fn split_collection(&self, collection_id: i64) -> Result<Vec<i64>, String> {
         self.with_write(|conn| write::collections::split_collection(conn, collection_id))
     }
@@ -237,8 +246,41 @@ impl LibraryDatabase {
         self.with_write(|conn| write::folders::create_folder(conn, name, parent_id, icon, color, &now))
     }
 
+    pub fn update_folder(
+        &self,
+        folder_id: i64,
+        name: Option<&str>,
+        icon: Option<&str>,
+        color: Option<&str>,
+        auto_tags: Option<&str>,
+    ) -> Result<(), String> {
+        let now = chrono::Utc::now().to_rfc3339();
+        let n = name.map(str::to_string);
+        let i = icon.map(str::to_string);
+        let c = color.map(str::to_string);
+        let a = auto_tags.map(str::to_string);
+        self.with_write(move |conn| {
+            write::folders::update_folder(conn, folder_id, n.as_deref(), i.as_deref(), c.as_deref(), a.as_deref(), &now)
+        })
+    }
+
     pub fn delete_folder(&self, folder_id: i64) -> Result<(), String> {
         self.with_write(|conn| write::folders::delete_folder(conn, folder_id))
+    }
+
+    pub fn move_folder(&self, folder_id: i64, new_parent_id: Option<i64>) -> Result<(), String> {
+        let now = chrono::Utc::now().to_rfc3339();
+        self.with_write(move |conn| write::folders::move_folder(conn, folder_id, new_parent_id, &now))
+    }
+
+    pub fn reorder_folders(&self, moves: &[(i64, i64)]) -> Result<(), String> {
+        let m = moves.to_vec();
+        self.with_write(move |conn| write::folders::reorder_folders(conn, &m))
+    }
+
+    pub fn reorder_folder_items(&self, folder_id: i64, moves: &[(i64, i64)]) -> Result<(), String> {
+        let m = moves.to_vec();
+        self.with_write(move |conn| write::folders::reorder_members(conn, folder_id, &m))
     }
 
     pub fn add_folder_members(
@@ -275,8 +317,326 @@ impl LibraryDatabase {
         })
     }
 
+    pub fn update_smart_folder(
+        &self,
+        smart_folder_id: i64,
+        name: Option<&str>,
+        predicate_json: Option<&str>,
+        icon: Option<&str>,
+        color: Option<&str>,
+        sort_field: Option<&str>,
+        sort_order: Option<&str>,
+    ) -> Result<(), String> {
+        let now = chrono::Utc::now().to_rfc3339();
+        let n = name.map(str::to_string);
+        let p = predicate_json.map(str::to_string);
+        let i = icon.map(str::to_string);
+        let c = color.map(str::to_string);
+        let sf = sort_field.map(str::to_string);
+        let so = sort_order.map(str::to_string);
+        self.with_write(move |conn| {
+            write::smart_folders::update_smart_folder(
+                conn, smart_folder_id,
+                n.as_deref(), p.as_deref(), i.as_deref(), c.as_deref(),
+                sf.as_deref(), so.as_deref(), &now,
+            )
+        })
+    }
+
     pub fn delete_smart_folder(&self, smart_folder_id: i64) -> Result<(), String> {
         self.with_write(|conn| write::smart_folders::delete_smart_folder(conn, smart_folder_id))
+    }
+
+    pub fn move_smart_folder(&self, smart_folder_id: i64, new_parent_id: Option<i64>) -> Result<(), String> {
+        let now = chrono::Utc::now().to_rfc3339();
+        self.with_write(move |conn| write::smart_folders::move_smart_folder(conn, smart_folder_id, new_parent_id, &now))
+    }
+
+    pub fn reorder_smart_folders(&self, moves: &[(i64, i64)]) -> Result<(), String> {
+        let m = moves.to_vec();
+        self.with_write(move |conn| write::smart_folders::reorder_smart_folders(conn, &m))
+    }
+
+    // ── Bulk target operations (for engine query_results targets) ──
+
+    pub fn resolve_entity_hashes(&self, hashes: &[String]) -> Result<Vec<i64>, String> {
+        self.with_read(|conn| {
+            let mut ids = Vec::with_capacity(hashes.len());
+            let mut stmt = conn.prepare_cached(
+                "SELECT entity_id FROM media_entity WHERE entity_hash = ?1",
+            )?;
+            for hash in hashes {
+                if let Ok(id) = stmt.query_row([hash], |row| row.get::<_, i64>(0)) {
+                    ids.push(id);
+                }
+            }
+            Ok(ids)
+        })
+    }
+
+    pub fn get_entity_hashes_by_ids(&self, ids: &[i64]) -> Result<Vec<String>, String> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        self.with_read(|conn| {
+            let placeholders: Vec<String> = (1..=ids.len()).map(|i| format!("?{i}")).collect();
+            let sql = format!(
+                "SELECT entity_hash FROM media_entity WHERE entity_id IN ({})",
+                placeholders.join(",")
+            );
+            let mut stmt = conn.prepare(&sql)?;
+            let params: Vec<&dyn rusqlite::types::ToSql> =
+                ids.iter().map(|id| id as &dyn rusqlite::types::ToSql).collect();
+            let rows = stmt.query_map(params.as_slice(), |row| row.get::<_, String>(0))?;
+            rows.collect()
+        })
+    }
+
+    pub fn get_entity_grid_items(
+        &self,
+        entity_hashes: &[String],
+    ) -> Result<Vec<types::EntityGridItem>, String> {
+        let hashes = entity_hashes.to_vec();
+        self.with_read(|conn| query::grid::get_entity_grid_items_by_hash(conn, &hashes))
+    }
+
+    pub fn patch_entity_metadata(
+        &self,
+        entity_ids: &[i64],
+        patch: &types::MediaEntityPatch,
+    ) -> Result<types::EntityChange, String> {
+        let now = chrono::Utc::now().to_rfc3339();
+        self.with_write(|conn| {
+            write::entities::patch_entity_metadata(
+                conn,
+                entity_ids,
+                patch.name.as_deref(),
+                patch.rating.map(Some),
+                patch.notes.as_ref().map(|v| serde_json::to_string(v).unwrap_or_default()).as_deref(),
+                patch.source_urls.as_ref().map(|urls| serde_json::to_string(urls).unwrap_or_default()).as_deref(),
+                &now,
+                types::ExpansionMode::EntityAndDescendants,
+            )
+        })
+    }
+
+    pub fn patch_entity_metadata_bulk(
+        &self,
+        query: &types::EntityViewQuery,
+        exclusions: &[String],
+        patch: &types::MediaEntityPatch,
+    ) -> Result<types::EntityChange, String> {
+        let now = chrono::Utc::now().to_rfc3339();
+        let q = query.clone();
+        let excl = exclusions.to_vec();
+        let p = patch.clone();
+        let bm = self.bitmaps.clone();
+        self.with_write(move |conn| {
+            write::bulk::populate_bulk_target(conn, &q, &excl, &bm)?;
+            write::bulk::expand_bulk_target(conn, types::ExpansionMode::EntityAndDescendants)?;
+            let ids = write::bulk::collect_bulk_ids(conn)?;
+            write::entities::patch_entity_metadata(
+                conn, &ids,
+                p.name.as_deref(), p.rating.map(Some),
+                p.notes.as_ref().map(|v| serde_json::to_string(v).unwrap_or_default()).as_deref(),
+                p.source_urls.as_ref().map(|u| serde_json::to_string(u).unwrap_or_default()).as_deref(),
+                &now, types::ExpansionMode::EntityOnly,
+            )
+        })
+    }
+
+    pub fn set_entity_status_bulk(
+        &self,
+        query: &types::EntityViewQuery,
+        exclusions: &[String],
+        status: i64,
+    ) -> Result<types::StatusChange, String> {
+        let now = chrono::Utc::now().to_rfc3339();
+        let q = query.clone();
+        let excl = exclusions.to_vec();
+        let bm = self.bitmaps.clone();
+        self.with_write(move |conn| {
+            write::bulk::populate_bulk_target(conn, &q, &excl, &bm)?;
+            write::bulk::expand_bulk_target(conn, types::ExpansionMode::EntityAndDescendants)?;
+            let ids = write::bulk::collect_bulk_ids(conn)?;
+            write::entities::set_entity_status(conn, &ids, status, types::ExpansionMode::EntityOnly, &now)
+        })
+    }
+
+    pub fn delete_entities_bulk(
+        &self,
+        query: &types::EntityViewQuery,
+        exclusions: &[String],
+    ) -> Result<types::EntityChange, String> {
+        let q = query.clone();
+        let excl = exclusions.to_vec();
+        let bm = self.bitmaps.clone();
+        self.with_write(move |conn| {
+            write::bulk::populate_bulk_target(conn, &q, &excl, &bm)?;
+            let ids = write::bulk::collect_bulk_ids(conn)?;
+            write::entities::delete_entities(conn, &ids)
+        })
+    }
+
+    pub fn add_tags_bulk(
+        &self,
+        query: &types::EntityViewQuery,
+        exclusions: &[String],
+        tags: &[String],
+        expansion: types::ExpansionMode,
+    ) -> Result<types::TagChange, String> {
+        let q = query.clone();
+        let excl = exclusions.to_vec();
+        let t = tags.to_vec();
+        let bm = self.bitmaps.clone();
+        self.with_write(move |conn| {
+            write::bulk::populate_bulk_target(conn, &q, &excl, &bm)?;
+            write::bulk::expand_bulk_target(conn, expansion)?;
+            let ids = write::bulk::collect_bulk_ids(conn)?;
+            write::tags::add_tags(conn, &ids, &t, types::ExpansionMode::EntityOnly)
+        })
+    }
+
+    pub fn remove_tags_bulk(
+        &self,
+        query: &types::EntityViewQuery,
+        exclusions: &[String],
+        tags: &[String],
+        expansion: types::ExpansionMode,
+    ) -> Result<types::TagChange, String> {
+        let q = query.clone();
+        let excl = exclusions.to_vec();
+        let t = tags.to_vec();
+        let bm = self.bitmaps.clone();
+        self.with_write(move |conn| {
+            write::bulk::populate_bulk_target(conn, &q, &excl, &bm)?;
+            write::bulk::expand_bulk_target(conn, expansion)?;
+            let ids = write::bulk::collect_bulk_ids(conn)?;
+            write::tags::remove_tags(conn, &ids, &t, types::ExpansionMode::EntityOnly)
+        })
+    }
+
+    pub fn add_folder_members_bulk(
+        &self,
+        folder_id: i64,
+        query: &types::EntityViewQuery,
+        exclusions: &[String],
+        expansion: types::ExpansionMode,
+    ) -> Result<types::FolderMembershipChange, String> {
+        let q = query.clone();
+        let excl = exclusions.to_vec();
+        let bm = self.bitmaps.clone();
+        self.with_write(move |conn| {
+            write::bulk::populate_bulk_target(conn, &q, &excl, &bm)?;
+            write::bulk::expand_bulk_target(conn, expansion)?;
+            let ids = write::bulk::collect_bulk_ids(conn)?;
+            write::folders::add_members(conn, folder_id, &ids, types::ExpansionMode::EntityOnly)
+        })
+    }
+
+    pub fn remove_folder_members_bulk(
+        &self,
+        folder_id: i64,
+        query: &types::EntityViewQuery,
+        exclusions: &[String],
+        expansion: types::ExpansionMode,
+    ) -> Result<types::FolderMembershipChange, String> {
+        let q = query.clone();
+        let excl = exclusions.to_vec();
+        let bm = self.bitmaps.clone();
+        self.with_write(move |conn| {
+            write::bulk::populate_bulk_target(conn, &q, &excl, &bm)?;
+            write::bulk::expand_bulk_target(conn, expansion)?;
+            let ids = write::bulk::collect_bulk_ids(conn)?;
+            write::folders::remove_members(conn, folder_id, &ids, types::ExpansionMode::EntityOnly)
+        })
+    }
+
+    pub fn get_selection_summary_from_query(
+        &self,
+        query: &types::EntityViewQuery,
+        exclusions: &[String],
+    ) -> Result<crate::engine::selection::SelectionSummary, String> {
+        // Use the same query builder as the grid with no pagination
+        // to get an accurate total count including all filters.
+        let mut unbounded = query.clone();
+        unbounded.page = types::QueryPage { limit: i64::MAX, cursor: None };
+
+        let result = self.query_entity_view(&unbounded)?;
+        let total = result.total_count.unwrap_or(result.items.len() as i64);
+
+        // Subtract exclusions from the full set
+        let excluded_count = if exclusions.is_empty() {
+            0
+        } else {
+            let excl_set: std::collections::HashSet<&str> =
+                exclusions.iter().map(|s| s.as_str()).collect();
+            result.items.iter().filter(|i| excl_set.contains(i.entity_hash.as_str())).count() as i64
+        };
+
+        Ok(crate::engine::selection::SelectionSummary {
+            total_count: total - excluded_count,
+            entity_hashes: Vec::new(),
+        })
+    }
+
+    // ── Deferred work ────────────────────────────────────────────
+
+    pub fn get_deferred_work_summary(
+        &self,
+    ) -> Result<crate::engine::deferred::DeferredWorkSummary, String> {
+        self.with_read(|conn| {
+            let pending: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM deferred_work_item WHERE status = 'pending'",
+                [],
+                |r| r.get(0),
+            )?;
+            let running: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM deferred_work_item WHERE status = 'running'",
+                [],
+                |r| r.get(0),
+            )?;
+            let failed: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM deferred_work_item WHERE status = 'pending' AND attempt_count > 0",
+                [],
+                |r| r.get(0),
+            )?;
+            Ok(crate::engine::deferred::DeferredWorkSummary {
+                pending_count: pending,
+                running_count: running,
+                failed_count: failed,
+            })
+        })
+    }
+
+    pub fn retry_deferred_work(&self, entity_hash: &str) -> Result<(), String> {
+        let h = entity_hash.to_string();
+        let now = chrono::Utc::now().to_rfc3339();
+        self.with_write(|conn| {
+            conn.execute(
+                "UPDATE deferred_work_item
+                 SET status = 'pending', attempt_count = 0, available_at = ?1, last_error = NULL
+                 WHERE entity_hash = ?2",
+                rusqlite::params![now, h],
+            )?;
+            Ok(())
+        })
+    }
+
+    /// Get the entity_hash of a collection's primary member (first by ordinal).
+    pub fn get_primary_member_hash(&self, collection_hash: &str) -> Result<Option<String>, String> {
+        let h = collection_hash.to_string();
+        self.with_read(|conn| {
+            use rusqlite::OptionalExtension;
+            conn.query_row(
+                "SELECT pm.entity_hash FROM media_entity me
+                 JOIN media_entity pm ON pm.entity_id = me.primary_member_entity_id
+                 WHERE me.entity_hash = ?1 AND me.entity_kind = 'collection'",
+                [&h],
+                |row| row.get(0),
+            )
+            .optional()
+        })
     }
 
     // ── Query operations ─────────────────────────────────────────

@@ -6,6 +6,17 @@ P1
 ## AI-generated caveat
 This document is based on an in-repo audit of the current export commands and media I/O helpers. It is intentionally narrow. Export is treated as a job domain, not as an ad hoc file helper.
 
+## Lifecycle
+- `Implemented` when export exists as a real job boundary starting from `EntityTarget`.
+- `Activatable` when `PBI-568`, `PBI-569`, and `PBI-578` are implemented enough for export to use canonical targets and media delivery rules.
+- `Activated` when the live export path uses the new export job boundary by default.
+- `Legacy removed` when replaced ad hoc export/media-I/O paths for that activated slice are deleted.
+
+Activation depends on:
+- [PBI-568-greenfield-backend-engine-boundary-reset.md](./docs/pbis/active-alpha/PBI-568-greenfield-backend-engine-boundary-reset.md)
+- [PBI-569-greenfield-media-delivery-service.md](./docs/pbis/active-alpha/PBI-569-greenfield-media-delivery-service.md)
+- [PBI-578-bulk-entity-target-and-selection-reset.md](./docs/pbis/active-alpha/PBI-578-bulk-entity-target-and-selection-reset.md)
+
 ## Problem
 Export is currently mixed into media I/O helpers and shaped too much like file operations instead of one entity-targeted job flow.
 

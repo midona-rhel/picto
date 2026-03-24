@@ -113,7 +113,7 @@ describe('multi-step state-change workflows', () => {
   it('sidebar_counts in receipt produces sidebar/counts key', () => {
     const receipt = makeEvent(
       makeChanges({ status_changed: true }),
-      { sidebar_counts: { all_active: 50, inbox: 3, trash: 1 } },
+      { sidebar_counts: { active: 50, inbox: 3, trash: 1 } },
     );
 
     const targets = keys(receipt);
@@ -159,7 +159,7 @@ describe('multi-step state-change workflows', () => {
     const event2 = makeEvent(makeChanges({
       domains: ['sidebar', 'folders'] as Domain[],
       folder_membership_changed: [5],
-    }), { sidebar_counts: { all_active: 100, inbox: 3, trash: 1 } }, 2);
+    }), { sidebar_counts: { active: 100, inbox: 3, trash: 1 } }, 2);
 
     const targets = accumulateRefreshTargets([event1, event2]);
 
@@ -195,7 +195,7 @@ describe('multi-step state-change workflows', () => {
       domains: ['sidebar', 'files', 'smart_folders'] as Domain[],
       entity_hashes: ['sub_h1', 'sub_h2'],
       extra_grid_scopes: ['system:inbox'],
-    }), { sidebar_counts: { all_active: 52, inbox: 5, trash: 1 } }, 1);
+    }), { sidebar_counts: { active: 52, inbox: 5, trash: 1 } }, 1);
 
     const targets = keys(receipt);
 

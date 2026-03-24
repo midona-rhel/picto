@@ -21,6 +21,9 @@ use crate::types::{RunningSubscriptions, SubTerminalStatuses};
 pub struct AppState {
     pub db: Arc<SqliteDatabase>,
     pub blob_store: Arc<BlobStore>,
+    /// The new application engine boundary. All new code should call
+    /// `engine` methods instead of going through `db` directly.
+    pub engine: Arc<crate::engine::ApplicationEngine>,
     pub settings: SettingsStore,
     pub rate_limiter: RateLimiter,
     pub running_subscriptions: RunningSubscriptions,
@@ -121,9 +124,19 @@ pub async fn open_library(library_root: PathBuf) -> Result<Arc<AppState>, String
     )
     .await;
 
+    // Open the new database boundary alongside the old one.
+    // The engine wraps LibraryDatabase; old dispatch still uses SqliteDatabase
+    // until the transport adapter rewrite replaces it.
+    let new_db = Arc::new(
+        crate::db::LibraryDatabase::open(&library_root)
+            .map_err(|e| format!("Failed to open new LibraryDatabase: {e}"))?,
+    );
+    let engine = Arc::new(crate::engine::ApplicationEngine::new(new_db));
+
     let state = Arc::new(AppState {
         db: library_db,
         blob_store,
+        engine,
         settings,
         rate_limiter,
         running_subscriptions,

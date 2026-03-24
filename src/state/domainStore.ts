@@ -48,7 +48,7 @@ interface DomainState {
   // Actions
   fetchSidebarTree: () => Promise<void>;
   requestRefresh: () => void;
-  applySidebarCounts: (counts: { all_active: number; inbox: number; trash: number }) => void;
+  applySidebarCounts: (counts: { active: number; inbox: number; trash: number }) => void;
   setDuplicatesCount: (count: number) => void;
   /** Eagerly adjust the sidebar tag count (e.g. +1 on create, -1 on delete). */
   adjustTagsCount: (delta: number) => void;
@@ -245,7 +245,7 @@ export const useDomainStore = create<DomainState>((set, get) => ({
 
   applySidebarCounts: (counts) => {
     set({
-      allActiveCount: counts.all_active,
+      allActiveCount: counts.active,
       inboxCount: counts.inbox,
       trashCount: counts.trash,
     });

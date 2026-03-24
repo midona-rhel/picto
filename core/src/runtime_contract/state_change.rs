@@ -145,7 +145,7 @@ pub struct StateChanges {
 #[ts(export_to = "../../src/shared/types/generated/runtime-contract/")]
 pub struct SidebarCounts {
     #[ts(type = "number")]
-    pub all_active: i64,
+    pub active: i64,
     #[ts(type = "number")]
     pub inbox: i64,
     #[ts(type = "number")]

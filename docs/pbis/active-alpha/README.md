@@ -60,15 +60,30 @@
 - PBI-579-cross-layer-testing-rules.md
 - PBI-580-cross-layer-comment-rules.md
 
+- Reset activation order:
+- 1. Activate prerequisites: PBI-572, PBI-579, PBI-580
+- 2. Implement foundations: PBI-567, PBI-568, PBI-578
+- 3. Activate frontend core entity flow: PBI-581, PBI-582, PBI-587, PBI-583, PBI-584, then activate PBI-567/PBI-568/PBI-578 together
+- 4. Activate media/platform layers: PBI-569, PBI-585, PBI-576
+- 5. Activate downstream subsystems: PBI-573, PBI-574, PBI-575, PBI-577
+- 6. Activate frontend structural cleanup: PBI-586, then PBI-571
+
 - Reset program:
 - PBI-567-greenfield-library-database-reset.md
 - PBI-568-greenfield-backend-engine-boundary-reset.md
 - PBI-569-greenfield-media-delivery-service.md
-- PBI-570-greenfield-frontend-boundary-and-state-reset.md
-- PBI-571-frontend-component-and-styling-consolidation-reset.md
+- PBI-570-greenfield-frontend-reset-program-index.md
+- PBI-571-frontend-shared-component-and-styling-system-reset.md
 - PBI-573-greenfield-import-and-ingest-reset.md
 - PBI-574-greenfield-export-job-reset.md
 - PBI-575-greenfield-subscriptions-engine-and-recovery-reset.md
 - PBI-576-greenfield-deferred-work-and-background-processing-reset.md
 - PBI-577-greenfield-duplicates-and-rejected-media-reset.md
 - PBI-578-bulk-entity-target-and-selection-reset.md
+- PBI-581-greenfield-frontend-api-layer-reset.md
+- PBI-582-greenfield-frontend-controller-boundary-reset.md
+- PBI-583-greenfield-frontend-runtime-reconciliation-reset.md
+- PBI-584-greenfield-frontend-grid-query-and-selection-reset.md
+- PBI-585-greenfield-frontend-media-consumption-reset.md
+- PBI-586-greenfield-frontend-feature-module-architecture-reset.md
+- PBI-587-greenfield-frontend-state-ownership-reset.md

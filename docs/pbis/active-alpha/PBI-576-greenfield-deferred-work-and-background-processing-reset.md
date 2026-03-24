@@ -6,6 +6,16 @@ P1
 ## AI-generated caveat
 This document supersedes the old narrow deferred-work queue idea by treating background work as a shared platform concern. The implementing engineer should keep it small, explicit, and durable.
 
+## Lifecycle
+- `Implemented` when one background-work platform exists with durable queue/task semantics.
+- `Activatable` when `PBI-567` and `PBI-568` are implemented enough that domains can schedule work through the new boundaries.
+- `Activated` when the intended heavy-work flows use the shared background-work platform by default.
+- `Legacy removed` when replaced domain-specific queue/runtime paths for that activated slice are deleted.
+
+Activation depends on:
+- [PBI-567-greenfield-library-database-reset.md](./docs/pbis/active-alpha/PBI-567-greenfield-library-database-reset.md)
+- [PBI-568-greenfield-backend-engine-boundary-reset.md](./docs/pbis/active-alpha/PBI-568-greenfield-backend-engine-boundary-reset.md)
+
 ## Problem
 The application still treats several heavy or long-running operations as special cases instead of one background-processing model.
 

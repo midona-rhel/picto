@@ -326,6 +326,14 @@ export interface TypedCommandMap {
   remove_tags_selection: { input: RemoveTagsSelectionInput; output: number };
   get_selection_summary: { input: GetSelectionSummaryInput; output: unknown };
   update_selection_metadata: { input: UpdateSelectionMetadataInput; output: number };
+  // engine canonical commands
+  query_entity_view: { input: Record<string, unknown>; output: unknown };
+  patch_media_entities: { input: Record<string, unknown>; output: unknown };
+  apply_entity_tags: { input: Record<string, unknown>; output: unknown };
+  update_folder_membership: { input: Record<string, unknown>; output: unknown };
+  resolve_entity_asset: { input: Record<string, unknown>; output: unknown };
+  get_deferred_work_summary: { input: Record<string, never>; output: unknown };
+  retry_deferred_work: { input: Record<string, unknown>; output: unknown };
   // grid
   get_grid_page_slim: { input: GetGridPageSlimInput; output: unknown };
   get_entity_details: { input: GetEntityInput; output: unknown };

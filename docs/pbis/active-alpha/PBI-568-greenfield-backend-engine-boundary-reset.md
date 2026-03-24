@@ -6,8 +6,19 @@ P1
 ## AI-generated caveat
 This document is based on an in-repo audit of the current backend engine surface plus product intent clarified during review. It is intentionally concrete and decision-complete, but it is still AI-generated planning. The implementing engineer should simplify further where that preserves the same API and behavior.
 
+## Lifecycle
+- `Implemented` when `core/src/engine/**` exists, canonical engine methods are real, and transport can call them.
+- `Activatable` when `PBI-567` is implemented, `PBI-578` bulk-target semantics are implemented for the intended commands, and the core frontend boundary slice of `PBI-570` can call the canonical engine commands.
+- `Activated` when the live core entity flow uses canonical engine commands by default.
+- `Legacy removed` when old behavior-owning dispatch handlers for that activated slice are deleted.
+
+Activation depends on:
+- [PBI-567-greenfield-library-database-reset.md](./docs/pbis/active-alpha/PBI-567-greenfield-library-database-reset.md)
+- [PBI-578-bulk-entity-target-and-selection-reset.md](./docs/pbis/active-alpha/PBI-578-bulk-entity-target-and-selection-reset.md)
+- [PBI-570-greenfield-frontend-reset-program-index.md](./docs/pbis/active-alpha/PBI-570-greenfield-frontend-reset-program-index.md)
+
 ## Problem
-The current backend engine still exposes too much of its storage and transport history instead of one clean application-facing model.
+The current backend behavior layer still exposes too much of its storage and transport history instead of one clean application-facing model.
 
 Current problems:
 - the public surface is larger than the product model actually needs
@@ -19,7 +30,7 @@ Current problems:
 - the backend still makes some callers think in file terms when the product now thinks in entity terms
 - the engine boundary is not yet strict enough to cleanly separate app behavior from storage and transport details
 
-This PBI is the engine-side companion to the greenfield database reset. The database PBI defines what canonical data exists. This PBI defines how the application is allowed to talk to that data.
+This PBI is the engine-side companion to the greenfield database reset. The database PBI defines what canonical data exists. This PBI defines the one application engine that is allowed to talk to that data.
 
 Media delivery is intentionally split out into the greenfield media delivery service PBI. PBI-568 should define backend behavior and public APIs, not absorb asset transport and streaming concerns into the same document.
 
@@ -32,11 +43,18 @@ The backend engine should reflect these application rules:
 - deferred work is a separate engine concern, not something hidden inside normal entity reads
 - naming should match the frontend model and remain stable
 - the engine API should survive a future transport change without changing app behavior
+- the engine owns behavior, expansion, state-change emission, and projection scheduling
+- the engine coordinates bounded services; it does not force every subsystem to be one big database-shaped module
+- transport code only deserializes input, calls the engine, and serializes output
 
 ## Locked decisions
 
 ### 1. One entity-centric engine surface
 The engine should expose intent-shaped APIs, not table-shaped APIs.
+
+Locked rule:
+- `ApplicationEngine` is the single backend entry point for application behavior above `LibraryDatabase`
+- `ApplicationEngine` may depend on multiple typed backend services, not just `LibraryDatabase`
 
 Keep these public categories:
 - `query_entity_view(query)`
@@ -53,6 +71,30 @@ Keep these public categories:
 
 Subscriptions get their own follow-up PBI. Do not let subscription-specific engine shape bloat this reset.
 
+Concrete engine surface:
+
+```rust
+// Entity reads
+fn query_entity_view(&self, query: EntityViewQuery) -> Result<EntityViewPage>;
+fn get_entity_details(&self, entity_hash: &str) -> Result<Option<EntityDetails>>;
+fn get_entity_grid_items(&self, entity_hashes: &[String]) -> Result<Vec<EntityGridItem>>;
+
+// Entity writes
+fn patch_media_entities(&self, target: EntityTarget, patch: MediaEntityPatch) -> Result<EntityChange>;
+fn set_entity_status(&self, target: EntityTarget, status: i64) -> Result<StatusChange>;
+fn delete_entities(&self, target: EntityTarget) -> Result<EntityChange>;
+
+// Tags / folders
+fn apply_entity_tags(&self, target: EntityTarget, operation: TagOperation, tags: &[String]) -> Result<TagChange>;
+fn update_folder_membership(&self, target: EntityTarget, folder_id: i64, operation: MembershipOperation) -> Result<FolderMembershipChange>;
+
+// Assets / selection / deferred work
+fn resolve_entity_asset(&self, entity_hash: &str, role: AssetRole) -> Result<EntityAssetResult>;
+fn get_selection_summary(&self, target: EntityTarget) -> Result<SelectionSummary>;
+fn get_deferred_work_summary(&self) -> Result<DeferredWorkSummary>;
+fn retry_deferred_work(&self, entity_hash: &str) -> Result<()>;
+```
+
 ### 1a. The engine API is independent of transport
 The engine surface is an app API, not a desktop IPC API.
 
@@ -62,6 +104,28 @@ Rules:
 - filesystem paths, SQLite ids, and other storage or host-process details must not leak through the public engine API unless they are true product concepts
 
 The important split is not “frontend process vs backend process”. The important split is “app behavior vs implementation details”.
+
+### 1c. Services are explicit backend boundaries
+The reset should use explicit backend services where a subsystem has its own responsibilities or storage.
+
+Examples:
+- `LibraryDatabase` for library data
+- `MediaDeliveryService` for media delivery and streaming
+- `SubscriptionService` for subscription definitions, runs, issues, and recovery behavior
+
+Rules:
+- the engine coordinates these services through typed interfaces
+- a service may keep its own storage if that makes the subsystem boundary cleaner
+- service-owned storage must not leak through the engine API as raw schema details
+- do not force unrelated subsystems into `LibraryDatabase` just because they run in the same app
+
+### 1b. `dispatch` is transport, not architecture
+`dispatch` is not the main backend behavior layer in this reset.
+
+Locked rule:
+- the real behavior layer is `core/src/engine/**`
+- `dispatch` may remain as a transport adapter shell
+- `dispatch` must stop being the place where application behavior is defined
 
 ### 2. One typed grid view query
 The primary grid read API is one typed query object:
@@ -237,6 +301,20 @@ The only acceptable permanent duplication is:
 ## Expected backend shape
 The engine layer should be organized around application domains, not command-string buckets.
 
+Use this structure:
+- `core/src/engine/mod.rs`
+- `core/src/engine/reads.rs`
+- `core/src/engine/writes.rs`
+- `core/src/engine/tags.rs`
+- `core/src/engine/folders.rs`
+- `core/src/engine/collections.rs`
+- `core/src/engine/smart_folders.rs`
+- `core/src/engine/assets.rs`
+- `core/src/engine/selection.rs`
+- `core/src/engine/deferred.rs`
+- `core/src/engine/system.rs`
+- `core/src/engine/target.rs`
+
 Use these categories:
 - entity view/query surface
 - entity write surface
@@ -245,15 +323,57 @@ Use these categories:
 - deferred-work surface
 - system/settings/library surface
 
-Use one explicit engine interface above transport, for example `ApplicationEngine` or equivalent.
+Use one explicit engine interface above transport, for example `ApplicationEngine`.
 
 Rules:
 - transport adapters call the engine interface
-- the engine interface calls the database boundary
+- the engine interface calls the database boundary and any other bounded service interfaces
 - transport code is not allowed to define app behavior
-- the engine is not allowed to reach around the database boundary and access storage details directly
+- the engine is not allowed to reach around service boundaries and access storage details directly
+- the engine resolves `EntityTarget`, applies expansion rules, emits state changes, and schedules projection work
 
-The legacy string dispatcher may still exist as a transport shell, but it should become a thin adapter over the new engine API. It should not remain the place where app behavior is defined.
+### Target resolution belongs in the engine
+The engine owns `EntityTarget -> entity_ids` resolution.
+
+Use a dedicated target module for:
+- `entity_hashes` -> id lookup
+- `query_results` -> execute `EntityViewQuery`, collect entity ids or hashes, apply exclusions
+- shared bulk-target behavior reused by status, metadata, tags, folders, delete, export, and similar commands
+
+The legacy dispatcher may still exist as a transport shell, but it should become a thin adapter over the engine API. It must not remain the place where app behavior is defined.
+
+## Implementation phases
+### Phase 1: Engine skeleton and target resolution
+- create `ApplicationEngine` holding `Arc<LibraryDatabase>`
+- implement `target.rs`
+- wire `AppState` to hold `Arc<ApplicationEngine>`
+
+### Phase 2: Read surface
+- `query_entity_view`
+- `get_entity_details`
+- `get_entity_grid_items`
+
+### Phase 3: Write surface
+- `patch_media_entities`
+- `set_entity_status`
+- `delete_entities`
+- each write resolves target, calls the database boundary, emits state changes, and schedules compiler work
+
+### Phase 4: Domain commands
+- `apply_entity_tags`
+- `update_folder_membership`
+- folder, collection, and smart-folder CRUD through engine-owned domain methods
+
+### Phase 5: Asset resolver
+- `resolve_entity_asset`
+- collection asset resolution through `primary_member_entity_id`
+
+### Phase 6: Transport adapter rewrite
+- rewrite `dispatch/mod.rs` and any remaining transport entry points to call `ApplicationEngine`
+- deserialize input
+- call engine method
+- serialize output
+- remove old `dispatch/typed/*` behavior modules
 
 ## Relationship to PBI-567
 This PBI is intentionally paired with PBI-567.
@@ -267,6 +387,7 @@ PBI-568 defines:
 - how the application is allowed to query and change that data
 - what the backend exposes publicly
 - how naming and types line up with the frontend
+- where application behavior should live above the database boundary
 
 Do not implement one as if the other did not exist.
 
@@ -276,6 +397,7 @@ This PBI must follow the cross-layer comment rules in [PBI-580-cross-layer-comme
 
 ## Acceptance criteria
 This PBI is complete only when:
+- `core/src/engine/**` exists as the main behavior layer
 - the public backend surface is entity-centric rather than file/table-centric
 - the main grid read path is one typed `EntityViewQuery`
 - metadata writes are patch-based and target-based
@@ -286,14 +408,18 @@ This PBI is complete only when:
 - the engine exposes one transport-independent app API above the transport layer
 - transport adapters are thin shells, not behavior owners
 - the dispatch shell, if it still exists, is only an adapter layer and not the main behavior layer
+- the engine owns target resolution, expansion, event emission, and projection scheduling
 
 ## Tests
 Required tests:
 - query shape tests for `EntityViewQuery`
 - cursor stability tests for entity view pagination
+- target resolution tests for `entity_hashes` vs `query_results`
 - metadata patch tests for single and collection targets
 - tag/folder/status routing tests through target-based engine APIs
 - asset resolver tests for single image, single video, and collection cover behavior
+- engine-to-database integration tests for state-change emission and projection scheduling
+- transport adapter integration tests proving deserialize -> engine -> result serialization flow
 - field-naming serialization tests for `date_added`, `date_created`, and `date_modified`
 - boundary tests proving file-table operations are not exposed publicly by the engine
 

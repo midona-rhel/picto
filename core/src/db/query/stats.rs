@@ -5,7 +5,7 @@ use rusqlite::Connection;
 /// System scope counts (top-level entities only, excludes collection members).
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct ScopeCounts {
-    pub all_active: i64,
+    pub active: i64,
     pub inbox: i64,
     pub trash: i64,
     pub uncategorized: i64,
@@ -22,7 +22,7 @@ pub fn get_scope_counts(conn: &Connection) -> rusqlite::Result<ScopeCounts> {
         )
     };
 
-    let all_active = count(1)?;
+    let active = count(1)?;
     let inbox = count(0)?;
     let trash = count(2)?;
 
@@ -55,7 +55,7 @@ pub fn get_scope_counts(conn: &Connection) -> rusqlite::Result<ScopeCounts> {
     )?;
 
     Ok(ScopeCounts {
-        all_active,
+        active,
         inbox,
         trash,
         uncategorized,

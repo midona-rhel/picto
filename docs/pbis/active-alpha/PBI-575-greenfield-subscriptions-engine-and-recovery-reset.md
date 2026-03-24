@@ -6,6 +6,17 @@ P1
 ## AI-generated caveat
 This document is based on an in-repo audit of the current subscriptions CRUD, run orchestration, gallery-dl runner, and runtime progress/state handling. It is intentionally decisive. The main goal is to stop treating too many failures as opaque and terminal.
 
+## Lifecycle
+- `Implemented` when `SubscriptionService` exists with definition/run/issue boundaries.
+- `Activatable` when `PBI-568`, `PBI-573`, and `PBI-576` are implemented enough for subscriptions to use the new engine, ingest, and background-work layers.
+- `Activated` when the live subscription flow uses the new subscription service by default.
+- `Legacy removed` when replaced subscription transport/runtime paths for that activated slice are deleted.
+
+Activation depends on:
+- [PBI-568-greenfield-backend-engine-boundary-reset.md](./docs/pbis/active-alpha/PBI-568-greenfield-backend-engine-boundary-reset.md)
+- [PBI-573-greenfield-import-and-ingest-reset.md](./docs/pbis/active-alpha/PBI-573-greenfield-import-and-ingest-reset.md)
+- [PBI-576-greenfield-deferred-work-and-background-processing-reset.md](./docs/pbis/active-alpha/PBI-576-greenfield-deferred-work-and-background-processing-reset.md)
+
 ## Problem
 The current subscription system works, but too much of its runtime behavior is still modeled as “run something, maybe fail, maybe stop.”
 
@@ -24,6 +35,7 @@ The subscription subsystem should reflect these truths:
 - most failures are recoverable, retryable, or reviewable, not globally “unrecoverable”
 - gallery-dl is an implementation detail behind one subscription runtime
 - imported media flows through the normal ingest pipeline
+- subscriptions are a bounded backend service, not just a folder under the library database
 
 ## Locked decisions
 
@@ -36,6 +48,11 @@ Model subscriptions as:
 - credential health
 
 Do not collapse all of that into the subscription row itself.
+
+Locked rule:
+- this subsystem should be implemented behind a `SubscriptionService`
+- `SubscriptionService` may keep its own storage for definitions, runs, issues, logs, and credential health
+- it should not be forced into `LibraryDatabase` if that makes ownership blurrier
 
 ### 2. Persist issues from gallery-dl and runtime failures
 When a run encounters a meaningful problem, persist a structured issue record.
@@ -110,6 +127,8 @@ The new runtime model should include explicit records such as:
 - credential-health rows
 
 Exact table names can be improved, but the separation is not optional.
+
+The engine should talk to this subsystem through a typed service boundary. It should not know or care whether the subscription service stores its state in the library database, a separate SQLite database, or another local store.
 
 ## Relationship to other reset PBIs
 - PBI-573 defines ingest, which subscriptions must feed into

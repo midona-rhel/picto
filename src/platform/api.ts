@@ -110,33 +110,37 @@ function normalizeSmartFolder(r: Record<string, unknown>): SmartFolder {
   };
 }
 
+import { hashTarget, hashesTarget, selectionToTarget } from './targets';
+
 const entityApi = {
   getDetails: (hash: string) =>
-    invokeTyped('get_entity_details', { hash }) as Promise<EntityDetails | null>,
+    invokeTyped('get_entity_details', { entity_hash: hash }) as Promise<EntityDetails | null>,
   getGridItem: (hash: string) =>
-    invokeTyped('get_entity_grid_item', { hash }) as Promise<EntityGridItem | null>,
+    invokeTyped('get_entity_grid_item', { entity_hash: hash }) as Promise<EntityGridItem | null>,
   getGridItems: (hashes: string[]) =>
-    invokeTyped('get_entity_grid_items', { hashes }) as Promise<EntityGridItem[]>,
+    invokeTyped('get_entity_grid_items', { entity_hashes: hashes }) as Promise<EntityGridItem[]>,
   getAllMetadata: (hash: string) =>
     invokeTyped('get_media_entity_metadata', { hash }) as Promise<EntityAllMetadata>,
   setStatus: (hash: string, status: string) =>
-    invokeTyped('set_entity_status', { hash, status } as never) as unknown as Promise<void>,
+    invokeTyped('set_entity_status', { target: hashTarget(hash), status } as never) as unknown as Promise<void>,
   setStatusSelection: (selection: SelectionQuerySpec, status: string) =>
-    invokeTyped('set_entity_status', { selection, status } as never),
+    invokeTyped('set_entity_status', { target: selectionToTarget(selection), status } as never),
   deleteMany: (hashes: string[]) =>
-    invokeTyped('delete_entities', { hashes } as never),
+    invokeTyped('delete_entities', { target: hashesTarget(hashes) } as never),
   deleteSelection: (selection: SelectionQuerySpec) =>
-    invokeTyped('delete_entities', { selection } as never),
+    invokeTyped('delete_entities', { target: selectionToTarget(selection) } as never),
   updateRating: (hash: string, rating: number | null) =>
-    invokeTyped('update_media_entity_metadata', { hash, rating } as never) as unknown as Promise<void>,
+    invokeTyped('patch_media_entities', { target: hashTarget(hash), patch: { rating } } as never) as unknown as Promise<void>,
   setName: (hash: string, name: string | null) =>
-    invokeTyped('update_media_entity_metadata', { hash, name } as never) as unknown as Promise<void>,
+    invokeTyped('patch_media_entities', { target: hashTarget(hash), patch: { name } } as never) as unknown as Promise<void>,
   setSourceUrls: (hash: string, urls: string[]) =>
-    invokeTyped('update_media_entity_metadata', { hash, source_urls: urls } as never) as unknown as Promise<void>,
+    invokeTyped('patch_media_entities', { target: hashTarget(hash), patch: { source_urls: urls } } as never) as unknown as Promise<void>,
   setNotes: (hash: string, notes: Record<string, string>) =>
-    invokeTyped('update_media_entity_metadata', { hash, notes } as never) as unknown as Promise<void>,
+    invokeTyped('patch_media_entities', { target: hashTarget(hash), patch: { notes } } as never) as unknown as Promise<void>,
+  // TODO: replace with resolve_entity_asset once media delivery service lands
   resolvePath: (hash: string) =>
     invokeTyped('resolve_file_path', { hash }),
+  // TODO: replace with resolve_entity_asset once media delivery service lands
   resolveThumbnailPath: (hash: string) =>
     invokeTyped('resolve_thumbnail_path', { hash }),
   openDefault: (hash: string) =>
@@ -158,8 +162,16 @@ const entityApi = {
 /**
  * Typed API surface — single place where all backend command strings live.
  * Every invoke() in the codebase should route through here.
+ *
+ * Canonical engine commands (from PBI-568) use the new command names and
+ * EntityTarget shapes. They are the primary path.
+ *
+ * Legacy methods below are kept for domains not yet migrated to the engine
+ * (subscriptions, duplicates, AI tagger, import/export, media I/O).
+ * TODO: remove legacy methods as each domain migrates to canonical engine commands.
  */
 export const api = {
+  // TODO: replace with query_entity_view once the frontend grid model is migrated
   grid: {
     getPageSlim: (query: GridPageSlimQuery) =>
       invokeTyped('get_grid_page_slim', { query } as never) as Promise<GridPageSlimResponse>,
@@ -200,9 +212,9 @@ export const api = {
     getForFile: (hash: string) =>
       invokeTyped('get_entity_tags', { hash }) as Promise<TagDisplay[]>,
     add: (hashes: string[], tagStrings: string[]) =>
-      invokeTyped('add_tags', { hashes, tag_strings: tagStrings }) as unknown as Promise<void>,
+      invokeTyped('apply_entity_tags', { target: hashesTarget(hashes), operation: 'add', tags: tagStrings } as never) as unknown as Promise<void>,
     remove: (hashes: string[], tagStrings: string[]) =>
-      invokeTyped('remove_tags', { hashes, tag_strings: tagStrings }) as unknown as Promise<void>,
+      invokeTyped('apply_entity_tags', { target: hashesTarget(hashes), operation: 'remove', tags: tagStrings } as never) as unknown as Promise<void>,
     findFilesByTags: (tagStrings: string[], limit?: number, offset?: number) =>
       invokeTyped('find_files_by_tags', { tag_strings: tagStrings, limit, offset } as never) as Promise<string[]>,
     getPaginated: (params: { namespace?: string; search?: string; cursor?: string; limit?: number }) =>
@@ -227,19 +239,19 @@ export const api = {
 
   selection: {
     getSummary: (selection: SelectionQuerySpec) =>
-      invokeTyped('get_selection_summary', { selection } as never) as Promise<SelectionSummary>,
+      invokeTyped('get_selection_summary', { target: selectionToTarget(selection) } as never) as Promise<SelectionSummary>,
     resolveEntityHashes: (selection: SelectionQuerySpec) =>
       invoke<string[]>('resolve_selection_entity_hashes', { selection }),
     addTags: (selection: SelectionQuerySpec, tagStrings: string[]) =>
-      invokeTyped('add_tags_selection', { selection, tag_strings: tagStrings } as never),
+      invokeTyped('apply_entity_tags', { target: selectionToTarget(selection), operation: 'add', tags: tagStrings } as never),
     removeTags: (selection: SelectionQuerySpec, tagStrings: string[]) =>
-      invokeTyped('remove_tags_selection', { selection, tag_strings: tagStrings } as never),
+      invokeTyped('apply_entity_tags', { target: selectionToTarget(selection), operation: 'remove', tags: tagStrings } as never),
     updateRating: (selection: SelectionQuerySpec, rating: number | null) =>
-      invokeTyped('update_selection_metadata', { selection, rating } as never),
+      invokeTyped('patch_media_entities', { target: selectionToTarget(selection), patch: { rating } } as never),
     setNotes: (selection: SelectionQuerySpec, notes: Record<string, string>) =>
-      invokeTyped('update_selection_metadata', { selection, notes } as never),
+      invokeTyped('patch_media_entities', { target: selectionToTarget(selection), patch: { notes } } as never),
     setSourceUrls: (selection: SelectionQuerySpec, urls: string[]) =>
-      invokeTyped('update_selection_metadata', { selection, source_urls: urls } as never),
+      invokeTyped('patch_media_entities', { target: selectionToTarget(selection), patch: { source_urls: urls } } as never),
   },
 
   folders: {
@@ -268,9 +280,17 @@ export const api = {
     moveFolder: (folderId: number, newParentId: number | null, siblingOrder: [number, number][]) =>
       invokeTyped('move_folder', { folder_id: folderId, new_parent_id: newParentId, sibling_order: siblingOrder }) as unknown as Promise<void>,
     addFiles: (folderId: number, hashes: string[], selection?: SelectionQuerySpec) =>
-      invokeTyped('add_entities_to_folder', { folder_id: folderId, hashes, selection: selection ?? null } as never) as unknown as Promise<number>,
+      invokeTyped('update_folder_membership', {
+        target: selection ? selectionToTarget(selection) : hashesTarget(hashes),
+        folder_id: folderId,
+        operation: 'add',
+      } as never) as unknown as Promise<number>,
     removeFiles: (folderId: number, hashes: string[], selection?: SelectionQuerySpec) =>
-      invokeTyped('remove_entities_from_folder', { folder_id: folderId, hashes, selection: selection ?? null } as never) as unknown as Promise<number>,
+      invokeTyped('update_folder_membership', {
+        target: selection ? selectionToTarget(selection) : hashesTarget(hashes),
+        folder_id: folderId,
+        operation: 'remove',
+      } as never) as unknown as Promise<number>,
     getFiles: (folderId: number) =>
       invokeTyped('get_folder_files', { folder_id: folderId }),
     getCoverHash: (folderId: number) =>

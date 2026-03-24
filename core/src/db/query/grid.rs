@@ -518,6 +518,26 @@ fn resolve_similar_ids(conn: &Connection, source_entity_hash: &str) -> Vec<i64> 
     result
 }
 
+/// Batch fetch grid items by entity_hash. Used for targeted reconciliation
+/// and eager grid insertion, not for driving the main grid.
+pub fn get_entity_grid_items_by_hash(
+    conn: &Connection,
+    hashes: &[String],
+) -> rusqlite::Result<Vec<EntityGridItem>> {
+    if hashes.is_empty() {
+        return Ok(Vec::new());
+    }
+    let placeholders: Vec<String> = (1..=hashes.len()).map(|i| format!("?{i}")).collect();
+    let sql = format!(
+        "{GRID_SELECT} WHERE me.entity_hash IN ({}) AND me.parent_collection_entity_id IS NULL",
+        placeholders.join(",")
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let params: Vec<&dyn ToSql> = hashes.iter().map(|h| h as &dyn ToSql).collect();
+    let rows = stmt.query_map(params.as_slice(), read_grid_item)?;
+    rows.collect()
+}
+
 /// Bitwise hamming distance between two byte slices of equal length.
 fn hamming_distance(a: &[u8], b: &[u8]) -> u32 {
     a.iter().zip(b.iter()).map(|(x, y)| (x ^ y).count_ones()).sum()

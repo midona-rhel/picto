@@ -1,0 +1,96 @@
+//! Folder CRUD + membership operations.
+
+use crate::db::types::*;
+
+use super::{target, ApplicationEngine, WriteChange};
+
+/// Folder membership operation kind.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MembershipOperation {
+    Add,
+    Remove,
+}
+
+impl ApplicationEngine {
+    /// Add or remove entities from a folder.
+    /// Collections expand to EntityAndDescendants.
+    pub fn update_folder_membership(
+        &self,
+        target: EntityTarget,
+        folder_id: i64,
+        operation: MembershipOperation,
+    ) -> Result<FolderMembershipChange, String> {
+        let resolved = target::resolve(&self.db, &target)?;
+        let expansion = ExpansionMode::EntityAndDescendants;
+
+        let change = match resolved {
+            target::ResolvedTarget::Ids(ids) => match operation {
+                MembershipOperation::Add => {
+                    self.db.add_folder_members(folder_id, &ids, expansion)?
+                }
+                MembershipOperation::Remove => {
+                    self.db.remove_folder_members(folder_id, &ids, expansion)?
+                }
+            },
+            target::ResolvedTarget::Query { view_query, exclusions } => match operation {
+                MembershipOperation::Add => {
+                    self.db.add_folder_members_bulk(folder_id, &view_query, &exclusions, expansion)?
+                }
+                MembershipOperation::Remove => {
+                    self.db
+                        .remove_folder_members_bulk(folder_id, &view_query, &exclusions, expansion)?
+                }
+            },
+        };
+        self.commit_write(&WriteChange::from_folder(&change));
+        Ok(change)
+    }
+
+    // ── Folder CRUD ────────────────────────────────────────────
+
+    pub fn create_folder(
+        &self,
+        name: &str,
+        parent_id: Option<i64>,
+        icon: Option<&str>,
+        color: Option<&str>,
+    ) -> Result<i64, String> {
+        self.db.create_folder(name, parent_id, icon, color)
+    }
+
+    pub fn update_folder(
+        &self,
+        folder_id: i64,
+        name: Option<&str>,
+        icon: Option<&str>,
+        color: Option<&str>,
+        auto_tags: Option<&str>,
+    ) -> Result<(), String> {
+        self.db.update_folder(folder_id, name, icon, color, auto_tags)
+    }
+
+    pub fn delete_folder(&self, folder_id: i64) -> Result<(), String> {
+        self.db.delete_folder(folder_id)
+    }
+
+    pub fn move_folder(
+        &self,
+        folder_id: i64,
+        new_parent_id: Option<i64>,
+    ) -> Result<(), String> {
+        self.db.move_folder(folder_id, new_parent_id)
+    }
+
+    pub fn reorder_folders(&self, moves: &[(i64, i64)]) -> Result<(), String> {
+        self.db.reorder_folders(moves)
+    }
+
+    pub fn reorder_folder_items(
+        &self,
+        folder_id: i64,
+        moves: &[(i64, i64)],
+    ) -> Result<(), String> {
+        self.db.reorder_folder_items(folder_id, moves)
+    }
+}

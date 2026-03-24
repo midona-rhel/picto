@@ -6,6 +6,12 @@ P1
 ## AI-generated caveat
 This document is based on the reset PBIs and the current shared API surface. It is intentionally prescriptive. The goal is to remove naming drift, not to preserve historical wording.
 
+## Lifecycle
+- `Implemented` when the naming rules are written, linked, and specific enough to apply.
+- `Activatable` when the active reset PBIs explicitly reference and adopt these rules.
+- `Activated` when the migrated slices in the reset line actually use the locked names.
+- `Legacy removed` when the migrated slices no longer leak replaced public names.
+
 ## Problem
 The project still carries multiple names for the same concept across database, backend, frontend, and transport code.
 
@@ -279,8 +285,8 @@ This naming contract is mandatory for:
 - [PBI-567-greenfield-library-database-reset.md](./docs/pbis/active-alpha/PBI-567-greenfield-library-database-reset.md)
 - [PBI-568-greenfield-backend-engine-boundary-reset.md](./docs/pbis/active-alpha/PBI-568-greenfield-backend-engine-boundary-reset.md)
 - [PBI-569-greenfield-media-delivery-service.md](./docs/pbis/active-alpha/PBI-569-greenfield-media-delivery-service.md)
-- [PBI-570-greenfield-frontend-boundary-and-state-reset.md](./docs/pbis/active-alpha/PBI-570-greenfield-frontend-boundary-and-state-reset.md)
-- [PBI-571-frontend-component-and-styling-consolidation-reset.md](./docs/pbis/active-alpha/PBI-571-frontend-component-and-styling-consolidation-reset.md)
+- [PBI-570-greenfield-frontend-reset-program-index.md](./docs/pbis/active-alpha/PBI-570-greenfield-frontend-reset-program-index.md)
+- [PBI-571-frontend-shared-component-and-styling-system-reset.md](./docs/pbis/active-alpha/PBI-571-frontend-shared-component-and-styling-system-reset.md)
 
 Those PBIs define architecture. This PBI defines the words that architecture must use.
 

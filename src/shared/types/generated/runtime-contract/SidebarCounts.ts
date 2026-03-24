@@ -3,4 +3,4 @@
 /**
  * O(1) bitmap-derived sidebar counts.
  */
-export type SidebarCounts = { all_active: number, inbox: number, trash: number, };
+export type SidebarCounts = { active: number, inbox: number, trash: number, };

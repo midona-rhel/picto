@@ -6,6 +6,12 @@ P1
 ## AI-generated caveat
 This document is intentionally strict. The goal is to stop comments from becoming a second stale design document inside the code.
 
+## Lifecycle
+- `Implemented` when the comment rules are written, linked, and specific enough to apply.
+- `Activatable` when the active reset PBIs explicitly adopt these rules.
+- `Activated` when migrated reset slices actually follow the comment discipline.
+- `Legacy removed` when migrated reset slices no longer keep the replaced stale comment style.
+
 ## Problem
 The project currently has too many comments that:
 

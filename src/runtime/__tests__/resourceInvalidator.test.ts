@@ -233,7 +233,7 @@ describe('planRefreshTargets', () => {
   it('sidebar_counts present yields sidebar/counts', () => {
     const result = keys(makeEvent(
       makeChanges({}),
-      { sidebar_counts: { all_active: 100, inbox: 5, trash: 2 } },
+      { sidebar_counts: { active: 100, inbox: 5, trash: 2 } },
     ));
     expect(result).toContain('sidebar/counts');
   });

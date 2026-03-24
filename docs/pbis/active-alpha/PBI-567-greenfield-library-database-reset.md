@@ -6,6 +6,16 @@ P1
 ## AI-generated caveat
 This document is based on an in-repo audit of the current database backend plus product intent clarified during review. It is intentionally decision-complete, but it is still AI-generated planning. The implementing engineer should improve local naming and factoring where that clearly preserves the same architecture.
 
+## Lifecycle
+- `Implemented` when `core/src/db/**` is the real library database boundary with the new schema, write/query/projection split, and migration path.
+- `Activatable` when `PBI-568` and the core frontend/backend boundary slice of `PBI-570` are implemented enough to use `LibraryDatabase` in the live core entity flow.
+- `Activated` when the core entity path runs through `LibraryDatabase` end to end.
+- `Legacy removed` when the replaced old storage path is deleted for that activated slice.
+
+Activation depends on:
+- [PBI-568-greenfield-backend-engine-boundary-reset.md](./docs/pbis/active-alpha/PBI-568-greenfield-backend-engine-boundary-reset.md)
+- [PBI-570-greenfield-frontend-reset-program-index.md](./docs/pbis/active-alpha/PBI-570-greenfield-frontend-reset-program-index.md)
+
 ## Problem
 The current database backend works, but its structure reflects multiple historical designs at once instead of one clear model.
 
@@ -22,6 +32,8 @@ This PBI is not a cleanup or migration-in-place exercise. It is a greenfield res
 The old database is kept only as a migration input. The new runtime code should not preserve legacy schema assumptions, dual-write behavior, or old naming just because it already exists.
 
 This PBI is intentionally paired with the greenfield backend engine boundary reset. PBI-567 defines the canonical storage shape and storage boundaries. The engine PBI defines how the application is allowed to query and change that stored data. They should be implemented as one coherent architecture program, not as unrelated cleanups.
+
+This PBI is specifically about the library database. It does not force every backend subsystem to share that same storage. Separate services may keep their own storage when that better matches their domain, as long as the boundary is explicit.
 
 ## Product model to encode
 The new database should encode these product rules:
@@ -151,6 +163,20 @@ Rules:
 - the engine consumes typed methods and typed result models only
 
 This boundary is required because the storage layer must be replaceable or evolvable later without re-teaching the engine the schema.
+
+### 9. Library storage is not the only allowed backend storage
+`LibraryDatabase` owns library data. It is not required to own every backend subsystem's data.
+
+Locked rule:
+- media library entities, files, tags, folders, smart folders, and library-facing projections live behind `LibraryDatabase`
+- other bounded backend services may keep their own storage when that makes the boundary cleaner
+- service-owned storage must stay behind that service's own typed boundary
+- the engine may coordinate multiple services, but it must not collapse their internal storage into one blurred module surface
+
+Reason:
+- not every subsystem is the library
+- clear service ownership is better than one giant mixed database boundary
+- future replacement is easier when service boundaries are explicit
 
 ## Required database shape
 

@@ -511,7 +511,7 @@ pub fn sidebar_counts_from_bitmaps(db: &crate::sqlite::SqliteDatabase) -> Sideba
     // Status bitmaps already exclude collection members (the compiler
     // filters them out). Direct bitmap reads give tile-level counts.
     SidebarCounts {
-        all_active: db.bitmaps.len(&BitmapKey::Status(1)) as i64,
+        active: db.bitmaps.len(&BitmapKey::Status(1)) as i64,
         inbox: db.bitmaps.len(&BitmapKey::Status(0)) as i64,
         trash: db.bitmaps.len(&BitmapKey::Status(2)) as i64,
     }

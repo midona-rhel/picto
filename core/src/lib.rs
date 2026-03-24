@@ -6,6 +6,9 @@
 // ── Database boundary ──────────────────────────────
 pub mod db;
 
+// ── Application engine ─────────────────────────────
+pub mod engine;
+
 // ── Domain modules ──────────────────────────────────
 pub mod ai_tagger;
 pub mod duplicates;

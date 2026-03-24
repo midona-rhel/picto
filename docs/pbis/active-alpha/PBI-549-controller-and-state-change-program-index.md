@@ -76,6 +76,70 @@ A PBI is not done because code compiled. It is only done when:
 - its manual validation checklist passes
 - its public naming is clearer than what it replaced
 
+## Reset Lifecycle Model
+For the greenfield reset line starting at `PBI-567`, every PBI should be tracked in four states instead of one vague “done/not done” bucket.
+
+### 1. Implemented
+Use this when:
+- the replacement layer exists
+- its local boundary is real
+- its direct code/tests for that slice are in place as far as currently possible
+- remaining blockers are outside the slice and explicitly named
+
+### 2. Activatable
+Use this when:
+- the PBI itself is implemented
+- every direct dependency listed on that PBI is implemented
+- anything still missing is a known cross-PBI TODO, not local architectural confusion
+
+### 3. Activated
+Use this when:
+- the product is using the new path by default for the intended flow
+- dependent layers are actually calling it end to end
+- runtime/manual verification for the active path has happened
+
+### 4. Legacy Removed
+Use this when:
+- the old path is deleted
+- old names/helpers/handlers for that replaced slice are gone
+- the team is no longer carrying both paths for that slice
+
+Do not force early reset PBIs to remain “open” forever just because later PBIs are needed before activation. Mark them `Implemented`, then `Activatable`, then `Activated`, then `Legacy Removed`.
+
+## Reset Program Order
+Use this as the main activation path for the reset set:
+
+1. Activate the rule prerequisites:
+- `PBI-572` naming
+- `PBI-579` testing
+- `PBI-580` comment discipline
+
+2. Implement the storage and engine foundations:
+- `PBI-567` library database
+- `PBI-568` backend engine
+- `PBI-578` bulk entity target and selection
+
+3. Activate the core entity flow:
+- `PBI-581`, `PBI-582`, `PBI-587`, `PBI-583`, and `PBI-584` activate the frontend core entity flow
+- then activate `PBI-567`, `PBI-568`, and `PBI-578` together for core entity reads/writes
+
+4. Activate media and long-running platform layers:
+- `PBI-569` media delivery
+- `PBI-585` frontend media consumption
+- `PBI-576` deferred work/background processing
+
+5. Activate ingest and downstream subsystems on top of the new foundations:
+- `PBI-573` ingest/import
+- `PBI-574` export jobs
+- `PBI-575` subscriptions
+- `PBI-577` duplicates/rejected-media
+
+6. Activate frontend structure cleanup after the boundary is stable:
+- `PBI-586` frontend feature/module architecture
+- `PBI-571` frontend shared component/styling system
+
+Some implementation work can overlap, but activation should generally follow this order.
+
 ## Program Status
 This document is now a retained program summary, not a child-index.
 
@@ -104,6 +168,7 @@ The full program is only done when:
 - raw backend access exists only in `src/platform/**` and `src/controllers/**`
 - every migrated user action has one controller-owned path
 - controllers own undo/redo registration for migrated domains
+- migrated frontend state ownership is explicit and no longer duplicated across nearby hooks/components
 - long-running tasks are tracked and gated centrally
 - backend emits one final self-describing `runtime/state_changed` event per completed action
 - deferred media derivatives emit authoritative state changes

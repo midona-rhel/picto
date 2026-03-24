@@ -6,6 +6,17 @@ P1
 ## AI-generated caveat
 This document is based on an in-repo audit of the current selection APIs, `SelectionQuerySpec`, explicit-hash vs all-results branching, and controller code paths that still distinguish single vs batch operations too often.
 
+## Lifecycle
+- `Implemented` when one canonical bulk-target model exists across backend and frontend for the intended commands.
+- `Activatable` when `PBI-567` and `PBI-568` are implemented enough to execute bulk targets correctly, and `PBI-570` is implemented enough to send them from the frontend.
+- `Activated` when live selection-driven entity actions use the canonical bulk-target model by default.
+- `Legacy removed` when replaced selection-only side paths and giant explicit-hash expansion paths are deleted for that activated slice.
+
+Activation depends on:
+- [PBI-567-greenfield-library-database-reset.md](./docs/pbis/active-alpha/PBI-567-greenfield-library-database-reset.md)
+- [PBI-568-greenfield-backend-engine-boundary-reset.md](./docs/pbis/active-alpha/PBI-568-greenfield-backend-engine-boundary-reset.md)
+- [PBI-570-greenfield-frontend-reset-program-index.md](./docs/pbis/active-alpha/PBI-570-greenfield-frontend-reset-program-index.md)
+
 ## Problem
 The application still treats “one item,” “many items,” and “select all” as more different than they should be.
 

@@ -6,6 +6,16 @@ P1
 ## AI-generated caveat
 This document is based on an in-repo audit of the current media I/O and viewer surface plus product intent clarified during review. It is intentionally concrete and decision-complete, but it is still AI-generated planning. The implementing engineer should simplify further where that preserves the same delivery API.
 
+## Lifecycle
+- `Implemented` when `MediaDeliveryService` exists with typed asset roles and stable delivery outputs.
+- `Activatable` when `PBI-568` is implemented enough for the engine to call media delivery and `PBI-570` is implemented enough for the frontend to consume media URLs/handles.
+- `Activated` when viewer/grid/preview surfaces use the media delivery service by default.
+- `Legacy removed` when path-shaped media helpers for the activated slice are deleted.
+
+Activation depends on:
+- [PBI-568-greenfield-backend-engine-boundary-reset.md](./docs/pbis/active-alpha/PBI-568-greenfield-backend-engine-boundary-reset.md)
+- [PBI-570-greenfield-frontend-reset-program-index.md](./docs/pbis/active-alpha/PBI-570-greenfield-frontend-reset-program-index.md)
+
 ## Problem
 The current backend media surface is still path-oriented and transport-shaped instead of being a clean media delivery service.
 
@@ -43,6 +53,9 @@ Do not keep separate public services as the main API for:
 - thumbnail path resolution
 - original-vs-thumbnail lookup
 
+Locked rule:
+- media delivery is its own backend service boundary, not a helper bag hanging off the engine or the library database
+
 ### 2. Stable media URLs or handles
 The frontend consumes stable backend-generated URLs or URL-like handles.
 
@@ -52,6 +65,20 @@ That means:
 - the backend can change physical storage layout without changing the frontend contract
 
 Those URLs or handles are the abstraction boundary. They must remain valid regardless of whether the media is served by a local process, a remote backend, or a different storage layout later.
+
+### 2a. Media delivery may keep its own delivery-side storage
+The media delivery service may keep its own storage for delivery concerns when needed.
+
+Examples:
+- asset URL/handle state
+- stream/session state
+- delivery cache manifests
+- derivative-serving metadata that is not part of the canonical library model
+
+Rules:
+- canonical library facts still come from `LibraryDatabase`
+- delivery-specific state belongs to `MediaDeliveryService`
+- the engine should not need to know whether delivery state is stored in SQLite, files, or another store
 
 ### 3. One typed asset role model
 Use one asset role system:
@@ -139,7 +166,7 @@ The public API must not be shaped like:
 The same primary member must be used for all roles.
 
 ## Implementation changes
-- add a dedicated backend media delivery module/service separate from generic dispatch handlers
+- add a dedicated backend media delivery module/service separate from the engine and separate from thin transport adapters
 - make blob/file lookup private to that service
 - add a real stream-capable video delivery path
 - define stable URL or handle generation there
@@ -152,12 +179,13 @@ This PBI is intentionally split out from PBI-568.
 PBI-568 defines:
 - backend query and write behavior
 - entity-facing command and read APIs
+- `ApplicationEngine` as the main backend behavior layer above storage
 
 PBI-569 defines:
 - how media assets are delivered and streamed
 - how the frontend obtains thumbnails, previews, originals, and streams
 
-Do not bury media delivery inside generic engine commands.
+Do not bury media delivery inside generic engine commands or transport adapters. It is its own backend service boundary that the engine and transport layer can call.
 
 This PBI must follow the cross-layer naming contract in [PBI-572-cross-layer-naming-contract.md](./docs/pbis/active-alpha/PBI-572-cross-layer-naming-contract.md).
 This PBI must follow the cross-layer testing rules in [PBI-579-cross-layer-testing-rules.md](./docs/pbis/active-alpha/PBI-579-cross-layer-testing-rules.md).

@@ -6,6 +6,18 @@ P1
 ## AI-generated caveat
 This document is based on an in-repo audit of the current duplicate scanner, perceptual-hash code, duplicate-pair storage, and manual review flow. It also incorporates the product requirement to retain and surface rejected media and exact rejected fingerprints.
 
+## Lifecycle
+- `Implemented` when duplicates and rejected-media exist as one bounded subsystem on the new model.
+- `Activatable` when `PBI-567`, `PBI-568`, and `PBI-576` are implemented, and `PBI-573` is implemented where ingest-time rejection/suppression is part of the flow.
+- `Activated` when the live duplicate/rejected-media path uses the new subsystem by default.
+- `Legacy removed` when replaced duplicate/review/rejection paths for that activated slice are deleted.
+
+Activation depends on:
+- [PBI-567-greenfield-library-database-reset.md](./docs/pbis/active-alpha/PBI-567-greenfield-library-database-reset.md)
+- [PBI-568-greenfield-backend-engine-boundary-reset.md](./docs/pbis/active-alpha/PBI-568-greenfield-backend-engine-boundary-reset.md)
+- [PBI-576-greenfield-deferred-work-and-background-processing-reset.md](./docs/pbis/active-alpha/PBI-576-greenfield-deferred-work-and-background-processing-reset.md)
+- [PBI-573-greenfield-import-and-ingest-reset.md](./docs/pbis/active-alpha/PBI-573-greenfield-import-and-ingest-reset.md) where reject/suppress behavior is part of ingest activation
+
 ## Problem
 The current duplicates system is too close to the current file-table implementation and does not yet model rejected-media behavior explicitly enough.
 

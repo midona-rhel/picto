@@ -8,6 +8,60 @@ pub mod typed;
 
 pub use common::{ok_null, to_json};
 
+// Transport-layer input types for engine-routed commands.
+// These are pure deserialization targets — no behavior.
+#[derive(serde::Deserialize)]
+struct GetHashInput {
+    entity_hash: String,
+}
+
+#[derive(serde::Deserialize)]
+struct GetHashesInput {
+    entity_hashes: Vec<String>,
+}
+
+#[derive(serde::Deserialize)]
+struct PatchEntitiesInput {
+    target: crate::db::types::EntityTarget,
+    patch: crate::db::types::MediaEntityPatch,
+}
+
+#[derive(serde::Deserialize)]
+struct ApplyTagsInput {
+    target: crate::db::types::EntityTarget,
+    operation: crate::engine::tags::TagOperation,
+    tags: Vec<String>,
+}
+
+#[derive(serde::Deserialize)]
+struct FolderMembershipInput {
+    target: crate::db::types::EntityTarget,
+    folder_id: i64,
+    operation: crate::engine::folders::MembershipOperation,
+}
+
+#[derive(serde::Deserialize)]
+struct ResolveAssetInput {
+    entity_hash: String,
+    role: crate::engine::assets::AssetRole,
+}
+
+#[derive(serde::Deserialize)]
+struct SetStatusInput {
+    target: crate::db::types::EntityTarget,
+    status: i64,
+}
+
+#[derive(serde::Deserialize)]
+struct DeleteEntitiesInput {
+    target: crate::db::types::EntityTarget,
+}
+
+#[derive(serde::Deserialize)]
+struct SelectionSummaryInput {
+    target: crate::db::types::EntityTarget,
+}
+
 /// Deserialize args, call a handler function, serialize its output.
 macro_rules! call {
     ($func:path, $state:expr, $args:expr) => {{
@@ -135,6 +189,84 @@ async fn dispatch_inner(command: &str, args: serde_json::Value) -> Result<String
 
     let state = crate::state::get_state()?;
 
+    // ── Engine-routed commands (canonical names from PBI-568) ──
+    // These go through ApplicationEngine. The old dispatch/typed handlers
+    // below remain as fallback until the frontend migrates to new names.
+    match command {
+        "query_entity_view" => {
+            let query: crate::db::types::EntityViewQuery = serde_json::from_value(args)
+                .map_err(|e| format!("Invalid args: {e}"))?;
+            let result = state.engine.query_entity_view(query)?;
+            return to_json(&result);
+        }
+        "get_entity_details" => {
+            let input: GetHashInput = serde_json::from_value(args)
+                .map_err(|e| format!("Invalid args: {e}"))?;
+            let result = state.engine.get_entity_details(&input.entity_hash)?;
+            return to_json(&result);
+        }
+        "get_entity_grid_items" => {
+            let input: GetHashesInput = serde_json::from_value(args)
+                .map_err(|e| format!("Invalid args: {e}"))?;
+            let result = state.engine.get_entity_grid_items(&input.entity_hashes)?;
+            return to_json(&result);
+        }
+        "patch_media_entities" => {
+            let input: PatchEntitiesInput = serde_json::from_value(args)
+                .map_err(|e| format!("Invalid args: {e}"))?;
+            let result = state.engine.patch_media_entities(input.target, input.patch)?;
+            return to_json(&result);
+        }
+        "apply_entity_tags" => {
+            let input: ApplyTagsInput = serde_json::from_value(args)
+                .map_err(|e| format!("Invalid args: {e}"))?;
+            let result = state.engine.apply_entity_tags(input.target, input.operation, &input.tags)?;
+            return to_json(&result);
+        }
+        "update_folder_membership" => {
+            let input: FolderMembershipInput = serde_json::from_value(args)
+                .map_err(|e| format!("Invalid args: {e}"))?;
+            let result = state.engine.update_folder_membership(input.target, input.folder_id, input.operation)?;
+            return to_json(&result);
+        }
+        "resolve_entity_asset" => {
+            let input: ResolveAssetInput = serde_json::from_value(args)
+                .map_err(|e| format!("Invalid args: {e}"))?;
+            let result = state.engine.resolve_entity_asset(&input.entity_hash, input.role)?;
+            return to_json(&result);
+        }
+        "get_deferred_work_summary" => {
+            let result = state.engine.get_deferred_work_summary()?;
+            return to_json(&result);
+        }
+        "retry_deferred_work" => {
+            let input: GetHashInput = serde_json::from_value(args)
+                .map_err(|e| format!("Invalid args: {e}"))?;
+            state.engine.retry_deferred_work(&input.entity_hash)?;
+            return ok_null();
+        }
+        "set_entity_status" => {
+            let input: SetStatusInput = serde_json::from_value(args)
+                .map_err(|e| format!("Invalid args: {e}"))?;
+            let result = state.engine.set_entity_status(input.target, input.status)?;
+            return to_json(&result);
+        }
+        "delete_entities" => {
+            let input: DeleteEntitiesInput = serde_json::from_value(args)
+                .map_err(|e| format!("Invalid args: {e}"))?;
+            let result = state.engine.delete_entities(input.target)?;
+            return to_json(&result);
+        }
+        "get_selection_summary" => {
+            let input: SelectionSummaryInput = serde_json::from_value(args)
+                .map_err(|e| format!("Invalid args: {e}"))?;
+            let result = state.engine.get_selection_summary(input.target)?;
+            return to_json(&result);
+        }
+        _ => {}
+    }
+
+    // ── Legacy dispatch (old command names → old handlers) ──
     match command {
         // ── Grid ──────────────────────────────────────────────
         "get_grid_page_slim" => call!(typed::grid::get_grid_page_slim, &state, args),

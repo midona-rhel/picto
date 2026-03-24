@@ -88,16 +88,16 @@ function eagerAdjustSystemCounts(count: number, fromStatus: string | null, toSta
   if (count <= 0 || fromStatus === toStatus) return;
   const store = useDomainStore.getState();
   const s = {
-    all_active: store.allActiveCount,
+    active: store.allActiveCount,
     inbox: store.inboxCount,
     trash: store.trashCount,
   };
   // Decrement source
-  if (fromStatus === 'active') s.all_active -= count;
+  if (fromStatus === 'active') s.active -= count;
   else if (fromStatus === 'inbox') s.inbox -= count;
   else if (fromStatus === 'trash') s.trash -= count;
   // Increment target
-  if (toStatus === 'active') s.all_active += count;
+  if (toStatus === 'active') s.active += count;
   else if (toStatus === 'inbox') s.inbox += count;
   else if (toStatus === 'trash') s.trash += count;
   store.applySidebarCounts(s);

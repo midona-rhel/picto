@@ -6,6 +6,12 @@ P1
 ## AI-generated caveat
 This document is intentionally blunt. The goal is to stop test structure from drifting into a pile of large source files, scattered inline test blocks, and tiny one-off cases that do not prove real behavior.
 
+## Lifecycle
+- `Implemented` when the testing rules are written, linked, and specific enough to apply.
+- `Activatable` when the active reset PBIs explicitly adopt these rules.
+- `Activated` when migrated reset slices actually follow the locked testing shape.
+- `Legacy removed` when migrated reset slices no longer keep the replaced test structure.
+
 ## Problem
 The project currently has too many tests that are:
 

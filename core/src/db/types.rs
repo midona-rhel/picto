@@ -34,20 +34,20 @@ pub enum ExpansionMode {
     EntityAndDescendants,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Serialize)]
 pub struct EntityChange {
     pub entity_ids: Vec<i64>,
     pub entity_hashes: Vec<String>,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Serialize)]
 pub struct StatusChange {
     pub entity_ids: Vec<i64>,
     pub entity_hashes: Vec<String>,
     pub new_status: i64,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Serialize)]
 pub struct TagChange {
     pub entity_ids: Vec<i64>,
     pub tag_ids: Vec<i64>,
@@ -55,13 +55,13 @@ pub struct TagChange {
     pub tags_removed: Vec<String>,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Serialize)]
 pub struct FolderMembershipChange {
     pub folder_id: i64,
     pub entity_ids: Vec<i64>,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Serialize)]
 pub struct CollectionMembershipChange {
     pub collection_id: i64,
     pub added: Vec<i64>,
@@ -278,4 +278,16 @@ pub struct TagInfo {
 pub struct FolderInfo {
     pub folder_id: i64,
     pub name: String,
+}
+
+/// Partial metadata patch for entities.
+/// Each field is None = "not included in this patch", Some = "set to this value".
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+pub struct MediaEntityPatch {
+    pub name: Option<String>,
+    /// Notes as a JSON object (Record<string, string> from the frontend).
+    /// Stored as JSON text in the database.
+    pub notes: Option<serde_json::Value>,
+    pub rating: Option<i64>,
+    pub source_urls: Option<Vec<String>>,
 }
