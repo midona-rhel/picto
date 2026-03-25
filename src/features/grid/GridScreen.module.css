@@ -20,12 +20,20 @@
 
 .surfaceIncomingHidden {
   opacity: 0;
+  visibility: hidden;
   pointer-events: none;
+}
+
+.surfaceIncomingFadeIn {
+  opacity: 1;
+  visibility: visible;
+  transition: opacity 250ms var(--ease-default);
+  will-change: opacity;
 }
 
 .surfaceIncomingVisible {
   opacity: 1;
-  transition: opacity 140ms var(--ease-default);
+  visibility: visible;
   will-change: opacity;
 }
 
@@ -36,7 +44,7 @@
 
 .surfaceOutgoingFade {
   opacity: 0;
-  transition: opacity 140ms var(--ease-default);
+  transition: opacity 250ms var(--ease-default);
   will-change: opacity;
 }
 

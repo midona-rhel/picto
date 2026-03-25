@@ -17,8 +17,6 @@ export interface VisibilityPlan {
   behindPrefetchIndices: number[];
 }
 
-const EXTEND_ROWS_PX = 100; // Extra pixels to prevent flicker at edges
-
 export function buildVisibilityPlan(
   positions: LayoutItem[],
   scrollTop: number,
@@ -29,8 +27,8 @@ export function buildVisibilityPlan(
     return { start: 0, end: 0, aheadPrefetchIndices: [], behindPrefetchIndices: [] };
   }
 
-  const visibleTop = scrollTop - EXTEND_ROWS_PX;
-  const visibleBottom = scrollTop + viewportHeight + EXTEND_ROWS_PX;
+  const visibleTop = scrollTop;
+  const visibleBottom = scrollTop + viewportHeight;
 
   // Binary search for first item whose bottom edge is >= visibleTop
   const start = lowerBound(positions, visibleTop);

@@ -12,11 +12,11 @@ import { hitTestTile } from './hitTesting';
 import { ThumbnailPipeline } from './thumbnailPipeline';
 import styles from './CanvasGrid.module.css';
 
-const GAP = 4;
+const GAP = 6;
 const TEXT_NAME_ROW_H = 20;
 const PADDING_X = 10;
-const REVEAL_DURATION_MS = 150;
-const REVEAL_STAGGER_MS = 18;
+const REVEAL_DURATION_MS = 250;
+const MAX_CONCURRENT_REVEALS = 54;
 
 interface RevealState {
   startAt: number;
@@ -57,11 +57,10 @@ export function CanvasGrid({
   const rafRef = useRef<number | null>(null);
   const dirtyRef = useRef(true);
   const drawRef = useRef<() => void>(() => {});
-  const renderGenerationRef = useRef(0);
   const firstPaintNotifiedRef = useRef(false);
   const lastVisibleSetRef = useRef<Set<string>>(new Set());
   const revealStatesRef = useRef<Map<string, RevealState>>(new Map());
-  const revealCursorRef = useRef(0);
+  const revealSlotsRef = useRef<number[]>([]);
   const scrollDirectionRef = useRef<-1 | 0 | 1>(0);
   const lastScrollTopRef = useRef(0);
   const backgroundColorRef = useRef<string>('rgb(24, 25, 27)');
@@ -115,6 +114,22 @@ export function CanvasGrid({
     dirtyRef.current = true;
     scheduleRedraw();
   }, [aspectRatios, targetSize, viewMode, textHeight, scheduleRedraw]);
+
+  const nextRevealSlot = useCallback((now: number): number => {
+    const activeSlots = revealSlotsRef.current.filter((t) => now - t < REVEAL_DURATION_MS);
+    if (activeSlots.length < MAX_CONCURRENT_REVEALS) {
+      activeSlots.push(now);
+      revealSlotsRef.current = activeSlots;
+      return now;
+    }
+
+    const oldest = activeSlots[0];
+    const staggered = oldest + REVEAL_DURATION_MS;
+    activeSlots.shift();
+    activeSlots.push(staggered);
+    revealSlotsRef.current = activeSlots;
+    return staggered;
+  }, []);
 
   const draw = useCallback(() => {
     const container = containerRef.current;
@@ -179,14 +194,14 @@ export function CanvasGrid({
 
     const now = performance.now();
     const visibleSet = new Set(visibleHashes);
-    let revealCursor = Math.max(now, revealCursorRef.current);
     for (const hash of visibleHashes) {
       if (!lastVisibleSetRef.current.has(hash)) {
-        revealStatesRef.current.set(hash, { startAt: revealCursor });
-        revealCursor += REVEAL_STAGGER_MS;
+        revealStatesRef.current.set(hash, { startAt: nextRevealSlot(now) });
       }
     }
-    revealCursorRef.current = revealCursor;
+    for (const hash of revealStatesRef.current.keys()) {
+      if (!visibleSet.has(hash)) revealStatesRef.current.delete(hash);
+    }
     lastVisibleSetRef.current = visibleSet;
 
     const revealProgressByHash = new Map<string, number>();
@@ -290,11 +305,10 @@ export function CanvasGrid({
   }, [recomputeLayout]);
 
   useEffect(() => {
-    renderGenerationRef.current += 1;
     firstPaintNotifiedRef.current = false;
     lastVisibleSetRef.current = new Set();
     revealStatesRef.current.clear();
-    revealCursorRef.current = 0;
+    revealSlotsRef.current = [];
     dirtyRef.current = true;
     scheduleRedraw();
   }, [items, viewMode, targetSize, showName, showExtension, scheduleRedraw]);

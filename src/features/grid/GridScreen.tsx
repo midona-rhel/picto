@@ -31,7 +31,7 @@ const GRID_SYSTEM_SCOPES: Record<string, string> = {
 };
 
 const NON_GRID_NODES = new Set(['system:duplicates', 'system:recent_viewed']);
-const SCOPE_TRANSITION_MS = 140;
+const SCOPE_TRANSITION_MS = 250;
 
 interface SurfaceSnapshot {
   items: CanonicalEntityGridItem[];
@@ -69,7 +69,7 @@ export function GridScreen() {
   const showExtension = useAtomValue(gridShowExtensionAtom);
 
   const [outgoingSurface, setOutgoingSurface] = useState<SurfaceSnapshot | null>(null);
-  const [transitionPhase, setTransitionPhase] = useState<'idle' | 'waiting' | 'fading'>('idle');
+  const [transitionPhase, setTransitionPhase] = useState<'idle' | 'fading_out' | 'waiting' | 'fading_in'>('idle');
   const lastScrollTopRef = useRef(0);
   const previousNodeIdRef = useRef(activeNodeId);
   const transitionTimerRef = useRef<number | null>(null);
@@ -100,7 +100,7 @@ export function GridScreen() {
     }
   }, [isGridScope, items, showExtension, showName, targetSize, viewMode]);
 
-  const beginFade = useCallback(() => {
+  const beginFadeIn = useCallback(() => {
     setTransitionPhase((phase) => {
       if (phase !== 'waiting') return phase;
       if (transitionTimerRef.current != null) {
@@ -108,10 +108,9 @@ export function GridScreen() {
       }
       transitionTimerRef.current = window.setTimeout(() => {
         transitionTimerRef.current = null;
-        setOutgoingSurface(null);
         setTransitionPhase('idle');
       }, SCOPE_TRANSITION_MS);
-      return 'fading';
+      return 'fading_in';
     });
   }, []);
 
@@ -121,7 +120,15 @@ export function GridScreen() {
 
     if (previousScope && nextScope && latestRenderableSurfaceRef.current) {
       setOutgoingSurface(latestRenderableSurfaceRef.current);
-      setTransitionPhase('waiting');
+      setTransitionPhase('fading_out');
+      if (transitionTimerRef.current != null) {
+        window.clearTimeout(transitionTimerRef.current);
+      }
+      transitionTimerRef.current = window.setTimeout(() => {
+        transitionTimerRef.current = null;
+        setOutgoingSurface(null);
+        setTransitionPhase('waiting');
+      }, SCOPE_TRANSITION_MS);
     } else {
       clearTransition();
     }
@@ -137,17 +144,9 @@ export function GridScreen() {
   useEffect(() => {
     if (transitionPhase !== 'waiting') return;
     if (!loading && (error || items.length === 0 || !isGridScope)) {
-      beginFade();
+      beginFadeIn();
     }
-  }, [beginFade, error, isGridScope, items.length, loading, transitionPhase]);
-
-  useEffect(() => {
-    if (outgoingSurface || transitionPhase !== 'idle') return;
-    if (loading && items.length === 0 && latestRenderableSurfaceRef.current) {
-      setOutgoingSurface(latestRenderableSurfaceRef.current);
-      setTransitionPhase('waiting');
-    }
-  }, [items.length, loading, outgoingSurface, transitionPhase]);
+  }, [beginFadeIn, error, isGridScope, items.length, loading, transitionPhase]);
 
   useEffect(() => () => {
     if (transitionTimerRef.current != null) {
@@ -155,8 +154,9 @@ export function GridScreen() {
     }
   }, []);
 
-  const incomingHidden = outgoingSurface && transitionPhase === 'waiting';
-  const outgoingFading = outgoingSurface && transitionPhase === 'fading';
+  const incomingHidden = transitionPhase === 'fading_out' || transitionPhase === 'waiting';
+  const incomingFadingIn = transitionPhase === 'fading_in';
+  const outgoingFading = outgoingSurface && transitionPhase === 'fading_out';
   const isEmpty = items.length === 0 && !loading;
 
   const renderIncomingSurface = () => {
@@ -191,7 +191,7 @@ export function GridScreen() {
         targetSize={targetSize}
         showName={showName}
         showExtension={showExtension}
-        onFirstPaint={beginFade}
+        onFirstPaint={beginFadeIn}
         onScrollTopChange={(scrollTop) => { lastScrollTopRef.current = scrollTop; }}
         onTileClick={(_index, _item) => { /* TODO: selection / viewer — PBI-593 */ }}
         onLoadMore={cursor ? () => gridController.loadNextPage() : undefined}
@@ -204,7 +204,11 @@ export function GridScreen() {
       <div className={styles.surfaceStack}>
         <div
           className={`${styles.surface} ${
-            incomingHidden ? styles.surfaceIncomingHidden : styles.surfaceIncomingVisible
+            incomingHidden
+              ? styles.surfaceIncomingHidden
+              : incomingFadingIn
+                ? styles.surfaceIncomingFadeIn
+                : styles.surfaceIncomingVisible
           }`}
         >
           {renderIncomingSurface()}
