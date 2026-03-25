@@ -75,6 +75,7 @@ export function GridScreen() {
   const transitionTimerRef = useRef<number | null>(null);
   const fadeInFrameRef = useRef<number | null>(null);
   const latestRenderableSurfaceRef = useRef<SurfaceSnapshot | null>(null);
+  const pendingNodeIdRef = useRef(activeNodeId);
 
   const scope = nodeIdToScope(activeNodeId);
   const isGridScope = scope !== null;
@@ -129,28 +130,44 @@ export function GridScreen() {
   useEffect(() => {
     const previousScope = nodeIdToScope(previousNodeIdRef.current);
     const nextScope = nodeIdToScope(activeNodeId);
+    pendingNodeIdRef.current = activeNodeId;
+
+    if (transitionTimerRef.current != null) {
+      window.clearTimeout(transitionTimerRef.current);
+      transitionTimerRef.current = null;
+    }
+    if (fadeInFrameRef.current != null) {
+      window.cancelAnimationFrame(fadeInFrameRef.current);
+      fadeInFrameRef.current = null;
+    }
 
     if (previousScope && nextScope && latestRenderableSurfaceRef.current) {
       setOutgoingSurface(latestRenderableSurfaceRef.current);
       setTransitionPhase('fading_out');
-      if (transitionTimerRef.current != null) {
-        window.clearTimeout(transitionTimerRef.current);
-      }
       transitionTimerRef.current = window.setTimeout(() => {
         transitionTimerRef.current = null;
+        const committedNodeId = pendingNodeIdRef.current;
+        const committedScope = nodeIdToScope(committedNodeId);
         setOutgoingSurface(null);
         setTransitionPhase('waiting');
+        if (committedScope) {
+          void gridController.navigateTo(committedScope);
+        } else {
+          gridController.deactivate();
+        }
+        previousNodeIdRef.current = committedNodeId;
       }, SCOPE_TRANSITION_MS);
-    } else {
-      clearTransition();
+      return;
     }
 
     if (nextScope) {
-      gridController.navigateTo(nextScope);
+      void gridController.navigateTo(nextScope);
+      previousNodeIdRef.current = activeNodeId;
     } else {
       gridController.deactivate();
+      previousNodeIdRef.current = activeNodeId;
+      clearTransition();
     }
-    previousNodeIdRef.current = activeNodeId;
   }, [activeNodeId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
