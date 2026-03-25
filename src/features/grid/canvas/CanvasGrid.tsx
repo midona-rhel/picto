@@ -64,6 +64,7 @@ export function CanvasGrid({
   const revealCursorRef = useRef(0);
   const scrollDirectionRef = useRef<-1 | 0 | 1>(0);
   const lastScrollTopRef = useRef(0);
+  const backgroundColorRef = useRef<string>('rgb(24, 25, 27)');
 
   const textHeight = showName ? TEXT_NAME_ROW_H : 0;
 
@@ -143,6 +144,8 @@ export function CanvasGrid({
     const ctx = baseContextRef.current;
     if (!ctx) return;
 
+    backgroundColorRef.current = getComputedStyle(container).backgroundColor || backgroundColorRef.current;
+
     const { positions } = layoutRef.current;
     const plan = buildVisibilityPlan(positions, scrollTop, height, scrollDirectionRef.current);
 
@@ -202,7 +205,11 @@ export function CanvasGrid({
     }
 
     if (dirtyRef.current || needsNextAnimationFrame) {
-      ctx.clearRect(0, 0, baseCanvas.width, baseCanvas.height);
+      ctx.save();
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.fillStyle = backgroundColorRef.current;
+      ctx.fillRect(0, 0, baseCanvas.width, baseCanvas.height);
+      ctx.restore();
       ctx.save();
       ctx.translate(0, -scrollTop * dpr);
       drawBaseLayer({
