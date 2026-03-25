@@ -18,8 +18,7 @@ import {
 } from '../../state/grid';
 import { gridController } from '../../controllers/gridController';
 import { CanvasGrid } from './canvas/CanvasGrid';
-import type { BaseScope, CanonicalEntityGridItem } from '../../shared/types/canonical';
-import type { GridViewMode } from './layout/types';
+import type { BaseScope } from '../../shared/types/canonical';
 import styles from './GridScreen.module.css';
 
 const GRID_SYSTEM_SCOPES: Record<string, string> = {
@@ -32,15 +31,6 @@ const GRID_SYSTEM_SCOPES: Record<string, string> = {
 
 const NON_GRID_NODES = new Set(['system:duplicates', 'system:recent_viewed']);
 const SCOPE_TRANSITION_MS = 250;
-
-interface SurfaceSnapshot {
-  items: CanonicalEntityGridItem[];
-  viewMode: GridViewMode;
-  targetSize: number;
-  showName: boolean;
-  showExtension: boolean;
-  scrollTop: number;
-}
 
 function nodeIdToScope(nodeId: string): BaseScope | null {
   if (nodeId.startsWith('folder:')) {
@@ -68,14 +58,14 @@ export function GridScreen() {
   const showName = useAtomValue(gridShowNameAtom);
   const showExtension = useAtomValue(gridShowExtensionAtom);
 
-  const [outgoingSurface, setOutgoingSurface] = useState<SurfaceSnapshot | null>(null);
   const [transitionPhase, setTransitionPhase] = useState<'idle' | 'fading_out' | 'waiting' | 'fading_in'>('idle');
   const lastScrollTopRef = useRef(0);
   const previousNodeIdRef = useRef(activeNodeId);
   const transitionTimerRef = useRef<number | null>(null);
   const fadeInFrameRef = useRef<number | null>(null);
-  const latestRenderableSurfaceRef = useRef<SurfaceSnapshot | null>(null);
   const pendingNodeIdRef = useRef(activeNodeId);
+  const itemsLengthRef = useRef(items.length);
+  itemsLengthRef.current = items.length;
 
   const scope = nodeIdToScope(activeNodeId);
   const isGridScope = scope !== null;
@@ -89,22 +79,8 @@ export function GridScreen() {
       window.cancelAnimationFrame(fadeInFrameRef.current);
       fadeInFrameRef.current = null;
     }
-    setOutgoingSurface(null);
     setTransitionPhase('idle');
   }, []);
-
-  useEffect(() => {
-    if (items.length > 0 && isGridScope) {
-      latestRenderableSurfaceRef.current = {
-        items,
-        viewMode,
-        targetSize,
-        showName,
-        showExtension,
-        scrollTop: lastScrollTopRef.current,
-      };
-    }
-  }, [isGridScope, items, showExtension, showName, targetSize, viewMode]);
 
   const beginFadeIn = useCallback(() => {
     if (fadeInFrameRef.current != null) {
@@ -141,14 +117,12 @@ export function GridScreen() {
       fadeInFrameRef.current = null;
     }
 
-    if (previousScope && nextScope && latestRenderableSurfaceRef.current) {
-      setOutgoingSurface(latestRenderableSurfaceRef.current);
+    if (previousScope && itemsLengthRef.current > 0) {
       setTransitionPhase('fading_out');
       transitionTimerRef.current = window.setTimeout(() => {
         transitionTimerRef.current = null;
         const committedNodeId = pendingNodeIdRef.current;
         const committedScope = nodeIdToScope(committedNodeId);
-        setOutgoingSurface(null);
         setTransitionPhase('waiting');
         if (committedScope) {
           void gridController.navigateTo(committedScope);
@@ -168,7 +142,7 @@ export function GridScreen() {
       previousNodeIdRef.current = activeNodeId;
       clearTransition();
     }
-  }, [activeNodeId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [activeNodeId, clearTransition]);
 
   useEffect(() => {
     if (transitionPhase !== 'waiting') return;
@@ -186,9 +160,9 @@ export function GridScreen() {
     }
   }, []);
 
-  const incomingHidden = transitionPhase === 'fading_out' || transitionPhase === 'waiting';
+  const incomingHidden = transitionPhase === 'waiting';
+  const incomingFadingOut = transitionPhase === 'fading_out';
   const incomingFadingIn = transitionPhase === 'fading_in';
-  const outgoingFading = outgoingSurface && transitionPhase === 'fading_out';
   const isEmpty = items.length === 0 && !loading;
 
   const renderIncomingSurface = () => {
@@ -223,6 +197,7 @@ export function GridScreen() {
         targetSize={targetSize}
         showName={showName}
         showExtension={showExtension}
+        suppressTileReveal={transitionPhase !== 'idle'}
         onFirstPaint={beginFadeIn}
         onScrollTopChange={(scrollTop) => { lastScrollTopRef.current = scrollTop; }}
         onTileClick={(_index, _item) => { /* TODO: selection / viewer — PBI-593 */ }}
@@ -233,36 +208,18 @@ export function GridScreen() {
 
   return (
     <div className={styles.root}>
-      <div className={styles.surfaceStack}>
-        <div
-          className={`${styles.surface} ${
-            incomingHidden
-              ? styles.surfaceIncomingHidden
+      <div
+        className={`${styles.surface} ${
+          incomingHidden
+            ? styles.surfaceIncomingHidden
+            : incomingFadingOut
+              ? styles.surfaceFadeOut
               : incomingFadingIn
                 ? styles.surfaceIncomingFadeIn
                 : styles.surfaceIncomingVisible
-          }`}
-        >
-          {renderIncomingSurface()}
-        </div>
-
-        {outgoingSurface && (
-          <div
-            className={`${styles.surface} ${styles.surfaceOutgoing} ${
-              outgoingFading ? styles.surfaceOutgoingFade : ''
-            }`}
-          >
-            <CanvasGrid
-              items={outgoingSurface.items}
-              viewMode={outgoingSurface.viewMode}
-              targetSize={outgoingSurface.targetSize}
-              showName={outgoingSurface.showName}
-              showExtension={outgoingSurface.showExtension}
-              interactive={false}
-              frozenScrollTop={outgoingSurface.scrollTop}
-            />
-          </div>
-        )}
+        }`}
+      >
+        {renderIncomingSurface()}
       </div>
     </div>
   );

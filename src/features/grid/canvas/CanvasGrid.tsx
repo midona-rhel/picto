@@ -34,6 +34,7 @@ interface CanvasGridProps {
   onScrollTopChange?: (scrollTop: number) => void;
   interactive?: boolean;
   frozenScrollTop?: number;
+  suppressTileReveal?: boolean;
 }
 
 export function CanvasGrid({
@@ -48,6 +49,7 @@ export function CanvasGrid({
   onScrollTopChange,
   interactive = true,
   frozenScrollTop = 0,
+  suppressTileReveal = false,
 }: CanvasGridProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
@@ -100,20 +102,22 @@ export function CanvasGrid({
   );
 
   const layoutRef = useRef<ReturnType<typeof computeLayout>>({ positions: [], totalHeight: 0 });
+  const targetSizeRef = useRef(targetSize);
+  targetSizeRef.current = targetSize;
 
   const recomputeLayout = useCallback(() => {
     const container = containerRef.current;
     if (!container) return;
 
     const width = container.clientWidth;
-    layoutRef.current = computeLayout(aspectRatios, width, targetSize, GAP, viewMode, textHeight, PADDING_X);
+    layoutRef.current = computeLayout(aspectRatios, width, targetSizeRef.current, GAP, viewMode, textHeight, PADDING_X);
 
     if (wrapRef.current) wrapRef.current.style.height = `${layoutRef.current.totalHeight}px`;
     if (viewportRef.current) viewportRef.current.style.height = `${container.clientHeight}px`;
 
     dirtyRef.current = true;
     scheduleRedraw();
-  }, [aspectRatios, targetSize, viewMode, textHeight, scheduleRedraw]);
+  }, [aspectRatios, viewMode, textHeight, scheduleRedraw]);
 
   const nextRevealSlot = useCallback((now: number): number => {
     const activeSlots = revealSlotsRef.current.filter((t) => now - t < REVEAL_DURATION_MS);
@@ -192,30 +196,38 @@ export function CanvasGrid({
     });
     pipeline.evict(new Set([...visibleHashes, ...aheadHashes, ...behindHashes]));
 
-    const now = performance.now();
-    const visibleSet = new Set(visibleHashes);
-    for (const hash of visibleHashes) {
-      if (!lastVisibleSetRef.current.has(hash)) {
-        revealStatesRef.current.set(hash, { startAt: nextRevealSlot(now) });
-      }
-    }
-    for (const hash of revealStatesRef.current.keys()) {
-      if (!visibleSet.has(hash)) revealStatesRef.current.delete(hash);
-    }
-    lastVisibleSetRef.current = visibleSet;
-
     const revealProgressByHash = new Map<string, number>();
     let needsNextAnimationFrame = false;
-    for (const hash of visibleHashes) {
-      const state = revealStatesRef.current.get(hash);
-      if (!state) {
+    if (suppressTileReveal) {
+      for (const hash of visibleHashes) {
         revealProgressByHash.set(hash, 1);
-        continue;
       }
-      const progress = Math.max(0, Math.min(1, (now - state.startAt) / REVEAL_DURATION_MS));
-      revealProgressByHash.set(hash, progress);
-      if (progress < 1 && pipeline.get(hash)) {
-        needsNextAnimationFrame = true;
+      // Track visible set so tiles don't re-fade when suppress ends
+      lastVisibleSetRef.current = new Set(visibleHashes);
+    } else {
+      const now = performance.now();
+      const visibleSet = new Set(visibleHashes);
+      for (const hash of visibleHashes) {
+        if (!lastVisibleSetRef.current.has(hash)) {
+          revealStatesRef.current.set(hash, { startAt: nextRevealSlot(now) });
+        }
+      }
+      for (const hash of revealStatesRef.current.keys()) {
+        if (!visibleSet.has(hash)) revealStatesRef.current.delete(hash);
+      }
+      lastVisibleSetRef.current = visibleSet;
+
+      for (const hash of visibleHashes) {
+        const state = revealStatesRef.current.get(hash);
+        if (!state) {
+          revealProgressByHash.set(hash, 1);
+          continue;
+        }
+        const progress = Math.max(0, Math.min(1, (now - state.startAt) / REVEAL_DURATION_MS));
+        revealProgressByHash.set(hash, progress);
+        if (progress < 1 && pipeline.get(hash)) {
+          needsNextAnimationFrame = true;
+        }
       }
     }
 
@@ -261,7 +273,9 @@ export function CanvasGrid({
     scheduleRedraw,
     showExtension,
     showName,
+    suppressTileReveal,
     textHeight,
+    nextRevealSlot,
   ]);
 
   drawRef.current = draw;
@@ -291,18 +305,38 @@ export function CanvasGrid({
     return () => container.removeEventListener('scroll', handleScroll);
   }, [interactive, onLoadMore, onScrollTopChange, scheduleRedraw]);
 
+  // Debounced resize — freeze layout during active window drag
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
+    let timer: number | null = null;
+    const DEBOUNCE = 150;
 
-    const ro = new ResizeObserver(() => recomputeLayout());
+    const ro = new ResizeObserver(() => {
+      if (timer != null) clearTimeout(timer);
+      timer = window.setTimeout(() => {
+        timer = null;
+        recomputeLayout();
+      }, DEBOUNCE);
+    });
+
     ro.observe(container);
-    return () => ro.disconnect();
+    return () => {
+      ro.disconnect();
+      if (timer != null) clearTimeout(timer);
+    };
   }, [recomputeLayout]);
 
+  // Immediate layout on items/viewMode change
   useEffect(() => {
     recomputeLayout();
   }, [recomputeLayout]);
+
+  // Debounced layout on zoom slider drag
+  useEffect(() => {
+    const timer = window.setTimeout(() => recomputeLayout(), 80);
+    return () => clearTimeout(timer);
+  }, [targetSize]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     firstPaintNotifiedRef.current = false;

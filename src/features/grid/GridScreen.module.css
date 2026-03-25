@@ -7,20 +7,20 @@
   position: relative;
 }
 
-.surfaceStack {
-  position: relative;
+.surface {
   width: 100%;
   height: 100%;
-}
-
-.surface {
-  position: absolute;
-  inset: 0;
 }
 
 .surfaceIncomingHidden {
   opacity: 0;
   pointer-events: none;
+}
+
+.surfaceFadeOut {
+  opacity: 0;
+  transition: opacity 250ms var(--ease-default);
+  will-change: opacity;
 }
 
 .surfaceIncomingFadeIn {
@@ -31,17 +31,6 @@
 
 .surfaceIncomingVisible {
   opacity: 1;
-  will-change: opacity;
-}
-
-.surfaceOutgoing {
-  pointer-events: none;
-  opacity: 1;
-}
-
-.surfaceOutgoingFade {
-  opacity: 0;
-  transition: opacity 250ms var(--ease-default);
   will-change: opacity;
 }
 

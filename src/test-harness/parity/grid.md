@@ -4,39 +4,58 @@ Reference: PBI-592 (grid screen rebuild)
 Fixtures: `src/test-harness/fixtures/grid.ts`
 Last evaluated: 2026-03-24
 
+## Current state
+
+The grid screen is a working canvas-based renderer prototype. It is **not yet activatable**
+per PBI-592 because the canonical query model (PBI-584), selection model, and parity
+confirmation against fixtures are not in place. The data path still routes through the
+legacy `get_grid_page_slim` command because the new LibraryDatabase tables are not populated.
+
 ## Toolbar
 
-- [x] Scope label shows current view name (All, Inbox, Trash, Folder, Smart Folder, etc.)
+- [ ] Scope label shows current view name — **not implemented**, toolbar has no scope label
 - [x] Item count displays with tabular-nums formatting
 - [x] Sort field selector with 6 options (Date Added, Date Created, Date Modified, Name, Rating, Size)
 - [x] Sort direction toggle (asc/desc) with icon indicator
 - [x] Loading indicator (pulsing dot) when data is being fetched
 - [x] Changing sort reloads the grid via controller
+- [x] View mode toggle (waterfall / grid / justified) with segmented button group
+- [x] Zoom slider (100–900px target size)
+- [ ] Filter button placeholder — **not implemented**
 
-## Tile rendering
+## Tile rendering (canvas)
 
-- [x] Image tiles show thumbnail via media:// protocol
-- [x] Tiles show dominant_color_hex as background placeholder
-- [x] Video tiles show duration badge (top-right)
-- [x] Video tiles with has_audio show audio indicator
-- [x] Collection tiles show member_count badge
-- [x] Tiles without thumbnails show type placeholder text
-- [x] Name label renders at bottom with gradient overlay
-- [x] Rating stars render at top-left when rating > 0
+- [x] Thumbnail loading via `media://` protocol using `<img>` → `createImageBitmap`
+- [x] Dominant color placeholder fill when thumbnail not yet loaded
+- [x] Video duration badge (top-right, dark rounded rect, white text)
+- [ ] Audio indicator for video tiles — **not implemented** in canvas draw path
+- [x] Collection member count badge
+- [x] Extension badge (bottom-right, when `showExtension` enabled)
+- [x] Rating stars at top-left (gold, repeated ★ character)
+- [x] Name text below tile (truncated with ellipsis, when `showName` enabled)
+- [ ] Resolution text below name — **not implemented**, no `gridShowResolutionAtom`
+- [x] Glass inner border (`rgba(255,255,255,0.2)`, 1px inset, rounded)
+- [x] Center-crop image drawing (`drawImageCover`)
+- [ ] Animated thumbnail reveal (fade-in ~150ms) — **not implemented**, thumbnails appear at full opacity
+- [ ] Staggered reveal timing (max concurrent fades) — **not implemented**
 
 ## Layout
 
-- [x] Grid uses auto-fill columns with min 180px
-- [x] Tiles are square (aspect-ratio: 1)
-- [x] Tiles have rounded corners
-- [x] Hover shows primary-color ring
+- [x] Waterfall (masonry) layout — shortest-column placement
+- [x] Grid (uniform square) layout
+- [x] Justified (row-fill) layout with last-row fix
+- [x] Column count derived from container width and target size
+- [x] Rounded corners via canvas `roundRect` clip
+- [x] Hover ring on overlay canvas (blue, 2px)
 - [x] Scrollbar-gutter: stable
+- [ ] Resize-freeze during window drag — **not implemented**, recomputes every ResizeObserver tick
 
 ## Pagination
 
 - [x] First page loads automatically on scope change
-- [x] Scroll-to-load fetches next page using cursor
-- [x] Loading state shows during fetch
+- [x] Scroll-to-load fetches next page using cursor (400px threshold)
+- [x] Loading state displayed during fetch
+- [x] Version token prevents stale page results from overwriting newer data
 
 ## States
 
@@ -44,29 +63,49 @@ Last evaluated: 2026-03-24
 - [x] Error state: error message + Retry button
 - [x] Non-grid surface: "This view is not available yet"
 
-## Reconcile
+## Reconcile / settle
 
 - [x] Metadata-only changes patch visible rows in place
 - [x] Membership changes use ReplaceWindow (one round-trip)
 - [x] Stale reconcile results are version-gated
 - [x] Grid settle is scope-aware and ignores unrelated events
+- [x] Compiler batch triggers refresh for smart folder / system scopes
 
-## Not yet implemented (follow-up PBIs)
+## Data path (known constraints)
 
-- [ ] Click-to-select single tile — PBI-593
-- [ ] Multi-select (Cmd/Ctrl+click, Shift+click, Cmd+A) — PBI-593/584
-- [ ] Tile context menu (right-click actions) — PBI-593
-- [ ] Filter bar — follow-up PBI-592 chunk
-- [ ] Drag from grid to sidebar folder — follow-up
-- [ ] Keyboard navigation (arrow keys) — follow-up
-- [ ] Rating shortcut keys (0-5) — follow-up
-- [ ] Delete key → trash — PBI-593
-- [ ] View mode toggle (grid/list) — follow-up
-- [ ] Tile size slider — follow-up
+- [ ] Canonical `query_entity_view` command — **not in use**, routed through legacy `get_grid_page_slim`
+- [ ] Smart folder scope passes predicate/ID — **broken**, maps to `{ kind: 'smart' }` with no identifier
+- [ ] Filters are translated — **hardcoded to `{}`**
+- [x] Legacy response items mapped to `CanonicalEntityGridItem` type
 
-## Accepted differences from legacy
+## Selection — **not implemented** (PBI-593 / PBI-584)
 
-- Sort selector is a native `<select>` instead of a custom dropdown — intentional simplification for this chunk
-- No filter bar yet — follow-up chunk
-- No tile name overlay toggle — follow-up
-- No view mode toggle — follow-up
+- [ ] Click-to-select single tile
+- [ ] Multi-select (Cmd/Ctrl+click, Shift+click, Cmd+A)
+- [ ] Selection state drives overlay canvas rendering
+- [ ] Selection-driven actions target what user actually selected
+- [ ] Virtual selection / select-all semantics
+
+## Interaction
+
+- [x] Click hit-testing (identifies tile under pointer)
+- [x] Hover state tracking (overlay canvas redraw)
+- [ ] Tile context menu (right-click actions) — **not implemented**
+- [ ] Keyboard navigation (arrow keys) — **not implemented**
+- [ ] Drag from grid to sidebar folder — **not implemented**
+
+## Not yet started
+
+- [ ] Per-scope view preferences (load/save via `get_view_prefs` / `set_view_prefs`)
+- [ ] Scroll-phase-aware prefetch (idle/slow/fast)
+- [ ] Full-quality image lifecycle (only thumbnails are loaded currently)
+- [ ] Shared preview primitive (tile visuals are feature-owned, not shared per PBI-594)
+- [ ] Parity harness renders rebuilt grid against fixtures (currently JSON-only)
+
+## PBI activation blockers
+
+1. Legacy `get_grid_page_slim` bridge must be replaced with canonical `query_entity_view` (PBI-584)
+2. Selection model must exist (PBI-593, gated by PBI-584)
+3. Parity harness must render rebuilt grid surfaces, not just fixture JSON (PBI-590)
+4. Smart folder scope mapping must be correct
+5. Shared preview primitive contract must be demonstrated (PBI-594)
