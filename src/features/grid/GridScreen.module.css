@@ -20,20 +20,17 @@
 
 .surfaceIncomingHidden {
   opacity: 0;
-  visibility: hidden;
   pointer-events: none;
 }
 
 .surfaceIncomingFadeIn {
   opacity: 1;
-  visibility: visible;
   transition: opacity 250ms var(--ease-default);
   will-change: opacity;
 }
 
 .surfaceIncomingVisible {
   opacity: 1;
-  visibility: visible;
   will-change: opacity;
 }
 
