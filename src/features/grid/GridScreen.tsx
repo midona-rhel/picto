@@ -15,6 +15,7 @@ import {
   gridTargetSizeAtom,
   gridShowNameAtom,
   gridShowExtensionAtom,
+  gridScopeLabelAtom,
 } from '../../state/grid';
 import { gridController } from '../../controllers/gridController';
 import { CanvasGrid } from './canvas/CanvasGrid';
@@ -57,6 +58,7 @@ export function GridScreen() {
   const targetSize = useAtomValue(gridTargetSizeAtom);
   const showName = useAtomValue(gridShowNameAtom);
   const showExtension = useAtomValue(gridShowExtensionAtom);
+  const scopeLabel = useAtomValue(gridScopeLabelAtom);
 
   const [transitionPhase, setTransitionPhase] = useState<'idle' | 'fading_out' | 'waiting' | 'fading_in'>('idle');
   const lastScrollTopRef = useRef(0);
@@ -185,7 +187,7 @@ export function GridScreen() {
       return (
         <div className={styles.empty}>
           <IconPhotoOff size={32} stroke={1} className={styles.emptyIcon} />
-          <span>No items</span>
+          <span>{scopeLabel ? `No items in ${scopeLabel}` : 'No items'}</span>
         </div>
       );
     }

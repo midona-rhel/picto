@@ -2,7 +2,7 @@
 
 Reference: PBI-592 (grid screen rebuild)
 Fixtures: `src/test-harness/fixtures/grid.ts`
-Last evaluated: 2026-03-24
+Last evaluated: 2026-03-25
 
 ## Current state
 
@@ -13,14 +13,15 @@ legacy `get_grid_page_slim` command because the new LibraryDatabase tables are n
 
 ## Toolbar
 
-- [ ] Scope label shows current view name — **not implemented**, toolbar has no scope label
+- [x] Scope label shows current view name (derived from sidebar nodes)
 - [x] Item count displays with tabular-nums formatting
 - [x] Sort field selector with 6 options (Date Added, Date Created, Date Modified, Name, Rating, Size)
 - [x] Sort direction toggle (asc/desc) with icon indicator
 - [x] Loading indicator (pulsing dot) when data is being fetched
 - [x] Changing sort reloads the grid via controller
 - [x] View mode toggle (waterfall / grid / justified) with segmented button group
-- [x] Zoom slider (100–900px target size)
+- [x] Zoom minus/plus buttons with slider (100–900px, step 50)
+- [x] Search input field (Cmd+F focus) — **UI only, not wired to query**
 - [ ] Filter button placeholder — **not implemented**
 
 ## Tile rendering (canvas)
@@ -34,10 +35,13 @@ legacy `get_grid_page_slim` command because the new LibraryDatabase tables are n
 - [x] Rating stars at top-left (gold, repeated ★ character)
 - [x] Name text below tile (truncated with ellipsis, when `showName` enabled)
 - [ ] Resolution text below name — **not implemented**, no `gridShowResolutionAtom`
-- [x] Glass inner border (`rgba(255,255,255,0.2)`, 1px inset, rounded)
-- [x] Center-crop image drawing (`drawImageCover`)
-- [ ] Animated thumbnail reveal (fade-in ~150ms) — **not implemented**, thumbnails appear at full opacity
-- [ ] Staggered reveal timing (max concurrent fades) — **not implemented**
+- [x] Glass inner border (`rgba(255,255,255,0.15)`, 1px inset, 8px radius)
+- [x] Center-crop image drawing (`drawImageCover`) with rounded clip
+- [x] Animated thumbnail reveal (fade-in 250ms over dominant color placeholder)
+- [x] Staggered reveal timing (max 54 concurrent fades)
+- [x] Collection thumbnails use primary member hash (no 404 for collections)
+- [x] Placeholder skipped once image fully revealed (no wasted draws)
+- [x] VRAM-budgeted image cache (1GB cap, LRU eviction)
 
 ## Layout
 

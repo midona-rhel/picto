@@ -1,19 +1,17 @@
 /**
  * Visibility planning — determine which items are visible and should be prefetched.
  * Uses binary search for fast visible-range lookup in large item sets.
+ *
+ * Accepts scratch arrays for prefetch indices to avoid per-frame allocations.
  */
 
 import type { LayoutItem } from '../layout/types';
 import { lowerBound } from '../layout/layoutMath';
 
 export interface VisibilityPlan {
-  /** First visible item index. */
   start: number;
-  /** One past the last visible item index. */
   end: number;
-  /** Indices ahead of the current scroll direction. */
   aheadPrefetchIndices: number[];
-  /** Indices behind the current scroll direction. */
   behindPrefetchIndices: number[];
 }
 
@@ -22,17 +20,23 @@ export function buildVisibilityPlan(
   scrollTop: number,
   viewportHeight: number,
   scrollDirection: -1 | 0 | 1,
+  aheadOut: number[] = [],
+  behindOut: number[] = [],
 ): VisibilityPlan {
+  aheadOut.length = 0;
+  behindOut.length = 0;
+
   if (positions.length === 0) {
-    return { start: 0, end: 0, aheadPrefetchIndices: [], behindPrefetchIndices: [] };
+    return { start: 0, end: 0, aheadPrefetchIndices: aheadOut, behindPrefetchIndices: behindOut };
   }
 
-  const visibleTop = scrollTop;
-  const visibleBottom = scrollTop + viewportHeight;
+  // Extend visible range by ~1 row above and below to prevent flicker.
+  // Estimate row height from the first position (all rows are similar height).
+  const rowH = positions[0].h;
+  const visibleTop = Math.max(0, scrollTop - rowH);
+  const visibleBottom = scrollTop + viewportHeight + rowH;
 
-  // Binary search for first item whose bottom edge is >= visibleTop
   const start = lowerBound(positions, visibleTop);
-  // Find last item whose top edge is <= visibleBottom
   let end = start;
   while (end < positions.length && positions[end].y < visibleBottom) {
     end++;
@@ -51,18 +55,16 @@ export function buildVisibilityPlan(
     ? visibleTop
     : scrollTop + viewportHeight + backwardDistance;
 
-  const aheadPrefetchIndices = collectIndices(positions, aheadTop, aheadBottom);
-  const behindPrefetchIndices = collectIndices(positions, behindTop, behindBottom);
+  collectInto(positions, aheadTop, aheadBottom, aheadOut);
+  collectInto(positions, behindTop, behindBottom, behindOut);
 
-  return { start, end, aheadPrefetchIndices, behindPrefetchIndices };
+  return { start, end, aheadPrefetchIndices: aheadOut, behindPrefetchIndices: behindOut };
 }
 
-function collectIndices(positions: LayoutItem[], fromY: number, toY: number): number[] {
-  if (toY <= fromY) return [];
+function collectInto(positions: LayoutItem[], fromY: number, toY: number, out: number[]) {
+  if (toY <= fromY) return;
   const start = Math.max(0, lowerBound(positions, fromY));
-  const indices: number[] = [];
   for (let i = start; i < positions.length && positions[i].y < toY; i++) {
-    indices.push(i);
+    out.push(i);
   }
-  return indices;
 }

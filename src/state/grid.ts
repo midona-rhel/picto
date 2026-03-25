@@ -5,6 +5,8 @@
 import { atom } from 'jotai';
 import type { CanonicalEntityGridItem, BaseScope } from '../shared/types/canonical';
 import type { GridViewMode } from '../features/grid/layout/types';
+import { activeNodeIdAtom } from './navigation';
+import { sidebarNodesAtom } from './sidebar';
 
 // ── Query inputs ─────────────────────────────────────────────────
 
@@ -39,6 +41,22 @@ export const gridActiveAtom = atom(true);
 export const gridEmptyAtom = atom((get) =>
   get(gridItemsAtom).length === 0 && !get(gridLoadingAtom),
 );
+
+/** Human-readable label for the current scope. Derived from sidebar nodes. */
+export const gridScopeLabelAtom = atom((get) => {
+  const nodeId = get(activeNodeIdAtom);
+  const nodes = get(sidebarNodesAtom);
+  const node = nodes.find((n) => n.id === nodeId);
+  if (node) return node.name;
+  const fallbacks: Record<string, string> = {
+    'system:active': 'All',
+    'system:inbox': 'Inbox',
+    'system:trash': 'Trash',
+    'system:uncategorized': 'Uncategorized',
+    'system:untagged': 'Untagged',
+  };
+  return fallbacks[nodeId] ?? '';
+});
 
 // Re-export types for convenience
 export type { GridViewMode };

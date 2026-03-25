@@ -67,8 +67,10 @@ function mapLegacyGridItem(raw: Record<string, unknown>): CanonicalEntityGridIte
   else if (statusRaw === 'trash') status = 2;
   else status = 1;
 
+  const entityHash = String(raw.hash ?? raw.entity_hash ?? '');
   return {
-    entity_hash: String(raw.hash ?? raw.entity_hash ?? ''),
+    entity_hash: entityHash,
+    thumbnail_hash: String(raw.thumbnail_hash ?? entityHash),
     entity_kind: (raw.kind as string) === 'collection' ? 'collection' : 'single',
     name: (raw.name as string | null) ?? null,
     mime_type: String(raw.mime ?? raw.mime_type ?? 'application/octet-stream'),

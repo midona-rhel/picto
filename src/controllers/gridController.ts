@@ -17,6 +17,7 @@ import {
 const store = getDefaultStore();
 
 let gridVersion = 0;
+let paginationInFlight: string | null = null;
 
 function currentQuery(limit: number): EntityViewQuery {
   return {
@@ -35,6 +36,7 @@ export const gridController = {
 
   deactivate() {
     gridVersion++;
+    paginationInFlight = null;
     store.set(gridActiveAtom, false);
   },
 
@@ -46,6 +48,7 @@ export const gridController = {
   },
 
   async loadFirstPage(options?: { preserveItems?: boolean }) {
+    paginationInFlight = null; // invalidate any in-flight next-page
     const v = ++gridVersion;
     store.set(gridLoadingAtom, true);
     store.set(gridErrorAtom, null);
@@ -71,18 +74,23 @@ export const gridController = {
   async loadNextPage() {
     const cursor = store.get(gridCursorAtom);
     if (!cursor) return;
+    // Guard: if this cursor is already being fetched, skip
+    if (paginationInFlight === cursor) return;
+    paginationInFlight = cursor;
     const v = gridVersion;
     store.set(gridLoadingAtom, true);
     try {
       const query = currentQuery(100);
       query.page = { limit: 100, cursor };
       const result = await api.queryEntityView(query);
-      if (v !== gridVersion) return;
+      if (v !== gridVersion || paginationInFlight !== cursor) return;
+      paginationInFlight = null;
       store.set(gridItemsAtom, [...store.get(gridItemsAtom), ...result.items]);
       store.set(gridCursorAtom, result.next_cursor);
       store.set(gridTotalCountAtom, result.total_count);
     } catch (err) {
       if (v !== gridVersion) return;
+      paginationInFlight = null;
       store.set(gridErrorAtom, err instanceof Error ? err.message : String(err));
     } finally {
       if (v === gridVersion) store.set(gridLoadingAtom, false);

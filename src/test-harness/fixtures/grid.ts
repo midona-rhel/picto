@@ -16,6 +16,7 @@ import type {
 
 export const jpegImage: CanonicalEntityGridItem = {
   entity_hash: 'a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2',
+  thumbnail_hash: 'a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2',
   entity_kind: 'single',
   name: 'sunset_beach.jpg',
   mime_type: 'image/jpeg',
@@ -37,6 +38,7 @@ export const jpegImage: CanonicalEntityGridItem = {
 
 export const pngImage: CanonicalEntityGridItem = {
   entity_hash: 'b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3',
+  thumbnail_hash: 'b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3',
   entity_kind: 'single',
   name: 'character_design_v3.png',
   mime_type: 'image/png',
@@ -58,6 +60,7 @@ export const pngImage: CanonicalEntityGridItem = {
 
 export const videoMp4: CanonicalEntityGridItem = {
   entity_hash: 'c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4',
+  thumbnail_hash: 'c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4',
   entity_kind: 'single',
   name: 'timelapse_clouds.mp4',
   mime_type: 'video/mp4',
@@ -79,6 +82,7 @@ export const videoMp4: CanonicalEntityGridItem = {
 
 export const videoWithAudio: CanonicalEntityGridItem = {
   entity_hash: 'd4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5',
+  thumbnail_hash: 'd4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5',
   entity_kind: 'single',
   name: 'interview_clip.mp4',
   mime_type: 'video/mp4',
@@ -100,6 +104,7 @@ export const videoWithAudio: CanonicalEntityGridItem = {
 
 export const animatedGif: CanonicalEntityGridItem = {
   entity_hash: 'e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6',
+  thumbnail_hash: 'e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6',
   entity_kind: 'single',
   name: 'loading_spinner.gif',
   mime_type: 'image/gif',
@@ -121,6 +126,7 @@ export const animatedGif: CanonicalEntityGridItem = {
 
 export const collection: CanonicalEntityGridItem = {
   entity_hash: 'f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1',
+  thumbnail_hash: 'f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1',
   entity_kind: 'collection',
   name: 'Beach Vacation 2026',
   mime_type: 'image/jpeg',
@@ -142,6 +148,7 @@ export const collection: CanonicalEntityGridItem = {
 
 export const noThumbnail: CanonicalEntityGridItem = {
   entity_hash: 'a7b8c9d0e1f2a7b8c9d0e1f2a7b8c9d0e1f2a7b8c9d0e1f2a7b8c9d0e1f2a7b8',
+  thumbnail_hash: 'a7b8c9d0e1f2a7b8c9d0e1f2a7b8c9d0e1f2a7b8c9d0e1f2a7b8c9d0e1f2a7b8',
   entity_kind: 'single',
   name: 'corrupted_import.png',
   mime_type: 'image/png',
@@ -163,6 +170,7 @@ export const noThumbnail: CanonicalEntityGridItem = {
 
 export const noName: CanonicalEntityGridItem = {
   entity_hash: 'b8c9d0e1f2a3b8c9d0e1f2a3b8c9d0e1f2a3b8c9d0e1f2a3b8c9d0e1f2a3b8c9',
+  thumbnail_hash: 'b8c9d0e1f2a3b8c9d0e1f2a3b8c9d0e1f2a3b8c9d0e1f2a3b8c9d0e1f2a3b8c9',
   entity_kind: 'single',
   name: null,
   mime_type: 'image/jpeg',

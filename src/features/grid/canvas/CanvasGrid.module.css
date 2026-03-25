@@ -29,7 +29,7 @@
   width: 100%;
   height: 100%;
   overflow: hidden;
-  contain: strict;
+  contain: layout paint;
 }
 
 .baseCanvas {
@@ -39,4 +39,20 @@
   width: 100%;
   pointer-events: auto;
   will-change: transform;
+}
+
+.profilerOverlay {
+  position: fixed;
+  bottom: 8px;
+  right: 8px;
+  padding: 6px 8px;
+  margin: 0;
+  background: rgba(0, 0, 0, 0.75);
+  color: rgba(140, 255, 140, 0.9);
+  font: 10px/1.4 'SF Mono', 'Cascadia Code', monospace;
+  border-radius: 4px;
+  pointer-events: none;
+  z-index: 10;
+  white-space: pre;
+  user-select: none;
 }

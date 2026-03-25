@@ -38,27 +38,36 @@ export function computeLayout(
   gap: number,
   viewMode: GridViewMode,
   textHeight: number,
-  paddingX = 0,
+  _paddingX = 0,
+  scrollbarWidth = 0,
 ): LayoutResult {
   if (aspectRatios.length === 0 || containerWidth <= 0) {
     return { positions: [], totalHeight: 0 };
   }
 
-  const innerWidth = containerWidth - 2 * paddingX;
-  const columnCount = Math.max(1, Math.round((innerWidth + gap) / (targetSize + gap)));
-  const colWidth = Math.floor((innerWidth - (columnCount - 1) * gap) / columnCount);
+  // The containerWidth is clientWidth (excludes scrollbar). But visually
+  // the scrollbar sits between the grid and the window edge. To make the
+  // visual left margin equal the visual right margin (gap to window edge),
+  // treat the full width as containerWidth + scrollbarWidth, center the
+  // grid within that, then clamp to containerWidth.
+  const fullWidth = containerWidth + scrollbarWidth;
+  const minInnerWidth = fullWidth - 2 * gap;
+  const columnCount = Math.max(1, Math.round((minInnerWidth + gap) / (targetSize + gap)));
+  const colWidth = Math.floor((minInnerWidth - (columnCount - 1) * gap) / columnCount);
+  const usedWidth = columnCount * colWidth + (columnCount - 1) * gap;
+  const offsetX = Math.floor((fullWidth - usedWidth) / 2);
 
   let result: LayoutResult;
   if (viewMode === 'grid') {
     result = layoutGrid(aspectRatios.length, colWidth, columnCount, gap, textHeight);
   } else if (viewMode === 'justified') {
-    result = layoutJustified(aspectRatios, innerWidth, targetSize, gap, textHeight);
+    result = layoutJustified(aspectRatios, usedWidth, targetSize, gap, textHeight);
   } else {
     result = layoutWaterfall(aspectRatios, colWidth, columnCount, gap, textHeight);
   }
 
   for (const pos of result.positions) {
-    if (paddingX > 0) pos.x += paddingX;
+    pos.x += offsetX;
     pos.y += LAYOUT_PADDING_TOP;
   }
   result.totalHeight += LAYOUT_PADDING_TOP + LAYOUT_PADDING_BOTTOM;

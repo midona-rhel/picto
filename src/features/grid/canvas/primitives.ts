@@ -1,12 +1,13 @@
 /**
  * Canvas drawing primitives — shared by base and overlay draw layers.
- * Matches legacy canvasGridPrimitives.ts rendering exactly.
  */
 
 export const BADGE_H = 18;
 export const BADGE_FONT = '600 10px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+export const BADGE_PAD_X = 5;
+export const BADGE_RADIUS = 4;
 export const NAME_FONT = '400 12px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
-export const INFO_FONT = '400 11px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+export const RATING_FONT = '10px sans-serif';
 
 const truncateCache = new Map<string, string>();
 
@@ -21,13 +22,11 @@ export function drawImageCover(
   let sx: number, sy: number, sw: number, sh: number;
 
   if (imgAspect > rectAspect) {
-    // Image is wider — crop sides
     sh = img.height;
     sw = sh * rectAspect;
     sx = (img.width - sw) / 2;
     sy = 0;
   } else {
-    // Image is taller — crop top/bottom
     sw = img.width;
     sh = sw / rectAspect;
     sx = 0;
@@ -37,35 +36,34 @@ export function drawImageCover(
   ctx.drawImage(img, sx, sy, sw, sh, dx, dy, dw, dh);
 }
 
-/** Draw a dark rounded-rect badge with white text. */
+/**
+ * Draw a dark rounded-rect badge with white text.
+ * Returns the total badge width (for positioning adjacent badges).
+ * Assumes ctx.font is already set to BADGE_FONT by the caller.
+ */
 export function drawBadge(
   ctx: CanvasRenderingContext2D,
   text: string,
   x: number, y: number,
   align: 'left' | 'right' = 'right',
-) {
-  ctx.font = BADGE_FONT;
+): number {
   const metrics = ctx.measureText(text);
-  const padX = 5;
-  const w = metrics.width + padX * 2;
-  const h = BADGE_H;
+  const w = metrics.width + BADGE_PAD_X * 2;
   const bx = align === 'right' ? x - w : x;
-  const by = y;
-  const r = 4;
 
-  // Background
   ctx.fillStyle = 'rgba(0, 0, 0, 0.55)';
   ctx.beginPath();
-  ctx.roundRect(bx, by, w, h, r);
+  ctx.roundRect(bx, y, w, BADGE_H, BADGE_RADIUS);
   ctx.fill();
 
-  // Text
   ctx.fillStyle = 'rgba(255, 255, 255, 0.9)';
   ctx.textBaseline = 'middle';
-  ctx.fillText(text, bx + padX, by + h / 2);
+  ctx.fillText(text, bx + BADGE_PAD_X, y + BADGE_H / 2);
+
+  return w;
 }
 
-/** Truncate text with ellipsis, cached by (text, maxWidth). */
+/** Truncate text with ellipsis, cached by (text, maxWidth). Binary search. */
 export function truncateText(
   ctx: CanvasRenderingContext2D,
   text: string,
@@ -80,14 +78,20 @@ export function truncateText(
     return text;
   }
 
-  let truncated = text;
-  while (truncated.length > 0 && ctx.measureText(truncated + '…').width > maxWidth) {
-    truncated = truncated.slice(0, -1);
+  // Binary search for longest prefix that fits with ellipsis
+  let lo = 0;
+  let hi = text.length;
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >>> 1;
+    if (ctx.measureText(text.slice(0, mid) + '…').width <= maxWidth) {
+      lo = mid;
+    } else {
+      hi = mid - 1;
+    }
   }
-  const result = truncated + '…';
+  const result = lo > 0 ? text.slice(0, lo) + '…' : '…';
   truncateCache.set(key, result);
 
-  // Prevent cache from growing unbounded
   if (truncateCache.size > 5000) {
     const firstKey = truncateCache.keys().next().value;
     if (firstKey) truncateCache.delete(firstKey);
@@ -104,15 +108,16 @@ export function formatDuration(ms: number): string {
   return `${m}:${sec.toString().padStart(2, '0')}`;
 }
 
+const MIME_TO_EXT: Record<string, string> = {
+  'image/jpeg': 'JPG', 'image/png': 'PNG', 'image/gif': 'GIF',
+  'image/webp': 'WEBP', 'image/svg+xml': 'SVG', 'image/bmp': 'BMP',
+  'image/tiff': 'TIFF', 'image/avif': 'AVIF', 'image/heic': 'HEIC',
+  'video/mp4': 'MP4', 'video/webm': 'WEBM', 'video/quicktime': 'MOV',
+  'video/x-matroska': 'MKV', 'video/avi': 'AVI',
+  'audio/mpeg': 'MP3', 'audio/wav': 'WAV', 'audio/flac': 'FLAC',
+};
+
 /** Map MIME type to file extension for badge display. */
 export function mimeToExt(mime: string): string {
-  const map: Record<string, string> = {
-    'image/jpeg': 'JPG', 'image/png': 'PNG', 'image/gif': 'GIF',
-    'image/webp': 'WEBP', 'image/svg+xml': 'SVG', 'image/bmp': 'BMP',
-    'image/tiff': 'TIFF', 'image/avif': 'AVIF', 'image/heic': 'HEIC',
-    'video/mp4': 'MP4', 'video/webm': 'WEBM', 'video/quicktime': 'MOV',
-    'video/x-matroska': 'MKV', 'video/avi': 'AVI',
-    'audio/mpeg': 'MP3', 'audio/wav': 'WAV', 'audio/flac': 'FLAC',
-  };
-  return map[mime] ?? mime.split('/')[1]?.toUpperCase() ?? '';
+  return MIME_TO_EXT[mime] ?? mime.split('/')[1]?.toUpperCase() ?? '';
 }
