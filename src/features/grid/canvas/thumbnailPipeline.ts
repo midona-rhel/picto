@@ -21,7 +21,7 @@ interface QueueEntry {
   seq: number;
 }
 
-const MAX_CONCURRENT_LOADS = 12;
+const MAX_CONCURRENT_LOADS = 6;
 
 export class ThumbnailPipeline {
   private bitmaps = new Map<string, ImageBitmap>();
@@ -29,6 +29,7 @@ export class ThumbnailPipeline {
   private queued = new Map<string, QueueEntry>();
   private sequence = 0;
   private onLoaded: OnThumbnailLoaded;
+  private notifyScheduled = false;
 
   constructor(onLoaded: OnThumbnailLoaded) {
     this.onLoaded = onLoaded;
@@ -49,17 +50,22 @@ export class ThumbnailPipeline {
     this.drain();
   }
 
-  evict(keepHashes: Set<string>, maxEvictPerTick = 8) {
+  /** Evict items not in any of the provided arrays. Avoids allocating a merged Set. */
+  evictExcept(a: string[], b: string[], c: string[], maxEvictPerTick = 8) {
+    // Build a single lookup set from the three arrays
+    const keep = new Set<string>();
+    for (const h of a) keep.add(h);
+    for (const h of b) keep.add(h);
+    for (const h of c) keep.add(h);
+
     for (const hash of this.queued.keys()) {
-      if (!keepHashes.has(hash)) {
-        this.queued.delete(hash);
-      }
+      if (!keep.has(hash)) this.queued.delete(hash);
     }
 
     let evicted = 0;
     for (const [hash, bitmap] of this.bitmaps) {
       if (evicted >= maxEvictPerTick) break;
-      if (!keepHashes.has(hash)) {
+      if (!keep.has(hash)) {
         bitmap.close();
         this.bitmaps.delete(hash);
         evicted++;
@@ -74,6 +80,16 @@ export class ThumbnailPipeline {
       bitmap.close();
     }
     this.bitmaps.clear();
+  }
+
+  /** Coalesce multiple load completions into a single onLoaded notification. */
+  private scheduleNotify() {
+    if (this.notifyScheduled) return;
+    this.notifyScheduled = true;
+    queueMicrotask(() => {
+      this.notifyScheduled = false;
+      this.onLoaded('');
+    });
   }
 
   private enqueue(hashes: string[], priority: QueuePriority) {
@@ -136,7 +152,7 @@ export class ThumbnailPipeline {
 
         this.loading.delete(hash);
         this.bitmaps.set(hash, bitmap);
-        this.onLoaded(hash);
+        this.scheduleNotify();
       } catch {
         this.loading.delete(hash);
       } finally {

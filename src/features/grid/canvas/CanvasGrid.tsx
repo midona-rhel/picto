@@ -66,6 +66,13 @@ export function CanvasGrid({
   const scrollDirectionRef = useRef<-1 | 0 | 1>(0);
   const lastScrollTopRef = useRef(0);
   const backgroundColorRef = useRef<string>('rgb(24, 25, 27)');
+  const lastPlanRef = useRef({ start: -1, end: -1 });
+  // Scratch buffers reused every frame to avoid allocations
+  const scratchVisible = useRef<string[]>([]);
+  const scratchAhead = useRef<string[]>([]);
+  const scratchBehind = useRef<string[]>([]);
+  const scratchSeen = useRef<Set<string>>(new Set());
+  const scratchRevealProgress = useRef<Map<string, number>>(new Map());
 
   const textHeight = showName ? TEXT_NAME_ROW_H : 0;
 
@@ -163,59 +170,59 @@ export function CanvasGrid({
     const ctx = baseContextRef.current;
     if (!ctx) return;
 
-    backgroundColorRef.current = getComputedStyle(container).backgroundColor || backgroundColorRef.current;
-
     const { positions } = layoutRef.current;
     const plan = buildVisibilityPlan(positions, scrollTop, height, scrollDirectionRef.current);
 
-    const visibleHashes: string[] = [];
-    const aheadHashes: string[] = [];
-    const behindHashes: string[] = [];
-
-    const seen = new Set<string>();
-    const collect = (indices: number[], out: string[]) => {
-      for (const index of indices) {
-        if (index < 0 || index >= items.length) continue;
-        const hash = items[index].entity_hash;
-        if (!hash || seen.has(hash)) continue;
-        seen.add(hash);
-        out.push(hash);
-      }
-    };
+    // Reuse scratch buffers — clear instead of allocating
+    const visibleHashes = scratchVisible.current; visibleHashes.length = 0;
+    const aheadHashes = scratchAhead.current; aheadHashes.length = 0;
+    const behindHashes = scratchBehind.current; behindHashes.length = 0;
+    const seen = scratchSeen.current; seen.clear();
 
     for (let i = plan.start; i < plan.end && i < items.length; i++) {
-      collect([i], visibleHashes);
+      const hash = items[i].entity_hash;
+      if (hash && !seen.has(hash)) { seen.add(hash); visibleHashes.push(hash); }
     }
-    collect(plan.aheadPrefetchIndices, aheadHashes);
-    collect(plan.behindPrefetchIndices, behindHashes);
+    for (const idx of plan.aheadPrefetchIndices) {
+      if (idx >= 0 && idx < items.length) {
+        const hash = items[idx].entity_hash;
+        if (hash && !seen.has(hash)) { seen.add(hash); aheadHashes.push(hash); }
+      }
+    }
+    for (const idx of plan.behindPrefetchIndices) {
+      if (idx >= 0 && idx < items.length) {
+        const hash = items[idx].entity_hash;
+        if (hash && !seen.has(hash)) { seen.add(hash); behindHashes.push(hash); }
+      }
+    }
 
-    pipeline.request({
-      visible: visibleHashes,
-      ahead: aheadHashes,
-      behind: behindHashes,
-    });
-    pipeline.evict(new Set([...visibleHashes, ...aheadHashes, ...behindHashes]));
+    // Only call pipeline when visible window actually shifts
+    const planChanged = plan.start !== lastPlanRef.current.start || plan.end !== lastPlanRef.current.end;
+    if (planChanged) {
+      lastPlanRef.current = { start: plan.start, end: plan.end };
+      pipeline.request({ visible: visibleHashes, ahead: aheadHashes, behind: behindHashes });
+      pipeline.evictExcept(visibleHashes, aheadHashes, behindHashes);
+    }
 
-    const revealProgressByHash = new Map<string, number>();
+    const revealProgressByHash = scratchRevealProgress.current; revealProgressByHash.clear();
     let needsNextAnimationFrame = false;
     if (suppressTileReveal) {
       for (const hash of visibleHashes) {
         revealProgressByHash.set(hash, 1);
       }
-      // Track visible set so tiles don't re-fade when suppress ends
-      lastVisibleSetRef.current = new Set(visibleHashes);
+      lastVisibleSetRef.current = seen; // seen already contains visible hashes
     } else {
       const now = performance.now();
-      const visibleSet = new Set(visibleHashes);
       for (const hash of visibleHashes) {
         if (!lastVisibleSetRef.current.has(hash)) {
           revealStatesRef.current.set(hash, { startAt: nextRevealSlot(now) });
         }
       }
       for (const hash of revealStatesRef.current.keys()) {
-        if (!visibleSet.has(hash)) revealStatesRef.current.delete(hash);
+        if (!seen.has(hash)) revealStatesRef.current.delete(hash);
       }
-      lastVisibleSetRef.current = visibleSet;
+      // Update lastVisibleSet — use a new Set (can't reuse seen, it includes prefetch)
+      lastVisibleSetRef.current = new Set(visibleHashes);
 
       for (const hash of visibleHashes) {
         const state = revealStatesRef.current.get(hash);
@@ -305,6 +312,14 @@ export function CanvasGrid({
     return () => container.removeEventListener('scroll', handleScroll);
   }, [interactive, onLoadMore, onScrollTopChange, scheduleRedraw]);
 
+  // Read background color once on mount and on resize (proxy for theme change)
+  useEffect(() => {
+    const container = containerRef.current;
+    if (container) {
+      backgroundColorRef.current = getComputedStyle(container).backgroundColor || backgroundColorRef.current;
+    }
+  }, []);
+
   // Debounced resize — freeze layout during active window drag
   useEffect(() => {
     const container = containerRef.current;
@@ -316,6 +331,7 @@ export function CanvasGrid({
       if (timer != null) clearTimeout(timer);
       timer = window.setTimeout(() => {
         timer = null;
+        backgroundColorRef.current = getComputedStyle(container).backgroundColor || backgroundColorRef.current;
         recomputeLayout();
       }, DEBOUNCE);
     });
