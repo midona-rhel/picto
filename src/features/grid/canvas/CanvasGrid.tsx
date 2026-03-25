@@ -12,7 +12,7 @@ import { hitTestTile } from './hitTesting';
 import { ThumbnailPipeline } from './thumbnailPipeline';
 import styles from './CanvasGrid.module.css';
 
-const GAP = 6;
+const GAP = 12;
 const TEXT_NAME_ROW_H = 20;
 const PADDING_X = 10;
 const REVEAL_DURATION_MS = 250;

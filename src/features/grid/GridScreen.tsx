@@ -73,6 +73,7 @@ export function GridScreen() {
   const lastScrollTopRef = useRef(0);
   const previousNodeIdRef = useRef(activeNodeId);
   const transitionTimerRef = useRef<number | null>(null);
+  const fadeInFrameRef = useRef<number | null>(null);
   const latestRenderableSurfaceRef = useRef<SurfaceSnapshot | null>(null);
 
   const scope = nodeIdToScope(activeNodeId);
@@ -82,6 +83,10 @@ export function GridScreen() {
     if (transitionTimerRef.current != null) {
       window.clearTimeout(transitionTimerRef.current);
       transitionTimerRef.current = null;
+    }
+    if (fadeInFrameRef.current != null) {
+      window.cancelAnimationFrame(fadeInFrameRef.current);
+      fadeInFrameRef.current = null;
     }
     setOutgoingSurface(null);
     setTransitionPhase('idle');
@@ -101,16 +106,23 @@ export function GridScreen() {
   }, [isGridScope, items, showExtension, showName, targetSize, viewMode]);
 
   const beginFadeIn = useCallback(() => {
-    setTransitionPhase((phase) => {
-      if (phase !== 'waiting') return phase;
-      if (transitionTimerRef.current != null) {
-        window.clearTimeout(transitionTimerRef.current);
-      }
-      transitionTimerRef.current = window.setTimeout(() => {
-        transitionTimerRef.current = null;
-        setTransitionPhase('idle');
-      }, SCOPE_TRANSITION_MS);
-      return 'fading_in';
+    if (fadeInFrameRef.current != null) {
+      window.cancelAnimationFrame(fadeInFrameRef.current);
+      fadeInFrameRef.current = null;
+    }
+    fadeInFrameRef.current = window.requestAnimationFrame(() => {
+      fadeInFrameRef.current = null;
+      setTransitionPhase((phase) => {
+        if (phase !== 'waiting') return phase;
+        if (transitionTimerRef.current != null) {
+          window.clearTimeout(transitionTimerRef.current);
+        }
+        transitionTimerRef.current = window.setTimeout(() => {
+          transitionTimerRef.current = null;
+          setTransitionPhase('idle');
+        }, SCOPE_TRANSITION_MS);
+        return 'fading_in';
+      });
     });
   }, []);
 
@@ -151,6 +163,9 @@ export function GridScreen() {
   useEffect(() => () => {
     if (transitionTimerRef.current != null) {
       window.clearTimeout(transitionTimerRef.current);
+    }
+    if (fadeInFrameRef.current != null) {
+      window.cancelAnimationFrame(fadeInFrameRef.current);
     }
   }, []);
 
