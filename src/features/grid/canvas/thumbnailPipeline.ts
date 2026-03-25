@@ -1,243 +1,480 @@
-/**
- * Image pipeline — loads, caches, and evicts images for the canvas grid.
- *
- * The tile doesn't know whether it's getting a thumbnail or full-quality image.
- * It requests an image at a display size; the pipeline decides what to serve.
- * Currently all requests load thumbnails. Full-quality upgrade can be added
- * without changing the renderer contract.
- *
- * Memory-budgeted: tracks estimated VRAM per bitmap, evicts LRU when over budget.
- */
+import { mediaThumbnailUrl } from './mediaUrl';
+import { decodeThumbnailInWorker, getThumbnailDecodeWorkerStats } from './thumbnailDecodeClient';
+import {
+  THUMBNAIL_PIPELINE_MAX_ENTRIES,
+  THUMBNAIL_PIPELINE_MAX_PREFETCH_ACTIVE_FAST,
+  THUMBNAIL_PIPELINE_MAX_PREFETCH_ACTIVE_IDLE,
+  THUMBNAIL_PIPELINE_MAX_PREFETCH_ACTIVE_SLOW,
+  THUMBNAIL_PIPELINE_MAX_VISIBLE_ACTIVE_FAST,
+  THUMBNAIL_PIPELINE_MAX_VISIBLE_ACTIVE_IDLE,
+  THUMBNAIL_PIPELINE_MAX_VISIBLE_ACTIVE_SLOW,
+  THUMBNAIL_PIPELINE_MAX_CONCURRENT_REVEALS,
+  THUMBNAIL_PIPELINE_REVEAL_MS,
+  THUMBNAIL_PIPELINE_SOURCE_EDGE,
+} from './thumbnailPipelinePolicy';
+import type {
+  ThumbnailInFlightItem,
+  ThumbnailPipelineEntry,
+  ThumbnailPipelineStats,
+  ThumbnailQueueItem,
+  ThumbnailRequestPriority,
+} from './thumbnailPipelineTypes';
+import {
+  type CanvasScrollPhase,
+  type CanvasScrollState,
+  createIdleCanvasScrollState,
+} from './scrollState';
 
-export type OnImageLoaded = () => void;
+export type { ThumbnailPipelineEntry, ThumbnailPipelineStats } from './thumbnailPipelineTypes';
 
-type QueuePriority = 0 | 1 | 2;
-
-export interface ImageRequest {
-  hash: string;
-  displayWidth: number;
-  displayHeight: number;
+interface EnsureThumbnailArgs {
+  y?: number;
+  drawWidth?: number;
+  drawHeight?: number;
 }
-
-export interface RequestGroups {
-  visible: Array<string | ImageRequest>;
-  ahead: Array<string | ImageRequest>;
-  behind: Array<string | ImageRequest>;
-}
-
-export interface PipelineStats {
-  queueDepth: number;
-  activeLoads: number;
-  cacheEntries: number;
-  totalBytes: number;
-}
-
-export type PipelineEntryState = 'ready' | 'loading' | 'queued' | 'missing';
-
-interface CacheEntry {
-  bitmap: ImageBitmap;
-  bytes: number;
-  lastUsedAt: number;
-}
-
-interface QueueEntry {
-  hash: string;
-  priority: QueuePriority;
-  seq: number;
-}
-
-const MAX_CONCURRENT_LOADS = 6;
-const VRAM_BUDGET_BYTES = 1024 * 1024 * 1024; // 1 GB
 
 export class ThumbnailPipeline {
-  private cache = new Map<string, CacheEntry>();
-  private loading = new Set<string>();
-  private queued = new Map<string, QueueEntry>();
-  private sequence = 0;
+  private cache = new Map<string, ThumbnailPipelineEntry>();
+  private queueMap = new Map<string, ThumbnailQueueItem>();
+  private inFlight = new Map<string, ThumbnailInFlightItem>();
+  private activeLoads = 0;
+  private activeVisibleLoads = 0;
+  private activePrefetchLoads = 0;
+  private accessCounter = 0;
+  private scrollState: CanvasScrollState = createIdleCanvasScrollState();
+  private destroyed = false;
   private totalBytes = 0;
-  private onLoaded: OnImageLoaded;
-  private notifyScheduled = false;
+  private revealSlots: number[] = [];
+  private onDirty: () => void;
 
-  constructor(onLoaded: OnImageLoaded) {
-    this.onLoaded = onLoaded;
+  constructor(onDirty: () => void = () => {}) {
+    this.onDirty = onDirty;
   }
 
-  get(hash: string): ImageBitmap | undefined {
-    const entry = this.cache.get(hash);
-    if (entry) {
-      entry.lastUsedAt = performance.now();
-      return entry.bitmap;
-    }
-    return undefined;
+  setOnDirty(onDirty: () => void): void {
+    this.onDirty = onDirty;
   }
 
-  getState(hash: string): PipelineEntryState {
-    if (this.cache.has(hash)) return 'ready';
-    if (this.loading.has(hash)) return 'loading';
-    if (this.queued.has(hash)) return 'queued';
-    return 'missing';
-  }
+  setScrollState(nextState: CanvasScrollState): void {
+    const prevPhase = this.scrollState.phase;
+    this.scrollState = nextState;
 
-  /** Get all bitmaps for the draw layer. Touches lastUsedAt for visible entries via get(). */
-  getAll(): Map<string, CacheEntry> {
-    return this.cache;
-  }
+    if (nextState.phase === 'fast' && prevPhase !== 'fast') {
+      for (const [hash, item] of this.queueMap) {
+        if (item.priority === 'visible') continue;
+        this.queueMap.delete(hash);
+        const entry = this.cache.get(hash);
+        if (entry && !entry.thumb) this.resetEntry(entry);
+      }
 
-  request(groups: RequestGroups) {
-    this.enqueueGroup(groups.visible, 0);
-    this.enqueueGroup(groups.ahead, 1);
-    this.enqueueGroup(groups.behind, 2);
-    this.drain();
-  }
-
-  /** Evict queued and cached items not in the keep set. */
-  evictExcept(keepOrA: Set<string> | string[], b?: string[], c?: string[], maxEvictPerTick = 8) {
-    let keep: Set<string>;
-    if (keepOrA instanceof Set) {
-      keep = keepOrA;
-    } else {
-      keep = new Set<string>();
-      for (const h of keepOrA) keep.add(h);
-      if (b) for (const h of b) keep.add(h);
-      if (c) for (const h of c) keep.add(h);
-    }
-
-    for (const hash of this.queued.keys()) {
-      if (!keep.has(hash)) this.queued.delete(hash);
-    }
-
-    let evicted = 0;
-    for (const [hash, entry] of this.cache) {
-      if (evicted >= maxEvictPerTick) break;
-      if (!keep.has(hash)) {
-        this.totalBytes -= entry.bytes;
-        entry.bitmap.close();
-        this.cache.delete(hash);
-        evicted++;
+      for (const [hash, inFlight] of this.inFlight) {
+        if (inFlight.priority === 'visible') continue;
+        inFlight.cancel();
+        const entry = this.cache.get(hash);
+        if (entry && entry.state === 'loading') this.resetEntry(entry);
       }
     }
+
+    this.pump();
   }
 
-  clear() {
-    this.loading.clear();
-    this.queued.clear();
-    for (const entry of this.cache.values()) {
-      entry.bitmap.close();
+  get(hash: string): ThumbnailPipelineEntry | null {
+    const entry = this.cache.get(hash);
+    if (!entry) return null;
+    this.touch(entry);
+    return entry;
+  }
+
+  ensure(hash: string, args: EnsureThumbnailArgs = {}): void {
+    if (this.destroyed || !hash) return;
+
+    const entry = this.getOrCreateEntry(hash);
+    const request = buildRequest(hash, args);
+    if (entry.thumb && entry.state === 'shown' && entry.bytes > 0) {
+      return;
     }
-    this.cache.clear();
-    this.totalBytes = 0;
+
+    if (entry.state === 'queued' || entry.state === 'loading') {
+      const queued = this.queueMap.get(hash);
+      if (queued && queued.priority === request.priority) return;
+      const inFlight = this.inFlight.get(hash);
+      if (inFlight && inFlight.priority === request.priority) return;
+    }
+
+    this.markQueued(entry);
+    this.queueMap.set(hash, request);
+    this.pump();
   }
 
-  getStats(): PipelineStats {
+  cancelOutsideWindow(top: number, bottom: number): void {
+    for (const [hash, item] of this.queueMap) {
+      if (item.y >= top && item.y <= bottom) continue;
+      this.queueMap.delete(hash);
+      const entry = this.cache.get(hash);
+      if (entry && !entry.thumb) this.resetEntry(entry);
+    }
+
+    for (const [hash, inFlight] of this.inFlight) {
+      if (inFlight.y >= top && inFlight.y <= bottom) continue;
+      inFlight.cancel();
+      const entry = this.cache.get(hash);
+      if (entry && entry.state === 'loading') this.resetEntry(entry);
+    }
+  }
+
+  getEvictCandidatesBatch(
+    keepHashes: Set<string>,
+    limit: number,
+    cursor: number,
+  ): { evicted: string[]; nextCursor: number } {
+    const evicted: string[] = [];
+    const keys = Array.from(this.cache.keys());
+    if (keys.length === 0) return { evicted, nextCursor: 0 };
+    let idx = cursor % keys.length;
+    for (let checked = 0; checked < limit && checked < keys.length; checked += 1) {
+      const hash = keys[idx];
+      const entry = this.cache.get(hash);
+      if (entry?.thumb && !keepHashes.has(hash) && entry.state !== 'queued' && entry.state !== 'loading') {
+        evicted.push(hash);
+      }
+      idx = (idx + 1) % keys.length;
+    }
+    return { evicted, nextCursor: idx };
+  }
+
+  evictHashes(hashes: string[]): void {
+    for (const hash of hashes) {
+      const entry = this.cache.get(hash);
+      if (!entry || !entry.thumb) continue;
+      this.totalBytes -= entry.bytes;
+      entry.thumb.close();
+      entry.thumb = null;
+      entry.bytes = 0;
+      entry.animateIn = false;
+      entry.revealStartedAt = 0;
+      this.resetEntry(entry);
+    }
+  }
+
+  getStats(): ThumbnailPipelineStats {
+    const workerStats = getThumbnailDecodeWorkerStats();
     return {
-      queueDepth: this.queued.size,
-      activeLoads: this.loading.size,
+      queueDepth: this.queueMap.size,
+      activeLoads: this.activeLoads,
       cacheEntries: this.cache.size,
       totalBytes: this.totalBytes,
+      scrollPhase: this.scrollState.phase,
+      scrollDirection: this.scrollState.direction,
+      scrollVelocityPxPerSec: this.scrollState.velocityPxPerSec,
+      droppedLateWorkerResults: workerStats.droppedLateResponses,
     };
   }
 
-  private enqueueGroup(items: Array<string | ImageRequest>, priority: QueuePriority) {
-    for (const item of items) {
-      const hash = typeof item === 'string' ? item : item.hash;
-      if (!hash || this.cache.has(hash) || this.loading.has(hash)) continue;
-      const existing = this.queued.get(hash);
-      if (existing) {
-        if (priority < existing.priority) existing.priority = priority;
+  clear(): void {
+    this.destroyed = true;
+    for (const inFlight of this.inFlight.values()) inFlight.cancel();
+    this.inFlight.clear();
+    this.queueMap.clear();
+    for (const entry of this.cache.values()) {
+      entry.thumb?.close();
+    }
+    this.cache.clear();
+    this.activeLoads = 0;
+    this.activeVisibleLoads = 0;
+    this.activePrefetchLoads = 0;
+    this.totalBytes = 0;
+  }
+
+  private pump(): void {
+    if (this.destroyed) return;
+    while (true) {
+      const next = this.selectNextQueueItem();
+      if (!next) break;
+      this.queueMap.delete(next.hash);
+      this.startLoad(next);
+    }
+  }
+
+  private selectNextQueueItem(): ThumbnailQueueItem | null {
+    const budgets = getActiveBudgets(this.scrollState.phase);
+    let best: ThumbnailQueueItem | null = null;
+    let bestScore = -1;
+    for (const item of this.queueMap.values()) {
+      if (!canStartQueueItem({
+        item,
+        budgets,
+        scrollPhase: this.scrollState.phase,
+        activeVisibleLoads: this.activeVisibleLoads,
+        activePrefetchLoads: this.activePrefetchLoads,
+      })) {
         continue;
       }
-      this.queued.set(hash, { hash, priority, seq: this.sequence++ });
-    }
-  }
-
-  private drain() {
-    while (this.loading.size < MAX_CONCURRENT_LOADS) {
-      const next = this.dequeueNext();
-      if (!next) break;
-      this.loading.add(next.hash);
-      this.loadOne(next.hash);
-    }
-  }
-
-  private dequeueNext(): QueueEntry | null {
-    let best: QueueEntry | null = null;
-    for (const entry of this.queued.values()) {
-      if (
-        !best
-        || entry.priority < best.priority
-        || (entry.priority === best.priority && entry.seq < best.seq)
-      ) {
-        best = entry;
+      const score = scoreQueueItem(item);
+      if (score > bestScore) {
+        best = item;
+        bestScore = score;
       }
     }
-    if (!best) return null;
-    this.queued.delete(best.hash);
     return best;
   }
 
-  /** Coalesce multiple load completions into a single notification. */
-  private scheduleNotify() {
-    if (this.notifyScheduled) return;
-    this.notifyScheduled = true;
-    queueMicrotask(() => {
-      this.notifyScheduled = false;
-      this.onLoaded();
+  private startLoad(item: ThumbnailQueueItem): void {
+    const entry = this.cache.get(item.hash);
+    if (!entry) return;
+
+    let finished = false;
+    const finish = () => {
+      if (finished) return;
+      finished = true;
+      this.inFlight.delete(item.hash);
+      this.activeLoads = Math.max(0, this.activeLoads - 1);
+      if (item.priority === 'visible') this.activeVisibleLoads = Math.max(0, this.activeVisibleLoads - 1);
+      else this.activePrefetchLoads = Math.max(0, this.activePrefetchLoads - 1);
+      this.pump();
+    };
+
+    const controller = new AbortController();
+    this.inFlight.set(item.hash, {
+      cancel: () => {
+        controller.abort();
+        finish();
+      },
+      y: item.y,
+      priority: item.priority,
+      requestedLongEdge: item.requestedLongEdge,
+      queuedAt: item.queuedAt,
     });
+
+    this.activeLoads += 1;
+    if (item.priority === 'visible') this.activeVisibleLoads += 1;
+    else this.activePrefetchLoads += 1;
+    this.markLoading(entry);
+
+    void loadBitmap(item, controller.signal)
+      .then(({ bitmap }) => {
+        if (controller.signal.aborted) {
+          bitmap.close();
+          return;
+        }
+        this.applyBitmap(item.hash, bitmap);
+      })
+      .catch(() => {
+        if (controller.signal.aborted) return;
+        const current = this.cache.get(item.hash);
+        if (current) {
+          current.state = 'error';
+          this.onDirty();
+        }
+      })
+      .finally(() => {
+        finish();
+      });
   }
 
-  /** Evict least-recently-used entries until under VRAM budget. */
-  private enforceVramBudget() {
-    if (this.totalBytes <= VRAM_BUDGET_BYTES) return;
+  private applyBitmap(hash: string, bitmap: ImageBitmap): void {
+    const entry = this.cache.get(hash);
+    if (!entry) {
+      bitmap.close();
+      return;
+    }
 
-    // Collect entries sorted by lastUsedAt ascending (oldest first)
-    const entries = [...this.cache.entries()].sort(
-      (a, b) => a[1].lastUsedAt - b[1].lastUsedAt,
-    );
+    this.totalBytes -= entry.bytes;
+    entry.thumb?.close();
+    entry.thumb = bitmap;
+    entry.bytes = bitmap.width * bitmap.height * 4;
+    this.totalBytes += entry.bytes;
+    entry.state = 'shown';
+    entry.animateIn = true;
+    entry.revealStartedAt = this.nextRevealSlot();
+    this.pruneCache();
+    this.onDirty();
+  }
 
-    for (const [hash, entry] of entries) {
-      if (this.totalBytes <= VRAM_BUDGET_BYTES) break;
-      this.totalBytes -= entry.bytes;
-      entry.bitmap.close();
+  private nextRevealSlot(): number {
+    const now = performance.now();
+    this.revealSlots = this.revealSlots.filter((t) => now - t < THUMBNAIL_PIPELINE_REVEAL_MS);
+    if (this.revealSlots.length < THUMBNAIL_PIPELINE_MAX_CONCURRENT_REVEALS) {
+      this.revealSlots.push(now);
+      return now;
+    }
+    const oldest = this.revealSlots[0];
+    const staggered = oldest + THUMBNAIL_PIPELINE_REVEAL_MS;
+    this.revealSlots.shift();
+    this.revealSlots.push(staggered);
+    return staggered;
+  }
+
+  private pruneCache(): void {
+    if (this.cache.size <= THUMBNAIL_PIPELINE_MAX_ENTRIES) return;
+    const target = THUMBNAIL_PIPELINE_MAX_ENTRIES - 25;
+    const threshold = this.accessCounter - target;
+    for (const [hash, entry] of this.cache) {
+      if (this.cache.size <= target) break;
+      if (entry.state === 'queued' || entry.state === 'loading') continue;
+      if (entry.lastAccessed >= threshold) continue;
+      if (entry.thumb) {
+        this.totalBytes -= entry.bytes;
+        entry.thumb.close();
+      }
       this.cache.delete(hash);
     }
   }
 
-  private loadOne(hash: string) {
-    // Currently always loads thumbnails. A future upgrade could check
-    // displayWidth/displayHeight against thumbnail dimensions and load
-    // media://host/file/<hash>.<ext> for larger tiles instead.
-    const url = `media://host/thumb/${hash}.jpg`;
-    const img = new Image();
-    img.crossOrigin = 'anonymous';
+  private getOrCreateEntry(hash: string): ThumbnailPipelineEntry {
+    let entry = this.cache.get(hash);
+    if (entry) {
+      this.touch(entry);
+      return entry;
+    }
 
-    img.onload = async () => {
-      try {
-        if (!this.loading.has(hash)) return;
-
-        const bitmap = await createImageBitmap(img);
-        if (!this.loading.has(hash)) {
-          bitmap.close();
-          return;
-        }
-
-        const bytes = bitmap.width * bitmap.height * 4;
-        this.loading.delete(hash);
-        this.cache.set(hash, { bitmap, bytes, lastUsedAt: performance.now() });
-        this.totalBytes += bytes;
-        this.enforceVramBudget();
-        this.scheduleNotify();
-      } catch {
-        this.loading.delete(hash);
-      } finally {
-        this.drain();
-      }
+    entry = {
+      thumb: null,
+      state: 'idle',
+      lastAccessed: ++this.accessCounter,
+      revealStartedAt: 0,
+      animateIn: false,
+      bytes: 0,
     };
-
-    img.onerror = () => {
-      this.loading.delete(hash);
-      this.drain();
-    };
-
-    img.src = url;
+    this.cache.set(hash, entry);
+    return entry;
   }
+
+  private touch(entry: ThumbnailPipelineEntry): void {
+    entry.lastAccessed = ++this.accessCounter;
+  }
+
+  private markQueued(entry: ThumbnailPipelineEntry): void {
+    entry.state = 'queued';
+  }
+
+  private markLoading(entry: ThumbnailPipelineEntry): void {
+    entry.state = 'loading';
+  }
+
+  private resetEntry(entry: ThumbnailPipelineEntry): void {
+    entry.state = 'idle';
+  }
+}
+
+function buildRequest(hash: string, args: EnsureThumbnailArgs): ThumbnailQueueItem {
+  const requestedDisplayLongEdge = Math.max(1, Math.round(Math.max(args.drawWidth ?? 0, args.drawHeight ?? 0)));
+  return {
+    hash,
+    url: mediaThumbnailUrl(hash),
+    y: args.y ?? 0,
+    priority: getRequestPriority(args),
+    requestedLongEdge: Math.max(THUMBNAIL_PIPELINE_SOURCE_EDGE, requestedDisplayLongEdge),
+    queuedAt: performance.now(),
+  };
+}
+
+function getRequestPriority(args: EnsureThumbnailArgs): ThumbnailRequestPriority {
+  return args.drawWidth && args.drawHeight ? 'visible' : 'prefetch';
+}
+
+async function loadBitmap(
+  item: ThumbnailQueueItem,
+  signal: AbortSignal,
+): Promise<{ bitmap: ImageBitmap; decodeDurationMs: number }> {
+  const startedAt = performance.now();
+  const workerResult = decodeThumbnailInWorker(item.url, signal);
+  if (workerResult) {
+    try {
+      const { bitmap, durationMs } = await workerResult;
+      return { bitmap, decodeDurationMs: durationMs };
+    } catch (error) {
+      if (signal.aborted) throw error;
+    }
+  }
+
+  try {
+    const response = await fetch(item.url, { signal });
+    if (!response.ok) throw new Error(`thumbnail fetch failed: ${response.status}`);
+    const blob = await response.blob();
+    return {
+      bitmap: await createImageBitmap(blob),
+      decodeDurationMs: performance.now() - startedAt,
+    };
+  } catch (error) {
+    if (signal.aborted) throw error;
+    return {
+      bitmap: await loadBitmapViaImage(item.url, signal),
+      decodeDurationMs: performance.now() - startedAt,
+    };
+  }
+}
+
+function loadBitmapViaImage(url: string, signal: AbortSignal): Promise<ImageBitmap> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    let done = false;
+
+    const cleanup = () => {
+      img.onload = null;
+      img.onerror = null;
+      signal.removeEventListener('abort', onAbort);
+    };
+
+    const onAbort = () => {
+      if (done) return;
+      done = true;
+      cleanup();
+      reject(new DOMException('Aborted', 'AbortError'));
+    };
+
+    img.crossOrigin = 'anonymous';
+    img.onload = () => {
+      if (done) return;
+      done = true;
+      cleanup();
+      createImageBitmap(img).then(resolve, reject);
+    };
+    img.onerror = () => {
+      if (done) return;
+      done = true;
+      cleanup();
+      reject(new Error('thumbnail image load failed'));
+    };
+
+    signal.addEventListener('abort', onAbort, { once: true });
+    if (signal.aborted) {
+      onAbort();
+      return;
+    }
+    img.src = url;
+  });
+}
+
+function scoreQueueItem(item: ThumbnailQueueItem): number {
+  return item.priority === 'visible' ? 2 : 1;
+}
+
+function getActiveBudgets(scrollPhase: CanvasScrollPhase) {
+  return {
+    maxVisible: scrollPhase === 'fast'
+      ? THUMBNAIL_PIPELINE_MAX_VISIBLE_ACTIVE_FAST
+      : scrollPhase === 'slow'
+        ? THUMBNAIL_PIPELINE_MAX_VISIBLE_ACTIVE_SLOW
+        : THUMBNAIL_PIPELINE_MAX_VISIBLE_ACTIVE_IDLE,
+    maxPrefetch: scrollPhase === 'fast'
+      ? THUMBNAIL_PIPELINE_MAX_PREFETCH_ACTIVE_FAST
+      : scrollPhase === 'slow'
+        ? THUMBNAIL_PIPELINE_MAX_PREFETCH_ACTIVE_SLOW
+        : THUMBNAIL_PIPELINE_MAX_PREFETCH_ACTIVE_IDLE,
+  };
+}
+
+function canStartQueueItem(args: {
+  item: ThumbnailQueueItem;
+  budgets: ReturnType<typeof getActiveBudgets>;
+  scrollPhase: CanvasScrollPhase;
+  activeVisibleLoads: number;
+  activePrefetchLoads: number;
+}): boolean {
+  const { item, budgets, scrollPhase, activeVisibleLoads, activePrefetchLoads } = args;
+  if (item.priority === 'prefetch') {
+    if (scrollPhase === 'fast') return false;
+    return activePrefetchLoads < budgets.maxPrefetch;
+  }
+  return activeVisibleLoads < budgets.maxVisible;
 }

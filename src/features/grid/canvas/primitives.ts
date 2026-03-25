@@ -3,11 +3,12 @@
  */
 
 export const BADGE_H = 18;
-export const BADGE_FONT = '600 10px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+export const BADGE_FONT = '600 10px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
 export const BADGE_PAD_X = 5;
 export const BADGE_RADIUS = 4;
-export const NAME_FONT = '400 12px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+export const NAME_FONT = '13px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
 export const RATING_FONT = '10px sans-serif';
+const BADGE_HIDDEN_TYPES = new Set(['jpg', 'jpeg', 'png', 'webp']);
 
 const truncateCache = new Map<string, string>();
 
@@ -34,6 +35,42 @@ export function drawImageCover(
   }
 
   ctx.drawImage(img, sx, sy, sw, sh, dx, dy, dw, dh);
+}
+
+export function drawImageContain(
+  ctx: CanvasRenderingContext2D,
+  img: ImageBitmap,
+  dx: number, dy: number, dw: number, dh: number,
+) {
+  const scale = Math.min(dw / img.width, dh / img.height);
+  const sw = img.width * scale;
+  const sh = img.height * scale;
+  const ox = dx + (dw - sw) / 2;
+  const oy = dy + (dh - sh) / 2;
+  ctx.drawImage(img, 0, 0, img.width, img.height, ox, oy, sw, sh);
+}
+
+export function getContainRect(
+  aspectRatio: number,
+  dx: number,
+  dy: number,
+  dw: number,
+  dh: number,
+): { x: number; y: number; w: number; h: number } {
+  const safe = Number.isFinite(aspectRatio) && aspectRatio > 0 ? aspectRatio : 1;
+  const scale = Math.min(dw / safe, dh);
+  const w = safe * scale;
+  const h = scale;
+  return {
+    x: dx + (dw - w) / 2,
+    y: dy + (dh - h) / 2,
+    w,
+    h,
+  };
+}
+
+export function isHiddenBadgeType(ext: string): boolean {
+  return BADGE_HIDDEN_TYPES.has(ext.toLowerCase());
 }
 
 /**

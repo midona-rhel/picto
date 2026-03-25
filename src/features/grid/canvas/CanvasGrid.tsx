@@ -1,29 +1,29 @@
-/**
- * Canvas grid — single-canvas renderer with visibility-based thumbnail loading.
- */
-
-import { useEffect, useRef, useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSetAtom } from 'jotai';
 import type { CanonicalEntityGridItem } from '../../../shared/types/canonical';
+import { gridPerfAtom } from '../../../state/gridPerf';
 import type { GridViewMode } from '../layout/types';
 import { computeLayout, safeAspectRatio } from '../layout/layoutMath';
-import { buildVisibilityPlan } from './visibilityPlan';
-import { drawTileChromeLayer, drawTileMediaLayer } from './drawBase';
 import { hitTestTile } from './hitTesting';
-import { ThumbnailPipeline, type ImageRequest } from './thumbnailPipeline';
 import { FrameProfiler, Phase } from './frameProfiler';
-import { gridPerfAtom } from '../../../state/gridPerf';
+import { ThumbnailPipeline } from './thumbnailPipeline';
+import { drawCanvasBaseLayer } from './drawBase';
+import { adaptGridItem } from './renderItemAdapter';
+import { buildCanvasVisibilityPlan } from './visibilityPlan';
+import {
+  CANVAS_SCROLL_IDLE_DELAY_MS,
+  classifyCanvasScrollPhase,
+  createIdleCanvasScrollState,
+  resolveCanvasScrollDirection,
+} from './scrollState';
 import styles from './CanvasGrid.module.css';
 
 const GAP = 12;
 const TEXT_NAME_ROW_H = 20;
 const PADDING_X = GAP;
-const REVEAL_DURATION_MS = 250;
-const MAX_CONCURRENT_REVEALS = 54;
+const PLACEHOLDER_BG = 'rgba(255, 255, 255, 0.04)';
 
-interface RevealState {
-  startAt: number;
-}
+type DirtyLane = 'base' | 'overlay' | 'both';
 
 interface CanvasGridProps {
   items: CanonicalEntityGridItem[];
@@ -40,94 +40,26 @@ interface CanvasGridProps {
   suppressTileReveal?: boolean;
 }
 
-function inferGridCause(input: {
-  frameStats: ReturnType<FrameProfiler['getStats']>;
-  slowestPhase: string;
-  slowestPhaseP99Ms: number;
-  queueDepth: number;
-  activeLoads: number;
-  visibleTileCount: number;
-  visibleUniqueThumbCount: number;
-  visibleUniqueThumbReady: number;
-  visibleUniqueThumbLoading: number;
-  visibleUniqueThumbQueued: number;
-  visibleUniqueThumbMissing: number;
-  scrollActive: boolean;
-  scrollFrames: number;
-}): { cause: string; reason: string } {
-  const {
-    frameStats,
-    slowestPhase,
-    slowestPhaseP99Ms,
-    queueDepth,
-    activeLoads,
-    visibleTileCount,
-    visibleUniqueThumbCount,
-    visibleUniqueThumbReady,
-    visibleUniqueThumbLoading,
-    visibleUniqueThumbQueued,
-    visibleUniqueThumbMissing,
-    scrollActive,
-    scrollFrames,
-  } = input;
-
-  const visiblePending = visibleUniqueThumbLoading + visibleUniqueThumbQueued + visibleUniqueThumbMissing;
-  if (visiblePending > 0 && activeLoads >= 4) {
-    return {
-      cause: 'pipeline_bound',
-      reason: `${visiblePending}/${visibleUniqueThumbCount} visible thumbnails are not ready while ${activeLoads} loads are active and queue depth is ${queueDepth}.`,
-    };
+function diagnosticsEnabled(): boolean {
+  if (typeof window === 'undefined') return false;
+  const host = window.location.hostname;
+  if (host !== '127.0.0.1' && host !== 'localhost') return false;
+  try {
+    return window.localStorage.getItem('grid-diagnostics') === '1';
+  } catch {
+    return false;
   }
+}
 
-  if (slowestPhase === 'pipeline' && slowestPhaseP99Ms > 2) {
-    return {
-      cause: 'pipeline_bound',
-      reason: `Pipeline work is the slowest phase at p99 ${slowestPhaseP99Ms.toFixed(2)}ms with queue depth ${queueDepth}.`,
-    };
-  }
+function measureContainerSize(container: HTMLDivElement): { width: number; height: number } {
+  const rect = container.getBoundingClientRect();
+  const width = container.clientWidth || Math.round(rect.width);
+  const height = container.clientHeight || Math.round(rect.height);
+  return { width, height };
+}
 
-  if ((slowestPhase === 'images' || slowestPhase === 'chrome') && slowestPhaseP99Ms > 4) {
-    return {
-      cause: 'draw_bound',
-      reason: `Canvas draw is the slowest phase at p99 ${slowestPhaseP99Ms.toFixed(2)}ms with ${visibleTileCount} visible tiles.`,
-    };
-  }
-
-  if ((slowestPhase === 'visibility' || slowestPhase === 'hashes' || slowestPhase === 'pipeline') && slowestPhaseP99Ms > 2) {
-    return {
-      cause: 'prep_bound',
-      reason: `${slowestPhase} work is the slowest phase at p99 ${slowestPhaseP99Ms.toFixed(2)}ms before the draw even begins.`,
-    };
-  }
-
-  if (
-    visibleUniqueThumbReady === visibleUniqueThumbCount
-    && frameStats.drawOverBudgetFrames === 0
-    && frameStats.missedFrames > 0
-  ) {
-    if (scrollActive || scrollFrames > 0) {
-      return {
-        cause: 'presentation_bound',
-        reason: 'Visible thumbnails are already ready and draw is within budget, so the missed frames are happening in scroll/presentation timing rather than canvas raster cost.',
-      };
-    }
-    return {
-      cause: 'idle_noise',
-      reason: 'The rolling window still contains earlier presentation misses, but the grid is currently idle and not draw-bound.',
-    };
-  }
-
-  if (frameStats.missedFrames === 0 && frameStats.nearThresholdFrames > 0) {
-    return {
-      cause: 'idle_noise',
-      reason: 'The grid is hovering near the 120Hz budget without producing real missed frames.',
-    };
-  }
-
-  return {
-    cause: 'idle_noise',
-    reason: `No single dominant cause. Slowest phase is ${slowestPhase} at p99 ${slowestPhaseP99Ms.toFixed(2)}ms.`,
-  };
+function logCanvasGrid(event: string, data: Record<string, unknown>): void {
+  console.warn(`[canvas-grid] ${event}`, data);
 }
 
 export function CanvasGrid({
@@ -148,344 +80,455 @@ export function CanvasGrid({
   const wrapRef = useRef<HTMLDivElement>(null);
   const viewportRef = useRef<HTMLDivElement>(null);
   const baseCanvasRef = useRef<HTMLCanvasElement>(null);
+  const overlayCanvasRef = useRef<HTMLCanvasElement>(null);
   const baseContextRef = useRef<CanvasRenderingContext2D | null>(null);
+  const overlayContextRef = useRef<CanvasRenderingContext2D | null>(null);
   const rafRef = useRef<number | null>(null);
-  const dirtyRef = useRef(true);
+  const dirtyRef = useRef({ base: true, overlay: true });
   const drawRef = useRef<() => void>(() => {});
   const firstPaintNotifiedRef = useRef(false);
-  const lastVisibleSetRef = useRef<Set<string>>(new Set());
-  const revealStatesRef = useRef<Map<string, RevealState>>(new Map());
-  const revealSlotsRef = useRef<number[]>([]);
-  const scrollDirectionRef = useRef<-1 | 0 | 1>(0);
+  const scrollStateRef = useRef(createIdleCanvasScrollState());
   const lastScrollTopRef = useRef(0);
+  const lastScrollEventAtRef = useRef(0);
   const scrollActiveRef = useRef(false);
   const scrollIdleTimerRef = useRef<number | null>(null);
-  const backgroundColorRef = useRef<string>('rgb(24, 25, 27)');
-  const onScrollTopChangeRef = useRef(onScrollTopChange);
-  onScrollTopChangeRef.current = onScrollTopChange;
-  const onLoadMoreRef = useRef(onLoadMore);
-  onLoadMoreRef.current = onLoadMore;
-  const onTileClickRef = useRef(onTileClick);
-  onTileClickRef.current = onTileClick;
-  const onFirstPaintRef = useRef(onFirstPaint);
-  onFirstPaintRef.current = onFirstPaint;
-  const profilerRef = useRef(new FrameProfiler());
-  const lastPlanRef = useRef({ start: -1, end: -1 });
-  const visibleTileCountRef = useRef(0);
-  const visibleThumbStateCountsRef = useRef({ unique: 0, ready: 0, loading: 0, queued: 0, missing: 0 });
-  const setGridPerf = useSetAtom(gridPerfAtom);
-  const lastLoggedPerfRef = useRef({
-    missedFrames: 0,
-    drawOverBudgetFrames: 0,
-    cause: '',
-    fpsBucket: 120,
-  });
-  // Cached container dimensions — only updated on resize, never read from DOM per frame
+  const pendingPipelineDirtyRef = useRef(false);
+  const backgroundColorRef = useRef('rgb(24, 25, 27)');
   const containerDimsRef = useRef({ width: 0, height: 0 });
-  // Scratch buffers reused every frame to avoid allocations
-  const scratchVisible = useRef<ImageRequest[]>([]);
-  const scratchAhead = useRef<ImageRequest[]>([]);
-  const scratchBehind = useRef<ImageRequest[]>([]);
-  const scratchSeen = useRef<Set<string>>(new Set());
-  const scratchRevealProgress = useRef<Map<string, number>>(new Map());
-  const scratchAheadIdx = useRef<number[]>([]);
-  const scratchBehindIdx = useRef<number[]>([]);
-  const rafScheduledAtRef = useRef(0);
-  const lastScrollEventAtRef = useRef(0);
-  const telemetryRef = useRef({
-    scrollEvents: 0,
-    scrollFrames: 0,
-    rafScheduled: 0,
-    rafExecuted: 0,
-    framesDrawn: 0,
-    framesSkipped: 0,
-    rafFramesWhileIdle: 0,
-    rafFramesWhileScrolling: 0,
-    scrollVelocitySum: 0,
-    scrollVelocitySamples: 0,
-    maxScrollVelocity: 0,
-  });
-
-  const requestProfiledFrame = useCallback((cb: () => void): number => {
-    rafScheduledAtRef.current = performance.now();
-    telemetryRef.current.rafScheduled++;
-    return requestAnimationFrame(() => {
-      telemetryRef.current.rafExecuted++;
-      if (scrollActiveRef.current) {
-        telemetryRef.current.rafFramesWhileScrolling++;
-      } else {
-        telemetryRef.current.rafFramesWhileIdle++;
-      }
-      profilerRef.current.noteRafDelay(performance.now() - rafScheduledAtRef.current);
-      cb();
-    });
-  }, []);
-
-  const textHeight = showName ? TEXT_NAME_ROW_H : 0;
-
-  const scheduleRedraw = useCallback(() => {
-    if (rafRef.current != null) return;
-    rafRef.current = requestProfiledFrame(() => {
-      rafRef.current = null;
-      drawRef.current();
-    });
-  }, [requestProfiledFrame]);
-
-  const pipelineRef = useRef<ThumbnailPipeline | null>(null);
-  useEffect(() => {
-    if (!pipelineRef.current) {
-      pipelineRef.current = new ThumbnailPipeline(() => {
-        dirtyRef.current = true;
-        scheduleRedraw();
-      });
-    }
-    return () => {
-      pipelineRef.current?.clear();
-      pipelineRef.current = null;
-    };
-  }, [scheduleRedraw]);
-
-  const aspectRatios = useMemo(
-    () => items.map((item) => {
-      if (item.pixel_width && item.pixel_height) {
-        return safeAspectRatio(item.pixel_width / item.pixel_height);
-      }
-      return 1.5;
-    }),
-    [items],
-  );
-
   const layoutRef = useRef<ReturnType<typeof computeLayout>>({ positions: [], totalHeight: 0 });
   const targetSizeRef = useRef(targetSize);
+  const profilerRef = useRef(new FrameProfiler());
+  const visibleTileCountRef = useRef(0);
+  const visibleThumbStateCountsRef = useRef({ unique: 0, ready: 0, loading: 0, queued: 0, missing: 0 });
+  const evictStateRef = useRef({ lastRun: 0, keepHashes: new Set<string>(), cursor: 0 });
+  const drawLogCountRef = useRef(0);
+  const scheduleLogCountRef = useRef(0);
+  const rafScheduledAtRef = useRef(0);
+  const pipelineRef = useRef<ThumbnailPipeline | null>(null);
+  const setGridPerf = useSetAtom(gridPerfAtom);
+  const perfEnabled = useMemo(diagnosticsEnabled, []);
+  const onTileClickRef = useRef(onTileClick);
+  const onLoadMoreRef = useRef(onLoadMore);
+  const onFirstPaintRef = useRef(onFirstPaint);
+  const onScrollTopChangeRef = useRef(onScrollTopChange);
+
+  onTileClickRef.current = onTileClick;
+  onLoadMoreRef.current = onLoadMore;
+  onFirstPaintRef.current = onFirstPaint;
+  onScrollTopChangeRef.current = onScrollTopChange;
   targetSizeRef.current = targetSize;
 
-  const recomputeLayout = useCallback(() => {
-    const container = containerRef.current;
-    if (!container) return;
+  const textHeight = showName ? TEXT_NAME_ROW_H : 0;
+  const renderItems = useMemo(() => items.map(adaptGridItem), [items]);
+  const aspectRatios = useMemo(
+    () => renderItems.map((item) => safeAspectRatio(item.aspectRatio ?? 1.5)),
+    [renderItems],
+  );
 
-    const width = container.clientWidth;
-    const height = container.clientHeight;
-    const scrollbarW = container.offsetWidth - width;
-    containerDimsRef.current = { width, height };
-
-    layoutRef.current = computeLayout(aspectRatios, width, targetSizeRef.current, GAP, viewMode, textHeight, PADDING_X, scrollbarW);
+  const applyLayout = useCallback((width: number, height: number, scrollbarWidth: number) => {
+    layoutRef.current = computeLayout(
+      aspectRatios,
+      width,
+      targetSizeRef.current,
+      GAP,
+      viewMode,
+      textHeight,
+      PADDING_X,
+      scrollbarWidth,
+    );
 
     if (wrapRef.current) wrapRef.current.style.height = `${layoutRef.current.totalHeight}px`;
     if (viewportRef.current) viewportRef.current.style.height = `${height}px`;
 
-    dirtyRef.current = true;
-    scheduleRedraw();
-  }, [aspectRatios, viewMode, textHeight, scheduleRedraw]);
+    logCanvasGrid('layout-applied', {
+      items: renderItems.length,
+      positions: layoutRef.current.positions.length,
+      totalHeight: layoutRef.current.totalHeight,
+      width,
+      height,
+      scrollbarWidth,
+      viewMode,
+      targetSize: targetSizeRef.current,
+      textHeight,
+    });
+  }, [aspectRatios, renderItems.length, textHeight, viewMode]);
 
-  const nextRevealSlot = useCallback((now: number): number => {
-    const activeSlots = revealSlotsRef.current.filter((t) => now - t < REVEAL_DURATION_MS);
-    if (activeSlots.length < MAX_CONCURRENT_REVEALS) {
-      activeSlots.push(now);
-      revealSlotsRef.current = activeSlots;
-      return now;
+  const scheduleRedraw = useCallback(() => {
+    if (rafRef.current != null) {
+      const ageMs = performance.now() - rafScheduledAtRef.current;
+      if (ageMs > 100) {
+        cancelAnimationFrame(rafRef.current);
+        rafRef.current = null;
+        if (scheduleLogCountRef.current < 20) {
+          logCanvasGrid('schedule-reset-stale-raf', {
+            items: renderItems.length,
+            baseDirty: dirtyRef.current.base,
+            overlayDirty: dirtyRef.current.overlay,
+            ageMs,
+          });
+          scheduleLogCountRef.current += 1;
+        }
+      } else {
+        if (scheduleLogCountRef.current < 20) {
+          logCanvasGrid('schedule-skipped-existing-raf', {
+            items: renderItems.length,
+            baseDirty: dirtyRef.current.base,
+            overlayDirty: dirtyRef.current.overlay,
+            ageMs,
+          });
+          scheduleLogCountRef.current += 1;
+        }
+        return;
+      }
+    }
+    if (scheduleLogCountRef.current < 20) {
+      logCanvasGrid('schedule-redraw', {
+        items: renderItems.length,
+        baseDirty: dirtyRef.current.base,
+        overlayDirty: dirtyRef.current.overlay,
+      });
+      scheduleLogCountRef.current += 1;
+    }
+    rafScheduledAtRef.current = performance.now();
+    rafRef.current = requestAnimationFrame(() => {
+      if (scheduleLogCountRef.current < 20) {
+        logCanvasGrid('raf-fired', {
+          items: renderItems.length,
+          baseDirty: dirtyRef.current.base,
+          overlayDirty: dirtyRef.current.overlay,
+        });
+        scheduleLogCountRef.current += 1;
+      }
+      rafRef.current = null;
+      rafScheduledAtRef.current = 0;
+      drawRef.current();
+    });
+  }, [renderItems.length]);
+
+  const markDirty = useCallback((lane: DirtyLane) => {
+    if (lane === 'base' || lane === 'both') dirtyRef.current.base = true;
+    if (lane === 'overlay' || lane === 'both') dirtyRef.current.overlay = true;
+    scheduleRedraw();
+  }, [scheduleRedraw]);
+
+  useEffect(() => {
+    const pipeline = new ThumbnailPipeline(() => {
+      if (scrollActiveRef.current) {
+        pendingPipelineDirtyRef.current = true;
+        return;
+      }
+      markDirty('base');
+    });
+    pipelineRef.current = pipeline;
+    return () => {
+      pipeline.clear();
+      pipelineRef.current = null;
+    };
+  }, [markDirty]);
+
+  const recomputeLayout = useCallback(() => {
+    const container = containerRef.current;
+    if (!container) return;
+    const { width, height } = measureContainerSize(container);
+    if (width <= 0 || height <= 0) return;
+    const scrollbarWidth = container.offsetWidth - width;
+    containerDimsRef.current = { width, height };
+    applyLayout(width, height, scrollbarWidth);
+    markDirty('both');
+  }, [applyLayout, markDirty]);
+
+  const ensureCanvasContexts = useCallback((width: number, height: number) => {
+    const dpr = window.devicePixelRatio || 1;
+    const bufferWidth = Math.ceil(width * dpr);
+    const bufferHeight = Math.ceil(height * dpr);
+
+    for (const canvas of [baseCanvasRef.current, overlayCanvasRef.current]) {
+      if (!canvas) continue;
+      if (canvas.width !== bufferWidth || canvas.height !== bufferHeight) {
+        canvas.width = bufferWidth;
+        canvas.height = bufferHeight;
+        canvas.style.width = `${width}px`;
+        canvas.style.height = `${height}px`;
+      }
     }
 
-    const oldest = activeSlots[0];
-    const staggered = oldest + REVEAL_DURATION_MS;
-    activeSlots.shift();
-    activeSlots.push(staggered);
-    revealSlotsRef.current = activeSlots;
-    return staggered;
+    if (!baseContextRef.current && baseCanvasRef.current) {
+      baseContextRef.current = baseCanvasRef.current.getContext('2d', { alpha: true, desynchronized: true });
+    }
+    if (!overlayContextRef.current && overlayCanvasRef.current) {
+      overlayContextRef.current = overlayCanvasRef.current.getContext('2d', { alpha: true, desynchronized: true });
+    }
+
+    return { dpr };
   }, []);
 
   const draw = useCallback(() => {
-    const profiler = profilerRef.current;
     const container = containerRef.current;
-    const baseCanvas = baseCanvasRef.current;
     const pipeline = pipelineRef.current;
-    if (!container || !baseCanvas || !pipeline) return;
+    if (!container || !pipeline) {
+      logCanvasGrid('draw-skipped-missing-root', {
+        hasContainer: !!container,
+        hasPipeline: !!pipeline,
+      });
+      return;
+    }
 
-    profiler.begin();
+    let { width, height } = containerDimsRef.current;
+    if (width <= 0 || height <= 0) {
+      const measured = measureContainerSize(container);
+      width = measured.width;
+      height = measured.height;
+      if (width <= 0 || height <= 0) {
+        logCanvasGrid('draw-skipped-zero-size', {
+          width,
+          height,
+          items: renderItems.length,
+        });
+        return;
+      }
+      containerDimsRef.current = measured;
+      if (viewportRef.current) viewportRef.current.style.height = `${height}px`;
+    }
+    if (width <= 0 || height <= 0) return;
 
-    const dpr = window.devicePixelRatio || 1;
-    const { width, height } = containerDimsRef.current;
-    if (width === 0 || height === 0) { profiler.end(); return; }
     const scrollTop = interactive ? container.scrollTop : frozenScrollTop;
-
-    const pixelWidth = Math.ceil(width * dpr);
-    const pixelHeight = Math.ceil(height * dpr);
-    if (baseCanvas.width !== pixelWidth || baseCanvas.height !== pixelHeight) {
-      baseCanvas.width = pixelWidth;
-      baseCanvas.height = pixelHeight;
-      baseCanvas.style.width = `${width}px`;
-      baseCanvas.style.height = `${height}px`;
-      baseContextRef.current = baseCanvas.getContext('2d', { alpha: false });
-      dirtyRef.current = true;
+    const sizing = ensureCanvasContexts(width, height);
+    const baseCtx = baseContextRef.current;
+    const overlayCtx = overlayContextRef.current;
+    if (!sizing || !baseCtx || !overlayCtx) {
+      logCanvasGrid('draw-skipped-missing-context', {
+        hasSizing: !!sizing,
+        hasBaseCtx: !!baseCtx,
+        hasOverlayCtx: !!overlayCtx,
+        items: renderItems.length,
+        width,
+        height,
+      });
+      return;
     }
 
-    const ctx = baseContextRef.current;
-    if (!ctx) { profiler.end(); return; }
-
+    const { dpr } = sizing;
+    if (layoutRef.current.positions.length !== renderItems.length) {
+      const scrollbarWidth = container.offsetWidth - width;
+      applyLayout(width, height, scrollbarWidth);
+    }
     const { positions } = layoutRef.current;
-    const plan = buildVisibilityPlan(
-      positions, scrollTop, height, scrollDirectionRef.current,
-      scratchAheadIdx.current, scratchBehindIdx.current,
-    );
-    visibleTileCountRef.current = Math.max(0, plan.end - plan.start);
-    profiler.mark(Phase.visibilityPlan);
+    const profiler = profilerRef.current;
+    if (perfEnabled) profiler.begin();
 
-    const visibleReqs = scratchVisible.current; visibleReqs.length = 0;
-    const aheadReqs = scratchAhead.current; aheadReqs.length = 0;
-    const behindReqs = scratchBehind.current; behindReqs.length = 0;
-    const seen = scratchSeen.current; seen.clear();
-    const visibleHashes: string[] = [];
-    let visibleUniqueThumbReady = 0;
-    let visibleUniqueThumbLoading = 0;
-    let visibleUniqueThumbQueued = 0;
-    let visibleUniqueThumbMissing = 0;
-
-    for (let i = plan.start; i < plan.end && i < items.length; i++) {
-      const hash = items[i].thumbnail_hash;
-      if (!hash || seen.has(hash)) continue;
-      seen.add(hash);
-      const pos = positions[i];
-      visibleHashes.push(hash);
-      switch (pipeline.getState(hash)) {
-        case 'ready': visibleUniqueThumbReady++; break;
-        case 'loading': visibleUniqueThumbLoading++; break;
-        case 'queued': visibleUniqueThumbQueued++; break;
-        case 'missing': visibleUniqueThumbMissing++; break;
-      }
-      visibleReqs.push({ hash, displayWidth: pos ? pos.w | 0 : 0, displayHeight: pos ? (pos.h - textHeight) | 0 : 0 });
-    }
-    for (const idx of plan.aheadPrefetchIndices) {
-      if (idx < 0 || idx >= items.length) continue;
-      const hash = items[idx].thumbnail_hash;
-      if (!hash || seen.has(hash)) continue;
-      seen.add(hash);
-      const pos = positions[idx];
-      aheadReqs.push({ hash, displayWidth: pos ? pos.w | 0 : 0, displayHeight: pos ? (pos.h - textHeight) | 0 : 0 });
-    }
-    for (const idx of plan.behindPrefetchIndices) {
-      if (idx < 0 || idx >= items.length) continue;
-      const hash = items[idx].thumbnail_hash;
-      if (!hash || seen.has(hash)) continue;
-      seen.add(hash);
-      const pos = positions[idx];
-      behindReqs.push({ hash, displayWidth: pos ? pos.w | 0 : 0, displayHeight: pos ? (pos.h - textHeight) | 0 : 0 });
-    }
-    profiler.mark(Phase.hashCollection);
-    visibleThumbStateCountsRef.current = {
-      unique: visibleHashes.length,
-      ready: visibleUniqueThumbReady,
-      loading: visibleUniqueThumbLoading,
-      queued: visibleUniqueThumbQueued,
-      missing: visibleUniqueThumbMissing,
-    };
-
-    const planChanged = plan.start !== lastPlanRef.current.start || plan.end !== lastPlanRef.current.end;
-    if (planChanged) {
-      lastPlanRef.current = { start: plan.start, end: plan.end };
-      pipeline.request({ visible: visibleReqs, ahead: aheadReqs, behind: behindReqs });
-      pipeline.evictExcept(seen);
-    }
-    profiler.mark(Phase.pipeline);
-
-    // Single-pass reveal progress computation
-    const revealProgressByHash = scratchRevealProgress.current; revealProgressByHash.clear();
-    let needsNextAnimationFrame = false;
-
-    if (suppressTileReveal) {
-      for (const hash of visibleHashes) revealProgressByHash.set(hash, 1);
-      lastVisibleSetRef.current = new Set(visibleHashes);
-    } else {
-      const now = performance.now();
-      const prevVisible = lastVisibleSetRef.current;
-
-      for (const hash of visibleHashes) {
-        if (!prevVisible.has(hash)) {
-          revealStatesRef.current.set(hash, { startAt: nextRevealSlot(now) });
-        }
-        const state = revealStatesRef.current.get(hash);
-        if (!state || !pipeline.get(hash)) {
-          revealProgressByHash.set(hash, 1);
-        } else {
-          const progress = Math.min(1, (now - state.startAt) / REVEAL_DURATION_MS);
-          revealProgressByHash.set(hash, progress);
-          if (progress < 1) needsNextAnimationFrame = true;
-        }
-      }
-
-      for (const hash of revealStatesRef.current.keys()) {
-        if (!seen.has(hash)) revealStatesRef.current.delete(hash);
-      }
-
-      let changed = visibleHashes.length !== prevVisible.size;
-      if (!changed) {
-        for (const h of visibleHashes) { if (!prevVisible.has(h)) { changed = true; break; } }
-      }
-      if (changed) lastVisibleSetRef.current = new Set(visibleHashes);
-    }
-    profiler.mark(Phase.revealCompute);
-
-    if (dirtyRef.current || needsNextAnimationFrame) {
-      ctx.setTransform(1, 0, 0, 1, 0, 0);
-      ctx.fillStyle = backgroundColorRef.current;
-      ctx.fillRect(0, 0, baseCanvas.width, baseCanvas.height);
-      ctx.setTransform(dpr, 0, 0, dpr, 0, -(scrollTop * dpr));
-      profiler.mark(Phase.clear);
-
-      drawTileMediaLayer({
-        ctx, items, positions,
-        thumbnails: pipeline.getAll(),
-        revealProgressByHash, textHeight,
-        visibleStart: plan.start, visibleEnd: plan.end,
-        showName, showExtension,
-      });
-      profiler.mark(Phase.imageDraw);
-
-      drawTileChromeLayer({
-        ctx, items, positions,
-        thumbnails: pipeline.getAll(),
-        revealProgressByHash, textHeight,
-        visibleStart: plan.start, visibleEnd: plan.end,
-        showName, showExtension,
-      });
-      profiler.mark(Phase.chromeDraw);
-
-      ctx.setTransform(1, 0, 0, 1, 0, 0);
-      dirtyRef.current = false;
-      telemetryRef.current.framesDrawn++;
-      if (scrollActiveRef.current) {
-        telemetryRef.current.scrollFrames++;
-      }
-
-      if (!firstPaintNotifiedRef.current && items.length > 0 && plan.end > plan.start) {
-        firstPaintNotifiedRef.current = true;
-        onFirstPaintRef.current?.();
-      }
-    } else {
-      telemetryRef.current.framesSkipped++;
-    }
-
-    profiler.end({
-      visibleTiles: visibleTileCountRef.current,
-      expectContinuousFrames: needsNextAnimationFrame,
+    pipeline.setScrollState(scrollStateRef.current);
+    const plan = buildCanvasVisibilityPlan({
+      positions,
+      scrollTop,
+      viewportHeight: height,
+      scrollPhase: scrollStateRef.current.phase,
+      scrollDirection: scrollStateRef.current.direction,
+      queueDepth: pipeline.getStats().queueDepth,
     });
 
-    if (needsNextAnimationFrame) {
-      dirtyRef.current = true;
-      rafRef.current = requestProfiledFrame(() => {
-        rafRef.current = null;
-        drawRef.current();
+    if (renderItems.length > 0 && plan.visibleIterEnd === 0) {
+      logCanvasGrid('empty-visible-plan', {
+        items: renderItems.length,
+        positions: positions.length,
+        scrollTop,
+        viewportHeight: height,
+        startIdx: plan.startIdx,
+        endIdx: plan.endIdx,
+        totalHeight: layoutRef.current.totalHeight,
       });
     }
+    if (drawLogCountRef.current < 20) {
+      logCanvasGrid('draw-plan', {
+        items: renderItems.length,
+        positions: positions.length,
+        visibleIterEnd: plan.visibleIterEnd,
+        startIdx: plan.startIdx,
+        endIdx: plan.endIdx,
+        scrollTop,
+        viewportHeight: height,
+        baseDirty: dirtyRef.current.base,
+        overlayDirty: dirtyRef.current.overlay,
+      });
+    }
+    if (perfEnabled) profiler.mark(Phase.visibilityPlan);
+
+    const visibleHashes = new Set<string>();
+    let ready = 0;
+    let loading = 0;
+    let queued = 0;
+    let missing = 0;
+
+    for (let n = 0; n < plan.visibleIterEnd; n += 1) {
+      const idx = plan.visibleIndices ? plan.visibleIndices[n] : plan.startIdx + n;
+      if (idx >= plan.endIdx || idx >= renderItems.length) break;
+      const pos = positions[idx];
+      const item = renderItems[idx];
+      if (!pos || !item || visibleHashes.has(item.thumbnailHash)) continue;
+      visibleHashes.add(item.thumbnailHash);
+      pipeline.ensure(item.thumbnailHash, {
+        y: pos.y + pos.h / 2,
+        drawWidth: pos.w,
+        drawHeight: pos.h - textHeight,
+      });
+      const entry = pipeline.get(item.thumbnailHash);
+      switch (entry?.state ?? 'idle') {
+        case 'shown': ready += 1; break;
+        case 'loading': loading += 1; break;
+        case 'queued': queued += 1; break;
+        default: missing += 1; break;
+      }
+    }
+    if (perfEnabled) profiler.mark(Phase.hashCollection);
+
+    for (const idx of plan.prefetchIndices) {
+      const pos = positions[idx];
+      const item = renderItems[idx];
+      if (!pos || !item) continue;
+      pipeline.ensure(item.thumbnailHash, { y: pos.y + pos.h / 2 });
+    }
+    pipeline.cancelOutsideWindow(plan.cancelTop, plan.cancelBottom);
+    if (perfEnabled) profiler.mark(Phase.pipeline);
+
+    const evictState = evictStateRef.current;
+    const evictNow = performance.now();
+    if (evictNow - evictState.lastRun >= 33) {
+      evictState.lastRun = evictNow;
+      evictState.keepHashes.clear();
+      const keepTop = scrollTop - height;
+      const keepBottom = scrollTop + height + height;
+      for (let i = Math.max(0, plan.startIdx - 30); i < Math.min(positions.length, plan.endIdx + 30); i += 1) {
+        const pos = positions[i];
+        const item = renderItems[i];
+        if (!pos || !item) continue;
+        if (pos.y + pos.h >= keepTop && pos.y <= keepBottom) {
+          evictState.keepHashes.add(item.thumbnailHash);
+        }
+      }
+      for (const idx of plan.prefetchIndices) {
+        const item = renderItems[idx];
+        if (item) evictState.keepHashes.add(item.thumbnailHash);
+      }
+      const batch = pipeline.getEvictCandidatesBatch(evictState.keepHashes, 5, evictState.cursor);
+      evictState.cursor = batch.nextCursor;
+      if (batch.evicted.length > 0) {
+        pipeline.evictHashes(batch.evicted);
+      }
+    }
+
+    visibleTileCountRef.current = plan.visibleIterEnd;
+    visibleThumbStateCountsRef.current = {
+      unique: visibleHashes.size,
+      ready,
+      loading,
+      queued,
+      missing,
+    };
+
+    if (renderItems.length > 0 && visibleHashes.size === 0) {
+      logCanvasGrid('no-visible-hashes', {
+        items: renderItems.length,
+        positions: positions.length,
+        visibleIterEnd: plan.visibleIterEnd,
+        startIdx: plan.startIdx,
+        endIdx: plan.endIdx,
+        scrollTop,
+        viewportHeight: height,
+      });
+    }
+
+    let hasActiveReveal = false;
+    if (dirtyRef.current.base) {
+      const drawNow = suppressTileReveal ? Number.MAX_SAFE_INTEGER : performance.now();
+      baseCtx.setTransform(1, 0, 0, 1, 0, 0);
+      baseCtx.fillStyle = backgroundColorRef.current;
+      baseCtx.fillRect(0, 0, baseCanvasRef.current?.width ?? 0, baseCanvasRef.current?.height ?? 0);
+      baseCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      if (perfEnabled) profiler.mark(Phase.clear);
+
+      hasActiveReveal = drawCanvasBaseLayer({
+        ctx: baseCtx,
+        positions,
+        items: renderItems,
+        atlasGet: (hash) => pipeline.get(hash),
+        atlasEnsure: (hash, args) => pipeline.ensure(hash, args),
+        now: drawNow,
+        visible: {
+          startIdx: plan.startIdx,
+          endIdx: plan.endIdx,
+          visibleIndices: plan.visibleIndices,
+          visibleIterEnd: plan.visibleIterEnd,
+          scrollTop,
+          cssH: height,
+          th: textHeight,
+          br: 8,
+        },
+        theme: {
+          placeholderBg: PLACEHOLDER_BG,
+          borderRadius: 8,
+        },
+        viewMode,
+        showTileName: showName,
+        showExtension,
+      });
+      if (perfEnabled) {
+        profiler.mark(Phase.imageDraw);
+        profiler.mark(Phase.chromeDraw);
+      }
+      if (drawLogCountRef.current < 20) {
+        logCanvasGrid('draw-complete', {
+          items: renderItems.length,
+          visibleIterEnd: plan.visibleIterEnd,
+          visibleThumbs: visibleHashes.size,
+          ready,
+          loading,
+          queued,
+          missing,
+          canvasWidth: baseCanvasRef.current?.width ?? 0,
+          canvasHeight: baseCanvasRef.current?.height ?? 0,
+          cssWidth: width,
+          cssHeight: height,
+          hasActiveReveal,
+        });
+        drawLogCountRef.current += 1;
+      }
+      dirtyRef.current.base = false;
+    }
+
+    if (dirtyRef.current.overlay) {
+      overlayCtx.setTransform(1, 0, 0, 1, 0, 0);
+      overlayCtx.clearRect(0, 0, overlayCanvasRef.current?.width ?? 0, overlayCanvasRef.current?.height ?? 0);
+      dirtyRef.current.overlay = false;
+    }
+
+    if (!firstPaintNotifiedRef.current && items.length > 0 && plan.visibleIterEnd > 0) {
+      firstPaintNotifiedRef.current = true;
+      onFirstPaintRef.current?.();
+    }
+
+    if (perfEnabled) {
+      profiler.end({
+        visibleTiles: visibleTileCountRef.current,
+        expectContinuousFrames: hasActiveReveal,
+      });
+    }
+
+    if (hasActiveReveal) {
+      dirtyRef.current.base = true;
+      scheduleRedraw();
+    }
   }, [
-    items,
+    ensureCanvasContexts,
     frozenScrollTop,
     interactive,
+    items.length,
+    perfEnabled,
+    renderItems,
     scheduleRedraw,
     showExtension,
     showName,
     suppressTileReveal,
     textHeight,
-    nextRevealSlot,
-    requestProfiledFrame,
+    viewMode,
   ]);
 
   drawRef.current = draw;
@@ -494,36 +537,35 @@ export function CanvasGrid({
     const container = containerRef.current;
     if (!container || !interactive) return;
 
-    const SCROLL_IDLE_MS = 150;
-
     const handleScroll = () => {
-      telemetryRef.current.scrollEvents++;
       const scrollTop = container.scrollTop;
       const previous = lastScrollTopRef.current;
       const now = performance.now();
-      const dt = lastScrollEventAtRef.current > 0 ? now - lastScrollEventAtRef.current : 0;
-      if (dt > 0) {
-        const velocity = Math.abs(scrollTop - previous) / dt;
-        telemetryRef.current.scrollVelocitySum += velocity;
-        telemetryRef.current.scrollVelocitySamples++;
-        if (velocity > telemetryRef.current.maxScrollVelocity) {
-          telemetryRef.current.maxScrollVelocity = velocity;
-        }
-      }
-      lastScrollEventAtRef.current = now;
-      scrollDirectionRef.current = scrollTop > previous ? 1 : scrollTop < previous ? -1 : 0;
-      lastScrollTopRef.current = scrollTop;
-      onScrollTopChangeRef.current?.(scrollTop);
-      dirtyRef.current = true;
+      const delta = scrollTop - previous;
+      const elapsed = lastScrollEventAtRef.current > 0 ? now - lastScrollEventAtRef.current : 0;
+      const velocityPxPerSec = elapsed > 0 ? (Math.abs(delta) / elapsed) * 1000 : 0;
 
+      lastScrollTopRef.current = scrollTop;
+      lastScrollEventAtRef.current = now;
+      scrollStateRef.current = {
+        phase: classifyCanvasScrollPhase(velocityPxPerSec),
+        direction: resolveCanvasScrollDirection(delta),
+        velocityPxPerSec,
+      };
       scrollActiveRef.current = true;
-      if (scrollIdleTimerRef.current != null) clearTimeout(scrollIdleTimerRef.current);
+      onScrollTopChangeRef.current?.(scrollTop);
+      markDirty('base');
+
+      if (scrollIdleTimerRef.current != null) window.clearTimeout(scrollIdleTimerRef.current);
       scrollIdleTimerRef.current = window.setTimeout(() => {
         scrollIdleTimerRef.current = null;
         scrollActiveRef.current = false;
-      }, SCROLL_IDLE_MS);
-
-      scheduleRedraw();
+        scrollStateRef.current = createIdleCanvasScrollState();
+        if (pendingPipelineDirtyRef.current) {
+          pendingPipelineDirtyRef.current = false;
+          markDirty('base');
+        }
+      }, CANVAS_SCROLL_IDLE_DELAY_MS);
 
       const loadMore = onLoadMoreRef.current;
       if (loadMore) {
@@ -537,127 +579,80 @@ export function CanvasGrid({
     container.addEventListener('scroll', handleScroll, { passive: true });
     return () => {
       container.removeEventListener('scroll', handleScroll);
-      if (scrollIdleTimerRef.current != null) clearTimeout(scrollIdleTimerRef.current);
+      if (scrollIdleTimerRef.current != null) window.clearTimeout(scrollIdleTimerRef.current);
     };
-  }, [interactive, scheduleRedraw]); // callbacks via refs — no effect churn
-
-  // Read background color once on mount and on resize (proxy for theme change)
-  useEffect(() => {
-    const container = containerRef.current;
-    if (container) {
-      backgroundColorRef.current = getComputedStyle(container).backgroundColor || backgroundColorRef.current;
-    }
-  }, []);
-
-  // Debounced resize — fire immediately on first observation, debounce subsequent
-  useEffect(() => {
-    const container = containerRef.current;
-    if (!container) return;
-    let timer: number | null = null;
-    let firstFire = true;
-    const DEBOUNCE = 150;
-
-    const ro = new ResizeObserver(() => {
-      if (firstFire) {
-        firstFire = false;
-        backgroundColorRef.current = getComputedStyle(container).backgroundColor || backgroundColorRef.current;
-        recomputeLayout();
-        return;
-      }
-      if (timer != null) clearTimeout(timer);
-      timer = window.setTimeout(() => {
-        timer = null;
-        backgroundColorRef.current = getComputedStyle(container).backgroundColor || backgroundColorRef.current;
-        recomputeLayout();
-      }, DEBOUNCE);
-    });
-
-    ro.observe(container);
-    return () => {
-      ro.disconnect();
-      if (timer != null) clearTimeout(timer);
-    };
-  }, [recomputeLayout]);
-
-  // Immediate layout on items/viewMode change
-  useEffect(() => {
-    recomputeLayout();
-  }, [recomputeLayout]);
-
-  // Debounced layout on zoom slider drag
-  useEffect(() => {
-    const timer = window.setTimeout(() => recomputeLayout(), 80);
-    return () => clearTimeout(timer);
-  }, [targetSize]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  useEffect(() => {
-    firstPaintNotifiedRef.current = false;
-    lastVisibleSetRef.current = new Set();
-    revealStatesRef.current.clear();
-    revealSlotsRef.current = [];
-    dirtyRef.current = true;
-    scheduleRedraw();
-  }, [items, viewMode, targetSize, showName, showExtension, scheduleRedraw]);
+  }, [interactive, markDirty]);
 
   useEffect(() => {
     if (!interactive) {
       lastScrollTopRef.current = frozenScrollTop;
-      scrollDirectionRef.current = 0;
-      dirtyRef.current = true;
-      scheduleRedraw();
+      scrollStateRef.current = createIdleCanvasScrollState();
+      markDirty('base');
     }
-  }, [frozenScrollTop, interactive, scheduleRedraw]);
+  }, [frozenScrollTop, interactive, markDirty]);
 
   useEffect(() => {
-    const baseCanvas = baseCanvasRef.current;
     const container = containerRef.current;
-    if (!baseCanvas || !container) return;
+    if (!container) return;
+    backgroundColorRef.current = getComputedStyle(container).backgroundColor || backgroundColorRef.current;
+    const observer = new ResizeObserver(() => {
+      backgroundColorRef.current = getComputedStyle(container).backgroundColor || backgroundColorRef.current;
+      recomputeLayout();
+    });
+    observer.observe(container);
+    return () => observer.disconnect();
+  }, [recomputeLayout]);
 
-    const getCanvasCoords = (e: MouseEvent): { x: number; y: number } => {
+  useEffect(() => {
+    firstPaintNotifiedRef.current = false;
+    logCanvasGrid('items-updated', {
+      items: items.length,
+      renderItems: renderItems.length,
+      viewMode,
+      targetSize,
+      showName,
+      showExtension,
+    });
+    recomputeLayout();
+    markDirty('both');
+  }, [items, markDirty, recomputeLayout, renderItems.length, showExtension, showName, targetSize, viewMode]);
+
+  useEffect(() => {
+    const container = containerRef.current;
+    const canvas = baseCanvasRef.current;
+    if (!container || !canvas) return;
+
+    const handleClick = (event: MouseEvent) => {
       const rect = container.getBoundingClientRect();
       const scrollTop = interactive ? container.scrollTop : frozenScrollTop;
-      return {
-        x: e.clientX - rect.left,
-        y: e.clientY - rect.top + scrollTop,
-      };
-    };
-
-    const handleClick = (e: MouseEvent) => {
-      const { x, y } = getCanvasCoords(e);
+      const x = event.clientX - rect.left;
+      const y = event.clientY - rect.top + scrollTop;
       const { positions } = layoutRef.current;
-      const scrollTop = interactive ? container.scrollTop : frozenScrollTop;
-      const plan = buildVisibilityPlan(positions, scrollTop, container.clientHeight, 0);
-      const hit = hitTestTile(positions, x, y, textHeight, plan.start, plan.end);
+      const plan = buildCanvasVisibilityPlan({
+        positions,
+        scrollTop,
+        viewportHeight: container.clientHeight,
+        scrollPhase: scrollStateRef.current.phase,
+        scrollDirection: scrollStateRef.current.direction,
+        queueDepth: pipelineRef.current?.getStats().queueDepth ?? 0,
+      });
+      const hit = hitTestTile(positions, x, y, textHeight, plan.startIdx, plan.endIdx);
       if (hit !== null && hit < items.length) {
         onTileClickRef.current?.(hit, items[hit]);
       }
     };
 
-    baseCanvas.addEventListener('click', handleClick);
-    return () => baseCanvas.removeEventListener('click', handleClick);
+    canvas.addEventListener('click', handleClick);
+    return () => canvas.removeEventListener('click', handleClick);
   }, [frozenScrollTop, interactive, items, textHeight]);
 
   useEffect(() => () => {
-    if (rafRef.current != null) {
-      cancelAnimationFrame(rafRef.current);
-      rafRef.current = null;
-    }
+    if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
   }, []);
 
-  // Dev overlay — shows frame profiler stats, updates every 500ms (doesn't affect measurements)
-  const isDevHost = typeof window !== 'undefined'
-    && (window.location.hostname === '127.0.0.1' || window.location.hostname === 'localhost');
   const [profilerText, setProfilerText] = useState('');
   useEffect(() => {
-    if (!isDevHost || !interactive) return;
-    const timer = window.setInterval(() => {
-      setProfilerText(profilerRef.current.formatStats());
-    }, 500);
-    return () => window.clearInterval(timer);
-  }, [isDevHost, interactive]);
-
-  useEffect(() => {
-    if (!interactive) {
+    if (!perfEnabled || !interactive) {
       setGridPerf(null);
       return;
     }
@@ -665,60 +660,10 @@ export function CanvasGrid({
     const publish = () => {
       const frameStats = profilerRef.current.getStats();
       const pipelineStats = pipelineRef.current?.getStats();
-      const visibleThumbStates = visibleThumbStateCountsRef.current;
-      const telemetry = telemetryRef.current;
-      const slowestPhase = frameStats.phases
+      const thumbStates = visibleThumbStateCountsRef.current;
+      const nonTotalPhases = frameStats.phases
         .filter((phase) => phase.name !== 'TOTAL')
-        .sort((a, b) => b.p99 - a.p99)[0];
-      const inferred = inferGridCause({
-        frameStats,
-        slowestPhase: slowestPhase?.name ?? 'none',
-        slowestPhaseP99Ms: slowestPhase?.p99 ?? 0,
-        queueDepth: pipelineStats?.queueDepth ?? 0,
-        activeLoads: pipelineStats?.activeLoads ?? 0,
-        visibleTileCount: visibleTileCountRef.current,
-        visibleUniqueThumbCount: visibleThumbStates.unique,
-        visibleUniqueThumbReady: visibleThumbStates.ready,
-        visibleUniqueThumbLoading: visibleThumbStates.loading,
-        visibleUniqueThumbQueued: visibleThumbStates.queued,
-        visibleUniqueThumbMissing: visibleThumbStates.missing,
-        scrollActive: scrollActiveRef.current,
-        scrollFrames: telemetry.scrollFrames,
-      });
-
-      const fpsBucket = frameStats.fps >= 110 ? 120 : frameStats.fps >= 80 ? 90 : frameStats.fps >= 50 ? 60 : 30;
-      const shouldLog =
-        frameStats.missedFrames > lastLoggedPerfRef.current.missedFrames
-        || frameStats.drawOverBudgetFrames > lastLoggedPerfRef.current.drawOverBudgetFrames
-        || inferred.cause !== lastLoggedPerfRef.current.cause
-        || fpsBucket < lastLoggedPerfRef.current.fpsBucket;
-
-      if (shouldLog) {
-        if (frameStats.missedFrames > lastLoggedPerfRef.current.missedFrames) {
-          console.warn(
-            `[grid-perf] missed-frame cause=${inferred.cause} gap=${frameStats.maxMissedFrameGapMs.toFixed(2)}ms draw=${(frameStats.phases.find((phase) => phase.name === 'TOTAL')?.p99 ?? 0).toFixed(2)}ms visibleTiles=${visibleTileCountRef.current} visibleThumbs=${visibleThumbStates.unique} queue=${pipelineStats?.queueDepth ?? 0} loads=${pipelineStats?.activeLoads ?? 0}`,
-          );
-        }
-        if (
-          frameStats.drawOverBudgetFrames > lastLoggedPerfRef.current.drawOverBudgetFrames
-          || inferred.cause !== lastLoggedPerfRef.current.cause
-          || fpsBucket < lastLoggedPerfRef.current.fpsBucket
-        ) {
-          console.warn(
-            `[grid-perf] snapshot fps=${frameStats.fps} missed=${frameStats.missedFrames} near=${frameStats.nearThresholdFrames} pauses=${frameStats.pauseFrames} drawOver=${frameStats.drawOverBudgetFrames} totalP99=${(frameStats.phases.find((phase) => phase.name === 'TOTAL')?.p99 ?? 0).toFixed(2)}ms cause=${inferred.cause} reason=${inferred.reason} visibleTiles=${visibleTileCountRef.current} visibleThumbs=${visibleThumbStates.unique} ready=${visibleThumbStates.ready} loading=${visibleThumbStates.loading} queued=${visibleThumbStates.queued} missing=${visibleThumbStates.missing} queue=${pipelineStats?.queueDepth ?? 0} loads=${pipelineStats?.activeLoads ?? 0} scrollActive=${scrollActiveRef.current} scrollFrames=${telemetry.scrollFrames}`,
-          );
-        }
-        lastLoggedPerfRef.current = {
-          missedFrames: frameStats.missedFrames,
-          drawOverBudgetFrames: frameStats.drawOverBudgetFrames,
-          cause: inferred.cause,
-          fpsBucket,
-        };
-      }
-
-      const avgScrollVelocityPxPerMs = telemetry.scrollVelocitySamples > 0
-        ? telemetry.scrollVelocitySum / telemetry.scrollVelocitySamples
-        : 0;
+        .sort((a, b) => b.p99 - a.p99);
 
       setGridPerf({
         fps: frameStats.fps,
@@ -734,50 +679,41 @@ export function CanvasGrid({
         avgRafDelayMs: frameStats.avgRafDelayMs,
         maxRafDelayMs: frameStats.maxRafDelayMs,
         totalP99Ms: frameStats.phases.find((phase) => phase.name === 'TOTAL')?.p99 ?? 0,
-        slowestPhase: slowestPhase?.name ?? 'none',
-        slowestPhaseP99Ms: slowestPhase?.p99 ?? 0,
+        slowestPhase: nonTotalPhases[0]?.name ?? 'none',
+        slowestPhaseP99Ms: nonTotalPhases[0]?.p99 ?? 0,
         queueDepth: pipelineStats?.queueDepth ?? 0,
         activeLoads: pipelineStats?.activeLoads ?? 0,
         cacheEntries: pipelineStats?.cacheEntries ?? 0,
-        cacheMb: ((pipelineStats?.totalBytes ?? 0) / (1024 * 1024)),
+        cacheMb: (pipelineStats?.totalBytes ?? 0) / (1024 * 1024),
         visibleTileCount: visibleTileCountRef.current,
-        visibleUniqueThumbCount: visibleThumbStates.unique,
-        visibleUniqueThumbReady: visibleThumbStates.ready,
-        visibleUniqueThumbLoading: visibleThumbStates.loading,
-        visibleUniqueThumbQueued: visibleThumbStates.queued,
-        visibleUniqueThumbMissing: visibleThumbStates.missing,
+        visibleUniqueThumbCount: thumbStates.unique,
+        visibleUniqueThumbReady: thumbStates.ready,
+        visibleUniqueThumbLoading: thumbStates.loading,
+        visibleUniqueThumbQueued: thumbStates.queued,
+        visibleUniqueThumbMissing: thumbStates.missing,
         scrollActive: scrollActiveRef.current,
-        scrollFrames: telemetry.scrollFrames,
-        avgScrollVelocityPxPerMs,
-        maxScrollVelocityPxPerMs: telemetry.maxScrollVelocity,
-        rafFramesWhileIdle: telemetry.rafFramesWhileIdle,
-        rafFramesWhileScrolling: telemetry.rafFramesWhileScrolling,
+        scrollFrames: 0,
+        avgScrollVelocityPxPerMs: scrollStateRef.current.velocityPxPerSec / 1000,
+        maxScrollVelocityPxPerMs: scrollStateRef.current.velocityPxPerSec / 1000,
+        rafFramesWhileIdle: 0,
+        rafFramesWhileScrolling: 0,
         scrollTranslationMode: 'unsnapped',
-        inferredCause: inferred.cause,
-        inferredReason: inferred.reason,
+        inferredCause: scrollActiveRef.current ? 'presentation_bound' : 'idle_noise',
+        inferredReason: scrollActiveRef.current
+          ? 'Legacy-style scroll scheduling is active; diagnostics are opt-in to stay out of the hot path.'
+          : 'Diagnostics are sampled outside the hot path and only reflect explicit debug sessions.',
         updatedAt: performance.now(),
       });
-
-      telemetry.scrollEvents = 0;
-      telemetry.scrollFrames = 0;
-      telemetry.rafScheduled = 0;
-      telemetry.rafExecuted = 0;
-      telemetry.framesDrawn = 0;
-      telemetry.framesSkipped = 0;
-      telemetry.rafFramesWhileIdle = 0;
-      telemetry.rafFramesWhileScrolling = 0;
-      telemetry.scrollVelocitySum = 0;
-      telemetry.scrollVelocitySamples = 0;
-      telemetry.maxScrollVelocity = 0;
+      setProfilerText(profilerRef.current.formatStats());
     };
 
     publish();
-    const timer = window.setInterval(publish, 250);
+    const timer = window.setInterval(publish, 500);
     return () => {
       window.clearInterval(timer);
       setGridPerf(null);
     };
-  }, [interactive, setGridPerf]);
+  }, [interactive, perfEnabled, setGridPerf]);
 
   return (
     <div
@@ -787,9 +723,10 @@ export function CanvasGrid({
       <div className={styles.canvasWrap} ref={wrapRef}>
         <div className={styles.canvasViewport} ref={viewportRef}>
           <canvas ref={baseCanvasRef} className={styles.baseCanvas} />
+          <canvas ref={overlayCanvasRef} className={styles.overlayCanvas} />
         </div>
       </div>
-      {isDevHost && interactive && profilerText && (
+      {perfEnabled && interactive && profilerText && (
         <pre className={styles.profilerOverlay}>{profilerText}</pre>
       )}
     </div>

@@ -1,70 +1,168 @@
-/**
- * Visibility planning — determine which items are visible and should be prefetched.
- * Uses binary search for fast visible-range lookup in large item sets.
- *
- * Accepts scratch arrays for prefetch indices to avoid per-frame allocations.
- */
-
 import type { LayoutItem } from '../layout/types';
-import { lowerBound } from '../layout/layoutMath';
+import type { CanvasScrollDirection, CanvasScrollPhase } from './scrollState';
 
-export interface VisibilityPlan {
-  start: number;
-  end: number;
-  aheadPrefetchIndices: number[];
-  behindPrefetchIndices: number[];
+export interface CanvasVisibilityPlan {
+  startIdx: number;
+  endIdx: number;
+  visibleIndices: number[] | null;
+  visibleIterEnd: number;
+  prefetchIndices: number[];
+  cancelTop: number;
+  cancelBottom: number;
 }
 
-export function buildVisibilityPlan(
+function lowerBound(
   positions: LayoutItem[],
-  scrollTop: number,
-  viewportHeight: number,
-  scrollDirection: -1 | 0 | 1,
-  aheadOut: number[] = [],
-  behindOut: number[] = [],
-): VisibilityPlan {
-  aheadOut.length = 0;
-  behindOut.length = 0;
-
-  if (positions.length === 0) {
-    return { start: 0, end: 0, aheadPrefetchIndices: aheadOut, behindPrefetchIndices: behindOut };
+  target: number,
+  selector: (item: LayoutItem) => number,
+): number {
+  let lo = 0;
+  let hi = positions.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (selector(positions[mid]) < target) lo = mid + 1;
+    else hi = mid;
   }
-
-  // Extend visible range by ~1 row above and below to prevent flicker.
-  // Estimate row height from the first position (all rows are similar height).
-  const rowH = positions[0].h;
-  const visibleTop = Math.max(0, scrollTop - rowH);
-  const visibleBottom = scrollTop + viewportHeight + rowH;
-
-  const start = lowerBound(positions, visibleTop);
-  let end = start;
-  while (end < positions.length && positions[end].y < visibleBottom) {
-    end++;
-  }
-
-  const forwardDistance = viewportHeight * 0.75;
-  const backwardDistance = viewportHeight * 0.25;
-
-  const preferDown = scrollDirection >= 0;
-  const aheadTop = preferDown ? visibleBottom : Math.max(0, scrollTop - forwardDistance);
-  const aheadBottom = preferDown
-    ? scrollTop + viewportHeight + forwardDistance
-    : visibleTop;
-  const behindTop = preferDown ? Math.max(0, scrollTop - backwardDistance) : visibleBottom;
-  const behindBottom = preferDown
-    ? visibleTop
-    : scrollTop + viewportHeight + backwardDistance;
-
-  collectInto(positions, aheadTop, aheadBottom, aheadOut);
-  collectInto(positions, behindTop, behindBottom, behindOut);
-
-  return { start, end, aheadPrefetchIndices: aheadOut, behindPrefetchIndices: behindOut };
+  return lo;
 }
 
-function collectInto(positions: LayoutItem[], fromY: number, toY: number, out: number[]) {
-  if (toY <= fromY) return;
-  const start = Math.max(0, lowerBound(positions, fromY));
-  for (let i = start; i < positions.length && positions[i].y < toY; i++) {
-    out.push(i);
+const PREFETCH_PX = 800;
+const FAST_PRIMARY_PREFETCH_LIMIT = 0;
+const SLOW_PRIMARY_PREFETCH_LIMIT = 6;
+const IDLE_PRIMARY_PREFETCH_LIMIT = 12;
+const IDLE_BACKFILL_LIMIT = 4;
+
+export function buildCanvasVisibilityPlan(args: {
+  positions: LayoutItem[];
+  scrollTop: number;
+  viewportHeight: number;
+  scrollPhase: CanvasScrollPhase;
+  scrollDirection: CanvasScrollDirection;
+  queueDepth: number;
+}): CanvasVisibilityPlan {
+  const { positions, scrollTop, viewportHeight, scrollPhase, scrollDirection, queueDepth } = args;
+
+  if (positions.length === 0 || viewportHeight === 0) {
+    return {
+      startIdx: 0,
+      endIdx: 0,
+      visibleIndices: null,
+      visibleIterEnd: 0,
+      prefetchIndices: [],
+      cancelTop: scrollTop - 4000,
+      cancelBottom: scrollTop + viewportHeight + 4000,
+    };
   }
+
+  const top = scrollTop;
+  const bottom = scrollTop + viewportHeight;
+  const rawStart = lowerBound(positions, top, (p) => p.y + p.h);
+  const rawEnd = lowerBound(positions, bottom, (p) => p.y);
+  const startIdx = Math.max(0, rawStart - 1);
+  const endIdx = Math.min(positions.length, rawEnd + 1);
+  const visibleIterEnd = Math.max(0, endIdx - startIdx);
+
+  const prefetchPx = scrollPhase === 'idle' ? PREFETCH_PX : scrollPhase === 'slow' ? 600 : 0;
+  const prefetchLimit = getPrimaryPrefetchLimit(scrollPhase, queueDepth);
+  const prefetchTop = Math.max(0, scrollTop - prefetchPx);
+  const prefetchBottom = scrollTop + viewportHeight + prefetchPx;
+  const pfStart = lowerBound(positions, prefetchTop, (p) => p.y + p.h);
+  const pfEnd = lowerBound(positions, prefetchBottom, (p) => p.y);
+
+  const forward: number[] = [];
+  const backward: number[] = [];
+  for (let i = endIdx; i < pfEnd && i < positions.length; i++) {
+    forward.push(i);
+  }
+  for (let i = startIdx - 1; i >= pfStart && i >= 0; i--) {
+    backward.push(i);
+  }
+
+  return {
+    startIdx,
+    endIdx,
+    visibleIndices: null,
+    visibleIterEnd,
+    prefetchIndices: buildDirectionalPrefetch({
+      forward,
+      backward,
+      scrollPhase,
+      scrollDirection,
+      primaryLimit: prefetchLimit,
+    }),
+    ...buildCancelWindow({ scrollTop, viewportHeight, scrollPhase, scrollDirection }),
+  };
+}
+
+function getPrimaryPrefetchLimit(scrollPhase: CanvasScrollPhase, queueDepth: number): number {
+  if (scrollPhase === 'fast') return FAST_PRIMARY_PREFETCH_LIMIT;
+  if (scrollPhase === 'slow') return SLOW_PRIMARY_PREFETCH_LIMIT;
+
+  let limit = IDLE_PRIMARY_PREFETCH_LIMIT;
+  if (queueDepth > 240) limit = Math.min(limit, 8);
+  else if (queueDepth > 160) limit = Math.min(limit, 12);
+  else if (queueDepth > 100) limit = Math.min(limit, 16);
+  return limit;
+}
+
+function buildDirectionalPrefetch(args: {
+  forward: number[];
+  backward: number[];
+  scrollPhase: CanvasScrollPhase;
+  scrollDirection: CanvasScrollDirection;
+  primaryLimit: number;
+}): number[] {
+  const { forward, backward, scrollPhase, scrollDirection, primaryLimit } = args;
+  if (primaryLimit <= 0) return [];
+
+  if (scrollPhase === 'slow') {
+    if (scrollDirection === 'backward') return backward.slice(0, primaryLimit);
+    if (scrollDirection === 'forward') return forward.slice(0, primaryLimit);
+    return [];
+  }
+
+  if (scrollDirection === 'backward') {
+    return backward
+      .slice(0, primaryLimit)
+      .concat(forward.slice(0, Math.min(IDLE_BACKFILL_LIMIT, Math.max(0, primaryLimit - backward.length))));
+  }
+
+  return forward
+    .slice(0, primaryLimit)
+    .concat(backward.slice(0, Math.min(IDLE_BACKFILL_LIMIT, Math.max(0, primaryLimit - forward.length))));
+}
+
+function buildCancelWindow(args: {
+  scrollTop: number;
+  viewportHeight: number;
+  scrollPhase: CanvasScrollPhase;
+  scrollDirection: CanvasScrollDirection;
+}) {
+  const { scrollTop, viewportHeight, scrollPhase, scrollDirection } = args;
+  let behindMultiplier = 2;
+  let aheadMultiplier = 3;
+
+  if (scrollPhase === 'fast') {
+    behindMultiplier = 0.5;
+    aheadMultiplier = 1;
+  } else if (scrollPhase === 'slow') {
+    behindMultiplier = 0.75;
+    aheadMultiplier = 1.5;
+  } else {
+    behindMultiplier = 1;
+    aheadMultiplier = 1.5;
+  }
+
+  if (scrollDirection === 'backward') {
+    [behindMultiplier, aheadMultiplier] = [aheadMultiplier, behindMultiplier];
+  } else if (scrollDirection === 'unknown') {
+    const symmetric = Math.max(behindMultiplier, aheadMultiplier);
+    behindMultiplier = symmetric;
+    aheadMultiplier = symmetric;
+  }
+
+  return {
+    cancelTop: scrollTop - viewportHeight * behindMultiplier,
+    cancelBottom: scrollTop + viewportHeight + viewportHeight * aheadMultiplier,
+  };
 }

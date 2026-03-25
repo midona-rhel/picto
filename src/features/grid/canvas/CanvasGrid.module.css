@@ -41,6 +41,14 @@
   will-change: transform;
 }
 
+.overlayCanvas {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  pointer-events: none;
+}
+
 .profilerOverlay {
   position: fixed;
   bottom: 8px;

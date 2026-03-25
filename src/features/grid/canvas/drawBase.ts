@@ -1,192 +1,256 @@
-/**
- * Canvas base layer drawing — multi-pass renderer.
- *
- * Draws in passes grouped by canvas state to minimize fillStyle/font changes:
- *   Pass 1: Placeholder fills (rounded rects, one fillStyle per tile)
- *   Pass 2: Thumbnails (drawImage only, globalAlpha for reveals)
- *   Pass 3: Batched glass inner borders (single stroke call)
- *   Pass 4: All badges (BADGE_FONT set once)
- *   Pass 5: All rating stars (RATING_FONT set once)
- *   Pass 6: All name text (NAME_FONT set once)
- *
- * Caller sets the transform via ctx.setTransform — no save/restore/scale here.
- */
-
-import type { CanonicalEntityGridItem } from '../../../shared/types/canonical';
 import type { LayoutItem } from '../layout/types';
+import type { GridViewMode } from '../layout/types';
+import type { CanvasRenderItem } from './renderItemAdapter';
+import type { ThumbnailPipelineEntry } from './thumbnailPipeline';
 import {
-  drawImageCover, drawBadge, truncateText, formatDuration, mimeToExt,
-  BADGE_FONT, BADGE_H, NAME_FONT, RATING_FONT,
+  BADGE_FONT,
+  BADGE_H,
+  NAME_FONT,
+  RATING_FONT,
+  drawBadge,
+  drawImageContain,
+  drawImageCover,
+  getContainRect,
+  isHiddenBadgeType,
+  mimeToExt,
+  truncateText,
+  formatDuration,
 } from './primitives';
+import { THUMBNAIL_PIPELINE_REVEAL_MS } from './thumbnailPipelinePolicy';
 
-const BORDER_RADIUS = 8;
-const PLACEHOLDER_COLOR = '#2a2a2e';
-const GLASS_BORDER_COLOR = 'rgba(255, 255, 255, 0.15)';
+const GLASS_BORDER_COLOR = 'rgba(255, 255, 255, 0.2)';
 
-interface CacheEntry { bitmap: ImageBitmap; bytes: number; lastUsedAt: number }
+interface ThemeLike {
+  placeholderBg: string;
+  borderRadius: number;
+}
 
-export interface BaseDrawParams {
+export interface VisibleWindow {
+  startIdx: number;
+  endIdx: number;
+  visibleIndices: number[] | null;
+  visibleIterEnd: number;
+  scrollTop: number;
+  cssH: number;
+  th: number;
+  br: number;
+}
+
+export interface BaseLayerArgs {
   ctx: CanvasRenderingContext2D;
-  items: CanonicalEntityGridItem[];
   positions: LayoutItem[];
-  thumbnails: Map<string, CacheEntry>;
-  revealProgressByHash: Map<string, number>;
-  textHeight: number;
-  visibleStart: number;
-  visibleEnd: number;
-  showName: boolean;
+  items: CanvasRenderItem[];
+  atlasGet: (hash: string) => ThumbnailPipelineEntry | null;
+  atlasEnsure: (hash: string, args?: { y?: number; drawWidth?: number; drawHeight?: number }) => void;
+  now: number;
+  visible: VisibleWindow;
+  theme: ThemeLike;
+  viewMode: GridViewMode;
+  showTileName: boolean;
   showExtension: boolean;
 }
 
-export function drawTileMediaLayer(params: BaseDrawParams) {
-  const {
-    ctx, items, positions, thumbnails, revealProgressByHash,
-    textHeight, visibleStart, visibleEnd,
-  } = params;
+function fillPlaceholder(
+  ctx: CanvasRenderingContext2D,
+  item: CanvasRenderItem,
+  theme: ThemeLike,
+  fit: 'cover' | 'contain',
+  x: number,
+  y: number,
+  w: number,
+  h: number,
+  alpha = 1,
+): void {
+  const hasContainShape = fit === 'contain' && !!item.aspectRatio;
+  const previousAlpha = ctx.globalAlpha;
 
-  const end = Math.min(visibleEnd, items.length);
-
-  // ── Pass 1: Placeholder fills (only for tiles without a fully-loaded image) ──
-  for (let i = visibleStart; i < end; i++) {
-    const item = items[i];
-    const pos = positions[i];
-    if (!pos) continue;
-
-    const entry = thumbnails.get(item.thumbnail_hash);
-    const progress = revealProgressByHash.get(item.thumbnail_hash) ?? 1;
-
-    // Skip placeholder entirely when image is fully revealed
-    if (entry && progress >= 1) continue;
-
-    const tx = pos.x | 0;
-    const ty = pos.y | 0;
-    const tw = pos.w | 0;
-    const th = (pos.h - textHeight) | 0;
-
-    ctx.fillStyle = item.dominant_color_hex ?? PLACEHOLDER_COLOR;
-    ctx.beginPath();
-    ctx.roundRect(tx, ty, tw, th, BORDER_RADIUS);
-    ctx.fill();
+  if (hasContainShape) {
+    ctx.globalAlpha = previousAlpha * alpha;
+    ctx.fillStyle = theme.placeholderBg;
+    ctx.fillRect(x, y, w, h);
+    if (item.dominantColor) {
+      const rect = getContainRect(item.aspectRatio ?? 1, x, y, w, h);
+      ctx.fillStyle = item.dominantColor;
+      ctx.beginPath();
+      ctx.roundRect(rect.x, rect.y, rect.w, rect.h, theme.borderRadius);
+      ctx.fill();
+    }
+    ctx.globalAlpha = previousAlpha;
+    return;
   }
 
-  // ── Pass 2: Images (clipped to rounded rect) ──────────────────
-  for (let i = visibleStart; i < end; i++) {
-    const item = items[i];
+  ctx.globalAlpha = previousAlpha * alpha;
+  ctx.fillStyle = item.dominantColor ?? theme.placeholderBg;
+  ctx.fillRect(x, y, w, h);
+  ctx.globalAlpha = previousAlpha;
+}
+
+export function drawCanvasBaseLayer({
+  ctx,
+  positions,
+  items,
+  atlasGet,
+  atlasEnsure,
+  now,
+  visible,
+  theme,
+  viewMode,
+  showTileName,
+  showExtension,
+}: BaseLayerArgs): boolean {
+  const { startIdx, endIdx, visibleIndices, visibleIterEnd, scrollTop, cssH, th, br } = visible;
+  const effectiveFit = viewMode === 'grid' ? 'contain' as const : 'cover' as const;
+  let hasActiveReveal = false;
+
+  for (let n = 0; n < visibleIterEnd; n += 1) {
+    const i = visibleIndices ? visibleIndices[n] : startIdx + n;
+    if (i >= endIdx) break;
     const pos = positions[i];
-    if (!pos) continue;
+    const item = items[i];
+    if (!pos || !item) continue;
 
-    const entry = thumbnails.get(item.thumbnail_hash);
-    if (!entry) continue;
+    const drawY = pos.y - scrollTop;
+    const imageHeight = pos.h - th;
+    if (drawY + pos.h < 0 || drawY > cssH) continue;
 
-    const tx = pos.x | 0;
-    const ty = pos.y | 0;
-    const tw = pos.w | 0;
-    const th = (pos.h - textHeight) | 0;
-    const progress = revealProgressByHash.get(item.thumbnail_hash) ?? 1;
+    atlasEnsure(item.thumbnailHash, {
+      y: pos.y + pos.h / 2,
+      drawWidth: pos.w,
+      drawHeight: imageHeight,
+    });
 
-    if (progress <= 0) continue;
+    const entry = atlasGet(item.thumbnailHash);
+    const isVideo = item.mime.startsWith('video/');
+    const useContain = effectiveFit === 'contain' || isVideo;
+    const drawThumb = useContain ? drawImageContain : drawImageCover;
 
     ctx.save();
-    ctx.beginPath();
-    ctx.roundRect(tx, ty, tw, th, BORDER_RADIUS);
-    ctx.clip();
-    if (progress < 1) {
-      ctx.globalAlpha = progress;
-      drawImageCover(ctx, entry.bitmap, tx, ty, tw, th);
-      ctx.globalAlpha = 1;
+    if (useContain && item.aspectRatio) {
+      const rect = getContainRect(item.aspectRatio, pos.x, drawY, pos.w, imageHeight);
+      ctx.beginPath();
+      ctx.roundRect(rect.x, rect.y, rect.w, rect.h, br);
+      ctx.clip();
     } else {
-      drawImageCover(ctx, entry.bitmap, tx, ty, tw, th);
+      ctx.beginPath();
+      ctx.roundRect(pos.x, drawY, pos.w, imageHeight, br);
+      ctx.clip();
     }
+
+    if (entry?.thumb) {
+      const revealElapsedMs = entry.animateIn
+        ? Math.max(0, now - entry.revealStartedAt)
+        : THUMBNAIL_PIPELINE_REVEAL_MS * 2;
+      const imageProgress = Math.min(1, revealElapsedMs / THUMBNAIL_PIPELINE_REVEAL_MS);
+      const placeholderFadeElapsedMs = Math.max(0, revealElapsedMs - THUMBNAIL_PIPELINE_REVEAL_MS);
+      const placeholderAlpha = imageProgress < 1
+        ? 1
+        : Math.max(0, 1 - (placeholderFadeElapsedMs / THUMBNAIL_PIPELINE_REVEAL_MS));
+
+      if (imageProgress < 1 || placeholderAlpha > 0) {
+        hasActiveReveal = true;
+      }
+
+      if (placeholderAlpha > 0) {
+        fillPlaceholder(ctx, item, theme, effectiveFit, pos.x, drawY, pos.w, imageHeight, placeholderAlpha);
+      }
+
+      if (imageProgress < 1) {
+        ctx.globalAlpha = imageProgress;
+        drawThumb(ctx, entry.thumb, pos.x, drawY, pos.w, imageHeight);
+        ctx.globalAlpha = 1;
+      } else {
+        drawThumb(ctx, entry.thumb, pos.x, drawY, pos.w, imageHeight);
+      }
+    } else {
+      fillPlaceholder(ctx, item, theme, effectiveFit, pos.x, drawY, pos.w, imageHeight);
+    }
+
     ctx.restore();
   }
 
-}
-
-export function drawTileChromeLayer(params: BaseDrawParams) {
-  const {
-    ctx, items, positions, textHeight, visibleStart, visibleEnd, showName, showExtension,
-  } = params;
-
-  const end = Math.min(visibleEnd, items.length);
-
-  // ── Pass 3: Batched glass inner borders ──────────────────────
   ctx.strokeStyle = GLASS_BORDER_COLOR;
   ctx.lineWidth = 1;
   ctx.beginPath();
-  for (let i = visibleStart; i < end; i++) {
+  for (let n = 0; n < visibleIterEnd; n += 1) {
+    const i = visibleIndices ? visibleIndices[n] : startIdx + n;
+    if (i >= endIdx) break;
     const pos = positions[i];
-    if (!pos) continue;
-    const th = (pos.h - textHeight) | 0;
-    ctx.roundRect((pos.x | 0) + 0.5, (pos.y | 0) + 0.5, (pos.w | 0) - 1, th - 1, BORDER_RADIUS - 0.5);
+    const item = items[i];
+    if (!pos || !item) continue;
+    const drawY = pos.y - scrollTop;
+    const imageHeight = pos.h - th;
+    if (drawY + pos.h < 0 || drawY > cssH) continue;
+    if (effectiveFit === 'contain' && item.aspectRatio) {
+      const rect = getContainRect(item.aspectRatio, pos.x, drawY, pos.w, imageHeight);
+      ctx.roundRect(rect.x + 0.5, rect.y + 0.5, rect.w - 1, rect.h - 1, br);
+    } else {
+      ctx.roundRect(pos.x + 0.5, drawY + 0.5, pos.w - 1, imageHeight - 1, br);
+    }
   }
   ctx.stroke();
 
-  // ── Pass 4: All badges (set font once) ───────────────────────
   ctx.font = BADGE_FONT;
-  for (let i = visibleStart; i < end; i++) {
-    const item = items[i];
+  for (let n = 0; n < visibleIterEnd; n += 1) {
+    const i = visibleIndices ? visibleIndices[n] : startIdx + n;
+    if (i >= endIdx) break;
     const pos = positions[i];
-    if (!pos) continue;
+    const item = items[i];
+    if (!pos || !item) continue;
+    const drawY = pos.y - scrollTop;
+    if (drawY + pos.h < 0 || drawY > cssH) continue;
 
-    const tx = pos.x | 0;
-    const ty = pos.y | 0;
-    const tw = pos.w | 0;
-    const th = (pos.h - textHeight) | 0;
+    const imageHeight = pos.h - th;
+    let badgeX = pos.x + pos.w - 4;
+    const badgeY = drawY + 4;
 
-    let badgeX = tx + tw - 4;
-    const badgeY = ty + 4;
-
-    if (item.duration_ms != null) {
-      const durStr = formatDuration(item.duration_ms);
-      const w = drawBadge(ctx, durStr, badgeX, badgeY, 'right');
-      badgeX -= w + 4;
+    if (item.durationMs != null) {
+      const duration = formatDuration(item.durationMs);
+      badgeX -= drawBadge(ctx, duration, badgeX, badgeY, 'right') + 4;
     }
 
-    if (item.entity_kind === 'collection' && item.member_count != null) {
-      drawBadge(ctx, String(item.member_count), badgeX, badgeY, 'right');
+    if (item.kind === 'collection' && item.memberCount != null) {
+      drawBadge(ctx, String(item.memberCount), badgeX, badgeY, 'right');
     }
 
-    if (showExtension && item.mime_type) {
-      const ext = mimeToExt(item.mime_type);
-      if (ext) {
-        drawBadge(ctx, ext, tx + tw - 4, ty + th - BADGE_H - 4, 'right');
+    if (showExtension) {
+      const ext = mimeToExt(item.mime);
+      if (ext && !isHiddenBadgeType(ext)) {
+        drawBadge(ctx, ext, pos.x + pos.w - 4, drawY + imageHeight - BADGE_H - 4, 'right');
       }
     }
   }
 
-  // ── Pass 5: All rating stars ─────────────────────────────────
   ctx.font = RATING_FONT;
   ctx.fillStyle = '#ffd54f';
   ctx.textBaseline = 'top';
-  for (let i = visibleStart; i < end; i++) {
-    const item = items[i];
-    if (item.rating == null || item.rating <= 0) continue;
+  for (let n = 0; n < visibleIterEnd; n += 1) {
+    const i = visibleIndices ? visibleIndices[n] : startIdx + n;
+    if (i >= endIdx) break;
     const pos = positions[i];
-    if (!pos) continue;
-    ctx.fillText('★'.repeat(item.rating), (pos.x | 0) + 5, (pos.y | 0) + 5);
+    const item = items[i];
+    if (!pos || !item || item.rating == null || item.rating <= 0) continue;
+    const drawY = pos.y - scrollTop;
+    if (drawY + pos.h < 0 || drawY > cssH) continue;
+    ctx.fillText('★'.repeat(item.rating), pos.x + 5, drawY + 5);
   }
 
-  // ── Pass 6: All name text ────────────────────────────────────
-  if (showName && textHeight > 0) {
+  if (showTileName && th > 0) {
     ctx.font = NAME_FONT;
     ctx.fillStyle = 'rgba(255, 255, 255, 0.85)';
     ctx.textBaseline = 'top';
-    for (let i = visibleStart; i < end; i++) {
-      const item = items[i];
-      if (!item.name) continue;
+    for (let n = 0; n < visibleIterEnd; n += 1) {
+      const i = visibleIndices ? visibleIndices[n] : startIdx + n;
+      if (i >= endIdx) break;
       const pos = positions[i];
-      if (!pos) continue;
-      const tx = pos.x | 0;
-      const th = (pos.h - textHeight) | 0;
-      const nameY = (pos.y | 0) + th + 3;
-      const maxNameW = (pos.w | 0) - 4;
-      const displayName = truncateText(ctx, item.name, maxNameW);
-      ctx.fillText(displayName, tx + 2, nameY);
+      const item = items[i];
+      if (!pos || !item || !item.name) continue;
+      const drawY = pos.y - scrollTop;
+      if (drawY + pos.h < 0 || drawY > cssH) continue;
+      const nameY = drawY + (pos.h - th) + 3;
+      const displayName = truncateText(ctx, item.name, pos.w - 4);
+      ctx.fillText(displayName, pos.x + 2, nameY);
     }
   }
-}
 
-export function drawBaseLayer(params: BaseDrawParams) {
-  drawTileMediaLayer(params);
-  drawTileChromeLayer(params);
+  return hasActiveReveal;
 }
