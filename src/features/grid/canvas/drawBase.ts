@@ -16,6 +16,7 @@ export interface BaseDrawParams {
   items: CanonicalEntityGridItem[];
   positions: LayoutItem[];
   thumbnails: Map<string, ImageBitmap>;
+  revealProgressByHash: Map<string, number>;
   textHeight: number;
   visibleStart: number;
   visibleEnd: number;
@@ -25,7 +26,10 @@ export interface BaseDrawParams {
 }
 
 export function drawBaseLayer(params: BaseDrawParams) {
-  const { ctx, items, positions, thumbnails, textHeight, visibleStart, visibleEnd, dpr, showName, showExtension } = params;
+  const {
+    ctx, items, positions, thumbnails, revealProgressByHash,
+    textHeight, visibleStart, visibleEnd, dpr, showName, showExtension,
+  } = params;
 
   ctx.save();
   ctx.scale(dpr, dpr);
@@ -52,7 +56,13 @@ export function drawBaseLayer(params: BaseDrawParams) {
     // Thumbnail
     const bitmap = thumbnails.get(item.entity_hash);
     if (bitmap) {
-      drawImageCover(ctx, bitmap, tx, ty, pos.w, imgH);
+      const progress = revealProgressByHash.get(item.entity_hash) ?? 1;
+      if (progress > 0) {
+        ctx.save();
+        ctx.globalAlpha = progress;
+        drawImageCover(ctx, bitmap, tx, ty, pos.w, imgH);
+        ctx.restore();
+      }
     }
 
     // Glass inner border

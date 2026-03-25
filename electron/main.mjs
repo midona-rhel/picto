@@ -1,6 +1,12 @@
 import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, nativeTheme, protocol, screen } from 'electron';
 
 app.commandLine.appendSwitch('disable-features', 'AutofillServerCommunication');
+app.commandLine.appendSwitch('force_high_performance_gpu');
+if (process.env.PICTO_EXPERIMENTAL_GPU_FLAGS === '1') {
+  app.commandLine.appendSwitch('enable-gpu-rasterization');
+  app.commandLine.appendSwitch('enable-zero-copy');
+  app.commandLine.appendSwitch('num-raster-threads', '4');
+}
 
 // Single instance guard — prevent multiple Picto processes from running.
 // If another instance is already running, focus its window and quit this one.
@@ -132,6 +138,7 @@ const menuManager = createMenuManager({
 buildAppMenu = menuManager.buildAppMenu;
 
 registerIpcHandlers({
+  app,
   ipcMain,
   BrowserWindow,
   Menu,

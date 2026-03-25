@@ -1,13 +1,5 @@
 /**
- * Canvas grid — dual-canvas renderer with visibility-based thumbnail loading.
- *
- * Architecture:
- *   - Scroll container holds a sized div (totalHeight) for native scrollbar
- *   - Base canvas: thumbnails, placeholders, badges, text, borders
- *   - Overlay canvas: selection borders, hover ring
- *   - Layout positions computed from aspect ratios via layoutMath
- *   - Thumbnail pipeline loads ImageBitmaps for visible items
- *   - RAF-batched redraws on scroll, thumbnail load, or state change
+ * Canvas grid — single-canvas renderer with visibility-based thumbnail loading.
  */
 
 import { useEffect, useRef, useCallback, useMemo } from 'react';
@@ -16,14 +8,19 @@ import type { GridViewMode } from '../layout/types';
 import { computeLayout, safeAspectRatio } from '../layout/layoutMath';
 import { buildVisibilityPlan } from './visibilityPlan';
 import { drawBaseLayer } from './drawBase';
-import { drawOverlayLayer } from './drawOverlay';
 import { hitTestTile } from './hitTesting';
 import { ThumbnailPipeline } from './thumbnailPipeline';
 import styles from './CanvasGrid.module.css';
 
 const GAP = 4;
 const TEXT_NAME_ROW_H = 20;
-const PADDING_X = 4;
+const PADDING_X = 10;
+const REVEAL_DURATION_MS = 150;
+const REVEAL_STAGGER_MS = 18;
+
+interface RevealState {
+  startAt: number;
+}
 
 interface CanvasGridProps {
   items: CanonicalEntityGridItem[];
@@ -33,257 +30,319 @@ interface CanvasGridProps {
   showExtension: boolean;
   onTileClick?: (index: number, item: CanonicalEntityGridItem) => void;
   onLoadMore?: () => void;
+  onFirstPaint?: () => void;
+  onScrollTopChange?: (scrollTop: number) => void;
+  interactive?: boolean;
+  frozenScrollTop?: number;
 }
 
 export function CanvasGrid({
-  items, viewMode, targetSize, showName, showExtension,
-  onTileClick, onLoadMore,
+  items,
+  viewMode,
+  targetSize,
+  showName,
+  showExtension,
+  onTileClick,
+  onLoadMore,
+  onFirstPaint,
+  onScrollTopChange,
+  interactive = true,
+  frozenScrollTop = 0,
 }: CanvasGridProps) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const viewportRef = useRef<HTMLDivElement>(null);
   const baseCanvasRef = useRef<HTMLCanvasElement>(null);
-  const overlayCanvasRef = useRef<HTMLCanvasElement>(null);
-  const hoverIndexRef = useRef<number | null>(null);
+  const baseContextRef = useRef<CanvasRenderingContext2D | null>(null);
   const rafRef = useRef<number | null>(null);
-  const dirtyRef = useRef<{ base: boolean; overlay: boolean }>({ base: true, overlay: true });
+  const dirtyRef = useRef(true);
+  const drawRef = useRef<() => void>(() => {});
+  const renderGenerationRef = useRef(0);
+  const firstPaintNotifiedRef = useRef(false);
+  const lastVisibleSetRef = useRef<Set<string>>(new Set());
+  const revealStatesRef = useRef<Map<string, RevealState>>(new Map());
+  const revealCursorRef = useRef(0);
+  const scrollDirectionRef = useRef<-1 | 0 | 1>(0);
+  const lastScrollTopRef = useRef(0);
 
   const textHeight = showName ? TEXT_NAME_ROW_H : 0;
 
-  // Compute layout from aspect ratios
+  const scheduleRedraw = useCallback(() => {
+    if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
+    rafRef.current = requestAnimationFrame(() => {
+      rafRef.current = null;
+      drawRef.current();
+    });
+  }, []);
+
+  const pipelineRef = useRef<ThumbnailPipeline | null>(null);
+  useEffect(() => {
+    if (!pipelineRef.current) {
+      pipelineRef.current = new ThumbnailPipeline(() => {
+        dirtyRef.current = true;
+        scheduleRedraw();
+      });
+    }
+    return () => {
+      pipelineRef.current?.clear();
+      pipelineRef.current = null;
+    };
+  }, [scheduleRedraw]);
+
   const aspectRatios = useMemo(
     () => items.map((item) => {
       if (item.pixel_width && item.pixel_height) {
         return safeAspectRatio(item.pixel_width / item.pixel_height);
       }
-      return 1.5; // Default for items without dimensions
+      return 1.5;
     }),
     [items],
   );
 
-  // Layout ref — recomputed when inputs change, but not via React state
   const layoutRef = useRef<ReturnType<typeof computeLayout>>({ positions: [], totalHeight: 0 });
-  const containerWidthRef = useRef(0);
 
-  // Thumbnail pipeline
-  const pipelineRef = useRef<ThumbnailPipeline | null>(null);
-  if (!pipelineRef.current) {
-    pipelineRef.current = new ThumbnailPipeline(() => {
-      dirtyRef.current.base = true;
-      scheduleRedraw();
-    });
-  }
-
-  // Recompute layout
   const recomputeLayout = useCallback(() => {
     const container = containerRef.current;
     if (!container) return;
+
     const width = container.clientWidth;
-    containerWidthRef.current = width;
     layoutRef.current = computeLayout(aspectRatios, width, targetSize, GAP, viewMode, textHeight, PADDING_X);
 
-    // Size the canvas wrapper to match total height
-    const wrap = container.querySelector(`.${styles.canvasWrap}`) as HTMLElement | null;
-    if (wrap) wrap.style.height = `${layoutRef.current.totalHeight}px`;
+    if (wrapRef.current) wrapRef.current.style.height = `${layoutRef.current.totalHeight}px`;
+    if (viewportRef.current) viewportRef.current.style.height = `${container.clientHeight}px`;
 
-    dirtyRef.current.base = true;
-    dirtyRef.current.overlay = true;
+    dirtyRef.current = true;
     scheduleRedraw();
-  }, [aspectRatios, targetSize, viewMode, textHeight]);
+  }, [aspectRatios, targetSize, viewMode, textHeight, scheduleRedraw]);
 
-  // Redraw scheduling
-  const scheduleRedraw = useCallback(() => {
-    if (rafRef.current != null) return;
-    rafRef.current = requestAnimationFrame(() => {
-      rafRef.current = null;
-      draw();
-    });
-  }, []);
-
-  // Main draw function
   const draw = useCallback(() => {
     const container = containerRef.current;
     const baseCanvas = baseCanvasRef.current;
-    const overlayCanvas = overlayCanvasRef.current;
-    if (!container || !baseCanvas || !overlayCanvas) return;
+    const pipeline = pipelineRef.current;
+    if (!container || !baseCanvas || !pipeline) return;
 
     const dpr = window.devicePixelRatio || 1;
     const width = container.clientWidth;
     const height = container.clientHeight;
-    const scrollTop = container.scrollTop;
+    const scrollTop = interactive ? container.scrollTop : frozenScrollTop;
 
-    // Resize canvases if needed
-    const cw = Math.ceil(width * dpr);
-    const ch = Math.ceil(height * dpr);
-    if (baseCanvas.width !== cw || baseCanvas.height !== ch) {
-      baseCanvas.width = cw;
-      baseCanvas.height = ch;
+    const pixelWidth = Math.ceil(width * dpr);
+    const pixelHeight = Math.ceil(height * dpr);
+    if (baseCanvas.width !== pixelWidth || baseCanvas.height !== pixelHeight) {
+      baseCanvas.width = pixelWidth;
+      baseCanvas.height = pixelHeight;
       baseCanvas.style.width = `${width}px`;
       baseCanvas.style.height = `${height}px`;
-      overlayCanvas.width = cw;
-      overlayCanvas.height = ch;
-      overlayCanvas.style.width = `${width}px`;
-      overlayCanvas.style.height = `${height}px`;
-      dirtyRef.current.base = true;
-      dirtyRef.current.overlay = true;
+      baseContextRef.current = baseCanvas.getContext('2d', {
+        alpha: false,
+        desynchronized: true,
+      });
+      dirtyRef.current = true;
     }
+
+    const ctx = baseContextRef.current;
+    if (!ctx) return;
 
     const { positions } = layoutRef.current;
-    const plan = buildVisibilityPlan(positions, scrollTop, height);
+    const plan = buildVisibilityPlan(positions, scrollTop, height, scrollDirectionRef.current);
 
-    // Request thumbnails for visible + prefetch items
-    const pipeline = pipelineRef.current!;
     const visibleHashes: string[] = [];
+    const aheadHashes: string[] = [];
+    const behindHashes: string[] = [];
+
+    const seen = new Set<string>();
+    const collect = (indices: number[], out: string[]) => {
+      for (const index of indices) {
+        if (index < 0 || index >= items.length) continue;
+        const hash = items[index].entity_hash;
+        if (!hash || seen.has(hash)) continue;
+        seen.add(hash);
+        out.push(hash);
+      }
+    };
+
     for (let i = plan.start; i < plan.end && i < items.length; i++) {
-      visibleHashes.push(items[i].entity_hash);
+      collect([i], visibleHashes);
     }
-    for (const idx of plan.prefetchIndices) {
-      if (idx < items.length) visibleHashes.push(items[idx].entity_hash);
+    collect(plan.aheadPrefetchIndices, aheadHashes);
+    collect(plan.behindPrefetchIndices, behindHashes);
+
+    pipeline.request({
+      visible: visibleHashes,
+      ahead: aheadHashes,
+      behind: behindHashes,
+    });
+    pipeline.evict(new Set([...visibleHashes, ...aheadHashes, ...behindHashes]));
+
+    const now = performance.now();
+    const visibleSet = new Set(visibleHashes);
+    let revealCursor = Math.max(now, revealCursorRef.current);
+    for (const hash of visibleHashes) {
+      if (!lastVisibleSetRef.current.has(hash)) {
+        revealStatesRef.current.set(hash, { startAt: revealCursor });
+        revealCursor += REVEAL_STAGGER_MS;
+      }
     }
-    pipeline.request(visibleHashes);
+    revealCursorRef.current = revealCursor;
+    lastVisibleSetRef.current = visibleSet;
 
-    // Evict thumbnails outside keep zone
-    const keepSet = new Set(visibleHashes);
-    pipeline.evict(keepSet);
+    const revealProgressByHash = new Map<string, number>();
+    let needsNextAnimationFrame = false;
+    for (const hash of visibleHashes) {
+      const state = revealStatesRef.current.get(hash);
+      if (!state) {
+        revealProgressByHash.set(hash, 1);
+        continue;
+      }
+      const progress = Math.max(0, Math.min(1, (now - state.startAt) / REVEAL_DURATION_MS));
+      revealProgressByHash.set(hash, progress);
+      if (progress < 1 && pipeline.get(hash)) {
+        needsNextAnimationFrame = true;
+      }
+    }
 
-    // Draw base layer
-    if (dirtyRef.current.base) {
-      const ctx = baseCanvas.getContext('2d')!;
+    if (dirtyRef.current || needsNextAnimationFrame) {
       ctx.clearRect(0, 0, baseCanvas.width, baseCanvas.height);
       ctx.save();
       ctx.translate(0, -scrollTop * dpr);
       drawBaseLayer({
-        ctx, items, positions,
+        ctx,
+        items,
+        positions,
         thumbnails: pipeline.getAll(),
-        textHeight, visibleStart: plan.start, visibleEnd: plan.end,
-        dpr, showName, showExtension,
-      });
-      ctx.restore();
-      dirtyRef.current.base = false;
-    }
-
-    // Draw overlay layer
-    if (dirtyRef.current.overlay) {
-      const ctx = overlayCanvas.getContext('2d')!;
-      ctx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
-      ctx.save();
-      ctx.translate(0, -scrollTop * dpr);
-      drawOverlayLayer({
-        ctx, positions, textHeight,
-        visibleStart: plan.start, visibleEnd: plan.end,
-        selectedIndices: new Set(), // TODO: selection state from PBI-593
-        hoverIndex: hoverIndexRef.current,
+        revealProgressByHash,
+        textHeight,
+        visibleStart: plan.start,
+        visibleEnd: plan.end,
         dpr,
+        showName,
+        showExtension,
       });
       ctx.restore();
-      dirtyRef.current.overlay = false;
-    }
-  }, [items, textHeight, showName, showExtension]);
+      dirtyRef.current = false;
 
-  // Scroll handler
+      if (!firstPaintNotifiedRef.current && items.length > 0 && plan.end > plan.start) {
+        firstPaintNotifiedRef.current = true;
+        onFirstPaint?.();
+      }
+    }
+
+    if (needsNextAnimationFrame) {
+      dirtyRef.current = true;
+      scheduleRedraw();
+    }
+  }, [
+    items,
+    frozenScrollTop,
+    interactive,
+    onFirstPaint,
+    scheduleRedraw,
+    showExtension,
+    showName,
+    textHeight,
+  ]);
+
+  drawRef.current = draw;
+
   useEffect(() => {
     const container = containerRef.current;
-    if (!container) return;
-    function handleScroll() {
-      dirtyRef.current.base = true;
-      dirtyRef.current.overlay = true;
+    if (!container || !interactive) return;
+
+    const handleScroll = () => {
+      const scrollTop = container.scrollTop;
+      const previous = lastScrollTopRef.current;
+      scrollDirectionRef.current = scrollTop > previous ? 1 : scrollTop < previous ? -1 : 0;
+      lastScrollTopRef.current = scrollTop;
+      onScrollTopChange?.(scrollTop);
+      dirtyRef.current = true;
       scheduleRedraw();
 
-      // Load more when near bottom
-      if (onLoadMore && container) {
-        const { scrollTop, scrollHeight, clientHeight } = container;
+      if (onLoadMore) {
+        const { scrollHeight, clientHeight } = container;
         if (scrollHeight - scrollTop - clientHeight < 400) {
           onLoadMore();
         }
       }
-    }
+    };
+
     container.addEventListener('scroll', handleScroll, { passive: true });
     return () => container.removeEventListener('scroll', handleScroll);
-  }, [scheduleRedraw, onLoadMore]);
+  }, [interactive, onLoadMore, onScrollTopChange, scheduleRedraw]);
 
-  // Resize observer
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
+
     const ro = new ResizeObserver(() => recomputeLayout());
     ro.observe(container);
     return () => ro.disconnect();
   }, [recomputeLayout]);
 
-  // Recompute layout when items/viewMode/targetSize change
   useEffect(() => {
     recomputeLayout();
   }, [recomputeLayout]);
 
-  // Clear pipeline when items change (new scope)
   useEffect(() => {
-    pipelineRef.current?.clear();
-    dirtyRef.current.base = true;
+    renderGenerationRef.current += 1;
+    firstPaintNotifiedRef.current = false;
+    lastVisibleSetRef.current = new Set();
+    revealStatesRef.current.clear();
+    revealCursorRef.current = 0;
+    dirtyRef.current = true;
     scheduleRedraw();
-  }, [items]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [items, viewMode, targetSize, showName, showExtension, scheduleRedraw]);
 
-  // Pointer interactions on overlay canvas
   useEffect(() => {
-    const overlay = overlayCanvasRef.current;
+    if (!interactive) {
+      lastScrollTopRef.current = frozenScrollTop;
+      scrollDirectionRef.current = 0;
+      dirtyRef.current = true;
+      scheduleRedraw();
+    }
+  }, [frozenScrollTop, interactive, scheduleRedraw]);
+
+  useEffect(() => {
+    const baseCanvas = baseCanvasRef.current;
     const container = containerRef.current;
-    if (!overlay || !container) return;
+    if (!baseCanvas || !container) return;
 
-    function getCanvasCoords(e: MouseEvent): { x: number; y: number } {
-      const rect = container!.getBoundingClientRect();
-      return { x: e.clientX - rect.left, y: e.clientY - rect.top + container!.scrollTop };
-    }
+    const getCanvasCoords = (e: MouseEvent): { x: number; y: number } => {
+      const rect = container.getBoundingClientRect();
+      const scrollTop = interactive ? container.scrollTop : frozenScrollTop;
+      return {
+        x: e.clientX - rect.left,
+        y: e.clientY - rect.top + scrollTop,
+      };
+    };
 
-    function handleMouseMove(e: MouseEvent) {
+    const handleClick = (e: MouseEvent) => {
       const { x, y } = getCanvasCoords(e);
       const { positions } = layoutRef.current;
-      const plan = buildVisibilityPlan(positions, container!.scrollTop, container!.clientHeight);
-      const hit = hitTestTile(positions, x, y, textHeight, plan.start, plan.end);
-      if (hit !== hoverIndexRef.current) {
-        hoverIndexRef.current = hit;
-        dirtyRef.current.overlay = true;
-        scheduleRedraw();
-      }
-    }
-
-    function handleMouseLeave() {
-      if (hoverIndexRef.current !== null) {
-        hoverIndexRef.current = null;
-        dirtyRef.current.overlay = true;
-        scheduleRedraw();
-      }
-    }
-
-    function handleClick(e: MouseEvent) {
-      const { x, y } = getCanvasCoords(e);
-      const { positions } = layoutRef.current;
-      const plan = buildVisibilityPlan(positions, container!.scrollTop, container!.clientHeight);
+      const scrollTop = interactive ? container.scrollTop : frozenScrollTop;
+      const plan = buildVisibilityPlan(positions, scrollTop, container.clientHeight, 0);
       const hit = hitTestTile(positions, x, y, textHeight, plan.start, plan.end);
       if (hit !== null && hit < items.length) {
         onTileClick?.(hit, items[hit]);
       }
-    }
-
-    overlay.addEventListener('mousemove', handleMouseMove);
-    overlay.addEventListener('mouseleave', handleMouseLeave);
-    overlay.addEventListener('click', handleClick);
-    return () => {
-      overlay.removeEventListener('mousemove', handleMouseMove);
-      overlay.removeEventListener('mouseleave', handleMouseLeave);
-      overlay.removeEventListener('click', handleClick);
     };
-  }, [items, textHeight, onTileClick, scheduleRedraw]);
 
-  // Cleanup
-  useEffect(() => {
-    return () => {
-      if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
-      pipelineRef.current?.clear();
-    };
+    baseCanvas.addEventListener('click', handleClick);
+    return () => baseCanvas.removeEventListener('click', handleClick);
+  }, [frozenScrollTop, interactive, items, onTileClick, textHeight]);
+
+  useEffect(() => () => {
+    if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
   }, []);
 
   return (
-    <div className={styles.container} ref={containerRef}>
-      <div className={styles.canvasWrap}>
-        <canvas ref={baseCanvasRef} className={styles.baseCanvas} />
-        <canvas ref={overlayCanvasRef} className={styles.overlayCanvas} />
+    <div
+      className={`${styles.container} ${interactive ? '' : styles.containerFrozen}`}
+      ref={containerRef}
+    >
+      <div className={styles.canvasWrap} ref={wrapRef}>
+        <div className={styles.canvasViewport} ref={viewportRef}>
+          <canvas ref={baseCanvasRef} className={styles.baseCanvas} />
+        </div>
       </div>
     </div>
   );

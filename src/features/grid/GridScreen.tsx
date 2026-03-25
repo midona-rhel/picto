@@ -2,17 +2,24 @@
  * Grid screen — feature root. Reads state, delegates to CanvasGrid.
  */
 
-import { useEffect } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import { useAtomValue } from 'jotai';
 import { IconPhotoOff } from '@tabler/icons-react';
 import { activeNodeIdAtom } from '../../state/navigation';
 import {
-  gridItemsAtom, gridLoadingAtom, gridErrorAtom, gridCursorAtom,
-  gridViewModeAtom, gridTargetSizeAtom, gridShowNameAtom, gridShowExtensionAtom,
+  gridItemsAtom,
+  gridLoadingAtom,
+  gridErrorAtom,
+  gridCursorAtom,
+  gridViewModeAtom,
+  gridTargetSizeAtom,
+  gridShowNameAtom,
+  gridShowExtensionAtom,
 } from '../../state/grid';
 import { gridController } from '../../controllers/gridController';
 import { CanvasGrid } from './canvas/CanvasGrid';
-import type { BaseScope } from '../../shared/types/canonical';
+import type { BaseScope, CanonicalEntityGridItem } from '../../shared/types/canonical';
+import type { GridViewMode } from './layout/types';
 import styles from './GridScreen.module.css';
 
 const GRID_SYSTEM_SCOPES: Record<string, string> = {
@@ -24,6 +31,16 @@ const GRID_SYSTEM_SCOPES: Record<string, string> = {
 };
 
 const NON_GRID_NODES = new Set(['system:duplicates', 'system:recent_viewed']);
+const SCOPE_TRANSITION_MS = 140;
+
+interface SurfaceSnapshot {
+  items: CanonicalEntityGridItem[];
+  viewMode: GridViewMode;
+  targetSize: number;
+  showName: boolean;
+  showExtension: boolean;
+  scrollTop: number;
+}
 
 function nodeIdToScope(nodeId: string): BaseScope | null {
   if (nodeId.startsWith('folder:')) {
@@ -51,54 +68,166 @@ export function GridScreen() {
   const showName = useAtomValue(gridShowNameAtom);
   const showExtension = useAtomValue(gridShowExtensionAtom);
 
+  const [outgoingSurface, setOutgoingSurface] = useState<SurfaceSnapshot | null>(null);
+  const [transitionPhase, setTransitionPhase] = useState<'idle' | 'waiting' | 'fading'>('idle');
+  const lastScrollTopRef = useRef(0);
+  const previousNodeIdRef = useRef(activeNodeId);
+  const transitionTimerRef = useRef<number | null>(null);
+  const latestRenderableSurfaceRef = useRef<SurfaceSnapshot | null>(null);
+
   const scope = nodeIdToScope(activeNodeId);
   const isGridScope = scope !== null;
 
+  const clearTransition = useCallback(() => {
+    if (transitionTimerRef.current != null) {
+      window.clearTimeout(transitionTimerRef.current);
+      transitionTimerRef.current = null;
+    }
+    setOutgoingSurface(null);
+    setTransitionPhase('idle');
+  }, []);
+
   useEffect(() => {
-    if (scope) {
-      gridController.navigateTo(scope);
+    if (items.length > 0 && isGridScope) {
+      latestRenderableSurfaceRef.current = {
+        items,
+        viewMode,
+        targetSize,
+        showName,
+        showExtension,
+        scrollTop: lastScrollTopRef.current,
+      };
+    }
+  }, [isGridScope, items, showExtension, showName, targetSize, viewMode]);
+
+  const beginFade = useCallback(() => {
+    setTransitionPhase((phase) => {
+      if (phase !== 'waiting') return phase;
+      if (transitionTimerRef.current != null) {
+        window.clearTimeout(transitionTimerRef.current);
+      }
+      transitionTimerRef.current = window.setTimeout(() => {
+        transitionTimerRef.current = null;
+        setOutgoingSurface(null);
+        setTransitionPhase('idle');
+      }, SCOPE_TRANSITION_MS);
+      return 'fading';
+    });
+  }, []);
+
+  useEffect(() => {
+    const previousScope = nodeIdToScope(previousNodeIdRef.current);
+    const nextScope = nodeIdToScope(activeNodeId);
+
+    if (previousScope && nextScope && latestRenderableSurfaceRef.current) {
+      setOutgoingSurface(latestRenderableSurfaceRef.current);
+      setTransitionPhase('waiting');
+    } else {
+      clearTransition();
+    }
+
+    if (nextScope) {
+      gridController.navigateTo(nextScope);
     } else {
       gridController.deactivate();
     }
+    previousNodeIdRef.current = activeNodeId;
   }, [activeNodeId]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  if (!isGridScope) {
-    return <div className={styles.nonGridPlaceholder}>This view is not available yet</div>;
-  }
+  useEffect(() => {
+    if (transitionPhase !== 'waiting') return;
+    if (!loading && (error || items.length === 0 || !isGridScope)) {
+      beginFade();
+    }
+  }, [beginFade, error, isGridScope, items.length, loading, transitionPhase]);
 
-  if (error) {
-    return (
-      <div className={styles.error}>
-        <span>{error}</span>
-        <button className={styles.retryBtn} onClick={() => gridController.loadFirstPage()}>
-          Retry
-        </button>
-      </div>
-    );
-  }
+  useEffect(() => {
+    if (outgoingSurface || transitionPhase !== 'idle') return;
+    if (loading && items.length === 0 && latestRenderableSurfaceRef.current) {
+      setOutgoingSurface(latestRenderableSurfaceRef.current);
+      setTransitionPhase('waiting');
+    }
+  }, [items.length, loading, outgoingSurface, transitionPhase]);
 
+  useEffect(() => () => {
+    if (transitionTimerRef.current != null) {
+      window.clearTimeout(transitionTimerRef.current);
+    }
+  }, []);
+
+  const incomingHidden = outgoingSurface && transitionPhase === 'waiting';
+  const outgoingFading = outgoingSurface && transitionPhase === 'fading';
   const isEmpty = items.length === 0 && !loading;
 
-  if (isEmpty) {
-    return (
-      <div className={styles.empty}>
-        <IconPhotoOff size={32} stroke={1} className={styles.emptyIcon} />
-        <span>No items</span>
-      </div>
-    );
-  }
+  const renderIncomingSurface = () => {
+    if (!isGridScope) {
+      return <div className={styles.nonGridPlaceholder}>This view is not available yet</div>;
+    }
 
-  return (
-    <div className={styles.root}>
+    if (error) {
+      return (
+        <div className={styles.error}>
+          <span>{error}</span>
+          <button className={styles.retryBtn} onClick={() => gridController.loadFirstPage()}>
+            Retry
+          </button>
+        </div>
+      );
+    }
+
+    if (isEmpty) {
+      return (
+        <div className={styles.empty}>
+          <IconPhotoOff size={32} stroke={1} className={styles.emptyIcon} />
+          <span>No items</span>
+        </div>
+      );
+    }
+
+    return (
       <CanvasGrid
         items={items}
         viewMode={viewMode}
         targetSize={targetSize}
         showName={showName}
         showExtension={showExtension}
+        onFirstPaint={beginFade}
+        onScrollTopChange={(scrollTop) => { lastScrollTopRef.current = scrollTop; }}
         onTileClick={(_index, _item) => { /* TODO: selection / viewer — PBI-593 */ }}
         onLoadMore={cursor ? () => gridController.loadNextPage() : undefined}
       />
+    );
+  };
+
+  return (
+    <div className={styles.root}>
+      <div className={styles.surfaceStack}>
+        <div
+          className={`${styles.surface} ${
+            incomingHidden ? styles.surfaceIncomingHidden : styles.surfaceIncomingVisible
+          }`}
+        >
+          {renderIncomingSurface()}
+        </div>
+
+        {outgoingSurface && (
+          <div
+            className={`${styles.surface} ${styles.surfaceOutgoing} ${
+              outgoingFading ? styles.surfaceOutgoingFade : ''
+            }`}
+          >
+            <CanvasGrid
+              items={outgoingSurface.items}
+              viewMode={outgoingSurface.viewMode}
+              targetSize={outgoingSurface.targetSize}
+              showName={outgoingSurface.showName}
+              showExtension={outgoingSurface.showExtension}
+              interactive={false}
+              frozenScrollTop={outgoingSurface.scrollTop}
+            />
+          </div>
+        )}
+      </div>
     </div>
   );
 }

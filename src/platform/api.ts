@@ -34,19 +34,12 @@ export async function queryEntityView(query: EntityViewQuery): Promise<EntityVie
     },
   };
 
-  console.log('[grid] request:', JSON.stringify(legacyQuery));
-
   const result = await invoke<{
     items: Array<Record<string, unknown>>;
     next_cursor: string | null;
     has_more: boolean;
     total_count: number | null;
-  }>('get_grid_page_slim', legacyQuery).catch((err) => {
-    console.error('[grid] get_grid_page_slim FAILED:', err);
-    throw err;
-  });
-
-  console.log('[grid] response:', result.items.length, 'items, total:', result.total_count);
+  }>('get_grid_page_slim', legacyQuery);
 
   return {
     items: result.items.map(mapLegacyGridItem),

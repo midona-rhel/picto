@@ -11,20 +11,22 @@ export interface VisibilityPlan {
   start: number;
   /** One past the last visible item index. */
   end: number;
-  /** Indices to prefetch (outside visible but within prefetch zone). */
-  prefetchIndices: number[];
+  /** Indices ahead of the current scroll direction. */
+  aheadPrefetchIndices: number[];
+  /** Indices behind the current scroll direction. */
+  behindPrefetchIndices: number[];
 }
 
-const PREFETCH_PX = 600;
 const EXTEND_ROWS_PX = 100; // Extra pixels to prevent flicker at edges
 
 export function buildVisibilityPlan(
   positions: LayoutItem[],
   scrollTop: number,
   viewportHeight: number,
+  scrollDirection: -1 | 0 | 1,
 ): VisibilityPlan {
   if (positions.length === 0) {
-    return { start: 0, end: 0, prefetchIndices: [] };
+    return { start: 0, end: 0, aheadPrefetchIndices: [], behindPrefetchIndices: [] };
   }
 
   const visibleTop = scrollTop - EXTEND_ROWS_PX;
@@ -38,18 +40,31 @@ export function buildVisibilityPlan(
     end++;
   }
 
-  // Prefetch zone
-  const prefetchTop = scrollTop - PREFETCH_PX;
-  const prefetchBottom = scrollTop + viewportHeight + PREFETCH_PX;
-  const prefetchStart = Math.max(0, lowerBound(positions, prefetchTop));
-  let prefetchEnd = end;
-  while (prefetchEnd < positions.length && positions[prefetchEnd].y < prefetchBottom) {
-    prefetchEnd++;
+  const forwardDistance = viewportHeight * 0.75;
+  const backwardDistance = viewportHeight * 0.25;
+
+  const preferDown = scrollDirection >= 0;
+  const aheadTop = preferDown ? visibleBottom : Math.max(0, scrollTop - forwardDistance);
+  const aheadBottom = preferDown
+    ? scrollTop + viewportHeight + forwardDistance
+    : visibleTop;
+  const behindTop = preferDown ? Math.max(0, scrollTop - backwardDistance) : visibleBottom;
+  const behindBottom = preferDown
+    ? visibleTop
+    : scrollTop + viewportHeight + backwardDistance;
+
+  const aheadPrefetchIndices = collectIndices(positions, aheadTop, aheadBottom);
+  const behindPrefetchIndices = collectIndices(positions, behindTop, behindBottom);
+
+  return { start, end, aheadPrefetchIndices, behindPrefetchIndices };
+}
+
+function collectIndices(positions: LayoutItem[], fromY: number, toY: number): number[] {
+  if (toY <= fromY) return [];
+  const start = Math.max(0, lowerBound(positions, fromY));
+  const indices: number[] = [];
+  for (let i = start; i < positions.length && positions[i].y < toY; i++) {
+    indices.push(i);
   }
-
-  const prefetchIndices: number[] = [];
-  for (let i = prefetchStart; i < start; i++) prefetchIndices.push(i);
-  for (let i = end; i < prefetchEnd; i++) prefetchIndices.push(i);
-
-  return { start, end, prefetchIndices };
+  return indices;
 }

@@ -155,6 +155,7 @@ async function runReverseImageSearch({ BrowserWindow, filePath, engine }) {
 }
 
 export function registerIpcHandlers({
+  app,
   ipcMain,
   BrowserWindow,
   Menu,
@@ -411,6 +412,22 @@ export function registerIpcHandlers({
     return {
       scaleFactor: display.scaleFactor,
       size: { width: display.size.width, height: display.size.height },
+    };
+  });
+
+  ipcMain.handle('picto:monitor:gpu', async () => {
+    const featureStatus = app.getGPUFeatureStatus();
+    let info = null;
+    try {
+      info = await app.getGPUInfo('basic');
+    } catch {
+      info = null;
+    }
+    return {
+      hardwareAccelerationEnabled: app.isHardwareAccelerationEnabled(),
+      featureStatus,
+      info,
+      experimentalFlagsEnabled: process.env.PICTO_EXPERIMENTAL_GPU_FLAGS === '1',
     };
   });
 

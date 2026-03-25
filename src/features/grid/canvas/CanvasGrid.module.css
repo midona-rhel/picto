@@ -9,19 +9,30 @@
   scrollbar-gutter: stable;
 }
 
+.containerFrozen {
+  overflow: hidden;
+}
+
+/* Sized to totalHeight via JS so the container scrolls correctly. */
 .canvasWrap {
   position: relative;
 }
 
+/* Sticky viewport — stays at the top of the scroll container,
+   holds both canvases stacked via absolute positioning. */
+.canvasViewport {
+  position: sticky;
+  top: 0;
+  width: 100%;
+  height: 100vh; /* Will be overridden by JS to match container height */
+  overflow: hidden;
+}
+
 .baseCanvas,
-.overlayCanvas {
+.baseCanvas {
   position: absolute;
   top: 0;
   left: 0;
   width: 100%;
-  pointer-events: none;
-}
-
-.overlayCanvas {
   pointer-events: auto;
 }

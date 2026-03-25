@@ -45,10 +45,15 @@ export const gridController = {
     await this.loadFirstPage();
   },
 
-  async loadFirstPage() {
+  async loadFirstPage(options?: { preserveItems?: boolean }) {
     const v = ++gridVersion;
     store.set(gridLoadingAtom, true);
     store.set(gridErrorAtom, null);
+    if (!options?.preserveItems) {
+      store.set(gridItemsAtom, []);
+      store.set(gridCursorAtom, null);
+      store.set(gridTotalCountAtom, null);
+    }
     try {
       const result = await api.queryEntityView(currentQuery(100));
       if (v !== gridVersion) return;
@@ -114,12 +119,12 @@ export const gridController = {
           }
           return false;
         case 'full_refresh_required':
-          await this.loadFirstPage();
+          await this.loadFirstPage({ preserveItems: true });
           return true;
       }
     } catch {
       if (v !== gridVersion) return false;
-      await this.loadFirstPage();
+      await this.loadFirstPage({ preserveItems: true });
       return true;
     }
   },

@@ -12,7 +12,8 @@
 
 import type { LayoutItem, LayoutResult, GridViewMode } from './types';
 
-const LAYOUT_PADDING_Y = 2;
+const LAYOUT_PADDING_TOP = 20;
+const LAYOUT_PADDING_BOTTOM = 0;
 
 export function safeAspectRatio(value: number): number {
   if (!Number.isFinite(value) || value <= 0) return 1.5;
@@ -58,9 +59,9 @@ export function computeLayout(
 
   for (const pos of result.positions) {
     if (paddingX > 0) pos.x += paddingX;
-    pos.y += LAYOUT_PADDING_Y;
+    pos.y += LAYOUT_PADDING_TOP;
   }
-  result.totalHeight += LAYOUT_PADDING_Y * 2;
+  result.totalHeight += LAYOUT_PADDING_TOP + LAYOUT_PADDING_BOTTOM;
 
   return result;
 }
@@ -184,34 +185,7 @@ function layoutJustified(
   return { positions, totalHeight: Math.max(0, y - gap) };
 }
 
-// ── Bucket index for fast visible-range lookup ───────────────────
-
-export const BUCKET_SIZE = 256;
-
-export interface BucketIndexEntry {
-  bucket: number;
-  indices: number[];
-}
-
-export function buildBucketIndex(positions: LayoutItem[]): Map<number, number[]> {
-  const buckets = new Map<number, number[]>();
-  for (let i = 0; i < positions.length; i++) {
-    const pos = positions[i];
-    const startBucket = Math.floor(pos.y / BUCKET_SIZE);
-    const endBucket = Math.floor((pos.y + pos.h) / BUCKET_SIZE);
-    for (let bucket = startBucket; bucket <= endBucket; bucket++) {
-      let indices = buckets.get(bucket);
-      if (!indices) {
-        indices = [];
-        buckets.set(bucket, indices);
-      }
-      indices.push(i);
-    }
-  }
-  return buckets;
-}
-
-/** Binary search: find first index where positions[i].y >= target. */
+/** Binary search: find first index where positions[i].y + h >= target. */
 export function lowerBound(positions: LayoutItem[], targetY: number): number {
   let lo = 0;
   let hi = positions.length;

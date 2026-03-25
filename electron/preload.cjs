@@ -50,6 +50,7 @@ const library = {
 
 const monitor = {
   current: () => ipcRenderer.invoke('picto:monitor:current'),
+  gpu: () => ipcRenderer.invoke('picto:monitor:gpu'),
 };
 
 const updater = {

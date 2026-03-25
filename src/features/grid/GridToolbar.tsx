@@ -4,6 +4,7 @@
  */
 
 import { useAtomValue, useSetAtom } from 'jotai';
+import { useEffect, useState } from 'react';
 import {
   IconLayoutGrid, IconLayoutList, IconLayoutRows,
   IconSortAscending, IconSortDescending,
@@ -15,6 +16,7 @@ import {
   type SortField, type GridViewMode,
 } from '../../state/grid';
 import { gridController } from '../../controllers/gridController';
+import { getGpuDiagnostics, type GpuDiagnostics } from '../../platform/ipc';
 import styles from './GridToolbar.module.css';
 
 const SORT_OPTIONS: { value: SortField; label: string }[] = [
@@ -41,8 +43,32 @@ export function GridToolbar() {
   const targetSize = useAtomValue(gridTargetSizeAtom);
   const setViewMode = useSetAtom(gridViewModeAtom);
   const setTargetSize = useSetAtom(gridTargetSizeAtom);
+  const [gpuDiagnostics, setGpuDiagnostics] = useState<GpuDiagnostics | null>(null);
+  const isDevHost = typeof window !== 'undefined'
+    && (window.location.hostname === '127.0.0.1' || window.location.hostname === 'localhost');
 
   const SortIcon = sortDirection === 'desc' ? IconSortDescending : IconSortAscending;
+
+  useEffect(() => {
+    if (!isDevHost) return undefined;
+    let cancelled = false;
+
+    const load = async () => {
+      try {
+        const diagnostics = await getGpuDiagnostics();
+        if (!cancelled) setGpuDiagnostics(diagnostics);
+      } catch {
+        if (!cancelled) setGpuDiagnostics(null);
+      }
+    };
+
+    void load();
+    const timer = window.setInterval(load, 5000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [isDevHost]);
 
   return (
     <div className={styles.toolbar}>
@@ -101,6 +127,26 @@ export function GridToolbar() {
       </div>
 
       {loading && <span className={styles.loadingDot} />}
+
+      {isDevHost && gpuDiagnostics && (
+        <div className={styles.gpuPanel} title="GPU diagnostics">
+          <span className={styles.gpuFlag}>
+            {gpuDiagnostics.hardwareAccelerationEnabled ? 'HW' : 'SW'}
+          </span>
+          <span className={styles.gpuText}>
+            2D:{gpuDiagnostics.featureStatus['2d_canvas'] ?? 'unknown'}
+          </span>
+          <span className={styles.gpuText}>
+            Comp:{gpuDiagnostics.featureStatus['gpu_compositing'] ?? 'unknown'}
+          </span>
+          <span className={styles.gpuText}>
+            Raster:{gpuDiagnostics.featureStatus.rasterization ?? 'unknown'}
+          </span>
+          {gpuDiagnostics.experimentalFlagsEnabled && (
+            <span className={styles.gpuFlagExperimental}>EXP</span>
+          )}
+        </div>
+      )}
     </div>
   );
 }

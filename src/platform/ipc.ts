@@ -2,6 +2,13 @@
 
 export type UnlistenFn = () => void;
 
+export interface GpuDiagnostics {
+  hardwareAccelerationEnabled: boolean;
+  featureStatus: Record<string, string>;
+  info: unknown;
+  experimentalFlagsEnabled: boolean;
+}
+
 function requireDesktop() {
   if (!(window as any).picto?.api?.invoke) {
     throw new Error('Electron desktop API is unavailable.');
@@ -15,4 +22,8 @@ export function invoke<T = unknown>(command: string, args?: Record<string, unkno
 
 export function listen<T = unknown>(name: string, handler: (event: { payload: T }) => void): Promise<UnlistenFn> {
   return requireDesktop().events.on(name, (payload: T) => handler({ payload })) as Promise<UnlistenFn>;
+}
+
+export function getGpuDiagnostics(): Promise<GpuDiagnostics> {
+  return requireDesktop().monitor.gpu() as Promise<GpuDiagnostics>;
 }
