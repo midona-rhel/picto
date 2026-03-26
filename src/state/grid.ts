@@ -17,6 +17,7 @@ export type SortDirection = 'asc' | 'desc';
 
 export const gridSortFieldAtom = atom<SortField>('date_added');
 export const gridSortDirectionAtom = atom<SortDirection>('desc');
+export const gridSearchTextAtom = atom<string>('');
 
 // ── View options ─────────────────────────────────────────────────
 

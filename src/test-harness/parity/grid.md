@@ -6,10 +6,11 @@ Last evaluated: 2026-03-25
 
 ## Current state
 
-The grid screen is a working canvas-based renderer prototype. It is **not yet activatable**
-per PBI-592 because the canonical query model (PBI-584), selection model, and parity
-confirmation against fixtures are not in place. The data path still routes through the
-legacy `get_grid_page_slim` command because the new LibraryDatabase tables are not populated.
+The grid screen is a working canvas-based renderer. It is **not yet activatable**
+per PBI-592 because the selection model and parity confirmation against fixtures
+are not in place. The data path uses the canonical `query_entity_view` command
+through `ApplicationEngine` → `LibraryDatabase`. Both loading and reconcile
+use the same backend path.
 
 ## Toolbar
 
@@ -21,7 +22,7 @@ legacy `get_grid_page_slim` command because the new LibraryDatabase tables are n
 - [x] Changing sort reloads the grid via controller
 - [x] View mode toggle (waterfall / grid / justified) with segmented button group
 - [x] Zoom minus/plus buttons with slider (100–900px, step 50)
-- [x] Search input field (Cmd+F focus) — **UI only, not wired to query**
+- [x] Search input field (Cmd+F focus, wired to query via debounced `search_text` filter)
 - [ ] Filter button placeholder — **not implemented**
 
 ## Tile rendering (canvas)
@@ -77,10 +78,10 @@ legacy `get_grid_page_slim` command because the new LibraryDatabase tables are n
 
 ## Data path (known constraints)
 
-- [ ] Canonical `query_entity_view` command — **not in use**, routed through legacy `get_grid_page_slim`
-- [ ] Smart folder scope passes predicate/ID — **broken**, maps to `{ kind: 'smart' }` with no identifier
-- [ ] Filters are translated — **hardcoded to `{}`**
-- [x] Legacy response items mapped to `CanonicalEntityGridItem` type
+- [x] Canonical `query_entity_view` command — live, both load and reconcile use same backend path
+- [x] Smart folder scope passes `{ kind: 'smart_folder', id }` — resolved via bitmap in engine
+- [x] Search text filter passed through to canonical query
+- [x] Response items are canonical `EntityGridItem` with `thumbnail_hash` — no legacy mapping needed
 
 ## Selection — **not implemented** (PBI-593 / PBI-584)
 
@@ -108,7 +109,7 @@ legacy `get_grid_page_slim` command because the new LibraryDatabase tables are n
 
 ## PBI activation blockers
 
-1. Legacy `get_grid_page_slim` bridge must be replaced with canonical `query_entity_view` (PBI-584)
+1. ~~Legacy `get_grid_page_slim` bridge~~ — replaced with canonical `query_entity_view`
 2. Selection model must exist (PBI-593, gated by PBI-584)
 3. Parity harness must render rebuilt grid surfaces, not just fixture JSON (PBI-590)
 4. Smart folder scope mapping must be correct

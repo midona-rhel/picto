@@ -111,7 +111,7 @@ pub async fn get_sidebar_tree(
     _input: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
     let started = Instant::now();
-    let nodes = state.db.get_sidebar_tree().await?;
+    let nodes = state.engine.get_sidebar_tree()?;
     let tree_epoch = state.db.manifest.published_epoch();
     let result = crate::types::SidebarTreeResponse {
         nodes: nodes

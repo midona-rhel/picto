@@ -32,7 +32,8 @@ const GRID_SELECT: &str =
         COALESCE(mf.has_audio, pmf.has_audio, 0) AS has_audio,
         COALESCE(mf.dominant_color_hex, pmf.dominant_color_hex) AS dominant_color_hex,
         COALESCE(mf.size_bytes, me.total_size_bytes, 0) AS size_bytes,
-        me.entity_id
+        me.entity_id,
+        COALESCE(pm.entity_hash, me.entity_hash) AS thumbnail_hash
      FROM media_entity me
      LEFT JOIN single_media_entity sme ON sme.entity_id = me.entity_id
      LEFT JOIN media_file mf ON mf.file_id = sme.file_id
@@ -40,11 +41,14 @@ const GRID_SELECT: &str =
      LEFT JOIN single_media_entity psme ON psme.entity_id = pm.entity_id
      LEFT JOIN media_file pmf ON pmf.file_id = psme.file_id";
 
-/// Reads an EntityGridItem from a row. The entity_id at column 18 is NOT
-/// included in the struct — the caller reads it separately for cursor building.
+/// Reads an EntityGridItem from a row. entity_id at column 18 and
+/// thumbnail_hash at column 19 are read separately by the caller / here.
 fn read_grid_item(row: &rusqlite::Row) -> rusqlite::Result<EntityGridItem> {
+    let entity_hash: String = row.get(0)?;
+    let thumbnail_hash: String = row.get(19).unwrap_or_else(|_| entity_hash.clone());
     Ok(EntityGridItem {
-        entity_hash: row.get(0)?,
+        entity_hash,
+        thumbnail_hash,
         entity_kind: match row.get::<_, String>(1)?.as_str() {
             "collection" => EntityKind::Collection,
             _ => EntityKind::Single,

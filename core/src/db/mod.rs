@@ -19,6 +19,31 @@ use rusqlite::Connection;
 use self::projection::bitmaps::BitmapStore;
 use self::types::*;
 
+/// Import legacy data from an old SqliteDatabase file via ATTACH.
+/// Fatal — returns Err if the import fails.
+fn import_from_legacy_db(conn: &Connection, old_db_path: &Path) -> Result<(), String> {
+    tracing::info!("Importing from legacy database at {}", old_db_path.display());
+    let old_db_str = old_db_path.to_string_lossy().to_string();
+
+    conn.execute("ATTACH DATABASE ?1 AS old_db", rusqlite::params![old_db_str])
+        .map_err(|e| format!("Failed to attach legacy database: {e}"))?;
+
+    let result = migration_legacy::migrate_from_attached(conn);
+    let _ = conn.execute("DETACH DATABASE old_db", []);
+
+    match result {
+        Ok(r) => {
+            tracing::info!("Legacy import complete: {r}");
+            Ok(())
+        }
+        Err(e) => Err(format!(
+            "Failed to import legacy data from {}: {e}. \
+             The library cannot open with an empty canonical database while legacy data exists.",
+            old_db_path.display()
+        )),
+    }
+}
+
 /// The single typed database boundary. All storage access goes through here.
 /// Code outside `core/src/db/` must not issue SQL or know table names.
 pub struct LibraryDatabase {
@@ -56,30 +81,54 @@ impl LibraryDatabase {
             library_root: library_root.to_path_buf(),
         };
 
-        // Check if migration is needed
+        // Bootstrap: migrate, import, or load existing schema
         {
             let conn = db.write_conn.lock().unwrap();
+            let old_db_path = library_root.join("db").join("library.sqlite");
+            let legacy_exists = old_db_path.exists();
+
             if migration_legacy::needs_migration(&conn) {
-                tracing::info!("Legacy schema detected, running migration...");
+                // In-place migration (old tables exist in library.db itself)
+                tracing::info!("Legacy schema detected in library.db, running in-place migration...");
                 let result = migration_legacy::migrate(&conn)?;
                 tracing::info!("{result}");
-                // Full projection rebuild after migration
                 projection::compiler::full_rebuild(&conn, &db.bitmaps);
                 tracing::info!("Post-migration projection rebuild complete");
+
             } else if !migration_legacy::is_new_schema(&conn) {
-                // Fresh database — create new schema
+                // Fresh library.db — create schema and import from legacy if it exists
                 conn.execute_batch(core::schema::LIBRARY_DDL)
                     .map_err(|e| format!("Failed to create schema: {e}"))?;
+
+                if legacy_exists {
+                    import_from_legacy_db(&conn, &old_db_path)?;
+                }
+
                 projection::compiler::full_rebuild(&conn, &db.bitmaps);
+
             } else {
-                // Existing new-schema database — load bitmap snapshot + replay deltas
-                let delta_path = library_root.join("bitmaps.delta");
-                let replayed = projection::bitmap_delta::replay_deltas(&delta_path, &db.bitmaps)
+                // Existing new-schema library.db — check for empty-with-legacy-data
+                let canonical_count: i64 = conn
+                    .query_row("SELECT COUNT(*) FROM media_entity", [], |r| r.get(0))
                     .unwrap_or(0);
-                if replayed == 0 {
-                    // No deltas or snapshot — full rebuild
-                    let conn_r = db.read_conn.lock().unwrap();
-                    projection::compiler::full_rebuild(&conn_r, &db.bitmaps);
+
+                if canonical_count == 0 && legacy_exists {
+                    // New schema exists but is empty while legacy data exists.
+                    // This means a previous import failed or was skipped. Repair.
+                    tracing::warn!(
+                        "Canonical DB has new schema but 0 entities while legacy DB exists. Repairing..."
+                    );
+                    import_from_legacy_db(&conn, &old_db_path)?;
+                    projection::compiler::full_rebuild(&conn, &db.bitmaps);
+                } else {
+                    // Normal startup — load bitmaps
+                    let delta_path = library_root.join("bitmaps.delta");
+                    let replayed = projection::bitmap_delta::replay_deltas(&delta_path, &db.bitmaps)
+                        .unwrap_or(0);
+                    if replayed == 0 {
+                        let conn_r = db.read_conn.lock().unwrap();
+                        projection::compiler::full_rebuild(&conn_r, &db.bitmaps);
+                    }
                 }
             }
         }

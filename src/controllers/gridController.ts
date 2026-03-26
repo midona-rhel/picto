@@ -11,17 +11,21 @@ import type { SortField, SortDirection } from '../state/grid';
 import {
   gridScopeAtom, gridActiveAtom, gridItemsAtom, gridCursorAtom,
   gridTotalCountAtom, gridLoadingAtom, gridErrorAtom,
-  gridSortFieldAtom, gridSortDirectionAtom,
+  gridSortFieldAtom, gridSortDirectionAtom, gridSearchTextAtom,
 } from '../state/grid';
 
 const store = getDefaultStore();
 
 let gridVersion = 0;
 let paginationInFlight: string | null = null;
+let searchDebounceTimer: ReturnType<typeof setTimeout> | null = null;
+const SEARCH_DEBOUNCE_MS = 300;
 
 function currentQuery(limit: number): EntityViewQuery {
+  const searchText = store.get(gridSearchTextAtom).trim();
   return {
     base_scope: store.get(gridScopeAtom),
+    filters: searchText ? { search_text: searchText } : undefined,
     sort: { field: store.get(gridSortFieldAtom), direction: store.get(gridSortDirectionAtom) },
     page: { limit },
   };
@@ -30,14 +34,27 @@ function currentQuery(limit: number): EntityViewQuery {
 export const gridController = {
   async navigateTo(scope: BaseScope) {
     store.set(gridScopeAtom, scope);
+    store.set(gridSearchTextAtom, '');
     store.set(gridActiveAtom, true);
+    if (searchDebounceTimer) { clearTimeout(searchDebounceTimer); searchDebounceTimer = null; }
     await this.loadFirstPage();
   },
 
   deactivate() {
     gridVersion++;
     paginationInFlight = null;
+    if (searchDebounceTimer) { clearTimeout(searchDebounceTimer); searchDebounceTimer = null; }
     store.set(gridActiveAtom, false);
+  },
+
+  /** Update search text and reload with debounce. */
+  setSearchText(text: string) {
+    store.set(gridSearchTextAtom, text);
+    if (searchDebounceTimer) clearTimeout(searchDebounceTimer);
+    searchDebounceTimer = setTimeout(() => {
+      searchDebounceTimer = null;
+      void this.loadFirstPage();
+    }, SEARCH_DEBOUNCE_MS);
   },
 
   /** Change sort and reload. */

@@ -1,69 +1,94 @@
-/* Grid toolbar — rendered in titlebar right section. */
+/* Grid toolbar — matches legacy ImageGridControls layout and styling. */
 
 .toolbar {
+  position: relative;
   display: flex;
   align-items: center;
-  gap: 6px;
+  width: 100%;
   height: 100%;
   padding: 0 8px;
-  font-size: var(--font-size-sm);
-  color: var(--color-text-secondary);
-  -webkit-app-region: no-drag;
+  gap: 0;
 }
 
-.scopeLabel {
+/* ── Icon button base (matches legacy icBtn28) ────────── */
+
+.icBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--color-text-primary);
+  cursor: pointer;
+  outline: none;
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  min-width: 28px;
+  margin: 0 1px;
+  -webkit-app-region: no-drag;
+  transition: background 150ms var(--ease-default);
+}
+
+.icBtn:hover {
+  background: rgba(248, 249, 251, 0.05);
+}
+
+.icBtn:active {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.icBtn:disabled {
+  opacity: 0.35;
+  cursor: default;
+  pointer-events: none;
+}
+
+/* ── Title (absolutely positioned, fade mask at right) ── */
+
+.title {
+  position: absolute;
+  left: 8px;
+  right: 50%;
   font-size: var(--font-size-sm);
   font-weight: var(--font-weight-medium);
   color: var(--color-text-primary);
   white-space: nowrap;
   overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 200px;
-}
-
-.count {
-  font-variant-numeric: tabular-nums;
-  font-family: var(--font-family-mono);
-  color: var(--color-text-tertiary);
-  font-size: var(--font-size-xs);
-}
-
-.spacer {
-  flex: 1;
-}
-
-/* ── Zoom ────────────────────────────────────────────── */
-
-.zoomGroup {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-}
-
-.zoomBtn {
-  appearance: none;
-  border: none;
-  background: none;
-  padding: 0;
-  width: 22px;
-  height: 22px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: var(--radius-sm);
-  color: var(--color-text-tertiary);
-  cursor: pointer;
-}
-
-.zoomBtn:hover {
-  color: var(--color-text-primary);
-  background: var(--color-surface-hover);
-}
-
-.zoomBtn:disabled {
-  opacity: 0.3;
-  cursor: default;
+  user-select: none;
   pointer-events: none;
+  mask-image: linear-gradient(to right, black calc(100% - 40px), transparent 100%);
+  -webkit-mask-image: linear-gradient(to right, black calc(100% - 40px), transparent 100%);
+}
+
+.titleFadeOut {
+  opacity: 0;
+  transition: opacity 250ms var(--ease-default);
+}
+
+.titleFadeIn {
+  opacity: 1;
+  transition: opacity 250ms var(--ease-default);
+}
+
+/* ── Center group (zoom controls, centered) ──────────── */
+
+.centerGroup {
+  flex: 1;
+  display: flex;
+  justify-content: center;
+  min-width: 0;
+}
+
+.sliderSection {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  -webkit-app-region: no-drag;
 }
 
 .zoomSlider {
@@ -81,7 +106,7 @@
   width: 12px;
   height: 12px;
   border-radius: 50%;
-  background: var(--color-text-secondary);
+  background: var(--color-text-primary);
   cursor: pointer;
 }
 
@@ -89,112 +114,50 @@
   background: var(--color-text-primary);
 }
 
-/* ── View modes ──────────────────────────────────────── */
+/* ── Right section ───────────────────────────────────── */
 
-.viewModes {
-  display: flex;
-  gap: 1px;
-  background: var(--color-border-secondary);
-  border-radius: var(--radius-sm);
-  padding: 1px;
-}
-
-.viewModeBtn {
-  appearance: none;
-  border: none;
-  background: transparent;
-  padding: 0;
-  width: 24px;
-  height: 22px;
+.rightSection {
   display: flex;
   align-items: center;
-  justify-content: center;
-  border-radius: 3px;
-  color: var(--color-text-tertiary);
-  cursor: pointer;
-}
-
-.viewModeBtn:hover {
-  color: var(--color-text-primary);
-}
-
-.viewModeActive {
-  background: var(--color-surface-active);
-  color: var(--color-text-primary);
-}
-
-/* ── Sort ────────────────────────────────────────────── */
-
-.sortGroup {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-}
-
-.sortSelect {
-  appearance: none;
-  background: none;
-  border: none;
-  color: var(--color-text-secondary);
-  font-size: var(--font-size-xs);
-  font-family: var(--font-family);
-  cursor: pointer;
-  padding: 2px 4px;
-  border-radius: var(--radius-sm);
-}
-
-.sortSelect:hover {
-  color: var(--color-text-primary);
-  background: var(--color-surface-hover);
-}
-
-.sortDirBtn {
-  appearance: none;
-  border: none;
-  background: none;
-  padding: 0;
-  width: 20px;
-  height: 20px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: var(--radius-sm);
-  color: var(--color-text-secondary);
-  cursor: pointer;
-}
-
-.sortDirBtn:hover {
-  color: var(--color-text-primary);
-  background: var(--color-surface-hover);
+  gap: 4px;
+  flex-shrink: 0;
 }
 
 /* ── Search ──────────────────────────────────────────── */
 
-.searchGroup {
+.searchWrap {
   position: relative;
   display: flex;
   align-items: center;
+  width: 125px;
+  height: 26px;
+  flex-shrink: 0;
+  -webkit-app-region: no-drag;
 }
 
 .searchIcon {
   position: absolute;
-  left: 6px;
+  left: 7px;
   color: var(--color-text-tertiary);
   pointer-events: none;
+  z-index: 1;
 }
 
 .searchInput {
-  appearance: none;
-  border: 1px solid var(--color-border-secondary);
-  background: rgba(255, 255, 255, 0.04);
-  color: var(--color-text-primary);
-  font-size: var(--font-size-xs);
-  font-family: var(--font-family);
-  width: 125px;
-  height: 26px;
+  width: 100%;
+  height: 100%;
   padding: 0 8px 0 24px;
-  border-radius: var(--radius-sm);
+  margin: 0;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--color-text-primary);
+  font-size: var(--font-size-sm);
+  font-family: inherit;
   outline: none;
+  box-sizing: border-box;
+  transition: border-color 200ms var(--ease-default),
+              background-color 200ms var(--ease-default);
 }
 
 .searchInput::placeholder {
@@ -202,10 +165,11 @@
 }
 
 .searchInput:focus {
-  border-color: var(--color-border-focus);
+  border-color: var(--color-primary-60);
+  background: rgba(0, 0, 0, 0.2);
 }
 
-/* ── Perf ────────────────────────────────────────────── */
+/* ── Perf chip (dev only) ────────────────────────────── */
 
 .perfChip {
   font-family: var(--font-family-mono);
@@ -217,6 +181,7 @@
   border-radius: var(--radius-sm);
   padding: 5px 7px;
   white-space: nowrap;
+  margin-left: 4px;
 }
 
 .perfChipWarn {
@@ -232,6 +197,7 @@
   border-radius: 50%;
   background: var(--color-primary);
   animation: pulse 1s ease-in-out infinite;
+  margin-left: 4px;
 }
 
 @keyframes pulse {

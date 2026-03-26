@@ -136,7 +136,7 @@ export function drawCanvasBaseLayer({
       ctx.clip();
     }
 
-    if (entry?.thumb) {
+    if (entry?.thumb && entry.state === 'shown') {
       const revealElapsedMs = entry.animateIn
         ? Math.max(0, now - entry.revealStartedAt)
         : THUMBNAIL_PIPELINE_REVEAL_MS * 2;

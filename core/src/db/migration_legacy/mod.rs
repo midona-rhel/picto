@@ -318,6 +318,132 @@ pub struct MigrationResult {
     pub folder_members_migrated: usize,
 }
 
+/// Import data from old SqliteDatabase (attached as `old_db`) into the fresh new schema.
+/// The new schema tables already exist in the main database. This copies core data.
+pub fn migrate_from_attached(conn: &Connection) -> Result<MigrationResult, String> {
+    let mut result = MigrationResult::default();
+
+    conn.execute_batch("PRAGMA foreign_keys = OFF;")
+        .map_err(|e| format!("Failed to disable FK: {e}"))?;
+
+    // Step 1: media_file ← old_db.file
+    result.files_migrated = conn.execute(
+        "INSERT OR IGNORE INTO media_file (file_id, file_hash, mime_type, size_bytes, pixel_width, pixel_height, duration_ms, frame_count, has_audio, perceptual_hash, dominant_color_hex, dominant_palette_blob, date_added)
+         SELECT file_id, hash, mime, size, width, height, duration_ms, num_frames, COALESCE(has_audio, 0), phash, dominant_color_hex, dominant_palette_blob, COALESCE(imported_at, datetime('now'))
+         FROM old_db.file WHERE hash IS NOT NULL",
+        [],
+    ).map_err(|e| format!("Failed to import files: {e}"))?;
+
+    // Step 2: media_entity ← old_db.media_entity (singles)
+    result.singles_migrated = conn.execute(
+        "INSERT OR IGNORE INTO media_entity (entity_id, entity_hash, entity_kind, status, name, notes, rating, source_urls_json, date_created, date_added, date_modified, parent_collection_entity_id, collection_ordinal)
+         SELECT me.entity_id, COALESCE(me.hash, f.hash, hex(randomblob(32))), 'single', COALESCE(me.status, 0),
+                COALESCE(me.name, f.name), me.description, COALESCE(me.rating, f.rating),
+                f.source_urls_json,
+                COALESCE(me.created_at, f.imported_at, datetime('now')),
+                COALESCE(f.imported_at, me.created_at, datetime('now')),
+                COALESCE(me.updated_at, datetime('now')),
+                me.parent_collection_id, me.collection_ordinal
+         FROM old_db.media_entity me
+         LEFT JOIN old_db.entity_file ef ON ef.entity_id = me.entity_id
+         LEFT JOIN old_db.file f ON f.file_id = ef.file_id
+         WHERE me.kind = 'single'",
+        [],
+    ).map_err(|e| format!("Failed to import singles: {e}"))?;
+
+    // Collections
+    result.collections_migrated = conn.execute(
+        "INSERT OR IGNORE INTO media_entity (entity_id, entity_hash, entity_kind, status, name, notes, rating, date_created, date_added, date_modified, member_count, total_size_bytes)
+         SELECT me.entity_id, COALESCE(me.hash, hex(randomblob(32))), 'collection', COALESCE(me.status, 0),
+                me.name, me.description, me.rating,
+                COALESCE(me.created_at, datetime('now')),
+                COALESCE(me.created_at, datetime('now')),
+                COALESCE(me.updated_at, datetime('now')),
+                me.cached_item_count, me.cached_total_size_bytes
+         FROM old_db.media_entity me WHERE me.kind = 'collection'",
+        [],
+    ).map_err(|e| format!("Failed to import collections: {e}"))?;
+
+    // Step 3: single_media_entity ← old_db.entity_file
+    result.bridges_migrated = conn.execute(
+        "INSERT OR IGNORE INTO single_media_entity (entity_id, file_id)
+         SELECT ef.entity_id, ef.file_id
+         FROM old_db.entity_file ef
+         JOIN old_db.media_entity me ON me.entity_id = ef.entity_id
+         WHERE me.kind = 'single'",
+        [],
+    ).map_err(|e| format!("Failed to import single_media_entity: {e}"))?;
+
+    // Step 4: tags
+    let _ = conn.execute(
+        "INSERT OR IGNORE INTO tag (tag_id, namespace, subtag, file_count)
+         SELECT tag_id, namespace, subtag, file_count FROM old_db.tag", []);
+    result.tags_migrated = conn.execute(
+        "INSERT OR IGNORE INTO entity_tag (entity_id, tag_id, source)
+         SELECT entity_id, tag_id, source FROM old_db.entity_tag_raw", [],
+    ).map_err(|e| format!("Failed to import tags: {e}"))?;
+
+    // Step 5: folders
+    let _ = conn.execute(
+        "INSERT OR IGNORE INTO folder (folder_id, name, parent_id, icon, color, sort_order, auto_tags, watch_path, watch_enabled, watch_subfolders, watch_import_status_mode, date_added, date_modified)
+         SELECT folder_id, name, parent_id, icon, color, sort_order, auto_tags, watch_path, watch_enabled, watch_subfolders, watch_import_status_mode, COALESCE(created_at, datetime('now')), COALESCE(updated_at, datetime('now'))
+         FROM old_db.folder", []);
+    result.folder_members_migrated = conn.execute(
+        "INSERT OR IGNORE INTO folder_member (folder_id, entity_id, position_rank)
+         SELECT folder_id, entity_id, position_rank FROM old_db.folder_entity", [],
+    ).map_err(|e| format!("Failed to import folder_member: {e}"))?;
+
+    // Step 6: Fix collection primary_member_entity_id
+    let _ = conn.execute(
+        "UPDATE media_entity SET primary_member_entity_id = (
+             SELECT child.entity_id FROM media_entity child
+             WHERE child.parent_collection_entity_id = media_entity.entity_id
+             ORDER BY child.collection_ordinal ASC LIMIT 1
+         ) WHERE entity_kind = 'collection'", []);
+
+    // Step 7: Recompute collection aggregates
+    let _ = conn.execute(
+        "UPDATE media_entity SET
+             member_count = (SELECT COUNT(*) FROM media_entity child WHERE child.parent_collection_entity_id = media_entity.entity_id),
+             total_size_bytes = (SELECT COALESCE(SUM(mf.size_bytes), 0) FROM media_entity child JOIN single_media_entity sme ON sme.entity_id = child.entity_id JOIN media_file mf ON mf.file_id = sme.file_id WHERE child.parent_collection_entity_id = media_entity.entity_id)
+         WHERE entity_kind = 'collection'", []);
+
+    // Step 8: smart_folder
+    let _ = conn.execute(
+        "INSERT OR IGNORE INTO smart_folder (smart_folder_id, name, parent_id, icon, color, predicate_json, sort_field, sort_order, display_order, date_added, date_modified)
+         SELECT smart_folder_id, name, parent_id, icon, color, predicate_json, sort_field, sort_order, display_order, COALESCE(created_at, datetime('now')), COALESCE(updated_at, datetime('now'))
+         FROM old_db.smart_folder", []);
+
+    // Step 9: subscriptions
+    let _ = conn.execute("INSERT OR IGNORE INTO subscription_group (group_id, name, schedule, date_added) SELECT group_id, name, schedule, COALESCE(created_at, datetime('now')) FROM old_db.subscription_group", []);
+    let _ = conn.execute("INSERT OR IGNORE INTO subscription (subscription_id, name, site_id, paused, group_id, initial_post_limit, periodic_post_limit, auto_collections, date_added) SELECT subscription_id, name, site_id, paused, group_id, initial_post_limit, periodic_post_limit, COALESCE(auto_collections, 1), COALESCE(created_at, datetime('now')) FROM old_db.subscription", []);
+    let _ = conn.execute("INSERT OR IGNORE INTO subscription_query (query_id, subscription_id, query_text, display_name, paused, last_check_time, files_found, posts_found, completed_initial_run, resume_cursor, resume_strategy) SELECT query_id, subscription_id, query_text, display_name, paused, last_check_time, files_found, COALESCE(posts_found, files_found), completed_initial_run, resume_cursor, resume_strategy FROM old_db.subscription_query", []);
+    let _ = conn.execute("INSERT OR IGNORE INTO subscription_entity (subscription_id, entity_id) SELECT subscription_id, entity_id FROM old_db.subscription_entity", []);
+    let _ = conn.execute("INSERT OR IGNORE INTO subscription_post_collection (subscription_id, site_id, post_id, collection_entity_id, date_added, date_modified) SELECT subscription_id, site_id, post_id, collection_entity_id, COALESCE(created_at, datetime('now')), COALESCE(updated_at, datetime('now')) FROM old_db.subscription_post_collection", []);
+
+    // Step 10: file_color, credentials, duplicates, settings
+    let _ = conn.execute("INSERT OR IGNORE INTO file_color (rowid, file_id, hex, l, a, b) SELECT rowid, file_id, hex, l, a, b FROM old_db.file_color", []);
+    let _ = conn.execute("INSERT OR IGNORE INTO credential_domain (site_category, credential_type, display_name, date_added) SELECT site_category, credential_type, display_name, COALESCE(created_at, datetime('now')) FROM old_db.credential_domain", []);
+    let _ = conn.execute("INSERT OR IGNORE INTO credential_health (site_category, health_status, last_checked_at, last_error) SELECT site_category, health_status, last_checked_at, last_error FROM old_db.credential_health", []);
+    let _ = conn.execute("INSERT OR IGNORE INTO duplicate (file_id_a, file_id_b, distance, status, decision_at, decision_source, decision_reason, winner_file_id, loser_file_id) SELECT file_id_a, file_id_b, distance, status, decision_at, decision_source, decision_reason, winner_file_id, loser_file_id FROM old_db.duplicate", []);
+    let _ = conn.execute("INSERT OR IGNORE INTO kv_settings (key, value) SELECT key, value FROM old_db.kv_settings", []);
+    let _ = conn.execute("INSERT OR IGNORE INTO view_pref (scope, sort_field, sort_dir, layout, tile_size, show_name, show_resolution, show_extension, show_label, thumbnail_fit) SELECT scope, sort_field, sort_dir, layout, tile_size, show_name, show_resolution, show_extension, show_label, thumbnail_fit FROM old_db.view_pref", []);
+
+    // Step 11: deferred_work
+    let _ = conn.execute("INSERT OR IGNORE INTO deferred_work_item (work_id, entity_hash, work_type, status, attempt_count, available_at, last_error, queued_at) SELECT work_id, hash, work_type, status, attempt_count, available_at, last_error, COALESCE(created_at, datetime('now')) FROM old_db.deferred_work", []);
+
+    // Set schema version
+    conn.execute("DELETE FROM schema_version", [])
+        .map_err(|e| format!("Failed to clear schema_version: {e}"))?;
+    conn.execute("INSERT INTO schema_version (version) VALUES (?1)", [NEW_SCHEMA_VERSION])
+        .map_err(|e| format!("Failed to set schema version: {e}"))?;
+
+    conn.execute_batch("PRAGMA foreign_keys = ON;")
+        .map_err(|e| format!("Failed to re-enable FK: {e}"))?;
+
+    Ok(result)
+}
+
 impl std::fmt::Display for MigrationResult {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(

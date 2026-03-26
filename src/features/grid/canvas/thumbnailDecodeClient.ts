@@ -18,11 +18,13 @@ type WorkerResponse = WorkerSuccessResponse | WorkerErrorResponse;
 interface PendingRequest {
   resolve: (value: { bitmap: ImageBitmap; durationMs: number }) => void;
   reject: (reason?: unknown) => void;
+  meta?: Record<string, unknown>;
 }
 
 interface WorkerSlot {
   worker: Worker;
   pending: Map<number, PendingRequest>;
+  aborted: Map<number, Record<string, unknown> | undefined>;
 }
 
 const WORKER_POOL_SIZE = 2;
@@ -30,6 +32,7 @@ const WORKER_POOL_SIZE = 2;
 let workerSlots: WorkerSlot[] | null | undefined;
 let nextRequestId = 1;
 let droppedLateResponses = 0;
+let lateResponseListener: ((meta?: Record<string, unknown>) => void) | null = null;
 
 function destroyPool(): void {
   if (!workerSlots) return;
@@ -48,20 +51,25 @@ function createWorkerSlot(): WorkerSlot {
   const slot: WorkerSlot = {
     worker,
     pending: new Map(),
+    aborted: new Map(),
   };
 
   worker.onmessage = (event: MessageEvent<WorkerResponse>) => {
     const message = event.data;
     const request = slot.pending.get(message.requestId);
     if (!request) {
+      const meta = slot.aborted.get(message.requestId);
+      slot.aborted.delete(message.requestId);
       if (message.type === 'success') {
         message.bitmap.close();
       }
       droppedLateResponses += 1;
+      lateResponseListener?.(meta);
       return;
     }
 
     slot.pending.delete(message.requestId);
+    slot.aborted.delete(message.requestId);
     if (message.type === 'success') {
       request.resolve({ bitmap: message.bitmap, durationMs: message.durationMs });
       return;
@@ -96,6 +104,7 @@ function pickWorkerSlot(slots: WorkerSlot[]): WorkerSlot {
 export function decodeThumbnailInWorker(
   url: string,
   signal: AbortSignal,
+  meta?: Record<string, unknown>,
 ): Promise<{ bitmap: ImageBitmap; durationMs: number }> | null {
   const slots = ensureWorkerPool();
   if (!slots || typeof createImageBitmap !== 'function') return null;
@@ -106,7 +115,11 @@ export function decodeThumbnailInWorker(
 
   const promise = new Promise<{ bitmap: ImageBitmap; durationMs: number }>((resolve, reject) => {
     abort = () => {
+      const request = slot.pending.get(requestId);
       const removed = slot.pending.delete(requestId);
+      if (removed) {
+        slot.aborted.set(requestId, request?.meta);
+      }
       slot.worker.postMessage({ type: 'cancel', requestId });
       if (removed) {
         reject(new DOMException('Aborted', 'AbortError'));
@@ -118,7 +131,7 @@ export function decodeThumbnailInWorker(
       return;
     }
 
-    slot.pending.set(requestId, { resolve, reject });
+    slot.pending.set(requestId, { resolve, reject, meta });
     signal.addEventListener('abort', abort, { once: true });
     slot.worker.postMessage({
       type: 'decode',
@@ -139,4 +152,10 @@ export function getThumbnailDecodeWorkerStats() {
     pendingRequests: slots.reduce((sum, slot) => sum + slot.pending.size, 0),
     droppedLateResponses,
   };
+}
+
+export function setThumbnailDecodeLateResponseListener(
+  listener: ((meta?: Record<string, unknown>) => void) | null,
+): void {
+  lateResponseListener = listener;
 }

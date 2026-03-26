@@ -1,6 +1,6 @@
 import type { CanvasScrollDirection, CanvasScrollPhase } from './scrollState';
 
-export type ThumbnailPipelineState = 'idle' | 'queued' | 'loading' | 'shown' | 'error';
+export type ThumbnailPipelineState = 'idle' | 'queued' | 'loading' | 'ready_pending' | 'shown' | 'error';
 export type ThumbnailRequestPriority = 'visible' | 'prefetch';
 
 export interface ThumbnailPipelineEntry {
@@ -19,6 +19,7 @@ export interface ThumbnailQueueItem {
   priority: ThumbnailRequestPriority;
   requestedLongEdge: number;
   queuedAt: number;
+  generation: number;
 }
 
 export interface ThumbnailInFlightItem {
@@ -27,6 +28,7 @@ export interface ThumbnailInFlightItem {
   priority: ThumbnailRequestPriority;
   requestedLongEdge: number;
   queuedAt: number;
+  generation: number;
 }
 
 export interface ThumbnailPipelineStats {
@@ -38,4 +40,9 @@ export interface ThumbnailPipelineStats {
   scrollDirection: CanvasScrollDirection;
   scrollVelocityPxPerSec: number;
   droppedLateWorkerResults: number;
+}
+
+export interface ThumbnailPipelineTraceEvent {
+  type: string;
+  payload: Record<string, unknown>;
 }

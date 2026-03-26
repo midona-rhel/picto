@@ -74,6 +74,9 @@ pub struct CollectionMembershipChange {
 #[derive(Debug, Clone, Serialize)]
 pub struct EntityGridItem {
     pub entity_hash: String,
+    /// Hash used to load the thumbnail. For singles == entity_hash.
+    /// For collections == primary member's hash.
+    pub thumbnail_hash: String,
     pub entity_kind: EntityKind,
     pub name: Option<String>,
     pub mime_type: String,

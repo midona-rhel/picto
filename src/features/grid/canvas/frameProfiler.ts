@@ -83,6 +83,13 @@ export interface FrameStats {
   maxRafDelayMs: number;
 }
 
+export interface FrameCommitStats {
+  frameGapMs: number;
+  rafDelayMs: number;
+  totalMs: number;
+  drawOverBudget: boolean;
+}
+
 export class FrameProfiler {
   // Ring buffer: each frame is PHASE_COUNT floats (one per phase duration in ms)
   private buffer = new Float64Array(WINDOW_SIZE * PHASE_COUNT);
@@ -122,8 +129,8 @@ export class FrameProfiler {
   }
 
   /** End the frame and commit timings to the ring buffer. */
-  end(context?: { visibleTiles?: number; expectContinuousFrames?: boolean }) {
-    if (!this.enabled) return;
+  end(context?: { visibleTiles?: number; expectContinuousFrames?: boolean }): FrameCommitStats | null {
+    if (!this.enabled) return null;
     const now = performance.now();
     this.marks[Phase.total] = now;
     const rafDelayMs = this.currentRafDelayMs;
@@ -169,6 +176,13 @@ export class FrameProfiler {
     if (this.warnOnDrop && totalMs > BUDGET_120HZ) {
       this.logDrawOverBudgetFrame(totalMs, context?.visibleTiles);
     }
+
+    return {
+      frameGapMs,
+      rafDelayMs,
+      totalMs,
+      drawOverBudget: totalMs > BUDGET_120HZ,
+    };
   }
 
   /** Get rolling window stats. Safe to call from dev overlay RAF. */

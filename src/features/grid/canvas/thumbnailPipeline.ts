@@ -1,5 +1,9 @@
 import { mediaThumbnailUrl } from './mediaUrl';
-import { decodeThumbnailInWorker, getThumbnailDecodeWorkerStats } from './thumbnailDecodeClient';
+import {
+  decodeThumbnailInWorker,
+  getThumbnailDecodeWorkerStats,
+  setThumbnailDecodeLateResponseListener,
+} from './thumbnailDecodeClient';
 import {
   THUMBNAIL_PIPELINE_MAX_ENTRIES,
   THUMBNAIL_PIPELINE_MAX_PREFETCH_ACTIVE_FAST,
@@ -18,6 +22,7 @@ import type {
   ThumbnailPipelineStats,
   ThumbnailQueueItem,
   ThumbnailRequestPriority,
+  ThumbnailPipelineTraceEvent,
 } from './thumbnailPipelineTypes';
 import {
   type CanvasScrollPhase,
@@ -33,6 +38,8 @@ interface EnsureThumbnailArgs {
   drawHeight?: number;
 }
 
+type TraceListener = (event: ThumbnailPipelineTraceEvent) => void;
+
 export class ThumbnailPipeline {
   private cache = new Map<string, ThumbnailPipelineEntry>();
   private queueMap = new Map<string, ThumbnailQueueItem>();
@@ -46,13 +53,22 @@ export class ThumbnailPipeline {
   private totalBytes = 0;
   private revealSlots: number[] = [];
   private onDirty: () => void;
+  private onTraceEvent: TraceListener | null = null;
+  private generationByHash = new Map<string, number>();
 
   constructor(onDirty: () => void = () => {}) {
     this.onDirty = onDirty;
+    setThumbnailDecodeLateResponseListener((meta) => {
+      this.emitTrace('late_worker_response', meta ?? {});
+    });
   }
 
   setOnDirty(onDirty: () => void): void {
     this.onDirty = onDirty;
+  }
+
+  setTraceListener(listener: TraceListener | null): void {
+    this.onTraceEvent = listener;
   }
 
   setScrollState(nextState: CanvasScrollState): void {
@@ -65,6 +81,11 @@ export class ThumbnailPipeline {
         this.queueMap.delete(hash);
         const entry = this.cache.get(hash);
         if (entry && !entry.thumb) this.resetEntry(entry);
+        this.emitTrace('queue_became_stale', {
+          hash,
+          priority: item.priority,
+          reason: 'fast_scroll',
+        });
       }
 
       for (const [hash, inFlight] of this.inFlight) {
@@ -72,6 +93,11 @@ export class ThumbnailPipeline {
         inFlight.cancel();
         const entry = this.cache.get(hash);
         if (entry && entry.state === 'loading') this.resetEntry(entry);
+        this.emitTrace('inflight_canceled', {
+          hash,
+          priority: inFlight.priority,
+          reason: 'fast_scroll',
+        });
       }
     }
 
@@ -85,12 +111,37 @@ export class ThumbnailPipeline {
     return entry;
   }
 
+  promote(hash: string): boolean {
+    const entry = this.cache.get(hash);
+    if (!entry?.thumb) return false;
+    if (entry.state === 'shown') return false;
+    entry.state = 'shown';
+    entry.animateIn = true;
+    entry.revealStartedAt = this.nextRevealSlot();
+    this.emitTrace('bitmap_promoted', {
+      hash,
+    });
+    return true;
+  }
+
   ensure(hash: string, args: EnsureThumbnailArgs = {}): void {
     if (this.destroyed || !hash) return;
 
     const entry = this.getOrCreateEntry(hash);
     const request = buildRequest(hash, args);
     if (entry.thumb && entry.state === 'shown' && entry.bytes > 0) {
+      this.emitTrace('cache_hit', {
+        hash,
+        priority: request.priority,
+      });
+      return;
+    }
+
+    if (entry.thumb && entry.state === 'ready_pending' && entry.bytes > 0) {
+      this.emitTrace('ready_pending_hit', {
+        hash,
+        priority: request.priority,
+      });
       return;
     }
 
@@ -101,8 +152,18 @@ export class ThumbnailPipeline {
       if (inFlight && inFlight.priority === request.priority) return;
     }
 
+    const generation = (this.generationByHash.get(hash) ?? 0) + 1;
+    this.generationByHash.set(hash, generation);
     this.markQueued(entry);
+    request.generation = generation;
     this.queueMap.set(hash, request);
+    this.emitTrace('queue_enqueued', {
+      hash,
+      priority: request.priority,
+      y: request.y,
+      requestedLongEdge: request.requestedLongEdge,
+      generation,
+    });
     this.pump();
   }
 
@@ -112,6 +173,11 @@ export class ThumbnailPipeline {
       this.queueMap.delete(hash);
       const entry = this.cache.get(hash);
       if (entry && !entry.thumb) this.resetEntry(entry);
+      this.emitTrace('queue_became_stale', {
+        hash,
+        priority: item.priority,
+        reason: 'cancel_window',
+      });
     }
 
     for (const [hash, inFlight] of this.inFlight) {
@@ -119,6 +185,11 @@ export class ThumbnailPipeline {
       inFlight.cancel();
       const entry = this.cache.get(hash);
       if (entry && entry.state === 'loading') this.resetEntry(entry);
+      this.emitTrace('inflight_canceled', {
+        hash,
+        priority: inFlight.priority,
+        reason: 'cancel_window',
+      });
     }
   }
 
@@ -153,6 +224,9 @@ export class ThumbnailPipeline {
       entry.animateIn = false;
       entry.revealStartedAt = 0;
       this.resetEntry(entry);
+      this.emitTrace('evicted', {
+        hash,
+      });
     }
   }
 
@@ -243,12 +317,18 @@ export class ThumbnailPipeline {
       priority: item.priority,
       requestedLongEdge: item.requestedLongEdge,
       queuedAt: item.queuedAt,
+      generation: item.generation,
     });
 
     this.activeLoads += 1;
     if (item.priority === 'visible') this.activeVisibleLoads += 1;
     else this.activePrefetchLoads += 1;
     this.markLoading(entry);
+    this.emitTrace('load_started', {
+      hash: item.hash,
+      priority: item.priority,
+      generation: item.generation,
+    });
 
     void loadBitmap(item, controller.signal)
       .then(({ bitmap }) => {
@@ -275,6 +355,23 @@ export class ThumbnailPipeline {
     const entry = this.cache.get(hash);
     if (!entry) {
       bitmap.close();
+      this.emitTrace('stale_result_dropped', {
+        hash,
+        reason: 'missing_entry',
+      });
+      return;
+    }
+
+    const expectedGeneration = this.generationByHash.get(hash) ?? 0;
+    const inFlight = this.inFlight.get(hash);
+    if (inFlight && inFlight.generation !== expectedGeneration) {
+      bitmap.close();
+      this.emitTrace('stale_result_dropped', {
+        hash,
+        reason: 'generation_mismatch',
+        expectedGeneration,
+        actualGeneration: inFlight.generation,
+      });
       return;
     }
 
@@ -283,10 +380,14 @@ export class ThumbnailPipeline {
     entry.thumb = bitmap;
     entry.bytes = bitmap.width * bitmap.height * 4;
     this.totalBytes += entry.bytes;
-    entry.state = 'shown';
-    entry.animateIn = true;
-    entry.revealStartedAt = this.nextRevealSlot();
+    entry.state = 'ready_pending';
+    entry.animateIn = false;
+    entry.revealStartedAt = 0;
     this.pruneCache();
+    this.emitTrace('bitmap_ready', {
+      hash,
+      bytes: entry.bytes,
+    });
     this.onDirty();
   }
 
@@ -317,6 +418,10 @@ export class ThumbnailPipeline {
         entry.thumb.close();
       }
       this.cache.delete(hash);
+      this.emitTrace('evicted', {
+        hash,
+        reason: 'cache_prune',
+      });
     }
   }
 
@@ -354,6 +459,10 @@ export class ThumbnailPipeline {
   private resetEntry(entry: ThumbnailPipelineEntry): void {
     entry.state = 'idle';
   }
+
+  private emitTrace(type: string, payload: Record<string, unknown>): void {
+    this.onTraceEvent?.({ type, payload });
+  }
 }
 
 function buildRequest(hash: string, args: EnsureThumbnailArgs): ThumbnailQueueItem {
@@ -365,6 +474,7 @@ function buildRequest(hash: string, args: EnsureThumbnailArgs): ThumbnailQueueIt
     priority: getRequestPriority(args),
     requestedLongEdge: Math.max(THUMBNAIL_PIPELINE_SOURCE_EDGE, requestedDisplayLongEdge),
     queuedAt: performance.now(),
+    generation: 0,
   };
 }
 
@@ -377,7 +487,12 @@ async function loadBitmap(
   signal: AbortSignal,
 ): Promise<{ bitmap: ImageBitmap; decodeDurationMs: number }> {
   const startedAt = performance.now();
-  const workerResult = decodeThumbnailInWorker(item.url, signal);
+  const meta = {
+    hash: item.hash,
+    priority: item.priority,
+    generation: item.generation,
+  };
+  const workerResult = decodeThumbnailInWorker(item.url, signal, meta);
   if (workerResult) {
     try {
       const { bitmap, durationMs } = await workerResult;
