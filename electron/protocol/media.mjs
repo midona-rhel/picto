@@ -62,9 +62,38 @@ export function createMediaProtocolService({
   getCurrentLibraryRoot,
 }) {
   const thumbEnsureInFlight = new Map();
+  const thumbMetaCache = new Map();
+  const fileMetaCache = new Map();
+  let cachedRoot = null;
+
+  function syncCachesForCurrentRoot() {
+    const root = getCurrentLibraryRoot() ?? null;
+    if (root === cachedRoot) return root;
+    cachedRoot = root;
+    thumbMetaCache.clear();
+    fileMetaCache.clear();
+    thumbEnsureInFlight.clear();
+    return root;
+  }
+
+  async function tryStat(filePath) {
+    try {
+      return await fs.stat(filePath);
+    } catch {
+      return null;
+    }
+  }
+
+  function buildMeta(filePath, stat, extHint = '') {
+    return {
+      filePath,
+      size: stat.size,
+      actualExt: path.extname(filePath).slice(1).toLowerCase() || extHint,
+    };
+  }
 
   function buildBlobPath(kind, hash, ext) {
-    const root = getCurrentLibraryRoot();
+    const root = syncCachesForCurrentRoot();
     if (!root) return '';
     const ab = hash.slice(0, 2);
     const cd = hash.slice(2, 4);
@@ -72,43 +101,61 @@ export function createMediaProtocolService({
     return path.join(root, 'blobs', 'f', ab, cd, `${hash}.${ext}`);
   }
 
-  async function resolveOriginalPath(hash, extHint) {
-    const root = getCurrentLibraryRoot();
-    if (!root) return '';
+  async function resolveOriginalMeta(hash, extHint) {
+    const root = syncCachesForCurrentRoot();
+    if (!root) return null;
+    const cached = fileMetaCache.get(hash);
+    if (cached) return cached;
     const ab = hash.slice(0, 2);
     const cd = hash.slice(2, 4);
     const dir = path.join(root, 'blobs', 'f', ab, cd);
     const hinted = path.join(dir, `${hash}.${extHint}`);
-    try {
-      await fs.stat(hinted);
-      return hinted;
-    } catch {}
+    const hintedStat = await tryStat(hinted);
+    if (hintedStat) {
+      const meta = buildMeta(hinted, hintedStat, extHint);
+      fileMetaCache.set(hash, meta);
+      return meta;
+    }
     try {
       const entries = await fs.readdir(dir);
       const prefix = `${hash}.`;
       const found = entries.find((name) => name.startsWith(prefix));
-      if (found) return path.join(dir, found);
+      if (found) {
+        const filePath = path.join(dir, found);
+        const stat = await tryStat(filePath);
+        if (stat) {
+          const meta = buildMeta(filePath, stat, extHint);
+          fileMetaCache.set(hash, meta);
+          return meta;
+        }
+      }
     } catch {}
-    return hinted;
+    return null;
   }
 
-  async function resolveThumbPath(hash) {
-    const root = getCurrentLibraryRoot();
-    if (!root) return '';
+  async function resolveThumbMeta(hash) {
+    const root = syncCachesForCurrentRoot();
+    if (!root) return null;
+    const cached = thumbMetaCache.get(hash);
+    if (cached) return cached;
     const ab = hash.slice(0, 2);
     const cd = hash.slice(2, 4);
     const dir = path.join(root, 'blobs', 't', ab, cd);
     const jpg = path.join(dir, `${hash}.jpg`);
-    try {
-      await fs.stat(jpg);
-      return jpg;
-    } catch {}
+    const jpgStat = await tryStat(jpg);
+    if (jpgStat) {
+      const meta = buildMeta(jpg, jpgStat, 'jpg');
+      thumbMetaCache.set(hash, meta);
+      return meta;
+    }
     const png = path.join(dir, `${hash}.png`);
-    try {
-      await fs.stat(png);
-      return png;
-    } catch {}
-    return jpg;
+    const pngStat = await tryStat(png);
+    if (pngStat) {
+      const meta = buildMeta(png, pngStat, 'png');
+      thumbMetaCache.set(hash, meta);
+      return meta;
+    }
+    return null;
   }
 
   async function ensureThumbBefore404(hash) {
@@ -130,6 +177,7 @@ export function createMediaProtocolService({
 
   async function registerMediaProtocol() {
     protocol.handle('media', async (request) => {
+      syncCachesForCurrentRoot();
       const parsed = parseMediaUrl(request.url);
       if (!parsed || !isValidHash(parsed.hash)) {
         forwardWarn('media', `Failed to parse: ${request.url}`);
@@ -139,45 +187,38 @@ export function createMediaProtocolService({
         });
       }
 
-      let filePath = parsed.kind === 'thumb'
-        ? await resolveThumbPath(parsed.hash)
-        : buildBlobPath(parsed.kind, parsed.hash, parsed.ext);
-      let stat;
-      try {
-        stat = await fs.stat(filePath);
-      } catch {
-        if (parsed.kind === 'thumb') {
-          await ensureThumbBefore404(parsed.hash);
-          filePath = await resolveThumbPath(parsed.hash);
-          try {
-            stat = await fs.stat(filePath);
-          } catch {}
-        } else if (parsed.kind === 'file') {
-          filePath = await resolveOriginalPath(parsed.hash, parsed.ext);
-          try {
-            stat = await fs.stat(filePath);
-          } catch {}
-        }
-        if (!stat) {
-          forwardWarn('media', `404: ${parsed.kind} ${parsed.hash.slice(0, 12)} ${filePath}`);
-          return new Response('Not found', {
-            status: 404,
-            headers: { 'Content-Type': 'text/plain', 'Cache-Control': 'no-store' },
-          });
-        }
+      let meta = parsed.kind === 'thumb'
+        ? await resolveThumbMeta(parsed.hash)
+        : await resolveOriginalMeta(parsed.hash, parsed.ext);
+
+      if (!meta && parsed.kind === 'thumb') {
+        await ensureThumbBefore404(parsed.hash);
+        meta = await resolveThumbMeta(parsed.hash);
       }
 
-      const actualExt = path.extname(filePath).slice(1).toLowerCase();
-      const mime = parsed.kind === 'thumb' ? extToMime(actualExt || 'jpg') : extToMime(parsed.ext);
-      const range = parseRange(request.headers.get('range'), stat.size);
+      if (!meta) {
+        const missingPath = parsed.kind === 'thumb'
+          ? buildBlobPath(parsed.kind, parsed.hash, 'jpg')
+          : buildBlobPath(parsed.kind, parsed.hash, parsed.ext);
+        forwardWarn('media', `404: ${parsed.kind} ${parsed.hash.slice(0, 12)} ${missingPath}`);
+        return new Response('Not found', {
+          status: 404,
+          headers: { 'Content-Type': 'text/plain', 'Cache-Control': 'no-store' },
+        });
+      }
+
+      const mime = parsed.kind === 'thumb'
+        ? extToMime(meta.actualExt || 'jpg')
+        : extToMime(meta.actualExt || parsed.ext);
+      const range = parseRange(request.headers.get('range'), meta.size);
 
       if (!range) {
-        const stream = createReadStream(filePath);
+        const stream = createReadStream(meta.filePath);
         return new Response(Readable.toWeb(stream), {
           status: 200,
           headers: {
             'Content-Type': mime,
-            'Content-Length': String(stat.size),
+            'Content-Length': String(meta.size),
             'Accept-Ranges': 'bytes',
             'Cache-Control': 'public, max-age=31536000, immutable',
           },
@@ -185,13 +226,13 @@ export function createMediaProtocolService({
       }
 
       const length = range.end - range.start + 1;
-      const stream = createReadStream(filePath, { start: range.start, end: range.end });
+      const stream = createReadStream(meta.filePath, { start: range.start, end: range.end });
       return new Response(Readable.toWeb(stream), {
         status: 206,
         headers: {
           'Content-Type': mime,
           'Content-Length': String(length),
-          'Content-Range': `bytes ${range.start}-${range.end}/${stat.size}`,
+          'Content-Range': `bytes ${range.start}-${range.end}/${meta.size}`,
           'Accept-Ranges': 'bytes',
           'Cache-Control': 'public, max-age=31536000, immutable',
         },
