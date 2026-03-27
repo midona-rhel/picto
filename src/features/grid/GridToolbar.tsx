@@ -5,17 +5,17 @@
  *   [title(abs)] [- slider +] [view btn][filter btn][search input] [perf] [loading]
  */
 
-import { useAtomValue, useSetAtom } from 'jotai';
+import { useAtom, useAtomValue, useSetAtom } from 'jotai';
 import { useRef, useState, useEffect, useCallback } from 'react';
 import {
   IconMinus, IconPlus, IconSearch,
   IconAdjustments, IconFilter,
 } from '@tabler/icons-react';
 import {
-  gridLoadingAtom,
   gridTargetSizeAtom,
   gridScopeLabelAtom,
   gridSearchTextAtom,
+  gridRendererAtom,
 } from '../../state/grid';
 import { gridController } from '../../controllers/gridController';
 import { gridPerfAtom } from '../../state/gridPerf';
@@ -146,11 +146,24 @@ function PerfChip() {
   );
 }
 
+function RendererToggle() {
+  const [renderer, setRenderer] = useAtom(gridRendererAtom);
+  const isCanvas = renderer === 'canvas';
+
+  return (
+    <button
+      className={`${styles.modeBtn} ${isCanvas ? styles.modeBtnActive : ''}`}
+      onClick={() => setRenderer(isCanvas ? 'webgl' : 'canvas')}
+      title={isCanvas ? 'Switch to WebGL renderer' : 'Switch to canvas fallback'}
+    >
+      {isCanvas ? 'Canvas' : 'WebGL'}
+    </button>
+  );
+}
+
 // ── Toolbar root ────────────────────────────────────────────────
 
 export function GridToolbar() {
-  const loading = useAtomValue(gridLoadingAtom);
-
   const isDevHost = typeof window !== 'undefined'
     && (window.location.hostname === '127.0.0.1' || window.location.hostname === 'localhost');
 
@@ -163,6 +176,8 @@ export function GridToolbar() {
       </div>
 
       <div className={styles.rightSection}>
+        <RendererToggle />
+
         <button className={styles.icBtn} title="View">
           <IconAdjustments size={14} style={{ transform: 'rotate(90deg)' }} />
         </button>
@@ -175,7 +190,6 @@ export function GridToolbar() {
       </div>
 
       {isDevHost && <PerfChip />}
-      {loading && <span className={styles.loadingDot} />}
     </div>
   );
 }

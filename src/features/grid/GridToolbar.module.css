@@ -123,6 +123,37 @@
   flex-shrink: 0;
 }
 
+.modeBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 5px;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--color-text-secondary);
+  font-size: 11px;
+  font-weight: var(--font-weight-medium);
+  letter-spacing: 0.01em;
+  cursor: pointer;
+  -webkit-app-region: no-drag;
+  transition: background 150ms var(--ease-default),
+              border-color 150ms var(--ease-default),
+              color 150ms var(--ease-default);
+}
+
+.modeBtn:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--color-text-primary);
+}
+
+.modeBtnActive {
+  color: var(--color-text-primary);
+  border-color: rgba(255, 255, 255, 0.2);
+  background: rgba(255, 255, 255, 0.1);
+}
+
 /* ── Search ──────────────────────────────────────────── */
 
 .searchWrap {
@@ -187,20 +218,4 @@
 .perfChipWarn {
   color: var(--color-negative);
   border-color: rgba(255, 107, 107, 0.35);
-}
-
-/* ── Loading ─────────────────────────────────────────── */
-
-.loadingDot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--color-primary);
-  animation: pulse 1s ease-in-out infinite;
-  margin-left: 4px;
-}
-
-@keyframes pulse {
-  0%, 100% { opacity: 0.3; }
-  50% { opacity: 1; }
 }

@@ -1,0 +1,128 @@
+.container {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-gutter: stable;
+  background: var(--color-bg-app);
+}
+
+.containerFrozen {
+  overflow: hidden;
+}
+
+.spacer {
+  position: relative;
+  width: 100%;
+  min-height: 100%;
+}
+
+.tile {
+  position: absolute;
+  display: block;
+  padding: 0;
+  margin: 0;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.tileImageWrap {
+  position: relative;
+  width: 100%;
+  overflow: hidden;
+  border-radius: 8px;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.2);
+}
+
+.tileImage {
+  display: block;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  transition: opacity 250ms ease;
+}
+
+.tileImageLoaded {
+  opacity: 1;
+}
+
+.tileName {
+  padding: 3px 2px 0;
+  font: 13px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  line-height: 17px;
+  color: rgba(255, 255, 255, 0.85);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.badge {
+  position: absolute;
+  max-width: calc(100% - 8px);
+  padding: 0 5px;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.55);
+  color: rgba(255, 255, 255, 0.9);
+  font: 600 10px/18px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.badgeTopRight {
+  top: 4px;
+  right: 4px;
+}
+
+.badgeTopRightOffset {
+  top: 4px;
+  right: 52px;
+}
+
+.badgeBottomRight {
+  right: 4px;
+  bottom: 4px;
+}
+
+.rating {
+  position: absolute;
+  top: 5px;
+  left: 5px;
+  color: #ffd54f;
+  font: 10px/1 sans-serif;
+  text-shadow: 0 1px 1px rgba(0, 0, 0, 0.5);
+}
+
+.spinnerOverlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  z-index: 2;
+}
+
+.spinner {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.18);
+  border-top-color: rgba(255, 255, 255, 0.92);
+  animation: gridSpinnerRotate 0.65s linear infinite;
+  will-change: transform;
+}
+
+@keyframes gridSpinnerRotate {
+  from {
+    transform: rotate(0deg);
+  }
+
+  to {
+    transform: rotate(360deg);
+  }
+}
