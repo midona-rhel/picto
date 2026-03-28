@@ -58,6 +58,7 @@ fn descendant_hashes(top_level_hashes: &[String], effective_hashes: Vec<String>)
 
 // ─── Handlers ──────────────────────────────────────────────────────────────
 
+// Legacy-only: bulk selection mutations not yet in rebuilt frontend.
 pub async fn add_tags_selection(
     state: &AppState,
     input: AddTagsSelectionInput,
@@ -99,6 +100,7 @@ pub async fn add_tags_selection(
     Ok(count)
 }
 
+// Legacy-only: bulk selection mutations not yet in rebuilt frontend.
 pub async fn remove_tags_selection(
     state: &AppState,
     input: RemoveTagsSelectionInput,
@@ -151,6 +153,7 @@ pub async fn get_selection_summary(
     serde_json::to_value(&result).map_err(|e| e.to_string())
 }
 
+// Legacy-only: bulk selection mutations not yet in rebuilt frontend.
 pub async fn update_selection_metadata(
     state: &AppState,
     input: UpdateSelectionMetadataInput,

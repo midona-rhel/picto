@@ -7,6 +7,7 @@ import { invoke } from './ipc';
 import type {
   SidebarTreeResponse, EntityViewQuery, EntityViewPage,
   CanonicalEntityGridItem, CanonicalEntityDetails,
+  EntityTarget, MediaEntityPatch,
 } from '../shared/types/canonical';
 
 // ── Grid ────────────────────────────────────────────────────────
@@ -41,6 +42,20 @@ export function reconcileEntityView(
 
 export function getEntityDetails(entityHash: string): Promise<CanonicalEntityDetails | null> {
   return invoke<CanonicalEntityDetails | null>('get_entity_details', { entity_hash: entityHash });
+}
+
+// ── Entity mutations ─────────────────────────────────────────────
+
+export function patchMediaEntities(target: EntityTarget, patch: MediaEntityPatch): Promise<unknown> {
+  return invoke('patch_media_entities', { target, patch } as unknown as Record<string, unknown>);
+}
+
+export function applyEntityTags(
+  target: EntityTarget,
+  operation: 'add' | 'remove',
+  tags: string[],
+): Promise<unknown> {
+  return invoke('apply_entity_tags', { target, operation, tags } as unknown as Record<string, unknown>);
 }
 
 // ── Sidebar ──────────────────────────────────────────────────────

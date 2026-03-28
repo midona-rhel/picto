@@ -62,13 +62,9 @@ impl ApplicationEngine {
     pub fn update_folder(
         &self,
         folder_id: i64,
-        name: Option<&str>,
-        icon: Option<&str>,
-        color: Option<&str>,
-        auto_tags: Option<&str>,
-        notes: Option<&str>,
+        patch: &crate::db::types::FolderPatch,
     ) -> Result<(), String> {
-        self.db.update_folder(folder_id, name, icon, color, auto_tags, notes)
+        self.db.update_folder(folder_id, patch)
     }
 
     pub fn delete_folder(&self, folder_id: i64) -> Result<(), String> {
@@ -95,14 +91,23 @@ impl ApplicationEngine {
         self.db.reorder_folder_items(folder_id, moves)
     }
 
-    pub fn upsert_folder_record(
-        &self,
-        record: &crate::db::types::FolderMirrorRecord,
-    ) -> Result<(), String> {
-        self.db.upsert_folder_record(record)
+    pub fn get_folder(&self, folder_id: i64) -> Result<Option<crate::db::query::folders::FolderRow>, String> {
+        self.db.get_folder(folder_id)
     }
 
-    pub fn delete_folder_record(&self, folder_id: i64) -> Result<(), String> {
-        self.db.delete_folder(folder_id)
+    pub fn get_smart_folder(&self, smart_folder_id: i64) -> Result<Option<crate::db::query::folders::SmartFolderRow>, String> {
+        self.db.get_smart_folder(smart_folder_id)
+    }
+
+    pub fn list_folders(&self) -> Result<Vec<crate::db::query::folders::FolderRow>, String> {
+        self.db.list_folders_canonical()
+    }
+
+    pub fn list_smart_folders(&self) -> Result<Vec<crate::db::query::folders::SmartFolderRow>, String> {
+        self.db.list_smart_folders_canonical()
+    }
+
+    pub fn run_compiler(&self, plan: crate::db::projection::compiler::CompilerPlan) {
+        self.db.run_compiler(plan);
     }
 }

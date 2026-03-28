@@ -173,12 +173,17 @@ export function GridScreen() {
     }
   }, []);
 
+  // Commit the displayed scene snapshot when the new grid scene begins (fading_in)
+  // or during steady state (idle). This ensures the inspector swaps at the same
+  // moment the new grid starts fading in — one unified scene transition.
   useEffect(() => {
     if (!isGridScope) {
-      if (transitionPhase === 'idle') setDisplayedGridSnapshot(null);
+      if (transitionPhase === 'idle' || transitionPhase === 'fading_in') {
+        setDisplayedGridSnapshot(null);
+      }
       return;
     }
-    if (transitionPhase === 'idle') {
+    if (transitionPhase === 'fading_in' || transitionPhase === 'idle') {
       setDisplayedGridSnapshot({
         nodeId: activeNodeId,
         previewItems: items.slice(0, 4),
@@ -235,6 +240,7 @@ export function GridScreen() {
         targetSize={targetSize}
         showName={showName}
         showExtension={showExtension}
+        totalCount={totalCount}
         suppressTileReveal={transitionPhase !== 'idle'}
         selectedEntityHash={selectedHash}
         onFirstPaint={beginFadeIn}

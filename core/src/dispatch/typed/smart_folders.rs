@@ -5,46 +5,19 @@ use ts_rs::TS;
 
 use crate::state::AppState;
 
-fn smart_folder_meta_json(folder: &crate::smart_folders::db::SmartFolder) -> String {
+fn smart_folder_meta_json_canonical(row: &crate::db::query::folders::SmartFolderRow) -> String {
     serde_json::json!({
-        "smart_folder_id": folder.smart_folder_id,
-        "parent_id": folder.parent_id,
-        "notes": folder.notes,
-        "predicate": serde_json::from_str::<serde_json::Value>(&folder.predicate_json)
+        "smart_folder_id": row.smart_folder_id,
+        "parent_id": row.parent_id,
+        "notes": row.notes,
+        "predicate": serde_json::from_str::<serde_json::Value>(&row.predicate_json)
             .unwrap_or_else(|_| serde_json::json!({ "groups": [] })),
-        "sort_field": folder.sort_field,
-        "sort_order": folder.sort_order,
+        "sort_field": row.sort_field,
+        "sort_order": row.sort_order,
     })
     .to_string()
 }
 
-fn smart_folder_mirror_record(
-    folder: &crate::smart_folders::db::SmartFolder,
-) -> crate::db::types::SmartFolderMirrorRecord {
-    crate::db::types::SmartFolderMirrorRecord {
-        smart_folder_id: folder.smart_folder_id,
-        name: folder.name.clone(),
-        parent_id: folder.parent_id,
-        icon: folder.icon.clone(),
-        color: folder.color.clone(),
-        notes: folder.notes.clone(),
-        predicate_json: folder.predicate_json.clone(),
-        sort_field: folder.sort_field.clone(),
-        sort_order: folder.sort_order.clone(),
-        display_order: folder.display_order,
-        date_added: folder.created_at.clone().unwrap_or_else(|| chrono::Utc::now().to_rfc3339()),
-        date_modified: folder.updated_at.clone().unwrap_or_else(|| chrono::Utc::now().to_rfc3339()),
-    }
-}
-
-fn mirror_smart_folder(
-    state: &AppState,
-    folder: &crate::smart_folders::db::SmartFolder,
-) -> Result<(), String> {
-    state
-        .engine
-        .upsert_smart_folder_record(&smart_folder_mirror_record(folder))
-}
 
 // ─── Input structs ─────────────────────────────────────────────────────────
 
@@ -100,7 +73,7 @@ pub async fn list_smart_folders(
     state: &AppState,
     _input: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
-    let result = state.db.list_smart_folders().await?;
+    let result = state.engine.list_smart_folders()?;
     Ok(serde_json::to_value(&result).map_err(|e| e.to_string())?)
 }
 
@@ -108,49 +81,46 @@ pub async fn create_smart_folder(
     state: &AppState,
     input: CreateSmartFolderInput,
 ) -> Result<serde_json::Value, String> {
-    let parent_id = input.folder.parent_id;
-    if let Some(target_parent_id) = parent_id {
-        let exists = state
-            .db
-            .with_read_conn(move |conn| {
-                Ok(crate::smart_folders::db::get_smart_folder(conn, target_parent_id)?.is_some())
-            })
-            .await?;
-        if !exists {
-            return Err(format!(
-                "Invalid smart folder parent id: {target_parent_id}"
-            ));
-        }
-    }
-    let result = crate::smart_folders::service::SmartFolderService::create_smart_folder(
-        &state.db,
-        input.folder,
-    )
-    .await?;
-    mirror_smart_folder(state, &result)?;
+    let sf = &input.folder;
+    let sf_id = state.engine.create_smart_folder(
+        &sf.name,
+        sf.parent_id,
+        &sf.predicate_json,
+        sf.icon.as_deref(),
+        sf.color.as_deref(),
+        sf.notes.as_deref(),
+    )?;
+    let row = state.engine.get_smart_folder(sf_id)?
+        .ok_or_else(|| format!("Smart folder {sf_id} not found after create"))?;
+    let meta = smart_folder_meta_json_canonical(&row);
     let upsert = crate::runtime_contract::state_change::SidebarNodePatch {
-        node_id: format!("smart:{}", result.smart_folder_id),
+        node_id: format!("smart:{sf_id}"),
         removed: None,
         upsert: Some(true),
         kind: Some("smart_folder".into()),
-        parent_id: Some(result.parent_id.map(|pid| format!("smart:{pid}")).or(Some("section:smart_folders".into()))),
-        name: Some(result.name.clone()),
-        icon: Some(result.icon.clone()),
-        color: Some(result.color.clone()),
-        sort_order: Some(result.display_order),
-        count: Some(Some(0)), // New smart folder starts with 0 (bitmap not compiled yet)
+        parent_id: Some(row.parent_id.map(|pid| format!("smart:{pid}")).or(Some("section:smart_folders".into()))),
+        name: Some(row.name.clone()),
+        icon: Some(row.icon.clone()),
+        color: Some(row.color.clone()),
+        sort_order: Some(row.display_order),
+        count: Some(Some(0)),
         selectable: Some(true),
-        freshness: Some("stale".into()), // Counts are stale until compiler runs
-        meta_json: Some(Some(smart_folder_meta_json(&result))),
+        freshness: Some("stale".into()),
+        meta_json: Some(Some(meta)),
     };
+    state.engine.run_compiler(crate::db::projection::compiler::CompilerPlan {
+        rebuild_sidebar: true,
+        dirty_smart_folder_ids: vec![sf_id],
+        ..Default::default()
+    });
     crate::events::emit_state_changed(
         "create_smart_folder",
         crate::runtime_contract::change_builder::ChangeImpact::new()
             .add_domains(&[crate::runtime_contract::state_change::Domain::SmartFolders, crate::runtime_contract::state_change::Domain::Sidebar])
-            .smart_folder_ids(vec![result.smart_folder_id])
+            .smart_folder_ids(vec![sf_id])
             .sidebar_node_patch(upsert),
     );
-    Ok(serde_json::to_value(&result).map_err(|e| e.to_string())?)
+    Ok(serde_json::to_value(&row).map_err(|e| e.to_string())?)
 }
 
 pub async fn update_smart_folder(
@@ -165,35 +135,46 @@ pub async fn update_smart_folder(
         return Err("A smart folder cannot be its own parent".to_string());
     }
     if let Some(parent_id) = input.folder.parent_id {
-        let blocked = state
-            .db
-            .with_read_conn(move |conn| {
-                let descendants =
-                    crate::smart_folders::db::collect_descendant_smart_folder_ids(conn, sf_id)?;
-                Ok(descendants.into_iter().any(|id| id == parent_id))
-            })
-            .await?;
-        if blocked {
+        let descendants = state.engine.collect_descendant_smart_folder_ids(sf_id)?;
+        if descendants.iter().any(|&id| id == parent_id) {
             return Err("A smart folder cannot be moved under one of its descendants".to_string());
         }
     }
-    let (result, predicate_changed) =
-        crate::smart_folders::service::SmartFolderService::update_smart_folder(
-            &state.db,
-            input.id.clone(),
-            input.folder,
-        )
-        .await?;
-    mirror_smart_folder(state, &result)?;
+    // Read old predicate to detect changes
+    let old_predicate = state.engine.get_smart_folder(sf_id)?
+        .map(|r| r.predicate_json.clone())
+        .unwrap_or_default();
+
+    let sf = &input.folder;
+    state.engine.update_smart_folder(
+        sf_id,
+        Some(&sf.name),
+        Some(&sf.predicate_json),
+        sf.icon.as_deref(),
+        sf.color.as_deref(),
+        sf.notes.as_deref(),
+        sf.sort_field.as_deref(),
+        sf.sort_order.as_deref(),
+    )?;
+    let row = state.engine.get_smart_folder(sf_id)?
+        .ok_or_else(|| format!("Smart folder {sf_id} not found after update"))?;
+    let predicate_changed = row.predicate_json != old_predicate;
+
+    let meta = smart_folder_meta_json_canonical(&row);
     let patch = crate::runtime_contract::state_change::SidebarNodePatch {
         node_id: format!("smart:{sf_id}"),
         removed: None, upsert: None, kind: None, parent_id: None,
-        name: Some(result.name.clone()),
-        icon: Some(result.icon.clone()),
-        color: Some(result.color.clone()),
-        sort_order: Some(result.display_order), count: None, selectable: None, freshness: None,
-        meta_json: Some(Some(smart_folder_meta_json(&result))),
+        name: Some(row.name.clone()),
+        icon: Some(row.icon.clone()),
+        color: Some(row.color.clone()),
+        sort_order: Some(row.display_order), count: None, selectable: None, freshness: None,
+        meta_json: Some(Some(meta)),
     };
+    state.engine.run_compiler(crate::db::projection::compiler::CompilerPlan {
+        rebuild_sidebar: true,
+        dirty_smart_folder_ids: if predicate_changed { vec![sf_id] } else { vec![] },
+        ..Default::default()
+    });
     let mut impact = crate::runtime_contract::change_builder::ChangeImpact::new()
         .add_domains(&[crate::runtime_contract::state_change::Domain::SmartFolders, crate::runtime_contract::state_change::Domain::Sidebar])
         .smart_folder_ids(vec![sf_id])
@@ -202,7 +183,7 @@ pub async fn update_smart_folder(
         impact = impact.extra_grid_scopes(vec![format!("smart:{sf_id}")]);
     }
     crate::events::emit_state_changed("update_smart_folder", impact);
-    Ok(serde_json::to_value(&result).map_err(|e| e.to_string())?)
+    Ok(serde_json::to_value(&row).map_err(|e| e.to_string())?)
 }
 
 pub async fn move_smart_folder(
@@ -213,35 +194,17 @@ pub async fn move_smart_folder(
         return Err("A smart folder cannot be its own parent".to_string());
     }
     if let Some(new_parent_id) = input.new_parent_id {
-        let blocked = state
-            .db
-            .with_read_conn(move |conn| {
-                let descendants = crate::smart_folders::db::collect_descendant_smart_folder_ids(
-                    conn,
-                    input.smart_folder_id,
-                )?;
-                Ok(descendants.into_iter().any(|id| id == new_parent_id))
-            })
-            .await?;
-        if blocked {
+        let descendants = state.engine.collect_descendant_smart_folder_ids(input.smart_folder_id)?;
+        if descendants.iter().any(|&id| id == new_parent_id) {
             return Err("A smart folder cannot be moved under one of its descendants".to_string());
         }
     }
     let sibling_order = input.sibling_order;
-    crate::smart_folders::service::SmartFolderService::move_smart_folder(
-        &state.db,
-        input.smart_folder_id,
-        input.new_parent_id,
-        sibling_order.clone(),
-    )
-    .await?;
-    if let Some(folder) = state
-        .db
-        .with_read_conn(move |conn| crate::smart_folders::db::get_smart_folder(conn, input.smart_folder_id))
-        .await?
-    {
-        mirror_smart_folder(state, &folder)?;
+    state.engine.move_smart_folder(input.smart_folder_id, input.new_parent_id)?;
+    if !sibling_order.is_empty() {
+        state.engine.reorder_smart_folders(&sibling_order)?;
     }
+    state.engine.run_compiler(crate::db::projection::compiler::CompilerPlan { rebuild_sidebar: true, ..Default::default() });
     crate::events::emit_state_changed(
         "move_smart_folder",
         crate::runtime_contract::change_builder::ChangeImpact::new()
@@ -261,24 +224,8 @@ pub async fn delete_smart_folder(
         .id
         .parse()
         .map_err(|_| format!("Invalid smart folder id: {}", input.id))?;
-    let (promoted_ids, deleted_parent_id) =
-        crate::smart_folders::service::SmartFolderService::delete_smart_folder(&state.db, input.id)
-            .await?;
-    state.engine.delete_smart_folder_record(sf_id)?;
-    for child_id in &promoted_ids {
-        if let Some(folder) = state
-            .db
-            .with_read_conn({
-                let child_id = *child_id;
-                move |conn| crate::smart_folders::db::get_smart_folder(conn, child_id)
-            })
-            .await?
-        {
-            mirror_smart_folder(state, &folder)?;
-        }
-    }
+    let (promoted_ids, deleted_parent_id) = state.engine.delete_smart_folder(sf_id)?;
 
-    // Build patches: remove the deleted node + reparent promoted children
     let mut patches = vec![crate::runtime_contract::state_change::SidebarNodePatch {
         node_id: format!("smart:{sf_id}"),
         removed: Some(true),
@@ -286,7 +233,6 @@ pub async fn delete_smart_folder(
         icon: None, color: None, sort_order: None, count: None,
         selectable: None, freshness: None, meta_json: None,
     }];
-    // Promoted children get the deleted folder's parent
     let new_parent = deleted_parent_id
         .map(|pid| format!("smart:{pid}"))
         .unwrap_or_else(|| "section:smart_folders".into());
@@ -303,6 +249,7 @@ pub async fn delete_smart_folder(
     let mut all_sf_ids = vec![sf_id];
     all_sf_ids.extend(&promoted_ids);
 
+    state.engine.run_compiler(crate::db::projection::compiler::CompilerPlan { rebuild_sidebar: true, ..Default::default() });
     crate::events::emit_state_changed(
         "delete_smart_folder",
         crate::runtime_contract::change_builder::ChangeImpact::new()
@@ -314,6 +261,8 @@ pub async fn delete_smart_folder(
     Ok(())
 }
 
+// Legacy-only: count_smart_folder compiles a predicate against old DB bitmaps.
+// Not called by the rebuilt frontend.
 pub async fn count_smart_folder(
     state: &AppState,
     input: CountSmartFolderInput,
@@ -332,24 +281,8 @@ pub async fn reorder_smart_folders(
 ) -> Result<(), String> {
     let sfids: Vec<i64> = input.moves.iter().map(|(id, _)| *id).collect();
     let order_changes = input.moves.clone();
-    crate::smart_folders::service::SmartFolderService::reorder_smart_folders(
-        &state.db,
-        input.parent_id,
-        input.moves,
-    )
-    .await?;
-    for smart_folder_id in &sfids {
-        if let Some(folder) = state
-            .db
-            .with_read_conn({
-                let smart_folder_id = *smart_folder_id;
-                move |conn| crate::smart_folders::db::get_smart_folder(conn, smart_folder_id)
-            })
-            .await?
-        {
-            mirror_smart_folder(state, &folder)?;
-        }
-    }
+    state.engine.reorder_smart_folders(&input.moves)?;
+    state.engine.run_compiler(crate::db::projection::compiler::CompilerPlan { rebuild_sidebar: true, ..Default::default() });
     crate::events::emit_state_changed(
         "reorder_smart_folders",
         crate::runtime_contract::change_builder::ChangeImpact::new()

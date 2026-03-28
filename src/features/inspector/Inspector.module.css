@@ -254,6 +254,39 @@
   display: none;
 }
 
+.tagAddBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 1px dashed rgba(255, 255, 255, 0.15);
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+}
+
+.tagAddBtn:hover {
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+}
+
+.tagInput {
+  width: 80px;
+  height: 22px;
+  padding: 0 6px;
+  border: 1px solid var(--color-border-focus);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--color-text-primary);
+  font-size: var(--font-size-xs);
+  font-family: var(--font-family);
+  outline: none;
+  box-sizing: border-box;
+}
+
 .tag {
   font-size: var(--font-size-sm);
   padding: 4px 8px;

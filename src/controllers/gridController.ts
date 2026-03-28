@@ -79,7 +79,9 @@ export const gridController = {
       store.set(gridTotalSizeBytesAtom, null);
     }
     try {
-      const result = await api.queryEntityView(currentQuery(100));
+      // First page loads 500 items for accurate scroll height estimation.
+      // Subsequent pages load 100 via loadNextPage.
+      const result = await api.queryEntityView(currentQuery(500));
       if (v !== gridVersion) return;
       store.set(gridItemsAtom, result.items);
       store.set(gridCursorAtom, result.next_cursor);

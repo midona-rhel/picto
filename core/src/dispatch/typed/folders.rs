@@ -17,7 +17,7 @@ fn descendant_hashes(top_level_hashes: &[String], effective_hashes: &[(String, i
         .collect()
 }
 
-fn folder_meta_json(folder: &crate::folders::db::Folder) -> String {
+fn folder_meta_json_canonical(folder: &crate::db::query::folders::FolderRow) -> String {
     serde_json::json!({
         "folder_id": folder.folder_id,
         "notes": folder.notes,
@@ -28,29 +28,6 @@ fn folder_meta_json(folder: &crate::folders::db::Folder) -> String {
         "watch_import_status_mode": folder.watch_import_status_mode,
     })
     .to_string()
-}
-
-fn folder_mirror_record(folder: &crate::folders::db::Folder) -> crate::db::types::FolderMirrorRecord {
-    crate::db::types::FolderMirrorRecord {
-        folder_id: folder.folder_id,
-        name: folder.name.clone(),
-        parent_id: folder.parent_id,
-        icon: folder.icon.clone(),
-        color: folder.color.clone(),
-        notes: folder.notes.clone(),
-        sort_order: folder.sort_order,
-        auto_tags_json: serde_json::to_string(&folder.auto_tags).unwrap_or_else(|_| "[]".into()),
-        watch_path: folder.watch_path.clone(),
-        watch_enabled: folder.watch_enabled,
-        watch_subfolders: folder.watch_subfolders,
-        watch_import_status_mode: folder.watch_import_status_mode.clone(),
-        date_added: folder.created_at.clone().unwrap_or_else(|| chrono::Utc::now().to_rfc3339()),
-        date_modified: folder.updated_at.clone().unwrap_or_else(|| chrono::Utc::now().to_rfc3339()),
-    }
-}
-
-fn mirror_folder(state: &AppState, folder: &crate::folders::db::Folder) -> Result<(), String> {
-    state.engine.upsert_folder_record(&folder_mirror_record(folder))
 }
 
 // ─── Input structs ─────────────────────────────────────────────────────────
@@ -280,9 +257,14 @@ pub struct DeleteCollectionInput {
 pub async fn list_folders(
     state: &AppState,
     _input: serde_json::Value,
-) -> Result<Vec<crate::folders::db::Folder>, String> {
-    state.db.list_folders().await
+) -> Result<Vec<crate::db::query::folders::FolderRow>, String> {
+    state.engine.list_folders()
 }
+
+// ── Legacy-only read handlers ────────────────────────────────────────────
+// The following handlers are NOT called by the rebuilt frontend (src/).
+// They exist only for the legacy frontend (legacy/frontend/) and will be
+// removed when the legacy frontend is deleted.
 
 pub async fn get_folder_files(
     state: &AppState,
@@ -317,17 +299,11 @@ pub async fn get_entity_folders(
 
 pub async fn move_folder(state: &AppState, input: MoveFolderInput) -> Result<(), String> {
     let sibling_order = input.sibling_order;
-    state
-        .db
-        .move_folder(input.folder_id, input.new_parent_id, sibling_order.clone())
-        .await?;
-    if let Some(folder) = state
-        .db
-        .with_read_conn(move |conn| crate::folders::db::get_folder(conn, input.folder_id))
-        .await?
-    {
-        mirror_folder(state, &folder)?;
+    state.engine.move_folder(input.folder_id, input.new_parent_id)?;
+    if !sibling_order.is_empty() {
+        state.engine.reorder_folders(&sibling_order)?;
     }
+    state.engine.run_compiler(crate::db::projection::compiler::CompilerPlan { rebuild_sidebar: true, ..Default::default() });
     crate::events::emit_state_changed(
         "move_folder",
         crate::runtime_contract::change_builder::ChangeImpact::new()
@@ -342,18 +318,18 @@ pub async fn move_folder(state: &AppState, input: MoveFolderInput) -> Result<(),
 pub async fn create_folder(
     state: &AppState,
     input: CreateFolderInput,
-) -> Result<crate::folders::db::Folder, String> {
-    let folder = crate::folders::service::create_folder(
-        &state.db,
-        input.name,
+) -> Result<crate::db::query::folders::FolderRow, String> {
+    let folder_id = state.engine.create_folder(
+        &input.name,
         input.parent_id,
-        input.icon,
-        input.color,
-    )
-    .await?;
-    mirror_folder(state, &folder)?;
+        input.icon.as_deref(),
+        input.color.as_deref(),
+    )?;
+    let folder = state.engine.get_folder(folder_id)?
+        .ok_or_else(|| format!("Folder {folder_id} not found after create"))?;
+    let meta = folder_meta_json_canonical(&folder);
     let upsert = crate::runtime_contract::state_change::SidebarNodePatch {
-        node_id: format!("folder:{}", folder.folder_id),
+        node_id: format!("folder:{folder_id}"),
         removed: None,
         upsert: Some(true),
         kind: Some("folder".into()),
@@ -362,53 +338,50 @@ pub async fn create_folder(
         icon: Some(folder.icon.clone()),
         color: Some(folder.color.clone()),
         sort_order: Some(folder.sort_order),
-        count: Some(Some(0)), // New folder starts with 0 items
+        count: Some(Some(0)),
         selectable: Some(true),
         freshness: Some("exact".into()),
-        meta_json: Some(Some(folder_meta_json(&folder))),
+        meta_json: Some(Some(meta)),
     };
+    state.engine.run_compiler(crate::db::projection::compiler::CompilerPlan { rebuild_sidebar: true, ..Default::default() });
     crate::events::emit_state_changed(
         "create_folder",
         crate::runtime_contract::change_builder::ChangeImpact::new()
             .add_domains(&[crate::runtime_contract::state_change::Domain::Folders, crate::runtime_contract::state_change::Domain::Sidebar])
-            .folder_ids(vec![folder.folder_id])
+            .folder_ids(vec![folder_id])
             .sidebar_node_patch(upsert),
     );
     Ok(folder)
 }
 
 pub async fn update_folder(state: &AppState, input: UpdateFolderInput) -> Result<(), String> {
-    crate::folders::service::update_folder(
-        &state.db,
-        input.folder_id,
-        input.name.clone(),
-        input.icon.clone(),
-        input.color.clone(),
-        input.notes,
-        input.auto_tags,
-    )
-    .await?;
-    let updated = state
-        .db
-        .with_read_conn(move |conn| crate::folders::db::get_folder(conn, input.folder_id))
-        .await?
+    let patch = crate::db::types::FolderPatch {
+        name: input.name.clone(),
+        icon: input.icon.clone(),
+        color: input.color.clone(),
+        notes: input.notes,
+        auto_tags: input.auto_tags.map(|tags| serde_json::to_string(&tags).unwrap_or_else(|_| "[]".into())),
+        ..Default::default()
+    };
+    state.engine.update_folder(input.folder_id, &patch)?;
+    let folder = state.engine.get_folder(input.folder_id)?
         .ok_or_else(|| format!("Folder {} not found after update", input.folder_id))?;
-    mirror_folder(state, &updated)?;
-    let patch = crate::runtime_contract::state_change::SidebarNodePatch {
+    let sidebar_patch = crate::runtime_contract::state_change::SidebarNodePatch {
         node_id: format!("folder:{}", input.folder_id),
         removed: None, upsert: None, kind: None, parent_id: None,
         name: input.name,
         icon: Some(input.icon),
         color: Some(input.color),
         sort_order: None, count: None, selectable: None, freshness: None,
-        meta_json: Some(Some(folder_meta_json(&updated))),
+        meta_json: Some(Some(folder_meta_json_canonical(&folder))),
     };
+    state.engine.run_compiler(crate::db::projection::compiler::CompilerPlan { rebuild_sidebar: true, ..Default::default() });
     crate::events::emit_state_changed(
         "update_folder",
         crate::runtime_contract::change_builder::ChangeImpact::new()
             .add_domains(&[crate::runtime_contract::state_change::Domain::Folders, crate::runtime_contract::state_change::Domain::Sidebar])
             .folder_ids(vec![input.folder_id])
-            .sidebar_node_patch(patch),
+            .sidebar_node_patch(sidebar_patch),
     );
     Ok(())
 }
@@ -437,6 +410,15 @@ pub async fn set_folder_watch_config(
     }
     let canonical_path = canonical_path.to_string_lossy().to_string();
 
+    let watch_patch = crate::db::types::FolderPatch {
+        watch_path: Some(canonical_path.clone()),
+        watch_enabled: Some(input.watch_enabled),
+        watch_subfolders: Some(input.watch_subfolders),
+        watch_import_status_mode: Some(input.watch_import_status_mode.clone()),
+        ..Default::default()
+    };
+    state.engine.update_folder(input.folder_id, &watch_patch)?;
+    // Also write to old DB so the watch worker can read it (fenced legacy dependency)
     crate::folders::service::set_folder_watch_config(
         &state.db,
         input.folder_id,
@@ -446,12 +428,6 @@ pub async fn set_folder_watch_config(
         input.watch_import_status_mode.clone(),
     )
     .await?;
-    let mirrored = state
-        .db
-        .with_read_conn(move |conn| crate::folders::db::get_folder(conn, input.folder_id))
-        .await?
-        .ok_or_else(|| format!("Folder {} not found after watch update", input.folder_id))?;
-    mirror_folder(state, &mirrored)?;
 
     if input.import_existing_now {
         // import_existing_for_folder_watch emits its own final combined delta
@@ -472,7 +448,7 @@ pub async fn set_folder_watch_config(
             removed: None, upsert: None, kind: None, parent_id: None,
             name: None, icon: None, color: None, sort_order: None, count: None,
             selectable: None, freshness: None,
-            meta_json: Some(Some(folder_meta_json(&mirrored))),
+            meta_json: Some(state.engine.get_folder(input.folder_id).ok().flatten().map(|f| folder_meta_json_canonical(&f))),
         };
         crate::events::emit_state_changed(
             "set_folder_watch_config",
@@ -497,22 +473,26 @@ pub async fn clear_folder_watch_config(
     state: &AppState,
     input: ClearFolderWatchConfigInput,
 ) -> Result<(), String> {
+    let clear_patch = crate::db::types::FolderPatch {
+        watch_path: Some(String::new()),
+        watch_enabled: Some(false),
+        watch_subfolders: Some(false),
+        watch_import_status_mode: Some("inherit".into()),
+        ..Default::default()
+    };
+    state.engine.update_folder(input.folder_id, &clear_patch)?;
+    // Also clear on old DB so watch worker sees it (fenced legacy dependency)
     crate::folders::service::clear_folder_watch_config(&state.db, input.folder_id).await?;
-    let updated = state
-        .db
-        .with_read_conn(move |conn| crate::folders::db::get_folder(conn, input.folder_id))
-        .await?
-        .ok_or_else(|| format!("Folder {} not found after watch clear", input.folder_id))?;
-    mirror_folder(state, &updated)?;
     let _ = state
         .folder_watch_commands
         .send(crate::folders::watch::FolderWatchCommand::Reload);
+    let folder = state.engine.get_folder(input.folder_id)?.ok_or_else(|| format!("Folder {} not found", input.folder_id))?;
     let patch = crate::runtime_contract::state_change::SidebarNodePatch {
         node_id: format!("folder:{}", input.folder_id),
         removed: None, upsert: None, kind: None, parent_id: None,
         name: None, icon: None, color: None, sort_order: None, count: None,
         selectable: None, freshness: None,
-        meta_json: Some(Some(folder_meta_json(&updated))),
+        meta_json: Some(Some(folder_meta_json_canonical(&folder))),
     };
     crate::events::emit_state_changed(
         "clear_folder_watch_config",
@@ -528,8 +508,7 @@ pub async fn clear_folder_watch_config(
 }
 
 pub async fn delete_folder(state: &AppState, input: DeleteFolderInput) -> Result<(), String> {
-    crate::folders::service::delete_folder(&state.db, input.folder_id).await?;
-    state.engine.delete_folder_record(input.folder_id)?;
+    state.engine.delete_folder(input.folder_id)?;
     let patch = crate::runtime_contract::state_change::SidebarNodePatch {
         node_id: format!("folder:{}", input.folder_id),
         removed: Some(true),
@@ -555,15 +534,7 @@ pub async fn update_folder_parent(
     state: &AppState,
     input: UpdateFolderParentInput,
 ) -> Result<(), String> {
-    crate::folders::service::update_folder_parent(&state.db, input.folder_id, input.new_parent_id)
-        .await?;
-    if let Some(folder) = state
-        .db
-        .with_read_conn(move |conn| crate::folders::db::get_folder(conn, input.folder_id))
-        .await?
-    {
-        mirror_folder(state, &folder)?;
-    }
+    state.engine.move_folder(input.folder_id, input.new_parent_id)?;
     let patch = crate::runtime_contract::state_change::SidebarNodePatch {
         node_id: format!("folder:{}", input.folder_id),
         removed: None, upsert: None, kind: None,
@@ -645,19 +616,8 @@ pub async fn remove_files_from_folder(
 pub async fn reorder_folders(state: &AppState, input: ReorderFoldersInput) -> Result<(), String> {
     let fids: Vec<i64> = input.moves.iter().map(|(id, _)| *id).collect();
     let order_changes = input.moves.clone();
-    state.db.reorder_folders(input.moves).await?;
-    for folder_id in &fids {
-        if let Some(folder) = state
-            .db
-            .with_read_conn({
-                let folder_id = *folder_id;
-                move |conn| crate::folders::db::get_folder(conn, folder_id)
-            })
-            .await?
-        {
-            mirror_folder(state, &folder)?;
-        }
-    }
+    state.engine.reorder_folders(&input.moves)?;
+    state.engine.run_compiler(crate::db::projection::compiler::CompilerPlan { rebuild_sidebar: true, ..Default::default() });
     crate::events::emit_state_changed(
         "reorder_folders",
         crate::runtime_contract::change_builder::ChangeImpact::new()
@@ -668,11 +628,14 @@ pub async fn reorder_folders(state: &AppState, input: ReorderFoldersInput) -> Re
     Ok(())
 }
 
+// Legacy-only: reorder_folder_items uses old DB for hash-to-position resolution.
+// Not called by the rebuilt frontend.
 pub async fn reorder_folder_items(
     state: &AppState,
     input: ReorderFolderItemsInput,
 ) -> Result<(), String> {
     if let Some(moves) = input.moves {
+        // Fenced legacy: relative reorder (before/after hash) uses old DB which resolves hashes to positions
         crate::folders::service::reorder_folder_items(&state.db, input.folder_id, moves).await?;
     } else if let Some(sort_by) = input.sort_by {
         let direction = input.direction.unwrap_or_else(|| "asc".to_string());

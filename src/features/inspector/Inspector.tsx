@@ -5,16 +5,20 @@
  * Scope mode renders a committed displayed grid snapshot.
  */
 
-import { useEffect, useMemo, useState, type CSSProperties } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useAtomValue } from 'jotai';
 import {
   IconAlertCircle,
   IconFolder,
+  IconPlus,
 } from '@tabler/icons-react';
 import * as api from '../../platform/api';
+import * as entityMutations from '../../controllers/entityMutations';
 import { PropertyRow } from '../../shared/ui/PropertyRow/PropertyRow';
 import { InspectorSection } from '../../shared/ui/InspectorSection/InspectorSection';
 import { StarRating } from '../../shared/ui/StarRating/StarRating';
+import { EditableTextField } from '../../shared/ui/EditableTextField/EditableTextField';
+import { TagChip } from '../../shared/ui/TagChip/TagChip';
 import {
   displayedInspectorEntityDataAtom,
   displayedInspectorTargetAtom,
@@ -81,27 +85,6 @@ const NS_ORDER: Record<string, number> = {
   species: 5, meta: 6, system: 7, '': 8, default: 8,
 };
 
-const NS_COLORS: Record<string, [number, number, number]> = {
-  creator: [170, 0, 0],
-  studio: [128, 0, 0],
-  character: [0, 170, 0],
-  person: [0, 128, 0],
-  series: [170, 0, 170],
-  species: [0, 130, 170],
-  meta: [160, 160, 160],
-  system: [153, 101, 21],
-  '': [114, 160, 193],
-  default: [114, 160, 193],
-};
-
-function tagChipStyle(ns: string): CSSProperties {
-  const [r, g, b] = NS_COLORS[ns.toLowerCase()] ?? NS_COLORS.default;
-  return {
-    background: `rgba(${r}, ${g}, ${b}, 0.12)`,
-    border: `1px solid rgba(${r}, ${g}, ${b}, 0.25)`,
-    color: 'rgba(255, 255, 255, 0.85)',
-  };
-}
 
 function tagSortKey(ns: string, sub: string): string {
   return `${(NS_ORDER[ns.toLowerCase()] ?? 7).toString().padStart(2, '0')}:${sub.toLowerCase()}`;
@@ -233,6 +216,49 @@ function EditableNotesField({
   );
 }
 
+function TagInput({ onAdd }: { onAdd: (tag: string) => void }) {
+  const [value, setValue] = useState('');
+  const [open, setOpen] = useState(false);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const commit = useCallback(() => {
+    const trimmed = value.trim();
+    if (trimmed) {
+      onAdd(trimmed);
+      setValue('');
+    }
+    setOpen(false);
+  }, [value, onAdd]);
+
+  if (!open) {
+    return (
+      <button
+        className={styles.tagAddBtn}
+        onClick={() => { setOpen(true); setTimeout(() => inputRef.current?.focus(), 0); }}
+        type="button"
+        title="Add tag"
+      >
+        <IconPlus size={10} stroke={2} />
+      </button>
+    );
+  }
+
+  return (
+    <input
+      ref={inputRef}
+      className={styles.tagInput}
+      value={value}
+      placeholder="tag"
+      onChange={(e) => setValue(e.target.value)}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') commit();
+        if (e.key === 'Escape') { setValue(''); setOpen(false); }
+      }}
+      onBlur={commit}
+    />
+  );
+}
+
 function EntityInspector() {
   const data = useAtomValue(displayedInspectorEntityDataAtom);
   const loading = useAtomValue(inspectorLoadingAtom);
@@ -281,12 +307,16 @@ function EntityInspector() {
       </div>
 
       <div className={styles.fieldStack}>
-        <div className={styles.readOnlyField}>
-          {data.name || <span className={styles.placeholder}>Name</span>}
-        </div>
-        <div className={`${styles.readOnlyField} ${styles.notesFieldReadOnly}`}>
-          {data.notes || <span className={styles.placeholder}>Notes</span>}
-        </div>
+        <EditableTextField
+          value={data.name ?? ''}
+          placeholder="Name"
+          onCommit={(name) => { void entityMutations.setEntityName(data.entity_hash, name); }}
+        />
+        <EditableNotesField
+          value={typeof data.notes === 'string' ? data.notes : null}
+          placeholder="Notes"
+          onCommit={async (text) => { await entityMutations.setEntityNotes(data.entity_hash, text); }}
+        />
         {sourceUrls.length > 0 ? (
           <div className={styles.readOnlyField}>{sourceUrls.map(extractDomain).join(', ')}</div>
         ) : (
@@ -296,24 +326,22 @@ function EntityInspector() {
         )}
       </div>
 
-      {sortedTags.length > 0 && (
-        <InspectorSection title="Tags" count={sortedTags.length}>
-          <div className={styles.tagsWrap}>
-            {sortedTags.map((tag) => (
-              <span
-                key={`${tag.namespace}:${tag.subtag}`}
-                className={styles.tag}
-                style={tagChipStyle(tag.namespace)}
-              >
-                {tag.namespace !== 'default' && tag.namespace !== '' && (
-                  <span className={styles.tagNamespace}>{tag.namespace}:</span>
-                )}
-                {tag.subtag}
-              </span>
-            ))}
-          </div>
-        </InspectorSection>
-      )}
+      <InspectorSection title="Tags" count={sortedTags.length}>
+        <div className={styles.tagsWrap}>
+          {sortedTags.map((tag) => {
+            const rawTag = tag.namespace && tag.namespace !== 'default' ? `${tag.namespace}:${tag.subtag}` : tag.subtag;
+            return (
+              <TagChip
+                key={rawTag}
+                namespace={tag.namespace}
+                subtag={tag.subtag}
+                onRemove={() => { void entityMutations.removeEntityTags(data.entity_hash, [rawTag]); }}
+              />
+            );
+          })}
+          <TagInput onAdd={(tag) => { void entityMutations.addEntityTags(data.entity_hash, [tag]); }} />
+        </div>
+      </InspectorSection>
 
       {folders.length > 0 && (
         <InspectorSection title="Folders">
@@ -330,7 +358,10 @@ function EntityInspector() {
 
       <InspectorSection title="Properties">
         <div className={styles.propsStack}>
-          <StarRating value={data.rating ?? 0} />
+          <StarRating
+            value={data.rating ?? 0}
+            onChange={(rating) => { void entityMutations.setEntityRating(data.entity_hash, rating); }}
+          />
 
           {!isCollection && (
             <>

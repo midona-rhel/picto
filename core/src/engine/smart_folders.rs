@@ -32,7 +32,8 @@ impl ApplicationEngine {
         )
     }
 
-    pub fn delete_smart_folder(&self, smart_folder_id: i64) -> Result<(), String> {
+    /// Delete a smart folder. Returns (promoted_child_ids, deleted_parent_id).
+    pub fn delete_smart_folder(&self, smart_folder_id: i64) -> Result<(Vec<i64>, Option<i64>), String> {
         self.db.delete_smart_folder(smart_folder_id)
     }
 
@@ -48,14 +49,7 @@ impl ApplicationEngine {
         self.db.reorder_smart_folders(moves)
     }
 
-    pub fn upsert_smart_folder_record(
-        &self,
-        record: &crate::db::types::SmartFolderMirrorRecord,
-    ) -> Result<(), String> {
-        self.db.upsert_smart_folder_record(record)
-    }
-
-    pub fn delete_smart_folder_record(&self, smart_folder_id: i64) -> Result<(), String> {
-        self.db.delete_smart_folder(smart_folder_id)
+    pub fn collect_descendant_smart_folder_ids(&self, root_id: i64) -> Result<Vec<i64>, String> {
+        self.db.collect_descendant_smart_folder_ids(root_id)
     }
 }

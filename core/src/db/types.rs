@@ -68,38 +68,19 @@ pub struct CollectionMembershipChange {
     pub removed: Vec<i64>,
 }
 
-#[derive(Debug, Clone)]
-pub struct FolderMirrorRecord {
-    pub folder_id: i64,
-    pub name: String,
-    pub parent_id: Option<i64>,
+/// Partial patch for folder metadata.
+/// Each field is None = "not included in this patch".
+#[derive(Debug, Clone, Default)]
+pub struct FolderPatch {
+    pub name: Option<String>,
     pub icon: Option<String>,
     pub color: Option<String>,
     pub notes: Option<String>,
-    pub sort_order: Option<i64>,
-    pub auto_tags_json: String,
+    pub auto_tags: Option<String>,
     pub watch_path: Option<String>,
-    pub watch_enabled: bool,
-    pub watch_subfolders: bool,
-    pub watch_import_status_mode: String,
-    pub date_added: String,
-    pub date_modified: String,
-}
-
-#[derive(Debug, Clone)]
-pub struct SmartFolderMirrorRecord {
-    pub smart_folder_id: i64,
-    pub name: String,
-    pub parent_id: Option<i64>,
-    pub icon: Option<String>,
-    pub color: Option<String>,
-    pub notes: Option<String>,
-    pub predicate_json: String,
-    pub sort_field: Option<String>,
-    pub sort_order: Option<String>,
-    pub display_order: Option<i64>,
-    pub date_added: String,
-    pub date_modified: String,
+    pub watch_enabled: Option<bool>,
+    pub watch_subfolders: Option<bool>,
+    pub watch_import_status_mode: Option<String>,
 }
 
 // ── Query/projection types (public boundary) ────────────────────
@@ -362,9 +343,8 @@ pub enum EntityViewReconcileResult {
 #[derive(Debug, Clone, Default, serde::Deserialize)]
 pub struct MediaEntityPatch {
     pub name: Option<String>,
-    /// Notes as a JSON object (Record<string, string> from the frontend).
-    /// Stored as JSON text in the database.
-    pub notes: Option<serde_json::Value>,
+    /// Plain text notes. Stored as-is in the database.
+    pub notes: Option<String>,
     pub rating: Option<i64>,
     pub source_urls: Option<Vec<String>>,
 }

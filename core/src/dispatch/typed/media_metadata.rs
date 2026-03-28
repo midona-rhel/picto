@@ -77,6 +77,7 @@ pub async fn get_media_entity_metadata(
     serde_json::to_value(&result).map_err(|e| e.to_string())
 }
 
+// Legacy-only: rebuilt frontend uses engine-routed `patch_media_entities` command.
 pub async fn update_media_entity_metadata(
     state: &AppState,
     input: UpdateMediaEntityMetadataInput,

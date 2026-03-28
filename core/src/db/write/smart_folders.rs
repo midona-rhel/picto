@@ -1,9 +1,7 @@
 //! Smart folder write operations — CRUD only.
 //! Smart folder membership is derived (not authoritative).
 
-use rusqlite::{params, Connection};
-
-use crate::db::types::SmartFolderMirrorRecord;
+use rusqlite::{params, Connection, OptionalExtension};
 
 pub fn create_smart_folder(
     conn: &Connection,
@@ -59,50 +57,24 @@ pub fn update_smart_folder(
     Ok(())
 }
 
-pub fn delete_smart_folder(conn: &Connection, smart_folder_id: i64) -> rusqlite::Result<()> {
+/// Delete a smart folder and promote its children to its parent.
+/// Returns (promoted_child_ids, deleted_parent_id).
+pub fn delete_smart_folder(conn: &Connection, smart_folder_id: i64) -> rusqlite::Result<(Vec<i64>, Option<i64>)> {
+    // Read parent before delete
+    let parent_id: Option<i64> = conn
+        .query_row("SELECT parent_id FROM smart_folder WHERE smart_folder_id = ?1", [smart_folder_id], |r| r.get(0))
+        .optional()?
+        .flatten();
+    // Find direct children
+    let mut stmt = conn.prepare("SELECT smart_folder_id FROM smart_folder WHERE parent_id = ?1")?;
+    let children: Vec<i64> = stmt.query_map([smart_folder_id], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
+    // Promote children to deleted folder's parent
+    for &child_id in &children {
+        conn.execute("UPDATE smart_folder SET parent_id = ?1 WHERE smart_folder_id = ?2", params![parent_id, child_id])?;
+    }
+    // Delete the folder
     conn.execute("DELETE FROM smart_folder WHERE smart_folder_id = ?1", [smart_folder_id])?;
-    Ok(())
-}
-
-pub fn upsert_smart_folder_record(
-    conn: &Connection,
-    record: &SmartFolderMirrorRecord,
-) -> rusqlite::Result<()> {
-    conn.execute(
-        "INSERT INTO smart_folder (
-            smart_folder_id, name, parent_id, icon, color, notes, predicate_json,
-            sort_field, sort_order, display_order, date_added, date_modified
-         ) VALUES (
-            ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12
-         )
-         ON CONFLICT(smart_folder_id) DO UPDATE SET
-            name = excluded.name,
-            parent_id = excluded.parent_id,
-            icon = excluded.icon,
-            color = excluded.color,
-            notes = excluded.notes,
-            predicate_json = excluded.predicate_json,
-            sort_field = excluded.sort_field,
-            sort_order = excluded.sort_order,
-            display_order = excluded.display_order,
-            date_added = excluded.date_added,
-            date_modified = excluded.date_modified",
-        params![
-            record.smart_folder_id,
-            record.name,
-            record.parent_id,
-            record.icon,
-            record.color,
-            record.notes,
-            record.predicate_json,
-            record.sort_field,
-            record.sort_order,
-            record.display_order,
-            record.date_added,
-            record.date_modified,
-        ],
-    )?;
-    Ok(())
+    Ok((children, parent_id))
 }
 
 pub fn move_smart_folder(

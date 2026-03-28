@@ -189,7 +189,8 @@ export interface EntityTarget {
 
 export interface MediaEntityPatch {
   name?: string | null;
-  notes?: Record<string, string> | null;
+  /** Plain text notes. */
+  notes?: string | null;
   rating?: number | null;
   source_urls?: string[] | null;
 }

@@ -322,39 +322,17 @@ impl LibraryDatabase {
     pub fn update_folder(
         &self,
         folder_id: i64,
-        name: Option<&str>,
-        icon: Option<&str>,
-        color: Option<&str>,
-        auto_tags: Option<&str>,
-        notes: Option<&str>,
+        patch: &types::FolderPatch,
     ) -> Result<(), String> {
         let now = chrono::Utc::now().to_rfc3339();
-        let n = name.map(str::to_string);
-        let i = icon.map(str::to_string);
-        let c = color.map(str::to_string);
-        let a = auto_tags.map(str::to_string);
-        let notes = notes.map(str::to_string);
+        let p = patch.clone();
         self.with_write(move |conn| {
-            write::folders::update_folder(
-                conn,
-                folder_id,
-                n.as_deref(),
-                i.as_deref(),
-                c.as_deref(),
-                a.as_deref(),
-                notes.as_deref(),
-                &now,
-            )
+            write::folders::update_folder(conn, folder_id, &p, &now)
         })
     }
 
     pub fn delete_folder(&self, folder_id: i64) -> Result<(), String> {
         self.with_write(|conn| write::folders::delete_folder(conn, folder_id))
-    }
-
-    pub fn upsert_folder_record(&self, record: &FolderMirrorRecord) -> Result<(), String> {
-        let record = record.clone();
-        self.with_write(move |conn| write::folders::upsert_folder_record(conn, &record))
     }
 
     pub fn move_folder(&self, folder_id: i64, new_parent_id: Option<i64>) -> Result<(), String> {
@@ -370,6 +348,26 @@ impl LibraryDatabase {
     pub fn reorder_folder_items(&self, folder_id: i64, moves: &[(i64, i64)]) -> Result<(), String> {
         let m = moves.to_vec();
         self.with_write(move |conn| write::folders::reorder_members(conn, folder_id, &m))
+    }
+
+    pub fn get_folder(&self, folder_id: i64) -> Result<Option<query::folders::FolderRow>, String> {
+        self.with_read(|conn| query::folders::get_folder(conn, folder_id))
+    }
+
+    pub fn collect_descendant_smart_folder_ids(&self, root_id: i64) -> Result<Vec<i64>, String> {
+        self.with_read(|conn| query::folders::collect_descendant_smart_folder_ids(conn, root_id))
+    }
+
+    pub fn get_smart_folder(&self, smart_folder_id: i64) -> Result<Option<query::folders::SmartFolderRow>, String> {
+        self.with_read(|conn| query::folders::get_smart_folder(conn, smart_folder_id))
+    }
+
+    pub fn list_folders_canonical(&self) -> Result<Vec<query::folders::FolderRow>, String> {
+        self.with_read(|conn| query::folders::list_folders(conn))
+    }
+
+    pub fn list_smart_folders_canonical(&self) -> Result<Vec<query::folders::SmartFolderRow>, String> {
+        self.with_read(|conn| query::folders::list_smart_folders(conn))
     }
 
     pub fn add_folder_members(
@@ -444,13 +442,8 @@ impl LibraryDatabase {
         })
     }
 
-    pub fn delete_smart_folder(&self, smart_folder_id: i64) -> Result<(), String> {
+    pub fn delete_smart_folder(&self, smart_folder_id: i64) -> Result<(Vec<i64>, Option<i64>), String> {
         self.with_write(|conn| write::smart_folders::delete_smart_folder(conn, smart_folder_id))
-    }
-
-    pub fn upsert_smart_folder_record(&self, record: &SmartFolderMirrorRecord) -> Result<(), String> {
-        let record = record.clone();
-        self.with_write(move |conn| write::smart_folders::upsert_smart_folder_record(conn, &record))
     }
 
     pub fn move_smart_folder(&self, smart_folder_id: i64, new_parent_id: Option<i64>) -> Result<(), String> {
@@ -518,7 +511,7 @@ impl LibraryDatabase {
                 entity_ids,
                 patch.name.as_deref(),
                 patch.rating.map(Some),
-                patch.notes.as_ref().map(|v| serde_json::to_string(v).unwrap_or_default()).as_deref(),
+                patch.notes.as_deref(),
                 patch.source_urls.as_ref().map(|urls| serde_json::to_string(urls).unwrap_or_default()).as_deref(),
                 &now,
                 types::ExpansionMode::EntityAndDescendants,
@@ -544,7 +537,7 @@ impl LibraryDatabase {
             write::entities::patch_entity_metadata(
                 conn, &ids,
                 p.name.as_deref(), p.rating.map(Some),
-                p.notes.as_ref().map(|v| serde_json::to_string(v).unwrap_or_default()).as_deref(),
+                p.notes.as_deref(),
                 p.source_urls.as_ref().map(|u| serde_json::to_string(u).unwrap_or_default()).as_deref(),
                 &now, types::ExpansionMode::EntityOnly,
             )

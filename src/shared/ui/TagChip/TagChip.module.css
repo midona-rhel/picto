@@ -1,0 +1,47 @@
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px 8px;
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-sm);
+  color: rgba(255, 255, 255, 0.85);
+  white-space: nowrap;
+  line-height: 1.3;
+  user-select: text;
+}
+
+.namespace {
+  color: var(--color-text-tertiary);
+  margin-right: 1px;
+}
+
+.subtag {
+  color: inherit;
+}
+
+.removeBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  padding: 0;
+  margin-left: 2px;
+  border: none;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 100ms;
+}
+
+.chip:hover .removeBtn {
+  opacity: 1;
+}
+
+.removeBtn:hover {
+  background: rgba(255, 255, 255, 0.2);
+  color: var(--color-text-primary);
+}

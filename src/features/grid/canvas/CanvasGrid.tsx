@@ -36,6 +36,8 @@ export interface CanvasGridProps {
   targetSize: number;
   showName: boolean;
   showExtension: boolean;
+  /** Total item count for the current scope (from backend). Used to estimate scroll height before all items are loaded. */
+  totalCount?: number | null;
   onTileClick?: (index: number, item: CanonicalEntityGridItem) => void;
   onLoadMore?: () => void;
   onFirstPaint?: () => void;
@@ -52,6 +54,7 @@ export function CanvasGrid({
   targetSize,
   showName,
   showExtension,
+  totalCount = null,
   onTileClick,
   onLoadMore,
   onFirstPaint,
@@ -103,6 +106,18 @@ export function CanvasGrid({
     () => computeLayout(aspectRatios, containerWidth, targetSize, GAP, viewMode, textHeight, 0, scrollbarWidth),
     [aspectRatios, containerWidth, targetSize, GAP, viewMode, textHeight, scrollbarWidth],
   );
+
+  // ── Estimated total scroll height ──
+  // When totalCount > loaded items, estimate from average height per item.
+  // First page loads 500 items — enough for a good estimate.
+  // As more 100-item batches load, the estimate refines imperceptibly.
+  const estimatedTotalHeight = useMemo(() => {
+    const loadedCount = items.length;
+    const total = totalCount ?? loadedCount;
+    if (total <= loadedCount || loadedCount === 0) return layout.totalHeight;
+    const avgPerItem = layout.totalHeight / loadedCount;
+    return Math.round(avgPerItem * total);
+  }, [items.length, totalCount, layout.totalHeight]);
 
   // ── Thumbnail pipeline lifecycle ──
   useEffect(() => {
@@ -392,7 +407,7 @@ export function CanvasGrid({
       >
         <div
           className={styles.canvasWrap}
-          style={{ height: `${layout.totalHeight}px` }}
+          style={{ height: `${estimatedTotalHeight}px` }}
         >
           <div
             className={styles.viewportLayer}

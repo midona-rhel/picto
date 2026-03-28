@@ -180,6 +180,7 @@ pub async fn get_file_tags(
     serde_json::to_value(&result).map_err(|e| e.to_string())
 }
 
+// Legacy-only: rebuilt frontend uses engine-routed `apply_entity_tags` command.
 pub async fn add_tags(state: &AppState, input: AddTagsInput) -> Result<(), String> {
     if input.tag_strings.is_empty() || input.hashes.is_empty() {
         return Ok(());
@@ -206,6 +207,7 @@ pub async fn add_tags(state: &AppState, input: AddTagsInput) -> Result<(), Strin
     Ok(())
 }
 
+// Legacy-only: rebuilt frontend uses engine-routed `apply_entity_tags` command.
 pub async fn remove_tags(state: &AppState, input: RemoveTagsInput) -> Result<(), String> {
     if input.tag_strings.is_empty() || input.hashes.is_empty() {
         return Ok(());
@@ -246,6 +248,7 @@ pub async fn find_files_by_tags(
     serde_json::to_value(&result).map_err(|e| e.to_string())
 }
 
+// Legacy-only: tag management UI not yet in rebuilt frontend.
 pub async fn manage_tag_alias(state: &AppState, input: ManageTagAliasInput) -> Result<(), String> {
     let (from_ns, from_st) = crate::tags::normalize::parse_tag(&input.from)
         .ok_or_else(|| format!("Invalid tag: {}", input.from))?;
@@ -288,6 +291,7 @@ pub async fn get_tag_relations(
     serde_json::to_value(&result).map_err(|e| e.to_string())
 }
 
+// Legacy-only: tag management UI not yet in rebuilt frontend.
 pub async fn manage_tag_implication(
     state: &AppState,
     input: ManageTagImplicationInput,
@@ -322,6 +326,7 @@ pub async fn manage_tag_implication(
     Ok(())
 }
 
+// Legacy-only: tag management UI not yet in rebuilt frontend.
 pub async fn merge_tags(state: &AppState, input: MergeTagsInput) -> Result<(), String> {
     let (from_ns, from_st) = crate::tags::normalize::parse_tag(&input.from_tag)
         .ok_or_else(|| format!("Invalid tag: {}", input.from_tag))?;
@@ -404,6 +409,7 @@ pub async fn get_namespace_summary(
     serde_json::to_value(&json_result).map_err(|e| e.to_string())
 }
 
+// Legacy-only: tag management UI not yet in rebuilt frontend.
 pub async fn rename_tag(
     state: &AppState,
     input: RenameTagInput,
@@ -452,6 +458,7 @@ pub async fn rename_tag(
     }))
 }
 
+// Legacy-only: tag management UI not yet in rebuilt frontend.
 pub async fn delete_tag(
     state: &AppState,
     input: DeleteTagInput,

@@ -101,3 +101,4 @@
 - PBI-595-greenfield-frontend-manager-navigation-and-surface-reset.md
 - PBI-596-greenfield-random-active-image-view-contract.md
 - PBI-597-greenfield-entity-view-reconciliation-and-sidebar-delta-contract.md
+- PBI-598-tag-site-and-provenance-mask-contract.md
