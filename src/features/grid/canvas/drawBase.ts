@@ -1,29 +1,18 @@
 /**
  * Canvas base layer — images, placeholders, badges, text.
  *
- * Ported from legacy v0.5.0-alpha canvasGridDrawHelpers.ts with full feature set:
- * - Cover/contain fit modes (contain for grid+video, cover for waterfall/justified)
- * - Dominant color placeholders with rounded corners
- * - Two-phase reveal animation (image fade in → placeholder fade out)
- * - Glass border ring
- * - Extension badge (top-left)
- * - Duration badge (top-right for video/animated)
- * - Collection item count badge (bottom-left)
- * - Rating stars
- * - Centered name text
- * - Resolution text
+ * Receives activeTiles[] from CanvasGrid and draws only those tiles.
+ * Multi-pass: images+reveal → glass borders → badges → stars → text.
  */
 
 import type { LayoutItem, GridViewMode } from '../layout/types';
 import type { CanvasRenderItem } from './renderItemAdapter';
-import type { CanvasVisibilityPlan } from './visibilityPlan';
 import type { ThumbnailPipelineEntry } from './thumbnailPipeline';
 import {
   BADGE_FONT,
   BADGE_H,
   INFO_FONT,
   NAME_FONT,
-  RATING_FONT,
   drawBadge,
   drawImageContain,
   drawImageCover,
@@ -56,11 +45,11 @@ export interface BaseLayerArgs {
   positions: LayoutItem[];
   items: CanvasRenderItem[];
   atlasGet: (hash: string) => ThumbnailPipelineEntry | null;
-  atlasEnsure: (hash: string, args?: { y?: number; drawWidth?: number; drawHeight?: number }) => void;
   now: number;
-  /** Per-tile reveal start time. Tiles not in this map show placeholder only. */
+  /** Per-tile reveal start time. */
   revealMap: Map<number, number>;
-  plan: CanvasVisibilityPlan;
+  /** Indices of tiles in the activation zone — the ONLY tiles to draw. */
+  activeTiles: number[];
   draw: DrawContext;
   theme: ThemeLike;
   viewMode: GridViewMode;
@@ -107,10 +96,9 @@ export function drawCanvasBaseLayer({
   positions,
   items,
   atlasGet,
-  atlasEnsure,
   now,
   revealMap,
-  plan,
+  activeTiles,
   draw,
   theme,
   viewMode,
@@ -119,15 +107,12 @@ export function drawCanvasBaseLayer({
   showExtension,
   showExtensionLabel,
 }: BaseLayerArgs): boolean {
-  const { startIdx, endIdx, visibleIndices, visibleIterEnd } = plan;
   const { scrollTop, viewportHeight: cssH, textHeight: th, borderRadius: br } = draw;
   const effectiveFit = viewMode === 'grid' ? 'contain' as const : 'cover' as const;
   let hasActiveReveal = false;
 
   // ── Pass 1: Images with reveal animation ──
-  for (let n = 0; n < visibleIterEnd; n += 1) {
-    const i = visibleIndices ? visibleIndices[n] : startIdx + n;
-    if (i >= endIdx) break;
+  for (const i of activeTiles) {
     const pos = positions[i];
     const item = items[i];
     if (!pos || !item) continue;
@@ -135,12 +120,6 @@ export function drawCanvasBaseLayer({
     const drawY = pos.y - scrollTop;
     const imageHeight = pos.h - th;
     if (drawY + pos.h < 0 || drawY > cssH) continue;
-
-    atlasEnsure(item.thumbnailHash, {
-      y: pos.y + pos.h / 2,
-      drawWidth: pos.w,
-      drawHeight: imageHeight,
-    });
 
     const entry = atlasGet(item.thumbnailHash);
     const isVideo = item.mime.startsWith('video/');
@@ -205,9 +184,7 @@ export function drawCanvasBaseLayer({
   ctx.strokeStyle = GLASS_BORDER_COLOR;
   ctx.lineWidth = 1;
   ctx.beginPath();
-  for (let n = 0; n < visibleIterEnd; n += 1) {
-    const i = visibleIndices ? visibleIndices[n] : startIdx + n;
-    if (i >= endIdx) break;
+  for (const i of activeTiles) {
     const pos = positions[i];
     const item = items[i];
     if (!pos || !item) continue;
@@ -225,9 +202,7 @@ export function drawCanvasBaseLayer({
 
   // ── Pass 3: Badges (extension, duration, collection count) ──
   const isContain = effectiveFit === 'contain';
-  for (let n = 0; n < visibleIterEnd; n += 1) {
-    const i = visibleIndices ? visibleIndices[n] : startIdx + n;
-    if (i >= endIdx) break;
+  for (const i of activeTiles) {
     const pos = positions[i];
     const item = items[i];
     if (!pos || !item) continue;
@@ -271,22 +246,7 @@ export function drawCanvasBaseLayer({
     }
   }
 
-  // ── Pass 4: Rating stars ──
-  ctx.font = RATING_FONT;
-  ctx.fillStyle = '#ffd54f';
-  ctx.textBaseline = 'top';
-  for (let n = 0; n < visibleIterEnd; n += 1) {
-    const i = visibleIndices ? visibleIndices[n] : startIdx + n;
-    if (i >= endIdx) break;
-    const pos = positions[i];
-    const item = items[i];
-    if (!pos || !item || item.rating == null || item.rating <= 0) continue;
-    const drawY = pos.y - scrollTop;
-    if (drawY + pos.h < 0 || drawY > cssH) continue;
-    ctx.fillText('★'.repeat(item.rating), pos.x + 5, drawY + 5);
-  }
-
-  // ── Pass 5: Name and resolution text ──
+  // ── Pass 4: Name and resolution text ──
   if ((showTileName || showResolution) && th > 0) {
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
@@ -294,9 +254,7 @@ export function drawCanvasBaseLayer({
     if (showTileName) {
       ctx.font = NAME_FONT;
       ctx.fillStyle = theme.textPrimary;
-      for (let n = 0; n < visibleIterEnd; n += 1) {
-        const i = visibleIndices ? visibleIndices[n] : startIdx + n;
-        if (i >= endIdx) break;
+      for (const i of activeTiles) {
         const pos = positions[i];
         const item = items[i];
         if (!pos || !item) continue;
@@ -316,9 +274,7 @@ export function drawCanvasBaseLayer({
       ctx.font = INFO_FONT;
       ctx.fillStyle = theme.textTertiary;
       const resOffset = showTileName ? 20 : 0;
-      for (let n = 0; n < visibleIterEnd; n += 1) {
-        const i = visibleIndices ? visibleIndices[n] : startIdx + n;
-        if (i >= endIdx) break;
+      for (const i of activeTiles) {
         const pos = positions[i];
         const item = items[i];
         if (!pos || !item || !item.width || !item.height) continue;

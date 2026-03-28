@@ -59,6 +59,7 @@ async fn build_smart_folder_sidebar_node(
     let mut meta = serde_json::json!({
         "smart_folder_id": sf.smart_folder_id,
         "parent_id": sf.parent_id,
+        "notes": sf.notes,
         "predicate": effective_predicate,
         "local_predicate": serde_json::from_str::<serde_json::Value>(&sf.predicate_json).unwrap_or_else(|_| serde_json::json!({ "groups": [] })),
         "inherited_predicates": inherited_predicates,
@@ -130,6 +131,7 @@ impl SmartFolderService {
                 folder.predicate_json,
                 folder.icon,
                 folder.color,
+                folder.notes,
                 folder.sort_field,
                 folder.sort_order,
             )

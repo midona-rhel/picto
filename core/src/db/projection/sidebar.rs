@@ -106,15 +106,47 @@ pub fn compile_sidebar(conn: &Connection) {
     let _ = conn.execute("UPDATE sidebar_node SET count = ?1 WHERE node_id = 'system:duplicates'", [duplicates]);
 
     // Folder nodes (children of section:folders)
-    let folders: Vec<(i64, String, Option<i64>, Option<String>, Option<String>, Option<i64>)> = conn
-        .prepare("SELECT folder_id, name, parent_id, icon, color, sort_order FROM folder ORDER BY sort_order, name")
+    let folders: Vec<(
+        i64,
+        String,
+        Option<i64>,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<i64>,
+        Option<String>,
+        Option<String>,
+        bool,
+        bool,
+        String,
+    )> = conn
+        .prepare(
+            "SELECT folder_id, name, parent_id, icon, color, notes, sort_order, auto_tags, watch_path, watch_enabled, watch_subfolders, watch_import_status_mode
+             FROM folder
+             ORDER BY sort_order, name",
+        )
         .and_then(|mut stmt| {
-            stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?)))
+            stmt.query_map([], |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                    row.get(6)?,
+                    row.get(7)?,
+                    row.get(8)?,
+                    row.get::<_, Option<i64>>(9)?.unwrap_or(0) != 0,
+                    row.get::<_, Option<i64>>(10)?.unwrap_or(0) != 0,
+                    row.get::<_, Option<String>>(11)?.unwrap_or_else(|| "inherit".into()),
+                ))
+            })
                 .map(|rows| rows.flatten().collect())
         })
         .unwrap_or_default();
 
-    for (fid, name, parent_id, icon, color, sort_order) in &folders {
+    for (fid, name, parent_id, icon, color, notes, sort_order, auto_tags_raw, watch_path, watch_enabled, watch_subfolders, watch_import_status_mode) in &folders {
         let node_id = format!("folder:{fid}");
         let parent = parent_id
             .map(|pid| format!("folder:{pid}"))
@@ -131,7 +163,15 @@ pub fn compile_sidebar(conn: &Connection) {
             .unwrap_or(0);
         let meta = serde_json::json!({
             "folder_id": fid,
-            "auto_tags": serde_json::Value::Null,
+            "notes": notes,
+            "auto_tags": auto_tags_raw
+                .as_deref()
+                .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok())
+                .unwrap_or(serde_json::Value::Null),
+            "watch_path": watch_path,
+            "watch_enabled": watch_enabled,
+            "watch_subfolders": watch_subfolders,
+            "watch_import_status_mode": watch_import_status_mode,
         });
         let _ = conn.execute(
             "INSERT OR REPLACE INTO sidebar_node (node_id, kind, parent_id, name, icon, color, sort_order, count, selectable, freshness, epoch, meta_json, date_modified)
@@ -141,15 +181,15 @@ pub fn compile_sidebar(conn: &Connection) {
     }
 
     // Smart folder nodes (children of section:smart_folders)
-    let smart_folders: Vec<(i64, String, Option<i64>, Option<String>, Option<String>, Option<i64>, String)> = conn
-        .prepare("SELECT smart_folder_id, name, parent_id, icon, color, display_order, predicate_json FROM smart_folder ORDER BY display_order, name")
+    let smart_folders: Vec<(i64, String, Option<i64>, Option<String>, Option<String>, Option<String>, Option<i64>, String, Option<String>, Option<String>)> = conn
+        .prepare("SELECT smart_folder_id, name, parent_id, icon, color, notes, display_order, predicate_json, sort_field, sort_order FROM smart_folder ORDER BY display_order, name")
         .and_then(|mut stmt| {
-            stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?)))
+            stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?, row.get(7)?, row.get(8)?, row.get(9)?)))
                 .map(|rows| rows.flatten().collect())
         })
         .unwrap_or_default();
 
-    for (sfid, name, parent_id, icon, color, display_order, predicate_json) in &smart_folders {
+    for (sfid, name, parent_id, icon, color, notes, display_order, predicate_json, sort_field, sort_order) in &smart_folders {
         let node_id = format!("smart:{sfid}");
         let parent = parent_id
             .map(|pid| format!("smart:{pid}"))
@@ -157,7 +197,10 @@ pub fn compile_sidebar(conn: &Connection) {
         let meta = serde_json::json!({
             "smart_folder_id": sfid,
             "parent_id": parent_id,
+            "notes": notes,
             "predicate": serde_json::from_str::<serde_json::Value>(predicate_json).unwrap_or_default(),
+            "sort_field": sort_field,
+            "sort_order": sort_order,
         });
         let _ = conn.execute(
             "INSERT OR REPLACE INTO sidebar_node (node_id, kind, parent_id, name, icon, color, sort_order, count, selectable, freshness, epoch, meta_json, date_modified)

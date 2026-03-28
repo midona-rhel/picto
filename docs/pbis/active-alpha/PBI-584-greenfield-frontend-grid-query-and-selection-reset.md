@@ -42,6 +42,10 @@ The rebuilt grid path should:
 - provide the stable data/selection contract that the rebuilt grid UI can depend on
 - keep the current `EntityViewQuery` in frontend-owned state
 - treat visible-window settlement as backend-owned truth via a typed reconcile call, not frontend guesswork
+- expose `total_size_bytes` alongside `total_count` for scope-aware inspector surfaces
+- keep inspector visibility separate from selection ownership
+- let the inspector read scope context from canonical grid state plus sidebar state
+- keep inspector display state committed, not derived directly from raw live navigation during transitions
 
 Locked decision:
 - the backend should not generally track the frontend’s live grid/session state
@@ -74,7 +78,7 @@ The visual/UI rebuild of the grid screen is tracked separately in:
 - virtual selection/select-all semantics are stable and explicit
 - slim/grid-page legacy dependence is materially reduced or removed for the rebuilt slice
 - the rebuilt grid UI can depend on this contract without legacy translation helpers
-- current query state, visible-window state, and backend reconcile semantics are explicit and testable
+- current query state, visible-window state, inspector display-state semantics, and backend reconcile semantics are explicit and testable
 
 ## Tests
 - app-shell to grid-root boundary tests

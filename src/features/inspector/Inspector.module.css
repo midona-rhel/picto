@@ -1,0 +1,301 @@
+/* Inspector panel — persistent right-hand rail using legacy inspector grammar. */
+
+.panel {
+  height: 100%;
+  background: var(--color-surface-1);
+  display: flex;
+  flex-direction: column;
+  position: relative;
+}
+
+/* Scrollable content */
+.scrollContent {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  scrollbar-gutter: stable;
+  padding: 16px 16px 48px 16px;
+}
+
+.contentStack {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  color: var(--color-text-primary);
+  gap: 16px;
+}
+
+/* Empty state */
+.empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  flex: 1;
+  gap: 8px;
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-sm);
+}
+
+.emptyIcon {
+  opacity: 0.3;
+}
+
+.emptyText {
+  color: var(--color-text-tertiary);
+}
+
+.emptyInline {
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-sm);
+}
+
+.errorIcon {
+  color: var(--color-negative);
+}
+
+.errorText {
+  color: var(--color-negative);
+  font-size: var(--font-size-xs);
+}
+
+/* Image preview — entity mode */
+.preview {
+  width: 100%;
+  min-height: 200px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 8px;
+}
+
+/* Scope preview — folder stack with 4-image collage inside front card */
+.thumbnail {
+  position: relative;
+  width: 100%;
+  max-width: 200px;
+  aspect-ratio: 4 / 3;
+  box-sizing: border-box;
+}
+
+.pic1,
+.pic2,
+.pic3 {
+  position: absolute;
+  border-radius: 10px;
+  background: radial-gradient(100% 100% at 50% 0%, var(--color-white-15, rgba(255,255,255,0.15)) 0%, var(--color-white-05, rgba(255,255,255,0.05)) 100%);
+}
+
+:global([data-theme="light"]) .pic1,
+:global([data-theme="light"]) .pic2,
+:global([data-theme="light"]) .pic3,
+:global([data-theme="lightgray"]) .pic1,
+:global([data-theme="lightgray"]) .pic2,
+:global([data-theme="lightgray"]) .pic3 {
+  background: linear-gradient(180deg, var(--color-black-10) 0%, var(--color-black-10) 100%);
+}
+
+/* Front card — contains the collage */
+.pic1 {
+  z-index: 10;
+  top: 10px;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: 8px;
+  overflow: hidden;
+  border-top: 1px solid var(--color-white-15, rgba(255,255,255,0.15));
+  border-right: 1px solid var(--color-white-05, rgba(255,255,255,0.05));
+  border-left: 1px solid var(--color-white-05, rgba(255,255,255,0.05));
+}
+
+:global([data-theme="light"]) .pic1,
+:global([data-theme="lightgray"]) .pic1 {
+  border-top: 1px solid var(--color-black-20);
+  border-right: 1px solid var(--color-black-10);
+  border-left: 1px solid var(--color-black-10);
+}
+
+/* Middle card peek */
+.pic2 {
+  z-index: 9;
+  left: 10px;
+  right: 10px;
+  top: 6px;
+  height: 2px;
+  border-radius: 50% 50% 0 0;
+  background: var(--color-white-15, rgba(255,255,255,0.15));
+}
+
+:global([data-theme="light"]) .pic2,
+:global([data-theme="lightgray"]) .pic2 {
+  background: var(--color-black-20);
+}
+
+/* Back card peek */
+.pic3 {
+  z-index: 9;
+  left: 20px;
+  right: 20px;
+  top: 2px;
+  height: 2px;
+  border-radius: 50% 50% 0 0;
+  background: var(--color-white-10, rgba(255,255,255,0.10));
+}
+
+:global([data-theme="light"]) .pic3,
+:global([data-theme="lightgray"]) .pic3 {
+  background: var(--color-black-10);
+}
+
+/* 2×2 collage grid inside pic1 */
+.collage {
+  width: 100%;
+  height: 100%;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: 1fr 1fr;
+  gap: 8px;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.collageCell {
+  overflow: hidden;
+  background: var(--color-white-05, rgba(255, 255, 255, 0.05));
+  border-radius: 8px;
+}
+
+.collageCell img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+/* Placeholder when no images */
+.folderPlaceholder {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.folderPlaceholder svg {
+  opacity: 0.2;
+}
+
+.previewImage {
+  max-width: 100%;
+  max-height: 200px;
+  object-fit: contain;
+  border-radius: 6px;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
+/* Read-only field pills (name, notes, source) */
+.fieldStack {
+  display: flex;
+  flex-direction: column;
+}
+
+.readOnlyField {
+  display: flex;
+  align-items: center;
+  height: 32px;
+  padding: 4px 8px;
+  gap: 6px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--color-border-primary);
+  margin-bottom: 8px;
+  font-family: var(--font-family);
+  font-size: var(--font-size-md);
+  line-height: 20px;
+  color: var(--color-text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.notesFieldReadOnly,
+.notesField {
+  min-height: 74px;
+  height: auto;
+  align-items: flex-start;
+  white-space: pre-wrap;
+  overflow: visible;
+  text-overflow: clip;
+}
+
+.notesField {
+  width: 100%;
+  resize: none;
+  outline: none;
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--color-text-primary);
+}
+
+.placeholder {
+  color: var(--color-text-tertiary);
+}
+
+/* Tags — namespace:subtag chips with namespace coloring */
+.tagsWrap {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.tagsWrap:empty,
+.foldersWrap:empty {
+  display: none;
+}
+
+.tag {
+  font-size: var(--font-size-sm);
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  gap: 0;
+  cursor: default;
+  user-select: text;
+  -webkit-user-select: text;
+  line-height: 1.3;
+}
+
+.tagNamespace {
+  color: var(--color-text-tertiary);
+  margin-right: 1px;
+}
+
+/* Folders */
+.foldersWrap {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.folderChip {
+  font-size: 10px;
+  color: var(--color-text-secondary);
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  padding: 2px 8px;
+  border-radius: 3px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+  cursor: default;
+}
+
+/* Properties */
+.propsStack {
+  display: flex;
+  flex-direction: column;
+}

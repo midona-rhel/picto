@@ -3,7 +3,7 @@
 
 use rusqlite::{params, Connection};
 
-use crate::db::types::{ExpansionMode, FolderMembershipChange};
+use crate::db::types::{ExpansionMode, FolderMembershipChange, FolderMirrorRecord};
 
 use super::entities::expand_ids;
 
@@ -16,7 +16,7 @@ pub fn create_folder(
     now: &str,
 ) -> rusqlite::Result<i64> {
     conn.execute(
-        "INSERT INTO folder (name, parent_id, icon, color, date_added, date_modified) VALUES (?1, ?2, ?3, ?4, ?5, ?5)",
+        "INSERT INTO folder (name, parent_id, icon, color, notes, date_added, date_modified) VALUES (?1, ?2, ?3, ?4, NULL, ?5, ?5)",
         params![name, parent_id, icon, color, now],
     )?;
     Ok(conn.last_insert_rowid())
@@ -29,6 +29,7 @@ pub fn update_folder(
     icon: Option<&str>,
     color: Option<&str>,
     auto_tags: Option<&str>,
+    notes: Option<&str>,
     now: &str,
 ) -> rusqlite::Result<()> {
     if let Some(n) = name {
@@ -55,12 +56,64 @@ pub fn update_folder(
             params![at, now, folder_id],
         )?;
     }
+    if let Some(n) = notes {
+        conn.execute(
+            "UPDATE folder SET notes = ?1, date_modified = ?2 WHERE folder_id = ?3",
+            params![n, now, folder_id],
+        )?;
+    }
     Ok(())
 }
 
 pub fn delete_folder(conn: &Connection, folder_id: i64) -> rusqlite::Result<()> {
     conn.execute("DELETE FROM folder_member WHERE folder_id = ?1", [folder_id])?;
     conn.execute("DELETE FROM folder WHERE folder_id = ?1", [folder_id])?;
+    Ok(())
+}
+
+pub fn upsert_folder_record(
+    conn: &Connection,
+    record: &FolderMirrorRecord,
+) -> rusqlite::Result<()> {
+    conn.execute(
+        "INSERT INTO folder (
+            folder_id, name, parent_id, icon, color, notes, sort_order, auto_tags,
+            watch_path, watch_enabled, watch_subfolders, watch_import_status_mode,
+            date_added, date_modified
+         ) VALUES (
+            ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14
+         )
+         ON CONFLICT(folder_id) DO UPDATE SET
+            name = excluded.name,
+            parent_id = excluded.parent_id,
+            icon = excluded.icon,
+            color = excluded.color,
+            notes = excluded.notes,
+            sort_order = excluded.sort_order,
+            auto_tags = excluded.auto_tags,
+            watch_path = excluded.watch_path,
+            watch_enabled = excluded.watch_enabled,
+            watch_subfolders = excluded.watch_subfolders,
+            watch_import_status_mode = excluded.watch_import_status_mode,
+            date_added = excluded.date_added,
+            date_modified = excluded.date_modified",
+        params![
+            record.folder_id,
+            record.name,
+            record.parent_id,
+            record.icon,
+            record.color,
+            record.notes,
+            record.sort_order,
+            record.auto_tags_json,
+            record.watch_path,
+            if record.watch_enabled { 1 } else { 0 },
+            if record.watch_subfolders { 1 } else { 0 },
+            record.watch_import_status_mode,
+            record.date_added,
+            record.date_modified,
+        ],
+    )?;
     Ok(())
 }
 

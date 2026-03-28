@@ -19,6 +19,29 @@ use rusqlite::Connection;
 use self::projection::bitmaps::BitmapStore;
 use self::types::*;
 
+fn has_column(conn: &Connection, table: &str, column: &str) -> rusqlite::Result<bool> {
+    let mut stmt = conn.prepare(&format!("PRAGMA table_info({table})"))?;
+    let rows = stmt.query_map([], |row| row.get::<_, String>(1))?;
+    for row in rows {
+        if row? == column {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn reconcile_open_schema(conn: &Connection) -> Result<(), String> {
+    if has_column(conn, "folder", "notes").map_err(|e| e.to_string())? == false {
+        conn.execute_batch("ALTER TABLE folder ADD COLUMN notes TEXT")
+            .map_err(|e| format!("Failed to add folder.notes to canonical db: {e}"))?;
+    }
+    if has_column(conn, "smart_folder", "notes").map_err(|e| e.to_string())? == false {
+        conn.execute_batch("ALTER TABLE smart_folder ADD COLUMN notes TEXT")
+            .map_err(|e| format!("Failed to add smart_folder.notes to canonical db: {e}"))?;
+    }
+    Ok(())
+}
+
 /// Import legacy data from an old SqliteDatabase file via ATTACH.
 /// Fatal — returns Err if the import fails.
 fn import_from_legacy_db(conn: &Connection, old_db_path: &Path) -> Result<(), String> {
@@ -84,6 +107,7 @@ impl LibraryDatabase {
         // Bootstrap: migrate, import, or load existing schema
         {
             let conn = db.write_conn.lock().unwrap();
+            reconcile_open_schema(&conn)?;
             let old_db_path = library_root.join("db").join("library.sqlite");
             let legacy_exists = old_db_path.exists();
 
@@ -302,19 +326,35 @@ impl LibraryDatabase {
         icon: Option<&str>,
         color: Option<&str>,
         auto_tags: Option<&str>,
+        notes: Option<&str>,
     ) -> Result<(), String> {
         let now = chrono::Utc::now().to_rfc3339();
         let n = name.map(str::to_string);
         let i = icon.map(str::to_string);
         let c = color.map(str::to_string);
         let a = auto_tags.map(str::to_string);
+        let notes = notes.map(str::to_string);
         self.with_write(move |conn| {
-            write::folders::update_folder(conn, folder_id, n.as_deref(), i.as_deref(), c.as_deref(), a.as_deref(), &now)
+            write::folders::update_folder(
+                conn,
+                folder_id,
+                n.as_deref(),
+                i.as_deref(),
+                c.as_deref(),
+                a.as_deref(),
+                notes.as_deref(),
+                &now,
+            )
         })
     }
 
     pub fn delete_folder(&self, folder_id: i64) -> Result<(), String> {
         self.with_write(|conn| write::folders::delete_folder(conn, folder_id))
+    }
+
+    pub fn upsert_folder_record(&self, record: &FolderMirrorRecord) -> Result<(), String> {
+        let record = record.clone();
+        self.with_write(move |conn| write::folders::upsert_folder_record(conn, &record))
     }
 
     pub fn move_folder(&self, folder_id: i64, new_parent_id: Option<i64>) -> Result<(), String> {
@@ -359,10 +399,20 @@ impl LibraryDatabase {
         predicate_json: &str,
         icon: Option<&str>,
         color: Option<&str>,
+        notes: Option<&str>,
     ) -> Result<i64, String> {
         let now = chrono::Utc::now().to_rfc3339();
         self.with_write(|conn| {
-            write::smart_folders::create_smart_folder(conn, name, parent_id, predicate_json, icon, color, &now)
+            write::smart_folders::create_smart_folder(
+                conn,
+                name,
+                parent_id,
+                predicate_json,
+                icon,
+                color,
+                notes,
+                &now,
+            )
         })
     }
 
@@ -373,6 +423,7 @@ impl LibraryDatabase {
         predicate_json: Option<&str>,
         icon: Option<&str>,
         color: Option<&str>,
+        notes: Option<&str>,
         sort_field: Option<&str>,
         sort_order: Option<&str>,
     ) -> Result<(), String> {
@@ -381,12 +432,13 @@ impl LibraryDatabase {
         let p = predicate_json.map(str::to_string);
         let i = icon.map(str::to_string);
         let c = color.map(str::to_string);
+        let notes = notes.map(str::to_string);
         let sf = sort_field.map(str::to_string);
         let so = sort_order.map(str::to_string);
         self.with_write(move |conn| {
             write::smart_folders::update_smart_folder(
                 conn, smart_folder_id,
-                n.as_deref(), p.as_deref(), i.as_deref(), c.as_deref(),
+                n.as_deref(), p.as_deref(), i.as_deref(), c.as_deref(), notes.as_deref(),
                 sf.as_deref(), so.as_deref(), &now,
             )
         })
@@ -394,6 +446,11 @@ impl LibraryDatabase {
 
     pub fn delete_smart_folder(&self, smart_folder_id: i64) -> Result<(), String> {
         self.with_write(|conn| write::smart_folders::delete_smart_folder(conn, smart_folder_id))
+    }
+
+    pub fn upsert_smart_folder_record(&self, record: &SmartFolderMirrorRecord) -> Result<(), String> {
+        let record = record.clone();
+        self.with_write(move |conn| write::smart_folders::upsert_smart_folder_record(conn, &record))
     }
 
     pub fn move_smart_folder(&self, smart_folder_id: i64, new_parent_id: Option<i64>) -> Result<(), String> {

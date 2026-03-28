@@ -31,6 +31,7 @@ export const gridShowExtensionAtom = atom(false);
 export const gridItemsAtom = atom<CanonicalEntityGridItem[]>([]);
 export const gridCursorAtom = atom<string | null>(null);
 export const gridTotalCountAtom = atom<number | null>(null);
+export const gridTotalSizeBytesAtom = atom<number | null>(null);
 export const gridLoadingAtom = atom(false);
 export const gridErrorAtom = atom<string | null>(null);
 

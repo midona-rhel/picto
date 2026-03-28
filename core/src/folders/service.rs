@@ -31,6 +31,7 @@ fn build_folder_sidebar_node(
         meta_json: Some(
             serde_json::json!({
                 "folder_id": folder.folder_id,
+                "notes": folder.notes,
                 "auto_tags": folder.auto_tags,
                 "watch_path": folder.watch_path,
                 "watch_enabled": folder.watch_enabled,
@@ -91,6 +92,7 @@ pub async fn create_folder(
             parent_id,
             icon,
             color,
+            notes: None,
             auto_tags: Vec::new(),
         })
         .await?;
@@ -106,6 +108,7 @@ pub async fn update_folder(
     name: Option<String>,
     icon: Option<String>,
     color: Option<String>,
+    notes: Option<String>,
     auto_tags: Option<Vec<String>>,
 ) -> Result<(), String> {
     let current = db
@@ -123,12 +126,17 @@ pub async fn update_folder(
         Some(_) => color,
         None => current.color,
     };
+    let final_notes = match notes {
+        Some(value) => Some(value),
+        None => current.notes,
+    };
     let final_auto_tags = auto_tags.unwrap_or(current.auto_tags);
     db.update_folder(
         folder_id,
         final_name,
         final_icon,
         final_color,
+        final_notes,
         final_auto_tags,
     )
     .await?;

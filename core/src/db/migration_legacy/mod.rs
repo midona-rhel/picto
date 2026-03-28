@@ -135,8 +135,8 @@ pub fn migrate(conn: &Connection) -> Result<MigrationResult, String> {
 
     // ── Step 5: folder ← _old_folder, folder_member ← folder_entity
     let _ = conn.execute(
-        "INSERT OR IGNORE INTO folder (folder_id, name, parent_id, icon, color, sort_order, auto_tags, watch_path, watch_enabled, watch_subfolders, watch_import_status_mode, date_added, date_modified)
-         SELECT folder_id, name, parent_id, icon, color, sort_order, auto_tags, watch_path, watch_enabled, watch_subfolders, watch_import_status_mode, COALESCE(created_at, datetime('now')), COALESCE(updated_at, datetime('now'))
+        "INSERT OR IGNORE INTO folder (folder_id, name, parent_id, icon, color, notes, sort_order, auto_tags, watch_path, watch_enabled, watch_subfolders, watch_import_status_mode, date_added, date_modified)
+         SELECT folder_id, name, parent_id, icon, color, notes, sort_order, auto_tags, watch_path, watch_enabled, watch_subfolders, watch_import_status_mode, COALESCE(created_at, datetime('now')), COALESCE(updated_at, datetime('now'))
          FROM _old_folder",
         [],
     );
@@ -186,8 +186,8 @@ pub fn migrate(conn: &Connection) -> Result<MigrationResult, String> {
 
     // ── Step 8: smart_folder ← _old_smart_folder ────────────────────
     let _ = conn.execute(
-        "INSERT OR IGNORE INTO smart_folder (smart_folder_id, name, parent_id, icon, color, predicate_json, sort_field, sort_order, display_order, date_added, date_modified)
-         SELECT smart_folder_id, name, parent_id, icon, color, predicate_json, sort_field, sort_order, display_order, COALESCE(created_at, datetime('now')), COALESCE(updated_at, datetime('now'))
+        "INSERT OR IGNORE INTO smart_folder (smart_folder_id, name, parent_id, icon, color, notes, predicate_json, sort_field, sort_order, display_order, date_added, date_modified)
+         SELECT smart_folder_id, name, parent_id, icon, color, notes, predicate_json, sort_field, sort_order, display_order, COALESCE(created_at, datetime('now')), COALESCE(updated_at, datetime('now'))
          FROM _old_smart_folder",
         [],
     );
@@ -385,8 +385,8 @@ pub fn migrate_from_attached(conn: &Connection) -> Result<MigrationResult, Strin
 
     // Step 5: folders
     let _ = conn.execute(
-        "INSERT OR IGNORE INTO folder (folder_id, name, parent_id, icon, color, sort_order, auto_tags, watch_path, watch_enabled, watch_subfolders, watch_import_status_mode, date_added, date_modified)
-         SELECT folder_id, name, parent_id, icon, color, sort_order, auto_tags, watch_path, watch_enabled, watch_subfolders, watch_import_status_mode, COALESCE(created_at, datetime('now')), COALESCE(updated_at, datetime('now'))
+        "INSERT OR IGNORE INTO folder (folder_id, name, parent_id, icon, color, notes, sort_order, auto_tags, watch_path, watch_enabled, watch_subfolders, watch_import_status_mode, date_added, date_modified)
+         SELECT folder_id, name, parent_id, icon, color, notes, sort_order, auto_tags, watch_path, watch_enabled, watch_subfolders, watch_import_status_mode, COALESCE(created_at, datetime('now')), COALESCE(updated_at, datetime('now'))
          FROM old_db.folder", []);
     result.folder_members_migrated = conn.execute(
         "INSERT OR IGNORE INTO folder_member (folder_id, entity_id, position_rank)
@@ -410,8 +410,8 @@ pub fn migrate_from_attached(conn: &Connection) -> Result<MigrationResult, Strin
 
     // Step 8: smart_folder
     let _ = conn.execute(
-        "INSERT OR IGNORE INTO smart_folder (smart_folder_id, name, parent_id, icon, color, predicate_json, sort_field, sort_order, display_order, date_added, date_modified)
-         SELECT smart_folder_id, name, parent_id, icon, color, predicate_json, sort_field, sort_order, display_order, COALESCE(created_at, datetime('now')), COALESCE(updated_at, datetime('now'))
+        "INSERT OR IGNORE INTO smart_folder (smart_folder_id, name, parent_id, icon, color, notes, predicate_json, sort_field, sort_order, display_order, date_added, date_modified)
+         SELECT smart_folder_id, name, parent_id, icon, color, notes, predicate_json, sort_field, sort_order, display_order, COALESCE(created_at, datetime('now')), COALESCE(updated_at, datetime('now'))
          FROM old_db.smart_folder", []);
 
     // Step 9: subscriptions

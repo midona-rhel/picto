@@ -10,9 +10,10 @@ import type { BaseScope, EntityViewQuery } from '../shared/types/canonical';
 import type { SortField, SortDirection } from '../state/grid';
 import {
   gridScopeAtom, gridActiveAtom, gridItemsAtom, gridCursorAtom,
-  gridTotalCountAtom, gridLoadingAtom, gridErrorAtom,
+  gridTotalCountAtom, gridTotalSizeBytesAtom, gridLoadingAtom, gridErrorAtom,
   gridSortFieldAtom, gridSortDirectionAtom, gridSearchTextAtom,
 } from '../state/grid';
+import { selectedEntityHashAtom } from '../state/selection';
 
 const store = getDefaultStore();
 
@@ -35,6 +36,7 @@ export const gridController = {
   async navigateTo(scope: BaseScope) {
     store.set(gridScopeAtom, scope);
     store.set(gridSearchTextAtom, '');
+    store.set(selectedEntityHashAtom, null);
     store.set(gridActiveAtom, true);
     if (searchDebounceTimer) { clearTimeout(searchDebounceTimer); searchDebounceTimer = null; }
     await this.loadFirstPage();
@@ -44,6 +46,7 @@ export const gridController = {
     gridVersion++;
     paginationInFlight = null;
     if (searchDebounceTimer) { clearTimeout(searchDebounceTimer); searchDebounceTimer = null; }
+    store.set(selectedEntityHashAtom, null);
     store.set(gridActiveAtom, false);
   },
 
@@ -73,6 +76,7 @@ export const gridController = {
       store.set(gridItemsAtom, []);
       store.set(gridCursorAtom, null);
       store.set(gridTotalCountAtom, null);
+      store.set(gridTotalSizeBytesAtom, null);
     }
     try {
       const result = await api.queryEntityView(currentQuery(100));
@@ -80,6 +84,7 @@ export const gridController = {
       store.set(gridItemsAtom, result.items);
       store.set(gridCursorAtom, result.next_cursor);
       store.set(gridTotalCountAtom, result.total_count);
+      store.set(gridTotalSizeBytesAtom, result.total_size_bytes);
     } catch (err) {
       if (v !== gridVersion) return;
       store.set(gridErrorAtom, err instanceof Error ? err.message : String(err));
@@ -105,6 +110,7 @@ export const gridController = {
       store.set(gridItemsAtom, [...store.get(gridItemsAtom), ...result.items]);
       store.set(gridCursorAtom, result.next_cursor);
       store.set(gridTotalCountAtom, result.total_count);
+      store.set(gridTotalSizeBytesAtom, result.total_size_bytes);
     } catch (err) {
       if (v !== gridVersion) return;
       paginationInFlight = null;
@@ -141,6 +147,7 @@ export const gridController = {
             store.set(gridItemsAtom, result.page.items);
             store.set(gridCursorAtom, result.page.next_cursor);
             store.set(gridTotalCountAtom, result.page.total_count);
+            store.set(gridTotalSizeBytesAtom, result.page.total_size_bytes);
           }
           return false;
         case 'full_refresh_required':

@@ -1,5 +1,5 @@
 /**
- * Canvas drawing primitives — ported from legacy v0.5.0-alpha canvasGridPrimitives.ts.
+ * Canvas drawing primitives — shared by base and overlay draw layers.
  */
 
 export const BADGE_H = 18;

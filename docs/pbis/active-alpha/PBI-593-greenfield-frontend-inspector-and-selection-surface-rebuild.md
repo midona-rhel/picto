@@ -1,10 +1,10 @@
-# PBI-593: Greenfield frontend inspector and selection surface rebuild
+# PBI-593: Greenfield frontend persistent inspector and context side surface rebuild
 
 ## Priority
 P1
 
 ## AI-generated caveat
-This document is about rebuilding the inspector and selection-driven side surface in the new frontend. It exists separately because the current inspector is large, stateful, and tightly coupled to old selection/media wiring.
+This document is about rebuilding the persistent inspector/context side surface in the new frontend. It exists separately because the current inspector is large, stateful, and tightly coupled to old selection/media wiring.
 
 ## Lifecycle
 - `Implemented` when the rebuilt inspector and selection surface exist in the new `src/**` tree.
@@ -31,10 +31,18 @@ That should be rebuilt as a smaller, clearer surface after the rebuilt grid exis
 
 ## Product model to encode
 The rebuilt inspector should:
-- consume the rebuilt selection state
+- always be present in grid view
+- consume the rebuilt selection state for entity mode
 - consume canonical entity details and selection summary shapes
+- show current scope context when nothing is selected
 - keep selection-driven actions controller-owned
 - keep layout and rendering separate from data ownership
+
+Locked behavior:
+- entity selection overrides scope mode, but does not control inspector visibility
+- scope mode uses the same inspector grammar as entity mode: preview, name, notes, properties, optional sections
+- folder and smart-folder notes are real persisted metadata
+- system-scope notes are fixed read-only descriptions
 
 The rebuilt inspector should not preserve a separate legacy preview implementation if the same visual object already exists in the rebuilt grid or viewer surface.
 If the inspector preview is just the same rounded media preview with different surrounding controls, it should share that preview primitive.
@@ -51,6 +59,8 @@ Do not start [PBI-585-greenfield-frontend-media-consumption-reset.md](./docs/pbi
 
 ## Acceptance criteria
 - the rebuilt inspector uses the rebuilt selection state
+- the rebuilt inspector is persistent in grid view
+- no-selection mode shows current scope context instead of an empty state
 - metadata and selection summary behavior are stable
 - tag/folder/notes/rating/source-url actions remain correct
 - parity is confirmed against the reference harness

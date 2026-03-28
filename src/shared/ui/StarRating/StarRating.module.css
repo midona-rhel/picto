@@ -1,0 +1,43 @@
+.row {
+  display: flex;
+  align-items: center;
+  height: 20px;
+}
+
+.label {
+  color: var(--color-text-secondary);
+  font-size: 11px;
+  min-width: 64px;
+}
+
+.stars {
+  display: flex;
+  gap: 0;
+  margin-left: auto;
+}
+
+.star {
+  cursor: pointer;
+  width: 16px;
+  height: 20px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  color: inherit;
+}
+
+.active {
+  color: #FF9F0A;
+}
+
+.inactive {
+  color: var(--color-text-secondary);
+  opacity: 0.25;
+}
+
+.disabled {
+  cursor: default;
+}

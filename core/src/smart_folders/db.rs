@@ -18,6 +18,7 @@ pub struct SmartFolder {
     pub parent_id: Option<i64>,
     pub icon: Option<String>,
     pub color: Option<String>,
+    pub notes: Option<String>,
     pub predicate_json: String,
     pub sort_field: Option<String>,
     pub sort_order: Option<String>,
@@ -72,19 +73,21 @@ pub fn create_smart_folder(
     predicate_json: &str,
     icon: Option<&str>,
     color: Option<&str>,
+    notes: Option<&str>,
     sort_field: Option<&str>,
     sort_order: Option<&str>,
 ) -> rusqlite::Result<i64> {
     let now = chrono::Utc::now().to_rfc3339();
     conn.execute(
-        "INSERT INTO smart_folder (name, parent_id, predicate_json, icon, color, sort_field, sort_order, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        "INSERT INTO smart_folder (name, parent_id, predicate_json, icon, color, notes, sort_field, sort_order, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
         params![
             name,
             parent_id,
             predicate_json,
             icon,
             color,
+            notes,
             sort_field,
             sort_order,
             now,
@@ -99,7 +102,7 @@ pub fn get_smart_folder(
     smart_folder_id: i64,
 ) -> rusqlite::Result<Option<SmartFolder>> {
     conn.query_row(
-        "SELECT smart_folder_id, name, parent_id, icon, color, predicate_json, sort_field, sort_order, display_order, created_at, updated_at
+        "SELECT smart_folder_id, name, parent_id, icon, color, notes, predicate_json, sort_field, sort_order, display_order, created_at, updated_at
          FROM smart_folder WHERE smart_folder_id = ?1",
         [smart_folder_id],
         |row| {
@@ -109,12 +112,13 @@ pub fn get_smart_folder(
                 parent_id: row.get(2)?,
                 icon: row.get(3)?,
                 color: row.get(4)?,
-                predicate_json: row.get(5)?,
-                sort_field: row.get(6)?,
-                sort_order: row.get(7)?,
-                display_order: row.get(8)?,
-                created_at: row.get(9)?,
-                updated_at: row.get(10)?,
+                notes: row.get(5)?,
+                predicate_json: row.get(6)?,
+                sort_field: row.get(7)?,
+                sort_order: row.get(8)?,
+                display_order: row.get(9)?,
+                created_at: row.get(10)?,
+                updated_at: row.get(11)?,
             })
         },
     )
@@ -123,7 +127,7 @@ pub fn get_smart_folder(
 
 pub fn list_smart_folders(conn: &Connection) -> rusqlite::Result<Vec<SmartFolder>> {
     let mut stmt = conn.prepare_cached(
-        "SELECT smart_folder_id, name, parent_id, icon, color, predicate_json, sort_field, sort_order, display_order, created_at, updated_at
+        "SELECT smart_folder_id, name, parent_id, icon, color, notes, predicate_json, sort_field, sort_order, display_order, created_at, updated_at
          FROM smart_folder
          ORDER BY COALESCE(parent_id, 0), COALESCE(display_order, smart_folder_id), smart_folder_id",
     )?;
@@ -134,12 +138,13 @@ pub fn list_smart_folders(conn: &Connection) -> rusqlite::Result<Vec<SmartFolder
             parent_id: row.get(2)?,
             icon: row.get(3)?,
             color: row.get(4)?,
-            predicate_json: row.get(5)?,
-            sort_field: row.get(6)?,
-            sort_order: row.get(7)?,
-            display_order: row.get(8)?,
-            created_at: row.get(9)?,
-            updated_at: row.get(10)?,
+            notes: row.get(5)?,
+            predicate_json: row.get(6)?,
+            sort_field: row.get(7)?,
+            sort_order: row.get(8)?,
+            display_order: row.get(9)?,
+            created_at: row.get(10)?,
+            updated_at: row.get(11)?,
         })
     })?;
     rows.collect()
@@ -149,14 +154,15 @@ pub fn update_smart_folder(conn: &Connection, sf: &SmartFolder) -> rusqlite::Res
     let now = chrono::Utc::now().to_rfc3339();
     conn.execute(
         "UPDATE smart_folder SET name = ?1, parent_id = ?2, predicate_json = ?3, icon = ?4, color = ?5,
-         sort_field = ?6, sort_order = ?7, updated_at = ?8
-         WHERE smart_folder_id = ?9",
+         notes = ?6, sort_field = ?7, sort_order = ?8, updated_at = ?9
+         WHERE smart_folder_id = ?10",
         params![
             sf.name,
             sf.parent_id,
             sf.predicate_json,
             sf.icon,
             sf.color,
+            sf.notes,
             sf.sort_field,
             sf.sort_order,
             now,
@@ -832,6 +838,7 @@ impl SqliteDatabase {
         predicate_json: String,
         icon: Option<String>,
         color: Option<String>,
+        notes: Option<String>,
         sort_field: Option<String>,
         sort_order: Option<String>,
     ) -> Result<SmartFolder, String> {
@@ -844,6 +851,7 @@ impl SqliteDatabase {
                     &predicate_json,
                     icon.as_deref(),
                     color.as_deref(),
+                    notes.as_deref(),
                     sort_field.as_deref(),
                     sort_order.as_deref(),
                 )

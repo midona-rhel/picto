@@ -66,8 +66,9 @@ impl ApplicationEngine {
         icon: Option<&str>,
         color: Option<&str>,
         auto_tags: Option<&str>,
+        notes: Option<&str>,
     ) -> Result<(), String> {
-        self.db.update_folder(folder_id, name, icon, color, auto_tags)
+        self.db.update_folder(folder_id, name, icon, color, auto_tags, notes)
     }
 
     pub fn delete_folder(&self, folder_id: i64) -> Result<(), String> {
@@ -92,5 +93,16 @@ impl ApplicationEngine {
         moves: &[(i64, i64)],
     ) -> Result<(), String> {
         self.db.reorder_folder_items(folder_id, moves)
+    }
+
+    pub fn upsert_folder_record(
+        &self,
+        record: &crate::db::types::FolderMirrorRecord,
+    ) -> Result<(), String> {
+        self.db.upsert_folder_record(record)
+    }
+
+    pub fn delete_folder_record(&self, folder_id: i64) -> Result<(), String> {
+        self.db.delete_folder(folder_id)
     }
 }

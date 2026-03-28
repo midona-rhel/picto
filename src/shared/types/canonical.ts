@@ -140,6 +140,7 @@ export interface EntityViewPage {
   items: CanonicalEntityGridItem[];
   next_cursor: string | null;
   total_count: number | null;
+  total_size_bytes: number | null;
 }
 
 // ── Sidebar types ────────────────────────────────────────────────

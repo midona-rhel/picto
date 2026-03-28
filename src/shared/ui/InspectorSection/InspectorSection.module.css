@@ -1,0 +1,65 @@
+.section {
+  width: 100%;
+  border-top: 1px solid var(--color-border-secondary);
+  padding-top: 10px;
+  margin-top: 10px;
+  font-size: 12px;
+}
+
+.header {
+  display: flex;
+  height: 26px;
+  align-items: center;
+  cursor: pointer;
+  user-select: none;
+  color: var(--color-text-tertiary);
+}
+
+.header:hover {
+  color: var(--color-text-primary);
+}
+
+.title {
+  font-weight: var(--font-weight-bold, 600);
+  font-size: 12px;
+}
+
+.count {
+  font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', ui-monospace, monospace;
+  margin-left: 2px;
+}
+
+.chevron {
+  margin-left: auto;
+  width: 24px;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0.3;
+  transform: rotate(0deg);
+  transition: transform 200ms cubic-bezier(0.4, 0, 0.22, 1),
+              opacity 200ms cubic-bezier(0.4, 0, 0.22, 1);
+}
+
+.chevronExpanded {
+  opacity: 0;
+  transform: rotate(90deg);
+}
+
+.section:hover .chevron {
+  opacity: 0.5;
+}
+
+.header:hover .chevron {
+  opacity: 1 !important;
+}
+
+.content {
+  margin-top: 4px;
+}
+
+.content:empty {
+  display: none;
+  margin-top: 0;
+}

@@ -3,7 +3,7 @@
  */
 
 import { useEffect, useRef, useState, useCallback } from 'react';
-import { useAtomValue } from 'jotai';
+import { useAtomValue, useSetAtom } from 'jotai';
 import { IconPhotoOff } from '@tabler/icons-react';
 import { activeNodeIdAtom } from '../../state/navigation';
 import {
@@ -15,9 +15,14 @@ import {
   gridTargetSizeAtom,
   gridShowNameAtom,
   gridShowExtensionAtom,
+  gridSearchTextAtom,
   gridScopeLabelAtom,
+  gridTotalCountAtom,
+  gridTotalSizeBytesAtom,
 } from '../../state/grid';
 import { gridController } from '../../controllers/gridController';
+import { selectedEntityHashAtom } from '../../state/selection';
+import { displayedGridSnapshotAtom } from '../../state/inspector';
 import { CanvasGrid } from './canvas/CanvasGrid';
 import type { BaseScope } from '../../shared/types/canonical';
 import styles from './GridScreen.module.css';
@@ -59,6 +64,12 @@ export function GridScreen() {
   const showName = useAtomValue(gridShowNameAtom);
   const showExtension = useAtomValue(gridShowExtensionAtom);
   const scopeLabel = useAtomValue(gridScopeLabelAtom);
+  const searchText = useAtomValue(gridSearchTextAtom);
+  const totalCount = useAtomValue(gridTotalCountAtom);
+  const totalSizeBytes = useAtomValue(gridTotalSizeBytesAtom);
+  const selectedHash = useAtomValue(selectedEntityHashAtom);
+  const setSelectedHash = useSetAtom(selectedEntityHashAtom);
+  const setDisplayedGridSnapshot = useSetAtom(displayedGridSnapshotAtom);
 
   const [transitionPhase, setTransitionPhase] = useState<'idle' | 'fading_out' | 'waiting' | 'fading_in'>('idle');
   const lastScrollTopRef = useRef(0);
@@ -162,6 +173,31 @@ export function GridScreen() {
     }
   }, []);
 
+  useEffect(() => {
+    if (!isGridScope) {
+      if (transitionPhase === 'idle') setDisplayedGridSnapshot(null);
+      return;
+    }
+    if (transitionPhase === 'idle') {
+      setDisplayedGridSnapshot({
+        nodeId: activeNodeId,
+        previewItems: items.slice(0, 4),
+        totalCount,
+        totalSizeBytes,
+        searchText: searchText.trim(),
+      });
+    }
+  }, [
+    activeNodeId,
+    isGridScope,
+    items,
+    searchText,
+    setDisplayedGridSnapshot,
+    totalCount,
+    totalSizeBytes,
+    transitionPhase,
+  ]);
+
   const incomingHidden = transitionPhase === 'waiting';
   const incomingFadingOut = transitionPhase === 'fading_out';
   const incomingFadingIn = transitionPhase === 'fading_in';
@@ -200,9 +236,10 @@ export function GridScreen() {
         showName={showName}
         showExtension={showExtension}
         suppressTileReveal={transitionPhase !== 'idle'}
+        selectedEntityHash={selectedHash}
         onFirstPaint={beginFadeIn}
         onScrollTopChange={(scrollTop) => { lastScrollTopRef.current = scrollTop; }}
-        onTileClick={(_index, _item) => { /* TODO: selection / viewer — PBI-593 */ }}
+        onTileClick={(_index, item) => { setSelectedHash(item.entity_hash); }}
         onLoadMore={cursor ? () => gridController.loadNextPage() : undefined}
       />
     );

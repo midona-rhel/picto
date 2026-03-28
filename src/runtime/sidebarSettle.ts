@@ -44,6 +44,7 @@ interface SidebarNodePatch {
   icon?: string;
   color?: string;
   count?: number | null;
+  meta_json?: string | null;
 }
 
 interface StateChanges {

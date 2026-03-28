@@ -68,6 +68,40 @@ pub struct CollectionMembershipChange {
     pub removed: Vec<i64>,
 }
 
+#[derive(Debug, Clone)]
+pub struct FolderMirrorRecord {
+    pub folder_id: i64,
+    pub name: String,
+    pub parent_id: Option<i64>,
+    pub icon: Option<String>,
+    pub color: Option<String>,
+    pub notes: Option<String>,
+    pub sort_order: Option<i64>,
+    pub auto_tags_json: String,
+    pub watch_path: Option<String>,
+    pub watch_enabled: bool,
+    pub watch_subfolders: bool,
+    pub watch_import_status_mode: String,
+    pub date_added: String,
+    pub date_modified: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct SmartFolderMirrorRecord {
+    pub smart_folder_id: i64,
+    pub name: String,
+    pub parent_id: Option<i64>,
+    pub icon: Option<String>,
+    pub color: Option<String>,
+    pub notes: Option<String>,
+    pub predicate_json: String,
+    pub sort_field: Option<String>,
+    pub sort_order: Option<String>,
+    pub display_order: Option<i64>,
+    pub date_added: String,
+    pub date_modified: String,
+}
+
 // ── Query/projection types (public boundary) ────────────────────
 
 /// Grid tile payload.
@@ -102,6 +136,7 @@ pub struct EntityViewPage {
     pub items: Vec<EntityGridItem>,
     pub next_cursor: Option<String>,
     pub total_count: Option<i64>,
+    pub total_size_bytes: Option<i64>,
 }
 
 /// Scope kind for grid queries.

@@ -11,10 +11,12 @@ import { IconLayoutSidebar } from '@tabler/icons-react';
 import { Sidebar } from '../features/sidebar/Sidebar';
 import { GridScreen } from '../features/grid/GridScreen';
 import { GridToolbar } from '../features/grid/GridToolbar';
+import { Inspector } from '../features/inspector/Inspector';
 import { sidebarCollapsedAtom, toggleSidebarAtom } from '../state/navigation';
 import { gridActiveAtom } from '../state/grid';
 import { startSidebarSettle } from '../runtime/sidebarSettle';
 import { startGridSettle } from '../runtime/gridSettle';
+import { startInspectorSync } from '../controllers/inspectorController';
 import { zoomController } from '../controllers/zoomController';
 import styles from './AppShell.module.css';
 
@@ -24,6 +26,7 @@ function ensureSettle() {
     settleStarted = true;
     startSidebarSettle();
     startGridSettle();
+    startInspectorSync();
   }
 }
 
@@ -48,7 +51,7 @@ export function AppShell() {
 
   return (
     <div className={styles.shell}>
-      {/* Titlebar — drag region, sidebar-colored left + main-colored right */}
+      {/* Titlebar — drag region with 3 sections: sidebar | main | inspector */}
       <div className={styles.titlebar}>
         <div className={sidebarCollapsed ? styles.titlebarLeftCollapsed : styles.titlebarLeft}>
           <div className={styles.titlebarActions}>
@@ -57,12 +60,13 @@ export function AppShell() {
             </button>
           </div>
         </div>
-        <div className={styles.titlebarRight}>
+        <div className={styles.titlebarCenter}>
           {gridActive && <GridToolbar />}
         </div>
+        {gridActive && <div className={styles.titlebarInspector} />}
       </div>
 
-      {/* Body — sidebar + main */}
+      {/* Body — sidebar + main + inspector */}
       <div className={styles.body}>
         {!sidebarCollapsed && (
           <div className={styles.sidebar}>
@@ -72,6 +76,11 @@ export function AppShell() {
         <div className={styles.main}>
           <GridScreen />
         </div>
+        {gridActive && (
+          <div className={styles.inspector}>
+            <Inspector />
+          </div>
+        )}
       </div>
     </div>
   );

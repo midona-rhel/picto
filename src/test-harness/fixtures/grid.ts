@@ -197,6 +197,7 @@ export const gridPageMixed: EntityViewPage = {
   items: [jpegImage, pngImage, videoMp4, animatedGif, collection, videoWithAudio, noName],
   next_cursor: '2026-03-18T09:00:00Z|e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6',
   total_count: 1247,
+  total_size_bytes: 18_130_000,
 };
 
 /** Empty results (no matching items). */
@@ -204,6 +205,7 @@ export const gridPageEmpty: EntityViewPage = {
   items: [],
   next_cursor: null,
   total_count: 0,
+  total_size_bytes: 0,
 };
 
 /** Single item result. */
@@ -211,6 +213,7 @@ export const gridPageSingle: EntityViewPage = {
   items: [jpegImage],
   next_cursor: null,
   total_count: 1,
+  total_size_bytes: 2_400_000,
 };
 
 /** Last page (no more pages). */
@@ -218,6 +221,7 @@ export const gridPageLast: EntityViewPage = {
   items: [noName],
   next_cursor: null,
   total_count: 1247,
+  total_size_bytes: 350_000,
 };
 
 /** Inbox items (status=0). */
@@ -225,6 +229,7 @@ export const gridPageInbox: EntityViewPage = {
   items: [noThumbnail],
   next_cursor: null,
   total_count: 1,
+  total_size_bytes: 0,
 };
 
 // ── Matching queries ─────────────────────────────────────────────

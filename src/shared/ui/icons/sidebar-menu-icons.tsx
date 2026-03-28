@@ -6,9 +6,11 @@
  */
 
 interface IconProps {
-  size?: number;
-  stroke?: number;
+  size?: number | string;
+  stroke?: number | string;
   color?: string;
+  fill?: string;
+  fillOpacity?: number;
   className?: string;
 }
 
@@ -17,6 +19,8 @@ function defaults(props: IconProps) {
     size: props.size ?? 24,
     stroke: props.stroke ?? 1.5,
     color: props.color ?? 'currentColor',
+    fill: props.fill ?? 'none',
+    fillOpacity: props.fillOpacity ?? undefined,
   };
 }
 
@@ -180,6 +184,54 @@ export function IconChangeColor(props: IconProps) {
       strokeLinecap="round" strokeLinejoin="round" className={props.className}>
       <circle cx="12" cy="12" r="9" />
       <circle cx="12" cy="12" r="5" fill={color} fillOpacity="0.2" />
+    </svg>
+  );
+}
+
+/**
+ * Custom folder-question icon — modified from Tabler.
+ * - Right stroke of folder shortened (v1.5 instead of v2.5)
+ * - ? curve moved up 1px
+ * - Vertical stem added from curve down toward dot
+ */
+export function IconFolderQuestionCustom(props: IconProps) {
+  const { size, stroke, color, fill, fillOpacity } = defaults(props);
+  return (
+    <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24"
+      fill={fill} fillOpacity={fillOpacity} stroke={color} strokeWidth={stroke}
+      strokeLinecap="round" strokeLinejoin="round" className={props.className}>
+      {/* Folder shape — right side shortened from v2.5 to v1.5 */}
+      <path d="M15 19h-10a2 2 0 0 1 -2 -2v-11a2 2 0 0 1 2 -2h4l3 3h7a2 2 0 0 1 2 2v1.5" />
+      {/* ? curve — moved up 1px */}
+      <path d="M19 18a2.003 2.003 0 0 0 .914 -3.782a1.98 1.98 0 0 0 -2.414 .483" />
+      {/* Vertical stem from curve bottom toward dot */}
+      <path d="M19 18v2.5" />
+      {/* Dot */}
+      <path d="M19 22v.01" />
+    </svg>
+  );
+}
+
+/**
+ * Custom bookmark-question icon — modified from Tabler.
+ * - Right stroke of bookmark shortened (v3 instead of v4)
+ * - ? curve moved up 1px
+ * - Vertical stem added from curve down toward dot
+ */
+export function IconBookmarkQuestionCustom(props: IconProps) {
+  const { size, stroke, color, fill, fillOpacity } = defaults(props);
+  return (
+    <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24"
+      fill={fill} fillOpacity={fillOpacity} stroke={color} strokeWidth={stroke}
+      strokeLinecap="round" strokeLinejoin="round" className={props.className}>
+      {/* Bookmark shape — right side shortened from v4 to v3 */}
+      <path d="M15 19l-3 -2l-6 4v-14a4 4 0 0 1 4 -4h4a4 4 0 0 1 4 4v3" />
+      {/* ? curve — moved up 1px */}
+      <path d="M19 18a2.003 2.003 0 0 0 .914 -3.782a1.98 1.98 0 0 0 -2.414 .483" />
+      {/* Vertical stem from curve bottom toward dot */}
+      <path d="M19 18v2.5" />
+      {/* Dot */}
+      <path d="M19 22v.01" />
     </svg>
   );
 }

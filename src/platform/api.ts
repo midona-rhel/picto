@@ -6,7 +6,7 @@
 import { invoke } from './ipc';
 import type {
   SidebarTreeResponse, EntityViewQuery, EntityViewPage,
-  CanonicalEntityGridItem,
+  CanonicalEntityGridItem, CanonicalEntityDetails,
 } from '../shared/types/canonical';
 
 // ── Grid ────────────────────────────────────────────────────────
@@ -35,6 +35,12 @@ export function reconcileEntityView(
     visible_hashes: visibleHashes,
     metadata_only: metadataOnly,
   } as unknown as Record<string, unknown>);
+}
+
+// ── Inspector / entity details ───────────────────────────────────
+
+export function getEntityDetails(entityHash: string): Promise<CanonicalEntityDetails | null> {
+  return invoke<CanonicalEntityDetails | null>('get_entity_details', { entity_hash: entityHash });
 }
 
 // ── Sidebar ──────────────────────────────────────────────────────
@@ -70,6 +76,7 @@ export function updateFolder(folderId: number, patch: {
   name?: string;
   icon?: string | null;
   color?: string | null;
+  notes?: string | null;
 }): Promise<void> {
   return invoke<void>('update_folder', { folder_id: folderId, ...patch });
 }
@@ -93,8 +100,27 @@ export function deleteSmartFolder(id: string): Promise<void> {
 }
 
 // NOTE: update_smart_folder requires a full SmartFolder struct.
-// No partial patch command exists. Rename/color/icon for smart folders
-// are blocked until the backend adds partial update support.
+// No partial patch command exists.
+
+export function updateSmartFolder(params: {
+  id: string;
+  folder: {
+    smart_folder_id: number;
+    name: string;
+    parent_id: number | null;
+    icon: string | null;
+    color: string | null;
+    notes: string | null;
+    predicate_json: string;
+    sort_field: string | null;
+    sort_order: string | null;
+    display_order: number | null;
+    created_at: string | null;
+    updated_at: string | null;
+  };
+}): Promise<void> {
+  return invoke<void>('update_smart_folder', params);
+}
 
 export function moveSmartFolder(
   smartFolderId: number,

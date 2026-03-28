@@ -3,6 +3,8 @@
 
 use rusqlite::{params, Connection};
 
+use crate::db::types::SmartFolderMirrorRecord;
+
 pub fn create_smart_folder(
     conn: &Connection,
     name: &str,
@@ -10,12 +12,13 @@ pub fn create_smart_folder(
     predicate_json: &str,
     icon: Option<&str>,
     color: Option<&str>,
+    notes: Option<&str>,
     now: &str,
 ) -> rusqlite::Result<i64> {
     conn.execute(
-        "INSERT INTO smart_folder (name, parent_id, predicate_json, icon, color, date_added, date_modified)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)",
-        params![name, parent_id, predicate_json, icon, color, now],
+        "INSERT INTO smart_folder (name, parent_id, predicate_json, icon, color, notes, date_added, date_modified)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7)",
+        params![name, parent_id, predicate_json, icon, color, notes, now],
     )?;
     Ok(conn.last_insert_rowid())
 }
@@ -27,6 +30,7 @@ pub fn update_smart_folder(
     predicate_json: Option<&str>,
     icon: Option<&str>,
     color: Option<&str>,
+    notes: Option<&str>,
     sort_field: Option<&str>,
     sort_order: Option<&str>,
     now: &str,
@@ -43,6 +47,9 @@ pub fn update_smart_folder(
     if let Some(c) = color {
         conn.execute("UPDATE smart_folder SET color = ?1, date_modified = ?2 WHERE smart_folder_id = ?3", params![c, now, smart_folder_id])?;
     }
+    if let Some(n) = notes {
+        conn.execute("UPDATE smart_folder SET notes = ?1, date_modified = ?2 WHERE smart_folder_id = ?3", params![n, now, smart_folder_id])?;
+    }
     if let Some(sf) = sort_field {
         conn.execute("UPDATE smart_folder SET sort_field = ?1 WHERE smart_folder_id = ?2", params![sf, smart_folder_id])?;
     }
@@ -54,6 +61,47 @@ pub fn update_smart_folder(
 
 pub fn delete_smart_folder(conn: &Connection, smart_folder_id: i64) -> rusqlite::Result<()> {
     conn.execute("DELETE FROM smart_folder WHERE smart_folder_id = ?1", [smart_folder_id])?;
+    Ok(())
+}
+
+pub fn upsert_smart_folder_record(
+    conn: &Connection,
+    record: &SmartFolderMirrorRecord,
+) -> rusqlite::Result<()> {
+    conn.execute(
+        "INSERT INTO smart_folder (
+            smart_folder_id, name, parent_id, icon, color, notes, predicate_json,
+            sort_field, sort_order, display_order, date_added, date_modified
+         ) VALUES (
+            ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12
+         )
+         ON CONFLICT(smart_folder_id) DO UPDATE SET
+            name = excluded.name,
+            parent_id = excluded.parent_id,
+            icon = excluded.icon,
+            color = excluded.color,
+            notes = excluded.notes,
+            predicate_json = excluded.predicate_json,
+            sort_field = excluded.sort_field,
+            sort_order = excluded.sort_order,
+            display_order = excluded.display_order,
+            date_added = excluded.date_added,
+            date_modified = excluded.date_modified",
+        params![
+            record.smart_folder_id,
+            record.name,
+            record.parent_id,
+            record.icon,
+            record.color,
+            record.notes,
+            record.predicate_json,
+            record.sort_field,
+            record.sort_order,
+            record.display_order,
+            record.date_added,
+            record.date_modified,
+        ],
+    )?;
     Ok(())
 }
 

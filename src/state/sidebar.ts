@@ -210,6 +210,17 @@ interface SidebarNodePatchPayload {
   count?: number | null;
   selectable?: boolean;
   freshness?: string;
+  meta_json?: string | null;
+}
+
+function parseMetaJson(metaJson: string | null | undefined): Record<string, unknown> | null {
+  if (metaJson == null) return null;
+  try {
+    const parsed = JSON.parse(metaJson);
+    return parsed && typeof parsed === 'object' ? parsed as Record<string, unknown> : null;
+  } catch {
+    return null;
+  }
 }
 
 /** Apply sidebar node patches from state_changed event.
@@ -241,6 +252,7 @@ export const applySidebarNodePatchesAtom = atom(
         if (patch.count !== undefined) updated.count = patch.count;
         if (patch.sort_order !== undefined) updated.sort_order = patch.sort_order;
         if (patch.freshness !== undefined) updated.freshness = patch.freshness;
+        if ('meta_json' in patch) updated.meta = parseMetaJson(patch.meta_json);
         return updated;
       });
     }
@@ -260,6 +272,7 @@ export const applySidebarNodePatchesAtom = atom(
           count: u.count ?? 0,
           freshness: u.freshness ?? 'exact',
           selectable: u.selectable ?? true,
+          meta: parseMetaJson(u.meta_json),
         };
         if (existingIds.has(u.node_id)) {
           // Replace existing

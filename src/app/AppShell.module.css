@@ -35,7 +35,7 @@
   box-shadow: 0 1px 0 0 var(--color-border-secondary);
 }
 
-.titlebarRight {
+.titlebarCenter {
   flex: 1;
   min-width: 0;
   display: flex;
@@ -43,6 +43,13 @@
   padding: 0 8px;
   background: var(--color-bg-app);
   box-shadow: 0 1px 0 0 var(--color-border-secondary);
+}
+
+.titlebarInspector {
+  flex-shrink: 0;
+  width: 320px;
+  background: var(--color-surface-1);
+  border-left: 1px solid var(--color-border-primary);
 }
 
 .titlebarActions {
@@ -93,5 +100,14 @@
   flex: 1;
   min-width: 0;
   height: 100%;
+  overflow: hidden;
+}
+
+.inspector {
+  flex-shrink: 0;
+  width: 320px;
+  height: 100%;
+  background: var(--color-surface-1);
+  border-left: 1px solid var(--color-border-primary);
   overflow: hidden;
 }

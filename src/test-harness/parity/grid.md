@@ -32,17 +32,15 @@ use the same backend path.
 - [x] Video duration badge (top-right, dark rounded rect, white text)
 - [ ] Audio indicator for video tiles — **not implemented** in canvas draw path
 - [x] Collection member count badge
-- [x] Extension badge (bottom-right, when `showExtension` enabled)
-- [x] Rating stars at top-left (gold, repeated ★ character)
-- [x] Name text below tile (truncated with ellipsis, when `showName` enabled)
-- [ ] Resolution text below name — **not implemented**, no `gridShowResolutionAtom`
-- [x] Glass inner border (`rgba(255,255,255,0.15)`, 1px inset, 8px radius)
-- [x] Center-crop image drawing (`drawImageCover`) with rounded clip
-- [x] Animated thumbnail reveal (fade-in 250ms over dominant color placeholder)
-- [x] Staggered reveal timing (max 54 concurrent fades)
-- [x] Collection thumbnails use primary member hash (no 404 for collections)
-- [x] Placeholder skipped once image fully revealed (no wasted draws)
-- [x] VRAM-budgeted image cache (1GB cap, LRU eviction)
+- [x] Extension badge (top-left, hidden for jpg/jpeg/png/webp — matches tagged release)
+- [x] Name text below tile (centered, truncated with ellipsis, name + optional extension)
+- [x] Resolution text below name (when `showResolution` enabled)
+- [x] Glass inner border (`rgba(255,255,255,0.2)`, 1px inset, 4px radius — matches tagged release)
+- [x] Cover crop for waterfall/justified, contain for grid mode (matches tagged release default)
+- [x] Two-phase reveal animation (image fade 250ms, placeholder fade 250ms — matches tagged release)
+- [x] Collection thumbnails use primary member hash
+- [ ] Rating stars — **not in tagged release**, intentionally removed for parity
+- [ ] Audio indicator for video tiles — **not in tagged release draw path**
 
 ## Layout
 

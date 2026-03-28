@@ -122,8 +122,8 @@ pub fn query_entity_view(
     let limit_idx = bound.len() + 1;
     bound.push(Box::new(limit));
 
-    // Count (without cursor/limit) — reuses the same scope and filter logic
-    let total_count = {
+    // Aggregates (without cursor/limit) — reuses the same scope and filter logic
+    let (total_count, total_size_bytes) = {
         let mut cw: Vec<String> = vec!["1=1".into()];
         if !matches!(q.base_scope.kind, ScopeKind::Collection) {
             cw.push("me.parent_collection_entity_id IS NULL".into());
@@ -132,7 +132,10 @@ pub fn query_entity_view(
         apply_scope(conn, &q.base_scope, &mut cw, &mut count_bound, preresolved_ids);
         apply_filters(&q.filters, &mut cw, &mut count_bound);
         let count_sql = format!(
-            "SELECT COUNT(*) FROM media_entity me
+            "SELECT
+                COUNT(*),
+                COALESCE(SUM(COALESCE(mf.size_bytes, me.total_size_bytes, 0)), 0)
+             FROM media_entity me
              LEFT JOIN single_media_entity sme ON sme.entity_id = me.entity_id
              LEFT JOIN media_file mf ON mf.file_id = sme.file_id
              LEFT JOIN media_entity pm ON pm.entity_id = me.primary_member_entity_id
@@ -142,7 +145,9 @@ pub fn query_entity_view(
             cw.join(" AND ")
         );
         let refs: Vec<&dyn ToSql> = count_bound.iter().map(|b| b.as_ref()).collect();
-        conn.query_row(&count_sql, refs.as_slice(), |row| row.get::<_, i64>(0))?
+        conn.query_row(&count_sql, refs.as_slice(), |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?))
+        })?
     };
 
     // Data query — reads both EntityGridItem and entity_id per row
@@ -183,6 +188,7 @@ pub fn query_entity_view(
         items,
         next_cursor,
         total_count: Some(total_count),
+        total_size_bytes: Some(total_size_bytes),
     })
 }
 

@@ -38,6 +38,7 @@ The rebuilt grid screen should have:
 - one results/pagination model
 - one renderer boundary
 - one viewer bridge
+- one stable right-hand inspector rail with its own titlebar segment
 
 The rebuilt grid screen should not treat runtime changes as “always refetch the whole current grid”.
 It should:
@@ -67,6 +68,7 @@ Do not start [PBI-593-greenfield-frontend-inspector-and-selection-surface-rebuil
 - the rebuilt grid screen is a clean feature root
 - canonical query/selection semantics are used by default
 - selection-driven actions target what the user actually selected
+- the activated grid screen includes a stable right-hand inspector/context rail
 - parity is confirmed against the reference harness
 - the rebuilt grid no longer depends on the legacy `ImageGrid.tsx` architecture
 - tile/chrome primitives that are visually/functionally equivalent to inspector or preview surfaces are shared instead of re-implemented

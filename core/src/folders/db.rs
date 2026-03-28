@@ -18,6 +18,7 @@ pub struct Folder {
     pub parent_id: Option<i64>,
     pub icon: Option<String>,
     pub color: Option<String>,
+    pub notes: Option<String>,
     pub auto_tags: Vec<String>,
     pub watch_path: Option<String>,
     pub watch_enabled: bool,
@@ -33,6 +34,7 @@ pub struct NewFolder {
     pub parent_id: Option<i64>,
     pub icon: Option<String>,
     pub color: Option<String>,
+    pub notes: Option<String>,
     pub auto_tags: Vec<String>,
 }
 
@@ -58,13 +60,14 @@ pub fn create_folder(conn: &Connection, f: &NewFolder) -> rusqlite::Result<i64> 
     let sort_order = max_order.unwrap_or(0) + 1;
 
     conn.execute(
-        "INSERT INTO folder (name, parent_id, icon, color, auto_tags, watch_path, watch_enabled, watch_subfolders, watch_import_status_mode, sort_order, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, NULL, 0, 0, 'inherit', ?6, ?7, ?8)",
+        "INSERT INTO folder (name, parent_id, icon, color, notes, auto_tags, watch_path, watch_enabled, watch_subfolders, watch_import_status_mode, sort_order, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL, 0, 0, 'inherit', ?7, ?8, ?9)",
         params![
             f.name,
             f.parent_id,
             f.icon,
             f.color,
+            f.notes,
             encode_auto_tags(&f.auto_tags),
             sort_order,
             now,
@@ -76,7 +79,7 @@ pub fn create_folder(conn: &Connection, f: &NewFolder) -> rusqlite::Result<i64> 
 
 pub fn get_folder(conn: &Connection, folder_id: i64) -> rusqlite::Result<Option<Folder>> {
     conn.query_row(
-        "SELECT folder_id, name, parent_id, icon, color, auto_tags, watch_path, watch_enabled, watch_subfolders, watch_import_status_mode, sort_order, created_at, updated_at
+        "SELECT folder_id, name, parent_id, icon, color, notes, auto_tags, watch_path, watch_enabled, watch_subfolders, watch_import_status_mode, sort_order, created_at, updated_at
          FROM folder WHERE folder_id = ?1",
         [folder_id],
         |row| {
@@ -86,14 +89,15 @@ pub fn get_folder(conn: &Connection, folder_id: i64) -> rusqlite::Result<Option<
                 parent_id: row.get(2)?,
                 icon: row.get(3)?,
                 color: row.get(4)?,
-                auto_tags: decode_auto_tags(row.get(5)?),
-                watch_path: row.get(6)?,
-                watch_enabled: row.get::<_, i64>(7)? != 0,
-                watch_subfolders: row.get::<_, i64>(8)? != 0,
-                watch_import_status_mode: row.get(9)?,
-                sort_order: row.get(10)?,
-                created_at: row.get(11)?,
-                updated_at: row.get(12)?,
+                notes: row.get(5)?,
+                auto_tags: decode_auto_tags(row.get(6)?),
+                watch_path: row.get(7)?,
+                watch_enabled: row.get::<_, i64>(8)? != 0,
+                watch_subfolders: row.get::<_, i64>(9)? != 0,
+                watch_import_status_mode: row.get(10)?,
+                sort_order: row.get(11)?,
+                created_at: row.get(12)?,
+                updated_at: row.get(13)?,
             })
         },
     )
@@ -102,7 +106,7 @@ pub fn get_folder(conn: &Connection, folder_id: i64) -> rusqlite::Result<Option<
 
 pub fn list_folders(conn: &Connection) -> rusqlite::Result<Vec<Folder>> {
     let mut stmt = conn.prepare_cached(
-        "SELECT folder_id, name, parent_id, icon, color, auto_tags, watch_path, watch_enabled, watch_subfolders, watch_import_status_mode, sort_order, created_at, updated_at
+        "SELECT folder_id, name, parent_id, icon, color, notes, auto_tags, watch_path, watch_enabled, watch_subfolders, watch_import_status_mode, sort_order, created_at, updated_at
          FROM folder ORDER BY sort_order",
     )?;
     let rows = stmt.query_map([], |row| {
@@ -112,14 +116,15 @@ pub fn list_folders(conn: &Connection) -> rusqlite::Result<Vec<Folder>> {
             parent_id: row.get(2)?,
             icon: row.get(3)?,
             color: row.get(4)?,
-            auto_tags: decode_auto_tags(row.get(5)?),
-            watch_path: row.get(6)?,
-            watch_enabled: row.get::<_, i64>(7)? != 0,
-            watch_subfolders: row.get::<_, i64>(8)? != 0,
-            watch_import_status_mode: row.get(9)?,
-            sort_order: row.get(10)?,
-            created_at: row.get(11)?,
-            updated_at: row.get(12)?,
+            notes: row.get(5)?,
+            auto_tags: decode_auto_tags(row.get(6)?),
+            watch_path: row.get(7)?,
+            watch_enabled: row.get::<_, i64>(8)? != 0,
+            watch_subfolders: row.get::<_, i64>(9)? != 0,
+            watch_import_status_mode: row.get(10)?,
+            sort_order: row.get(11)?,
+            created_at: row.get(12)?,
+            updated_at: row.get(13)?,
         })
     })?;
     rows.collect()
@@ -131,16 +136,18 @@ pub fn update_folder(
     name: &str,
     icon: Option<&str>,
     color: Option<&str>,
+    notes: Option<&str>,
     auto_tags: &[String],
 ) -> rusqlite::Result<()> {
     let now = chrono::Utc::now().to_rfc3339();
     conn.execute(
-        "UPDATE folder SET name = ?1, icon = ?2, color = ?3, auto_tags = ?4, updated_at = ?5
-         WHERE folder_id = ?6",
+        "UPDATE folder SET name = ?1, icon = ?2, color = ?3, notes = ?4, auto_tags = ?5, updated_at = ?6
+         WHERE folder_id = ?7",
         params![
             name,
             icon,
             color,
+            notes,
             encode_auto_tags(auto_tags),
             now,
             folder_id
@@ -198,7 +205,7 @@ pub fn get_folder_by_watch_path(
     watch_path: &str,
 ) -> rusqlite::Result<Option<Folder>> {
     conn.query_row(
-        "SELECT folder_id, name, parent_id, icon, color, auto_tags, watch_path, watch_enabled, watch_subfolders, watch_import_status_mode, sort_order, created_at, updated_at
+        "SELECT folder_id, name, parent_id, icon, color, notes, auto_tags, watch_path, watch_enabled, watch_subfolders, watch_import_status_mode, sort_order, created_at, updated_at
          FROM folder
          WHERE watch_path = ?1",
         [watch_path],
@@ -209,14 +216,15 @@ pub fn get_folder_by_watch_path(
                 parent_id: row.get(2)?,
                 icon: row.get(3)?,
                 color: row.get(4)?,
-                auto_tags: decode_auto_tags(row.get(5)?),
-                watch_path: row.get(6)?,
-                watch_enabled: row.get::<_, i64>(7)? != 0,
-                watch_subfolders: row.get::<_, i64>(8)? != 0,
-                watch_import_status_mode: row.get(9)?,
-                sort_order: row.get(10)?,
-                created_at: row.get(11)?,
-                updated_at: row.get(12)?,
+                notes: row.get(5)?,
+                auto_tags: decode_auto_tags(row.get(6)?),
+                watch_path: row.get(7)?,
+                watch_enabled: row.get::<_, i64>(8)? != 0,
+                watch_subfolders: row.get::<_, i64>(9)? != 0,
+                watch_import_status_mode: row.get(10)?,
+                sort_order: row.get(11)?,
+                created_at: row.get(12)?,
+                updated_at: row.get(13)?,
             })
         },
     )
@@ -225,10 +233,10 @@ pub fn get_folder_by_watch_path(
 
 pub fn list_watched_folders(conn: &Connection) -> rusqlite::Result<Vec<Folder>> {
     let mut stmt = conn.prepare_cached(
-        "SELECT folder_id, name, parent_id, icon, color, auto_tags, watch_path, watch_enabled, watch_subfolders, watch_import_status_mode, sort_order, created_at, updated_at
+        "SELECT folder_id, name, parent_id, icon, color, notes, auto_tags, watch_path, watch_enabled, watch_subfolders, watch_import_status_mode, sort_order, created_at, updated_at
          FROM folder
          WHERE watch_path IS NOT NULL
-           AND watch_enabled = 1
+          AND watch_enabled = 1
          ORDER BY folder_id",
     )?;
     let rows = stmt.query_map([], |row| {
@@ -238,14 +246,15 @@ pub fn list_watched_folders(conn: &Connection) -> rusqlite::Result<Vec<Folder>> 
             parent_id: row.get(2)?,
             icon: row.get(3)?,
             color: row.get(4)?,
-            auto_tags: decode_auto_tags(row.get(5)?),
-            watch_path: row.get(6)?,
-            watch_enabled: row.get::<_, i64>(7)? != 0,
-            watch_subfolders: row.get::<_, i64>(8)? != 0,
-            watch_import_status_mode: row.get(9)?,
-            sort_order: row.get(10)?,
-            created_at: row.get(11)?,
-            updated_at: row.get(12)?,
+            notes: row.get(5)?,
+            auto_tags: decode_auto_tags(row.get(6)?),
+            watch_path: row.get(7)?,
+            watch_enabled: row.get::<_, i64>(8)? != 0,
+            watch_subfolders: row.get::<_, i64>(9)? != 0,
+            watch_import_status_mode: row.get(10)?,
+            sort_order: row.get(11)?,
+            created_at: row.get(12)?,
+            updated_at: row.get(13)?,
         })
     })?;
     rows.collect()
@@ -257,7 +266,7 @@ pub fn find_child_folder_by_name(
     name: &str,
 ) -> rusqlite::Result<Option<Folder>> {
     conn.query_row(
-        "SELECT folder_id, name, parent_id, icon, color, auto_tags, watch_path, watch_enabled, watch_subfolders, watch_import_status_mode, sort_order, created_at, updated_at
+        "SELECT folder_id, name, parent_id, icon, color, notes, auto_tags, watch_path, watch_enabled, watch_subfolders, watch_import_status_mode, sort_order, created_at, updated_at
          FROM folder
          WHERE parent_id IS ?1
            AND name = ?2
@@ -271,14 +280,15 @@ pub fn find_child_folder_by_name(
                 parent_id: row.get(2)?,
                 icon: row.get(3)?,
                 color: row.get(4)?,
-                auto_tags: decode_auto_tags(row.get(5)?),
-                watch_path: row.get(6)?,
-                watch_enabled: row.get::<_, i64>(7)? != 0,
-                watch_subfolders: row.get::<_, i64>(8)? != 0,
-                watch_import_status_mode: row.get(9)?,
-                sort_order: row.get(10)?,
-                created_at: row.get(11)?,
-                updated_at: row.get(12)?,
+                notes: row.get(5)?,
+                auto_tags: decode_auto_tags(row.get(6)?),
+                watch_path: row.get(7)?,
+                watch_enabled: row.get::<_, i64>(8)? != 0,
+                watch_subfolders: row.get::<_, i64>(9)? != 0,
+                watch_import_status_mode: row.get(10)?,
+                sort_order: row.get(11)?,
+                created_at: row.get(12)?,
+                updated_at: row.get(13)?,
             })
         },
     )
@@ -1013,14 +1023,16 @@ impl SqliteDatabase {
         name: String,
         icon: Option<String>,
         color: Option<String>,
+        notes: Option<String>,
         auto_tags: Vec<String>,
     ) -> Result<(), String> {
         let n = name;
         let i = icon;
         let c = color;
+        let notes = notes;
         let tags = auto_tags;
         self.with_conn(move |conn| {
-            update_folder(conn, folder_id, &n, i.as_deref(), c.as_deref(), &tags)
+            update_folder(conn, folder_id, &n, i.as_deref(), c.as_deref(), notes.as_deref(), &tags)
         })
         .await?;
         self.emit_read_model_event(ReadModelEvent::FolderChanged { folder_id });

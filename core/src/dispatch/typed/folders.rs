@@ -17,6 +17,42 @@ fn descendant_hashes(top_level_hashes: &[String], effective_hashes: &[(String, i
         .collect()
 }
 
+fn folder_meta_json(folder: &crate::folders::db::Folder) -> String {
+    serde_json::json!({
+        "folder_id": folder.folder_id,
+        "notes": folder.notes,
+        "auto_tags": folder.auto_tags,
+        "watch_path": folder.watch_path,
+        "watch_enabled": folder.watch_enabled,
+        "watch_subfolders": folder.watch_subfolders,
+        "watch_import_status_mode": folder.watch_import_status_mode,
+    })
+    .to_string()
+}
+
+fn folder_mirror_record(folder: &crate::folders::db::Folder) -> crate::db::types::FolderMirrorRecord {
+    crate::db::types::FolderMirrorRecord {
+        folder_id: folder.folder_id,
+        name: folder.name.clone(),
+        parent_id: folder.parent_id,
+        icon: folder.icon.clone(),
+        color: folder.color.clone(),
+        notes: folder.notes.clone(),
+        sort_order: folder.sort_order,
+        auto_tags_json: serde_json::to_string(&folder.auto_tags).unwrap_or_else(|_| "[]".into()),
+        watch_path: folder.watch_path.clone(),
+        watch_enabled: folder.watch_enabled,
+        watch_subfolders: folder.watch_subfolders,
+        watch_import_status_mode: folder.watch_import_status_mode.clone(),
+        date_added: folder.created_at.clone().unwrap_or_else(|| chrono::Utc::now().to_rfc3339()),
+        date_modified: folder.updated_at.clone().unwrap_or_else(|| chrono::Utc::now().to_rfc3339()),
+    }
+}
+
+fn mirror_folder(state: &AppState, folder: &crate::folders::db::Folder) -> Result<(), String> {
+    state.engine.upsert_folder_record(&folder_mirror_record(folder))
+}
+
 // ─── Input structs ─────────────────────────────────────────────────────────
 
 #[derive(Debug, Deserialize, TS)]
@@ -75,6 +111,7 @@ pub struct UpdateFolderInput {
     pub name: Option<String>,
     pub icon: Option<String>,
     pub color: Option<String>,
+    pub notes: Option<String>,
     pub auto_tags: Option<Vec<String>>,
 }
 
@@ -284,6 +321,13 @@ pub async fn move_folder(state: &AppState, input: MoveFolderInput) -> Result<(),
         .db
         .move_folder(input.folder_id, input.new_parent_id, sibling_order.clone())
         .await?;
+    if let Some(folder) = state
+        .db
+        .with_read_conn(move |conn| crate::folders::db::get_folder(conn, input.folder_id))
+        .await?
+    {
+        mirror_folder(state, &folder)?;
+    }
     crate::events::emit_state_changed(
         "move_folder",
         crate::runtime_contract::change_builder::ChangeImpact::new()
@@ -307,6 +351,7 @@ pub async fn create_folder(
         input.color,
     )
     .await?;
+    mirror_folder(state, &folder)?;
     let upsert = crate::runtime_contract::state_change::SidebarNodePatch {
         node_id: format!("folder:{}", folder.folder_id),
         removed: None,
@@ -320,6 +365,7 @@ pub async fn create_folder(
         count: Some(Some(0)), // New folder starts with 0 items
         selectable: Some(true),
         freshness: Some("exact".into()),
+        meta_json: Some(Some(folder_meta_json(&folder))),
     };
     crate::events::emit_state_changed(
         "create_folder",
@@ -338,9 +384,16 @@ pub async fn update_folder(state: &AppState, input: UpdateFolderInput) -> Result
         input.name.clone(),
         input.icon.clone(),
         input.color.clone(),
+        input.notes,
         input.auto_tags,
     )
     .await?;
+    let updated = state
+        .db
+        .with_read_conn(move |conn| crate::folders::db::get_folder(conn, input.folder_id))
+        .await?
+        .ok_or_else(|| format!("Folder {} not found after update", input.folder_id))?;
+    mirror_folder(state, &updated)?;
     let patch = crate::runtime_contract::state_change::SidebarNodePatch {
         node_id: format!("folder:{}", input.folder_id),
         removed: None, upsert: None, kind: None, parent_id: None,
@@ -348,6 +401,7 @@ pub async fn update_folder(state: &AppState, input: UpdateFolderInput) -> Result
         icon: Some(input.icon),
         color: Some(input.color),
         sort_order: None, count: None, selectable: None, freshness: None,
+        meta_json: Some(Some(folder_meta_json(&updated))),
     };
     crate::events::emit_state_changed(
         "update_folder",
@@ -392,6 +446,12 @@ pub async fn set_folder_watch_config(
         input.watch_import_status_mode.clone(),
     )
     .await?;
+    let mirrored = state
+        .db
+        .with_read_conn(move |conn| crate::folders::db::get_folder(conn, input.folder_id))
+        .await?
+        .ok_or_else(|| format!("Folder {} not found after watch update", input.folder_id))?;
+    mirror_folder(state, &mirrored)?;
 
     if input.import_existing_now {
         // import_existing_for_folder_watch emits its own final combined delta
@@ -407,11 +467,22 @@ pub async fn set_folder_watch_config(
         )
         .await?;
     } else {
+        let patch = crate::runtime_contract::state_change::SidebarNodePatch {
+            node_id: format!("folder:{}", input.folder_id),
+            removed: None, upsert: None, kind: None, parent_id: None,
+            name: None, icon: None, color: None, sort_order: None, count: None,
+            selectable: None, freshness: None,
+            meta_json: Some(Some(folder_meta_json(&mirrored))),
+        };
         crate::events::emit_state_changed(
             "set_folder_watch_config",
             crate::runtime_contract::change_builder::ChangeImpact::new()
-                .add_domain(crate::runtime_contract::state_change::Domain::Folders)
-                .folder_ids(vec![input.folder_id]),
+                .add_domains(&[
+                    crate::runtime_contract::state_change::Domain::Folders,
+                    crate::runtime_contract::state_change::Domain::Sidebar,
+                ])
+                .folder_ids(vec![input.folder_id])
+                .sidebar_node_patch(patch),
         );
     }
 
@@ -427,26 +498,44 @@ pub async fn clear_folder_watch_config(
     input: ClearFolderWatchConfigInput,
 ) -> Result<(), String> {
     crate::folders::service::clear_folder_watch_config(&state.db, input.folder_id).await?;
+    let updated = state
+        .db
+        .with_read_conn(move |conn| crate::folders::db::get_folder(conn, input.folder_id))
+        .await?
+        .ok_or_else(|| format!("Folder {} not found after watch clear", input.folder_id))?;
+    mirror_folder(state, &updated)?;
     let _ = state
         .folder_watch_commands
         .send(crate::folders::watch::FolderWatchCommand::Reload);
+    let patch = crate::runtime_contract::state_change::SidebarNodePatch {
+        node_id: format!("folder:{}", input.folder_id),
+        removed: None, upsert: None, kind: None, parent_id: None,
+        name: None, icon: None, color: None, sort_order: None, count: None,
+        selectable: None, freshness: None,
+        meta_json: Some(Some(folder_meta_json(&updated))),
+    };
     crate::events::emit_state_changed(
         "clear_folder_watch_config",
         crate::runtime_contract::change_builder::ChangeImpact::new()
-            .add_domain(crate::runtime_contract::state_change::Domain::Folders)
-            .folder_ids(vec![input.folder_id]),
+            .add_domains(&[
+                crate::runtime_contract::state_change::Domain::Folders,
+                crate::runtime_contract::state_change::Domain::Sidebar,
+            ])
+            .folder_ids(vec![input.folder_id])
+            .sidebar_node_patch(patch),
     );
     Ok(())
 }
 
 pub async fn delete_folder(state: &AppState, input: DeleteFolderInput) -> Result<(), String> {
     crate::folders::service::delete_folder(&state.db, input.folder_id).await?;
+    state.engine.delete_folder_record(input.folder_id)?;
     let patch = crate::runtime_contract::state_change::SidebarNodePatch {
         node_id: format!("folder:{}", input.folder_id),
         removed: Some(true),
         upsert: None, kind: None, parent_id: None, name: None,
         icon: None, color: None, sort_order: None, count: None,
-        selectable: None, freshness: None,
+        selectable: None, freshness: None, meta_json: None,
     };
     crate::events::emit_state_changed(
         "delete_folder",
@@ -468,12 +557,19 @@ pub async fn update_folder_parent(
 ) -> Result<(), String> {
     crate::folders::service::update_folder_parent(&state.db, input.folder_id, input.new_parent_id)
         .await?;
+    if let Some(folder) = state
+        .db
+        .with_read_conn(move |conn| crate::folders::db::get_folder(conn, input.folder_id))
+        .await?
+    {
+        mirror_folder(state, &folder)?;
+    }
     let patch = crate::runtime_contract::state_change::SidebarNodePatch {
         node_id: format!("folder:{}", input.folder_id),
         removed: None, upsert: None, kind: None,
         parent_id: Some(input.new_parent_id.map(|pid| format!("folder:{pid}")).or(Some("section:folders".into()))),
         name: None, icon: None, color: None, sort_order: None,
-        count: None, selectable: None, freshness: None,
+        count: None, selectable: None, freshness: None, meta_json: None,
     };
     crate::events::emit_state_changed(
         "update_folder_parent",
@@ -550,6 +646,18 @@ pub async fn reorder_folders(state: &AppState, input: ReorderFoldersInput) -> Re
     let fids: Vec<i64> = input.moves.iter().map(|(id, _)| *id).collect();
     let order_changes = input.moves.clone();
     state.db.reorder_folders(input.moves).await?;
+    for folder_id in &fids {
+        if let Some(folder) = state
+            .db
+            .with_read_conn({
+                let folder_id = *folder_id;
+                move |conn| crate::folders::db::get_folder(conn, folder_id)
+            })
+            .await?
+        {
+            mirror_folder(state, &folder)?;
+        }
+    }
     crate::events::emit_state_changed(
         "reorder_folders",
         crate::runtime_contract::change_builder::ChangeImpact::new()

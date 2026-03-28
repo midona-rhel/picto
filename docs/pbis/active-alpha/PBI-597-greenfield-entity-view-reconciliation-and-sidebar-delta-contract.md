@@ -135,6 +135,7 @@ The clean reactive split is:
 - state owns the current query/sidebar tree and visible window state
 - runtime asks backend to reconcile query-visible state when membership/order is uncertain
 - runtime applies exact sidebar deltas directly when available
+- runtime keeps displayed scope context aligned with the displayed grid, not raw active-node state during fades
 
 ## Implementation changes
 - add a typed backend entity-view reconcile contract
@@ -150,6 +151,8 @@ The clean reactive split is:
 - the frontend does not guess query membership/order from hashes alone
 - the grid can ignore unrelated events, patch simple visible-row updates, or reconcile the current window through the backend as appropriate
 - the sidebar can apply count/tree deltas directly for normal state changes
+- displayed scope inspector content stays on the outgoing grid until the outgoing fade finishes
+- entity inspector swaps use one committed displayed snapshot instead of staggered field updates
 - one completed backend action normally produces one merged self-describing `runtime/state_changed` event
 - full sidebar/grid refresh remains only as a documented fallback path
 

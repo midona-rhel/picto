@@ -843,6 +843,14 @@ pub fn run_migrations(conn: &Connection, from_version: i64) -> rusqlite::Result<
                 ON deferred_work(status, available_at, work_id);",
         )?;
     }
+    if from_version < 38 {
+        if !has_column(conn, "folder", "notes")? {
+            conn.execute_batch("ALTER TABLE folder ADD COLUMN notes TEXT")?;
+        }
+        if !has_column(conn, "smart_folder", "notes")? {
+            conn.execute_batch("ALTER TABLE smart_folder ADD COLUMN notes TEXT")?;
+        }
+    }
 
     conn.execute("UPDATE schema_version SET version = ?1", [CURRENT_VERSION])?;
     Ok(())

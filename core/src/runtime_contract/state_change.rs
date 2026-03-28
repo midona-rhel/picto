@@ -154,9 +154,9 @@ pub struct StateChanges {
 /// without fetching the whole tree.
 ///
 /// Note: upserts are rendering-sufficient, not full SidebarNodeDto clones.
-/// They carry enough data to render the node (kind, parent, name, icon, color,
-/// sort_order, count, selectable, freshness) but omit `meta` and
-/// `expanded_by_default` which are not needed for initial rendering.
+/// They carry enough data to render the node and its current context inspector
+/// summary (kind, parent, name, icon, color, sort_order, count, selectable,
+/// freshness, meta_json) but omit `expanded_by_default`.
 #[derive(Debug, Clone, Serialize, TS)]
 #[ts(export_to = "../../src/shared/types/generated/runtime-contract/")]
 pub struct SidebarNodePatch {
@@ -201,6 +201,10 @@ pub struct SidebarNodePatch {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub freshness: Option<String>,
+    /// Meta JSON: None = not in patch, Some(None) = clear, Some(Some(v)) = set.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional, type = "string | null")]
+    pub meta_json: Option<Option<String>>,
 }
 
 /// Sidebar system scope counts — bitmap-derived where possible.

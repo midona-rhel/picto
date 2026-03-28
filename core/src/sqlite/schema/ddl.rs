@@ -238,6 +238,7 @@ CREATE TABLE IF NOT EXISTS folder (
     parent_id  INTEGER REFERENCES folder(folder_id) ON DELETE SET NULL,
     icon       TEXT,
     color      TEXT,
+    notes      TEXT,
     auto_tags  TEXT NOT NULL DEFAULT '[]',
     watch_path TEXT,
     watch_enabled INTEGER NOT NULL DEFAULT 0,
@@ -268,6 +269,7 @@ CREATE TABLE IF NOT EXISTS smart_folder (
     parent_id       INTEGER REFERENCES smart_folder(smart_folder_id) ON DELETE SET NULL,
     icon            TEXT,
     color           TEXT,
+    notes           TEXT,
     predicate_json  TEXT NOT NULL,
     sort_field      TEXT,
     sort_order      TEXT,
@@ -510,5 +512,5 @@ CREATE TABLE IF NOT EXISTS kv_settings (
 
 -- Schema version
 CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL);
-INSERT OR IGNORE INTO schema_version (version) VALUES (37);
+INSERT OR IGNORE INTO schema_version (version) VALUES (38);
 "#;

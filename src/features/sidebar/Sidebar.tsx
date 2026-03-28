@@ -10,13 +10,14 @@ import { useAtomValue, useSetAtom } from 'jotai';
 import {
   IconFolder, IconFolderOpen, IconFolderPlus, IconFolderSymlink,
   IconFolderMinus, IconCopy, IconUpload,
-  IconPhoto, IconInbox, IconFolderQuestion, IconTrash,
-  IconBookmarkQuestion, IconClock,
+  IconPhoto, IconInbox, IconTrash,
+  IconClock,
 } from '@tabler/icons-react';
 import type { Icon as TablerIcon } from '@tabler/icons-react';
 import {
   IconNewSubfolder, IconRename, IconSort, IconExpand, IconCollapse,
   IconExpandAll, IconChangeIcon, IconAutoTags, IconWatchFolder,
+  IconFolderQuestionCustom, IconBookmarkQuestionCustom,
 } from '../../shared/ui/icons/sidebar-menu-icons';
 import {
   sidebarNodesAtom, systemNodesAtom, folderNodesAtom,
@@ -43,8 +44,8 @@ const FILL = { stroke: 1.2, fill: 'currentColor', fillOpacity: 0.15 } as const;
 const SYSTEM_ICONS: Record<string, TablerIcon> = {
   'system:active':        IconPhoto,
   'system:inbox':         IconInbox,
-  'system:uncategorized': IconFolderQuestion,
-  'system:untagged':      IconBookmarkQuestion,
+  'system:uncategorized': IconFolderQuestionCustom as unknown as TablerIcon,
+  'system:untagged':      IconBookmarkQuestionCustom as unknown as TablerIcon,
   'system:recent_viewed': IconClock,
   'system:duplicates':    IconCopy,
   'system:trash':         IconTrash,
@@ -232,7 +233,7 @@ export function Sidebar() {
             onClick={() => navigate(node.id)}
             onContextMenu={(e) => openFolderMenu(e, node)}
           >
-            {folderRename.renamingId === node.id && (
+            {folderRename.renamingId === node.id ? (
               <input
                 ref={folderRename.inputRef}
                 className={styles.renameInput}
@@ -241,7 +242,7 @@ export function Sidebar() {
                 onKeyDown={folderRename.handleKeyDown}
                 onBlur={folderRename.commitRename}
               />
-            )}
+            ) : undefined}
           </SidebarRow>
         ))}
 

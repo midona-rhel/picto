@@ -1,11 +1,9 @@
 /**
- * Canvas2D grid renderer — dual-canvas architecture with QoS thumbnail pipeline.
+ * Canvas2D grid renderer — dual-canvas (base + overlay) with thumbnail pipeline.
  *
- * Restored from legacy v0.5.0-alpha with stability fixes:
- * - No scroll metrics cache (always fresh DOM reads)
- * - Frame-coherent viewport snapshots
- * - Debounced resize (16ms)
- * - Atomic layout + visibility recomputation
+ * Activation model: single zone (viewport ± 400px) determines what to draw,
+ * load, reveal-animate, and evict. No separate visibility plan — one linear
+ * scan per frame drives everything.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -14,7 +12,6 @@ import type { GridViewMode } from '../layout/types';
 import { computeLayout, safeAspectRatio } from '../layout/layoutMath';
 import { drawCanvasBaseLayer, type DrawContext } from './drawBase';
 
-import { buildCanvasVisibilityPlan } from './visibilityPlan';
 import { ThumbnailPipeline } from './thumbnailPipeline';
 import { adaptGridItem } from './renderItemAdapter';
 import { hitTestTile } from './hitTesting';
@@ -46,6 +43,7 @@ export interface CanvasGridProps {
   interactive?: boolean;
   frozenScrollTop?: number;
   suppressTileReveal?: boolean;
+  selectedEntityHash?: string | null;
 }
 
 export function CanvasGrid({
@@ -61,6 +59,7 @@ export function CanvasGrid({
   interactive = true,
   frozenScrollTop = 0,
   suppressTileReveal = false,
+  selectedEntityHash = null,
 }: CanvasGridProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const baseCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -112,15 +111,17 @@ export function CanvasGrid({
     });
     pipelineRef.current = pipeline;
     return () => {
+      pipeline.clear();
       pipelineRef.current = null;
+      if (idleTimerRef.current) { clearTimeout(idleTimerRef.current); idleTimerRef.current = null; }
     };
   }, []);
 
-  // Reset pipeline generation on item list change
+  // Reset on items change (scope navigation, sort, search — any new result set)
   useEffect(() => {
     firstPaintRef.current = false;
     revealMapRef.current.clear();
-  }, [items[0]?.entity_hash]);
+  }, [items]);
 
   // ── Draw functions ──
   const drawBase = useCallback(() => {
@@ -136,51 +137,53 @@ export function CanvasGrid({
     ensureCanvasSize(canvas, vp.containerWidth, vp.viewportHeight, vp.dpr);
 
     const scrollTop = interactive ? vp.scrollTop : frozenScrollTop;
-    const scrollState = scrollStateRef.current;
-
-    const plan = buildCanvasVisibilityPlan({
-      positions: layout.positions,
-      scrollTop,
-      viewportHeight: vp.viewportHeight,
-      scrollPhase: scrollState.phase,
-      scrollDirection: scrollState.direction,
-      queueDepth: pipeline.getStats().queueDepth,
-    });
+    const now = performance.now();
 
     ctx.save();
     ctx.scale(vp.dpr, vp.dpr);
     ctx.clearRect(0, 0, vp.containerWidth, vp.viewportHeight);
 
-    // Per-tile reveal map: tracks when each tile entered the activation zone.
-    // - Added when tile enters the visible+prefetch range
-    // - Removed when tile is fully outside the activation zone
-    // - Cleared on items/scope change
+    // ── Single activation zone: viewport ± margin ──
+    // One pass determines everything: what to draw, load, fade, and delete.
     const ACTIVATION_MARGIN = 400;
-    const now = performance.now();
-    const revealMap = revealMapRef.current;
     const zoneTop = scrollTop - ACTIVATION_MARGIN;
     const zoneBottom = scrollTop + vp.viewportHeight + ACTIVATION_MARGIN;
+    const revealMap = revealMapRef.current;
+    const activeTiles: number[] = [];
 
-    // Add tiles in the draw range
-    for (let n = 0; n < plan.visibleIterEnd; n++) {
-      const i = plan.visibleIndices ? plan.visibleIndices[n] : plan.startIdx + n;
-      if (i >= plan.endIdx) break;
-      if (!revealMap.has(i)) {
-        revealMap.set(i, now);
+    // Scan all tiles — a tile is active if any part overlaps the zone
+    for (let i = 0; i < layout.positions.length; i++) {
+      const pos = layout.positions[i];
+      if (!pos) continue;
+      if (pos.y + pos.h >= zoneTop && pos.y <= zoneBottom) {
+        activeTiles.push(i);
+        if (!revealMap.has(i)) {
+          // When suppressed (scope transition in progress), set reveal start far in the past
+          // so tiles render at full opacity immediately — no per-tile fade-in under the surface fade.
+          revealMap.set(i, suppressTileReveal ? 0 : now);
+        }
       }
     }
-    for (const idx of plan.prefetchIndices) {
-      if (!revealMap.has(idx)) {
-        revealMap.set(idx, now);
-      }
-    }
 
-    // Remove tiles fully outside activation zone
+    // Remove tiles fully outside the zone
     for (const idx of revealMap.keys()) {
       const pos = layout.positions[idx];
-      if (!pos) { revealMap.delete(idx); continue; }
-      if (pos.y + pos.h < zoneTop || pos.y > zoneBottom) {
+      if (!pos || pos.y + pos.h < zoneTop || pos.y > zoneBottom) {
         revealMap.delete(idx);
+      }
+    }
+
+    // Ensure thumbnails for all active tiles
+    for (const i of activeTiles) {
+      const item = renderItems[i];
+      const pos = layout.positions[i];
+      if (item && pos) {
+        const imageHeight = pos.h - textHeight;
+        pipeline.ensure(item.thumbnailHash, {
+          y: pos.y + pos.h / 2,
+          drawWidth: pos.w,
+          drawHeight: imageHeight,
+        });
       }
     }
 
@@ -196,12 +199,9 @@ export function CanvasGrid({
       positions: layout.positions,
       items: renderItems,
       atlasGet: (hash) => pipeline.get(hash),
-      atlasEnsure: (hash, args) => {
-        pipeline.ensure(hash, args);
-      },
       now,
       revealMap,
-      plan,
+      activeTiles,
       draw: drawCtx,
       theme: {
         placeholderBg: 'rgba(255, 255, 255, 0.04)',
@@ -218,16 +218,8 @@ export function CanvasGrid({
 
     ctx.restore();
 
-    // Prefetch
-    for (const idx of plan.prefetchIndices) {
-      const item = renderItems[idx];
-      if (item) {
-        pipeline.ensure(item.thumbnailHash);
-      }
-    }
-
-    // Cancel outside window
-    pipeline.cancelOutsideWindow(plan.cancelTop, plan.cancelBottom);
+    // Cancel loads outside the activation zone
+    pipeline.cancelOutsideWindow(zoneTop, zoneBottom);
 
     // Continue animation loop for active reveals
     if (hasActiveReveal) {
@@ -235,7 +227,7 @@ export function CanvasGrid({
     }
 
     // First paint notification
-    if (!firstPaintRef.current && plan.visibleIterEnd > 0) {
+    if (!firstPaintRef.current && activeTiles.length > 0) {
       firstPaintRef.current = true;
       onFirstPaint?.();
     }
@@ -253,8 +245,31 @@ export function CanvasGrid({
     ensureCanvasSize(canvas, vp.containerWidth, vp.viewportHeight, vp.dpr);
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-    // TODO: selection borders, hover rings, marquee
-  }, [layout]);
+    if (!selectedEntityHash) return;
+
+    // Draw selection border on the selected tile
+    ctx.save();
+    ctx.scale(vp.dpr, vp.dpr);
+    const scrollTop = interactive ? vp.scrollTop : frozenScrollTop;
+
+    for (let i = 0; i < items.length; i++) {
+      if (items[i].entity_hash !== selectedEntityHash) continue;
+      const pos = layout.positions[i];
+      if (!pos) continue;
+      const drawY = pos.y - scrollTop;
+      if (drawY + pos.h < -100 || drawY > vp.viewportHeight + 100) continue;
+      const imgH = pos.h - textHeight;
+
+      ctx.strokeStyle = '#3297FF';
+      ctx.lineWidth = 2.5;
+      ctx.beginPath();
+      ctx.roundRect(pos.x - 2, drawY - 2, pos.w + 4, imgH + 4, 6);
+      ctx.stroke();
+      break;
+    }
+
+    ctx.restore();
+  }, [layout, items, selectedEntityHash, textHeight, interactive, frozenScrollTop]);
 
   // ── RAF scheduler (legacy pattern) ──
   const frozenRef = useRef(!interactive);
@@ -301,6 +316,7 @@ export function CanvasGrid({
   // ── Redraw on layout/prop changes ──
   useEffect(() => { markDirty('both'); }, [layout, markDirty]);
   useEffect(() => { markDirty('base'); }, [showName, showExtension, viewMode, suppressTileReveal, markDirty]);
+  useEffect(() => { markDirty('overlay'); }, [selectedEntityHash, markDirty]);
 
   // ── Scroll handler ──
   const handleScroll = useCallback(() => {

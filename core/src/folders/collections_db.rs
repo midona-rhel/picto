@@ -1393,6 +1393,7 @@ mod tests {
                 parent_id: None,
                 icon: None,
                 color: None,
+                notes: None,
                 auto_tags: Vec::new(),
             },
         )

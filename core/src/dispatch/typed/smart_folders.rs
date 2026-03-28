@@ -5,6 +5,47 @@ use ts_rs::TS;
 
 use crate::state::AppState;
 
+fn smart_folder_meta_json(folder: &crate::smart_folders::db::SmartFolder) -> String {
+    serde_json::json!({
+        "smart_folder_id": folder.smart_folder_id,
+        "parent_id": folder.parent_id,
+        "notes": folder.notes,
+        "predicate": serde_json::from_str::<serde_json::Value>(&folder.predicate_json)
+            .unwrap_or_else(|_| serde_json::json!({ "groups": [] })),
+        "sort_field": folder.sort_field,
+        "sort_order": folder.sort_order,
+    })
+    .to_string()
+}
+
+fn smart_folder_mirror_record(
+    folder: &crate::smart_folders::db::SmartFolder,
+) -> crate::db::types::SmartFolderMirrorRecord {
+    crate::db::types::SmartFolderMirrorRecord {
+        smart_folder_id: folder.smart_folder_id,
+        name: folder.name.clone(),
+        parent_id: folder.parent_id,
+        icon: folder.icon.clone(),
+        color: folder.color.clone(),
+        notes: folder.notes.clone(),
+        predicate_json: folder.predicate_json.clone(),
+        sort_field: folder.sort_field.clone(),
+        sort_order: folder.sort_order.clone(),
+        display_order: folder.display_order,
+        date_added: folder.created_at.clone().unwrap_or_else(|| chrono::Utc::now().to_rfc3339()),
+        date_modified: folder.updated_at.clone().unwrap_or_else(|| chrono::Utc::now().to_rfc3339()),
+    }
+}
+
+fn mirror_smart_folder(
+    state: &AppState,
+    folder: &crate::smart_folders::db::SmartFolder,
+) -> Result<(), String> {
+    state
+        .engine
+        .upsert_smart_folder_record(&smart_folder_mirror_record(folder))
+}
+
 // ─── Input structs ─────────────────────────────────────────────────────────
 
 #[derive(Debug, Deserialize, TS)]
@@ -86,6 +127,7 @@ pub async fn create_smart_folder(
         input.folder,
     )
     .await?;
+    mirror_smart_folder(state, &result)?;
     let upsert = crate::runtime_contract::state_change::SidebarNodePatch {
         node_id: format!("smart:{}", result.smart_folder_id),
         removed: None,
@@ -99,6 +141,7 @@ pub async fn create_smart_folder(
         count: Some(Some(0)), // New smart folder starts with 0 (bitmap not compiled yet)
         selectable: Some(true),
         freshness: Some("stale".into()), // Counts are stale until compiler runs
+        meta_json: Some(Some(smart_folder_meta_json(&result))),
     };
     crate::events::emit_state_changed(
         "create_smart_folder",
@@ -141,13 +184,15 @@ pub async fn update_smart_folder(
             input.folder,
         )
         .await?;
+    mirror_smart_folder(state, &result)?;
     let patch = crate::runtime_contract::state_change::SidebarNodePatch {
         node_id: format!("smart:{sf_id}"),
         removed: None, upsert: None, kind: None, parent_id: None,
         name: Some(result.name.clone()),
         icon: Some(result.icon.clone()),
         color: Some(result.color.clone()),
-        sort_order: None, count: None, selectable: None, freshness: None,
+        sort_order: Some(result.display_order), count: None, selectable: None, freshness: None,
+        meta_json: Some(Some(smart_folder_meta_json(&result))),
     };
     let mut impact = crate::runtime_contract::change_builder::ChangeImpact::new()
         .add_domains(&[crate::runtime_contract::state_change::Domain::SmartFolders, crate::runtime_contract::state_change::Domain::Sidebar])
@@ -190,6 +235,13 @@ pub async fn move_smart_folder(
         sibling_order.clone(),
     )
     .await?;
+    if let Some(folder) = state
+        .db
+        .with_read_conn(move |conn| crate::smart_folders::db::get_smart_folder(conn, input.smart_folder_id))
+        .await?
+    {
+        mirror_smart_folder(state, &folder)?;
+    }
     crate::events::emit_state_changed(
         "move_smart_folder",
         crate::runtime_contract::change_builder::ChangeImpact::new()
@@ -212,6 +264,19 @@ pub async fn delete_smart_folder(
     let (promoted_ids, deleted_parent_id) =
         crate::smart_folders::service::SmartFolderService::delete_smart_folder(&state.db, input.id)
             .await?;
+    state.engine.delete_smart_folder_record(sf_id)?;
+    for child_id in &promoted_ids {
+        if let Some(folder) = state
+            .db
+            .with_read_conn({
+                let child_id = *child_id;
+                move |conn| crate::smart_folders::db::get_smart_folder(conn, child_id)
+            })
+            .await?
+        {
+            mirror_smart_folder(state, &folder)?;
+        }
+    }
 
     // Build patches: remove the deleted node + reparent promoted children
     let mut patches = vec![crate::runtime_contract::state_change::SidebarNodePatch {
@@ -219,7 +284,7 @@ pub async fn delete_smart_folder(
         removed: Some(true),
         upsert: None, kind: None, parent_id: None, name: None,
         icon: None, color: None, sort_order: None, count: None,
-        selectable: None, freshness: None,
+        selectable: None, freshness: None, meta_json: None,
     }];
     // Promoted children get the deleted folder's parent
     let new_parent = deleted_parent_id
@@ -231,7 +296,7 @@ pub async fn delete_smart_folder(
             removed: None, upsert: None, kind: None,
             parent_id: Some(Some(new_parent.clone())),
             name: None, icon: None, color: None, sort_order: None,
-            count: None, selectable: None, freshness: None,
+            count: None, selectable: None, freshness: None, meta_json: None,
         });
     }
 
@@ -273,6 +338,18 @@ pub async fn reorder_smart_folders(
         input.moves,
     )
     .await?;
+    for smart_folder_id in &sfids {
+        if let Some(folder) = state
+            .db
+            .with_read_conn({
+                let smart_folder_id = *smart_folder_id;
+                move |conn| crate::smart_folders::db::get_smart_folder(conn, smart_folder_id)
+            })
+            .await?
+        {
+            mirror_smart_folder(state, &folder)?;
+        }
+    }
     crate::events::emit_state_changed(
         "reorder_smart_folders",
         crate::runtime_contract::change_builder::ChangeImpact::new()

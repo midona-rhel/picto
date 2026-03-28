@@ -296,6 +296,10 @@ pub fn reconcile_schema(conn: &Connection) -> rusqlite::Result<()> {
         )?;
         tracing::warn!("Reconciled folder schema: added watch_import_status_mode");
     }
+    if table_exists(conn, "folder")? && !has_column(conn, "folder", "notes")? {
+        conn.execute_batch("ALTER TABLE folder ADD COLUMN notes TEXT")?;
+        tracing::warn!("Reconciled folder schema: added notes");
+    }
     if table_exists(conn, "folder")? {
         conn.execute_batch(
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_folder_watch_path
@@ -308,6 +312,10 @@ pub fn reconcile_schema(conn: &Connection) -> rusqlite::Result<()> {
             "ALTER TABLE smart_folder ADD COLUMN parent_id INTEGER REFERENCES smart_folder(smart_folder_id) ON DELETE SET NULL",
         )?;
         tracing::warn!("Reconciled smart_folder schema: added parent_id");
+    }
+    if table_exists(conn, "smart_folder")? && !has_column(conn, "smart_folder", "notes")? {
+        conn.execute_batch("ALTER TABLE smart_folder ADD COLUMN notes TEXT")?;
+        tracing::warn!("Reconciled smart_folder schema: added notes");
     }
     if table_exists(conn, "smart_folder")? {
         conn.execute_batch(

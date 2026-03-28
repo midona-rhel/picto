@@ -1,5 +1,5 @@
 /**
- * Dual-lane RAF scheduler — exact copy from legacy v0.5.0-alpha.
+ * Dual-lane RAF scheduler — base and overlay canvases share one RAF loop.
  */
 
 import { useCallback, useRef, type RefObject } from 'react';
