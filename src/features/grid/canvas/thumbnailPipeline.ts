@@ -1,21 +1,22 @@
-import { mediaThumbnailUrl } from './mediaUrl';
+function mediaThumbnailUrl(hash: string): string {
+  return `media://localhost/thumb/${hash}.jpg`;
+}
 import {
   decodeThumbnailInWorker,
   getThumbnailDecodeWorkerStats,
   setThumbnailDecodeLateResponseListener,
 } from './thumbnailDecodeClient';
-import {
-  THUMBNAIL_PIPELINE_MAX_ENTRIES,
-  THUMBNAIL_PIPELINE_MAX_PREFETCH_ACTIVE_FAST,
-  THUMBNAIL_PIPELINE_MAX_PREFETCH_ACTIVE_IDLE,
-  THUMBNAIL_PIPELINE_MAX_PREFETCH_ACTIVE_SLOW,
-  THUMBNAIL_PIPELINE_MAX_VISIBLE_ACTIVE_FAST,
-  THUMBNAIL_PIPELINE_MAX_VISIBLE_ACTIVE_IDLE,
-  THUMBNAIL_PIPELINE_MAX_VISIBLE_ACTIVE_SLOW,
-  THUMBNAIL_PIPELINE_MAX_CONCURRENT_REVEALS,
-  THUMBNAIL_PIPELINE_REVEAL_MS,
-  THUMBNAIL_PIPELINE_SOURCE_EDGE,
-} from './thumbnailPipelinePolicy';
+// Pipeline policy constants (formerly in thumbnailPipelinePolicy.ts)
+export const THUMBNAIL_PIPELINE_MAX_ENTRIES = 200;
+export const THUMBNAIL_PIPELINE_MAX_VISIBLE_ACTIVE_IDLE = 4;
+export const THUMBNAIL_PIPELINE_MAX_VISIBLE_ACTIVE_SLOW = 3;
+export const THUMBNAIL_PIPELINE_MAX_VISIBLE_ACTIVE_FAST = 2;
+export const THUMBNAIL_PIPELINE_MAX_PREFETCH_ACTIVE_IDLE = 2;
+export const THUMBNAIL_PIPELINE_MAX_PREFETCH_ACTIVE_SLOW = 1;
+export const THUMBNAIL_PIPELINE_MAX_PREFETCH_ACTIVE_FAST = 0;
+export const THUMBNAIL_PIPELINE_SOURCE_EDGE = 750;
+export const THUMBNAIL_PIPELINE_REVEAL_MS = 250;
+export const THUMBNAIL_PIPELINE_MAX_CONCURRENT_REVEALS = 54;
 import type {
   ThumbnailInFlightItem,
   ThumbnailPipelineEntry,
@@ -23,6 +24,7 @@ import type {
   ThumbnailQueueItem,
   ThumbnailRequestPriority,
   ThumbnailPipelineTraceEvent,
+  EnsureThumbnailArgs,
 } from './thumbnailPipelineTypes';
 import {
   type CanvasScrollPhase,
@@ -30,13 +32,7 @@ import {
   createIdleCanvasScrollState,
 } from './scrollState';
 
-export type { ThumbnailPipelineEntry, ThumbnailPipelineStats } from './thumbnailPipelineTypes';
-
-interface EnsureThumbnailArgs {
-  y?: number;
-  drawWidth?: number;
-  drawHeight?: number;
-}
+export type { ThumbnailPipelineEntry, ThumbnailPipelineStats, EnsureThumbnailArgs } from './thumbnailPipelineTypes';
 
 type TraceListener = (event: ThumbnailPipelineTraceEvent) => void;
 
@@ -375,14 +371,22 @@ export class ThumbnailPipeline {
       return;
     }
 
+    const isUpgrade = entry.thumb != null;
     this.totalBytes -= entry.bytes;
     entry.thumb?.close();
     entry.thumb = bitmap;
     entry.bytes = bitmap.width * bitmap.height * 4;
     this.totalBytes += entry.bytes;
-    entry.state = 'ready_pending';
-    entry.animateIn = false;
-    entry.revealStartedAt = 0;
+    entry.state = 'shown';
+    if (isUpgrade) {
+      // Thumbnail → full-quality upgrade: silent swap, no fade.
+      entry.animateIn = false;
+      entry.revealStartedAt = 0;
+    } else {
+      // Fresh load: staggered fade-in (legacy behavior).
+      entry.animateIn = true;
+      entry.revealStartedAt = this.nextRevealSlot();
+    }
     this.pruneCache();
     this.emitTrace('bitmap_ready', {
       hash,

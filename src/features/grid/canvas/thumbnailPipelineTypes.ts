@@ -46,3 +46,9 @@ export interface ThumbnailPipelineTraceEvent {
   type: string;
   payload: Record<string, unknown>;
 }
+
+export interface EnsureThumbnailArgs {
+  y?: number;
+  drawWidth?: number;
+  drawHeight?: number;
+}

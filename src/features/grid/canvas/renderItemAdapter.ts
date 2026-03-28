@@ -13,6 +13,7 @@ export interface CanvasRenderItem {
   memberCount: number | null;
   dominantColor: string | null;
   aspectRatio: number | null;
+  numFrames: number | null;
 }
 
 export function adaptGridItem(item: CanonicalEntityGridItem): CanvasRenderItem {
@@ -33,5 +34,6 @@ export function adaptGridItem(item: CanonicalEntityGridItem): CanvasRenderItem {
     memberCount: item.member_count,
     dominantColor: item.dominant_color_hex,
     aspectRatio,
+    numFrames: item.frame_count,
   };
 }

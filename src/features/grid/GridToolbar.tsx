@@ -5,7 +5,7 @@
  *   [title(abs)] [- slider +] [view btn][filter btn][search input] [perf] [loading]
  */
 
-import { useAtom, useAtomValue, useSetAtom } from 'jotai';
+import { useAtomValue, useSetAtom } from 'jotai';
 import { useRef, useState, useEffect, useCallback } from 'react';
 import {
   IconMinus, IconPlus, IconSearch,
@@ -15,7 +15,6 @@ import {
   gridTargetSizeAtom,
   gridScopeLabelAtom,
   gridSearchTextAtom,
-  gridRendererAtom,
 } from '../../state/grid';
 import { gridController } from '../../controllers/gridController';
 import { gridPerfAtom } from '../../state/gridPerf';
@@ -146,21 +145,6 @@ function PerfChip() {
   );
 }
 
-function RendererToggle() {
-  const [renderer, setRenderer] = useAtom(gridRendererAtom);
-  const isCanvas = renderer === 'canvas';
-
-  return (
-    <button
-      className={`${styles.modeBtn} ${isCanvas ? styles.modeBtnActive : ''}`}
-      onClick={() => setRenderer(isCanvas ? 'webgl' : 'canvas')}
-      title={isCanvas ? 'Switch to WebGL renderer' : 'Switch to canvas fallback'}
-    >
-      {isCanvas ? 'Canvas' : 'WebGL'}
-    </button>
-  );
-}
-
 // ── Toolbar root ────────────────────────────────────────────────
 
 export function GridToolbar() {
@@ -176,8 +160,6 @@ export function GridToolbar() {
       </div>
 
       <div className={styles.rightSection}>
-        <RendererToggle />
-
         <button className={styles.icBtn} title="View">
           <IconAdjustments size={14} style={{ transform: 'rotate(90deg)' }} />
         </button>

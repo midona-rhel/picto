@@ -58,8 +58,13 @@ export function buildCanvasVisibilityPlan(args: {
   const bottom = scrollTop + viewportHeight;
   const rawStart = lowerBound(positions, top, (p) => p.y + p.h);
   const rawEnd = lowerBound(positions, bottom, (p) => p.y);
-  const startIdx = Math.max(0, rawStart - 1);
-  const endIdx = Math.min(positions.length, rawEnd + 1);
+  // Widen the range to account for waterfall layouts where Y positions
+  // are not monotonically sorted by index. The drawBase loop has its own
+  // per-tile bounds check (drawY + pos.h < 0 || drawY > cssH) that skips
+  // tiles actually off-screen, so over-including is safe.
+  const COL_MARGIN = 20; // extra indices each side to cover column stagger
+  const startIdx = Math.max(0, rawStart - COL_MARGIN);
+  const endIdx = Math.min(positions.length, rawEnd + COL_MARGIN);
   const visibleIterEnd = Math.max(0, endIdx - startIdx);
 
   const prefetchPx = scrollPhase === 'idle' ? PREFETCH_PX : scrollPhase === 'slow' ? 600 : 0;

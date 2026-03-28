@@ -22,8 +22,6 @@ export const gridSearchTextAtom = atom<string>('');
 // ── View options ─────────────────────────────────────────────────
 
 export const gridViewModeAtom = atom<GridViewMode>('waterfall');
-export type GridRendererMode = 'webgl' | 'canvas';
-export const gridRendererAtom = atom<GridRendererMode>('webgl');
 export const gridTargetSizeAtom = atom(220);
 export const gridShowNameAtom = atom(true);
 export const gridShowExtensionAtom = atom(false);

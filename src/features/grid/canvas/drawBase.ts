@@ -1,10 +1,27 @@
-import type { LayoutItem } from '../layout/types';
-import type { GridViewMode } from '../layout/types';
+/**
+ * Canvas base layer — images, placeholders, badges, text.
+ *
+ * Ported from legacy v0.5.0-alpha canvasGridDrawHelpers.ts with full feature set:
+ * - Cover/contain fit modes (contain for grid+video, cover for waterfall/justified)
+ * - Dominant color placeholders with rounded corners
+ * - Two-phase reveal animation (image fade in → placeholder fade out)
+ * - Glass border ring
+ * - Extension badge (top-left)
+ * - Duration badge (top-right for video/animated)
+ * - Collection item count badge (bottom-left)
+ * - Rating stars
+ * - Centered name text
+ * - Resolution text
+ */
+
+import type { LayoutItem, GridViewMode } from '../layout/types';
 import type { CanvasRenderItem } from './renderItemAdapter';
+import type { CanvasVisibilityPlan } from './visibilityPlan';
 import type { ThumbnailPipelineEntry } from './thumbnailPipeline';
 import {
   BADGE_FONT,
   BADGE_H,
+  INFO_FONT,
   NAME_FONT,
   RATING_FONT,
   drawBadge,
@@ -16,24 +33,22 @@ import {
   truncateText,
   formatDuration,
 } from './primitives';
-import { THUMBNAIL_PIPELINE_REVEAL_MS } from './thumbnailPipelinePolicy';
+import { THUMBNAIL_PIPELINE_REVEAL_MS } from './thumbnailPipeline';
 
 const GLASS_BORDER_COLOR = 'rgba(255, 255, 255, 0.2)';
 
 interface ThemeLike {
   placeholderBg: string;
   borderRadius: number;
+  textPrimary: string;
+  textTertiary: string;
 }
 
-export interface VisibleWindow {
-  startIdx: number;
-  endIdx: number;
-  visibleIndices: number[] | null;
-  visibleIterEnd: number;
+export interface DrawContext {
   scrollTop: number;
-  cssH: number;
-  th: number;
-  br: number;
+  viewportHeight: number;
+  textHeight: number;
+  borderRadius: number;
 }
 
 export interface BaseLayerArgs {
@@ -43,11 +58,16 @@ export interface BaseLayerArgs {
   atlasGet: (hash: string) => ThumbnailPipelineEntry | null;
   atlasEnsure: (hash: string, args?: { y?: number; drawWidth?: number; drawHeight?: number }) => void;
   now: number;
-  visible: VisibleWindow;
+  /** Per-tile reveal start time. Tiles not in this map show placeholder only. */
+  revealMap: Map<number, number>;
+  plan: CanvasVisibilityPlan;
+  draw: DrawContext;
   theme: ThemeLike;
   viewMode: GridViewMode;
   showTileName: boolean;
+  showResolution: boolean;
   showExtension: boolean;
+  showExtensionLabel: boolean;
 }
 
 function fillPlaceholder(
@@ -55,10 +75,7 @@ function fillPlaceholder(
   item: CanvasRenderItem,
   theme: ThemeLike,
   fit: 'cover' | 'contain',
-  x: number,
-  y: number,
-  w: number,
-  h: number,
+  x: number, y: number, w: number, h: number,
   alpha = 1,
 ): void {
   const hasContainShape = fit === 'contain' && !!item.aspectRatio;
@@ -92,16 +109,22 @@ export function drawCanvasBaseLayer({
   atlasGet,
   atlasEnsure,
   now,
-  visible,
+  revealMap,
+  plan,
+  draw,
   theme,
   viewMode,
   showTileName,
+  showResolution,
   showExtension,
+  showExtensionLabel,
 }: BaseLayerArgs): boolean {
-  const { startIdx, endIdx, visibleIndices, visibleIterEnd, scrollTop, cssH, th, br } = visible;
+  const { startIdx, endIdx, visibleIndices, visibleIterEnd } = plan;
+  const { scrollTop, viewportHeight: cssH, textHeight: th, borderRadius: br } = draw;
   const effectiveFit = viewMode === 'grid' ? 'contain' as const : 'cover' as const;
   let hasActiveReveal = false;
 
+  // ── Pass 1: Images with reveal animation ──
   for (let n = 0; n < visibleIterEnd; n += 1) {
     const i = visibleIndices ? visibleIndices[n] : startIdx + n;
     if (i >= endIdx) break;
@@ -125,6 +148,8 @@ export function drawCanvasBaseLayer({
     const drawThumb = useContain ? drawImageContain : drawImageCover;
 
     ctx.save();
+
+    // Clip to tile area with rounded corners
     if (useContain && item.aspectRatio) {
       const rect = getContainRect(item.aspectRatio, pos.x, drawY, pos.w, imageHeight);
       ctx.beginPath();
@@ -136,10 +161,13 @@ export function drawCanvasBaseLayer({
       ctx.clip();
     }
 
-    if (entry?.thumb && entry.state === 'shown') {
-      const revealElapsedMs = entry.animateIn
-        ? Math.max(0, now - entry.revealStartedAt)
-        : THUMBNAIL_PIPELINE_REVEAL_MS * 2;
+    // Reveal timing comes from the per-tile revealMap, not the pipeline entry.
+    // Every tile always fades in from placeholder when it enters the activation zone.
+    const revealStart = revealMap.get(i);
+    const hasBitmap = entry?.thumb != null;
+
+    if (hasBitmap && revealStart != null) {
+      const revealElapsedMs = Math.max(0, now - revealStart);
       const imageProgress = Math.min(1, revealElapsedMs / THUMBNAIL_PIPELINE_REVEAL_MS);
       const placeholderFadeElapsedMs = Math.max(0, revealElapsedMs - THUMBNAIL_PIPELINE_REVEAL_MS);
       const placeholderAlpha = imageProgress < 1
@@ -156,18 +184,24 @@ export function drawCanvasBaseLayer({
 
       if (imageProgress < 1) {
         ctx.globalAlpha = imageProgress;
-        drawThumb(ctx, entry.thumb, pos.x, drawY, pos.w, imageHeight);
+        drawThumb(ctx, entry!.thumb!, pos.x, drawY, pos.w, imageHeight);
         ctx.globalAlpha = 1;
       } else {
-        drawThumb(ctx, entry.thumb, pos.x, drawY, pos.w, imageHeight);
+        drawThumb(ctx, entry!.thumb!, pos.x, drawY, pos.w, imageHeight);
       }
     } else {
+      // No bitmap yet or no reveal started — show placeholder
       fillPlaceholder(ctx, item, theme, effectiveFit, pos.x, drawY, pos.w, imageHeight);
+      if (hasBitmap && revealStart == null) {
+        // Bitmap ready but not in revealMap yet — will be added next frame
+        hasActiveReveal = true;
+      }
     }
 
     ctx.restore();
   }
 
+  // ── Pass 2: Glass border ring ──
   ctx.strokeStyle = GLASS_BORDER_COLOR;
   ctx.lineWidth = 1;
   ctx.beginPath();
@@ -189,7 +223,8 @@ export function drawCanvasBaseLayer({
   }
   ctx.stroke();
 
-  ctx.font = BADGE_FONT;
+  // ── Pass 3: Badges (extension, duration, collection count) ──
+  const isContain = effectiveFit === 'contain';
   for (let n = 0; n < visibleIterEnd; n += 1) {
     const i = visibleIndices ? visibleIndices[n] : startIdx + n;
     if (i >= endIdx) break;
@@ -199,27 +234,44 @@ export function drawCanvasBaseLayer({
     const drawY = pos.y - scrollTop;
     if (drawY + pos.h < 0 || drawY > cssH) continue;
 
-    const imageHeight = pos.h - th;
-    let badgeX = pos.x + pos.w - 4;
-    const badgeY = drawY + 4;
-
-    if (item.durationMs != null) {
-      const duration = formatDuration(item.durationMs);
-      badgeX -= drawBadge(ctx, duration, badgeX, badgeY, 'right') + 4;
+    const imgH = pos.h - th;
+    let bx = pos.x;
+    let by = drawY;
+    let bw = pos.w;
+    if (isContain && item.kind !== 'collection' && item.aspectRatio) {
+      const rect = getContainRect(item.aspectRatio, pos.x, drawY, pos.w, imgH);
+      bx = rect.x;
+      by = rect.y;
+      bw = rect.w;
     }
 
-    if (item.kind === 'collection' && item.memberCount != null) {
-      drawBadge(ctx, String(item.memberCount), badgeX, badgeY, 'right');
+    const ext = mimeToExt(item.mime);
+    const isVideo = item.mime.startsWith('video/');
+    const isAnimated = item.mime === 'image/gif' && (item.numFrames ?? 0) > 1;
+    const isCollection = item.kind === 'collection';
+    const showBadge = !isCollection && showExtensionLabel && ext && !isHiddenBadgeType(ext);
+
+    // Extension badge — top-left
+    if (showBadge) {
+      drawBadge(ctx, ext.toUpperCase(), bx + 5, by + 5);
     }
 
-    if (showExtension) {
-      const ext = mimeToExt(item.mime);
-      if (ext && !isHiddenBadgeType(ext)) {
-        drawBadge(ctx, ext, pos.x + pos.w - 4, drawY + imageHeight - BADGE_H - 4, 'right');
-      }
+    // Duration badge — top-right (video/animated only)
+    if ((isVideo || isAnimated) && typeof item.durationMs === 'number' && item.durationMs > 0) {
+      const durText = formatDuration(item.durationMs);
+      ctx.font = BADGE_FONT;
+      const durW = ctx.measureText(durText).width + 8;
+      drawBadge(ctx, durText, bx + bw - durW - 5, by + 5);
+    }
+
+    // Collection count badge — bottom-left
+    if (isCollection) {
+      const itemCount = Math.max(0, item.memberCount ?? 0);
+      drawBadge(ctx, `${itemCount.toLocaleString()} items`, bx + 5, by + imgH - BADGE_H - 5);
     }
   }
 
+  // ── Pass 4: Rating stars ──
   ctx.font = RATING_FONT;
   ctx.fillStyle = '#ffd54f';
   ctx.textBaseline = 'top';
@@ -234,21 +286,47 @@ export function drawCanvasBaseLayer({
     ctx.fillText('★'.repeat(item.rating), pos.x + 5, drawY + 5);
   }
 
-  if (showTileName && th > 0) {
-    ctx.font = NAME_FONT;
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.85)';
-    ctx.textBaseline = 'top';
-    for (let n = 0; n < visibleIterEnd; n += 1) {
-      const i = visibleIndices ? visibleIndices[n] : startIdx + n;
-      if (i >= endIdx) break;
-      const pos = positions[i];
-      const item = items[i];
-      if (!pos || !item || !item.name) continue;
-      const drawY = pos.y - scrollTop;
-      if (drawY + pos.h < 0 || drawY > cssH) continue;
-      const nameY = drawY + (pos.h - th) + 3;
-      const displayName = truncateText(ctx, item.name, pos.w - 4);
-      ctx.fillText(displayName, pos.x + 2, nameY);
+  // ── Pass 5: Name and resolution text ──
+  if ((showTileName || showResolution) && th > 0) {
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+
+    if (showTileName) {
+      ctx.font = NAME_FONT;
+      ctx.fillStyle = theme.textPrimary;
+      for (let n = 0; n < visibleIterEnd; n += 1) {
+        const i = visibleIndices ? visibleIndices[n] : startIdx + n;
+        if (i >= endIdx) break;
+        const pos = positions[i];
+        const item = items[i];
+        if (!pos || !item) continue;
+        const drawY = pos.y - scrollTop;
+        const imageHeight = pos.h - th;
+        if (drawY + pos.h < 0 || drawY > cssH) continue;
+        const textX = pos.x + pos.w / 2;
+        const nameY = drawY + imageHeight + 14;
+        const textMaxW = pos.w - 8;
+        const ext = mimeToExt(item.mime);
+        const nameStr = (item.name || 'Untitled') + (showExtension && ext ? `.${ext}` : '');
+        ctx.fillText(truncateText(ctx, nameStr, textMaxW), textX, nameY);
+      }
+    }
+
+    if (showResolution) {
+      ctx.font = INFO_FONT;
+      ctx.fillStyle = theme.textTertiary;
+      const resOffset = showTileName ? 20 : 0;
+      for (let n = 0; n < visibleIterEnd; n += 1) {
+        const i = visibleIndices ? visibleIndices[n] : startIdx + n;
+        if (i >= endIdx) break;
+        const pos = positions[i];
+        const item = items[i];
+        if (!pos || !item || !item.width || !item.height) continue;
+        const drawY = pos.y - scrollTop;
+        const imageHeight = pos.h - th;
+        if (drawY + pos.h < 0 || drawY > cssH) continue;
+        ctx.fillText(`${item.width} × ${item.height}`, pos.x + pos.w / 2, drawY + imageHeight + 14 + resOffset);
+      }
     }
   }
 
