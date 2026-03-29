@@ -37,8 +37,41 @@ export interface CanonicalTagInfo {
   tag_id: number;
   namespace: string;
   subtag: string;
+  site_mask: string;
+  provenance_mask: string;
   source: string;
 }
+
+export interface CanonicalTagRecord {
+  tag_id: number;
+  namespace: string;
+  subtag: string;
+  file_count: number;
+  site_mask: string;
+}
+
+export interface CanonicalTagRelation {
+  tag_id: number;
+  namespace: string;
+  subtag: string;
+  relation: string;
+  site_mask: string;
+}
+
+export interface CanonicalNamespaceSummary {
+  namespace: string;
+  count: number;
+}
+
+export const TAG_PROVENANCE_MANUAL = 1n << 0n;
+export const TAG_PROVENANCE_AI = 1n << 1n;
+export const TAG_PROVENANCE_UNKNOWN = 1n << 2n;
+export const TAG_PROVENANCE_LOCAL_TOOL = 1n << 3n;
+
+export const TAG_SITE_E621 = 1n << 63n;
+export const TAG_SITE_GELBOORU = 1n << 62n;
+export const TAG_SITE_DANBOORU = 1n << 61n;
+export const TAG_SITE_RULE34 = 1n << 60n;
 
 export interface CanonicalFolderInfo {
   folder_id: number;
@@ -47,6 +80,7 @@ export interface CanonicalFolderInfo {
 
 export interface CanonicalEntityDetails {
   entity_hash: string;
+  thumbnail_hash: string;
   entity_kind: EntityKind;
   name: string | null;
   mime_type: string;
@@ -171,9 +205,26 @@ export interface SidebarTreeResponse {
 
 // ── Selection types ──────────────────────────────────────────────
 
+export interface SelectionTagCount {
+  tag: string;
+  count: number;
+}
+
+export interface SelectionSummaryStats {
+  total_size_bytes: number | null;
+  mime_counts: Record<string, number> | null;
+  rating_stats: { min: number | null; max: number | null; shared: number | null } | null;
+}
+
 export interface SelectionSummary {
   total_count: number;
-  entity_hashes: string[];
+  selected_count: number;
+  sample_hashes: string[];
+  shared_tags: SelectionTagCount[];
+  top_tags: SelectionTagCount[];
+  stats: SelectionSummaryStats;
+  pending: boolean;
+  generated_at: string;
 }
 
 // ── Bulk target types ────────────────────────────────────────────

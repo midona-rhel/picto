@@ -1,0 +1,94 @@
+.root {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  overflow: hidden;
+}
+
+.searchInput {
+  width: 100%;
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid var(--color-border-secondary);
+  height: 36px;
+  color: var(--color-text-primary);
+  font-size: 13px;
+  padding: 0 12px;
+  outline: none;
+  box-sizing: border-box;
+  flex-shrink: 0;
+}
+.searchInput::placeholder { color: var(--color-text-tertiary); }
+.searchInput:focus { border-bottom-color: var(--color-primary-60, #3297FF); }
+
+.body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px;
+}
+
+.groupTitle {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--color-text-secondary);
+  margin: 16px 0 8px;
+}
+.groupCount { color: var(--color-text-tertiary); font-weight: 400; margin-left: 4px; }
+
+.table {
+  border: 1px solid var(--color-border-secondary);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.row {
+  height: 36px;
+  display: flex;
+  align-items: center;
+  border-bottom: 1px solid var(--color-border-secondary);
+}
+.row:last-child { border-bottom: none; }
+.row:nth-child(even) { background: rgba(255, 255, 255, 0.02); }
+
+.label {
+  flex: 4;
+  padding: 4px 12px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.labelText { font-weight: 500; font-size: 13px; color: var(--color-text-primary); }
+.labelDesc { font-size: 11px; color: var(--color-text-secondary); opacity: 0.8; }
+
+.binding { flex: 3; padding: 4px; }
+
+.shortcutInputWrap { position: relative; width: 100%; }
+
+.shortcutInput {
+  width: 100%;
+  height: 28px;
+  border-radius: 6px;
+  padding: 0 52px 0 8px;
+  box-sizing: border-box;
+  color: var(--color-text-primary);
+  font-size: 13px;
+  outline: none;
+  border: 1px solid transparent;
+  background: transparent;
+  cursor: text;
+}
+.shortcutInput:focus { border-color: var(--color-primary-60, #3297FF); background: rgba(0, 0, 0, 0.2); }
+.shortcutConflict { border-color: var(--color-warning, #FFA500) !important; }
+
+.clearBtn {
+  position: absolute;
+  top: 50%; right: 6px; transform: translateY(-50%);
+  height: 18px; padding: 0 4px;
+  color: var(--color-text-tertiary);
+  font-size: 11px;
+  border: none; background: none; border-radius: 4px; cursor: pointer;
+}
+.clearBtn:hover { color: var(--color-text-primary); background: rgba(255, 255, 255, 0.1); }
+
+.empty { padding: 24px; color: var(--color-text-tertiary); font-size: 13px; text-align: center; }

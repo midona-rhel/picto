@@ -54,6 +54,15 @@ Those are separate follow-up concerns.
 
 ## Locked decisions
 
+### 0. Public transport uses decimal strings
+When these masks cross the backend/frontend transport boundary, serialize them as decimal strings.
+
+Rules:
+- Rust storage remains integer-backed
+- TypeScript transport types use `string`
+- do not expose these masks as JS `number`
+- do not invent split-word transport unless decimal strings prove insufficient
+
 ### 1. Two authoritative masks, not more
 Use exactly these authoritative fields:
 
@@ -208,4 +217,3 @@ Required tests:
 - deleting an `entity_tag` row does not mutate `tag.site_mask`
 - bulk tag application can set one provenance mask across many entities
 - serialization tests prove the public contract preserves full `u64` values without silent truncation
-

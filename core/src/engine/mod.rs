@@ -19,7 +19,9 @@ pub mod smart_folders;
 pub mod assets;
 pub mod selection;
 pub mod deferred;
+pub mod ingest;
 pub mod system;
+pub mod duplicates;
 
 use std::sync::Arc;
 
@@ -39,6 +41,14 @@ pub struct ApplicationEngine {
 impl ApplicationEngine {
     pub fn new(db: Arc<LibraryDatabase>) -> Self {
         Self { db }
+    }
+
+    pub(crate) fn db(&self) -> &LibraryDatabase {
+        &self.db
+    }
+
+    pub(crate) fn db_arc(&self) -> Arc<LibraryDatabase> {
+        self.db.clone()
     }
 
     /// Commit a write result: emit a state-change event and schedule projection work.

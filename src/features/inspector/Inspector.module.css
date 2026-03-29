@@ -22,7 +22,6 @@
   flex-direction: column;
   width: 100%;
   color: var(--color-text-primary);
-  gap: 16px;
 }
 
 /* Empty state */
@@ -50,6 +49,18 @@
   font-size: var(--font-size-sm);
 }
 
+.multiHeader {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 12px;
+}
+
+.multiTitle {
+  color: var(--color-text-primary);
+  font-size: var(--font-size-sm);
+}
+
 .errorIcon {
   color: var(--color-negative);
 }
@@ -67,6 +78,21 @@
   align-items: center;
   justify-content: center;
   margin-bottom: 8px;
+}
+
+/* Multi-select stacked preview */
+.stackContainer {
+  position: relative;
+  width: 80%;
+  height: 200px;
+}
+
+.stackItem {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 /* Scope preview — folder stack with 4-image collage inside front card */
@@ -150,8 +176,8 @@
 
 /* 2×2 collage grid inside pic1 */
 .collage {
-  width: 100%;
-  height: 100%;
+  position: absolute;
+  inset: 8px;
   display: grid;
   grid-template-columns: 1fr 1fr;
   grid-template-rows: 1fr 1fr;
@@ -186,13 +212,30 @@
   opacity: 0.2;
 }
 
+.previewFrame {
+  position: relative;
+  max-width: 200px;
+  max-height: 200px;
+  border-radius: 6px;
+  overflow: hidden;
+}
+
 .previewImage {
-  max-width: 100%;
+  display: block;
+  max-width: 200px;
   max-height: 200px;
   object-fit: contain;
   border-radius: 6px;
   user-select: none;
   -webkit-user-drag: none;
+}
+
+.previewGlass {
+  position: absolute;
+  inset: 0;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  pointer-events: none;
 }
 
 /* Read-only field pills (name, notes, source) */
@@ -201,46 +244,6 @@
   flex-direction: column;
 }
 
-.readOnlyField {
-  display: flex;
-  align-items: center;
-  height: 32px;
-  padding: 4px 8px;
-  gap: 6px;
-  border-radius: 6px;
-  background: rgba(255, 255, 255, 0.05);
-  border: 1px solid var(--color-border-primary);
-  margin-bottom: 8px;
-  font-family: var(--font-family);
-  font-size: var(--font-size-md);
-  line-height: 20px;
-  color: var(--color-text-primary);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.notesFieldReadOnly,
-.notesField {
-  min-height: 74px;
-  height: auto;
-  align-items: flex-start;
-  white-space: pre-wrap;
-  overflow: visible;
-  text-overflow: clip;
-}
-
-.notesField {
-  width: 100%;
-  resize: none;
-  outline: none;
-  background: rgba(255, 255, 255, 0.05);
-  color: var(--color-text-primary);
-}
-
-.placeholder {
-  color: var(--color-text-tertiary);
-}
 
 /* Tags — namespace:subtag chips with namespace coloring */
 .tagsWrap {
@@ -255,55 +258,37 @@
 }
 
 .tagAddBtn {
-  display: inline-flex;
+  display: flex;
   align-items: center;
   justify-content: center;
-  width: 22px;
-  height: 22px;
+  width: 26px;
+  height: 26px;
   padding: 0;
-  border: 1px dashed rgba(255, 255, 255, 0.15);
-  border-radius: var(--radius-sm);
+  border: none;
+  border-radius: 6px;
   background: none;
-  color: var(--color-text-tertiary);
+  color: var(--color-text-primary);
   cursor: pointer;
+  opacity: 0.5;
+  transition: opacity var(--ease-default) 200ms;
 }
 
 .tagAddBtn:hover {
-  border-color: var(--color-primary);
-  color: var(--color-primary);
+  opacity: 1;
 }
 
 .tagInput {
   width: 80px;
-  height: 22px;
-  padding: 0 6px;
+  height: 26px;
+  padding: 0 8px;
   border: 1px solid var(--color-border-focus);
-  border-radius: var(--radius-sm);
-  background: rgba(255, 255, 255, 0.06);
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.2);
   color: var(--color-text-primary);
-  font-size: var(--font-size-xs);
+  font-size: 12px;
   font-family: var(--font-family);
   outline: none;
   box-sizing: border-box;
-}
-
-.tag {
-  font-size: var(--font-size-sm);
-  padding: 4px 8px;
-  border-radius: var(--radius-sm);
-  white-space: nowrap;
-  display: inline-flex;
-  align-items: center;
-  gap: 0;
-  cursor: default;
-  user-select: text;
-  -webkit-user-select: text;
-  line-height: 1.3;
-}
-
-.tagNamespace {
-  color: var(--color-text-tertiary);
-  margin-right: 1px;
 }
 
 /* Folders */
@@ -313,22 +298,36 @@
   gap: 4px;
 }
 
-.folderChip {
-  font-size: 10px;
-  color: var(--color-text-secondary);
-  background: rgba(255, 255, 255, 0.06);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  padding: 2px 8px;
-  border-radius: 3px;
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  white-space: nowrap;
-  cursor: default;
-}
-
 /* Properties */
 .propsStack {
   display: flex;
   flex-direction: column;
+}
+
+.bulkActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.bulkActionBtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--color-border-subtle, rgba(255, 255, 255, 0.08));
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--color-text-primary);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.bulkActionBtn:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.bulkActionDanger {
+  color: var(--color-negative);
 }

@@ -62,7 +62,7 @@ pub async fn get_grid_page_slim(
         .filter(|h| !h.is_empty())
         .collect();
     if !backfill_hashes.is_empty() {
-        let db = state.db.clone();
+        let db = state.engine.db_arc();
         let blob_store = state.blob_store.clone();
         tokio::spawn(async move {
             super::media_io::backfill_missing_deferred(&db, &blob_store, &backfill_hashes).await;

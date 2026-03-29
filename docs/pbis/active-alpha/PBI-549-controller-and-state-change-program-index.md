@@ -160,7 +160,7 @@ Use this as the main activation path for the reset set:
 - `PBI-573` ingest/import
 - `PBI-574` export jobs
 - `PBI-575` subscriptions
-- `PBI-577` duplicates/rejected-media
+- `PBI-577` duplicates
 
 8. Activate frontend structure cleanup after the boundary is stable:
 - `PBI-595` manager navigation and manager surfaces

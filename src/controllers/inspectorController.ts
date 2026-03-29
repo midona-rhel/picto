@@ -1,21 +1,18 @@
 /**
- * Inspector controller — commits displayed inspector state.
+ * Inspector controller — handles async entity data loading.
  *
- * Live selection/navigation state can move ahead of the displayed grid during
- * scope transitions. This controller only commits inspector content when the
- * next entity or displayed scope is actually ready to render.
+ * Scope transitions are committed by GridScreen directly (atomic with snapshot).
+ * This controller only handles entity selection: fetching details + preloading images.
  */
 
 import { getDefaultStore } from 'jotai';
 import * as api from '../platform/api';
 import {
-  displayedGridSnapshotAtom,
   displayedInspectorEntityDataAtom,
   displayedInspectorTargetAtom,
   inspectorErrorAtom,
   inspectorLoadingAtom,
   liveInspectorTargetAtom,
-  type InspectorTarget,
 } from '../state/inspector';
 
 const store = getDefaultStore();
@@ -32,36 +29,17 @@ function preloadImage(src: string): Promise<void> {
   });
 }
 
-function commitScopeFromSnapshot() {
-  const snapshot = store.get(displayedGridSnapshotAtom);
-  if (!snapshot) {
-    store.set(displayedInspectorTargetAtom, { kind: 'none' });
-    store.set(displayedInspectorEntityDataAtom, null);
-    store.set(inspectorLoadingAtom, false);
-    store.set(inspectorErrorAtom, null);
-    return;
-  }
-  store.set(displayedInspectorEntityDataAtom, null);
-  store.set(displayedInspectorTargetAtom, { kind: 'scope', nodeId: snapshot.nodeId });
-  store.set(inspectorLoadingAtom, false);
-  store.set(inspectorErrorAtom, null);
-}
-
 export async function loadInspectorData(entityHash: string | null) {
+  if (!entityHash) return;
+
   const v = ++loadVersion;
-
-  if (!entityHash) {
-    commitScopeFromSnapshot();
-    return;
-  }
-
   store.set(inspectorLoadingAtom, true);
   store.set(inspectorErrorAtom, null);
 
   try {
     const result = await api.getEntityDetails(entityHash);
     if (v !== loadVersion || !result) return;
-    await preloadImage(`media://localhost/thumb/${result.entity_hash}.jpg`);
+    await preloadImage(`media://localhost/thumb/${result.thumbnail_hash ?? result.entity_hash}.jpg`);
     if (v !== loadVersion) return;
     store.set(displayedInspectorEntityDataAtom, result);
     store.set(displayedInspectorTargetAtom, { kind: 'entity', entityHash: result.entity_hash });
@@ -73,39 +51,35 @@ export async function loadInspectorData(entityHash: string | null) {
   }
 }
 
-function syncToDisplayedState(target: InspectorTarget) {
-  if (target.kind === 'entity') {
-    void loadInspectorData(target.entityHash);
-    return;
-  }
-
-  // Scope/none mode is driven by the committed displayed grid snapshot.
-  if (store.get(liveInspectorTargetAtom).kind !== 'entity') {
-    loadVersion++;
-    commitScopeFromSnapshot();
-  }
-}
-
+/** Start watching live selection for entity data loading. */
 export function startInspectorSync() {
   if (subscribed) return;
   subscribed = true;
 
-  let lastKey = '';
-  const runSync = () => {
-    const liveTarget = store.get(liveInspectorTargetAtom);
-    const snapshot = store.get(displayedGridSnapshotAtom);
-    const key =
-      liveTarget.kind === 'entity'
-        ? `entity:${liveTarget.entityHash}`
-        : snapshot
-          ? `scope:${snapshot.nodeId}`
-          : liveTarget.kind;
-    if (key === lastKey) return;
-    lastKey = key;
-    syncToDisplayedState(liveTarget);
-  };
-
-  runSync();
-  store.sub(liveInspectorTargetAtom, runSync);
-  store.sub(displayedGridSnapshotAtom, runSync);
+  let lastEntityHash = '';
+  store.sub(liveInspectorTargetAtom, () => {
+    const target = store.get(liveInspectorTargetAtom);
+    if (target.kind === 'entity') {
+      if (target.entityHash !== lastEntityHash) {
+        lastEntityHash = target.entityHash;
+        void loadInspectorData(target.entityHash);
+      }
+    } else if (target.kind === 'multi') {
+      lastEntityHash = '';
+      loadVersion++;
+      store.set(displayedInspectorEntityDataAtom, null);
+      store.set(displayedInspectorTargetAtom, target);
+      store.set(inspectorLoadingAtom, false);
+      store.set(inspectorErrorAtom, null);
+    } else {
+      lastEntityHash = '';
+      loadVersion++;
+      // Commit scope/none target immediately so the inspector switches
+      // back from entity/multi view when selection is cleared.
+      store.set(displayedInspectorEntityDataAtom, null);
+      store.set(displayedInspectorTargetAtom, target);
+      store.set(inspectorLoadingAtom, false);
+      store.set(inspectorErrorAtom, null);
+    }
+  });
 }

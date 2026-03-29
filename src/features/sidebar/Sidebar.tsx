@@ -5,7 +5,7 @@
  * Manager surfaces (Tags, Random) are out of scope — see PBI-595, PBI-596.
  */
 
-import { useEffect, useMemo, useCallback } from 'react';
+import { useEffect, useMemo, useCallback, useRef } from 'react';
 import { useAtomValue, useSetAtom } from 'jotai';
 import {
   IconFolder, IconFolderOpen, IconFolderPlus, IconFolderSymlink,
@@ -24,6 +24,7 @@ import {
   smartFolderNodesAtom, sidebarLoadingAtom,
 } from '../../state/sidebar';
 import { activeNodeIdAtom } from '../../state/navigation';
+import { pushHistory } from '../../state/navigationHistory';
 import { sidebarController } from '../../controllers/sidebarController';
 import { foldersController } from '../../controllers/foldersController';
 import { smartFoldersController } from '../../controllers/smartFoldersController';
@@ -80,9 +81,34 @@ export function Sidebar() {
     },
   });
 
+  // Pending rename: when a new folder is created, we queue its ID here
+  // and start inline rename once the node appears in the tree.
+  const pendingRenameRef = useRef<string | null>(null);
+
   useEffect(() => { sidebarController.ensureLoaded(); }, []);
 
-  const navigate = useCallback((id: string) => setActiveNodeId(id), [setActiveNodeId]);
+  // Trigger pending rename when folder nodes update
+  useEffect(() => {
+    const pendingId = pendingRenameRef.current;
+    if (!pendingId) return;
+    const node = folderNodes.find((n) => n.id === pendingId);
+    if (node) {
+      pendingRenameRef.current = null;
+      folderRename.startRename(node.id, node.name);
+    }
+  }, [folderNodes, folderRename]);
+
+  const createFolderAndRename = useCallback(async (parentId?: number | null) => {
+    const nodeId = await foldersController.create('New Folder', parentId);
+    if (nodeId) {
+      pendingRenameRef.current = nodeId;
+    }
+  }, []);
+
+  const navigate = useCallback((id: string) => {
+    setActiveNodeId(id);
+    pushHistory(id);
+  }, [setActiveNodeId]);
 
   const toggleCollapseAll = useCallback(() => {
     // If any folder is expanded, collapse all. Otherwise expand all.
@@ -120,8 +146,8 @@ export function Sidebar() {
     const isExpanded = !collapsed.has(node.id);
     const hasChildren = folderList.some(({ node: n }) => n.parent_id === node.id);
     const entries: MenuEntry[] = [
-      { label: 'New Folder', icon: <IconFolderPlus size={14} />, action: () => foldersController.create('New Folder') },
-      { label: 'New Subfolder', icon: <IconNewSubfolder size={14} />, action: () => foldersController.create('New Folder', folderId) },
+      { label: 'New Folder', icon: <IconFolderPlus size={14} />, action: () => { void createFolderAndRename(); } },
+      { label: 'New Subfolder', icon: <IconNewSubfolder size={14} />, action: () => { void createFolderAndRename(folderId); } },
       { separator: true },
       { label: 'Rename', icon: <IconRename size={14} />, action: () => folderRename.startRename(node.id, node.name) },
       { label: 'Set Auto-Tags...', icon: <IconAutoTags size={14} />, action: () => { /* TODO: needs auto-tags editor panel */ } },
@@ -218,7 +244,7 @@ export function Sidebar() {
           variant="section" label="Folders"
           expanded={!collapsed.has('folders')}
           onToggle={() => toggleCollapse('folders')}
-          onAdd={() => foldersController.create('New Folder')}
+          onAdd={() => { void createFolderAndRename(); }}
         />
         {!collapsed.has('folders') && folderList.map(({ node, indent, hasChildren }) => (
           <SidebarRow
@@ -226,7 +252,7 @@ export function Sidebar() {
             icon={<NodeIcon node={node} expanded={!collapsed.has(node.id) && hasChildren} />}
             label={folderRename.renamingId === node.id ? undefined : node.name}
             count={folderRename.renamingId === node.id ? undefined : node.count}
-            countStale={node.freshness !== 'exact' && node.freshness !== 'fresh'}
+
             active={activeNodeId === node.id} indent={indent}
             hasChildren={hasChildren} expanded={!collapsed.has(node.id)}
             onToggleExpand={() => toggleCollapse(node.id)}
@@ -241,6 +267,7 @@ export function Sidebar() {
                 onChange={(e) => folderRename.setRenameValue(e.target.value)}
                 onKeyDown={folderRename.handleKeyDown}
                 onBlur={folderRename.commitRename}
+                onContextMenu={(e) => { e.preventDefault(); folderRename.commitRename(); }}
               />
             ) : undefined}
           </SidebarRow>
@@ -258,7 +285,7 @@ export function Sidebar() {
             key={node.id} variant="smart_folder"
             icon={<NodeIcon node={node} expanded={!collapsed.has(node.id) && hasChildren} />}
             label={node.name} count={node.count}
-            countStale={node.freshness !== 'exact' && node.freshness !== 'fresh'}
+
             active={activeNodeId === node.id} indent={indent}
             hasChildren={hasChildren} expanded={!collapsed.has(node.id)}
             onToggleExpand={() => toggleCollapse(node.id)}

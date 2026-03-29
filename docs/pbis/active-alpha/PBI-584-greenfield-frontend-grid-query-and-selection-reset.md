@@ -71,11 +71,14 @@ The visual/UI rebuild of the grid screen is tracked separately in:
 - remove duplicated selection translation logic where possible
 - make grouped top-level selection semantics explicit and testable
 - define the reconcile contract between current query/window state and backend state-change facts
+- keep bulk summary/read helpers on the same canonical `EntityTarget` model as bulk writes
+- do not let select-all summary behavior fall back to loaded-window reductions for tags/folders/rating/size
 
 ## Acceptance criteria
 - the rebuilt grid data path uses the canonical entity-view query model
 - selection-driven entity actions target what the user actually selected
 - virtual selection/select-all semantics are stable and explicit
+- virtual selection/select-all summary semantics are DB-owned and truthful, not loaded-window approximations
 - slim/grid-page legacy dependence is materially reduced or removed for the rebuilt slice
 - the rebuilt grid UI can depend on this contract without legacy translation helpers
 - current query state, visible-window state, inspector display-state semantics, and backend reconcile semantics are explicit and testable
@@ -85,6 +88,7 @@ The visual/UI rebuild of the grid screen is tracked separately in:
 - grid query construction tests
 - selection-target translation tests
 - grouped selection behavior tests
+- select-all summary tests for shared tags/folders/rating without hash expansion
 - integration tests for filtered selection -> action -> runtime settle
 - reconcile-decision tests for current query vs state-change scope impact
 

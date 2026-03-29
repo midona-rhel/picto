@@ -1,0 +1,182 @@
+/* VideoPlayer — custom video player controls */
+
+.root {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #000;
+  overflow: hidden;
+}
+
+.video {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+  cursor: pointer;
+}
+
+/* Controls overlay */
+.controls {
+  position: absolute;
+  left: 0; right: 0; bottom: 0;
+  padding: 24px 12px 10px;
+  background: linear-gradient(to top, rgba(0,0,0,0.6) 0%, transparent 100%);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  transition: opacity 0.3s ease;
+  z-index: 10;
+}
+
+.controlsHidden { pointer-events: none; }
+.controlsHidden .controls { opacity: 0; }
+
+/* Progress bar */
+.progressBar {
+  width: 100%; height: 16px;
+  display: flex; align-items: center;
+  cursor: pointer; position: relative;
+}
+
+.progressTrack {
+  width: 100%; height: 4px;
+  background: rgba(255,255,255,0.15);
+  border-radius: 2px;
+  position: relative; overflow: hidden;
+  transition: height 0.1s ease;
+}
+
+.progressTrackExpanded { height: 6px; border-radius: 3px; }
+
+.progressBuffered {
+  position: absolute; top: 0; left: 0; height: 100%;
+  background: rgba(255,255,255,0.2); border-radius: inherit;
+}
+
+.progressFill {
+  position: absolute; top: 0; left: 0; height: 100%;
+  background: rgba(255,255,255,0.95); border-radius: inherit;
+}
+
+.progressHoverTime {
+  position: absolute; bottom: 20px;
+  transform: translateX(-50%);
+  background: rgba(0,0,0,0.8);
+  color: rgba(255,255,255,0.95);
+  font-size: 11px;
+  font-family: 'SF Mono', 'Menlo', 'Consolas', monospace;
+  padding: 2px 6px; border-radius: 3px;
+  white-space: nowrap; pointer-events: none;
+}
+
+/* Button row */
+.buttonRow {
+  display: flex; align-items: center;
+  justify-content: space-between; gap: 4px;
+}
+.buttonRowLeft { display: flex; align-items: center; gap: 4px; }
+.buttonRowRight { display: flex; align-items: center; gap: 4px; }
+
+/* Icon buttons */
+.icBtn {
+  display: inline-flex; align-items: center; justify-content: center;
+  padding: 0; border: none; border-radius: 5px;
+  background: transparent; cursor: pointer; outline: none;
+  color: rgba(255,255,255,0.8);
+  width: 32px; height: 32px; min-width: 32px;
+  font-size: 11px;
+  font-family: 'SF Mono', 'Menlo', 'Consolas', monospace;
+  transition: background 150ms ease;
+}
+.icBtn:hover { background: rgba(255,255,255,0.15); color: rgba(255,255,255,0.95); }
+.icBtn:active { background: rgba(255,255,255,0.25); }
+.icBtnActive { color: rgba(255,255,255,0.95); }
+
+/* Separator */
+.separator {
+  width: 1px; height: 16px;
+  background: rgba(255,255,255,0.2);
+  margin: 0 4px; flex-shrink: 0;
+}
+
+/* Time display */
+.timeDisplay {
+  font-size: 11px;
+  font-family: 'SF Mono', 'Menlo', 'Consolas', monospace;
+  color: rgba(255,255,255,0.7);
+  white-space: nowrap; cursor: default; user-select: none;
+  padding: 0 4px;
+}
+
+/* Volume panel */
+.volumePanel { position: relative; display: inline-flex; align-items: center; }
+.volumePopup {
+  position: absolute; bottom: 36px; left: 50%;
+  transform: translateX(-50%);
+  display: flex; flex-direction: column; align-items: center; gap: 4px;
+  padding: 8px 6px;
+  background: rgba(0,0,0,0.8); border-radius: 6px;
+  border: 1px solid rgba(255,255,255,0.1);
+}
+.volumePercent {
+  font-size: 10px;
+  font-family: 'SF Mono', 'Menlo', 'Consolas', monospace;
+  color: rgba(255,255,255,0.7); user-select: none;
+}
+.volumeTrack {
+  width: 4px; height: 80px;
+  background: rgba(255,255,255,0.15);
+  border-radius: 2px; position: relative; cursor: pointer;
+}
+.volumeFill {
+  position: absolute; bottom: 0; left: 0; width: 100%;
+  background: rgba(255,255,255,0.95); border-radius: 2px;
+}
+
+/* Playback rate menu */
+.rateMenuContainer { position: relative; display: inline-flex; }
+.rateButton { width: auto; min-width: 28px; padding: 0 4px; }
+.rateMenu {
+  position: absolute; bottom: 36px; left: 50%;
+  transform: translateX(-50%);
+  display: flex; flex-direction: column; padding: 4px 0;
+  background: rgba(0,0,0,0.9); border-radius: 6px;
+  border: 1px solid rgba(255,255,255,0.1);
+  min-width: 56px;
+}
+.rateMenuItem {
+  display: block; width: 100%; padding: 4px 12px;
+  color: rgba(255,255,255,0.7);
+  font-size: 12px;
+  font-family: 'SF Mono', 'Menlo', 'Consolas', monospace;
+  text-align: center; white-space: nowrap;
+  border: none; background: none; cursor: pointer;
+}
+.rateMenuItem:hover { background: rgba(255,255,255,0.1); color: rgba(255,255,255,0.95); }
+.rateMenuItemActive { color: rgba(255,255,255,0.95); }
+
+/* Volume HUD */
+.volumeHud {
+  position: absolute; top: 50%; left: 50%;
+  transform: translate(-50%, -50%);
+  display: flex; flex-direction: column; align-items: center; gap: 4px;
+  padding: 16px 24px;
+  background: rgba(0,0,0,0.7); border-radius: 12px;
+  color: rgba(255,255,255,0.95);
+  pointer-events: none;
+  animation: volumeHudFadeIn 0.15s ease;
+  z-index: 20;
+}
+.volumeHudPercent {
+  font-size: 16px;
+  font-family: 'SF Mono', 'Menlo', 'Consolas', monospace;
+  font-weight: 600;
+}
+@keyframes volumeHudFadeIn {
+  from { opacity: 0; transform: translate(-50%, -50%) scale(0.9); }
+  to { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+}

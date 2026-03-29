@@ -370,8 +370,8 @@ pub async fn update_folder(state: &AppState, input: UpdateFolderInput) -> Result
         node_id: format!("folder:{}", input.folder_id),
         removed: None, upsert: None, kind: None, parent_id: None,
         name: input.name,
-        icon: Some(input.icon),
-        color: Some(input.color),
+        icon: input.icon.map(Some),
+        color: input.color.map(Some),
         sort_order: None, count: None, selectable: None, freshness: None,
         meta_json: Some(Some(folder_meta_json_canonical(&folder))),
     };
@@ -418,16 +418,6 @@ pub async fn set_folder_watch_config(
         ..Default::default()
     };
     state.engine.update_folder(input.folder_id, &watch_patch)?;
-    // Also write to old DB so the watch worker can read it (fenced legacy dependency)
-    crate::folders::service::set_folder_watch_config(
-        &state.db,
-        input.folder_id,
-        canonical_path.clone(),
-        input.watch_enabled,
-        input.watch_subfolders,
-        input.watch_import_status_mode.clone(),
-    )
-    .await?;
 
     if input.import_existing_now {
         // import_existing_for_folder_watch emits its own final combined delta
@@ -435,6 +425,7 @@ pub async fn set_folder_watch_config(
         // No separate watch-config emission needed — one combined action.
         crate::folders::watch::import_existing_for_folder_watch(
             &state.db,
+            state.engine.db(),
             &state.blob_store,
             input.folder_id,
             &canonical_path,
@@ -481,8 +472,6 @@ pub async fn clear_folder_watch_config(
         ..Default::default()
     };
     state.engine.update_folder(input.folder_id, &clear_patch)?;
-    // Also clear on old DB so watch worker sees it (fenced legacy dependency)
-    crate::folders::service::clear_folder_watch_config(&state.db, input.folder_id).await?;
     let _ = state
         .folder_watch_commands
         .send(crate::folders::watch::FolderWatchCommand::Reload);
@@ -661,57 +650,38 @@ pub async fn reorder_folder_items(
 pub async fn get_collections(
     state: &AppState,
     _input: serde_json::Value,
-) -> Result<Vec<crate::folders::collections_db::CollectionRecord>, String> {
-    state.db.list_collections().await
+) -> Result<Vec<crate::db::types::CollectionRecord>, String> {
+    state.engine.get_collections()
 }
 
 pub async fn get_collection_summary(
     state: &AppState,
     input: GetCollectionSummaryInput,
-) -> Result<crate::folders::collections_db::CollectionSummary, String> {
-    state.db.get_collection_summary(input.id).await
+) -> Result<crate::db::types::CollectionSummary, String> {
+    state.engine.get_collection_summary(input.id)
 }
 
 pub async fn create_collection(
     state: &AppState,
     input: CreateCollectionInput,
 ) -> Result<i64, String> {
-    let collection_id = state.db.create_collection(&input.name).await?;
-    crate::events::emit_state_changed(
-        "create_collection",
-        crate::runtime_contract::change_builder::ChangeImpact::collection_membership_change(
-            collection_id,
-        )
-        .status_changed()
-        .sidebar_counts_from(&state.db)
-        .extra_grid_scopes(vec!["system:active".into()]),
-    );
-    Ok(collection_id)
+    state.engine.create_collection(&input.name)
 }
 
 pub async fn update_collection(
     state: &AppState,
     input: UpdateCollectionInput,
 ) -> Result<(), String> {
-    let member_hashes = if input.tags.is_some() {
-        state.db.list_collection_member_hashes(input.id).await?
-    } else {
-        Vec::new()
-    };
-    state
-        .db
-        .update_collection(input.id, input.name.as_deref(), input.tags.as_deref())
-        .await?;
-    let mut impact =
-        crate::runtime_contract::change_builder::ChangeImpact::collection_update(input.id);
     if input.tags.is_some() {
-        impact = impact.tags_changed();
-        if !member_hashes.is_empty() {
-            impact = impact.entity_hashes(member_hashes);
-        }
+        return Err(
+            "Collection tag editing no longer lives in update_collection; use the canonical tag commands instead"
+                .to_string(),
+        );
     }
-    crate::events::emit_state_changed("update_collection", impact);
-    Ok(())
+    let Some(name) = input.name.as_deref() else {
+        return Ok(());
+    };
+    state.engine.update_collection(input.id, name)
 }
 
 // add_collection_tags / remove_collection_tags removed —
@@ -722,205 +692,44 @@ pub async fn reorder_collection_members(
     input: ReorderCollectionMembersInput,
 ) -> Result<(), String> {
     state
-        .db
+        .engine
         .reorder_collection_members_by_hashes(input.id, &input.hashes)
-        .await?;
-    crate::events::emit_state_changed(
-        "reorder_collection_members",
-        crate::runtime_contract::change_builder::ChangeImpact::collection_update(
-            input.id,
-        ),
-    );
-    Ok(())
 }
 
 pub async fn add_collection_members(
     state: &AppState,
     input: AddCollectionMembersInput,
 ) -> Result<usize, String> {
-    let added = state
-        .db
-        .add_collection_members_by_hashes(input.id, &input.hashes)
-        .await?;
-    if added > 0 {
-        // Members are now hidden inside a collection — remove them from status bitmaps
-        let resolved = state
-            .db
-            .resolve_entity_hashes_batch(&input.hashes)
-            .await
-            .unwrap_or_default();
-        {
-            use crate::sqlite::bitmaps::BitmapKey;
-            for (_, fid) in &resolved {
-                for s in 0..=2i64 {
-                    state.db.bitmaps.remove(&BitmapKey::Status(s), *fid as u32);
-                }
-            }
-        }
-        state
-            .db
-            .emit_read_model_event(crate::sqlite::ReadModelEvent::StatusBatchChanged);
-        crate::events::emit_state_changed(
-            "add_collection_members",
-            crate::runtime_contract::change_builder::ChangeImpact::collection_membership_change(
-                input.id,
-            )
-            .status_changed()
-            .sidebar_counts_from(&state.db)
-            .extra_grid_scopes(vec!["system:active".into()]),
-        );
-    }
-    Ok(added)
+    Ok(state
+        .engine
+        .add_collection_members_by_hashes(input.id, &input.hashes)?
+        .added
+        .len())
 }
 
 pub async fn remove_collection_members(
     state: &AppState,
     input: RemoveCollectionMembersInput,
 ) -> Result<usize, String> {
-    // Resolve member file_ids before removal (they'll be orphaned after)
-    let resolved = state
-        .db
-        .resolve_entity_hashes_batch(&input.hashes)
-        .await
-        .unwrap_or_default();
-    let removed = state
-        .db
-        .remove_collection_members_by_hashes(input.id, &input.hashes)
-        .await?;
-    if removed > 0 {
-        // Members are now standalone — add them back to status bitmaps with their actual status
-        {
-            use crate::sqlite::bitmaps::BitmapKey;
-            for (_, fid) in &resolved {
-                let status = state
-                    .db
-                    .with_read_conn({
-                        let f = *fid;
-                        move |conn| {
-                            conn.query_row(
-                                "SELECT status FROM file WHERE file_id = ?1",
-                                [f],
-                                |row| row.get::<_, i64>(0),
-                            )
-                        }
-                    })
-                    .await
-                    .unwrap_or(1);
-                state
-                    .db
-                    .bitmaps
-                    .insert(&BitmapKey::Status(status), *fid as u32);
-            }
-        }
-        state
-            .db
-            .emit_read_model_event(crate::sqlite::ReadModelEvent::StatusBatchChanged);
-        crate::events::emit_state_changed(
-            "remove_collection_members",
-            crate::runtime_contract::change_builder::ChangeImpact::collection_membership_change(
-                input.id,
-            )
-            .status_changed()
-            .sidebar_counts_from(&state.db)
-            .extra_grid_scopes(vec!["system:active".into()]),
-        );
-    }
-    Ok(removed)
+    Ok(state
+        .engine
+        .remove_collection_members_by_hashes(input.id, &input.hashes)?
+        .removed
+        .len())
 }
 
 pub async fn delete_collection(
     state: &AppState,
     input: DeleteCollectionInput,
 ) -> Result<(), String> {
-    let member_hashes = state.db.list_collection_member_hashes(input.id).await?;
-    let affected_folder_ids = state
-        .db
-        .get_entity_folder_memberships_by_entity_id(input.id)
-        .await?
-        .into_iter()
-        .map(|folder| folder.folder_id)
-        .collect::<Vec<_>>();
-    // Get member file_ids BEFORE deletion (for bitmap updates)
-    let member_file_ids = state
-        .db
-        .with_read_conn({
-            let id = input.id;
-            move |conn| crate::folders::collections_db::get_collection_member_file_ids(conn, id)
-        })
-        .await?;
-
-    state.db.delete_collection(input.id).await?;
-
-    // Members are now standalone — add them to the correct Status bitmap based on their actual status.
-    // The collection entity was deleted — remove it from Status bitmaps.
-    {
-        use crate::sqlite::bitmaps::BitmapKey;
-        let cid = input.id as u32;
-        for s in 0..=2i64 {
-            state.db.bitmaps.remove(&BitmapKey::Status(s), cid);
-        }
-        // Look up each member's actual status and add to the right bitmap
-        let member_statuses = state
-            .db
-            .with_read_conn({
-                let fids = member_file_ids.clone();
-                move |conn| {
-                    let mut result = Vec::with_capacity(fids.len());
-                    for &fid in &fids {
-                        let status: i64 = conn
-                            .query_row("SELECT status FROM file WHERE file_id = ?1", [fid], |row| {
-                                row.get(0)
-                            })
-                            .unwrap_or(1);
-                        result.push((fid, status));
-                    }
-                    Ok(result)
-                }
-            })
-            .await?;
-        for (fid, status) in &member_statuses {
-            state
-                .db
-                .bitmaps
-                .insert(&BitmapKey::Status(*status), *fid as u32);
-        }
-    }
-
-    // Trigger compiler to rebuild sidebar projection with updated bitmaps
-    state
-        .db
-        .emit_read_model_event(crate::sqlite::ReadModelEvent::StatusBatchChanged);
-
-    let mut impact = crate::runtime_contract::change_builder::ChangeImpact::collection_delete(
-        input.id,
-        affected_folder_ids,
-    )
-    .status_changed()
-    .sidebar_counts_from(&state.db);
-    // Clone before moving into impact — needed for color backfill below.
-    let backfill_hashes = member_hashes.clone();
-    if !member_hashes.is_empty() {
-        impact = impact.entity_hashes(member_hashes);
-    }
-    crate::events::emit_state_changed("delete_collection", impact);
-
-    // Backfill missing colors for members that were hidden inside the collection.
-    if !backfill_hashes.is_empty() {
-        let db = state.db.clone();
-        let blob_store = state.blob_store.clone();
-        tokio::spawn(async move {
-            super::media_io::backfill_missing_deferred(&db, &blob_store, &backfill_hashes).await;
-        });
-    }
-
-    Ok(())
+    state.engine.delete_collection(input.id)
 }
 
 pub async fn list_collection_member_hashes(
     state: &AppState,
     input: DeleteCollectionInput,
 ) -> Result<Vec<String>, String> {
-    state.db.list_collection_member_hashes(input.id).await
+    state.engine.list_collection_member_hashes(input.id)
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────

@@ -3,7 +3,7 @@
  */
 
 import { atom } from 'jotai';
-import type { CanonicalEntityGridItem, BaseScope } from '../shared/types/canonical';
+import type { CanonicalEntityGridItem, BaseScope, EntityViewQuery } from '../shared/types/canonical';
 import type { GridViewMode } from '../features/grid/layout/types';
 import { activeNodeIdAtom } from './navigation';
 import { sidebarNodesAtom } from './sidebar';
@@ -12,12 +12,24 @@ import { sidebarNodesAtom } from './sidebar';
 
 export const gridScopeAtom = atom<BaseScope>({ kind: 'system', key: 'all' });
 
-export type SortField = 'date_added' | 'date_created' | 'date_modified' | 'rating' | 'name' | 'size_bytes';
+export type SortField = 'date_added' | 'date_created' | 'date_modified' | 'rating' | 'name' | 'size_bytes' | 'duration';
 export type SortDirection = 'asc' | 'desc';
 
 export const gridSortFieldAtom = atom<SortField>('date_added');
 export const gridSortDirectionAtom = atom<SortDirection>('desc');
 export const gridSearchTextAtom = atom<string>('');
+
+export const currentGridQueryAtom = atom<EntityViewQuery>((get) => {
+  const searchText = get(gridSearchTextAtom).trim();
+  return {
+    base_scope: get(gridScopeAtom),
+    filters: searchText ? { search_text: searchText } : undefined,
+    sort: {
+      field: get(gridSortFieldAtom),
+      direction: get(gridSortDirectionAtom),
+    },
+  };
+});
 
 // ── View options ─────────────────────────────────────────────────
 
@@ -25,6 +37,9 @@ export const gridViewModeAtom = atom<GridViewMode>('waterfall');
 export const gridTargetSizeAtom = atom(220);
 export const gridShowNameAtom = atom(true);
 export const gridShowExtensionAtom = atom(false);
+export const gridShowResolutionAtom = atom(false);
+export const gridShowExtensionLabelAtom = atom(false);
+export const gridFitThumbnailsAtom = atom(false);
 
 // ── Results ──────────────────────────────────────────────────────
 
@@ -37,6 +52,13 @@ export const gridErrorAtom = atom<string | null>(null);
 
 /** Whether the grid is the active surface. */
 export const gridActiveAtom = atom(true);
+
+/** Grid transition phase — inspector/toolbar freeze when not 'idle'. */
+export type GridTransitionPhase = 'idle' | 'fading_out' | 'waiting' | 'fading_in';
+export const gridTransitionPhaseAtom = atom<GridTransitionPhase>('idle');
+
+/** Pending action to execute at the midpoint of a soft fade transition. */
+export const gridSoftTransitionActionAtom = atom<(() => void) | null>(null);
 
 // ── Derived ──────────────────────────────────────────────────────
 

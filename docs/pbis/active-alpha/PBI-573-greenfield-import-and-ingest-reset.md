@@ -8,7 +8,7 @@ This document is based on an in-repo audit of the current import pipeline, watch
 
 ## Lifecycle
 - `Implemented` when one ingest pipeline/service exists for incoming media.
-- `Activatable` when `PBI-567`, `PBI-568`, and `PBI-576` are implemented, and `PBI-577` is implemented where reject/suppress behavior is required.
+- `Activatable` when `PBI-567`, `PBI-568`, and `PBI-576` are implemented, and `PBI-577` is implemented where exact file-hash reuse and exact/near pHash behavior are required.
 - `Activated` when manual import and the intended automated ingest paths use the shared ingest pipeline by default.
 - `Legacy removed` when replaced one-off import paths for that activated slice are deleted.
 
@@ -16,7 +16,7 @@ Activation depends on:
 - [PBI-567-greenfield-library-database-reset.md](./docs/pbis/active-alpha/PBI-567-greenfield-library-database-reset.md)
 - [PBI-568-greenfield-backend-engine-boundary-reset.md](./docs/pbis/active-alpha/PBI-568-greenfield-backend-engine-boundary-reset.md)
 - [PBI-576-greenfield-deferred-work-and-background-processing-reset.md](./docs/pbis/active-alpha/PBI-576-greenfield-deferred-work-and-background-processing-reset.md)
-- [PBI-577-greenfield-duplicates-and-rejected-media-reset.md](./docs/pbis/active-alpha/PBI-577-greenfield-duplicates-and-rejected-media-reset.md) where reject/suppress behavior is part of the activated flow
+- [PBI-577-greenfield-duplicates-and-rejected-media-reset.md](./docs/pbis/active-alpha/PBI-577-greenfield-duplicates-and-rejected-media-reset.md) where duplicate and exact/near pHash behavior is part of the activated flow
 
 ## Problem
 The application still has multiple ingestion paths that conceptually do the same thing but are shaped around different callers and historical shortcuts.
@@ -25,7 +25,7 @@ Current problems:
 - manual import, folder-watch import, and subscription import still feel like adjacent systems instead of one ingest pipeline
 - import logic still leaks file-centric structure upward instead of presenting one media-entity outcome
 - duplicate/reuse behavior is not locked tightly enough at the ingest boundary
-- reject/suppress behavior is not integrated into the main ingest decision path
+- exact file-hash reuse and exact/near pHash behavior are not integrated into one clear ingest decision path
 - deferred heavy work is still mixed with ingest instead of being scheduled cleanly
 
 This PBI defines one ingest pipeline for every source of incoming media.
@@ -75,6 +75,14 @@ The source may affect:
 
 It must not create a separate storage model.
 
+### 3a. Default status policy is source-driven and explicit
+The default initial status is:
+- `subscription` -> inbox
+- manual import into a target folder -> active
+- watch-folder import -> active unless the watch config explicitly overrides it
+
+Manual drag/drop into a Picto folder is a folder attachment action first. It should not land in inbox by default.
+
 ### 4. Auto-collection is a grouping policy, not a second ingest system
 When the source supplies grouping information:
 - the ingest pipeline imports/reuses member entities first
@@ -90,14 +98,26 @@ If ingest wants to place a single entity into a collection but that entity alrea
 
 Moving an entity between collections must be an explicit action.
 
-### 5. Reject/suppress checks happen inside ingest
-Before a new inbound item becomes a normal inbox/active entity, ingest must consult:
-- exact duplicate reuse rules
-- exact rejected-media suppress rules from the duplicates/rejected-media reset
+### 4b. Collection metadata is inherited from members
+Collections created during ingest derive their visible metadata from member state:
+- preview/cover comes from collection membership ordering
+- aggregate fields such as count and total size come from members
+- collection updates follow child/member changes instead of preserving a separate imported metadata truth
 
-If an inbound item exactly matches a previously rejected fingerprint:
-- ingest records the attempt
-- the item lands in rejected review state instead of normal inbox flow
+Do not treat collection import as a second metadata-authoring path beside member ingest.
+
+### 5. Exact hash and pHash checks happen inside ingest
+Before a new inbound item becomes a normal inbox/active entity, ingest must consult:
+- exact file-hash reuse rules
+- exact pHash comparison rules for comparable static images
+- near-pHash duplicate-review rules
+
+Locked behavior:
+- exact file hash reuses the existing entity and merges metadata/context
+- exact pHash only applies to comparable static images
+- exact pHash with a clearly better new image may auto-upgrade to the better version
+- exact pHash with ambiguous quality imports and goes to duplicate review
+- near pHash imports and goes to duplicate review
 
 ### 6. Deferred heavy work is scheduled, not hidden
 Ingest may synchronously do only the minimum required to create correct stored rows and basic visible results.
@@ -139,16 +159,24 @@ The ingest result should distinguish:
 - reused entities
 - created collections
 - collection attachments
-- rejected/suppressed items
+- duplicate-review candidates created during ingest
 - scheduled deferred work
 
 Do not reduce ingest outcomes to one vague imported/skipped count.
+
+### Duplicate / reuse merge rules
+When a file already exists and ingest reuses the existing single entity:
+- attach the existing entity to the requested folder/subscription/collection context instead of creating a duplicate
+- preserve the oldest known created-at value
+- merge additive metadata such as source URLs and notes
+- keep `date_modified` as normal mutable state
+- do not let a newer ingest overwrite stable older metadata just because it arrived later
 
 ## Relationship to other reset PBIs
 - PBI-567 defines the canonical storage model for files, entities, and collections
 - PBI-568 defines the engine boundary above ingest
 - PBI-576 defines the deferred-work system ingest should schedule into
-- PBI-577 defines exact duplicate and rejected-media behavior ingest must consult
+- PBI-577 defines exact duplicate and exact/near pHash behavior ingest must consult
 
 PBI-573 is the ingest and source-normalization layer sitting on top of those.
 
@@ -162,7 +190,7 @@ This PBI is complete only when:
 - file reuse and entity reuse are explicit and correct
 - manual import, watch-folder import, and subscription import share the same ingest semantics
 - auto-collection is handled as a grouping policy inside ingest, not a separate storage path
-- rejected exact matches are consulted during ingest
+- exact file hash reuse and exact/near pHash behavior are consulted during ingest
 - deferred heavy work is scheduled through the background-work system instead of being hidden inside ingest
 - ingest outcomes are structured enough for UI, review, and state-change publication
 
@@ -174,5 +202,5 @@ Required tests:
 - collection-group import attaches members without creating duplicate single entities
 - same file imported twice reuses the same single entity
 - collection ownership conflicts are recorded instead of silently duplicating or moving an entity
-- exact rejected fingerprint routes to rejected state instead of normal inbox
+- exact pHash ambiguity and near pHash create duplicate review work instead of silent suppression
 - ingest schedules deferred work instead of requiring inline derivative completion

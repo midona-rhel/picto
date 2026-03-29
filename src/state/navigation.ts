@@ -23,3 +23,15 @@ export const toggleSidebarAtom = atom(null, (get, set) => {
   set(sidebarCollapsedAtom, next);
   localStorage.setItem(STORAGE_KEY, String(next));
 });
+
+/** Whether the inspector is collapsed. Persisted to localStorage. */
+const INSPECTOR_STORAGE_KEY = 'picto-inspector-collapsed';
+const storedInspectorCollapsed = localStorage.getItem(INSPECTOR_STORAGE_KEY) === 'true';
+
+export const inspectorCollapsedAtom = atom(storedInspectorCollapsed);
+
+export const toggleInspectorAtom = atom(null, (get, set) => {
+  const next = !get(inspectorCollapsedAtom);
+  set(inspectorCollapsedAtom, next);
+  localStorage.setItem(INSPECTOR_STORAGE_KEY, String(next));
+});

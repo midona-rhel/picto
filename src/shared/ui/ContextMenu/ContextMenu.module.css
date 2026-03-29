@@ -1,4 +1,4 @@
-/* Context menu — reusable glass panel with search. */
+/* Context menu — reference application-matched glass panel with search. */
 
 .backdrop {
   position: fixed;
@@ -7,20 +7,19 @@
 }
 
 .menu {
-  --cm-icon-size: 16px;
-
   position: fixed;
   z-index: var(--layer-menu);
   width: 260px;
-  max-height: calc(100vh - 16px);
+  max-height: calc(100vh - 40px);
   overflow: hidden;
   display: flex;
   flex-direction: column;
   user-select: none;
   -webkit-user-select: none;
-  font-size: var(--font-size-sm);
+  font-size: 13px;
+  -webkit-font-smoothing: antialiased;
 
-  /* Glass surface — tokens from surfaces.css */
+  /* Glass surface */
   background: var(--glass-bg);
   backdrop-filter: var(--glass-blur);
   -webkit-backdrop-filter: var(--glass-blur);
@@ -28,38 +27,42 @@
   border-right: var(--glass-border-side);
   border-bottom: var(--glass-border-bottom);
   border-left: var(--glass-border-side);
-  border-radius: var(--radius-lg);
+  border-radius: 8px;
   box-shadow: var(--shadow-panel);
 }
 
 /* Search */
 .searchArea {
-  position: relative;
   height: 36px;
   flex-shrink: 0;
-  border-bottom: 1px solid var(--color-menu-separator);
+  box-shadow: 0 -1px 0 var(--color-border-secondary) inset;
+}
+
+.searchRow {
+  display: flex;
+  align-items: center;
+  height: 36px;
+  padding: 0 0 0 10px;
+  gap: 6px;
 }
 
 .searchIcon {
-  position: absolute;
-  left: 12px;
-  top: 50%;
-  transform: translateY(-50%);
+  flex-shrink: 0;
   color: var(--color-text-tertiary);
-  pointer-events: none;
+  opacity: 0.6;
 }
 
 .searchInput {
-  width: 100%;
-  height: 36px;
-  line-height: 36px;
-  padding: 0 12px 0 36px;
+  flex: 1;
   background: none;
   border: none;
   outline: none;
   color: var(--color-text-primary);
-  font-size: var(--font-size-sm);
+  font-size: 13px;
   font-family: var(--font-family);
+  height: 36px;
+  padding: 0;
+  min-width: 0;
   caret-color: var(--color-text-primary);
 }
 
@@ -69,22 +72,24 @@
 
 /* Items */
 .items {
+  display: flex;
+  flex-direction: column;
   overflow-y: auto;
-  padding: 3px 0;
+  padding: 4px;
+  gap: 2px;
 }
 
 .item {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 5px 8px;
-  margin: 0 3px;
-  border-radius: var(--radius-md);
+  height: 26px;
+  padding: 0 6px;
+  border-radius: 6px;
   cursor: pointer;
   color: var(--color-text-primary);
-  line-height: 1.4;
-  font-size: var(--font-size-sm);
-  transition: background var(--duration-fast) var(--ease-default);
+  white-space: nowrap;
+  font-size: 13px;
+  transition: all var(--ease-default) 30ms;
 }
 
 .item:hover,
@@ -108,20 +113,23 @@
 }
 
 .iconSlot {
-  width: var(--cm-icon-size);
-  height: var(--cm-icon-size);
-  flex-shrink: 0;
   display: flex;
   align-items: center;
-  justify-content: center;
-  color: var(--color-text-secondary);
+  width: 16px;
+  flex-shrink: 0;
+  margin-right: 6px;
+  opacity: 0.8;
 }
 
-/* Force all SVGs inside items to consistent size and stroke */
+.item:hover .iconSlot,
+.focused .iconSlot {
+  opacity: 1;
+}
+
+/* Force all SVGs inside items to consistent size */
 .item svg {
-  width: var(--cm-icon-size) !important;
-  height: var(--cm-icon-size) !important;
-  stroke-width: 1.5 !important;
+  width: 16px !important;
+  height: 16px !important;
 }
 
 .label {
@@ -133,27 +141,28 @@
 }
 
 .shortcut {
-  color: var(--color-text-tertiary);
-  font-size: var(--font-size-xs);
+  opacity: 0.5;
+  font-size: 11px;
   flex-shrink: 0;
-  margin-left: 12px;
-  font-family: var(--font-family);
+  margin-left: auto;
+  padding-left: 28px;
+  white-space: nowrap;
 }
 
 .separator {
   height: 1px;
-  background: var(--color-menu-separator);
-  margin: 3px 6px;
+  background: var(--color-border-secondary);
+  margin: 2px 0;
 }
 
 .customItem {
-  padding: 4px 8px;
-  margin: 0 3px;
+  padding: 0 6px;
+  margin: 0;
 }
 
 .empty {
   text-align: center;
   color: var(--color-text-tertiary);
   padding: 8px 12px;
-  font-size: var(--font-size-sm);
+  font-size: 12px;
 }

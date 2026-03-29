@@ -43,6 +43,9 @@ Locked behavior:
 - scope mode uses the same inspector grammar as entity mode: preview, name, notes, properties, optional sections
 - folder and smart-folder notes are real persisted metadata
 - system-scope notes are fixed read-only descriptions
+- multi-select inspector mode uses canonical `SelectionSummary` read helpers over the same `EntityTarget` model used by bulk writes
+- multi-select shared tags and shared folders are removable intersections only; additive bulk actions do not require full intersection state
+- bulk notes are a write surface, not a “shared notes” read model
 
 The rebuilt inspector should not preserve a separate legacy preview implementation if the same visual object already exists in the rebuilt grid or viewer surface.
 If the inspector preview is just the same rounded media preview with different surrounding controls, it should share that preview primitive.
@@ -63,6 +66,7 @@ Do not start [PBI-585-greenfield-frontend-media-consumption-reset.md](./docs/pbi
 - no-selection mode shows current scope context instead of an empty state
 - metadata and selection summary behavior are stable
 - tag/folder/notes/rating/source-url actions remain correct
+- multi-select summary remains truthful for explicit selection and query-results select-all
 - parity is confirmed against the reference harness
 - the rebuilt inspector no longer depends on the legacy inspector architecture
 - preview and row primitives that are equivalent to rebuilt grid/sidebar/UI primitives are shared instead of rebuilt separately
@@ -72,6 +76,7 @@ Do not start [PBI-585-greenfield-frontend-media-consumption-reset.md](./docs/pbi
 ## Tests
 - fixture rendering tests for single-item, multi-item, collection, and virtual-selection states
 - interaction tests for the main inspector actions
+- multi-select tests for shared tags, shared folders, and mixed/shared rating state
 - parity checklist and visual confirmation notes
 
 This PBI must follow the cross-layer naming contract in [PBI-572-cross-layer-naming-contract.md](./docs/pbis/active-alpha/PBI-572-cross-layer-naming-contract.md).

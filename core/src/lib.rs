@@ -14,9 +14,13 @@ pub mod ai_tagger;
 pub mod duplicates;
 pub mod folders;
 pub mod grid;
+pub mod ingest;
 pub mod import;
 pub mod metadata;
 pub mod media_derivatives;
+pub mod media_capabilities;
+pub mod media_analysis;
+pub mod media_delivery;
 pub mod scope;
 pub mod selection;
 pub mod settings;
@@ -27,6 +31,7 @@ pub mod tags;
 
 // ── Cross-cutting infrastructure ────────────────────
 pub mod blob_store;
+pub mod background_work;
 pub mod constants;
 pub mod credential_store;
 pub mod dispatch;

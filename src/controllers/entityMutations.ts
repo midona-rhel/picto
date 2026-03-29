@@ -7,35 +7,90 @@
 
 import * as api from '../platform/api';
 import { loadInspectorData } from './inspectorController';
-import type { EntityTarget } from '../shared/types/canonical';
+import type { EntityTarget, SelectionSummary } from '../shared/types/canonical';
 
 function singleTarget(entityHash: string): EntityTarget {
   return { kind: 'entity_hashes', entity_hashes: [entityHash] };
 }
 
+function maybeReloadSingleEntity(target: EntityTarget): void {
+  const hashes = target.kind === 'entity_hashes' ? target.entity_hashes ?? [] : [];
+  if (hashes.length === 1) {
+    void loadInspectorData(hashes[0]);
+  }
+}
+
+export async function setTargetRating(target: EntityTarget, rating: number): Promise<void> {
+  await api.patchMediaEntities(target, { rating });
+  maybeReloadSingleEntity(target);
+}
+
+export async function setTargetName(target: EntityTarget, name: string): Promise<void> {
+  await api.patchMediaEntities(target, { name });
+  maybeReloadSingleEntity(target);
+}
+
+export async function setTargetNotes(target: EntityTarget, notes: string): Promise<void> {
+  await api.patchMediaEntities(target, { notes: notes.trim() || null });
+  maybeReloadSingleEntity(target);
+}
+
+export async function addTargetTags(target: EntityTarget, tags: string[]): Promise<void> {
+  if (tags.length === 0) return;
+  await api.applyEntityTags(target, 'add', tags);
+  maybeReloadSingleEntity(target);
+}
+
+export async function removeTargetTags(target: EntityTarget, tags: string[]): Promise<void> {
+  if (tags.length === 0) return;
+  await api.applyEntityTags(target, 'remove', tags);
+  maybeReloadSingleEntity(target);
+}
+
+export async function setTargetStatus(target: EntityTarget, status: number): Promise<void> {
+  await api.setEntityStatus(target, status);
+  maybeReloadSingleEntity(target);
+}
+
+export async function updateTargetFolderMembership(
+  target: EntityTarget,
+  folderId: number,
+  operation: 'add' | 'remove',
+): Promise<void> {
+  await api.updateFolderMembership(target, folderId, operation);
+  maybeReloadSingleEntity(target);
+}
+
+export async function getTargetSelectionSummary(target: EntityTarget): Promise<SelectionSummary> {
+  return api.getSelectionSummary(target);
+}
+
 export async function setEntityRating(entityHash: string, rating: number): Promise<void> {
-  await api.patchMediaEntities(singleTarget(entityHash), { rating });
-  void loadInspectorData(entityHash);
+  await setTargetRating(singleTarget(entityHash), rating);
 }
 
 export async function setEntityName(entityHash: string, name: string): Promise<void> {
-  await api.patchMediaEntities(singleTarget(entityHash), { name });
-  void loadInspectorData(entityHash);
+  await setTargetName(singleTarget(entityHash), name);
 }
 
 export async function setEntityNotes(entityHash: string, notes: string): Promise<void> {
-  await api.patchMediaEntities(singleTarget(entityHash), { notes: notes.trim() || null });
-  void loadInspectorData(entityHash);
+  await setTargetNotes(singleTarget(entityHash), notes);
 }
 
 export async function addEntityTags(entityHash: string, tags: string[]): Promise<void> {
-  if (tags.length === 0) return;
-  await api.applyEntityTags(singleTarget(entityHash), 'add', tags);
-  void loadInspectorData(entityHash);
+  await addTargetTags(singleTarget(entityHash), tags);
 }
 
 export async function removeEntityTags(entityHash: string, tags: string[]): Promise<void> {
-  if (tags.length === 0) return;
-  await api.applyEntityTags(singleTarget(entityHash), 'remove', tags);
+  await removeTargetTags(singleTarget(entityHash), tags);
+}
+
+export async function removeEntityFromFolder(entityHash: string, folderId: number): Promise<void> {
+  await api.removeEntitiesFromFolder(folderId, [entityHash]);
+  void loadInspectorData(entityHash);
+}
+
+export async function setEntitySourceUrls(entityHash: string, urls: string[]): Promise<void> {
+  await api.patchMediaEntities(singleTarget(entityHash), { source_urls: urls.length > 0 ? urls : null });
   void loadInspectorData(entityHash);
 }

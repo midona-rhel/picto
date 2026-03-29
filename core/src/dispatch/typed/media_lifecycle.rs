@@ -72,27 +72,14 @@ pub async fn import_files(
         }
     }
 
-    let app_settings = state.settings.get();
-    let auto_merge_enabled = app_settings.duplicate_auto_merge_enabled
-        && !app_settings.duplicate_auto_merge_subscriptions_only;
-    let auto_merge_distance = if auto_merge_enabled {
-        crate::settings::store::similarity_pct_to_distance(
-            app_settings.duplicate_auto_merge_similarity_pct,
-        )
-    } else {
-        0
-    };
-    let auto_merge_require_matching_dimensions =
-        app_settings.duplicate_auto_merge_require_matching_dimensions;
-    let result = crate::import::service::ImportService::import_files(
+    let result = state
+        .engine
+        .import_files(
         &state.db,
         &state.blob_store,
         input.paths,
         input.tag_strings,
         input.source_urls,
-        auto_merge_enabled,
-        auto_merge_distance,
-        auto_merge_require_matching_dimensions,
         input.initial_status,
         Some(&state.library_root),
     )
@@ -119,27 +106,14 @@ pub async fn import_folder(
         }
     }
 
-    let app_settings = state.settings.get();
-    let auto_merge_enabled = app_settings.duplicate_auto_merge_enabled
-        && !app_settings.duplicate_auto_merge_subscriptions_only;
-    let auto_merge_distance = if auto_merge_enabled {
-        crate::settings::store::similarity_pct_to_distance(
-            app_settings.duplicate_auto_merge_similarity_pct,
-        )
-    } else {
-        0
-    };
-    let auto_merge_require_matching_dimensions =
-        app_settings.duplicate_auto_merge_require_matching_dimensions;
-    let result = crate::import::service::ImportService::import_folder(
+    let result = state
+        .engine
+        .import_folder(
         &state.db,
         &state.blob_store,
         input.path,
         input.preserve_structure,
         input.parent_folder_id,
-        auto_merge_enabled,
-        auto_merge_distance,
-        auto_merge_require_matching_dimensions,
         input.initial_status,
     )
     .await?;

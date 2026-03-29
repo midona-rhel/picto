@@ -1,0 +1,68 @@
+/**
+ * Navigation history — back/forward stack for scope navigation.
+ *
+ * Tracks visited sidebar node IDs. Supports browser-like back/forward.
+ */
+
+import { atom, getDefaultStore } from 'jotai';
+import { activeNodeIdAtom } from './navigation';
+
+interface HistoryState {
+  stack: string[];
+  cursor: number;
+}
+
+const historyAtom = atom<HistoryState>({
+  stack: ['system:active'],
+  cursor: 0,
+});
+
+export const canGoBackAtom = atom((get) => get(historyAtom).cursor > 0);
+export const canGoForwardAtom = atom((get) => {
+  const h = get(historyAtom);
+  return h.cursor < h.stack.length - 1;
+});
+
+const store = getDefaultStore();
+
+// ── Scroll position per scope ────────────────────────────────────
+const scrollPositions = new Map<string, number>();
+
+export function saveScrollPosition(nodeId: string, scrollTop: number) {
+  scrollPositions.set(nodeId, scrollTop);
+}
+
+export function getScrollPosition(nodeId: string): number | null {
+  return scrollPositions.get(nodeId) ?? null;
+}
+
+/** Push a new node onto the history stack (called on scope navigation). */
+export function pushHistory(nodeId: string) {
+  const h = store.get(historyAtom);
+  // If we're not at the end, truncate forward history
+  const stack = h.stack.slice(0, h.cursor + 1);
+  // Don't push duplicate
+  if (stack[stack.length - 1] === nodeId) return;
+  stack.push(nodeId);
+  // Cap at 100 entries
+  if (stack.length > 100) stack.shift();
+  store.set(historyAtom, { stack, cursor: stack.length - 1 });
+}
+
+/** Go back in history. */
+export function goBack() {
+  const h = store.get(historyAtom);
+  if (h.cursor <= 0) return;
+  const next = h.cursor - 1;
+  store.set(historyAtom, { ...h, cursor: next });
+  store.set(activeNodeIdAtom, h.stack[next]);
+}
+
+/** Go forward in history. */
+export function goForward() {
+  const h = store.get(historyAtom);
+  if (h.cursor >= h.stack.length - 1) return;
+  const next = h.cursor + 1;
+  store.set(historyAtom, { ...h, cursor: next });
+  store.set(activeNodeIdAtom, h.stack[next]);
+}

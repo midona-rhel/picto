@@ -12,8 +12,10 @@ import {
   gridScopeAtom, gridActiveAtom, gridItemsAtom, gridCursorAtom,
   gridTotalCountAtom, gridTotalSizeBytesAtom, gridLoadingAtom, gridErrorAtom,
   gridSortFieldAtom, gridSortDirectionAtom, gridSearchTextAtom,
+  currentGridQueryAtom,
+  gridSoftTransitionActionAtom,
 } from '../state/grid';
-import { selectedEntityHashAtom } from '../state/selection';
+import { selectedEntityHashesAtom } from '../state/selection';
 
 const store = getDefaultStore();
 
@@ -23,20 +25,15 @@ let searchDebounceTimer: ReturnType<typeof setTimeout> | null = null;
 const SEARCH_DEBOUNCE_MS = 300;
 
 function currentQuery(limit: number): EntityViewQuery {
-  const searchText = store.get(gridSearchTextAtom).trim();
-  return {
-    base_scope: store.get(gridScopeAtom),
-    filters: searchText ? { search_text: searchText } : undefined,
-    sort: { field: store.get(gridSortFieldAtom), direction: store.get(gridSortDirectionAtom) },
-    page: { limit },
-  };
+  const q = store.get(currentGridQueryAtom);
+  return { ...q, page: { limit } };
 }
 
 export const gridController = {
   async navigateTo(scope: BaseScope) {
     store.set(gridScopeAtom, scope);
     store.set(gridSearchTextAtom, '');
-    store.set(selectedEntityHashAtom, null);
+    store.set(selectedEntityHashesAtom, new Set());
     store.set(gridActiveAtom, true);
     if (searchDebounceTimer) { clearTimeout(searchDebounceTimer); searchDebounceTimer = null; }
     await this.loadFirstPage();
@@ -46,7 +43,7 @@ export const gridController = {
     gridVersion++;
     paginationInFlight = null;
     if (searchDebounceTimer) { clearTimeout(searchDebounceTimer); searchDebounceTimer = null; }
-    store.set(selectedEntityHashAtom, null);
+    store.set(selectedEntityHashesAtom, new Set());
     store.set(gridActiveAtom, false);
   },
 
@@ -60,11 +57,13 @@ export const gridController = {
     }, SEARCH_DEBOUNCE_MS);
   },
 
-  /** Change sort and reload. */
-  async setSort(field: SortField, direction: SortDirection) {
-    store.set(gridSortFieldAtom, field);
-    store.set(gridSortDirectionAtom, direction);
-    await this.loadFirstPage();
+  /** Change sort — deferred to soft fade midpoint. */
+  setSort(field: SortField, direction: SortDirection) {
+    store.set(gridSoftTransitionActionAtom, () => {
+      store.set(gridSortFieldAtom, field);
+      store.set(gridSortDirectionAtom, direction);
+      void this.loadFirstPage({ preserveItems: true });
+    });
   },
 
   async loadFirstPage(options?: { preserveItems?: boolean }) {
@@ -79,8 +78,11 @@ export const gridController = {
       store.set(gridTotalSizeBytesAtom, null);
     }
     try {
-      // First page loads 500 items for accurate scroll height estimation.
-      // Subsequent pages load 100 via loadNextPage.
+      // First page loads 500 items so the layout math has enough positions
+      // to estimate the total scroll height accurately (avoids scrollbar jitter
+      // as 100-item batches stream in). Subsequent pages load 100 via loadNextPage.
+      // This is a deliberate UX trade-off: slightly larger initial payload for
+      // stable scroll behavior. Can be tuned down if memory pressure is observed.
       const result = await api.queryEntityView(currentQuery(500));
       if (v !== gridVersion) return;
       store.set(gridItemsAtom, result.items);

@@ -10,6 +10,7 @@ use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
 use crate::blob_store::BlobStore;
+use crate::db::LibraryDatabase;
 use crate::folders::watch::FolderWatchCommand;
 use crate::rate_limiter::RateLimiter;
 use crate::sqlite::SqliteDatabase;
@@ -24,6 +25,7 @@ const SHUTDOWN_JOIN_TIMEOUT: std::time::Duration = std::time::Duration::from_sec
 /// and passed to `stop_workers()` on shutdown.
 pub async fn start_workers(
     db: &Arc<SqliteDatabase>,
+    canonical_db: &Arc<LibraryDatabase>,
     blob_store: &Arc<BlobStore>,
     rate_limiter: &RateLimiter,
     running_subscriptions: &RunningSubscriptions,
@@ -136,10 +138,10 @@ pub async fn start_workers(
 
     // ── Deferred media work queue ─────────────────────
     {
-        let deferred_db = db.clone();
+        let deferred_db = canonical_db.clone();
         let deferred_blob = blob_store.clone();
         let deferred_cancel = cancel.clone();
-        let handle = tokio::spawn(crate::media_derivatives::start_deferred_work_loop(
+        let handle = tokio::spawn(crate::background_work::start_worker_loop(
             deferred_db,
             deferred_blob,
             deferred_cancel,
@@ -150,10 +152,12 @@ pub async fn start_workers(
     // ── Folder watch worker ────────────────────────────
     {
         let watch_db = db.clone();
+        let watch_canonical_db = canonical_db.clone();
         let watch_blob = blob_store.clone();
         let watch_cancel = cancel.clone();
         let handle = crate::folders::watch::spawn_worker(
             watch_db,
+            watch_canonical_db,
             watch_blob,
             folder_watch_rx,
             watch_cancel,

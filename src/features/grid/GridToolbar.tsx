@@ -7,50 +7,36 @@
 
 import { useAtomValue, useSetAtom } from 'jotai';
 import { useRef, useState, useEffect, useCallback } from 'react';
+import { KbdTooltip } from '../../shared/ui/KbdTooltip';
 import {
   IconMinus, IconPlus, IconSearch,
   IconAdjustments, IconFilter,
+  IconArrowLeft, IconChevronLeft, IconChevronRight,
+  IconArrowsMaximize, IconMaximize,
 } from '@tabler/icons-react';
 import {
   gridTargetSizeAtom,
-  gridScopeLabelAtom,
   gridSearchTextAtom,
 } from '../../state/grid';
+import { displayedScopeLabelAtom } from '../../state/inspector';
+import { canGoBackAtom, canGoForwardAtom, goBack, goForward } from '../../state/navigationHistory';
 import { gridController } from '../../controllers/gridController';
 import { gridPerfAtom } from '../../state/gridPerf';
+import { viewerSessionAtom, viewerDisplayStateAtom, viewerDisplayControlsAtom } from '../../state/viewer';
+import { ContextMenu, useContextMenu } from '../../shared/ui/ContextMenu';
+import { buildViewMenuEntries } from './GridViewMenu';
 import styles from './GridToolbar.module.css';
 
-const ZOOM_MIN = 100;
+const ZOOM_MIN = 150;
 const ZOOM_MAX = 900;
 const ZOOM_STEP = 50;
 
-// ── Title with fade transition on scope change ──────────────────
-
-const TITLE_FADE_MS = 250;
+// ── Title — reads from frozen snapshot, changes with the grid fade ──
 
 function ScopeTitle() {
-  const label = useAtomValue(gridScopeLabelAtom);
-  const [displayed, setDisplayed] = useState(label);
-  const [fading, setFading] = useState(false);
-  const pendingRef = useRef(label);
-
-  useEffect(() => {
-    if (label === displayed) return;
-    pendingRef.current = label;
-    setFading(true);
-    const timer = window.setTimeout(() => {
-      setDisplayed(pendingRef.current);
-      setFading(false);
-    }, TITLE_FADE_MS);
-    return () => clearTimeout(timer);
-  }, [label, displayed]);
-
-  if (!displayed) return null;
-  return (
-    <span className={`${styles.title} ${fading ? styles.titleFadeOut : styles.titleFadeIn}`}>
-      {displayed}
-    </span>
-  );
+  const label = useAtomValue(displayedScopeLabelAtom);
+  if (!label) return null;
+  return <span className={styles.title}>{label}</span>;
 }
 
 // ── Zoom controls ───────────────────────────────────────────────
@@ -147,20 +133,159 @@ function PerfChip() {
 
 // ── Toolbar root ────────────────────────────────────────────────
 
-export function GridToolbar() {
-  const isDevHost = typeof window !== 'undefined'
-    && (window.location.hostname === '127.0.0.1' || window.location.hostname === 'localhost');
+// Logarithmic zoom slider: 0→5%, 50→100%, 100→800%
+function zoomToSlider(zoomPct: number): number {
+  if (zoomPct <= 100) return 50 * Math.log(zoomPct / 5) / Math.log(100 / 5);
+  return 50 + 50 * Math.log(zoomPct / 100) / Math.log(800 / 100);
+}
+function sliderToZoom(pos: number): number {
+  if (pos <= 50) return 5 * Math.pow(100 / 5, pos / 50);
+  return 100 * Math.pow(800 / 100, (pos - 50) / 50);
+}
+
+function ViewerToolbar() {
+  const state = useAtomValue(viewerDisplayStateAtom);
+  const controls = useAtomValue(viewerDisplayControlsAtom);
+  const [sliderPos, setSliderPos] = useState(50);
+  const sliderDraggingRef = useRef(false);
+
+  // Sync slider from viewer state when not dragging
+  useEffect(() => {
+    if (state && !sliderDraggingRef.current) {
+      setSliderPos(zoomToSlider(state.zoomPercent));
+    }
+  }, [state?.zoomPercent]);
+
+  if (!state || !controls) return null;
+
+  const canPrev = state.currentIndex > 0;
+  const canNext = state.currentIndex < state.total - 1;
 
   return (
     <div className={styles.toolbar}>
-      <ScopeTitle />
+      <div className={styles.leftSection}>
+        <KbdTooltip label="Back to grid" shortcut="Escape">
+          <button className={styles.icBtn} onClick={controls.close}>
+            <IconArrowLeft size={16} />
+          </button>
+        </KbdTooltip>
+        <span className={styles.counter}>
+          {state.currentIndex + 1} / {state.total}
+        </span>
+      </div>
 
       <div className={styles.centerGroup}>
+        <div className={styles.sliderSection}>
+          <span className={styles.zoomLabel}>{state.zoomPercent}%</span>
+          <input
+            type="range"
+            className={styles.zoomSlider}
+            min={0}
+            max={100}
+            step={0.5}
+            value={sliderPos}
+            onChange={(e) => {
+              sliderDraggingRef.current = true;
+              const v = Number(e.target.value);
+              setSliderPos(v);
+              controls.setZoomScale(sliderToZoom(v) / 100);
+            }}
+            onMouseUp={() => { sliderDraggingRef.current = false; }}
+            onTouchEnd={() => { sliderDraggingRef.current = false; }}
+          />
+        </div>
+      </div>
+
+      <div className={styles.rightSection}>
+        <KbdTooltip label="Fit to window" shortcut="`">
+          <button className={styles.icBtn} onClick={controls.fitToWindow}>
+            <IconArrowsMaximize size={14} />
+          </button>
+        </KbdTooltip>
+        <KbdTooltip label="Actual size" shortcut="Mod+0">
+          <button className={styles.icBtn} onClick={controls.fitActual}>
+            <IconMaximize size={14} />
+          </button>
+        </KbdTooltip>
+        <div className={styles.navGroup}>
+          <KbdTooltip label="Previous" shortcut="ArrowLeft">
+            <button
+              className={`${styles.icBtn} ${!canPrev ? styles.icBtnDisabled : ''}`}
+              onClick={canPrev ? () => controls.navigate(-1) : undefined}
+            >
+              <IconChevronLeft size={16} />
+            </button>
+          </KbdTooltip>
+          <KbdTooltip label="Next" shortcut="ArrowRight">
+            <button
+              className={`${styles.icBtn} ${!canNext ? styles.icBtnDisabled : ''}`}
+              onClick={canNext ? () => controls.navigate(1) : undefined}
+            >
+              <IconChevronRight size={16} />
+            </button>
+          </KbdTooltip>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export function GridToolbar() {
+  const viewerSession = useAtomValue(viewerSessionAtom);
+  const isDevHost = typeof window !== 'undefined'
+    && (window.location.hostname === '127.0.0.1' || window.location.hostname === 'localhost');
+  const viewMenu = useContextMenu();
+  const viewBtnRef = useRef<HTMLButtonElement>(null);
+
+  const canBack = useAtomValue(canGoBackAtom);
+  const canForward = useAtomValue(canGoForwardAtom);
+
+  const openViewMenu = useCallback(() => {
+    const rect = viewBtnRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    viewMenu.openAt({ x: rect.left, y: rect.bottom + 4 }, buildViewMenuEntries());
+  }, [viewMenu]);
+
+  const toolbarRef = useRef<HTMLDivElement>(null);
+  const [toolbarWidth, setToolbarWidth] = useState(9999);
+  useEffect(() => {
+    const el = toolbarRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver((entries) => {
+      for (const entry of entries) setToolbarWidth(entry.contentRect.width);
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [viewerSession]);
+
+  // When viewer is open, swap toolbar contents
+  if (viewerSession) {
+    return <ViewerToolbar />;
+  }
+
+  const showZoom = toolbarWidth > 300;
+
+  return (
+    <div ref={toolbarRef} className={styles.toolbar}>
+      <button className={`${styles.icBtn} ${!canBack ? styles.icBtnDisabled : ''}`} onClick={canBack ? goBack : undefined} title="Back (⌘[)">
+        <IconChevronLeft size={16} stroke={1.5} />
+      </button>
+      <button className={`${styles.icBtn} ${!canForward ? styles.icBtnDisabled : ''}`} onClick={canForward ? goForward : undefined} title="Forward (⌘])">
+        <IconChevronRight size={16} stroke={1.5} />
+      </button>
+      <ScopeTitle />
+
+      <div className={styles.centerGroup} style={showZoom ? undefined : { visibility: 'hidden', pointerEvents: 'none' }}>
         <ZoomControls />
       </div>
 
       <div className={styles.rightSection}>
-        <button className={styles.icBtn} title="View">
+        <button
+          ref={viewBtnRef}
+          className={`${styles.icBtn} ${viewMenu.state ? styles.icBtnActive : ''}`}
+          onClick={openViewMenu}
+          title="View"
+        >
           <IconAdjustments size={14} style={{ transform: 'rotate(90deg)' }} />
         </button>
 
@@ -172,6 +297,16 @@ export function GridToolbar() {
       </div>
 
       {isDevHost && <PerfChip />}
+
+      {viewMenu.state && (
+        <ContextMenu
+          entries={viewMenu.state.entries}
+          position={viewMenu.state.position}
+          onClose={viewMenu.close}
+          searchable={false}
+          width={270}
+        />
+      )}
     </div>
   );
 }

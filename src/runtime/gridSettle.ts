@@ -110,9 +110,9 @@ function classifyGridAction(changes: StateChanges, scope: BaseScope): GridAction
     return 'ignore';
   }
 
-  // 8. Compiler batch — fallback refresh
+  // 8. Compiler batch — sidebar-only work (rename, reorder, color).
+  // Smart folder content rebuilds always carry extra_grid_scopes (handled by step 1).
   if (changes.compiler_batch_done) {
-    if (scope.kind === 'smart_folder' || scope.kind === 'system') return 'refresh';
     return 'ignore';
   }
 
@@ -141,7 +141,7 @@ export function startGridSettle() {
         gridController.reconcile(false); // Membership may have changed — backend decides
         break;
       case 'refresh':
-        gridController.loadFirstPage();
+        gridController.loadFirstPage({ preserveItems: true });
         break;
     }
   });

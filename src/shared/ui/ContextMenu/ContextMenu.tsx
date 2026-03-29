@@ -42,9 +42,10 @@ interface ContextMenuProps {
   position: { x: number; y: number };
   onClose: () => void;
   searchable?: boolean;
+  width?: number;
 }
 
-export function ContextMenu({ entries, position, onClose, searchable = true }: ContextMenuProps) {
+export function ContextMenu({ entries, position, onClose, searchable = true, width }: ContextMenuProps) {
   const menuRef = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   const [pos, setPos] = useState(position);
@@ -117,32 +118,34 @@ export function ContextMenu({ entries, position, onClose, searchable = true }: C
   }, [onClose, focusIdx, cleaned, actionableIndices]);
 
   return createPortal(
-    <>
+    <div className="no-drag-region">
       <div
         className={styles.backdrop}
-        onClick={onClose}
-        onContextMenu={(e) => { e.preventDefault(); onClose(); }}
+        onPointerDown={(e) => { e.preventDefault(); e.stopPropagation(); onClose(); }}
+        onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); onClose(); }}
       />
       <div
         ref={menuRef}
         className={styles.menu}
-        style={{ left: pos.x, top: pos.y }}
+        style={{ left: pos.x, top: pos.y, width: width ?? undefined }}
         onPointerDown={(e) => e.stopPropagation()}
         onContextMenu={(e) => e.preventDefault()}
       >
         {searchable && (
           <div className={styles.searchArea}>
-            <IconSearch size={18} stroke={1.5} className={styles.searchIcon} />
-            <input
-              ref={searchRef}
-              className={styles.searchInput}
-              value={search}
-              onChange={(e) => { setSearch(e.target.value); setFocusIdx(-1); }}
-              placeholder="Search..."
-              onKeyDown={(e) => {
-                if (e.key === 'Escape') { e.stopPropagation(); onClose(); }
-              }}
-            />
+            <div className={styles.searchRow}>
+              <IconSearch size={16} stroke={1.5} className={styles.searchIcon} />
+              <input
+                ref={searchRef}
+                className={styles.searchInput}
+                value={search}
+                onChange={(e) => { setSearch(e.target.value); setFocusIdx(-1); }}
+                placeholder="Search..."
+                onKeyDown={(e) => {
+                  if (e.key === 'Escape') { e.stopPropagation(); onClose(); }
+                }}
+              />
+            </div>
           </div>
         )}
 
@@ -189,7 +192,7 @@ export function ContextMenu({ entries, position, onClose, searchable = true }: C
           )}
         </div>
       </div>
-    </>,
+    </div>,
     document.body,
   );
 }
@@ -225,7 +228,12 @@ export function useContextMenu() {
     setState({ entries, position: { x: e.clientX, y: e.clientY } });
   }, []);
 
+  /** Open at explicit coordinates — no event required. */
+  const openAt = useCallback((position: { x: number; y: number }, entries: MenuEntry[]) => {
+    setState({ entries, position });
+  }, []);
+
   const close = useCallback(() => setState(null), []);
 
-  return { state, open, close };
+  return { state, open, openAt, close };
 }

@@ -57,6 +57,7 @@ CREATE TABLE IF NOT EXISTS tag (
     tag_id     INTEGER PRIMARY KEY,
     namespace  TEXT    NOT NULL DEFAULT '',
     subtag     TEXT    NOT NULL,
+    site_mask  INTEGER NOT NULL DEFAULT 0,
     file_count INTEGER NOT NULL DEFAULT 0,
     UNIQUE (namespace, subtag)
 );
@@ -64,6 +65,7 @@ CREATE TABLE IF NOT EXISTS tag (
 CREATE TABLE IF NOT EXISTS entity_tag (
     entity_id  INTEGER NOT NULL REFERENCES media_entity(entity_id) ON DELETE CASCADE,
     tag_id     INTEGER NOT NULL REFERENCES tag(tag_id) ON DELETE CASCADE,
+    provenance_mask INTEGER NOT NULL DEFAULT 0,
     source     TEXT    NOT NULL DEFAULT 'local',
     PRIMARY KEY (entity_id, tag_id, source)
 );

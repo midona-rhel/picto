@@ -22,7 +22,6 @@ import {
   truncateText,
   formatDuration,
 } from './primitives';
-import { THUMBNAIL_PIPELINE_REVEAL_MS } from './thumbnailPipeline';
 
 const GLASS_BORDER_COLOR = 'rgba(255, 255, 255, 0.2)';
 
@@ -45,14 +44,14 @@ export interface BaseLayerArgs {
   positions: LayoutItem[];
   items: CanvasRenderItem[];
   atlasGet: (hash: string) => ThumbnailPipelineEntry | null;
-  now: number;
-  /** Per-tile reveal start time. */
-  revealMap: Map<number, number>;
+  /** Per-hash reveal progress (0–1). Missing = fully revealed. */
+  revealProgressByHash: Map<string, number>;
   /** Indices of tiles in the activation zone — the ONLY tiles to draw. */
   activeTiles: number[];
   draw: DrawContext;
   theme: ThemeLike;
   viewMode: GridViewMode;
+  fitThumbnails: boolean;
   showTileName: boolean;
   showResolution: boolean;
   showExtension: boolean;
@@ -96,19 +95,23 @@ export function drawCanvasBaseLayer({
   positions,
   items,
   atlasGet,
-  now,
-  revealMap,
+  revealProgressByHash,
   activeTiles,
   draw,
   theme,
   viewMode,
+  fitThumbnails,
   showTileName,
   showResolution,
   showExtension,
   showExtensionLabel,
 }: BaseLayerArgs): boolean {
   const { scrollTop, viewportHeight: cssH, textHeight: th, borderRadius: br } = draw;
-  const effectiveFit = viewMode === 'grid' ? 'contain' as const : 'cover' as const;
+  // Grid default = contain. fitThumbnails flips grid to cover (fill/crop).
+  // Waterfall/justified = always cover.
+  const effectiveFit = viewMode === 'grid'
+    ? (fitThumbnails ? 'cover' as const : 'contain' as const)
+    : 'cover' as const;
   let hasActiveReveal = false;
 
   // ── Pass 1: Images with reveal animation ──
@@ -140,41 +143,21 @@ export function drawCanvasBaseLayer({
       ctx.clip();
     }
 
-    // Reveal timing comes from the per-tile revealMap, not the pipeline entry.
-    // Every tile always fades in from placeholder when it enters the activation zone.
-    const revealStart = revealMap.get(i);
     const hasBitmap = entry?.thumb != null;
+    const progress = revealProgressByHash.get(item.thumbnailHash) ?? 1;
 
-    if (hasBitmap && revealStart != null) {
-      const revealElapsedMs = Math.max(0, now - revealStart);
-      const imageProgress = Math.min(1, revealElapsedMs / THUMBNAIL_PIPELINE_REVEAL_MS);
-      const placeholderFadeElapsedMs = Math.max(0, revealElapsedMs - THUMBNAIL_PIPELINE_REVEAL_MS);
-      const placeholderAlpha = imageProgress < 1
-        ? 1
-        : Math.max(0, 1 - (placeholderFadeElapsedMs / THUMBNAIL_PIPELINE_REVEAL_MS));
-
-      if (imageProgress < 1 || placeholderAlpha > 0) {
+    if (hasBitmap && progress > 0) {
+      if (progress < 1) {
         hasActiveReveal = true;
-      }
-
-      if (placeholderAlpha > 0) {
-        fillPlaceholder(ctx, item, theme, effectiveFit, pos.x, drawY, pos.w, imageHeight, placeholderAlpha);
-      }
-
-      if (imageProgress < 1) {
-        ctx.globalAlpha = imageProgress;
+        fillPlaceholder(ctx, item, theme, effectiveFit, pos.x, drawY, pos.w, imageHeight);
+        ctx.globalAlpha = progress;
         drawThumb(ctx, entry!.thumb!, pos.x, drawY, pos.w, imageHeight);
         ctx.globalAlpha = 1;
       } else {
         drawThumb(ctx, entry!.thumb!, pos.x, drawY, pos.w, imageHeight);
       }
     } else {
-      // No bitmap yet or no reveal started — show placeholder
       fillPlaceholder(ctx, item, theme, effectiveFit, pos.x, drawY, pos.w, imageHeight);
-      if (hasBitmap && revealStart == null) {
-        // Bitmap ready but not in revealMap yet — will be added next frame
-        hasActiveReveal = true;
-      }
     }
 
     ctx.restore();

@@ -1,8 +1,9 @@
 /**
- * TagChip — namespace-colored tag pill with optional remove button.
- * Stateless and presentational.
+ * TagChip — reference application-matched label-item with namespace coloring and optional icon.
+ * Used for both tags and folders in the inspector.
  */
 
+import type { ReactNode } from 'react';
 import { IconX } from '@tabler/icons-react';
 import styles from './TagChip.module.css';
 
@@ -22,24 +23,39 @@ const NS_COLORS: Record<string, [number, number, number]> = {
 interface Props {
   namespace: string;
   subtag: string;
+  icon?: ReactNode;
+  colorRgb?: [number, number, number];
   onRemove?: () => void;
+  onClick?: () => void;
 }
 
-export function TagChip({ namespace, subtag, onRemove }: Props) {
-  const [r, g, b] = NS_COLORS[namespace.toLowerCase()] ?? NS_COLORS.default;
-  const style = {
-    background: `rgba(${r}, ${g}, ${b}, 0.12)`,
-    border: `1px solid rgba(${r}, ${g}, ${b}, 0.25)`,
-  };
+export function TagChip({ namespace, subtag, icon, colorRgb, onRemove, onClick }: Props) {
+  const [r, g, b] = colorRgb ?? NS_COLORS[namespace.toLowerCase()] ?? NS_COLORS.default;
+  const chipStyle = {
+    '--chip-bg': `rgba(${r}, ${g}, ${b}, 0.10)`,
+    '--chip-border': `rgba(${r}, ${g}, ${b}, 0.25)`,
+    '--chip-hover-bg': `rgba(${r}, ${g}, ${b}, 0.20)`,
+    '--chip-hover-border': `rgba(${r}, ${g}, ${b}, 0.50)`,
+  } as React.CSSProperties;
 
   const showNamespace = namespace !== 'default' && namespace !== '';
 
   return (
-    <span className={styles.chip} style={style}>
+    <span
+      className={styles.chip}
+      style={chipStyle}
+      onClick={onClick}
+    >
+      {icon && <span className={styles.iconSlot}>{icon}</span>}
       {showNamespace && <span className={styles.namespace}>{namespace}:</span>}
       <span className={styles.subtag}>{subtag}</span>
       {onRemove && (
-        <button className={styles.removeBtn} onClick={onRemove} type="button" title="Remove tag">
+        <button
+          className={styles.removeBtn}
+          onClick={(e) => { e.stopPropagation(); onRemove(); }}
+          type="button"
+          title="Remove"
+        >
           <IconX size={10} stroke={2} />
         </button>
       )}

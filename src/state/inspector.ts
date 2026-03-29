@@ -14,13 +14,18 @@ import type {
 } from '../shared/types/canonical';
 import { gridActiveAtom } from './grid';
 import { activeNodeIdAtom } from './navigation';
-import { selectedEntityHashAtom } from './selection';
+import {
+  selectedEntityHashAtom,
+  selectionCountAtom,
+  selectionModeAtom,
+} from './selection';
 import { sidebarNodesAtom } from './sidebar';
 
 export type InspectorTarget =
   | { kind: 'none' }
   | { kind: 'scope'; nodeId: string }
-  | { kind: 'entity'; entityHash: string };
+  | { kind: 'entity'; entityHash: string }
+  | { kind: 'multi'; count: number; selectionMode: 'explicit' | 'query_results' };
 
 export type DisplayedGridSnapshot = {
   nodeId: string;
@@ -28,10 +33,20 @@ export type DisplayedGridSnapshot = {
   totalCount: number | null;
   totalSizeBytes: number | null;
   searchText: string;
+  /** Frozen sidebar node at commit time — prevents live sidebar changes from leaking into inspector during transitions. */
+  sidebarNode: SidebarNodeDto | null;
 };
 
 export const liveInspectorTargetAtom = atom<InspectorTarget>((get) => {
   if (!get(gridActiveAtom)) return { kind: 'none' };
+  const selectionMode = get(selectionModeAtom);
+  const selectionCount = get(selectionCountAtom);
+  if (selectionMode === 'query_results' && selectionCount > 0) {
+    return { kind: 'multi', count: selectionCount, selectionMode };
+  }
+  if (selectionCount > 1) {
+    return { kind: 'multi', count: selectionCount, selectionMode };
+  }
   const selectedHash = get(selectedEntityHashAtom);
   if (selectedHash) return { kind: 'entity', entityHash: selectedHash };
   const activeNodeId = get(activeNodeIdAtom);
@@ -39,6 +54,22 @@ export const liveInspectorTargetAtom = atom<InspectorTarget>((get) => {
 });
 
 export const displayedGridSnapshotAtom = atom<DisplayedGridSnapshot | null>(null);
+/** Scope label — reads live sidebar node so renames propagate immediately. */
+export const displayedScopeLabelAtom = atom((get) => {
+  const node = get(displayedSidebarNodeAtom);
+  if (node) return node.name;
+  const snapshot = get(displayedGridSnapshotAtom);
+  if (!snapshot) return '';
+  const fallbacks: Record<string, string> = {
+    'system:active': 'All',
+    'system:inbox': 'Inbox',
+    'system:trash': 'Trash',
+    'system:uncategorized': 'Uncategorized',
+    'system:untagged': 'Untagged',
+  };
+  return fallbacks[snapshot.nodeId] ?? '';
+});
+
 export const displayedInspectorTargetAtom = atom<InspectorTarget>({ kind: 'none' });
 export const displayedInspectorEntityDataAtom = atom<CanonicalEntityDetails | null>(null);
 export const inspectorLoadingAtom = atom(false);
@@ -85,7 +116,9 @@ const SYSTEM_SCOPE_DESCRIPTIONS: Record<string, string> = {
 export const displayedSidebarNodeAtom = atom<SidebarNodeDto | null>((get) => {
   const snapshot = get(displayedGridSnapshotAtom);
   if (!snapshot) return null;
-  return get(sidebarNodesAtom).find((node) => node.id === snapshot.nodeId) ?? null;
+  // Read LIVE sidebar node by ID — not the frozen snapshot copy.
+  // The frozen copy goes stale after rename/color/meta updates.
+  return get(sidebarNodesAtom).find((n) => n.id === snapshot.nodeId) ?? snapshot.sidebarNode ?? null;
 });
 
 export const scopeInspectorViewModelAtom = atom((get) => {
@@ -93,10 +126,7 @@ export const scopeInspectorViewModelAtom = atom((get) => {
   const node = get(displayedSidebarNodeAtom);
   if (!snapshot || !node || !get(gridActiveAtom)) return null;
 
-  const nodes = get(sidebarNodesAtom);
-  const parentName = node.parent_id
-    ? nodes.find((candidate) => candidate.id === node.parent_id)?.name ?? null
-    : null;
+  const parentName: string | null = null; // Parent lookup removed (no live sidebar read)
 
   const meta = (node.meta ?? {}) as Record<string, unknown>;
   const folderMeta = meta as ScopeInspectorFolderMeta;

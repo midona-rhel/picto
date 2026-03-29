@@ -1,6 +1,6 @@
 //! Folder and smart-folder read queries for the canonical DB.
 
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{Connection, OptionalExtension};
 
 /// Minimal folder row for building sidebar patches and meta_json.
 #[derive(Debug, Clone, serde::Serialize)]

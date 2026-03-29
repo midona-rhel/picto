@@ -7,7 +7,8 @@ import { invoke } from './ipc';
 import type {
   SidebarTreeResponse, EntityViewQuery, EntityViewPage,
   CanonicalEntityGridItem, CanonicalEntityDetails,
-  EntityTarget, MediaEntityPatch,
+  EntityTarget, MediaEntityPatch, CanonicalTagRecord,
+  CanonicalTagRelation, CanonicalNamespaceSummary, SelectionSummary,
 } from '../shared/types/canonical';
 
 // ── Grid ────────────────────────────────────────────────────────
@@ -54,8 +55,74 @@ export function applyEntityTags(
   target: EntityTarget,
   operation: 'add' | 'remove',
   tags: string[],
+  provenanceMask?: string | null,
 ): Promise<unknown> {
-  return invoke('apply_entity_tags', { target, operation, tags } as unknown as Record<string, unknown>);
+  return invoke('apply_entity_tags', {
+    target,
+    operation,
+    tags,
+    provenance_mask: provenanceMask ?? null,
+  } as unknown as Record<string, unknown>);
+}
+
+export function setEntityStatus(target: EntityTarget, status: number): Promise<unknown> {
+  return invoke('set_entity_status', { target, status } as unknown as Record<string, unknown>);
+}
+
+export function getSelectionSummary(target: EntityTarget): Promise<SelectionSummary> {
+  return invoke<SelectionSummary>('get_selection_summary', { target } as unknown as Record<string, unknown>);
+}
+
+export function searchTags(query: string, limit = 20, offset = 0): Promise<CanonicalTagRecord[]> {
+  return invoke<CanonicalTagRecord[]>('search_tags', { query, limit, offset });
+}
+
+export function getTagsPaginated(params: {
+  namespace?: string | null;
+  search?: string | null;
+  cursor?: string | null;
+  limit?: number;
+}): Promise<CanonicalTagRecord[]> {
+  return invoke<CanonicalTagRecord[]>('get_tags_paginated', params as unknown as Record<string, unknown>);
+}
+
+export function getNamespaceSummary(): Promise<CanonicalNamespaceSummary[]> {
+  return invoke<CanonicalNamespaceSummary[]>('get_namespace_summary');
+}
+
+export function getTagRelations(tagId: number, relationType: 'aliases' | 'implications'): Promise<CanonicalTagRelation[]> {
+  return invoke<CanonicalTagRelation[]>('get_tag_relations', {
+    tag_id: tagId,
+    relation_type: relationType,
+  });
+}
+
+export function renameTag(tagId: number, newName: string): Promise<unknown> {
+  return invoke('rename_tag', { tag_id: tagId, new_name: newName });
+}
+
+export function mergeTags(fromTag: string, toTag: string): Promise<unknown> {
+  return invoke('merge_tags', { from_tag: fromTag, to_tag: toTag });
+}
+
+export function deleteTag(tagId: number): Promise<unknown> {
+  return invoke('delete_tag', { tag_id: tagId });
+}
+
+export function manageTagAlias(from: string, to?: string | null): Promise<void> {
+  return invoke<void>('manage_tag_alias', { from, to: to ?? null });
+}
+
+export function manageTagImplication(
+  child: string,
+  parent: string,
+  action: 'add' | 'remove',
+): Promise<void> {
+  return invoke<void>('manage_tag_implication', { child, parent, action });
+}
+
+export function setTagSiteMask(tagId: number, siteMask: string): Promise<void> {
+  return invoke<void>('set_tag_site_mask', { tag_id: tagId, site_mask: siteMask });
 }
 
 // ── Sidebar ──────────────────────────────────────────────────────
@@ -83,6 +150,10 @@ export function deleteFolder(folderId: number): Promise<void> {
   return invoke<void>('delete_folder', { folder_id: folderId });
 }
 
+export function removeEntitiesFromFolder(folderId: number, hashes: string[]): Promise<void> {
+  return invoke<void>('remove_entities_from_folder', { folder_id: folderId, hashes });
+}
+
 export function renameFolder(folderId: number, name: string): Promise<void> {
   return invoke<void>('update_folder', { folder_id: folderId, name });
 }
@@ -106,6 +177,18 @@ export function moveFolder(
     new_parent_id: newParentId,
     sibling_order: siblingOrder,
   });
+}
+
+export function updateFolderMembership(
+  target: EntityTarget,
+  folderId: number,
+  operation: 'add' | 'remove',
+): Promise<unknown> {
+  return invoke('update_folder_membership', {
+    target,
+    folder_id: folderId,
+    operation,
+  } as unknown as Record<string, unknown>);
 }
 
 // ── Smart folders ────────────────────────────────────────────────

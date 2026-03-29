@@ -55,6 +55,7 @@ The frontend API layer should:
 ## Acceptance criteria
 - frontend code outside the API layer does not know transport command names
 - canonical backend commands have first-class API methods
+- full-width mask fields such as tag `site_mask` and relation `provenance_mask` cross the API boundary as decimal strings, not JS numbers
 - target/query conversion is centralized
 - query reconcile request/response shapes are centralized
 - legacy API shims are clearly isolated and removable

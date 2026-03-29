@@ -3,7 +3,7 @@
 
 use rusqlite::{Connection, OptionalExtension};
 
-use crate::db::types::{EntityKind, EntityDetails, TagInfo, FolderInfo};
+use crate::db::types::{mask_from_db_bits, EntityKind, EntityDetails, TagInfo, FolderInfo};
 
 /// Get full details for an entity by hash.
 pub fn get_entity_details(
@@ -34,7 +34,8 @@ pub fn get_entity_details(
                 COALESCE(mf.frame_count, pmf.frame_count) AS frame_count,
                 COALESCE(mf.has_audio, pmf.has_audio, 0) AS has_audio,
                 COALESCE(mf.dominant_color_hex, pmf.dominant_color_hex) AS dominant_color_hex,
-                mf.perceptual_hash
+                mf.perceptual_hash,
+                COALESCE(mf.file_hash, pmf.file_hash, me.entity_hash) AS thumbnail_hash
              FROM media_entity me
              LEFT JOIN single_media_entity sme ON sme.entity_id = me.entity_id
              LEFT JOIN media_file mf ON mf.file_id = sme.file_id
@@ -67,6 +68,7 @@ pub fn get_entity_details(
                     row.get::<_, i64>(19)?,     // has_audio
                     row.get::<_, Option<String>>(20)?, // dominant_color_hex
                     row.get::<_, Option<String>>(21)?, // perceptual_hash
+                    row.get::<_, String>(22)?,         // thumbnail_hash
                 ))
             },
         )
@@ -77,7 +79,7 @@ pub fn get_entity_details(
         source_urls_json, date_created, date_added, date_modified,
         member_count, total_size_bytes, mime_type, size_bytes,
         pixel_width, pixel_height, duration_ms, frame_count,
-        has_audio, dominant_color_hex, perceptual_hash,
+        has_audio, dominant_color_hex, perceptual_hash, thumbnail_hash,
     )) = row else {
         return Ok(None);
     };
@@ -88,7 +90,7 @@ pub fn get_entity_details(
 
     // Fetch tags
     let mut tag_stmt = conn.prepare(
-        "SELECT t.tag_id, t.namespace, t.subtag, et.source
+        "SELECT t.tag_id, t.namespace, t.subtag, t.site_mask, et.provenance_mask, et.source
          FROM entity_tag et
          JOIN tag t ON t.tag_id = et.tag_id
          WHERE et.entity_id = ?1
@@ -100,7 +102,9 @@ pub fn get_entity_details(
                 tag_id: row.get(0)?,
                 namespace: row.get(1)?,
                 subtag: row.get(2)?,
-                source: row.get(3)?,
+                site_mask: mask_from_db_bits(row.get::<_, Option<i64>>(3)?.unwrap_or(0)),
+                provenance_mask: mask_from_db_bits(row.get::<_, Option<i64>>(4)?.unwrap_or(0)),
+                source: row.get(5)?,
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -124,6 +128,7 @@ pub fn get_entity_details(
 
     Ok(Some(EntityDetails {
         entity_hash,
+        thumbnail_hash,
         entity_kind: EntityKind::from_str(&entity_kind_str).unwrap_or(EntityKind::Single),
         name,
         mime_type,

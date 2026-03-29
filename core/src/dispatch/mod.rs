@@ -31,6 +31,13 @@ struct ApplyTagsInput {
     target: crate::db::types::EntityTarget,
     operation: crate::engine::tags::TagOperation,
     tags: Vec<String>,
+    provenance_mask: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+struct SetTagSiteMaskInput {
+    tag_id: i64,
+    site_mask: String,
 }
 
 #[derive(serde::Deserialize)]
@@ -62,6 +69,11 @@ struct SelectionSummaryInput {
     target: crate::db::types::EntityTarget,
 }
 
+#[derive(serde::Deserialize)]
+struct DeferredWorkItemsInput {
+    filter: Option<crate::background_work::DeferredWorkFilter>,
+}
+
 /// Deserialize args, call a handler function, serialize its output.
 macro_rules! call {
     ($func:path, $state:expr, $args:expr) => {{
@@ -86,6 +98,7 @@ const WRITE_COMMANDS: &[&str] = &[
     "merge_tags",
     "rename_tag",
     "delete_tag",
+    "set_tag_site_mask",
     "add_tags_selection",
     "remove_tags_selection",
     "update_selection_metadata",
@@ -226,8 +239,22 @@ async fn dispatch_inner(command: &str, args: serde_json::Value) -> Result<String
         "apply_entity_tags" => {
             let input: ApplyTagsInput = serde_json::from_value(args)
                 .map_err(|e| format!("Invalid args: {e}"))?;
-            let result = state.engine.apply_entity_tags(input.target, input.operation, &input.tags)?;
+            let provenance_mask = input
+                .provenance_mask
+                .as_deref()
+                .map(crate::db::types::parse_mask_decimal)
+                .transpose()?;
+            let result = state
+                .engine
+                .apply_entity_tags(input.target, input.operation, &input.tags, provenance_mask)?;
             return to_json(&result);
+        }
+        "set_tag_site_mask" => {
+            let input: SetTagSiteMaskInput = serde_json::from_value(args)
+                .map_err(|e| format!("Invalid args: {e}"))?;
+            let site_mask = crate::db::types::parse_mask_decimal(&input.site_mask)?;
+            state.engine.set_tag_site_mask(input.tag_id, site_mask)?;
+            return ok_null();
         }
         "update_folder_membership" => {
             let input: FolderMembershipInput = serde_json::from_value(args)
@@ -243,6 +270,14 @@ async fn dispatch_inner(command: &str, args: serde_json::Value) -> Result<String
         }
         "get_deferred_work_summary" => {
             let result = state.engine.get_deferred_work_summary()?;
+            return to_json(&result);
+        }
+        "list_deferred_work_items" => {
+            let input: DeferredWorkItemsInput = serde_json::from_value(args)
+                .map_err(|e| format!("Invalid args: {e}"))?;
+            let result = state
+                .engine
+                .list_deferred_work_items(input.filter.unwrap_or_default())?;
             return to_json(&result);
         }
         "retry_deferred_work" => {

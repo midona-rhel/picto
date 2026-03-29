@@ -1,6 +1,6 @@
 //! Shared types for the database boundary.
 
-use serde::Serialize;
+use serde::{Serialize, Serializer};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -66,6 +66,145 @@ pub struct CollectionMembershipChange {
     pub collection_id: i64,
     pub added: Vec<i64>,
     pub removed: Vec<i64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct DuplicatePairRecord {
+    pub hash_a: String,
+    pub hash_b: String,
+    pub distance: f64,
+    pub similarity_pct: f64,
+    pub status: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct DuplicateScanSummary {
+    pub candidates_found: usize,
+    pub pairs_inserted: usize,
+    pub reviewable_detected_total: usize,
+    pub reviewable_detected_new: usize,
+    pub total_files: usize,
+    pub files_with_phash: usize,
+    pub files_scanned: usize,
+    pub closest_distance: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct DuplicatePairPage {
+    pub items: Vec<DuplicatePairRecord>,
+    pub next_cursor: Option<String>,
+    pub has_more: bool,
+    pub total: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DuplicateResolveStatus {
+    Resolved,
+    Conflict,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct DuplicateCollectionConflict {
+    pub winner_hash: String,
+    pub loser_hash: String,
+    pub winner_collection_id: Option<i64>,
+    pub loser_collection_id: Option<i64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct DuplicateResolutionResult {
+    pub status: DuplicateResolveStatus,
+    pub winner_hash: Option<String>,
+    pub loser_hash: Option<String>,
+    pub action: String,
+    pub affected_folder_ids: Vec<i64>,
+    pub affected_collection_ids: Vec<i64>,
+    pub tags_merged: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub conflict: Option<DuplicateCollectionConflict>,
+}
+
+#[derive(Debug, Clone)]
+pub struct PerceptualHashCandidate {
+    pub file_id: i64,
+    pub entity_id: i64,
+    pub entity_hash: String,
+    pub file_hash: String,
+    pub mime_type: String,
+    pub size_bytes: i64,
+    pub pixel_width: Option<i64>,
+    pub pixel_height: Option<i64>,
+    pub frame_count: Option<i64>,
+    pub perceptual_hash: String,
+    pub distance: u32,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CollectionRecord {
+    pub id: i64,
+    pub name: String,
+    pub tags: Vec<String>,
+    pub image_count: i64,
+    pub created_at: Option<String>,
+    pub updated_at: Option<String>,
+    pub thumbnail_url: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CollectionMimeCount {
+    pub mime: String,
+    pub count: i64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CollectionSummary {
+    pub id: i64,
+    pub name: String,
+    pub tags: Vec<String>,
+    pub image_count: i64,
+    pub total_size_bytes: i64,
+    pub mime_breakdown: Vec<CollectionMimeCount>,
+    pub source_urls: Vec<String>,
+    pub rating: Option<i64>,
+    #[serde(rename = "date_created")]
+    pub created_at: Option<String>,
+    #[serde(rename = "date_modified")]
+    pub updated_at: Option<String>,
+    #[serde(rename = "date_added")]
+    pub imported_at: Option<String>,
+    pub notes: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct IngestPreparedSingle {
+    pub entity_hash: String,
+    pub name: Option<String>,
+    pub size_bytes: i64,
+    pub mime_type: String,
+    pub pixel_width: Option<i64>,
+    pub pixel_height: Option<i64>,
+    pub duration_ms: Option<i64>,
+    pub frame_count: Option<i64>,
+    pub has_audio: bool,
+    pub status: i64,
+    pub date_created: String,
+    pub date_added: String,
+    pub has_thumbnail: bool,
+    pub skip_thumbnail: bool,
+    pub notes: Option<String>,
+    pub source_urls: Vec<String>,
+    pub tag_strings: Vec<String>,
+    pub tag_provenance_mask: u64,
+    pub perceptual_hash: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ClaimedDeferredWorkItem {
+    pub work_id: i64,
+    pub entity_hash: String,
+    pub work_type: String,
+    pub attempt_count: i64,
 }
 
 /// Partial patch for folder metadata.
@@ -261,6 +400,7 @@ pub enum EntityTargetKind {
 #[derive(Debug, Clone, Serialize)]
 pub struct EntityDetails {
     pub entity_hash: String,
+    pub thumbnail_hash: String,
     pub entity_kind: EntityKind,
     pub name: Option<String>,
     pub mime_type: String,
@@ -290,7 +430,99 @@ pub struct TagInfo {
     pub tag_id: i64,
     pub namespace: String,
     pub subtag: String,
+    /// Concept-level site support mask. Curated metadata, not derived from assignment rows.
+    #[serde(serialize_with = "serialize_mask_as_decimal")]
+    pub site_mask: u64,
+    /// Assignment provenance mask for this entity-tag relation.
+    #[serde(serialize_with = "serialize_mask_as_decimal")]
+    pub provenance_mask: u64,
     pub source: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct TagRecord {
+    pub tag_id: i64,
+    pub namespace: String,
+    pub subtag: String,
+    pub file_count: i64,
+    #[serde(serialize_with = "serialize_mask_as_decimal")]
+    pub site_mask: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct TagRelation {
+    pub tag_id: i64,
+    pub namespace: String,
+    pub subtag: String,
+    pub relation: String,
+    #[serde(serialize_with = "serialize_mask_as_decimal")]
+    pub site_mask: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct NamespaceSummary {
+    pub namespace: String,
+    pub count: i64,
+}
+
+#[derive(Debug, Default, Clone, Serialize)]
+pub struct TagStructureChange {
+    pub entity_ids: Vec<i64>,
+    pub dirty_tag_ids: Vec<i64>,
+    pub merged_into_tag_id: Option<i64>,
+}
+
+/// Low-bit provenance flags for tag assignment masks.
+pub const TAG_PROVENANCE_MANUAL: u64 = 1_u64 << 0;
+pub const TAG_PROVENANCE_AI: u64 = 1_u64 << 1;
+pub const TAG_PROVENANCE_UNKNOWN: u64 = 1_u64 << 2;
+pub const TAG_PROVENANCE_LOCAL_TOOL: u64 = 1_u64 << 3;
+
+/// High-bit site flags reserved by PBI-598.
+pub const TAG_SITE_E621: u64 = 1_u64 << 63;
+pub const TAG_SITE_GELBOORU: u64 = 1_u64 << 62;
+pub const TAG_SITE_DANBOORU: u64 = 1_u64 << 61;
+pub const TAG_SITE_RULE34: u64 = 1_u64 << 60;
+
+pub fn mask_to_db_bits(mask: u64) -> i64 {
+    mask as i64
+}
+
+pub fn mask_from_db_bits(bits: i64) -> u64 {
+    bits as u64
+}
+
+pub fn parse_mask_decimal(mask: &str) -> Result<u64, String> {
+    mask.parse::<u64>()
+        .map_err(|e| format!("Invalid mask decimal '{mask}': {e}"))
+}
+
+fn serialize_mask_as_decimal<S>(mask: &u64, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: Serializer,
+{
+    serializer.serialize_str(&mask.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{TagInfo, TAG_PROVENANCE_MANUAL, TAG_SITE_E621};
+
+    #[test]
+    fn tag_info_serializes_masks_as_decimal_strings() {
+        let tag = TagInfo {
+            tag_id: 1,
+            namespace: String::new(),
+            subtag: "test".to_string(),
+            site_mask: TAG_SITE_E621,
+            provenance_mask: TAG_PROVENANCE_MANUAL,
+            source: "local".to_string(),
+        };
+
+        let json = serde_json::to_value(&tag).expect("serialize tag info");
+        assert_eq!(json["site_mask"], TAG_SITE_E621.to_string());
+        assert_eq!(json["provenance_mask"], TAG_PROVENANCE_MANUAL.to_string());
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -343,8 +575,9 @@ pub enum EntityViewReconcileResult {
 #[derive(Debug, Clone, Default, serde::Deserialize)]
 pub struct MediaEntityPatch {
     pub name: Option<String>,
-    /// Plain text notes. Stored as-is in the database.
-    pub notes: Option<String>,
+    /// Plain-text notes. Absent = unchanged, null = clear, string = set.
+    #[serde(default, deserialize_with = "crate::dispatch::common::deserialize_some")]
+    pub notes: Option<Option<String>>,
     pub rating: Option<i64>,
     pub source_urls: Option<Vec<String>>,
 }

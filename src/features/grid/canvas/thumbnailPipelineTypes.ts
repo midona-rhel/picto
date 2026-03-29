@@ -1,15 +1,17 @@
 import type { CanvasScrollDirection, CanvasScrollPhase } from './scrollState';
 
-export type ThumbnailPipelineState = 'idle' | 'queued' | 'loading' | 'ready_pending' | 'shown' | 'error';
+export type ThumbnailPipelineState = 'idle' | 'queued' | 'loading' | 'shown' | 'error';
 export type ThumbnailRequestPriority = 'visible' | 'prefetch';
 
 export interface ThumbnailPipelineEntry {
   thumb: ImageBitmap | null;
   state: ThumbnailPipelineState;
   lastAccessed: number;
-  revealStartedAt: number;
-  animateIn: boolean;
   bytes: number;
+  /** Whether this entry should fade in. Set on fresh bitmap load, cleared on eviction/upgrade. */
+  animateIn: boolean;
+  /** Timestamp (performance.now) when the fade started. 0 = not animating. */
+  revealStartedAt: number;
 }
 
 export interface ThumbnailQueueItem {

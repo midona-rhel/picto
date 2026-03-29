@@ -48,7 +48,6 @@ interface RowProps {
   icon?: ReactNode;
   label?: string;
   count?: number | null;
-  countStale?: boolean;
   active?: boolean;
   dropTarget?: boolean;
   indent?: number;
@@ -64,7 +63,6 @@ function StandardRow({
   icon,
   label,
   count,
-  countStale,
   active,
   dropTarget,
   indent = 0,
@@ -82,7 +80,7 @@ function StandardRow({
   ].filter(Boolean).join(' ');
 
   const rowStyle: React.CSSProperties | undefined = indent > 0
-    ? { paddingLeft: indent * 18, '--row-inset': `${(indent * 18) - 1}px` } as React.CSSProperties
+    ? { paddingLeft: indent * 18, '--row-inset': `${(indent * 18) + 1}px` } as React.CSSProperties
     : undefined;
 
   return (
@@ -103,7 +101,7 @@ function StandardRow({
       {icon && <span className={styles.icon}>{icon}</span>}
       {children ?? (label != null && <span className={styles.label}>{label}</span>)}
       {count != null && (
-        <span className={`${styles.count} ${countStale ? styles.stale : ''}`}>
+        <span className={styles.count}>
           {count.toLocaleString()}
         </span>
       )}

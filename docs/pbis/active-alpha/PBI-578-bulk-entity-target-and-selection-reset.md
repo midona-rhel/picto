@@ -84,6 +84,19 @@ The frontend may still need:
 
 Those are read helpers. They should not force the write surface back into selection-specific DTOs.
 
+Selection summary helpers for the rebuilt app must use the same canonical `EntityTarget` semantics as bulk writes:
+- explicit selections summarize the selected ids/hashes
+- `query_results` selections summarize the DB-side query target plus exclusions
+- giant query selections must not require frontend-side hash expansion
+
+Shared bulk-summary state such as:
+- shared tags
+- shared folders
+- shared rating
+- total size
+
+belongs to this read-helper layer, but still follows the same target model as writes.
+
 ## Relationship to other reset PBIs
 - PBI-568 defines the engine boundary that should consume `EntityTarget`
 - PBI-570 defines the frontend adapter/controller boundary that should construct `EntityTarget`
@@ -109,4 +122,5 @@ Required tests:
 - query-results status change without enumerating all hashes
 - query-results delete with excluded hashes
 - export with query-results target
+- query-results bulk summary with shared tags/folders/rating without explicit hash expansion
 - controller tests proving large “select all” operations do not require explicit hash enumeration up front

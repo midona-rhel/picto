@@ -16,6 +16,7 @@ import type {
 /** Fully populated image with tags, folders, notes, source URLs, rating. */
 export const detailsRichImage: CanonicalEntityDetails = {
   entity_hash: 'a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2',
+  thumbnail_hash: 'a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2',
   entity_kind: 'single',
   name: 'sunset_beach.jpg',
   mime_type: 'image/jpeg',
@@ -38,11 +39,11 @@ export const detailsRichImage: CanonicalEntityDetails = {
   dominant_color_hex: '#e8731a',
   perceptual_hash: 'AQAAAA==',
   tags: [
-    { tag_id: 1, namespace: '', subtag: 'landscape', source: 'local' },
-    { tag_id: 2, namespace: '', subtag: 'sunset', source: 'local' },
-    { tag_id: 3, namespace: '', subtag: 'beach', source: 'local' },
-    { tag_id: 10, namespace: 'creator', subtag: 'photographer_name', source: 'local' },
-    { tag_id: 20, namespace: 'meta', subtag: 'high_quality', source: 'ai_tagger' },
+    { tag_id: 1, namespace: '', subtag: 'landscape', site_mask: '0', provenance_mask: '1', source: 'local' },
+    { tag_id: 2, namespace: '', subtag: 'sunset', site_mask: '0', provenance_mask: '1', source: 'local' },
+    { tag_id: 3, namespace: '', subtag: 'beach', site_mask: '0', provenance_mask: '1', source: 'local' },
+    { tag_id: 10, namespace: 'creator', subtag: 'photographer_name', site_mask: '0', provenance_mask: '1', source: 'local' },
+    { tag_id: 20, namespace: 'meta', subtag: 'high_quality', site_mask: '0', provenance_mask: '2', source: 'ai_tagger' },
   ],
   folders: [
     { folder_id: 1, name: 'Artwork' },
@@ -55,6 +56,7 @@ export const detailsRichImage: CanonicalEntityDetails = {
 /** Minimal image — no tags, no folders, no notes, no rating. */
 export const detailsSparseImage: CanonicalEntityDetails = {
   entity_hash: 'b8c9d0e1f2a3b8c9d0e1f2a3b8c9d0e1f2a3b8c9d0e1f2a3b8c9d0e1f2a3b8c9',
+  thumbnail_hash: 'b8c9d0e1f2a3b8c9d0e1f2a3b8c9d0e1f2a3b8c9d0e1f2a3b8c9d0e1f2a3b8c9',
   entity_kind: 'single',
   name: null,
   mime_type: 'image/jpeg',
@@ -82,6 +84,7 @@ export const detailsSparseImage: CanonicalEntityDetails = {
 /** Video with audio, duration, frame count. */
 export const detailsVideo: CanonicalEntityDetails = {
   entity_hash: 'c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4',
+  thumbnail_hash: 'c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4',
   entity_kind: 'single',
   name: 'timelapse_clouds.mp4',
   mime_type: 'video/mp4',
@@ -101,8 +104,8 @@ export const detailsVideo: CanonicalEntityDetails = {
   dominant_color_hex: '#81d4fa',
   perceptual_hash: 'BQAAAA==',
   tags: [
-    { tag_id: 5, namespace: '', subtag: 'timelapse', source: 'local' },
-    { tag_id: 6, namespace: '', subtag: 'nature', source: 'local' },
+    { tag_id: 5, namespace: '', subtag: 'timelapse', site_mask: '0', provenance_mask: '1', source: 'local' },
+    { tag_id: 6, namespace: '', subtag: 'nature', site_mask: '0', provenance_mask: '1', source: 'local' },
   ],
   folders: [],
   member_count: null,
@@ -112,6 +115,7 @@ export const detailsVideo: CanonicalEntityDetails = {
 /** Collection with 47 members. */
 export const detailsCollection: CanonicalEntityDetails = {
   entity_hash: 'f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1',
+  thumbnail_hash: 'a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2',
   entity_kind: 'collection',
   name: 'Beach Vacation 2026',
   mime_type: 'image/jpeg',
@@ -131,8 +135,8 @@ export const detailsCollection: CanonicalEntityDetails = {
   dominant_color_hex: '#e8731a',
   perceptual_hash: null,
   tags: [
-    { tag_id: 3, namespace: '', subtag: 'beach', source: 'local' },
-    { tag_id: 7, namespace: '', subtag: 'vacation', source: 'local' },
+    { tag_id: 3, namespace: '', subtag: 'beach', site_mask: '0', provenance_mask: '1', source: 'local' },
+    { tag_id: 7, namespace: '', subtag: 'vacation', site_mask: '0', provenance_mask: '1', source: 'local' },
   ],
   folders: [
     { folder_id: 1, name: 'Artwork' },
@@ -144,6 +148,7 @@ export const detailsCollection: CanonicalEntityDetails = {
 /** Inbox item (status=0, pending review). */
 export const detailsInboxItem: CanonicalEntityDetails = {
   entity_hash: 'a7b8c9d0e1f2a7b8c9d0e1f2a7b8c9d0e1f2a7b8c9d0e1f2a7b8c9d0e1f2a7b8',
+  thumbnail_hash: 'a7b8c9d0e1f2a7b8c9d0e1f2a7b8c9d0e1f2a7b8c9d0e1f2a7b8c9d0e1f2a7b8',
   entity_kind: 'single',
   name: 'corrupted_import.png',
   mime_type: 'image/png',
@@ -170,30 +175,60 @@ export const detailsInboxItem: CanonicalEntityDetails = {
 
 // ── Selection summaries ──────────────────────────────────────────
 
+const EMPTY_STATS: SelectionSummary['stats'] = {
+  total_size_bytes: null,
+  mime_counts: null,
+  rating_stats: null,
+};
+
 /** Single entity selected. */
 export const selectionSingle: SelectionSummary = {
   total_count: 1,
-  entity_hashes: ['a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2'],
+  selected_count: 1,
+  sample_hashes: ['a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2'],
+  shared_tags: [],
+  top_tags: [],
+  stats: EMPTY_STATS,
+  pending: false,
+  generated_at: '2026-03-28T00:00:00Z',
 };
 
 /** Three entities explicitly selected. */
 export const selectionMulti: SelectionSummary = {
   total_count: 3,
-  entity_hashes: [
+  selected_count: 3,
+  sample_hashes: [
     'a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2',
     'b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3',
     'c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4',
   ],
+  shared_tags: [],
+  top_tags: [],
+  stats: EMPTY_STATS,
+  pending: false,
+  generated_at: '2026-03-28T00:00:00Z',
 };
 
-/** Virtual select-all (query_results target — hashes list is empty). */
+/** Virtual select-all (query_results target — sample hashes are a subset). */
 export const selectionVirtualAll: SelectionSummary = {
   total_count: 1247,
-  entity_hashes: [],
+  selected_count: 1247,
+  sample_hashes: [],
+  shared_tags: [],
+  top_tags: [],
+  stats: EMPTY_STATS,
+  pending: false,
+  generated_at: '2026-03-28T00:00:00Z',
 };
 
 /** Nothing selected. */
 export const selectionEmpty: SelectionSummary = {
   total_count: 0,
-  entity_hashes: [],
+  selected_count: 0,
+  sample_hashes: [],
+  shared_tags: [],
+  top_tags: [],
+  stats: EMPTY_STATS,
+  pending: false,
+  generated_at: '2026-03-28T00:00:00Z',
 };

@@ -6,9 +6,16 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
 use crate::blob_store::{mime_to_extension, BlobStore};
+use crate::db::LibraryDatabase;
 use crate::runtime_contract::change_builder::ChangeImpact;
 use crate::runtime_contract::state_change::MediaDerivativeField;
 use crate::sqlite::{ReadModelEvent, SqliteDatabase};
+
+// Legacy note:
+// The rebuilt live app path now uses `crate::background_work` as the canonical
+// deferred/background work boundary. This module remains for legacy queue
+// compatibility and older maintenance helpers that still operate on
+// `SqliteDatabase`.
 
 const DEFERRED_WORK_TICK: std::time::Duration = std::time::Duration::from_secs(5);
 const MAX_BACKOFF_SECS: i64 = 60 * 60;
@@ -677,6 +684,285 @@ pub async fn start_deferred_work_loop(
             _ = tokio::time::sleep(DEFERRED_WORK_TICK) => {}
             _ = cancel.cancelled() => {
                 debug!("Deferred work loop cancelled");
+                return;
+            }
+        }
+    }
+}
+
+pub fn enqueue_import_derivatives_canonical(
+    db: &LibraryDatabase,
+    entity_hash: &str,
+    mime: &str,
+    frame_count: Option<i64>,
+    needs_thumbnail: bool,
+) -> Result<(), String> {
+    crate::background_work::enqueue_derivative_jobs(
+        db,
+        entity_hash,
+        mime,
+        frame_count,
+        needs_thumbnail,
+    )
+}
+
+async fn ensure_thumbnail_canonical(
+    db: &LibraryDatabase,
+    blob_store: &Arc<BlobStore>,
+    entity_hash: &str,
+    force: bool,
+) -> Result<EnsureThumbnailResult, String> {
+    let file = match db.get_derivative_target_by_entity_hash(entity_hash)? {
+        Some(file) => file,
+        None => {
+            return Ok(EnsureThumbnailResult {
+                regenerated_thumbnail: false,
+                has_thumbnail: false,
+            });
+        }
+    };
+
+    let ext = mime_to_extension(&file.mime_type).to_string();
+    let file_hash = file.file_hash.clone();
+    let bs = blob_store.clone();
+    let (regenerated_thumbnail, has_thumbnail) = tokio::spawn(async move {
+        let result: Result<(bool, bool), String> = (async {
+            if force {
+                bs.delete_thumbnail(&file_hash)
+                    .map_err(|e| format!("Delete thumbnail failed: {}", e))?;
+            }
+
+            let original = bs
+                .find_original(&file_hash, Some(&ext))
+                .map_err(|e| format!("Blob error: {}", e))?
+                .ok_or_else(|| format!("Original file not found for hash {}", file_hash))?;
+
+            if !force {
+                let thumb_exists = bs
+                    .find_thumbnail_path(&file_hash)
+                    .map_err(|e| format!("Thumbnail lookup failed: {}", e))?
+                    .is_some();
+                if thumb_exists {
+                    return Ok((false, true));
+                }
+            }
+
+            let info = match crate::media_processing::get_file_info(&original.0, None).await {
+                Ok(info) => info,
+                Err(_) => return Ok((false, false)),
+            };
+
+            let (thumb_bytes, thumb_ext) = match crate::media_processing::generate_thumbnail_bytes(
+                &original.0,
+                crate::media_processing::DEFAULT_THUMBNAIL_DIMENSIONS,
+                info.mime,
+                info.duration_ms,
+                info.num_frames,
+                35,
+            )
+            .await
+            {
+                Ok(result) => result,
+                Err(_) => return Ok((false, false)),
+            };
+
+            bs.write_thumbnail(&file_hash, &thumb_bytes, &thumb_ext)
+                .map_err(|e| format!("Thumbnail write failed: {}", e))?;
+            Ok((true, true))
+        })
+        .await;
+        result
+    })
+    .await
+    .map_err(|e| format!("Thumbnail task failed: {}", e))??;
+
+    Ok(EnsureThumbnailResult {
+        regenerated_thumbnail,
+        has_thumbnail,
+    })
+}
+
+async fn reanalyze_file_colors_canonical(
+    db: &LibraryDatabase,
+    blob_store: &Arc<BlobStore>,
+    entity_hash: &str,
+) -> Result<ReanalyzeFileColorsResult, String> {
+    let file = match db.get_derivative_target_by_entity_hash(entity_hash)? {
+        Some(file) => file,
+        None => {
+            return Ok(ReanalyzeFileColorsResult {
+                colors_extracted: 0,
+                dominant_color_hex: None,
+            });
+        }
+    };
+
+    if !file.mime_type.starts_with("image/") {
+        db.set_file_colors_for_entity_hash(entity_hash, &[], None)?;
+        return Ok(ReanalyzeFileColorsResult {
+            colors_extracted: 0,
+            dominant_color_hex: None,
+        });
+    }
+
+    let hash_owned = file.file_hash.clone();
+    let ext = mime_to_extension(&file.mime_type).to_string();
+    let bs = blob_store.clone();
+    let colors = tokio::task::spawn_blocking(
+        move || -> Result<Vec<(String, f32, f32, f32)>, String> {
+            let bytes = if let Ok(Some(thumb_path)) = bs.find_thumbnail_path(&hash_owned) {
+                std::fs::read(&thumb_path)
+                    .map_err(|e| format!("Failed to read thumbnail: {}", e))?
+            } else {
+                let original = bs
+                    .find_original(&hash_owned, Some(&ext))
+                    .map_err(|e| format!("Blob error: {}", e))?
+                    .ok_or_else(|| format!("Original file not found for hash {}", hash_owned))?;
+                std::fs::read(&original.0)
+                    .map_err(|e| format!("Failed to read original file: {}", e))?
+            };
+            let img =
+                image::load_from_memory(&bytes).map_err(|e| format!("Image decode failed: {}", e))?;
+            Ok(crate::media_processing::colors::extract_dominant_colors(&img, 8)
+                .iter()
+                .map(|c| (c.hex.clone(), c.l as f32, c.a as f32, c.b as f32))
+                .collect())
+        },
+    )
+    .await
+    .map_err(|e| format!("Color extraction task failed: {}", e))??;
+
+    let dominant_color_hex = colors.first().map(|(hex, _, _, _)| hex.clone());
+    db.set_file_colors_for_entity_hash(entity_hash, &colors, dominant_color_hex.as_deref())?;
+    Ok(ReanalyzeFileColorsResult {
+        colors_extracted: colors.len(),
+        dominant_color_hex,
+    })
+}
+
+async fn ensure_phash_canonical(
+    db: &LibraryDatabase,
+    blob_store: &Arc<BlobStore>,
+    entity_hash: &str,
+    force: bool,
+) -> Result<bool, String> {
+    let file = match db.get_derivative_target_by_entity_hash(entity_hash)? {
+        Some(file) => file,
+        None => return Ok(false),
+    };
+    if !file.mime_type.starts_with("image/") {
+        return Ok(false);
+    }
+    if !force && file.perceptual_hash.is_some() {
+        return Ok(false);
+    }
+
+    let ext = mime_to_extension(&file.mime_type).to_string();
+    let file_hash = file.file_hash.clone();
+    let bs = blob_store.clone();
+    let phash_b64 = tokio::task::spawn_blocking(move || -> Result<String, String> {
+        let original = bs
+            .find_original(&file_hash, Some(&ext))
+            .map_err(|e| format!("{e}"))?
+            .ok_or_else(|| format!("Original file not found for hash {}", file_hash))?;
+        let bytes = std::fs::read(&original.0).map_err(|e| format!("{e}"))?;
+        crate::duplicates::phash::compute_phash_base64(&bytes).map_err(|e| format!("{e}"))
+    })
+    .await
+    .map_err(|e| format!("Phash task failed: {}", e))??;
+
+    db.set_phash_for_entity_hash(entity_hash, &phash_b64)?;
+    Ok(true)
+}
+
+async fn drain_next_entity_canonical(
+    db: &LibraryDatabase,
+    blob_store: &Arc<BlobStore>,
+) -> Result<usize, String> {
+    let jobs = db.claim_next_deferred_work_items()?;
+    if jobs.is_empty() {
+        return Ok(0);
+    }
+
+    let hash = jobs[0].entity_hash.clone();
+    let mut fields: Vec<MediaDerivativeField> = Vec::new();
+    let mut any_changed = false;
+
+    for job in &jobs {
+        let result: Result<Option<MediaDerivativeField>, String> = match job.work_type.as_str() {
+            "thumbnail" => match ensure_thumbnail_canonical(db, blob_store, &job.entity_hash, false).await {
+                Ok(r) => Ok(r.regenerated_thumbnail.then_some(MediaDerivativeField::Thumbnail)),
+                Err(e) => Err(e),
+            },
+            "dominant_colors" => {
+                match reanalyze_file_colors_canonical(db, blob_store, &job.entity_hash).await {
+                    Ok(r) => Ok((r.colors_extracted > 0).then_some(MediaDerivativeField::DominantColorHex)),
+                    Err(e) => Err(e),
+                }
+            }
+            "perceptual_hash" => match ensure_phash_canonical(db, blob_store, &job.entity_hash, false).await {
+                Ok(changed) => Ok(changed.then_some(MediaDerivativeField::Phash)),
+                Err(e) => Err(e),
+            },
+            other => Err(format!("Unknown deferred work type: {other}")),
+        };
+
+        match result {
+            Ok(changed_field) => {
+                db.complete_deferred_work_item(job.work_id)?;
+                if let Some(field) = changed_field {
+                    any_changed = true;
+                    if !fields.contains(&field) {
+                        fields.push(field);
+                    }
+                }
+            }
+            Err(error) => {
+                db.retry_deferred_work_item(job.work_id, job.attempt_count + 1, &error)?;
+                warn!(
+                    hash = %job.entity_hash,
+                    work_type = %job.work_type,
+                    attempt = job.attempt_count + 1,
+                    error = %error,
+                    "Canonical deferred work failed"
+                );
+            }
+        }
+    }
+
+    if any_changed && !fields.is_empty() {
+        crate::events::emit_state_changed(
+            "deferred_work_batch",
+            ChangeImpact::new()
+                .entity_hashes(vec![hash])
+                .derivative_fields_changed(&fields)
+                .smart_folder_scopes_changed_for_derivative_fields(&fields),
+        );
+    }
+
+    Ok(jobs.len())
+}
+
+pub async fn start_deferred_work_loop_canonical(
+    db: Arc<LibraryDatabase>,
+    blob_store: Arc<BlobStore>,
+    cancel: CancellationToken,
+) {
+    if let Err(error) = db.reset_running_deferred_work_items() {
+        warn!(error = %error, "Canonical deferred work reset failed");
+    }
+
+    loop {
+        match drain_next_entity_canonical(&db, &blob_store).await {
+            Ok(processed) if processed > 0 => continue,
+            Ok(_) => {}
+            Err(error) => warn!(error = %error, "Canonical deferred work drain failed"),
+        }
+
+        tokio::select! {
+            _ = tokio::time::sleep(DEFERRED_WORK_TICK) => {}
+            _ = cancel.cancelled() => {
+                debug!("Canonical deferred work loop cancelled");
                 return;
             }
         }

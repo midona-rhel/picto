@@ -78,7 +78,13 @@ Keep these public categories:
 - `get_entity_grid_items(entity_hashes)`
 - `patch_media_entities(target, patch)`
 - `set_entity_status(target, status)`
-- `apply_entity_tags(target, operation, tags)`
+- `apply_entity_tags(target, operation, tags, provenance_mask?)`
+- `rename_tag(tag_id, new_name)`
+- `merge_tags(from_tag, to_tag)` or equivalent canonical admin route
+- `delete_tag(tag_id)`
+- `manage_tag_alias(...)`
+- `manage_tag_implication(...)`
+- `set_tag_site_mask(tag_id, site_mask)`
 - `update_folder_membership(target, folder_id, operation)`
 - `resolve_entity_asset(entity_hash, role)`
 - `get_selection_summary(selection)`
@@ -102,7 +108,7 @@ fn set_entity_status(&self, target: EntityTarget, status: i64) -> Result<StatusC
 fn delete_entities(&self, target: EntityTarget) -> Result<EntityChange>;
 
 // Tags / folders
-fn apply_entity_tags(&self, target: EntityTarget, operation: TagOperation, tags: &[String]) -> Result<TagChange>;
+fn apply_entity_tags(&self, target: EntityTarget, operation: TagOperation, tags: &[String], provenance_mask: Option<u64>) -> Result<TagChange>;
 fn update_folder_membership(&self, target: EntityTarget, folder_id: i64, operation: MembershipOperation) -> Result<FolderMembershipChange>;
 
 // Assets / selection / deferred work
@@ -150,7 +156,7 @@ The primary grid read API is one typed query object:
 ```ts
 type EntityViewQuery = {
   base_scope:
-    | { kind: 'system'; key: 'active' | 'inbox' | 'trash' | 'rejected' | 'untagged' | 'uncategorized' }
+    | { kind: 'system'; key: 'active' | 'inbox' | 'trash' | 'untagged' | 'uncategorized' }
     | { kind: 'folder'; folder_id: number }
     | { kind: 'collection'; collection_id: number }
     | { kind: 'smart_folder'; smart_folder_id: number }

@@ -136,6 +136,7 @@ The clean reactive split is:
 - runtime asks backend to reconcile query-visible state when membership/order is uncertain
 - runtime applies exact sidebar deltas directly when available
 - runtime keeps displayed scope context aligned with the displayed grid, not raw active-node state during fades
+- selection summary for bulk inspector surfaces is treated as another backend-owned query/read helper, not a frontend reduction over loaded rows
 
 ## Implementation changes
 - add a typed backend entity-view reconcile contract
@@ -144,6 +145,7 @@ The clean reactive split is:
 - teach runtime/grid settle to compare the current query against event scope hints before deciding to reconcile or ignore
 - teach runtime/sidebar settle to apply exact count/node deltas instead of broad tree fetch as the normal path
 - keep broad refresh only as explicit fallback, not the default
+- keep bulk summary reads such as shared tags/folders/rating aligned with canonical `EntityTarget` / query-results semantics
 
 ## Acceptance criteria
 - activated grid/sidebar slices no longer use broad invalidation as the normal correctness path
@@ -151,6 +153,7 @@ The clean reactive split is:
 - the frontend does not guess query membership/order from hashes alone
 - the grid can ignore unrelated events, patch simple visible-row updates, or reconcile the current window through the backend as appropriate
 - the sidebar can apply count/tree deltas directly for normal state changes
+- bulk inspector summary state for query-results selections is backend-owned and does not depend on loaded-window frontend inference
 - displayed scope inspector content stays on the outgoing grid until the outgoing fade finishes
 - entity inspector swaps use one committed displayed snapshot instead of staggered field updates
 - one completed backend action normally produces one merged self-describing `runtime/state_changed` event
@@ -161,6 +164,7 @@ The clean reactive split is:
 - sidebar delta application tests
 - integration tests for new entity/status/tag/folder/smart-folder changes against the current grid query
 - integration tests for sidebar count/tree changes without broad fetch
+- bulk summary tests proving query-results shared tags/folders/rating stay exact without frontend hash expansion
 
 This PBI must follow the cross-layer naming contract in [PBI-572-cross-layer-naming-contract.md](./docs/pbis/active-alpha/PBI-572-cross-layer-naming-contract.md).
 This PBI must follow the cross-layer testing rules in [PBI-579-cross-layer-testing-rules.md](./docs/pbis/active-alpha/PBI-579-cross-layer-testing-rules.md).

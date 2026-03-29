@@ -108,8 +108,8 @@ pub struct ExportMediaResult {
 
 // ─── Private result structs ────────────────────────────────────────────────
 
-type EnsureThumbnailResult = crate::media_derivatives::EnsureThumbnailResult;
-type ReanalyzeFileColorsResult = crate::media_derivatives::ReanalyzeFileColorsResult;
+type EnsureThumbnailResult = crate::background_work::EnsureThumbnailResult;
+type ReanalyzeFileColorsResult = crate::background_work::ReanalyzeFileColorsResult;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ExportFormat {
@@ -472,40 +472,40 @@ async fn export_media_inner(
 }
 
 async fn ensure_thumbnail_inner(
-    db: &crate::sqlite::SqliteDatabase,
+    db: &crate::db::LibraryDatabase,
     blob_store: &std::sync::Arc<crate::blob_store::BlobStore>,
     hash: &str,
 ) -> Result<EnsureThumbnailResult, String> {
-    crate::media_derivatives::ensure_thumbnail(db, blob_store, hash, false).await
+    crate::background_work::ensure_thumbnail_now(db, blob_store, hash, false).await
 }
 
 /// Core thumbnail generation. When `force` is true, deletes existing thumbnail
 /// first (used by regenerate). When false, skips if thumbnail already exists.
 async fn generate_thumbnail_inner(
-    db: &crate::sqlite::SqliteDatabase,
+    db: &crate::db::LibraryDatabase,
     blob_store: &std::sync::Arc<crate::blob_store::BlobStore>,
     hash: &str,
     force: bool,
 ) -> Result<EnsureThumbnailResult, String> {
-    crate::media_derivatives::ensure_thumbnail(db, blob_store, hash, force).await
+    crate::background_work::ensure_thumbnail_now(db, blob_store, hash, force).await
 }
 
 async fn reanalyze_file_colors_inner(
-    db: &crate::sqlite::SqliteDatabase,
+    db: &crate::db::LibraryDatabase,
     blob_store: &std::sync::Arc<crate::blob_store::BlobStore>,
     hash: &str,
 ) -> Result<ReanalyzeFileColorsResult, String> {
-    crate::media_derivatives::reanalyze_file_colors(db, blob_store, hash).await
+    crate::background_work::reanalyze_file_colors_now(db, blob_store, hash).await
 }
 
 /// Background-backfill missing thumbnails and dominant colors.
 /// Fire-and-forget enqueue — the deferred-work worker owns execution.
 pub async fn backfill_missing_deferred(
-    db: &crate::sqlite::SqliteDatabase,
+    db: &crate::db::LibraryDatabase,
     blob_store: &std::sync::Arc<crate::blob_store::BlobStore>,
     hashes: &[String],
 ) {
-    crate::media_derivatives::enqueue_missing_deferred(db, blob_store, hashes).await;
+    crate::background_work::enqueue_missing_derivative_jobs(db, blob_store, hashes).await;
 }
 
 // ─── Handlers ──────────────────────────────────────────────────────────────
@@ -514,6 +514,7 @@ pub async fn resolve_file_path(
     state: &AppState,
     input: ResolveFilePathInput,
 ) -> Result<String, String> {
+    // Legacy-only: rebuilt frontend should use resolve_entity_asset + media:// URLs.
     resolve_file_path_inner(&state.db, &state.blob_store, &input.hash).await
 }
 
@@ -601,6 +602,7 @@ pub async fn resolve_thumbnail_path(
     state: &AppState,
     input: ResolveThumbnailPathInput,
 ) -> Result<String, String> {
+    // Legacy-only: rebuilt frontend should use resolve_entity_asset + media:// URLs.
     let bs = state.blob_store.clone();
     let hash = input.hash;
     let result = tokio::task::spawn_blocking(move || {
@@ -618,7 +620,7 @@ pub async fn ensure_thumbnail(
     state: &AppState,
     input: EnsureThumbnailInput,
 ) -> Result<serde_json::Value, String> {
-    let result = ensure_thumbnail_inner(&state.db, &state.blob_store, &input.hash).await?;
+    let result = ensure_thumbnail_inner(state.engine.db(), &state.blob_store, &input.hash).await?;
     if result.regenerated_thumbnail {
         crate::events::emit_state_changed(
             "ensure_thumbnail",
@@ -634,7 +636,7 @@ pub async fn regenerate_thumbnail(
     state: &AppState,
     input: RegenerateThumbnailInput,
 ) -> Result<serde_json::Value, String> {
-    let result = generate_thumbnail_inner(&state.db, &state.blob_store, &input.hash, true).await?;
+    let result = generate_thumbnail_inner(state.engine.db(), &state.blob_store, &input.hash, true).await?;
     if result.regenerated_thumbnail {
         crate::events::emit_state_changed(
             "regenerate_thumbnail",
@@ -654,7 +656,7 @@ pub async fn regenerate_thumbnails_batch(
     let mut errors = 0usize;
     let mut changed_hashes = Vec::new();
     for hash in &input.hashes {
-        match generate_thumbnail_inner(&state.db, &state.blob_store, hash, true).await {
+        match generate_thumbnail_inner(state.engine.db(), &state.blob_store, hash, true).await {
             Ok(r) => {
                 if r.regenerated_thumbnail {
                     regenerated += 1;
@@ -685,10 +687,7 @@ pub async fn reanalyze_file_colors(
     state: &AppState,
     input: ReanalyzeFileColorsInput,
 ) -> Result<serde_json::Value, String> {
-    let result = reanalyze_file_colors_inner(&state.db, &state.blob_store, &input.hash).await?;
-    state
-        .db
-        .emit_read_model_event(crate::sqlite::ReadModelEvent::RebuildAll);
+    let result = reanalyze_file_colors_inner(state.engine.db(), &state.blob_store, &input.hash).await?;
     crate::events::emit_state_changed(
         "reanalyze_file_colors",
         crate::runtime_contract::change_builder::ChangeImpact::new()

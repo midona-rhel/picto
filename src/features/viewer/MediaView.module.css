@@ -1,0 +1,75 @@
+/* MediaView — image/video viewer content area. */
+
+.mediaView {
+  position: absolute;
+  inset: 0;
+  z-index: var(--layer-overlay);
+  background: var(--color-bg-app);
+  display: flex;
+  flex-direction: column;
+}
+
+/* Zoom container — the viewport for pan/zoom. overflow:hidden clips. */
+.zoomContainer {
+  flex: 1;
+  position: relative;
+  overflow: hidden;
+  cursor: grab;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.zoomContainer.dragging {
+  cursor: grabbing;
+}
+
+/* Navigator minimap */
+.navigator {
+  position: absolute;
+  bottom: 12px;
+  right: 12px;
+  width: 120px;
+  height: 120px;
+  background: rgba(0, 0, 0, 0.4);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 6px;
+  overflow: hidden;
+  cursor: crosshair;
+  z-index: 5;
+}
+
+.navigatorThumb {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  pointer-events: none;
+}
+
+.navigatorViewport {
+  position: absolute;
+  border: 1.5px solid rgba(255, 255, 255, 0.7);
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 2px;
+  pointer-events: none;
+}
+
+/* Boundary flash */
+.boundaryLeft,
+.boundaryRight {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  padding: 8px 14px;
+  background: rgba(0, 0, 0, 0.6);
+  border-radius: 6px;
+  color: var(--color-text-secondary);
+  font-size: 13px;
+  opacity: 0;
+  transition: opacity 200ms ease;
+  pointer-events: none;
+  z-index: 5;
+}
+
+.boundaryLeft { left: 16px; }
+.boundaryRight { right: 16px; }
+.boundaryVisible { opacity: 1; }

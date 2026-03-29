@@ -37,6 +37,9 @@ pub struct ResolveDuplicatePairInput {
     pub action: String,
     pub hash_a: String,
     pub hash_b: String,
+    #[serde(default)]
+    #[ts(type = "number | null")]
+    pub preferred_collection_id: Option<i64>,
 }
 
 #[derive(Debug, Deserialize, TS)]
@@ -71,12 +74,7 @@ pub async fn find_similar(
     state: &AppState,
     input: FindSimilarInput,
 ) -> Result<serde_json::Value, String> {
-    let result = crate::duplicates::orchestrator::DuplicateOrchestrator::find_similar(
-        &state.db,
-        &state.blob_store,
-        &input.hash,
-    )
-    .await?;
+    let result = state.engine.find_similar(&input.hash)?;
     serde_json::to_value(&result).map_err(|e| e.to_string())
 }
 
@@ -96,13 +94,9 @@ pub async fn scan_duplicates(
             s.duplicate_review_similarity_pct,
         ))
     };
-    let result = crate::duplicates::orchestrator::DuplicateOrchestrator::scan_duplicates(
-        &state.db,
-        &state.blob_store,
-        effective_threshold,
-        review_threshold,
-    )
-    .await?;
+    let result = state
+        .engine
+        .scan_duplicates(effective_threshold, review_threshold)?;
     Ok(serde_json::to_value(&result).map_err(|e| e.to_string())?)
 }
 
@@ -119,14 +113,9 @@ pub async fn get_duplicate_pairs(
         }
         _ => None,
     };
-    let result = crate::duplicates::orchestrator::DuplicateOrchestrator::get_duplicate_pairs(
-        &state.db,
-        input.cursor,
-        input.limit,
-        input.status,
-        max_distance,
-    )
-    .await?;
+    let result = state
+        .engine
+        .get_duplicate_pairs(input.cursor, input.limit, input.status, max_distance)?;
     Ok(serde_json::to_value(&result).map_err(|e| e.to_string())?)
 }
 
@@ -134,14 +123,17 @@ pub async fn resolve_duplicate_pair(
     state: &AppState,
     input: ResolveDuplicatePairInput,
 ) -> Result<serde_json::Value, String> {
-    let result = crate::duplicates::orchestrator::DuplicateOrchestrator::resolve_duplicate_pair(
-        &state.db,
-        &state.blob_store,
+    let result = state.engine.resolve_duplicate_pair(
         &input.action,
-        input.hash_a,
-        input.hash_b,
-    )
-    .await?;
+        &input.hash_a,
+        &input.hash_b,
+        input.preferred_collection_id,
+    )?;
+    if matches!(result.status, crate::db::types::DuplicateResolveStatus::Resolved) {
+        if let Some(loser_hash) = result.loser_hash.as_deref() {
+            let _ = state.blob_store.delete(loser_hash);
+        }
+    }
     Ok(serde_json::to_value(&result).map_err(|e| e.to_string())?)
 }
 
@@ -149,9 +141,7 @@ pub async fn get_duplicate_count(
     state: &AppState,
     _input: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
-    let count =
-        crate::duplicates::orchestrator::DuplicateOrchestrator::get_duplicate_count(&state.db)
-            .await?;
+    let count = state.engine.get_duplicate_count()?;
     Ok(serde_json::json!({ "count": count }))
 }
 

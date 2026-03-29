@@ -6,17 +6,13 @@ import {
   getThumbnailDecodeWorkerStats,
   setThumbnailDecodeLateResponseListener,
 } from './thumbnailDecodeClient';
-// Pipeline policy constants (formerly in thumbnailPipelinePolicy.ts)
+// Pipeline policy constants
 export const THUMBNAIL_PIPELINE_MAX_ENTRIES = 200;
-export const THUMBNAIL_PIPELINE_MAX_VISIBLE_ACTIVE_IDLE = 4;
-export const THUMBNAIL_PIPELINE_MAX_VISIBLE_ACTIVE_SLOW = 3;
-export const THUMBNAIL_PIPELINE_MAX_VISIBLE_ACTIVE_FAST = 2;
-export const THUMBNAIL_PIPELINE_MAX_PREFETCH_ACTIVE_IDLE = 2;
-export const THUMBNAIL_PIPELINE_MAX_PREFETCH_ACTIVE_SLOW = 1;
-export const THUMBNAIL_PIPELINE_MAX_PREFETCH_ACTIVE_FAST = 0;
+export const THUMBNAIL_PIPELINE_MAX_CONCURRENT_VISIBLE = 12;
+export const THUMBNAIL_PIPELINE_MAX_CONCURRENT_PREFETCH = 4;
 export const THUMBNAIL_PIPELINE_SOURCE_EDGE = 750;
-export const THUMBNAIL_PIPELINE_REVEAL_MS = 250;
-export const THUMBNAIL_PIPELINE_MAX_CONCURRENT_REVEALS = 54;
+/** Reveal duration used by CanvasGrid's stagger system. */
+export const REVEAL_DURATION_MS = 150;
 import type {
   ThumbnailInFlightItem,
   ThumbnailPipelineEntry,
@@ -27,7 +23,6 @@ import type {
   EnsureThumbnailArgs,
 } from './thumbnailPipelineTypes';
 import {
-  type CanvasScrollPhase,
   type CanvasScrollState,
   createIdleCanvasScrollState,
 } from './scrollState';
@@ -47,7 +42,6 @@ export class ThumbnailPipeline {
   private scrollState: CanvasScrollState = createIdleCanvasScrollState();
   private destroyed = false;
   private totalBytes = 0;
-  private revealSlots: number[] = [];
   private onDirty: () => void;
   private onTraceEvent: TraceListener | null = null;
   private generationByHash = new Map<string, number>();
@@ -68,35 +62,7 @@ export class ThumbnailPipeline {
   }
 
   setScrollState(nextState: CanvasScrollState): void {
-    const prevPhase = this.scrollState.phase;
     this.scrollState = nextState;
-
-    if (nextState.phase === 'fast' && prevPhase !== 'fast') {
-      for (const [hash, item] of this.queueMap) {
-        if (item.priority === 'visible') continue;
-        this.queueMap.delete(hash);
-        const entry = this.cache.get(hash);
-        if (entry && !entry.thumb) this.resetEntry(entry);
-        this.emitTrace('queue_became_stale', {
-          hash,
-          priority: item.priority,
-          reason: 'fast_scroll',
-        });
-      }
-
-      for (const [hash, inFlight] of this.inFlight) {
-        if (inFlight.priority === 'visible') continue;
-        inFlight.cancel();
-        const entry = this.cache.get(hash);
-        if (entry && entry.state === 'loading') this.resetEntry(entry);
-        this.emitTrace('inflight_canceled', {
-          hash,
-          priority: inFlight.priority,
-          reason: 'fast_scroll',
-        });
-      }
-    }
-
     this.pump();
   }
 
@@ -112,8 +78,6 @@ export class ThumbnailPipeline {
     if (!entry?.thumb) return false;
     if (entry.state === 'shown') return false;
     entry.state = 'shown';
-    entry.animateIn = true;
-    entry.revealStartedAt = this.nextRevealSlot();
     this.emitTrace('bitmap_promoted', {
       hash,
     });
@@ -127,14 +91,6 @@ export class ThumbnailPipeline {
     const request = buildRequest(hash, args);
     if (entry.thumb && entry.state === 'shown' && entry.bytes > 0) {
       this.emitTrace('cache_hit', {
-        hash,
-        priority: request.priority,
-      });
-      return;
-    }
-
-    if (entry.thumb && entry.state === 'ready_pending' && entry.bytes > 0) {
-      this.emitTrace('ready_pending_hit', {
         hash,
         priority: request.priority,
       });
@@ -161,6 +117,17 @@ export class ThumbnailPipeline {
       generation,
     });
     this.pump();
+  }
+
+  /** Reset reveal state for entries outside the visible window so they re-fade on scroll back. */
+  resetRevealOutsideWindow(visibleHashes: Set<string>): void {
+    for (const [hash, entry] of this.cache) {
+      if (visibleHashes.has(hash)) continue;
+      if (entry.animateIn) {
+        entry.animateIn = false;
+        entry.revealStartedAt = 0;
+      }
+    }
   }
 
   cancelOutsideWindow(top: number, bottom: number): void {
@@ -266,17 +233,10 @@ export class ThumbnailPipeline {
   }
 
   private selectNextQueueItem(): ThumbnailQueueItem | null {
-    const budgets = getActiveBudgets(this.scrollState.phase);
     let best: ThumbnailQueueItem | null = null;
     let bestScore = -1;
     for (const item of this.queueMap.values()) {
-      if (!canStartQueueItem({
-        item,
-        budgets,
-        scrollPhase: this.scrollState.phase,
-        activeVisibleLoads: this.activeVisibleLoads,
-        activePrefetchLoads: this.activePrefetchLoads,
-      })) {
+      if (!canStartLoad(item, this.activeVisibleLoads, this.activePrefetchLoads)) {
         continue;
       }
       const score = scoreQueueItem(item);
@@ -379,13 +339,12 @@ export class ThumbnailPipeline {
     this.totalBytes += entry.bytes;
     entry.state = 'shown';
     if (isUpgrade) {
-      // Thumbnail → full-quality upgrade: silent swap, no fade.
+      // Thumbnail → full-quality: silent swap, no fade.
       entry.animateIn = false;
-      entry.revealStartedAt = 0;
     } else {
-      // Fresh load: staggered fade-in (legacy behavior).
+      // Fresh load or re-load after eviction: fade in.
       entry.animateIn = true;
-      entry.revealStartedAt = this.nextRevealSlot();
+      entry.revealStartedAt = performance.now();
     }
     this.pruneCache();
     this.emitTrace('bitmap_ready', {
@@ -393,20 +352,6 @@ export class ThumbnailPipeline {
       bytes: entry.bytes,
     });
     this.onDirty();
-  }
-
-  private nextRevealSlot(): number {
-    const now = performance.now();
-    this.revealSlots = this.revealSlots.filter((t) => now - t < THUMBNAIL_PIPELINE_REVEAL_MS);
-    if (this.revealSlots.length < THUMBNAIL_PIPELINE_MAX_CONCURRENT_REVEALS) {
-      this.revealSlots.push(now);
-      return now;
-    }
-    const oldest = this.revealSlots[0];
-    const staggered = oldest + THUMBNAIL_PIPELINE_REVEAL_MS;
-    this.revealSlots.shift();
-    this.revealSlots.push(staggered);
-    return staggered;
   }
 
   private pruneCache(): void {
@@ -440,9 +385,9 @@ export class ThumbnailPipeline {
       thumb: null,
       state: 'idle',
       lastAccessed: ++this.accessCounter,
-      revealStartedAt: 0,
-      animateIn: false,
       bytes: 0,
+      animateIn: false,
+      revealStartedAt: 0,
     };
     this.cache.set(hash, entry);
     return entry;
@@ -568,32 +513,9 @@ function scoreQueueItem(item: ThumbnailQueueItem): number {
   return item.priority === 'visible' ? 2 : 1;
 }
 
-function getActiveBudgets(scrollPhase: CanvasScrollPhase) {
-  return {
-    maxVisible: scrollPhase === 'fast'
-      ? THUMBNAIL_PIPELINE_MAX_VISIBLE_ACTIVE_FAST
-      : scrollPhase === 'slow'
-        ? THUMBNAIL_PIPELINE_MAX_VISIBLE_ACTIVE_SLOW
-        : THUMBNAIL_PIPELINE_MAX_VISIBLE_ACTIVE_IDLE,
-    maxPrefetch: scrollPhase === 'fast'
-      ? THUMBNAIL_PIPELINE_MAX_PREFETCH_ACTIVE_FAST
-      : scrollPhase === 'slow'
-        ? THUMBNAIL_PIPELINE_MAX_PREFETCH_ACTIVE_SLOW
-        : THUMBNAIL_PIPELINE_MAX_PREFETCH_ACTIVE_IDLE,
-  };
-}
-
-function canStartQueueItem(args: {
-  item: ThumbnailQueueItem;
-  budgets: ReturnType<typeof getActiveBudgets>;
-  scrollPhase: CanvasScrollPhase;
-  activeVisibleLoads: number;
-  activePrefetchLoads: number;
-}): boolean {
-  const { item, budgets, scrollPhase, activeVisibleLoads, activePrefetchLoads } = args;
+function canStartLoad(item: ThumbnailQueueItem, activeVisibleLoads: number, activePrefetchLoads: number): boolean {
   if (item.priority === 'prefetch') {
-    if (scrollPhase === 'fast') return false;
-    return activePrefetchLoads < budgets.maxPrefetch;
+    return activePrefetchLoads < THUMBNAIL_PIPELINE_MAX_CONCURRENT_PREFETCH;
   }
-  return activeVisibleLoads < budgets.maxVisible;
+  return activeVisibleLoads < THUMBNAIL_PIPELINE_MAX_CONCURRENT_VISIBLE;
 }

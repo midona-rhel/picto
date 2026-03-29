@@ -1,0 +1,292 @@
+/* Settings window — reference application-inspired layout with always-visible footer. */
+
+.root {
+  display: flex;
+  height: 100vh;
+  overflow: hidden;
+  user-select: none;
+  background: var(--color-bg-app, #1a1a1e);
+  color: var(--color-text-primary, #e0e0e0);
+  font-family: var(--font-family, system-ui);
+}
+
+/* ── Sidebar ── */
+
+.sidebar {
+  width: 200px;
+  height: 100%;
+  flex-shrink: 0;
+  padding: 0 12px;
+  border-right: 1px solid var(--color-border-secondary, rgba(255,255,255,0.06));
+  background: var(--color-surface-1, rgba(255,255,255,0.03));
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+}
+
+.sidebarTitle {
+  height: 48px;
+  display: flex;
+  align-items: center;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--color-text-primary);
+  -webkit-app-region: drag;
+  padding-left: 60px; /* macOS traffic lights */
+  flex-shrink: 0;
+}
+
+.searchWrap {
+  position: relative;
+  margin-bottom: 8px;
+  flex-shrink: 0;
+  -webkit-app-region: no-drag;
+}
+
+.searchIcon {
+  position: absolute;
+  left: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--color-text-tertiary, #666);
+  pointer-events: none;
+}
+
+.sidebarSearch {
+  display: block;
+  width: 100%;
+  height: 32px;
+  padding: 0 8px 0 30px;
+  box-sizing: border-box;
+  border-radius: 6px;
+  border: 1px solid var(--color-border-primary, rgba(255,255,255,0.08));
+  background: rgba(0, 0, 0, 0.2);
+  color: var(--color-text-primary);
+  font-size: 13px;
+  outline: none;
+}
+.sidebarSearch:focus { border-color: var(--color-primary-60, #3297FF); }
+.sidebarSearch::placeholder { color: var(--color-text-tertiary, #666); }
+
+.sidebarItems {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  -webkit-app-region: no-drag;
+}
+
+.navItem, .navItemActive {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 8px;
+  font-size: 13px;
+  border-radius: 6px;
+  border: none;
+  background: transparent;
+  color: var(--color-text-primary);
+  cursor: pointer;
+  text-align: left;
+  width: 100%;
+  transition: background 100ms ease;
+}
+.navItem:hover { background: rgba(255, 255, 255, 0.04); }
+.navItemActive { background: rgba(255, 255, 255, 0.08); font-weight: 500; }
+
+/* ── Content ── */
+
+.content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.contentHeader {
+  min-height: 48px;
+  padding: 0 12px 0 16px;
+  display: flex;
+  align-items: center;
+  border-bottom: 1px solid var(--color-border-secondary, rgba(255,255,255,0.06));
+  -webkit-app-region: drag;
+  flex-shrink: 0;
+}
+
+.contentTitle {
+  flex: 1;
+  font-size: 14px;
+  font-weight: 600;
+  -webkit-app-region: no-drag;
+}
+
+.closeBtn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px; height: 24px;
+  border: none; border-radius: 4px;
+  background: transparent;
+  color: var(--color-text-tertiary, #666);
+  cursor: pointer;
+  margin-left: auto;
+  -webkit-app-region: no-drag;
+  transition: background 150ms ease;
+}
+.closeBtn:hover { background: rgba(255,255,255,0.06); color: var(--color-text-primary); }
+
+.contentBody {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px;
+}
+
+/* ── Setting rows ── */
+
+.settingRow {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  min-height: 36px;
+  padding: 8px 0;
+}
+
+.settingRow + .settingRow {
+  border-top: 1px solid var(--color-border-secondary, rgba(255,255,255,0.04));
+}
+
+.settingLabel {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text-primary);
+  min-width: 130px;
+  padding-top: 4px;
+  flex-shrink: 0;
+}
+
+.settingControl {
+  flex: 1;
+  min-width: 0;
+}
+
+.select {
+  height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--color-border-primary, rgba(255,255,255,0.08));
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.2);
+  color: var(--color-text-primary);
+  font-size: 13px;
+  outline: none;
+  cursor: pointer;
+  min-width: 220px;
+}
+.select:focus { border-color: var(--color-primary-60, #3297FF); }
+
+.settingHint {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: var(--color-text-tertiary, #666);
+  line-height: 1.4;
+}
+
+.settingPlaceholder {
+  font-size: 13px;
+  color: var(--color-text-tertiary, #666);
+}
+
+.panelContent {
+  display: flex;
+  flex-direction: column;
+}
+
+/* ── Search results ── */
+
+.searchGroup {
+  margin-bottom: 20px;
+}
+
+.searchGroupTitle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--color-text-secondary, #999);
+  margin-bottom: 8px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.searchGroupLink {
+  border: none;
+  background: none;
+  color: var(--color-primary-60, #3297FF);
+  font-size: 11px;
+  cursor: pointer;
+  padding: 0;
+}
+.searchGroupLink:hover { text-decoration: underline; }
+
+.searchGroupHint {
+  font-size: 13px;
+  color: var(--color-text-tertiary, #666);
+  padding: 8px 0;
+}
+
+.emptySearch {
+  text-align: center;
+  padding: 32px;
+  color: var(--color-text-tertiary, #666);
+  font-size: 13px;
+}
+
+/* ── Footer — always visible ── */
+
+.footer {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 10px 16px;
+  border-top: 1px solid var(--color-border-secondary, rgba(255,255,255,0.06));
+  background: var(--color-surface-1, rgba(255,255,255,0.02));
+}
+
+.footerBtnSecondary {
+  height: 30px;
+  padding: 0 14px;
+  border: 1px solid var(--color-border-primary, rgba(255,255,255,0.1));
+  border-radius: 6px;
+  background: transparent;
+  color: var(--color-text-secondary, #999);
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 150ms ease;
+}
+.footerBtnSecondary:hover {
+  background: rgba(255,255,255,0.04);
+  color: var(--color-text-primary);
+  border-color: rgba(255,255,255,0.15);
+}
+
+.footerBtnPrimary {
+  height: 30px;
+  padding: 0 18px;
+  border: none;
+  border-radius: 6px;
+  background: var(--color-primary-60, #3297FF);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 150ms ease;
+}
+.footerBtnPrimary:hover { background: var(--color-primary-70, #4BA3FF); }
+.footerBtnPrimary:disabled {
+  opacity: 0.35;
+  cursor: default;
+  pointer-events: none;
+}

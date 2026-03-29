@@ -113,8 +113,14 @@ pub async fn open_library(library_root: PathBuf) -> Result<Arc<AppState>, String
     let cancel = CancellationToken::new();
     let (folder_watch_commands, folder_watch_rx) = crate::folders::watch::channel();
 
+    let new_db = Arc::new(
+        crate::db::LibraryDatabase::open(&library_root)
+            .map_err(|e| format!("Failed to open new LibraryDatabase: {e}"))?,
+    );
+
     let worker_handles = crate::workers::start_workers(
         &library_db,
+        &new_db,
         &blob_store,
         &rate_limiter,
         &running_subscriptions,
@@ -127,10 +133,6 @@ pub async fn open_library(library_root: PathBuf) -> Result<Arc<AppState>, String
     // Open the new database boundary alongside the old one.
     // The engine wraps LibraryDatabase; old dispatch still uses SqliteDatabase
     // until the transport adapter rewrite replaces it.
-    let new_db = Arc::new(
-        crate::db::LibraryDatabase::open(&library_root)
-            .map_err(|e| format!("Failed to open new LibraryDatabase: {e}"))?,
-    );
     let engine = Arc::new(crate::engine::ApplicationEngine::new(new_db));
 
     let state = Arc::new(AppState {

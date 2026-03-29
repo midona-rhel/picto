@@ -12,8 +12,9 @@
 
 import type { LayoutItem, LayoutResult, GridViewMode } from './types';
 
-const LAYOUT_PADDING_TOP = 20;
-const LAYOUT_PADDING_BOTTOM = 0;
+// Top and bottom padding match the gap between tiles — equal spacing everywhere.
+const LAYOUT_PADDING_TOP = 16;
+const LAYOUT_PADDING_BOTTOM = 16;
 
 export function safeAspectRatio(value: number): number {
   if (!Number.isFinite(value) || value <= 0) return 1.5;

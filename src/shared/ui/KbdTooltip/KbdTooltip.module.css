@@ -1,0 +1,26 @@
+/* KbdTooltip — content styles for the Mantine Tooltip label. */
+
+.content {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+  font-size: 13px;
+  font-weight: normal;
+  color: var(--color-text-primary);
+}
+
+.kbd {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 16px;
+  min-width: 16px;
+  padding: 0 4px;
+  border-radius: 3px;
+  font-size: 10px;
+  font-family: var(--font-family);
+  color: var(--color-text-primary);
+  background: rgba(255, 255, 255, 0.1);
+  box-sizing: border-box;
+}

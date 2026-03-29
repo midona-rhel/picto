@@ -6,9 +6,10 @@
   align-items: center;
   width: 100%;
   height: 100%;
-  padding: 0 8px;
+  padding: 0 8px 0 0;
   gap: 0;
 }
+
 
 /* ── Icon button base (matches legacy icBtn28) ────────── */
 
@@ -36,7 +37,8 @@
   background: rgba(248, 249, 251, 0.05);
 }
 
-.icBtn:active {
+.icBtn:active,
+.icBtnActive {
   background: rgba(255, 255, 255, 0.12);
 }
 
@@ -50,7 +52,7 @@
 
 .title {
   position: absolute;
-  left: 8px;
+  left: 64px;
   right: 50%;
   font-size: var(--font-size-sm);
   font-weight: var(--font-weight-medium);
@@ -61,16 +63,6 @@
   pointer-events: none;
   mask-image: linear-gradient(to right, black calc(100% - 40px), transparent 100%);
   -webkit-mask-image: linear-gradient(to right, black calc(100% - 40px), transparent 100%);
-}
-
-.titleFadeOut {
-  opacity: 0;
-  transition: opacity 250ms var(--ease-default);
-}
-
-.titleFadeIn {
-  opacity: 1;
-  transition: opacity 250ms var(--ease-default);
 }
 
 /* ── Center group (zoom controls, centered) ──────────── */
@@ -86,9 +78,22 @@
   position: relative;
   display: flex;
   align-items: center;
+  background: var(--color-bg-app);
   gap: 6px;
   flex-shrink: 0;
   -webkit-app-region: no-drag;
+}
+
+/* Fade gradient on the left of the slider — covers title text smoothly */
+.sliderSection::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: 100%;
+  width: 20px;
+  background: linear-gradient(to right, transparent, var(--color-bg-app));
+  pointer-events: none;
 }
 
 .zoomSlider {
@@ -112,6 +117,45 @@
 
 .zoomSlider::-webkit-slider-thumb:hover {
   background: var(--color-text-primary);
+}
+
+/* ── Left section (viewer mode) ─────────────────────── */
+
+.leftSection {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.counter {
+  font-size: 12px;
+  font-family: var(--font-family-mono, monospace);
+  color: var(--color-text-secondary);
+  margin-left: 4px;
+  white-space: nowrap;
+  -webkit-app-region: no-drag;
+}
+
+.zoomLabel {
+  font-size: 12px;
+  font-family: var(--font-family-mono, monospace);
+  color: var(--color-text-secondary);
+  min-width: 40px;
+  text-align: center;
+  -webkit-app-region: no-drag;
+}
+
+.navGroup {
+  display: flex;
+  align-items: center;
+  margin-left: 4px;
+}
+
+.icBtnDisabled {
+  opacity: 0.2;
+  cursor: default;
+  pointer-events: none;
 }
 
 /* ── Right section ───────────────────────────────────── */

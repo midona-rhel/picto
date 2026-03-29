@@ -1,0 +1,103 @@
+/* QuickLook — peek overlay (Space key). Copied from legacy v0.5.0-alpha. */
+
+.overlay {
+  position: fixed;
+  inset: 0;
+  z-index: var(--layer-overlay);
+  background: var(--color-bg-app);
+  display: flex;
+  flex-direction: column;
+}
+
+.imageArea {
+  flex: 1;
+  margin: 48px 16px;
+  border-radius: 8px;
+  overflow: hidden;
+  position: relative;
+  opacity: 0;
+  transition: opacity 100ms ease;
+  will-change: opacity;
+  cursor: grab;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.imageArea.open {
+  opacity: 1;
+}
+
+.imageArea.dragging {
+  cursor: grabbing;
+}
+
+.inlineToolbar {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.navBtn {
+  width: 48px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  border: none;
+  background: transparent;
+  color: var(--color-text-primary);
+  cursor: pointer;
+  padding: 0;
+  transition: background 200ms ease;
+}
+
+.navBtn:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.navBtn:disabled {
+  opacity: 0.3;
+  cursor: default;
+  pointer-events: none;
+}
+
+.pageCounter {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 13px;
+  font-family: var(--font-family-mono, 'SF Mono', 'Menlo', 'Consolas', monospace);
+  color: var(--color-text-primary);
+  min-width: 60px;
+  justify-content: center;
+}
+
+.exitBtn {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 10;
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  border: none;
+  background: transparent;
+  color: var(--color-text-primary);
+  cursor: pointer;
+  padding: 0;
+  transition: background 200ms ease;
+}
+
+.exitBtn:hover {
+  background: rgba(255, 255, 255, 0.06);
+}

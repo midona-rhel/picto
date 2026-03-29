@@ -120,15 +120,18 @@ pub fn migrate(conn: &Connection) -> Result<MigrationResult, String> {
 
     // ── Step 4: tag ← _old_tag, entity_tag ← entity_tag_raw ────────
     let _ = conn.execute(
-        "INSERT OR IGNORE INTO tag (tag_id, namespace, subtag, file_count)
-         SELECT tag_id, namespace, subtag, file_count FROM _old_tag",
+        "INSERT OR IGNORE INTO tag (tag_id, namespace, subtag, site_mask, file_count)
+         SELECT tag_id, namespace, subtag, 0, file_count FROM _old_tag",
         [],
     );
     let tags = conn
         .execute(
-            "INSERT OR IGNORE INTO entity_tag (entity_id, tag_id, source)
-             SELECT entity_id, tag_id, source FROM entity_tag_raw",
-            [],
+            "INSERT OR IGNORE INTO entity_tag (entity_id, tag_id, provenance_mask, source)
+             SELECT entity_id, tag_id,
+                    CASE WHEN source = 'local' THEN ?1 ELSE 0 END,
+                    source
+             FROM entity_tag_raw",
+            [crate::db::types::mask_to_db_bits(crate::db::types::TAG_PROVENANCE_MANUAL)],
         )
         .map_err(|e| format!("Failed to migrate entity_tag: {e}"))?;
     result.tags_migrated = tags;
@@ -376,11 +379,14 @@ pub fn migrate_from_attached(conn: &Connection) -> Result<MigrationResult, Strin
 
     // Step 4: tags
     let _ = conn.execute(
-        "INSERT OR IGNORE INTO tag (tag_id, namespace, subtag, file_count)
-         SELECT tag_id, namespace, subtag, file_count FROM old_db.tag", []);
+        "INSERT OR IGNORE INTO tag (tag_id, namespace, subtag, site_mask, file_count)
+         SELECT tag_id, namespace, subtag, 0, file_count FROM old_db.tag", []);
     result.tags_migrated = conn.execute(
-        "INSERT OR IGNORE INTO entity_tag (entity_id, tag_id, source)
-         SELECT entity_id, tag_id, source FROM old_db.entity_tag_raw", [],
+        "INSERT OR IGNORE INTO entity_tag (entity_id, tag_id, provenance_mask, source)
+         SELECT entity_id, tag_id,
+                CASE WHEN source = 'local' THEN ?1 ELSE 0 END,
+                source
+         FROM old_db.entity_tag_raw", [crate::db::types::mask_to_db_bits(crate::db::types::TAG_PROVENANCE_MANUAL)],
     ).map_err(|e| format!("Failed to import tags: {e}"))?;
 
     // Step 5: folders

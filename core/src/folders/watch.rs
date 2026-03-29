@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::fs;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -9,13 +9,8 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tokio_util::sync::CancellationToken;
 
 use crate::blob_store::BlobStore;
-use crate::duplicates::orchestrator::DuplicateOrchestrator;
+use crate::db::LibraryDatabase;
 use crate::events::{self, ManualImportProgressEvent};
-use crate::folders::service;
-use crate::import::existing::{merge_existing_import_target, ExistingImportMergeRequest};
-use crate::import::pipeline::{ImportError, ImportOptions, ImportPipeline};
-use crate::media_derivatives;
-use crate::runtime_contract::change_builder::ChangeImpact;
 use crate::sqlite::SqliteDatabase;
 
 const WATCH_DEBOUNCE: Duration = Duration::from_millis(700);
@@ -58,13 +53,14 @@ pub fn channel() -> (
 
 pub fn spawn_worker(
     db: Arc<SqliteDatabase>,
+    canonical_db: Arc<LibraryDatabase>,
     blob_store: Arc<BlobStore>,
     mut command_rx: UnboundedReceiver<FolderWatchCommand>,
     cancel: CancellationToken,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel::<RawWatchEvent>();
-        let mut runtime = FolderWatchRuntime::new(db, blob_store, event_tx);
+        let mut runtime = FolderWatchRuntime::new(db, canonical_db, blob_store, event_tx);
         runtime.reload().await;
         let mut sweep = tokio::time::interval(WATCH_SWEEP_INTERVAL);
 
@@ -92,6 +88,7 @@ pub fn spawn_worker(
 
 pub async fn import_existing_for_folder_watch(
     db: &SqliteDatabase,
+    canonical_db: &LibraryDatabase,
     blob_store: &BlobStore,
     folder_id: i64,
     watch_path: &str,
@@ -111,6 +108,7 @@ pub async fn import_existing_for_folder_watch(
     for (index, path) in file_paths.iter().enumerate() {
         process_import_path(
             db,
+            canonical_db,
             blob_store,
             folder_id,
             &root_path,
@@ -135,6 +133,7 @@ pub async fn import_existing_for_folder_watch(
 
 struct FolderWatchRuntime {
     db: Arc<SqliteDatabase>,
+    canonical_db: Arc<LibraryDatabase>,
     blob_store: Arc<BlobStore>,
     event_tx: UnboundedSender<RawWatchEvent>,
     configs: HashMap<PathBuf, WatchedFolderConfig>,
@@ -145,11 +144,13 @@ struct FolderWatchRuntime {
 impl FolderWatchRuntime {
     fn new(
         db: Arc<SqliteDatabase>,
+        canonical_db: Arc<LibraryDatabase>,
         blob_store: Arc<BlobStore>,
         event_tx: UnboundedSender<RawWatchEvent>,
     ) -> Self {
         Self {
             db,
+            canonical_db,
             blob_store,
             event_tx,
             configs: HashMap::new(),
@@ -163,7 +164,7 @@ impl FolderWatchRuntime {
         self.configs.clear();
         self.pending.clear();
 
-        let folders = match self.db.list_watched_folders().await {
+        let folders = match self.canonical_db.list_folders_canonical() {
             Ok(folders) => folders,
             Err(err) => {
                 tracing::warn!(error = %err, "Failed to load watched folder configs");
@@ -172,6 +173,9 @@ impl FolderWatchRuntime {
         };
 
         for folder in folders {
+            if !folder.watch_enabled {
+                continue;
+            }
             let Some(watch_path) = folder.watch_path.clone() else {
                 continue;
             };
@@ -215,7 +219,10 @@ impl FolderWatchRuntime {
                     folder_id: folder.folder_id,
                     root_path: root_path.clone(),
                     watch_subfolders: folder.watch_subfolders,
-                    watch_import_status_mode: folder.watch_import_status_mode,
+                    watch_import_status_mode: folder
+                        .watch_import_status_mode
+                        .clone()
+                        .unwrap_or_else(|| "inherit".to_string()),
                 },
             );
             self.watchers.insert(root_path, watcher);
@@ -267,6 +274,7 @@ impl FolderWatchRuntime {
             }
             match process_import_path(
                 &self.db,
+                &self.canonical_db,
                 &self.blob_store,
                 config.folder_id,
                 &config.root_path,
@@ -378,6 +386,7 @@ fn collect_existing_paths(root_path: &Path, recursive: bool) -> Result<Vec<PathB
 
 async fn process_import_path(
     db: &SqliteDatabase,
+    canonical_db: &LibraryDatabase,
     blob_store: &BlobStore,
     folder_id: i64,
     root_path: &Path,
@@ -394,207 +403,35 @@ async fn process_import_path(
         return Ok(());
     }
 
-    let target_folder_id = if relative_parent.as_os_str().is_empty() {
-        folder_id
-    } else {
-        ensure_relative_folder_path(db, folder_id, relative_parent).await?
-    };
+    let summary = crate::ingest::import_watch_path(
+        canonical_db,
+        Some(db),
+        blob_store,
+        folder_id,
+        root_path,
+        watch_subfolders,
+        watch_import_status_mode,
+        path,
+    )
+    .await?;
 
-    let initial_status = resolve_initial_status(watch_import_status_mode)?;
-    import_file_into_folder(db, blob_store, path, target_folder_id, initial_status).await
-}
-
-async fn ensure_relative_folder_path(
-    db: &SqliteDatabase,
-    root_folder_id: i64,
-    relative_parent: &Path,
-) -> Result<i64, String> {
-    let mut current_folder_id = root_folder_id;
-    for component in relative_parent.components() {
-        let Component::Normal(name) = component else {
-            continue;
-        };
-        let Some(name) = name.to_str() else {
-            continue;
-        };
-        let child = service::ensure_child_folder(db, current_folder_id, name).await?;
-        current_folder_id = child.folder_id;
-    }
-    Ok(current_folder_id)
-}
-
-fn resolve_initial_status(mode: &str) -> Result<i64, String> {
-    match mode {
-        "inbox" => Ok(0),
-        "active" => Ok(1),
-        "inherit" => {
-            let default_mode = crate::state::get_state()
-                .map(|state| state.settings.get().watch_folder_default_status)
-                .unwrap_or_else(|_| "inbox".to_string());
-            resolve_initial_status(&default_mode)
-        }
-        other => Err(format!("Invalid watch import status mode: {other}")),
-    }
-}
-
-async fn import_file_into_folder(
-    db: &SqliteDatabase,
-    blob_store: &BlobStore,
-    path: &Path,
-    folder_id: i64,
-    initial_status: i64,
-) -> Result<(), String> {
-    let app_settings = crate::state::get_state()
-        .map(|state| state.settings.get())
-        .unwrap_or_default();
-    let auto_merge_enabled = app_settings.duplicate_auto_merge_enabled
-        && !app_settings.duplicate_auto_merge_subscriptions_only;
-    let auto_merge_distance = if auto_merge_enabled {
-        crate::settings::store::similarity_pct_to_distance(
-            app_settings.duplicate_auto_merge_similarity_pct,
-        )
-    } else {
-        0
-    };
-    let auto_merge_require_matching_dimensions =
-        app_settings.duplicate_auto_merge_require_matching_dimensions;
-
-    let pipeline = ImportPipeline::new(db, blob_store);
-    let options = ImportOptions {
-        initial_status,
-        ..ImportOptions::default()
-    };
-
-    let mut imported_hashes = Vec::<String>::new();
-    let mut skipped_hashes = Vec::<String>::new();
-
-    match pipeline.import_file(path, &options).await {
-        Ok(imported) => {
-            let surviving_hash = maybe_auto_merge(
-                db,
-                blob_store,
-                &imported.hex_hash,
-                auto_merge_enabled,
-                auto_merge_distance,
-                auto_merge_require_matching_dimensions,
-            )
-            .await;
-            if surviving_hash == imported.hex_hash {
-                emit_file_imported(db, &surviving_hash).await;
-            }
-            media_derivatives::enqueue_import_derivatives(
-                db,
-                &surviving_hash,
-                &imported.mime,
-                options.skip_thumbnail,
-            )
-            .await?;
-            imported_hashes.push(surviving_hash);
-        }
-        Err(ImportError::AlreadyImported(hash)) => {
-            merge_existing_import_target(
-                db,
-                &hash,
-                ExistingImportMergeRequest {
-                    restore_status: Some(initial_status),
-                    tag_strings: Vec::new(),
-                    source_urls: Vec::new(),
-                    created_at: None,
-                    name: None,
-                    note_entries: Default::default(),
-                    subscription_id: None,
-                    change_origin: "watch_folder_existing",
-                },
-            )
-            .await?;
-            skipped_hashes.push(hash);
-        }
-        Err(err) => return Err(err.to_string()),
-    }
-
-    let membership_hashes: Vec<String> = imported_hashes
-        .iter()
-        .cloned()
-        .chain(skipped_hashes.iter().cloned())
-        .collect();
-    if !membership_hashes.is_empty() {
-        let membership_entity_ids: Vec<i64> = db
-            .resolve_entity_hashes_batch(&membership_hashes)
-            .await?
-            .into_iter()
-            .map(|(_, entity_id)| entity_id)
-            .collect();
-        db.add_entities_to_folder_batch(folder_id, &membership_entity_ids)
-            .await?;
-        service::refresh_sidebar_projection_for_folder_ids(db, &[folder_id]).await?;
-    }
-
-    let mut impact: Option<ChangeImpact> = None;
-    if !imported_hashes.is_empty() {
-        let next = ChangeImpact::file_lifecycle(db)
-            .entity_hashes(imported_hashes.clone())
-            .merge(ChangeImpact::folder_file_change(folder_id));
-        impact = Some(match impact.take() {
-            Some(current) => current.merge(next),
-            None => next,
-        });
-    }
-    if !skipped_hashes.is_empty() {
-        let next = ChangeImpact::new()
-            .entity_hashes(skipped_hashes.clone())
-            .merge(ChangeImpact::folder_file_change(folder_id));
-        impact = Some(match impact.take() {
-            Some(current) => current.merge(next),
-            None => next,
-        });
-    }
-
-    if let Some(impact) = impact {
-        let origin = if !imported_hashes.is_empty() {
+    crate::ingest::apply_compiler_plan(canonical_db, &summary.flags, &summary.folder_ids);
+    if !summary.imported_hashes.is_empty() || !summary.skipped_hashes.is_empty() {
+        let origin = if !summary.imported_hashes.is_empty() {
             "watch_folder_import"
         } else {
             "watch_folder_membership"
         };
-        crate::events::emit_state_changed(origin, impact);
+        crate::events::emit_state_changed(
+            origin,
+            crate::ingest::build_ingest_change_impact(
+                &summary,
+                vec!["system:active".into(), "system:inbox".into()],
+            ),
+        );
     }
 
     Ok(())
-}
-
-async fn maybe_auto_merge(
-    db: &SqliteDatabase,
-    blob_store: &BlobStore,
-    hash: &str,
-    auto_merge_enabled: bool,
-    auto_merge_distance: u32,
-    auto_merge_require_matching_dimensions: bool,
-) -> String {
-    if !auto_merge_enabled {
-        return hash.to_string();
-    }
-    match DuplicateOrchestrator::check_and_auto_merge(
-        db,
-        blob_store,
-        hash,
-        auto_merge_distance,
-        auto_merge_require_matching_dimensions,
-    )
-    .await
-    {
-        Ok(Some(result)) => result.winner_hash,
-        Ok(None) => hash.to_string(),
-        Err(err) => {
-            tracing::warn!(error = %err, hash = %hash, "Folder watch auto-merge failed");
-            hash.to_string()
-        }
-    }
-}
-
-async fn emit_file_imported(db: &SqliteDatabase, hash: &str) {
-    if let Ok(Some(record)) = db.get_file_by_hash(hash).await {
-        let slim = crate::types::FileGridInfo::from(record);
-        crate::events::emit(crate::events::event_names::FILE_IMPORTED, &slim);
-    }
 }
 
 fn emit_progress(done: usize, total: usize, current_file: String) {

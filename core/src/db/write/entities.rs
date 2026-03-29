@@ -86,7 +86,7 @@ pub fn patch_entity_metadata(
     entity_ids: &[i64],
     name: Option<&str>,
     rating: Option<Option<i64>>,
-    notes: Option<&str>,
+    notes: Option<Option<&str>>,
     source_urls_json: Option<&str>,
     now: &str,
     expansion: ExpansionMode,
@@ -140,6 +140,22 @@ pub fn patch_entity_metadata(
     }
 
     Ok(change)
+}
+
+pub fn set_entity_date_created(
+    conn: &Connection,
+    entity_id: i64,
+    date_created: &str,
+    now: &str,
+) -> rusqlite::Result<()> {
+    conn.execute(
+        "UPDATE media_entity
+         SET date_created = ?1,
+             date_modified = ?2
+         WHERE entity_id = ?3",
+        params![date_created, now, entity_id],
+    )?;
+    Ok(())
 }
 
 /// Delete entities. For collections, also deletes member singles.

@@ -92,9 +92,6 @@
   align-items: center;
 }
 
-.stale {
-  opacity: 0.5;
-}
 
 /* Section header */
 .section {
@@ -162,7 +159,7 @@
   justify-content: center;
   width: 14px;
   height: 14px;
-  margin-right: 0;
+  margin-right: 1px;
   border-radius: 0;
   color: var(--color-text-secondary);
   opacity: 0;
