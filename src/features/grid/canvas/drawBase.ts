@@ -8,6 +8,7 @@
 import type { LayoutItem, GridViewMode } from '../layout/types';
 import type { CanvasRenderItem } from './renderItemAdapter';
 import type { ThumbnailPipelineEntry } from './thumbnailPipeline';
+import { THUMBNAIL_PIPELINE_REVEAL_MS } from './thumbnailPipeline';
 import {
   BADGE_FONT,
   BADGE_H,
@@ -44,8 +45,7 @@ export interface BaseLayerArgs {
   positions: LayoutItem[];
   items: CanvasRenderItem[];
   atlasGet: (hash: string) => ThumbnailPipelineEntry | null;
-  /** Per-hash reveal progress (0–1). Missing = fully revealed. */
-  revealProgressByHash: Map<string, number>;
+  now: number;
   /** Indices of tiles in the activation zone — the ONLY tiles to draw. */
   activeTiles: number[];
   draw: DrawContext;
@@ -95,7 +95,7 @@ export function drawCanvasBaseLayer({
   positions,
   items,
   atlasGet,
-  revealProgressByHash,
+  now,
   activeTiles,
   draw,
   theme,
@@ -143,18 +143,32 @@ export function drawCanvasBaseLayer({
       ctx.clip();
     }
 
-    const hasBitmap = entry?.thumb != null;
-    const progress = revealProgressByHash.get(item.thumbnailHash) ?? 1;
+    // Legacy two-phase reveal: image fades 0→1 over REVEAL_MS,
+    // then placeholder fades 1→0 over the next REVEAL_MS.
+    if (entry?.thumb) {
+      const revealElapsedMs = entry.animateIn
+        ? Math.max(0, now - entry.revealStartedAt)
+        : THUMBNAIL_PIPELINE_REVEAL_MS * 2;
+      const imageProgress = Math.min(1, revealElapsedMs / THUMBNAIL_PIPELINE_REVEAL_MS);
+      const placeholderFadeElapsedMs = Math.max(0, revealElapsedMs - THUMBNAIL_PIPELINE_REVEAL_MS);
+      const placeholderAlpha = imageProgress < 1
+        ? 1
+        : Math.max(0, 1 - (placeholderFadeElapsedMs / THUMBNAIL_PIPELINE_REVEAL_MS));
 
-    if (hasBitmap && progress > 0) {
-      if (progress < 1) {
+      if (imageProgress < 1 || placeholderAlpha > 0) {
         hasActiveReveal = true;
-        fillPlaceholder(ctx, item, theme, effectiveFit, pos.x, drawY, pos.w, imageHeight);
-        ctx.globalAlpha = progress;
-        drawThumb(ctx, entry!.thumb!, pos.x, drawY, pos.w, imageHeight);
+      }
+
+      if (placeholderAlpha > 0) {
+        fillPlaceholder(ctx, item, theme, effectiveFit, pos.x, drawY, pos.w, imageHeight, placeholderAlpha);
+      }
+
+      if (imageProgress < 1) {
+        ctx.globalAlpha = imageProgress;
+        drawThumb(ctx, entry.thumb, pos.x, drawY, pos.w, imageHeight);
         ctx.globalAlpha = 1;
       } else {
-        drawThumb(ctx, entry!.thumb!, pos.x, drawY, pos.w, imageHeight);
+        drawThumb(ctx, entry.thumb, pos.x, drawY, pos.w, imageHeight);
       }
     } else {
       fillPlaceholder(ctx, item, theme, effectiveFit, pos.x, drawY, pos.w, imageHeight);

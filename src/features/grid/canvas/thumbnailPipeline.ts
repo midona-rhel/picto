@@ -11,8 +11,8 @@ export const THUMBNAIL_PIPELINE_MAX_ENTRIES = 200;
 export const THUMBNAIL_PIPELINE_MAX_CONCURRENT_VISIBLE = 12;
 export const THUMBNAIL_PIPELINE_MAX_CONCURRENT_PREFETCH = 4;
 export const THUMBNAIL_PIPELINE_SOURCE_EDGE = 750;
-/** Reveal duration used by CanvasGrid's stagger system. */
-export const REVEAL_DURATION_MS = 150;
+export const THUMBNAIL_PIPELINE_REVEAL_MS = 250;
+export const THUMBNAIL_PIPELINE_MAX_CONCURRENT_REVEALS = 54;
 import type {
   ThumbnailInFlightItem,
   ThumbnailPipelineEntry,
@@ -42,6 +42,7 @@ export class ThumbnailPipeline {
   private scrollState: CanvasScrollState = createIdleCanvasScrollState();
   private destroyed = false;
   private totalBytes = 0;
+  private revealSlots: number[] = [];
   private onDirty: () => void;
   private onTraceEvent: TraceListener | null = null;
   private generationByHash = new Map<string, number>();
@@ -119,14 +120,19 @@ export class ThumbnailPipeline {
     this.pump();
   }
 
-  /** Reset reveal state for entries outside the visible window so they re-fade on scroll back. */
-  resetRevealOutsideWindow(visibleHashes: Set<string>): void {
+  /** Evict bitmaps for entries not in the visible set. They'll reload and re-fade on scroll back. */
+  evictOutsideVisible(visibleHashes: Set<string>): void {
     for (const [hash, entry] of this.cache) {
       if (visibleHashes.has(hash)) continue;
-      if (entry.animateIn) {
-        entry.animateIn = false;
-        entry.revealStartedAt = 0;
-      }
+      if (!entry.thumb) continue;
+      if (entry.state === 'queued' || entry.state === 'loading') continue;
+      this.totalBytes -= entry.bytes;
+      entry.thumb.close();
+      entry.thumb = null;
+      entry.bytes = 0;
+      entry.animateIn = false;
+      entry.revealStartedAt = 0;
+      this.resetEntry(entry);
     }
   }
 
@@ -344,7 +350,7 @@ export class ThumbnailPipeline {
     } else {
       // Fresh load or re-load after eviction: fade in.
       entry.animateIn = true;
-      entry.revealStartedAt = performance.now();
+      entry.revealStartedAt = this.nextRevealSlot();
     }
     this.pruneCache();
     this.emitTrace('bitmap_ready', {
@@ -372,6 +378,27 @@ export class ThumbnailPipeline {
         reason: 'cache_prune',
       });
     }
+  }
+
+  /**
+   * Returns a staggered reveal start time so at most MAX_CONCURRENT_REVEALS
+   * thumbnails are fading in simultaneously. If fewer than the max are active,
+   * returns now. Otherwise, schedules after the earliest active one finishes.
+   */
+  private nextRevealSlot(): number {
+    const now = performance.now();
+    this.revealSlots = this.revealSlots.filter(
+      (t) => now - t < THUMBNAIL_PIPELINE_REVEAL_MS,
+    );
+    if (this.revealSlots.length < THUMBNAIL_PIPELINE_MAX_CONCURRENT_REVEALS) {
+      this.revealSlots.push(now);
+      return now;
+    }
+    const oldest = this.revealSlots[0];
+    const staggered = oldest + THUMBNAIL_PIPELINE_REVEAL_MS;
+    this.revealSlots.shift();
+    this.revealSlots.push(staggered);
+    return staggered;
   }
 
   private getOrCreateEntry(hash: string): ThumbnailPipelineEntry {

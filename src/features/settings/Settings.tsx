@@ -219,17 +219,8 @@ export function Settings() {
                 const panel = PANELS.find((p) => p.id === panelId);
                 return (
                   <div key={panelId} className={styles.searchGroup}>
-                    <div className={styles.searchGroupTitle}>
-                      {panel?.label ?? panelId}
-                      <button className={styles.searchGroupLink} onClick={() => { setSelected(panelId); setSearch(''); }}>
-                        View all →
-                      </button>
-                    </div>
-                    {panelId === 'shortcuts' ? (
-                      <div className={styles.searchGroupHint}>Open Shortcuts panel to view and edit all keyboard bindings.</div>
-                    ) : (
-                      rows.map((row) => <div key={row.id}>{row.render(markDirty)}</div>)
-                    )}
+                    <div className={styles.searchGroupTitle}>{panel?.label ?? panelId}</div>
+                    {rows.map((row) => <div key={row.id}>{row.render(markDirty)}</div>)}
                   </div>
                 );
               })
@@ -246,8 +237,8 @@ export function Settings() {
 
         {/* ── Footer — always visible ── */}
         <div className={styles.footer}>
-          <button className={styles.footerBtnSecondary} onClick={handleReset}>Reset to Defaults</button>
-          <button className={styles.footerBtnPrimary} onClick={handleSave} disabled={!isDirty}>
+          <button className={styles.footerBtn} onClick={handleReset} disabled={!isDirty}>Reset to Defaults</button>
+          <button className={styles.footerBtn} onClick={handleSave} disabled={!isDirty}>
             Save Changes
           </button>
         </div>

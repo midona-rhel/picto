@@ -1,4 +1,4 @@
-/* Settings window — reference application-inspired layout with always-visible footer. */
+/* Settings window — matches legacy + reference application-inspired layout. */
 
 .root {
   display: flex;
@@ -18,7 +18,7 @@
   flex-shrink: 0;
   padding: 0 12px;
   border-right: 1px solid var(--color-border-secondary, rgba(255,255,255,0.06));
-  background: var(--color-surface-1, rgba(255,255,255,0.03));
+  background: var(--color-surface-1, rgb(36, 37, 40));
   display: flex;
   flex-direction: column;
   overflow-y: auto;
@@ -32,7 +32,9 @@
   font-weight: 600;
   color: var(--color-text-primary);
   -webkit-app-region: drag;
-  padding-left: 60px; /* macOS traffic lights */
+  /* As far left as possible — just clear macOS traffic lights */
+  padding-left: 0;
+  margin-left: -4px;
   flex-shrink: 0;
 }
 
@@ -102,6 +104,7 @@
   flex-direction: column;
   min-width: 0;
   overflow: hidden;
+  /* Same background as root — no separate color */
 }
 
 .contentHeader {
@@ -110,6 +113,7 @@
   display: flex;
   align-items: center;
   border-bottom: 1px solid var(--color-border-secondary, rgba(255,255,255,0.06));
+  background: var(--color-surface-1, rgb(36, 37, 40));
   -webkit-app-region: drag;
   flex-shrink: 0;
 }
@@ -128,13 +132,13 @@
   width: 24px; height: 24px;
   border: none; border-radius: 4px;
   background: transparent;
-  color: var(--color-text-tertiary, #666);
+  color: var(--color-text-secondary, #999);
   cursor: pointer;
   margin-left: auto;
   -webkit-app-region: no-drag;
-  transition: background 150ms ease;
+  transition: all 150ms ease;
 }
-.closeBtn:hover { background: rgba(255,255,255,0.06); color: var(--color-text-primary); }
+.closeBtn:hover { background: rgba(255,255,255,0.04); color: var(--color-text-primary); }
 
 .contentBody {
   flex: 1;
@@ -153,7 +157,7 @@
 }
 
 .settingRow + .settingRow {
-  border-top: 1px solid var(--color-border-secondary, rgba(255,255,255,0.04));
+  border-top: 1px solid rgba(255,255,255,0.04);
 }
 
 .settingLabel {
@@ -165,10 +169,7 @@
   flex-shrink: 0;
 }
 
-.settingControl {
-  flex: 1;
-  min-width: 0;
-}
+.settingControl { flex: 1; min-width: 0; }
 
 .select {
   height: 30px;
@@ -191,21 +192,13 @@
   line-height: 1.4;
 }
 
-.settingPlaceholder {
-  font-size: 13px;
-  color: var(--color-text-tertiary, #666);
-}
+.settingPlaceholder { font-size: 13px; color: var(--color-text-tertiary, #666); }
 
-.panelContent {
-  display: flex;
-  flex-direction: column;
-}
+.panelContent { display: flex; flex-direction: column; }
 
 /* ── Search results ── */
 
-.searchGroup {
-  margin-bottom: 20px;
-}
+.searchGroup { margin-bottom: 20px; }
 
 .searchGroupTitle {
   display: flex;
@@ -220,29 +213,17 @@
 }
 
 .searchGroupLink {
-  border: none;
-  background: none;
+  border: none; background: none;
   color: var(--color-primary-60, #3297FF);
-  font-size: 11px;
-  cursor: pointer;
-  padding: 0;
+  font-size: 11px; cursor: pointer; padding: 0;
 }
 .searchGroupLink:hover { text-decoration: underline; }
 
-.searchGroupHint {
-  font-size: 13px;
-  color: var(--color-text-tertiary, #666);
-  padding: 8px 0;
-}
+.searchGroupHint { font-size: 13px; color: var(--color-text-tertiary, #666); padding: 8px 0; }
 
-.emptySearch {
-  text-align: center;
-  padding: 32px;
-  color: var(--color-text-tertiary, #666);
-  font-size: 13px;
-}
+.emptySearch { text-align: center; padding: 32px; color: var(--color-text-tertiary, #666); font-size: 13px; }
 
-/* ── Footer — always visible ── */
+/* ── Footer — always visible, same bg as sidebar ── */
 
 .footer {
   flex-shrink: 0;
@@ -252,40 +233,32 @@
   gap: 8px;
   padding: 10px 16px;
   border-top: 1px solid var(--color-border-secondary, rgba(255,255,255,0.06));
-  background: var(--color-surface-1, rgba(255,255,255,0.02));
+  background: var(--color-surface-1, rgb(36, 37, 40));
 }
 
-.footerBtnSecondary {
-  height: 30px;
-  padding: 0 14px;
-  border: 1px solid var(--color-border-primary, rgba(255,255,255,0.1));
-  border-radius: 6px;
-  background: transparent;
-  color: var(--color-text-secondary, #999);
+/* Legacy textBtn style — subtle border, transparent bg */
+.footerBtn {
+  height: 32px;
+  display: inline-flex;
+  justify-content: center;
+  align-items: center;
+  padding: 0 16px;
   font-size: 13px;
-  cursor: pointer;
-  transition: all 150ms ease;
-}
-.footerBtnSecondary:hover {
-  background: rgba(255,255,255,0.04);
+  font-weight: 400;
+  font-family: inherit;
   color: var(--color-text-primary);
-  border-color: rgba(255,255,255,0.15);
+  border: 1px solid var(--color-border-primary, rgba(255,255,255,0.1));
+  background: rgba(247, 248, 248, 0.05);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 150ms ease;
 }
 
-.footerBtnPrimary {
-  height: 30px;
-  padding: 0 18px;
-  border: none;
-  border-radius: 6px;
-  background: var(--color-primary-60, #3297FF);
-  color: #fff;
-  font-size: 13px;
-  font-weight: 500;
-  cursor: pointer;
-  transition: all 150ms ease;
+.footerBtn:hover {
+  background: rgba(247, 248, 248, 0.1);
 }
-.footerBtnPrimary:hover { background: var(--color-primary-70, #4BA3FF); }
-.footerBtnPrimary:disabled {
+
+.footerBtn:disabled {
   opacity: 0.35;
   cursor: default;
   pointer-events: none;

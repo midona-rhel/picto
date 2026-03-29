@@ -13,7 +13,7 @@ import { computeLayout, safeAspectRatio } from '../layout/layoutMath';
 import { HoverPreviewPortal } from './HoverPreviewPortal';
 import { drawCanvasBaseLayer, type DrawContext } from './drawBase';
 
-import { ThumbnailPipeline, REVEAL_DURATION_MS } from './thumbnailPipeline';
+import { ThumbnailPipeline } from './thumbnailPipeline';
 import { adaptGridItem } from './renderItemAdapter';
 import { hitTestTile } from './hitTesting';
 import {
@@ -277,26 +277,6 @@ export function CanvasGrid({
       });
     }
 
-    // ── Tile reveal — read directly from pipeline entry (legacy approach) ──
-    // animateIn + revealStartedAt live on the pipeline entry.
-    // Fresh bitmap load → animateIn=true, revealStartedAt=perf.now().
-    // Eviction → animateIn=false. Re-load → fresh timestamp → re-fades.
-    const revealProgressByHash = new Map<string, number>();
-    let hasActiveReveal = false;
-    for (const hash of visibleHashes) {
-      const entry = pipeline.get(hash);
-      if (!entry?.thumb) { revealProgressByHash.set(hash, 0); continue; }
-      // If entry was reset (scrolled out then back), re-trigger fade
-      if (!entry.animateIn) {
-        entry.animateIn = true;
-        entry.revealStartedAt = now;
-      }
-      const elapsed = Math.max(0, now - entry.revealStartedAt);
-      const progress = Math.min(1, elapsed / REVEAL_DURATION_MS);
-      revealProgressByHash.set(hash, progress);
-      if (progress < 1) hasActiveReveal = true;
-    }
-
     const drawCtx: DrawContext = {
       scrollTop,
       viewportHeight: vp.viewportHeight,
@@ -309,7 +289,7 @@ export function CanvasGrid({
       positions: layout.positions,
       items: renderItems,
       atlasGet: (hash) => pipeline.get(hash),
-      revealProgressByHash,
+      now,
       activeTiles,
       draw: drawCtx,
       theme: {
@@ -325,16 +305,17 @@ export function CanvasGrid({
       showExtension,
       showExtensionLabel: showExtension,
     });
-    hasActiveReveal = hasActiveReveal || hasActiveRevealFromDraw;
 
     ctx.restore();
 
-    // Cancel queued/in-flight loads outside the zone + reset reveal for off-screen entries
+    // Cancel queued/in-flight loads outside the zone
     pipeline.cancelOutsideWindow(zoneTop, zoneBottom);
-    pipeline.resetRevealOutsideWindow(visibleHashes);
+    // Evict bitmaps outside the draw zone so they re-fade on scroll back.
+    // Only tiles in the zone (viewport ± 100px ≈ one row buffer) keep bitmaps.
+    pipeline.evictOutsideVisible(visibleHashes);
 
     // Continue animation loop for active reveals
-    if (hasActiveReveal) {
+    if (hasActiveRevealFromDraw) {
       markDirty('base');
     }
 
