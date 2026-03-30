@@ -34,7 +34,7 @@ function ShortcutInput({ value, onChange, conflict }: { value: string; onChange:
   const [editing, setEditing] = useState(false);
   const [temp, setTemp] = useState('');
   const inputRef = useRef<HTMLInputElement>(null);
-  const display = editing ? (temp || 'Press shortcut…') : formatKeysDisplay(value);
+  const display = editing ? (temp || 'Press keys') : formatKeysDisplay(value);
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLInputElement>) => {
     e.preventDefault(); e.stopPropagation();
@@ -49,8 +49,9 @@ function ShortcutInput({ value, onChange, conflict }: { value: string; onChange:
     <div className={styles.shortcutInputWrap}>
       <input
         ref={inputRef}
-        className={`${styles.shortcutInput} ${conflict ? styles.shortcutConflict : ''}`}
+        className={`${styles.shortcutInput} ${conflict ? styles.shortcutConflict : ''} ${!value && !editing ? styles.shortcutEmpty : ''}`}
         value={display}
+        placeholder="Click to bind"
         readOnly
         onFocus={() => { setEditing(true); setTemp(''); }}
         onBlur={() => { setEditing(false); setTemp(''); }}
@@ -60,7 +61,7 @@ function ShortcutInput({ value, onChange, conflict }: { value: string; onChange:
         <button type="button" className={styles.clearBtn}
           onMouseDown={(e) => e.preventDefault()}
           onClick={(e) => { e.preventDefault(); onChange(''); setEditing(false); inputRef.current?.blur(); }}>
-          Clear
+          ×
         </button>
       )}
     </div>
@@ -82,9 +83,11 @@ export function ShortcutsPanel() {
   const groups = useMemo(() => getShortcutGroups(), []);
   const [search, setSearch] = useState('');
   const [overrides, setOverrides] = useState<Record<string, string>>({});
+  const [overrides2, setOverrides2] = useState<Record<string, string>>({});
   const [conflicts, setConflicts] = useState<Record<string, string>>({});
 
   const getKeys = useCallback((def: ShortcutDef) => overrides[def.id] ?? def.keys, [overrides]);
+  const getKeys2 = useCallback((def: ShortcutDef) => overrides2[def.id] ?? def.keys2 ?? '', [overrides2]);
   const filtered = useMemo(() => filterGroups(groups, search), [groups, search]);
 
   const handleChange = useCallback((id: string, newKeys: string) => {
@@ -102,6 +105,10 @@ export function ShortcutsPanel() {
     }
     setOverrides((p) => ({ ...p, [id]: newKeys }));
   }, [overrides]);
+
+  const handleChange2 = useCallback((id: string, newKeys: string) => {
+    setOverrides2((p) => ({ ...p, [id]: newKeys }));
+  }, []);
 
   return (
     <div className={styles.root}>
@@ -125,6 +132,9 @@ export function ShortcutsPanel() {
                   </div>
                   <div className={styles.binding}>
                     <ShortcutInput value={getKeys(def)} onChange={(k) => handleChange(def.id, k)} conflict={conflicts[def.id] ?? null} />
+                  </div>
+                  <div className={styles.binding}>
+                    <ShortcutInput value={getKeys2(def)} onChange={(k) => handleChange2(def.id, k)} />
                   </div>
                 </div>
               ))}

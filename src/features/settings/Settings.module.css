@@ -32,9 +32,7 @@
   font-weight: 600;
   color: var(--color-text-primary);
   -webkit-app-region: drag;
-  /* As far left as possible — just clear macOS traffic lights */
-  padding-left: 0;
-  margin-left: -4px;
+  padding-left: 8px;
   flex-shrink: 0;
 }
 

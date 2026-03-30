@@ -78,7 +78,9 @@
   background: transparent;
   cursor: text;
 }
+.shortcutInput::placeholder { color: rgba(255, 255, 255, 0.2); font-style: italic; }
 .shortcutInput:focus { border-color: var(--color-primary-60, #3297FF); background: rgba(0, 0, 0, 0.2); }
+.shortcutEmpty { color: rgba(255, 255, 255, 0.2); font-style: italic; }
 .shortcutConflict { border-color: var(--color-warning, #FFA500) !important; }
 
 .clearBtn {
