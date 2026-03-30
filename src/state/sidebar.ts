@@ -8,6 +8,21 @@
 import { atom } from 'jotai';
 import type { SidebarNodeDto } from '../shared/types/canonical';
 
+const SUBSCRIPTIONS_NODE: SidebarNodeDto = {
+  id: 'system:subscriptions',
+  kind: 'system',
+  parent_id: null,
+  name: 'Subscriptions',
+  icon: null,
+  color: null,
+  sort_order: 7,
+  count: null,
+  freshness: 'exact',
+  selectable: true,
+  expanded_by_default: false,
+  meta: null,
+};
+
 // ── Authoritative ────────────────────────────────────────────────
 
 export const sidebarNodesAtom = atom<SidebarNodeDto[]>([]);
@@ -17,7 +32,9 @@ export const sidebarLoadingAtom = atom(false);
 // ── Derived: node kind filters ───────────────────────────────────
 
 export const systemNodesAtom = atom((get) =>
-  get(sidebarNodesAtom).filter((n) => n.kind === 'system' && n.id !== 'system:all'),
+  withSubscriptionsNode(
+    get(sidebarNodesAtom).filter((n) => n.kind === 'system' && n.id !== 'system:all'),
+  ),
 );
 
 export const folderNodesAtom = atom((get) =>
@@ -27,6 +44,18 @@ export const folderNodesAtom = atom((get) =>
 export const smartFolderNodesAtom = atom((get) =>
   get(sidebarNodesAtom).filter((n) => n.kind === 'smart_folder'),
 );
+
+function withSubscriptionsNode(nodes: SidebarNodeDto[]): SidebarNodeDto[] {
+  if (nodes.some((node) => node.id === SUBSCRIPTIONS_NODE.id)) return nodes;
+  const next = [...nodes];
+  const duplicatesIndex = next.findIndex((node) => node.id === 'system:duplicates');
+  if (duplicatesIndex >= 0) {
+    next.splice(duplicatesIndex + 1, 0, SUBSCRIPTIONS_NODE);
+    return next;
+  }
+  next.push(SUBSCRIPTIONS_NODE);
+  return next;
+}
 
 // ── Derived: scope counts ────────────────────────────────────────
 

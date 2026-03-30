@@ -1,12 +1,13 @@
 /**
- * Context menu primitive — glass panel with search and keyboard nav.
- * Ported from legacy ContextMenu.tsx structure and behavior.
+ * Context menu — glass panel with search, keyboard nav, and submenu support.
  */
 
 import { type ReactNode, useEffect, useLayoutEffect, useRef, useState, useCallback } from 'react';
 import { createPortal } from 'react-dom';
-import { IconSearch } from '@tabler/icons-react';
+import { IconSearch, IconChevronRight } from '@tabler/icons-react';
 import styles from './ContextMenu.module.css';
+
+// ── Types ──
 
 export interface MenuItem {
   label: string;
@@ -27,7 +28,14 @@ export interface MenuCustom {
   render: () => ReactNode;
 }
 
-export type MenuEntry = MenuItem | MenuSeparator | MenuCustom;
+export interface MenuSubmenu {
+  submenu: true;
+  label: string;
+  icon?: ReactNode;
+  children: MenuEntry[];
+}
+
+export type MenuEntry = MenuItem | MenuSeparator | MenuCustom | MenuSubmenu;
 
 function isSeparator(entry: MenuEntry): entry is MenuSeparator {
   return 'separator' in entry;
@@ -36,6 +44,37 @@ function isSeparator(entry: MenuEntry): entry is MenuSeparator {
 function isCustom(entry: MenuEntry): entry is MenuCustom {
   return 'custom' in entry;
 }
+
+function isSubmenu(entry: MenuEntry): entry is MenuSubmenu {
+  return 'submenu' in entry;
+}
+
+// ── Hook ──
+
+interface ContextMenuState {
+  entries: MenuEntry[];
+  position: { x: number; y: number };
+}
+
+export function useContextMenu() {
+  const [state, setState] = useState<ContextMenuState | null>(null);
+
+  const open = useCallback((e: React.MouseEvent, entries: MenuEntry[]) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setState({ entries, position: { x: e.clientX, y: e.clientY } });
+  }, []);
+
+  const openAt = useCallback((position: { x: number; y: number }, entries: MenuEntry[]) => {
+    setState({ entries, position });
+  }, []);
+
+  const close = useCallback(() => setState(null), []);
+
+  return { state, open, openAt, close };
+}
+
+// ── Component ──
 
 interface ContextMenuProps {
   entries: MenuEntry[];
@@ -51,19 +90,36 @@ export function ContextMenu({ entries, position, onClose, searchable = true, wid
   const [pos, setPos] = useState(position);
   const [search, setSearch] = useState('');
   const [focusIdx, setFocusIdx] = useState(-1);
+  const [openSubmenuLabel, setOpenSubmenuLabel] = useState<string | null>(null);
+  const submenuTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Filter — custom entries always shown, separators hidden during search
+  const cancelSubmenuTimer = useCallback(() => {
+    if (submenuTimerRef.current) { clearTimeout(submenuTimerRef.current); submenuTimerRef.current = null; }
+  }, []);
+
+  useEffect(() => () => cancelSubmenuTimer(), [cancelSubmenuTimer]);
+
+  const handleSubmenuIntent = useCallback((target: string | null) => {
+    cancelSubmenuTimer();
+    if (target !== null) {
+      setOpenSubmenuLabel(target);
+    } else if (openSubmenuLabel !== null) {
+      submenuTimerRef.current = setTimeout(() => setOpenSubmenuLabel(null), 150);
+    }
+  }, [openSubmenuLabel, cancelSubmenuTimer]);
+
+  // Filter
   const query = search.toLowerCase().trim();
   const filtered = query
     ? entries.filter((e) => {
         if (isSeparator(e)) return false;
         if (isCustom(e)) return true;
+        if (isSubmenu(e)) return e.label.toLowerCase().includes(query);
         return e.label.toLowerCase().includes(query);
       })
     : entries;
   const cleaned = cleanSeparators(filtered);
 
-  // Actionable indices for keyboard nav (only MenuItem, not separators or custom)
   const actionableIndices = cleaned
     .map((e, i) => (!isSeparator(e) && !isCustom(e) ? i : -1))
     .filter((i) => i >= 0);
@@ -81,12 +137,9 @@ export function ContextMenu({ entries, position, onClose, searchable = true, wid
     setPos({ x, y });
   }, [position, cleaned.length]);
 
-  // Focus search on open
-  useEffect(() => {
-    if (searchable) searchRef.current?.focus();
-  }, [searchable]);
+  useEffect(() => { if (searchable) searchRef.current?.focus(); }, [searchable]);
 
-  // Keyboard navigation
+  // Keyboard
   useEffect(() => {
     function handleKey(e: KeyboardEvent) {
       if (e.key === 'Escape') { onClose(); return; }
@@ -107,15 +160,22 @@ export function ContextMenu({ entries, position, onClose, searchable = true, wid
       if (e.key === 'Enter' && focusIdx >= 0) {
         e.preventDefault();
         const item = cleaned[focusIdx];
-        if (item && !isSeparator(item) && !isCustom(item) && !item.disabled) {
-          item.action();
-          onClose();
-        }
+        if (!item || isSeparator(item) || isCustom(item)) return;
+        if (isSubmenu(item)) { setOpenSubmenuLabel(openSubmenuLabel === item.label ? null : item.label); return; }
+        if (!item.disabled) { item.action(); onClose(); }
+      }
+      if (e.key === 'ArrowRight' && focusIdx >= 0) {
+        const item = cleaned[focusIdx];
+        if (item && isSubmenu(item)) { e.preventDefault(); setOpenSubmenuLabel(item.label); }
+      }
+      if (e.key === 'ArrowLeft' && openSubmenuLabel) {
+        e.preventDefault();
+        setOpenSubmenuLabel(null);
       }
     }
     window.addEventListener('keydown', handleKey, true);
     return () => window.removeEventListener('keydown', handleKey, true);
-  }, [onClose, focusIdx, cleaned, actionableIndices]);
+  }, [onClose, focusIdx, cleaned, actionableIndices, openSubmenuLabel]);
 
   return createPortal(
     <div className="no-drag-region">
@@ -141,9 +201,7 @@ export function ContextMenu({ entries, position, onClose, searchable = true, wid
                 value={search}
                 onChange={(e) => { setSearch(e.target.value); setFocusIdx(-1); }}
                 placeholder="Search..."
-                onKeyDown={(e) => {
-                  if (e.key === 'Escape') { e.stopPropagation(); onClose(); }
-                }}
+                onKeyDown={(e) => { if (e.key === 'Escape') { e.stopPropagation(); onClose(); } }}
               />
             </div>
           </div>
@@ -151,12 +209,45 @@ export function ContextMenu({ entries, position, onClose, searchable = true, wid
 
         <div className={styles.items}>
           {cleaned.map((entry, i) => {
-            if (isSeparator(entry)) {
-              return <div key={i} className={styles.separator} />;
-            }
+            if (isSeparator(entry)) return <div key={i} className={styles.separator} />;
+
             if (isCustom(entry)) {
-              return <div key={entry.key} className={styles.customItem} onClick={(e) => e.stopPropagation()}>{entry.render()}</div>;
+              return (
+                <div key={entry.key} className={styles.customItem}
+                  onClick={(e) => e.stopPropagation()}
+                  onMouseEnter={() => { setFocusIdx(-1); handleSubmenuIntent(null); }}>
+                  {entry.render()}
+                </div>
+              );
             }
+
+            if (isSubmenu(entry)) {
+              const isOpen = openSubmenuLabel === entry.label;
+              const cls = [styles.item, focusIdx === i ? styles.focused : ''].filter(Boolean).join(' ');
+              return (
+                <div key={entry.label} data-menu-idx={i}>
+                  <div
+                    className={cls}
+                    onClick={() => setOpenSubmenuLabel(isOpen ? null : entry.label)}
+                    onMouseEnter={() => { setFocusIdx(i); handleSubmenuIntent(entry.label); }}
+                  >
+                    <span className={styles.iconSlot}>{entry.icon ?? null}</span>
+                    <span className={styles.label}>{entry.label}</span>
+                    <IconChevronRight size={12} className={styles.chevron} />
+                  </div>
+                  {isOpen && (
+                    <SubmenuPanel
+                      items={entry.children}
+                      parentRef={menuRef}
+                      itemIdx={i}
+                      onClose={onClose}
+                      onMouseEnter={cancelSubmenuTimer}
+                    />
+                  )}
+                </div>
+              );
+            }
+
             const cls = [
               styles.item,
               focusIdx === i ? styles.focused : '',
@@ -168,28 +259,18 @@ export function ContextMenu({ entries, position, onClose, searchable = true, wid
               <div
                 key={i}
                 className={cls}
-                onClick={() => {
-                  if (entry.disabled) return;
-                  entry.action();
-                  onClose();
-                }}
-                onMouseEnter={() => setFocusIdx(i)}
+                onClick={() => { if (entry.disabled) return; entry.action(); onClose(); }}
+                onMouseEnter={() => { setFocusIdx(i); handleSubmenuIntent(null); }}
                 onMouseLeave={() => setFocusIdx(-1)}
               >
-                <span className={styles.iconSlot}>
-                  {entry.icon ?? null}
-                </span>
+                <span className={styles.iconSlot}>{entry.icon ?? null}</span>
                 <span className={styles.label}>{entry.label}</span>
-                {entry.shortcut && (
-                  <span className={styles.shortcut}>{entry.shortcut}</span>
-                )}
+                {entry.shortcut && <span className={styles.shortcut}>{entry.shortcut}</span>}
               </div>
             );
           })}
 
-          {cleaned.length === 0 && query && (
-            <div className={styles.empty}>No results</div>
-          )}
+          {cleaned.length === 0 && query && <div className={styles.empty}>No results</div>}
         </div>
       </div>
     </div>,
@@ -197,43 +278,80 @@ export function ContextMenu({ entries, position, onClose, searchable = true, wid
   );
 }
 
+// ── Submenu panel ──
+
+function SubmenuPanel({
+  items, parentRef, itemIdx, onClose, onMouseEnter,
+}: {
+  items: MenuEntry[];
+  parentRef: React.RefObject<HTMLDivElement | null>;
+  itemIdx: number;
+  onClose: () => void;
+  onMouseEnter: () => void;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState({ left: 0, top: 0 });
+
+  useLayoutEffect(() => {
+    const parent = parentRef.current;
+    const el = ref.current;
+    if (!parent || !el) return;
+    const parentRect = parent.getBoundingClientRect();
+    const triggerEl = parent.querySelector(`[data-menu-idx="${itemIdx}"]`);
+    const itemRect = triggerEl?.getBoundingClientRect() ?? parentRect;
+
+    let left = parentRect.right + 4;
+    let top = itemRect.top - 3;
+    const elRect = el.getBoundingClientRect();
+    if (left + elRect.width > window.innerWidth - 8) left = parentRect.left - elRect.width - 4;
+    if (top + elRect.height > window.innerHeight - 8) top = window.innerHeight - elRect.height - 8;
+    if (top < 8) top = 8;
+    setPos({ left, top });
+  }, [parentRef, itemIdx]);
+
+  const cleaned = cleanSeparators(items);
+
+  return createPortal(
+    <div
+      ref={ref}
+      className={styles.menu}
+      style={{ left: pos.left, top: pos.top }}
+      onPointerDown={(e) => e.stopPropagation()}
+      onContextMenu={(e) => e.preventDefault()}
+      onMouseEnter={onMouseEnter}
+    >
+      <div className={styles.items}>
+        {cleaned.map((entry, i) => {
+          if (isSeparator(entry)) return <div key={i} className={styles.separator} />;
+          if (isCustom(entry)) return <div key={entry.key} className={styles.customItem}>{entry.render()}</div>;
+          if (isSubmenu(entry)) return null; // No nested submenus
+          const cls = [styles.item, entry.disabled ? styles.disabled : '', entry.danger ? styles.danger : ''].filter(Boolean).join(' ');
+          return (
+            <div key={i} className={cls}
+              onClick={() => { if (entry.disabled) return; entry.action(); onClose(); }}>
+              <span className={styles.iconSlot}>{entry.icon ?? null}</span>
+              <span className={styles.label}>{entry.label}</span>
+              {entry.shortcut && <span className={styles.shortcut}>{entry.shortcut}</span>}
+            </div>
+          );
+        })}
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
+// ── Helpers ──
+
 function cleanSeparators(entries: MenuEntry[]): MenuEntry[] {
   const result: MenuEntry[] = [];
   for (const entry of entries) {
     if (isSeparator(entry)) {
-      if (result.length > 0 && !isSeparator(result[result.length - 1])) {
-        result.push(entry);
-      }
+      if (result.length > 0 && !isSeparator(result[result.length - 1])) result.push(entry);
     } else {
       result.push(entry);
     }
   }
   if (result.length > 0 && isSeparator(result[result.length - 1])) result.pop();
   return result;
-}
-
-// ── Hook ─────────────────────────────────────────────────────────
-
-interface ContextMenuState {
-  entries: MenuEntry[];
-  position: { x: number; y: number };
-}
-
-export function useContextMenu() {
-  const [state, setState] = useState<ContextMenuState | null>(null);
-
-  const open = useCallback((e: React.MouseEvent, entries: MenuEntry[]) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setState({ entries, position: { x: e.clientX, y: e.clientY } });
-  }, []);
-
-  /** Open at explicit coordinates — no event required. */
-  const openAt = useCallback((position: { x: number; y: number }, entries: MenuEntry[]) => {
-    setState({ entries, position });
-  }, []);
-
-  const close = useCallback(() => setState(null), []);
-
-  return { state, open, openAt, close };
 }

@@ -39,6 +39,12 @@ pub fn collection_group_parts(
     site_id: &str,
     metadata: &ParsedMetadata,
 ) -> Option<(String, String, String)> {
+    let is_multi_post = metadata.page_count.is_some_and(|count| count > 1)
+        || metadata.page_num.is_some_and(|page_num| page_num > 0);
+    if !is_multi_post {
+        return None;
+    }
+
     let post_id = metadata.post_id.as_deref()?.trim().to_string();
     if post_id.is_empty() {
         return None;
@@ -85,6 +91,7 @@ mod tests {
         let metadata = ParsedMetadata {
             post_id: Some("1234".to_string()),
             category: Some("danbooru".to_string()),
+            page_count: Some(3),
             ..Default::default()
         };
         let parts = collection_group_parts("ignored", &metadata).expect("group parts");
@@ -98,12 +105,25 @@ mod tests {
         let metadata = ParsedMetadata {
             post_id: Some("77".to_string()),
             title: Some("  Nice title  ".to_string()),
+            page_count: Some(2),
             ..Default::default()
         };
         let parts = collection_group_parts("pixiv", &metadata).expect("group parts");
         assert_eq!(parts.0, "pixiv");
         assert_eq!(parts.1, "77");
         assert_eq!(parts.2, "Nice title");
+    }
+
+    #[test]
+    fn collection_group_parts_ignores_single_image_posts() {
+        let metadata = ParsedMetadata {
+            post_id: Some("42".to_string()),
+            category: Some("gelbooru".to_string()),
+            page_count: Some(1),
+            page_num: Some(0),
+            ..Default::default()
+        };
+        assert!(collection_group_parts("gelbooru", &metadata).is_none());
     }
 
     #[test]

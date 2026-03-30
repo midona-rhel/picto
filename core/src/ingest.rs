@@ -91,8 +91,18 @@ pub struct SubscriptionCollectionOutcome {
     pub collection_id: Option<i64>,
     pub collection_hash: Option<String>,
     pub imported_hashes: Vec<String>,
+    pub resolved_members: Vec<ResolvedSubscriptionCollectionMember>,
     pub flags: IngestFlags,
     pub scheduled_work: usize,
+}
+
+#[derive(Debug, Clone)]
+pub struct ResolvedSubscriptionCollectionMember {
+    pub item_key: Option<String>,
+    pub page_num: Option<u32>,
+    pub canonical_post_url: Option<String>,
+    pub media_url: Option<String>,
+    pub entity_hash: String,
 }
 
 fn collect_files_recursive(dir: &Path) -> Vec<PathBuf> {
@@ -697,8 +707,11 @@ pub async fn import_files(
             Ok(outcome) => {
                 summary.flags.merge(&outcome.flags);
                 summary.scheduled_work += outcome.scheduled_work;
+                let mut item_summary = IngestBatchSummary::default();
+                item_summary.flags.merge(&outcome.flags);
                 if outcome.imported_new {
                     summary.imported_hashes.push(outcome.entity_hash.clone());
+                    item_summary.imported_hashes.push(outcome.entity_hash.clone());
                     batch.imported.push(ImportResult {
                         hash: outcome.entity_hash,
                         mime: outcome.mime,
@@ -708,8 +721,17 @@ pub async fn import_files(
                     });
                 } else {
                     summary.skipped_hashes.push(outcome.entity_hash.clone());
+                    item_summary.skipped_hashes.push(outcome.entity_hash.clone());
                     batch.skipped.push(outcome.entity_hash);
                 }
+                apply_compiler_plan(canonical_db, &item_summary.flags, &item_summary.folder_ids);
+                crate::events::emit_state_changed(
+                    "manual_import",
+                    build_ingest_change_impact(
+                        &item_summary,
+                        vec!["system:active".into(), "system:inbox".into()],
+                    ),
+                );
             }
             Err(error) => batch.errors.push(error),
         }
@@ -806,6 +828,8 @@ pub async fn import_folder(
             Ok(outcome) => {
                 summary.flags.merge(&outcome.flags);
                 summary.scheduled_work += outcome.scheduled_work;
+                let mut item_summary = IngestBatchSummary::default();
+                item_summary.flags.merge(&outcome.flags);
                 if let Some(folder_id) = target_folder_id {
                     let ids = canonical_db.resolve_entity_hashes(&[outcome.entity_hash.clone()])?;
                     if !ids.is_empty() {
@@ -817,10 +841,12 @@ pub async fn import_folder(
                         if !summary.folder_ids.contains(&folder_id) {
                             summary.folder_ids.push(folder_id);
                         }
+                        item_summary.folder_ids.push(folder_id);
                     }
                 }
                 if outcome.imported_new {
                     summary.imported_hashes.push(outcome.entity_hash.clone());
+                    item_summary.imported_hashes.push(outcome.entity_hash.clone());
                     batch.imported.push(ImportResult {
                         hash: outcome.entity_hash,
                         mime: outcome.mime,
@@ -830,8 +856,17 @@ pub async fn import_folder(
                     });
                 } else {
                     summary.skipped_hashes.push(outcome.entity_hash.clone());
+                    item_summary.skipped_hashes.push(outcome.entity_hash.clone());
                     batch.skipped.push(outcome.entity_hash);
                 }
+                apply_compiler_plan(canonical_db, &item_summary.flags, &item_summary.folder_ids);
+                crate::events::emit_state_changed(
+                    "import_folder",
+                    build_ingest_change_impact(
+                        &item_summary,
+                        vec!["system:active".into(), "system:inbox".into()],
+                    ),
+                );
             }
             Err(error) => batch.errors.push(error),
         }
@@ -962,9 +997,12 @@ pub async fn materialize_subscription_collection(
     post_id: &str,
     preferred_name: &str,
     members: &[SubscriptionCollectionMember],
+    existing_collection_id: Option<i64>,
+    force_collection: bool,
 ) -> Result<SubscriptionCollectionOutcome, String> {
     let mut existing_member_ids = Vec::new();
-    let mut new_members = Vec::new();
+    let mut new_members = Vec::<(IngestPreparedSingle, ResolvedSubscriptionCollectionMember)>::new();
+    let mut resolved_members = Vec::<ResolvedSubscriptionCollectionMember>::new();
     let mut pending_review_pairs = Vec::<(String, Vec<PerceptualHashCandidate>)>::new();
     let mut pending_exact_upgrades = Vec::<(String, String)>::new();
     let mut imported_hashes = Vec::new();
@@ -993,6 +1031,13 @@ pub async fn materialize_subscription_collection(
             let merge = merge_existing_import_target(canonical_db, Some(legacy_db), &existing, &request).await?;
             flags.merge(&merge.flags);
             existing_member_ids.push(existing.entity_id);
+            resolved_members.push(ResolvedSubscriptionCollectionMember {
+                item_key: member.metadata.item_key.clone(),
+                page_num: member.metadata.page_num,
+                canonical_post_url: member.metadata.canonical_post_url.clone(),
+                media_url: member.metadata.media_url.clone(),
+                entity_hash: existing.entity_hash.clone(),
+            });
             continue;
         }
 
@@ -1037,6 +1082,13 @@ pub async fn materialize_subscription_collection(
                         .await?;
                         flags.merge(&merge.flags);
                         existing_member_ids.push(existing.entity_id);
+                        resolved_members.push(ResolvedSubscriptionCollectionMember {
+                            item_key: member.metadata.item_key.clone(),
+                            page_num: member.metadata.page_num,
+                            canonical_post_url: member.metadata.canonical_post_url.clone(),
+                            media_url: member.metadata.media_url.clone(),
+                            entity_hash: existing.entity_hash.clone(),
+                        });
                         continue;
                     }
                     crate::duplicates::quality::ImageQualityDecision::RightBetter => {
@@ -1067,21 +1119,32 @@ pub async fn materialize_subscription_collection(
             prepared_single.perceptual_hash.is_some(),
         )
         .len();
-        new_members.push(prepared_single);
+        new_members.push((
+            prepared_single.clone(),
+            ResolvedSubscriptionCollectionMember {
+                item_key: member.metadata.item_key.clone(),
+                page_num: member.metadata.page_num,
+                canonical_post_url: member.metadata.canonical_post_url.clone(),
+                media_url: member.metadata.media_url.clone(),
+                entity_hash: prepared_single.entity_hash.clone(),
+            },
+        ));
     }
 
-    if new_members.is_empty() && existing_member_ids.len() < 2 {
+    let total_member_count = new_members.len() + existing_member_ids.len();
+    if total_member_count == 0 {
         return Ok(SubscriptionCollectionOutcome {
             collection_id: None,
             collection_hash: None,
             imported_hashes,
+            resolved_members,
             flags,
             scheduled_work,
         });
     }
 
-    if new_members.len() + existing_member_ids.len() < 2 {
-        if let Some(member) = new_members.into_iter().next() {
+    if existing_collection_id.is_none() && total_member_count < 2 && !force_collection {
+        if let Some((member, identity)) = new_members.into_iter().next() {
             canonical_db.insert_ingested_single(&member)?;
             let work_types = work_types_for_new_ingest(
                 &member.mime_type,
@@ -1092,11 +1155,13 @@ pub async fn materialize_subscription_collection(
             if !work_types.is_empty() {
                 canonical_db.enqueue_deferred_jobs(&member.entity_hash, &work_types)?;
             }
+            resolved_members.push(identity);
         }
         return Ok(SubscriptionCollectionOutcome {
             collection_id: None,
             collection_hash: None,
             imported_hashes,
+            resolved_members,
             flags: IngestFlags {
                 status_changed: true,
                 ..flags
@@ -1105,10 +1170,19 @@ pub async fn materialize_subscription_collection(
         });
     }
 
-    let (collection_id, collection_hash, new_hashes) =
-        canonical_db.materialize_ingested_collection(preferred_name, &new_members, &existing_member_ids)?;
+    let prepared_members: Vec<IngestPreparedSingle> =
+        new_members.iter().map(|(member, _)| member.clone()).collect();
+    let mut new_member_results: Vec<ResolvedSubscriptionCollectionMember> =
+        new_members.into_iter().map(|(_, identity)| identity).collect();
+    let (collection_id, collection_hash, new_hashes) = canonical_db.materialize_ingested_collection(
+        preferred_name,
+        &prepared_members,
+        &existing_member_ids,
+        existing_collection_id,
+        force_collection,
+    )?;
 
-    let batch: Vec<(String, Vec<DeferredWorkType>)> = new_members
+    let batch: Vec<(String, Vec<DeferredWorkType>)> = prepared_members
         .iter()
         .map(|member| {
             let work_types = work_types_for_new_ingest(
@@ -1143,18 +1217,50 @@ pub async fn materialize_subscription_collection(
             new_hash,
             Some(collection_id),
         )?;
+        if let Some(winner_hash) = resolution.winner_hash.clone() {
+            for member in &mut new_member_results {
+                if member.entity_hash == *new_hash {
+                    member.entity_hash = winner_hash.clone();
+                }
+            }
+        }
         if let Some(loser_hash) = resolution.loser_hash.as_deref() {
             let _ = blob_store.delete(loser_hash);
         }
     }
 
     imported_hashes.extend(new_hashes);
+    resolved_members.extend(new_member_results);
     flags.status_changed = true;
     Ok(SubscriptionCollectionOutcome {
         collection_id: Some(collection_id),
         collection_hash: Some(collection_hash),
         imported_hashes,
+        resolved_members,
         flags,
         scheduled_work,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_subscription_tags;
+    use crate::subscriptions::gallery_dl_runner::ParsedMetadata;
+
+    #[test]
+    fn normalize_subscription_tags_preserves_literal_colons() {
+        let metadata = ParsedMetadata {
+            tags: vec![
+                ("".to_string(), "http://example.com".to_string()),
+                ("".to_string(), "dragon:quest".to_string()),
+                ("artist".to_string(), "foo_artist".to_string()),
+            ],
+            ..Default::default()
+        };
+
+        let normalized = normalize_subscription_tags(&metadata);
+        assert!(normalized.iter().any(|tag| tag == ":http://example.com"));
+        assert!(normalized.iter().any(|tag| tag == ":dragon:quest"));
+        assert!(normalized.iter().any(|tag| tag == "artist:foo_artist"));
+    }
 }

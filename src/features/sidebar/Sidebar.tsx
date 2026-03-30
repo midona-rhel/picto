@@ -12,6 +12,7 @@ import {
   IconFolderMinus, IconCopy, IconUpload,
   IconPhoto, IconInbox, IconTrash,
   IconClock,
+  IconAntennaBars5,
 } from '@tabler/icons-react';
 import type { Icon as TablerIcon } from '@tabler/icons-react';
 import {
@@ -49,6 +50,7 @@ const SYSTEM_ICONS: Record<string, TablerIcon> = {
   'system:untagged':      IconBookmarkQuestionCustom as unknown as TablerIcon,
   'system:recent_viewed': IconClock,
   'system:duplicates':    IconCopy,
+  'system:subscriptions': IconAntennaBars5,
   'system:trash':         IconTrash,
 };
 

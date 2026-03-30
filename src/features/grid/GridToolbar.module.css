@@ -11,7 +11,7 @@
 }
 
 
-/* ── Icon button base (matches legacy icBtn28) ────────── */
+/* ── Icon button base — matches AppShell titlebarBtn ────────── */
 
 .icBtn {
   display: inline-flex;
@@ -22,6 +22,7 @@
   border-radius: 5px;
   background: transparent;
   color: var(--color-text-primary);
+  opacity: 0.8;
   cursor: pointer;
   outline: none;
   flex-shrink: 0;
@@ -30,20 +31,22 @@
   min-width: 28px;
   margin: 0 1px;
   -webkit-app-region: no-drag;
-  transition: background 150ms var(--ease-default);
+  transition: opacity 150ms var(--ease-default), background 150ms var(--ease-default);
 }
 
 .icBtn:hover {
-  background: rgba(248, 249, 251, 0.05);
+  opacity: 1;
+  background: rgba(255, 255, 255, 0.08);
 }
 
 .icBtn:active,
 .icBtnActive {
+  opacity: 1;
   background: rgba(255, 255, 255, 0.12);
 }
 
 .icBtn:disabled {
-  opacity: 0.35;
+  opacity: 0.2;
   cursor: default;
   pointer-events: none;
 }

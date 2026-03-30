@@ -36,7 +36,7 @@ export function getScrollPosition(nodeId: string): number | null {
   return scrollPositions.get(nodeId) ?? null;
 }
 
-/** Push a new node onto the history stack (called on scope navigation). */
+/** Push a new node onto the history stack (called on direct scope navigation, NOT back/forward). */
 export function pushHistory(nodeId: string) {
   const h = store.get(historyAtom);
   // If we're not at the end, truncate forward history
@@ -47,6 +47,9 @@ export function pushHistory(nodeId: string) {
   // Cap at 100 entries
   if (stack.length > 100) stack.shift();
   store.set(historyAtom, { stack, cursor: stack.length - 1 });
+  // Direct navigation = fresh start. Clear saved scroll so grid starts at top.
+  // Back/forward never calls pushHistory, so their scroll positions are preserved.
+  scrollPositions.delete(nodeId);
 }
 
 /** Go back in history. */

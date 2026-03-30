@@ -50,6 +50,8 @@ export function useImageZoom(
 
   /** Invoked every interactive frame — used by navigator renderer. */
   const onLiveFrameRef = useRef<((s: ZoomState) => void) | null>(null);
+  /** Second callback for live zoom updates (e.g. toolbar slider). */
+  const onLiveScaleRef = useRef<((s: ZoomState) => void) | null>(null);
 
   const applyTransform = useCallback((next: ZoomState) => {
     const transform = `translate(calc(-50% + ${next.tx}px), calc(-50% + ${next.ty}px)) scale(${next.scale})`;
@@ -58,6 +60,7 @@ export function useImageZoom(
       if (el) el.style.transform = transform;
     }
     onLiveFrameRef.current?.(next);
+    onLiveScaleRef.current?.(next);
   }, [transformTargets]);
 
   const flushCommittedState = useCallback((next?: ZoomState) => {
@@ -267,6 +270,7 @@ export function useImageZoom(
     navigatorRect,
     panToNormalized,
     onLiveFrameRef,
+    onLiveScaleRef,
     handlers: { onMouseDown },
   };
 }

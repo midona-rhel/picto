@@ -27,6 +27,7 @@ fn schema_init_creates_all_tables() {
         "subscription_query",
         "subscription_entity",
         "subscription_post_collection",
+        "subscription_post_member",
         "credential_domain",
         "credential_health",
         "duplicate",
@@ -214,11 +215,17 @@ fn v14_backfills_entity_links_from_legacy_tables() {
         )
         .unwrap();
     conn.execute(
-            "INSERT INTO subscription (subscription_id, name, site_id, paused, group_id, initial_post_limit, periodic_post_limit, created_at)
-             VALUES (1, 'sub', 'x', 0, 1, 100, 50, CURRENT_TIMESTAMP)",
+            "INSERT INTO subscription (subscription_id, name, paused, group_id, initial_post_limit, periodic_post_limit, created_at)
+             VALUES (1, 'sub', 0, 1, 100, 50, CURRENT_TIMESTAMP)",
             [],
         )
         .unwrap();
+    conn.execute(
+        "INSERT INTO subscription_query (query_id, subscription_id, site_id, query_text, display_name)
+             VALUES (1, 1, 'gelbooru', 'test', 'test')",
+        [],
+    )
+    .unwrap();
     conn.execute(
             "INSERT INTO file (file_id, hash, name, size, mime, has_audio, status, view_count, imported_at)
              VALUES (100, 'h100', 'n100', 1, 'image/png', 0, 1, 0, CURRENT_TIMESTAMP)",
@@ -445,4 +452,58 @@ fn reconcile_schema_restores_missing_credential_columns() {
     assert!(has_column(&conn, "credential_domain", "created_at").unwrap());
     assert!(has_column(&conn, "credential_health", "last_checked_at").unwrap());
     assert!(has_column(&conn, "credential_health", "last_error").unwrap());
+}
+
+#[test]
+fn reconcile_schema_resets_legacy_subscription_site_ownership() {
+    let conn = Connection::open_in_memory().unwrap();
+    apply_pragmas(&conn).unwrap();
+    init_schema(&conn).unwrap();
+
+    conn.execute_batch(
+        "DROP TABLE subscription_download_attempt;
+         DROP TABLE subscription_issue;
+         DROP TABLE subscription_query_run;
+         DROP TABLE subscription_run;
+         DROP TABLE subscription_post_member;
+         DROP TABLE subscription_post_collection;
+         DROP TABLE subscription_entity;
+         DROP TABLE subscription_query;
+         DROP TABLE subscription;
+         CREATE TABLE subscription (
+             subscription_id INTEGER PRIMARY KEY,
+             name TEXT NOT NULL,
+             site_id TEXT NOT NULL,
+             paused INTEGER NOT NULL DEFAULT 0,
+             group_id INTEGER,
+             initial_post_limit INTEGER NOT NULL DEFAULT 100,
+             periodic_post_limit INTEGER NOT NULL DEFAULT 50,
+             auto_collections INTEGER NOT NULL DEFAULT 1,
+             created_at TEXT NOT NULL
+         );
+         CREATE TABLE subscription_query (
+             query_id INTEGER PRIMARY KEY,
+             subscription_id INTEGER NOT NULL,
+             query_text TEXT NOT NULL
+         );
+         INSERT INTO subscription (subscription_id, name, site_id, created_at)
+             VALUES (1, 'legacy', 'gelbooru', CURRENT_TIMESTAMP);
+         INSERT INTO subscription_query (query_id, subscription_id, query_text)
+             VALUES (1, 1, 'princess_peach dress');",
+    )
+    .unwrap();
+
+    reconcile_schema(&conn).unwrap();
+
+    assert!(!has_column(&conn, "subscription", "site_id").unwrap());
+    assert!(has_column(&conn, "subscription_query", "site_id").unwrap());
+
+    let sub_count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM subscription", [], |row| row.get(0))
+        .unwrap();
+    let query_count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM subscription_query", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(sub_count, 0);
+    assert_eq!(query_count, 0);
 }

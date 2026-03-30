@@ -28,16 +28,15 @@ pub fn set_group_schedule(conn: &Connection, group_id: i64, schedule: &str) -> r
 pub fn create_subscription(
     conn: &Connection,
     name: &str,
-    site_id: &str,
     group_id: Option<i64>,
     initial_post_limit: Option<i64>,
     periodic_post_limit: Option<i64>,
     now: &str,
 ) -> rusqlite::Result<i64> {
     conn.execute(
-        "INSERT INTO subscription (name, site_id, group_id, initial_post_limit, periodic_post_limit, date_added)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-        params![name, site_id, group_id, initial_post_limit.unwrap_or(100), periodic_post_limit.unwrap_or(100), now],
+        "INSERT INTO subscription (name, group_id, initial_post_limit, periodic_post_limit, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5)",
+        params![name, group_id, initial_post_limit.unwrap_or(100), periodic_post_limit.unwrap_or(100), now],
     )?;
     Ok(conn.last_insert_rowid())
 }
@@ -57,10 +56,15 @@ pub fn pause_subscription(conn: &Connection, subscription_id: i64, paused: bool)
     Ok(())
 }
 
-pub fn add_query(conn: &Connection, subscription_id: i64, query_text: &str) -> rusqlite::Result<i64> {
+pub fn add_query(
+    conn: &Connection,
+    subscription_id: i64,
+    site_id: &str,
+    query_text: &str,
+) -> rusqlite::Result<i64> {
     conn.execute(
-        "INSERT INTO subscription_query (subscription_id, query_text) VALUES (?1, ?2)",
-        params![subscription_id, query_text],
+        "INSERT INTO subscription_query (subscription_id, site_id, query_text) VALUES (?1, ?2, ?3)",
+        params![subscription_id, site_id, query_text],
     )?;
     Ok(conn.last_insert_rowid())
 }
@@ -70,10 +74,16 @@ pub fn delete_query(conn: &Connection, query_id: i64) -> rusqlite::Result<()> {
     Ok(())
 }
 
-pub fn edit_query(conn: &Connection, query_id: i64, query_text: &str, display_name: Option<&str>) -> rusqlite::Result<()> {
+pub fn edit_query(
+    conn: &Connection,
+    query_id: i64,
+    site_id: &str,
+    query_text: &str,
+    display_name: Option<&str>,
+) -> rusqlite::Result<()> {
     conn.execute(
-        "UPDATE subscription_query SET query_text = ?1, display_name = ?2 WHERE query_id = ?3",
-        params![query_text, display_name, query_id],
+        "UPDATE subscription_query SET site_id = ?1, query_text = ?2, display_name = ?3 WHERE query_id = ?4",
+        params![site_id, query_text, display_name, query_id],
     )?;
     Ok(())
 }

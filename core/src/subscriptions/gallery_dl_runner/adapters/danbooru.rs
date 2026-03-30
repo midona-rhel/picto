@@ -4,17 +4,17 @@ use serde_json::Value;
 pub(super) static ADAPTER: DanbooruAdapter = DanbooruAdapter;
 
 const CATEGORIES: &[(&str, &str)] = &[
-    ("tags_artist", "creator"),
+    ("tags_artist", "artist"),
     ("tags_character", "character"),
-    ("tags_copyright", "series"),
+    ("tags_copyright", "copyright"),
     ("tags_general", ""),
     ("tags_meta", "meta"),
 ];
 
 const TAG_STRINGS: &[(&str, &str)] = &[
-    ("tag_string_artist", "creator"),
+    ("tag_string_artist", "artist"),
     ("tag_string_character", "character"),
-    ("tag_string_copyright", "series"),
+    ("tag_string_copyright", "copyright"),
     ("tag_string_general", ""),
     ("tag_string_meta", "meta"),
 ];

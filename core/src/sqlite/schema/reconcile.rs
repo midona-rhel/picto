@@ -88,29 +88,164 @@ pub fn reconcile_schema(conn: &Connection) -> rusqlite::Result<()> {
         tracing::warn!("Reconciled subscription schema: renamed subscription.flow_id to group_id");
     }
 
-    // Some legacy DBs still have `subscription.site_plugin_id` but not `site_id`.
-    if table_exists(conn, "subscription")? && !has_column(conn, "subscription", "site_id")? {
-        conn.execute_batch("ALTER TABLE subscription ADD COLUMN site_id TEXT")?;
-        if has_column(conn, "subscription", "site_plugin_id")? {
-            conn.execute_batch(
-                "UPDATE subscription
-                 SET site_id = site_plugin_id
-                 WHERE site_id IS NULL OR TRIM(site_id) = ''",
-            )?;
-        } else {
-            conn.execute_batch(
-                "UPDATE subscription
-                 SET site_id = 'unknown'
-                 WHERE site_id IS NULL OR TRIM(site_id) = ''",
-            )?;
-        }
-        tracing::warn!(
-            "Reconciled subscription schema: added subscription.site_id and backfilled values"
-        );
+    let subscription_schema_needs_reset =
+        (table_exists(conn, "subscription")? && has_column(conn, "subscription", "site_id")?)
+            || (table_exists(conn, "subscription_query")?
+                && !has_column(conn, "subscription_query", "site_id")?);
+
+    if subscription_schema_needs_reset {
+        conn.execute_batch(
+            "DROP TABLE IF EXISTS subscription_download_attempt;
+             DROP TABLE IF EXISTS subscription_issue_event;
+             DROP TABLE IF EXISTS subscription_issue;
+             DROP TABLE IF EXISTS subscription_query_run;
+             DROP TABLE IF EXISTS subscription_run;
+             DROP TABLE IF EXISTS subscription_post_member;
+             DROP TABLE IF EXISTS subscription_post_collection;
+             DROP TABLE IF EXISTS subscription_entity;
+             DROP TABLE IF EXISTS subscription_query;
+             DROP TABLE IF EXISTS subscription;",
+        )?;
+        tracing::warn!("Reset subscription domain schema to query-owned site model");
     }
 
-    // Older libraries can miss subscription_query columns that newer code
-    // reads unconditionally.
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS subscription (
+             subscription_id         INTEGER PRIMARY KEY,
+             name                    TEXT NOT NULL,
+             paused                  INTEGER NOT NULL DEFAULT 0,
+             group_id                INTEGER REFERENCES subscription_group(group_id) ON DELETE CASCADE,
+             initial_post_limit      INTEGER NOT NULL DEFAULT 100,
+             periodic_post_limit     INTEGER NOT NULL DEFAULT 50,
+             auto_collections        INTEGER NOT NULL DEFAULT 1,
+             created_at              TEXT NOT NULL
+         );
+         CREATE TABLE IF NOT EXISTS subscription_query (
+             query_id              INTEGER PRIMARY KEY,
+             subscription_id       INTEGER NOT NULL REFERENCES subscription(subscription_id) ON DELETE CASCADE,
+             site_id               TEXT NOT NULL,
+             query_text            TEXT NOT NULL,
+             display_name          TEXT,
+             notes                 TEXT,
+             paused                INTEGER NOT NULL DEFAULT 0,
+             last_check_time       TEXT,
+             files_found           INTEGER NOT NULL DEFAULT 0,
+             posts_found           INTEGER NOT NULL DEFAULT 0,
+             completed_initial_run INTEGER NOT NULL DEFAULT 0,
+             resume_cursor         TEXT,
+             resume_strategy       TEXT,
+             last_success_at       TEXT,
+             last_failure_at       TEXT,
+             last_failure_kind     TEXT,
+             last_failure_message  TEXT
+         );
+         CREATE INDEX IF NOT EXISTS idx_sq_sub ON subscription_query(subscription_id);
+         CREATE TABLE IF NOT EXISTS subscription_entity (
+             subscription_id INTEGER NOT NULL REFERENCES subscription(subscription_id) ON DELETE CASCADE,
+             entity_id       INTEGER NOT NULL REFERENCES media_entity(entity_id) ON DELETE CASCADE,
+             PRIMARY KEY (subscription_id, entity_id)
+         );
+         CREATE TABLE IF NOT EXISTS subscription_post_collection (
+             subscription_id      INTEGER NOT NULL REFERENCES subscription(subscription_id) ON DELETE CASCADE,
+             site_id              TEXT NOT NULL,
+             post_id              TEXT NOT NULL,
+             collection_entity_id INTEGER NOT NULL REFERENCES media_entity(entity_id) ON DELETE CASCADE,
+             created_at           TEXT NOT NULL,
+             updated_at           TEXT NOT NULL,
+             PRIMARY KEY (subscription_id, site_id, post_id)
+         );
+         CREATE INDEX IF NOT EXISTS idx_spc_collection ON subscription_post_collection(collection_entity_id);
+         CREATE TABLE IF NOT EXISTS subscription_post_member (
+             subscription_id      INTEGER NOT NULL REFERENCES subscription(subscription_id) ON DELETE CASCADE,
+             site_id              TEXT NOT NULL,
+             post_id              TEXT NOT NULL,
+             item_key             TEXT NOT NULL,
+             page_num             INTEGER,
+             canonical_post_url   TEXT,
+             media_url            TEXT,
+             entity_hash          TEXT,
+             status               TEXT NOT NULL DEFAULT 'pending',
+             created_at           TEXT NOT NULL,
+             updated_at           TEXT NOT NULL,
+             PRIMARY KEY (subscription_id, site_id, post_id, item_key)
+         );
+         CREATE INDEX IF NOT EXISTS idx_subscription_post_member_post
+             ON subscription_post_member(subscription_id, site_id, post_id, page_num, item_key);",
+    )?;
+
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS subscription_run (
+             run_id               INTEGER PRIMARY KEY,
+             subscription_id      INTEGER NOT NULL REFERENCES subscription(subscription_id) ON DELETE CASCADE,
+             started_at           TEXT NOT NULL,
+             finished_at          TEXT,
+             status               TEXT NOT NULL DEFAULT 'running',
+             failure_kind         TEXT,
+             error_message        TEXT,
+             files_downloaded     INTEGER NOT NULL DEFAULT 0,
+             files_skipped        INTEGER NOT NULL DEFAULT 0,
+             metadata_validated   INTEGER NOT NULL DEFAULT 0,
+             metadata_invalid     INTEGER NOT NULL DEFAULT 0
+         );
+         CREATE INDEX IF NOT EXISTS idx_subscription_run_subscription
+             ON subscription_run(subscription_id, run_id DESC);
+         CREATE TABLE IF NOT EXISTS subscription_query_run (
+             query_run_id         INTEGER PRIMARY KEY,
+             run_id               INTEGER REFERENCES subscription_run(run_id) ON DELETE CASCADE,
+             subscription_id      INTEGER NOT NULL REFERENCES subscription(subscription_id) ON DELETE CASCADE,
+             query_id             INTEGER NOT NULL REFERENCES subscription_query(query_id) ON DELETE CASCADE,
+             started_at           TEXT NOT NULL,
+             finished_at          TEXT,
+             status               TEXT NOT NULL DEFAULT 'running',
+             failure_kind         TEXT,
+             error_message        TEXT,
+             posts_processed      INTEGER NOT NULL DEFAULT 0,
+             files_downloaded     INTEGER NOT NULL DEFAULT 0,
+             files_skipped        INTEGER NOT NULL DEFAULT 0
+         );
+         CREATE INDEX IF NOT EXISTS idx_subscription_query_run_query
+             ON subscription_query_run(query_id, query_run_id DESC);
+         CREATE TABLE IF NOT EXISTS subscription_issue (
+             issue_id             INTEGER PRIMARY KEY,
+             subscription_id      INTEGER NOT NULL REFERENCES subscription(subscription_id) ON DELETE CASCADE,
+             query_id             INTEGER REFERENCES subscription_query(query_id) ON DELETE CASCADE,
+             issue_kind           TEXT NOT NULL,
+             status               TEXT NOT NULL DEFAULT 'open',
+             message              TEXT NOT NULL,
+             detail               TEXT,
+             first_seen_at        TEXT NOT NULL,
+             last_seen_at         TEXT NOT NULL,
+             resolved_at          TEXT,
+             UNIQUE(subscription_id, query_id, issue_kind, message)
+         );
+         CREATE INDEX IF NOT EXISTS idx_subscription_issue_subscription
+             ON subscription_issue(subscription_id, status, last_seen_at DESC);
+         CREATE TABLE IF NOT EXISTS subscription_download_attempt (
+             attempt_id           INTEGER PRIMARY KEY,
+             subscription_id      INTEGER NOT NULL REFERENCES subscription(subscription_id) ON DELETE CASCADE,
+             query_id             INTEGER REFERENCES subscription_query(query_id) ON DELETE CASCADE,
+             query_run_id         INTEGER REFERENCES subscription_query_run(query_run_id) ON DELETE CASCADE,
+             item_key             TEXT NOT NULL,
+             site_category        TEXT,
+             post_id              TEXT,
+             page_num             INTEGER,
+             canonical_post_url   TEXT,
+             media_url            TEXT,
+             retry_url            TEXT,
+             retry_count          INTEGER NOT NULL DEFAULT 0,
+             status               TEXT NOT NULL DEFAULT 'pending',
+             failure_kind         TEXT,
+             last_error           TEXT,
+             next_retry_at        TEXT,
+             created_at           TEXT NOT NULL,
+             updated_at           TEXT NOT NULL,
+             resolved_at          TEXT,
+             UNIQUE(subscription_id, query_id, item_key)
+         );
+         CREATE INDEX IF NOT EXISTS idx_subscription_download_attempt_retry
+             ON subscription_download_attempt(subscription_id, query_id, status, next_retry_at, attempt_id);",
+    )?;
+
     if table_exists(conn, "subscription_query")? {
         if !has_column(conn, "subscription_query", "display_name")? {
             conn.execute_batch("ALTER TABLE subscription_query ADD COLUMN display_name TEXT")?;
@@ -145,6 +280,26 @@ pub fn reconcile_schema(conn: &Connection) -> rusqlite::Result<()> {
         if !has_column(conn, "subscription_query", "resume_strategy")? {
             conn.execute_batch("ALTER TABLE subscription_query ADD COLUMN resume_strategy TEXT")?;
             tracing::warn!("Reconciled subscription_query schema: added resume_strategy");
+        }
+        if !has_column(conn, "subscription_query", "notes")? {
+            conn.execute_batch("ALTER TABLE subscription_query ADD COLUMN notes TEXT")?;
+            tracing::warn!("Reconciled subscription_query schema: added notes");
+        }
+        if !has_column(conn, "subscription_query", "last_success_at")? {
+            conn.execute_batch("ALTER TABLE subscription_query ADD COLUMN last_success_at TEXT")?;
+            tracing::warn!("Reconciled subscription_query schema: added last_success_at");
+        }
+        if !has_column(conn, "subscription_query", "last_failure_at")? {
+            conn.execute_batch("ALTER TABLE subscription_query ADD COLUMN last_failure_at TEXT")?;
+            tracing::warn!("Reconciled subscription_query schema: added last_failure_at");
+        }
+        if !has_column(conn, "subscription_query", "last_failure_kind")? {
+            conn.execute_batch("ALTER TABLE subscription_query ADD COLUMN last_failure_kind TEXT")?;
+            tracing::warn!("Reconciled subscription_query schema: added last_failure_kind");
+        }
+        if !has_column(conn, "subscription_query", "last_failure_message")? {
+            conn.execute_batch("ALTER TABLE subscription_query ADD COLUMN last_failure_message TEXT")?;
+            tracing::warn!("Reconciled subscription_query schema: added last_failure_message");
         }
     }
 

@@ -156,7 +156,7 @@ export function createMenuManager({
           {
             label: 'Subscriptions…',
             accelerator: 'Shift+CmdOrCtrl+S',
-            click: () => openSubscriptionsWindow(),
+            click: () => sendToMainWindow('menu:navigate', 'subscriptions'),
           },
           ...(!isMac ? [{
             label: 'Settings…',

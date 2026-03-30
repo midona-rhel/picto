@@ -6,7 +6,7 @@
  * One linear scan per frame drives everything.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { CanonicalEntityGridItem } from '../../../shared/types/canonical';
 import type { GridViewMode } from '../layout/types';
 import { computeLayout, safeAspectRatio } from '../layout/layoutMath';
@@ -29,6 +29,7 @@ import styles from './CanvasGrid.module.css';
 
 const GAP = 16;
 const TEXT_NAME_ROW_H = 20;
+const EMPTY_HASH_SET = new Set<string>();
 const LOAD_MORE_THRESHOLD_PX = 400;
 const ZOOM_BTN_SIZE = 24;
 const HOVER_PREVIEW_DELAY_MS = 200;
@@ -83,7 +84,7 @@ export function CanvasGrid({
   frozenScrollTop = 0,
   suppressTileReveal = false,
   initialScrollTop = null,
-  selectedEntityHashes = new Set<string>(),
+  selectedEntityHashes = EMPTY_HASH_SET,
 }: CanvasGridProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const baseCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -142,52 +143,75 @@ export function CanvasGrid({
     [aspectRatios, containerWidth, targetSize, GAP, effectiveViewMode, textHeight, scrollbarWidth],
   );
 
-  // ── Scroll anchor on resize/zoom ──
-  // Each step picks fresh: prefer selected item closest to center, else any tile.
-  useEffect(() => {
+  // ── Scroll anchor on resize / zoom / viewMode / display toggle ──
+  // Anchor on the TOP EDGE of the topmost visible tile. The image top
+  // is stable when text height changes (names/resolution toggle adds
+  // space below images, not above). For zoom and view mode changes
+  // the tile top is still the most intuitive anchor point.
+  //
+  // useLayoutEffect so we run before the browser paints / clamps scrollTop.
+  // lastScrollTopRef is the pre-layout scroll position (kept in sync by
+  // handleScroll and the initialScrollTop restore).
+  const selectedHashesRef = useRef(selectedEntityHashes);
+  selectedHashesRef.current = selectedEntityHashes;
+
+  useLayoutEffect(() => {
     const prev = prevLayoutRef.current;
     prevLayoutRef.current = layout;
     const prevItems = prevItemsRef.current;
     prevItemsRef.current = items;
 
+    // Items changed → scope transition handles its own scroll. Skip.
     if (prevItems !== items) return;
-    if (!prev || prev === layout || prev.positions === layout.positions) return;
+    // No previous layout (first mount / first resize) or same layout object.
+    if (!prev || prev === layout) return;
     if (prev.positions.length === 0 || layout.positions.length === 0) return;
+
     const container = containerRef.current;
     if (!container) return;
-
-    const scrollTop = container.scrollTop;
     const vh = container.clientHeight;
     if (vh === 0) return;
 
-    const viewportCenter = scrollTop + vh / 2;
-    let anchorIdx = -1;
-    let bestDist = Infinity;
+    const scrollTop = lastScrollTopRef.current;
+    const vpTop = scrollTop;
+    const vpBot = scrollTop + vh;
 
-    // Prefer selected item closest to viewport center
-    if (selectedEntityHashes.size > 0) {
+    let anchorIdx = -1;
+    let bestTop = Infinity;
+    const sel = selectedHashesRef.current;
+
+    // 1) Prefer a selected tile that is at least partially visible
+    if (sel.size > 0) {
       for (let i = 0; i < prev.positions.length; i++) {
-        if (!items[i] || !selectedEntityHashes.has(items[i].entity_hash)) continue;
-        const dist = Math.abs(prev.positions[i].y + prev.positions[i].h / 2 - viewportCenter);
-        if (dist < bestDist) { bestDist = dist; anchorIdx = i; }
+        const p = prev.positions[i];
+        if (!p || !items[i] || !sel.has(items[i].entity_hash)) continue;
+        if (p.y + p.h < vpTop || p.y > vpBot) continue;
+        if (p.y < bestTop) { bestTop = p.y; anchorIdx = i; }
       }
     }
 
-    // Fall back to any tile closest to center
+    // 2) Fall back to the topmost tile that overlaps the viewport
     if (anchorIdx < 0) {
+      bestTop = Infinity;
       for (let i = 0; i < prev.positions.length; i++) {
-        const dist = Math.abs(prev.positions[i].y + prev.positions[i].h / 2 - viewportCenter);
-        if (dist < bestDist) { bestDist = dist; anchorIdx = i; }
+        const p = prev.positions[i];
+        if (!p) continue;
+        if (p.y + p.h < vpTop || p.y > vpBot) continue;
+        if (p.y < bestTop) { bestTop = p.y; anchorIdx = i; }
       }
     }
 
     if (anchorIdx < 0 || anchorIdx >= layout.positions.length) return;
 
-    const oldCenter = prev.positions[anchorIdx].y + prev.positions[anchorIdx].h / 2;
-    const offsetInViewport = oldCenter - scrollTop;
-    const newCenter = layout.positions[anchorIdx].y + layout.positions[anchorIdx].h / 2;
-    container.scrollTop = Math.max(0, newCenter - offsetInViewport);
-  }, [layout, items, selectedEntityHashes]);
+    // Anchor on the tile's top edge — stable when text height changes
+    const oldTop = prev.positions[anchorIdx].y;
+    const newTop = layout.positions[anchorIdx].y;
+    const offset = oldTop - scrollTop;
+    const next = Math.max(0, newTop - offset);
+
+    container.scrollTop = next;
+    lastScrollTopRef.current = next;
+  }, [layout, items]);
 
   // ── Estimated total scroll height ──
   // When totalCount > loaded items, estimate from average height per item.
@@ -217,9 +241,16 @@ export function CanvasGrid({
   // Reset on items change (scope navigation, sort, search — any new result set)
   useEffect(() => {
     firstPaintRef.current = false;
-    // Restore scroll position from back/forward navigation
-    if (initialScrollTop != null && initialScrollTop > 0 && containerRef.current) {
-      containerRef.current.scrollTop = initialScrollTop;
+    const container = containerRef.current;
+    if (!container) return;
+    if (initialScrollTop != null && initialScrollTop > 0) {
+      // Restore scroll position from back/forward navigation
+      container.scrollTop = initialScrollTop;
+      lastScrollTopRef.current = initialScrollTop;
+    } else {
+      // Fresh navigation — start at top
+      container.scrollTop = 0;
+      lastScrollTopRef.current = 0;
     }
   }, [items]); // eslint-disable-line react-hooks/exhaustive-deps -- initialScrollTop read once per items change
 
@@ -253,6 +284,7 @@ export function CanvasGrid({
 
     // Full scan — masonry positions are NOT Y-sorted (tiles placed in shortest column).
     const visibleHashes = new Set<string>();
+    const planHashes: string[] = [];
     for (let i = 0; i < layout.positions.length; i++) {
       const pos = layout.positions[i];
       if (!pos) continue;
@@ -264,18 +296,12 @@ export function CanvasGrid({
       const item = renderItems[i];
       if (!item) continue;
 
-      const entry = pipeline.get(item.thumbnailHash);
-      if (entry?.thumb != null) {
-        visibleHashes.add(item.thumbnailHash);
-      }
-
-      const imageHeight = pos.h - textHeight;
-      pipeline.ensure(item.thumbnailHash, {
-        y: pos.y + pos.h / 2,
-        drawWidth: pos.w,
-        drawHeight: imageHeight,
-      });
+      visibleHashes.add(item.thumbnailHash);
+      planHashes.push(item.thumbnailHash);
     }
+
+    // Send plan to worker — it handles loading, caching, staggered reveals.
+    pipeline.updatePlan(planHashes);
 
     const drawCtx: DrawContext = {
       scrollTop,
@@ -308,10 +334,8 @@ export function CanvasGrid({
 
     ctx.restore();
 
-    // Cancel queued/in-flight loads outside the zone
-    pipeline.cancelOutsideWindow(zoneTop, zoneBottom);
-    // Evict bitmaps outside the draw zone so they re-fade on scroll back.
-    // Only tiles in the zone (viewport ± 100px ≈ one row buffer) keep bitmaps.
+    // Evict main-thread bitmaps outside the draw zone.
+    // The worker handles load cancellation via the plan diff.
     pipeline.evictOutsideVisible(visibleHashes);
 
     // Continue animation loop for active reveals
@@ -491,7 +515,6 @@ export function CanvasGrid({
     };
     scrollStateRef.current = nextScrollState;
     isScrollingRef.current = nextScrollState.phase !== 'idle';
-    pipelineRef.current?.setScrollState(nextScrollState);
 
     // Clear hover and preview during scroll
     if (hoveredTileRef.current != null) {

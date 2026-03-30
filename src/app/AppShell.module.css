@@ -36,6 +36,7 @@
 }
 
 .titlebarCenter {
+  position: relative;
   flex: 1;
   min-width: 0;
   display: flex;
@@ -45,12 +46,77 @@
   box-shadow: 0 1px 0 0 var(--color-border-secondary);
 }
 
+/* ── Titlebar icon button — unified base for all titlebar buttons ── */
+
+.titlebarBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--color-text-primary);
+  opacity: 0.8;
+  cursor: pointer;
+  outline: none;
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  min-width: 28px;
+  -webkit-app-region: no-drag;
+  transition: opacity 150ms var(--ease-default), background 150ms var(--ease-default);
+}
+
+.titlebarBtn:hover {
+  opacity: 1;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.titlebarBtnActive {
+  opacity: 1;
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.titlebarBtnDisabled {
+  opacity: 0.2;
+  cursor: default;
+  pointer-events: none;
+}
+
+/* Aliases for backward compat with JSX class names */
+.navBtn { composes: titlebarBtn; margin: 0 1px; }
+.navBtnDisabled { composes: titlebarBtnDisabled; }
+
+.scopeTitle {
+  position: absolute;
+  left: 72px;
+  right: 50%;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  user-select: none;
+  pointer-events: none;
+  mask-image: linear-gradient(to right, black calc(100% - 40px), transparent 100%);
+  -webkit-mask-image: linear-gradient(to right, black calc(100% - 40px), transparent 100%);
+}
+
 .titlebarInspector {
   flex-shrink: 0;
   width: 320px;
   background: var(--color-surface-1);
   border-left: 1px solid var(--color-border-primary);
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding: 0 8px;
+  -webkit-app-region: drag;
 }
+
+.pinBtn { composes: titlebarBtn; }
+.pinBtnActive { composes: titlebarBtnActive; }
 
 .titlebarActions {
   display: flex;
@@ -60,26 +126,7 @@
   -webkit-app-region: no-drag;
 }
 
-.toggleBtn {
-  appearance: none;
-  border: none;
-  background: transparent;
-  padding: 0;
-  width: 28px;
-  height: 28px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: var(--radius-sm);
-  color: var(--color-text-primary);
-  cursor: pointer;
-  -webkit-app-region: no-drag;
-  transition: background var(--duration-fast) var(--ease-default);
-}
-
-.toggleBtn:hover {
-  background: var(--color-surface-hover);
-}
+.toggleBtn { composes: titlebarBtn; }
 
 /* Body — sidebar + main below titlebar */
 .body {

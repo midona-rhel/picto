@@ -78,6 +78,7 @@ export interface CanonicalFolderInfo {
   name: string;
 }
 
+
 export interface CanonicalEntityDetails {
   entity_hash: string;
   thumbnail_hash: string;
@@ -216,12 +217,18 @@ export interface SelectionSummaryStats {
   rating_stats: { min: number | null; max: number | null; shared: number | null } | null;
 }
 
+export interface SelectionFolderInfo {
+  folder_id: number;
+  name: string;
+}
+
 export interface SelectionSummary {
   total_count: number;
   selected_count: number;
   sample_hashes: string[];
   shared_tags: SelectionTagCount[];
   top_tags: SelectionTagCount[];
+  shared_folders: SelectionFolderInfo[];
   stats: SelectionSummaryStats;
   pending: boolean;
   generated_at: string;

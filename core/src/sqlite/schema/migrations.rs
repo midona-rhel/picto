@@ -764,6 +764,103 @@ pub fn run_migrations(conn: &Connection, from_version: i64) -> rusqlite::Result<
             CREATE INDEX IF NOT EXISTS idx_dqi_queue ON download_queue_item(queue_id);",
         )?;
     }
+    if from_version < 39 {
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS subscription_run (
+                run_id               INTEGER PRIMARY KEY,
+                subscription_id      INTEGER NOT NULL REFERENCES subscription(subscription_id) ON DELETE CASCADE,
+                started_at           TEXT NOT NULL,
+                finished_at          TEXT,
+                status               TEXT NOT NULL DEFAULT 'running',
+                failure_kind         TEXT,
+                error_message        TEXT,
+                files_downloaded     INTEGER NOT NULL DEFAULT 0,
+                files_skipped        INTEGER NOT NULL DEFAULT 0,
+                metadata_validated   INTEGER NOT NULL DEFAULT 0,
+                metadata_invalid     INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE INDEX IF NOT EXISTS idx_subscription_run_subscription
+                ON subscription_run(subscription_id, run_id DESC);
+
+            CREATE TABLE IF NOT EXISTS subscription_query_run (
+                query_run_id         INTEGER PRIMARY KEY,
+                run_id               INTEGER REFERENCES subscription_run(run_id) ON DELETE CASCADE,
+                subscription_id      INTEGER NOT NULL REFERENCES subscription(subscription_id) ON DELETE CASCADE,
+                query_id             INTEGER NOT NULL REFERENCES subscription_query(query_id) ON DELETE CASCADE,
+                started_at           TEXT NOT NULL,
+                finished_at          TEXT,
+                status               TEXT NOT NULL DEFAULT 'running',
+                failure_kind         TEXT,
+                error_message        TEXT,
+                posts_processed      INTEGER NOT NULL DEFAULT 0,
+                files_downloaded     INTEGER NOT NULL DEFAULT 0,
+                files_skipped        INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE INDEX IF NOT EXISTS idx_subscription_query_run_query
+                ON subscription_query_run(query_id, query_run_id DESC);
+
+            CREATE TABLE IF NOT EXISTS subscription_issue (
+                issue_id             INTEGER PRIMARY KEY,
+                subscription_id      INTEGER NOT NULL REFERENCES subscription(subscription_id) ON DELETE CASCADE,
+                query_id             INTEGER REFERENCES subscription_query(query_id) ON DELETE CASCADE,
+                issue_kind           TEXT NOT NULL,
+                status               TEXT NOT NULL DEFAULT 'open',
+                message              TEXT NOT NULL,
+                detail               TEXT,
+                first_seen_at        TEXT NOT NULL,
+                last_seen_at         TEXT NOT NULL,
+                resolved_at          TEXT,
+                UNIQUE(subscription_id, query_id, issue_kind, message)
+            );
+            CREATE INDEX IF NOT EXISTS idx_subscription_issue_subscription
+                ON subscription_issue(subscription_id, status, last_seen_at DESC);
+
+            CREATE TABLE IF NOT EXISTS subscription_download_attempt (
+                attempt_id           INTEGER PRIMARY KEY,
+                subscription_id      INTEGER NOT NULL REFERENCES subscription(subscription_id) ON DELETE CASCADE,
+                query_id             INTEGER REFERENCES subscription_query(query_id) ON DELETE CASCADE,
+                query_run_id         INTEGER REFERENCES subscription_query_run(query_run_id) ON DELETE CASCADE,
+                item_key             TEXT NOT NULL,
+                site_category        TEXT,
+                post_id              TEXT,
+                page_num             INTEGER,
+                canonical_post_url   TEXT,
+                media_url            TEXT,
+                retry_url            TEXT,
+                retry_count          INTEGER NOT NULL DEFAULT 0,
+                status               TEXT NOT NULL DEFAULT 'pending',
+                failure_kind         TEXT,
+                last_error           TEXT,
+                next_retry_at        TEXT,
+                created_at           TEXT NOT NULL,
+                updated_at           TEXT NOT NULL,
+                resolved_at          TEXT,
+                UNIQUE(subscription_id, query_id, item_key)
+            );
+            CREATE INDEX IF NOT EXISTS idx_subscription_download_attempt_retry
+                ON subscription_download_attempt(subscription_id, query_id, status, next_retry_at, attempt_id);",
+        )?;
+    }
+    if from_version < 40 {
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS subscription_post_member (
+                subscription_id      INTEGER NOT NULL REFERENCES subscription(subscription_id) ON DELETE CASCADE,
+                site_id              TEXT NOT NULL,
+                post_id              TEXT NOT NULL,
+                item_key             TEXT NOT NULL,
+                page_num             INTEGER,
+                canonical_post_url   TEXT,
+                media_url            TEXT,
+                entity_hash          TEXT,
+                status               TEXT NOT NULL DEFAULT 'pending',
+                created_at           TEXT NOT NULL,
+                updated_at           TEXT NOT NULL,
+                PRIMARY KEY (subscription_id, site_id, post_id, item_key)
+            );
+            CREATE INDEX IF NOT EXISTS idx_subscription_post_member_post
+                ON subscription_post_member(subscription_id, site_id, post_id, page_num, item_key);",
+        )?;
+    }
     // ── V36: Collection entity hash identity + drop collection_tag ──
     if from_version < 36 {
         // 1. Add hash column to media_entity

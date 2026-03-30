@@ -479,6 +479,8 @@ impl LibraryDatabase {
         name: &str,
         new_members: &[types::IngestPreparedSingle],
         existing_member_ids: &[i64],
+        existing_collection_id: Option<i64>,
+        force_collection: bool,
     ) -> Result<(i64, String, Vec<String>), String> {
         let collection_name = name.to_string();
         let prepared = new_members.to_vec();
@@ -540,10 +542,24 @@ impl LibraryDatabase {
                 new_hashes.push(member.entity_hash.clone());
             }
 
-            let now = chrono::Utc::now().to_rfc3339();
-            let collection_id =
-                write::collections::create_collection(&tx, &collection_name, &now)?;
-            write::collections::add_members(&tx, collection_id, &member_ids)?;
+            if existing_collection_id.is_none() && member_ids.len() < 2 && !force_collection {
+                return Err(rusqlite::Error::InvalidQuery);
+            }
+
+            let collection_id = if let Some(collection_id) = existing_collection_id {
+                if !member_ids.is_empty() {
+                    write::collections::add_members(&tx, collection_id, &member_ids)?;
+                }
+                collection_id
+            } else {
+                let now = chrono::Utc::now().to_rfc3339();
+                let collection_id =
+                    write::collections::create_collection(&tx, &collection_name, &now)?;
+                if !member_ids.is_empty() {
+                    write::collections::add_members(&tx, collection_id, &member_ids)?;
+                }
+                collection_id
+            };
 
             let collection_hash = query::collections::get_collection_hash(&tx, collection_id)?
                 .ok_or_else(|| rusqlite::Error::QueryReturnedNoRows)?;

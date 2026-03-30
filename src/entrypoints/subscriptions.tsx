@@ -1,10 +1,10 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
+import '../app/globals.css';
+import { SubscriptionsScreen } from '../features/subscriptions/SubscriptionsScreen';
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
-    <div style={{ padding: 32, fontFamily: 'system-ui', color: '#ccc', background: '#1a1a1e' }}>
-      <p>Subscriptions window — rebuild pending</p>
-    </div>
+    <SubscriptionsScreen />
   </React.StrictMode>,
 );

@@ -1,74 +1,156 @@
 /// <reference lib="webworker" />
 
-type DecodeMessage = {
-  type: 'decode';
-  requestId: number;
-  url: string;
-};
+/**
+ * Thumbnail decode worker — owns loading, caching, and reveal staggering.
+ *
+ * The main thread sends a "plan" (visible hashes + URLs) each frame.
+ * The worker fetches, decodes, and releases bitmaps one at a time
+ * every STAGGER_MS so the main thread gets a smooth reveal cascade.
+ */
 
-type CancelMessage = {
-  type: 'cancel';
-  requestId: number;
-};
+// ── Messages ────────────────────────────────────────────────────
 
-type WorkerMessage = DecodeMessage | CancelMessage;
+type PlanEntry = { hash: string; url: string };
+type PlanMessage = { type: 'plan'; entries: PlanEntry[] };
+type ClearMessage = { type: 'clear' };
+type IncomingMessage = PlanMessage | ClearMessage;
 
-type SuccessResponse = {
-  type: 'success';
-  requestId: number;
-  durationMs: number;
-  bitmap: ImageBitmap;
-};
+// ── State ───────────────────────────────────────────────────────
 
-type ErrorResponse = {
-  type: 'error';
-  requestId: number;
-  error: string;
-};
+const ctx = self as DedicatedWorkerGlobalScope;
 
-const worker = self as DedicatedWorkerGlobalScope;
-const controllers = new Map<number, AbortController>();
+const currentPlan = new Map<string, string>();          // hash → url
+const inFlight = new Map<string, AbortController>();
+const decoded = new Map<string, ImageBitmap>();          // decoded, waiting to reveal
+const revealed = new Set<string>();                      // already transferred to main
+const failCounts = new Map<string, number>();
+const revealQueue: string[] = [];
+let drainTimer: ReturnType<typeof setTimeout> | null = null;
 
-async function decodeRequest(message: DecodeMessage): Promise<void> {
-  const controller = new AbortController();
-  controllers.set(message.requestId, controller);
-  const startedAt = performance.now();
+const MAX_CONCURRENT = 4;
+const STAGGER_MS = 30;
+const MAX_FAILURES = 2;
 
-  try {
-    const response = await fetch(message.url, { signal: controller.signal });
-    if (!response.ok) throw new Error(`thumbnail fetch failed: ${response.status}`);
-    const blob = await response.blob();
-    const bitmap = await createImageBitmap(blob);
-    if (controller.signal.aborted) {
-      bitmap.close();
-      return;
+// ── Plan ────────────────────────────────────────────────────────
+
+function handlePlan(entries: PlanEntry[]): void {
+  const next = new Map(entries.map(e => [e.hash, e.url]));
+
+  // Cancel loads no longer in plan
+  for (const [hash, controller] of inFlight) {
+    if (!next.has(hash)) {
+      controller.abort();
+      inFlight.delete(hash);
     }
-    const result: SuccessResponse = {
-      type: 'success',
-      requestId: message.requestId,
-      durationMs: performance.now() - startedAt,
-      bitmap,
-    };
-    worker.postMessage(result, [bitmap]);
-  } catch (error) {
-    if (controller.signal.aborted) return;
-    const result: ErrorResponse = {
-      type: 'error',
-      requestId: message.requestId,
-      error: error instanceof Error ? error.message : String(error),
-    };
-    worker.postMessage(result);
-  } finally {
-    controllers.delete(message.requestId);
+  }
+
+  // Drop decoded bitmaps no longer in plan
+  for (const [hash, bitmap] of decoded) {
+    if (!next.has(hash)) {
+      bitmap.close();
+      decoded.delete(hash);
+    }
+  }
+
+  // Prune reveal queue
+  for (let i = revealQueue.length - 1; i >= 0; i--) {
+    if (!next.has(revealQueue[i])) revealQueue.splice(i, 1);
+  }
+
+  // Forget revealed hashes that left the plan (so they re-decode on re-entry)
+  for (const hash of revealed) {
+    if (!next.has(hash)) revealed.delete(hash);
+  }
+
+  currentPlan.clear();
+  for (const [h, u] of next) currentPlan.set(h, u);
+
+  pumpLoads();
+}
+
+function handleClear(): void {
+  for (const c of inFlight.values()) c.abort();
+  inFlight.clear();
+  for (const b of decoded.values()) b.close();
+  decoded.clear();
+  revealed.clear();
+  failCounts.clear();
+  revealQueue.length = 0;
+  currentPlan.clear();
+  if (drainTimer) { clearTimeout(drainTimer); drainTimer = null; }
+}
+
+// ── Loading ─────────────────────────────────────────────────────
+
+function pumpLoads(): void {
+  for (const [hash, url] of currentPlan) {
+    if (inFlight.size >= MAX_CONCURRENT) break;
+    if (inFlight.has(hash) || decoded.has(hash) || revealed.has(hash)) continue;
+    if ((failCounts.get(hash) ?? 0) >= MAX_FAILURES) continue;
+    startLoad(hash, url);
   }
 }
 
-worker.onmessage = (event: MessageEvent<WorkerMessage>) => {
-  const message = event.data;
-  if (message.type === 'cancel') {
-    controllers.get(message.requestId)?.abort();
-    controllers.delete(message.requestId);
+function startLoad(hash: string, url: string): void {
+  const controller = new AbortController();
+  inFlight.set(hash, controller);
+
+  void (async () => {
+    try {
+      const response = await fetch(url, { signal: controller.signal });
+      if (!response.ok) throw new Error(`fetch ${response.status}`);
+      const blob = await response.blob();
+      const bitmap = await createImageBitmap(blob);
+
+      if (controller.signal.aborted) { bitmap.close(); return; }
+      inFlight.delete(hash);
+
+      if (!currentPlan.has(hash)) { bitmap.close(); return; }
+
+      decoded.set(hash, bitmap);
+      revealQueue.push(hash);
+      drainRevealQueue();
+    } catch (error) {
+      inFlight.delete(hash);
+      if ((error as Error)?.name === 'AbortError') return;
+      failCounts.set(hash, (failCounts.get(hash) ?? 0) + 1);
+      ctx.postMessage({ type: 'error', hash });
+    } finally {
+      pumpLoads();
+    }
+  })();
+}
+
+// ── Reveal stagger ──────────────────────────────────────────────
+
+function drainRevealQueue(): void {
+  if (drainTimer || revealQueue.length === 0) return;
+
+  const hash = revealQueue.shift()!;
+  const bitmap = decoded.get(hash);
+  decoded.delete(hash);
+
+  if (!bitmap || !currentPlan.has(hash)) {
+    bitmap?.close();
+    drainRevealQueue();
     return;
   }
-  void decodeRequest(message);
+
+  revealed.add(hash);
+  ctx.postMessage({ type: 'reveal', hash, bitmap }, [bitmap]);
+
+  if (revealQueue.length > 0) {
+    drainTimer = setTimeout(() => {
+      drainTimer = null;
+      drainRevealQueue();
+    }, STAGGER_MS);
+  }
+}
+
+// ── Entry ───────────────────────────────────────────────────────
+
+ctx.onmessage = (event: MessageEvent<IncomingMessage>) => {
+  const msg = event.data;
+  if (msg.type === 'plan') handlePlan(msg.entries);
+  else if (msg.type === 'clear') handleClear();
 };

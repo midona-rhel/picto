@@ -75,6 +75,9 @@ export const displayedInspectorEntityDataAtom = atom<CanonicalEntityDetails | nu
 export const inspectorLoadingAtom = atom(false);
 export const inspectorErrorAtom = atom<string | null>(null);
 
+/** When pinned, inspector ignores selection changes and stays on current entity/scope. */
+export const inspectorPinnedAtom = atom(false);
+
 type ScopeInspectorFolderMeta = {
   folder_id?: number;
   notes?: unknown;

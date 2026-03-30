@@ -182,6 +182,15 @@ export function registerIpcHandlers({
       windowManager.openSettingsWindow();
       return null;
     }
+    if (command === 'auth_session_start') {
+      return windowManager.startAuthSession(args?.site_category, args?.start_url ?? null);
+    }
+    if (command === 'auth_session_set_bounds') {
+      return windowManager.setAuthSessionBounds(args);
+    }
+    if (command === 'auth_session_cancel') {
+      return windowManager.cancelAuthSession();
+    }
     if (command === 'pixiv_oauth_popup') {
       const result = await windowManager.openPixivOAuthPopup(args?.login_url);
       return result; // { code, phpsessid }
@@ -456,5 +465,14 @@ export function registerIpcHandlers({
   });
   ipcMain.handle('picto:updater:install', () => {
     updaterService.quitAndInstall();
+  });
+
+  // Shell operations — reveal in Finder/Explorer, open with default app
+  ipcMain.handle('picto:shell:showInFolder', async (_event, { path }) => {
+    if (path) shell.showItemInFolder(path);
+  });
+
+  ipcMain.handle('picto:shell:openPath', async (_event, { path }) => {
+    if (path) await shell.openPath(path);
   });
 }

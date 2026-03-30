@@ -18,11 +18,9 @@ import {
   gridTargetSizeAtom,
   gridSearchTextAtom,
 } from '../../state/grid';
-import { displayedScopeLabelAtom } from '../../state/inspector';
-import { canGoBackAtom, canGoForwardAtom, goBack, goForward } from '../../state/navigationHistory';
 import { gridController } from '../../controllers/gridController';
 import { gridPerfAtom } from '../../state/gridPerf';
-import { viewerSessionAtom, viewerDisplayStateAtom, viewerDisplayControlsAtom } from '../../state/viewer';
+import { viewerDisplayStateAtom, viewerDisplayControlsAtom } from '../../state/viewer';
 import { ContextMenu, useContextMenu } from '../../shared/ui/ContextMenu';
 import { buildViewMenuEntries } from './GridViewMenu';
 import styles from './GridToolbar.module.css';
@@ -30,14 +28,6 @@ import styles from './GridToolbar.module.css';
 const ZOOM_MIN = 150;
 const ZOOM_MAX = 900;
 const ZOOM_STEP = 50;
-
-// ── Title — reads from frozen snapshot, changes with the grid fade ──
-
-function ScopeTitle() {
-  const label = useAtomValue(displayedScopeLabelAtom);
-  if (!label) return null;
-  return <span className={styles.title}>{label}</span>;
-}
 
 // ── Zoom controls ───────────────────────────────────────────────
 
@@ -143,7 +133,7 @@ function sliderToZoom(pos: number): number {
   return 100 * Math.pow(800 / 100, (pos - 50) / 50);
 }
 
-function ViewerToolbar() {
+export function ViewerToolbar() {
   const state = useAtomValue(viewerDisplayStateAtom);
   const controls = useAtomValue(viewerDisplayControlsAtom);
   const [sliderPos, setSliderPos] = useState(50);
@@ -231,14 +221,10 @@ function ViewerToolbar() {
 }
 
 export function GridToolbar() {
-  const viewerSession = useAtomValue(viewerSessionAtom);
   const isDevHost = typeof window !== 'undefined'
     && (window.location.hostname === '127.0.0.1' || window.location.hostname === 'localhost');
   const viewMenu = useContextMenu();
   const viewBtnRef = useRef<HTMLButtonElement>(null);
-
-  const canBack = useAtomValue(canGoBackAtom);
-  const canForward = useAtomValue(canGoForwardAtom);
 
   const openViewMenu = useCallback(() => {
     const rect = viewBtnRef.current?.getBoundingClientRect();
@@ -256,25 +242,12 @@ export function GridToolbar() {
     });
     ro.observe(el);
     return () => ro.disconnect();
-  }, [viewerSession]);
-
-  // When viewer is open, swap toolbar contents
-  if (viewerSession) {
-    return <ViewerToolbar />;
-  }
+  }, []);
 
   const showZoom = toolbarWidth > 300;
 
   return (
     <div ref={toolbarRef} className={styles.toolbar}>
-      <button className={`${styles.icBtn} ${!canBack ? styles.icBtnDisabled : ''}`} onClick={canBack ? goBack : undefined} title="Back (⌘[)">
-        <IconChevronLeft size={16} stroke={1.5} />
-      </button>
-      <button className={`${styles.icBtn} ${!canForward ? styles.icBtnDisabled : ''}`} onClick={canForward ? goForward : undefined} title="Forward (⌘])">
-        <IconChevronRight size={16} stroke={1.5} />
-      </button>
-      <ScopeTitle />
-
       <div className={styles.centerGroup} style={showZoom ? undefined : { visibility: 'hidden', pointerEvents: 'none' }}>
         <ZoomControls />
       </div>

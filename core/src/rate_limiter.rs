@@ -13,6 +13,7 @@ use std::time::{Duration, Instant};
 #[derive(Clone)]
 pub struct RateLimiter {
     inner: Arc<Mutex<RateLimiterInner>>,
+    run_locks: Arc<tokio::sync::Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>>,
 }
 
 struct RateLimiterInner {
@@ -34,6 +35,7 @@ impl RateLimiter {
                 last_request: HashMap::new(),
                 default_interval: Duration::from_millis(1000), // 1 req/sec default
             })),
+            run_locks: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
         }
     }
 
@@ -70,4 +72,21 @@ impl RateLimiter {
                 .insert(domain.to_string(), Instant::now());
         }
     }
+
+    pub async fn acquire_domain_run(&self, domain: &str) -> DomainRunGuard {
+        let domain_lock = {
+            let mut locks = self.run_locks.lock().await;
+            locks
+                .entry(domain.to_string())
+                .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+                .clone()
+        };
+        DomainRunGuard {
+            _guard: domain_lock.lock_owned().await,
+        }
+    }
+}
+
+pub struct DomainRunGuard {
+    _guard: tokio::sync::OwnedMutexGuard<()>,
 }

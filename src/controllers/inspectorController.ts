@@ -12,6 +12,7 @@ import {
   displayedInspectorTargetAtom,
   inspectorErrorAtom,
   inspectorLoadingAtom,
+  inspectorPinnedAtom,
   liveInspectorTargetAtom,
 } from '../state/inspector';
 
@@ -58,6 +59,9 @@ export function startInspectorSync() {
 
   let lastEntityHash = '';
   store.sub(liveInspectorTargetAtom, () => {
+    // When pinned, ignore all selection changes
+    if (store.get(inspectorPinnedAtom)) return;
+
     const target = store.get(liveInspectorTargetAtom);
     if (target.kind === 'entity') {
       if (target.entityHash !== lastEntityHash) {

@@ -1,7 +1,8 @@
-//! Gallery-dl subprocess runner.
+//! Gallery-dl Python bridge runner.
 //!
-//! Manages gallery-dl invocations: generates temp config files, spawns the
-//! subprocess, scans output directories, and parses metadata sidecar JSON files.
+//! Manages gallery-dl invocations through the owned Python bridge:
+//! generates temp config files, spawns the bridge, and consumes NDJSON item
+//! events without relying on sidecar JSON as the live contract.
 //!
 //! Gallery-dl reference: `external/gallery-dl/` (source code).
 //! Key source files consulted:
@@ -13,25 +14,6 @@
 //! - `gallery_dl/extractor/e621.py` — nested tags dict
 
 mod adapters;
-
-/// Convert a path string to a `PathBuf`, prefixing `\\?\` on Windows to
-/// bypass the 260-character MAX_PATH limitation. Without this, `is_file()`
-/// and `fs::read()` silently fail on long gallery-dl download paths.
-fn to_long_path(raw: &str) -> PathBuf {
-    #[cfg(target_os = "windows")]
-    {
-        let p = raw.replace('/', "\\");
-        if p.starts_with("\\\\?\\") {
-            PathBuf::from(p)
-        } else {
-            PathBuf::from(format!("\\\\?\\{}", p))
-        }
-    }
-    #[cfg(not(target_os = "windows"))]
-    {
-        PathBuf::from(raw)
-    }
-}
 mod config;
 mod failure;
 mod filesystem;
@@ -41,6 +23,7 @@ mod sites;
 
 use std::path::PathBuf;
 use std::process::Stdio;
+use std::collections::BTreeSet;
 
 use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
@@ -88,14 +71,23 @@ pub struct RunSummary {
     pub exit_code: i32,
     pub stderr_output: String,
     pub temp_dir: PathBuf,
-    /// True if any individual file download failed after all retries.
     pub had_download_errors: bool,
+    pub failed_items: Vec<FailedDownloadedItem>,
+    pub discovered_items: usize,
+    pub discovered_post_ids: Vec<String>,
+    pub skipped_archive_items: usize,
 }
 
 /// A single file downloaded by gallery-dl, paired with its parsed metadata.
 pub struct DownloadedItem {
     pub file_path: PathBuf,
     pub metadata: ParsedMetadata,
+}
+
+#[derive(Debug, Clone)]
+pub struct FailedDownloadedItem {
+    pub metadata: ParsedMetadata,
+    pub error_message: String,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -105,6 +97,7 @@ pub struct ParsedMetadata {
     pub description: Option<String>,
     pub source_url: Option<String>,
     pub source_urls: Vec<String>,
+    pub media_url: Option<String>,
     pub rating: Option<String>,
     pub title: Option<String>,
     pub post_id: Option<String>,
@@ -115,6 +108,27 @@ pub struct ParsedMetadata {
     pub page_num: Option<u32>,
     /// Total pages in the post (gallery-dl `count` field). >1 means multi-image.
     pub page_count: Option<u32>,
+    pub canonical_post_url: Option<String>,
+    pub item_key: Option<String>,
+    #[serde(default)]
+    pub raw_metadata: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Deserialize)]
+struct BridgeEvent {
+    event: String,
+    #[serde(default)]
+    file_path: Option<String>,
+    #[serde(default)]
+    metadata: Option<ParsedMetadata>,
+}
+
+#[derive(Default)]
+struct BridgeOutputStats {
+    failed_items: Vec<FailedDownloadedItem>,
+    discovered_items: usize,
+    discovered_post_ids: BTreeSet<String>,
+    skipped_archive_items: usize,
 }
 
 /// The gallery-dl subprocess runner.
@@ -162,35 +176,32 @@ impl GalleryDlRunner {
             .await
             .map_err(|e| format!("Config write error: {e}"))?;
 
-        // 3. Build command arguments
-        let mut args = vec![
-            "--config".to_string(),
-            config_path.display().to_string(),
-            "--config-ignore".to_string(),
-            "--write-metadata".to_string(),
-            "--no-input".to_string(),
-            "-d".to_string(),
-            temp_dir.display().to_string(),
-        ];
+        let bridge_request = serde_json::json!({
+            "url": opts.url,
+            "subscription_id": serde_json::Value::Null,
+            "query_id": serde_json::Value::Null,
+            "config_path": config_path.display().to_string(),
+            "gallery_dl_module_dir": self.gallery_dl_module_dir().map(|path| path.display().to_string()),
+            "post_range": opts.post_limit.map(|limit| {
+                let start = opts.range_start.max(1);
+                let end = start.saturating_add(limit).saturating_sub(1);
+                format!("{start}-{end}")
+            }),
+            "abort_threshold": opts.abort_threshold,
+            "archive_path": (!opts.archive_path.as_os_str().is_empty()).then(|| opts.archive_path.display().to_string()),
+            "archive_prefix": opts.archive_prefix,
+        });
+        let request_path = temp_dir.join("bridge-request.json");
+        tokio::fs::write(
+            &request_path,
+            serde_json::to_vec_pretty(&bridge_request)
+                .map_err(|e| format!("Bridge request serialization error: {e}"))?,
+        )
+        .await
+        .map_err(|e| format!("Bridge request write error: {e}"))?;
 
-        if let Some(limit) = opts.post_limit {
-            let start = opts.range_start.max(1);
-            let end = start.saturating_add(limit).saturating_sub(1);
-            args.push("--post-range".to_string());
-            args.push(format!("{start}-{end}"));
-        }
-
-        if let Some(threshold) = opts.abort_threshold {
-            args.push("-A".to_string());
-            args.push(threshold.to_string());
-        }
-
-        if !opts.archive_path.as_os_str().is_empty() {
-            args.push("--download-archive".to_string());
-            args.push(opts.archive_path.display().to_string());
-        }
-
-        args.push(opts.url.clone());
+        let bridge_path = self.bridge_script_path()?;
+        let python = self.python_executable();
 
         info!(
             url = %opts.url,
@@ -198,17 +209,29 @@ impl GalleryDlRunner {
             range_start = opts.range_start,
             abort_threshold = ?opts.abort_threshold,
             elapsed_ms = run_start.elapsed().as_millis(),
-            "Spawning gallery-dl"
+            "Spawning gallery-dl bridge"
         );
-        info!(binary = %self.binary_path.display(), args = ?args, "gallery-dl command");
+        info!(python = %python, bridge = %bridge_path.display(), "gallery-dl bridge command");
 
         // 4. Spawn subprocess
-        let mut cmd = tokio::process::Command::new(&self.binary_path);
-        cmd.args(&args)
+        let mut cmd = tokio::process::Command::new(&python);
+        cmd.arg(&bridge_path)
+            .arg("--request")
+            .arg(&request_path)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
+
+        if let Some(module_dir) = self.gallery_dl_module_dir() {
+            let merged = match std::env::var("PYTHONPATH") {
+                Ok(existing) if !existing.is_empty() => {
+                    format!("{}:{}", module_dir.display(), existing)
+                }
+                _ => module_dir.display().to_string(),
+            };
+            cmd.env("PYTHONPATH", merged);
+        }
 
         // On Windows: suppress console window and ensure clean process creation.
         #[cfg(target_os = "windows")]
@@ -224,93 +247,90 @@ impl GalleryDlRunner {
         let child_stdout = child.stdout.take();
         let child_stderr = child.stderr.take();
 
-        // 5. Stream stdout: each line is a downloaded file path.
-        //    Parse its sidecar and send through channel for immediate import.
+        // 5. Stream stdout: bridge emits NDJSON events.
         use tokio::io::{AsyncBufReadExt, BufReader};
         let stdout_handle = tokio::spawn(async move {
+            let mut stats = BridgeOutputStats::default();
             if let Some(out) = child_stdout {
                 let mut reader = BufReader::new(out).lines();
                 while let Ok(Some(line)) = reader.next_line().await {
-                    // On Windows, gallery-dl may emit paths with \r or
-                    // surrounding quotes — strip both.
-                    let trimmed = line.trim().trim_matches('"').trim().to_string();
+                    let trimmed = line.trim();
                     if trimmed.is_empty() {
                         continue;
                     }
-                    let path = to_long_path(&trimmed);
-                    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-                    if ext == "json" {
-                        tracing::trace!(path = %trimmed, "gallery-dl stdout: skipping json sidecar");
+                    let Ok(event) = serde_json::from_str::<BridgeEvent>(trimmed) else {
+                        tracing::warn!(line = trimmed, "gallery-dl bridge: invalid NDJSON event");
                         continue;
-                    }
-                    if !path.is_file() {
-                        tracing::warn!(path = %trimmed, "gallery-dl stdout: path is not a file, skipping");
-                        continue;
-                    }
-
-                    tracing::info!(path = %trimmed, ext, "gallery-dl stdout: downloaded file");
-                    let metadata = filesystem::parse_sidecar_for_file(&path);
-                    tracing::debug!(
-                        post_id = metadata.post_id.as_deref().unwrap_or("?"),
-                        page_num = ?metadata.page_num,
-                        page_count = ?metadata.page_count,
-                        tags = metadata.tags.len(),
-                        category = metadata.category.as_deref().unwrap_or("?"),
-                        "gallery-dl stdout: parsed sidecar metadata"
-                    );
-                    if item_tx
-                        .send(DownloadedItem {
-                            file_path: path,
-                            metadata,
-                        })
-                        .await
-                        .is_err()
-                    {
-                        tracing::warn!("gallery-dl stdout: receiver dropped, stopping");
-                        break;
+                    };
+                    match event.event.as_str() {
+                        "item_discovered" => {
+                            stats.discovered_items += 1;
+                            if let Some(metadata) = event.metadata {
+                                if let Some(post_id) = metadata.post_id {
+                                    stats.discovered_post_ids.insert(post_id);
+                                }
+                            }
+                        }
+                        "item_downloaded" => {
+                            let Some(file_path) = event.file_path else {
+                                continue;
+                            };
+                            let Some(metadata) = event.metadata else {
+                                continue;
+                            };
+                            stats.discovered_items += 1;
+                            if let Some(post_id) = metadata.post_id.clone() {
+                                stats.discovered_post_ids.insert(post_id);
+                            }
+                            if item_tx
+                                .send(DownloadedItem {
+                                    file_path: PathBuf::from(file_path),
+                                    metadata,
+                                })
+                                .await
+                                .is_err()
+                            {
+                                tracing::warn!("gallery-dl bridge: receiver dropped, stopping");
+                                break;
+                            }
+                        }
+                        "item_skipped_archive" => {
+                            stats.skipped_archive_items += 1;
+                            if let Some(metadata) = event.metadata {
+                                if let Some(post_id) = metadata.post_id {
+                                    stats.discovered_post_ids.insert(post_id);
+                                }
+                            }
+                        }
+                        "item_failed_final" => {
+                            if let Some(metadata) = event.metadata {
+                                if let Some(post_id) = metadata.post_id.clone() {
+                                    stats.discovered_post_ids.insert(post_id);
+                                }
+                                stats.failed_items.push(FailedDownloadedItem {
+                                    metadata,
+                                    error_message: "gallery-dl exhausted item retries".to_string(),
+                                });
+                            }
+                        }
+                        _ => {}
                     }
                 }
             }
+            stats
         });
-
-        let download_failed_cancel = CancellationToken::new();
-        let download_failed_signal = download_failed_cancel.clone();
 
         let stderr_handle = tokio::spawn(async move {
             let mut output = String::new();
-            let mut had_download_errors = false;
-            // Keep recent warning lines to attach as context when a [download][error] fires.
-            let mut recent_warnings: Vec<String> = Vec::new();
             if let Some(err) = child_stderr {
                 let mut reader = BufReader::new(err).lines();
                 while let Ok(Some(line)) = reader.next_line().await {
                     let trimmed = line.trim();
                     if trimmed.is_empty() { continue; }
-
-                    if trimmed.contains("[download][error]") {
-                        had_download_errors = true;
-                        let context = if recent_warnings.is_empty() {
-                            "no prior warnings".to_string()
-                        } else {
-                            recent_warnings.join(" | ")
-                        };
-                        warn!(
-                            line = trimmed,
-                            context = %context,
-                            "gallery-dl: download failed after all retries — stopping query"
-                        );
-                        recent_warnings.clear();
-                        // All retries exhausted for a file — abort the run.
-                        download_failed_signal.cancel();
-                        break;
-                    } else if trimmed.contains("[error]") {
+                    if trimmed.contains("[error]") {
                         warn!(line = trimmed, "gallery-dl error");
                     } else if trimmed.contains("[warning]") {
                         info!(line = trimmed, "gallery-dl warning");
-                        recent_warnings.push(trimmed.to_string());
-                        if recent_warnings.len() > 10 {
-                            recent_warnings.remove(0);
-                        }
                     } else {
                         info!(line = trimmed, "gallery-dl stderr");
                     }
@@ -319,7 +339,7 @@ impl GalleryDlRunner {
                     output.push('\n');
                 }
             }
-            (output, had_download_errors)
+            output
         });
 
         let child_pid = child.id();
@@ -386,47 +406,22 @@ impl GalleryDlRunner {
                     }
                 }
             }
-            _ = download_failed_cancel.cancelled() => {
-                warn!(pid = ?child_pid, "Gallery-dl download failed after all retries — killing subprocess");
-                #[cfg(not(target_os = "windows"))]
-                {
-                    let _ = child.kill().await;
-                }
-                #[cfg(target_os = "windows")]
-                {
-                    if let Some(pid) = child_pid {
-                        use std::os::windows::process::CommandExt;
-                        let _ = tokio::process::Command::new("taskkill")
-                            .args(["/F", "/T", "/PID", &pid.to_string()])
-                            .creation_flags(0x08000000)
-                            .stdout(Stdio::null())
-                            .stderr(Stdio::null())
-                            .output()
-                            .await;
-                    } else {
-                        let _ = child.kill().await;
-                    }
-                }
-                match tokio::time::timeout(
-                    std::time::Duration::from_secs(2),
-                    child.wait(),
-                ).await {
-                    Ok(Ok(s)) => s,
-                    _ => std::process::ExitStatus::default(),
-                }
-            }
             result = child.wait() => {
                 result.map_err(|e| format!("Gallery-dl process error: {e}"))?
             }
         };
 
         let exit_code = status.code().unwrap_or(-1);
-        let _ = stdout_handle.await;
-        let (stderr, had_download_errors) = stderr_handle.await.unwrap_or_default();
+        let bridge_stats = stdout_handle.await.unwrap_or_default();
+        let stderr = stderr_handle.await.unwrap_or_default();
+        let had_download_errors = !bridge_stats.failed_items.is_empty();
 
         info!(
             exit_code,
             had_download_errors,
+            discovered_items = bridge_stats.discovered_items,
+            skipped_archive_items = bridge_stats.skipped_archive_items,
+            discovered_posts = bridge_stats.discovered_post_ids.len(),
             elapsed_ms = run_start.elapsed().as_millis(),
             "gallery-dl finished"
         );
@@ -438,7 +433,55 @@ impl GalleryDlRunner {
             had_download_errors,
             stderr_output: stderr,
             temp_dir,
+            failed_items: bridge_stats.failed_items,
+            discovered_items: bridge_stats.discovered_items,
+            discovered_post_ids: bridge_stats.discovered_post_ids.into_iter().collect(),
+            skipped_archive_items: bridge_stats.skipped_archive_items,
         })
+    }
+
+    fn python_executable(&self) -> String {
+        #[cfg(target_os = "windows")]
+        {
+            "python".to_string()
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            "python3".to_string()
+        }
+    }
+
+    fn gallery_dl_module_dir(&self) -> Option<PathBuf> {
+        let parent = self.binary_path.parent()?;
+        let wheel = parent.join("wheel");
+        if wheel.join("gallery_dl").is_dir() {
+            return Some(wheel);
+        }
+        None
+    }
+
+    fn bridge_script_path(&self) -> Result<PathBuf, String> {
+        let mut roots = Vec::new();
+        if let Ok(cwd) = std::env::current_dir() {
+            roots.push(cwd);
+        }
+        if let Ok(exe) = std::env::current_exe() {
+            let mut dir = exe.parent().map(|p| p.to_path_buf());
+            while let Some(current) = dir {
+                roots.push(current.clone());
+                dir = current.parent().map(|p| p.to_path_buf());
+                if roots.len() > 8 {
+                    break;
+                }
+            }
+        }
+        for root in roots {
+            let candidate = root.join("scripts").join("gallery_dl_bridge.py");
+            if candidate.is_file() {
+                return Ok(candidate);
+            }
+        }
+        Err("Unable to locate scripts/gallery_dl_bridge.py".to_string())
     }
 
     async fn ensure_runtime_dependencies(&self) -> Result<(), String> {

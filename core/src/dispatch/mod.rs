@@ -150,8 +150,11 @@ const WRITE_COMMANDS: &[&str] = &[
     "run_subscription",
     "stop_subscription",
     "reset_subscription",
+    "reset_subscription_query",
     "rename_subscription",
     "run_subscription_query",
+    "stop_subscription_query",
+    "retry_subscription_failed_post",
     "set_credential",
     "delete_credential",
     "pixiv_oauth_start",
@@ -500,6 +503,9 @@ async fn dispatch_inner(command: &str, args: serde_json::Value) -> Result<String
         "run_subscription" => call!(typed::subscriptions::run_subscription, &state, args),
         "stop_subscription" => call!(typed::subscriptions::stop_subscription, &state, args),
         "reset_subscription" => call!(typed::subscriptions::reset_subscription, &state, args),
+        "reset_subscription_query" => {
+            call!(typed::subscriptions::reset_subscription_query, &state, args)
+        }
         "get_running_subscriptions" => call!(
             typed::subscriptions::get_running_subscriptions,
             &state,
@@ -513,6 +519,24 @@ async fn dispatch_inner(command: &str, args: serde_json::Value) -> Result<String
         "rename_subscription" => call!(typed::subscriptions::rename_subscription, &state, args),
         "run_subscription_query" => {
             call!(typed::subscriptions::run_subscription_query, &state, args)
+        }
+        "stop_subscription_query" => {
+            call!(typed::subscriptions::stop_subscription_query, &state, args)
+        }
+        "retry_subscription_failed_post" => {
+            call!(typed::subscriptions::retry_subscription_failed_post, &state, args)
+        }
+        "list_subscription_runs" => {
+            call!(typed::subscriptions::list_subscription_runs, &state, args)
+        }
+        "list_subscription_query_runs" => {
+            call!(typed::subscriptions::list_subscription_query_runs, &state, args)
+        }
+        "list_subscription_issues" => {
+            call!(typed::subscriptions::list_subscription_issues, &state, args)
+        }
+        "list_subscription_download_attempts" => {
+            call!(typed::subscriptions::list_subscription_download_attempts, &state, args)
         }
         "list_credentials" => call!(typed::subscriptions::list_credentials, &state, args),
         "list_credential_health" => {

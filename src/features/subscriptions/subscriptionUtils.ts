@@ -1,0 +1,243 @@
+import type {
+  CredentialDomain,
+  CredentialHealth,
+  FailedPostGroup,
+  SubscriptionDownloadAttemptRecord,
+  SubscriptionProgressEvent,
+  SubscriptionQueryInfo,
+  SubscriptionSiteInfo,
+} from '../../shared/types/subscriptions';
+
+export function formatRelativeTime(value: string | null | undefined): string {
+  if (!value) return 'Never';
+
+  const parsed = Date.parse(value);
+  if (Number.isNaN(parsed)) return value;
+
+  const deltaMs = parsed - Date.now();
+  const deltaMinutes = Math.round(deltaMs / 60000);
+  const formatter = new Intl.RelativeTimeFormat(undefined, { numeric: 'auto' });
+
+  if (Math.abs(deltaMinutes) < 60) return formatter.format(deltaMinutes, 'minute');
+  const deltaHours = Math.round(deltaMinutes / 60);
+  if (Math.abs(deltaHours) < 48) return formatter.format(deltaHours, 'hour');
+  const deltaDays = Math.round(deltaHours / 24);
+  if (Math.abs(deltaDays) < 30) return formatter.format(deltaDays, 'day');
+  const deltaMonths = Math.round(deltaDays / 30);
+  return formatter.format(deltaMonths, 'month');
+}
+
+export function formatDateTime(value: string | null | undefined): string {
+  if (!value) return 'None';
+  const parsed = Date.parse(value);
+  if (Number.isNaN(parsed)) return value;
+  return new Intl.DateTimeFormat(undefined, {
+    dateStyle: 'medium',
+    timeStyle: 'short',
+  }).format(new Date(parsed));
+}
+
+export function getSiteLabel(siteId: string, sites: SubscriptionSiteInfo[]): string {
+  return sites.find((site) => site.id === siteId)?.name ?? siteId;
+}
+
+export function getSubscriptionSiteSummary(
+  queries: SubscriptionQueryInfo[],
+  sites: SubscriptionSiteInfo[],
+): string {
+  const siteIds = Array.from(new Set(queries.map((query) => query.site_id)));
+  if (siteIds.length === 0) return 'No sites';
+  if (siteIds.length === 1) return getSiteLabel(siteIds[0], sites);
+  if (siteIds.length === 2) {
+    return siteIds.map((siteId) => getSiteLabel(siteId, sites)).join(' + ');
+  }
+  return `${siteIds.length} sites`;
+}
+
+export function getProgressBySubscriptionId(progress: SubscriptionProgressEvent[]): Map<string, SubscriptionProgressEvent> {
+  return new Map(progress.map((entry) => [entry.subscription_id, entry]));
+}
+
+export function describeSubscriptionState(input: {
+  paused: boolean;
+  progress?: SubscriptionProgressEvent | null;
+  failedPostCount: number;
+  openIssueCount: number;
+}): 'running' | 'paused' | 'attention' | 'idle' {
+  if (input.progress) return 'running';
+  if (input.paused) return 'paused';
+  if (input.failedPostCount > 0 || input.openIssueCount > 0) return 'attention';
+  return 'idle';
+}
+
+export function parseCookies(raw: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  const entries = raw.split(/[\n;]/).map((value) => value.trim()).filter(Boolean);
+  for (const entry of entries) {
+    const idx = entry.indexOf('=');
+    if (idx <= 0) continue;
+    const key = entry.slice(0, idx).trim();
+    const value = entry.slice(idx + 1).trim();
+    if (!key || !value) continue;
+    out[key] = value;
+  }
+  return out;
+}
+
+export function parseBooruApiCredential(raw: string): { userId: string; apiKey: string } | null {
+  const input = raw.trim();
+  if (!input) return null;
+
+  let query = input;
+  const qIndex = input.indexOf('?');
+  if (qIndex >= 0 && qIndex < input.length - 1) {
+    query = input.slice(qIndex + 1);
+  }
+  if (query.startsWith('&') || query.startsWith('?')) {
+    query = query.slice(1);
+  }
+
+  const params = new URLSearchParams(query);
+  const apiKey = (params.get('api_key') ?? params.get('api-key') ?? '').trim();
+  const userId = (params.get('user_id') ?? params.get('user-id') ?? '').trim();
+  if (!apiKey || !userId) return null;
+  return { userId, apiKey };
+}
+
+export function isPixivCategory(siteCategory: string): boolean {
+  const normalized = siteCategory.trim().toLowerCase();
+  return normalized === 'pixiv' || normalized === 'pixivuser';
+}
+
+export function isTwitterCategory(siteCategory: string): boolean {
+  const normalized = siteCategory.trim().toLowerCase();
+  return normalized === 'twitter' || normalized === 'x.com';
+}
+
+export function isGelbooruCategory(siteCategory: string): boolean {
+  return siteCategory.trim().toLowerCase() === 'gelbooru';
+}
+
+export function isRule34Category(siteCategory: string): boolean {
+  const normalized = siteCategory.trim().toLowerCase();
+  return normalized === 'rule34' || normalized === 'rule34xxx' || normalized === 'rule34.xxx';
+}
+
+export function isFuraffinityCategory(siteCategory: string): boolean {
+  return siteCategory.trim().toLowerCase() === 'furaffinity';
+}
+
+export function isBooruApiKeyCategory(siteCategory: string): boolean {
+  return isGelbooruCategory(siteCategory) || isRule34Category(siteCategory);
+}
+
+function canonicalSiteCategory(siteId: string): string {
+  const normalized = siteId.trim().toLowerCase();
+  return normalized === 'pixivuser' ? 'pixiv' : normalized;
+}
+
+export function getQueryModeLabel(query: SubscriptionQueryInfo): string {
+  return query.completed_initial_run ? 'front scan' : 'catch-up';
+}
+
+export function getQueryResumeSummary(query: SubscriptionQueryInfo): string {
+  if (query.completed_initial_run) return 'Front scan from newest items';
+  if (query.resume_cursor) return `Catch-up cursor ${query.resume_cursor}`;
+  return 'Catch-up start';
+}
+
+export function getQueryFailedCount(queryId: string, failedPosts: FailedPostGroup[]): number {
+  return failedPosts
+    .filter((group) => group.queryId === queryId)
+    .reduce((count, group) => count + group.failedMembers, 0);
+}
+
+export function getQueryAuthState(input: {
+  query: SubscriptionQueryInfo;
+  sites: SubscriptionSiteInfo[];
+  credentials: CredentialDomain[];
+  credentialHealth: CredentialHealth[];
+}): {
+  tone: 'running' | 'paused' | 'attention' | 'idle';
+  label: string;
+  blocking: boolean;
+} {
+  const siteId = canonicalSiteCategory(input.query.site_id);
+  const site = input.sites.find((entry) => canonicalSiteCategory(entry.id) === siteId) ?? null;
+  if (!site || !site.auth_supported) {
+    return { tone: 'idle', label: 'No auth', blocking: false };
+  }
+
+  const credential = input.credentials.find((entry) => canonicalSiteCategory(entry.site_category) === siteId) ?? null;
+  const health = input.credentialHealth.find((entry) => canonicalSiteCategory(entry.site_category) === siteId) ?? null;
+  const healthStatus = (health?.health_status ?? '').toLowerCase();
+  const missing = !credential;
+  const broken = healthStatus === 'unauthorized' || healthStatus === 'expired' || healthStatus === 'error' || healthStatus === 'missing';
+  const blocking = site.auth_required_for_full_access && (missing || broken);
+
+  if (blocking) {
+    return { tone: 'attention', label: missing ? 'Auth needed' : 'Auth broken', blocking: true };
+  }
+  if (credential && (healthStatus === 'valid' || healthStatus === 'healthy')) {
+    return { tone: 'running', label: 'Auth ok', blocking: false };
+  }
+  if (credential) {
+    return { tone: 'paused', label: 'Auth saved', blocking: false };
+  }
+  if (site.auth_required_for_full_access) {
+    return { tone: 'attention', label: 'Auth recommended', blocking: false };
+  }
+  return { tone: 'idle', label: 'Optional auth', blocking: false };
+}
+
+export function groupFailedPostAttempts(
+  attempts: SubscriptionDownloadAttemptRecord[],
+  queries: SubscriptionQueryInfo[],
+): FailedPostGroup[] {
+  const queryNameById = new Map(queries.map((query) => [query.id, query.display_name?.trim() || query.query_text]));
+  const grouped = new Map<string, FailedPostGroup>();
+
+  for (const attempt of attempts) {
+    if (!attempt.post_id || attempt.resolved_at) continue;
+    if (attempt.status === 'resolved' || attempt.status === 'succeeded') continue;
+
+    const siteId = attempt.site_category ?? 'unknown';
+    const queryId = attempt.query_id == null ? null : String(attempt.query_id);
+    const key = `${queryId ?? 'none'}:${siteId}:${attempt.post_id}`;
+    const existing = grouped.get(key);
+    const queryLabel = queryId ? queryNameById.get(queryId) ?? `Query ${queryId}` : 'Unknown query';
+
+    if (!existing) {
+      grouped.set(key, {
+        key,
+        queryId,
+        queryLabel,
+        siteId,
+        postId: attempt.post_id,
+        canonicalPostUrl: attempt.canonical_post_url,
+        mediaUrl: attempt.media_url,
+        failedMembers: 1,
+        retryCount: attempt.retry_count,
+        status: attempt.status,
+        lastError: attempt.last_error,
+        nextRetryAt: attempt.next_retry_at,
+        canRetry: Boolean(queryId && attempt.post_id),
+      });
+      continue;
+    }
+
+    existing.failedMembers += 1;
+    if (attempt.retry_count > existing.retryCount) existing.retryCount = attempt.retry_count;
+    if (!existing.lastError && attempt.last_error) existing.lastError = attempt.last_error;
+    if (!existing.canonicalPostUrl && attempt.canonical_post_url) existing.canonicalPostUrl = attempt.canonical_post_url;
+    if (!existing.mediaUrl && attempt.media_url) existing.mediaUrl = attempt.media_url;
+    if (!existing.nextRetryAt && attempt.next_retry_at) existing.nextRetryAt = attempt.next_retry_at;
+  }
+
+  return Array.from(grouped.values()).sort((left, right) => {
+    const leftTime = left.nextRetryAt ?? '';
+    const rightTime = right.nextRetryAt ?? '';
+    if (leftTime !== rightTime) return rightTime.localeCompare(leftTime);
+    return left.postId.localeCompare(right.postId);
+  });
+}

@@ -31,6 +31,11 @@ const clipboard = {
   copyImage: (filePath) => ipcRenderer.invoke('picto:clipboard:copyImage', { filePath }),
 };
 
+const shellOps = {
+  showInFolder: (path) => ipcRenderer.invoke('picto:shell:showInFolder', { path }),
+  openPath: (path) => ipcRenderer.invoke('picto:shell:openPath', { path }),
+};
+
 const search = {
   reverseImage: (filePath, engine) => ipcRenderer.invoke('picto:reverseImageSearch', { filePath, engine }),
 };
@@ -113,6 +118,7 @@ contextBridge.exposeInMainWorld('picto', {
   events,
   dialog,
   clipboard,
+  shell: shellOps,
   monitor,
   webview,
   search,

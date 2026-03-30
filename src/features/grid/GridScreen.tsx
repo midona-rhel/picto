@@ -6,7 +6,7 @@ import { useEffect, useRef, useState, useCallback } from 'react';
 import { useAtomValue, useSetAtom } from 'jotai';
 import { IconPhoto, IconUpload, IconFolderPlus } from '@tabler/icons-react';
 import * as entityMutations from '../../controllers/entityMutations';
-import { activeNodeIdAtom } from '../../state/navigation';
+import { activeNodeIdAtom, subscriptionsWorkspaceTabAtom } from '../../state/navigation';
 import {
   gridItemsAtom,
   gridLoadingAtom,
@@ -51,8 +51,11 @@ import { buildTileContextMenu, buildEmptyContextMenu } from './gridContextMenu';
 import type { BaseScope } from '../../shared/types/canonical';
 import { saveScrollPosition, getScrollPosition } from '../../state/navigationHistory';
 import { promptForFolderId } from '../../shared/lib/selectFolderPrompt';
+import { resolveFilePath, shellOpenPath, shellShowInFolder, clipboardWriteText, clipboardCopyFile } from '../../platform/api';
 import { viewerSessionAtom, quickLookSessionAtom, createViewerSession, navigateViewerSession } from '../../state/viewer';
 import { MediaView } from '../viewer/MediaView';
+import { SubscriptionsScreen } from '../subscriptions/SubscriptionsScreen';
+import { AuthWorkspace } from '../auth/AuthWorkspace';
 import { QuickLook } from '../viewer/QuickLook';
 import styles from './GridScreen.module.css';
 
@@ -64,7 +67,7 @@ const GRID_SYSTEM_SCOPES: Record<string, string> = {
   'system:untagged': 'untagged',
 };
 
-const NON_GRID_NODES = new Set(['system:duplicates', 'system:recent_viewed']);
+const NON_GRID_NODES = new Set(['system:duplicates', 'system:recent_viewed', 'system:subscriptions']);
 const SCOPE_TRANSITION_MS = 250;
 const STATUS_ACTIVE = 1;
 const STATUS_TRASH = 2;
@@ -86,6 +89,7 @@ function nodeIdToScope(nodeId: string): BaseScope | null {
 
 export function GridScreen() {
   const activeNodeId = useAtomValue(activeNodeIdAtom);
+  const subscriptionsWorkspaceTab = useAtomValue(subscriptionsWorkspaceTabAtom);
   const items = useAtomValue(gridItemsAtom);
   const loading = useAtomValue(gridLoadingAtom);
   const error = useAtomValue(gridErrorAtom);
@@ -197,35 +201,35 @@ export function GridScreen() {
       fadeInFrameRef.current = null;
     }
 
+    if (!nextScope) {
+      // Navigating to non-grid (subscriptions, etc.) — no fade, just deactivate immediately
+      if (previousScope) saveScrollPosition(previousNodeIdRef.current, lastScrollTopRef.current);
+      gridController.deactivate();
+      previousNodeIdRef.current = '';
+      clearTransition();
+      return;
+    }
+
     if (previousScope) {
-      // Save scroll position for the scope we're leaving
+      // Grid-to-grid: fade out old → wait → load new → fade in
       saveScrollPosition(previousNodeIdRef.current, lastScrollTopRef.current);
       setTransitionPhase('fading_out');
       transitionTimerRef.current = window.setTimeout(() => {
         transitionTimerRef.current = null;
         const committedNodeId = pendingNodeIdRef.current;
-        const committedScope = nodeIdToScope(committedNodeId);
-        // Look up saved scroll position for the incoming scope
         restoredScrollTopRef.current = getScrollPosition(committedNodeId);
         setTransitionPhase('waiting');
-        if (committedScope) {
-          void gridController.navigateTo(committedScope);
-        } else {
-          gridController.deactivate();
-        }
+        void gridController.navigateTo(nodeIdToScope(committedNodeId)!);
         previousNodeIdRef.current = committedNodeId;
       }, SCOPE_TRANSITION_MS);
       return;
     }
 
-    if (nextScope) {
-      void gridController.navigateTo(nextScope);
-      previousNodeIdRef.current = activeNodeId;
-    } else {
-      gridController.deactivate();
-      previousNodeIdRef.current = activeNodeId;
-      clearTransition();
-    }
+    // Non-grid to grid: no fade-out, start in waiting for clean fade-in
+    setTransitionPhase('waiting');
+    restoredScrollTopRef.current = getScrollPosition(activeNodeId);
+    void gridController.navigateTo(nextScope);
+    previousNodeIdRef.current = activeNodeId;
   }, [activeNodeId, clearTransition]);
 
   useEffect(() => {
@@ -385,6 +389,12 @@ export function GridScreen() {
     await entityMutations.setTargetStatus(selectionTarget, status);
   }, [selectionTarget]);
 
+  const permanentlyDeleteSelection = useCallback(async () => {
+    if (!selectionTarget) return;
+    await entityMutations.permanentlyDeleteTarget(selectionTarget);
+    clearSelection();
+  }, [selectionTarget, clearSelection]);
+
   const incomingHidden = transitionPhase === 'waiting';
   const incomingFadingOut = transitionPhase === 'fading_out';
   const incomingFadingIn = transitionPhase === 'fading_in';
@@ -392,6 +402,9 @@ export function GridScreen() {
 
   const renderIncomingSurface = () => {
     if (!isGridScope) {
+      if (activeNodeId === 'system:subscriptions') {
+        return subscriptionsWorkspaceTab === 'auth' ? <AuthWorkspace /> : <SubscriptionsScreen />;
+      }
       return <div className={styles.nonGridPlaceholder}>This view is not available yet</div>;
     }
 
@@ -544,12 +557,16 @@ export function GridScreen() {
             loadedCount: items.length,
             onSelectAll: () => selectAllResults(),
             onDeselectAll: () => clearSelection(),
+            onOpen: singleItem ? () => setViewerSession(createViewerSession(items, singleItem.entity_hash)) : undefined,
+            onOpenDefault: (hash) => { void resolveFilePath(hash).then((p) => { if (p) shellOpenPath(p); }); },
+            onRevealInFolder: (hash) => { void resolveFilePath(hash).then((p) => { if (p) shellShowInFolder(p); }); },
+            onCopyFilePath: (hash) => { void resolveFilePath(hash).then((p) => { if (p) clipboardWriteText(p); }); },
+            onCopyFile: (hash) => { void resolveFilePath(hash).then((p) => { if (p) clipboardCopyFile(p); }); },
             onAddToFolder: () => { void addSelectionToFolder(); },
             onRemoveFromFolder: () => { void removeSelectionFromCurrentFolder(); },
-            onAcceptInbox: () => { void setSelectionStatus(STATUS_ACTIVE); },
-            onRejectInbox: () => { void setSelectionStatus(STATUS_TRASH); },
             onMoveToTrash: () => { void setSelectionStatus(STATUS_TRASH); },
             onRestore: () => { void setSelectionStatus(STATUS_ACTIVE); },
+            onPermanentDelete: () => { void permanentlyDeleteSelection(); },
           });
           contextMenu.openAt(pos, entries);
         }}

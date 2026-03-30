@@ -7,6 +7,7 @@ import { useAtomValue, useSetAtom } from 'jotai';
 import {
   IconBorderAll, IconLayoutBoard,
   IconSortAscending, IconSortDescending,
+  IconAdjustments,
 } from '@tabler/icons-react';
 import {
   gridViewModeAtom, gridSortFieldAtom, gridSortDirectionAtom,
@@ -54,28 +55,9 @@ function ViewPanel() {
   const setViewMode = useSetAtom(gridViewModeAtom);
   const sortField = useAtomValue(gridSortFieldAtom);
   const sortDir = useAtomValue(gridSortDirectionAtom);
-  const showName = useAtomValue(gridShowNameAtom);
-  const setShowName = useSetAtom(gridShowNameAtom);
-  const showRes = useAtomValue(gridShowResolutionAtom);
-  const setShowRes = useSetAtom(gridShowResolutionAtom);
-  const showExt = useAtomValue(gridShowExtensionAtom);
-  const setShowExt = useSetAtom(gridShowExtensionAtom);
-  const showExtLabel = useAtomValue(gridShowExtensionLabelAtom);
-  const setShowExtLabel = useSetAtom(gridShowExtensionLabelAtom);
-  const fitThumbs = useAtomValue(gridFitThumbnailsAtom);
-  const setFitThumbs = useSetAtom(gridFitThumbnailsAtom);
-  const sidebarCollapsed = useAtomValue(sidebarCollapsedAtom);
-  const setSidebarCollapsed = useSetAtom(sidebarCollapsedAtom);
   const setSoftAction = useSetAtom(gridSoftTransitionActionAtom);
 
   const setSort = (f: SortField, d: SortDirection) => { void gridController.setSort(f, d); };
-
-  const toggle = (label: string, on: boolean, flip: () => void, disabled = false) => (
-    <div className={`${s.toggleRow} ${disabled ? s.toggleRowDisabled : ''}`} onClick={disabled ? undefined : flip}>
-      <div className={s.toggleLabel}>{label}</div>
-      <div className={s.toggleValue}><ToggleSwitch on={on} onChange={disabled ? () => {} : flip} /></div>
-    </div>
-  );
 
   return (
     <div className={s.panel}>
@@ -108,15 +90,41 @@ function ViewPanel() {
           </div>
         </div>
       </div>
+    </div>
+  );
+}
 
-      <div className={s.sep} />
+/** Display toggle panel — shown inside the "Display" submenu. */
+function DisplayPanel() {
+  const viewMode = useAtomValue(gridViewModeAtom);
+  const showName = useAtomValue(gridShowNameAtom);
+  const setShowName = useSetAtom(gridShowNameAtom);
+  const showRes = useAtomValue(gridShowResolutionAtom);
+  const setShowRes = useSetAtom(gridShowResolutionAtom);
+  const showExt = useAtomValue(gridShowExtensionAtom);
+  const setShowExt = useSetAtom(gridShowExtensionAtom);
+  const showExtLabel = useAtomValue(gridShowExtensionLabelAtom);
+  const setShowExtLabel = useSetAtom(gridShowExtensionLabelAtom);
+  const fitThumbs = useAtomValue(gridFitThumbnailsAtom);
+  const setFitThumbs = useSetAtom(gridFitThumbnailsAtom);
+  const sidebarCollapsed = useAtomValue(sidebarCollapsedAtom);
+  const setSidebarCollapsed = useSetAtom(sidebarCollapsedAtom);
 
+  const toggle = (label: string, on: boolean, flip: () => void, disabled = false) => (
+    <div className={`${s.toggleRow} ${disabled ? s.toggleRowDisabled : ''}`} onClick={disabled ? undefined : flip}>
+      <div className={s.toggleLabel}>{label}</div>
+      <div className={s.toggleValue}><ToggleSwitch on={on} onChange={disabled ? () => {} : flip} /></div>
+    </div>
+  );
+
+  return (
+    <div className={s.panel}>
       {toggle('Show Name', showName, () => setShowName(!showName))}
-      {toggle('Show resolution', showRes, () => setShowRes(!showRes))}
-      {toggle('Show extension', showExt, () => setShowExt(!showExt))}
-      {toggle('Show label', showExtLabel, () => setShowExtLabel(!showExtLabel))}
-      {toggle('Fit thumbnails', fitThumbs, () => setFitThumbs(!fitThumbs), viewMode !== 'grid')}
-      {toggle('Show subfolders', false, () => { /* TODO */ })}
+      {toggle('Show Resolution', showRes, () => setShowRes(!showRes))}
+      {toggle('Show Extension', showExt, () => setShowExt(!showExt))}
+      {toggle('Show Label', showExtLabel, () => setShowExtLabel(!showExtLabel))}
+      {toggle('Fit Thumbnails', fitThumbs, () => setFitThumbs(!fitThumbs), viewMode !== 'grid')}
+      {toggle('Show Subfolders', false, () => { /* TODO */ })}
 
       <div className={s.sep} />
 
@@ -126,6 +134,22 @@ function ViewPanel() {
   );
 }
 
+/** Build entries for the toolbar view menu button (full panel: layout + sort + display toggles). */
 export function buildViewMenuEntries(): MenuEntry[] {
-  return [{ custom: true, key: 'view-panel', render: () => <ViewPanel /> }];
+  return [
+    { custom: true, key: 'view-layout-sort', render: () => <ViewPanel /> },
+    { separator: true },
+    { custom: true, key: 'display-toggles', render: () => <DisplayPanel /> },
+  ];
+}
+
+/** Build entries for context menu: layout/sort inline, separator, display as submenu. */
+export function buildContextMenuViewEntries(): MenuEntry[] {
+  return [
+    { custom: true, key: 'view-layout-sort', render: () => <ViewPanel /> },
+    { separator: true },
+    { submenu: true, label: 'Display', icon: <IconAdjustments size={15} style={{ transform: 'rotate(90deg)' }} />, children: [
+      { custom: true, key: 'display-toggles', render: () => <DisplayPanel /> },
+    ] },
+  ];
 }

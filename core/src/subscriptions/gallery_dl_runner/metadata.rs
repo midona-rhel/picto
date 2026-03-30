@@ -195,6 +195,7 @@ pub fn parse_metadata(json: &serde_json::Value) -> ParsedMetadata {
         description,
         source_url,
         source_urls,
+        media_url: None,
         rating,
         title,
         post_id,
@@ -202,6 +203,9 @@ pub fn parse_metadata(json: &serde_json::Value) -> ParsedMetadata {
         category,
         page_num,
         page_count,
+        canonical_post_url: None,
+        item_key: None,
+        raw_metadata: Some(json.clone()),
     }
 }
 

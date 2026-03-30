@@ -160,6 +160,12 @@
   margin: 0;
 }
 
+.chevron {
+  margin-left: auto;
+  opacity: 0.4;
+  flex-shrink: 0;
+}
+
 .empty {
   text-align: center;
   color: var(--color-text-tertiary);

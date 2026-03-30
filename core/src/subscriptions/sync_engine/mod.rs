@@ -15,14 +15,16 @@ mod progress;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use chrono::Utc;
+use chrono::{Duration, Utc};
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
 use crate::blob_store::BlobStore;
+use crate::rate_limiter::RateLimiter;
 use crate::settings::store::AppSettings;
 use crate::sqlite::SqliteDatabase;
 use crate::subscriptions::archive::subscription_query_archive_prefix;
+use crate::subscriptions::db::OwnedSubscriptionDownloadAttemptUpsert;
 use crate::subscriptions::gallery_dl_runner::{self, FailureKind, GalleryDlRunner, RunOptions};
 use crate::subscriptions::import_policy::{
     collection_group_parts, preferred_import_name, validate_metadata_for_site,
@@ -52,6 +54,7 @@ pub struct SyncProgress {
 pub struct SubscriptionSyncEngine<'a> {
     db: &'a SqliteDatabase,
     blob_store: &'a BlobStore,
+    rate_limiter: Option<RateLimiter>,
     runner: GalleryDlRunner,
     settings: AppSettings,
     subscription_name: String,
@@ -76,11 +79,80 @@ pub(super) struct PendingCollection {
     pub category: String,
     pub post_id: String,
     pub preferred_name: String,
+    pub expected_count: Option<u32>,
     pub members: Vec<PendingMember>,
     pub queue_id: Option<i64>,
 }
 
 impl<'a> SubscriptionSyncEngine<'a> {
+    async fn finalize_current_post_progress(
+        &self,
+        query_id: i64,
+        progress: &mut SyncProgress,
+        posts_processed_this_run: &mut usize,
+        completed_initial_run: bool,
+        resume_strategy: &Option<String>,
+        range_start: u32,
+        all_post_ids: &std::collections::HashSet<String>,
+    ) {
+        if progress.current_post_id.is_none() {
+            return;
+        }
+
+        progress.posts_processed += 1;
+        *posts_processed_this_run += 1;
+
+        let cursor = compute_incremental_cursor(
+            resume_strategy.as_deref(),
+            range_start,
+            *posts_processed_this_run,
+            all_post_ids,
+        );
+        progress.resume_cursor = cursor.clone();
+        if !completed_initial_run {
+            let _ = self
+                .db
+                .set_query_resume_state(query_id, cursor, resume_strategy.clone())
+                .await;
+        }
+        let _ = self
+            .db
+            .update_query_progress(
+                query_id,
+                &Utc::now().to_rfc3339(),
+                progress.files_downloaded as i64,
+                progress.posts_processed as i64,
+            )
+            .await;
+
+        progress.current_post_id = None;
+        progress.current_post_items = 0;
+    }
+
+    async fn flush_pending_collection(
+        &mut self,
+        pending_key: &str,
+        pending_collections: &mut HashMap<String, PendingCollection>,
+        subscription_id: i64,
+        sub_id_str: &str,
+        progress: &mut SyncProgress,
+        changed_collection_ids: &mut Vec<i64>,
+        failed_members: &[gallery_dl_runner::ParsedMetadata],
+    ) {
+        let Some(pc) = pending_collections.remove(pending_key) else {
+            return;
+        };
+        self.materialize_collection(
+            pc,
+            subscription_id,
+            sub_id_str,
+            progress,
+            changed_collection_ids,
+            failed_members,
+        )
+        .await;
+    }
+
     pub fn new(
         db: &'a SqliteDatabase,
         blob_store: &'a BlobStore,
@@ -92,6 +164,7 @@ impl<'a> SubscriptionSyncEngine<'a> {
         Ok(Self {
             db,
             blob_store,
+            rate_limiter: None,
             runner,
             settings: settings.clone(),
             subscription_name: String::new(),
@@ -122,6 +195,11 @@ impl<'a> SubscriptionSyncEngine<'a> {
         self
     }
 
+    pub fn with_rate_limiter(mut self, rate_limiter: RateLimiter) -> Self {
+        self.rate_limiter = Some(rate_limiter);
+        self
+    }
+
     pub fn with_auto_merge(
         mut self,
         enabled: bool,
@@ -137,6 +215,7 @@ impl<'a> SubscriptionSyncEngine<'a> {
     /// Sync a single subscription query via gallery-dl.
     pub async fn sync_query(
         &mut self,
+        subscription_run_id: Option<i64>,
         subscription_id: i64,
         query_id: i64,
         query_text: &str,
@@ -220,6 +299,13 @@ impl<'a> SubscriptionSyncEngine<'a> {
             .load_run_credential(site_id, &url, &sub_id_str, &progress)
             .await;
         let has_credential = credential.is_some();
+        let mut _domain_run_guard = None;
+        if let Some(rate_limiter) = &self.rate_limiter {
+            if let Some(domain) = gallery_dl_runner::extract_domain(&url) {
+                _domain_run_guard = Some(rate_limiter.acquire_domain_run(&domain).await);
+                rate_limiter.wait_for_slot(&domain).await;
+            }
+        }
 
         info!(
             elapsed_ms = sync_start.elapsed().as_millis(),
@@ -251,6 +337,11 @@ impl<'a> SubscriptionSyncEngine<'a> {
             elapsed_ms = sync_start.elapsed().as_millis(),
             "sync_query: pre-spawn ready"
         );
+        let query_run_id = self
+            .db
+            .create_subscription_query_run(subscription_run_id, subscription_id, query_id)
+            .await
+            .ok();
 
         self.set_phase("starting");
         self.emit_progress(
@@ -306,9 +397,11 @@ impl<'a> SubscriptionSyncEngine<'a> {
         };
 
         let mut pending_collections: HashMap<String, PendingCollection> = HashMap::new();
+        let mut current_pending_collection_key: Option<String> = None;
         let mut changed_collection_ids: Vec<i64> = Vec::new();
         let mut all_post_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
         let mut total_items: usize = 0;
+        let mut posts_processed_this_run: usize = 0;
 
         info!(query_id, "sync_query: waiting for gallery-dl items...");
 
@@ -336,6 +429,14 @@ impl<'a> SubscriptionSyncEngine<'a> {
             if let Err(e) = validate_metadata_for_site(site_id, &item.metadata) {
                 info!(query_id, path = %file_path_display, error = %e, "sync_query: metadata validation failed, skipping");
                 progress.metadata_invalid += 1;
+                self.record_issue(
+                    subscription_id,
+                    Some(query_id),
+                    "malformed_metadata",
+                    "gallery-dl item metadata failed validation",
+                    Some(&e),
+                )
+                .await;
                 continue;
             }
             progress.metadata_validated += 1;
@@ -359,44 +460,43 @@ impl<'a> SubscriptionSyncEngine<'a> {
             );
 
             if is_collection_member {
-                // Don't import yet — just stash the file for later.
-                // Files are only imported once the full collection is ready.
                 let (category, post_id, preferred_name) = collection_parts.unwrap();
                 let key = format!("{category}:{post_id}");
 
-                // Track current post for progress display
+                if current_pending_collection_key
+                    .as_deref()
+                    .is_some_and(|current| current != key)
+                {
+                    if let Some(previous_key) = current_pending_collection_key.take() {
+                        self.flush_pending_collection(
+                            &previous_key,
+                            &mut pending_collections,
+                            subscription_id,
+                            &sub_id_str,
+                            &mut progress,
+                            &mut changed_collection_ids,
+                            &[],
+                        )
+                        .await;
+                    }
+                    self.finalize_current_post_progress(
+                        query_id,
+                        &mut progress,
+                        &mut posts_processed_this_run,
+                        completed_initial_run,
+                        &resume_strategy,
+                        range_start,
+                        &all_post_ids,
+                    )
+                    .await;
+                }
+
                 let is_new_post = progress.current_post_id.as_deref() != Some(&post_id);
                 if is_new_post {
-                    if progress.current_post_id.is_some() {
-                        progress.posts_processed += 1;
-
-                        // Persist cursor + file count after each completed post
-                        let cursor = compute_incremental_cursor(
-                            resume_strategy.as_deref(),
-                            range_start,
-                            progress.posts_processed,
-                            &all_post_ids,
-                        );
-                        progress.resume_cursor = cursor.clone();
-                        if !completed_initial_run {
-                            let _ = self
-                                .db
-                                .set_query_resume_state(query_id, cursor, resume_strategy.clone())
-                                .await;
-                        }
-                        let _ = self
-                            .db
-                            .update_query_progress(
-                                query_id,
-                                &Utc::now().to_rfc3339(),
-                                progress.files_downloaded as i64,
-                                progress.posts_processed as i64,
-                            )
-                            .await;
-                    }
                     progress.current_post_id = Some(post_id.clone());
                     progress.current_post_items = 0;
                 }
+                current_pending_collection_key = Some(key.clone());
                 progress.current_post_items += 1;
                 progress.files_downloaded += 1;
 
@@ -417,25 +517,6 @@ impl<'a> SubscriptionSyncEngine<'a> {
                 let page_count = item.metadata.page_count.unwrap_or(0);
                 let page_num = item.metadata.page_num.unwrap_or(u32::MAX);
 
-                // gallery-dl processes posts sequentially — a new post_id means
-                // the previous post is complete. Materialize it now.
-                let finished: Vec<_> = pending_collections
-                    .keys()
-                    .filter(|k| *k != &key)
-                    .cloned()
-                    .collect();
-                for k in finished {
-                    let pc = pending_collections.remove(&k).unwrap();
-                    self.materialize_collection(
-                        pc,
-                        subscription_id,
-                        &sub_id_str,
-                        &mut progress,
-                        &mut changed_collection_ids,
-                    )
-                    .await;
-                }
-
                 let pending =
                     pending_collections
                         .entry(key.clone())
@@ -443,9 +524,17 @@ impl<'a> SubscriptionSyncEngine<'a> {
                             category,
                             post_id,
                             preferred_name,
+                            expected_count: None,
                             members: Vec::new(),
                             queue_id: None,
                         });
+                pending.expected_count = Some(
+                    pending
+                        .expected_count
+                        .unwrap_or(0)
+                        .max(page_count),
+                )
+                .filter(|count| *count > 0);
 
                 // Persist to download queue for crash recovery
                 if pending.queue_id.is_none() {
@@ -478,17 +567,32 @@ impl<'a> SubscriptionSyncEngine<'a> {
                     page_num,
                 });
             } else {
-                // A non-collection item means any pending collection is complete
-                for (_, pc) in pending_collections.drain() {
-                    self.materialize_collection(
-                        pc,
+                if let Some(previous_key) = current_pending_collection_key.take() {
+                    self.flush_pending_collection(
+                        &previous_key,
+                        &mut pending_collections,
                         subscription_id,
                         &sub_id_str,
                         &mut progress,
                         &mut changed_collection_ids,
+                        &[],
+                    )
+                    .await;
+                    self.finalize_current_post_progress(
+                        query_id,
+                        &mut progress,
+                        &mut posts_processed_this_run,
+                        completed_initial_run,
+                        &resume_strategy,
+                        range_start,
+                        &all_post_ids,
                     )
                     .await;
                 }
+
+                progress.current_post_id =
+                    Some(item.metadata.post_id.clone().unwrap_or_else(|| "unknown".to_string()));
+                progress.current_post_items = 1;
 
                 // Single image (or multi-image with auto_collections off): import immediately
                 self.set_phase("downloading");
@@ -521,14 +625,29 @@ impl<'a> SubscriptionSyncEngine<'a> {
                     &item.metadata
                 };
 
-                // Track as a processed post
-                progress.posts_processed += 1;
-
                 match self
                     .import_item(&item.file_path, metadata_ref, subscription_id, &url, false)
                     .await
                 {
                     Ok(outcome) => {
+                        if let Some(item_key) = metadata_item_key(metadata_ref) {
+                            let _ = self
+                                .db
+                                .resolve_subscription_download_attempt(
+                                    subscription_id,
+                                    Some(query_id),
+                                    &item_key,
+                                )
+                                .await;
+                        }
+                        self.persist_post_member_state(
+                            subscription_id,
+                            site_id,
+                            metadata_ref,
+                            Some(outcome.entity_hash.as_str()),
+                            "imported",
+                        )
+                        .await;
                         if outcome.imported_new {
                             progress.files_downloaded += 1;
                             info!(
@@ -558,32 +677,27 @@ impl<'a> SubscriptionSyncEngine<'a> {
                         progress
                             .errors
                             .push(format!("Import error for post {post_id_display}: {e}"));
+                        self.record_issue(
+                            subscription_id,
+                            Some(query_id),
+                            "import_failure",
+                            &format!("Import failed for post {post_id_display}"),
+                            Some(&e),
+                        )
+                        .await;
                     }
                 }
 
-                // Persist cursor + file count after each single-image post
-                let cursor = compute_incremental_cursor(
-                    resume_strategy.as_deref(),
+                self.finalize_current_post_progress(
+                    query_id,
+                    &mut progress,
+                    &mut posts_processed_this_run,
+                    completed_initial_run,
+                    &resume_strategy,
                     range_start,
-                    progress.posts_processed,
                     &all_post_ids,
-                );
-                progress.resume_cursor = cursor.clone();
-                if !completed_initial_run {
-                    let _ = self
-                        .db
-                        .set_query_resume_state(query_id, cursor, resume_strategy.clone())
-                        .await;
-                }
-                let _ = self
-                    .db
-                    .update_query_progress(
-                        query_id,
-                        &Utc::now().to_rfc3339(),
-                        progress.files_downloaded as i64,
-                        progress.posts_processed as i64,
-                    )
-                    .await;
+                )
+                .await;
             }
         }
 
@@ -596,11 +710,35 @@ impl<'a> SubscriptionSyncEngine<'a> {
                 progress.failure_kind = Some("unknown".to_string());
                 self.update_credential_health(site_id, "error", Some(&e))
                     .await;
+                let _ = self
+                    .db
+                    .set_query_terminal_state(
+                        query_id,
+                        None,
+                        Some(Utc::now().to_rfc3339()),
+                        progress.failure_kind.clone(),
+                        progress.errors.last().cloned(),
+                    )
+                    .await;
                 // Don't materialize incomplete collections on runner failure
                 let _ = self
                     .db
                     .mark_all_pending_stale_for_subscription(subscription_id)
                     .await;
+                if let Some(query_run_id) = query_run_id {
+                    let _ = self
+                        .db
+                        .finish_subscription_query_run(
+                            query_run_id,
+                            "failed",
+                            progress.failure_kind.clone(),
+                            progress.errors.last().cloned(),
+                            progress.posts_processed as i64,
+                            progress.files_downloaded as i64,
+                            progress.files_skipped as i64,
+                        )
+                        .await;
+                }
                 return progress;
             }
             Err(e) => {
@@ -610,8 +748,32 @@ impl<'a> SubscriptionSyncEngine<'a> {
                 progress.failure_kind = Some("unknown".to_string());
                 let _ = self
                     .db
+                    .set_query_terminal_state(
+                        query_id,
+                        None,
+                        Some(Utc::now().to_rfc3339()),
+                        progress.failure_kind.clone(),
+                        progress.errors.last().cloned(),
+                    )
+                    .await;
+                let _ = self
+                    .db
                     .mark_all_pending_stale_for_subscription(subscription_id)
                     .await;
+                if let Some(query_run_id) = query_run_id {
+                    let _ = self
+                        .db
+                        .finish_subscription_query_run(
+                            query_run_id,
+                            "failed",
+                            progress.failure_kind.clone(),
+                            progress.errors.last().cloned(),
+                            progress.posts_processed as i64,
+                            progress.files_downloaded as i64,
+                            progress.files_skipped as i64,
+                        )
+                        .await;
+                }
                 return progress;
             }
         };
@@ -619,15 +781,38 @@ impl<'a> SubscriptionSyncEngine<'a> {
         if cancel.is_cancelled() {
             progress.cancelled = true;
         }
-        // If any file downloads failed after retries, stop the run and don't
-        // advance the cursor — we don't want to skip files permanently.
-        if run_summary.had_download_errors && !progress.cancelled {
-            warn!(
-                "gallery-dl had download errors — stopping run to avoid skipping files"
-            );
-            progress.cancelled = true;
+        let mut failed_post_members: HashMap<String, Vec<gallery_dl_runner::ParsedMetadata>> =
+            HashMap::new();
+        if run_summary.had_download_errors {
             progress.failure_kind = Some("download_error".to_string());
-            progress.errors.push("Download failed for one or more files — run stopped to avoid skipping content".to_string());
+            progress.errors.push(
+                "One or more subscription downloads failed after retries".to_string(),
+            );
+            for failed in &run_summary.failed_items {
+                self.persist_failed_download_attempt(
+                    subscription_id,
+                    query_id,
+                    query_run_id,
+                    failed,
+                )
+                .await;
+                if let Some((category, post_id, _)) = collection_group_parts(site_id, &failed.metadata)
+                {
+                    let key = format!("{category}:{post_id}");
+                    failed_post_members
+                        .entry(key)
+                        .or_default()
+                        .push(failed.metadata.clone());
+                }
+            }
+            self.record_issue(
+                subscription_id,
+                Some(query_id),
+                "download_failure",
+                "One or more subscription items failed after gallery-dl retries",
+                run_summary.failed_items.first().map(|item| item.error_message.as_str()),
+            )
+            .await;
         }
         if run_summary.exit_code != 0 && !progress.cancelled {
             let failure_kind = gallery_dl_runner::classify_failure(&run_summary.stderr_output);
@@ -660,8 +845,32 @@ impl<'a> SubscriptionSyncEngine<'a> {
             warn!(site_id = %site_id, query_id, failure_kind = failure_kind_str, error = %err, "gallery-dl query execution failed");
             self.update_credential_health(site_id, health_status, Some(&err))
                 .await;
+            self.record_issue(
+                subscription_id,
+                Some(query_id),
+                failure_kind_str,
+                &summary,
+                Some(&err),
+            )
+            .await;
         } else if run_summary.exit_code == 0 && has_credential {
             self.update_credential_health(site_id, "valid", None).await;
+            let _ = self
+                .db
+                .resolve_subscription_issues(subscription_id, Some(query_id), "unauthorized")
+                .await;
+            let _ = self
+                .db
+                .resolve_subscription_issues(subscription_id, Some(query_id), "expired")
+                .await;
+            let _ = self
+                .db
+                .resolve_subscription_issues(subscription_id, Some(query_id), "rate_limited")
+                .await;
+            let _ = self
+                .db
+                .resolve_subscription_issues(subscription_id, Some(query_id), "network")
+                .await;
         }
 
         // Finalize pending collections — only after we know the full run outcome.
@@ -678,15 +887,65 @@ impl<'a> SubscriptionSyncEngine<'a> {
             "sync_query: finalizing pending collections"
         );
         if !progress.cancelled {
-            for (_, pc) in pending_collections {
-                self.materialize_collection(
-                    pc,
+            if let Some(last_key) = current_pending_collection_key.take() {
+                let failed_members = failed_post_members.remove(&last_key).unwrap_or_default();
+                self.flush_pending_collection(
+                    &last_key,
+                    &mut pending_collections,
                     subscription_id,
                     &sub_id_str,
                     &mut progress,
                     &mut changed_collection_ids,
+                    &failed_members,
                 )
                 .await;
+                self.finalize_current_post_progress(
+                    query_id,
+                    &mut progress,
+                    &mut posts_processed_this_run,
+                    completed_initial_run,
+                    &resume_strategy,
+                    range_start,
+                    &all_post_ids,
+            )
+            .await;
+        }
+
+        let bridge_discovered_without_downloads =
+            !completed_initial_run
+                && !progress.cancelled
+                && run_summary.exit_code == 0
+                && run_summary.discovered_items > 0
+                && total_items == 0;
+        if bridge_discovered_without_downloads {
+            let detail = format!(
+                "gallery-dl discovered {} items across {} posts but produced no downloadable files",
+                run_summary.discovered_items,
+                run_summary.discovered_post_ids.len(),
+            );
+            warn!(
+                query_id,
+                discovered_items = run_summary.discovered_items,
+                discovered_posts = run_summary.discovered_post_ids.len(),
+                skipped_archive_items = run_summary.skipped_archive_items,
+                "sync_query: bridge discovered items but no downloads were emitted"
+            );
+            progress.failure_kind = Some("bridge_no_downloads".to_string());
+            progress.errors.push(detail.clone());
+            self.record_issue(
+                subscription_id,
+                Some(query_id),
+                "bridge_no_downloads",
+                "gallery-dl discovered items but emitted no downloads",
+                Some(&detail),
+            )
+            .await;
+        }
+            for failed_members in failed_post_members.into_values() {
+                for failed in failed_members {
+                    self.persist_post_member_state(subscription_id, site_id, &failed, None, "failed")
+                        .await;
+                }
             }
         } else {
             // Cancelled or errored — don't materialize incomplete collections.
@@ -738,13 +997,14 @@ impl<'a> SubscriptionSyncEngine<'a> {
 
         self.set_phase("finalizing");
         self.emit_progress_force(&sub_id_str, &progress, "Finalizing...");
-        let completed_cleanly = run_summary.exit_code == 0 && !progress.cancelled;
+        let completed_cleanly =
+            run_summary.exit_code == 0 && !progress.cancelled && progress.errors.is_empty();
         // Resume cursor based on ACTUAL posts processed, not the theoretical range end.
         // This prevents skipping posts that weren't downloaded due to errors or cancellation.
         let next_resume_cursor = compute_incremental_cursor(
             resume_strategy.as_deref(),
             range_start,
-            progress.posts_processed,
+            posts_processed_this_run,
             &all_post_ids,
         );
         let unique_post_count = all_post_ids.len();
@@ -804,6 +1064,7 @@ impl<'a> SubscriptionSyncEngine<'a> {
                 .db
                 .set_query_completed_initial_run(query_id, true)
                 .await;
+            let _ = self.db.set_query_resume_state(query_id, None, None).await;
         } else if continue_initial_pagination {
             info!(query_id, next_resume_cursor = ?next_resume_cursor, fetched_items = total_items,
                 post_limit = ?post_limit, "sync_query: initial run continues; resuming next chunk");
@@ -820,8 +1081,448 @@ impl<'a> SubscriptionSyncEngine<'a> {
             "sync_query: finished"
         );
 
+        if let Some(query_run_id) = query_run_id {
+            let status = if progress.cancelled {
+                "cancelled"
+            } else if progress.errors.is_empty() {
+                "succeeded"
+            } else {
+                "failed"
+            };
+            let _ = self
+                .db
+                .finish_subscription_query_run(
+                    query_run_id,
+                    status,
+                    progress.failure_kind.clone(),
+                    progress.errors.last().cloned(),
+                    progress.posts_processed as i64,
+                    progress.files_downloaded as i64,
+                    progress.files_skipped as i64,
+                )
+                .await;
+        }
+
+        if progress.errors.is_empty() && !progress.cancelled {
+            let _ = self
+                .db
+                .set_query_terminal_state(
+                    query_id,
+                    Some(Utc::now().to_rfc3339()),
+                    None,
+                    None,
+                    None,
+                )
+                .await;
+        } else if !progress.cancelled {
+            let _ = self
+                .db
+                .set_query_terminal_state(
+                    query_id,
+                    None,
+                    Some(Utc::now().to_rfc3339()),
+                    progress.failure_kind.clone(),
+                    progress.errors.last().cloned(),
+                )
+                .await;
+        }
+
         progress
     }
+
+    pub async fn retry_failed_post(
+        &mut self,
+        subscription_id: i64,
+        query_id: i64,
+        site_id: &str,
+        retry_url: &str,
+        expected_post_id: &str,
+        cancel: CancellationToken,
+    ) -> SyncProgress {
+        self.current_query_id = Some(query_id);
+        self.current_query_name = Some(format!("retry:{expected_post_id}"));
+        let mut progress = SyncProgress::default();
+        let sub_id_str = subscription_id.to_string();
+
+        let credential = self
+            .load_run_credential(site_id, retry_url, &sub_id_str, &progress)
+            .await;
+        let mut _domain_run_guard = None;
+        if let Some(rate_limiter) = &self.rate_limiter {
+            if let Some(domain) = gallery_dl_runner::extract_domain(retry_url) {
+                _domain_run_guard = Some(rate_limiter.acquire_domain_run(&domain).await);
+                rate_limiter.wait_for_slot(&domain).await;
+            }
+        }
+
+        let query_run_id = self
+            .db
+            .create_subscription_query_run(None, subscription_id, query_id)
+            .await
+            .ok();
+
+        let opts = RunOptions {
+            url: retry_url.to_string(),
+            post_limit: None,
+            range_start: 1,
+            abort_threshold: None,
+            sleep_request: self.settings.sub_rate_limit_secs,
+            credential,
+            archive_path: PathBuf::new(),
+            archive_prefix: None,
+            cancel: cancel.clone(),
+        };
+
+        let (item_tx, mut item_rx) =
+            tokio::sync::mpsc::channel::<gallery_dl_runner::DownloadedItem>(32);
+        let runner_handle = {
+            let runner = gallery_dl_runner::GalleryDlRunner::new(self.runner.binary_path().clone());
+            tokio::spawn(async move { runner.run(&opts, item_tx).await })
+        };
+
+        let mut pending_collections: HashMap<String, PendingCollection> = HashMap::new();
+        let mut changed_collection_ids: Vec<i64> = Vec::new();
+
+        while let Some(item) = item_rx.recv().await {
+            if cancel.is_cancelled() {
+                progress.cancelled = true;
+                break;
+            }
+            if let Some(post_id) = item.metadata.post_id.as_deref() {
+                if post_id != expected_post_id {
+                    self.record_issue(
+                        subscription_id,
+                        Some(query_id),
+                        "unexpected_retry_item",
+                        &format!("Retry for post {expected_post_id} yielded item from post {post_id}"),
+                        item.metadata.canonical_post_url.as_deref(),
+                    )
+                    .await;
+                    continue;
+                }
+            }
+            if let Err(error) = validate_metadata_for_site(site_id, &item.metadata) {
+                progress.metadata_invalid += 1;
+                self.record_issue(
+                    subscription_id,
+                    Some(query_id),
+                    "malformed_metadata",
+                    "gallery-dl item metadata failed validation during retry",
+                    Some(&error),
+                )
+                .await;
+                continue;
+            }
+            progress.metadata_validated += 1;
+            let collection_parts = collection_group_parts(site_id, &item.metadata);
+            let is_collection_member = self.auto_collections && collection_parts.is_some();
+            if is_collection_member {
+                let (category, post_id, preferred_name) = collection_parts.unwrap();
+                let key = format!("{category}:{post_id}");
+                let pending =
+                    pending_collections
+                        .entry(key)
+                        .or_insert_with(|| PendingCollection {
+                            category,
+                            post_id,
+                            preferred_name,
+                            expected_count: None,
+                            members: Vec::new(),
+                            queue_id: None,
+                        });
+                pending.expected_count = Some(
+                    pending
+                        .expected_count
+                        .unwrap_or(0)
+                        .max(item.metadata.page_count.unwrap_or(0)),
+                )
+                .filter(|count| *count > 0);
+                let page_num = item.metadata.page_num.unwrap_or(u32::MAX);
+                pending.members.push(PendingMember {
+                    file_path: item.file_path,
+                    metadata: item.metadata,
+                    page_num,
+                });
+                continue;
+            }
+
+            match self
+                .import_item(&item.file_path, &item.metadata, subscription_id, retry_url, false)
+                .await
+            {
+                Ok(outcome) => {
+                    if let Some(item_key) = metadata_item_key(&item.metadata) {
+                        let _ = self
+                            .db
+                            .resolve_subscription_download_attempt(
+                                subscription_id,
+                                Some(query_id),
+                                &item_key,
+                            )
+                            .await;
+                    }
+                    self.persist_post_member_state(
+                        subscription_id,
+                        site_id,
+                        &item.metadata,
+                        Some(outcome.entity_hash.as_str()),
+                        "imported",
+                    )
+                    .await;
+                    if outcome.imported_new {
+                        progress.files_downloaded += 1;
+                    } else {
+                        progress.files_skipped += 1;
+                    }
+                }
+                Err(error) => {
+                    progress.errors.push(error.clone());
+                    self.record_issue(
+                        subscription_id,
+                        Some(query_id),
+                        "import_failure",
+                        &format!("Retry import failed for post {expected_post_id}"),
+                        Some(&error),
+                    )
+                    .await;
+                }
+            }
+        }
+
+        let run_summary = match runner_handle.await {
+            Ok(Ok(summary)) => summary,
+            Ok(Err(error)) => {
+                progress.errors.push(format!("gallery-dl retry failed: {error}"));
+                progress.failure_kind = Some("unknown".to_string());
+                return progress;
+            }
+            Err(error) => {
+                progress
+                    .errors
+                    .push(format!("gallery-dl retry task panicked: {error}"));
+                progress.failure_kind = Some("unknown".to_string());
+                return progress;
+            }
+        };
+
+        let mut failed_post_members: HashMap<String, Vec<gallery_dl_runner::ParsedMetadata>> =
+            HashMap::new();
+        if run_summary.had_download_errors {
+            progress.failure_kind = Some("download_error".to_string());
+            for failed in &run_summary.failed_items {
+                self.persist_failed_download_attempt(
+                    subscription_id,
+                    query_id,
+                    query_run_id,
+                    failed,
+                )
+                .await;
+                if let Some((category, post_id, _)) =
+                    collection_group_parts(site_id, &failed.metadata)
+                {
+                    let key = format!("{category}:{post_id}");
+                    failed_post_members
+                        .entry(key)
+                        .or_default()
+                        .push(failed.metadata.clone());
+                }
+            }
+        }
+
+        if !progress.cancelled {
+            for (key, pc) in pending_collections {
+                let failed_members = failed_post_members.remove(&key).unwrap_or_default();
+                self.materialize_collection(
+                    pc,
+                    subscription_id,
+                    &sub_id_str,
+                    &mut progress,
+                    &mut changed_collection_ids,
+                    &failed_members,
+                )
+                .await;
+            }
+        }
+
+        if !changed_collection_ids.is_empty() {
+            changed_collection_ids.sort_unstable();
+            changed_collection_ids.dedup();
+            let mut impact = crate::runtime_contract::change_builder::ChangeImpact::new();
+            for collection_id in &changed_collection_ids {
+                impact = impact.merge(
+                    crate::runtime_contract::change_builder::ChangeImpact::collection_membership_change(
+                        *collection_id,
+                    ),
+                );
+            }
+            crate::events::emit_state_changed("subscription_retry_post", impact);
+        }
+
+        gallery_dl_runner::cleanup_temp_dir(&run_summary.temp_dir).await;
+        if run_summary.failed_items.is_empty() {
+            let _ = self
+                .db
+                .resolve_subscription_issues(subscription_id, Some(query_id), "download_failure")
+                .await;
+        }
+        if let Some(query_run_id) = query_run_id {
+            let status = if progress.cancelled {
+                "cancelled"
+            } else if progress.errors.is_empty() && run_summary.failed_items.is_empty() {
+                "succeeded"
+            } else {
+                "failed"
+            };
+            let _ = self
+                .db
+                .finish_subscription_query_run(
+                    query_run_id,
+                    status,
+                    progress.failure_kind.clone(),
+                    progress.errors.last().cloned(),
+                    progress.posts_processed as i64,
+                    progress.files_downloaded as i64,
+                    progress.files_skipped as i64,
+                )
+                .await;
+        }
+        progress
+    }
+
+    async fn persist_post_member_state(
+        &self,
+        subscription_id: i64,
+        site_id: &str,
+        metadata: &gallery_dl_runner::ParsedMetadata,
+        entity_hash: Option<&str>,
+        status: &str,
+    ) {
+        let Some(post_id) = metadata.post_id.as_deref().map(str::trim).filter(|value| !value.is_empty()) else {
+            return;
+        };
+        let category = metadata
+            .category
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or(site_id);
+        let item_key = metadata_item_key(metadata).unwrap_or_else(|| {
+            format!(
+                "{category}:{post_id}:{}",
+                metadata.page_num.unwrap_or(0)
+            )
+        });
+        let _ = self
+            .db
+            .upsert_subscription_post_member(
+                crate::subscriptions::db::OwnedSubscriptionPostMemberUpsert {
+                    subscription_id,
+                    site_id: category.to_string(),
+                    post_id: post_id.to_string(),
+                    item_key,
+                    page_num: metadata.page_num.map(i64::from),
+                    canonical_post_url: metadata.canonical_post_url.clone(),
+                    media_url: metadata.media_url.clone(),
+                    entity_hash: entity_hash.map(ToOwned::to_owned),
+                    status: status.to_string(),
+                },
+            )
+            .await;
+    }
+
+    async fn reconcile_post_collection_order(
+        &self,
+        subscription_id: i64,
+        site_id: &str,
+        post_id: &str,
+        collection_id: i64,
+    ) {
+        let members = match self
+            .db
+            .list_subscription_post_members(subscription_id, site_id, post_id)
+            .await
+        {
+            Ok(members) => members,
+            Err(_) => return,
+        };
+        let ordered_hashes: Vec<String> = members
+            .into_iter()
+            .filter(|member| member.status == "imported")
+            .filter_map(|member| member.entity_hash)
+            .collect();
+        if ordered_hashes.is_empty() {
+            return;
+        }
+        if let Ok(state) = crate::state::get_state() {
+            let _ = state
+                .engine
+                .db()
+                .reorder_collection_members_by_hashes(collection_id, &ordered_hashes);
+        }
+    }
+
+    async fn record_issue(
+        &self,
+        subscription_id: i64,
+        query_id: Option<i64>,
+        issue_kind: &str,
+        message: &str,
+        detail: Option<&str>,
+    ) {
+        let _ = self
+            .db
+            .upsert_subscription_issue(subscription_id, query_id, issue_kind, message, detail)
+            .await;
+    }
+
+    async fn persist_failed_download_attempt(
+        &self,
+        subscription_id: i64,
+        query_id: i64,
+        query_run_id: Option<i64>,
+        failed: &gallery_dl_runner::FailedDownloadedItem,
+    ) {
+        let next_retry_at = (Utc::now() + Duration::minutes(15)).to_rfc3339();
+        let metadata = &failed.metadata;
+        let item_key = metadata_item_key(metadata)
+            .unwrap_or_else(|| format!("unknown:{}:{}", query_id, Utc::now().timestamp_millis()));
+        let _ = self
+            .db
+            .upsert_subscription_download_attempt(OwnedSubscriptionDownloadAttemptUpsert {
+                subscription_id,
+                query_id: Some(query_id),
+                query_run_id,
+                item_key,
+                site_category: metadata.category.clone(),
+                post_id: metadata.post_id.clone(),
+                page_num: metadata.page_num.map(i64::from),
+                canonical_post_url: metadata.canonical_post_url.clone(),
+                media_url: metadata.media_url.clone(),
+                retry_url: metadata.canonical_post_url.clone().or_else(|| metadata.source_url.clone()),
+                failure_kind: Some("download_failure".to_string()),
+                last_error: Some(failed.error_message.clone()),
+                next_retry_at: Some(next_retry_at),
+            })
+            .await;
+        let site_id = metadata.category.as_deref().unwrap_or("unknown");
+        self.persist_post_member_state(subscription_id, site_id, metadata, None, "failed")
+            .await;
+    }
+}
+
+fn metadata_item_key(metadata: &gallery_dl_runner::ParsedMetadata) -> Option<String> {
+    metadata.item_key.clone().or_else(|| {
+        let category = metadata.category.as_deref()?;
+        let target = metadata
+            .post_id
+            .as_deref()
+            .or(metadata.canonical_post_url.as_deref())
+            .or(metadata.media_url.as_deref())?;
+        Some(format!(
+            "{category}:{target}:{}",
+            metadata.page_num.unwrap_or(0)
+        ))
+    })
 }
 
 /// Compute the resume cursor based on posts actually processed in THIS run.

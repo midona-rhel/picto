@@ -10,7 +10,7 @@ use crate::scope::resolver::{resolve_scope, ScopeFilter};
 use crate::sqlite::bitmaps::BitmapKey;
 use crate::sqlite::files::{batch_get_by_hashes, list_files_slim_by_ids};
 use crate::sqlite::SqliteDatabase;
-use crate::types::{tag_display_key, SelectionQuerySpec, SelectionTagCount};
+use crate::types::{tag_display_key, SelectionFolderInfo, SelectionQuerySpec, SelectionTagCount};
 
 pub async fn summarize_hashes_bulk(
     db: &SqliteDatabase,
@@ -104,6 +104,84 @@ pub async fn summarize_hashes_bulk(
         top_tags,
         sample_hashes,
     ))
+}
+
+/// Compute shared folders for explicit hash selection.
+/// Returns folders that ALL selected entities belong to.
+pub async fn summarize_folders_from_hashes(
+    db: &SqliteDatabase,
+    file_ids: &[i64],
+) -> Result<Vec<SelectionFolderInfo>, String> {
+    if file_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let ids = file_ids.to_vec();
+    db.with_read_conn(move |conn| {
+        let placeholders = std::iter::repeat_n("?", ids.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
+            "SELECT f.folder_id, f.name, COUNT(*) as cnt
+             FROM folder_entity fe
+             JOIN folder f ON f.folder_id = fe.folder_id
+             WHERE fe.entity_id IN ({placeholders})
+             GROUP BY f.folder_id
+             HAVING cnt = ?
+             ORDER BY f.name"
+        );
+        let total = ids.len() as i64;
+        let mut params: Vec<Box<dyn rusqlite::ToSql>> =
+            ids.iter().map(|id| Box::new(*id) as Box<dyn rusqlite::ToSql>).collect();
+        params.push(Box::new(total));
+        let mut stmt = conn.prepare(&sql)?;
+        let rows = stmt.query_map(rusqlite::params_from_iter(params.iter().map(|p| p.as_ref())), |row| {
+            Ok(SelectionFolderInfo {
+                folder_id: row.get(0)?,
+                name: row.get(1)?,
+            })
+        })?;
+        rows.collect()
+    })
+    .await
+}
+
+/// Compute shared folders from a bitmap of selected entity IDs.
+/// Uses Folder bitmaps for fast intersection.
+pub async fn summarize_folders_from_bitmap(
+    db: &SqliteDatabase,
+    selected_bitmap: &RoaringBitmap,
+) -> Result<Vec<SelectionFolderInfo>, String> {
+    let selected_count = selected_bitmap.len() as u64;
+    if selected_count == 0 {
+        return Ok(Vec::new());
+    }
+
+    // Get all folder IDs + names from the database
+    let all_folders = db
+        .with_read_conn(|conn| {
+            let mut stmt = conn.prepare_cached(
+                "SELECT folder_id, name FROM folder ORDER BY name",
+            )?;
+            let rows = stmt.query_map([], |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+            })?;
+            rows.collect::<rusqlite::Result<Vec<_>>>()
+        })
+        .await?;
+
+    let mut shared = Vec::new();
+    for (folder_id, name) in all_folders {
+        let mut bm = db.bitmaps.get(&BitmapKey::Folder(folder_id));
+        if bm.is_empty() {
+            continue;
+        }
+        bm &= selected_bitmap;
+        if bm.len() as u64 == selected_count {
+            shared.push(SelectionFolderInfo { folder_id, name });
+        }
+    }
+
+    Ok(shared)
 }
 
 pub async fn selection_bitmap_for_all_results(

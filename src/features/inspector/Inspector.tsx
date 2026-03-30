@@ -12,6 +12,7 @@ import {
   IconFolder,
   IconPlus,
 } from '@tabler/icons-react';
+import { ColorPalette } from '../../shared/ui/ColorPalette';
 import * as api from '../../platform/api';
 import * as entityMutations from '../../controllers/entityMutations';
 import { PropertyRow } from '../../shared/ui/PropertyRow/PropertyRow';
@@ -226,6 +227,8 @@ function EntityInspector() {
         </div>
       </div>
 
+      <ColorPalette colors={data.dominant_color_hex ? [data.dominant_color_hex] : []} />
+
       <div className={styles.fieldStack}>
         <InspectorField
           value={data.name ?? ''}
@@ -409,6 +412,8 @@ function ScopeInspector() {
         <ScopePreview items={vm.previewItems} />
       </div>
 
+      <ColorPalette colors={[]} />
+
       <div className={styles.fieldStack}>
         <InspectorField
           value={vm.node.name}
@@ -512,15 +517,13 @@ function MultiSelectInspector({
   const sidebarNodes = useAtomValue(sidebarNodesAtom);
   const selectedHashes = useAtomValue(selectedEntityHashesAtom);
   const [summary, setSummary] = useState<import('../../shared/types/canonical').SelectionSummary | null>(null);
-  const targetRef = useRef(target);
-  targetRef.current = target;
 
   // Fetch selection summary whenever target changes
   useEffect(() => {
     if (!target) { setSummary(null); return; }
     let stale = false;
     void entityMutations.getTargetSelectionSummary(target).then((s) => {
-      if (!stale && targetRef.current === target) setSummary(s);
+      if (!stale) setSummary(s);
     }).catch(() => {});
     return () => { stale = true; };
   }, [target]);
@@ -532,11 +535,14 @@ function MultiSelectInspector({
   const totalSize = summary?.stats?.total_size_bytes;
   const sharedTags = summary?.shared_tags ?? [];
   const topTags = summary?.top_tags ?? [];
+  const sharedFolders = summary?.shared_folders ?? [];
   const previewHashes = summary?.sample_hashes ?? [...selectedHashes].slice(0, 3);
 
   return (
     <div className={styles.contentStack}>
       <StackedPreview hashes={previewHashes} />
+
+      <ColorPalette colors={[]} />
 
       <div className={styles.fieldStack}>
         <InspectorField
@@ -574,9 +580,20 @@ function MultiSelectInspector({
         </div>
       </InspectorSection>
 
-      <InspectorSection title="Folders">
+      <InspectorSection title="Folders" count={sharedFolders.length}>
         <div className={styles.foldersWrap}>
-          {/* TODO: show shared folders when backend supports folder intersection query */}
+          {sharedFolders.map((folder) => {
+            const node = sidebarNodes.find((n) => n.id === `folder:${folder.folder_id}`);
+            return (
+              <TagChip
+                key={folder.folder_id}
+                namespace=""
+                subtag={node?.name ?? folder.name}
+                colorRgb={hexToRgb(node?.color)}
+                onRemove={() => { void entityMutations.updateTargetFolderMembership(target, folder.folder_id, 'remove'); }}
+              />
+            );
+          })}
           <button
             className={styles.tagAddBtn}
             onClick={() => {

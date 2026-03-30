@@ -303,8 +303,26 @@ mod tests {
             Some(("creator".into(), "foo".into()))
         );
         assert_eq!(
+            parse_tag_ingest("artist:foo"),
+            Some(("artist".into(), "foo".into()))
+        );
+        assert_eq!(
             parse_tag_ingest("character:samus"),
             Some(("character".into(), "samus".into()))
+        );
+    }
+
+    #[test]
+    fn test_combine_tag_escapes_literal_colons_for_empty_namespace() {
+        assert_eq!(combine_tag("", "http://example.com"), ":http://example.com");
+        assert_eq!(
+            parse_tag_ingest(":http://example.com"),
+            Some(("".into(), "http://example.com".into()))
+        );
+        assert_eq!(combine_tag("", "dragon:quest"), ":dragon:quest");
+        assert_eq!(
+            parse_tag_ingest(":dragon:quest"),
+            Some(("".into(), "dragon:quest".into()))
         );
     }
 }

@@ -10,6 +10,7 @@
 
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { IconDots, IconLink, IconPlus, IconX, IconExternalLink } from '@tabler/icons-react';
+import { openExternalUrl } from '../../../platform/api';
 import styles from './InspectorField.module.css';
 
 // ── InspectorField (name, notes, any text) ───────────────────────
@@ -172,16 +173,21 @@ export function InspectorSourceField({ urls, onChange, readOnly = false }: Sourc
     const trimmed = val.trim();
     setEditIdx(null); setEditVal('');
     if (!onChange) return;
-    const next = [...urls];
-    if (trimmed) next[index] = trimmed; else next.splice(index, 1);
-    onChange(next);
+    if (index >= urls.length) {
+      // New entry — only persist if non-empty
+      if (trimmed) onChange([...urls, trimmed]);
+    } else {
+      const next = [...urls];
+      if (trimmed) next[index] = trimmed; else next.splice(index, 1);
+      onChange(next);
+    }
   }, [urls, onChange]);
 
   const handleAdd = useCallback(() => {
     if (!onChange) return;
-    const next = [...urls, ''];
-    onChange(next);
-    setEditIdx(next.length - 1);
+    // Don't persist yet — just open an empty edit row.
+    // The new URL is committed only when the user types and blurs/enters.
+    setEditIdx(urls.length);
     setEditVal('');
     if (!open) setOpen(true);
   }, [urls, onChange, open]);
@@ -226,7 +232,7 @@ export function InspectorSourceField({ urls, onChange, readOnly = false }: Sourc
                 key={i}
                 className={styles.popoverLink}
                 href={url}
-                onClick={(e) => { e.preventDefault(); /* TODO: windowController.openExternal */ }}
+                onClick={(e) => { e.preventDefault(); void openExternalUrl(url); }}
               >
                 {url}
               </a>
@@ -267,7 +273,7 @@ export function InspectorSourceField({ urls, onChange, readOnly = false }: Sourc
               {url.trim() && editIdx !== idx && (
                 <button
                   className={styles.urlActionBtn}
-                  onClick={() => { /* TODO: windowController.openExternal */ }}
+                  onClick={() => { void openExternalUrl(url); }}
                   type="button" title="Open link"
                 >
                   <IconExternalLink size={13} stroke={1.5} />
@@ -284,6 +290,22 @@ export function InspectorSourceField({ urls, onChange, readOnly = false }: Sourc
               )}
             </div>
           ))}
+          {editIdx === urls.length && (
+            <div className={styles.urlRow}>
+              <input
+                className={styles.urlEditInput}
+                autoFocus
+                value={editVal}
+                onChange={(e) => setEditVal(e.target.value)}
+                onBlur={() => handleSave(urls.length, editVal)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') e.currentTarget.blur();
+                  if (e.key === 'Escape') { setEditIdx(null); setEditVal(''); }
+                }}
+                placeholder="https://..."
+              />
+            </div>
+          )}
           {canEdit && (
             <button className={styles.addUrlBtn} onClick={handleAdd} type="button">
               <IconPlus size={13} stroke={1.5} />

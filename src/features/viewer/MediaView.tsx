@@ -122,11 +122,14 @@ export function MediaView({
   }, [currentIndex, items.length, onNavigate, onLoadMore]);
 
   // ── Toolbar state ──
-  const zoomPercent = Math.round((zoom.state.scale / (zoom.getFitScale() || 1)) * 100);
+  const zoomPercent = Math.round(zoom.state.scale * 100);
 
   useEffect(() => {
     setDisplayState({ currentIndex, total, zoomPercent });
   }, [currentIndex, total, zoomPercent, setDisplayState]);
+
+  // Zoom % updates only on committed state (after 96ms debounce).
+  // Live per-frame updates removed — settle-only is sufficient.
 
   useEffect(() => {
     setDisplayControls({

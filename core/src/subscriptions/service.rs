@@ -24,8 +24,11 @@ pub async fn get_subscriptions(db: &SqliteDatabase) -> Result<Vec<SubscriptionIn
             .or_default()
             .push(SubscriptionQueryInfo {
                 id: q.query_id.to_string(),
+                site_id: crate::subscriptions::gallery_dl_runner::canonical_site_id(&q.site_id)
+                    .to_string(),
                 query_text: q.query_text.clone(),
                 display_name: q.display_name.or(Some(q.query_text)),
+                notes: q.notes,
                 paused: q.paused,
                 last_check_time: q.last_check_time,
                 files_found: q.files_found as u64,
@@ -33,6 +36,10 @@ pub async fn get_subscriptions(db: &SqliteDatabase) -> Result<Vec<SubscriptionIn
                 completed_initial_run: q.completed_initial_run,
                 resume_cursor: q.resume_cursor,
                 resume_strategy: q.resume_strategy,
+                last_success_at: q.last_success_at,
+                last_failure_at: q.last_failure_at,
+                last_failure_kind: q.last_failure_kind,
+                last_failure_message: q.last_failure_message,
             });
     }
 
@@ -40,12 +47,9 @@ pub async fn get_subscriptions(db: &SqliteDatabase) -> Result<Vec<SubscriptionIn
         .into_iter()
         .map(|(sub, total_files)| {
             let sub_id = sub.subscription_id;
-            let canonical_site_id =
-                crate::subscriptions::gallery_dl_runner::canonical_site_id(&sub.site_id);
             SubscriptionInfo {
                 id: sub_id.to_string(),
                 name: sub.name,
-                site_id: canonical_site_id.to_string(),
                 paused: sub.paused,
                 group_id: sub.group_id.map(|id| id.to_string()),
                 initial_post_limit: sub.initial_post_limit as u32,
@@ -70,20 +74,11 @@ pub async fn get_subscriptions(db: &SqliteDatabase) -> Result<Vec<SubscriptionIn
 pub async fn create_subscription(
     db: &SqliteDatabase,
     name: String,
-    site_id: String,
-    queries: Vec<String>,
     group_id: Option<i64>,
     initial_post_limit: Option<u32>,
     periodic_post_limit: Option<u32>,
 ) -> Result<SubscriptionInfo, String> {
-    if crate::subscriptions::gallery_dl_runner::site_by_id(&site_id).is_none() {
-        return Err(format!("Unknown site: {site_id}"));
-    }
-    let canonical_site_id =
-        crate::subscriptions::gallery_dl_runner::canonical_site_id(&site_id).to_string();
-    let sub = db
-        .create_subscription(&name, &canonical_site_id, group_id)
-        .await?;
+    let sub = db.create_subscription(&name, group_id).await?;
     let sub_id = sub.subscription_id;
 
     if initial_post_limit.is_some() || periodic_post_limit.is_some() {
@@ -100,33 +95,9 @@ pub async fn create_subscription(
         .await?;
     }
 
-    let mut query_infos = Vec::new();
-    for query_text in queries {
-        let trimmed = query_text.trim().to_string();
-        if trimmed.is_empty() {
-            continue;
-        }
-        let q = db
-            .add_subscription_query(sub_id, &trimmed, Some(trimmed.as_str()))
-            .await?;
-        query_infos.push(SubscriptionQueryInfo {
-            id: q.query_id.to_string(),
-            query_text: q.query_text,
-            display_name: q.display_name,
-            paused: q.paused,
-            last_check_time: q.last_check_time,
-            files_found: q.files_found as u64,
-            posts_found: q.posts_found as u64,
-            completed_initial_run: q.completed_initial_run,
-            resume_cursor: q.resume_cursor,
-            resume_strategy: q.resume_strategy,
-        });
-    }
-
     Ok(SubscriptionInfo {
         id: sub_id.to_string(),
         name,
-        site_id: canonical_site_id,
         paused: false,
         group_id: group_id.map(|id| id.to_string()),
         initial_post_limit: initial_post_limit.unwrap_or(100),
@@ -134,7 +105,7 @@ pub async fn create_subscription(
         auto_collections: true,
         created_at: sub.created_at,
         total_files: 0,
-        queries: query_infos,
+        queries: vec![],
     })
 }
 
@@ -164,18 +135,33 @@ pub async fn pause_subscription(
 pub async fn add_subscription_query(
     db: &SqliteDatabase,
     subscription_id: String,
+    site_id: String,
     query_text: String,
+    notes: Option<String>,
 ) -> Result<SubscriptionQueryInfo, String> {
     let sub_id: i64 = subscription_id
         .parse()
         .map_err(|_| format!("Invalid subscription id: {}", subscription_id))?;
+    if crate::subscriptions::gallery_dl_runner::site_by_id(&site_id).is_none() {
+        return Err(format!("Unknown site: {site_id}"));
+    }
+    let canonical_site_id =
+        crate::subscriptions::gallery_dl_runner::canonical_site_id(&site_id).to_string();
     let q = db
-        .add_subscription_query(sub_id, query_text.trim(), Some(query_text.trim()))
+        .add_subscription_query(
+            sub_id,
+            &canonical_site_id,
+            query_text.trim(),
+            Some(query_text.trim()),
+            notes.as_deref(),
+        )
         .await?;
     Ok(SubscriptionQueryInfo {
         id: q.query_id.to_string(),
+        site_id: canonical_site_id,
         query_text: q.query_text,
         display_name: q.display_name,
+        notes: q.notes,
         paused: q.paused,
         last_check_time: q.last_check_time,
         files_found: q.files_found as u64,
@@ -183,6 +169,10 @@ pub async fn add_subscription_query(
         completed_initial_run: q.completed_initial_run,
         resume_cursor: q.resume_cursor,
         resume_strategy: q.resume_strategy,
+        last_success_at: q.last_success_at,
+        last_failure_at: q.last_failure_at,
+        last_failure_kind: q.last_failure_kind,
+        last_failure_message: q.last_failure_message,
     })
 }
 
@@ -240,6 +230,48 @@ pub async fn reset_subscription(db: &SqliteDatabase, id: String) -> Result<(), S
         entities_deleted,
         post_maps_deleted,
         "Subscription reset: state cleared"
+    );
+    Ok(())
+}
+
+pub async fn reset_subscription_query_checked(
+    db: &SqliteDatabase,
+    running_subs: &RunningSubscriptions,
+    id: String,
+) -> Result<(), String> {
+    let query_id: i64 = id
+        .parse()
+        .map_err(|_| format!("Invalid query id: {}", id))?;
+    let query = db
+        .get_subscription_query(query_id)
+        .await?
+        .ok_or_else(|| format!("Query {} not found", id))?;
+    let sub_id_str = query.subscription_id.to_string();
+
+    {
+        let map = running_subs.lock().await;
+        if map.contains_key(&sub_id_str) {
+            return Err(format!(
+                "Subscription {} is running; stop it before resetting query {}",
+                query.subscription_id, query_id
+            ));
+        }
+    }
+
+    let archive_prefix = subscription_query_archive_prefix(query.subscription_id, query_id);
+    let (query_reset, query_runs_deleted, issues_deleted, attempts_deleted, queues_deleted) =
+        db.reset_subscription_query_state(query_id).await?;
+    clear_subscription_archive_entries(db, &[archive_prefix]).await?;
+
+    tracing::info!(
+        subscription_id = query.subscription_id,
+        query_id,
+        query_reset,
+        query_runs_deleted,
+        issues_deleted,
+        attempts_deleted,
+        queues_deleted,
+        "Subscription query reset: state cleared"
     );
     Ok(())
 }

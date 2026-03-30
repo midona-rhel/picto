@@ -84,6 +84,10 @@ pub fn build_config(opts: &RunOptions, _temp_dir: &Path) -> serde_json::Value {
     }
 
     let mut root = serde_json::Map::new();
+    root.insert(
+        "base-directory".into(),
+        serde_json::Value::String(_temp_dir.display().to_string()),
+    );
     root.insert("extractor".into(), serde_json::Value::Object(extractor));
 
     if !postprocessors.is_empty() {

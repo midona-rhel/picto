@@ -1,4 +1,4 @@
-import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, nativeImage, nativeTheme, protocol, screen } from 'electron';
+import { app, BrowserWindow, WebContentsView, clipboard, dialog, ipcMain, Menu, nativeImage, nativeTheme, protocol, screen } from 'electron';
 
 app.commandLine.appendSwitch('disable-features', 'AutofillServerCommunication');
 app.commandLine.appendSwitch('force_high_performance_gpu');
@@ -75,6 +75,7 @@ const mediaProtocol = createMediaProtocolService({
 
 const windowManager = createWindowManager({
   BrowserWindow,
+  WebContentsView,
   screen,
   path,
   __dirname,

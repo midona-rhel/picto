@@ -22,6 +22,7 @@
 //! - `delete_subscription_query` → query_ids
 //! - `edit_subscription_query` → query_ids
 //! - `pause_subscription_query` → query_ids
+//! - `reset_subscription_query` → query_ids
 //! - `set_credential` → credential_categories
 //! - `delete_credential` → credential_categories
 //! - `pixiv_oauth_exchange` → credential_categories
@@ -32,6 +33,7 @@
 //! - `run_subscription`
 //! - `stop_subscription`
 //! - `run_subscription_query`
+//! - `retry_subscription_failed_post`
 //!
 //! ### read-only handlers
 //! - `get_sites`
@@ -40,6 +42,10 @@
 //! - `get_subscriptions`
 //! - `get_running_subscriptions`
 //! - `get_running_subscription_progress`
+//! - `list_subscription_runs`
+//! - `list_subscription_query_runs`
+//! - `list_subscription_issues`
+//! - `list_subscription_download_attempts`
 //! - `list_credentials`
 //! - `list_credential_health`
 //! - `pixiv_oauth_start`
@@ -111,8 +117,6 @@ pub struct ValidateSiteMetadataInput {
 #[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct CreateSubscriptionInput {
     pub name: String,
-    pub site_id: String,
-    pub queries: Vec<String>,
     #[ts(type = "number | null")]
     pub group_id: Option<i64>,
     #[ts(type = "number | null")]
@@ -138,7 +142,9 @@ pub struct PauseSubscriptionInput {
 #[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct AddSubscriptionQueryInput {
     pub subscription_id: String,
+    pub site_id: String,
     pub query_text: String,
+    pub notes: Option<String>,
 }
 
 #[derive(Debug, Deserialize, TS)]
@@ -174,6 +180,12 @@ pub struct ResetSubscriptionInput {
 
 #[derive(Debug, Deserialize, TS)]
 #[ts(export_to = "../../src/shared/types/generated/commands/")]
+pub struct ResetSubscriptionQueryInput {
+    pub id: String,
+}
+
+#[derive(Debug, Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct RenameSubscriptionInput {
     pub id: String,
     pub name: String,
@@ -184,6 +196,52 @@ pub struct RenameSubscriptionInput {
 pub struct RunSubscriptionQueryInput {
     pub subscription_id: String,
     pub query_id: String,
+}
+
+#[derive(Debug, Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
+pub struct StopSubscriptionQueryInput {
+    pub subscription_id: String,
+    pub query_id: String,
+}
+
+#[derive(Debug, Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
+pub struct RetrySubscriptionFailedPostInput {
+    pub subscription_id: String,
+    pub query_id: String,
+    pub site_id: String,
+    pub post_id: String,
+}
+
+#[derive(Debug, Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
+pub struct ListSubscriptionRunsInput {
+    pub subscription_id: String,
+    pub limit: Option<i64>,
+}
+
+#[derive(Debug, Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
+pub struct ListSubscriptionQueryRunsInput {
+    pub query_id: String,
+    pub limit: Option<i64>,
+}
+
+#[derive(Debug, Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
+pub struct ListSubscriptionIssuesInput {
+    pub subscription_id: String,
+    pub query_id: Option<String>,
+    pub limit: Option<i64>,
+}
+
+#[derive(Debug, Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
+pub struct ListSubscriptionDownloadAttemptsInput {
+    pub subscription_id: String,
+    pub query_id: Option<String>,
+    pub limit: Option<i64>,
 }
 
 #[derive(Debug, Deserialize, TS)]
@@ -346,8 +404,6 @@ pub async fn create_subscription(
     let sub = crate::subscriptions::service::create_subscription(
         &state.db,
         input.name,
-        input.site_id,
-        input.queries,
         input.group_id,
         input.initial_post_limit,
         input.periodic_post_limit,
@@ -402,7 +458,9 @@ pub async fn add_subscription_query(
     let query = crate::subscriptions::service::add_subscription_query(
         &state.db,
         input.subscription_id,
+        input.site_id,
         input.query_text,
+        input.notes,
     )
     .await?;
     let qid: i64 = query.id.parse().unwrap_or(0);
@@ -434,8 +492,10 @@ pub async fn delete_subscription_query(
 #[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct EditSubscriptionQueryInput {
     pub id: i64,
+    pub site_id: String,
     pub query_text: String,
     pub display_name: Option<String>,
+    pub notes: Option<String>,
 }
 
 pub async fn edit_subscription_query(
@@ -444,7 +504,13 @@ pub async fn edit_subscription_query(
 ) -> Result<(), String> {
     state
         .db
-        .update_subscription_query(input.id, input.query_text, input.display_name)
+        .update_subscription_query(
+            input.id,
+            input.site_id,
+            input.query_text,
+            input.display_name,
+            input.notes,
+        )
         .await?;
     crate::events::emit_state_changed(
         "edit_subscription_query",
@@ -551,6 +617,26 @@ pub async fn reset_subscription(
     Ok(())
 }
 
+pub async fn reset_subscription_query(
+    state: &AppState,
+    input: ResetSubscriptionQueryInput,
+) -> Result<(), String> {
+    let qid: i64 = input.id.parse().unwrap_or(0);
+    crate::subscriptions::service::reset_subscription_query_checked(
+        &state.db,
+        &state.running_subscriptions,
+        input.id,
+    )
+    .await?;
+    crate::events::emit_state_changed(
+        "reset_subscription_query",
+        crate::runtime_contract::change_builder::ChangeImpact::new()
+            .add_domain(crate::runtime_contract::state_change::Domain::Subscriptions)
+            .query_ids(vec![qid]),
+    );
+    Ok(())
+}
+
 pub async fn get_running_subscriptions(
     state: &AppState,
     _input: serde_json::Value,
@@ -566,6 +652,80 @@ pub async fn get_running_subscription_progress(
     _input: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
     let result = crate::subscriptions::run_orchestrator::SubscriptionRunOrchestrator::get_running_subscription_progress();
+    Ok(serde_json::to_value(&result).map_err(|e| e.to_string())?)
+}
+
+pub async fn list_subscription_runs(
+    state: &AppState,
+    input: ListSubscriptionRunsInput,
+) -> Result<serde_json::Value, String> {
+    let subscription_id: i64 = input
+        .subscription_id
+        .parse()
+        .map_err(|_| format!("Invalid subscription id: {}", input.subscription_id))?;
+    let result = state
+        .db
+        .list_subscription_runs(subscription_id, input.limit.unwrap_or(20).max(1))
+        .await?;
+    Ok(serde_json::to_value(&result).map_err(|e| e.to_string())?)
+}
+
+pub async fn list_subscription_query_runs(
+    state: &AppState,
+    input: ListSubscriptionQueryRunsInput,
+) -> Result<serde_json::Value, String> {
+    let query_id: i64 = input
+        .query_id
+        .parse()
+        .map_err(|_| format!("Invalid query id: {}", input.query_id))?;
+    let result = state
+        .db
+        .list_subscription_query_runs(query_id, input.limit.unwrap_or(20).max(1))
+        .await?;
+    Ok(serde_json::to_value(&result).map_err(|e| e.to_string())?)
+}
+
+pub async fn list_subscription_issues(
+    state: &AppState,
+    input: ListSubscriptionIssuesInput,
+) -> Result<serde_json::Value, String> {
+    let subscription_id: i64 = input
+        .subscription_id
+        .parse()
+        .map_err(|_| format!("Invalid subscription id: {}", input.subscription_id))?;
+    let query_id = input
+        .query_id
+        .map(|value| value.parse::<i64>())
+        .transpose()
+        .map_err(|_| "Invalid query id".to_string())?;
+    let result = state
+        .db
+        .list_subscription_issues(subscription_id, query_id, input.limit.unwrap_or(50).max(1))
+        .await?;
+    Ok(serde_json::to_value(&result).map_err(|e| e.to_string())?)
+}
+
+pub async fn list_subscription_download_attempts(
+    state: &AppState,
+    input: ListSubscriptionDownloadAttemptsInput,
+) -> Result<serde_json::Value, String> {
+    let subscription_id: i64 = input
+        .subscription_id
+        .parse()
+        .map_err(|_| format!("Invalid subscription id: {}", input.subscription_id))?;
+    let query_id = input
+        .query_id
+        .map(|value| value.parse::<i64>())
+        .transpose()
+        .map_err(|_| "Invalid query id".to_string())?;
+    let result = state
+        .db
+        .list_subscription_download_attempts(
+            subscription_id,
+            query_id,
+            input.limit.unwrap_or(50).max(1),
+        )
+        .await?;
     Ok(serde_json::to_value(&result).map_err(|e| e.to_string())?)
 }
 
@@ -596,6 +756,39 @@ pub async fn run_subscription_query(
         &state.running_subscriptions,
         input.subscription_id,
         input.query_id,
+        &state.settings,
+    )
+    .await?;
+    Ok(())
+}
+
+pub async fn stop_subscription_query(
+    state: &AppState,
+    input: StopSubscriptionQueryInput,
+) -> Result<(), String> {
+    crate::subscriptions::run_orchestrator::SubscriptionRunOrchestrator::stop_subscription_query(
+        &state.db,
+        &state.running_subscriptions,
+        input.subscription_id,
+        input.query_id,
+    )
+    .await?;
+    Ok(())
+}
+
+pub async fn retry_subscription_failed_post(
+    state: &AppState,
+    input: RetrySubscriptionFailedPostInput,
+) -> Result<(), String> {
+    crate::subscriptions::run_orchestrator::SubscriptionRunOrchestrator::retry_failed_post(
+        &state.db,
+        &state.blob_store,
+        &state.rate_limiter,
+        &state.running_subscriptions,
+        input.subscription_id,
+        input.query_id,
+        input.site_id,
+        input.post_id,
         &state.settings,
     )
     .await?;

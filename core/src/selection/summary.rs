@@ -7,8 +7,10 @@ use chrono::Utc;
 
 use crate::selection::helpers::{
     sample_hashes_from_entity_bitmap, selection_bitmap_for_all_results,
-    summarize_entity_stats_from_bitmap, summarize_hashes_bulk, summarize_tags_from_bitmap,
+    summarize_entity_stats_from_bitmap, summarize_folders_from_bitmap,
+    summarize_folders_from_hashes, summarize_hashes_bulk, summarize_tags_from_bitmap,
 };
+use crate::sqlite::files::batch_get_by_hashes;
 use crate::sqlite::SqliteDatabase;
 use crate::types::{SelectionMode, SelectionQuerySpec, SelectionSummary, SelectionSummaryStats};
 
@@ -28,6 +30,7 @@ pub async fn get_selection_summary(
         mut sample_hashes,
         shared_tags,
         top_tags,
+        shared_folders,
         total_size_bytes,
         mime_counts,
         rating_stats_val,
@@ -41,7 +44,18 @@ pub async fn get_selection_summary(
                 .collect();
             let (count, total_size, mimes, shared, top, sample) =
                 summarize_hashes_bulk(db, &filtered).await?;
-            (count, sample, shared, top, total_size, mimes, None, false)
+
+            // Compute shared folders from file_ids
+            let hash_vec = filtered;
+            let file_ids = db
+                .with_conn(move |conn| {
+                    let files = batch_get_by_hashes(conn, &hash_vec)?;
+                    Ok(files.into_iter().map(|f| f.file_id).collect::<Vec<_>>())
+                })
+                .await?;
+            let folders = summarize_folders_from_hashes(db, &file_ids).await?;
+
+            (count, sample, shared, top, folders, total_size, mimes, None, false)
         }
         SelectionMode::AllResults => {
             let (base_bm, filtered_bm) = selection_bitmap_for_all_results(db, &selection).await?;
@@ -51,6 +65,8 @@ pub async fn get_selection_summary(
 
             let (shared, top) = summarize_tags_from_bitmap(db, &filtered_bm).await?;
 
+            let folders = summarize_folders_from_bitmap(db, &filtered_bm).await?;
+
             let (size, mimes, rstats) =
                 summarize_entity_stats_from_bitmap(db, &filtered_bm).await?;
             (
@@ -58,6 +74,7 @@ pub async fn get_selection_summary(
                 sample,
                 shared,
                 top,
+                folders,
                 Some(size),
                 Some(mimes),
                 Some(serde_json::json!({
@@ -83,6 +100,7 @@ pub async fn get_selection_summary(
         sample_hashes,
         shared_tags,
         top_tags,
+        shared_folders,
         stats: SelectionSummaryStats {
             total_size_bytes,
             mime_counts,

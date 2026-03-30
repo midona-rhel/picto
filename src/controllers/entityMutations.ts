@@ -52,6 +52,10 @@ export async function setTargetStatus(target: EntityTarget, status: number): Pro
   maybeReloadSingleEntity(target);
 }
 
+export async function permanentlyDeleteTarget(target: EntityTarget): Promise<void> {
+  await api.deleteEntities(target);
+}
+
 export async function updateTargetFolderMembership(
   target: EntityTarget,
   folderId: number,

@@ -64,10 +64,30 @@ impl SubscriptionRunOrchestrator {
         list_runtime_progress_from_tasks()
     }
 
+    pub async fn stop_subscription_query(
+        db: &SqliteDatabase,
+        running_subs: &tokio::sync::Mutex<std::collections::HashMap<String, CancellationToken>>,
+        subscription_id: String,
+        query_id: String,
+    ) -> Result<(), String> {
+        let progress = list_runtime_progress_from_tasks()
+            .into_iter()
+            .find(|event| event.subscription_id == subscription_id);
+        let event = progress
+            .ok_or_else(|| format!("Subscription {} is not running", subscription_id))?;
+        if event.mode != "query" || event.query_id.as_deref() != Some(query_id.as_str()) {
+            return Err(format!(
+                "Query {} is not running independently and cannot be stopped separately",
+                query_id
+            ));
+        }
+        Self::stop_subscription(db, running_subs, subscription_id).await
+    }
+
     pub async fn run_subscription(
         db: &Arc<SqliteDatabase>,
         blob_store: &Arc<BlobStore>,
-        _rate_limiter: &RateLimiter,
+        rate_limiter: &RateLimiter,
         running_subs: &RunningSubscriptions,
         id: String,
         sub_terminal_statuses: Option<SubTerminalStatuses>,
@@ -97,12 +117,13 @@ impl SubscriptionRunOrchestrator {
         if queries.is_empty() {
             return Err("Subscription has no queries".to_string());
         }
-
-        if sub.site_id.is_empty() {
-            return Err("Subscription has no site configured".to_string());
-        }
-        if crate::subscriptions::gallery_dl_runner::site_by_id(&sub.site_id).is_none() {
-            return Err(format!("Unknown site: {}", sub.site_id));
+        for query in &queries {
+            if query.site_id.is_empty() {
+                return Err(format!("Query {} has no site configured", query.query_id));
+            }
+            if crate::subscriptions::gallery_dl_runner::site_by_id(&query.site_id).is_none() {
+                return Err(format!("Unknown site: {}", query.site_id));
+            }
         }
 
         let cancel = CancellationToken::new();
@@ -125,9 +146,8 @@ impl SubscriptionRunOrchestrator {
             None
         };
         let sub_id_str = id.clone();
-        let site_id =
-            crate::subscriptions::gallery_dl_runner::canonical_site_id(&sub.site_id).to_string();
         let terminal_statuses = sub_terminal_statuses;
+        let rate_limiter = rate_limiter.clone();
 
         let app_settings = settings.get();
         let auto_merge_enabled = app_settings.duplicate_auto_merge_enabled;
@@ -167,6 +187,7 @@ impl SubscriptionRunOrchestrator {
                 let mut last_metadata_error: Option<String> = None;
 
                 let engine_result = SubscriptionSyncEngine::new(&db, &blob_store, &app_settings);
+                let subscription_run_id = db.create_subscription_run(sub_id).await.ok();
                 tracing::info!(
                     elapsed_ms = run_clock.elapsed().as_millis(),
                     "orchestrator: engine created"
@@ -176,6 +197,7 @@ impl SubscriptionRunOrchestrator {
                         let mut engine = engine
                             .with_name(sub_name.clone())
                             .with_group_name(group_name.clone())
+                            .with_rate_limiter(rate_limiter.clone())
                             .with_auto_merge(
                                 auto_merge_enabled,
                                 auto_merge_distance,
@@ -229,11 +251,12 @@ impl SubscriptionRunOrchestrator {
                                 );
                                 let result = engine
                                     .sync_query(
+                                        subscription_run_id,
                                         sub_id,
                                         current_query.query_id,
                                         &current_query.query_text,
                                         current_query.display_name.as_deref(),
-                                        &site_id,
+                                        &current_query.site_id,
                                         post_limit,
                                         current_query.completed_initial_run,
                                         current_query.resume_cursor.as_deref(),
@@ -322,6 +345,20 @@ impl SubscriptionRunOrchestrator {
                 } else {
                     "succeeded"
                 };
+                if let Some(subscription_run_id) = subscription_run_id {
+                    let _ = db
+                        .finish_subscription_run(
+                            subscription_run_id,
+                            status,
+                            last_failure_kind.clone(),
+                            last_error.clone(),
+                            total_downloaded as i64,
+                            total_skipped as i64,
+                            total_metadata_validated as i64,
+                            total_metadata_invalid as i64,
+                        )
+                        .await;
+                }
 
                 tracing::info!(
                     subscription_id = %sub_id_str,
@@ -388,7 +425,7 @@ impl SubscriptionRunOrchestrator {
     pub async fn run_subscription_query(
         db: &Arc<SqliteDatabase>,
         blob_store: &Arc<BlobStore>,
-        _rate_limiter: &RateLimiter,
+        rate_limiter: &RateLimiter,
         running_subs: &RunningSubscriptions,
         subscription_id: String,
         query_id: String,
@@ -430,11 +467,11 @@ impl SubscriptionRunOrchestrator {
             return Err(format!("Query {} is paused", query_id));
         }
 
-        if sub.site_id.is_empty() {
-            return Err("Subscription has no site configured".to_string());
+        if query.site_id.is_empty() {
+            return Err("Query has no site configured".to_string());
         }
-        if crate::subscriptions::gallery_dl_runner::site_by_id(&sub.site_id).is_none() {
-            return Err(format!("Unknown site: {}", sub.site_id));
+        if crate::subscriptions::gallery_dl_runner::site_by_id(&query.site_id).is_none() {
+            return Err(format!("Unknown site: {}", query.site_id));
         }
 
         let cancel = CancellationToken::new();
@@ -464,8 +501,9 @@ impl SubscriptionRunOrchestrator {
         let query_id_str = query_id.clone();
         let query_name_str = query_name.clone();
         let site_id =
-            crate::subscriptions::gallery_dl_runner::canonical_site_id(&sub.site_id).to_string();
+            crate::subscriptions::gallery_dl_runner::canonical_site_id(&query.site_id).to_string();
         let app_settings = settings.get();
+        let rate_limiter = rate_limiter.clone();
         let auto_merge_enabled = app_settings.duplicate_auto_merge_enabled;
         let auto_merge_distance = if auto_merge_enabled {
             crate::settings::store::similarity_pct_to_distance(
@@ -504,6 +542,7 @@ impl SubscriptionRunOrchestrator {
                             let mut engine = engine
                                 .with_name(sub_name.clone())
                                 .with_group_name(group_name_q.clone())
+                                .with_rate_limiter(rate_limiter.clone())
                                 .with_auto_merge(
                                     auto_merge_enabled,
                                     auto_merge_distance,
@@ -545,6 +584,7 @@ impl SubscriptionRunOrchestrator {
 
                                 let result = engine
                                     .sync_query(
+                                        None,
                                         sub_id,
                                         qid,
                                         &cq.query_text,
@@ -679,6 +719,212 @@ impl SubscriptionRunOrchestrator {
             }
         });
 
+        Ok(())
+    }
+
+    pub async fn retry_failed_post(
+        db: &Arc<SqliteDatabase>,
+        blob_store: &Arc<BlobStore>,
+        rate_limiter: &RateLimiter,
+        running_subs: &RunningSubscriptions,
+        subscription_id: String,
+        query_id: String,
+        site_id: String,
+        post_id: String,
+        settings: &SettingsStore,
+    ) -> Result<(), String> {
+        let sub_id: i64 = subscription_id
+            .parse()
+            .map_err(|_| format!("Invalid subscription id: {}", subscription_id))?;
+        let qid: i64 = query_id
+            .parse()
+            .map_err(|_| format!("Invalid query id: {}", query_id))?;
+
+        {
+            let map = running_subs.lock().await;
+            if map.contains_key(&subscription_id) {
+                return Err(format!(
+                    "Subscription {} is already running",
+                    subscription_id
+                ));
+            }
+        }
+
+        let sub = db
+            .with_read_conn(move |conn| get_subscription(conn, sub_id))
+            .await?
+            .ok_or_else(|| format!("Subscription {} not found", subscription_id))?;
+        let query = db
+            .with_read_conn(move |conn| get_subscription_query(conn, qid))
+            .await?
+            .ok_or_else(|| format!("Query {} not found", query_id))?;
+
+        let canonical_site_id =
+            crate::subscriptions::gallery_dl_runner::canonical_site_id(&site_id).to_string();
+        if canonical_site_id
+            != crate::subscriptions::gallery_dl_runner::canonical_site_id(&query.site_id)
+        {
+            return Err("retry site_id does not match the query site".to_string());
+        }
+
+        let attempts = db
+            .list_subscription_download_attempts(sub_id, Some(qid), 500)
+            .await?;
+        let matching: Vec<_> = attempts
+            .into_iter()
+            .filter(|attempt| {
+                attempt.post_id.as_deref() == Some(post_id.as_str())
+                    && attempt.site_category.as_deref() == Some(canonical_site_id.as_str())
+                    && attempt.status != "resolved"
+            })
+            .collect();
+        if matching.is_empty() {
+            return Err(format!(
+                "No failed download attempts found for post {} on query {}",
+                post_id, query_id
+            ));
+        }
+        let retry_url = matching
+            .iter()
+            .find_map(|attempt| attempt.retry_url.clone())
+            .or_else(|| matching.iter().find_map(|attempt| attempt.canonical_post_url.clone()))
+            .ok_or_else(|| format!("No retry URL recorded for post {post_id}"))?;
+        for attempt in &matching {
+            let _ = db
+                .mark_subscription_download_attempt_retrying(attempt.attempt_id)
+                .await;
+        }
+
+        let cancel = CancellationToken::new();
+        {
+            let mut map = running_subs.lock().await;
+            map.insert(subscription_id.clone(), cancel.clone());
+        }
+
+        let query_name = format!("Retry post {post_id}");
+        publish_start(
+            &subscription_id,
+            &sub.name,
+            "query",
+            Some(query_id.clone()),
+            Some(query_name.clone()),
+        );
+
+        let db = db.clone();
+        let blob_store = blob_store.clone();
+        let running_subs = running_subs.clone();
+        let rate_limiter = rate_limiter.clone();
+        let app_settings = settings.get();
+        let sub_name = sub.name.clone();
+        let group_name = if let Some(gid) = sub.group_id {
+            db.get_group(gid).await.ok().flatten().map(|g| g.name)
+        } else {
+            None
+        };
+        let sub_id_str = subscription_id.clone();
+        let query_id_str = query_id.clone();
+        let post_id_str = post_id.clone();
+        let retry_url_owned = retry_url.clone();
+        let query_name_finished = query_name.clone();
+        let query_name_panic = query_name.clone();
+        let running_subs_inner = running_subs.clone();
+        let running_subs_panic = running_subs.clone();
+        let sub_id_inner = sub_id_str.clone();
+        let sub_id_panic = subscription_id.clone();
+        let query_id_panic = query_id.clone();
+        let auto_merge_enabled = app_settings.duplicate_auto_merge_enabled;
+        let auto_merge_distance = if auto_merge_enabled {
+            crate::settings::store::similarity_pct_to_distance(
+                app_settings.duplicate_auto_merge_similarity_pct,
+            )
+        } else {
+            0
+        };
+        let auto_merge_require_matching_dimensions =
+            app_settings.duplicate_auto_merge_require_matching_dimensions;
+
+        tokio::spawn(async move {
+            let inner = tokio::spawn(async move {
+                let result = match SubscriptionSyncEngine::new(&db, &blob_store, &app_settings) {
+                    Ok(engine) => {
+                        let mut engine = engine
+                            .with_name(sub_name.clone())
+                            .with_group_name(group_name.clone())
+                            .with_rate_limiter(rate_limiter.clone())
+                            .with_auto_merge(
+                                auto_merge_enabled,
+                                auto_merge_distance,
+                                auto_merge_require_matching_dimensions,
+                            )
+                            .with_auto_collections(sub.auto_collections);
+                        engine
+                            .retry_failed_post(
+                                sub_id,
+                                qid,
+                                &canonical_site_id,
+                                &retry_url_owned,
+                                &post_id_str,
+                                cancel.clone(),
+                            )
+                            .await
+                    }
+                    Err(error) => {
+                        let mut progress = crate::subscriptions::sync_engine::SyncProgress::default();
+                        progress.errors.push(error);
+                        progress.failure_kind = Some("unknown".to_string());
+                        progress
+                    }
+                };
+
+                {
+                    let mut map = running_subs_inner.lock().await;
+                    map.remove(&sub_id_inner);
+                }
+
+                let status = if result.cancelled {
+                    "cancelled"
+                } else if result.errors.is_empty() {
+                    "succeeded"
+                } else {
+                    "failed"
+                };
+                let final_status_text =
+                    resolve_finished_status_text(status, result.failure_kind.as_deref());
+                publish_finished(
+                    &sub_id_str,
+                    &sub_name,
+                    "query",
+                    Some(query_id_str.clone()),
+                    Some(query_name_finished.clone()),
+                    result.files_downloaded,
+                    result.files_skipped,
+                    result.metadata_validated,
+                    result.metadata_invalid,
+                    result.last_metadata_error.clone(),
+                    status,
+                    final_status_text,
+                    result.failure_kind.clone(),
+                    result.errors.last().cloned(),
+                );
+                schedule_progress_snapshot_clear(running_subs_inner.clone(), sub_id_inner.clone());
+            });
+
+            if let Err(e) = inner.await {
+                let mut map = running_subs_panic.lock().await;
+                map.remove(&sub_id_panic);
+                publish_panic(
+                    &sub_id_panic,
+                    &sub.name,
+                    "query",
+                    Some(query_id_panic.clone()),
+                    Some(query_name_panic.clone()),
+                    format!("Task panicked: {e}"),
+                );
+                schedule_progress_snapshot_clear(running_subs_panic.clone(), sub_id_panic.clone());
+            }
+        });
+
+        let _ = query;
         Ok(())
     }
 }

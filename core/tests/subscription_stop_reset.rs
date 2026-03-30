@@ -2,7 +2,6 @@
 
 mod common;
 
-use picto_core::subscriptions::db::SubscriptionQuery;
 use picto_core::subscriptions::gallery_dl_runner::{self, ParsedMetadata};
 use picto_core::subscriptions::import_policy::{collection_group_parts, preferred_import_name};
 use picto_core::subscriptions::policy::effective_query_post_limit;
@@ -18,12 +17,12 @@ async fn reset_clears_file_and_post_counts() {
     // Create a subscription with a query
     let sub = h
         .db
-        .create_subscription("test-sub", "danbooru", None)
+        .create_subscription("test-sub", None)
         .await
         .expect("create subscription");
     let query = h
         .db
-        .add_subscription_query(sub.subscription_id, "1girl solo", None)
+        .add_subscription_query(sub.subscription_id, "danbooru", "1girl solo", None)
         .await
         .expect("add query");
 
@@ -83,12 +82,12 @@ async fn reset_single_query_clears_post_count() {
 
     let sub = h
         .db
-        .create_subscription("test-sub2", "gelbooru", None)
+        .create_subscription("test-sub2", None)
         .await
         .expect("create subscription");
     let query = h
         .db
-        .add_subscription_query(sub.subscription_id, "landscape", None)
+        .add_subscription_query(sub.subscription_id, "gelbooru", "landscape", None)
         .await
         .expect("add query");
 
@@ -251,6 +250,7 @@ fn collection_group_uses_canonical_kemono_category() {
         post_id: Some("555".to_string()),
         category: Some("kemonoparty".to_string()),
         title: Some("Post Title".to_string()),
+        page_count: Some(2),
         ..Default::default()
     };
 

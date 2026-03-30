@@ -479,12 +479,19 @@ pub struct SelectionSummaryStats {
 }
 
 #[derive(Debug, Serialize)]
+pub struct SelectionFolderInfo {
+    pub folder_id: i64,
+    pub name: String,
+}
+
+#[derive(Debug, Serialize)]
 pub struct SelectionSummary {
     pub total_count: i64,
     pub selected_count: i64,
     pub sample_hashes: Vec<String>,
     pub shared_tags: Vec<SelectionTagCount>,
     pub top_tags: Vec<SelectionTagCount>,
+    pub shared_folders: Vec<SelectionFolderInfo>,
     pub stats: SelectionSummaryStats,
     pub pending: bool,
     pub generated_at: String,
@@ -614,7 +621,6 @@ pub struct SubscriptionGroupInfo {
 pub struct SubscriptionInfo {
     pub id: String,
     pub name: String,
-    pub site_id: String,
     pub paused: bool,
     pub group_id: Option<String>,
     pub initial_post_limit: u32,
@@ -628,8 +634,10 @@ pub struct SubscriptionInfo {
 #[derive(Debug, Serialize)]
 pub struct SubscriptionQueryInfo {
     pub id: String,
+    pub site_id: String,
     pub query_text: String,
     pub display_name: Option<String>,
+    pub notes: Option<String>,
     pub paused: bool,
     pub last_check_time: Option<String>,
     pub files_found: u64,
@@ -637,6 +645,10 @@ pub struct SubscriptionQueryInfo {
     pub completed_initial_run: bool,
     pub resume_cursor: Option<String>,
     pub resume_strategy: Option<String>,
+    pub last_success_at: Option<String>,
+    pub last_failure_at: Option<String>,
+    pub last_failure_kind: Option<String>,
+    pub last_failure_message: Option<String>,
 }
 
 /// Running subscriptions tracker. Key = subscription ID string.

@@ -1,0 +1,50 @@
+.root {
+  display: inline-flex;
+  align-items: center;
+  gap: 0;
+  border: 1px solid var(--color-border-secondary);
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.15);
+  overflow: hidden;
+  -webkit-app-region: no-drag;
+}
+
+.button {
+  appearance: none;
+  border: none;
+  background: transparent;
+  color: var(--color-text-secondary);
+  opacity: 0.8;
+  min-height: 28px;
+  padding: 0 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  line-height: 1;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: opacity 150ms ease, background 150ms ease, color 150ms ease;
+}
+
+.button:hover {
+  opacity: 1;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--color-text-primary);
+}
+
+.button:focus-visible {
+  outline: 2px solid var(--color-primary-60);
+  outline-offset: -2px;
+}
+
+.button + .button {
+  border-left: 1px solid var(--color-border-secondary);
+}
+
+.buttonActive {
+  opacity: 1;
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--color-text-primary);
+}

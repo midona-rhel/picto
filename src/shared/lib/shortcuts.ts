@@ -30,12 +30,15 @@ export const SHORTCUT_DEFS: ShortcutDef[] = [
   // ── File ──
   { id: 'file.settings',            label: 'Settings',             group: 'File', keys: 'Mod+,' },
   { id: 'file.delete',              label: 'Move to Trash',        group: 'File', keys: 'Mod+Backspace' },
+  { id: 'file.restore',             label: 'Restore from Trash',   group: 'File', keys: 'Mod+Backspace' },
+  { id: 'file.permanentDelete',     label: 'Delete Permanently',   group: 'File', keys: 'Mod+Shift+Backspace' },
   { id: 'file.newFolder',           label: 'New Folder',           group: 'File', keys: 'Mod+Shift+N' },
   { id: 'file.addToFolder',         label: 'Add to Folder...',     group: 'File', keys: 'Mod+Shift+J' },
   { id: 'file.removeFromFolder',    label: 'Remove from Folder',   group: 'File', keys: 'Mod+Shift+Backspace' },
   { id: 'file.regenerateThumbnail', label: 'Regenerate Thumbnail', group: 'File', keys: 'Mod+Shift+T' },
-  // TODO: file.import (Mod+I), file.export (Mod+E), file.openDefault (Shift+Enter),
-  //       file.newWindow (Mod+O), file.revealFolder (Mod+Enter) — add when UI exists
+  { id: 'file.openDefaultApp',     label: 'Open with Default App', group: 'File', keys: 'Shift+Enter' },
+  { id: 'file.revealInFolder',     label: 'Reveal in Folder',     group: 'File', keys: 'Mod+Enter' },
+  { id: 'file.openNewWindow',      label: 'Open in New Window',   group: 'File', keys: 'Mod+O' },
 
   // ── Edit ──
   { id: 'organize.addTag',    label: 'Add Tags',       group: 'Edit', keys: 'T',              description: 'Focus tag input in inspector' },
@@ -43,8 +46,12 @@ export const SHORTCUT_DEFS: ShortcutDef[] = [
   { id: 'edit.undo',          label: 'Undo',            group: 'Edit', keys: 'Mod+Z' },
   { id: 'edit.redo',          label: 'Redo',            group: 'Edit', keys: 'Mod+Shift+Z' },
   { id: 'edit.selectAll',     label: 'Select All',      group: 'Edit', keys: 'Mod+A' },
+  { id: 'edit.deselectAll',   label: 'Deselect All',    group: 'Edit', keys: 'Escape' },
   { id: 'edit.rename',        label: 'Rename',          group: 'Edit', keys: 'Mod+R' },
-  // TODO: edit.copyPath (Mod+Alt+C), organize.autoTag (Mod+Shift+A) — add when UI exists
+  { id: 'edit.copy',          label: 'Copy',            group: 'Edit', keys: 'Mod+C' },
+  { id: 'edit.copyFilePath',  label: 'Copy File Path',  group: 'Edit', keys: 'Mod+Alt+C' },
+  { id: 'edit.copyTags',      label: 'Copy Tags',       group: 'Edit', keys: 'Mod+Shift+C' },
+  { id: 'edit.pasteTags',     label: 'Paste Tags',      group: 'Edit', keys: 'Mod+Shift+V' },
 
   // ── Inbox ──
   { id: 'inbox.accept', label: 'Accept', group: 'Inbox', keys: 'Enter',     description: 'Accept inbox image (set to active)' },

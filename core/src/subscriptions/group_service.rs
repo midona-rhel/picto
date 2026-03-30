@@ -28,8 +28,11 @@ pub async fn get_groups(db: &SqliteDatabase) -> Result<Vec<SubscriptionGroupInfo
                 .or_default()
                 .push(SubscriptionQueryInfo {
                     id: q.query_id.to_string(),
+                    site_id: crate::subscriptions::gallery_dl_runner::canonical_site_id(&q.site_id)
+                        .to_string(),
                     query_text: q.query_text.clone(),
                     display_name: q.display_name.or(Some(q.query_text)),
+                    notes: q.notes,
                     paused: q.paused,
                     last_check_time: q.last_check_time,
                     files_found: q.files_found as u64,
@@ -37,6 +40,10 @@ pub async fn get_groups(db: &SqliteDatabase) -> Result<Vec<SubscriptionGroupInfo
                     completed_initial_run: q.completed_initial_run,
                     resume_cursor: q.resume_cursor,
                     resume_strategy: q.resume_strategy,
+                    last_success_at: q.last_success_at,
+                    last_failure_at: q.last_failure_at,
+                    last_failure_kind: q.last_failure_kind,
+                    last_failure_message: q.last_failure_message,
                 });
         }
 
@@ -46,12 +53,9 @@ pub async fn get_groups(db: &SqliteDatabase) -> Result<Vec<SubscriptionGroupInfo
             .map(|(sub, file_count)| {
                 let sub_id = sub.subscription_id;
                 group_total += file_count as u64;
-                let canonical_site_id =
-                    crate::subscriptions::gallery_dl_runner::canonical_site_id(&sub.site_id);
                 SubscriptionInfo {
                     id: sub_id.to_string(),
                     name: sub.name,
-                    site_id: canonical_site_id.to_string(),
                     paused: sub.paused,
                     group_id: sub.group_id.map(|id| id.to_string()),
                     initial_post_limit: sub.initial_post_limit as u32,
