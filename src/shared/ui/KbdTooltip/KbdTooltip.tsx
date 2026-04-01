@@ -21,7 +21,7 @@ const tooltipStyles = {
     backdropFilter: 'blur(16px)',
     WebkitBackdropFilter: 'blur(16px)',
     border: '1px solid var(--color-border-secondary)',
-    borderTop: '1px solid rgba(255, 255, 255, 0.15)',
+    borderTop: 'var(--glass-border-top)',
     boxShadow: '0 2px 8px rgba(0, 0, 0, 0.3)',
     borderRadius: 4,
     padding: '0 6px',

@@ -100,7 +100,7 @@
 
 .pinBtn:hover {
   color: var(--color-text-primary);
-  background: rgba(255, 255, 255, 0.10);
+  background: var(--color-subtle-overlay);
 }
 
 .pinBtnActive {
@@ -167,7 +167,7 @@
   height: 17px;
   padding: 0 4px;
   border-radius: 3px;
-  background: rgba(255, 255, 255, 0.10);
+  background: var(--color-subtle-overlay);
   font-size: 11px;
   font-family: var(--font-family-mono);
   color: var(--color-text-primary);
@@ -189,7 +189,7 @@
 }
 
 .checkRow:hover {
-  background: rgba(255, 255, 255, 0.10);
+  background: var(--color-subtle-overlay);
 }
 
 .checkRowActive {
@@ -201,7 +201,7 @@
   height: 14px;
   border-radius: var(--radius-sm);
   background: var(--color-black-20);
-  outline: 1px solid rgba(255, 255, 255, 0.20);
+  outline: 1px solid var(--color-pressed-overlay);
   outline-offset: -1px;
   display: flex;
   align-items: center;

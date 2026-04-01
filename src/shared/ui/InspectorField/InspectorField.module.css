@@ -48,7 +48,7 @@
 
 .fieldActionBtn:hover {
   opacity: 1;
-  background: rgba(255, 255, 255, 0.05);
+  background: var(--color-surface-hover);
 }
 
 /* Content area — view mode */
@@ -90,7 +90,7 @@
   max-height: 132px;
   overflow-y: auto;
   scrollbar-width: none;
-  background: rgba(255, 255, 255, 0.05);
+  background: var(--color-surface-hover);
   border: 1px solid var(--color-border-secondary);
   border-radius: 6px;
   box-shadow: var(--shadow-panel);
@@ -145,7 +145,7 @@
 
 .popoverActionBtn:hover {
   opacity: 1;
-  background: rgba(255, 255, 255, 0.05);
+  background: var(--color-surface-hover);
 }
 
 .popoverText {
@@ -182,7 +182,7 @@
   left: 0;
   right: 0;
   z-index: var(--layer-overlay);
-  background: rgba(255, 255, 255, 0.05);
+  background: var(--color-surface-hover);
   backdrop-filter: blur(16px) saturate(1.2);
   -webkit-backdrop-filter: blur(16px) saturate(1.2);
   border: 1px solid var(--color-border-secondary);
@@ -205,7 +205,7 @@
 }
 
 .urlRow:hover {
-  background: rgba(255, 255, 255, 0.05);
+  background: var(--color-surface-hover);
 }
 
 .urlText {

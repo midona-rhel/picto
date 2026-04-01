@@ -47,7 +47,12 @@ export interface FolderWatchModalState {
 export const folderWatchModalAtom = atom<FolderWatchModalState>({ open: false });
 
 // ── Export modal ──
-export const exportModalAtom = atom({ open: false, fileCount: 0 });
+export interface ExportModalState {
+  open: boolean;
+  fileCount: number;
+  target?: import('../shared/types/canonical').EntityTarget;
+}
+export const exportModalAtom = atom<ExportModalState>({ open: false, fileCount: 0 });
 
 // ── Create subscription group modal ──
 export const createGroupModalAtom = atom({ open: false });

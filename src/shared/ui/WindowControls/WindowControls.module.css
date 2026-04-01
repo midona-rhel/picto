@@ -31,11 +31,11 @@
 }
 
 .btn:hover {
-  background: rgba(255, 255, 255, 0.10);
+  background: var(--color-subtle-overlay);
 }
 
 .btn:active {
-  background: rgba(255, 255, 255, 0.20);
+  background: var(--color-pressed-overlay);
 }
 
 .btn.closeBtn:hover {

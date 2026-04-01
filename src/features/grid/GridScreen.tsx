@@ -51,7 +51,7 @@ import { ContextMenu, useContextMenu } from '../../shared/ui/ContextMenu';
 import { buildTileContextMenu, buildEmptyContextMenu } from './gridContextMenu';
 import type { BaseScope } from '../../shared/types/canonical';
 import { saveScrollPosition, getScrollPosition, pushHistory } from '../../state/navigationHistory';
-import { resolveFilePath, shellOpenPath, shellShowInFolder, clipboardWriteText, clipboardCopyFile, createCollection, addCollectionMembers, removeCollectionMembers, deleteCollection, listCollectionMemberHashes } from '../../platform/api';
+import { resolveFilePath, shellOpenPath, shellShowInFolder, clipboardWriteText, clipboardCopyFile, createCollection, addCollectionMembers, removeCollectionMembers, deleteCollection, listCollectionMemberHashes, importFiles, importFolder } from '../../platform/api';
 import { viewerSessionAtom, quickLookSessionAtom, createViewerSession, navigateViewerSession } from '../../state/viewer';
 import { tagSelectOpenAtom, folderPickerOpenAtom, aiTaggerOpenAtom, batchRenameOpenAtom } from '../../state/portals';
 import { confirmModalAtom } from '../../state/modals';
@@ -614,11 +614,48 @@ export function GridScreen() {
           <span className={styles.emptyDesc}>{emptyDesc}</span>
           {showImport && (
             <div className={styles.emptyActions}>
-              <button className={styles.emptyBtn} type="button" onClick={() => { /* TODO: import files */ }}>
+              <button className={styles.emptyBtn} type="button" onClick={() => {
+                void (async () => {
+                  try {
+                    console.log('[grid] opening file picker for import');
+                    const result = await (window as any).picto.dialog.open({
+                      properties: ['openFile'], multiple: true, title: 'Import files',
+                      filters: [{ name: 'Media', extensions: ['png','jpg','jpeg','gif','webp','bmp','mp4','webm','mkv','mov','avi'] }],
+                    });
+                    console.log('[grid] file picker result:', result);
+                    if (result) {
+                      const paths = Array.isArray(result) ? result : [result];
+                      console.log('[grid] importing files:', paths.length);
+                      await importFiles(paths);
+                      console.log('[grid] import_files dispatched');
+                    }
+                  } catch (err) {
+                    console.error('[grid] import files failed:', err);
+                  }
+                })();
+              }}>
                 <IconUpload size={14} stroke={1.5} />
                 Import Files
               </button>
-              <button className={styles.emptyBtn} type="button" onClick={() => { /* TODO: import folder */ }}>
+              <button className={styles.emptyBtn} type="button" onClick={() => {
+                void (async () => {
+                  try {
+                    console.log('[grid] opening directory picker for import');
+                    const result = await (window as any).picto.dialog.open({
+                      properties: ['openDirectory'], multiple: false, title: 'Import folder',
+                    });
+                    console.log('[grid] directory picker result:', result);
+                    if (result) {
+                      const folderPath = typeof result === 'string' ? result : result[0];
+                      console.log('[grid] importing folder:', folderPath);
+                      await importFolder(folderPath);
+                      console.log('[grid] import_folder dispatched');
+                    }
+                  } catch (err) {
+                    console.error('[grid] import folder failed:', err);
+                  }
+                })();
+              }}>
                 <IconFolderPlus size={14} stroke={1.5} />
                 Import Folder
               </button>

@@ -1,6 +1,7 @@
 //! Durable ingest queue — committed source files wait here until the background
 //! ingest worker imports them into the library.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -1099,6 +1100,17 @@ async fn maybe_cleanup_root(db: &SqliteDatabase, cleanup_root: Option<&str>) {
     }
 }
 
+fn unique_entity_hashes<'a>(entity_hashes: impl IntoIterator<Item = &'a str>) -> Vec<String> {
+    let mut seen = HashSet::new();
+    let mut unique = Vec::new();
+    for entity_hash in entity_hashes {
+        if seen.insert(entity_hash) {
+            unique.push(entity_hash.to_string());
+        }
+    }
+    unique
+}
+
 async fn process_single_queue(
     db: &Arc<SqliteDatabase>,
     canonical_db: &Arc<LibraryDatabase>,
@@ -1201,6 +1213,12 @@ async fn process_single_queue(
         Some(outcome.file_hash.clone()),
     )
     .await?;
+    crate::background_work::enqueue_missing_derivative_jobs(
+        canonical_db,
+        blob_store,
+        std::slice::from_ref(&outcome.entity_hash),
+    )
+    .await;
     if item.delete_after_ingest {
         delete_source_file_if_owned(&item.source_path).await;
     }
@@ -1386,6 +1404,14 @@ async fn process_collection_queue(
             delete_source_file_if_owned(&item.source_path).await;
         }
     }
+    let derivative_entity_hashes =
+        unique_entity_hashes(result.resolved_members.iter().map(|member| member.entity_hash.as_str()));
+    crate::background_work::enqueue_missing_derivative_jobs(
+        canonical_db,
+        blob_store,
+        &derivative_entity_hashes,
+    )
+    .await;
     Ok(())
 }
 
@@ -1654,5 +1680,11 @@ mod tests {
 
         let candidates = list_duplicate_failed_single_queue_candidates(&conn).unwrap();
         assert_eq!(candidates, vec![(1, 11, "/tmp/a".to_string())]);
+    }
+
+    #[test]
+    fn unique_entity_hashes_preserves_order_while_deduping() {
+        let unique = unique_entity_hashes(["a", "b", "a", "c", "b"]);
+        assert_eq!(unique, vec!["a".to_string(), "b".to_string(), "c".to_string()]);
     }
 }

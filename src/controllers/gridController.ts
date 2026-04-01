@@ -28,6 +28,12 @@ let gridVersion = 0;
 let paginationInFlight: string | null = null;
 let searchDebounceTimer: ReturnType<typeof setTimeout> | null = null;
 const SEARCH_DEBOUNCE_MS = 300;
+
+// Prefetch: keep at least this many items loaded, and start fetching more
+// when remaining (unloaded) items drops below the runway threshold.
+const PREFETCH_MIN_ITEMS = 5000;
+const PREFETCH_RUNWAY_ITEMS = 1000;
+const PREFETCH_BATCH_SIZE = 500;
 let viewPrefsSaveTimer: ReturnType<typeof setTimeout> | null = null;
 const VIEW_PREFS_SAVE_DEBOUNCE_MS = 500;
 let currentScopeKey = '';
@@ -183,7 +189,7 @@ export const gridController = {
   },
 
   async loadFirstPage(options?: { preserveItems?: boolean }) {
-    paginationInFlight = null; // invalidate any in-flight next-page
+    paginationInFlight = null;
     const v = ++gridVersion;
     store.set(gridLoadingAtom, true);
     store.set(gridErrorAtom, null);
@@ -194,17 +200,14 @@ export const gridController = {
       store.set(gridTotalSizeBytesAtom, null);
     }
     try {
-      // First page loads 500 items so the layout math has enough positions
-      // to estimate the total scroll height accurately (avoids scrollbar jitter
-      // as 100-item batches stream in). Subsequent pages load 100 via loadNextPage.
-      // This is a deliberate UX trade-off: slightly larger initial payload for
-      // stable scroll behavior. Can be tuned down if memory pressure is observed.
-      const result = await api.queryEntityView(currentQuery(500));
+      const result = await api.queryEntityView(currentQuery(PREFETCH_BATCH_SIZE));
       if (v !== gridVersion) return;
       store.set(gridItemsAtom, result.items);
       store.set(gridCursorAtom, result.next_cursor);
       store.set(gridTotalCountAtom, result.total_count);
       store.set(gridTotalSizeBytesAtom, result.total_size_bytes);
+      // Kick off background prefetch to fill the buffer
+      void this.prefetchToMinimum();
     } catch (err) {
       if (v !== gridVersion) return;
       store.set(gridErrorAtom, err instanceof Error ? err.message : String(err));
@@ -216,14 +219,13 @@ export const gridController = {
   async loadNextPage() {
     const cursor = store.get(gridCursorAtom);
     if (!cursor) return;
-    // Guard: if this cursor is already being fetched, skip
     if (paginationInFlight === cursor) return;
     paginationInFlight = cursor;
     const v = gridVersion;
     store.set(gridLoadingAtom, true);
     try {
-      const query = currentQuery(100);
-      query.page = { limit: 100, cursor };
+      const query = currentQuery(PREFETCH_BATCH_SIZE);
+      query.page = { limit: PREFETCH_BATCH_SIZE, cursor };
       const result = await api.queryEntityView(query);
       if (v !== gridVersion || paginationInFlight !== cursor) return;
       paginationInFlight = null;
@@ -231,12 +233,51 @@ export const gridController = {
       store.set(gridCursorAtom, result.next_cursor);
       store.set(gridTotalCountAtom, result.total_count);
       store.set(gridTotalSizeBytesAtom, result.total_size_bytes);
+      // After each scroll-triggered fetch, check if we need more
+      void this.prefetchToMinimum();
     } catch (err) {
       if (v !== gridVersion) return;
       paginationInFlight = null;
       store.set(gridErrorAtom, err instanceof Error ? err.message : String(err));
     } finally {
       if (v === gridVersion) store.set(gridLoadingAtom, false);
+    }
+  },
+
+  /**
+   * Background prefetch loop — keeps loading batches until at least
+   * PREFETCH_MIN_ITEMS are buffered or there are no more items.
+   * Re-triggered when remaining runway drops below PREFETCH_RUNWAY_ITEMS.
+   */
+  async prefetchToMinimum() {
+    const v = gridVersion;
+    while (v === gridVersion) {
+      const cursor = store.get(gridCursorAtom);
+      if (!cursor) break; // no more pages
+      const loaded = store.get(gridItemsAtom).length;
+      const total = store.get(gridTotalCountAtom) ?? loaded;
+      const remaining = total - loaded;
+      // Stop if we have enough loaded or the remaining unloaded items are
+      // above the runway (i.e. we're far from the edge)
+      if (loaded >= PREFETCH_MIN_ITEMS && remaining > PREFETCH_RUNWAY_ITEMS) break;
+      // Also stop if loaded >= total (everything fetched)
+      if (loaded >= total) break;
+      if (paginationInFlight === cursor) break; // another fetch is handling this cursor
+      paginationInFlight = cursor;
+      try {
+        const query = currentQuery(PREFETCH_BATCH_SIZE);
+        query.page = { limit: PREFETCH_BATCH_SIZE, cursor };
+        const result = await api.queryEntityView(query);
+        if (v !== gridVersion || paginationInFlight !== cursor) return;
+        paginationInFlight = null;
+        store.set(gridItemsAtom, [...store.get(gridItemsAtom), ...result.items]);
+        store.set(gridCursorAtom, result.next_cursor);
+        store.set(gridTotalCountAtom, result.total_count);
+        store.set(gridTotalSizeBytesAtom, result.total_size_bytes);
+      } catch {
+        paginationInFlight = null;
+        break; // stop prefetching on error, scroll-triggered fetch will retry
+      }
     }
   },
 

@@ -21,6 +21,6 @@
   font-size: 10px;
   font-family: var(--font-family);
   color: var(--color-text-primary);
-  background: rgba(255, 255, 255, 0.1);
+  background: var(--color-subtle-overlay);
   box-sizing: border-box;
 }

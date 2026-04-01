@@ -49,7 +49,7 @@ export function FolderWatchModal({
   const browse = useCallback(async () => {
     try {
       const result = await (window as any).picto.dialog.open({
-        directory: true,
+        properties: ['openDirectory'],
         multiple: false,
         title: 'Select folder to watch',
       });

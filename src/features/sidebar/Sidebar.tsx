@@ -7,7 +7,7 @@
 
 import { useEffect, useMemo, useCallback, useRef } from 'react';
 import { useAtomValue, useSetAtom, getDefaultStore } from 'jotai';
-import { folderWatchModalAtom, confirmModalAtom } from '../../state/modals';
+import { folderWatchModalAtom, confirmModalAtom, exportModalAtom } from '../../state/modals';
 import {
   IconFolder, IconFolderOpen, IconFolderPlus, IconFolderSymlink,
   IconCopy, IconUpload, IconDownload,
@@ -26,14 +26,13 @@ import {
 } from '../../state/sidebar';
 import { activeNodeIdAtom } from '../../state/navigation';
 import { pushHistory } from '../../state/navigationHistory';
+import * as api from '../../platform/api';
 import { sidebarController } from '../../controllers/sidebarController';
 import { foldersController } from '../../controllers/foldersController';
 import { smartFoldersController } from '../../controllers/smartFoldersController';
 import { SidebarRow } from '../../shared/ui/SidebarRow';
 import { ContextMenu, useContextMenu, type MenuEntry } from '../../shared/ui/ContextMenu';
 import { ColorPicker } from '../../shared/ui/ColorPicker';
-// TODO: wire IconPicker into "Change Icon..." submenu
-// import { IconPicker } from '../../shared/ui/IconPicker';
 import { DynamicIcon } from '../../shared/ui/DynamicIcon';
 import { useInlineRename } from '../../shared/hooks/useInlineRename';
 import { usePersistedSet } from '../../shared/hooks/usePersistedSet';
@@ -171,24 +170,47 @@ export function Sidebar() {
       { label: 'Rename', icon: <IconRename size={14} />, action: () => folderRename.startRename(node.id, node.name) },
       { label: 'Set Auto-Tags...', icon: <IconAutoTags size={14} />, action: () => { /* TODO: needs auto-tags editor panel */ } },
       { separator: true },
-      { label: 'Import Folder Here...', icon: <IconFolderPlus size={14} />, action: () => { /* TODO: needs import dialog */ } },
+      { label: 'Import Folder Here...', icon: <IconFolderPlus size={14} />, action: () => {
+        void (async () => {
+          try {
+            console.log('[sidebar] opening directory picker for import into folder', folderId);
+            const result = await (window as any).picto.dialog.open({
+              properties: ['openDirectory'], multiple: false, title: 'Import folder into ' + node.name,
+            });
+            console.log('[sidebar] dialog result:', result);
+            if (result) {
+              const folderPath = typeof result === 'string' ? result : result[0];
+              console.log('[sidebar] importing folder:', folderPath, '→ parent:', folderId);
+              await api.importFolder(folderPath, { parent_folder_id: folderId, preserve_structure: true });
+              console.log('[sidebar] import_folder dispatched');
+            }
+          } catch (err) {
+            console.error('[sidebar] import folder failed:', err);
+          }
+        })();
+      } },
       { label: 'Attach Watched Folder...', icon: <IconWatchFolder size={14} />, action: () => {
         store.set(folderWatchModalAtom, { open: true, folderId, initial: {} });
       } },
       { separator: true },
-      { label: 'Sort', icon: <IconSort size={14} />, action: () => { /* TODO: needs sort submenu */ } },
+      { label: 'Sort by Name', icon: <IconSort size={14} />, action: () => { void api.reorderFolderItems(folderId, { sort_by: 'name', direction: 'asc' }); } },
       { label: isExpanded ? 'Collapse Folder' : 'Expand Folder', icon: isExpanded ? <IconCollapse size={14} /> : <IconExpand size={14} />,
         action: () => { if (hasChildren) toggleCollapse(node.id); },
         disabled: !hasChildren },
       { label: 'Expand/Collapse All', icon: <IconExpandAll size={14} />, action: () => toggleCollapseAll() },
       { separator: true },
-      { label: 'Change Icon...', icon: <IconChangeIcon size={14} />, action: () => { /* TODO: needs icon picker submenu */ } },
+      { label: 'Change Icon...', icon: <IconChangeIcon size={14} />, action: () => { /* TODO: needs icon picker submenu — update_folder supports icon param */ } },
       { custom: true, key: 'folder-color', render: () => (
         <ColorPicker value={node.color ?? null} onChange={(hex) => foldersController.applyColor(folderId, hex)} />
       ) },
       { separator: true },
-      { label: 'Duplicate', icon: <IconCopy size={14} />, action: () => { /* TODO: needs folder duplicate API */ } },
-      { label: 'Export...', icon: <IconUpload size={14} />, action: () => { /* TODO: needs export dialog */ } },
+      { label: 'Duplicate', icon: <IconCopy size={14} />, disabled: true, action: () => {} },
+      { label: 'Export...', icon: <IconUpload size={14} />, action: () => {
+        store.set(exportModalAtom, {
+          open: true, fileCount: node.count ?? 0,
+          target: { kind: 'query_results', query: { base_scope: { kind: 'folder', id: folderId } } },
+        });
+      } },
       { label: 'Move', icon: <IconFolderSymlink size={14} />, action: () => { /* TODO: needs folder destination picker */ } },
       { separator: true },
       { label: 'Delete', icon: <IconTrash size={14} />, danger: true, action: () => {
@@ -218,7 +240,7 @@ export function Sidebar() {
         }} />
       ) },
       { separator: true },
-      { label: 'Duplicate', icon: <IconCopy size={14} />, action: () => { /* TODO: needs smart folder duplicate API */ } },
+      { label: 'Duplicate', icon: <IconCopy size={14} />, disabled: true, action: () => {} },
       { separator: true },
       { label: 'Delete', icon: <IconTrash size={14} />, danger: true, action: () => {
         store.set(confirmModalAtom, {
@@ -293,7 +315,7 @@ export function Sidebar() {
           variant="section" label="Smart Folders"
           expanded={!collapsed.has('smart_folders')}
           onToggle={() => toggleCollapse('smart_folders')}
-          onAdd={() => { /* TODO: smart folder create modal */ }}
+          onAdd={() => { void api.createSmartFolder({ name: 'New Smart Folder' }); }}
         />
         {!collapsed.has('smart_folders') && smartList.map(({ node, indent, hasChildren, treeLines, isLastChild }) => (
           <SidebarRow

@@ -88,10 +88,19 @@ export function ContextMenu({ entries, position, onClose, searchable = true, wid
   const menuRef = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   const [pos, setPos] = useState(position);
+  const [origin, setOrigin] = useState('top left');
   const [search, setSearch] = useState('');
   const [focusIdx, setFocusIdx] = useState(-1);
   const [openSubmenuLabel, setOpenSubmenuLabel] = useState<string | null>(null);
   const submenuTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [closing, setClosing] = useState(false);
+
+  const startClose = useCallback(() => {
+    if (closing) return;
+    setClosing(true);
+    // Unmount after exit animation
+    setTimeout(onClose, 80);
+  }, [closing, onClose]);
 
   const cancelSubmenuTimer = useCallback(() => {
     if (submenuTimerRef.current) { clearTimeout(submenuTimerRef.current); submenuTimerRef.current = null; }
@@ -124,17 +133,20 @@ export function ContextMenu({ entries, position, onClose, searchable = true, wid
     .map((e, i) => (!isSeparator(e) && !isCustom(e) ? i : -1))
     .filter((i) => i >= 0);
 
-  // Viewport clamping
+  // Viewport clamping + transform origin for scale animation
   useLayoutEffect(() => {
     const el = menuRef.current;
     if (!el) return;
     const rect = el.getBoundingClientRect();
     let { x, y } = position;
-    if (x + rect.width > window.innerWidth - 8) x = window.innerWidth - rect.width - 8;
-    if (y + rect.height > window.innerHeight - 8) y = window.innerHeight - rect.height - 8;
+    let ox = 'left';
+    let oy = 'top';
+    if (x + rect.width > window.innerWidth - 8) { x = window.innerWidth - rect.width - 8; ox = 'right'; }
+    if (y + rect.height > window.innerHeight - 8) { y = window.innerHeight - rect.height - 8; oy = 'bottom'; }
     if (x < 8) x = 8;
     if (y < 8) y = 8;
     setPos({ x, y });
+    setOrigin(`${oy} ${ox}`);
   }, [position, cleaned.length]);
 
   useEffect(() => { if (searchable) searchRef.current?.focus(); }, [searchable]);
@@ -142,7 +154,7 @@ export function ContextMenu({ entries, position, onClose, searchable = true, wid
   // Keyboard
   useEffect(() => {
     function handleKey(e: KeyboardEvent) {
-      if (e.key === 'Escape') { onClose(); return; }
+      if (e.key === 'Escape') { startClose(); return; }
       if (e.key === 'ArrowDown') {
         e.preventDefault();
         setFocusIdx((prev) => {
@@ -162,7 +174,7 @@ export function ContextMenu({ entries, position, onClose, searchable = true, wid
         const item = cleaned[focusIdx];
         if (!item || isSeparator(item) || isCustom(item)) return;
         if (isSubmenu(item)) { setOpenSubmenuLabel(openSubmenuLabel === item.label ? null : item.label); return; }
-        if (!item.disabled) { item.action(); onClose(); }
+        if (!item.disabled) { item.action(); startClose(); }
       }
       if (e.key === 'ArrowRight' && focusIdx >= 0) {
         const item = cleaned[focusIdx];
@@ -175,19 +187,19 @@ export function ContextMenu({ entries, position, onClose, searchable = true, wid
     }
     window.addEventListener('keydown', handleKey, true);
     return () => window.removeEventListener('keydown', handleKey, true);
-  }, [onClose, focusIdx, cleaned, actionableIndices, openSubmenuLabel]);
+  }, [startClose, focusIdx, cleaned, actionableIndices, openSubmenuLabel]);
 
   return createPortal(
     <div className="no-drag-region">
       <div
         className={styles.backdrop}
-        onPointerDown={(e) => { e.preventDefault(); e.stopPropagation(); onClose(); }}
-        onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); onClose(); }}
+        onPointerDown={(e) => { e.preventDefault(); e.stopPropagation(); startClose(); }}
+        onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); startClose(); }}
       />
       <div
         ref={menuRef}
         className={styles.menu}
-        style={{ left: pos.x, top: pos.y, width: width ?? undefined }}
+        style={{ left: pos.x, top: pos.y, width: width ?? undefined, transformOrigin: origin }}
         onPointerDown={(e) => e.stopPropagation()}
         onContextMenu={(e) => e.preventDefault()}
       >
@@ -291,6 +303,7 @@ function SubmenuPanel({
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const [pos, setPos] = useState({ left: 0, top: 0 });
+  const [subOrigin, setSubOrigin] = useState('top left');
 
   useLayoutEffect(() => {
     const parent = parentRef.current;
@@ -302,11 +315,13 @@ function SubmenuPanel({
 
     let left = parentRect.right + 4;
     let top = itemRect.top - 3;
+    let ox = 'left';
     const elRect = el.getBoundingClientRect();
-    if (left + elRect.width > window.innerWidth - 8) left = parentRect.left - elRect.width - 4;
+    if (left + elRect.width > window.innerWidth - 8) { left = parentRect.left - elRect.width - 4; ox = 'right'; }
     if (top + elRect.height > window.innerHeight - 8) top = window.innerHeight - elRect.height - 8;
     if (top < 8) top = 8;
     setPos({ left, top });
+    setSubOrigin(`top ${ox}`);
   }, [parentRef, itemIdx]);
 
   const cleaned = cleanSeparators(items);
@@ -315,7 +330,7 @@ function SubmenuPanel({
     <div
       ref={ref}
       className={styles.menu}
-      style={{ left: pos.left, top: pos.top }}
+      style={{ left: pos.left, top: pos.top, transformOrigin: subOrigin }}
       onPointerDown={(e) => e.stopPropagation()}
       onContextMenu={(e) => e.preventDefault()}
       onMouseEnter={onMouseEnter}

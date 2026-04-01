@@ -516,6 +516,97 @@ export function pixivOAuthExchange(
   });
 }
 
+// ── Import / Export ─────────────────────────────────────────────
+
+export function importFiles(paths: string[], params?: {
+  tag_strings?: string[];
+  source_urls?: string[];
+  initial_status?: number;
+  parent_folder_id?: number | null;
+}): Promise<unknown> {
+  return invoke('import_files', { paths, ...params } as unknown as Record<string, unknown>);
+}
+
+export function importFolder(path: string, params?: {
+  preserve_structure?: boolean;
+  parent_folder_id?: number | null;
+  initial_status?: number;
+}): Promise<unknown> {
+  return invoke('import_folder', {
+    path,
+    preserve_structure: params?.preserve_structure ?? true,
+    parent_folder_id: params?.parent_folder_id ?? null,
+    initial_status: params?.initial_status ?? 1,
+  } as unknown as Record<string, unknown>);
+}
+
+export function exportMedia(target: EntityTarget, config: {
+  output_dir: string;
+  format?: string | null;
+  quality?: number | null;
+  width?: number | null;
+  height?: number | null;
+  keep_aspect?: boolean;
+}): Promise<unknown> {
+  return invoke('export_media', { target, ...config } as unknown as Record<string, unknown>);
+}
+
+// ── Folder operations ───────────────────────────────────────────
+
+export function reorderFolderItems(folderId: number, params: {
+  sort_by?: string;
+  direction?: string;
+}): Promise<void> {
+  return invoke<void>('reorder_folder_items', { folder_id: folderId, ...params });
+}
+
+// ── AI Tagger ───────────────────────────────────────────────────
+
+export interface AiTaggerStatus {
+  models: Array<{
+    model: string;
+    downloaded: boolean;
+    enabled: boolean;
+    size_bytes: number | null;
+  }>;
+  gpu_backend: string | null;
+}
+
+export function aiTaggerStatus(): Promise<AiTaggerStatus> {
+  return invoke<AiTaggerStatus>('ai_tagger_status');
+}
+
+export function aiTaggerDownloadModel(model: string): Promise<void> {
+  return invoke<void>('ai_tagger_download_model', { model });
+}
+
+export function aiTaggerDeleteModel(model: string): Promise<void> {
+  return invoke<void>('ai_tagger_delete_model', { model });
+}
+
+export interface TagPrediction {
+  namespace: string;
+  tag: string;
+  confidence: number;
+}
+
+export interface FilePrediction {
+  hash: string;
+  tags: TagPrediction[];
+  error?: string | null;
+}
+
+export function aiTagPredict(hashes: string[], models?: string[]): Promise<{ predictions: FilePrediction[] }> {
+  return invoke<{ predictions: FilePrediction[] }>('ai_tag_predict', {
+    hashes,
+    models: models ?? null,
+  } as unknown as Record<string, unknown>);
+}
+
+export function aiTagApply(hashes: string[], tags: string[]): Promise<{ applied_count: number }> {
+  return invoke<{ applied_count: number }>('ai_tag_apply', { hashes, tags });
+}
+
 // ── Shell operations ────────────────────────────────────────────
 
 export interface EntityAssetResult {

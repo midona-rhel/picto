@@ -50,7 +50,7 @@ export function ExportModal({ open, onClose, onExport, fileCount }: ExportModalP
   const browse = useCallback(async () => {
     try {
       const result = await (window as any).picto.dialog.open({
-        directory: true, multiple: false, title: 'Choose export folder',
+        properties: ['openDirectory'], multiple: false, title: 'Choose export folder',
       });
       if (result) setOutputDir(typeof result === 'string' ? result : result[0]);
     } catch {}

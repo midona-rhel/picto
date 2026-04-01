@@ -17,6 +17,7 @@ import { ExportModal } from './ExportModal';
 import { CreateGroupModal } from './CreateGroupModal';
 import { smartFoldersController } from '../../controllers/smartFoldersController';
 import { foldersController } from '../../controllers/foldersController';
+import * as api from '../../platform/api';
 
 export function ModalLayer() {
   const confirm = useAtomValue(confirmModalAtom);
@@ -85,8 +86,17 @@ export function ModalLayer() {
       <ExportModal
         open={exportState.open}
         onClose={() => setExport({ open: false, fileCount: 0 })}
-        onExport={() => {
-          // TODO: wire export backend command when available
+        onExport={(config) => {
+          if (exportState.target) {
+            void api.exportMedia(exportState.target, {
+              output_dir: config.outputDir,
+              format: config.format === 'original' ? null : config.format,
+              quality: config.quality,
+              width: config.width,
+              height: config.height,
+              keep_aspect: config.keepAspectRatio,
+            });
+          }
           setExport({ open: false, fileCount: 0 });
         }}
         fileCount={exportState.fileCount}

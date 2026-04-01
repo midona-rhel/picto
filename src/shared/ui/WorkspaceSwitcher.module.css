@@ -31,7 +31,7 @@
 
 .button:hover {
   opacity: 1;
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--color-hover-overlay);
   color: var(--color-text-primary);
 }
 
@@ -46,6 +46,6 @@
 
 .buttonActive {
   opacity: 1;
-  background: rgba(255, 255, 255, 0.1);
+  background: var(--color-subtle-overlay);
   color: var(--color-text-primary);
 }
