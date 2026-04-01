@@ -12,6 +12,7 @@ const api = {
     call: (method, payload = {}) => ipcRenderer.invoke('picto:window', { method, payload }),
   },
   popupMenu: () => ipcRenderer.invoke('picto:popup-menu'),
+  restartMainWindow: () => ipcRenderer.invoke('picto:restart-main-window'),
 };
 
 const events = {

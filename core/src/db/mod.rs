@@ -54,6 +54,16 @@ fn reconcile_open_schema(conn: &Connection) -> Result<(), String> {
         )
         .map_err(|e| format!("Failed to backfill entity_tag.provenance_mask: {e}"))?;
     }
+    if has_column(conn, "media_file", "color_analysis_version").map_err(|e| e.to_string())? == false
+    {
+        conn.execute_batch(
+            "ALTER TABLE media_file
+             ADD COLUMN color_analysis_version INTEGER NOT NULL DEFAULT 0",
+        )
+        .map_err(|e| {
+            format!("Failed to add media_file.color_analysis_version to canonical db: {e}")
+        })?;
+    }
     conn.execute_batch(
         "DROP TABLE IF EXISTS rejected_fingerprint;
          DROP TABLE IF EXISTS rejected_media;",
@@ -1553,10 +1563,13 @@ impl LibraryDatabase {
         entity_hash: &str,
         colors: &[(String, f32, f32, f32)],
         dominant_color_hex: Option<&str>,
+        dominant_palette_blob: Option<&[u8]>,
+        color_analysis_version: i64,
     ) -> Result<(), String> {
         let hash = entity_hash.to_string();
         let colors = colors.to_vec();
         let dominant = dominant_color_hex.map(str::to_string);
+        let palette_blob = dominant_palette_blob.map(|blob| blob.to_vec());
         self.with_write(move |conn| {
             let file_id: i64 = conn.query_row(
                 "SELECT mf.file_id
@@ -1567,8 +1580,14 @@ impl LibraryDatabase {
                 [&hash],
                 |row| row.get(0),
             )?;
-            write::files::save_file_colors(conn, file_id, &colors)?;
-            write::files::update_file_analysis(conn, file_id, None, dominant.as_deref(), None)
+            write::files::replace_file_color_analysis(
+                conn,
+                file_id,
+                &colors,
+                dominant.as_deref(),
+                palette_blob.as_deref(),
+                color_analysis_version,
+            )
         })
     }
 
@@ -1577,13 +1596,122 @@ impl LibraryDatabase {
         file_id: i64,
         colors: &[(String, f32, f32, f32)],
         dominant_color_hex: Option<&str>,
+        dominant_palette_blob: Option<&[u8]>,
+        color_analysis_version: i64,
     ) -> Result<(), String> {
         let colors = colors.to_vec();
         let dominant = dominant_color_hex.map(str::to_string);
+        let palette_blob = dominant_palette_blob.map(|blob| blob.to_vec());
         self.with_write(move |conn| {
-            write::files::save_file_colors(conn, file_id, &colors)?;
-            write::files::replace_file_dominant_color(conn, file_id, dominant.as_deref())
+            write::files::replace_file_color_analysis(
+                conn,
+                file_id,
+                &colors,
+                dominant.as_deref(),
+                palette_blob.as_deref(),
+                color_analysis_version,
+            )
         })
+    }
+
+    pub fn get_file_colors_for_entity_hash(
+        &self,
+        entity_hash: &str,
+    ) -> Result<Vec<(String, f64, f64, f64)>, String> {
+        let hash = entity_hash.to_string();
+        self.with_read(|conn| {
+            let row = conn
+                .query_row(
+                    "SELECT mf.file_id, mf.dominant_palette_blob
+                     FROM media_entity me
+                     JOIN single_media_entity sme ON sme.entity_id = me.entity_id
+                     JOIN media_file mf ON mf.file_id = sme.file_id
+                     WHERE me.entity_hash = ?1",
+                    [&hash],
+                    |row| Ok((row.get::<_, i64>(0)?, row.get::<_, Option<Vec<u8>>>(1)?)),
+                )
+                .optional()?;
+            let Some((file_id, dominant_palette_blob)) = row else {
+                return Ok(Vec::new());
+            };
+
+            if let Some(blob) = dominant_palette_blob.as_deref() {
+                match crate::media_processing::colors::deserialize_dominant_palette_blob(blob) {
+                    Ok(colors) => {
+                        return Ok(colors
+                            .into_iter()
+                            .map(|color| (color.hex, color.l, color.a, color.b))
+                            .collect());
+                    }
+                    Err(error) => {
+                        tracing::warn!(
+                            entity_hash = %hash,
+                            file_id,
+                            error = %error,
+                            "Failed to decode dominant_palette_blob, falling back to file_color"
+                        );
+                    }
+                }
+            }
+
+            let mut stmt = conn.prepare_cached(
+                "SELECT hex, l, a, b FROM file_color WHERE file_id = ?1 ORDER BY rowid",
+            )?;
+            let colors = stmt
+                .query_map([file_id], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, f64>(1)?,
+                        row.get::<_, f64>(2)?,
+                        row.get::<_, f64>(3)?,
+                    ))
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(colors)
+        })
+    }
+
+    pub fn enqueue_stale_color_analysis_jobs(&self, target_version: i64) -> Result<usize, String> {
+        let candidates = self.with_read(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT me.entity_hash, mf.mime_type, mf.frame_count
+                 FROM media_entity me
+                 JOIN single_media_entity sme ON sme.entity_id = me.entity_id
+                 JOIN media_file mf ON mf.file_id = sme.file_id
+                 WHERE mf.color_analysis_version < ?1
+                    OR (mf.color_analysis_version >= ?1 AND mf.dominant_palette_blob IS NULL)",
+            )?;
+            let rows = stmt
+                .query_map([target_version], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, Option<i64>>(2)?,
+                    ))
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(rows)
+        })?;
+
+        let items = candidates
+            .into_iter()
+            .filter_map(|(entity_hash, mime_type, frame_count)| {
+                let caps = crate::media_capabilities::capabilities_for_stored_media(
+                    &mime_type,
+                    frame_count,
+                );
+                caps.can_dominant_colors.then_some((
+                    entity_hash,
+                    vec![crate::background_work::DeferredWorkType::DominantColors],
+                ))
+            })
+            .collect::<Vec<_>>();
+
+        let count = items.len();
+        if count > 0 {
+            self.enqueue_deferred_jobs_batch(items)?;
+        }
+        Ok(count)
     }
 
     /// Get the entity_hash of a collection's primary member (first by ordinal).
@@ -1637,8 +1765,26 @@ impl LibraryDatabase {
         self.with_read(|conn| query::sidebar::get_sidebar_tree(conn))
     }
 
+    pub fn get_sidebar_tree_epoch(&self) -> Result<u64, String> {
+        self.with_read(query::sidebar::get_sidebar_tree_epoch)
+    }
+
     pub fn get_scope_counts(&self) -> Result<query::stats::ScopeCounts, String> {
         self.with_read(|conn| query::stats::get_scope_counts(conn))
+    }
+
+    pub fn count_media_files(&self) -> Result<i64, String> {
+        self.with_read(query::stats::count_media_files)
+    }
+
+    pub fn aggregate_file_stats(&self) -> Result<crate::sqlite::files::FileStats, String> {
+        self.with_read(query::stats::aggregate_file_stats)
+    }
+
+    pub fn aggregate_media_type_breakdown(
+        &self,
+    ) -> Result<crate::sqlite::files::MediaTypeBreakdown, String> {
+        self.with_read(query::stats::aggregate_media_type_breakdown)
     }
 
     pub fn search_tags(
@@ -1656,6 +1802,132 @@ impl LibraryDatabase {
 
     pub fn get_entity_tags(&self, entity_hash: &str) -> Result<Vec<types::TagInfo>, String> {
         self.with_read(|conn| query::tags::get_entity_tags(conn, entity_hash))
+    }
+
+    pub fn get_entity_all_metadata(
+        &self,
+        entity_hash: &str,
+    ) -> Result<Option<crate::types::EntityAllMetadata>, String> {
+        let Some(entity) = self.get_entity_details(entity_hash)? else {
+            return Ok(None);
+        };
+        let entity_id = self.with_read(|conn| {
+            conn.query_row(
+                "SELECT entity_id FROM media_entity WHERE entity_hash = ?1",
+                [entity_hash],
+                |row| row.get::<_, i64>(0),
+            )
+        })?;
+
+        let colors = self.get_file_colors_for_entity_hash(entity_hash)?;
+        let parent_tags = self.with_read(|conn| query::metadata::get_implied_tags(conn, entity_hash))?;
+
+        let tags = entity
+            .tags
+            .iter()
+            .map(|tag| {
+                let raw_tag = crate::types::tag_display_key(&tag.namespace, &tag.subtag);
+                crate::types::ResolvedTagInfo {
+                    raw_tag: raw_tag.clone(),
+                    display_tag: raw_tag,
+                    namespace: tag.namespace.clone(),
+                    subtag: tag.subtag.clone(),
+                    source: tag.source.clone(),
+                    read_only: tag.source != "local",
+                }
+            })
+            .collect();
+
+        let has_thumbnail = !entity.thumbnail_hash.is_empty();
+        let entity_dto = crate::types::EntityDetails {
+            entity_id,
+            kind: entity.entity_kind.as_str().to_string(),
+            hash: entity.entity_hash.clone(),
+            thumbnail_hash: entity.thumbnail_hash,
+            member_count: entity.member_count,
+            name: entity.name,
+            size: entity.size_bytes,
+            mime: entity.mime_type,
+            width: entity.pixel_width,
+            height: entity.pixel_height,
+            duration_ms: entity.duration_ms,
+            num_frames: entity.frame_count,
+            has_audio: entity.has_audio,
+            status: crate::types::status_to_string(entity.status).to_string(),
+            rating: entity.rating,
+            view_count: 0,
+            source_urls: entity
+                .source_urls
+                .as_ref()
+                .and_then(|urls| serde_json::to_value(urls).ok()),
+            imported_at: entity.date_added,
+            has_thumbnail,
+            dominant_color_hex: entity.dominant_color_hex,
+            dominant_colors: Some(
+                colors
+                    .into_iter()
+                    .map(|(hex, l, a, b)| crate::types::DominantColorDto { hex, l, a, b })
+                    .collect(),
+            ),
+            notes: entity
+                .notes
+                .as_ref()
+                .and_then(|notes| serde_json::from_str(notes).ok()),
+            created_at: Some(entity.date_created),
+            updated_at: Some(entity.date_modified),
+        };
+
+        Ok(Some(crate::types::EntityAllMetadata {
+            entity: entity_dto,
+            tags,
+            parent_tags,
+        }))
+    }
+
+    pub fn get_view_pref(
+        &self,
+        scope: &str,
+    ) -> Result<Option<crate::settings::db::ViewPref>, String> {
+        self.with_read(|conn| query::settings::get_view_pref_with_fallback(conn, scope))
+    }
+
+    pub fn set_view_pref(&self, pref: crate::settings::db::ViewPref) -> Result<(), String> {
+        self.with_write(|conn| query::settings::set_view_pref(conn, &pref))
+    }
+
+    pub fn get_folder_entity_hashes(&self, folder_id: i64) -> Result<Vec<String>, String> {
+        self.with_read(|conn| query::folders::get_folder_entity_hashes(conn, folder_id))
+    }
+
+    pub fn get_folder_cover_hash(&self, folder_id: i64) -> Result<Option<String>, String> {
+        self.with_read(|conn| query::folders::get_folder_cover_hash(conn, folder_id))
+    }
+
+    pub fn get_entity_folder_memberships(
+        &self,
+        entity_hash: &str,
+    ) -> Result<Vec<crate::folders::db::FolderMembership>, String> {
+        let hash = entity_hash.to_string();
+        self.with_read(|conn| {
+            let entity_id: Option<i64> = conn
+                .query_row(
+                    "SELECT entity_id FROM media_entity WHERE entity_hash = ?1",
+                    [&hash],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            let Some(entity_id) = entity_id else {
+                return Ok(Vec::new());
+            };
+            query::folders::get_entity_folder_memberships(conn, entity_id)
+        })
+    }
+
+    pub fn get_entity_folder_memberships_by_entity_id(
+        &self,
+        entity_id: i64,
+    ) -> Result<Vec<crate::folders::db::FolderMembership>, String> {
+        self.with_read(|conn| query::folders::get_entity_folder_memberships(conn, entity_id))
     }
 
     pub fn get_aliases_for_tag(&self, tag_id: i64) -> Result<Vec<types::TagRelation>, String> {
@@ -2463,5 +2735,141 @@ impl LibraryDatabase {
     /// Get bitmap length for a key (used by sidebar counts).
     pub fn bitmap_len(&self, key: &projection::bitmaps::BitmapKey) -> u64 {
         self.bitmaps.len(key)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::LibraryDatabase;
+    use crate::background_work::{DeferredWorkFilter, DeferredWorkType};
+    use crate::db::core::schema::LIBRARY_DDL;
+    use crate::media_analysis::TARGET_COLOR_ANALYSIS_VERSION;
+    use crate::media_processing::colors::{serialize_dominant_palette_blob, DominantColor};
+    use tempfile::TempDir;
+
+    fn open_test_db() -> LibraryDatabase {
+        let tmp = TempDir::new().expect("tempdir");
+        let db = LibraryDatabase::open(tmp.path()).expect("open library db");
+        std::mem::forget(tmp);
+        db
+    }
+
+    #[test]
+    fn get_file_colors_for_entity_hash_prefers_blob_and_falls_back_to_index() {
+        let db = open_test_db();
+        db.with_write(|conn| {
+            conn.execute_batch(LIBRARY_DDL)?;
+            conn.execute(
+                "INSERT INTO media_entity (
+                    entity_id, entity_hash, entity_kind, status, name, date_created, date_added, date_modified
+                 ) VALUES (1, 'with_blob', 'single', 1, 'Blob', '2026-04-01', '2026-04-01', '2026-04-01')",
+                [],
+            )?;
+            conn.execute(
+                "INSERT INTO media_entity (
+                    entity_id, entity_hash, entity_kind, status, name, date_created, date_added, date_modified
+                 ) VALUES (2, 'fallback', 'single', 1, 'Fallback', '2026-04-01', '2026-04-01', '2026-04-01')",
+                [],
+            )?;
+
+            let blob = serialize_dominant_palette_blob(&[DominantColor {
+                hex: "#abcdef".into(),
+                l: 10.0,
+                a: 1.0,
+                b: 2.0,
+            }])
+            .expect("serialize");
+
+            conn.execute(
+                "INSERT INTO media_file (
+                    file_id, file_hash, mime_type, size_bytes, has_audio, dominant_color_hex,
+                    dominant_palette_blob, color_analysis_version, date_added
+                 ) VALUES (1, 'file_blob', 'image/png', 1, 0, '#abcdef', ?1, ?2, '2026-04-01')",
+                rusqlite::params![blob, TARGET_COLOR_ANALYSIS_VERSION],
+            )?;
+            conn.execute(
+                "INSERT INTO media_file (
+                    file_id, file_hash, mime_type, size_bytes, has_audio, dominant_color_hex,
+                    color_analysis_version, date_added
+                 ) VALUES (2, 'file_fallback', 'image/png', 1, 0, '#123456', 0, '2026-04-01')",
+                [],
+            )?;
+            conn.execute("INSERT INTO single_media_entity (entity_id, file_id) VALUES (1, 1)", [])?;
+            conn.execute("INSERT INTO single_media_entity (entity_id, file_id) VALUES (2, 2)", [])?;
+            conn.execute(
+                "INSERT INTO file_color (file_id, hex, l, a, b) VALUES (2, '#fedcba', 20.0, 3.0, 4.0)",
+                [],
+            )?;
+            Ok(())
+        })
+        .expect("seed db");
+
+        let blob_colors = db
+            .get_file_colors_for_entity_hash("with_blob")
+            .expect("get blob colors");
+        let fallback_colors = db
+            .get_file_colors_for_entity_hash("fallback")
+            .expect("get fallback colors");
+
+        assert_eq!(blob_colors[0].0, "#abcdef");
+        assert_eq!(fallback_colors[0].0, "#fedcba");
+    }
+
+    #[test]
+    fn enqueue_stale_color_analysis_jobs_only_queues_stale_color_capable_rows() {
+        let db = open_test_db();
+        db.with_write(|conn| {
+            conn.execute_batch(LIBRARY_DDL)?;
+            conn.execute(
+                "INSERT INTO media_entity (
+                    entity_id, entity_hash, entity_kind, status, name, date_created, date_added, date_modified
+                 ) VALUES
+                    (1, 'stale_image', 'single', 1, 'Stale', '2026-04-01', '2026-04-01', '2026-04-01'),
+                    (2, 'fresh_image', 'single', 1, 'Fresh', '2026-04-01', '2026-04-01', '2026-04-01'),
+                    (3, 'audio_only', 'single', 1, 'Audio', '2026-04-01', '2026-04-01', '2026-04-01')",
+                [],
+            )?;
+
+            let blob = serialize_dominant_palette_blob(&[DominantColor {
+                hex: "#010203".into(),
+                l: 1.0,
+                a: 2.0,
+                b: 3.0,
+            }])
+            .expect("serialize");
+
+            conn.execute(
+                "INSERT INTO media_file (
+                    file_id, file_hash, mime_type, size_bytes, has_audio, color_analysis_version, date_added
+                 ) VALUES
+                    (1, 'stale_file', 'image/png', 1, 0, 0, '2026-04-01'),
+                    (3, 'audio_file', 'audio/mpeg', 1, 1, 0, '2026-04-01')",
+                [],
+            )?;
+            conn.execute(
+                "INSERT INTO media_file (
+                    file_id, file_hash, mime_type, size_bytes, has_audio, dominant_palette_blob,
+                    color_analysis_version, date_added
+                 ) VALUES (2, 'fresh_file', 'image/png', 1, 0, ?1, ?2, '2026-04-01')",
+                rusqlite::params![blob, TARGET_COLOR_ANALYSIS_VERSION],
+            )?;
+            conn.execute("INSERT INTO single_media_entity (entity_id, file_id) VALUES (1, 1)", [])?;
+            conn.execute("INSERT INTO single_media_entity (entity_id, file_id) VALUES (2, 2)", [])?;
+            conn.execute("INSERT INTO single_media_entity (entity_id, file_id) VALUES (3, 3)", [])?;
+            Ok(())
+        })
+        .expect("seed db");
+
+        let queued = db
+            .enqueue_stale_color_analysis_jobs(TARGET_COLOR_ANALYSIS_VERSION)
+            .expect("enqueue stale colors");
+        let jobs = db
+            .list_deferred_work_items(DeferredWorkFilter::default())
+            .expect("list jobs");
+
+        assert_eq!(queued, 1);
+        assert_eq!(jobs.len(), 1);
+        assert_eq!(jobs[0].entity_hash, "stale_image");
+        assert_eq!(jobs[0].work_type, DeferredWorkType::DominantColors);
     }
 }

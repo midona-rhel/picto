@@ -15,6 +15,7 @@ pub mod deferred;
 pub mod duplicates;
 pub mod folders;
 pub mod ingest;
+pub mod media_io;
 pub mod reads;
 pub mod selection;
 pub mod smart_folders;
@@ -45,10 +46,6 @@ impl ApplicationEngine {
 
     pub(crate) fn db(&self) -> &LibraryDatabase {
         &self.db
-    }
-
-    pub(crate) fn db_arc(&self) -> Arc<LibraryDatabase> {
-        self.db.clone()
     }
 
     /// Commit a write result: emit a state-change event and schedule projection work.
@@ -85,9 +82,17 @@ impl ApplicationEngine {
                     patches.push(crate::runtime_contract::state_change::SidebarNodePatch {
                         node_id: format!("folder:{fid}"),
                         count: Some(Some(count)),
-                        removed: None, upsert: None, kind: None, parent_id: None,
-                        name: None, icon: None, color: None, sort_order: None,
-                        selectable: None, freshness: None, meta_json: None,
+                        removed: None,
+                        upsert: None,
+                        kind: None,
+                        parent_id: None,
+                        name: None,
+                        icon: None,
+                        color: None,
+                        sort_order: None,
+                        selectable: None,
+                        freshness: None,
+                        meta_json: None,
                     });
                 }
             }

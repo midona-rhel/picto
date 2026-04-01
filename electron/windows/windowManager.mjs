@@ -1,34 +1,58 @@
 import fs from 'node:fs';
+import { createRequire } from 'node:module';
+
+const isMac = process.platform === 'darwin';
+const isWin = process.platform === 'win32';
+const esmRequire = createRequire(import.meta.url);
 
 /** Map theme name to a background color for BrowserWindow creation. */
 const THEME_BG_COLORS = {
-  dark:      '#1a1a1e',
-  blue:      '#0f1732',
-  purple:    '#1e1526',
-  gray:      '#323236',
-  light:     '#ebedef',
-  lightgray: '#d5d7da',
-  auto:      null, // resolved below
+  dark:        '#1a1a1e',
+  blue:        '#0f1732',
+  purple:      '#1e1526',
+  gray:        '#323236',
+  light:       '#ebedef',
+  lightgray:   '#c8cacd',
+  auto:        null,
+  // Native transparency themes — bg is transparent
+  vibrancy:    '#00000000',
+  liquidglass: '#00000000',
+  mica:        '#00000000',
+  acrylic:     '#00000000',
 };
 
+/** Native transparency themes that need special BrowserWindow options. */
+const NATIVE_THEMES = new Set(['vibrancy', 'liquidglass', 'mica', 'acrylic']);
+
 /** Try to read the theme from the last library's settings.json synchronously. */
-function getThemeBgColor(getCachedConfig) {
+function getThemeInfo(getCachedConfig) {
+  let theme = 'dark';
   try {
     const config = getCachedConfig();
     const libraryPath = config?.lastLibrary;
-    if (!libraryPath) return THEME_BG_COLORS.dark;
-    const settingsPath = libraryPath + '/settings.json';
-    const raw = fs.readFileSync(settingsPath, 'utf-8');
-    const settings = JSON.parse(raw);
-    const theme = settings.theme || 'dark';
-    if (theme === 'auto') {
-      // Check OS preference via nativeTheme (imported by caller if needed)
-      return THEME_BG_COLORS.dark; // safe fallback; actual auto handled at CSS level
+    if (libraryPath) {
+      const settingsPath = libraryPath + '/settings.json';
+      const raw = fs.readFileSync(settingsPath, 'utf-8');
+      const settings = JSON.parse(raw);
+      theme = settings.colorScheme || settings.theme || 'dark';
     }
-    return THEME_BG_COLORS[theme] || THEME_BG_COLORS.dark;
-  } catch {
-    return THEME_BG_COLORS.dark;
+  } catch {}
+  if (theme === 'auto') {
+    // Resolve auto at creation time — CSS handles the rest
+    try {
+      const { nativeTheme } = esmRequire('electron');
+      theme = nativeTheme.shouldUseDarkColors ? 'dark' : 'light';
+    } catch {
+      theme = 'dark';
+    }
   }
+  const bgColor = THEME_BG_COLORS[theme] || THEME_BG_COLORS.dark;
+  return { theme, bgColor };
+}
+
+// Keep backward compat
+function getThemeBgColor(getCachedConfig) {
+  return getThemeInfo(getCachedConfig).bgColor;
 }
 
 const MAIN_WINDOW_DEFAULT_WIDTH = 1200;
@@ -697,12 +721,16 @@ export function createWindowManager({
     const isSubscriptions = label === 'subscriptions';
     const isDetail = hash != null && !isSettings && !isSubscriptions;
     const isMain = !isSettings && !isSubscriptions && !isDetail;
-    const isMac = process.platform === 'darwin';
-
     const savedMainState = isMain ? getSavedMainWindowState() : null;
     const initialWidth = savedMainState?.width ?? width;
     const initialHeight = savedMainState?.height ?? height;
-    const themeBg = getThemeBgColor(getCachedConfig);
+    const { theme: currentTheme, bgColor: themeBg } = getThemeInfo(getCachedConfig);
+    const isNativeTheme = NATIVE_THEMES.has(currentTheme);
+    // Native themes: transparent + vibrancy on macOS for main, settings, and subscriptions windows.
+    // Liquid glass falls back to vibrancy (addView blocks input — see above).
+    const isSecondary = isSettings || isSubscriptions;
+    const useTransparent = isNativeTheme && isMac && (isMain || isSecondary);
+    const useVibrancy = isMac && (currentTheme === 'vibrancy' || currentTheme === 'liquidglass');
     const winOpts = {
       width: initialWidth,
       height: initialHeight,
@@ -714,8 +742,8 @@ export function createWindowManager({
             maximizable: false,
             fullscreenable: false,
             frame: false,
-            transparent: false,
-            backgroundColor: themeBg,
+            transparent: useTransparent,
+            backgroundColor: useTransparent ? '#00000000' : (themeBg === '#00000000' ? '#1a1a1e' : themeBg),
           }
         : isSubscriptions
           ? {
@@ -727,13 +755,13 @@ export function createWindowManager({
               maximizable: false,
               fullscreenable: false,
               frame: false,
-              transparent: false,
-              backgroundColor: themeBg,
+              transparent: useTransparent,
+              backgroundColor: useTransparent ? '#00000000' : (themeBg === '#00000000' ? '#1a1a1e' : themeBg),
             }
           : isDetail
             ? {
                 frame: false,
-                transparent: false,
+                transparent: useTransparent,
                 backgroundColor: themeBg,
               }
             : {
@@ -743,17 +771,25 @@ export function createWindowManager({
                   ? {
                       frame: true,
                       titleBarStyle: 'hiddenInset',
-                      transparent: false,
+                      transparent: useTransparent,
                       backgroundColor: themeBg,
                     }
                   : {
                       frame: false,
-                      transparent: false,
+                      transparent: useTransparent,
                       backgroundColor: themeBg,
                     }),
               }),
       show: false,
       ...(isMac && { roundedCorners: true }),
+      // macOS vibrancy — applied at creation time (zero-frame)
+      ...(useVibrancy && {
+        vibrancy: 'under-window',
+        visualEffectState: 'active',
+      }),
+      // Liquid glass on main: NO vibrancy (addView handles it)
+      ...(isMain && currentTheme === 'mica' && isWin && { backgroundMaterial: 'mica' }),
+      ...(isMain && currentTheme === 'acrylic' && isWin && { backgroundMaterial: 'acrylic' }),
       webPreferences: {
         preload: path.join(__dirname, 'preload.cjs'),
         contextIsolation: true,
@@ -767,6 +803,11 @@ export function createWindowManager({
     }
 
     const win = new BrowserWindow(winOpts);
+
+    // macOS Liquid Glass — electron-liquid-glass addView() blocks all mouse input
+    // (NSGlassEffectView intercepts hit tests, no known fix as of v1.1.1).
+    // Fall back to vibrancy which gives a similar frosted effect with working input.
+    const needsLiquidGlass = false; // disabled — see above
     win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
 
     if (isDetail) {
@@ -1072,6 +1113,7 @@ export function createWindowManager({
     openSubscriptionsWindow,
     setAuthSessionBounds,
     startAuthSession,
+    getMainWindow,
     sendToAllWindows,
     sendToFocusedWindow,
     sendToMainWindow,

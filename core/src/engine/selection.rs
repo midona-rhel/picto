@@ -6,7 +6,9 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 
 use crate::db::types::{EntityGridItem, EntityTarget, QueryPage};
 use crate::selection::helpers::RatingStats;
-use crate::types::{SelectionFolderInfo, SelectionSummary, SelectionSummaryStats, SelectionTagCount};
+use crate::types::{
+    SelectionFolderInfo, SelectionSummary, SelectionSummaryStats, SelectionTagCount,
+};
 
 use super::{target, ApplicationEngine};
 
@@ -97,10 +99,12 @@ impl ApplicationEngine {
         let mut shared = Vec::new();
 
         for tag in all_counts {
-            let mut bitmap = self
-                .db
-                .bitmaps
-                .get(&crate::db::projection::bitmaps::BitmapKey::EffectiveTag(tag.tag_id));
+            let mut bitmap =
+                self.db
+                    .bitmaps
+                    .get(&crate::db::projection::bitmaps::BitmapKey::EffectiveTag(
+                        tag.tag_id,
+                    ));
             if bitmap.is_empty() {
                 continue;
             }
@@ -153,10 +157,12 @@ impl ApplicationEngine {
 
         let mut shared = Vec::new();
         for (folder_id, name) in all_folders {
-            let mut bitmap = self
-                .db
-                .bitmaps
-                .get(&crate::db::projection::bitmaps::BitmapKey::Folder(folder_id));
+            let mut bitmap =
+                self.db
+                    .bitmaps
+                    .get(&crate::db::projection::bitmaps::BitmapKey::Folder(
+                        folder_id,
+                    ));
             if bitmap.is_empty() {
                 continue;
             }

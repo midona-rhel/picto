@@ -24,6 +24,7 @@ import { useViewerMediaPipeline } from './hooks/useViewerMediaPipeline';
 import { useNavigatorRenderer } from './hooks/useNavigatorRenderer';
 import { useNavigatorDrag } from './hooks/useNavigatorDrag';
 import { VideoPlayer } from './video/VideoPlayer';
+import { resolveFilePath } from '../../platform/api';
 import styles from './DetailWindow.module.css';
 import viewerStyles from './MediaView.module.css';
 
@@ -282,7 +283,8 @@ export function DetailWindow({ hash }: DetailWindowProps) {
   const handleCopyPath = useCallback(async () => {
     if (!currentImage) return;
     try {
-      const path = await window.picto.api.invoke('resolve_file_path', { entity_hash: currentImage.hash }) as string;
+      const path = await resolveFilePath(currentImage.hash);
+      if (!path) return;
       await window.picto.clipboard.writeText(path);
     } catch {}
   }, [currentImage]);

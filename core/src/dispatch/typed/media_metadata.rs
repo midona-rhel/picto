@@ -19,9 +19,10 @@ pub async fn get_media_entity_metadata(
     state: &AppState,
     input: GetMediaEntityMetadataInput,
 ) -> Result<serde_json::Value, String> {
-    let result =
-        crate::metadata::query::MetadataQuery::get_entity_all_metadata(&state.db, input.hash)
-            .await?;
+    let result = state
+        .engine
+        .get_entity_all_metadata(&input.hash)?
+        .ok_or_else(|| format!("Entity not found: {}", input.hash))?;
     serde_json::to_value(&result).map_err(|e| e.to_string())
 }
 
@@ -29,8 +30,7 @@ pub async fn get_storage_stats(
     state: &AppState,
     _input: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
-    let stats = state.db.aggregate_file_stats().await?;
-    let breakdown = state.db.aggregate_media_type_breakdown().await?;
+    let (stats, breakdown) = state.engine.get_storage_stats()?;
     let blob_store = state.blob_store.clone();
     let (originals_disk, thumbnails_disk) =
         tokio::task::spawn_blocking(move || blob_store.disk_usage())

@@ -435,7 +435,12 @@ fn apply_filters(filters: &QueryFilters, parts: &mut Vec<String>, bound: &mut Ve
                 })
                 .collect();
             parts.push(format!(
-                "COALESCE(mf.dominant_color_hex, pmf.dominant_color_hex) IN ({})",
+                "EXISTS (
+                    SELECT 1
+                    FROM file_color fc
+                    WHERE fc.file_id IN (COALESCE(mf.file_id, -1), COALESCE(pmf.file_id, -1))
+                      AND fc.hex IN ({})
+                )",
                 placeholders.join(",")
             ));
             for c in colors {
@@ -592,4 +597,67 @@ fn hamming_distance(a: &[u8], b: &[u8]) -> u32 {
         .zip(b.iter())
         .map(|(x, y)| (x ^ y).count_ones())
         .sum()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::query_entity_view;
+    use crate::db::core::schema::LIBRARY_DDL;
+    use crate::db::types::{
+        BaseScope, EntityViewQuery, QueryFilters, QueryPage, QuerySort, ScopeKind,
+    };
+    use rusqlite::params;
+
+    #[test]
+    fn color_filters_match_any_palette_color_not_only_dominant_hex() {
+        let conn = rusqlite::Connection::open_in_memory().expect("open db");
+        conn.execute_batch(LIBRARY_DDL).expect("create schema");
+
+        conn.execute(
+            "INSERT INTO media_entity (
+                entity_id, entity_hash, entity_kind, status, name, date_created, date_added, date_modified
+             ) VALUES (?1, ?2, 'single', 1, ?3, ?4, ?4, ?4)",
+            params![1_i64, "entity_1", "Test", "2026-04-01T00:00:00Z"],
+        )
+        .expect("insert entity");
+        conn.execute(
+            "INSERT INTO media_file (
+                file_id, file_hash, mime_type, size_bytes, has_audio, dominant_color_hex, date_added
+             ) VALUES (?1, ?2, 'image/png', 1024, 0, ?3, ?4)",
+            params![1_i64, "file_1", "#111111", "2026-04-01T00:00:00Z"],
+        )
+        .expect("insert file");
+        conn.execute(
+            "INSERT INTO single_media_entity (entity_id, file_id) VALUES (1, 1)",
+            [],
+        )
+        .expect("link file");
+        conn.execute(
+            "INSERT INTO file_color (file_id, hex, l, a, b) VALUES (1, '#222222', 20.0, 0.0, 0.0)",
+            [],
+        )
+        .expect("insert palette color");
+
+        let page = query_entity_view(
+            &conn,
+            &EntityViewQuery {
+                base_scope: BaseScope {
+                    kind: ScopeKind::System,
+                    key: Some("all".into()),
+                    id: None,
+                },
+                filters: QueryFilters {
+                    colors: Some(vec!["#222222".into()]),
+                    ..Default::default()
+                },
+                sort: QuerySort::default(),
+                page: QueryPage::default(),
+            },
+            None,
+        )
+        .expect("query");
+
+        assert_eq!(page.items.len(), 1);
+        assert_eq!(page.items[0].entity_hash, "entity_1");
+    }
 }

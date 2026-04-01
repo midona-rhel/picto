@@ -475,16 +475,6 @@ async fn scope_contract_grid_and_selection_same_scope() {
     harness.bitmaps_insert_effective_tag(red, f1);
     harness.bitmaps_insert_effective_tag(red, f3);
 
-    let grid_query = GridPageSlimQuery {
-        limit: Some(20),
-        cursor: None,
-        scope: GridScopeSpec::default(),
-        filters: GridFilterSpec {
-            search_tags: Some(vec!["red".to_string()]),
-            ..Default::default()
-        },
-        sort: GridSortSpec::default(),
-    };
     let selection_query = SelectionQuerySpec {
         mode: SelectionMode::AllResults,
         hashes: None,
@@ -498,7 +488,13 @@ async fn scope_contract_grid_and_selection_same_scope() {
         included_hashes: None,
     };
 
-    let grid_filter = ScopeFilter::from(&grid_query);
+    let grid_filter = ScopeFilter {
+        scope: GridScopeSpec::default(),
+        filters: GridFilterSpec {
+            search_tags: Some(vec!["red".to_string()]),
+            ..Default::default()
+        },
+    };
     let sel_filter = ScopeFilter::from(&selection_query);
     let grid_bm = resolve_scope(&harness.db, &grid_filter).await.unwrap();
     let sel_bm = resolve_scope(&harness.db, &sel_filter).await.unwrap();

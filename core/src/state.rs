@@ -19,7 +19,9 @@ use crate::types::{RunningSubscriptions, SubTerminalStatuses};
 
 /// Shared application state, accessible to all command handlers.
 pub struct AppState {
-    pub db: Arc<SqliteDatabase>,
+    /// Legacy write-side database boundary.
+    /// Active read-model code must go through `engine`/`LibraryDatabase`.
+    pub legacy_db: Arc<SqliteDatabase>,
     pub blob_store: Arc<BlobStore>,
     /// The new application engine boundary. All new code should call
     /// `engine` methods instead of going through `db` directly.
@@ -118,6 +120,12 @@ pub async fn open_library(library_root: PathBuf) -> Result<Arc<AppState>, String
             .map_err(|e| format!("Failed to open new LibraryDatabase: {e}"))?,
     );
 
+    match crate::media_analysis::enqueue_stale_color_backfill(&new_db) {
+        Ok(count) if count > 0 => tracing::info!(count, "Queued stale color analysis backfill"),
+        Ok(_) => {}
+        Err(e) => tracing::warn!(error = %e, "Color analysis backfill enqueue failed"),
+    }
+
     let worker_handles = crate::workers::start_workers(
         &library_db,
         &new_db,
@@ -130,13 +138,13 @@ pub async fn open_library(library_root: PathBuf) -> Result<Arc<AppState>, String
     )
     .await;
 
-    // Open the new database boundary alongside the old one.
-    // The engine wraps LibraryDatabase; old dispatch still uses SqliteDatabase
-    // until the transport adapter rewrite replaces it.
+    // Keep the legacy database around only for write-side domains that have not
+    // yet been cut over (import, ingest queue, subscriptions, watch folders).
+    // All active read-model behavior should go through engine/LibraryDatabase.
     let engine = Arc::new(crate::engine::ApplicationEngine::new(new_db));
 
     let state = Arc::new(AppState {
-        db: library_db,
+        legacy_db: library_db,
         blob_store,
         engine,
         settings,
@@ -200,7 +208,7 @@ async fn close_library_inner() {
         };
         crate::workers::stop_workers(handles).await;
 
-        if let Err(e) = state.db.flush().await {
+        if let Err(e) = state.legacy_db.flush().await {
             tracing::warn!("Final flush on close failed: {e}");
         }
 

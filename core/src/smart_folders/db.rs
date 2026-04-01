@@ -539,7 +539,7 @@ fn compile_group(
                     for hex in color_values {
                         color_bm |= &sql_to_bitmap(
                             conn,
-                            "SELECT file_id FROM file_color WHERE hex_color = ?1",
+                            "SELECT file_id FROM file_color WHERE hex = ?1",
                             params![hex],
                         )?;
                     }

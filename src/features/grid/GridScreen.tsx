@@ -51,10 +51,10 @@ import { ContextMenu, useContextMenu } from '../../shared/ui/ContextMenu';
 import { buildTileContextMenu, buildEmptyContextMenu } from './gridContextMenu';
 import type { BaseScope } from '../../shared/types/canonical';
 import { saveScrollPosition, getScrollPosition, pushHistory } from '../../state/navigationHistory';
-import { promptForFolderId } from '../../shared/lib/selectFolderPrompt';
 import { resolveFilePath, shellOpenPath, shellShowInFolder, clipboardWriteText, clipboardCopyFile, createCollection, addCollectionMembers, removeCollectionMembers, deleteCollection, listCollectionMemberHashes } from '../../platform/api';
 import { viewerSessionAtom, quickLookSessionAtom, createViewerSession, navigateViewerSession } from '../../state/viewer';
 import { tagSelectOpenAtom, folderPickerOpenAtom, aiTaggerOpenAtom, batchRenameOpenAtom } from '../../state/portals';
+import { confirmModalAtom } from '../../state/modals';
 import { MediaView } from '../viewer/MediaView';
 import { SubscriptionsScreen } from '../subscriptions/SubscriptionsScreen';
 import { QuickLook } from '../viewer/QuickLook';
@@ -393,13 +393,10 @@ export function GridScreen() {
 
 
 
-  const addSelectionToFolder = useCallback(async () => {
+  const addSelectionToFolder = useCallback(() => {
     if (!selectionTarget) return;
-    const folderId = promptForFolderId(sidebarNodes);
-    if (folderId != null) {
-      await entityMutations.updateTargetFolderMembership(selectionTarget, folderId, 'add');
-    }
-  }, [selectionTarget, sidebarNodes]);
+    setFolderPickerOpen(true);
+  }, [selectionTarget, setFolderPickerOpen]);
 
   const removeSelectionFromCurrentFolder = useCallback(async () => {
     if (!selectionTarget || gridScope.kind !== 'folder' || gridScope.id == null) return;
@@ -411,11 +408,20 @@ export function GridScreen() {
     await entityMutations.setTargetStatus(selectionTarget, status);
   }, [selectionTarget]);
 
-  const permanentlyDeleteSelection = useCallback(async () => {
+  const permanentlyDeleteSelection = useCallback(() => {
     if (!selectionTarget) return;
-    await entityMutations.permanentlyDeleteTarget(selectionTarget);
-    clearSelection();
-  }, [selectionTarget, clearSelection]);
+    store.set(confirmModalAtom, {
+      open: true,
+      title: 'Delete Permanently',
+      message: `This will permanently delete ${selectionCount} item${selectionCount !== 1 ? 's' : ''}. This cannot be undone.`,
+      confirmLabel: 'Delete',
+      danger: true,
+      onConfirm: () => {
+        void entityMutations.permanentlyDeleteTarget(selectionTarget);
+        clearSelection();
+      },
+    });
+  }, [selectionTarget, selectionCount, clearSelection]);
 
   // ── Detail window communication ──
   // When a detail window opens, it sends 'detail-window-ready' with { hash }.

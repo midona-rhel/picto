@@ -1,5 +1,7 @@
 //! Smart folder CRUD.
 
+use crate::smart_folders::db::SmartFolderPredicate;
+
 use super::ApplicationEngine;
 
 impl ApplicationEngine {
@@ -61,5 +63,19 @@ impl ApplicationEngine {
 
     pub fn collect_descendant_smart_folder_ids(&self, root_id: i64) -> Result<Vec<i64>, String> {
         self.db.collect_descendant_smart_folder_ids(root_id)
+    }
+
+    pub fn count_smart_folder_predicate(
+        &self,
+        predicate: &SmartFolderPredicate,
+    ) -> Result<i64, String> {
+        let json = serde_json::to_string(predicate).map_err(|e| e.to_string())?;
+        let bitmap =
+            crate::db::projection::smart_folders::evaluate_predicate(&self.db.bitmaps, &json);
+        let active = self
+            .db
+            .bitmaps
+            .get(&crate::db::projection::bitmaps::BitmapKey::Status(1));
+        Ok((&bitmap & &active).len() as i64)
     }
 }

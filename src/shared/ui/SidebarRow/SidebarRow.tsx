@@ -129,11 +129,11 @@ function StandardRow({
           fill="none"
         >
           {useLShape ? (
-            <path d="M3.5 0 V9.5 A3.5 3.5 0 0 0 7 13 H11" stroke="var(--color-text-tertiary)" strokeWidth="1" fill="none" vectorEffect="non-scaling-stroke" />
+            <path d="M3.5 0 V9.5 A3.5 3.5 0 0 0 7 13 H15" stroke="var(--color-text-tertiary)" strokeWidth="1" fill="none" vectorEffect="non-scaling-stroke" />
           ) : (
             <>
               <line x1="3.5" y1="0" x2="3.5" y2="26" stroke="var(--color-text-tertiary)" strokeWidth="1" vectorEffect="non-scaling-stroke" />
-              <line x1="4" y1="13" x2="11" y2="13" stroke="var(--color-text-tertiary)" strokeWidth="1" vectorEffect="non-scaling-stroke" />
+              <line x1="4" y1="13" x2="15" y2="13" stroke="var(--color-text-tertiary)" strokeWidth="1" vectorEffect="non-scaling-stroke" />
             </>
           )}
         </svg>

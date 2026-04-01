@@ -149,3 +149,84 @@ pub fn list_smart_folders(conn: &Connection) -> rusqlite::Result<Vec<SmartFolder
         .collect::<rusqlite::Result<Vec<_>>>()?;
     Ok(rows)
 }
+
+pub fn get_folder_entity_hashes(
+    conn: &Connection,
+    folder_id: i64,
+) -> rusqlite::Result<Vec<String>> {
+    let mut stmt = conn.prepare(
+        "SELECT me.entity_hash
+         FROM (
+             SELECT COALESCE(child.parent_collection_entity_id, child.entity_id) AS top_entity_id,
+                    MIN(COALESCE(fm.position_rank, child.entity_id)) AS min_rank
+             FROM folder_member fm
+             JOIN media_entity child ON child.entity_id = fm.entity_id
+             WHERE fm.folder_id = ?1
+             GROUP BY COALESCE(child.parent_collection_entity_id, child.entity_id)
+         ) ordered
+         JOIN media_entity me ON me.entity_id = ordered.top_entity_id
+         ORDER BY ordered.min_rank ASC, me.entity_hash ASC",
+    )?;
+    let hashes = stmt.query_map([folder_id], |row| row.get(0))?;
+    hashes.collect()
+}
+
+pub fn get_folder_cover_hash(
+    conn: &Connection,
+    folder_id: i64,
+) -> rusqlite::Result<Option<String>> {
+    conn.query_row(
+        "SELECT me.entity_hash
+         FROM (
+             SELECT COALESCE(child.parent_collection_entity_id, child.entity_id) AS top_entity_id,
+                    MIN(COALESCE(fm.position_rank, child.entity_id)) AS min_rank
+             FROM folder_member fm
+             JOIN media_entity child ON child.entity_id = fm.entity_id
+             WHERE fm.folder_id = ?1
+               AND child.status = 1
+             GROUP BY COALESCE(child.parent_collection_entity_id, child.entity_id)
+         ) ordered
+         JOIN media_entity me ON me.entity_id = ordered.top_entity_id
+         WHERE me.status = 1
+         ORDER BY ordered.min_rank ASC, me.entity_hash ASC
+         LIMIT 1",
+        [folder_id],
+        |row| row.get(0),
+    )
+    .optional()
+}
+
+pub fn get_entity_folder_memberships(
+    conn: &Connection,
+    entity_id: i64,
+) -> rusqlite::Result<Vec<crate::folders::db::FolderMembership>> {
+    let target_entity_id: Option<i64> = conn
+        .query_row(
+            "SELECT COALESCE(parent_collection_entity_id, entity_id)
+             FROM media_entity
+             WHERE entity_id = ?1",
+            [entity_id],
+            |row| row.get(0),
+        )
+        .optional()?;
+
+    let Some(target_entity_id) = target_entity_id else {
+        return Ok(Vec::new());
+    };
+
+    let mut stmt = conn.prepare(
+        "SELECT DISTINCT f.folder_id, f.name
+         FROM folder_member fm
+         JOIN folder f ON f.folder_id = fm.folder_id
+         JOIN media_entity child ON child.entity_id = fm.entity_id
+         WHERE COALESCE(child.parent_collection_entity_id, child.entity_id) = ?1
+         ORDER BY f.name ASC, f.folder_id ASC",
+    )?;
+    let memberships = stmt.query_map([target_entity_id], |row| {
+        Ok(crate::folders::db::FolderMembership {
+            folder_id: row.get(0)?,
+            folder_name: row.get(1)?,
+        })
+    })?;
+    memberships.collect()
+}

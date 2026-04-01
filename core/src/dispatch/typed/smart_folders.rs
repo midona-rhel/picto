@@ -326,17 +326,13 @@ pub async fn delete_smart_folder(
     Ok(())
 }
 
-// Legacy-only: count_smart_folder compiles a predicate against old DB bitmaps.
-// Not called by the rebuilt frontend.
+// Compatibility handler: the rebuilt frontend does not call this directly,
+// but it now evaluates the predicate against the canonical bitmap store.
 pub async fn count_smart_folder(
     state: &AppState,
     input: CountSmartFolderInput,
 ) -> Result<serde_json::Value, String> {
-    let count = crate::smart_folders::service::SmartFolderService::count_smart_folder(
-        &state.db,
-        input.predicate,
-    )
-    .await?;
+    let count = state.engine.count_smart_folder_predicate(&input.predicate)?;
     Ok(serde_json::to_value(&count).map_err(|e| e.to_string())?)
 }
 

@@ -77,7 +77,7 @@ pub async fn get_library_info(
         .map(|n| n.to_string_lossy().to_string())
         .unwrap_or_else(|| "Library".to_string());
     let display_name = name.strip_suffix(".library").unwrap_or(&name).to_string();
-    let file_count = state.db.count_files(None).await.unwrap_or(0);
+    let file_count = state.engine.count_library_files().unwrap_or(0);
     Ok(serde_json::json!({
         "path": path_str,
         "name": display_name,
@@ -116,7 +116,7 @@ pub async fn get_sidebar_tree(
 ) -> Result<serde_json::Value, String> {
     let started = Instant::now();
     let nodes = state.engine.get_sidebar_tree()?;
-    let tree_epoch = state.db.manifest.published_epoch();
+    let tree_epoch = state.engine.get_sidebar_tree_epoch()?;
     let result = crate::types::SidebarTreeResponse {
         nodes: nodes
             .into_iter()
@@ -165,7 +165,7 @@ pub async fn reorder_sidebar_nodes(
             }
         }
     }
-    state.db.reorder_sidebar_nodes(input.moves).await?;
+    state.engine.reorder_sidebar_nodes(&input.moves)?;
     let mut impact = crate::runtime_contract::change_builder::ChangeImpact::new()
         .add_domain(crate::runtime_contract::state_change::Domain::Sidebar);
     if !folder_ids.is_empty() {
@@ -187,8 +187,7 @@ pub async fn get_view_prefs(
     input: GetViewPrefsInput,
 ) -> Result<serde_json::Value, String> {
     let scope_key = input.scope_key.unwrap_or_default();
-    let result =
-        crate::settings::view_prefs::ViewPrefsService::get_view_prefs(&state.db, scope_key).await?;
+    let result = state.engine.get_view_prefs(&scope_key)?;
     Ok(serde_json::to_value(&result).map_err(|e| e.to_string())?)
 }
 
@@ -197,12 +196,7 @@ pub async fn set_view_prefs(
     input: SetViewPrefsInput,
 ) -> Result<serde_json::Value, String> {
     let scope_key = input.scope_key.unwrap_or_default();
-    let result = crate::settings::view_prefs::ViewPrefsService::set_view_prefs(
-        &state.db,
-        scope_key,
-        input.patch,
-    )
-    .await?;
+    let result = state.engine.set_view_prefs(&scope_key, input.patch)?;
     crate::events::emit_state_changed(
         "set_view_prefs",
         crate::runtime_contract::change_builder::ChangeImpact::view_prefs_change(),

@@ -21,6 +21,14 @@ pub struct DominantColor {
     pub b: f64,
 }
 
+pub fn serialize_dominant_palette_blob(colors: &[DominantColor]) -> Result<Vec<u8>, String> {
+    serde_json::to_vec(colors).map_err(|e| format!("{e}"))
+}
+
+pub fn deserialize_dominant_palette_blob(blob: &[u8]) -> Result<Vec<DominantColor>, String> {
+    serde_json::from_slice(blob).map_err(|e| format!("{e}"))
+}
+
 /// Delta E (CIE76) distance between two Lab colors.
 fn lab_distance(a: &Lab, b: &Lab) -> f64 {
     let dl = (a.l - b.l) as f64;
@@ -117,4 +125,67 @@ pub fn extract_dominant_colors(img: &DynamicImage, max_colors: usize) -> Vec<Dom
             }
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        deserialize_dominant_palette_blob, extract_dominant_colors,
+        serialize_dominant_palette_blob, DominantColor,
+    };
+    use image::{DynamicImage, Rgb, RgbImage};
+
+    #[test]
+    fn dominant_palette_blob_roundtrips() {
+        let colors = vec![
+            DominantColor {
+                hex: "#112233".into(),
+                l: 12.0,
+                a: -1.0,
+                b: 4.0,
+            },
+            DominantColor {
+                hex: "#445566".into(),
+                l: 34.0,
+                a: 5.0,
+                b: -6.0,
+            },
+        ];
+
+        let blob = serialize_dominant_palette_blob(&colors).expect("serialize blob");
+        let decoded = deserialize_dominant_palette_blob(&blob).expect("decode blob");
+
+        assert_eq!(decoded.len(), 2);
+        assert_eq!(decoded[0].hex, "#112233");
+        assert_eq!(decoded[1].hex, "#445566");
+    }
+
+    #[test]
+    fn extract_dominant_colors_caps_output_at_ten() {
+        let mut img = RgbImage::new(110, 10);
+        let palette = [
+            [255, 0, 0],
+            [0, 255, 0],
+            [0, 0, 255],
+            [255, 255, 0],
+            [255, 0, 255],
+            [0, 255, 255],
+            [128, 0, 0],
+            [0, 128, 0],
+            [0, 0, 128],
+            [128, 128, 0],
+            [128, 0, 128],
+        ];
+        for (stripe, color) in palette.iter().enumerate() {
+            for x in (stripe * 10)..((stripe + 1) * 10) {
+                for y in 0..10 {
+                    img.put_pixel(x as u32, y, Rgb(*color));
+                }
+            }
+        }
+
+        let extracted = extract_dominant_colors(&DynamicImage::ImageRgb8(img), 99);
+
+        assert!(extracted.len() <= 10);
+    }
 }

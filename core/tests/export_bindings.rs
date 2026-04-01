@@ -36,11 +36,6 @@ fn export_all_bindings() {
     picto_core::dispatch::typed::folders::RemoveCollectionMembersInput::export().unwrap();
     picto_core::dispatch::typed::folders::DeleteCollectionInput::export().unwrap();
 
-    picto_core::dispatch::typed::grid::GetGridPageSlimInput::export().unwrap();
-    picto_core::dispatch::typed::grid::GetEntityInput::export().unwrap();
-    picto_core::dispatch::typed::grid::GetEntitiesInput::export().unwrap();
-    picto_core::dispatch::typed::grid::GetEntitiesMetadataBatchInput::export().unwrap();
-
     picto_core::dispatch::typed::media_io::ResolveFilePathInput::export().unwrap();
     picto_core::dispatch::typed::media_io::OpenFileDefaultInput::export().unwrap();
     picto_core::dispatch::typed::media_io::RevealInFolderInput::export().unwrap();
@@ -52,16 +47,7 @@ fn export_all_bindings() {
     picto_core::dispatch::typed::media_io::ReanalyzeFileColorsInput::export().unwrap();
 
     picto_core::dispatch::typed::media_lifecycle::ImportFilesInput::export().unwrap();
-    picto_core::dispatch::typed::media_lifecycle::UpdateFileStatusInput::export().unwrap();
-    picto_core::dispatch::typed::media_lifecycle::DeleteFilesInput::export().unwrap();
-
     picto_core::dispatch::typed::media_metadata::GetMediaEntityMetadataInput::export().unwrap();
-    picto_core::dispatch::typed::media_metadata::UpdateMediaEntityMetadataInput::export().unwrap();
-
-    picto_core::dispatch::typed::selection::AddTagsSelectionInput::export().unwrap();
-    picto_core::dispatch::typed::selection::RemoveTagsSelectionInput::export().unwrap();
-    picto_core::dispatch::typed::selection::GetSelectionSummaryInput::export().unwrap();
-    picto_core::dispatch::typed::selection::UpdateSelectionMetadataInput::export().unwrap();
 
     picto_core::dispatch::typed::smart_folders::ReorderSmartFoldersInput::export().unwrap();
     picto_core::dispatch::typed::smart_folders::CreateSmartFolderInput::export().unwrap();
@@ -143,7 +129,6 @@ fn export_all_bindings() {
     picto_core::types::GridScopeSpec::export().unwrap();
     picto_core::types::GridFilterSpec::export().unwrap();
     picto_core::types::GridSortSpec::export().unwrap();
-    picto_core::types::GridPageSlimQuery::export().unwrap();
     picto_core::types::SelectionMode::export().unwrap();
     picto_core::types::SelectionQuerySpec::export().unwrap();
     picto_core::types::ViewPrefsPatch::export().unwrap();

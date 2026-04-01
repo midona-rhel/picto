@@ -211,7 +211,7 @@ pub async fn add_tags(state: &AppState, input: AddTagsInput) -> Result<(), Strin
         return Ok(());
     }
     let resolved = state
-        .db
+        .legacy_db
         .resolve_entity_hashes_with_expansion(
             &input.hashes,
             EntityExpansionMode::EntityAndDescendants,
@@ -219,7 +219,7 @@ pub async fn add_tags(state: &AppState, input: AddTagsInput) -> Result<(), Strin
         .await?;
     let entity_ids: Vec<i64> = resolved.iter().map(|(_, id)| *id).collect();
     state
-        .db
+        .legacy_db
         .add_tags_batch_by_entity_ids(entity_ids, input.tag_strings.clone(), "local".to_string())
         .await?;
     crate::events::emit_state_changed(
@@ -238,7 +238,7 @@ pub async fn remove_tags(state: &AppState, input: RemoveTagsInput) -> Result<(),
         return Ok(());
     }
     let resolved = state
-        .db
+        .legacy_db
         .resolve_entity_hashes_with_expansion(
             &input.hashes,
             EntityExpansionMode::EntityAndDescendants,
@@ -246,7 +246,7 @@ pub async fn remove_tags(state: &AppState, input: RemoveTagsInput) -> Result<(),
         .await?;
     let entity_ids: Vec<i64> = resolved.iter().map(|(_, id)| *id).collect();
     state
-        .db
+        .legacy_db
         .remove_tags_batch_by_entity_ids(entity_ids, input.tag_strings.clone())
         .await?;
     crate::events::emit_state_changed(
@@ -264,7 +264,7 @@ pub async fn find_files_by_tags(
     input: FindFilesByTagsInput,
 ) -> Result<serde_json::Value, String> {
     let result = crate::tags::service::find_files_by_tags(
-        &state.db,
+        &state.legacy_db,
         input.tag_strings,
         input.limit,
         input.offset,
@@ -370,7 +370,7 @@ pub async fn companion_get_namespace_values(
     input: CompanionGetNamespaceValuesInput,
 ) -> Result<serde_json::Value, String> {
     let values = state
-        .db
+        .legacy_db
         .with_read_conn(move |conn| {
             let mut stmt = conn.prepare(
                 "SELECT subtag, file_count FROM tag
@@ -400,6 +400,7 @@ pub async fn companion_get_files_by_tag(
     input: CompanionGetFilesByTagInput,
 ) -> Result<serde_json::Value, String> {
     let result =
-        crate::tags::service::find_files_by_tags(&state.db, vec![input.tag], None, None).await?;
+        crate::tags::service::find_files_by_tags(&state.legacy_db, vec![input.tag], None, None)
+            .await?;
     serde_json::to_value(&result).map_err(|e| e.to_string())
 }

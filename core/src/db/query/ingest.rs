@@ -28,6 +28,8 @@ pub struct DerivativeTarget {
     pub duration_ms: Option<i64>,
     pub frame_count: Option<i64>,
     pub dominant_color_hex: Option<String>,
+    pub has_dominant_palette_blob: bool,
+    pub color_analysis_version: i64,
     pub perceptual_hash: Option<String>,
 }
 
@@ -113,6 +115,8 @@ pub fn get_derivative_target_by_entity_hash(
              mf.duration_ms,
              mf.frame_count,
              mf.dominant_color_hex,
+             mf.dominant_palette_blob IS NOT NULL,
+             mf.color_analysis_version,
              mf.perceptual_hash
          FROM media_entity me
          JOIN single_media_entity sme ON sme.entity_id = me.entity_id
@@ -128,7 +132,9 @@ pub fn get_derivative_target_by_entity_hash(
                 duration_ms: row.get(4)?,
                 frame_count: row.get(5)?,
                 dominant_color_hex: row.get(6)?,
-                perceptual_hash: row.get(7)?,
+                has_dominant_palette_blob: row.get::<_, i64>(7)? != 0,
+                color_analysis_version: row.get(8)?,
+                perceptual_hash: row.get(9)?,
             })
         },
     )

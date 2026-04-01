@@ -115,6 +115,28 @@ impl ApplicationEngine {
         self.db.list_smart_folders_canonical()
     }
 
+    pub fn get_folder_entity_hashes(&self, folder_id: i64) -> Result<Vec<String>, String> {
+        self.db.get_folder_entity_hashes(folder_id)
+    }
+
+    pub fn get_folder_cover_hash(&self, folder_id: i64) -> Result<Option<String>, String> {
+        self.db.get_folder_cover_hash(folder_id)
+    }
+
+    pub fn get_entity_folder_memberships(
+        &self,
+        entity_hash: &str,
+    ) -> Result<Vec<crate::folders::db::FolderMembership>, String> {
+        self.db.get_entity_folder_memberships(entity_hash)
+    }
+
+    pub fn get_entity_folder_memberships_by_entity_id(
+        &self,
+        entity_id: i64,
+    ) -> Result<Vec<crate::folders::db::FolderMembership>, String> {
+        self.db.get_entity_folder_memberships_by_entity_id(entity_id)
+    }
+
     pub fn run_compiler(&self, plan: crate::db::projection::compiler::CompilerPlan) {
         self.db.run_compiler(plan);
     }

@@ -13,6 +13,7 @@ import { Sidebar } from '../features/sidebar/Sidebar';
 import { GridScreen } from '../features/grid/GridScreen';
 import { GridToolbar, ViewerToolbar } from '../features/grid/GridToolbar';
 import { Inspector } from '../features/inspector/Inspector';
+import { ModalLayer } from '../features/modals/ModalLayer';
 import {
   sidebarCollapsedAtom, toggleSidebarAtom,
   inspectorCollapsedAtom, toggleInspectorAtom,
@@ -191,22 +192,46 @@ export function AppShell() {
   useEffect(() => {
     ensureSettle();
 
+    const applyTheme = (theme: string) => {
+      const lightThemes = new Set(['light', 'lightgray']);
+      const resolved = theme === 'auto'
+        ? (window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark')
+        : theme;
+      document.documentElement.dataset.theme = theme === 'auto' ? '' : theme;
+      document.documentElement.dataset.mantineColorScheme = lightThemes.has(resolved) ? 'light' : 'dark';
+      document.documentElement.style.colorScheme = lightThemes.has(resolved) ? 'light' : 'dark';
+      localStorage.setItem('picto-theme', theme);
+    };
+
     const loadAppSettings = () => {
       getSettings().then((s) => {
         setShowTreeGuides(s.showTreeGuides ?? true);
+        if (s.colorScheme) applyTheme(s.colorScheme);
       }).catch(() => {});
     };
 
     loadAppSettings();
 
     // Reload settings when backend emits view_prefs_changed (e.g. settings window saved)
-    let unlisten: (() => void) | undefined;
-    void import('../platform/ipc').then(({ listen }) =>
+    let unlistenSettings: (() => void) | undefined;
+    let unlistenOsTheme: (() => void) | undefined;
+    void import('../platform/ipc').then(({ listen }) => {
       listen<{ changes?: { view_prefs_changed?: boolean } }>('runtime/state_changed', (event) => {
         if (event.payload.changes?.view_prefs_changed) loadAppSettings();
-      }).then((fn) => { unlisten = fn; }),
-    );
-    return () => { unlisten?.(); };
+      }).then((fn) => { unlistenSettings = fn; });
+
+      // Auto theme: OS dark/light mode changed
+      listen<{ isDark: boolean }>('picto:os-theme-changed', (event) => {
+        const currentTheme = localStorage.getItem('picto-theme');
+        if (currentTheme !== 'auto') return;
+        const resolved = event.payload.isDark ? 'dark' : 'light';
+        const lightThemes = new Set(['light', 'lightgray']);
+        document.documentElement.dataset.theme = '';
+        document.documentElement.dataset.mantineColorScheme = lightThemes.has(resolved) ? 'light' : 'dark';
+        document.documentElement.style.colorScheme = lightThemes.has(resolved) ? 'light' : 'dark';
+      }).then((fn) => { unlistenOsTheme = fn; });
+    });
+    return () => { unlistenSettings?.(); unlistenOsTheme?.(); };
   }, []);
 
   useEffect(() => {
@@ -340,6 +365,7 @@ export function AppShell() {
           <Inspector />
         </div>
       )}
+      <ModalLayer />
     </div>
   );
 }

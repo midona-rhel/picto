@@ -295,7 +295,7 @@ pub async fn ai_tag_apply(state: &AppState, input: AiTagApplyInput) -> Result<us
     for hash in &input.hashes {
         for tag_str in &input.tags {
             if let Some((ns, st)) = crate::tags::normalize::parse_tag(tag_str) {
-                match state.db.tag_entity(hash, &ns, &st, "ai").await {
+                match state.legacy_db.tag_entity(hash, &ns, &st, "ai").await {
                     Ok(_) => count += 1,
                     Err(e) => {
                         tracing::warn!(hash, tag = tag_str, error = %e, "ai_tag_apply: failed")
@@ -308,7 +308,7 @@ pub async fn ai_tag_apply(state: &AppState, input: AiTagApplyInput) -> Result<us
     if count > 0 {
         // Sync parent collection metadata for any tagged files that are collection members
         let hashes = input.hashes.clone();
-        state.db.with_conn(move |conn| {
+        state.legacy_db.with_conn(move |conn| {
             let mut synced = std::collections::HashSet::new();
             for hash in &hashes {
                 let file_id: Option<i64> = conn.query_row(
@@ -346,7 +346,7 @@ pub async fn ai_tag_apply(state: &AppState, input: AiTagApplyInput) -> Result<us
 /// Read the original image bytes for a hash from the blob store.
 async fn read_original_image(state: &AppState, hash: &str) -> Result<Vec<u8>, String> {
     let file = state
-        .db
+        .legacy_db
         .get_file_by_hash(hash)
         .await?
         .ok_or_else(|| format!("File not found: {hash}"))?;
@@ -485,7 +485,7 @@ pub async fn auto_tag_imported(state: &AppState, hashes: &[String]) {
                 format!("{}:{}", pred.namespace, pred.tag)
             };
             if let Some((ns, st)) = crate::tags::normalize::parse_tag(&tag_str) {
-                if let Err(e) = state.db.tag_entity(hash, &ns, &st, "ai").await {
+                if let Err(e) = state.legacy_db.tag_entity(hash, &ns, &st, "ai").await {
                     tracing::warn!(hash, tag = tag_str, error = %e, "auto_tag_imported: tag failed");
                 }
             }

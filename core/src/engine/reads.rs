@@ -18,6 +18,13 @@ impl ApplicationEngine {
         self.db.get_entity_details(entity_hash)
     }
 
+    pub fn get_entity_all_metadata(
+        &self,
+        entity_hash: &str,
+    ) -> Result<Option<crate::types::EntityAllMetadata>, String> {
+        self.db.get_entity_all_metadata(entity_hash)
+    }
+
     /// Batch grid-item read for targeted reconciliation / eager insertion.
     pub fn get_entity_grid_items(
         &self,

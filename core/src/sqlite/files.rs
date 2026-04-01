@@ -569,9 +569,6 @@ fn entity_sort_expr(sort_field: &str) -> &'static str {
     }
 }
 
-/// Shared SELECT column list for entity-aware grid queries.
-/// Returns both singles and collections with unified column shape.
-pub(crate) const ENTITY_SLIM_SELECT_PUB: &str = ENTITY_SLIM_SELECT;
 const ENTITY_SLIM_SELECT: &str = "me.entity_id,
      me.kind AS kind,
      CASE WHEN me.kind = 'collection' THEN me.cached_item_count ELSE NULL END AS member_count,
@@ -621,8 +618,6 @@ const ENTITY_SLIM_SELECT: &str = "me.entity_id,
      me.created_at,
      me.updated_at";
 
-/// Shared FROM/JOIN clause for entity-aware grid queries.
-pub(crate) const ENTITY_SLIM_FROM_PUB: &str = ENTITY_SLIM_FROM;
 const ENTITY_SLIM_FROM: &str = " FROM media_entity me
       LEFT JOIN entity_file ef ON ef.entity_id = me.entity_id
       LEFT JOIN file f ON f.file_id = ef.file_id
@@ -633,11 +628,6 @@ const ENTITY_SLIM_FROM: &str = " FROM media_entity me
 const NON_MEMBER_SINGLE_CLAUSE: &str = " AND (me.kind = 'collection'
            OR me.parent_collection_id IS NULL)";
 
-/// Map a database row from an entity-aware query to FileMetadataSlim.
-/// Column order must match ENTITY_SLIM_SELECT.
-pub(crate) fn row_to_entity_slim_pub(row: &rusqlite::Row) -> rusqlite::Result<FileMetadataSlim> {
-    row_to_entity_slim(row)
-}
 fn row_to_entity_slim(row: &rusqlite::Row) -> rusqlite::Result<FileMetadataSlim> {
     Ok(FileMetadataSlim {
         entity_id: row.get(0)?,
@@ -1154,6 +1144,31 @@ pub fn get_file_colors(
     conn: &Connection,
     file_id: i64,
 ) -> rusqlite::Result<Vec<(String, f64, f64, f64)>> {
+    let dominant_palette_blob: Option<Vec<u8>> = conn
+        .query_row(
+            "SELECT dominant_palette_blob FROM file WHERE file_id = ?1",
+            [file_id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    if let Some(blob) = dominant_palette_blob.as_deref() {
+        match crate::media_processing::colors::deserialize_dominant_palette_blob(blob) {
+            Ok(colors) => {
+                return Ok(colors
+                    .into_iter()
+                    .map(|color| (color.hex, color.l, color.a, color.b))
+                    .collect());
+            }
+            Err(error) => {
+                tracing::warn!(
+                    file_id,
+                    error = %error,
+                    "Failed to decode dominant_palette_blob, falling back to file_color"
+                );
+            }
+        }
+    }
+
     let mut stmt = conn
         .prepare_cached("SELECT hex, l, a, b FROM file_color WHERE file_id = ?1 ORDER BY rowid")?;
     let rows = stmt.query_map([file_id], |row| {

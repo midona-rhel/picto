@@ -45,6 +45,7 @@ CREATE TABLE IF NOT EXISTS media_file (
     perceptual_hash      TEXT,
     dominant_color_hex   TEXT,
     dominant_palette_blob BLOB,
+    color_analysis_version INTEGER NOT NULL DEFAULT 0,
     date_added           TEXT    NOT NULL
 );
 

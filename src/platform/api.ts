@@ -203,8 +203,8 @@ export function deleteFolder(folderId: number): Promise<void> {
   return invoke<void>('delete_folder', { folder_id: folderId });
 }
 
-export function removeEntitiesFromFolder(folderId: number, hashes: string[]): Promise<void> {
-  return invoke<void>('remove_entities_from_folder', { folder_id: folderId, hashes });
+export function removeEntitiesFromFolder(folderId: number, target: EntityTarget): Promise<void> {
+  return invoke<void>('remove_entities_from_folder', { folder_id: folderId, target });
 }
 
 export function renameFolder(folderId: number, name: string): Promise<void> {
@@ -244,7 +244,29 @@ export function updateFolderMembership(
   } as unknown as Record<string, unknown>);
 }
 
+export function setFolderWatchConfig(folderId: number, config: {
+  watch_path: string;
+  watch_enabled: boolean;
+  watch_subfolders: boolean;
+  watch_import_status_mode: string;
+}): Promise<void> {
+  return invoke<void>('set_folder_watch_config', { folder_id: folderId, ...config });
+}
+
+export function clearFolderWatchConfig(folderId: number): Promise<void> {
+  return invoke<void>('clear_folder_watch_config', { folder_id: folderId });
+}
+
 // ── Smart folders ────────────────────────────────────────────────
+
+export function createSmartFolder(params: {
+  name: string;
+  icon?: string | null;
+  color?: string | null;
+  parent_id?: number | null;
+}): Promise<number> {
+  return invoke<number>('create_smart_folder', params as unknown as Record<string, unknown>);
+}
 
 export function deleteSmartFolder(id: string): Promise<void> {
   return invoke<void>('delete_smart_folder', { id });

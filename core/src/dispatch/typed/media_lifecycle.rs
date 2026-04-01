@@ -5,7 +5,6 @@ use serde::Deserialize;
 use ts_rs::TS;
 
 use crate::state::AppState;
-use crate::types::*;
 
 // ─── Input structs ─────────────────────────────────────────────────────────
 
@@ -59,7 +58,7 @@ pub async fn import_files(
     let result = state
         .engine
         .import_files(
-            &state.db,
+            &state.legacy_db,
             &state.blob_store,
             input.paths,
             input.tag_strings,
@@ -93,7 +92,7 @@ pub async fn import_folder(
     let result = state
         .engine
         .import_folder(
-            &state.db,
+            &state.legacy_db,
             &state.blob_store,
             input.path,
             input.preserve_structure,
@@ -112,36 +111,11 @@ pub async fn import_folder(
 /// Wipe all image data — catastrophic full reset.
 /// Uses file_lifecycle without specific hashes because ALL files are removed.
 pub async fn wipe_image_data(state: &AppState, _input: serde_json::Value) -> Result<(), String> {
-    state.db.wipe_all_files().await?;
+    state.legacy_db.wipe_all_files().await?;
     state.blob_store.wipe().map_err(|e| e.to_string())?;
     crate::events::emit_state_changed(
         "wipe_image_data",
-        crate::runtime_contract::change_builder::ChangeImpact::file_lifecycle(&state.db),
+        crate::runtime_contract::change_builder::ChangeImpact::file_lifecycle(&state.legacy_db),
     );
     Ok(())
-}
-
-// ─── Selection helpers ─────────────────────────────────────────────────────
-
-pub(crate) async fn resolve_selection_bitmap(
-    state: &AppState,
-    selection: &SelectionQuerySpec,
-) -> Result<roaring::RoaringBitmap, String> {
-    match &selection.mode {
-        SelectionMode::ExplicitHashes => {
-            let hashes = selection.hashes.clone().unwrap_or_default();
-            let pairs = state.db.resolve_entity_hashes_batch(&hashes).await?;
-            let mut bm = roaring::RoaringBitmap::new();
-            for (_, fid) in pairs {
-                bm.insert(fid as u32);
-            }
-            Ok(bm)
-        }
-        SelectionMode::AllResults => {
-            let (_, filtered) =
-                crate::selection::helpers::selection_bitmap_for_all_results(&state.db, selection)
-                    .await?;
-            Ok(filtered)
-        }
-    }
 }

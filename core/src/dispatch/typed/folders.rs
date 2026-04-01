@@ -3,22 +3,7 @@
 use serde::Deserialize;
 use ts_rs::TS;
 
-use crate::sqlite::EntityExpansionMode;
 use crate::state::AppState;
-
-fn descendant_hashes(
-    top_level_hashes: &[String],
-    effective_hashes: &[(String, i64)],
-) -> Vec<String> {
-    let top_level: std::collections::HashSet<&str> =
-        top_level_hashes.iter().map(String::as_str).collect();
-    effective_hashes
-        .iter()
-        .map(|(hash, _)| hash)
-        .filter(|hash| !top_level.contains(hash.as_str()))
-        .cloned()
-        .collect()
-}
 
 fn folder_meta_json_canonical(folder: &crate::db::query::folders::FolderRow) -> String {
     serde_json::json!({
@@ -142,10 +127,8 @@ pub struct UpdateFolderParentInput {
 pub struct AddFilesToFolderInput {
     #[ts(type = "number")]
     pub folder_id: i64,
-    #[serde(default)]
-    pub hashes: Vec<String>,
-    #[serde(default)]
-    pub selection: Option<crate::types::SelectionQuerySpec>,
+    #[ts(type = "import('../../src/shared/types/canonical').EntityTarget")]
+    pub target: crate::db::types::EntityTarget,
 }
 
 #[derive(Debug, Deserialize, TS)]
@@ -153,10 +136,8 @@ pub struct AddFilesToFolderInput {
 pub struct RemoveFilesFromFolderInput {
     #[ts(type = "number")]
     pub folder_id: i64,
-    #[serde(default)]
-    pub hashes: Vec<String>,
-    #[serde(default)]
-    pub selection: Option<crate::types::SelectionQuerySpec>,
+    #[ts(type = "import('../../src/shared/types/canonical').EntityTarget")]
+    pub target: crate::db::types::EntityTarget,
 }
 
 #[derive(Debug, Deserialize, TS)]
@@ -273,31 +254,28 @@ pub async fn get_folder_files(
     state: &AppState,
     input: GetFolderFilesInput,
 ) -> Result<Vec<String>, String> {
-    state.db.get_folder_entity_hashes(input.folder_id).await
+    state.engine.get_folder_entity_hashes(input.folder_id)
 }
 
 pub async fn get_folder_cover_hash(
     state: &AppState,
     input: GetFolderCoverHashInput,
 ) -> Result<Option<String>, String> {
-    state.db.get_folder_cover_hash(input.folder_id).await
+    state.engine.get_folder_cover_hash(input.folder_id)
 }
 
 pub async fn get_file_folders(
     state: &AppState,
     input: GetFileFoldersInput,
 ) -> Result<Vec<crate::folders::db::FolderMembership>, String> {
-    state.db.get_entity_folder_memberships(&input.hash).await
+    state.engine.get_entity_folder_memberships(&input.hash)
 }
 
 pub async fn get_entity_folders(
     state: &AppState,
     input: GetEntityFoldersInput,
 ) -> Result<Vec<crate::folders::db::FolderMembership>, String> {
-    state
-        .db
-        .get_entity_folder_memberships_by_entity_id(input.entity_id)
-        .await
+    state.engine.get_entity_folder_memberships_by_entity_id(input.entity_id)
 }
 
 pub async fn move_folder(state: &AppState, input: MoveFolderInput) -> Result<(), String> {
@@ -470,7 +448,7 @@ pub async fn set_folder_watch_config(
         // that includes both the imported files and folder membership changes.
         // No separate watch-config emission needed — one combined action.
         crate::folders::watch::import_existing_for_folder_watch(
-            &state.db,
+            &state.legacy_db,
             state.engine.db(),
             &state.blob_store,
             input.folder_id,
@@ -644,60 +622,28 @@ pub async fn add_files_to_folder(
     state: &AppState,
     input: AddFilesToFolderInput,
 ) -> Result<usize, String> {
-    let hashes = resolve_folder_op_hashes(state, input.hashes, input.selection).await?;
-    if hashes.is_empty() {
-        return Ok(0);
-    }
-    let resolved = state
-        .db
-        .resolve_entity_hashes_with_expansion(&hashes, EntityExpansionMode::EntityAndDescendants)
-        .await?;
-    let entity_ids: Vec<i64> = resolved.iter().map(|(_, id)| *id).collect();
     let count = state
-        .db
-        .add_entities_to_folder_batch(input.folder_id, &entity_ids)
-        .await?;
-    if count > 0 {
-        crate::events::emit_state_changed(
-            "add_files_to_folder",
-            crate::runtime_contract::change_builder::ChangeImpact::folder_file_change(
-                input.folder_id,
-            )
-            .entity_hashes(hashes.clone())
-            .member_hashes(descendant_hashes(&hashes, &resolved)),
-        );
-    }
-    Ok(count)
+        .engine
+        .update_folder_membership(
+            input.target,
+            input.folder_id,
+            crate::engine::folders::MembershipOperation::Add,
+        )?;
+    Ok(count.entity_ids.len())
 }
 
 pub async fn remove_files_from_folder(
     state: &AppState,
     input: RemoveFilesFromFolderInput,
 ) -> Result<usize, String> {
-    let hashes = resolve_folder_op_hashes(state, input.hashes, input.selection).await?;
-    if hashes.is_empty() {
-        return Ok(0);
-    }
-    let resolved = state
-        .db
-        .resolve_entity_hashes_with_expansion(&hashes, EntityExpansionMode::EntityAndDescendants)
-        .await?;
-    let entity_ids: Vec<i64> = resolved.iter().map(|(_, id)| *id).collect();
     let count = state
-        .db
-        .remove_entities_from_folder_batch(input.folder_id, &entity_ids)
-        .await?;
-    if count > 0 {
-        crate::events::emit_state_changed(
-            "remove_files_from_folder",
-            crate::runtime_contract::change_builder::ChangeImpact::folder_file_change(
-                input.folder_id,
-            )
-            .entity_hashes(hashes.clone())
-            .member_hashes(descendant_hashes(&hashes, &resolved)),
-        );
-    }
-    Ok(count)
+        .engine
+        .update_folder_membership(
+            input.target,
+            input.folder_id,
+            crate::engine::folders::MembershipOperation::Remove,
+        )?;
+    Ok(count.entity_ids.len())
 }
 
 pub async fn reorder_folders(state: &AppState, input: ReorderFoldersInput) -> Result<(), String> {
@@ -731,16 +677,17 @@ pub async fn reorder_folder_items(
 ) -> Result<(), String> {
     if let Some(moves) = input.moves {
         // Fenced legacy: relative reorder (before/after hash) uses old DB which resolves hashes to positions
-        crate::folders::service::reorder_folder_items(&state.db, input.folder_id, moves).await?;
+        crate::folders::service::reorder_folder_items(&state.legacy_db, input.folder_id, moves)
+            .await?;
     } else if let Some(sort_by) = input.sort_by {
         let direction = input.direction.unwrap_or_else(|| "asc".to_string());
         state
-            .db
+            .legacy_db
             .sort_folder_items(input.folder_id, sort_by, direction, input.hashes)
             .await?;
     } else if input.reverse == Some(true) {
         state
-            .db
+            .legacy_db
             .reverse_folder_items(input.folder_id, input.hashes)
             .await?;
     } else {
@@ -836,22 +783,4 @@ pub async fn list_collection_member_hashes(
     input: DeleteCollectionInput,
 ) -> Result<Vec<String>, String> {
     state.engine.list_collection_member_hashes(input.id)
-}
-
-// ─── Helpers ──────────────────────────────────────────────────────────────
-
-/// Resolve hashes for folder operations — from explicit hashes or a selection spec.
-async fn resolve_folder_op_hashes(
-    state: &AppState,
-    hashes: Vec<String>,
-    selection: Option<crate::types::SelectionQuerySpec>,
-) -> Result<Vec<String>, String> {
-    if let Some(sel) = selection {
-        let bitmap = super::media_lifecycle::resolve_selection_bitmap(state, &sel).await?;
-        let ids: Vec<i64> = bitmap.iter().map(|id| id as i64).collect();
-        let pairs = state.db.resolve_ids_batch(&ids).await?;
-        Ok(pairs.into_iter().map(|(_, h)| h).collect())
-    } else {
-        Ok(hashes)
-    }
 }

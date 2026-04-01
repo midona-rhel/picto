@@ -92,7 +92,10 @@ function Row({ label, sep, children }: { label: string; sep?: boolean; children:
 
 // ── Appearance panel ──
 
-const THEMES = [
+const isMacPlatform = typeof navigator !== 'undefined' && /Mac/.test(navigator.platform);
+const isWinPlatform = typeof navigator !== 'undefined' && /Win/.test(navigator.platform);
+
+const THEMES: Array<{ name: string; css: string; color: string | undefined; platform?: 'mac' | 'win' }> = [
   { name: 'Auto', css: 'auto', color: undefined },
   { name: 'Light', css: 'light', color: '#ffffff' },
   { name: 'Light Gray', css: 'lightgray', color: '#c8cacd' },
@@ -100,7 +103,13 @@ const THEMES = [
   { name: 'Dark', css: 'dark', color: '#010101' },
   { name: 'Blue', css: 'blue', color: '#28356e' },
   { name: 'Purple', css: 'purple', color: '#463275' },
-] as const;
+  // macOS native
+  { name: 'Vibrancy', css: 'vibrancy', color: undefined, platform: 'mac' as const },
+  { name: 'Liquid Glass', css: 'liquidglass', color: undefined, platform: 'mac' as const },
+  // Windows native
+  { name: 'Mica', css: 'mica', color: undefined, platform: 'win' as const },
+  { name: 'Acrylic', css: 'acrylic', color: undefined, platform: 'win' as const },
+].filter((t) => !t.platform || (t.platform === 'mac' && isMacPlatform) || (t.platform === 'win' && isWinPlatform));
 
 const ZOOM_OPTIONS = [
   { value: '75', label: '75%' },
@@ -157,6 +166,7 @@ function AppearancePanel({ onDirty, appSettings, setAppSettings, prefs, setPrefs
     return saved;
   });
   const [zoom, setZoom] = useState('100');
+  const previousThemeRef = useRef(activeTheme);
 
   const updateAppSetting = (patch: Partial<api.AppSettings>) => {
     setAppSettings((cur) => cur ? { ...cur, ...patch } : null);
@@ -166,6 +176,11 @@ function AppearancePanel({ onDirty, appSettings, setAppSettings, prefs, setPrefs
   };
 
   const handleThemeChange = (css: string) => {
+    // Native transparency themes need window recreation — warn user first
+    const nativeThemes = new Set(['vibrancy', 'liquidglass', 'mica', 'acrylic']);
+    const willRestart = nativeThemes.has(css) || nativeThemes.has(previousThemeRef.current);
+    if (willRestart && !window.confirm('This theme requires restarting the main window. Continue?')) return;
+
     // Theme preview is applied immediately (visual feedback), but only persisted on Save
     const lightThemes = new Set(['light', 'lightgray']);
     const resolved = css === 'auto'
@@ -177,6 +192,10 @@ function AppearancePanel({ onDirty, appSettings, setAppSettings, prefs, setPrefs
     localStorage.setItem('picto-theme', css);
     setActiveTheme(css);
     updateAppSetting({ colorScheme: css });
+    if (willRestart) {
+      void (window as any).picto?.api?.restartMainWindow?.()?.catch?.(() => {});
+    }
+    previousThemeRef.current = css;
   };
 
   const handleZoomChange = (value: string) => {
@@ -205,9 +224,9 @@ function AppearancePanel({ onDirty, appSettings, setAppSettings, prefs, setPrefs
               {THEMES.map((t) => (
                 <button
                   key={t.css}
-                  className={`${styles.themeSwatch} ${t.css === 'auto' ? styles.themeSwatchAuto : ''} ${activeTheme === t.css ? styles.themeSwatchActive : ''}`}
+                  className={`${styles.themeSwatch} ${t.css === 'auto' ? styles.themeSwatchAuto : ''} ${!t.color && t.css !== 'auto' ? styles.themeSwatchGlass : ''} ${activeTheme === t.css ? styles.themeSwatchActive : ''}`}
                   style={t.color ? { backgroundColor: t.color } : undefined}
-                  title={t.name}
+                  data-tooltip={t.name}
                   type="button"
                   onClick={() => handleThemeChange(t.css)}
                 />
@@ -320,6 +339,18 @@ const DEFAULT_VIEW_PREFS: api.ViewPrefsPatch = {
   show_label: false,
   thumbnail_fit: 'contain',
 };
+
+// Apply theme to this window immediately on module load (settings is a separate Electron window)
+(function applyThemeOnLoad() {
+  const saved = localStorage.getItem('picto-theme') ?? 'dark';
+  const lightThemes = new Set(['light', 'lightgray']);
+  const resolved = saved === 'auto'
+    ? (window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark')
+    : saved;
+  document.documentElement.dataset.theme = saved === 'auto' ? '' : saved;
+  document.documentElement.dataset.mantineColorScheme = lightThemes.has(resolved) ? 'light' : 'dark';
+  document.documentElement.style.colorScheme = lightThemes.has(resolved) ? 'light' : 'dark';
+})();
 
 export function Settings() {
   const [selected, setSelected] = useState('general');

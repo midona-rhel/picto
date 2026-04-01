@@ -12,6 +12,8 @@ use crate::media_processing::{
 use crate::runtime_contract::change_builder::ChangeImpact;
 use crate::runtime_contract::state_change::MediaDerivativeField;
 
+pub const TARGET_COLOR_ANALYSIS_VERSION: i64 = 2;
+
 #[derive(Debug, Serialize)]
 pub struct EnsureThumbnailResult {
     pub regenerated_thumbnail: bool,
@@ -217,20 +219,29 @@ async fn analyze_batch(
         changed_fields.push(MediaDerivativeField::Thumbnail);
     }
 
-    if want_colors && (force_colors || context.target.dominant_color_hex.is_none()) {
+    if want_colors
+        && (force_colors
+            || context.target.color_analysis_version < TARGET_COLOR_ANALYSIS_VERSION
+            || !context.target.has_dominant_palette_blob)
+    {
         let Some(source) = &context.raster_source else {
             return Err("Dominant color analysis requires decoded image".to_string());
         };
-        let colors: Vec<(String, f32, f32, f32)> =
-            media_processing::colors::extract_dominant_colors(&source.decoded, 8)
-                .iter()
-                .map(|c| (c.hex.clone(), c.l as f32, c.a as f32, c.b as f32))
-                .collect();
+        let palette = media_processing::colors::extract_dominant_colors(&source.decoded, 10);
+        let colors: Vec<(String, f32, f32, f32)> = palette
+            .iter()
+            .map(|c| (c.hex.clone(), c.l as f32, c.a as f32, c.b as f32))
+            .collect();
+        let dominant_palette_blob =
+            media_processing::colors::serialize_dominant_palette_blob(&palette)
+                .map_err(|e| format!("Dominant palette serialization failed: {e}"))?;
         let dominant_color_hex = colors.first().map(|(hex, _, _, _)| hex.clone());
         db.replace_file_colors(
             context.target.file_id,
             &colors,
             dominant_color_hex.as_deref(),
+            Some(dominant_palette_blob.as_slice()),
+            TARGET_COLOR_ANALYSIS_VERSION,
         )?;
         outcome.colors_extracted = colors.len();
         outcome.dominant_color_hex = dominant_color_hex;
@@ -302,7 +313,10 @@ pub async fn enqueue_missing_derivative_jobs(
         if caps.can_thumbnail() && thumb_missing {
             work_types.push(DeferredWorkType::Thumbnail);
         }
-        if caps.can_dominant_colors && target.dominant_color_hex.is_none() {
+        if caps.can_dominant_colors
+            && (target.color_analysis_version < TARGET_COLOR_ANALYSIS_VERSION
+                || !target.has_dominant_palette_blob)
+        {
             work_types.push(DeferredWorkType::DominantColors);
         }
         if caps.can_perceptual_hash && target.perceptual_hash.is_none() {
@@ -356,6 +370,10 @@ pub async fn reanalyze_file_colors_now(
         colors_extracted: outcome.colors_extracted,
         dominant_color_hex: outcome.dominant_color_hex,
     })
+}
+
+pub fn enqueue_stale_color_backfill(db: &LibraryDatabase) -> Result<usize, String> {
+    db.enqueue_stale_color_analysis_jobs(TARGET_COLOR_ANALYSIS_VERSION)
 }
 
 pub async fn process_deferred_batch(

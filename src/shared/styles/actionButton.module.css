@@ -1,0 +1,54 @@
+/* Shared action button — used in modals, portals, and forms. */
+
+.btn {
+  height: 28px;
+  padding: 0 12px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+  font-family: var(--font-family);
+  cursor: pointer;
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  transition: background 80ms ease, color 80ms ease;
+}
+
+.btn:hover {
+  background: rgba(255, 255, 255, 0.14);
+  color: var(--color-text-primary);
+}
+
+.btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+  pointer-events: none;
+}
+
+.btnPrimary {
+  background: var(--color-primary);
+  color: white;
+}
+
+.btnPrimary:hover {
+  background: var(--color-primary-60);
+}
+
+.btnDanger {
+  background: var(--color-negative);
+  color: white;
+}
+
+.btnDanger:hover {
+  background: color-mix(in srgb, var(--color-negative) 80%, black);
+}
+
+.btnGroup {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}

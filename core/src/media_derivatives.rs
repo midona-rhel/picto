@@ -806,7 +806,13 @@ async fn reanalyze_file_colors_canonical(
     };
 
     if !file.mime_type.starts_with("image/") {
-        db.set_file_colors_for_entity_hash(entity_hash, &[], None)?;
+        db.set_file_colors_for_entity_hash(
+            entity_hash,
+            &[],
+            None,
+            None,
+            crate::media_analysis::TARGET_COLOR_ANALYSIS_VERSION,
+        )?;
         return Ok(ReanalyzeFileColorsResult {
             colors_extracted: 0,
             dominant_color_hex: None,
@@ -816,8 +822,8 @@ async fn reanalyze_file_colors_canonical(
     let hash_owned = file.file_hash.clone();
     let ext = mime_to_extension(&file.mime_type).to_string();
     let bs = blob_store.clone();
-    let colors =
-        tokio::task::spawn_blocking(move || -> Result<Vec<(String, f32, f32, f32)>, String> {
+    let palette = tokio::task::spawn_blocking(
+        move || -> Result<Vec<crate::media_processing::colors::DominantColor>, String> {
             let bytes = if let Ok(Some(thumb_path)) = bs.find_thumbnail_path(&hash_owned) {
                 std::fs::read(&thumb_path)
                     .map_err(|e| format!("Failed to read thumbnail: {}", e))?
@@ -831,18 +837,28 @@ async fn reanalyze_file_colors_canonical(
             };
             let img = image::load_from_memory(&bytes)
                 .map_err(|e| format!("Image decode failed: {}", e))?;
-            Ok(
-                crate::media_processing::colors::extract_dominant_colors(&img, 8)
-                    .iter()
-                    .map(|c| (c.hex.clone(), c.l as f32, c.a as f32, c.b as f32))
-                    .collect(),
-            )
-        })
-        .await
-        .map_err(|e| format!("Color extraction task failed: {}", e))??;
+            Ok(crate::media_processing::colors::extract_dominant_colors(
+                &img, 10,
+            ))
+        },
+    )
+    .await
+    .map_err(|e| format!("Color extraction task failed: {}", e))??;
 
+    let colors = palette
+        .iter()
+        .map(|c| (c.hex.clone(), c.l as f32, c.a as f32, c.b as f32))
+        .collect::<Vec<_>>();
+    let dominant_palette_blob =
+        crate::media_processing::colors::serialize_dominant_palette_blob(&palette)?;
     let dominant_color_hex = colors.first().map(|(hex, _, _, _)| hex.clone());
-    db.set_file_colors_for_entity_hash(entity_hash, &colors, dominant_color_hex.as_deref())?;
+    db.set_file_colors_for_entity_hash(
+        entity_hash,
+        &colors,
+        dominant_color_hex.as_deref(),
+        Some(dominant_palette_blob.as_slice()),
+        crate::media_analysis::TARGET_COLOR_ANALYSIS_VERSION,
+    )?;
     Ok(ReanalyzeFileColorsResult {
         colors_extracted: colors.len(),
         dominant_color_hex,

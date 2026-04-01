@@ -90,7 +90,7 @@ export async function removeEntityTags(entityHash: string, tags: string[]): Prom
 }
 
 export async function removeEntityFromFolder(entityHash: string, folderId: number): Promise<void> {
-  await api.removeEntitiesFromFolder(folderId, [entityHash]);
+  await api.removeEntitiesFromFolder(folderId, singleTarget(entityHash));
   void loadInspectorData(entityHash);
 }
 

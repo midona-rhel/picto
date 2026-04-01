@@ -261,6 +261,17 @@ app.on('second-instance', () => {
 
 app.whenReady().then(async () => {
   await bootstrapApplication();
+
+  // Auto theme: broadcast OS dark/light mode changes to all windows
+  nativeTheme.on('updated', () => {
+    const isDark = nativeTheme.shouldUseDarkColors;
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (!win.isDestroyed()) {
+        win.webContents.send('picto:os-theme-changed', { isDark });
+      }
+    }
+  });
+
   app.on('activate', () => {
     if (windowManager.getAllWindows().length === 0) {
       windowManager.createWindow('main');

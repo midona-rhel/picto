@@ -177,6 +177,31 @@
   --shadow-panel: 0 8px 32px rgba(0, 0, 0, 0.15);
 }
 
+/* ── Native transparency themes ── */
+:root[data-theme="vibrancy"],
+:root[data-theme="mica"],
+:root[data-theme="acrylic"] {
+  --color-bg-app: transparent;
+  --color-surface-1: rgba(36, 37, 40, 0.6);
+  --color-surface-2: rgba(42, 42, 46, 0.4);
+  --color-surface-hover: rgba(248, 249, 251, 0.08);
+  --color-surface-active: rgba(248, 249, 251, 0.14);
+}
+
+/* ── Liquid Glass — near-transparent for the glass effect to dominate ── */
+:root[data-theme="liquidglass"] {
+  --color-bg-app: transparent;
+  --color-surface-1: rgba(0, 0, 0, 0.05);
+  --color-surface-2: rgba(0, 0, 0, 0.03);
+  --color-surface-hover: rgba(255, 255, 255, 0.05);
+  --color-surface-active: rgba(255, 255, 255, 0.08);
+  --color-border-primary: rgba(255, 255, 255, 0.06);
+  --color-border-secondary: rgba(255, 255, 255, 0.03);
+  --sidebar-item-hover-bg: rgba(255, 255, 255, 0.05);
+  --sidebar-item-active-bg: rgba(255, 255, 255, 0.08);
+  --shadow-panel: none;
+}
+
 /* ── Light Gray theme ────────────────────────────────────────── */
 :root[data-mantine-color-scheme="light"][data-theme="lightgray"] {
   --color-bg-app: #c8cacd;

@@ -147,41 +147,7 @@
   color: var(--color-text-tertiary);
 }
 
-/* ── Footer buttons ── */
-
-.footerBtnGroup {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.footerBtn {
-  height: 26px;
-  padding: 0 10px;
-  border: none;
-  border-radius: var(--radius-sm);
-  background: rgba(255, 255, 255, 0.08);
-  color: var(--color-text-secondary);
-  font-size: var(--font-size-sm);
-  font-family: var(--font-family);
-  cursor: pointer;
-  white-space: nowrap;
-  transition: background 80ms ease, color 80ms ease;
-}
-
-.footerBtn:hover {
-  background: rgba(255, 255, 255, 0.14);
-  color: var(--color-text-primary);
-}
-
-.footerBtnPrimary {
-  background: var(--color-primary);
-  color: white;
-}
-
-.footerBtnPrimary:hover {
-  background: var(--color-primary-60);
-}
+/* ── Footer buttons: use shared actionButton.module.css directly ── */
 
 /* ── Kbd hint ── */
 

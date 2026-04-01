@@ -76,6 +76,31 @@ pub fn replace_file_dominant_color(
     Ok(())
 }
 
+pub fn replace_file_color_analysis(
+    conn: &Connection,
+    file_id: i64,
+    colors: &[(String, f32, f32, f32)],
+    dominant_color_hex: Option<&str>,
+    dominant_palette_blob: Option<&[u8]>,
+    color_analysis_version: i64,
+) -> rusqlite::Result<()> {
+    save_file_colors(conn, file_id, colors)?;
+    conn.execute(
+        "UPDATE media_file
+         SET dominant_color_hex = ?1,
+             dominant_palette_blob = ?2,
+             color_analysis_version = ?3
+         WHERE file_id = ?4",
+        params![
+            dominant_color_hex,
+            dominant_palette_blob,
+            color_analysis_version,
+            file_id
+        ],
+    )?;
+    Ok(())
+}
+
 pub fn save_file_colors(
     conn: &Connection,
     file_id: i64,

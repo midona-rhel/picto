@@ -8,6 +8,7 @@ import { useAtomValue, useSetAtom } from 'jotai';
 import { OverlayShell } from '../../shared/ui/OverlayShell';
 import { batchRenameOpenAtom } from '../../state/portals';
 import shellStyles from '../../shared/ui/OverlayShell/OverlayShell.module.css';
+import btnStyles from '../../shared/styles/actionButton.module.css';
 
 export function BatchRenamePanel() {
   const open = useAtomValue(batchRenameOpenAtom);
@@ -29,9 +30,9 @@ export function BatchRenamePanel() {
           <span className={shellStyles.kbdHint}>
             <span className={shellStyles.kbd}>Esc</span> close
           </span>
-          <div className={shellStyles.footerBtnGroup}>
-            <button className={shellStyles.footerBtn} onClick={() => setOpen(false)} type="button">Cancel</button>
-            <button className={`${shellStyles.footerBtn} ${shellStyles.footerBtnPrimary}`} type="button" disabled>Rename</button>
+          <div className={btnStyles.btnGroup}>
+            <button className={btnStyles.btn} onClick={() => setOpen(false)} type="button">Cancel</button>
+            <button className={`${btnStyles.btn} ${btnStyles.btnPrimary}`} type="button" disabled>Rename</button>
           </div>
         </>
       }

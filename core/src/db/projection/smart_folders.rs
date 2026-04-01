@@ -50,7 +50,7 @@ pub fn compile_all_smart_folders(conn: &Connection, bitmaps: &BitmapStore) {
 /// Evaluate a predicate JSON against the bitmap store.
 /// Predicate format: { "groups": [ { "match": "all"|"any", "rules": [...] } ] }
 /// Groups are ANDed together.
-fn evaluate_predicate(bitmaps: &BitmapStore, json: &str) -> RoaringBitmap {
+pub(crate) fn evaluate_predicate(bitmaps: &BitmapStore, json: &str) -> RoaringBitmap {
     let parsed: serde_json::Value = match serde_json::from_str(json) {
         Ok(v) => v,
         Err(_) => return RoaringBitmap::new(),

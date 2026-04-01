@@ -22,14 +22,14 @@ export const smartFoldersController = {
     await api.deleteSmartFolder(id);
   },
 
-  // TODO: rename, applyColor, applyIcon — blocked on backend partial update support.
-  // The update_smart_folder command requires a full SmartFolder struct
-  // (smart_folder_id, name, parent_id, icon, color, predicate_json, sort_field, sort_order).
-  // Sending only { name } will fail deserialization.
-  //
-  // Options to unblock:
-  //   1. Add a partial update command to the backend (preferred)
-  //   2. Read the full smart folder from sidebar node meta, patch, then send
+  async create(name: string, icon?: string | null, color?: string | null, parentId?: number | null) {
+    await api.createSmartFolder({ name, icon, color, parent_id: parentId });
+    // Sidebar will refresh via state_changed event
+  },
 
-  // TODO: create(name, parentId, predicate) — needs smart folder create modal
+  // TODO: update — blocked on backend partial update support.
+  async update(id: number, name: string, icon?: string | null, color?: string | null) {
+    // Partial update not supported. Needs full struct. For now, update via the legacy path.
+    // TODO: add partial update command to backend
+  },
 };

@@ -40,4 +40,24 @@ export const foldersController = {
     store.set(patchFolderNodeAtom, { folderId, patch: { icon } });
     await api.updateFolder(folderId, { icon });
   },
+
+  async setWatchConfig(folderId: number, config: {
+    watchPath: string;
+    enabled: boolean;
+    subfolders: boolean;
+    importStatusMode: string;
+  }) {
+    await api.setFolderWatchConfig(folderId, {
+      watch_path: config.watchPath,
+      watch_enabled: config.enabled,
+      watch_subfolders: config.subfolders,
+      watch_import_status_mode: config.importStatusMode,
+    });
+    await sidebarController.fetchTree();
+  },
+
+  async clearWatchConfig(folderId: number) {
+    await api.clearFolderWatchConfig(folderId);
+    await sidebarController.fetchTree();
+  },
 };

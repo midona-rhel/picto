@@ -6,13 +6,13 @@
  */
 
 import { useEffect, useMemo, useCallback, useRef } from 'react';
-import { useAtomValue, useSetAtom } from 'jotai';
+import { useAtomValue, useSetAtom, getDefaultStore } from 'jotai';
+import { folderWatchModalAtom, confirmModalAtom } from '../../state/modals';
 import {
   IconFolder, IconFolderOpen, IconFolderPlus, IconFolderSymlink,
-  IconCopy, IconUpload,
+  IconCopy, IconUpload, IconDownload,
   IconPhoto, IconInbox, IconTrash,
-  IconClock,
-  IconAntennaBars5,
+  IconClock, IconBookmark,
 } from '@tabler/icons-react';
 import type { Icon as TablerIcon } from '@tabler/icons-react';
 import {
@@ -48,16 +48,27 @@ const SYSTEM_ICONS: Record<string, TablerIcon> = {
   'system:inbox':         IconInbox,
   'system:uncategorized': IconFolderQuestionCustom as unknown as TablerIcon,
   'system:untagged':      IconBookmarkQuestionCustom as unknown as TablerIcon,
+  'system:tag_manager':   IconBookmark,
   'system:recent_viewed': IconClock,
+  'system:subscriptions': IconDownload,
   'system:duplicates':    IconCopy,
-  'system:subscriptions': IconAntennaBars5,
   'system:trash':         IconTrash,
 };
 
-const PRIMARY_SCOPES = new Set([
-  'system:active', 'system:inbox', 'system:uncategorized',
-  'system:untagged', 'system:trash',
-]);
+const store = getDefaultStore();
+
+/** Fixed display order for all system scopes. */
+const SYSTEM_SCOPE_ORDER = [
+  'system:active',
+  'system:inbox',
+  'system:recent_viewed',
+  'system:uncategorized',
+  'system:untagged',
+  'system:tag_manager',
+  'system:subscriptions',
+  'system:duplicates',
+  'system:trash',
+];
 
 const LABEL_OVERRIDES: Record<string, string> = {
   'system:active': 'All',
@@ -123,14 +134,20 @@ export function Sidebar() {
     }
   }, [folderNodes, collapsed, toggleCollapse]);
 
-  const primaryNodes = useMemo(
-    () => systemNodes.filter((n) => PRIMARY_SCOPES.has(n.id)),
-    [systemNodes],
-  );
-  const secondaryNodes = useMemo(
-    () => systemNodes.filter((n) => !PRIMARY_SCOPES.has(n.id)),
-    [systemNodes],
-  );
+  const orderedSystemNodes = useMemo(() => {
+    const byId = new Map(systemNodes.map((n) => [n.id, n]));
+    const result: SidebarNodeDto[] = [];
+    for (const id of SYSTEM_SCOPE_ORDER) {
+      const node = byId.get(id);
+      if (node) {
+        result.push(node);
+      } else if (id === 'system:tag_manager') {
+        // Placeholder — not from backend
+        result.push({ id, name: 'Tag Manager', count: null, selectable: true, sort_order: 0 } as SidebarNodeDto);
+      }
+    }
+    return result;
+  }, [systemNodes]);
   const folderList = useMemo(
     () => buildTreeRenderList(folderNodes, 'section:folders', collapsed),
     [folderNodes, collapsed],
@@ -155,7 +172,9 @@ export function Sidebar() {
       { label: 'Set Auto-Tags...', icon: <IconAutoTags size={14} />, action: () => { /* TODO: needs auto-tags editor panel */ } },
       { separator: true },
       { label: 'Import Folder Here...', icon: <IconFolderPlus size={14} />, action: () => { /* TODO: needs import dialog */ } },
-      { label: 'Attach Watched Folder...', icon: <IconWatchFolder size={14} />, action: () => { /* TODO: needs watch config dialog */ } },
+      { label: 'Attach Watched Folder...', icon: <IconWatchFolder size={14} />, action: () => {
+        store.set(folderWatchModalAtom, { open: true, folderId, initial: {} });
+      } },
       { separator: true },
       { label: 'Sort', icon: <IconSort size={14} />, action: () => { /* TODO: needs sort submenu */ } },
       { label: isExpanded ? 'Collapse Folder' : 'Expand Folder', icon: isExpanded ? <IconCollapse size={14} /> : <IconExpand size={14} />,
@@ -172,7 +191,13 @@ export function Sidebar() {
       { label: 'Export...', icon: <IconUpload size={14} />, action: () => { /* TODO: needs export dialog */ } },
       { label: 'Move', icon: <IconFolderSymlink size={14} />, action: () => { /* TODO: needs folder destination picker */ } },
       { separator: true },
-      { label: 'Delete', icon: <IconTrash size={14} />, danger: true, action: () => foldersController.delete(folderId) },
+      { label: 'Delete', icon: <IconTrash size={14} />, danger: true, action: () => {
+        store.set(confirmModalAtom, {
+          open: true, title: 'Delete Folder', danger: true, confirmLabel: 'Delete',
+          message: `Delete "${node.name}"? Files inside will not be deleted.`,
+          onConfirm: () => foldersController.delete(folderId),
+        });
+      } },
     ];
     contextMenu.open(e, entries);
   }, [contextMenu, folderRename, collapsed, toggleCollapse]);
@@ -195,7 +220,13 @@ export function Sidebar() {
       { separator: true },
       { label: 'Duplicate', icon: <IconCopy size={14} />, action: () => { /* TODO: needs smart folder duplicate API */ } },
       { separator: true },
-      { label: 'Delete', icon: <IconTrash size={14} />, danger: true, action: () => smartFoldersController.delete(sfId) },
+      { label: 'Delete', icon: <IconTrash size={14} />, danger: true, action: () => {
+        store.set(confirmModalAtom, {
+          open: true, title: 'Delete Smart Folder', danger: true, confirmLabel: 'Delete',
+          message: `Delete "${node.name}"? This only removes the smart folder, not its contents.`,
+          onConfirm: () => smartFoldersController.delete(sfId),
+        });
+      } },
     ];
     contextMenu.open(e, entries);
   }, [contextMenu, folderRename]);
@@ -207,8 +238,8 @@ export function Sidebar() {
           <div className={styles.loadingMessage}>Loading…</div>
         )}
 
-        {/* Primary system scopes */}
-        {primaryNodes.map((node) => {
+        {/* System scopes — fixed order */}
+        {orderedSystemNodes.map((node) => {
           const ScopeIcon = SYSTEM_ICONS[node.id];
           return (
             <SidebarRow
@@ -221,25 +252,6 @@ export function Sidebar() {
             />
           );
         })}
-
-        {/* Secondary system scopes */}
-        {secondaryNodes.length > 0 && (
-          <>
-            <div className={styles.separator} />
-            {secondaryNodes.map((node) => {
-              const ScopeIcon = SYSTEM_ICONS[node.id];
-              return (
-                <SidebarRow
-                  key={node.id}
-                  icon={ScopeIcon ? <ScopeIcon size={IC} {...FILL} /> : undefined}
-                  label={LABEL_OVERRIDES[node.id] ?? node.name}
-                  active={activeNodeId === node.id}
-                  onClick={() => node.selectable && navigate(node.id)}
-                />
-              );
-            })}
-          </>
-        )}
 
         {/* Folders */}
         <SidebarRow

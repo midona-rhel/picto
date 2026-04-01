@@ -220,6 +220,16 @@ export function registerIpcHandlers({
     return invoke(command, args || {});
   });
 
+  // Restart the main window (e.g. after changing to a native transparency theme)
+  ipcMain.handle('picto:restart-main-window', () => {
+    const main = windowManager.getMainWindow();
+    if (main && !main.isDestroyed()) {
+      main.close();
+    }
+    // Small delay so the old window fully closes before creating a new one
+    setTimeout(() => { windowManager.createWindow('main'); }, 200);
+  });
+
   ipcMain.handle('picto:event:emit', (event, { name, payload, target }) => {
     if (!name || typeof name !== 'string') return null;
     if (target) {

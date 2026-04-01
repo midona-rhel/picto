@@ -1,0 +1,68 @@
+/* GlassInput — shared styled input for modals and portals. */
+
+.input {
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--color-border-primary);
+  border-radius: var(--radius-sm);
+  background: rgba(0, 0, 0, 0.20);
+  color: var(--color-text-primary);
+  font-size: var(--font-size-md);
+  font-family: var(--font-family);
+  outline: none;
+  width: 100%;
+  box-sizing: border-box;
+  transition: border-color 120ms ease;
+}
+
+.input:focus {
+  border-color: var(--color-primary-50);
+}
+
+.input::placeholder {
+  color: var(--color-text-tertiary);
+}
+
+.input:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.inputReadOnly {
+  cursor: default;
+  opacity: 0.8;
+}
+
+/* ── Search variant (icon + input) ── */
+
+.searchWrap {
+  display: flex;
+  align-items: center;
+  height: 36px;
+  gap: 6px;
+  padding: 0 0 0 10px;
+}
+
+.searchIcon {
+  flex-shrink: 0;
+  color: var(--color-text-tertiary);
+  opacity: 0.6;
+}
+
+.searchInput {
+  flex: 1;
+  background: none;
+  border: none;
+  outline: none;
+  color: var(--color-text-primary);
+  font-size: var(--font-size-md);
+  font-family: var(--font-family);
+  height: 36px;
+  padding: 0;
+  min-width: 0;
+  caret-color: var(--color-text-primary);
+}
+
+.searchInput::placeholder {
+  color: var(--color-text-tertiary);
+}

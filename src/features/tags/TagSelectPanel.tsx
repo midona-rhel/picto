@@ -18,6 +18,7 @@ import * as api from '../../platform/api';
 import * as entityMutations from '../../controllers/entityMutations';
 import type { CanonicalTagRecord, CanonicalNamespaceSummary } from '../../shared/types/canonical';
 import shellStyles from '../../shared/ui/OverlayShell/OverlayShell.module.css';
+import btnStyles from '../../shared/styles/actionButton.module.css';
 import styles from './TagSelectPanel.module.css';
 
 // Namespace → RGB color (same as TagChip)
@@ -316,11 +317,11 @@ export function TagSelectPanel() {
             <span className={shellStyles.kbd}>↩</span> Select
             <span className={shellStyles.kbd}>Tab</span>
           </span>
-          <div className={shellStyles.footerBtnGroup}>
+          <div className={btnStyles.btnGroup}>
             <span className={shellStyles.kbdHint}><span className={shellStyles.kbd}>Esc</span></span>
             {(checked.size > 0 || unchecked.size > 0) && (
               <button
-                className={`${shellStyles.footerBtn} ${shellStyles.footerBtnPrimary}`}
+                className={`${btnStyles.btn} ${btnStyles.btnPrimary}`}
                 onClick={applyTags}
                 type="button"
               >
