@@ -221,7 +221,7 @@ fn is_special_thumbnail_mime(mime_type: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{ThumbnailBackend, capabilities_for_detected_mime, capabilities_for_stored_media};
+    use super::{capabilities_for_detected_mime, capabilities_for_stored_media, ThumbnailBackend};
     use crate::constants::MimeType;
 
     #[test]

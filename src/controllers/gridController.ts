@@ -6,16 +6,21 @@
 
 import { getDefaultStore } from 'jotai';
 import * as api from '../platform/api';
-import type { BaseScope, EntityViewQuery } from '../shared/types/canonical';
+import type { BaseScope, EntityViewQuery, CanonicalEntityGridItem } from '../shared/types/canonical';
 import type { SortField, SortDirection } from '../state/grid';
 import {
   gridScopeAtom, gridActiveAtom, gridItemsAtom, gridCursorAtom,
   gridTotalCountAtom, gridTotalSizeBytesAtom, gridLoadingAtom, gridErrorAtom,
   gridSortFieldAtom, gridSortDirectionAtom, gridSearchTextAtom,
+  gridViewModeAtom, gridTargetSizeAtom,
+  gridShowNameAtom, gridShowExtensionAtom, gridShowResolutionAtom,
+  gridShowExtensionLabelAtom, gridFitThumbnailsAtom,
   currentGridQueryAtom,
   gridSoftTransitionActionAtom,
 } from '../state/grid';
+import type { GridViewMode } from '../features/grid/layout/types';
 import { selectedEntityHashesAtom } from '../state/selection';
+import type { ViewPrefsPatch } from '../platform/api';
 
 const store = getDefaultStore();
 
@@ -23,10 +28,85 @@ let gridVersion = 0;
 let paginationInFlight: string | null = null;
 let searchDebounceTimer: ReturnType<typeof setTimeout> | null = null;
 const SEARCH_DEBOUNCE_MS = 300;
+let viewPrefsSaveTimer: ReturnType<typeof setTimeout> | null = null;
+const VIEW_PREFS_SAVE_DEBOUNCE_MS = 500;
+let currentScopeKey = '';
+
+function scopeToKey(scope: BaseScope): string {
+  switch (scope.kind) {
+    case 'system': return `system:${scope.key === 'all' ? 'active' : scope.key}`;
+    case 'folder': return scope.id != null ? `folder:${scope.id}` : '';
+    case 'smart_folder': return scope.id != null ? `smart:${scope.id}` : '';
+    case 'collection': return scope.id != null ? `collection:${scope.id}` : '';
+    default: return '';
+  }
+}
 
 function currentQuery(limit: number): EntityViewQuery {
   const q = store.get(currentGridQueryAtom);
   return { ...q, page: { limit } };
+}
+
+/** Build a comparator for grid items based on the current sort field/direction. */
+function gridItemComparator(field: SortField, dir: SortDirection): (a: CanonicalEntityGridItem, b: CanonicalEntityGridItem) => number {
+  const sign = dir === 'asc' ? 1 : -1;
+  return (a, b) => {
+    let av: string | number | null;
+    let bv: string | number | null;
+    switch (field) {
+      case 'date_added': av = a.date_added; bv = b.date_added; break;
+      case 'date_created': av = a.date_created; bv = b.date_created; break;
+      case 'date_modified': av = a.date_modified; bv = b.date_modified; break;
+      case 'name': av = a.name; bv = b.name; break;
+      case 'rating': av = a.rating; bv = b.rating; break;
+      case 'duration': av = a.duration_ms; bv = b.duration_ms; break;
+      default: return 0; // size_bytes not on grid item — can't sort
+    }
+    if (av == null && bv == null) return 0;
+    if (av == null) return sign;
+    if (bv == null) return -sign;
+    if (av < bv) return -sign;
+    if (av > bv) return sign;
+    return 0;
+  };
+}
+
+/** Merge new items into an already-sorted array at their correct positions. */
+function sortedMerge(
+  existing: CanonicalEntityGridItem[],
+  newItems: CanonicalEntityGridItem[],
+  field: SortField,
+  dir: SortDirection,
+): CanonicalEntityGridItem[] {
+  if (field === 'size_bytes') {
+    // size_bytes not available on grid item — append at end
+    return [...existing, ...newItems];
+  }
+  const cmp = gridItemComparator(field, dir);
+  const merged = [...existing];
+  for (const item of newItems) {
+    // Binary search for insertion point
+    let lo = 0;
+    let hi = merged.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >>> 1;
+      if (cmp(merged[mid], item) <= 0) lo = mid + 1;
+      else hi = mid;
+    }
+    merged.splice(lo, 0, item);
+  }
+  return merged;
+}
+
+function uniqueEntityGridItems(items: CanonicalEntityGridItem[]): CanonicalEntityGridItem[] {
+  const seen = new Set<string>();
+  const unique: CanonicalEntityGridItem[] = [];
+  for (const item of items) {
+    if (seen.has(item.entity_hash)) continue;
+    seen.add(item.entity_hash);
+    unique.push(item);
+  }
+  return unique;
 }
 
 export const gridController = {
@@ -36,6 +116,30 @@ export const gridController = {
     store.set(selectedEntityHashesAtom, new Set());
     store.set(gridActiveAtom, true);
     if (searchDebounceTimer) { clearTimeout(searchDebounceTimer); searchDebounceTimer = null; }
+
+    // Load persisted view prefs for this scope.
+    // Missing fields fall back to global defaults so the previous scope's
+    // settings don't bleed into the new one.
+    const key = scopeToKey(scope);
+    currentScopeKey = key;
+    // Load per-scope prefs, then global defaults for any missing fields.
+    let prefs: api.ViewPrefsDto | null = null;
+    let globals: api.ViewPrefsDto | null = null;
+    if (key) {
+      try { prefs = await api.getViewPrefs(key); } catch { /* no saved prefs */ }
+    }
+    try { globals = await api.getViewPrefs(''); } catch { /* no global prefs */ }
+    const p = (field: keyof api.ViewPrefsDto) => prefs?.[field] ?? globals?.[field] ?? null;
+    store.set(gridSortFieldAtom, (p('sort_field') as SortField) || 'date_added');
+    store.set(gridSortDirectionAtom, (p('sort_order') as SortDirection) || 'desc');
+    store.set(gridViewModeAtom, (p('view_mode') as GridViewMode) || 'waterfall');
+    store.set(gridTargetSizeAtom, (p('target_size') as number) ?? 220);
+    store.set(gridShowNameAtom, (p('show_name') as boolean) ?? true);
+    store.set(gridShowResolutionAtom, (p('show_resolution') as boolean) ?? false);
+    store.set(gridShowExtensionAtom, (p('show_extension') as boolean) ?? false);
+    store.set(gridShowExtensionLabelAtom, (p('show_label') as boolean) ?? false);
+    store.set(gridFitThumbnailsAtom, p('thumbnail_fit') === 'cover');
+
     await this.loadFirstPage();
   },
 
@@ -64,6 +168,18 @@ export const gridController = {
       store.set(gridSortDirectionAtom, direction);
       void this.loadFirstPage({ preserveItems: true });
     });
+    this.saveViewPref({ sort_field: field, sort_order: direction });
+  },
+
+  /** Persist a view pref change for the current scope (debounced). */
+  saveViewPref(patch: ViewPrefsPatch) {
+    if (!currentScopeKey) return;
+    const key = currentScopeKey;
+    if (viewPrefsSaveTimer) clearTimeout(viewPrefsSaveTimer);
+    viewPrefsSaveTimer = setTimeout(() => {
+      viewPrefsSaveTimer = null;
+      void api.setViewPrefs(key, patch).catch(() => {});
+    }, VIEW_PREFS_SAVE_DEBOUNCE_MS);
   },
 
   async loadFirstPage(options?: { preserveItems?: boolean }) {
@@ -121,6 +237,48 @@ export const gridController = {
       store.set(gridErrorAtom, err instanceof Error ? err.message : String(err));
     } finally {
       if (v === gridVersion) store.set(gridLoadingAtom, false);
+    }
+  },
+
+  /** Remove specific items from the grid (trash/delete). */
+  removeItems(entityHashes: string[]) {
+    const currentItems = store.get(gridItemsAtom);
+    const removeSet = new Set(entityHashes);
+    const filtered = currentItems.filter((i) => !removeSet.has(i.entity_hash));
+    const removedCount = currentItems.length - filtered.length;
+    if (removedCount === 0) return;
+    store.set(gridItemsAtom, filtered);
+    const prevTotal = store.get(gridTotalCountAtom);
+    if (prevTotal != null) store.set(gridTotalCountAtom, Math.max(0, prevTotal - removedCount));
+  },
+
+  /** Insert specific new items into the grid at their sorted position. */
+  async insertItems(entityHashes: string[]) {
+    const currentItems = store.get(gridItemsAtom);
+    const existingSet = new Set(currentItems.map((i) => i.entity_hash));
+    const requested = Array.from(new Set(entityHashes));
+    const newHashes = requested.filter((h) => !existingSet.has(h));
+    if (newHashes.length === 0) return;
+
+    try {
+      const fetchedItems = await api.getEntityGridItems(newHashes);
+      const newItems = uniqueEntityGridItems(fetchedItems);
+      if (newItems.length === 0) return;
+
+      const sortField = store.get(gridSortFieldAtom);
+      const sortDir = store.get(gridSortDirectionAtom);
+      const merged = uniqueEntityGridItems(
+        sortedMerge(store.get(gridItemsAtom), newItems, sortField, sortDir),
+      );
+
+      store.set(gridItemsAtom, merged);
+      const prevTotal = store.get(gridTotalCountAtom);
+      if (prevTotal != null) {
+        const addedCount = merged.length - currentItems.length;
+        store.set(gridTotalCountAtom, prevTotal + Math.max(0, addedCount));
+      }
+    } catch {
+      void this.reconcile(false);
     }
   },
 

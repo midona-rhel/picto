@@ -99,15 +99,12 @@ pub fn split_tag(tag: &str) -> (&str, &str) {
 /// Combine namespace and subtag into a single tag string.
 /// If namespace is empty and subtag contains ':', prefixes with ':' to disambiguate.
 pub fn combine_tag(namespace: &str, subtag: &str) -> String {
-    if namespace.is_empty() {
-        if subtag.contains(':') {
-            format!(":{}", subtag)
-        } else {
-            subtag.to_string()
-        }
+    let ns = if namespace.is_empty() {
+        DEFAULT_NAMESPACE
     } else {
-        format!("{}:{}", namespace, subtag)
-    }
+        namespace
+    };
+    format!("{}:{}", ns, subtag)
 }
 
 /// Strip unwanted characters and normalise text.
@@ -210,6 +207,10 @@ pub fn parse_tag(raw: &str) -> Option<(String, String)> {
         return None;
     }
     let (ns, st) = split_tag(&cleaned);
+    if ns.is_empty() {
+        return Some((DEFAULT_NAMESPACE.to_string(), st.to_string()));
+    }
+    // User-created tags: any namespace is allowed
     Some((ns.to_string(), st.to_string()))
 }
 
@@ -219,25 +220,40 @@ pub fn parse_tags(raw_tags: &[String]) -> Vec<(String, String)> {
     raw_tags.iter().filter_map(|s| parse_tag(s)).collect()
 }
 
-/// Namespaces accepted on external ingest paths (import/subscription feeds).
-/// Any other `ns:tag` input is coerced to an unnamespaced tag literal `ns:tag`.
-pub fn is_ingest_namespace_allowed(namespace: &str) -> bool {
+/// Canonical namespaces (Hydrus Network compatible).
+/// `general` is the mandatory default — every tag must have a namespace.
+pub const DEFAULT_NAMESPACE: &str = "general";
+
+pub fn is_namespace_allowed(namespace: &str) -> bool {
     matches!(
         namespace,
-        "creator"
-            | "studio"
+        "general"
+            | "creator"
             | "character"
             | "person"
             | "series"
+            | "studio"
             | "species"
+            | "photoset"
             | "meta"
             | "system"
-            | "artist"
-            | "copyright"
-            | "general"
             | "rating"
-            | "source"
     )
+}
+
+/// Map booru-specific category names to canonical namespaces.
+fn map_booru_namespace(ns: &str) -> &str {
+    match ns {
+        "artist" => "creator",
+        "copyright" => "series",
+        "general" => "general",
+        _ => ns,
+    }
+}
+
+/// Legacy alias.
+pub fn is_ingest_namespace_allowed(namespace: &str) -> bool {
+    is_namespace_allowed(namespace)
 }
 
 /// Parse a raw tag for external ingest.
@@ -248,10 +264,15 @@ pub fn parse_tag_ingest(raw: &str) -> Option<(String, String)> {
         return None;
     }
     let (ns, st) = split_tag(&cleaned);
-    if ns.is_empty() || is_ingest_namespace_allowed(ns) {
-        return Some((ns.to_string(), st.to_string()));
+    if ns.is_empty() {
+        return Some((DEFAULT_NAMESPACE.to_string(), st.to_string()));
     }
-    Some(("".to_string(), format!("{}:{}", ns, st)))
+    let mapped = map_booru_namespace(ns);
+    if is_namespace_allowed(mapped) {
+        return Some((mapped.to_string(), st.to_string()));
+    }
+    // Unknown namespace (e.g. source, rating) — file under general, preserve colon in subtag
+    Some((DEFAULT_NAMESPACE.to_string(), format!("{}:{}", ns, st)))
 }
 
 /// Parse multiple raw tags for external ingest.

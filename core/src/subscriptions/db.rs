@@ -286,10 +286,7 @@ pub fn reset_subscription_query_state(
         [query_id],
     )?;
 
-    let queues_deleted = tx.execute(
-        "DELETE FROM download_queue WHERE query_id = ?1",
-        [query_id],
-    )?;
+    let queues_deleted = tx.execute("DELETE FROM ingest_queue WHERE query_id = ?1", [query_id])?;
 
     tx.commit()?;
     Ok((
@@ -664,9 +661,7 @@ fn map_subscription_query_run_row(
     })
 }
 
-fn map_subscription_issue_row(
-    row: &rusqlite::Row,
-) -> rusqlite::Result<SubscriptionIssueRecord> {
+fn map_subscription_issue_row(row: &rusqlite::Row) -> rusqlite::Result<SubscriptionIssueRecord> {
     Ok(SubscriptionIssueRecord {
         issue_id: row.get(0)?,
         subscription_id: row.get(1)?,
@@ -1159,6 +1154,26 @@ pub fn upsert_subscription_post_member(
     Ok(())
 }
 
+/// Check whether a subscription item has already been imported (status = 'imported').
+pub fn is_subscription_item_imported(
+    conn: &Connection,
+    subscription_id: i64,
+    site_id: &str,
+    post_id: &str,
+    item_key: &str,
+) -> rusqlite::Result<bool> {
+    let mut stmt = conn.prepare_cached(
+        "SELECT 1 FROM subscription_post_member
+         WHERE subscription_id = ?1
+           AND site_id = ?2
+           AND post_id = ?3
+           AND item_key = ?4
+           AND status = 'imported'
+         LIMIT 1",
+    )?;
+    stmt.exists(params![subscription_id, site_id, post_id, item_key])
+}
+
 pub fn list_subscription_post_members(
     conn: &Connection,
     subscription_id: i64,
@@ -1638,8 +1653,10 @@ impl SqliteDatabase {
         subscription_id: i64,
         query_id: i64,
     ) -> Result<i64, String> {
-        self.with_conn(move |conn| create_subscription_query_run(conn, run_id, subscription_id, query_id))
-            .await
+        self.with_conn(move |conn| {
+            create_subscription_query_run(conn, run_id, subscription_id, query_id)
+        })
+        .await
     }
 
     pub async fn finish_subscription_query_run(
@@ -1750,7 +1767,7 @@ impl SqliteDatabase {
                 },
             )
         })
-            .await
+        .await
     }
 
     pub async fn resolve_subscription_download_attempt(
@@ -1794,6 +1811,22 @@ impl SqliteDatabase {
     ) -> Result<Vec<SubscriptionDownloadAttemptRecord>, String> {
         self.with_read_conn(move |conn| {
             list_subscription_download_attempts(conn, subscription_id, query_id, limit)
+        })
+        .await
+    }
+
+    pub async fn is_subscription_item_imported(
+        &self,
+        subscription_id: i64,
+        site_id: &str,
+        post_id: &str,
+        item_key: &str,
+    ) -> Result<bool, String> {
+        let site_id = site_id.to_string();
+        let post_id = post_id.to_string();
+        let item_key = item_key.to_string();
+        self.with_read_conn(move |conn| {
+            is_subscription_item_imported(conn, subscription_id, &site_id, &post_id, &item_key)
         })
         .await
     }
@@ -1887,8 +1920,8 @@ mod tests {
     use super::{
         add_subscription_query, create_subscription, get_subscription_query,
         list_subscriptions_for_group_with_file_counts, list_subscriptions_with_file_counts,
-        reset_subscription_query_state, set_query_completed_initial_run,
-        set_query_resume_state, set_query_terminal_state, update_query_progress,
+        reset_subscription_query_state, set_query_completed_initial_run, set_query_resume_state,
+        set_query_terminal_state, update_query_progress,
     };
     use rusqlite::{params, Connection};
 
@@ -1986,7 +2019,8 @@ mod tests {
         .expect("create subscription tables");
 
         let group_id = 11_i64;
-        let in_group = create_subscription(&conn, "Grouped", Some(group_id)).expect("insert grouped");
+        let in_group =
+            create_subscription(&conn, "Grouped", Some(group_id)).expect("insert grouped");
         let _other = create_subscription(&conn, "Other", Some(99)).expect("insert other");
         conn.execute(
             "INSERT INTO subscription_entity (subscription_id, entity_id) VALUES (?1, ?2)",
@@ -2064,7 +2098,10 @@ mod tests {
             .expect("read query")
             .expect("query exists");
         assert_eq!(query.notes.as_deref(), Some("Safe baseline query"));
-        assert_eq!(query.last_success_at.as_deref(), Some("2026-03-30T10:00:00Z"));
+        assert_eq!(
+            query.last_success_at.as_deref(),
+            Some("2026-03-30T10:00:00Z")
+        );
         assert_eq!(query.last_failure_kind.as_deref(), Some("download_error"));
         assert_eq!(
             query.last_failure_message.as_deref(),
@@ -2152,15 +2189,20 @@ mod tests {
                  updated_at           TEXT NOT NULL,
                  resolved_at          TEXT
              );
-             CREATE TABLE download_queue (
+             CREATE TABLE ingest_queue (
                  queue_id        INTEGER PRIMARY KEY,
-                 subscription_id INTEGER NOT NULL,
+                 queue_kind      TEXT NOT NULL,
+                 source_kind     TEXT NOT NULL,
+                 subscription_id INTEGER,
                  query_id        INTEGER,
-                 post_id         TEXT NOT NULL,
-                 category        TEXT NOT NULL,
+                 query_run_id    INTEGER,
+                 cleanup_root    TEXT,
+                 post_id         TEXT,
+                 category        TEXT,
                  preferred_name  TEXT,
                  expected_count  INTEGER,
                  status          TEXT NOT NULL DEFAULT 'pending',
+                 last_error      TEXT,
                  created_at      TEXT NOT NULL,
                  updated_at      TEXT NOT NULL
              );",
@@ -2177,10 +2219,8 @@ mod tests {
             Some("notes"),
         )
         .expect("query");
-        update_query_progress(&conn, query_id, "2026-03-30T10:00:00Z", 12, 4)
-            .expect("progress");
-        set_query_resume_state(&conn, query_id, Some("123"), Some("tag_id_lt"))
-            .expect("resume");
+        update_query_progress(&conn, query_id, "2026-03-30T10:00:00Z", 12, 4).expect("progress");
+        set_query_resume_state(&conn, query_id, Some("123"), Some("tag_id_lt")).expect("resume");
         set_query_completed_initial_run(&conn, query_id, true).expect("completed");
         set_query_terminal_state(
             &conn,
@@ -2212,9 +2252,9 @@ mod tests {
         )
         .expect("attempt");
         conn.execute(
-            "INSERT INTO download_queue (
-                 subscription_id, query_id, post_id, category, created_at, updated_at
-             ) VALUES (?1, ?2, '1', 'gelbooru', '2026-03-30T10:00:00Z', '2026-03-30T10:00:00Z')",
+            "INSERT INTO ingest_queue (
+                 queue_kind, source_kind, subscription_id, query_id, post_id, category, created_at, updated_at
+             ) VALUES ('single', 'subscription', ?1, ?2, '1', 'gelbooru', '2026-03-30T10:00:00Z', '2026-03-30T10:00:00Z')",
             params![sub_id, query_id],
         )
         .expect("queue");
@@ -2263,7 +2303,7 @@ mod tests {
             .expect("count attempts");
         let remaining_queues: i64 = conn
             .query_row(
-                "SELECT COUNT(*) FROM download_queue WHERE query_id = ?1",
+                "SELECT COUNT(*) FROM ingest_queue WHERE query_id = ?1",
                 [query_id],
                 |row| row.get(0),
             )

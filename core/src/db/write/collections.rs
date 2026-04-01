@@ -103,7 +103,9 @@ pub fn add_members(
             .ok()
             .flatten()
         {
-            if previous_collection_id != collection_id && !previous_collections.contains(&previous_collection_id) {
+            if previous_collection_id != collection_id
+                && !previous_collections.contains(&previous_collection_id)
+            {
                 previous_collections.push(previous_collection_id);
             }
         }
@@ -148,7 +150,10 @@ pub fn remove_members(
     )?;
 
     if remaining == 0 {
-        conn.execute("DELETE FROM media_entity WHERE entity_id = ?1", [collection_id])?;
+        conn.execute(
+            "DELETE FROM media_entity WHERE entity_id = ?1",
+            [collection_id],
+        )?;
     } else {
         sync_aggregates(conn, collection_id)?;
     }
@@ -185,10 +190,7 @@ pub fn reorder_members(
 
 /// Split a collection: remove all members and delete the collection entity.
 /// Returns the freed member entity IDs.
-pub fn split_collection(
-    conn: &Connection,
-    collection_id: i64,
-) -> rusqlite::Result<Vec<i64>> {
+pub fn split_collection(conn: &Connection, collection_id: i64) -> rusqlite::Result<Vec<i64>> {
     let mut stmt = conn.prepare(
         "SELECT entity_id FROM media_entity WHERE parent_collection_entity_id = ?1 ORDER BY collection_ordinal",
     )?;
@@ -203,7 +205,10 @@ pub fn split_collection(
     )?;
 
     // Delete the collection entity
-    conn.execute("DELETE FROM media_entity WHERE entity_id = ?1", [collection_id])?;
+    conn.execute(
+        "DELETE FROM media_entity WHERE entity_id = ?1",
+        [collection_id],
+    )?;
 
     Ok(member_ids)
 }
@@ -289,6 +294,16 @@ pub fn sync_aggregates(conn: &Connection, collection_id: i64) -> rusqlite::Resul
         )
         .unwrap_or(None);
 
+    let date_added: Option<String> = conn
+        .query_row(
+            "SELECT MIN(date_added)
+             FROM media_entity
+             WHERE parent_collection_entity_id = ?1",
+            [collection_id],
+            |row| row.get(0),
+        )
+        .unwrap_or(None);
+
     conn.execute(
         "UPDATE media_entity
          SET member_count = ?1,
@@ -297,8 +312,9 @@ pub fn sync_aggregates(conn: &Connection, collection_id: i64) -> rusqlite::Resul
              rating = ?4,
              status = ?5,
              date_created = COALESCE(?6, date_created),
-             date_modified = COALESCE(?7, date_modified)
-         WHERE entity_id = ?8",
+             date_modified = COALESCE(?7, date_modified),
+             date_added = COALESCE(?8, date_added)
+         WHERE entity_id = ?9",
         params![
             member_count,
             total_size,
@@ -307,6 +323,7 @@ pub fn sync_aggregates(conn: &Connection, collection_id: i64) -> rusqlite::Resul
             status,
             date_created,
             date_modified,
+            date_added,
             collection_id
         ],
     )?;

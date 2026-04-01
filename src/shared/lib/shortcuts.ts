@@ -29,9 +29,8 @@ export const SHORTCUT_DEFS: ShortcutDef[] = [
 
   // ── File ──
   { id: 'file.settings',            label: 'Settings',             group: 'File', keys: 'Mod+,' },
-  { id: 'file.delete',              label: 'Move to Trash',        group: 'File', keys: 'Mod+Backspace' },
-  { id: 'file.restore',             label: 'Restore from Trash',   group: 'File', keys: 'Mod+Backspace' },
-  { id: 'file.permanentDelete',     label: 'Delete Permanently',   group: 'File', keys: 'Mod+Shift+Backspace' },
+  { id: 'file.delete',              label: 'Move to Trash',        group: 'File', keys: 'Mod+Backspace', description: 'Context-dependent: trash in active scope, permanent delete in trash scope' },
+  { id: 'file.restore',             label: 'Restore from Trash',   group: 'File', keys: 'Mod+Shift+Backspace' },
   { id: 'file.newFolder',           label: 'New Folder',           group: 'File', keys: 'Mod+Shift+N' },
   { id: 'file.addToFolder',         label: 'Add to Folder...',     group: 'File', keys: 'Mod+Shift+J' },
   { id: 'file.removeFromFolder',    label: 'Remove from Folder',   group: 'File', keys: 'Mod+Shift+Backspace' },

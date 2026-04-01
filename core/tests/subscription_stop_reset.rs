@@ -15,16 +15,14 @@ async fn reset_clears_file_and_post_counts() {
     let h = common::TestHarness::new().await;
 
     // Create a subscription with a query
-    let sub = h
-        .db
-        .create_subscription("test-sub", None)
-        .await
-        .expect("create subscription");
-    let query = h
-        .db
-        .add_subscription_query(sub.subscription_id, "danbooru", "1girl solo", None)
-        .await
-        .expect("add query");
+    let sub =
+        h.db.create_subscription("test-sub", None)
+            .await
+            .expect("create subscription");
+    let query =
+        h.db.add_subscription_query(sub.subscription_id, "danbooru", "1girl solo", None)
+            .await
+            .expect("add query");
 
     // Simulate progress: set files_found=42, posts_found=10
     let now = chrono::Utc::now().to_rfc3339();
@@ -45,12 +43,11 @@ async fn reset_clears_file_and_post_counts() {
     .ok();
 
     // Verify progress was written
-    let before = h
-        .db
-        .get_subscription_query(query.query_id)
-        .await
-        .expect("get query")
-        .expect("query exists");
+    let before =
+        h.db.get_subscription_query(query.query_id)
+            .await
+            .expect("get query")
+            .expect("query exists");
     assert_eq!(before.files_found, 42);
     assert_eq!(before.posts_found, 10);
     assert!(before.resume_cursor.is_some());
@@ -61,35 +58,35 @@ async fn reset_clears_file_and_post_counts() {
         .expect("reset subscription state");
 
     // Verify BOTH counters are zero
-    let after = h
-        .db
-        .get_subscription_query(query.query_id)
-        .await
-        .expect("get query")
-        .expect("query exists");
+    let after =
+        h.db.get_subscription_query(query.query_id)
+            .await
+            .expect("get query")
+            .expect("query exists");
     assert_eq!(after.files_found, 0, "files_found should be reset to 0");
     assert_eq!(after.posts_found, 0, "posts_found should be reset to 0");
     assert!(
         after.resume_cursor.is_none(),
         "resume_cursor should be cleared"
     );
-    assert!(!after.completed_initial_run, "completed_initial_run should be false");
+    assert!(
+        !after.completed_initial_run,
+        "completed_initial_run should be false"
+    );
 }
 
 #[tokio::test]
 async fn reset_single_query_clears_post_count() {
     let h = common::TestHarness::new().await;
 
-    let sub = h
-        .db
-        .create_subscription("test-sub2", None)
-        .await
-        .expect("create subscription");
-    let query = h
-        .db
-        .add_subscription_query(sub.subscription_id, "gelbooru", "landscape", None)
-        .await
-        .expect("add query");
+    let sub =
+        h.db.create_subscription("test-sub2", None)
+            .await
+            .expect("create subscription");
+    let query =
+        h.db.add_subscription_query(sub.subscription_id, "gelbooru", "landscape", None)
+            .await
+            .expect("add query");
 
     let now = chrono::Utc::now().to_rfc3339();
     h.db.update_query_progress(query.query_id, &now, 100, 50)
@@ -100,12 +97,11 @@ async fn reset_single_query_clears_post_count() {
         .await
         .expect("reset query progress");
 
-    let after = h
-        .db
-        .get_subscription_query(query.query_id)
-        .await
-        .expect("get query")
-        .expect("query exists");
+    let after =
+        h.db.get_subscription_query(query.query_id)
+            .await
+            .expect("get query")
+            .expect("query exists");
     assert_eq!(after.files_found, 0);
     assert_eq!(after.posts_found, 0);
 }

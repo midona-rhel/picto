@@ -11,17 +11,30 @@ pub fn create_group(conn: &Connection, name: &str, now: &str) -> rusqlite::Resul
 }
 
 pub fn delete_group(conn: &Connection, group_id: i64) -> rusqlite::Result<()> {
-    conn.execute("DELETE FROM subscription_group WHERE group_id = ?1", [group_id])?;
+    conn.execute(
+        "DELETE FROM subscription_group WHERE group_id = ?1",
+        [group_id],
+    )?;
     Ok(())
 }
 
 pub fn rename_group(conn: &Connection, group_id: i64, name: &str) -> rusqlite::Result<()> {
-    conn.execute("UPDATE subscription_group SET name = ?1 WHERE group_id = ?2", params![name, group_id])?;
+    conn.execute(
+        "UPDATE subscription_group SET name = ?1 WHERE group_id = ?2",
+        params![name, group_id],
+    )?;
     Ok(())
 }
 
-pub fn set_group_schedule(conn: &Connection, group_id: i64, schedule: &str) -> rusqlite::Result<()> {
-    conn.execute("UPDATE subscription_group SET schedule = ?1 WHERE group_id = ?2", params![schedule, group_id])?;
+pub fn set_group_schedule(
+    conn: &Connection,
+    group_id: i64,
+    schedule: &str,
+) -> rusqlite::Result<()> {
+    conn.execute(
+        "UPDATE subscription_group SET schedule = ?1 WHERE group_id = ?2",
+        params![schedule, group_id],
+    )?;
     Ok(())
 }
 
@@ -42,17 +55,34 @@ pub fn create_subscription(
 }
 
 pub fn delete_subscription(conn: &Connection, subscription_id: i64) -> rusqlite::Result<()> {
-    conn.execute("DELETE FROM subscription WHERE subscription_id = ?1", [subscription_id])?;
+    conn.execute(
+        "DELETE FROM subscription WHERE subscription_id = ?1",
+        [subscription_id],
+    )?;
     Ok(())
 }
 
-pub fn rename_subscription(conn: &Connection, subscription_id: i64, name: &str) -> rusqlite::Result<()> {
-    conn.execute("UPDATE subscription SET name = ?1 WHERE subscription_id = ?2", params![name, subscription_id])?;
+pub fn rename_subscription(
+    conn: &Connection,
+    subscription_id: i64,
+    name: &str,
+) -> rusqlite::Result<()> {
+    conn.execute(
+        "UPDATE subscription SET name = ?1 WHERE subscription_id = ?2",
+        params![name, subscription_id],
+    )?;
     Ok(())
 }
 
-pub fn pause_subscription(conn: &Connection, subscription_id: i64, paused: bool) -> rusqlite::Result<()> {
-    conn.execute("UPDATE subscription SET paused = ?1 WHERE subscription_id = ?2", params![paused as i64, subscription_id])?;
+pub fn pause_subscription(
+    conn: &Connection,
+    subscription_id: i64,
+    paused: bool,
+) -> rusqlite::Result<()> {
+    conn.execute(
+        "UPDATE subscription SET paused = ?1 WHERE subscription_id = ?2",
+        params![paused as i64, subscription_id],
+    )?;
     Ok(())
 }
 
@@ -70,7 +100,10 @@ pub fn add_query(
 }
 
 pub fn delete_query(conn: &Connection, query_id: i64) -> rusqlite::Result<()> {
-    conn.execute("DELETE FROM subscription_query WHERE query_id = ?1", [query_id])?;
+    conn.execute(
+        "DELETE FROM subscription_query WHERE query_id = ?1",
+        [query_id],
+    )?;
     Ok(())
 }
 
@@ -89,6 +122,9 @@ pub fn edit_query(
 }
 
 pub fn pause_query(conn: &Connection, query_id: i64, paused: bool) -> rusqlite::Result<()> {
-    conn.execute("UPDATE subscription_query SET paused = ?1 WHERE query_id = ?2", params![paused as i64, query_id])?;
+    conn.execute(
+        "UPDATE subscription_query SET paused = ?1 WHERE query_id = ?2",
+        params![paused as i64, query_id],
+    )?;
     Ok(())
 }

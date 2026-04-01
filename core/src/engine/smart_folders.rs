@@ -28,12 +28,22 @@ impl ApplicationEngine {
         sort_order: Option<&str>,
     ) -> Result<(), String> {
         self.db.update_smart_folder(
-            smart_folder_id, name, predicate_json, icon, color, notes, sort_field, sort_order,
+            smart_folder_id,
+            name,
+            predicate_json,
+            icon,
+            color,
+            notes,
+            sort_field,
+            sort_order,
         )
     }
 
     /// Delete a smart folder. Returns (promoted_child_ids, deleted_parent_id).
-    pub fn delete_smart_folder(&self, smart_folder_id: i64) -> Result<(Vec<i64>, Option<i64>), String> {
+    pub fn delete_smart_folder(
+        &self,
+        smart_folder_id: i64,
+    ) -> Result<(Vec<i64>, Option<i64>), String> {
         self.db.delete_smart_folder(smart_folder_id)
     }
 

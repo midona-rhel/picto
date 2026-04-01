@@ -44,8 +44,10 @@ fn reconcile_open_schema(conn: &Connection) -> Result<(), String> {
             .map_err(|e| format!("Failed to add tag.site_mask to canonical db: {e}"))?;
     }
     if has_column(conn, "entity_tag", "provenance_mask").map_err(|e| e.to_string())? == false {
-        conn.execute_batch("ALTER TABLE entity_tag ADD COLUMN provenance_mask INTEGER NOT NULL DEFAULT 0")
-            .map_err(|e| format!("Failed to add entity_tag.provenance_mask to canonical db: {e}"))?;
+        conn.execute_batch(
+            "ALTER TABLE entity_tag ADD COLUMN provenance_mask INTEGER NOT NULL DEFAULT 0",
+        )
+        .map_err(|e| format!("Failed to add entity_tag.provenance_mask to canonical db: {e}"))?;
         conn.execute(
             "UPDATE entity_tag SET provenance_mask = ?1 WHERE source = 'local' AND provenance_mask = 0",
             [types::mask_to_db_bits(types::TAG_PROVENANCE_MANUAL)],
@@ -63,11 +65,17 @@ fn reconcile_open_schema(conn: &Connection) -> Result<(), String> {
 /// Import legacy data from an old SqliteDatabase file via ATTACH.
 /// Fatal — returns Err if the import fails.
 fn import_from_legacy_db(conn: &Connection, old_db_path: &Path) -> Result<(), String> {
-    tracing::info!("Importing from legacy database at {}", old_db_path.display());
+    tracing::info!(
+        "Importing from legacy database at {}",
+        old_db_path.display()
+    );
     let old_db_str = old_db_path.to_string_lossy().to_string();
 
-    conn.execute("ATTACH DATABASE ?1 AS old_db", rusqlite::params![old_db_str])
-        .map_err(|e| format!("Failed to attach legacy database: {e}"))?;
+    conn.execute(
+        "ATTACH DATABASE ?1 AS old_db",
+        rusqlite::params![old_db_str],
+    )
+    .map_err(|e| format!("Failed to attach legacy database: {e}"))?;
 
     let result = migration_legacy::migrate_from_attached(conn);
     let _ = conn.execute("DETACH DATABASE old_db", []);
@@ -108,9 +116,15 @@ impl LibraryDatabase {
             .map_err(|e| format!("Failed to open read connection: {e}"))?;
 
         // Configure connections
-        write_conn.execute_batch("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;")
+        write_conn
+            .execute_batch(
+                "PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;",
+            )
             .map_err(|e| format!("Failed to configure write connection: {e}"))?;
-        read_conn.execute_batch("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;")
+        read_conn
+            .execute_batch(
+                "PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;",
+            )
             .map_err(|e| format!("Failed to configure read connection: {e}"))?;
 
         let bitmaps = Arc::new(BitmapStore::new());
@@ -130,12 +144,13 @@ impl LibraryDatabase {
 
             if migration_legacy::needs_migration(&conn) {
                 // In-place migration (old tables exist in library.db itself)
-                tracing::info!("Legacy schema detected in library.db, running in-place migration...");
+                tracing::info!(
+                    "Legacy schema detected in library.db, running in-place migration..."
+                );
                 let result = migration_legacy::migrate(&conn)?;
                 tracing::info!("{result}");
                 projection::compiler::full_rebuild(&conn, &db.bitmaps);
                 tracing::info!("Post-migration projection rebuild complete");
-
             } else if !migration_legacy::is_new_schema(&conn) {
                 // Fresh library.db — create schema and import from legacy if it exists
                 conn.execute_batch(core::schema::LIBRARY_DDL)
@@ -146,7 +161,6 @@ impl LibraryDatabase {
                 }
 
                 projection::compiler::full_rebuild(&conn, &db.bitmaps);
-
             } else {
                 // Existing new-schema library.db — check for empty-with-legacy-data
                 let canonical_count: i64 = conn
@@ -164,8 +178,9 @@ impl LibraryDatabase {
                 } else {
                     // Normal startup — load bitmaps
                     let delta_path = library_root.join("bitmaps.delta");
-                    let replayed = projection::bitmap_delta::replay_deltas(&delta_path, &db.bitmaps)
-                        .unwrap_or(0);
+                    let replayed =
+                        projection::bitmap_delta::replay_deltas(&delta_path, &db.bitmaps)
+                            .unwrap_or(0);
                     if replayed == 0 {
                         let conn_r = db.read_conn.lock().unwrap();
                         projection::compiler::full_rebuild(&conn_r, &db.bitmaps);
@@ -212,7 +227,15 @@ impl LibraryDatabase {
         date_added: &str,
     ) -> Result<i64, String> {
         self.with_write(|conn| {
-            write::entities::insert_single(conn, entity_hash, file_id, name, status, date_created, date_added)
+            write::entities::insert_single(
+                conn,
+                entity_hash,
+                file_id,
+                name,
+                status,
+                date_created,
+                date_added,
+            )
         })
     }
 
@@ -259,7 +282,18 @@ impl LibraryDatabase {
         date_added: &str,
     ) -> Result<i64, String> {
         self.with_write(|conn| {
-            write::files::insert_file(conn, file_hash, mime_type, size_bytes, pixel_width, pixel_height, duration_ms, frame_count, has_audio, date_added)
+            write::files::insert_file(
+                conn,
+                file_hash,
+                mime_type,
+                size_bytes,
+                pixel_width,
+                pixel_height,
+                duration_ms,
+                frame_count,
+                has_audio,
+                date_added,
+            )
         })
     }
 
@@ -269,6 +303,14 @@ impl LibraryDatabase {
     ) -> Result<Option<query::ingest::ExistingImportTarget>, String> {
         let hash = file_hash.to_string();
         self.with_read(|conn| query::ingest::get_existing_import_target_by_file_hash(conn, &hash))
+    }
+
+    pub fn get_existing_import_target_by_file_hash_write(
+        &self,
+        file_hash: &str,
+    ) -> Result<Option<query::ingest::ExistingImportTarget>, String> {
+        let hash = file_hash.to_string();
+        self.with_write(|conn| query::ingest::get_existing_import_target_by_file_hash(conn, &hash))
     }
 
     pub fn get_existing_import_target_by_entity_hash(
@@ -347,8 +389,11 @@ impl LibraryDatabase {
                     frame_count,
                     candidate_phash,
                 ) = row?;
-                if !crate::media_capabilities::capabilities_for_stored_media(&mime_type, frame_count)
-                    .can_perceptual_hash
+                if !crate::media_capabilities::capabilities_for_stored_media(
+                    &mime_type,
+                    frame_count,
+                )
+                .can_perceptual_hash
                 {
                     continue;
                 }
@@ -424,6 +469,13 @@ impl LibraryDatabase {
             } else {
                 Some(serde_json::to_string(&prepared.source_urls).unwrap_or_default())
             };
+            // Clean up any orphan media_file left by a deleted entity before
+            // inserting, so we don't hit a UNIQUE constraint on file_hash.
+            tx.execute(
+                "DELETE FROM media_file WHERE file_hash = ?1
+                 AND file_id NOT IN (SELECT file_id FROM single_media_entity)",
+                rusqlite::params![prepared.entity_hash],
+            )?;
             let file_id = write::files::insert_file(
                 &tx,
                 &prepared.entity_hash,
@@ -496,6 +548,13 @@ impl LibraryDatabase {
                 } else {
                     Some(serde_json::to_string(&member.source_urls).unwrap_or_default())
                 };
+                // Clean up any orphan media_file left by a deleted entity before
+                // inserting, so we don't hit a UNIQUE constraint on file_hash.
+                tx.execute(
+                    "DELETE FROM media_file WHERE file_hash = ?1
+                     AND file_id NOT IN (SELECT file_id FROM single_media_entity)",
+                    rusqlite::params![member.entity_hash],
+                )?;
                 let file_id = write::files::insert_file(
                     &tx,
                     &member.entity_hash,
@@ -575,7 +634,9 @@ impl LibraryDatabase {
         collection_id: i64,
         member_entity_ids: &[i64],
     ) -> Result<CollectionMembershipChange, String> {
-        self.with_write(|conn| write::collections::add_members(conn, collection_id, member_entity_ids))
+        self.with_write(|conn| {
+            write::collections::add_members(conn, collection_id, member_entity_ids)
+        })
     }
 
     pub fn create_collection(&self, name: &str) -> Result<i64, String> {
@@ -587,7 +648,9 @@ impl LibraryDatabase {
     pub fn update_collection_name(&self, collection_id: i64, name: &str) -> Result<(), String> {
         let n = name.to_string();
         let now = chrono::Utc::now().to_rfc3339();
-        self.with_write(move |conn| write::collections::update_collection_name(conn, collection_id, &n, &now))
+        self.with_write(move |conn| {
+            write::collections::update_collection_name(conn, collection_id, &n, &now)
+        })
     }
 
     pub fn remove_collection_members(
@@ -595,7 +658,9 @@ impl LibraryDatabase {
         collection_id: i64,
         member_entity_ids: &[i64],
     ) -> Result<CollectionMembershipChange, String> {
-        self.with_write(|conn| write::collections::remove_members(conn, collection_id, member_entity_ids))
+        self.with_write(|conn| {
+            write::collections::remove_members(conn, collection_id, member_entity_ids)
+        })
     }
 
     pub fn reorder_collection_members(
@@ -614,7 +679,8 @@ impl LibraryDatabase {
     ) -> Result<(), String> {
         let hashes = ordered_hashes.to_vec();
         self.with_write(move |conn| {
-            let current_rows = query::collections::list_collection_member_hash_rows(conn, collection_id)?;
+            let current_rows =
+                query::collections::list_collection_member_hash_rows(conn, collection_id)?;
             if current_rows.is_empty() {
                 return Ok(());
             }
@@ -677,11 +743,10 @@ impl LibraryDatabase {
         self.with_read(|conn| query::collections::get_collection_summary(conn, collection_id))
     }
 
-    pub fn list_collection_member_hashes(
-        &self,
-        collection_id: i64,
-    ) -> Result<Vec<String>, String> {
-        self.with_read(|conn| query::collections::list_collection_member_hashes(conn, collection_id))
+    pub fn list_collection_member_hashes(&self, collection_id: i64) -> Result<Vec<String>, String> {
+        self.with_read(|conn| {
+            query::collections::list_collection_member_hashes(conn, collection_id)
+        })
     }
 
     pub fn get_collection_hash(&self, collection_id: i64) -> Result<Option<String>, String> {
@@ -695,6 +760,17 @@ impl LibraryDatabase {
     pub fn get_folder_ids_for_entities(&self, entity_ids: &[i64]) -> Result<Vec<i64>, String> {
         let ids = entity_ids.to_vec();
         self.with_read(|conn| query::collections::get_folder_ids_for_entities(conn, &ids))
+    }
+
+    pub fn get_folder_entity_count(&self, folder_id: i64) -> Result<Option<i64>, String> {
+        self.with_read(|conn| {
+            conn.query_row(
+                "SELECT COUNT(*) FROM folder_member WHERE folder_id = ?1",
+                [folder_id],
+                |row| row.get(0),
+            )
+            .optional()
+        })
     }
 
     // ── Tag operations ───────────────────────────────────────────
@@ -736,11 +812,7 @@ impl LibraryDatabase {
         self.with_write(|conn| write::tags::merge_tags(conn, from_tag_id, to_tag_id))
     }
 
-    pub fn manage_tag_alias(
-        &self,
-        from_tag_id: i64,
-        to_tag_id: Option<i64>,
-    ) -> Result<(), String> {
+    pub fn manage_tag_alias(&self, from_tag_id: i64, to_tag_id: Option<i64>) -> Result<(), String> {
         self.with_write(|conn| write::tags::manage_alias(conn, from_tag_id, to_tag_id))
     }
 
@@ -773,19 +845,15 @@ impl LibraryDatabase {
         color: Option<&str>,
     ) -> Result<i64, String> {
         let now = chrono::Utc::now().to_rfc3339();
-        self.with_write(|conn| write::folders::create_folder(conn, name, parent_id, icon, color, &now))
+        self.with_write(|conn| {
+            write::folders::create_folder(conn, name, parent_id, icon, color, &now)
+        })
     }
 
-    pub fn update_folder(
-        &self,
-        folder_id: i64,
-        patch: &types::FolderPatch,
-    ) -> Result<(), String> {
+    pub fn update_folder(&self, folder_id: i64, patch: &types::FolderPatch) -> Result<(), String> {
         let now = chrono::Utc::now().to_rfc3339();
         let p = patch.clone();
-        self.with_write(move |conn| {
-            write::folders::update_folder(conn, folder_id, &p, &now)
-        })
+        self.with_write(move |conn| write::folders::update_folder(conn, folder_id, &p, &now))
     }
 
     pub fn delete_folder(&self, folder_id: i64) -> Result<(), String> {
@@ -794,7 +862,9 @@ impl LibraryDatabase {
 
     pub fn move_folder(&self, folder_id: i64, new_parent_id: Option<i64>) -> Result<(), String> {
         let now = chrono::Utc::now().to_rfc3339();
-        self.with_write(move |conn| write::folders::move_folder(conn, folder_id, new_parent_id, &now))
+        self.with_write(move |conn| {
+            write::folders::move_folder(conn, folder_id, new_parent_id, &now)
+        })
     }
 
     pub fn reorder_folders(&self, moves: &[(i64, i64)]) -> Result<(), String> {
@@ -815,24 +885,27 @@ impl LibraryDatabase {
         self.with_read(|conn| query::folders::collect_descendant_smart_folder_ids(conn, root_id))
     }
 
-    pub fn get_smart_folder(&self, smart_folder_id: i64) -> Result<Option<query::folders::SmartFolderRow>, String> {
+    pub fn get_smart_folder(
+        &self,
+        smart_folder_id: i64,
+    ) -> Result<Option<query::folders::SmartFolderRow>, String> {
         self.with_read(|conn| query::folders::get_smart_folder(conn, smart_folder_id))
     }
 
-    pub fn find_child_folder_id(
-        &self,
-        parent_id: i64,
-        name: &str,
-    ) -> Result<Option<i64>, String> {
+    pub fn find_child_folder_id(&self, parent_id: i64, name: &str) -> Result<Option<i64>, String> {
         let child_name = name.to_string();
-        self.with_read(move |conn| query::ingest::find_child_folder_id(conn, parent_id, &child_name))
+        self.with_read(move |conn| {
+            query::ingest::find_child_folder_id(conn, parent_id, &child_name)
+        })
     }
 
     pub fn list_folders_canonical(&self) -> Result<Vec<query::folders::FolderRow>, String> {
         self.with_read(|conn| query::folders::list_folders(conn))
     }
 
-    pub fn list_smart_folders_canonical(&self) -> Result<Vec<query::folders::SmartFolderRow>, String> {
+    pub fn list_smart_folders_canonical(
+        &self,
+    ) -> Result<Vec<query::folders::SmartFolderRow>, String> {
         self.with_read(|conn| query::folders::list_smart_folders(conn))
     }
 
@@ -851,7 +924,9 @@ impl LibraryDatabase {
         entity_ids: &[i64],
         expansion: ExpansionMode,
     ) -> Result<FolderMembershipChange, String> {
-        self.with_write(|conn| write::folders::remove_members(conn, folder_id, entity_ids, expansion))
+        self.with_write(|conn| {
+            write::folders::remove_members(conn, folder_id, entity_ids, expansion)
+        })
     }
 
     // ── Smart folder operations ──────────────────────────────────
@@ -901,20 +976,36 @@ impl LibraryDatabase {
         let so = sort_order.map(str::to_string);
         self.with_write(move |conn| {
             write::smart_folders::update_smart_folder(
-                conn, smart_folder_id,
-                n.as_deref(), p.as_deref(), i.as_deref(), c.as_deref(), notes.as_deref(),
-                sf.as_deref(), so.as_deref(), &now,
+                conn,
+                smart_folder_id,
+                n.as_deref(),
+                p.as_deref(),
+                i.as_deref(),
+                c.as_deref(),
+                notes.as_deref(),
+                sf.as_deref(),
+                so.as_deref(),
+                &now,
             )
         })
     }
 
-    pub fn delete_smart_folder(&self, smart_folder_id: i64) -> Result<(Vec<i64>, Option<i64>), String> {
+    pub fn delete_smart_folder(
+        &self,
+        smart_folder_id: i64,
+    ) -> Result<(Vec<i64>, Option<i64>), String> {
         self.with_write(|conn| write::smart_folders::delete_smart_folder(conn, smart_folder_id))
     }
 
-    pub fn move_smart_folder(&self, smart_folder_id: i64, new_parent_id: Option<i64>) -> Result<(), String> {
+    pub fn move_smart_folder(
+        &self,
+        smart_folder_id: i64,
+        new_parent_id: Option<i64>,
+    ) -> Result<(), String> {
         let now = chrono::Utc::now().to_rfc3339();
-        self.with_write(move |conn| write::smart_folders::move_smart_folder(conn, smart_folder_id, new_parent_id, &now))
+        self.with_write(move |conn| {
+            write::smart_folders::move_smart_folder(conn, smart_folder_id, new_parent_id, &now)
+        })
     }
 
     pub fn reorder_smart_folders(&self, moves: &[(i64, i64)]) -> Result<(), String> {
@@ -927,9 +1018,8 @@ impl LibraryDatabase {
     pub fn resolve_entity_hashes(&self, hashes: &[String]) -> Result<Vec<i64>, String> {
         self.with_read(|conn| {
             let mut ids = Vec::with_capacity(hashes.len());
-            let mut stmt = conn.prepare_cached(
-                "SELECT entity_id FROM media_entity WHERE entity_hash = ?1",
-            )?;
+            let mut stmt =
+                conn.prepare_cached("SELECT entity_id FROM media_entity WHERE entity_hash = ?1")?;
             for hash in hashes {
                 if let Ok(id) = stmt.query_row([hash], |row| row.get::<_, i64>(0)) {
                     ids.push(id);
@@ -950,8 +1040,10 @@ impl LibraryDatabase {
                 placeholders.join(",")
             );
             let mut stmt = conn.prepare(&sql)?;
-            let params: Vec<&dyn rusqlite::types::ToSql> =
-                ids.iter().map(|id| id as &dyn rusqlite::types::ToSql).collect();
+            let params: Vec<&dyn rusqlite::types::ToSql> = ids
+                .iter()
+                .map(|id| id as &dyn rusqlite::types::ToSql)
+                .collect();
             let rows = stmt.query_map(params.as_slice(), |row| row.get::<_, String>(0))?;
             rows.collect()
         })
@@ -978,7 +1070,11 @@ impl LibraryDatabase {
                 patch.name.as_deref(),
                 patch.rating.map(Some),
                 patch.notes.as_ref().map(|notes| notes.as_deref()),
-                patch.source_urls.as_ref().map(|urls| serde_json::to_string(urls).unwrap_or_default()).as_deref(),
+                patch
+                    .source_urls
+                    .as_ref()
+                    .map(|urls| serde_json::to_string(urls).unwrap_or_default())
+                    .as_deref(),
                 &now,
                 types::ExpansionMode::EntityAndDescendants,
             )
@@ -1019,11 +1115,17 @@ impl LibraryDatabase {
             write::bulk::expand_bulk_target(conn, types::ExpansionMode::EntityAndDescendants)?;
             let ids = write::bulk::collect_bulk_ids(conn)?;
             write::entities::patch_entity_metadata(
-                conn, &ids,
-                p.name.as_deref(), p.rating.map(Some),
+                conn,
+                &ids,
+                p.name.as_deref(),
+                p.rating.map(Some),
                 p.notes.as_ref().map(|notes| notes.as_deref()),
-                p.source_urls.as_ref().map(|u| serde_json::to_string(u).unwrap_or_default()).as_deref(),
-                &now, types::ExpansionMode::EntityOnly,
+                p.source_urls
+                    .as_ref()
+                    .map(|u| serde_json::to_string(u).unwrap_or_default())
+                    .as_deref(),
+                &now,
+                types::ExpansionMode::EntityOnly,
             )
         })
     }
@@ -1042,7 +1144,13 @@ impl LibraryDatabase {
             write::bulk::populate_bulk_target(conn, &q, &excl, &bm)?;
             write::bulk::expand_bulk_target(conn, types::ExpansionMode::EntityAndDescendants)?;
             let ids = write::bulk::collect_bulk_ids(conn)?;
-            write::entities::set_entity_status(conn, &ids, status, types::ExpansionMode::EntityOnly, &now)
+            write::entities::set_entity_status(
+                conn,
+                &ids,
+                status,
+                types::ExpansionMode::EntityOnly,
+                &now,
+            )
         })
     }
 
@@ -1077,7 +1185,13 @@ impl LibraryDatabase {
             write::bulk::populate_bulk_target(conn, &q, &excl, &bm)?;
             write::bulk::expand_bulk_target(conn, expansion)?;
             let ids = write::bulk::collect_bulk_ids(conn)?;
-            write::tags::add_tags(conn, &ids, &t, provenance_mask, types::ExpansionMode::EntityOnly)
+            write::tags::add_tags(
+                conn,
+                &ids,
+                &t,
+                provenance_mask,
+                types::ExpansionMode::EntityOnly,
+            )
         })
     }
 
@@ -1133,34 +1247,6 @@ impl LibraryDatabase {
             write::bulk::expand_bulk_target(conn, expansion)?;
             let ids = write::bulk::collect_bulk_ids(conn)?;
             write::folders::remove_members(conn, folder_id, &ids, types::ExpansionMode::EntityOnly)
-        })
-    }
-
-    pub fn get_selection_summary_from_query(
-        &self,
-        query: &types::EntityViewQuery,
-        exclusions: &[String],
-    ) -> Result<crate::engine::selection::SelectionSummary, String> {
-        // Use the same query builder as the grid with no pagination
-        // to get an accurate total count including all filters.
-        let mut unbounded = query.clone();
-        unbounded.page = types::QueryPage { limit: i64::MAX, cursor: None };
-
-        let result = self.query_entity_view(&unbounded)?;
-        let total = result.total_count.unwrap_or(result.items.len() as i64);
-
-        // Subtract exclusions from the full set
-        let excluded_count = if exclusions.is_empty() {
-            0
-        } else {
-            let excl_set: std::collections::HashSet<&str> =
-                exclusions.iter().map(|s| s.as_str()).collect();
-            result.items.iter().filter(|i| excl_set.contains(i.entity_hash.as_str())).count() as i64
-        };
-
-        Ok(crate::engine::selection::SelectionSummary {
-            total_count: total - excluded_count,
-            entity_hashes: Vec::new(),
         })
     }
 
@@ -1343,7 +1429,9 @@ impl LibraryDatabase {
         })
     }
 
-    pub fn claim_next_deferred_work_items(&self) -> Result<Vec<types::ClaimedDeferredWorkItem>, String> {
+    pub fn claim_next_deferred_work_items(
+        &self,
+    ) -> Result<Vec<types::ClaimedDeferredWorkItem>, String> {
         self.with_write(|conn| {
             let tx = conn.unchecked_transaction()?;
             let now = chrono::Utc::now().to_rfc3339();
@@ -1398,7 +1486,10 @@ impl LibraryDatabase {
 
     pub fn complete_deferred_work_item(&self, work_id: i64) -> Result<(), String> {
         self.with_write(move |conn| {
-            conn.execute("DELETE FROM deferred_work_item WHERE work_id = ?1", [work_id])?;
+            conn.execute(
+                "DELETE FROM deferred_work_item WHERE work_id = ?1",
+                [work_id],
+            )?;
             Ok(())
         })
     }
@@ -1433,11 +1524,7 @@ impl LibraryDatabase {
         })
     }
 
-    pub fn set_phash_for_entity_hash(
-        &self,
-        entity_hash: &str,
-        phash: &str,
-    ) -> Result<(), String> {
+    pub fn set_phash_for_entity_hash(&self, entity_hash: &str, phash: &str) -> Result<(), String> {
         let hash = entity_hash.to_string();
         let value = phash.to_string();
         self.with_write(move |conn| {
@@ -1454,13 +1541,11 @@ impl LibraryDatabase {
         })
     }
 
-    pub fn replace_file_phash(
-        &self,
-        file_id: i64,
-        phash: Option<&str>,
-    ) -> Result<(), String> {
+    pub fn replace_file_phash(&self, file_id: i64, phash: Option<&str>) -> Result<(), String> {
         let value = phash.map(str::to_string);
-        self.with_write(move |conn| write::files::replace_file_phash(conn, file_id, value.as_deref()))
+        self.with_write(move |conn| {
+            write::files::replace_file_phash(conn, file_id, value.as_deref())
+        })
     }
 
     pub fn set_file_colors_for_entity_hash(
@@ -1529,9 +1614,9 @@ impl LibraryDatabase {
         let preresolved = match view_query.base_scope.kind {
             types::ScopeKind::SmartFolder => {
                 let sf_id = view_query.base_scope.id.unwrap_or(0);
-                let bitmap = self.bitmaps.get(
-                    &projection::bitmaps::BitmapKey::SmartFolder(sf_id),
-                );
+                let bitmap = self
+                    .bitmaps
+                    .get(&projection::bitmaps::BitmapKey::SmartFolder(sf_id));
                 Some(bitmap.iter().map(|id| id as i64).collect::<Vec<_>>())
             }
             _ => None,
@@ -1569,10 +1654,7 @@ impl LibraryDatabase {
         self.with_read(query::tags::get_all_tags_with_counts)
     }
 
-    pub fn get_entity_tags(
-        &self,
-        entity_hash: &str,
-    ) -> Result<Vec<types::TagInfo>, String> {
+    pub fn get_entity_tags(&self, entity_hash: &str) -> Result<Vec<types::TagInfo>, String> {
         self.with_read(|conn| query::tags::get_entity_tags(conn, entity_hash))
     }
 
@@ -1580,10 +1662,7 @@ impl LibraryDatabase {
         self.with_read(|conn| query::tags::get_aliases_for_tag(conn, tag_id))
     }
 
-    pub fn get_implications_for_tag(
-        &self,
-        tag_id: i64,
-    ) -> Result<Vec<types::TagRelation>, String> {
+    pub fn get_implications_for_tag(&self, tag_id: i64) -> Result<Vec<types::TagRelation>, String> {
         self.with_read(|conn| query::tags::get_implications_for_tag(conn, tag_id))
     }
 
@@ -1640,8 +1719,11 @@ impl LibraryDatabase {
             });
         };
 
-        if !crate::media_capabilities::capabilities_for_stored_media(&source_mime, source_frame_count)
-            .can_perceptual_hash
+        if !crate::media_capabilities::capabilities_for_stored_media(
+            &source_mime,
+            source_frame_count,
+        )
+        .can_perceptual_hash
         {
             return Ok(crate::types::FindSimilarResponse {
                 source_hash,
@@ -1681,8 +1763,11 @@ impl LibraryDatabase {
         let mut items: Vec<crate::types::SimilarItem> = candidates
             .into_iter()
             .filter_map(|(hash, phash_b64, mime_type, frame_count)| {
-                if !crate::media_capabilities::capabilities_for_stored_media(&mime_type, frame_count)
-                    .can_perceptual_hash
+                if !crate::media_capabilities::capabilities_for_stored_media(
+                    &mime_type,
+                    frame_count,
+                )
+                .can_perceptual_hash
                 {
                     return None;
                 }
@@ -1729,12 +1814,19 @@ impl LibraryDatabase {
         let parsed: Vec<(i64, String, ImageHash<Vec<u8>>)> = files
             .iter()
             .filter_map(|(file_id, entity_hash, phash, mime_type, frame_count)| {
-                if !crate::media_capabilities::capabilities_for_stored_media(mime_type, *frame_count)
-                    .can_perceptual_hash
+                if !crate::media_capabilities::capabilities_for_stored_media(
+                    mime_type,
+                    *frame_count,
+                )
+                .can_perceptual_hash
                 {
                     return None;
                 }
-                Some((*file_id, entity_hash.clone(), ImageHash::<Vec<u8>>::from_base64(phash).ok()?))
+                Some((
+                    *file_id,
+                    entity_hash.clone(),
+                    ImageHash::<Vec<u8>>::from_base64(phash).ok()?,
+                ))
             })
             .collect();
 
@@ -2339,9 +2431,8 @@ impl LibraryDatabase {
             let placeholders = std::iter::repeat_n("?", ids.len())
                 .collect::<Vec<_>>()
                 .join(", ");
-            let sql = format!(
-                "SELECT entity_hash FROM media_entity WHERE entity_id IN ({placeholders})"
-            );
+            let sql =
+                format!("SELECT entity_hash FROM media_entity WHERE entity_id IN ({placeholders})");
             let mut stmt = conn.prepare(&sql)?;
             let rows = stmt.query_map(rusqlite::params_from_iter(ids.iter()), |row| row.get(0))?;
             rows.collect()

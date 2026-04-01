@@ -113,9 +113,10 @@ pub async fn get_duplicate_pairs(
         }
         _ => None,
     };
-    let result = state
-        .engine
-        .get_duplicate_pairs(input.cursor, input.limit, input.status, max_distance)?;
+    let result =
+        state
+            .engine
+            .get_duplicate_pairs(input.cursor, input.limit, input.status, max_distance)?;
     Ok(serde_json::to_value(&result).map_err(|e| e.to_string())?)
 }
 
@@ -129,7 +130,10 @@ pub async fn resolve_duplicate_pair(
         &input.hash_b,
         input.preferred_collection_id,
     )?;
-    if matches!(result.status, crate::db::types::DuplicateResolveStatus::Resolved) {
+    if matches!(
+        result.status,
+        crate::db::types::DuplicateResolveStatus::Resolved
+    ) {
         if let Some(loser_hash) = result.loser_hash.as_deref() {
             let _ = state.blob_store.delete(loser_hash);
         }

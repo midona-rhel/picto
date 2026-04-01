@@ -100,15 +100,6 @@ impl ScopeFilter {
     }
 }
 
-impl From<&crate::types::GridPageSlimQuery> for ScopeFilter {
-    fn from(q: &crate::types::GridPageSlimQuery) -> Self {
-        ScopeFilter {
-            scope: q.scope.clone(),
-            filters: q.filters.clone(),
-        }
-    }
-}
-
 impl From<&crate::types::SelectionQuerySpec> for ScopeFilter {
     fn from(s: &crate::types::SelectionQuerySpec) -> Self {
         ScopeFilter {

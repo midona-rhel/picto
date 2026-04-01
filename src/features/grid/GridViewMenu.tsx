@@ -66,7 +66,10 @@ function ViewPanel() {
         <CmSelect
           value={viewMode}
           options={LAYOUT_OPTIONS}
-          onChange={(v) => setSoftAction(() => () => setViewMode(v as GridViewMode))}
+          onChange={(v) => {
+            setSoftAction(() => () => setViewMode(v as GridViewMode));
+            gridController.saveViewPref({ view_mode: v });
+          }}
           width={130}
         />
       </div>
@@ -119,11 +122,11 @@ function DisplayPanel() {
 
   return (
     <div className={s.panel}>
-      {toggle('Show Name', showName, () => setShowName(!showName))}
-      {toggle('Show Resolution', showRes, () => setShowRes(!showRes))}
-      {toggle('Show Extension', showExt, () => setShowExt(!showExt))}
-      {toggle('Show Label', showExtLabel, () => setShowExtLabel(!showExtLabel))}
-      {toggle('Fit Thumbnails', fitThumbs, () => setFitThumbs(!fitThumbs), viewMode !== 'grid')}
+      {toggle('Show Name', showName, () => { setShowName(!showName); gridController.saveViewPref({ show_name: !showName }); })}
+      {toggle('Show Resolution', showRes, () => { setShowRes(!showRes); gridController.saveViewPref({ show_resolution: !showRes }); })}
+      {toggle('Show Extension', showExt, () => { setShowExt(!showExt); gridController.saveViewPref({ show_extension: !showExt }); })}
+      {toggle('Show Label', showExtLabel, () => { setShowExtLabel(!showExtLabel); gridController.saveViewPref({ show_label: !showExtLabel }); })}
+      {toggle('Fit Thumbnails', fitThumbs, () => { setFitThumbs(!fitThumbs); gridController.saveViewPref({ thumbnail_fit: !fitThumbs ? 'cover' : 'contain' }); }, viewMode !== 'grid')}
       {toggle('Show Subfolders', false, () => { /* TODO */ })}
 
       <div className={s.sep} />

@@ -159,6 +159,26 @@ The clean reactive split is:
 - one completed backend action normally produces one merged self-describing `runtime/state_changed` event
 - full sidebar/grid refresh remains only as a documented fallback path
 
+## Current implementation status
+
+Grid settle (`src/runtime/gridSettle.ts`) now uses a 5-strategy taxonomy:
+
+| Strategy | Trigger | Path | Ordering truth |
+|----------|---------|------|----------------|
+| **Insert** | New entity_hashes not in grid | `gridController.insertItems()` — client-side sorted merge | Client (pragmatic: grid items carry all sort fields, comparator matches backend) |
+| **Remove** | `status_changed` + all hashes in grid + system scope | `gridController.removeItems()` — client-side filter | Client (unambiguous: status transition always means leaving a system scope) |
+| **Patch** | Metadata/derivative-only for known hashes | `gridController.reconcile(true)` → backend `patch_rows` | N/A (in-place update) |
+| **Membership reconcile** | Ambiguous membership changes (folder/smart_folder/collection scopes, tag changes) | `gridController.reconcile(false)` → backend `replace_window` | **Backend** (correct: frontend cannot infer membership/order for non-system scopes) |
+| **Full refresh** | Sort change, scope navigation, search | `gridController.loadFirstPage()` | Backend |
+
+Insert and remove are client-side membership optimizations. They are safe because:
+- Insert: the entity's sort-relevant fields are on `CanonicalEntityGridItem`, and the comparator is deterministic
+- Remove: only used for system scopes where status transition is unambiguous (trash/delete)
+
+Ordering truth for ambiguous cases (folder/smart_folder/collection scope changes, tag changes affecting smart folders) remains backend-owned via reconcile.
+
+Scroll stability: `CanvasGrid` preserves scroll position on incremental item changes (insert/remove/patch). Scroll resets only on scope navigation (items array goes from empty or to empty).
+
 ## Tests
 - reconcile decision tests for current query vs state-change facts
 - sidebar delta application tests

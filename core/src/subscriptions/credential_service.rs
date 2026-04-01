@@ -1,0 +1,768 @@
+use std::collections::HashMap;
+
+use serde_json::Value;
+use tracing::warn;
+
+use crate::credential_store::{CredentialType, SiteCredential};
+use crate::sqlite::SqliteDatabase;
+use crate::subscriptions::gallery_dl_runner;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CredentialHealthStatus {
+    Unknown,
+    Missing,
+    Valid,
+    Unauthorized,
+    Expired,
+    Error,
+}
+
+impl CredentialHealthStatus {
+    pub fn as_db_str(self) -> &'static str {
+        match self {
+            Self::Unknown => "unknown",
+            Self::Missing => "missing",
+            Self::Valid => "valid",
+            Self::Unauthorized => "unauthorized",
+            Self::Expired => "expired",
+            Self::Error => "error",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AuthFailureKind {
+    Unauthorized,
+    Expired,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct GalleryDlAuthConfig {
+    pub site_category: String,
+    pub fragment: Value,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ResolvedRunCredential {
+    pub canonical_site_category: String,
+    pub matched_lookup_key: Option<String>,
+    pub auth_supported: bool,
+    pub auth_required_for_full_access: bool,
+    pub gallery_dl_auth: Option<GalleryDlAuthConfig>,
+}
+
+impl ResolvedRunCredential {
+    pub fn has_credential(&self) -> bool {
+        self.gallery_dl_auth.is_some()
+    }
+}
+
+pub struct SetManualCredentialRequest {
+    pub site_category: String,
+    pub credential_type: String,
+    pub username: Option<String>,
+    pub password: Option<String>,
+    pub cookies: Option<HashMap<String, String>>,
+    pub oauth_token: Option<String>,
+    pub display_name: Option<String>,
+}
+
+pub trait CredentialStoreBackend: Clone + Send + Sync + 'static {
+    fn set_credential(&self, cred: &SiteCredential) -> Result<(), String>;
+    fn get_credential(&self, site_category: &str) -> Result<Option<SiteCredential>, String>;
+    fn delete_credential(&self, site_category: &str) -> Result<(), String>;
+    fn build_extractor_auth(&self, cred: &SiteCredential) -> Value;
+}
+
+#[derive(Clone, Copy, Default)]
+pub struct SystemCredentialStore;
+
+impl CredentialStoreBackend for SystemCredentialStore {
+    fn set_credential(&self, cred: &SiteCredential) -> Result<(), String> {
+        crate::credential_store::set_credential(cred)
+    }
+
+    fn get_credential(&self, site_category: &str) -> Result<Option<SiteCredential>, String> {
+        crate::credential_store::get_credential(site_category)
+    }
+
+    fn delete_credential(&self, site_category: &str) -> Result<(), String> {
+        crate::credential_store::delete_credential(site_category)
+    }
+
+    fn build_extractor_auth(&self, cred: &SiteCredential) -> Value {
+        crate::credential_store::build_extractor_auth(cred)
+    }
+}
+
+pub struct SubscriptionCredentialService<'a, B = SystemCredentialStore> {
+    db: &'a SqliteDatabase,
+    store: B,
+}
+
+impl<'a> SubscriptionCredentialService<'a, SystemCredentialStore> {
+    pub fn new(db: &'a SqliteDatabase) -> Self {
+        Self {
+            db,
+            store: SystemCredentialStore,
+        }
+    }
+}
+
+impl<'a, B: CredentialStoreBackend> SubscriptionCredentialService<'a, B> {
+    pub fn with_store(db: &'a SqliteDatabase, store: B) -> Self {
+        Self { db, store }
+    }
+
+    pub async fn list_credentials(
+        &self,
+    ) -> Result<Vec<crate::subscriptions::db::CredentialDomain>, String> {
+        self.db.list_credential_domains().await
+    }
+
+    pub async fn list_credential_health(
+        &self,
+    ) -> Result<Vec<crate::subscriptions::db::CredentialHealth>, String> {
+        self.db.list_credential_health().await
+    }
+
+    pub async fn set_manual_credential(
+        &self,
+        request: SetManualCredentialRequest,
+    ) -> Result<String, String> {
+        let canonical_site_category = canonical_credential_site_category(&request.site_category);
+        let site = gallery_dl_runner::site_by_id(&canonical_site_category)
+            .ok_or_else(|| format!("Unknown site: {}", request.site_category))?;
+        let credential_type = CredentialType::from_str(&request.credential_type)
+            .ok_or_else(|| format!("Invalid credential_type: {}", request.credential_type))?;
+
+        validate_manual_credential(site, credential_type, &request.username, &request.password)?;
+
+        let cred = SiteCredential {
+            site_category: canonical_site_category.clone(),
+            credential_type,
+            username: request.username,
+            password: request.password,
+            cookies: request.cookies,
+            oauth_token: request.oauth_token,
+        };
+
+        self.store.set_credential(&cred)?;
+        self.db
+            .upsert_credential_domain(
+                &canonical_site_category,
+                &request.credential_type,
+                request.display_name.as_deref(),
+            )
+            .await?;
+        self.set_health(
+            &canonical_site_category,
+            CredentialHealthStatus::Unknown,
+            None,
+        )
+        .await;
+
+        Ok(canonical_site_category)
+    }
+
+    pub async fn store_pixiv_oauth_credential(
+        &self,
+        refresh_token: String,
+        phpsessid: Option<String>,
+    ) -> Result<String, String> {
+        let cookies = phpsessid
+            .filter(|value| !value.trim().is_empty())
+            .map(|sessid| {
+                let mut map = HashMap::new();
+                map.insert("PHPSESSID".to_string(), sessid);
+                map
+            });
+
+        self.set_manual_credential(SetManualCredentialRequest {
+            site_category: "pixiv".to_string(),
+            credential_type: "oauth_token".to_string(),
+            username: None,
+            password: None,
+            cookies,
+            oauth_token: Some(refresh_token),
+            display_name: Some("Pixiv".to_string()),
+        })
+        .await
+    }
+
+    pub async fn delete_credential(&self, site_category: &str) -> Result<String, String> {
+        let canonical_site_category = canonical_credential_site_category(site_category);
+        for category in credential_delete_categories(site_category) {
+            let _ = self.store.delete_credential(&category);
+            let _ = self.db.delete_credential_domain(&category).await;
+            let _ = self.db.delete_credential_health(&category).await;
+        }
+        Ok(canonical_site_category)
+    }
+
+    pub async fn resolve_for_run(
+        &self,
+        subscription_id: i64,
+        query_id: Option<i64>,
+        site_id: &str,
+        url: &str,
+    ) -> ResolvedRunCredential {
+        let canonical_site_category = canonical_credential_site_category(site_id);
+        let site_entry = gallery_dl_runner::site_by_id(&canonical_site_category)
+            .or_else(|| gallery_dl_runner::site_by_id(site_id));
+        let auth_supported = site_entry.is_some_and(|site| site.auth_supported);
+        let auth_required = site_entry.is_some_and(|site| site.auth_required_for_full_access);
+
+        let mut matched_lookup_key = None;
+        let mut gallery_dl_auth = None;
+
+        if auth_supported {
+            for category in credential_lookup_categories(site_id, url) {
+                match self.store.get_credential(&category) {
+                    Ok(Some(cred)) => {
+                        matched_lookup_key = Some(category);
+                        gallery_dl_auth = Some(GalleryDlAuthConfig {
+                            site_category: canonical_site_category.clone(),
+                            fragment: self.store.build_extractor_auth(&cred),
+                        });
+                        break;
+                    }
+                    Ok(None) => {}
+                    Err(error) => {
+                        warn!(site = %category, error = %error, "Failed to load credential");
+                    }
+                }
+            }
+        }
+
+        if auth_supported && gallery_dl_auth.is_none() && auth_required {
+            self.set_health(
+                &canonical_site_category,
+                CredentialHealthStatus::Missing,
+                Some("No credential configured for a site that commonly requires auth"),
+            )
+            .await;
+            self.upsert_issue(
+                subscription_id,
+                query_id,
+                "credential_missing",
+                "No credential configured for a site that commonly requires auth",
+                Some("Configure a credential for this site to access the full subscription result set."),
+            )
+            .await;
+        } else if gallery_dl_auth.is_some() {
+            self.resolve_issue(subscription_id, query_id, "credential_missing")
+                .await;
+        }
+
+        ResolvedRunCredential {
+            canonical_site_category,
+            matched_lookup_key,
+            auth_supported,
+            auth_required_for_full_access: auth_required,
+            gallery_dl_auth,
+        }
+    }
+
+    pub async fn note_run_auth_failure(
+        &self,
+        subscription_id: i64,
+        query_id: Option<i64>,
+        site_id: &str,
+        failure_kind: AuthFailureKind,
+        detail: Option<&str>,
+    ) {
+        let canonical_site_category = canonical_credential_site_category(site_id);
+        let status = match failure_kind {
+            AuthFailureKind::Unauthorized => CredentialHealthStatus::Unauthorized,
+            AuthFailureKind::Expired => CredentialHealthStatus::Expired,
+        };
+        let message = match failure_kind {
+            AuthFailureKind::Unauthorized => {
+                "Credential was rejected by the site during subscription sync"
+            }
+            AuthFailureKind::Expired => {
+                "Credential expired or was rejected by the site during subscription sync"
+            }
+        };
+
+        self.set_health(&canonical_site_category, status, detail)
+            .await;
+        self.upsert_issue(
+            subscription_id,
+            query_id,
+            "credential_blocked",
+            message,
+            detail,
+        )
+        .await;
+    }
+
+    pub async fn note_run_success(
+        &self,
+        subscription_id: i64,
+        query_id: Option<i64>,
+        site_id: &str,
+        used_credential: bool,
+    ) {
+        if !used_credential {
+            return;
+        }
+        let canonical_site_category = canonical_credential_site_category(site_id);
+        self.set_health(
+            &canonical_site_category,
+            CredentialHealthStatus::Valid,
+            None,
+        )
+        .await;
+        self.resolve_issue(subscription_id, query_id, "credential_missing")
+            .await;
+        self.resolve_issue(subscription_id, query_id, "credential_blocked")
+            .await;
+    }
+
+    pub async fn note_runtime_error(
+        &self,
+        site_id: &str,
+        used_credential: bool,
+        detail: Option<&str>,
+    ) {
+        if !used_credential {
+            return;
+        }
+        let canonical_site_category = canonical_credential_site_category(site_id);
+        self.set_health(
+            &canonical_site_category,
+            CredentialHealthStatus::Error,
+            detail,
+        )
+        .await;
+    }
+
+    async fn set_health(
+        &self,
+        site_category: &str,
+        status: CredentialHealthStatus,
+        detail: Option<&str>,
+    ) {
+        if let Err(error) = self
+            .db
+            .upsert_credential_health(site_category, status.as_db_str(), detail)
+            .await
+        {
+            warn!(
+                site = %site_category,
+                status = status.as_db_str(),
+                error = %error,
+                "Failed to persist credential health"
+            );
+        }
+    }
+
+    async fn upsert_issue(
+        &self,
+        subscription_id: i64,
+        query_id: Option<i64>,
+        issue_kind: &str,
+        message: &str,
+        detail: Option<&str>,
+    ) {
+        let _ = self
+            .db
+            .upsert_subscription_issue(subscription_id, query_id, issue_kind, message, detail)
+            .await;
+    }
+
+    async fn resolve_issue(&self, subscription_id: i64, query_id: Option<i64>, issue_kind: &str) {
+        let _ = self
+            .db
+            .resolve_subscription_issues(subscription_id, query_id, issue_kind)
+            .await;
+    }
+}
+
+pub fn canonical_credential_site_category(site_category: &str) -> String {
+    let canonical = gallery_dl_runner::canonical_site_id(site_category);
+    gallery_dl_runner::site_by_id(canonical)
+        .map(|site| site.credential_owner_site_id.to_string())
+        .unwrap_or_else(|| canonical.to_string())
+}
+
+pub fn credential_lookup_categories(site_id: &str, url: &str) -> Vec<String> {
+    let mut categories = Vec::new();
+    let canonical_site_id = gallery_dl_runner::canonical_site_id(site_id);
+    let canonical_credential_site = canonical_credential_site_category(site_id);
+
+    categories.push(canonical_credential_site.clone());
+    categories.push(canonical_site_id.to_string());
+    categories.push(site_id.trim().to_string());
+
+    if let Some(site) = gallery_dl_runner::site_by_id(site_id) {
+        categories.push(site.domain.to_string());
+        categories.push(site.domain.trim_start_matches("www.").to_string());
+    }
+    if let Some(owner_site) = gallery_dl_runner::site_by_id(&canonical_credential_site) {
+        categories.push(owner_site.domain.to_string());
+        categories.push(owner_site.domain.trim_start_matches("www.").to_string());
+    }
+    if let Some(domain) = gallery_dl_runner::extract_domain(url) {
+        categories.push(domain.clone());
+        categories.push(domain.trim_start_matches("www.").to_string());
+    }
+    categories.extend(
+        gallery_dl_runner::credential_site_aliases(canonical_site_id)
+            .iter()
+            .map(|alias| (*alias).to_string()),
+    );
+
+    categories.sort();
+    categories.dedup();
+    categories.retain(|value| !value.trim().is_empty());
+    categories
+}
+
+pub fn credential_delete_categories(site_id: &str) -> Vec<String> {
+    let canonical_site_id = gallery_dl_runner::canonical_site_id(site_id);
+    let canonical_credential_site = canonical_credential_site_category(site_id);
+    let mut categories = vec![
+        site_id.trim().to_string(),
+        canonical_site_id.to_string(),
+        canonical_credential_site.clone(),
+    ];
+
+    categories.extend(
+        gallery_dl_runner::credential_site_aliases(canonical_site_id)
+            .iter()
+            .map(|alias| (*alias).to_string()),
+    );
+    if let Some(site) = gallery_dl_runner::site_by_id(canonical_site_id) {
+        categories.push(site.domain.to_string());
+        categories.push(site.domain.trim_start_matches("www.").to_string());
+    }
+    if let Some(owner_site) = gallery_dl_runner::site_by_id(&canonical_credential_site) {
+        categories.push(owner_site.domain.to_string());
+        categories.push(owner_site.domain.trim_start_matches("www.").to_string());
+    }
+
+    categories.sort();
+    categories.dedup();
+    categories.retain(|value| !value.trim().is_empty());
+    categories
+}
+
+fn validate_manual_credential(
+    site: &gallery_dl_runner::SiteEntry,
+    credential_type: CredentialType,
+    username: &Option<String>,
+    password: &Option<String>,
+) -> Result<(), String> {
+    if !site.auth_supported {
+        return Err(format!("{} does not support stored credentials", site.name));
+    }
+
+    let credential_type_str = match credential_type {
+        CredentialType::UsernamePassword => "username_password",
+        CredentialType::Cookies => "cookies",
+        CredentialType::ApiKey => "api_key",
+        CredentialType::OAuthToken => "oauth_token",
+    };
+    if !site
+        .manual_credential_types
+        .iter()
+        .any(|allowed| *allowed == credential_type_str)
+    {
+        return Err(format!(
+            "{} does not accept `{}` credentials",
+            site.name, credential_type_str
+        ));
+    }
+
+    if site.id == "rule34" {
+        let user_id_ok = username
+            .as_deref()
+            .map(str::trim)
+            .is_some_and(|value| !value.is_empty());
+        let api_key_ok = password
+            .as_deref()
+            .map(str::trim)
+            .is_some_and(|value| !value.is_empty());
+        if !user_id_ok || !api_key_ok {
+            return Err(
+                "rule34.xxx requires both `user-id` and `api-key` (use username=user-id, password=api-key)"
+                    .to_string(),
+            );
+        }
+    }
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+    use std::sync::{Arc, Mutex};
+
+    use super::*;
+
+    #[derive(Clone, Default)]
+    struct InMemoryCredentialStore {
+        entries: Arc<Mutex<HashMap<String, SiteCredential>>>,
+    }
+
+    impl InMemoryCredentialStore {
+        fn insert(&self, credential: SiteCredential) {
+            self.entries
+                .lock()
+                .unwrap()
+                .insert(credential.site_category.clone(), credential);
+        }
+
+        fn contains(&self, site_category: &str) -> bool {
+            self.entries.lock().unwrap().contains_key(site_category)
+        }
+    }
+
+    impl CredentialStoreBackend for InMemoryCredentialStore {
+        fn set_credential(&self, cred: &SiteCredential) -> Result<(), String> {
+            self.entries
+                .lock()
+                .unwrap()
+                .insert(cred.site_category.clone(), cred.clone());
+            Ok(())
+        }
+
+        fn get_credential(&self, site_category: &str) -> Result<Option<SiteCredential>, String> {
+            Ok(self.entries.lock().unwrap().get(site_category).cloned())
+        }
+
+        fn delete_credential(&self, site_category: &str) -> Result<(), String> {
+            self.entries.lock().unwrap().remove(site_category);
+            Ok(())
+        }
+
+        fn build_extractor_auth(&self, cred: &SiteCredential) -> Value {
+            crate::credential_store::build_extractor_auth(cred)
+        }
+    }
+
+    async fn test_db() -> std::sync::Arc<SqliteDatabase> {
+        let dir = tempfile::tempdir().unwrap();
+        SqliteDatabase::open(dir.path()).await.unwrap()
+    }
+
+    async fn create_subscription_query(db: &SqliteDatabase, site_id: &str) -> (i64, i64) {
+        let subscription = db.create_subscription("Test", None).await.unwrap();
+        let query = db
+            .add_subscription_query(
+                subscription.subscription_id,
+                site_id,
+                "query",
+                Some("query"),
+                None,
+            )
+            .await
+            .unwrap();
+        (subscription.subscription_id, query.query_id)
+    }
+
+    #[tokio::test]
+    async fn set_manual_credential_for_alias_site_stores_under_owner_category() {
+        let db = test_db().await;
+        let store = InMemoryCredentialStore::default();
+        let service = SubscriptionCredentialService::with_store(&db, store.clone());
+
+        let canonical = service
+            .set_manual_credential(SetManualCredentialRequest {
+                site_category: "pixivuser".to_string(),
+                credential_type: "oauth_token".to_string(),
+                username: None,
+                password: None,
+                cookies: None,
+                oauth_token: Some("refresh".to_string()),
+                display_name: Some("Pixiv".to_string()),
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(canonical, "pixiv");
+        assert!(store.contains("pixiv"));
+
+        let credentials = service.list_credentials().await.unwrap();
+        assert_eq!(credentials.len(), 1);
+        assert_eq!(credentials[0].site_category, "pixiv");
+    }
+
+    #[tokio::test]
+    async fn delete_credential_removes_alias_visible_records_through_service() {
+        let db = test_db().await;
+        let store = InMemoryCredentialStore::default();
+        store.insert(SiteCredential {
+            site_category: "rule34".to_string(),
+            credential_type: CredentialType::ApiKey,
+            username: Some("123".to_string()),
+            password: Some("secret".to_string()),
+            cookies: None,
+            oauth_token: None,
+        });
+        store.insert(SiteCredential {
+            site_category: "rule34.xxx".to_string(),
+            credential_type: CredentialType::ApiKey,
+            username: Some("123".to_string()),
+            password: Some("secret".to_string()),
+            cookies: None,
+            oauth_token: None,
+        });
+        db.upsert_credential_domain("rule34", "api_key", Some("Rule34"))
+            .await
+            .unwrap();
+        db.upsert_credential_domain("rule34.xxx", "api_key", Some("Rule34"))
+            .await
+            .unwrap();
+        db.upsert_credential_health("rule34", "unknown", None)
+            .await
+            .unwrap();
+        db.upsert_credential_health("rule34.xxx", "unknown", None)
+            .await
+            .unwrap();
+
+        let service = SubscriptionCredentialService::with_store(&db, store.clone());
+        let canonical = service.delete_credential("rule34.xxx").await.unwrap();
+
+        assert_eq!(canonical, "rule34");
+        assert!(!store.contains("rule34"));
+        assert!(!store.contains("rule34.xxx"));
+        assert!(service.list_credentials().await.unwrap().is_empty());
+        assert!(service.list_credential_health().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn pixivuser_run_resolves_stored_pixiv_credential() {
+        let db = test_db().await;
+        let store = InMemoryCredentialStore::default();
+        store.insert(SiteCredential {
+            site_category: "pixiv".to_string(),
+            credential_type: CredentialType::OAuthToken,
+            username: None,
+            password: None,
+            cookies: None,
+            oauth_token: Some("refresh".to_string()),
+        });
+        let service = SubscriptionCredentialService::with_store(&db, store);
+        let (subscription_id, query_id) = create_subscription_query(&db, "pixivuser").await;
+
+        let resolved = service
+            .resolve_for_run(
+                subscription_id,
+                Some(query_id),
+                "pixivuser",
+                "https://www.pixiv.net/en/users/12345",
+            )
+            .await;
+
+        assert_eq!(resolved.canonical_site_category, "pixiv");
+        assert_eq!(resolved.matched_lookup_key.as_deref(), Some("pixiv"));
+        assert!(resolved.has_credential());
+    }
+
+    #[tokio::test]
+    async fn missing_credential_marks_health_and_creates_issue() {
+        let db = test_db().await;
+        let service =
+            SubscriptionCredentialService::with_store(&db, InMemoryCredentialStore::default());
+        let (subscription_id, query_id) = create_subscription_query(&db, "gelbooru").await;
+
+        let resolved = service
+            .resolve_for_run(
+                subscription_id,
+                Some(query_id),
+                "gelbooru",
+                "https://gelbooru.com/index.php?page=post&s=list&tags=test",
+            )
+            .await;
+
+        assert!(!resolved.has_credential());
+        let health = service.list_credential_health().await.unwrap();
+        assert_eq!(health[0].site_category, "gelbooru");
+        assert_eq!(health[0].health_status, "missing");
+
+        let issues = db
+            .list_subscription_issues(subscription_id, Some(query_id), 10)
+            .await
+            .unwrap();
+        assert!(issues
+            .iter()
+            .any(|issue| issue.issue_kind == "credential_missing"));
+    }
+
+    #[tokio::test]
+    async fn auth_failure_marks_blocked_and_success_clears_matching_issues() {
+        let db = test_db().await;
+        let service =
+            SubscriptionCredentialService::with_store(&db, InMemoryCredentialStore::default());
+        let (subscription_id, query_id) = create_subscription_query(&db, "gelbooru").await;
+
+        service
+            .note_run_auth_failure(
+                subscription_id,
+                Some(query_id),
+                "gelbooru",
+                AuthFailureKind::Unauthorized,
+                Some("401 Unauthorized"),
+            )
+            .await;
+
+        let health = service.list_credential_health().await.unwrap();
+        assert_eq!(health[0].health_status, "unauthorized");
+        let issues = db
+            .list_subscription_issues(subscription_id, Some(query_id), 10)
+            .await
+            .unwrap();
+        assert!(issues
+            .iter()
+            .any(|issue| issue.issue_kind == "credential_blocked"));
+
+        service
+            .note_run_success(subscription_id, Some(query_id), "gelbooru", true)
+            .await;
+
+        let health = service.list_credential_health().await.unwrap();
+        assert_eq!(health[0].health_status, "valid");
+        let issues = db
+            .list_subscription_issues(subscription_id, Some(query_id), 10)
+            .await
+            .unwrap();
+        assert!(issues
+            .iter()
+            .any(|issue| issue.issue_kind == "credential_blocked" && issue.status == "resolved"));
+    }
+
+    #[tokio::test]
+    async fn pixiv_oauth_save_uses_shared_persistence_path() {
+        let db = test_db().await;
+        let store = InMemoryCredentialStore::default();
+        let service = SubscriptionCredentialService::with_store(&db, store.clone());
+
+        let canonical = service
+            .store_pixiv_oauth_credential("refresh".to_string(), Some("phpsessid".to_string()))
+            .await
+            .unwrap();
+
+        assert_eq!(canonical, "pixiv");
+        let credentials = service.list_credentials().await.unwrap();
+        assert_eq!(credentials[0].site_category, "pixiv");
+        assert_eq!(credentials[0].credential_type, "oauth_token");
+        let health = service.list_credential_health().await.unwrap();
+        assert_eq!(health[0].health_status, "unknown");
+
+        let resolved = service
+            .resolve_for_run(
+                1,
+                None,
+                "pixiv",
+                "https://www.pixiv.net/en/tags/test/artworks",
+            )
+            .await;
+        assert!(resolved.has_credential());
+        assert!(store.contains("pixiv"));
+    }
+}

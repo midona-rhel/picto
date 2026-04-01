@@ -37,7 +37,8 @@ impl ApplicationEngine {
         status: Option<String>,
         max_distance: Option<f64>,
     ) -> Result<DuplicatePairPage, String> {
-        self.db.get_duplicate_pairs(cursor, limit, status, max_distance)
+        self.db
+            .get_duplicate_pairs(cursor, limit, status, max_distance)
     }
 
     pub fn get_duplicate_count(&self) -> Result<i64, String> {
@@ -51,10 +52,13 @@ impl ApplicationEngine {
         hash_b: &str,
         preferred_collection_id: Option<i64>,
     ) -> Result<DuplicateResolutionResult, String> {
-        let result = self
-            .db
-            .resolve_duplicate_pair(action, hash_a, hash_b, preferred_collection_id)?;
-        if matches!(result.status, crate::db::types::DuplicateResolveStatus::Resolved) {
+        let result =
+            self.db
+                .resolve_duplicate_pair(action, hash_a, hash_b, preferred_collection_id)?;
+        if matches!(
+            result.status,
+            crate::db::types::DuplicateResolveStatus::Resolved
+        ) {
             let mut impact = ChangeImpact::new()
                 .add_domain(Domain::Sidebar)
                 .entity_hashes(

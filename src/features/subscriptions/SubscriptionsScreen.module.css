@@ -17,6 +17,10 @@
   flex-direction: column;
 }
 
+.sourceToggle {
+  padding: 0 12px 8px;
+}
+
 .sidebarHeader {
   display: flex;
   align-items: center;
@@ -77,6 +81,8 @@
   gap: 1px;
 }
 
+/* Sidebar items — matches legacy tag manager .sidebarItem exactly */
+
 .subscriptionRow {
   position: relative;
   height: 26px;
@@ -99,8 +105,39 @@
   background-color: var(--sidebar-item-hover-bg);
 }
 
+.subscriptionRow:hover .sidebarItemIcon {
+  opacity: 1;
+}
+
 .subscriptionRowSelected {
   background-color: var(--sidebar-item-active-bg);
+}
+
+.subscriptionRowSelected .sidebarItemCount {
+  opacity: 1;
+}
+
+.subscriptionRowSelected .sidebarItemIcon {
+  opacity: 1;
+}
+
+.sidebarItemIcon {
+  width: 20px;
+  height: 20px;
+  margin-right: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0.8;
+  flex-shrink: 0;
+}
+
+.sidebarItemCount {
+  margin-left: auto;
+  font-family: var(--font-family-mono);
+  font-size: 11px;
+  opacity: 0.5;
+  flex-shrink: 0;
 }
 
 .rowTop,
@@ -636,9 +673,6 @@
   min-width: 0;
 }
 
-.queryCardHeader > :first-child {
-  min-width: 180px;
-}
 
 .queryCardInput {
   width: 100%;

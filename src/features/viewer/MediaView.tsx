@@ -137,8 +137,8 @@ export function MediaView({
       navigate,
       fitToWindow: zoom.fitToWindow,
       fitActual: zoom.fitActual,
-      zoomIn: () => zoom.zoomTo(zoom.state.scale * 1.25),
-      zoomOut: () => zoom.zoomTo(zoom.state.scale / 1.25),
+      zoomIn: () => zoom.animateZoomTo(zoom.state.scale * 1.25),
+      zoomOut: () => zoom.animateZoomTo(zoom.state.scale / 1.25),
       setZoomScale: (s) => zoom.zoomTo(s),
     });
   }, [currentHash, navigate, onClose, zoom, setDisplayControls]);
@@ -162,8 +162,8 @@ export function MediaView({
       if (matchesShortcutDef(e, prevDef)) { e.preventDefault(); navigate(-1); return; }
       if (matchesShortcutDef(e, nextDef)) { e.preventDefault(); navigate(1); return; }
       if (matchesShortcutDef(e, fitDef)) { e.preventDefault(); zoom.fitToWindow(); return; }
-      if (matchesShortcutDef(e, zoomInDef)) { e.preventDefault(); zoom.zoomTo(zoom.state.scale * 1.25); return; }
-      if (matchesShortcutDef(e, zoomOutDef)) { e.preventDefault(); zoom.zoomTo(zoom.state.scale / 1.25); return; }
+      if (matchesShortcutDef(e, zoomInDef)) { e.preventDefault(); zoom.animateZoomTo(zoom.state.scale * 1.25); return; }
+      if (matchesShortcutDef(e, zoomOutDef)) { e.preventDefault(); zoom.animateZoomTo(zoom.state.scale / 1.25); return; }
       if (matchesShortcutDef(e, actualDef)) { e.preventDefault(); zoom.fitActual(); return; }
 
       // Rating: 0-5 (no modifiers)

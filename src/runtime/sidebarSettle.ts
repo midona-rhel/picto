@@ -69,11 +69,13 @@ interface SidebarCounts {
   duplicates: number;
 }
 
-export function startSidebarSettle() {
-  listen<{
+export function startSidebarSettle(): () => void {
+  let cancelled = false;
+  const unlistenPromise = listen<{
     changes: StateChanges;
     sidebar_counts?: SidebarCounts | null;
   }>('runtime/state_changed', (event) => {
+    if (cancelled) return;
     const { changes, sidebar_counts } = event.payload;
     let needsTreeRefresh = false;
     let hadExactDeltas = false;
@@ -156,4 +158,8 @@ export function startSidebarSettle() {
       sidebarController.fetchTree();
     }
   });
+  return () => {
+    cancelled = true;
+    unlistenPromise.then((fn) => fn()).catch(() => {});
+  };
 }

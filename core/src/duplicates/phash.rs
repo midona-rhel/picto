@@ -42,7 +42,9 @@ pub fn compute_phash_base64(image_data: &[u8]) -> Result<String, image::ImageErr
 }
 
 /// Compute phash from a pre-decoded image and return as base64 string.
-pub fn compute_phash_base64_from_image(img: &image::DynamicImage) -> Result<String, image::ImageError> {
+pub fn compute_phash_base64_from_image(
+    img: &image::DynamicImage,
+) -> Result<String, image::ImageError> {
     let hash = compute_phash_from_image(img)?;
     Ok(hash.to_base64())
 }

@@ -163,10 +163,10 @@ impl SqliteDatabase {
                             placeholders
                         );
                         let mut stmt = conn.prepare(&sql)?;
-                        let rows = stmt.query_map(
-                            rusqlite::params_from_iter(misses.iter()),
-                            |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
-                        )?;
+                        let rows = stmt
+                            .query_map(rusqlite::params_from_iter(misses.iter()), |row| {
+                                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+                            })?;
                         let mut found = std::collections::HashSet::new();
                         for row in rows {
                             let (hash, fid) = row?;
@@ -191,10 +191,10 @@ impl SqliteDatabase {
                             placeholders
                         );
                         let mut stmt = conn.prepare(&sql)?;
-                        let rows = stmt.query_map(
-                            rusqlite::params_from_iter(still_missing.iter()),
-                            |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
-                        )?;
+                        let rows = stmt
+                            .query_map(rusqlite::params_from_iter(still_missing.iter()), |row| {
+                                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+                            })?;
                         for row in rows {
                             let (hash, eid) = row?;
                             hash_index.insert(hash.clone(), eid);
@@ -304,5 +304,4 @@ impl SqliteDatabase {
             .await?;
         self.resolve_entity_hashes_for_ids(&ids).await
     }
-
 }

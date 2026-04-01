@@ -1,5 +1,8 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useAtom, useAtomValue, useSetAtom } from 'jotai';
+import { subscriptionsWorkspaceTabAtom } from '../../state/navigation';
+import { AuthWorkspace } from '../auth/AuthWorkspace';
+import type { AuthSiteSnapshot } from '../../controllers/authController';
 import {
   IconPlayerPause,
   IconPlayerPlay,
@@ -56,7 +59,10 @@ function parseLimit(value: string): number | null {
 }
 
 export function SubscriptionsScreen() {
+  const workspaceTab = useAtomValue(subscriptionsWorkspaceTabAtom);
   const setSubscriptionsWorkspaceTab = useSetAtom(setSubscriptionsWorkspaceTabAtom);
+  const [authSites, setAuthSites] = useState<AuthSiteSnapshot[]>([]);
+  const [selectedAuthSiteId, setSelectedAuthSiteId] = useState<string | null>(null);
   const [snapshot, setSnapshot] = useAtom(subscriptionsWorkspaceSnapshotAtom);
   const [loading, setLoading] = useAtom(subscriptionsWorkspaceLoadingAtom);
   const [error, setError] = useAtom(subscriptionsWorkspaceErrorAtom);
@@ -247,8 +253,19 @@ export function SubscriptionsScreen() {
           setCreateForm(EMPTY_SUBSCRIPTION_CREATE_FORM);
           setShowCreateForm(false);
         }}
+        authSites={authSites}
+        selectedAuthSiteId={selectedAuthSiteId}
+        onSelectAuthSite={setSelectedAuthSiteId}
       />
 
+      {workspaceTab === 'auth' ? (
+        <AuthWorkspace
+          hideSidebar
+          onSitesLoaded={setAuthSites}
+          externalSelectedSiteId={selectedAuthSiteId}
+          onSelectSite={setSelectedAuthSiteId}
+        />
+      ) : (
       <main className={styles.content}>
         {!selectedSubscription ? (
             <div className={styles.detailEmpty}>
@@ -464,6 +481,7 @@ export function SubscriptionsScreen() {
           </>
         )}
       </main>
+      )}
     </div>
   );
 }

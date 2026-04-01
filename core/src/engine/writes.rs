@@ -15,12 +15,13 @@ impl ApplicationEngine {
     ) -> Result<EntityChange, String> {
         let resolved = target::resolve(&self.db, &target)?;
         let change = match resolved {
-            target::ResolvedTarget::Ids(ids) => {
-                self.db.patch_entity_metadata(&ids, &patch)?
-            }
-            target::ResolvedTarget::Query { view_query, exclusions } => {
-                self.db.patch_entity_metadata_bulk(&view_query, &exclusions, &patch)?
-            }
+            target::ResolvedTarget::Ids(ids) => self.db.patch_entity_metadata(&ids, &patch)?,
+            target::ResolvedTarget::Query {
+                view_query,
+                exclusions,
+            } => self
+                .db
+                .patch_entity_metadata_bulk(&view_query, &exclusions, &patch)?,
         };
         self.commit_write(&WriteChange::from_entity(&change));
         Ok(change)
@@ -35,29 +36,29 @@ impl ApplicationEngine {
         let resolved = target::resolve(&self.db, &target)?;
         let change = match resolved {
             target::ResolvedTarget::Ids(ids) => {
-                self.db.set_entity_status(&ids, status, ExpansionMode::EntityAndDescendants)?
+                self.db
+                    .set_entity_status(&ids, status, ExpansionMode::EntityAndDescendants)?
             }
-            target::ResolvedTarget::Query { view_query, exclusions } => {
-                self.db.set_entity_status_bulk(&view_query, &exclusions, status)?
-            }
+            target::ResolvedTarget::Query {
+                view_query,
+                exclusions,
+            } => self
+                .db
+                .set_entity_status_bulk(&view_query, &exclusions, status)?,
         };
         self.commit_write(&WriteChange::from_status(&change));
         Ok(change)
     }
 
     /// Permanently delete entities.
-    pub fn delete_entities(
-        &self,
-        target: EntityTarget,
-    ) -> Result<EntityChange, String> {
+    pub fn delete_entities(&self, target: EntityTarget) -> Result<EntityChange, String> {
         let resolved = target::resolve(&self.db, &target)?;
         let change = match resolved {
-            target::ResolvedTarget::Ids(ids) => {
-                self.db.delete_entities(&ids)?
-            }
-            target::ResolvedTarget::Query { view_query, exclusions } => {
-                self.db.delete_entities_bulk(&view_query, &exclusions)?
-            }
+            target::ResolvedTarget::Ids(ids) => self.db.delete_entities(&ids)?,
+            target::ResolvedTarget::Query {
+                view_query,
+                exclusions,
+            } => self.db.delete_entities_bulk(&view_query, &exclusions)?,
         };
         self.commit_write(&WriteChange::from_entity_delete(&change));
         Ok(change)

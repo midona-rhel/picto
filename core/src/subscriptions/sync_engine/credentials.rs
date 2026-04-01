@@ -1,88 +1,76 @@
-use tracing::warn;
-
-use crate::credential_store::{self, SiteCredential};
-use crate::subscriptions::gallery_dl_runner;
+use crate::subscriptions::credential_service::{
+    AuthFailureKind, ResolvedRunCredential, SubscriptionCredentialService,
+};
 
 use super::{SubscriptionSyncEngine, SyncProgress};
 
 impl<'a> SubscriptionSyncEngine<'a> {
     pub(super) async fn load_run_credential(
         &mut self,
+        subscription_id: i64,
+        query_id: i64,
         site_id: &str,
         url: &str,
-        subscription_id: &str,
+        subscription_id_str: &str,
         progress: &SyncProgress,
-    ) -> Option<SiteCredential> {
-        let site_entry = gallery_dl_runner::site_by_id(site_id);
-        let auth_supported = site_entry.is_some_and(|site| site.auth_supported);
-        let auth_required = site_entry.is_some_and(|site| site.auth_required_for_full_access);
-        let mut credential = None;
+    ) -> ResolvedRunCredential {
+        let resolved = SubscriptionCredentialService::new(self.db)
+            .resolve_for_run(subscription_id, Some(query_id), site_id, url)
+            .await;
 
-        if auth_supported {
-            let mut credential_categories = vec![site_id.to_string()];
-            // Pixiv has two site entries ("pixiv" + "pixivuser") sharing one credential
-            if site_id == "pixivuser" {
-                credential_categories.push("pixiv".to_string());
-            }
-            if let Some(site) = site_entry {
-                credential_categories.push(site.domain.to_string());
-                credential_categories.push(site.domain.trim_start_matches("www.").to_string());
-            }
-            if let Some(domain) = gallery_dl_runner::extract_domain(url) {
-                credential_categories.push(domain.clone());
-                credential_categories.push(domain.trim_start_matches("www.").to_string());
-            }
-            credential_categories.sort();
-            credential_categories.dedup();
-
-            for category in credential_categories {
-                match credential_store::get_credential(&category) {
-                    Ok(Some(c)) => {
-                        credential = Some(c);
-                        break;
-                    }
-                    Ok(None) => {}
-                    Err(e) => {
-                        warn!(site = %category, error = %e, "Failed to load credential");
-                    }
-                }
-            }
-        }
-
-        if auth_supported && credential.is_none() && auth_required {
+        if resolved.auth_supported
+            && resolved.auth_required_for_full_access
+            && !resolved.has_credential()
+        {
             self.emit_progress(
-                subscription_id,
+                subscription_id_str,
                 progress,
                 "No credential configured for this site; some content may be inaccessible",
             );
-            self.update_credential_health(
-                site_id,
-                "missing",
-                Some("No credential configured for a site that commonly requires auth"),
-            )
-            .await;
         }
 
-        credential
+        resolved
     }
 
-    pub(super) async fn update_credential_health(
+    pub(super) async fn note_run_auth_failure(
         &self,
-        site_category: &str,
-        health_status: &str,
-        last_error: Option<&str>,
+        subscription_id: i64,
+        query_id: i64,
+        site_id: &str,
+        failure_kind: AuthFailureKind,
+        detail: Option<&str>,
     ) {
-        if let Err(e) = self
-            .db
-            .upsert_credential_health(site_category, health_status, last_error)
-            .await
-        {
-            warn!(
-                site = %site_category,
-                status = %health_status,
-                error = %e,
-                "Failed to persist credential health"
-            );
-        }
+        SubscriptionCredentialService::new(self.db)
+            .note_run_auth_failure(
+                subscription_id,
+                Some(query_id),
+                site_id,
+                failure_kind,
+                detail,
+            )
+            .await;
+    }
+
+    pub(super) async fn note_run_success(
+        &self,
+        subscription_id: i64,
+        query_id: i64,
+        site_id: &str,
+        used_credential: bool,
+    ) {
+        SubscriptionCredentialService::new(self.db)
+            .note_run_success(subscription_id, Some(query_id), site_id, used_credential)
+            .await;
+    }
+
+    pub(super) async fn note_runtime_error(
+        &self,
+        site_id: &str,
+        used_credential: bool,
+        detail: Option<&str>,
+    ) {
+        SubscriptionCredentialService::new(self.db)
+            .note_runtime_error(site_id, used_credential, detail)
+            .await;
     }
 }

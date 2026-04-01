@@ -1,0 +1,468 @@
+/**
+ * DetailWindow — standalone image/video viewer in a separate Electron window.
+ *
+ * Differences from inline MediaView:
+ * - Own window with auto-hiding toolbar
+ * - Navigation via IPC (receives image list from main window)
+ * - Always-on-top pin toggle
+ * - Proportional zoom on window resize (image stays fit)
+ * - No aspect ratio lock — window resizes freely, theme bg fills gaps
+ */
+
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import {
+  IconArrowsMaximize,
+  IconAspectRatio,
+  IconPin,
+  IconPinFilled,
+  IconX,
+} from '@tabler/icons-react';
+import { mediaThumbnailUrl, mediaFileUrl } from '../../shared/lib/mediaUrl';
+import { getShortcut, matchesShortcutDef } from '../../shared/lib/shortcuts';
+import { useImageZoom, type ImageSize, type ZoomState } from './hooks/useImageZoom';
+import { useViewerMediaPipeline } from './hooks/useViewerMediaPipeline';
+import { useNavigatorRenderer } from './hooks/useNavigatorRenderer';
+import { useNavigatorDrag } from './hooks/useNavigatorDrag';
+import { VideoPlayer } from './video/VideoPlayer';
+import styles from './DetailWindow.module.css';
+import viewerStyles from './MediaView.module.css';
+
+// ── Types ────────────────────────────────────────────────────────
+
+interface LightImage {
+  hash: string;
+  name: string | null;
+  mime: string;
+  width: number | null;
+  height: number | null;
+}
+
+interface DetailWindowProps {
+  hash: string;
+}
+
+declare const window: Window & {
+  picto: {
+    api: { invoke: (cmd: string, args?: Record<string, unknown>) => Promise<unknown> };
+    events: {
+      on: (name: string, handler: (payload: unknown) => void) => Promise<() => void>;
+      emit: (name: string, payload: unknown) => Promise<void>;
+    };
+    clipboard: { writeText: (text: string) => Promise<void> };
+  };
+};
+
+// ── Constants ────────────────────────────────────────────────────
+
+const NAV_SIZE = 120;
+const TOOLBAR_HIDE_DELAY = 1000;
+
+// Per-image zoom state cache
+const zoomCache = new Map<string, ZoomState>();
+
+// ── Component ────────────────────────────────────────────────────
+
+export function DetailWindow({ hash }: DetailWindowProps) {
+  const [images, setImages] = useState<LightImage[]>([]);
+  const [totalCount, setTotalCount] = useState<number | null>(null);
+  const [currentIndex, setCurrentIndex] = useState(0);
+  const [alwaysOnTop, setAlwaysOnTop] = useState(false);
+  const [toolbarHidden, setToolbarHidden] = useState(true);
+  const toolbarTimerRef = useRef<ReturnType<typeof setTimeout>>();
+  const currentIndexRef = useRef(currentIndex);
+  currentIndexRef.current = currentIndex;
+
+  // ── Initial entity fetch ──
+  const [initialImage, setInitialImage] = useState<LightImage | null>(null);
+  useEffect(() => {
+    window.picto.api.invoke('get_entity_details', { entity_hash: hash }).then((raw: unknown) => {
+      if (!raw || typeof raw !== 'object') return;
+      const d = raw as Record<string, unknown>;
+      setInitialImage({
+        hash: d.entity_hash as string,
+        name: (d.name as string) ?? null,
+        mime: d.mime_type as string,
+        width: (d.pixel_width as number) ?? null,
+        height: (d.pixel_height as number) ?? null,
+      });
+    }).catch(() => {});
+  }, [hash]);
+
+  // ── IPC: receive image list from main window ──
+  useEffect(() => {
+    let cancelled = false;
+    const setup = async () => {
+      const unlisten = await window.picto.events.on('detail-images', (payload: unknown) => {
+        if (cancelled) return;
+        const data = payload as { images?: LightImage[]; totalCount?: number | null };
+        if (data.images?.length) {
+          setImages(data.images);
+          setTotalCount(data.totalCount ?? null);
+          const idx = data.images.findIndex((i) => i.hash === hash);
+          if (idx >= 0) setCurrentIndex(idx);
+        }
+      });
+      void window.picto.events.emit('detail-window-ready', { hash });
+      return unlisten;
+    };
+    const p = setup();
+    return () => {
+      cancelled = true;
+      p.then((fn) => fn()).catch(() => {});
+    };
+  }, [hash]);
+
+  // ── Current image ──
+  const currentImage = useMemo(() => {
+    if (images.length > 0 && images[currentIndex]) return images[currentIndex];
+    return initialImage;
+  }, [images, currentIndex, initialImage]);
+
+  const isVideo = currentImage?.mime?.startsWith('video/') ?? false;
+  const thumbHash = currentImage?.hash ?? hash;
+
+  // ── Toolbar auto-hide ──
+  const resetToolbarTimer = useCallback(() => {
+    setToolbarHidden(false);
+    clearTimeout(toolbarTimerRef.current);
+    toolbarTimerRef.current = setTimeout(() => setToolbarHidden(true), TOOLBAR_HIDE_DELAY);
+  }, []);
+
+  useEffect(() => {
+    const onMove = () => resetToolbarTimer();
+    const onBlur = () => { clearTimeout(toolbarTimerRef.current); setToolbarHidden(true); };
+    const onFocus = () => resetToolbarTimer();
+    // Keep toolbar visible while dragging the window (Electron sends this during drag)
+    const onWindowMoved = () => resetToolbarTimer();
+    document.addEventListener('mousemove', onMove);
+    window.addEventListener('blur', onBlur);
+    window.addEventListener('focus', onFocus);
+    const picto = (window as any).picto;
+    let unlistenWindowMoved: (() => void) | null = null;
+    if (picto?.events?.on) {
+      picto.events.on('picto:window-moved', onWindowMoved).then((fn: () => void) => {
+        unlistenWindowMoved = fn;
+      });
+    }
+    resetToolbarTimer();
+    return () => {
+      document.removeEventListener('mousemove', onMove);
+      window.removeEventListener('blur', onBlur);
+      window.removeEventListener('focus', onFocus);
+      unlistenWindowMoved?.();
+      clearTimeout(toolbarTimerRef.current);
+    };
+  }, [resetToolbarTimer]);
+
+  // ── Refs ──
+  const containerRef = useRef<HTMLDivElement>(null);
+  const thumbFrameRef = useRef<HTMLDivElement>(null);
+  const fullFrameRef = useRef<HTMLDivElement>(null);
+  const fullImgRef = useRef<HTMLImageElement>(null);
+  const navigatorRef = useRef<HTMLDivElement>(null);
+  const navViewportRef = useRef<HTMLDivElement>(null);
+
+  // ── Image size ──
+  const imageSize = useMemo<ImageSize | null>(() => {
+    if (!currentImage?.width || !currentImage?.height) return null;
+    return { width: currentImage.width, height: currentImage.height };
+  }, [currentImage?.width, currentImage?.height]);
+
+  const imageSizeRef = useRef(imageSize);
+  imageSizeRef.current = imageSize;
+
+  // ── Zoom/pan ──
+  const zoom = useImageZoom(containerRef, imageSize, [thumbFrameRef, fullFrameRef]);
+
+  // ── Media pipeline ──
+  const neighborHashes = useMemo(() => {
+    const r: string[] = [];
+    const prev = images[currentIndex - 1];
+    const next = images[currentIndex + 1];
+    if (prev) r.push(prev.hash);
+    if (next) r.push(next.hash);
+    return r;
+  }, [images, currentIndex]);
+
+  const pipeline = useViewerMediaPipeline({
+    hash: currentImage?.hash ?? null,
+    thumbnailHash: currentImage?.hash ?? null,
+    mime: currentImage?.mime ?? '',
+    isVideo,
+    imgRef: fullImgRef,
+    neighborHashes,
+  });
+
+  // Fit image to window as soon as we know the image dimensions.
+  // Track which hash we last fitted so we only fit once per image.
+  const lastFittedHashRef = useRef<string | null>(null);
+  useEffect(() => {
+    const h = currentImage?.hash ?? null;
+    if (!h || !imageSize) return;
+    if (lastFittedHashRef.current === h) return;
+    lastFittedHashRef.current = h;
+
+    const el = containerRef.current;
+    if (!el) return;
+    const cw = el.clientWidth;
+    const ch = el.clientHeight;
+    if (cw === 0 || ch === 0) return;
+
+    // Restore cached zoom or fit
+    const cached = zoomCache.get(h);
+    if (cached) {
+      zoom.setState(cached);
+    } else {
+      const fitScale = Math.min(cw / imageSize.width, ch / imageSize.height);
+      zoom.setState({ scale: fitScale, tx: 0, ty: 0 });
+    }
+  }, [currentImage?.hash, imageSize]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Cache zoom state on change
+  useEffect(() => {
+    if (currentImage?.hash) zoomCache.set(currentImage.hash, zoom.state);
+  }, [zoom.state, currentImage?.hash]);
+
+  // ── Proportional zoom on container resize ──
+  const prevContainerDimsRef = useRef({ w: 0, h: 0 });
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+    const ro = new ResizeObserver(() => {
+      const newW = container.clientWidth;
+      const newH = container.clientHeight;
+      const prev = prevContainerDimsRef.current;
+      if (prev.w > 0 && newW > 0 && imageSizeRef.current && (newW !== prev.w || newH !== prev.h)) {
+        const iSize = imageSizeRef.current;
+        const oldFit = Math.min(prev.w / iSize.width, prev.h / iSize.height, 1);
+        const newFit = Math.min(newW / iSize.width, newH / iSize.height, 1);
+        if (oldFit > 0 && newFit > 0) {
+          const scaleRatio = newFit / oldFit;
+          zoom.setState((s: ZoomState) => ({
+            scale: s.scale * scaleRatio,
+            tx: s.tx * (newW / prev.w),
+            ty: s.ty * (newH / prev.h),
+          }));
+        }
+      }
+      prevContainerDimsRef.current = { w: newW, h: newH };
+    });
+    ro.observe(container);
+    return () => ro.disconnect();
+  }, [zoom.setState]);
+
+  // ── Navigator ──
+  useNavigatorRenderer(navigatorRef, navViewportRef, imageSizeRef, zoom.navigatorRect, NAV_SIZE, zoom.onLiveFrameRef, zoom.containerSize);
+  const handleNavMouseDown = useNavigatorDrag(navigatorRef, imageSizeRef, zoom.panToNormalized);
+
+  // ── Navigation ──
+  const [boundaryFlash, setBoundaryFlash] = useState<'left' | 'right' | null>(null);
+  const boundaryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const navigate = useCallback((delta: number) => {
+    const nextIdx = currentIndexRef.current + delta;
+    if (nextIdx < 0 || nextIdx >= images.length) {
+      setBoundaryFlash(nextIdx < 0 ? 'left' : 'right');
+      if (boundaryTimerRef.current) clearTimeout(boundaryTimerRef.current);
+      boundaryTimerRef.current = setTimeout(() => setBoundaryFlash(null), 800);
+      return;
+    }
+    setBoundaryFlash(null);
+    setCurrentIndex(nextIdx);
+  }, [images.length]);
+
+  // ── Always on top ──
+  const toggleAlwaysOnTop = useCallback(() => {
+    const next = !alwaysOnTop;
+    setAlwaysOnTop(next);
+    (window as any).picto.api.window.call('setAlwaysOnTop', { value: next }).catch(() => setAlwaysOnTop(!next));
+  }, [alwaysOnTop]);
+
+  // ── Copy path ──
+  const handleCopyPath = useCallback(async () => {
+    if (!currentImage) return;
+    try {
+      const path = await window.picto.api.invoke('resolve_file_path', { entity_hash: currentImage.hash }) as string;
+      await window.picto.clipboard.writeText(path);
+    } catch {}
+  }, [currentImage]);
+
+  // ── Keyboard shortcuts (with EU alternatives via shortcut registry) ──
+  useEffect(() => {
+    const prevDef = getShortcut('view.prevImage');
+    const nextDef = getShortcut('view.nextImage');
+    const fitDef = getShortcut('view.fitWindow');
+    const zoomInDef = getShortcut('view.zoomIn');
+    const zoomOutDef = getShortcut('view.zoomOut');
+    const actualDef = getShortcut('view.actualSize');
+
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+
+      // Close window
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        (window as any).picto.api.window.call('close');
+        return;
+      }
+
+      // Navigation
+      if (prevDef && matchesShortcutDef(e, prevDef)) { e.preventDefault(); navigate(-1); return; }
+      if (nextDef && matchesShortcutDef(e, nextDef)) { e.preventDefault(); navigate(1); return; }
+
+      // Zoom
+      if (!isVideo) {
+        if (fitDef && matchesShortcutDef(e, fitDef)) { e.preventDefault(); zoom.fitToWindow(); return; }
+        if (zoomInDef && matchesShortcutDef(e, zoomInDef)) { e.preventDefault(); zoom.animateZoomTo(zoom.state.scale * 1.25); return; }
+        if (zoomOutDef && matchesShortcutDef(e, zoomOutDef)) { e.preventDefault(); zoom.animateZoomTo(zoom.state.scale / 1.25); return; }
+        if (actualDef && matchesShortcutDef(e, actualDef)) { e.preventDefault(); zoom.fitActual(); return; }
+      }
+
+      // Always on top
+      if (e.key === 't' || e.key === 'T') {
+        if (!e.metaKey && !e.ctrlKey && !e.altKey) {
+          e.preventDefault();
+          toggleAlwaysOnTop();
+          return;
+        }
+      }
+
+      // Copy path
+      if ((e.metaKey || e.ctrlKey) && e.altKey && e.key === 'c') {
+        e.preventDefault();
+        handleCopyPath();
+      }
+    };
+    window.addEventListener('keydown', handleKey);
+    return () => window.removeEventListener('keydown', handleKey);
+  }, [navigate, isVideo, zoom, toggleAlwaysOnTop, handleCopyPath]);
+
+  useEffect(() => () => { if (boundaryTimerRef.current) clearTimeout(boundaryTimerRef.current); }, []);
+
+  // ── Derived ──
+  const titleText = useMemo(() => {
+    if (!currentImage) return '';
+    const name = currentImage.name || currentImage.hash.slice(0, 12);
+    if (currentImage.width && currentImage.height) {
+      return `${name} (${currentImage.width}\u00d7${currentImage.height})`;
+    }
+    return name;
+  }, [currentImage]);
+
+  const zoomPercent = Math.round(zoom.state.scale * 100);
+  const thumbUrl = mediaThumbnailUrl(thumbHash);
+
+  // ── Render ──
+  return (
+    <div className={styles.root}>
+      {currentImage && (
+        <div className={`${styles.toolbar} ${toolbarHidden ? styles.toolbarHidden : ''}`}>
+          <div className={styles.toolbarLeft}>
+            <span className={styles.titleName}>{titleText}</span>
+            {images.length > 1 && (
+              <span className={styles.counter}>
+                {currentIndex + 1} / {totalCount ?? images.length}
+              </span>
+            )}
+          </div>
+
+          <div className={styles.toolbarRight}>
+            {!isVideo && pipeline.thumbLoaded && (
+              <>
+                <span className={styles.zoomRatio}>{zoomPercent}%</span>
+                <button className={styles.icBtn} onClick={() => zoom.fitActual()} title="Actual size (Cmd+0)">
+                  <IconArrowsMaximize size={16} />
+                </button>
+                <button className={styles.icBtn} onClick={() => zoom.fitToWindow()} title="Fit to window">
+                  <IconAspectRatio size={16} />
+                </button>
+              </>
+            )}
+
+            <button
+              className={`${styles.icBtn} ${alwaysOnTop ? styles.icBtnActive : ''}`}
+              onClick={toggleAlwaysOnTop}
+              title={alwaysOnTop ? 'Unpin (T)' : 'Always on top (T)'}
+            >
+              {alwaysOnTop ? <IconPinFilled size={16} /> : <IconPin size={16} />}
+            </button>
+
+            <button
+              className={styles.icBtn}
+              onClick={() => (window as any).picto.api.window.call('close')}
+              title="Close (Escape)"
+            >
+              <IconX size={16} />
+            </button>
+          </div>
+        </div>
+      )}
+
+      {isVideo && currentImage ? (
+        <div className={styles.container}>
+          <VideoPlayer key={currentImage.hash} src={mediaFileUrl(currentImage.hash, currentImage.mime)} />
+        </div>
+      ) : (
+        <div
+          ref={containerRef}
+          className={`${styles.container} ${zoom.isDragging ? styles.dragging : ''}`}
+          onMouseDown={zoom.handlers.onMouseDown}
+        >
+          {currentImage ? (
+            <>
+              {/* Thumbnail frame */}
+              <div ref={thumbFrameRef} style={{ position: 'absolute', left: '50%', top: '50%' }}>
+                <img
+                  src={pipeline.thumbUrl || thumbUrl}
+                  alt="" draggable={false}
+                  onLoad={pipeline.handleThumbLoad}
+                  style={{
+                    display: 'block',
+                    width: imageSize?.width,
+                    height: imageSize?.height,
+                    opacity: pipeline.thumbLoaded ? 1 : 0,
+                  }}
+                />
+              </div>
+
+              {/* Full-res frame */}
+              <div ref={fullFrameRef} style={{ position: 'absolute', left: '50%', top: '50%' }}>
+                {pipeline.fullUrl && (
+                  <img
+                    ref={fullImgRef}
+                    src={pipeline.fullUrl}
+                    alt="" decoding="async" draggable={false}
+                    onLoad={pipeline.handleFullLoad}
+                    style={{
+                      display: 'block',
+                      width: imageSize?.width,
+                      height: imageSize?.height,
+                      opacity: pipeline.fullVisible ? 1 : 0,
+                      transition: 'opacity 130ms ease',
+                    }}
+                  />
+                )}
+              </div>
+
+              {/* Boundary flash */}
+              <div className={`${viewerStyles.boundaryLeft} ${boundaryFlash === 'left' ? viewerStyles.boundaryVisible : ''}`}>First item</div>
+              <div className={`${viewerStyles.boundaryRight} ${boundaryFlash === 'right' ? viewerStyles.boundaryVisible : ''}`}>Last item</div>
+
+              {/* Navigator minimap */}
+              {!isVideo && (
+                <div ref={navigatorRef} className={viewerStyles.navigator} onMouseDown={handleNavMouseDown} style={{ display: 'none' }}>
+                  <img src={thumbUrl} alt="" draggable={false} className={viewerStyles.navigatorThumb} />
+                  <div ref={navViewportRef} className={viewerStyles.navigatorViewport} />
+                </div>
+              )}
+            </>
+          ) : (
+            <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <span style={{ color: 'var(--color-text-secondary)', fontSize: 13 }}>Loading...</span>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}

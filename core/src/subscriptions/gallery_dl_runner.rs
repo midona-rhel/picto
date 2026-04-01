@@ -21,15 +21,16 @@ mod metadata;
 mod metadata_validation;
 mod sites;
 
+use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::process::Stdio;
-use std::collections::BTreeSet;
 
 use serde::{Deserialize, Serialize};
 use tokio_util::sync::CancellationToken;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
-use crate::credential_store::SiteCredential;
+use crate::subscriptions::credential_service::GalleryDlAuthConfig;
+use crate::tags::logging::summarize_tag_pairs;
 
 use self::config::build_config;
 
@@ -41,10 +42,17 @@ pub use metadata_validation::{
     SiteMetadataValidationResult,
 };
 pub use sites::{
-    build_url, canonical_site_id, extract_domain, site_by_id, substitute_query, SiteEntry, SITES,
+    build_url, canonical_site_id, credential_site_aliases, extract_domain, site_by_id,
+    substitute_query, SiteEntry, SITES,
 };
 
 pub struct RunOptions {
+    /// Optional subscription identifier for structured diagnostics.
+    pub subscription_id: Option<i64>,
+    /// Optional query identifier for structured diagnostics.
+    pub query_id: Option<i64>,
+    /// Site identifier used to derive the gallery-dl config.
+    pub site_id: String,
     /// Full URL to download from (after query substitution).
     pub url: String,
     /// Max files to download (maps to `--post-range`). None = unlimited.
@@ -56,8 +64,8 @@ pub struct RunOptions {
     pub abort_threshold: Option<u32>,
     /// Seconds between HTTP requests during extraction (`sleep-request`).
     pub sleep_request: f64,
-    /// Optional credential for site authentication.
-    pub credential: Option<SiteCredential>,
+    /// Optional gallery-dl auth fragment for site authentication.
+    pub auth: Option<GalleryDlAuthConfig>,
     /// Path to the download archive SQLite DB.
     pub archive_path: PathBuf,
     /// Optional archive key prefix (used to support targeted reset per subscription/query).
@@ -131,6 +139,42 @@ struct BridgeOutputStats {
     skipped_archive_items: usize,
 }
 
+fn config_bool_at<'a>(value: &'a serde_json::Value, path: &[&str]) -> Option<bool> {
+    let mut current = value;
+    for key in path {
+        current = current.get(*key)?;
+    }
+    current.as_bool()
+}
+
+fn metadata_has_raw_key(metadata: &ParsedMetadata, key: &str) -> bool {
+    metadata
+        .raw_metadata
+        .as_ref()
+        .and_then(|raw| raw.get(key))
+        .is_some()
+}
+
+fn log_bridge_item_intake(metadata: &ParsedMetadata) {
+    let summary = summarize_tag_pairs(&metadata.tags);
+    debug!(
+        post_id = metadata.post_id.as_deref().unwrap_or("?"),
+        category = metadata.category.as_deref().unwrap_or("?"),
+        item_key = metadata.item_key.as_deref().unwrap_or("?"),
+        raw_has_tags_artist = metadata_has_raw_key(metadata, "tags_artist"),
+        raw_has_tags_character = metadata_has_raw_key(metadata, "tags_character"),
+        raw_has_tags_copyright = metadata_has_raw_key(metadata, "tags_copyright"),
+        parsed_tag_count = summary.total,
+        creator_tag_count = summary.creator,
+        character_tag_count = summary.character,
+        series_tag_count = summary.series,
+        general_tag_count = summary.general,
+        meta_tag_count = summary.meta,
+        other_namespaced_tag_count = summary.other_namespaced,
+        "gallery-dl bridge item intake"
+    );
+}
+
 /// The gallery-dl subprocess runner.
 pub struct GalleryDlRunner {
     binary_path: PathBuf,
@@ -171,15 +215,29 @@ impl GalleryDlRunner {
         let config_path = temp_dir.join("config.json");
         let config_json = serde_json::to_string_pretty(&config)
             .map_err(|e| format!("Config serialization error: {e}"))?;
-        info!(config = %config_json, "gallery-dl config written to {}", config_path.display());
+        info!(
+            subscription_id = opts.subscription_id,
+            query_id = opts.query_id,
+            site_id = %opts.site_id,
+            gelbooru_tags_enabled = config_bool_at(&config, &["extractor", "gelbooru", "tags"]).unwrap_or(false),
+            danbooru_tags_enabled = config_bool_at(&config, &["extractor", "danbooru", "tags"]).unwrap_or(false),
+            sleep_request = config
+                .get("extractor")
+                .and_then(|extractor| extractor.get("sleep-request"))
+                .and_then(|value| value.as_f64())
+                .unwrap_or(opts.sleep_request),
+            metadata_enabled = config_bool_at(&config, &["extractor", "metadata"]).unwrap_or(false),
+            config_path = %config_path.display(),
+            "gallery-dl tag config prepared"
+        );
         tokio::fs::write(&config_path, &config_json)
             .await
             .map_err(|e| format!("Config write error: {e}"))?;
 
         let bridge_request = serde_json::json!({
             "url": opts.url,
-            "subscription_id": serde_json::Value::Null,
-            "query_id": serde_json::Value::Null,
+            "subscription_id": opts.subscription_id,
+            "query_id": opts.query_id,
             "config_path": config_path.display().to_string(),
             "gallery_dl_module_dir": self.gallery_dl_module_dir().map(|path| path.display().to_string()),
             "post_range": opts.post_limit.map(|limit| {
@@ -278,6 +336,7 @@ impl GalleryDlRunner {
                             let Some(metadata) = event.metadata else {
                                 continue;
                             };
+                            log_bridge_item_intake(&metadata);
                             stats.discovered_items += 1;
                             if let Some(post_id) = metadata.post_id.clone() {
                                 stats.discovered_post_ids.insert(post_id);
@@ -326,7 +385,9 @@ impl GalleryDlRunner {
                 let mut reader = BufReader::new(err).lines();
                 while let Ok(Some(line)) = reader.next_line().await {
                     let trimmed = line.trim();
-                    if trimmed.is_empty() { continue; }
+                    if trimmed.is_empty() {
+                        continue;
+                    }
                     if trimmed.contains("[error]") {
                         warn!(line = trimmed, "gallery-dl error");
                     } else if trimmed.contains("[warning]") {

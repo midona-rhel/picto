@@ -3,7 +3,7 @@
 
 use rusqlite::{Connection, OptionalExtension};
 
-use crate::db::types::{mask_from_db_bits, EntityKind, EntityDetails, TagInfo, FolderInfo};
+use crate::db::types::{mask_from_db_bits, EntityDetails, EntityKind, FolderInfo, TagInfo};
 
 /// Get full details for an entity by hash.
 pub fn get_entity_details(
@@ -46,26 +46,26 @@ pub fn get_entity_details(
             [entity_hash],
             |row| {
                 Ok((
-                    row.get::<_, i64>(0)?,     // entity_id
-                    row.get::<_, String>(1)?,   // entity_hash
-                    row.get::<_, String>(2)?,   // entity_kind
-                    row.get::<_, Option<String>>(3)?, // name
-                    row.get::<_, i64>(4)?,      // status
-                    row.get::<_, Option<i64>>(5)?, // rating
-                    row.get::<_, Option<String>>(6)?, // notes
-                    row.get::<_, Option<String>>(7)?, // source_urls_json
-                    row.get::<_, String>(8)?,   // date_created
-                    row.get::<_, String>(9)?,   // date_added
-                    row.get::<_, String>(10)?,  // date_modified
-                    row.get::<_, Option<i64>>(11)?, // member_count
-                    row.get::<_, Option<i64>>(12)?, // total_size_bytes
-                    row.get::<_, String>(13)?,  // mime_type
-                    row.get::<_, i64>(14)?,     // size_bytes
-                    row.get::<_, Option<i64>>(15)?, // pixel_width
-                    row.get::<_, Option<i64>>(16)?, // pixel_height
-                    row.get::<_, Option<i64>>(17)?, // duration_ms
-                    row.get::<_, Option<i64>>(18)?, // frame_count
-                    row.get::<_, i64>(19)?,     // has_audio
+                    row.get::<_, i64>(0)?,             // entity_id
+                    row.get::<_, String>(1)?,          // entity_hash
+                    row.get::<_, String>(2)?,          // entity_kind
+                    row.get::<_, Option<String>>(3)?,  // name
+                    row.get::<_, i64>(4)?,             // status
+                    row.get::<_, Option<i64>>(5)?,     // rating
+                    row.get::<_, Option<String>>(6)?,  // notes
+                    row.get::<_, Option<String>>(7)?,  // source_urls_json
+                    row.get::<_, String>(8)?,          // date_created
+                    row.get::<_, String>(9)?,          // date_added
+                    row.get::<_, String>(10)?,         // date_modified
+                    row.get::<_, Option<i64>>(11)?,    // member_count
+                    row.get::<_, Option<i64>>(12)?,    // total_size_bytes
+                    row.get::<_, String>(13)?,         // mime_type
+                    row.get::<_, i64>(14)?,            // size_bytes
+                    row.get::<_, Option<i64>>(15)?,    // pixel_width
+                    row.get::<_, Option<i64>>(16)?,    // pixel_height
+                    row.get::<_, Option<i64>>(17)?,    // duration_ms
+                    row.get::<_, Option<i64>>(18)?,    // frame_count
+                    row.get::<_, i64>(19)?,            // has_audio
                     row.get::<_, Option<String>>(20)?, // dominant_color_hex
                     row.get::<_, Option<String>>(21)?, // perceptual_hash
                     row.get::<_, String>(22)?,         // thumbnail_hash
@@ -75,18 +75,36 @@ pub fn get_entity_details(
         .optional()?;
 
     let Some((
-        entity_id, entity_hash, entity_kind_str, name, status, rating, notes,
-        source_urls_json, date_created, date_added, date_modified,
-        member_count, total_size_bytes, mime_type, size_bytes,
-        pixel_width, pixel_height, duration_ms, frame_count,
-        has_audio, dominant_color_hex, perceptual_hash, thumbnail_hash,
-    )) = row else {
+        entity_id,
+        entity_hash,
+        entity_kind_str,
+        name,
+        status,
+        rating,
+        notes,
+        source_urls_json,
+        date_created,
+        date_added,
+        date_modified,
+        member_count,
+        total_size_bytes,
+        mime_type,
+        size_bytes,
+        pixel_width,
+        pixel_height,
+        duration_ms,
+        frame_count,
+        has_audio,
+        dominant_color_hex,
+        perceptual_hash,
+        thumbnail_hash,
+    )) = row
+    else {
         return Ok(None);
     };
 
-    let source_urls = source_urls_json.and_then(|json| {
-        serde_json::from_str::<Vec<String>>(&json).ok()
-    });
+    let source_urls =
+        source_urls_json.and_then(|json| serde_json::from_str::<Vec<String>>(&json).ok());
 
     // Fetch tags
     let mut tag_stmt = conn.prepare(

@@ -9,6 +9,8 @@ import traceback
 from datetime import datetime, timezone
 from typing import Any
 
+_TAGS_LOG = logging.getLogger("picto_bridge.tags")
+
 
 def _ensure_gallery_dl(module_dir: str | None) -> None:
     if module_dir:
@@ -126,15 +128,15 @@ def _collect_tags(category: str | None, meta: dict[str, Any]) -> list[list[str]]
         "konachan",
     }:
         fields = (
-            ("tags_artist", "artist"),
+            ("tags_artist", "creator"),
             ("tags_character", "character"),
-            ("tags_copyright", "copyright"),
+            ("tags_copyright", "series"),
             ("tags_general", ""),
             ("tags_meta", "meta"),
             ("tags_metadata", "meta"),
-            ("tag_string_artist", "artist"),
+            ("tag_string_artist", "creator"),
             ("tag_string_character", "character"),
-            ("tag_string_copyright", "copyright"),
+            ("tag_string_copyright", "series"),
             ("tag_string_general", ""),
             ("tag_string_meta", "meta"),
             ("tag_string_metadata", "meta"),
@@ -175,6 +177,75 @@ def _collect_tags(category: str | None, meta: dict[str, Any]) -> list[list[str]]
         if tags:
             break
     return tags
+
+
+def _tag_summary(tags: list[list[str]]) -> dict[str, Any]:
+    summary = {
+        "normalized_tag_count": 0,
+        "creator_tag_count": 0,
+        "character_tag_count": 0,
+        "series_tag_count": 0,
+        "general_tag_count": 0,
+        "meta_tag_count": 0,
+        "other_namespaced_tag_count": 0,
+    }
+    for namespace, _subtag in tags:
+        summary["normalized_tag_count"] += 1
+        if namespace == "creator":
+            summary["creator_tag_count"] += 1
+        elif namespace == "character":
+            summary["character_tag_count"] += 1
+        elif namespace == "series":
+            summary["series_tag_count"] += 1
+        elif namespace == "meta":
+            summary["meta_tag_count"] += 1
+        elif namespace:
+            summary["other_namespaced_tag_count"] += 1
+        else:
+            summary["general_tag_count"] += 1
+    return summary
+
+
+def _log_booru_tag_diagnostics(
+    stage: str, category: str | None, meta: dict[str, Any], tags: list[list[str]]
+) -> None:
+    if category not in {
+        "danbooru",
+        "gelbooru",
+        "rule34",
+        "3dbooru",
+        "sankaku",
+        "idolcomplex",
+        "safebooru",
+        "yandere",
+        "konachan",
+    }:
+        return
+    summary = _tag_summary(tags)
+    _TAGS_LOG.debug(
+        (
+            "stage=%s post_id=%s category=%s has_tags_artist=%s "
+            "has_tags_character=%s has_tags_copyright=%s has_tags_general=%s "
+            "normalized_tag_count=%s creator_tag_count=%s character_tag_count=%s "
+            "series_tag_count=%s general_tag_count=%s meta_tag_count=%s "
+            "other_namespaced_tag_count=%s tag_preview=%s"
+        ),
+        stage,
+        _post_id(meta) or "?",
+        category or "?",
+        "tags_artist" in meta,
+        "tags_character" in meta,
+        "tags_copyright" in meta,
+        "tags_general" in meta,
+        summary["normalized_tag_count"],
+        summary["creator_tag_count"],
+        summary["character_tag_count"],
+        summary["series_tag_count"],
+        summary["general_tag_count"],
+        summary["meta_tag_count"],
+        summary["other_namespaced_tag_count"],
+        tags[:3],
+    )
 
 
 def _canonical_post_url(category: str | None, meta: dict[str, Any]) -> str | None:
@@ -292,12 +363,16 @@ def _creator_identifier(category: str | None, meta: dict[str, Any]) -> str | Non
     return None
 
 
-def _normalized_metadata(url: str, meta: dict[str, Any]) -> dict[str, Any]:
+def _normalized_metadata(
+    url: str, meta: dict[str, Any], stage: str | None = None
+) -> dict[str, Any]:
     category = _canonical_site_id(_trim(meta.get("category")))
     tags = _collect_tags(category, meta)
+    if stage:
+        _log_booru_tag_diagnostics(stage, category, meta, tags)
     creator = _creator_identifier(category, meta)
     creator_namespace = (
-        "artist"
+        "creator"
         if category in {
             "danbooru",
             "gelbooru",
@@ -405,11 +480,15 @@ class PictoDownloadJob:
         return wrapped
 
     def _on_prepare(self, pathfmt):
-        meta = _normalized_metadata(pathfmt.kwdict.get("url") or "", dict(pathfmt.kwdict))
+        meta = _normalized_metadata(
+            pathfmt.kwdict.get("url") or "", dict(pathfmt.kwdict), "item_discovered"
+        )
         _emit("item_discovered", metadata=meta)
 
     def _on_after(self, pathfmt):
-        meta = _normalized_metadata(pathfmt.kwdict.get("url") or "", dict(pathfmt.kwdict))
+        meta = _normalized_metadata(
+            pathfmt.kwdict.get("url") or "", dict(pathfmt.kwdict), "item_downloaded"
+        )
         _emit(
             "item_downloaded",
             file_path=pathfmt.path,

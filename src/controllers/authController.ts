@@ -22,7 +22,12 @@ export interface AuthWorkspaceSnapshot {
   sites: AuthSiteSnapshot[];
 }
 
-const AUTH_ISSUE_KINDS = new Set(['unauthorized', 'expired']);
+const AUTH_ISSUE_KINDS = new Set([
+  'unauthorized',
+  'expired',
+  'credential_missing',
+  'credential_blocked',
+]);
 
 function canonicalSiteCategory(siteId: string): string {
   return siteId === 'pixivuser' ? 'pixiv' : siteId;

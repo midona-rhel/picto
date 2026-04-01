@@ -222,12 +222,13 @@ impl SmartFolderService {
         let parent_id: Option<i64> = db
             .with_read_conn(move |conn| {
                 use rusqlite::OptionalExtension;
-                let result: Option<Option<i64>> = conn.query_row(
-                    "SELECT parent_id FROM smart_folder WHERE smart_folder_id = ?1",
-                    [sf_id],
-                    |row| row.get(0),
-                )
-                .optional()?;
+                let result: Option<Option<i64>> = conn
+                    .query_row(
+                        "SELECT parent_id FROM smart_folder WHERE smart_folder_id = ?1",
+                        [sf_id],
+                        |row| row.get(0),
+                    )
+                    .optional()?;
                 Ok(result.flatten())
             })
             .await?;

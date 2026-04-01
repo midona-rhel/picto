@@ -102,8 +102,86 @@
   --titlebar-height: 48px;
 
   /* ── Sidebar-specific (reference application-matched) ────────────────────── */
-  --sidebar-width: 290px;
+  --sidebar-width: 280px;
   --sidebar-row-height: 26px;
-  --sidebar-indent: 18px;
+  --sidebar-indent: 20px;
   --sidebar-icon-size: 16px;
+}
+
+/* ── Blue theme ──────────────────────────────────────────────── */
+:root[data-theme="blue"] {
+  --color-bg-app: #0f1732;
+  --color-surface-1: #171f3a;
+  --color-surface-2: #1c2441;
+  --color-surface-hover: rgba(248, 249, 251, 0.05);
+  --color-surface-active: rgba(248, 249, 251, 0.10);
+  --color-menu-hover: rgba(255, 255, 255, 0.08);
+  --sidebar-item-hover-bg: rgba(248, 249, 251, 0.05);
+  --sidebar-item-active-bg: rgba(248, 249, 251, 0.10);
+  --shadow-panel: 0 8px 32px rgba(0, 0, 0, 0.4);
+}
+
+/* ── Purple theme ────────────────────────────────────────────── */
+:root[data-theme="purple"] {
+  --color-bg-app: #1e1526;
+  --color-surface-1: #261d2e;
+  --color-surface-2: #2b2235;
+  --color-surface-hover: rgba(248, 249, 251, 0.05);
+  --color-surface-active: rgba(248, 249, 251, 0.10);
+  --color-menu-hover: rgba(255, 255, 255, 0.08);
+  --sidebar-item-hover-bg: rgba(248, 249, 251, 0.05);
+  --sidebar-item-active-bg: rgba(248, 249, 251, 0.10);
+  --shadow-panel: 0 8px 32px rgba(0, 0, 0, 0.4);
+}
+
+/* ── Gray theme ──────────────────────────────────────────────── */
+:root[data-theme="gray"] {
+  --color-bg-app: #323236;
+  --color-surface-1: #3a3a3e;
+  --color-surface-2: #3f3f45;
+  --color-surface-hover: rgba(248, 249, 251, 0.05);
+  --color-surface-active: rgba(248, 249, 251, 0.10);
+  --color-menu-hover: rgba(255, 255, 255, 0.08);
+  --sidebar-item-hover-bg: rgba(248, 249, 251, 0.05);
+  --sidebar-item-active-bg: rgba(248, 249, 251, 0.10);
+  --shadow-panel: 0 8px 32px rgba(0, 0, 0, 0.4);
+}
+
+/* ── Light theme ─────────────────────────────────────────────── */
+:root[data-mantine-color-scheme="light"] {
+  --color-primary: #2563eb;
+  --color-primary-10: rgba(37, 99, 235, 0.10);
+  --color-primary-20: rgba(37, 99, 235, 0.20);
+  --color-primary-30: rgba(37, 99, 235, 0.30);
+  --color-primary-50: rgba(37, 99, 235, 0.50);
+  --color-primary-60: rgba(37, 99, 235, 0.60);
+  --color-primary-70: rgba(37, 99, 235, 0.70);
+
+  --color-bg-app: #f5f5f5;
+  --color-surface-1: #f0f0f0;
+  --color-surface-2: #ebedef;
+  --color-surface-hover: rgba(44, 47, 50, 0.05);
+  --color-surface-active: rgba(44, 47, 50, 0.10);
+
+  --color-text-primary: rgba(0, 0, 0, 1.0);
+  --color-text-secondary: rgba(0, 0, 0, 0.72);
+  --color-text-tertiary: rgba(0, 0, 0, 0.50);
+
+  --color-border-primary: rgba(0, 0, 0, 0.12);
+  --color-border-secondary: rgba(0, 0, 0, 0.06);
+
+  --sidebar-item-hover-bg: rgba(44, 47, 50, 0.05);
+  --sidebar-item-active-bg: rgba(44, 47, 50, 0.10);
+
+  --color-menu-hover: rgba(0, 0, 0, 0.06);
+  --shadow-panel: 0 8px 32px rgba(0, 0, 0, 0.15);
+}
+
+/* ── Light Gray theme ────────────────────────────────────────── */
+:root[data-mantine-color-scheme="light"][data-theme="lightgray"] {
+  --color-bg-app: #c8cacd;
+  --color-surface-1: #d0d2d5;
+  --color-surface-2: #c2c4c7;
+  --color-border-primary: #abadaf;
+  --color-border-secondary: rgba(0, 0, 0, 0.08);
 }

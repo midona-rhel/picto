@@ -99,10 +99,23 @@ pub fn patch_entity_metadata(
         let mut idx = 2u32;
 
         // Build dynamic SET clause based on which fields are provided
-        if name.is_some() { sets.push("name = ?2"); idx = 3; }
-        if rating.is_some() { sets.push(if idx == 2 { "rating = ?2" } else { "rating = ?3" }); }
-        if notes.is_some() { sets.push("notes = ?4"); }
-        if source_urls_json.is_some() { sets.push("source_urls_json = ?5"); }
+        if name.is_some() {
+            sets.push("name = ?2");
+            idx = 3;
+        }
+        if rating.is_some() {
+            sets.push(if idx == 2 {
+                "rating = ?2"
+            } else {
+                "rating = ?3"
+            });
+        }
+        if notes.is_some() {
+            sets.push("notes = ?4");
+        }
+        if source_urls_json.is_some() {
+            sets.push("source_urls_json = ?5");
+        }
 
         // For simplicity, update all provided fields in one statement
         if let Some(n) = name {
@@ -160,10 +173,7 @@ pub fn set_entity_date_created(
 
 /// Delete entities. For collections, also deletes member singles.
 /// Returns the deleted entity IDs and hashes.
-pub fn delete_entities(
-    conn: &Connection,
-    entity_ids: &[i64],
-) -> rusqlite::Result<EntityChange> {
+pub fn delete_entities(conn: &Connection, entity_ids: &[i64]) -> rusqlite::Result<EntityChange> {
     let mut change = EntityChange::default();
 
     for eid in entity_ids {
@@ -199,20 +209,56 @@ pub fn delete_entities(
                     [mid],
                     |row| row.get(0),
                 )?;
-                conn.execute("DELETE FROM single_media_entity WHERE entity_id = ?1", [mid])?;
+                // Get file_id before deleting single_media_entity so we can
+                // clean up the media_file row (no reverse CASCADE).
+                let member_file_id: Option<i64> = conn
+                    .query_row(
+                        "SELECT file_id FROM single_media_entity WHERE entity_id = ?1",
+                        [mid],
+                        |row| row.get(0),
+                    )
+                    .ok();
+                conn.execute(
+                    "DELETE FROM single_media_entity WHERE entity_id = ?1",
+                    [mid],
+                )?;
                 conn.execute("DELETE FROM entity_tag WHERE entity_id = ?1", [mid])?;
                 conn.execute("DELETE FROM folder_member WHERE entity_id = ?1", [mid])?;
                 conn.execute("DELETE FROM media_entity WHERE entity_id = ?1", [mid])?;
+                if let Some(fid) = member_file_id {
+                    conn.execute(
+                        "DELETE FROM duplicate WHERE file_id_a = ?1 OR file_id_b = ?1",
+                        [fid],
+                    )?;
+                    conn.execute("DELETE FROM media_file WHERE file_id = ?1", [fid])?;
+                }
                 change.entity_ids.push(*mid);
                 change.entity_hashes.push(mhash);
             }
         }
 
-        // Delete the entity itself
-        conn.execute("DELETE FROM single_media_entity WHERE entity_id = ?1", [eid])?;
+        // Delete the entity itself — get file_id before removing single_media_entity.
+        let file_id: Option<i64> = conn
+            .query_row(
+                "SELECT file_id FROM single_media_entity WHERE entity_id = ?1",
+                [eid],
+                |row| row.get(0),
+            )
+            .ok();
+        conn.execute(
+            "DELETE FROM single_media_entity WHERE entity_id = ?1",
+            [eid],
+        )?;
         conn.execute("DELETE FROM entity_tag WHERE entity_id = ?1", [eid])?;
         conn.execute("DELETE FROM folder_member WHERE entity_id = ?1", [eid])?;
         conn.execute("DELETE FROM media_entity WHERE entity_id = ?1", [eid])?;
+        if let Some(fid) = file_id {
+            conn.execute(
+                "DELETE FROM duplicate WHERE file_id_a = ?1 OR file_id_b = ?1",
+                [fid],
+            )?;
+            conn.execute("DELETE FROM media_file WHERE file_id = ?1", [fid])?;
+        }
 
         if let Some(h) = hash {
             change.entity_ids.push(*eid);

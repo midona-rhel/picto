@@ -283,7 +283,10 @@ pub async fn create_group(
     crate::events::emit_state_changed(
         "create_group",
         crate::runtime_contract::change_builder::ChangeImpact::new()
-            .add_domains(&[crate::runtime_contract::state_change::Domain::Subscriptions, crate::runtime_contract::state_change::Domain::Sidebar])
+            .add_domains(&[
+                crate::runtime_contract::state_change::Domain::Subscriptions,
+                crate::runtime_contract::state_change::Domain::Sidebar,
+            ])
             .group_ids(vec![gid]),
     );
     Ok(serde_json::to_value(&group).map_err(|e| e.to_string())?)
@@ -296,7 +299,10 @@ pub async fn delete_group(state: &AppState, input: DeleteGroupInput) -> Result<(
     crate::events::emit_state_changed(
         "delete_group",
         crate::runtime_contract::change_builder::ChangeImpact::new()
-            .add_domains(&[crate::runtime_contract::state_change::Domain::Subscriptions, crate::runtime_contract::state_change::Domain::Sidebar])
+            .add_domains(&[
+                crate::runtime_contract::state_change::Domain::Subscriptions,
+                crate::runtime_contract::state_change::Domain::Sidebar,
+            ])
             .group_ids(vec![gid]),
     );
     Ok(())
@@ -308,7 +314,10 @@ pub async fn rename_group(state: &AppState, input: RenameGroupInput) -> Result<(
     crate::events::emit_state_changed(
         "rename_group",
         crate::runtime_contract::change_builder::ChangeImpact::new()
-            .add_domains(&[crate::runtime_contract::state_change::Domain::Subscriptions, crate::runtime_contract::state_change::Domain::Sidebar])
+            .add_domains(&[
+                crate::runtime_contract::state_change::Domain::Subscriptions,
+                crate::runtime_contract::state_change::Domain::Sidebar,
+            ])
             .group_ids(vec![gid]),
     );
     Ok(())
@@ -413,7 +422,10 @@ pub async fn create_subscription(
     crate::events::emit_state_changed(
         "create_subscription",
         crate::runtime_contract::change_builder::ChangeImpact::new()
-            .add_domains(&[crate::runtime_contract::state_change::Domain::Subscriptions, crate::runtime_contract::state_change::Domain::Sidebar])
+            .add_domains(&[
+                crate::runtime_contract::state_change::Domain::Subscriptions,
+                crate::runtime_contract::state_change::Domain::Sidebar,
+            ])
             .subscription_ids(vec![sid]),
     );
     Ok(serde_json::to_value(&sub).map_err(|e| e.to_string())?)
@@ -430,7 +442,10 @@ pub async fn delete_subscription(
     crate::events::emit_state_changed(
         "delete_subscription",
         crate::runtime_contract::change_builder::ChangeImpact::new()
-            .add_domains(&[crate::runtime_contract::state_change::Domain::Subscriptions, crate::runtime_contract::state_change::Domain::Sidebar])
+            .add_domains(&[
+                crate::runtime_contract::state_change::Domain::Subscriptions,
+                crate::runtime_contract::state_change::Domain::Sidebar,
+            ])
             .subscription_ids(vec![sid]),
     );
     Ok(serde_json::to_value(&count).map_err(|e| e.to_string())?)
@@ -648,10 +663,25 @@ pub async fn get_running_subscriptions(
 }
 
 pub async fn get_running_subscription_progress(
-    _state: &AppState,
+    state: &AppState,
     _input: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
-    let result = crate::subscriptions::run_orchestrator::SubscriptionRunOrchestrator::get_running_subscription_progress();
+    let mut result = crate::subscriptions::run_orchestrator::SubscriptionRunOrchestrator::get_running_subscription_progress();
+    for event in &mut result {
+        if let Ok(subscription_id) = event.subscription_id.parse::<i64>() {
+            if let Ok(counts) = state
+                .db
+                .count_subscription_ingest_queue(subscription_id)
+                .await
+            {
+                event.queued_for_ingest = counts.queued;
+                event.ingesting = counts.ingesting;
+                event.ingested = counts.ingested;
+                event.reused = counts.reused;
+                event.failed_ingest = counts.failed;
+            }
+        }
+    }
     Ok(serde_json::to_value(&result).map_err(|e| e.to_string())?)
 }
 
@@ -738,7 +768,10 @@ pub async fn rename_subscription(
     crate::events::emit_state_changed(
         "rename_subscription",
         crate::runtime_contract::change_builder::ChangeImpact::new()
-            .add_domains(&[crate::runtime_contract::state_change::Domain::Subscriptions, crate::runtime_contract::state_change::Domain::Sidebar])
+            .add_domains(&[
+                crate::runtime_contract::state_change::Domain::Subscriptions,
+                crate::runtime_contract::state_change::Domain::Sidebar,
+            ])
             .subscription_ids(vec![sid]),
     );
     Ok(())
@@ -799,7 +832,10 @@ pub async fn list_credentials(
     state: &AppState,
     _input: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
-    let result = state.db.list_credential_domains().await?;
+    let result =
+        crate::subscriptions::credential_service::SubscriptionCredentialService::new(&state.db)
+            .list_credentials()
+            .await?;
     Ok(serde_json::to_value(&result).map_err(|e| e.to_string())?)
 }
 
@@ -807,74 +843,28 @@ pub async fn list_credential_health(
     state: &AppState,
     _input: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
-    let result = state.db.list_credential_health().await?;
+    let result =
+        crate::subscriptions::credential_service::SubscriptionCredentialService::new(&state.db)
+            .list_credential_health()
+            .await?;
     Ok(serde_json::to_value(&result).map_err(|e| e.to_string())?)
 }
 
 pub async fn set_credential(state: &AppState, input: SetCredentialInput) -> Result<(), String> {
     let site_category =
-        crate::subscriptions::gallery_dl_runner::canonical_site_id(input.site_category.trim())
-            .to_string();
-
-    let cred_type = match crate::credential_store::CredentialType::from_str(&input.credential_type)
-    {
-        Some(ct) => ct,
-        None => {
-            return Err(format!(
-                "Invalid credential_type: {}",
-                input.credential_type
-            ));
-        }
-    };
-
-    if site_category == "rule34" {
-        if cred_type != crate::credential_store::CredentialType::ApiKey {
-            return Err(
-                "rule34.xxx requires `api_key` credentials (user-id + api-key)".to_string(),
-            );
-        }
-        let user_id_ok = input
-            .username
-            .as_deref()
-            .map(str::trim)
-            .is_some_and(|v| !v.is_empty());
-        let api_key_ok = input
-            .password
-            .as_deref()
-            .map(str::trim)
-            .is_some_and(|v| !v.is_empty());
-        if !user_id_ok || !api_key_ok {
-            return Err(
-                "rule34.xxx requires both `user-id` and `api-key` (use username=user-id, password=api-key)"
-                    .to_string(),
-            );
-        }
-    }
-
-    let cred = crate::credential_store::SiteCredential {
-        site_category: site_category.clone(),
-        credential_type: cred_type,
-        username: input.username,
-        password: input.password,
-        cookies: input.cookies,
-        oauth_token: input.oauth_token,
-    };
-
-    crate::credential_store::set_credential(&cred)?;
-
-    state
-        .db
-        .upsert_credential_domain(
-            &site_category,
-            &input.credential_type,
-            input.display_name.as_deref(),
-        )
-        .await?;
-
-    let _ = state
-        .db
-        .upsert_credential_health(&site_category, "unknown", None)
-        .await;
+        crate::subscriptions::credential_service::SubscriptionCredentialService::new(&state.db)
+            .set_manual_credential(
+                crate::subscriptions::credential_service::SetManualCredentialRequest {
+                    site_category: input.site_category,
+                    credential_type: input.credential_type,
+                    username: input.username,
+                    password: input.password,
+                    cookies: input.cookies,
+                    oauth_token: input.oauth_token,
+                    display_name: input.display_name,
+                },
+            )
+            .await?;
 
     crate::events::emit_state_changed(
         "set_credential",
@@ -891,21 +881,9 @@ pub async fn delete_credential(
     input: DeleteCredentialInput,
 ) -> Result<(), String> {
     let canonical =
-        crate::subscriptions::gallery_dl_runner::canonical_site_id(input.site_category.trim())
-            .to_string();
-    let mut categories = vec![input.site_category.clone(), canonical.clone()];
-    if canonical == "rule34" {
-        categories.push("rule34xxx".to_string());
-        categories.push("rule34.xxx".to_string());
-    }
-    categories.sort();
-    categories.dedup();
-
-    for category in &categories {
-        let _ = crate::credential_store::delete_credential(category);
-        let _ = state.db.delete_credential_domain(category).await;
-        let _ = state.db.delete_credential_health(category).await;
-    }
+        crate::subscriptions::credential_service::SubscriptionCredentialService::new(&state.db)
+            .delete_credential(&input.site_category)
+            .await?;
     crate::events::emit_state_changed(
         "delete_credential",
         crate::runtime_contract::change_builder::ChangeImpact::new()
@@ -942,31 +920,8 @@ pub async fn pixiv_oauth_exchange(
     let refresh_token =
         crate::subscriptions::pixiv_oauth::exchange_code(&input.code, &input.code_verifier).await?;
 
-    // Build cookies map if PHPSESSID was captured from the login session
-    let cookies = input
-        .phpsessid
-        .filter(|s| !s.trim().is_empty())
-        .map(|sessid| {
-            let mut map = std::collections::HashMap::new();
-            map.insert("PHPSESSID".to_string(), sessid);
-            map
-        });
-
-    // Auto-save the refresh token (+ optional PHPSESSID) as a credential
-    let cred = crate::credential_store::SiteCredential {
-        site_category: "pixiv".to_string(),
-        credential_type: crate::credential_store::CredentialType::OAuthToken,
-        username: None,
-        password: None,
-        cookies,
-        oauth_token: Some(refresh_token),
-    };
-    crate::credential_store::set_credential(&cred)?;
-
-    // Register in DB so the credential shows up in the UI
-    state
-        .db
-        .upsert_credential_domain("pixiv", "oauth_token", Some("Pixiv"))
+    crate::subscriptions::credential_service::SubscriptionCredentialService::new(&state.db)
+        .store_pixiv_oauth_credential(refresh_token, input.phpsessid)
         .await?;
 
     crate::events::emit_state_changed(

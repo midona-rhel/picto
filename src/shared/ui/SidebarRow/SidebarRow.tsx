@@ -7,7 +7,9 @@
  */
 
 import type { ReactNode } from 'react';
+import { useAtomValue } from 'jotai';
 import { IconChevronRight, IconPlus } from '@tabler/icons-react';
+import { showTreeGuidesAtom } from '../../../state/navigation';
 import styles from './SidebarRow.module.css';
 
 // ── Section header variant ───────────────────────────────────────
@@ -53,11 +55,17 @@ interface RowProps {
   indent?: number;
   hasChildren?: boolean;
   expanded?: boolean;
+  /** For each ancestor level, true if a vertical line should continue (more siblings at that depth). */
+  treeLines?: boolean[];
+  /** True if this is the last child of its parent. */
+  isLastChild?: boolean;
   onToggleExpand?: () => void;
   onClick?: () => void;
   onContextMenu?: (e: React.MouseEvent) => void;
   children?: ReactNode;
 }
+
+const INDENT_PX = 20;
 
 function StandardRow({
   icon,
@@ -68,6 +76,8 @@ function StandardRow({
   indent = 0,
   hasChildren,
   expanded,
+  treeLines,
+  isLastChild,
   onToggleExpand,
   onClick,
   onContextMenu,
@@ -79,9 +89,14 @@ function StandardRow({
     dropTarget ? styles.dropTarget : '',
   ].filter(Boolean).join(' ');
 
+  const showGuides = useAtomValue(showTreeGuidesAtom);
+
   const rowStyle: React.CSSProperties | undefined = indent > 0
-    ? { paddingLeft: indent * 18, '--row-inset': `${(indent * 18) + 1}px` } as React.CSSProperties
+    ? { paddingLeft: indent * INDENT_PX, '--row-inset': `${(indent * INDENT_PX) + 1}px` } as React.CSSProperties
     : undefined;
+
+  // T-shape if not last child of parent, L-shape if last child
+  const useLShape = indent > 0 && (isLastChild ?? true);
 
   return (
     <div
@@ -90,6 +105,39 @@ function StandardRow({
       onClick={onClick}
       onContextMenu={onContextMenu}
     >
+      {/* Tree guide lines — continuation at column (d-1) for siblings at indent d.
+          Skip d=0: root-level items don't get tree connectors. */}
+      {showGuides && indent > 0 && treeLines && treeLines.map((continues, d) => (continues && d > 0) ? (
+        <svg
+          key={d}
+          className={styles.treeLine}
+          style={{ left: (d - 1) * INDENT_PX + INDENT_PX / 2 + 1 }}
+          viewBox="0 0 10 26"
+          preserveAspectRatio="none"
+          fill="none"
+        >
+          <line x1="3.5" y1="0" x2="3.5" y2="26" stroke="var(--color-text-tertiary)" strokeWidth="1" vectorEffect="non-scaling-stroke" />
+        </svg>
+      ) : null)}
+      {/* Branch connector — T (not last) or L (last child with no continuation) */}
+      {showGuides && indent > 0 && (
+        <svg
+          className={styles.treeBranch}
+          style={{ left: (indent - 1) * INDENT_PX + INDENT_PX / 2 + 1 }}
+          viewBox="0 0 10 26"
+          preserveAspectRatio="none"
+          fill="none"
+        >
+          {useLShape ? (
+            <path d="M3.5 0 V9.5 A3.5 3.5 0 0 0 7 13 H11" stroke="var(--color-text-tertiary)" strokeWidth="1" fill="none" vectorEffect="non-scaling-stroke" />
+          ) : (
+            <>
+              <line x1="3.5" y1="0" x2="3.5" y2="26" stroke="var(--color-text-tertiary)" strokeWidth="1" vectorEffect="non-scaling-stroke" />
+              <line x1="4" y1="13" x2="11" y2="13" stroke="var(--color-text-tertiary)" strokeWidth="1" vectorEffect="non-scaling-stroke" />
+            </>
+          )}
+        </svg>
+      )}
       {hasChildren && (
         <div
           className={styles.expandArrow}
@@ -112,6 +160,7 @@ function StandardRow({
 // ── Unified export ───────────────────────────────────────────────
 
 export type SidebarRowProps = SectionProps | (RowProps & { variant?: 'system' | 'folder' | 'smart_folder' });
+export { INDENT_PX as SIDEBAR_INDENT_PX };
 
 export function SidebarRow(props: SidebarRowProps) {
   if (props.variant === 'section') {

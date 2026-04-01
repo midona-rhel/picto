@@ -72,7 +72,10 @@ pub fn list_collection_member_hashes(
         .collect())
 }
 
-pub fn get_collection_hash(conn: &Connection, collection_id: i64) -> rusqlite::Result<Option<String>> {
+pub fn get_collection_hash(
+    conn: &Connection,
+    collection_id: i64,
+) -> rusqlite::Result<Option<String>> {
     conn.query_row(
         "SELECT entity_hash
          FROM media_entity
@@ -83,7 +86,10 @@ pub fn get_collection_hash(conn: &Connection, collection_id: i64) -> rusqlite::R
     .optional()
 }
 
-pub fn get_collection_folder_ids(conn: &Connection, collection_id: i64) -> rusqlite::Result<Vec<i64>> {
+pub fn get_collection_folder_ids(
+    conn: &Connection,
+    collection_id: i64,
+) -> rusqlite::Result<Vec<i64>> {
     let mut stmt = conn.prepare(
         "SELECT DISTINCT fm.folder_id
          FROM media_entity me

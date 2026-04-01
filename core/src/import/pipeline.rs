@@ -146,21 +146,21 @@ impl<'a> ImportPipeline<'a> {
             }
         }
 
-        let thumbnail_result = if options.skip_thumbnail || !caps.should_inline_thumbnail_on_ingest()
-        {
-            None
-        } else {
-            media_processing::generate_thumbnail_bytes(
-                path,
-                options.thumbnail_dimensions,
-                file_info.mime,
-                file_info.duration_ms,
-                file_info.num_frames,
-                35,
-            )
-            .await
-            .ok()
-        };
+        let thumbnail_result =
+            if options.skip_thumbnail || !caps.should_inline_thumbnail_on_ingest() {
+                None
+            } else {
+                media_processing::generate_thumbnail_bytes(
+                    path,
+                    options.thumbnail_dimensions,
+                    file_info.mime,
+                    file_info.duration_ms,
+                    file_info.num_frames,
+                    35,
+                )
+                .await
+                .ok()
+            };
 
         let blob_ext = crate::blob_store::mime_to_extension(&mime_string);
         blob_store.write_original(&hex_hash, &file_data, Some(blob_ext))?;

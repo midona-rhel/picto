@@ -34,46 +34,79 @@ pub fn update_smart_folder(
     now: &str,
 ) -> rusqlite::Result<()> {
     if let Some(n) = name {
-        conn.execute("UPDATE smart_folder SET name = ?1, date_modified = ?2 WHERE smart_folder_id = ?3", params![n, now, smart_folder_id])?;
+        conn.execute(
+            "UPDATE smart_folder SET name = ?1, date_modified = ?2 WHERE smart_folder_id = ?3",
+            params![n, now, smart_folder_id],
+        )?;
     }
     if let Some(p) = predicate_json {
         conn.execute("UPDATE smart_folder SET predicate_json = ?1, date_modified = ?2 WHERE smart_folder_id = ?3", params![p, now, smart_folder_id])?;
     }
     if let Some(i) = icon {
-        conn.execute("UPDATE smart_folder SET icon = ?1, date_modified = ?2 WHERE smart_folder_id = ?3", params![i, now, smart_folder_id])?;
+        conn.execute(
+            "UPDATE smart_folder SET icon = ?1, date_modified = ?2 WHERE smart_folder_id = ?3",
+            params![i, now, smart_folder_id],
+        )?;
     }
     if let Some(c) = color {
-        conn.execute("UPDATE smart_folder SET color = ?1, date_modified = ?2 WHERE smart_folder_id = ?3", params![c, now, smart_folder_id])?;
+        conn.execute(
+            "UPDATE smart_folder SET color = ?1, date_modified = ?2 WHERE smart_folder_id = ?3",
+            params![c, now, smart_folder_id],
+        )?;
     }
     if let Some(n) = notes {
-        conn.execute("UPDATE smart_folder SET notes = ?1, date_modified = ?2 WHERE smart_folder_id = ?3", params![n, now, smart_folder_id])?;
+        conn.execute(
+            "UPDATE smart_folder SET notes = ?1, date_modified = ?2 WHERE smart_folder_id = ?3",
+            params![n, now, smart_folder_id],
+        )?;
     }
     if let Some(sf) = sort_field {
-        conn.execute("UPDATE smart_folder SET sort_field = ?1 WHERE smart_folder_id = ?2", params![sf, smart_folder_id])?;
+        conn.execute(
+            "UPDATE smart_folder SET sort_field = ?1 WHERE smart_folder_id = ?2",
+            params![sf, smart_folder_id],
+        )?;
     }
     if let Some(so) = sort_order {
-        conn.execute("UPDATE smart_folder SET sort_order = ?1 WHERE smart_folder_id = ?2", params![so, smart_folder_id])?;
+        conn.execute(
+            "UPDATE smart_folder SET sort_order = ?1 WHERE smart_folder_id = ?2",
+            params![so, smart_folder_id],
+        )?;
     }
     Ok(())
 }
 
 /// Delete a smart folder and promote its children to its parent.
 /// Returns (promoted_child_ids, deleted_parent_id).
-pub fn delete_smart_folder(conn: &Connection, smart_folder_id: i64) -> rusqlite::Result<(Vec<i64>, Option<i64>)> {
+pub fn delete_smart_folder(
+    conn: &Connection,
+    smart_folder_id: i64,
+) -> rusqlite::Result<(Vec<i64>, Option<i64>)> {
     // Read parent before delete
     let parent_id: Option<i64> = conn
-        .query_row("SELECT parent_id FROM smart_folder WHERE smart_folder_id = ?1", [smart_folder_id], |r| r.get(0))
+        .query_row(
+            "SELECT parent_id FROM smart_folder WHERE smart_folder_id = ?1",
+            [smart_folder_id],
+            |r| r.get(0),
+        )
         .optional()?
         .flatten();
     // Find direct children
     let mut stmt = conn.prepare("SELECT smart_folder_id FROM smart_folder WHERE parent_id = ?1")?;
-    let children: Vec<i64> = stmt.query_map([smart_folder_id], |r| r.get(0))?.collect::<rusqlite::Result<_>>()?;
+    let children: Vec<i64> = stmt
+        .query_map([smart_folder_id], |r| r.get(0))?
+        .collect::<rusqlite::Result<_>>()?;
     // Promote children to deleted folder's parent
     for &child_id in &children {
-        conn.execute("UPDATE smart_folder SET parent_id = ?1 WHERE smart_folder_id = ?2", params![parent_id, child_id])?;
+        conn.execute(
+            "UPDATE smart_folder SET parent_id = ?1 WHERE smart_folder_id = ?2",
+            params![parent_id, child_id],
+        )?;
     }
     // Delete the folder
-    conn.execute("DELETE FROM smart_folder WHERE smart_folder_id = ?1", [smart_folder_id])?;
+    conn.execute(
+        "DELETE FROM smart_folder WHERE smart_folder_id = ?1",
+        [smart_folder_id],
+    )?;
     Ok((children, parent_id))
 }
 

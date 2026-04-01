@@ -44,9 +44,8 @@ pub fn compile_status_bitmaps(conn: &Connection, bitmaps: &BitmapStore) {
 /// Rebuild a single tag bitmap.
 pub fn compile_tag_bitmap(conn: &Connection, bitmaps: &BitmapStore, tag_id: i64) {
     let mut bitmap = RoaringBitmap::new();
-    if let Ok(mut stmt) = conn.prepare_cached(
-        "SELECT entity_id FROM entity_tag WHERE tag_id = ?1",
-    ) {
+    if let Ok(mut stmt) = conn.prepare_cached("SELECT entity_id FROM entity_tag WHERE tag_id = ?1")
+    {
         if let Ok(rows) = stmt.query_map([tag_id], |row| row.get::<_, i64>(0)) {
             for row in rows.flatten() {
                 bitmap.insert(row as u32);
@@ -126,9 +125,9 @@ pub fn compile_implied_tags(conn: &Connection, bitmaps: &BitmapStore) {
 
     for tag_id in &implied_tag_ids {
         let mut bitmap = RoaringBitmap::new();
-        if let Ok(mut stmt) = conn.prepare_cached(
-            "SELECT entity_id FROM entity_tag_implied WHERE tag_id = ?1",
-        ) {
+        if let Ok(mut stmt) =
+            conn.prepare_cached("SELECT entity_id FROM entity_tag_implied WHERE tag_id = ?1")
+        {
             if let Ok(rows) = stmt.query_map([tag_id], |row| row.get::<_, i64>(0)) {
                 for row in rows.flatten() {
                     bitmap.insert(row as u32);

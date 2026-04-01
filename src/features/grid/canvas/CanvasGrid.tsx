@@ -238,20 +238,27 @@ export function CanvasGrid({
     };
   }, []);
 
-  // Reset on items change (scope navigation, sort, search — any new result set)
+  // Track previous items length separately for the scroll reset decision.
+  // prevItemsRef is updated in useLayoutEffect (runs first), so we need our own tracker.
+  const prevItemsLengthForScrollRef = useRef(0);
   useEffect(() => {
-    firstPaintRef.current = false;
     const container = containerRef.current;
     if (!container) return;
+    const prevLen = prevItemsLengthForScrollRef.current;
+    prevItemsLengthForScrollRef.current = items.length;
+
     if (initialScrollTop != null && initialScrollTop > 0) {
       // Restore scroll position from back/forward navigation
+      firstPaintRef.current = false;
       container.scrollTop = initialScrollTop;
       lastScrollTopRef.current = initialScrollTop;
-    } else {
-      // Fresh navigation — start at top
+    } else if (prevLen === 0 || items.length === 0) {
+      // Fresh navigation or cleared → start at top
+      firstPaintRef.current = false;
       container.scrollTop = 0;
       lastScrollTopRef.current = 0;
     }
+    // Otherwise: items grew/changed incrementally — don't touch scroll or firstPaint
   }, [items]); // eslint-disable-line react-hooks/exhaustive-deps -- initialScrollTop read once per items change
 
   // ── Draw functions ──

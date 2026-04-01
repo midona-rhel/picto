@@ -502,7 +502,9 @@ fn reconcile_schema_resets_legacy_subscription_site_ownership() {
         .query_row("SELECT COUNT(*) FROM subscription", [], |row| row.get(0))
         .unwrap();
     let query_count: i64 = conn
-        .query_row("SELECT COUNT(*) FROM subscription_query", [], |row| row.get(0))
+        .query_row("SELECT COUNT(*) FROM subscription_query", [], |row| {
+            row.get(0)
+        })
         .unwrap();
     assert_eq!(sub_count, 0);
     assert_eq!(query_count, 0);

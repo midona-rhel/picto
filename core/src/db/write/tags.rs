@@ -141,8 +141,14 @@ pub fn delete_tag(conn: &Connection, tag_id: i64) -> rusqlite::Result<TagStructu
         .collect::<rusqlite::Result<Vec<_>>>()?;
 
     conn.execute("DELETE FROM entity_tag WHERE tag_id = ?1", [tag_id])?;
-    conn.execute("DELETE FROM tag_alias WHERE from_tag_id = ?1 OR to_tag_id = ?1", [tag_id])?;
-    conn.execute("DELETE FROM tag_implication WHERE child_tag_id = ?1 OR parent_tag_id = ?1", [tag_id])?;
+    conn.execute(
+        "DELETE FROM tag_alias WHERE from_tag_id = ?1 OR to_tag_id = ?1",
+        [tag_id],
+    )?;
+    conn.execute(
+        "DELETE FROM tag_implication WHERE child_tag_id = ?1 OR parent_tag_id = ?1",
+        [tag_id],
+    )?;
     conn.execute("DELETE FROM tag WHERE tag_id = ?1", [tag_id])?;
 
     Ok(TagStructureChange {
@@ -228,11 +234,7 @@ pub fn manage_implication(
 }
 
 /// Set concept-level site support for a tag.
-pub fn set_tag_site_mask(
-    conn: &Connection,
-    tag_id: i64,
-    site_mask: u64,
-) -> rusqlite::Result<()> {
+pub fn set_tag_site_mask(conn: &Connection, tag_id: i64, site_mask: u64) -> rusqlite::Result<()> {
     conn.execute(
         "UPDATE tag SET site_mask = ?1 WHERE tag_id = ?2",
         params![mask_to_db_bits(site_mask), tag_id],
@@ -301,7 +303,9 @@ use rusqlite::OptionalExtension;
 mod tests {
     use super::*;
     use crate::db::core::schema::LIBRARY_DDL;
-    use crate::db::types::{mask_to_db_bits, TAG_PROVENANCE_AI, TAG_PROVENANCE_MANUAL, TAG_SITE_E621};
+    use crate::db::types::{
+        mask_to_db_bits, TAG_PROVENANCE_AI, TAG_PROVENANCE_MANUAL, TAG_SITE_E621,
+    };
 
     fn setup_conn() -> Connection {
         let conn = Connection::open_in_memory().expect("open in-memory db");
@@ -363,7 +367,9 @@ mod tests {
         )
         .expect("add tag");
         let tag_id: i64 = conn
-            .query_row("SELECT tag_id FROM tag WHERE subtag = 'tag_a'", [], |row| row.get(0))
+            .query_row("SELECT tag_id FROM tag WHERE subtag = 'tag_a'", [], |row| {
+                row.get(0)
+            })
             .expect("get tag id");
         set_tag_site_mask(&conn, tag_id, TAG_SITE_E621).expect("set site mask");
 

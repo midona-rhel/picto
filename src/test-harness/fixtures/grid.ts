@@ -15,6 +15,7 @@ import type {
 // ── Individual items ─────────────────────────────────────────────
 
 export const jpegImage: CanonicalEntityGridItem = {
+  entity_id: 1,
   entity_hash: 'a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2',
   thumbnail_hash: 'a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2',
   entity_kind: 'single',
@@ -37,6 +38,7 @@ export const jpegImage: CanonicalEntityGridItem = {
 };
 
 export const pngImage: CanonicalEntityGridItem = {
+  entity_id: 2,
   entity_hash: 'b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3',
   thumbnail_hash: 'b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3',
   entity_kind: 'single',
@@ -59,6 +61,7 @@ export const pngImage: CanonicalEntityGridItem = {
 };
 
 export const videoMp4: CanonicalEntityGridItem = {
+  entity_id: 3,
   entity_hash: 'c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4',
   thumbnail_hash: 'c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4',
   entity_kind: 'single',
@@ -81,6 +84,7 @@ export const videoMp4: CanonicalEntityGridItem = {
 };
 
 export const videoWithAudio: CanonicalEntityGridItem = {
+  entity_id: 4,
   entity_hash: 'd4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5',
   thumbnail_hash: 'd4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5',
   entity_kind: 'single',
@@ -103,6 +107,7 @@ export const videoWithAudio: CanonicalEntityGridItem = {
 };
 
 export const animatedGif: CanonicalEntityGridItem = {
+  entity_id: 5,
   entity_hash: 'e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6',
   thumbnail_hash: 'e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6',
   entity_kind: 'single',
@@ -125,6 +130,7 @@ export const animatedGif: CanonicalEntityGridItem = {
 };
 
 export const collection: CanonicalEntityGridItem = {
+  entity_id: 6,
   entity_hash: 'f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1',
   thumbnail_hash: 'f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1',
   entity_kind: 'collection',
@@ -147,6 +153,7 @@ export const collection: CanonicalEntityGridItem = {
 };
 
 export const noThumbnail: CanonicalEntityGridItem = {
+  entity_id: 7,
   entity_hash: 'a7b8c9d0e1f2a7b8c9d0e1f2a7b8c9d0e1f2a7b8c9d0e1f2a7b8c9d0e1f2a7b8',
   thumbnail_hash: 'a7b8c9d0e1f2a7b8c9d0e1f2a7b8c9d0e1f2a7b8c9d0e1f2a7b8c9d0e1f2a7b8',
   entity_kind: 'single',
@@ -169,6 +176,7 @@ export const noThumbnail: CanonicalEntityGridItem = {
 };
 
 export const noName: CanonicalEntityGridItem = {
+  entity_id: 8,
   entity_hash: 'b8c9d0e1f2a3b8c9d0e1f2a3b8c9d0e1f2a3b8c9d0e1f2a3b8c9d0e1f2a3b8c9',
   thumbnail_hash: 'b8c9d0e1f2a3b8c9d0e1f2a3b8c9d0e1f2a3b8c9d0e1f2a3b8c9d0e1f2a3b8c9',
   entity_kind: 'single',

@@ -9,11 +9,7 @@ use super::bitmaps::{BitmapKey, BitmapStore};
 /// Compile a single smart folder's bitmap from its predicate.
 /// The predicate is a JSON structure with groups of rules.
 /// Each group is ANDed; rules within a group are ORed.
-pub fn compile_smart_folder(
-    conn: &Connection,
-    bitmaps: &BitmapStore,
-    smart_folder_id: i64,
-) {
+pub fn compile_smart_folder(conn: &Connection, bitmaps: &BitmapStore, smart_folder_id: i64) {
     let predicate_json: Option<String> = conn
         .query_row(
             "SELECT predicate_json FROM smart_folder WHERE smart_folder_id = ?1",
@@ -23,7 +19,10 @@ pub fn compile_smart_folder(
         .ok();
 
     let Some(json) = predicate_json else {
-        bitmaps.set(BitmapKey::SmartFolder(smart_folder_id), RoaringBitmap::new());
+        bitmaps.set(
+            BitmapKey::SmartFolder(smart_folder_id),
+            RoaringBitmap::new(),
+        );
         return;
     };
 
@@ -73,10 +72,7 @@ fn evaluate_predicate(bitmaps: &BitmapStore, json: &str) -> RoaringBitmap {
             continue;
         }
 
-        let match_mode = group
-            .get("match")
-            .and_then(|m| m.as_str())
-            .unwrap_or("all");
+        let match_mode = group.get("match").and_then(|m| m.as_str()).unwrap_or("all");
 
         let group_result = evaluate_group(bitmaps, rules, match_mode);
 
@@ -98,7 +94,10 @@ fn evaluate_group(
 
     for rule in rules {
         let rule_type = rule.get("type").and_then(|t| t.as_str()).unwrap_or("");
-        let operator = rule.get("operator").and_then(|o| o.as_str()).unwrap_or("include_all");
+        let operator = rule
+            .get("operator")
+            .and_then(|o| o.as_str())
+            .unwrap_or("include_all");
 
         let bitmap = match rule_type {
             "tag" => {

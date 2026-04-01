@@ -124,16 +124,28 @@ pub async fn start_workers(
         handles.push(("group_scheduler", handle));
     }
 
-    // ── Download queue cleanup (one-shot on library open) ──
+    // ── Ingest queue cleanup + worker ──────────────────
     {
         let cleanup_db = db.clone();
         tokio::spawn(async move {
-            if let Err(e) = cleanup_db.cleanup_download_queue().await {
-                tracing::warn!(error = %e, "Download queue cleanup failed");
+            if let Err(e) = cleanup_db.cleanup_ingest_queue().await {
+                tracing::warn!(error = %e, "Ingest queue cleanup failed");
             } else {
-                tracing::debug!("Download queue cleanup complete");
+                tracing::debug!("Ingest queue cleanup complete");
             }
         });
+
+        let ingest_db = db.clone();
+        let ingest_canonical_db = canonical_db.clone();
+        let ingest_blob = blob_store.clone();
+        let ingest_cancel = cancel.clone();
+        let handle = tokio::spawn(crate::ingest_queue::start_worker_loop(
+            ingest_db,
+            ingest_canonical_db,
+            ingest_blob,
+            ingest_cancel,
+        ));
+        handles.push(("ingest_queue", handle));
     }
 
     // ── Deferred media work queue ─────────────────────

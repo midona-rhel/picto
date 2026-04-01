@@ -121,8 +121,8 @@ export function QuickLook({
       if (matchesShortcutDef(e, prevDef)) { e.preventDefault(); navigate(-1); return; }
       if (matchesShortcutDef(e, nextDef)) { e.preventDefault(); navigate(1); return; }
       if (matchesShortcutDef(e, fitDef)) { e.preventDefault(); zoom.fitToWindow(); return; }
-      if (matchesShortcutDef(e, zoomInDef)) { e.preventDefault(); zoom.zoomTo(zoom.state.scale * 1.25); return; }
-      if (matchesShortcutDef(e, zoomOutDef)) { e.preventDefault(); zoom.zoomTo(zoom.state.scale / 1.25); return; }
+      if (matchesShortcutDef(e, zoomInDef)) { e.preventDefault(); zoom.animateZoomTo(zoom.state.scale * 1.25); return; }
+      if (matchesShortcutDef(e, zoomOutDef)) { e.preventDefault(); zoom.animateZoomTo(zoom.state.scale / 1.25); return; }
       if (matchesShortcutDef(e, actualDef)) { e.preventDefault(); zoom.fitActual(); return; }
 
       // Rating: 0-5

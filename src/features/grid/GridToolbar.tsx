@@ -35,13 +35,18 @@ function ZoomControls() {
   const targetSize = useAtomValue(gridTargetSizeAtom);
   const setTargetSize = useSetAtom(gridTargetSizeAtom);
 
+  const setAndSave = useCallback((v: number) => {
+    setTargetSize(v);
+    gridController.saveViewPref({ target_size: v });
+  }, [setTargetSize]);
+
   const zoomIn = useCallback(() => {
-    setTargetSize(Math.min(ZOOM_MAX, targetSize + ZOOM_STEP));
-  }, [targetSize, setTargetSize]);
+    setAndSave(Math.min(ZOOM_MAX, targetSize + ZOOM_STEP));
+  }, [targetSize, setAndSave]);
 
   const zoomOut = useCallback(() => {
-    setTargetSize(Math.max(ZOOM_MIN, targetSize - ZOOM_STEP));
-  }, [targetSize, setTargetSize]);
+    setAndSave(Math.max(ZOOM_MIN, targetSize - ZOOM_STEP));
+  }, [targetSize, setAndSave]);
 
   return (
     <div className={styles.sliderSection}>
@@ -59,7 +64,7 @@ function ZoomControls() {
         max={ZOOM_MAX}
         step={10}
         value={targetSize}
-        onChange={(e) => setTargetSize(Number(e.target.value))}
+        onChange={(e) => setAndSave(Number(e.target.value))}
         className={styles.zoomSlider}
       />
       <button

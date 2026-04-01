@@ -68,7 +68,9 @@ impl ApplicationEngine {
         let mime_type = details.mime_type.clone();
         let caps = capabilities_for_stored_media(&mime_type, details.frame_count);
         let url = match role {
-            AssetRole::Thumbnail if caps.can_thumbnail() => Some(thumbnail_url(&source_entity_hash)),
+            AssetRole::Thumbnail if caps.can_thumbnail() => {
+                Some(thumbnail_url(&source_entity_hash))
+            }
             AssetRole::PreviewImage if caps.can_preview_image => {
                 if mime_type.starts_with("video/") {
                     Some(thumbnail_url(&source_entity_hash))
@@ -101,9 +103,18 @@ mod tests {
     #[test]
     fn image_and_video_roles_use_expected_urls() {
         let hash = "a".repeat(64);
-        assert_eq!(thumbnail_url(&hash), format!("media://localhost/thumb/{hash}.jpg"));
-        assert_eq!(file_url(&hash, "image/png"), format!("media://localhost/file/{hash}.png"));
-        assert_eq!(file_url(&hash, "video/mp4"), format!("media://localhost/file/{hash}.mp4"));
+        assert_eq!(
+            thumbnail_url(&hash),
+            format!("media://localhost/thumb/{hash}.jpg")
+        );
+        assert_eq!(
+            file_url(&hash, "image/png"),
+            format!("media://localhost/file/{hash}.png")
+        );
+        assert_eq!(
+            file_url(&hash, "video/mp4"),
+            format!("media://localhost/file/{hash}.mp4")
+        );
     }
 
     #[test]

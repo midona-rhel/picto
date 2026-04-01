@@ -59,6 +59,10 @@ pub async fn save_settings(state: &AppState, input: serde_json::Value) -> Result
     let value: crate::settings::store::AppSettings =
         serde_json::from_value(input).map_err(|e| e.to_string())?;
     state.settings.update(value);
+    crate::events::emit_state_changed(
+        "save_settings",
+        crate::runtime_contract::change_builder::ChangeImpact::new().view_prefs_changed(),
+    );
     Ok(())
 }
 
@@ -152,20 +156,26 @@ pub async fn reorder_sidebar_nodes(
     let mut smart_folder_ids = Vec::new();
     for (id, _) in &input.moves {
         if let Some(fid) = id.strip_prefix("folder:") {
-            if let Ok(n) = fid.parse::<i64>() { folder_ids.push(n); }
+            if let Ok(n) = fid.parse::<i64>() {
+                folder_ids.push(n);
+            }
         } else if let Some(sfid) = id.strip_prefix("smart:") {
-            if let Ok(n) = sfid.parse::<i64>() { smart_folder_ids.push(n); }
+            if let Ok(n) = sfid.parse::<i64>() {
+                smart_folder_ids.push(n);
+            }
         }
     }
     state.db.reorder_sidebar_nodes(input.moves).await?;
     let mut impact = crate::runtime_contract::change_builder::ChangeImpact::new()
         .add_domain(crate::runtime_contract::state_change::Domain::Sidebar);
     if !folder_ids.is_empty() {
-        impact = impact.add_domain(crate::runtime_contract::state_change::Domain::Folders)
+        impact = impact
+            .add_domain(crate::runtime_contract::state_change::Domain::Folders)
             .folder_ids(folder_ids);
     }
     if !smart_folder_ids.is_empty() {
-        impact = impact.add_domain(crate::runtime_contract::state_change::Domain::SmartFolders)
+        impact = impact
+            .add_domain(crate::runtime_contract::state_change::Domain::SmartFolders)
             .smart_folder_ids(smart_folder_ids);
     }
     crate::events::emit_state_changed("reorder_sidebar_nodes", impact);

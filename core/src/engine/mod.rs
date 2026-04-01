@@ -9,24 +9,24 @@
 //! Transport adapters call engine methods. They do not own behavior.
 //! The engine calls LibraryDatabase. It does not access storage directly.
 
-pub mod target;
-pub mod reads;
-pub mod writes;
-pub mod tags;
-pub mod folders;
-pub mod collections;
-pub mod smart_folders;
 pub mod assets;
-pub mod selection;
+pub mod collections;
 pub mod deferred;
-pub mod ingest;
-pub mod system;
 pub mod duplicates;
+pub mod folders;
+pub mod ingest;
+pub mod reads;
+pub mod selection;
+pub mod smart_folders;
+pub mod system;
+pub mod tags;
+pub mod target;
+pub mod writes;
 
 use std::sync::Arc;
 
-use crate::db::LibraryDatabase;
 use crate::db::types::*;
+use crate::db::LibraryDatabase;
 use crate::runtime_contract::change_builder::ChangeImpact;
 use crate::runtime_contract::state_change::Domain;
 
@@ -77,6 +77,23 @@ impl ApplicationEngine {
         if !change.dirty_folder_ids.is_empty() {
             impact.folder_membership_changed = Some(change.dirty_folder_ids.clone());
             impact = impact.add_domain(Domain::Sidebar);
+            // Emit updated folder counts as sidebar node patches so the sidebar
+            // updates immediately without waiting for a full compiler rebuild.
+            let mut patches = impact.sidebar_node_patches.take().unwrap_or_default();
+            for &fid in &change.dirty_folder_ids {
+                if let Ok(Some(count)) = self.db.get_folder_entity_count(fid) {
+                    patches.push(crate::runtime_contract::state_change::SidebarNodePatch {
+                        node_id: format!("folder:{fid}"),
+                        count: Some(Some(count)),
+                        removed: None, upsert: None, kind: None, parent_id: None,
+                        name: None, icon: None, color: None, sort_order: None,
+                        selectable: None, freshness: None, meta_json: None,
+                    });
+                }
+            }
+            if !patches.is_empty() {
+                impact.sidebar_node_patches = Some(patches);
+            }
         }
         if change.entities_deleted {
             impact.status_changed = Some(true);

@@ -73,8 +73,8 @@ impl SubscriptionRunOrchestrator {
         let progress = list_runtime_progress_from_tasks()
             .into_iter()
             .find(|event| event.subscription_id == subscription_id);
-        let event = progress
-            .ok_or_else(|| format!("Subscription {} is not running", subscription_id))?;
+        let event =
+            progress.ok_or_else(|| format!("Subscription {} is not running", subscription_id))?;
         if event.mode != "query" || event.query_id.as_deref() != Some(query_id.as_str()) {
             return Err(format!(
                 "Query {} is not running independently and cannot be stopped separately",
@@ -229,12 +229,11 @@ impl SubscriptionRunOrchestrator {
                                     .flatten()
                                     .unwrap_or_else(|| query.clone());
 
-                                let subscription_limit =
-                                    if current_query.completed_initial_run {
-                                        sub.periodic_post_limit as u32
-                                    } else {
-                                        sub.initial_post_limit as u32
-                                    };
+                                let subscription_limit = if current_query.completed_initial_run {
+                                    sub.periodic_post_limit as u32
+                                } else {
+                                    sub.initial_post_limit as u32
+                                };
                                 let post_limit = effective_query_post_limit(
                                     app_settings.sub_batch_size,
                                     subscription_limit,
@@ -267,12 +266,9 @@ impl SubscriptionRunOrchestrator {
 
                                 // files_downloaded / files_skipped are cumulative
                                 // (include prior DB values), so use the last result.
-                                total_downloaded = total_downloaded
-                                    .max(result.files_downloaded);
-                                total_skipped = total_skipped
-                                    .max(result.files_skipped);
-                                total_metadata_validated +=
-                                    result.metadata_validated;
+                                total_downloaded = total_downloaded.max(result.files_downloaded);
+                                total_skipped = total_skipped.max(result.files_skipped);
+                                total_metadata_validated += result.metadata_validated;
                                 total_metadata_invalid += result.metadata_invalid;
                                 total_errors += result.errors.len();
                                 if let Some(e) = result.errors.last() {
@@ -295,14 +291,10 @@ impl SubscriptionRunOrchestrator {
                                     .await
                                     .ok()
                                     .flatten();
-                                let needs_continuation = refreshed
-                                    .as_ref()
-                                    .is_some_and(|q| {
-                                        !q.completed_initial_run
-                                            && q.resume_cursor
-                                                .as_ref()
-                                                .is_some_and(|c| !c.is_empty())
-                                    });
+                                let needs_continuation = refreshed.as_ref().is_some_and(|q| {
+                                    !q.completed_initial_run
+                                        && q.resume_cursor.as_ref().is_some_and(|c| !c.is_empty())
+                                });
                                 if !needs_continuation {
                                     tracing::info!(
                                         query_id = query.query_id,
@@ -562,11 +554,8 @@ impl SubscriptionRunOrchestrator {
 
                             // Continuation loop for initial pagination
                             loop {
-                                let current_query = db
-                                    .get_subscription_query(qid)
-                                    .await
-                                    .ok()
-                                    .flatten();
+                                let current_query =
+                                    db.get_subscription_query(qid).await.ok().flatten();
                                 let cq = match current_query {
                                     Some(q) => q,
                                     None => break,
@@ -618,16 +607,10 @@ impl SubscriptionRunOrchestrator {
                                 }
 
                                 // Check if query needs another pagination chunk
-                                let refreshed = db
-                                    .get_subscription_query(qid)
-                                    .await
-                                    .ok()
-                                    .flatten();
+                                let refreshed = db.get_subscription_query(qid).await.ok().flatten();
                                 let needs_continuation = refreshed.as_ref().is_some_and(|q| {
                                     !q.completed_initial_run
-                                        && q.resume_cursor
-                                            .as_ref()
-                                            .is_some_and(|c| !c.is_empty())
+                                        && q.resume_cursor.as_ref().is_some_and(|c| !c.is_empty())
                                 });
                                 if !needs_continuation {
                                     break;
@@ -787,7 +770,11 @@ impl SubscriptionRunOrchestrator {
         let retry_url = matching
             .iter()
             .find_map(|attempt| attempt.retry_url.clone())
-            .or_else(|| matching.iter().find_map(|attempt| attempt.canonical_post_url.clone()))
+            .or_else(|| {
+                matching
+                    .iter()
+                    .find_map(|attempt| attempt.canonical_post_url.clone())
+            })
             .ok_or_else(|| format!("No retry URL recorded for post {post_id}"))?;
         for attempt in &matching {
             let _ = db
@@ -869,7 +856,8 @@ impl SubscriptionRunOrchestrator {
                             .await
                     }
                     Err(error) => {
-                        let mut progress = crate::subscriptions::sync_engine::SyncProgress::default();
+                        let mut progress =
+                            crate::subscriptions::sync_engine::SyncProgress::default();
                         progress.errors.push(error);
                         progress.failure_kind = Some("unknown".to_string());
                         progress

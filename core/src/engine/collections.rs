@@ -5,7 +5,10 @@ use crate::db::types::{CollectionMembershipChange, CollectionRecord, CollectionS
 use super::{ApplicationEngine, WriteChange};
 
 fn collection_grid_scopes(collection_id: i64, folder_ids: &[i64]) -> Vec<String> {
-    let mut scopes = vec![format!("collection:{collection_id}"), "system:active".to_string()];
+    let mut scopes = vec![
+        format!("collection:{collection_id}"),
+        "system:active".to_string(),
+    ];
     for folder_id in folder_ids {
         scopes.push(format!("folder:{folder_id}"));
     }
@@ -62,11 +65,16 @@ impl ApplicationEngine {
 
     pub fn delete_collection(&self, collection_id: i64) -> Result<(), String> {
         let folder_ids = self.db.get_collection_folder_ids(collection_id)?;
+        // Get collection's own hash before deletion so the grid can remove the tile
+        let collection_hash = self.db.get_collection_hash(collection_id)?;
         let freed_member_ids = self.db.delete_collection(collection_id)?;
-        let freed_hashes = self.db.get_entity_hashes_by_ids(&freed_member_ids)?;
+        let mut entity_hashes = self.db.get_entity_hashes_by_ids(&freed_member_ids)?;
+        if let Some(ch) = collection_hash {
+            entity_hashes.push(ch);
+        }
         self.commit_write(&WriteChange {
             origin: "delete_collection".to_string(),
-            entity_hashes: freed_hashes,
+            entity_hashes,
             entity_ids: freed_member_ids,
             status_changed: true,
             extra_grid_scopes: collection_grid_scopes(collection_id, &folder_ids),
@@ -80,7 +88,9 @@ impl ApplicationEngine {
         collection_id: i64,
         member_hashes: &[String],
     ) -> Result<CollectionMembershipChange, String> {
-        let change = self.db.add_collection_members_by_hashes(collection_id, member_hashes)?;
+        let change = self
+            .db
+            .add_collection_members_by_hashes(collection_id, member_hashes)?;
         let folder_ids = self.db.get_folder_ids_for_entities(&change.added)?;
         self.commit_write(&WriteChange {
             origin: "add_collection_members".to_string(),
@@ -98,7 +108,9 @@ impl ApplicationEngine {
         collection_id: i64,
         member_hashes: &[String],
     ) -> Result<CollectionMembershipChange, String> {
-        let change = self.db.remove_collection_members_by_hashes(collection_id, member_hashes)?;
+        let change = self
+            .db
+            .remove_collection_members_by_hashes(collection_id, member_hashes)?;
         let folder_ids = self.db.get_folder_ids_for_entities(&change.removed)?;
         self.commit_write(&WriteChange {
             origin: "remove_collection_members".to_string(),

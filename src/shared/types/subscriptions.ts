@@ -53,6 +53,11 @@ export interface SubscriptionProgressEvent {
   query_name?: string | null;
   files_downloaded: number;
   files_skipped: number;
+  queued_for_ingest: number;
+  ingesting: number;
+  ingested: number;
+  reused: number;
+  failed_ingest: number;
   pages_fetched: number;
   metadata_validated: number;
   metadata_invalid: number;

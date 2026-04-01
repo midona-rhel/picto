@@ -7,10 +7,13 @@
  * Footer always visible: Reset (revert to defaults) + Save (commit changes).
  */
 
-import { useState, useMemo, useEffect, useCallback, type ReactNode } from 'react';
-import { IconSettings2, IconCommand, IconX, IconSearch } from '@tabler/icons-react';
+import { useState, useMemo, useEffect, useCallback, useRef, type ReactNode } from 'react';
+import { IconSettings2, IconCommand, IconPalette, IconX, IconSearch, IconBorderAll, IconLayoutBoard, IconSortAscending, IconSortDescending } from '@tabler/icons-react';
 import { getKeyboardPreset, setKeyboardPreset, type KeyboardPreset } from '../../shared/lib/shortcuts';
+import { CmSelect } from '../../shared/ui/CmSelect/CmSelect';
+import { ToggleSwitch } from '../../shared/ui/ToggleSwitch/ToggleSwitch';
 import { ShortcutsPanel } from './ShortcutsPanel';
+import * as api from '../../platform/api';
 import styles from './Settings.module.css';
 
 // ── Settings row definition ──
@@ -35,6 +38,7 @@ interface PanelDef {
 
 const PANELS: PanelDef[] = [
   { id: 'general', label: 'General', icon: IconSettings2 },
+  { id: 'appearance', label: 'Appearance', icon: IconPalette },
   { id: 'shortcuts', label: 'Shortcuts', icon: IconCommand, custom: () => <ShortcutsPanel /> },
 ];
 
@@ -67,13 +71,223 @@ function KeyboardPresetRow({ onDirty }: { onDirty: () => void }) {
   );
 }
 
-function ThemePlaceholderRow() {
+
+// ── Reusable row ──
+
+function TreeGuidesToggle({ on, onToggle }: { on: boolean; onToggle: () => void }) {
+  return <ToggleSwitch on={on} onChange={onToggle} />;
+}
+
+function Row({ label, sep, children }: { label: string; sep?: boolean; children: ReactNode }) {
   return (
-    <div className={styles.settingRow}>
-      <label className={styles.settingLabel}>Theme</label>
-      <div className={styles.settingControl}>
-        <span className={styles.settingPlaceholder}>Theme selection coming soon.</span>
+    <>
+      {sep && <div className={styles.rowSep} />}
+      <div className={styles.settingRow}>
+        <label className={styles.settingLabel}>{label}</label>
+        <div className={styles.settingControl}>{children}</div>
       </div>
+    </>
+  );
+}
+
+// ── Appearance panel ──
+
+const THEMES = [
+  { name: 'Auto', css: 'auto', color: undefined },
+  { name: 'Light', css: 'light', color: '#ffffff' },
+  { name: 'Light Gray', css: 'lightgray', color: '#c8cacd' },
+  { name: 'Gray', css: 'gray', color: '#444444' },
+  { name: 'Dark', css: 'dark', color: '#010101' },
+  { name: 'Blue', css: 'blue', color: '#28356e' },
+  { name: 'Purple', css: 'purple', color: '#463275' },
+] as const;
+
+const ZOOM_OPTIONS = [
+  { value: '75', label: '75%' },
+  { value: '80', label: '80%' },
+  { value: '90', label: '90%' },
+  { value: '100', label: '100%' },
+  { value: '110', label: '110%' },
+  { value: '125', label: '125%' },
+  { value: '150', label: '150%' },
+];
+
+function LayoutIcon({ mode }: { mode: string }) {
+  if (mode === 'grid') return <IconBorderAll size={14} />;
+  if (mode === 'justified') return <IconLayoutBoard size={14} style={{ transform: 'rotate(-90deg)' }} />;
+  return <IconLayoutBoard size={14} />;
+}
+
+const LAYOUT_OPTIONS = [
+  { value: 'waterfall', label: 'Waterfall', icon: <LayoutIcon mode="waterfall" /> },
+  { value: 'grid', label: 'Grid', icon: <LayoutIcon mode="grid" /> },
+  { value: 'justified', label: 'Justified', icon: <LayoutIcon mode="justified" /> },
+];
+const SORT_FIELD_OPTIONS = [
+  { value: 'date_added', label: 'Date Added' },
+  { value: 'date_created', label: 'Date Created' },
+  { value: 'date_modified', label: 'Date Modified' },
+  { value: 'name', label: 'Name' },
+  { value: 'rating', label: 'Rating' },
+  { value: 'size_bytes', label: 'File Size' },
+  { value: 'duration', label: 'Duration' },
+];
+const SORT_DIR_OPTIONS = [
+  { value: 'asc', label: 'Ascending', icon: <IconSortAscending size={14} /> },
+  { value: 'desc', label: 'Descending', icon: <IconSortDescending size={14} /> },
+];
+
+function AppearancePanel({ onDirty, appSettings, setAppSettings, prefs, setPrefs }: {
+  onDirty: () => void;
+  appSettings: api.AppSettings | null;
+  setAppSettings: React.Dispatch<React.SetStateAction<api.AppSettings | null>>;
+  prefs: api.ViewPrefsDto | null;
+  setPrefs: React.Dispatch<React.SetStateAction<api.ViewPrefsDto | null>>;
+}) {
+  const [activeTheme, setActiveTheme] = useState(() => {
+    const saved = localStorage.getItem('picto-theme') ?? 'dark';
+    // Apply theme to this window on mount (settings is a separate Electron window)
+    const lightThemes = new Set(['light', 'lightgray']);
+    const resolved = saved === 'auto'
+      ? (window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark')
+      : saved;
+    document.documentElement.dataset.theme = saved === 'auto' ? '' : saved;
+    document.documentElement.dataset.mantineColorScheme = lightThemes.has(resolved) ? 'light' : 'dark';
+    document.documentElement.style.colorScheme = lightThemes.has(resolved) ? 'light' : 'dark';
+    return saved;
+  });
+  const [zoom, setZoom] = useState('100');
+
+  const updateAppSetting = (patch: Partial<api.AppSettings>) => {
+    setAppSettings((cur) => cur ? { ...cur, ...patch } : null);
+    // Apply immediately for live preview in the main window
+    void api.saveSettings(patch).catch(() => {});
+    onDirty();
+  };
+
+  const handleThemeChange = (css: string) => {
+    // Theme preview is applied immediately (visual feedback), but only persisted on Save
+    const lightThemes = new Set(['light', 'lightgray']);
+    const resolved = css === 'auto'
+      ? (window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark')
+      : css;
+    document.documentElement.dataset.theme = css === 'auto' ? '' : css;
+    document.documentElement.dataset.mantineColorScheme = lightThemes.has(resolved) ? 'light' : 'dark';
+    document.documentElement.style.colorScheme = lightThemes.has(resolved) ? 'light' : 'dark';
+    localStorage.setItem('picto-theme', css);
+    setActiveTheme(css);
+    updateAppSetting({ colorScheme: css });
+  };
+
+  const handleZoomChange = (value: string) => {
+    setZoom(value);
+    // Zoom preview is applied immediately
+    const factor = Number(value) / 100;
+    void api.setZoomFactor(factor).catch(() => {});
+    updateAppSetting({ zoomFactor: Number(value) / 100 });
+  };
+
+  const updateViewPref = (patch: api.ViewPrefsPatch) => {
+    setPrefs((cur) => cur ? { ...cur, ...patch } as api.ViewPrefsDto : null);
+    // Apply immediately for live preview
+    void api.setViewPrefs('', patch).catch(() => {});
+    onDirty();
+  };
+
+  return (
+    <div className={styles.panelContent}>
+      {/* ── Appearance ── */}
+      <div className={styles.settingsBlock}>
+        <div className={styles.blockTitle}>Appearance</div>
+        <div className={styles.blockContent}>
+          <Row label="Theme">
+            <div className={styles.themesPicker}>
+              {THEMES.map((t) => (
+                <button
+                  key={t.css}
+                  className={`${styles.themeSwatch} ${t.css === 'auto' ? styles.themeSwatchAuto : ''} ${activeTheme === t.css ? styles.themeSwatchActive : ''}`}
+                  style={t.color ? { backgroundColor: t.color } : undefined}
+                  title={t.name}
+                  type="button"
+                  onClick={() => handleThemeChange(t.css)}
+                />
+              ))}
+            </div>
+          </Row>
+          <div className={styles.rowSep} />
+          <div className={styles.labelItems}>
+            <div className={styles.labelItem}>
+              <label className={styles.settingLabel}>Language</label>
+              <div className={styles.settingControl}>
+                <CmSelect value="en" options={[{ value: 'en', label: 'English' }]} onChange={() => {}} />
+              </div>
+            </div>
+            <div className={styles.labelItemsSep} />
+            <div className={styles.labelItem}>
+              <label className={styles.settingLabel}>Zoom</label>
+              <div className={styles.settingControl}>
+                <CmSelect value={zoom} options={ZOOM_OPTIONS} onChange={handleZoomChange} />
+              </div>
+            </div>
+          </div>
+          <Row label="Folder tree guides" sep>
+            <TreeGuidesToggle
+              on={appSettings?.showTreeGuides ?? true}
+              onToggle={() => updateAppSetting({ showTreeGuides: !(appSettings?.showTreeGuides ?? true) })}
+            />
+          </Row>
+        </div>
+      </div>
+
+      {/* ── Grid Defaults ── */}
+      {prefs && (
+        <div className={styles.settingsBlock}>
+          <div className={styles.blockTitle}>Grid Defaults</div>
+          <div className={styles.blockContent}>
+            <Row label="Default layout">
+              <CmSelect value={prefs.view_mode ?? 'waterfall'} options={LAYOUT_OPTIONS} onChange={(v) => updateViewPref({ view_mode: v })} />
+            </Row>
+            <Row label="Thumbnail size" sep>
+              <input type="range" min={100} max={600} step={50} value={prefs.target_size ?? 220}
+                onChange={(e) => updateViewPref({ target_size: Number(e.target.value) })} className={styles.rangeInput} />
+              <span className={styles.valueLabel}>{prefs.target_size ?? 220}px</span>
+            </Row>
+            <div className={styles.rowSep} />
+            <div className={styles.labelItems}>
+              <div className={styles.labelItem}>
+                <label className={styles.settingLabel}>Sort by</label>
+                <div className={styles.settingControl}>
+                  <CmSelect value={prefs.sort_field ?? 'date_added'} options={SORT_FIELD_OPTIONS} onChange={(v) => updateViewPref({ sort_field: v })} />
+                </div>
+              </div>
+              <div className={styles.labelItemsSep} />
+              <div className={styles.labelItem}>
+                <label className={styles.settingLabel}>Order</label>
+                <div className={styles.settingControl}>
+                  <CmSelect value={prefs.sort_order ?? 'desc'} options={SORT_DIR_OPTIONS} onChange={(v) => updateViewPref({ sort_order: v })} />
+                </div>
+              </div>
+            </div>
+            <Row label="Fit thumbnails" sep>
+              <ToggleSwitch on={prefs.thumbnail_fit === 'cover'} onChange={() => {
+                updateViewPref({ thumbnail_fit: prefs.thumbnail_fit === 'cover' ? 'contain' : 'cover' });
+              }} />
+            </Row>
+            <Row label="Show name" sep>
+              <ToggleSwitch on={prefs.show_name ?? true} onChange={() => updateViewPref({ show_name: !(prefs.show_name ?? true) })} />
+            </Row>
+            <Row label="Show resolution" sep>
+              <ToggleSwitch on={prefs.show_resolution ?? false} onChange={() => updateViewPref({ show_resolution: !(prefs.show_resolution ?? false) })} />
+            </Row>
+            <Row label="Show extension" sep>
+              <ToggleSwitch on={prefs.show_extension ?? false} onChange={() => updateViewPref({ show_extension: !(prefs.show_extension ?? false) })} />
+            </Row>
+            <Row label="Show label" sep>
+              <ToggleSwitch on={prefs.show_label ?? false} onChange={() => updateViewPref({ show_label: !(prefs.show_label ?? false) })} />
+            </Row>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -86,21 +300,50 @@ const ALL_SETTINGS: SettingRow[] = [
     panel: 'general',
     render: (onDirty) => <KeyboardPresetRow onDirty={onDirty} />,
   },
-  {
-    id: 'general.theme',
-    label: 'Theme',
-    keywords: 'theme appearance dark light color scheme',
-    panel: 'general',
-    render: () => <ThemePlaceholderRow />,
-  },
 ];
 
 // ── Component ──
+
+// Default app settings (used by Reset)
+const DEFAULT_APP_SETTINGS: Partial<api.AppSettings> = {
+  showTreeGuides: true,
+  colorScheme: 'dark',
+};
+const DEFAULT_VIEW_PREFS: api.ViewPrefsPatch = {
+  view_mode: 'waterfall',
+  target_size: 220,
+  sort_field: 'date_added',
+  sort_order: 'desc',
+  show_name: true,
+  show_resolution: false,
+  show_extension: false,
+  show_label: false,
+  thumbnail_fit: 'contain',
+};
 
 export function Settings() {
   const [selected, setSelected] = useState('general');
   const [search, setSearch] = useState('');
   const [isDirty, setIsDirty] = useState(false);
+
+  // Working state — applied to backend immediately for live preview.
+  // On Save: becomes the new saved baseline.
+  // On close without save: reverted to savedSnapshot.
+  const [pendingAppSettings, setPendingAppSettings] = useState<api.AppSettings | null>(null);
+  const [pendingViewPrefs, setPendingViewPrefs] = useState<api.ViewPrefsDto | null>(null);
+  const savedSnapshotRef = useRef<{ app: api.AppSettings | null; prefs: api.ViewPrefsDto | null }>({ app: null, prefs: null });
+
+  // Load from backend on mount + snapshot the saved state
+  useEffect(() => {
+    void api.getSettings().then((s) => {
+      setPendingAppSettings(s);
+      savedSnapshotRef.current.app = structuredClone(s);
+    }).catch(() => {});
+    void api.getViewPrefs('').then((p) => {
+      setPendingViewPrefs(p);
+      savedSnapshotRef.current.prefs = structuredClone(p);
+    }).catch(() => {});
+  }, []);
 
   const markDirty = useCallback(() => setIsDirty(true), []);
 
@@ -142,26 +385,47 @@ export function Settings() {
     );
   }, [search, isSearching]);
 
-  // Close confirmation
+  // Revert unsaved changes when window closes (native close button, Cmd+W, etc.)
   useEffect(() => {
     if (!isDirty) return;
-    const handler = (e: BeforeUnloadEvent) => { e.preventDefault(); e.returnValue = ''; };
+    const handler = () => {
+      const snap = savedSnapshotRef.current;
+      if (snap.app) void api.saveSettings(snap.app).catch(() => {});
+      if (snap.prefs) void api.setViewPrefs('', snap.prefs as api.ViewPrefsPatch).catch(() => {});
+    };
     window.addEventListener('beforeunload', handler);
     return () => window.removeEventListener('beforeunload', handler);
   }, [isDirty]);
 
   const handleClose = () => {
-    if (isDirty && !window.confirm('You have unsaved changes. Close anyway?')) return;
-    (window as any).picto?.api?.invoke('close_current_window')?.catch(() => { window.close(); });
+    if (isDirty) {
+      // Revert to saved snapshot
+      const snap = savedSnapshotRef.current;
+      if (snap.app) void api.saveSettings(snap.app).catch(() => {});
+      if (snap.prefs) void api.setViewPrefs('', snap.prefs as api.ViewPrefsPatch).catch(() => {});
+    }
+    window.close();
   };
 
-  const handleSave = () => setIsDirty(false);
+  const handleSave = () => {
+    // Persist pending state to backend — this is now the saved baseline
+    if (pendingAppSettings) {
+      void api.saveSettings(pendingAppSettings).catch(() => {});
+      savedSnapshotRef.current.app = structuredClone(pendingAppSettings);
+    }
+    if (pendingViewPrefs) {
+      void api.setViewPrefs('', pendingViewPrefs as api.ViewPrefsPatch).catch(() => {});
+      savedSnapshotRef.current.prefs = structuredClone(pendingViewPrefs);
+    }
+    setIsDirty(false);
+  };
+
   const handleReset = () => {
     if (!window.confirm('Reset all settings to defaults?')) return;
     setKeyboardPreset('us');
-    setIsDirty(false);
-    // Force re-render
-    setSelected((s) => s);
+    setPendingAppSettings((cur) => cur ? { ...cur, ...DEFAULT_APP_SETTINGS } : null);
+    setPendingViewPrefs((cur) => cur ? { ...cur, ...DEFAULT_VIEW_PREFS } as api.ViewPrefsDto : null);
+    setIsDirty(true);
   };
 
   // Rows for the currently selected panel
@@ -225,6 +489,14 @@ export function Settings() {
                 );
               })
             )
+          ) : activePanel.id === 'appearance' ? (
+            <AppearancePanel
+              onDirty={markDirty}
+              appSettings={pendingAppSettings}
+              setAppSettings={setPendingAppSettings}
+              prefs={pendingViewPrefs}
+              setPrefs={setPendingViewPrefs}
+            />
           ) : activePanel.custom ? (
             activePanel.custom(markDirty)
           ) : (

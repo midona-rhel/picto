@@ -88,10 +88,10 @@ pub fn reconcile_schema(conn: &Connection) -> rusqlite::Result<()> {
         tracing::warn!("Reconciled subscription schema: renamed subscription.flow_id to group_id");
     }
 
-    let subscription_schema_needs_reset =
-        (table_exists(conn, "subscription")? && has_column(conn, "subscription", "site_id")?)
-            || (table_exists(conn, "subscription_query")?
-                && !has_column(conn, "subscription_query", "site_id")?);
+    let subscription_schema_needs_reset = (table_exists(conn, "subscription")?
+        && has_column(conn, "subscription", "site_id")?)
+        || (table_exists(conn, "subscription_query")?
+            && !has_column(conn, "subscription_query", "site_id")?);
 
     if subscription_schema_needs_reset {
         conn.execute_batch(
@@ -298,7 +298,9 @@ pub fn reconcile_schema(conn: &Connection) -> rusqlite::Result<()> {
             tracing::warn!("Reconciled subscription_query schema: added last_failure_kind");
         }
         if !has_column(conn, "subscription_query", "last_failure_message")? {
-            conn.execute_batch("ALTER TABLE subscription_query ADD COLUMN last_failure_message TEXT")?;
+            conn.execute_batch(
+                "ALTER TABLE subscription_query ADD COLUMN last_failure_message TEXT",
+            )?;
             tracing::warn!("Reconciled subscription_query schema: added last_failure_message");
         }
     }
@@ -496,30 +498,55 @@ pub fn reconcile_schema(conn: &Connection) -> rusqlite::Result<()> {
         tracing::warn!("Reconciled subscription_query schema: added posts_found");
     }
 
-    // Download queue tables (PBI-539)
+    // Ingest queue tables
     conn.execute_batch(
-        "CREATE TABLE IF NOT EXISTS download_queue (
+        "CREATE TABLE IF NOT EXISTS ingest_queue (
              queue_id        INTEGER PRIMARY KEY,
-             subscription_id INTEGER NOT NULL,
+             queue_kind      TEXT NOT NULL,
+             source_kind     TEXT NOT NULL,
+             subscription_id INTEGER,
              query_id        INTEGER,
-             post_id         TEXT NOT NULL,
-             category        TEXT NOT NULL,
+             query_run_id    INTEGER,
+             cleanup_root    TEXT,
+             post_id         TEXT,
+             category        TEXT,
              preferred_name  TEXT,
              expected_count  INTEGER,
              status          TEXT NOT NULL DEFAULT 'pending',
+             last_error      TEXT,
              created_at      TEXT NOT NULL,
              updated_at      TEXT NOT NULL
          );
-         CREATE TABLE IF NOT EXISTS download_queue_item (
-             item_id     INTEGER PRIMARY KEY,
-             queue_id    INTEGER NOT NULL REFERENCES download_queue(queue_id) ON DELETE CASCADE,
-             blob_hash   TEXT,
-             page_num    INTEGER,
-             metadata    TEXT,
-             status      TEXT NOT NULL DEFAULT 'pending',
-             created_at  TEXT NOT NULL
+         CREATE TABLE IF NOT EXISTS ingest_queue_item (
+             item_id              INTEGER PRIMARY KEY,
+             queue_id             INTEGER NOT NULL REFERENCES ingest_queue(queue_id) ON DELETE CASCADE,
+             source_path          TEXT NOT NULL,
+             page_num             INTEGER,
+             payload_json         TEXT NOT NULL,
+             delete_after_ingest  INTEGER NOT NULL DEFAULT 0,
+             status               TEXT NOT NULL DEFAULT 'pending',
+             result_kind          TEXT,
+             resolved_entity_hash TEXT,
+             resolved_file_hash   TEXT,
+             last_error           TEXT,
+             created_at           TEXT NOT NULL,
+             updated_at           TEXT NOT NULL
          );
-         CREATE INDEX IF NOT EXISTS idx_dqi_queue ON download_queue_item(queue_id);",
+         CREATE INDEX IF NOT EXISTS idx_iqi_queue ON ingest_queue_item(queue_id);
+         CREATE INDEX IF NOT EXISTS idx_ingest_queue_ready ON ingest_queue(status, created_at, queue_id);",
+    )?;
+    if !has_column(conn, "ingest_queue_item", "result_kind")? {
+        conn.execute_batch(
+            "ALTER TABLE ingest_queue_item ADD COLUMN result_kind TEXT;
+             ALTER TABLE ingest_queue_item ADD COLUMN resolved_entity_hash TEXT;
+             ALTER TABLE ingest_queue_item ADD COLUMN resolved_file_hash TEXT;",
+        )?;
+    }
+    conn.execute(
+        "UPDATE ingest_queue_item
+         SET status = 'complete'
+         WHERE status = 'ingested'",
+        [],
     )?;
 
     conn.execute_batch(

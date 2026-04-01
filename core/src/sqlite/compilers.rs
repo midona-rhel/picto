@@ -347,19 +347,34 @@ async fn run_compilers(
     // Collect smart folder counts after compilation
     let sf_counts = if plan.rebuild_all_smart_folders || plan.rebuild_all {
         // All SF bitmaps were rebuilt — get all IDs and their counts
-        let all_ids = db.with_read_conn(|conn| {
-            conn.prepare("SELECT smart_folder_id FROM smart_folder")
-                .and_then(|mut stmt| {
-                    stmt.query_map([], |row| row.get::<_, i64>(0))
-                        .map(|rows| rows.flatten().collect::<Vec<_>>())
-                })
-        }).await.unwrap_or_default();
-        all_ids.iter()
-            .map(|&id| (id, db.bitmaps.len(&super::bitmaps::BitmapKey::SmartFolder(id)) as i64))
+        let all_ids = db
+            .with_read_conn(|conn| {
+                conn.prepare("SELECT smart_folder_id FROM smart_folder")
+                    .and_then(|mut stmt| {
+                        stmt.query_map([], |row| row.get::<_, i64>(0))
+                            .map(|rows| rows.flatten().collect::<Vec<_>>())
+                    })
+            })
+            .await
+            .unwrap_or_default();
+        all_ids
+            .iter()
+            .map(|&id| {
+                (
+                    id,
+                    db.bitmaps.len(&super::bitmaps::BitmapKey::SmartFolder(id)) as i64,
+                )
+            })
             .collect()
     } else if !plan.dirty_smart_folder_ids.is_empty() {
-        plan.dirty_smart_folder_ids.iter()
-            .map(|&id| (id, db.bitmaps.len(&super::bitmaps::BitmapKey::SmartFolder(id)) as i64))
+        plan.dirty_smart_folder_ids
+            .iter()
+            .map(|&id| {
+                (
+                    id,
+                    db.bitmaps.len(&super::bitmaps::BitmapKey::SmartFolder(id)) as i64,
+                )
+            })
             .collect()
     } else {
         Vec::new()

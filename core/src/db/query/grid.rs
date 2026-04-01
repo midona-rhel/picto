@@ -6,14 +6,13 @@ use base64::Engine;
 use rusqlite::{Connection, ToSql};
 
 use crate::db::types::{
-    EntityGridItem, EntityKind, EntityViewPage, EntityViewQuery, FilterOp, QueryFilters,
-    ScopeKind, TagMatchMode,
+    EntityGridItem, EntityKind, EntityViewPage, EntityViewQuery, FilterOp, QueryFilters, ScopeKind,
+    TagMatchMode,
 };
 
 /// Base SELECT for grid items. Also selects me.entity_id at position 18
 /// (not exposed in EntityGridItem but used for cursor construction).
-const GRID_SELECT: &str =
-    "SELECT
+const GRID_SELECT: &str = "SELECT
         me.entity_hash,
         me.entity_kind,
         me.name,
@@ -47,6 +46,7 @@ fn read_grid_item(row: &rusqlite::Row) -> rusqlite::Result<EntityGridItem> {
     let entity_hash: String = row.get(0)?;
     let thumbnail_hash: String = row.get(19).unwrap_or_else(|_| entity_hash.clone());
     Ok(EntityGridItem {
+        entity_id: row.get(18)?,
         entity_hash,
         thumbnail_hash,
         entity_kind: match row.get::<_, String>(1)?.as_str() {
@@ -94,7 +94,13 @@ pub fn query_entity_view(
     }
 
     // Scope
-    apply_scope(conn, &q.base_scope, &mut where_parts, &mut bound, preresolved_ids);
+    apply_scope(
+        conn,
+        &q.base_scope,
+        &mut where_parts,
+        &mut bound,
+        preresolved_ids,
+    );
 
     // Filters
     apply_filters(&q.filters, &mut where_parts, &mut bound);
@@ -129,7 +135,13 @@ pub fn query_entity_view(
             cw.push("me.parent_collection_entity_id IS NULL".into());
         }
         let mut count_bound: Vec<Box<dyn ToSql>> = Vec::new();
-        apply_scope(conn, &q.base_scope, &mut cw, &mut count_bound, preresolved_ids);
+        apply_scope(
+            conn,
+            &q.base_scope,
+            &mut cw,
+            &mut count_bound,
+            preresolved_ids,
+        );
         apply_filters(&q.filters, &mut cw, &mut count_bound);
         let count_sql = format!(
             "SELECT
@@ -203,9 +215,15 @@ fn apply_scope(
         ScopeKind::System => {
             let key = scope.key.as_deref().unwrap_or("all");
             match key {
-                "all" => { parts.push("me.status = 1".into()); }
-                "inbox" => { parts.push("me.status = 0".into()); }
-                "trash" => { parts.push("me.status = 2".into()); }
+                "all" => {
+                    parts.push("me.status = 1".into());
+                }
+                "inbox" => {
+                    parts.push("me.status = 0".into());
+                }
+                "trash" => {
+                    parts.push("me.status = 2".into());
+                }
                 "uncategorized" => {
                     parts.push("me.status = 1".into());
                     parts.push("NOT EXISTS (SELECT 1 FROM folder_member fm WHERE fm.entity_id = me.entity_id)".into());
@@ -216,7 +234,9 @@ fn apply_scope(
                     parts.push("NOT EXISTS (SELECT 1 FROM entity_tag et WHERE et.entity_id = me.entity_id)".into());
                     parts.push("NOT EXISTS (SELECT 1 FROM media_entity child WHERE child.parent_collection_entity_id = me.entity_id AND EXISTS (SELECT 1 FROM entity_tag et2 WHERE et2.entity_id = child.entity_id))".into());
                 }
-                _ => { parts.push("me.status = 1".into()); }
+                _ => {
+                    parts.push("me.status = 1".into());
+                }
             }
         }
         ScopeKind::Folder => {
@@ -238,7 +258,11 @@ fn apply_scope(
             match preresolved_ids {
                 Some(ids) if !ids.is_empty() => {
                     // Internal entity_ids from bitmap — safe to inline as integers
-                    let id_list = ids.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(",");
+                    let id_list = ids
+                        .iter()
+                        .map(|id| id.to_string())
+                        .collect::<Vec<_>>()
+                        .join(",");
                     parts.push(format!("me.entity_id IN ({id_list})"));
                 }
                 _ => {
@@ -288,7 +312,11 @@ fn apply_scope(
                 if similar_ids.is_empty() {
                     parts.push("1=0".into());
                 } else {
-                    let id_list = similar_ids.iter().map(|id| id.to_string()).collect::<Vec<_>>().join(",");
+                    let id_list = similar_ids
+                        .iter()
+                        .map(|id| id.to_string())
+                        .collect::<Vec<_>>()
+                        .join(",");
                     parts.push(format!("me.entity_id IN ({id_list})"));
                 }
             } else {
@@ -298,11 +326,7 @@ fn apply_scope(
     }
 }
 
-fn apply_filters(
-    filters: &QueryFilters,
-    parts: &mut Vec<String>,
-    bound: &mut Vec<Box<dyn ToSql>>,
-) {
+fn apply_filters(filters: &QueryFilters, parts: &mut Vec<String>, bound: &mut Vec<Box<dyn ToSql>>) {
     if let Some(ref rf) = filters.rating {
         let idx = bound.len() + 1;
         let op = match rf.op {
@@ -318,10 +342,14 @@ fn apply_filters(
 
     if let Some(ref mimes) = filters.mime_types {
         if !mimes.is_empty() {
-            let placeholders: Vec<String> = mimes.iter().enumerate().map(|(i, _)| {
-                let idx = bound.len() + 1 + i;
-                format!("?{idx}")
-            }).collect();
+            let placeholders: Vec<String> = mimes
+                .iter()
+                .enumerate()
+                .map(|(i, _)| {
+                    let idx = bound.len() + 1 + i;
+                    format!("?{idx}")
+                })
+                .collect();
             parts.push(format!(
                 "COALESCE(mf.mime_type, pmf.mime_type, '') IN ({})",
                 placeholders.join(",")
@@ -339,15 +367,21 @@ fn apply_filters(
                 let idx = bound.len() + 1;
                 match t.as_str() {
                     "image" => {
-                        type_parts.push(format!("COALESCE(mf.mime_type, pmf.mime_type, '') LIKE ?{idx}"));
+                        type_parts.push(format!(
+                            "COALESCE(mf.mime_type, pmf.mime_type, '') LIKE ?{idx}"
+                        ));
                         bound.push(Box::new("image/%".to_string()));
                     }
                     "video" => {
-                        type_parts.push(format!("COALESCE(mf.mime_type, pmf.mime_type, '') LIKE ?{idx}"));
+                        type_parts.push(format!(
+                            "COALESCE(mf.mime_type, pmf.mime_type, '') LIKE ?{idx}"
+                        ));
                         bound.push(Box::new("video/%".to_string()));
                     }
                     "audio" => {
-                        type_parts.push(format!("COALESCE(mf.mime_type, pmf.mime_type, '') LIKE ?{idx}"));
+                        type_parts.push(format!(
+                            "COALESCE(mf.mime_type, pmf.mime_type, '') LIKE ?{idx}"
+                        ));
                         bound.push(Box::new("audio/%".to_string()));
                     }
                     "collection" => {
@@ -392,10 +426,14 @@ fn apply_filters(
 
     if let Some(ref colors) = filters.colors {
         if !colors.is_empty() {
-            let placeholders: Vec<String> = colors.iter().enumerate().map(|(i, _)| {
-                let idx = bound.len() + 1 + i;
-                format!("?{idx}")
-            }).collect();
+            let placeholders: Vec<String> = colors
+                .iter()
+                .enumerate()
+                .map(|(i, _)| {
+                    let idx = bound.len() + 1 + i;
+                    format!("?{idx}")
+                })
+                .collect();
             parts.push(format!(
                 "COALESCE(mf.dominant_color_hex, pmf.dominant_color_hex) IN ({})",
                 placeholders.join(",")
@@ -550,5 +588,8 @@ pub fn get_entity_grid_items_by_hash(
 
 /// Bitwise hamming distance between two byte slices of equal length.
 fn hamming_distance(a: &[u8], b: &[u8]) -> u32 {
-    a.iter().zip(b.iter()).map(|(x, y)| (x ^ y).count_ones()).sum()
+    a.iter()
+        .zip(b.iter())
+        .map(|(x, y)| (x ^ y).count_ones())
+        .sum()
 }

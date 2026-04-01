@@ -28,20 +28,65 @@ pub fn update_folder(
     patch: &FolderPatch,
     now: &str,
 ) -> rusqlite::Result<()> {
-    if let Some(ref n) = patch.name { conn.execute("UPDATE folder SET name = ?1, date_modified = ?2 WHERE folder_id = ?3", params![n, now, folder_id])?; }
-    if let Some(ref i) = patch.icon { conn.execute("UPDATE folder SET icon = ?1, date_modified = ?2 WHERE folder_id = ?3", params![i, now, folder_id])?; }
-    if let Some(ref c) = patch.color { conn.execute("UPDATE folder SET color = ?1, date_modified = ?2 WHERE folder_id = ?3", params![c, now, folder_id])?; }
-    if let Some(ref at) = patch.auto_tags { conn.execute("UPDATE folder SET auto_tags = ?1, date_modified = ?2 WHERE folder_id = ?3", params![at, now, folder_id])?; }
-    if let Some(ref n) = patch.notes { conn.execute("UPDATE folder SET notes = ?1, date_modified = ?2 WHERE folder_id = ?3", params![n, now, folder_id])?; }
-    if let Some(ref wp) = patch.watch_path { conn.execute("UPDATE folder SET watch_path = ?1, date_modified = ?2 WHERE folder_id = ?3", params![wp, now, folder_id])?; }
-    if let Some(we) = patch.watch_enabled { conn.execute("UPDATE folder SET watch_enabled = ?1, date_modified = ?2 WHERE folder_id = ?3", params![we as i64, now, folder_id])?; }
-    if let Some(ws) = patch.watch_subfolders { conn.execute("UPDATE folder SET watch_subfolders = ?1, date_modified = ?2 WHERE folder_id = ?3", params![ws as i64, now, folder_id])?; }
-    if let Some(ref wm) = patch.watch_import_status_mode { conn.execute("UPDATE folder SET watch_import_status_mode = ?1, date_modified = ?2 WHERE folder_id = ?3", params![wm, now, folder_id])?; }
+    if let Some(ref n) = patch.name {
+        conn.execute(
+            "UPDATE folder SET name = ?1, date_modified = ?2 WHERE folder_id = ?3",
+            params![n, now, folder_id],
+        )?;
+    }
+    if let Some(ref i) = patch.icon {
+        conn.execute(
+            "UPDATE folder SET icon = ?1, date_modified = ?2 WHERE folder_id = ?3",
+            params![i, now, folder_id],
+        )?;
+    }
+    if let Some(ref c) = patch.color {
+        conn.execute(
+            "UPDATE folder SET color = ?1, date_modified = ?2 WHERE folder_id = ?3",
+            params![c, now, folder_id],
+        )?;
+    }
+    if let Some(ref at) = patch.auto_tags {
+        conn.execute(
+            "UPDATE folder SET auto_tags = ?1, date_modified = ?2 WHERE folder_id = ?3",
+            params![at, now, folder_id],
+        )?;
+    }
+    if let Some(ref n) = patch.notes {
+        conn.execute(
+            "UPDATE folder SET notes = ?1, date_modified = ?2 WHERE folder_id = ?3",
+            params![n, now, folder_id],
+        )?;
+    }
+    if let Some(ref wp) = patch.watch_path {
+        conn.execute(
+            "UPDATE folder SET watch_path = ?1, date_modified = ?2 WHERE folder_id = ?3",
+            params![wp, now, folder_id],
+        )?;
+    }
+    if let Some(we) = patch.watch_enabled {
+        conn.execute(
+            "UPDATE folder SET watch_enabled = ?1, date_modified = ?2 WHERE folder_id = ?3",
+            params![we as i64, now, folder_id],
+        )?;
+    }
+    if let Some(ws) = patch.watch_subfolders {
+        conn.execute(
+            "UPDATE folder SET watch_subfolders = ?1, date_modified = ?2 WHERE folder_id = ?3",
+            params![ws as i64, now, folder_id],
+        )?;
+    }
+    if let Some(ref wm) = patch.watch_import_status_mode {
+        conn.execute("UPDATE folder SET watch_import_status_mode = ?1, date_modified = ?2 WHERE folder_id = ?3", params![wm, now, folder_id])?;
+    }
     Ok(())
 }
 
 pub fn delete_folder(conn: &Connection, folder_id: i64) -> rusqlite::Result<()> {
-    conn.execute("DELETE FROM folder_member WHERE folder_id = ?1", [folder_id])?;
+    conn.execute(
+        "DELETE FROM folder_member WHERE folder_id = ?1",
+        [folder_id],
+    )?;
     conn.execute("DELETE FROM folder WHERE folder_id = ?1", [folder_id])?;
     Ok(())
 }

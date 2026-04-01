@@ -6,7 +6,9 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { useAtomValue } from 'jotai';
+import { useAtomValue, getDefaultStore } from 'jotai';
+
+const store = getDefaultStore();
 import {
   IconAlertCircle,
   IconFolder,
@@ -30,7 +32,7 @@ import {
 import { gridItemsAtom } from '../../state/grid';
 import { selectionTargetAtom, selectedEntityHashesAtom } from '../../state/selection';
 import { sidebarNodesAtom } from '../../state/sidebar';
-import { promptForFolderId } from '../../shared/lib/selectFolderPrompt';
+import { tagSelectPortalAtom, folderPickerPortalAtom } from '../../state/portals';
 import styles from './Inspector.module.css';
 
 function formatFileSize(bytes: number): string {
@@ -114,10 +116,10 @@ function ScopePreview({ items }: { items: Array<{ thumbnail_hash: string; entity
         {hasImages ? (
           <div className={styles.collage}>
             {[0, 1, 2, 3].map((i) => {
-              const item = thumbs[i % thumbs.length];
+              const item = thumbs[i];
               return (
                 <div key={i} className={styles.collageCell}>
-                  <img src={`media://localhost/thumb/${item.thumbnail_hash}.jpg`} alt="" draggable={false} />
+                  {item && <img src={`media://localhost/thumb/${item.thumbnail_hash}.jpg`} alt="" draggable={false} />}
                 </div>
               );
             })}
@@ -260,7 +262,7 @@ function EntityInspector() {
               />
             );
           })}
-          <TagInput onAdd={(tag) => { void entityMutations.addEntityTags(data.entity_hash, [tag]); }} />
+          <button className={styles.tagAddBtn} onClick={(e) => { const btn = e.currentTarget.getBoundingClientRect(); const panel = e.currentTarget.closest('[class*="inspector"]') as HTMLElement | null; const x = panel ? panel.getBoundingClientRect().left : btn.left; store.set(tagSelectPortalAtom, { open: true, anchor: { x, y: btn.top } }); }} type="button" title="Add tag"><IconPlus size={14} stroke={1.5} /></button>
         </div>
       </InspectorSection>
 
@@ -280,15 +282,8 @@ function EntityInspector() {
           })}
           <button
             className={styles.tagAddBtn}
-            onClick={() => {
-              const folderId = promptForFolderId(sidebarNodes);
-              if (folderId != null) {
-                void entityMutations.updateTargetFolderMembership(
-                  { kind: 'entity_hashes', entity_hashes: [data.entity_hash] },
-                  folderId,
-                  'add',
-                );
-              }
+            onClick={(e) => {
+              const btn = e.currentTarget.getBoundingClientRect(); const panel = e.currentTarget.closest('[class*="inspector"]') as HTMLElement | null; const x = panel ? panel.getBoundingClientRect().left : btn.left; store.set(folderPickerPortalAtom, { open: true, anchor: { x, y: btn.top } });
             }}
             type="button"
             title="Add to folder"
@@ -576,7 +571,7 @@ function MultiSelectInspector({
               subtag={t.tag.includes(':') ? t.tag.split(':').slice(1).join(':') : t.tag}
             />
           ))}
-          <TagInput onAdd={(tag) => { void entityMutations.addTargetTags(target, [tag]); }} />
+          <button className={styles.tagAddBtn} onClick={(e) => { const btn = e.currentTarget.getBoundingClientRect(); const panel = e.currentTarget.closest('[class*="inspector"]') as HTMLElement | null; const x = panel ? panel.getBoundingClientRect().left : btn.left; store.set(tagSelectPortalAtom, { open: true, anchor: { x, y: btn.top } }); }} type="button" title="Add tag"><IconPlus size={14} stroke={1.5} /></button>
         </div>
       </InspectorSection>
 
@@ -596,9 +591,8 @@ function MultiSelectInspector({
           })}
           <button
             className={styles.tagAddBtn}
-            onClick={() => {
-              const folderId = promptForFolderId(sidebarNodes);
-              if (folderId != null) { void entityMutations.updateTargetFolderMembership(target, folderId, 'add'); }
+            onClick={(e) => {
+              const btn = e.currentTarget.getBoundingClientRect(); const panel = e.currentTarget.closest('[class*="inspector"]') as HTMLElement | null; const x = panel ? panel.getBoundingClientRect().left : btn.left; store.set(folderPickerPortalAtom, { open: true, anchor: { x, y: btn.top } });
             }}
             type="button"
             title="Add to folder"

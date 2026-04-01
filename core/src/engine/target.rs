@@ -3,8 +3,8 @@
 //! Resolves an EntityTarget into either concrete entity ids (small targets)
 //! or a DB-backed bulk reference (large query_results targets).
 
-use crate::db::LibraryDatabase;
 use crate::db::types::{EntityTarget, EntityTargetKind, EntityViewQuery};
+use crate::db::LibraryDatabase;
 
 /// Resolved form of an EntityTarget.
 ///

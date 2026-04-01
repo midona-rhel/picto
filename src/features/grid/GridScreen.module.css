@@ -19,13 +19,13 @@
 
 .surfaceFadeOut {
   opacity: 0;
-  transition: opacity 250ms var(--ease-default);
+  transition: opacity 170ms var(--ease-default);
   will-change: opacity;
 }
 
 .surfaceIncomingFadeIn {
   opacity: 1;
-  transition: opacity 250ms var(--ease-default);
+  transition: opacity 170ms var(--ease-default);
   will-change: opacity;
 }
 

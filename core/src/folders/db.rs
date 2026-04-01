@@ -1032,7 +1032,15 @@ impl SqliteDatabase {
         let notes = notes;
         let tags = auto_tags;
         self.with_conn(move |conn| {
-            update_folder(conn, folder_id, &n, i.as_deref(), c.as_deref(), notes.as_deref(), &tags)
+            update_folder(
+                conn,
+                folder_id,
+                &n,
+                i.as_deref(),
+                c.as_deref(),
+                notes.as_deref(),
+                &tags,
+            )
         })
         .await?;
         self.emit_read_model_event(ReadModelEvent::FolderChanged { folder_id });

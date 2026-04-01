@@ -76,7 +76,9 @@ async fn seed_sidebar_normalizes_legacy_all_files_node() {
         "canonical all-active node should exist after normalization",
     );
     assert!(
-        !nodes.iter().any(|node| node.node_id == "system:active_files"),
+        !nodes
+            .iter()
+            .any(|node| node.node_id == "system:active_files"),
         "legacy all-files alias should be removed after normalization",
     );
 }

@@ -10,7 +10,7 @@
   cursor: default;
   user-select: none;
   color: var(--color-text-primary);
-  font-size: var(--font-size-sm);
+  font-size: var(--font-size-md);
 }
 
 /* Background highlight via ::before — left edge follows indent via --row-inset */
@@ -98,9 +98,9 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  height: 22px;
+  height: 24px;
   padding: 0 0 0 0;
-  margin: 6px 0 1px;
+  margin: 4px 0 1px;
   cursor: pointer;
   user-select: none;
 }
@@ -108,7 +108,7 @@
 .sectionTitleRow {
   display: flex;
   align-items: center;
-  height: 22px;
+  height: 24px;
   padding: 0 4px;
   margin-left: 1px;
   border-radius: 4px;
@@ -124,7 +124,7 @@
   font-weight: var(--font-weight-medium);
   color: var(--color-text-tertiary);
   white-space: pre;
-  line-height: 22px;
+  line-height: 24px;
 }
 
 .section:hover .sectionTitle {
@@ -157,9 +157,9 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 14px;
-  height: 14px;
-  margin-right: 1px;
+  width: 24px;
+  height: 24px;
+  margin-right: -4px;
   border-radius: 0;
   color: var(--color-text-secondary);
   opacity: 0;
@@ -178,34 +178,50 @@
 
 /* Folder expand/collapse triangle */
 .expandArrow {
-  position: absolute;
+  position: relative;
   z-index: 2;
-  left: -18px;
-  top: 0;
   width: 16px;
   height: var(--sidebar-row-height);
+  margin-left: -20px;
+  margin-right: 4px;
   display: flex;
   align-items: center;
   justify-content: flex-end;
+  flex-shrink: 0;
   cursor: pointer;
-  opacity: 0.7;
-  transition: opacity var(--duration-normal) var(--ease-default);
 }
 
-.expandArrow:hover {
-  opacity: 1;
+/* Opaque background patch — masks tree lines behind the arrow */
+.expandArrow::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  right: -2px;
+  transform: translateY(-50%);
+  width: 11px;
+  height: 9px;
+  background: var(--color-surface-1);
+  border-radius: 1px;
 }
 
 .triangle {
+  position: relative;
+  z-index: 1;
   display: inline-block;
   width: 0;
   height: 0;
   border-left: 3.5px solid transparent;
   border-right: 3.5px solid transparent;
-  border-top: 5px solid var(--color-text-secondary);
-  transition: transform var(--duration-normal) var(--ease-default);
+  border-top: 5px solid var(--color-text-primary);
+  transition: transform var(--duration-normal) var(--ease-default), opacity var(--duration-normal) var(--ease-default);
   margin-right: -2px;
+  opacity: 0.7;
 }
+
+.expandArrow:hover .triangle {
+  opacity: 1;
+}
+
 
 .expanded {
   transform: rotate(0deg);
@@ -213,4 +229,39 @@
 
 .collapsed {
   transform: rotate(-90deg);
+}
+
+/* ── Tree guide lines ── */
+
+/* Vertical continuation line — one per ancestor level that has more siblings */
+.treeLine {
+  position: absolute;
+  top: 0;
+  width: 10px;
+  height: 100%;
+  pointer-events: none;
+  z-index: 0;
+}
+
+/* Branch connector SVG — positioned at the parent's indent column */
+.treeBranch {
+  position: absolute;
+  top: 0;
+  width: 10px;
+  height: 100%;
+  pointer-events: none;
+  z-index: 0;
+}
+
+/* Arrow background knockout — small circle behind the expand arrow so tree lines don't clash */
+.expandArrow::before {
+  content: '';
+  position: absolute;
+  inset: 50% auto auto 50%;
+  transform: translate(-50%, -50%);
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--color-surface-1);
+  z-index: -1;
 }

@@ -9,7 +9,7 @@ import { useEffect, useMemo, useCallback, useRef } from 'react';
 import { useAtomValue, useSetAtom } from 'jotai';
 import {
   IconFolder, IconFolderOpen, IconFolderPlus, IconFolderSymlink,
-  IconFolderMinus, IconCopy, IconUpload,
+  IconCopy, IconUpload,
   IconPhoto, IconInbox, IconTrash,
   IconClock,
   IconAntennaBars5,
@@ -172,7 +172,7 @@ export function Sidebar() {
       { label: 'Export...', icon: <IconUpload size={14} />, action: () => { /* TODO: needs export dialog */ } },
       { label: 'Move', icon: <IconFolderSymlink size={14} />, action: () => { /* TODO: needs folder destination picker */ } },
       { separator: true },
-      { label: 'Remove Folder', icon: <IconFolderMinus size={14} />, danger: true, action: () => foldersController.delete(folderId) },
+      { label: 'Delete', icon: <IconTrash size={14} />, danger: true, action: () => foldersController.delete(folderId) },
     ];
     contextMenu.open(e, entries);
   }, [contextMenu, folderRename, collapsed, toggleCollapse]);
@@ -195,7 +195,7 @@ export function Sidebar() {
       { separator: true },
       { label: 'Duplicate', icon: <IconCopy size={14} />, action: () => { /* TODO: needs smart folder duplicate API */ } },
       { separator: true },
-      { label: 'Delete', icon: <IconFolderMinus size={14} />, danger: true, action: () => smartFoldersController.delete(sfId) },
+      { label: 'Delete', icon: <IconTrash size={14} />, danger: true, action: () => smartFoldersController.delete(sfId) },
     ];
     contextMenu.open(e, entries);
   }, [contextMenu, folderRename]);
@@ -248,7 +248,7 @@ export function Sidebar() {
           onToggle={() => toggleCollapse('folders')}
           onAdd={() => { void createFolderAndRename(); }}
         />
-        {!collapsed.has('folders') && folderList.map(({ node, indent, hasChildren }) => (
+        {!collapsed.has('folders') && folderList.map(({ node, indent, hasChildren, treeLines, isLastChild }) => (
           <SidebarRow
             key={node.id} variant="folder"
             icon={<NodeIcon node={node} expanded={!collapsed.has(node.id) && hasChildren} />}
@@ -257,6 +257,7 @@ export function Sidebar() {
 
             active={activeNodeId === node.id} indent={indent}
             hasChildren={hasChildren} expanded={!collapsed.has(node.id)}
+            treeLines={treeLines} isLastChild={isLastChild}
             onToggleExpand={() => toggleCollapse(node.id)}
             onClick={() => navigate(node.id)}
             onContextMenu={(e) => openFolderMenu(e, node)}
@@ -282,7 +283,7 @@ export function Sidebar() {
           onToggle={() => toggleCollapse('smart_folders')}
           onAdd={() => { /* TODO: smart folder create modal */ }}
         />
-        {!collapsed.has('smart_folders') && smartList.map(({ node, indent, hasChildren }) => (
+        {!collapsed.has('smart_folders') && smartList.map(({ node, indent, hasChildren, treeLines, isLastChild }) => (
           <SidebarRow
             key={node.id} variant="smart_folder"
             icon={<NodeIcon node={node} expanded={!collapsed.has(node.id) && hasChildren} />}
@@ -290,6 +291,7 @@ export function Sidebar() {
 
             active={activeNodeId === node.id} indent={indent}
             hasChildren={hasChildren} expanded={!collapsed.has(node.id)}
+            treeLines={treeLines} isLastChild={isLastChild}
             onToggleExpand={() => toggleCollapse(node.id)}
             onClick={() => navigate(node.id)}
             onContextMenu={(e) => openSmartFolderMenu(e, node)}
@@ -343,6 +345,10 @@ interface TreeRenderNode {
   node: SidebarNodeDto;
   indent: number;
   hasChildren: boolean;
+  /** For each indent level 0..indent-1, true if a vertical line should continue (more siblings below at that depth). */
+  treeLines: boolean[];
+  /** True if this is the last child of its parent (L-shape, not T-shape). */
+  isLastChild: boolean;
 }
 
 function buildTreeRenderList(
@@ -360,12 +366,21 @@ function buildTreeRenderList(
     children.sort((a, b) => (a.sort_order ?? 999) - (b.sort_order ?? 999) || a.name.localeCompare(b.name));
   }
   const result: TreeRenderNode[] = [];
-  (function walk(parentId: string, indent: number) {
-    for (const node of childrenMap.get(parentId) ?? []) {
+  (function walk(parentId: string, indent: number, ancestorLines: boolean[]) {
+    const siblings = childrenMap.get(parentId) ?? [];
+    for (let i = 0; i < siblings.length; i++) {
+      const node = siblings[i];
       const kids = childrenMap.get(node.id) ?? [];
-      result.push({ node, indent, hasChildren: kids.length > 0 });
-      if (!collapsed.has(node.id)) walk(node.id, indent + 1);
+      const isLast = i === siblings.length - 1;
+      // treeLines = ancestor continuation state (immutable copy per node)
+      const treeLines = ancestorLines.slice();
+      result.push({ node, indent, hasChildren: kids.length > 0, treeLines, isLastChild: isLast });
+      if (!collapsed.has(node.id) && kids.length > 0) {
+        // Pass down: this node's depth continues if it's not the last sibling
+        const childAncestorLines = [...ancestorLines, !isLast];
+        walk(node.id, indent + 1, childAncestorLines);
+      }
     }
-  })(rootParentId, 0);
+  })(rootParentId, 0, []);
   return result;
 }

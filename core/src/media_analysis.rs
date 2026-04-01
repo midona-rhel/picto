@@ -2,12 +2,12 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::background_work::DeferredWorkType;
-use crate::blob_store::{BlobStore, mime_to_extension};
-use crate::db::{LibraryDatabase, query::ingest::DerivativeTarget};
-use crate::media_capabilities::{ThumbnailBackend, capabilities_for_stored_media};
+use crate::blob_store::{mime_to_extension, BlobStore};
+use crate::db::{query::ingest::DerivativeTarget, LibraryDatabase};
+use crate::media_capabilities::{capabilities_for_stored_media, ThumbnailBackend};
 use crate::media_processing::{
-    self, DEFAULT_THUMBNAIL_DIMENSIONS, ThumbnailScaleType, encode_thumbnail,
-    get_thumbnail_resolution,
+    self, encode_thumbnail, get_thumbnail_resolution, ThumbnailScaleType,
+    DEFAULT_THUMBNAIL_DIMENSIONS,
 };
 use crate::runtime_contract::change_builder::ChangeImpact;
 use crate::runtime_contract::state_change::MediaDerivativeField;
@@ -47,7 +47,10 @@ struct AnalysisContext {
     raster_source: Option<LoadedRasterSource>,
 }
 
-fn load_original_path(blob_store: &BlobStore, target: &DerivativeTarget) -> Result<PathBuf, String> {
+fn load_original_path(
+    blob_store: &BlobStore,
+    target: &DerivativeTarget,
+) -> Result<PathBuf, String> {
     let ext = mime_to_extension(&target.mime_type).to_string();
     blob_store
         .find_original(&target.file_hash, Some(&ext))
@@ -140,14 +143,14 @@ fn build_context(
     }))
 }
 
-async fn render_thumbnail(
-    context: &AnalysisContext,
-) -> Result<(Vec<u8>, String), String> {
+async fn render_thumbnail(context: &AnalysisContext) -> Result<(Vec<u8>, String), String> {
     if let Some(source) = &context.raster_source {
         return render_thumbnail_from_decoded_image(&source.decoded);
     }
-    if matches!(context.caps.thumbnail_backend, Some(ThumbnailBackend::Ffmpeg))
-        && context.target.mime_type.starts_with("video/")
+    if matches!(
+        context.caps.thumbnail_backend,
+        Some(ThumbnailBackend::Ffmpeg)
+    ) && context.target.mime_type.starts_with("video/")
     {
         let bytes = media_processing::ffmpeg::render_video_thumbnail(
             &context.original_path,
@@ -192,8 +195,8 @@ async fn analyze_batch(
         work_types.contains(&DeferredWorkType::Thumbnail) && context.caps.can_thumbnail();
     let want_colors =
         work_types.contains(&DeferredWorkType::DominantColors) && context.caps.can_dominant_colors;
-    let want_phash = work_types.contains(&DeferredWorkType::PerceptualHash)
-        && context.caps.can_perceptual_hash;
+    let want_phash =
+        work_types.contains(&DeferredWorkType::PerceptualHash) && context.caps.can_perceptual_hash;
 
     let mut outcome = DerivativeBatchOutcome {
         has_thumbnail: context.thumbnail_exists,
@@ -370,7 +373,17 @@ pub async fn process_deferred_batch(
         .filter_map(|job| DeferredWorkType::from_db_str(&job.work_type))
         .collect();
 
-    match analyze_batch(db, blob_store, &entity_hash, &job_types, false, false, false).await {
+    match analyze_batch(
+        db,
+        blob_store,
+        &entity_hash,
+        &job_types,
+        false,
+        false,
+        false,
+    )
+    .await
+    {
         Ok((_, changed_fields)) => {
             for job in jobs {
                 db.complete_deferred_work_item(job.work_id)?;

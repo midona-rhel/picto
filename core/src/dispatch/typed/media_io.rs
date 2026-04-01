@@ -636,7 +636,8 @@ pub async fn regenerate_thumbnail(
     state: &AppState,
     input: RegenerateThumbnailInput,
 ) -> Result<serde_json::Value, String> {
-    let result = generate_thumbnail_inner(state.engine.db(), &state.blob_store, &input.hash, true).await?;
+    let result =
+        generate_thumbnail_inner(state.engine.db(), &state.blob_store, &input.hash, true).await?;
     if result.regenerated_thumbnail {
         crate::events::emit_state_changed(
             "regenerate_thumbnail",
@@ -687,7 +688,8 @@ pub async fn reanalyze_file_colors(
     state: &AppState,
     input: ReanalyzeFileColorsInput,
 ) -> Result<serde_json::Value, String> {
-    let result = reanalyze_file_colors_inner(state.engine.db(), &state.blob_store, &input.hash).await?;
+    let result =
+        reanalyze_file_colors_inner(state.engine.db(), &state.blob_store, &input.hash).await?;
     crate::events::emit_state_changed(
         "reanalyze_file_colors",
         crate::runtime_contract::change_builder::ChangeImpact::new()

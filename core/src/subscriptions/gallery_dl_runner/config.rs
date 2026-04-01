@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use crate::credential_store::SiteCredential;
+use crate::subscriptions::credential_service::GalleryDlAuthConfig;
 
 use super::RunOptions;
 
@@ -50,8 +50,8 @@ pub fn build_config(opts: &RunOptions, _temp_dir: &Path) -> serde_json::Value {
         );
     }
 
-    if let Some(ref cred) = opts.credential {
-        apply_credential_auth(&mut extractor, cred);
+    if let Some(ref auth) = opts.auth {
+        apply_credential_auth(&mut extractor, auth);
     }
 
     // Sites using dispatch URLs: include gallery + scraps, exclude favorites/stories.
@@ -128,8 +128,71 @@ pub fn build_config(opts: &RunOptions, _temp_dir: &Path) -> serde_json::Value {
 
 fn apply_credential_auth(
     extractor: &mut serde_json::Map<String, serde_json::Value>,
-    cred: &SiteCredential,
+    auth: &GalleryDlAuthConfig,
 ) {
-    let auth = crate::credential_store::build_extractor_auth(cred);
-    extractor.insert(cred.site_category.clone(), auth);
+    let site_obj = extractor
+        .entry(auth.site_category.clone())
+        .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()));
+    match (site_obj, auth.fragment.clone()) {
+        (serde_json::Value::Object(site_map), serde_json::Value::Object(auth_map)) => {
+            for (key, value) in auth_map {
+                site_map.insert(key, value);
+            }
+        }
+        (site_obj, auth) => {
+            *site_obj = auth;
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::subscriptions::credential_service::GalleryDlAuthConfig;
+
+    use super::build_config;
+    use super::RunOptions;
+
+    #[test]
+    fn build_config_keeps_booru_tags_when_api_credentials_are_present() {
+        let opts = RunOptions {
+            subscription_id: Some(1),
+            query_id: Some(2),
+            site_id: "gelbooru".to_string(),
+            url: "https://gelbooru.com/index.php?page=post&s=list&tags=test".to_string(),
+            post_limit: Some(1),
+            range_start: 1,
+            abort_threshold: None,
+            sleep_request: 2.0,
+            auth: Some(GalleryDlAuthConfig {
+                site_category: "gelbooru".to_string(),
+                fragment: serde_json::json!({
+                    "api-key": "secret",
+                    "user-id": "277923",
+                }),
+            }),
+            archive_path: std::path::PathBuf::new(),
+            archive_prefix: None,
+            cancel: tokio_util::sync::CancellationToken::new(),
+        };
+
+        let config = build_config(&opts, std::path::Path::new("/tmp"));
+        let gelbooru = config
+            .get("extractor")
+            .and_then(|value| value.get("gelbooru"))
+            .and_then(|value| value.as_object())
+            .expect("gelbooru extractor config");
+
+        assert_eq!(
+            gelbooru.get("tags").and_then(|value| value.as_bool()),
+            Some(true)
+        );
+        assert_eq!(
+            gelbooru.get("api-key").and_then(|value| value.as_str()),
+            Some("secret")
+        );
+        assert_eq!(
+            gelbooru.get("user-id").and_then(|value| value.as_str()),
+            Some("277923")
+        );
+    }
 }

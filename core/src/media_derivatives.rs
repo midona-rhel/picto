@@ -44,7 +44,6 @@ impl DeferredWorkType {
             _ => None,
         }
     }
-
 }
 
 #[derive(Debug, Clone)]
@@ -116,9 +115,7 @@ fn reset_running_deferred_work_sync(conn: &Connection) -> rusqlite::Result<usize
 
 /// Claim all pending jobs for the next available hash.
 /// Returns all work items for that single hash so they can be processed together.
-fn claim_next_hash_jobs_sync(
-    conn: &mut Connection,
-) -> rusqlite::Result<Vec<DeferredWorkItem>> {
+fn claim_next_hash_jobs_sync(conn: &mut Connection) -> rusqlite::Result<Vec<DeferredWorkItem>> {
     let tx = conn.transaction()?;
     let now = Utc::now().to_rfc3339();
 
@@ -129,8 +126,7 @@ fn claim_next_hash_jobs_sync(
              WHERE status = 'pending' AND available_at <= ?1
              ORDER BY work_id ASC LIMIT 1",
         )?;
-        stmt.query_row([&now], |row| row.get(0))
-            .optional()?
+        stmt.query_row([&now], |row| row.get(0)).optional()?
     };
 
     let Some(hash) = next_hash else {
@@ -242,7 +238,11 @@ pub async fn enqueue_missing_deferred(
 
         let mut work_types = Vec::new();
         if (file.mime.starts_with("image/") || file.mime.starts_with("video/"))
-            && blob_store.find_thumbnail_path(hash).ok().flatten().is_none()
+            && blob_store
+                .find_thumbnail_path(hash)
+                .ok()
+                .flatten()
+                .is_none()
         {
             work_types.push(DeferredWorkType::Thumbnail);
         }
@@ -385,8 +385,8 @@ pub async fn reanalyze_file_colors(
     let hash_owned = hash.to_string();
     let bs = blob_store.clone();
     let ext = mime_to_extension(&file.mime).to_string();
-    let colors = tokio::task::spawn_blocking(
-        move || -> Result<Vec<(String, f32, f32, f32)>, String> {
+    let colors =
+        tokio::task::spawn_blocking(move || -> Result<Vec<(String, f32, f32, f32)>, String> {
             let t0 = std::time::Instant::now();
             let used_thumbnail;
             let bytes = if let Ok(Some(thumb_path)) = bs.find_thumbnail_path(&hash_owned) {
@@ -403,8 +403,8 @@ pub async fn reanalyze_file_colors(
                     .map_err(|e| format!("Failed to read original file: {}", e))?
             };
             let t_read = t0.elapsed().as_millis() as u64;
-            let img =
-                image::load_from_memory(&bytes).map_err(|e| format!("Image decode failed: {}", e))?;
+            let img = image::load_from_memory(&bytes)
+                .map_err(|e| format!("Image decode failed: {}", e))?;
             let t_decode = t0.elapsed().as_millis() as u64;
             let extracted = crate::media_processing::colors::extract_dominant_colors(&img, 8);
             let t_extract = t0.elapsed().as_millis() as u64;
@@ -422,10 +422,9 @@ pub async fn reanalyze_file_colors(
                 .iter()
                 .map(|c| (c.hex.clone(), c.l as f32, c.a as f32, c.b as f32))
                 .collect())
-        },
-    )
-    .await
-    .map_err(|e| format!("Color extraction task failed: {}", e))??;
+        })
+        .await
+        .map_err(|e| format!("Color extraction task failed: {}", e))??;
 
     let dominant_color_hex = colors.first().map(|(hex, _, _, _)| hex.clone());
     let colors_extracted = colors.len();
@@ -518,7 +517,9 @@ async fn drain_next_image(
     // Pre-load and decode the original image once if both thumbnail and phash
     // are in the job set. Avoids decoding the full original twice (~4s saved
     // per 22MP image).
-    let has_thumbnail = jobs.iter().any(|j| j.work_type == DeferredWorkType::Thumbnail);
+    let has_thumbnail = jobs
+        .iter()
+        .any(|j| j.work_type == DeferredWorkType::Thumbnail);
     let has_phash = jobs.iter().any(|j| j.work_type == DeferredWorkType::Phash);
     let shared_decoded: Option<Arc<image::DynamicImage>> = if has_thumbnail && has_phash {
         let decode_started = std::time::Instant::now();
@@ -528,14 +529,15 @@ async fn drain_next_image(
                 let ext = mime_to_extension(&file.mime).to_string();
                 let h = hash.clone();
                 let bs = blob_store.clone();
-                let decoded = tokio::task::spawn_blocking(move || -> Option<image::DynamicImage> {
-                    let original = bs.find_original(&h, Some(&ext)).ok()??;
-                    let bytes = std::fs::read(&original.0).ok()?;
-                    image::load_from_memory(&bytes).ok()
-                })
-                .await
-                .ok()
-                .flatten();
+                let decoded =
+                    tokio::task::spawn_blocking(move || -> Option<image::DynamicImage> {
+                        let original = bs.find_original(&h, Some(&ext)).ok()??;
+                        let bytes = std::fs::read(&original.0).ok()?;
+                        image::load_from_memory(&bytes).ok()
+                    })
+                    .await
+                    .ok()
+                    .flatten();
                 info!(
                     hash = %hash,
                     elapsed_ms = decode_started.elapsed().as_millis() as u64,
@@ -555,56 +557,61 @@ async fn drain_next_image(
 
     for job in &jobs {
         let started = std::time::Instant::now();
-        let result: Result<Option<MediaDerivativeField>, String> = match job.work_type {
-            DeferredWorkType::Thumbnail => {
-                // Thumbnail uses its own path-based pipeline (handles video too).
-                match ensure_thumbnail(db, blob_store, &job.hash, false).await {
-                    Ok(r) => Ok(r.regenerated_thumbnail.then_some(MediaDerivativeField::Thumbnail)),
-                    Err(e) => Err(e),
+        let result: Result<Option<MediaDerivativeField>, String> =
+            match job.work_type {
+                DeferredWorkType::Thumbnail => {
+                    // Thumbnail uses its own path-based pipeline (handles video too).
+                    match ensure_thumbnail(db, blob_store, &job.hash, false).await {
+                        Ok(r) => Ok(r
+                            .regenerated_thumbnail
+                            .then_some(MediaDerivativeField::Thumbnail)),
+                        Err(e) => Err(e),
+                    }
                 }
-            }
-            DeferredWorkType::DominantColors => {
-                // Colors already use the thumbnail file (fast).
-                match reanalyze_file_colors(db, blob_store, &job.hash).await {
-                    Ok(r) => Ok((r.colors_extracted > 0).then_some(MediaDerivativeField::DominantColorHex)),
-                    Err(e) => Err(e),
+                DeferredWorkType::DominantColors => {
+                    // Colors already use the thumbnail file (fast).
+                    match reanalyze_file_colors(db, blob_store, &job.hash).await {
+                        Ok(r) => Ok((r.colors_extracted > 0)
+                            .then_some(MediaDerivativeField::DominantColorHex)),
+                        Err(e) => Err(e),
+                    }
                 }
-            }
-            DeferredWorkType::Phash => {
-                // Use the shared pre-decoded image if available, otherwise fall back.
-                if let Some(ref img) = shared_decoded {
-                    let img_ref = img.clone();
-                    let job_hash = job.hash.clone();
-                    let phash_result = tokio::task::spawn_blocking(move || {
-                        let t0 = std::time::Instant::now();
-                        let result = crate::duplicates::phash::compute_phash_base64_from_image(&img_ref)
-                            .map_err(|e| format!("{e}"));
-                        let hash_ms = t0.elapsed().as_millis() as u64;
-                        tracing::info!(
-                            hash = %job_hash,
-                            hash_ms,
-                            shared_decode = true,
-                            "phash: timing breakdown"
-                        );
-                        result
-                    })
-                    .await
-                    .map_err(|e| format!("Phash task failed: {e}"))?;
-                    match phash_result {
-                        Ok(phash_b64) => {
-                            db.set_phash(&job.hash, &phash_b64).await?;
-                            Ok(Some(MediaDerivativeField::Phash))
+                DeferredWorkType::Phash => {
+                    // Use the shared pre-decoded image if available, otherwise fall back.
+                    if let Some(ref img) = shared_decoded {
+                        let img_ref = img.clone();
+                        let job_hash = job.hash.clone();
+                        let phash_result = tokio::task::spawn_blocking(move || {
+                            let t0 = std::time::Instant::now();
+                            let result =
+                                crate::duplicates::phash::compute_phash_base64_from_image(&img_ref)
+                                    .map_err(|e| format!("{e}"));
+                            let hash_ms = t0.elapsed().as_millis() as u64;
+                            tracing::info!(
+                                hash = %job_hash,
+                                hash_ms,
+                                shared_decode = true,
+                                "phash: timing breakdown"
+                            );
+                            result
+                        })
+                        .await
+                        .map_err(|e| format!("Phash task failed: {e}"))?;
+                        match phash_result {
+                            Ok(phash_b64) => {
+                                db.set_phash(&job.hash, &phash_b64).await?;
+                                Ok(Some(MediaDerivativeField::Phash))
+                            }
+                            Err(e) => Err(e),
                         }
-                        Err(e) => Err(e),
-                    }
-                } else {
-                    match ensure_phash(db, blob_store, &job.hash, false).await {
-                        Ok(changed) => Ok(changed.then_some(MediaDerivativeField::Phash)),
-                        Err(e) => Err(e),
+                    } else {
+                        match ensure_phash(db, blob_store, &job.hash, false).await {
+                            Ok(changed) => Ok(changed.then_some(MediaDerivativeField::Phash)),
+                            Err(e) => Err(e),
+                        }
                     }
                 }
-            }
-        };
+            };
 
         let elapsed_ms = started.elapsed().as_millis() as u64;
         let ok = result.is_ok();
@@ -628,7 +635,8 @@ async fn drain_next_image(
             }
             Err(error) => {
                 let next_attempt = job.attempt_count + 1;
-                db.retry_deferred_work(job.work_id, next_attempt, &error).await?;
+                db.retry_deferred_work(job.work_id, next_attempt, &error)
+                    .await?;
                 warn!(
                     hash = %job.hash,
                     work_type = job.work_type.as_str(),
@@ -808,8 +816,8 @@ async fn reanalyze_file_colors_canonical(
     let hash_owned = file.file_hash.clone();
     let ext = mime_to_extension(&file.mime_type).to_string();
     let bs = blob_store.clone();
-    let colors = tokio::task::spawn_blocking(
-        move || -> Result<Vec<(String, f32, f32, f32)>, String> {
+    let colors =
+        tokio::task::spawn_blocking(move || -> Result<Vec<(String, f32, f32, f32)>, String> {
             let bytes = if let Ok(Some(thumb_path)) = bs.find_thumbnail_path(&hash_owned) {
                 std::fs::read(&thumb_path)
                     .map_err(|e| format!("Failed to read thumbnail: {}", e))?
@@ -821,16 +829,17 @@ async fn reanalyze_file_colors_canonical(
                 std::fs::read(&original.0)
                     .map_err(|e| format!("Failed to read original file: {}", e))?
             };
-            let img =
-                image::load_from_memory(&bytes).map_err(|e| format!("Image decode failed: {}", e))?;
-            Ok(crate::media_processing::colors::extract_dominant_colors(&img, 8)
-                .iter()
-                .map(|c| (c.hex.clone(), c.l as f32, c.a as f32, c.b as f32))
-                .collect())
-        },
-    )
-    .await
-    .map_err(|e| format!("Color extraction task failed: {}", e))??;
+            let img = image::load_from_memory(&bytes)
+                .map_err(|e| format!("Image decode failed: {}", e))?;
+            Ok(
+                crate::media_processing::colors::extract_dominant_colors(&img, 8)
+                    .iter()
+                    .map(|c| (c.hex.clone(), c.l as f32, c.a as f32, c.b as f32))
+                    .collect(),
+            )
+        })
+        .await
+        .map_err(|e| format!("Color extraction task failed: {}", e))??;
 
     let dominant_color_hex = colors.first().map(|(hex, _, _, _)| hex.clone());
     db.set_file_colors_for_entity_hash(entity_hash, &colors, dominant_color_hex.as_deref())?;
@@ -890,20 +899,29 @@ async fn drain_next_entity_canonical(
 
     for job in &jobs {
         let result: Result<Option<MediaDerivativeField>, String> = match job.work_type.as_str() {
-            "thumbnail" => match ensure_thumbnail_canonical(db, blob_store, &job.entity_hash, false).await {
-                Ok(r) => Ok(r.regenerated_thumbnail.then_some(MediaDerivativeField::Thumbnail)),
-                Err(e) => Err(e),
-            },
-            "dominant_colors" => {
-                match reanalyze_file_colors_canonical(db, blob_store, &job.entity_hash).await {
-                    Ok(r) => Ok((r.colors_extracted > 0).then_some(MediaDerivativeField::DominantColorHex)),
+            "thumbnail" => {
+                match ensure_thumbnail_canonical(db, blob_store, &job.entity_hash, false).await {
+                    Ok(r) => Ok(r
+                        .regenerated_thumbnail
+                        .then_some(MediaDerivativeField::Thumbnail)),
                     Err(e) => Err(e),
                 }
             }
-            "perceptual_hash" => match ensure_phash_canonical(db, blob_store, &job.entity_hash, false).await {
-                Ok(changed) => Ok(changed.then_some(MediaDerivativeField::Phash)),
-                Err(e) => Err(e),
-            },
+            "dominant_colors" => {
+                match reanalyze_file_colors_canonical(db, blob_store, &job.entity_hash).await {
+                    Ok(r) => {
+                        Ok((r.colors_extracted > 0)
+                            .then_some(MediaDerivativeField::DominantColorHex))
+                    }
+                    Err(e) => Err(e),
+                }
+            }
+            "perceptual_hash" => {
+                match ensure_phash_canonical(db, blob_store, &job.entity_hash, false).await {
+                    Ok(changed) => Ok(changed.then_some(MediaDerivativeField::Phash)),
+                    Err(e) => Err(e),
+                }
+            }
             other => Err(format!("Unknown deferred work type: {other}")),
         };
 
@@ -1001,8 +1019,11 @@ impl SqliteDatabase {
     }
 
     pub async fn reset_running_deferred_work(&self) -> Result<usize, String> {
-        self.with_conn_labeled("deferred_work/reset_running", reset_running_deferred_work_sync)
-            .await
+        self.with_conn_labeled(
+            "deferred_work/reset_running",
+            reset_running_deferred_work_sync,
+        )
+        .await
     }
 
     async fn claim_next_hash_jobs(&self) -> Result<Vec<DeferredWorkItem>, String> {
@@ -1075,7 +1096,9 @@ mod tests {
         reset_running_deferred_work_sync(&conn).unwrap();
 
         let status: String = conn
-            .query_row("SELECT status FROM deferred_work LIMIT 1", [], |row| row.get(0))
+            .query_row("SELECT status FROM deferred_work LIMIT 1", [], |row| {
+                row.get(0)
+            })
             .unwrap();
         assert_eq!(status, "pending");
     }

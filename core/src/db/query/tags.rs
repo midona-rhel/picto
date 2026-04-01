@@ -2,9 +2,7 @@
 
 use rusqlite::{params, Connection, OptionalExtension};
 
-use crate::db::types::{
-    mask_from_db_bits, NamespaceSummary, TagInfo, TagRecord, TagRelation,
-};
+use crate::db::types::{mask_from_db_bits, NamespaceSummary, TagInfo, TagRecord, TagRelation};
 
 pub fn find_tag_id(conn: &Connection, tag_str: &str) -> rusqlite::Result<Option<i64>> {
     let (namespace, subtag) = parse_tag(tag_str);
@@ -72,10 +70,7 @@ pub fn get_all_tags_with_counts(conn: &Connection) -> rusqlite::Result<Vec<TagRe
     rows.collect()
 }
 
-pub fn get_entity_tags(
-    conn: &Connection,
-    entity_hash: &str,
-) -> rusqlite::Result<Vec<TagInfo>> {
+pub fn get_entity_tags(conn: &Connection, entity_hash: &str) -> rusqlite::Result<Vec<TagInfo>> {
     let entity_id: Option<i64> = conn
         .query_row(
             "SELECT entity_id FROM media_entity WHERE entity_hash = ?1",
@@ -173,8 +168,11 @@ pub fn get_tags_paginated(
             };
             let mut stmt = conn.prepare(sql)?;
             return if use_ns {
-                stmt.query_map(params![fts_query, namespace.unwrap(), limit], map_tag_record)?
-                    .collect()
+                stmt.query_map(
+                    params![fts_query, namespace.unwrap(), limit],
+                    map_tag_record,
+                )?
+                .collect()
             } else {
                 stmt.query_map(params![fts_query, limit], map_tag_record)?
                     .collect()
@@ -249,7 +247,6 @@ pub fn get_namespace_summary(conn: &Connection) -> rusqlite::Result<Vec<Namespac
     let mut stmt = conn.prepare(
         "SELECT namespace, COUNT(*) AS count
          FROM tag
-         WHERE file_count > 0
          GROUP BY namespace
          ORDER BY count DESC, namespace ASC",
     )?;

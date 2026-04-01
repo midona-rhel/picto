@@ -88,8 +88,14 @@ pub fn compare_static_image_quality(
         }
     }
 
-    let left_density = left.size_bytes.saturating_mul(1_000).checked_div(left_pixels);
-    let right_density = right.size_bytes.saturating_mul(1_000).checked_div(right_pixels);
+    let left_density = left
+        .size_bytes
+        .saturating_mul(1_000)
+        .checked_div(left_pixels);
+    let right_density = right
+        .size_bytes
+        .saturating_mul(1_000)
+        .checked_div(right_pixels);
 
     if left_pixels >= right_pixels.saturating_mul(2) {
         if left_density.unwrap_or(0).saturating_mul(2) >= right_density.unwrap_or(0) {
@@ -105,12 +111,14 @@ pub fn compare_static_image_quality(
 
     if left.mime_type == right.mime_type {
         if left_pixels.saturating_mul(2) >= right_pixels.saturating_mul(3)
-            && left_density.unwrap_or(0).saturating_mul(3) >= right_density.unwrap_or(0).saturating_mul(2)
+            && left_density.unwrap_or(0).saturating_mul(3)
+                >= right_density.unwrap_or(0).saturating_mul(2)
         {
             return ImageQualityDecision::LeftBetter;
         }
         if right_pixels.saturating_mul(2) >= left_pixels.saturating_mul(3)
-            && right_density.unwrap_or(0).saturating_mul(3) >= left_density.unwrap_or(0).saturating_mul(2)
+            && right_density.unwrap_or(0).saturating_mul(3)
+                >= left_density.unwrap_or(0).saturating_mul(2)
         {
             return ImageQualityDecision::RightBetter;
         }
@@ -121,9 +129,7 @@ pub fn compare_static_image_quality(
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        ComparableImageCandidate, ImageQualityDecision, compare_static_image_quality,
-    };
+    use super::{compare_static_image_quality, ComparableImageCandidate, ImageQualityDecision};
 
     #[test]
     fn prefers_lossless_when_detail_is_comparable() {

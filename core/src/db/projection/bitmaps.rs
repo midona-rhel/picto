@@ -35,9 +35,9 @@ impl BitmapKey {
             BitmapKey::Status(_) | BitmapKey::Tagged | BitmapKey::CollectionMember => {
                 BitmapCategory::Status
             }
-            BitmapKey::Tag(_)
-            | BitmapKey::ImpliedTag(_)
-            | BitmapKey::EffectiveTag(_) => BitmapCategory::Tags,
+            BitmapKey::Tag(_) | BitmapKey::ImpliedTag(_) | BitmapKey::EffectiveTag(_) => {
+                BitmapCategory::Tags
+            }
             BitmapKey::Folder(_) | BitmapKey::SmartFolder(_) => BitmapCategory::Folders,
         }
     }

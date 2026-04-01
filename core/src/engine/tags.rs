@@ -31,13 +31,20 @@ impl ApplicationEngine {
                 TagOperation::Add => self.db.add_tags(&ids, tags, provenance_mask, expansion)?,
                 TagOperation::Remove => self.db.remove_tags(&ids, tags, expansion)?,
             },
-            target::ResolvedTarget::Query { view_query, exclusions } => match operation {
-                TagOperation::Add => {
-                    self.db
-                        .add_tags_bulk(&view_query, &exclusions, tags, provenance_mask, expansion)?
-                }
+            target::ResolvedTarget::Query {
+                view_query,
+                exclusions,
+            } => match operation {
+                TagOperation::Add => self.db.add_tags_bulk(
+                    &view_query,
+                    &exclusions,
+                    tags,
+                    provenance_mask,
+                    expansion,
+                )?,
                 TagOperation::Remove => {
-                    self.db.remove_tags_bulk(&view_query, &exclusions, tags, expansion)?
+                    self.db
+                        .remove_tags_bulk(&view_query, &exclusions, tags, expansion)?
                 }
             },
         };
@@ -87,11 +94,7 @@ impl ApplicationEngine {
         Ok(affected.entity_ids)
     }
 
-    pub fn manage_tag_alias(
-        &self,
-        from_tag_id: i64,
-        to_tag_id: Option<i64>,
-    ) -> Result<(), String> {
+    pub fn manage_tag_alias(&self, from_tag_id: i64, to_tag_id: Option<i64>) -> Result<(), String> {
         self.db.manage_tag_alias(from_tag_id, to_tag_id)?;
         let mut dirty = vec![from_tag_id];
         if let Some(to_tag_id) = to_tag_id {
@@ -190,6 +193,8 @@ impl ApplicationEngine {
     }
 
     fn resolve_entity_hashes(&self, entity_ids: &[i64]) -> Vec<String> {
-        self.db.resolve_entity_ids_to_hashes(entity_ids).unwrap_or_default()
+        self.db
+            .resolve_entity_ids_to_hashes(entity_ids)
+            .unwrap_or_default()
     }
 }

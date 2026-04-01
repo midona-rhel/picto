@@ -1,8 +1,9 @@
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{params, Connection, OptionalExtension};
 
 #[derive(Debug, Clone)]
 pub struct ExistingImportTarget {
     pub file_id: i64,
+    pub file_hash: String,
     pub entity_id: i64,
     pub entity_hash: String,
     pub name: Option<String>,
@@ -56,6 +57,7 @@ where
         &format!(
             "SELECT
              mf.file_id,
+             mf.file_hash,
              me.entity_id,
              me.entity_hash,
              me.name,
@@ -78,19 +80,20 @@ where
         |row| {
             Ok(ExistingImportTarget {
                 file_id: row.get(0)?,
-                entity_id: row.get(1)?,
-                entity_hash: row.get(2)?,
-                name: row.get(3)?,
-                status: row.get(4)?,
-                notes: row.get(5)?,
-                source_urls_json: row.get(6)?,
-                date_created: row.get(7)?,
-                mime_type: row.get(8)?,
-                size_bytes: row.get(9)?,
-                pixel_width: row.get(10)?,
-                pixel_height: row.get(11)?,
-                frame_count: row.get(12)?,
-                perceptual_hash: row.get(13)?,
+                file_hash: row.get(1)?,
+                entity_id: row.get(2)?,
+                entity_hash: row.get(3)?,
+                name: row.get(4)?,
+                status: row.get(5)?,
+                notes: row.get(6)?,
+                source_urls_json: row.get(7)?,
+                date_created: row.get(8)?,
+                mime_type: row.get(9)?,
+                size_bytes: row.get(10)?,
+                pixel_width: row.get(11)?,
+                pixel_height: row.get(12)?,
+                frame_count: row.get(13)?,
+                perceptual_hash: row.get(14)?,
             })
         },
     )

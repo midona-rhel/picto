@@ -6,7 +6,10 @@ use ts_rs::TS;
 use crate::sqlite::EntityExpansionMode;
 use crate::state::AppState;
 
-fn descendant_hashes(top_level_hashes: &[String], effective_hashes: &[(String, i64)]) -> Vec<String> {
+fn descendant_hashes(
+    top_level_hashes: &[String],
+    effective_hashes: &[(String, i64)],
+) -> Vec<String> {
     let top_level: std::collections::HashSet<&str> =
         top_level_hashes.iter().map(String::as_str).collect();
     effective_hashes
@@ -23,18 +26,6 @@ fn tag_display_key(namespace: &str, subtag: &str) -> String {
     } else {
         format!("{namespace}:{subtag}")
     }
-}
-
-fn legacy_tag_search_row(row: &crate::db::types::TagRecord) -> serde_json::Value {
-    serde_json::json!({
-        "tag_id": row.tag_id,
-        "display": tag_display_key(&row.namespace, &row.subtag),
-        "namespace": row.namespace,
-        "subtag": row.subtag,
-        "file_count": row.file_count,
-        "read_only": false,
-        "site_mask": row.site_mask,
-    })
 }
 
 fn resolve_tag_id_or_create(state: &AppState, tag: &str) -> Result<i64, String> {
@@ -166,25 +157,10 @@ pub async fn search_tags(
     input: SearchTagsInput,
 ) -> Result<serde_json::Value, String> {
     let query = input.query.unwrap_or_default();
-    let limit = input.limit.unwrap_or(if input.offset.is_some() { 200 } else { 20 }) as i64;
+    let limit = input.limit.unwrap_or(20) as i64;
     let offset = input.offset.unwrap_or(0) as i64;
     let result = state.engine.search_tags(&query, limit, offset)?;
-    if input.offset.is_some() {
-        let legacy_rows: Vec<(String, String, i64)> = result
-            .iter()
-            .map(|row| {
-                (
-                    tag_display_key(&row.namespace, &row.subtag),
-                    row.namespace.clone(),
-                    row.file_count,
-                )
-            })
-            .collect();
-        serde_json::to_value(&legacy_rows).map_err(|e| e.to_string())
-    } else {
-        let rows: Vec<serde_json::Value> = result.iter().map(legacy_tag_search_row).collect();
-        serde_json::to_value(&rows).map_err(|e| e.to_string())
-    }
+    serde_json::to_value(&result).map_err(|e| e.to_string())
 }
 
 pub async fn get_all_tags_with_counts(
@@ -212,17 +188,19 @@ pub async fn get_file_tags(
     let tags = state.engine.get_entity_tags(&input.hash)?;
     let result: Vec<serde_json::Value> = tags
         .iter()
-        .map(|t| serde_json::json!({
-            "tag_id": t.tag_id,
-            "display": tag_display_key(&t.namespace, &t.subtag),
-            "namespace": t.namespace,
-            "subtag": t.subtag,
-            "file_count": 0,
-            "read_only": t.source != "local",
-            "site_mask": t.site_mask,
-            "provenance_mask": t.provenance_mask,
-            "source": t.source,
-        }))
+        .map(|t| {
+            serde_json::json!({
+                "tag_id": t.tag_id,
+                "display": tag_display_key(&t.namespace, &t.subtag),
+                "namespace": t.namespace,
+                "subtag": t.subtag,
+                "file_count": 0,
+                "read_only": t.source != "local",
+                "site_mask": t.site_mask,
+                "provenance_mask": t.provenance_mask,
+                "source": t.source,
+            })
+        })
         .collect();
     serde_json::to_value(&result).map_err(|e| e.to_string())
 }
@@ -347,9 +325,12 @@ pub async fn get_tags_paginated(
     state: &AppState,
     input: GetTagsPaginatedInput,
 ) -> Result<serde_json::Value, String> {
-    let result = state
-        .engine
-        .get_tags_paginated(input.namespace, input.search, input.cursor, input.limit)?;
+    let result = state.engine.get_tags_paginated(
+        input.namespace,
+        input.search,
+        input.cursor,
+        input.limit,
+    )?;
     serde_json::to_value(&result).map_err(|e| e.to_string())
 }
 

@@ -403,10 +403,11 @@ async fn process_import_path(
         return Ok(());
     }
 
-    let summary = crate::ingest::import_watch_path(
+    let _ = blob_store;
+    let _ = canonical_db;
+    crate::ingest_queue::enqueue_watch_path(
         canonical_db,
-        Some(db),
-        blob_store,
+        db,
         folder_id,
         root_path,
         watch_subfolders,
@@ -414,22 +415,6 @@ async fn process_import_path(
         path,
     )
     .await?;
-
-    crate::ingest::apply_compiler_plan(canonical_db, &summary.flags, &summary.folder_ids);
-    if !summary.imported_hashes.is_empty() || !summary.skipped_hashes.is_empty() {
-        let origin = if !summary.imported_hashes.is_empty() {
-            "watch_folder_import"
-        } else {
-            "watch_folder_membership"
-        };
-        crate::events::emit_state_changed(
-            origin,
-            crate::ingest::build_ingest_change_impact(
-                &summary,
-                vec!["system:active".into(), "system:inbox".into()],
-            ),
-        );
-    }
 
     Ok(())
 }

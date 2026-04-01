@@ -69,9 +69,13 @@ pub fn execute_plan(conn: &Connection, bitmaps: &BitmapStore, plan: &CompilerPla
 
 /// Full rebuild of all projections from authoritative data.
 pub fn full_rebuild(conn: &Connection, bitmaps: &BitmapStore) {
-    execute_plan(conn, bitmaps, &CompilerPlan {
-        rebuild_all: true,
-        rebuild_sidebar: true,
-        ..Default::default()
-    });
+    execute_plan(
+        conn,
+        bitmaps,
+        &CompilerPlan {
+            rebuild_all: true,
+            rebuild_sidebar: true,
+            ..Default::default()
+        },
+    );
 }

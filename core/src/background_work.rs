@@ -98,7 +98,13 @@ pub fn enqueue_derivative_jobs(
     frame_count: Option<i64>,
     needs_thumbnail: bool,
 ) -> Result<(), String> {
-    crate::media_analysis::enqueue_derivative_jobs(db, entity_hash, mime, frame_count, needs_thumbnail)
+    crate::media_analysis::enqueue_derivative_jobs(
+        db,
+        entity_hash,
+        mime,
+        frame_count,
+        needs_thumbnail,
+    )
 }
 
 pub async fn enqueue_missing_derivative_jobs(

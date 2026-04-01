@@ -5,7 +5,7 @@
 import { atom } from 'jotai';
 import type { CanonicalEntityGridItem, BaseScope, EntityViewQuery } from '../shared/types/canonical';
 import type { GridViewMode } from '../features/grid/layout/types';
-import { activeNodeIdAtom } from './navigation';
+import { activeNodeIdAtom, collectionNameAtom } from './navigation';
 import { sidebarNodesAtom } from './sidebar';
 
 // ── Query inputs ─────────────────────────────────────────────────
@@ -69,6 +69,10 @@ export const gridEmptyAtom = atom((get) =>
 /** Human-readable label for the current scope. Derived from sidebar nodes. */
 export const gridScopeLabelAtom = atom((get) => {
   const nodeId = get(activeNodeIdAtom);
+  // Collection scope — use the stored collection name
+  if (nodeId.startsWith('collection:')) {
+    return get(collectionNameAtom) ?? 'Collection';
+  }
   const nodes = get(sidebarNodesAtom);
   const node = nodes.find((n) => n.id === nodeId);
   if (node) return node.name;

@@ -13,7 +13,9 @@ const NEW_SCHEMA_VERSION: i64 = 100;
 /// Check if the database needs migration from old schema.
 pub fn needs_migration(conn: &Connection) -> bool {
     let version: i64 = conn
-        .query_row("SELECT version FROM schema_version LIMIT 1", [], |row| row.get(0))
+        .query_row("SELECT version FROM schema_version LIMIT 1", [], |row| {
+            row.get(0)
+        })
         .unwrap_or(0);
     version > 0 && version <= OLD_SCHEMA_MAX_VERSION
 }
@@ -21,7 +23,9 @@ pub fn needs_migration(conn: &Connection) -> bool {
 /// Check if the database is already on the new schema.
 pub fn is_new_schema(conn: &Connection) -> bool {
     let version: i64 = conn
-        .query_row("SELECT version FROM schema_version LIMIT 1", [], |row| row.get(0))
+        .query_row("SELECT version FROM schema_version LIMIT 1", [], |row| {
+            row.get(0)
+        })
         .unwrap_or(0);
     version >= NEW_SCHEMA_VERSION
 }
@@ -38,13 +42,23 @@ pub fn migrate(conn: &Connection) -> Result<MigrationResult, String> {
     // Tables that exist in both old and new schemas with different column layouts.
     // Rename them out of the way before creating the new versions.
     let overlapping = [
-        "folder", "tag", "smart_folder", "media_entity",
-        "subscription_group", "subscription", "subscription_query",
-        "subscription_entity", "subscription_post_collection",
-        "download_queue", "download_queue_item",
-        "credential_domain", "credential_health",
-        "duplicate", "file_color", "sidebar_node",
-        "view_pref", "kv_settings", "manifest",
+        "folder",
+        "tag",
+        "smart_folder",
+        "media_entity",
+        "subscription_group",
+        "subscription",
+        "subscription_query",
+        "subscription_entity",
+        "subscription_post_collection",
+        "credential_domain",
+        "credential_health",
+        "duplicate",
+        "file_color",
+        "sidebar_node",
+        "view_pref",
+        "kv_settings",
+        "manifest",
         "deferred_work",
     ];
     for table in &overlapping {
@@ -131,7 +145,9 @@ pub fn migrate(conn: &Connection) -> Result<MigrationResult, String> {
                     CASE WHEN source = 'local' THEN ?1 ELSE 0 END,
                     source
              FROM entity_tag_raw",
-            [crate::db::types::mask_to_db_bits(crate::db::types::TAG_PROVENANCE_MANUAL)],
+            [crate::db::types::mask_to_db_bits(
+                crate::db::types::TAG_PROVENANCE_MANUAL,
+            )],
         )
         .map_err(|e| format!("Failed to migrate entity_tag: {e}"))?;
     result.tags_migrated = tags;
@@ -275,21 +291,40 @@ pub fn migrate(conn: &Connection) -> Result<MigrationResult, String> {
     // ── Step 15: Drop ALL old/renamed tables ──────────────────────
     let tables_to_drop = [
         // Renamed old tables
-        "_old_folder", "_old_tag", "_old_smart_folder", "_old_media_entity",
-        "_old_subscription_group", "_old_subscription", "_old_subscription_query",
-        "_old_subscription_entity", "_old_subscription_post_collection",
-        "_old_download_queue", "_old_download_queue_item",
-        "_old_credential_domain", "_old_credential_health",
-        "_old_duplicate", "_old_file_color", "_old_sidebar_node",
-        "_old_view_pref", "_old_kv_settings", "_old_manifest",
+        "_old_folder",
+        "_old_tag",
+        "_old_smart_folder",
+        "_old_media_entity",
+        "_old_subscription_group",
+        "_old_subscription",
+        "_old_subscription_query",
+        "_old_subscription_entity",
+        "_old_subscription_post_collection",
+        "_old_credential_domain",
+        "_old_credential_health",
+        "_old_duplicate",
+        "_old_file_color",
+        "_old_sidebar_node",
+        "_old_view_pref",
+        "_old_kv_settings",
+        "_old_manifest",
         "_old_deferred_work",
         // Original old-only tables
-        "file", "entity_file", "entity_tag_raw", "folder_entity",
-        "entity_metadata_projection", "artifact_manifest_meta",
-        "artifact_manifest_entry", "mutation_action",
-        "collection_source_url", "file_fts",
-        "entity_tag_implied", "tag_ancestor", "tag_alias",
-        "tag_implication", "tag_display",
+        "file",
+        "entity_file",
+        "entity_tag_raw",
+        "folder_entity",
+        "entity_metadata_projection",
+        "artifact_manifest_meta",
+        "artifact_manifest_entry",
+        "mutation_action",
+        "collection_source_url",
+        "file_fts",
+        "entity_tag_implied",
+        "tag_ancestor",
+        "tag_alias",
+        "tag_implication",
+        "tag_display",
     ];
     for table in &tables_to_drop {
         let _ = conn.execute(&format!("DROP TABLE IF EXISTS {table}"), []);
@@ -368,36 +403,48 @@ pub fn migrate_from_attached(conn: &Connection) -> Result<MigrationResult, Strin
     ).map_err(|e| format!("Failed to import collections: {e}"))?;
 
     // Step 3: single_media_entity ← old_db.entity_file
-    result.bridges_migrated = conn.execute(
-        "INSERT OR IGNORE INTO single_media_entity (entity_id, file_id)
+    result.bridges_migrated = conn
+        .execute(
+            "INSERT OR IGNORE INTO single_media_entity (entity_id, file_id)
          SELECT ef.entity_id, ef.file_id
          FROM old_db.entity_file ef
          JOIN old_db.media_entity me ON me.entity_id = ef.entity_id
          WHERE me.kind = 'single'",
-        [],
-    ).map_err(|e| format!("Failed to import single_media_entity: {e}"))?;
+            [],
+        )
+        .map_err(|e| format!("Failed to import single_media_entity: {e}"))?;
 
     // Step 4: tags
     let _ = conn.execute(
         "INSERT OR IGNORE INTO tag (tag_id, namespace, subtag, site_mask, file_count)
-         SELECT tag_id, namespace, subtag, 0, file_count FROM old_db.tag", []);
-    result.tags_migrated = conn.execute(
-        "INSERT OR IGNORE INTO entity_tag (entity_id, tag_id, provenance_mask, source)
+         SELECT tag_id, namespace, subtag, 0, file_count FROM old_db.tag",
+        [],
+    );
+    result.tags_migrated = conn
+        .execute(
+            "INSERT OR IGNORE INTO entity_tag (entity_id, tag_id, provenance_mask, source)
          SELECT entity_id, tag_id,
                 CASE WHEN source = 'local' THEN ?1 ELSE 0 END,
                 source
-         FROM old_db.entity_tag_raw", [crate::db::types::mask_to_db_bits(crate::db::types::TAG_PROVENANCE_MANUAL)],
-    ).map_err(|e| format!("Failed to import tags: {e}"))?;
+         FROM old_db.entity_tag_raw",
+            [crate::db::types::mask_to_db_bits(
+                crate::db::types::TAG_PROVENANCE_MANUAL,
+            )],
+        )
+        .map_err(|e| format!("Failed to import tags: {e}"))?;
 
     // Step 5: folders
     let _ = conn.execute(
         "INSERT OR IGNORE INTO folder (folder_id, name, parent_id, icon, color, notes, sort_order, auto_tags, watch_path, watch_enabled, watch_subfolders, watch_import_status_mode, date_added, date_modified)
          SELECT folder_id, name, parent_id, icon, color, notes, sort_order, auto_tags, watch_path, watch_enabled, watch_subfolders, watch_import_status_mode, COALESCE(created_at, datetime('now')), COALESCE(updated_at, datetime('now'))
          FROM old_db.folder", []);
-    result.folder_members_migrated = conn.execute(
-        "INSERT OR IGNORE INTO folder_member (folder_id, entity_id, position_rank)
-         SELECT folder_id, entity_id, position_rank FROM old_db.folder_entity", [],
-    ).map_err(|e| format!("Failed to import folder_member: {e}"))?;
+    result.folder_members_migrated = conn
+        .execute(
+            "INSERT OR IGNORE INTO folder_member (folder_id, entity_id, position_rank)
+         SELECT folder_id, entity_id, position_rank FROM old_db.folder_entity",
+            [],
+        )
+        .map_err(|e| format!("Failed to import folder_member: {e}"))?;
 
     // Step 6: Fix collection primary_member_entity_id
     let _ = conn.execute(
@@ -405,7 +452,9 @@ pub fn migrate_from_attached(conn: &Connection) -> Result<MigrationResult, Strin
              SELECT child.entity_id FROM media_entity child
              WHERE child.parent_collection_entity_id = media_entity.entity_id
              ORDER BY child.collection_ordinal ASC LIMIT 1
-         ) WHERE entity_kind = 'collection'", []);
+         ) WHERE entity_kind = 'collection'",
+        [],
+    );
 
     // Step 7: Recompute collection aggregates
     let _ = conn.execute(
@@ -432,7 +481,10 @@ pub fn migrate_from_attached(conn: &Connection) -> Result<MigrationResult, Strin
     let _ = conn.execute("INSERT OR IGNORE INTO credential_domain (site_category, credential_type, display_name, date_added) SELECT site_category, credential_type, display_name, COALESCE(created_at, datetime('now')) FROM old_db.credential_domain", []);
     let _ = conn.execute("INSERT OR IGNORE INTO credential_health (site_category, health_status, last_checked_at, last_error) SELECT site_category, health_status, last_checked_at, last_error FROM old_db.credential_health", []);
     let _ = conn.execute("INSERT OR IGNORE INTO duplicate (file_id_a, file_id_b, distance, status, decision_at, decision_source, decision_reason, winner_file_id, loser_file_id) SELECT file_id_a, file_id_b, distance, status, decision_at, decision_source, decision_reason, winner_file_id, loser_file_id FROM old_db.duplicate", []);
-    let _ = conn.execute("INSERT OR IGNORE INTO kv_settings (key, value) SELECT key, value FROM old_db.kv_settings", []);
+    let _ = conn.execute(
+        "INSERT OR IGNORE INTO kv_settings (key, value) SELECT key, value FROM old_db.kv_settings",
+        [],
+    );
     let _ = conn.execute("INSERT OR IGNORE INTO view_pref (scope, sort_field, sort_dir, layout, tile_size, show_name, show_resolution, show_extension, show_label, thumbnail_fit) SELECT scope, sort_field, sort_dir, layout, tile_size, show_name, show_resolution, show_extension, show_label, thumbnail_fit FROM old_db.view_pref", []);
 
     // Step 11: deferred_work
@@ -441,8 +493,11 @@ pub fn migrate_from_attached(conn: &Connection) -> Result<MigrationResult, Strin
     // Set schema version
     conn.execute("DELETE FROM schema_version", [])
         .map_err(|e| format!("Failed to clear schema_version: {e}"))?;
-    conn.execute("INSERT INTO schema_version (version) VALUES (?1)", [NEW_SCHEMA_VERSION])
-        .map_err(|e| format!("Failed to set schema version: {e}"))?;
+    conn.execute(
+        "INSERT INTO schema_version (version) VALUES (?1)",
+        [NEW_SCHEMA_VERSION],
+    )
+    .map_err(|e| format!("Failed to set schema version: {e}"))?;
 
     conn.execute_batch("PRAGMA foreign_keys = ON;")
         .map_err(|e| format!("Failed to re-enable FK: {e}"))?;

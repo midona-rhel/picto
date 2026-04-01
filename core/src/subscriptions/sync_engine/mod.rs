@@ -4,7 +4,7 @@
 //! 1. Build URL from subscription's gallery-dl URL template + query text
 //! 2. Load credentials from OS keychain (if configured for that site)
 //! 3. Spawn gallery-dl subprocess with appropriate flags
-//! 4. Import each downloaded file via the existing ImportPipeline
+//! 4. Queue each committed download for background ingest
 //! 5. Merge metadata for already-imported files (tags, URLs, notes, name)
 //! 6. Track `completed_initial_run` for smart-stop behavior
 
@@ -33,11 +33,13 @@ use crate::subscriptions::policy::{
     apply_resume_to_query, default_resume_strategy_for_site, effective_inbox_limit,
     range_start_from_cursor, resolve_query_name,
 };
+use crate::tags::logging::{preview_tag_strings, summarize_tag_strings};
 
 #[derive(Debug, Clone, Default)]
 pub struct SyncProgress {
     pub files_downloaded: usize,
     pub files_skipped: usize,
+    pub queued_for_ingest: usize,
     pub pages_fetched: usize,
     pub errors: Vec<String>,
     pub cancelled: bool,
@@ -81,7 +83,6 @@ pub(super) struct PendingCollection {
     pub preferred_name: String,
     pub expected_count: Option<u32>,
     pub members: Vec<PendingMember>,
-    pub queue_id: Option<i64>,
 }
 
 impl<'a> SubscriptionSyncEngine<'a> {
@@ -134,23 +135,126 @@ impl<'a> SubscriptionSyncEngine<'a> {
         pending_key: &str,
         pending_collections: &mut HashMap<String, PendingCollection>,
         subscription_id: i64,
+        query_id: i64,
+        query_run_id: Option<i64>,
         sub_id_str: &str,
         progress: &mut SyncProgress,
-        changed_collection_ids: &mut Vec<i64>,
-        failed_members: &[gallery_dl_runner::ParsedMetadata],
     ) {
         let Some(pc) = pending_collections.remove(pending_key) else {
             return;
         };
-        self.materialize_collection(
-            pc,
+        self.enqueue_pending_collection(pc, subscription_id, query_id, query_run_id)
+            .await;
+        progress.queued_for_ingest += 1;
+        self.set_phase("queueing");
+        self.emit_progress_force(sub_id_str, progress, "Queued post for ingest");
+    }
+
+    async fn enqueue_pending_collection(
+        &self,
+        pc: PendingCollection,
+        subscription_id: i64,
+        query_id: i64,
+        query_run_id: Option<i64>,
+    ) {
+        let cleanup_root = pc
+            .members
+            .first()
+            .and_then(|member| detect_gallery_dl_root(&member.file_path));
+        let items: Vec<(
+            PathBuf,
+            Option<i64>,
+            crate::ingest_queue::IngestQueueItemPayload,
+            bool,
+        )> = pc
+            .members
+            .into_iter()
+            .map(|member| {
+                let request = build_subscription_ingest_request(
+                    subscription_id,
+                    &member.file_path,
+                    &member.metadata,
+                    false,
+                    0,
+                );
+                log_subscription_ingest_request_shape(
+                    query_id,
+                    subscription_id,
+                    &member.metadata,
+                    &request.tag_strings,
+                );
+                (
+                    member.file_path,
+                    Some(member.page_num as i64),
+                    crate::ingest_queue::IngestQueueItemPayload {
+                        request,
+                        subscription_metadata: Some(member.metadata),
+                        target_folder_id: None,
+                    },
+                    true,
+                )
+            })
+            .collect();
+        let _ = self
+            .db
+            .enqueue_ingest_queue(
+                crate::ingest_queue::IngestQueueKind::Collection,
+                "subscription",
+                Some(subscription_id),
+                Some(query_id),
+                query_run_id,
+                cleanup_root.as_deref(),
+                Some(&pc.post_id),
+                Some(&pc.category),
+                Some(&pc.preferred_name),
+                pc.expected_count.map(i64::from),
+                items,
+            )
+            .await;
+    }
+
+    async fn enqueue_single_subscription_item(
+        &self,
+        subscription_id: i64,
+        query_id: i64,
+        query_run_id: Option<i64>,
+        file_path: &std::path::Path,
+        metadata: &gallery_dl_runner::ParsedMetadata,
+    ) {
+        let cleanup_root = detect_gallery_dl_root(file_path);
+        let request =
+            build_subscription_ingest_request(subscription_id, file_path, metadata, false, 0);
+        log_subscription_ingest_request_shape(
+            query_id,
             subscription_id,
-            sub_id_str,
-            progress,
-            changed_collection_ids,
-            failed_members,
-        )
-        .await;
+            metadata,
+            &request.tag_strings,
+        );
+        let _ = self
+            .db
+            .enqueue_ingest_queue(
+                crate::ingest_queue::IngestQueueKind::Single,
+                "subscription",
+                Some(subscription_id),
+                Some(query_id),
+                query_run_id,
+                cleanup_root.as_deref(),
+                metadata.post_id.as_deref(),
+                metadata.category.as_deref(),
+                preferred_import_name(metadata).as_deref(),
+                metadata.page_count.map(i64::from),
+                vec![(
+                    file_path.to_path_buf(),
+                    metadata.page_num.map(i64::from),
+                    crate::ingest_queue::IngestQueueItemPayload {
+                        request,
+                        subscription_metadata: Some(metadata.clone()),
+                        target_folder_id: None,
+                    },
+                    true,
+                )],
+            )
+            .await;
     }
 
     pub fn new(
@@ -296,9 +400,16 @@ impl<'a> SubscriptionSyncEngine<'a> {
         );
 
         let credential = self
-            .load_run_credential(site_id, &url, &sub_id_str, &progress)
+            .load_run_credential(
+                subscription_id,
+                query_id,
+                site_id,
+                &url,
+                &sub_id_str,
+                &progress,
+            )
             .await;
-        let has_credential = credential.is_some();
+        let has_credential = credential.has_credential();
         let mut _domain_run_guard = None;
         if let Some(rate_limiter) = &self.rate_limiter {
             if let Some(domain) = gallery_dl_runner::extract_domain(&url) {
@@ -368,12 +479,15 @@ impl<'a> SubscriptionSyncEngine<'a> {
         );
 
         let opts = RunOptions {
+            subscription_id: Some(subscription_id),
+            query_id: Some(query_id),
+            site_id: site_id.to_string(),
             url: url.clone(),
             post_limit,
             range_start,
             abort_threshold,
             sleep_request: self.settings.sub_rate_limit_secs,
-            credential,
+            auth: credential.gallery_dl_auth.clone(),
             archive_path: if use_archive {
                 archive_path
             } else {
@@ -387,7 +501,7 @@ impl<'a> SubscriptionSyncEngine<'a> {
             cancel: cancel.clone(),
         };
 
-        // ── Streaming import: process files as gallery-dl downloads them ──
+        // ── Streaming queue handoff: downloads are enqueued for background ingest ──
         let (item_tx, mut item_rx) =
             tokio::sync::mpsc::channel::<gallery_dl_runner::DownloadedItem>(32);
 
@@ -398,7 +512,6 @@ impl<'a> SubscriptionSyncEngine<'a> {
 
         let mut pending_collections: HashMap<String, PendingCollection> = HashMap::new();
         let mut current_pending_collection_key: Option<String> = None;
-        let mut changed_collection_ids: Vec<i64> = Vec::new();
         let mut all_post_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
         let mut total_items: usize = 0;
         let mut posts_processed_this_run: usize = 0;
@@ -472,10 +585,10 @@ impl<'a> SubscriptionSyncEngine<'a> {
                             &previous_key,
                             &mut pending_collections,
                             subscription_id,
+                            query_id,
+                            query_run_id,
                             &sub_id_str,
                             &mut progress,
-                            &mut changed_collection_ids,
-                            &[],
                         )
                         .await;
                     }
@@ -526,40 +639,9 @@ impl<'a> SubscriptionSyncEngine<'a> {
                             preferred_name,
                             expected_count: None,
                             members: Vec::new(),
-                            queue_id: None,
                         });
-                pending.expected_count = Some(
-                    pending
-                        .expected_count
-                        .unwrap_or(0)
-                        .max(page_count),
-                )
-                .filter(|count| *count > 0);
-
-                // Persist to download queue for crash recovery
-                if pending.queue_id.is_none() {
-                    if let Ok(qid) = self
-                        .db
-                        .create_or_get_queue_entry(
-                            subscription_id,
-                            Some(query_id),
-                            &pending.post_id,
-                            &pending.category,
-                            Some(&pending.preferred_name),
-                            Some(page_count as i64),
-                        )
-                        .await
-                    {
-                        pending.queue_id = Some(qid);
-                    }
-                }
-                if let Some(qid) = pending.queue_id {
-                    let meta_json = serde_json::to_string(&item.metadata).ok();
-                    let _ = self
-                        .db
-                        .add_queue_item(qid, Some(page_num as i64), meta_json.as_deref())
-                        .await;
-                }
+                pending.expected_count = Some(pending.expected_count.unwrap_or(0).max(page_count))
+                    .filter(|count| *count > 0);
 
                 pending.members.push(PendingMember {
                     file_path: item.file_path,
@@ -572,10 +654,10 @@ impl<'a> SubscriptionSyncEngine<'a> {
                         &previous_key,
                         &mut pending_collections,
                         subscription_id,
+                        query_id,
+                        query_run_id,
                         &sub_id_str,
                         &mut progress,
-                        &mut changed_collection_ids,
-                        &[],
                     )
                     .await;
                     self.finalize_current_post_progress(
@@ -590,16 +672,20 @@ impl<'a> SubscriptionSyncEngine<'a> {
                     .await;
                 }
 
-                progress.current_post_id =
-                    Some(item.metadata.post_id.clone().unwrap_or_else(|| "unknown".to_string()));
+                progress.current_post_id = Some(
+                    item.metadata
+                        .post_id
+                        .clone()
+                        .unwrap_or_else(|| "unknown".to_string()),
+                );
                 progress.current_post_items = 1;
 
                 // Single image (or multi-image with auto_collections off): import immediately
-                self.set_phase("downloading");
+                self.set_phase("queueing");
                 self.emit_progress(
                     &sub_id_str,
                     &progress,
-                    &format!("Importing {post_id_display}..."),
+                    &format!("Queueing {post_id_display}..."),
                 );
 
                 // When auto_collections is off and this is a multi-image post,
@@ -625,68 +711,20 @@ impl<'a> SubscriptionSyncEngine<'a> {
                     &item.metadata
                 };
 
-                match self
-                    .import_item(&item.file_path, metadata_ref, subscription_id, &url, false)
-                    .await
-                {
-                    Ok(outcome) => {
-                        if let Some(item_key) = metadata_item_key(metadata_ref) {
-                            let _ = self
-                                .db
-                                .resolve_subscription_download_attempt(
-                                    subscription_id,
-                                    Some(query_id),
-                                    &item_key,
-                                )
-                                .await;
-                        }
-                        self.persist_post_member_state(
-                            subscription_id,
-                            site_id,
-                            metadata_ref,
-                            Some(outcome.entity_hash.as_str()),
-                            "imported",
-                        )
-                        .await;
-                        if outcome.imported_new {
-                            progress.files_downloaded += 1;
-                            info!(
-                                query_id,
-                                post_id = post_id_display,
-                                total_downloaded = progress.files_downloaded,
-                                "sync_query: imported new file"
-                            );
-                            self.set_phase("downloading");
-                            self.emit_progress(
-                                &sub_id_str,
-                                &progress,
-                                &format!("Downloaded {} files", progress.files_downloaded),
-                            );
-                        } else {
-                            progress.files_skipped += 1;
-                            info!(
-                                query_id,
-                                post_id = post_id_display,
-                                total_skipped = progress.files_skipped,
-                                "sync_query: skipped (already exists)"
-                            );
-                        }
-                    }
-                    Err(e) => {
-                        warn!(query_id, post_id = post_id_display, error = %e, "sync_query: import error");
-                        progress
-                            .errors
-                            .push(format!("Import error for post {post_id_display}: {e}"));
-                        self.record_issue(
-                            subscription_id,
-                            Some(query_id),
-                            "import_failure",
-                            &format!("Import failed for post {post_id_display}"),
-                            Some(&e),
-                        )
-                        .await;
-                    }
-                }
+                self.enqueue_single_subscription_item(
+                    subscription_id,
+                    query_id,
+                    query_run_id,
+                    &item.file_path,
+                    metadata_ref,
+                )
+                .await;
+                progress.queued_for_ingest += 1;
+                self.emit_progress(
+                    &sub_id_str,
+                    &progress,
+                    &format!("Queued {} files for ingest", progress.queued_for_ingest),
+                );
 
                 self.finalize_current_post_progress(
                     query_id,
@@ -708,7 +746,7 @@ impl<'a> SubscriptionSyncEngine<'a> {
             Ok(Err(e)) => {
                 progress.errors.push(format!("gallery-dl failed: {e}"));
                 progress.failure_kind = Some("unknown".to_string());
-                self.update_credential_health(site_id, "error", Some(&e))
+                self.note_runtime_error(site_id, has_credential, Some(&e))
                     .await;
                 let _ = self
                     .db
@@ -723,7 +761,7 @@ impl<'a> SubscriptionSyncEngine<'a> {
                 // Don't materialize incomplete collections on runner failure
                 let _ = self
                     .db
-                    .mark_all_pending_stale_for_subscription(subscription_id)
+                    .mark_all_pending_ingest_stale_for_subscription(subscription_id)
                     .await;
                 if let Some(query_run_id) = query_run_id {
                     let _ = self
@@ -758,7 +796,7 @@ impl<'a> SubscriptionSyncEngine<'a> {
                     .await;
                 let _ = self
                     .db
-                    .mark_all_pending_stale_for_subscription(subscription_id)
+                    .mark_all_pending_ingest_stale_for_subscription(subscription_id)
                     .await;
                 if let Some(query_run_id) = query_run_id {
                     let _ = self
@@ -785,9 +823,9 @@ impl<'a> SubscriptionSyncEngine<'a> {
             HashMap::new();
         if run_summary.had_download_errors {
             progress.failure_kind = Some("download_error".to_string());
-            progress.errors.push(
-                "One or more subscription downloads failed after retries".to_string(),
-            );
+            progress
+                .errors
+                .push("One or more subscription downloads failed after retries".to_string());
             for failed in &run_summary.failed_items {
                 self.persist_failed_download_attempt(
                     subscription_id,
@@ -796,7 +834,8 @@ impl<'a> SubscriptionSyncEngine<'a> {
                     failed,
                 )
                 .await;
-                if let Some((category, post_id, _)) = collection_group_parts(site_id, &failed.metadata)
+                if let Some((category, post_id, _)) =
+                    collection_group_parts(site_id, &failed.metadata)
                 {
                     let key = format!("{category}:{post_id}");
                     failed_post_members
@@ -810,7 +849,10 @@ impl<'a> SubscriptionSyncEngine<'a> {
                 Some(query_id),
                 "download_failure",
                 "One or more subscription items failed after gallery-dl retries",
-                run_summary.failed_items.first().map(|item| item.error_message.as_str()),
+                run_summary
+                    .failed_items
+                    .first()
+                    .map(|item| item.error_message.as_str()),
             )
             .await;
         }
@@ -830,9 +872,13 @@ impl<'a> SubscriptionSyncEngine<'a> {
             );
             progress.errors.push(summary.clone());
             let health_status = match failure_kind {
-                FailureKind::Unauthorized => "unauthorized",
-                FailureKind::Expired => "expired",
-                _ => "error",
+                FailureKind::Unauthorized => {
+                    Some(crate::subscriptions::credential_service::AuthFailureKind::Unauthorized)
+                }
+                FailureKind::Expired => {
+                    Some(crate::subscriptions::credential_service::AuthFailureKind::Expired)
+                }
+                _ => None,
             };
             let err = run_summary
                 .stderr_output
@@ -843,18 +889,26 @@ impl<'a> SubscriptionSyncEngine<'a> {
                 .trim()
                 .to_string();
             warn!(site_id = %site_id, query_id, failure_kind = failure_kind_str, error = %err, "gallery-dl query execution failed");
-            self.update_credential_health(site_id, health_status, Some(&err))
+            if let Some(kind) = health_status {
+                self.note_run_auth_failure(subscription_id, query_id, site_id, kind, Some(&err))
+                    .await;
+            } else {
+                self.note_runtime_error(site_id, has_credential, Some(&err))
+                    .await;
+            }
+            if health_status.is_none() {
+                self.record_issue(
+                    subscription_id,
+                    Some(query_id),
+                    failure_kind_str,
+                    &summary,
+                    Some(&err),
+                )
                 .await;
-            self.record_issue(
-                subscription_id,
-                Some(query_id),
-                failure_kind_str,
-                &summary,
-                Some(&err),
-            )
-            .await;
+            }
         } else if run_summary.exit_code == 0 && has_credential {
-            self.update_credential_health(site_id, "valid", None).await;
+            self.note_run_success(subscription_id, query_id, site_id, has_credential)
+                .await;
             let _ = self
                 .db
                 .resolve_subscription_issues(subscription_id, Some(query_id), "unauthorized")
@@ -888,15 +942,14 @@ impl<'a> SubscriptionSyncEngine<'a> {
         );
         if !progress.cancelled {
             if let Some(last_key) = current_pending_collection_key.take() {
-                let failed_members = failed_post_members.remove(&last_key).unwrap_or_default();
                 self.flush_pending_collection(
                     &last_key,
                     &mut pending_collections,
                     subscription_id,
+                    query_id,
+                    query_run_id,
                     &sub_id_str,
                     &mut progress,
-                    &mut changed_collection_ids,
-                    &failed_members,
                 )
                 .await;
                 self.finalize_current_post_progress(
@@ -907,44 +960,49 @@ impl<'a> SubscriptionSyncEngine<'a> {
                     &resume_strategy,
                     range_start,
                     &all_post_ids,
-            )
-            .await;
-        }
+                )
+                .await;
+            }
 
-        let bridge_discovered_without_downloads =
-            !completed_initial_run
+            let bridge_discovered_without_downloads = !completed_initial_run
                 && !progress.cancelled
                 && run_summary.exit_code == 0
                 && run_summary.discovered_items > 0
                 && total_items == 0;
-        if bridge_discovered_without_downloads {
-            let detail = format!(
+            if bridge_discovered_without_downloads {
+                let detail = format!(
                 "gallery-dl discovered {} items across {} posts but produced no downloadable files",
                 run_summary.discovered_items,
                 run_summary.discovered_post_ids.len(),
             );
-            warn!(
-                query_id,
-                discovered_items = run_summary.discovered_items,
-                discovered_posts = run_summary.discovered_post_ids.len(),
-                skipped_archive_items = run_summary.skipped_archive_items,
-                "sync_query: bridge discovered items but no downloads were emitted"
-            );
-            progress.failure_kind = Some("bridge_no_downloads".to_string());
-            progress.errors.push(detail.clone());
-            self.record_issue(
-                subscription_id,
-                Some(query_id),
-                "bridge_no_downloads",
-                "gallery-dl discovered items but emitted no downloads",
-                Some(&detail),
-            )
-            .await;
-        }
+                warn!(
+                    query_id,
+                    discovered_items = run_summary.discovered_items,
+                    discovered_posts = run_summary.discovered_post_ids.len(),
+                    skipped_archive_items = run_summary.skipped_archive_items,
+                    "sync_query: bridge discovered items but no downloads were emitted"
+                );
+                progress.failure_kind = Some("bridge_no_downloads".to_string());
+                progress.errors.push(detail.clone());
+                self.record_issue(
+                    subscription_id,
+                    Some(query_id),
+                    "bridge_no_downloads",
+                    "gallery-dl discovered items but emitted no downloads",
+                    Some(&detail),
+                )
+                .await;
+            }
             for failed_members in failed_post_members.into_values() {
                 for failed in failed_members {
-                    self.persist_post_member_state(subscription_id, site_id, &failed, None, "failed")
-                        .await;
+                    self.persist_post_member_state(
+                        subscription_id,
+                        site_id,
+                        &failed,
+                        None,
+                        "failed",
+                    )
+                    .await;
                 }
             }
         } else {
@@ -952,48 +1010,11 @@ impl<'a> SubscriptionSyncEngine<'a> {
             // Mark queue entries as stale for potential later recovery.
             let _ = self
                 .db
-                .mark_all_pending_stale_for_subscription(subscription_id)
+                .mark_all_pending_ingest_stale_for_subscription(subscription_id)
                 .await;
         }
 
-        // Emit one merged state change for the completed import phase.
-        let mut impact: Option<crate::runtime_contract::change_builder::ChangeImpact> = None;
-        let mut origin = "subscription_import";
-
-        if !changed_collection_ids.is_empty() {
-            changed_collection_ids.sort_unstable();
-            changed_collection_ids.dedup();
-            let mut next = crate::runtime_contract::change_builder::ChangeImpact::new();
-            for collection_id in changed_collection_ids.iter() {
-                next = next.merge(
-                    crate::runtime_contract::change_builder::ChangeImpact::collection_membership_change(
-                        *collection_id,
-                    ),
-                );
-            }
-            impact = Some(match impact.take() {
-                Some(current) => current.merge(next),
-                None => next,
-            });
-        }
-        if progress.files_downloaded > 0 {
-            let next = crate::runtime_contract::change_builder::ChangeImpact::new()
-                .status_changed()
-                .sidebar_counts_from(self.db)
-                .extra_grid_scopes(vec!["system:inbox".into()]);
-            impact = Some(match impact.take() {
-                Some(current) => current.merge(next),
-                None => next,
-            });
-        } else if !changed_collection_ids.is_empty() {
-            origin = "subscription_import_collections";
-        }
-
-        if let Some(impact) = impact {
-            crate::events::emit_state_changed(origin, impact);
-        }
-
-        gallery_dl_runner::cleanup_temp_dir(&run_summary.temp_dir).await;
+        maybe_cleanup_subscription_temp_root(self.db, &run_summary.temp_dir).await;
 
         self.set_phase("finalizing");
         self.emit_progress_force(&sub_id_str, &progress, "Finalizing...");
@@ -1106,13 +1127,7 @@ impl<'a> SubscriptionSyncEngine<'a> {
         if progress.errors.is_empty() && !progress.cancelled {
             let _ = self
                 .db
-                .set_query_terminal_state(
-                    query_id,
-                    Some(Utc::now().to_rfc3339()),
-                    None,
-                    None,
-                    None,
-                )
+                .set_query_terminal_state(query_id, Some(Utc::now().to_rfc3339()), None, None, None)
                 .await;
         } else if !progress.cancelled {
             let _ = self
@@ -1145,7 +1160,14 @@ impl<'a> SubscriptionSyncEngine<'a> {
         let sub_id_str = subscription_id.to_string();
 
         let credential = self
-            .load_run_credential(site_id, retry_url, &sub_id_str, &progress)
+            .load_run_credential(
+                subscription_id,
+                query_id,
+                site_id,
+                retry_url,
+                &sub_id_str,
+                &progress,
+            )
             .await;
         let mut _domain_run_guard = None;
         if let Some(rate_limiter) = &self.rate_limiter {
@@ -1162,12 +1184,15 @@ impl<'a> SubscriptionSyncEngine<'a> {
             .ok();
 
         let opts = RunOptions {
+            subscription_id: Some(subscription_id),
+            query_id: Some(query_id),
+            site_id: site_id.to_string(),
             url: retry_url.to_string(),
             post_limit: None,
             range_start: 1,
             abort_threshold: None,
             sleep_request: self.settings.sub_rate_limit_secs,
-            credential,
+            auth: credential.gallery_dl_auth.clone(),
             archive_path: PathBuf::new(),
             archive_prefix: None,
             cancel: cancel.clone(),
@@ -1194,7 +1219,9 @@ impl<'a> SubscriptionSyncEngine<'a> {
                         subscription_id,
                         Some(query_id),
                         "unexpected_retry_item",
-                        &format!("Retry for post {expected_post_id} yielded item from post {post_id}"),
+                        &format!(
+                            "Retry for post {expected_post_id} yielded item from post {post_id}"
+                        ),
                         item.metadata.canonical_post_url.as_deref(),
                     )
                     .await;
@@ -1219,17 +1246,15 @@ impl<'a> SubscriptionSyncEngine<'a> {
             if is_collection_member {
                 let (category, post_id, preferred_name) = collection_parts.unwrap();
                 let key = format!("{category}:{post_id}");
-                let pending =
-                    pending_collections
-                        .entry(key)
-                        .or_insert_with(|| PendingCollection {
-                            category,
-                            post_id,
-                            preferred_name,
-                            expected_count: None,
-                            members: Vec::new(),
-                            queue_id: None,
-                        });
+                let pending = pending_collections
+                    .entry(key)
+                    .or_insert_with(|| PendingCollection {
+                        category,
+                        post_id,
+                        preferred_name,
+                        expected_count: None,
+                        members: Vec::new(),
+                    });
                 pending.expected_count = Some(
                     pending
                         .expected_count
@@ -1247,7 +1272,13 @@ impl<'a> SubscriptionSyncEngine<'a> {
             }
 
             match self
-                .import_item(&item.file_path, &item.metadata, subscription_id, retry_url, false)
+                .import_item(
+                    &item.file_path,
+                    &item.metadata,
+                    subscription_id,
+                    retry_url,
+                    false,
+                )
                 .await
             {
                 Ok(outcome) => {
@@ -1269,7 +1300,7 @@ impl<'a> SubscriptionSyncEngine<'a> {
                         "imported",
                     )
                     .await;
-                    if outcome.imported_new {
+                    if outcome.imported {
                         progress.files_downloaded += 1;
                     } else {
                         progress.files_skipped += 1;
@@ -1292,7 +1323,9 @@ impl<'a> SubscriptionSyncEngine<'a> {
         let run_summary = match runner_handle.await {
             Ok(Ok(summary)) => summary,
             Ok(Err(error)) => {
-                progress.errors.push(format!("gallery-dl retry failed: {error}"));
+                progress
+                    .errors
+                    .push(format!("gallery-dl retry failed: {error}"));
                 progress.failure_kind = Some("unknown".to_string());
                 return progress;
             }
@@ -1348,12 +1381,20 @@ impl<'a> SubscriptionSyncEngine<'a> {
             changed_collection_ids.sort_unstable();
             changed_collection_ids.dedup();
             let mut impact = crate::runtime_contract::change_builder::ChangeImpact::new();
-            for collection_id in &changed_collection_ids {
-                impact = impact.merge(
-                    crate::runtime_contract::change_builder::ChangeImpact::collection_membership_change(
-                        *collection_id,
-                    ),
-                );
+            if let Ok(state) = crate::state::get_state() {
+                for collection_id in &changed_collection_ids {
+                    let folder_ids = state
+                        .engine
+                        .db()
+                        .get_collection_folder_ids(*collection_id)
+                        .unwrap_or_default();
+                    impact = impact.merge(
+                        crate::runtime_contract::change_builder::ChangeImpact::collection_membership_change(
+                            *collection_id,
+                            &folder_ids,
+                        ),
+                    );
+                }
             }
             crate::events::emit_state_changed("subscription_retry_post", impact);
         }
@@ -1397,7 +1438,12 @@ impl<'a> SubscriptionSyncEngine<'a> {
         entity_hash: Option<&str>,
         status: &str,
     ) {
-        let Some(post_id) = metadata.post_id.as_deref().map(str::trim).filter(|value| !value.is_empty()) else {
+        let Some(post_id) = metadata
+            .post_id
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        else {
             return;
         };
         let category = metadata
@@ -1406,12 +1452,8 @@ impl<'a> SubscriptionSyncEngine<'a> {
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .unwrap_or(site_id);
-        let item_key = metadata_item_key(metadata).unwrap_or_else(|| {
-            format!(
-                "{category}:{post_id}:{}",
-                metadata.page_num.unwrap_or(0)
-            )
-        });
+        let item_key = metadata_item_key(metadata)
+            .unwrap_or_else(|| format!("{category}:{post_id}:{}", metadata.page_num.unwrap_or(0)));
         let _ = self
             .db
             .upsert_subscription_post_member(
@@ -1498,7 +1540,10 @@ impl<'a> SubscriptionSyncEngine<'a> {
                 page_num: metadata.page_num.map(i64::from),
                 canonical_post_url: metadata.canonical_post_url.clone(),
                 media_url: metadata.media_url.clone(),
-                retry_url: metadata.canonical_post_url.clone().or_else(|| metadata.source_url.clone()),
+                retry_url: metadata
+                    .canonical_post_url
+                    .clone()
+                    .or_else(|| metadata.source_url.clone()),
                 failure_kind: Some("download_failure".to_string()),
                 last_error: Some(failed.error_message.clone()),
                 next_retry_at: Some(next_retry_at),
@@ -1523,6 +1568,74 @@ fn metadata_item_key(metadata: &gallery_dl_runner::ParsedMetadata) -> Option<Str
             metadata.page_num.unwrap_or(0)
         ))
     })
+}
+
+fn build_subscription_ingest_request(
+    subscription_id: i64,
+    file_path: &std::path::Path,
+    metadata: &gallery_dl_runner::ParsedMetadata,
+    skip_thumbnail: bool,
+    initial_status: i64,
+) -> crate::ingest::SingleIngestRequest {
+    crate::ingest::SingleIngestRequest {
+        source_kind: crate::ingest::IngestSourceKind::Subscription,
+        path: file_path.to_path_buf(),
+        tag_strings: crate::ingest::normalize_subscription_tags(metadata),
+        source_urls: crate::ingest::dedupe_urls(metadata.source_urls.clone()),
+        name: preferred_import_name(metadata),
+        notes: crate::ingest::metadata_notes_text(metadata),
+        created_at: metadata.created_at.clone(),
+        initial_status,
+        skip_thumbnail,
+        tag_provenance_mask: crate::db::types::TAG_PROVENANCE_UNKNOWN,
+        subscription_id: Some(subscription_id),
+    }
+}
+
+fn log_subscription_ingest_request_shape(
+    query_id: i64,
+    subscription_id: i64,
+    metadata: &gallery_dl_runner::ParsedMetadata,
+    tag_strings: &[String],
+) {
+    let summary = summarize_tag_strings(tag_strings);
+    info!(
+        query_id,
+        subscription_id,
+        post_id = metadata.post_id.as_deref().unwrap_or("?"),
+        category = metadata.category.as_deref().unwrap_or("?"),
+        item_key = metadata.item_key.as_deref().unwrap_or("?"),
+        request_tag_count = summary.total,
+        request_creator_tag_count = summary.creator,
+        request_character_tag_count = summary.character,
+        request_series_tag_count = summary.series,
+        request_general_tag_count = summary.general,
+        request_meta_tag_count = summary.meta,
+        request_other_namespaced_tag_count = summary.other_namespaced,
+        request_tag_preview = ?preview_tag_strings(tag_strings, 5),
+        "subscription ingest request built"
+    );
+}
+
+fn detect_gallery_dl_root(path: &std::path::Path) -> Option<PathBuf> {
+    path.ancestors().find_map(|ancestor| {
+        let name = ancestor.file_name()?.to_str()?;
+        if name.starts_with("picto_gdl_") {
+            Some(ancestor.to_path_buf())
+        } else {
+            None
+        }
+    })
+}
+
+async fn maybe_cleanup_subscription_temp_root(db: &SqliteDatabase, temp_root: &std::path::Path) {
+    match db.has_retained_ingest_sources_for_root(temp_root).await {
+        Ok(true) => {}
+        Ok(false) => gallery_dl_runner::cleanup_temp_dir(temp_root).await,
+        Err(error) => {
+            warn!(path = %temp_root.display(), error = %error, "Failed to inspect temp-root ingest ownership")
+        }
+    }
 }
 
 /// Compute the resume cursor based on posts actually processed in THIS run.

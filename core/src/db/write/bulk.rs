@@ -33,25 +33,28 @@ pub fn populate_bulk_target(
 
     // Build a full query with no pagination limit to get all matching entity_ids.
     let mut unbounded = query.clone();
-    unbounded.page = QueryPage { limit: i64::MAX, cursor: None };
+    unbounded.page = QueryPage {
+        limit: i64::MAX,
+        cursor: None,
+    };
 
     // Pre-resolve SmartFolder bitmap to entity_ids, same as
     // LibraryDatabase::query_entity_view does for normal reads.
-    let preresolved = if matches!(query.base_scope.kind, crate::db::types::ScopeKind::SmartFolder) {
+    let preresolved = if matches!(
+        query.base_scope.kind,
+        crate::db::types::ScopeKind::SmartFolder
+    ) {
         let sf_id = query.base_scope.id.unwrap_or(0);
-        let bitmap = bitmaps.get(
-            &crate::db::projection::bitmaps::BitmapKey::SmartFolder(sf_id),
-        );
+        let bitmap = bitmaps.get(&crate::db::projection::bitmaps::BitmapKey::SmartFolder(
+            sf_id,
+        ));
         Some(bitmap.iter().map(|id| id as i64).collect::<Vec<_>>())
     } else {
         None
     };
 
-    let result = crate::db::query::grid::query_entity_view(
-        conn,
-        &unbounded,
-        preresolved.as_deref(),
-    )?;
+    let result =
+        crate::db::query::grid::query_entity_view(conn, &unbounded, preresolved.as_deref())?;
 
     // Insert all matching entity hashes → entity_ids into the temp table.
     // The grid query already returned the right set.

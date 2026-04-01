@@ -33,14 +33,22 @@ impl ApplicationEngine {
                     self.db.remove_folder_members(folder_id, &ids, expansion)?
                 }
             },
-            target::ResolvedTarget::Query { view_query, exclusions } => match operation {
-                MembershipOperation::Add => {
-                    self.db.add_folder_members_bulk(folder_id, &view_query, &exclusions, expansion)?
-                }
-                MembershipOperation::Remove => {
-                    self.db
-                        .remove_folder_members_bulk(folder_id, &view_query, &exclusions, expansion)?
-                }
+            target::ResolvedTarget::Query {
+                view_query,
+                exclusions,
+            } => match operation {
+                MembershipOperation::Add => self.db.add_folder_members_bulk(
+                    folder_id,
+                    &view_query,
+                    &exclusions,
+                    expansion,
+                )?,
+                MembershipOperation::Remove => self.db.remove_folder_members_bulk(
+                    folder_id,
+                    &view_query,
+                    &exclusions,
+                    expansion,
+                )?,
             },
         };
         self.commit_write(&WriteChange::from_folder(&change));
@@ -71,11 +79,7 @@ impl ApplicationEngine {
         self.db.delete_folder(folder_id)
     }
 
-    pub fn move_folder(
-        &self,
-        folder_id: i64,
-        new_parent_id: Option<i64>,
-    ) -> Result<(), String> {
+    pub fn move_folder(&self, folder_id: i64, new_parent_id: Option<i64>) -> Result<(), String> {
         self.db.move_folder(folder_id, new_parent_id)
     }
 
@@ -83,19 +87,21 @@ impl ApplicationEngine {
         self.db.reorder_folders(moves)
     }
 
-    pub fn reorder_folder_items(
-        &self,
-        folder_id: i64,
-        moves: &[(i64, i64)],
-    ) -> Result<(), String> {
+    pub fn reorder_folder_items(&self, folder_id: i64, moves: &[(i64, i64)]) -> Result<(), String> {
         self.db.reorder_folder_items(folder_id, moves)
     }
 
-    pub fn get_folder(&self, folder_id: i64) -> Result<Option<crate::db::query::folders::FolderRow>, String> {
+    pub fn get_folder(
+        &self,
+        folder_id: i64,
+    ) -> Result<Option<crate::db::query::folders::FolderRow>, String> {
         self.db.get_folder(folder_id)
     }
 
-    pub fn get_smart_folder(&self, smart_folder_id: i64) -> Result<Option<crate::db::query::folders::SmartFolderRow>, String> {
+    pub fn get_smart_folder(
+        &self,
+        smart_folder_id: i64,
+    ) -> Result<Option<crate::db::query::folders::SmartFolderRow>, String> {
         self.db.get_smart_folder(smart_folder_id)
     }
 
@@ -103,7 +109,9 @@ impl ApplicationEngine {
         self.db.list_folders_canonical()
     }
 
-    pub fn list_smart_folders(&self) -> Result<Vec<crate::db::query::folders::SmartFolderRow>, String> {
+    pub fn list_smart_folders(
+        &self,
+    ) -> Result<Vec<crate::db::query::folders::SmartFolderRow>, String> {
         self.db.list_smart_folders_canonical()
     }
 

@@ -116,6 +116,15 @@ export function QueriesTab({
             : getQueryModeLabel(query);
           const canRun = !activeStandaloneQueryId && !authState.blocking;
           const noteSummary = summarizeNotes(query.notes);
+          const ingestSummary = isRunning
+            ? [
+                `${currentProgress?.queued_for_ingest ?? 0} queued`,
+                `${currentProgress?.ingesting ?? 0} ingesting`,
+                `${currentProgress?.ingested ?? 0} imported`,
+                `${currentProgress?.reused ?? 0} reused`,
+                `${currentProgress?.failed_ingest ?? 0} failed`,
+              ].join(', ')
+            : null;
 
           return (
             <div key={query.id} className={styles.queryCard}>
@@ -150,6 +159,7 @@ export function QueriesTab({
                 <span>{query.files_found.toLocaleString()} files</span>
                 {query.last_check_time && <span>checked {formatRelativeTime(query.last_check_time)}</span>}
                 {failedCount > 0 && <span>{failedCount} failed</span>}
+                {ingestSummary && <span>{ingestSummary}</span>}
                 {noteSummary && <span>{noteSummary}</span>}
               </div>
 

@@ -30,6 +30,13 @@ Current problems:
 
 This PBI defines one ingest pipeline for every source of incoming media.
 
+## Current implementation status
+- Shared ingest queue exists and is used as the durable handoff for subscriptions, manual import, folder import, and watch-folder ingest.
+- Exact file-hash reuse now settles as a successful ingest reuse outcome instead of poisoning the queue as a failure.
+- Ingest queue items now record explicit terminal results: `imported`, `reused`, or `failed`.
+- Source cleanup now follows terminal success, not “new entity created”, so duplicate reruns can release temp files correctly.
+- Remaining parity work is mostly around broader duplicate-review policy and follow-up UX, not the exact-hash queue boundary itself.
+
 ## Product model to encode
 The ingest layer should reflect these truths:
 - every incoming media file enters the library through one ingest service

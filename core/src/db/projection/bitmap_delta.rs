@@ -85,14 +85,36 @@ pub fn flush_deltas(log_path: &Path, store: &BitmapStore) -> std::io::Result<usi
 fn serialize_key(key: &BitmapKey) -> Vec<u8> {
     let mut buf = Vec::with_capacity(9);
     match key {
-        BitmapKey::Status(v) => { buf.push(0); buf.extend_from_slice(&v.to_le_bytes()); }
-        BitmapKey::Tag(v) => { buf.push(1); buf.extend_from_slice(&v.to_le_bytes()); }
-        BitmapKey::ImpliedTag(v) => { buf.push(2); buf.extend_from_slice(&v.to_le_bytes()); }
-        BitmapKey::EffectiveTag(v) => { buf.push(3); buf.extend_from_slice(&v.to_le_bytes()); }
-        BitmapKey::Folder(v) => { buf.push(4); buf.extend_from_slice(&v.to_le_bytes()); }
-        BitmapKey::SmartFolder(v) => { buf.push(5); buf.extend_from_slice(&v.to_le_bytes()); }
-        BitmapKey::Tagged => { buf.push(6); }
-        BitmapKey::CollectionMember => { buf.push(7); }
+        BitmapKey::Status(v) => {
+            buf.push(0);
+            buf.extend_from_slice(&v.to_le_bytes());
+        }
+        BitmapKey::Tag(v) => {
+            buf.push(1);
+            buf.extend_from_slice(&v.to_le_bytes());
+        }
+        BitmapKey::ImpliedTag(v) => {
+            buf.push(2);
+            buf.extend_from_slice(&v.to_le_bytes());
+        }
+        BitmapKey::EffectiveTag(v) => {
+            buf.push(3);
+            buf.extend_from_slice(&v.to_le_bytes());
+        }
+        BitmapKey::Folder(v) => {
+            buf.push(4);
+            buf.extend_from_slice(&v.to_le_bytes());
+        }
+        BitmapKey::SmartFolder(v) => {
+            buf.push(5);
+            buf.extend_from_slice(&v.to_le_bytes());
+        }
+        BitmapKey::Tagged => {
+            buf.push(6);
+        }
+        BitmapKey::CollectionMember => {
+            buf.push(7);
+        }
     }
     buf
 }

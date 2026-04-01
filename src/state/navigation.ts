@@ -11,6 +11,15 @@ import { atom } from 'jotai';
 /** The sidebar node ID that is currently active (e.g. "system:active", "folder:5"). */
 export const activeNodeIdAtom = atom<string>('system:active');
 
+/** When navigating into a collection, this holds the scope we came from (for breadcrumb + back). */
+export const parentNodeIdAtom = atom<string | null>(null);
+
+/** The name of the currently viewed collection (set when navigating into one). */
+export const collectionNameAtom = atom<string | null>(null);
+
+/** When true, the next grid scope transition skips the fade-out phase. */
+export const skipFadeOutAtom = atom(false);
+
 export type SubscriptionsWorkspaceTab = 'subscriptions' | 'auth';
 const SUBSCRIPTIONS_TAB_STORAGE_KEY = 'picto-subscriptions-workspace-tab';
 const storedSubscriptionsTab = localStorage.getItem(SUBSCRIPTIONS_TAB_STORAGE_KEY);
@@ -42,6 +51,28 @@ export const toggleInspectorAtom = atom(null, (get, set) => {
   const next = !get(inspectorCollapsedAtom);
   set(inspectorCollapsedAtom, next);
   localStorage.setItem(INSPECTOR_STORAGE_KEY, String(next));
+});
+
+export const showTreeGuidesAtom = atom(true);
+export const toggleTreeGuidesAtom = atom(null, (get, set) => {
+  const next = !get(showTreeGuidesAtom);
+  set(showTreeGuidesAtom, next);
+});
+
+const INSPECTOR_WIDTH_STORAGE_KEY = 'picto-inspector-width';
+export const INSPECTOR_MIN_WIDTH = 260;
+export const INSPECTOR_MAX_WIDTH = 550;
+const INSPECTOR_DEFAULT_WIDTH = 320;
+const storedInspectorWidth = (() => {
+  const v = parseInt(localStorage.getItem(INSPECTOR_WIDTH_STORAGE_KEY) ?? '', 10);
+  return Number.isFinite(v) ? Math.min(INSPECTOR_MAX_WIDTH, Math.max(INSPECTOR_MIN_WIDTH, v)) : INSPECTOR_DEFAULT_WIDTH;
+})();
+
+export const inspectorWidthAtom = atom(storedInspectorWidth);
+export const setInspectorWidthAtom = atom(null, (_get, set, width: number) => {
+  const clamped = Math.min(INSPECTOR_MAX_WIDTH, Math.max(INSPECTOR_MIN_WIDTH, Math.round(width)));
+  set(inspectorWidthAtom, clamped);
+  localStorage.setItem(INSPECTOR_WIDTH_STORAGE_KEY, String(clamped));
 });
 
 export const setSubscriptionsWorkspaceTabAtom = atom(null, (_get, set, tab: SubscriptionsWorkspaceTab) => {

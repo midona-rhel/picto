@@ -27,6 +27,13 @@ Current problems:
 - broken queries, broken credentials, extractor changes, rate limits, and transient network problems are not persisted as first-class issues
 - subscription import still feels adjacent to ingest instead of explicitly delegating to the ingest pipeline
 
+## Current implementation status
+- Subscription downloads now enqueue durable ingest work instead of importing inline in the sync loop.
+- Exact file-hash duplicates in subscription reruns now settle through the ingest queue as successful reuse instead of failed import rows.
+- Queue-backed ingest progress now distinguishes queued, ingesting, imported, reused, and failed work at the runtime progress layer.
+- Startup repair resets previously poisoned exact-hash duplicate rows for retry so they can settle cleanly and release temp files.
+- Remaining parity work is mostly around richer issue classification and final runtime reporting, not the shared ingest handoff itself.
+
 ## Product model to encode
 The subscription subsystem should reflect these truths:
 - subscription definitions are persistent domain records

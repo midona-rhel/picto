@@ -159,7 +159,89 @@ export function useImageZoom(
     [updateZoomState],
   );
 
+  // ── Animated zoom (smooth transition for keyboard +/- and discrete scroll) ──
+  const animTargetRef = useRef<{ scale: number; tx: number; ty: number } | null>(null);
+  const animStartRef = useRef<{ scale: number; tx: number; ty: number } | null>(null);
+  const animStartTimeRef = useRef(0);
+  const animRafRef = useRef<number | null>(null);
+  const ANIM_DURATION_MS = 150;
+
+  const animateZoomTo = useCallback(
+    (targetScale: number, focalX?: number, focalY?: number) => {
+      // The target accumulates on each call (rapid +++ → 1.25 → 1.56 → 1.95).
+      // The animation always lerps from wherever we are NOW to the new target,
+      // resetting the timer so we always have ANIM_DURATION_MS left to arrive.
+      const cur = liveStateRef.current;
+      const pendingTarget = animTargetRef.current;
+
+      // Rebase: caller passes committedState * multiplier, but we want
+      // pendingTarget * multiplier so rapid presses accumulate.
+      let effectiveTargetScale = targetScale;
+      if (pendingTarget && focalX === undefined) {
+        const committed = state.scale;
+        if (committed > 0) {
+          const multiplier = targetScale / committed;
+          effectiveTargetScale = pendingTarget.scale * multiplier;
+        }
+      }
+      const clamped = Math.min(MAX_SCALE, Math.max(MIN_SCALE, effectiveTargetScale));
+      const base = pendingTarget ?? cur;
+      let target: ZoomState;
+      if (focalX !== undefined && focalY !== undefined) {
+        const ratio = clamped / cur.scale;
+        target = {
+          scale: clamped,
+          tx: focalX - ratio * (focalX - cur.tx),
+          ty: focalY - ratio * (focalY - cur.ty),
+        };
+      } else {
+        const ratio = clamped / base.scale;
+        target = { scale: clamped, tx: base.tx * ratio, ty: base.ty * ratio };
+      }
+
+      // Start from current position, reset timer — always ANIM_DURATION_MS from now
+      animStartRef.current = { ...cur };
+      animTargetRef.current = target;
+      animStartTimeRef.current = performance.now();
+
+      if (animRafRef.current != null) return; // already running
+      const tick = () => {
+        const start = animStartRef.current;
+        const end = animTargetRef.current;
+        if (!start || !end) { animRafRef.current = null; return; }
+
+        const elapsed = performance.now() - animStartTimeRef.current;
+        const t = Math.min(1, elapsed / ANIM_DURATION_MS);
+        // Ease out cubic
+        const ease = 1 - Math.pow(1 - t, 3);
+
+        const s: ZoomState = {
+          scale: start.scale + (end.scale - start.scale) * ease,
+          tx: start.tx + (end.tx - start.tx) * ease,
+          ty: start.ty + (end.ty - start.ty) * ease,
+        };
+
+        updateZoomState(s, true);
+
+        if (t < 1) {
+          animRafRef.current = requestAnimationFrame(tick);
+        } else {
+          animRafRef.current = null;
+          animStartRef.current = null;
+          animTargetRef.current = null;
+          updateZoomState(end);
+        }
+      };
+      animRafRef.current = requestAnimationFrame(tick);
+    },
+    [updateZoomState, state.scale],
+  );
+
   // ── Wheel zoom (non-passive for Mac trackpad) ──
+  // Trackpad sends many small deltaY events (smooth already).
+  // Discrete mouse wheel sends large deltaY — we animate those.
+  const wheelAccumRef = useRef({ targetScale: 0, focalX: 0, focalY: 0, timer: null as ReturnType<typeof setTimeout> | null });
+
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
@@ -169,22 +251,39 @@ export function useImageZoom(
       const rect = container.getBoundingClientRect();
       const focalX = e.clientX - rect.left - rect.width / 2;
       const focalY = e.clientY - rect.top - rect.height / 2;
-      const multiplier = Math.exp(-e.deltaY * 0.004);
 
-      updateZoomState((prev) => {
-        const newScale = Math.min(MAX_SCALE, Math.max(MIN_SCALE, prev.scale * multiplier));
-        const ratio = newScale / prev.scale;
-        return {
-          scale: newScale,
-          tx: focalX - ratio * (focalX - prev.tx),
-          ty: focalY - ratio * (focalY - prev.ty),
-        };
-      }, true);
+      // Trackpad: deltaMode 0, small deltaY. Mouse wheel: deltaMode 0 but large deltaY.
+      const isDiscrete = Math.abs(e.deltaY) >= 40 && !e.ctrlKey;
+
+      if (isDiscrete) {
+        // Accumulate into animated target
+        const acc = wheelAccumRef.current;
+        const base = acc.timer ? acc.targetScale : liveStateRef.current.scale;
+        const direction = e.deltaY > 0 ? 1 / 1.25 : 1.25;
+        acc.targetScale = Math.min(MAX_SCALE, Math.max(MIN_SCALE, base * direction));
+        acc.focalX = focalX;
+        acc.focalY = focalY;
+        if (acc.timer) clearTimeout(acc.timer);
+        animateZoomTo(acc.targetScale, focalX, focalY);
+        acc.timer = setTimeout(() => { acc.timer = null; }, 200);
+      } else {
+        // Smooth trackpad — apply directly per event
+        const multiplier = Math.exp(-e.deltaY * 0.004);
+        updateZoomState((prev) => {
+          const newScale = Math.min(MAX_SCALE, Math.max(MIN_SCALE, prev.scale * multiplier));
+          const ratio = newScale / prev.scale;
+          return {
+            scale: newScale,
+            tx: focalX - ratio * (focalX - prev.tx),
+            ty: focalY - ratio * (focalY - prev.ty),
+          };
+        }, true);
+      }
     };
 
     container.addEventListener('wheel', handleWheel, { passive: false });
     return () => container.removeEventListener('wheel', handleWheel);
-  }, [containerRef, updateZoomState]);
+  }, [containerRef, updateZoomState, animateZoomTo]);
 
   // ── Click-drag pan ──
   const onMouseDown = useCallback((e: React.MouseEvent) => {
@@ -233,8 +332,8 @@ export function useImageZoom(
       if (!imageSize || containerSize.w === 0) return;
       updateZoomState((prev) => ({
         ...prev,
-        tx: containerSize.w / 2 - nx * imageSize.width * prev.scale,
-        ty: containerSize.h / 2 - ny * imageSize.height * prev.scale,
+        tx: (0.5 - nx) * imageSize.width * prev.scale,
+        ty: (0.5 - ny) * imageSize.height * prev.scale,
       }));
     },
     [containerSize, imageSize, updateZoomState],
@@ -253,6 +352,7 @@ export function useImageZoom(
     () => () => {
       if (commitTimerRef.current) clearTimeout(commitTimerRef.current);
       if (frameRef.current != null) cancelAnimationFrame(frameRef.current);
+      if (animRafRef.current != null) cancelAnimationFrame(animRafRef.current);
     },
     [],
   );
@@ -267,6 +367,7 @@ export function useImageZoom(
     fitToWindow,
     fitActual,
     zoomTo,
+    animateZoomTo,
     navigatorRect,
     panToNormalized,
     onLiveFrameRef,

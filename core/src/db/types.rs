@@ -227,6 +227,7 @@ pub struct FolderPatch {
 /// Grid tile payload.
 #[derive(Debug, Clone, Serialize)]
 pub struct EntityGridItem {
+    pub entity_id: i64,
     pub entity_hash: String,
     /// Hash used to load the thumbnail. For singles == entity_hash.
     /// For collections == primary member's hash.
@@ -298,7 +299,7 @@ pub struct QueryFilters {
     pub rating: Option<RatingFilter>,
     pub colors: Option<Vec<String>>,
     pub mime_types: Option<Vec<String>>,
-    pub entity_types: Option<Vec<String>>,  // "image", "video", "audio", "collection"
+    pub entity_types: Option<Vec<String>>, // "image", "video", "audio", "collection"
     pub tags: Option<Vec<TagFilter>>,
     pub date_created: Option<DateRange>,
     pub date_added: Option<DateRange>,
@@ -327,7 +328,9 @@ pub enum TagMatchMode {
     Exclude,
 }
 
-fn default_tag_match() -> TagMatchMode { TagMatchMode::Include }
+fn default_tag_match() -> TagMatchMode {
+    TagMatchMode::Include
+}
 
 #[derive(Debug, Clone, Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -339,7 +342,9 @@ pub enum FilterOp {
     Lt,
 }
 
-fn default_filter_op() -> FilterOp { FilterOp::Gte }
+fn default_filter_op() -> FilterOp {
+    FilterOp::Gte
+}
 
 #[derive(Debug, Clone, Serialize, serde::Deserialize)]
 pub struct DateRange {
@@ -357,12 +362,19 @@ pub struct QuerySort {
 
 impl Default for QuerySort {
     fn default() -> Self {
-        Self { field: "date_added".into(), direction: "desc".into() }
+        Self {
+            field: "date_added".into(),
+            direction: "desc".into(),
+        }
     }
 }
 
-fn default_sort_field() -> String { "date_added".into() }
-fn default_sort_dir() -> String { "desc".into() }
+fn default_sort_field() -> String {
+    "date_added".into()
+}
+fn default_sort_dir() -> String {
+    "desc".into()
+}
 
 #[derive(Debug, Clone, Serialize, serde::Deserialize)]
 pub struct QueryPage {
@@ -374,11 +386,16 @@ pub struct QueryPage {
 
 impl Default for QueryPage {
     fn default() -> Self {
-        Self { limit: 100, cursor: None }
+        Self {
+            limit: 100,
+            cursor: None,
+        }
     }
 }
 
-fn default_limit() -> i64 { 100 }
+fn default_limit() -> i64 {
+    100
+}
 
 /// Bulk entity target — replaces SelectionQuerySpec.
 #[derive(Debug, Clone, Serialize, serde::Deserialize)]
@@ -557,15 +574,11 @@ pub enum EntityViewReconcileResult {
     NoChange,
     /// Some visible rows have updated metadata/derivatives.
     /// Frontend should patch these rows in place.
-    PatchRows {
-        items: Vec<EntityGridItem>,
-    },
+    PatchRows { items: Vec<EntityGridItem> },
     /// Membership or order changed. The backend re-ran the query for
     /// the loaded window size and returns the correct replacement page.
     /// Frontend should swap items, next_cursor, and total_count.
-    ReplaceWindow {
-        page: EntityViewPage,
-    },
+    ReplaceWindow { page: EntityViewPage },
     /// Truly unsupported case — frontend should call loadFirstPage.
     FullRefreshRequired,
 }
@@ -576,7 +589,10 @@ pub enum EntityViewReconcileResult {
 pub struct MediaEntityPatch {
     pub name: Option<String>,
     /// Plain-text notes. Absent = unchanged, null = clear, string = set.
-    #[serde(default, deserialize_with = "crate::dispatch::common::deserialize_some")]
+    #[serde(
+        default,
+        deserialize_with = "crate::dispatch::common::deserialize_some"
+    )]
     pub notes: Option<Option<String>>,
     pub rating: Option<i64>,
     pub source_urls: Option<Vec<String>>,

@@ -5,9 +5,10 @@
  * buttons are right-aligned in the titlebar-left section.
  */
 
-import { useEffect } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import { useAtomValue, useSetAtom } from 'jotai';
-import { IconAntennaBars5, IconLock, IconLayoutSidebar, IconSettings, IconChevronLeft, IconChevronRight, IconPin, IconPinFilled } from '@tabler/icons-react';
+import { IconLayoutSidebar, IconSettings, IconChevronLeft, IconChevronRight, IconPin, IconPinFilled } from '@tabler/icons-react';
+import { getSettings } from '../platform/api';
 import { Sidebar } from '../features/sidebar/Sidebar';
 import { GridScreen } from '../features/grid/GridScreen';
 import { GridToolbar, ViewerToolbar } from '../features/grid/GridToolbar';
@@ -15,12 +16,14 @@ import { Inspector } from '../features/inspector/Inspector';
 import {
   sidebarCollapsedAtom, toggleSidebarAtom,
   inspectorCollapsedAtom, toggleInspectorAtom,
-  activeNodeIdAtom,
-  subscriptionsWorkspaceTabAtom,
-  setSubscriptionsWorkspaceTabAtom,
+  inspectorWidthAtom, setInspectorWidthAtom,
+  INSPECTOR_MIN_WIDTH, INSPECTOR_MAX_WIDTH,
+  activeNodeIdAtom, parentNodeIdAtom,
+  showTreeGuidesAtom,
 } from '../state/navigation';
+import { sidebarNodesAtom } from '../state/sidebar';
 import { gridActiveAtom, gridScopeLabelAtom } from '../state/grid';
-import { displayedScopeLabelAtom, inspectorPinnedAtom } from '../state/inspector';
+import { displayedScopeLabelAtom, displayedGridSnapshotAtom, inspectorPinnedAtom } from '../state/inspector';
 import { viewerSessionAtom } from '../state/viewer';
 import { startSidebarSettle } from '../runtime/sidebarSettle';
 import { startGridSettle } from '../runtime/gridSettle';
@@ -30,18 +33,18 @@ import { canGoBackAtom, canGoForwardAtom, goBack, goForward, pushHistory } from 
 import { getShortcut, matchesShortcutDef } from '../shared/lib/shortcuts';
 import { KbdTooltip } from '../shared/ui/KbdTooltip';
 import { WindowControls } from '../shared/ui/WindowControls';
-import { WorkspaceSwitcher } from '../shared/ui/WorkspaceSwitcher';
 import { listen } from '../platform/ipc';
 import styles from './AppShell.module.css';
 
-let settleStarted = false;
+let cleanupFns: (() => void)[] = [];
 function ensureSettle() {
-  if (!settleStarted) {
-    settleStarted = true;
-    startSidebarSettle();
-    startGridSettle();
-    startInspectorSync();
-  }
+  // Clean up previous listeners (HMR safety — old listeners are cancelled)
+  for (const fn of cleanupFns) fn();
+  cleanupFns = [
+    startSidebarSettle(),
+    startGridSettle(),
+    startInspectorSync(),
+  ];
 }
 
 function InspectorTitlebarActions() {
@@ -64,13 +67,73 @@ function openSettings() {
   (window as any).picto?.api?.invoke('open_settings_window')?.catch(() => {});
 }
 
-/** Scope title — frozen during grid transitions, live otherwise. */
+/** Build the full ancestor path for a sidebar node (folder or smart folder). */
+function buildBreadcrumbPath(nodeId: string, nodes: { id: string; name: string; parent_id: string | null }[]): string[] {
+  const path: string[] = [];
+  let currentId: string | null = nodeId;
+  const sectionRoots = new Set(['section:folders', 'section:smart_folders']);
+  while (currentId) {
+    const node = nodes.find((n) => n.id === currentId);
+    if (!node || sectionRoots.has(node.id)) break;
+    path.unshift(node.name);
+    currentId = node.parent_id ?? null;
+  }
+  return path;
+}
+
+/** Scope title — shows full breadcrumb path for folders, smart folders, and collections. */
 function ScopeTitle() {
   const gridActive = useAtomValue(gridActiveAtom);
   const frozenLabel = useAtomValue(displayedScopeLabelAtom);
   const liveLabel = useAtomValue(gridScopeLabelAtom);
   const label = gridActive ? (frozenLabel || liveLabel) : liveLabel;
+  const snapshot = useAtomValue(displayedGridSnapshotAtom);
+  const parentNodeId = useAtomValue(parentNodeIdAtom);
+  const nodes = useAtomValue(sidebarNodesAtom);
+  const setActiveNodeId = useSetAtom(activeNodeIdAtom);
+  const setParentNodeId = useSetAtom(parentNodeIdAtom);
+
   if (!label) return null;
+
+  const displayedNodeId = snapshot?.nodeId ?? '';
+
+  // Collection breadcrumb: "Parent Scope / Collection Name"
+  if (displayedNodeId.startsWith('collection:') && parentNodeId) {
+    const parentPath = displayedNodeId.startsWith('collection:') && (parentNodeId.startsWith('folder:') || parentNodeId.startsWith('smart:'))
+      ? buildBreadcrumbPath(parentNodeId, nodes)
+      : [parentNodeId === 'system:active' ? 'All' : parentNodeId === 'system:inbox' ? 'Inbox' : parentNodeId === 'system:trash' ? 'Trash' : parentNodeId];
+
+    return (
+      <span className={styles.scopeTitle}>
+        {parentPath.map((seg, i) => (
+          <span key={i}>
+            {i > 0 && <span style={{ opacity: 0.4, margin: '0 5px' }}>/</span>}
+            <span style={{ opacity: 0.6 }}>{seg}</span>
+          </span>
+        ))}
+        <span style={{ opacity: 0.4, margin: '0 5px' }}>/</span>
+        {label}
+      </span>
+    );
+  }
+
+  // Folder / smart folder breadcrumb: full ancestor path
+  if (displayedNodeId.startsWith('folder:') || displayedNodeId.startsWith('smart:')) {
+    const path = buildBreadcrumbPath(displayedNodeId, nodes);
+    if (path.length > 1) {
+      return (
+        <span className={styles.scopeTitle}>
+          {path.map((seg, i) => (
+            <span key={i}>
+              {i > 0 && <span style={{ opacity: 0.4, margin: '0 5px' }}>/</span>}
+              <span style={i < path.length - 1 ? { opacity: 0.6 } : undefined}>{seg}</span>
+            </span>
+          ))}
+        </span>
+      );
+    }
+  }
+
   return <span className={styles.scopeTitle}>{label}</span>;
 }
 
@@ -79,19 +142,72 @@ export function AppShell() {
   const inspectorCollapsed = useAtomValue(inspectorCollapsedAtom);
   const gridActive = useAtomValue(gridActiveAtom);
   const activeNodeId = useAtomValue(activeNodeIdAtom);
-  const subscriptionsWorkspaceTab = useAtomValue(subscriptionsWorkspaceTabAtom);
   const viewerSession = useAtomValue(viewerSessionAtom);
   const canBack = useAtomValue(canGoBackAtom);
   const canForward = useAtomValue(canGoForwardAtom);
+  const inspectorWidth = useAtomValue(inspectorWidthAtom);
+  const setInspectorWidth = useSetAtom(setInspectorWidthAtom);
   const toggleSidebar = useSetAtom(toggleSidebarAtom);
   const toggleInspector = useSetAtom(toggleInspectorAtom);
   const setActiveNodeId = useSetAtom(activeNodeIdAtom);
-  const setSubscriptionsWorkspaceTab = useSetAtom(setSubscriptionsWorkspaceTabAtom);
 
   const toggleBothPanels = () => { toggleSidebar(); toggleInspector(); };
   const isSubscriptionsWorkspace = activeNodeId === 'system:subscriptions';
 
-  useEffect(() => { ensureSettle(); }, []);
+  // ── Inspector resize drag ──
+  const inspectorDragRef = useRef({ dragging: false, startX: 0, startWidth: 0 });
+  const inspectorElRef = useRef<HTMLDivElement>(null);
+  const onInspectorResizeStart = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    const el = inspectorElRef.current;
+    const d = inspectorDragRef.current;
+    d.dragging = true;
+    d.startX = e.clientX;
+    d.startWidth = el?.offsetWidth ?? inspectorWidth;
+    el?.classList.add(styles.inspectorDragging);
+
+    const onMove = (ev: MouseEvent) => {
+      if (!d.dragging) return;
+      const delta = d.startX - ev.clientX;
+      const next = Math.min(INSPECTOR_MAX_WIDTH, Math.max(INSPECTOR_MIN_WIDTH, Math.round(d.startWidth + delta)));
+      if (el) el.style.width = `${next}px`;
+      document.documentElement.style.setProperty('--inspector-width', `${next}px`);
+    };
+    const onUp = () => {
+      if (!d.dragging) return;
+      d.dragging = false;
+      el?.classList.remove(styles.inspectorDragging);
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      setInspectorWidth(el?.offsetWidth ?? d.startWidth);
+    };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  }, [inspectorWidth, setInspectorWidth]);
+
+  // Keep --inspector-width CSS variable in sync
+  const setShowTreeGuides = useSetAtom(showTreeGuidesAtom);
+
+  useEffect(() => {
+    ensureSettle();
+
+    const loadAppSettings = () => {
+      getSettings().then((s) => {
+        setShowTreeGuides(s.showTreeGuides ?? true);
+      }).catch(() => {});
+    };
+
+    loadAppSettings();
+
+    // Reload settings when backend emits view_prefs_changed (e.g. settings window saved)
+    let unlisten: (() => void) | undefined;
+    void import('../platform/ipc').then(({ listen }) =>
+      listen<{ changes?: { view_prefs_changed?: boolean } }>('runtime/state_changed', (event) => {
+        if (event.payload.changes?.view_prefs_changed) loadAppSettings();
+      }).then((fn) => { unlisten = fn; }),
+    );
+    return () => { unlisten?.(); };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -159,6 +275,13 @@ export function AppShell() {
 
   const showInspector = gridActive && !inspectorCollapsed && !isSubscriptionsWorkspace;
 
+  useEffect(() => {
+    document.documentElement.style.setProperty(
+      '--inspector-width',
+      showInspector ? `${inspectorWidth}px` : '0px',
+    );
+  }, [showInspector, inspectorWidth]);
+
   return (
     <div className={styles.shell}>
       <div className={styles.titlebar}>
@@ -188,28 +311,13 @@ export function AppShell() {
                 <IconChevronRight size={16} stroke={1.5} />
               </button>
               <ScopeTitle />
-              {isSubscriptionsWorkspace ? (
-                <WorkspaceSwitcher
-                  value={subscriptionsWorkspaceTab}
-                  onChange={setSubscriptionsWorkspaceTab}
-                  options={[
-                    { value: 'subscriptions', label: 'Subscriptions', icon: <IconAntennaBars5 size={14} stroke={1.5} /> },
-                    { value: 'auth', label: 'Auth', icon: <IconLock size={14} stroke={1.5} /> },
-                  ]}
-                />
-              ) : gridActive ? (
+              {gridActive && !isSubscriptionsWorkspace ? (
                 <GridToolbar />
               ) : null}
               {!showInspector && <WindowControls />}
             </>
           )}
         </div>
-        {showInspector && (
-          <div className={styles.titlebarInspector}>
-            <InspectorTitlebarActions />
-            <WindowControls />
-          </div>
-        )}
       </div>
 
       <div className={styles.body}>
@@ -221,12 +329,17 @@ export function AppShell() {
         <div className={styles.main}>
           <GridScreen />
         </div>
-        {showInspector && (
-          <div className={styles.inspector}>
-            <Inspector />
-          </div>
-        )}
       </div>
+      {showInspector && (
+        <div ref={inspectorElRef} className={styles.inspector} style={{ width: inspectorWidth }}>
+          <div className={styles.inspectorResizeHandle} onMouseDown={onInspectorResizeStart} />
+          <div className={styles.inspectorTitlebar}>
+            <InspectorTitlebarActions />
+            <WindowControls />
+          </div>
+          <Inspector />
+        </div>
+      )}
     </div>
   );
 }

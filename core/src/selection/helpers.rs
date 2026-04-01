@@ -130,16 +130,21 @@ pub async fn summarize_folders_from_hashes(
              ORDER BY f.name"
         );
         let total = ids.len() as i64;
-        let mut params: Vec<Box<dyn rusqlite::ToSql>> =
-            ids.iter().map(|id| Box::new(*id) as Box<dyn rusqlite::ToSql>).collect();
+        let mut params: Vec<Box<dyn rusqlite::ToSql>> = ids
+            .iter()
+            .map(|id| Box::new(*id) as Box<dyn rusqlite::ToSql>)
+            .collect();
         params.push(Box::new(total));
         let mut stmt = conn.prepare(&sql)?;
-        let rows = stmt.query_map(rusqlite::params_from_iter(params.iter().map(|p| p.as_ref())), |row| {
-            Ok(SelectionFolderInfo {
-                folder_id: row.get(0)?,
-                name: row.get(1)?,
-            })
-        })?;
+        let rows = stmt.query_map(
+            rusqlite::params_from_iter(params.iter().map(|p| p.as_ref())),
+            |row| {
+                Ok(SelectionFolderInfo {
+                    folder_id: row.get(0)?,
+                    name: row.get(1)?,
+                })
+            },
+        )?;
         rows.collect()
     })
     .await
@@ -159,9 +164,8 @@ pub async fn summarize_folders_from_bitmap(
     // Get all folder IDs + names from the database
     let all_folders = db
         .with_read_conn(|conn| {
-            let mut stmt = conn.prepare_cached(
-                "SELECT folder_id, name FROM folder ORDER BY name",
-            )?;
+            let mut stmt =
+                conn.prepare_cached("SELECT folder_id, name FROM folder ORDER BY name")?;
             let rows = stmt.query_map([], |row| {
                 Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
             })?;

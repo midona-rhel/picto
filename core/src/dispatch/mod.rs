@@ -77,8 +77,7 @@ struct DeferredWorkItemsInput {
 /// Deserialize args, call a handler function, serialize its output.
 macro_rules! call {
     ($func:path, $state:expr, $args:expr) => {{
-        let input =
-            serde_json::from_value($args).map_err(|e| format!("Invalid args: {e}"))?;
+        let input = serde_json::from_value($args).map_err(|e| format!("Invalid args: {e}"))?;
         let output = $func($state, input).await?;
         to_json(&output)
     }};
@@ -99,9 +98,6 @@ const WRITE_COMMANDS: &[&str] = &[
     "rename_tag",
     "delete_tag",
     "set_tag_site_mask",
-    "add_tags_selection",
-    "remove_tags_selection",
-    "update_selection_metadata",
     "scan_duplicates",
     "resolve_duplicate_pair",
     "update_duplicate_settings",
@@ -132,7 +128,6 @@ const WRITE_COMMANDS: &[&str] = &[
     "reorder_sidebar_nodes",
     "set_view_prefs",
     "set_zoom_factor",
-    "update_media_entity_metadata",
     "create_group",
     "delete_group",
     "rename_group",
@@ -210,65 +205,76 @@ async fn dispatch_inner(command: &str, args: serde_json::Value) -> Result<String
     // below remain as fallback until the frontend migrates to new names.
     match command {
         "query_entity_view" => {
-            let query: crate::db::types::EntityViewQuery = serde_json::from_value(args)
-                .map_err(|e| format!("Invalid args: {e}"))?;
+            let query: crate::db::types::EntityViewQuery =
+                serde_json::from_value(args).map_err(|e| format!("Invalid args: {e}"))?;
             let result = state.engine.query_entity_view(query)?;
             return to_json(&result);
         }
         "reconcile_entity_view" => {
-            let req: crate::db::types::EntityViewReconcileRequest = serde_json::from_value(args)
-                .map_err(|e| format!("Invalid args: {e}"))?;
+            let req: crate::db::types::EntityViewReconcileRequest =
+                serde_json::from_value(args).map_err(|e| format!("Invalid args: {e}"))?;
             let result = state.engine.reconcile_entity_view(req)?;
             return to_json(&result);
         }
         "get_entity_details" => {
-            let input: GetHashInput = serde_json::from_value(args)
-                .map_err(|e| format!("Invalid args: {e}"))?;
+            let input: GetHashInput =
+                serde_json::from_value(args).map_err(|e| format!("Invalid args: {e}"))?;
             let result = state.engine.get_entity_details(&input.entity_hash)?;
             return to_json(&result);
         }
         "get_entity_grid_items" => {
-            let input: GetHashesInput = serde_json::from_value(args)
-                .map_err(|e| format!("Invalid args: {e}"))?;
+            let input: GetHashesInput =
+                serde_json::from_value(args).map_err(|e| format!("Invalid args: {e}"))?;
             let result = state.engine.get_entity_grid_items(&input.entity_hashes)?;
             return to_json(&result);
         }
         "patch_media_entities" => {
-            let input: PatchEntitiesInput = serde_json::from_value(args)
-                .map_err(|e| format!("Invalid args: {e}"))?;
-            let result = state.engine.patch_media_entities(input.target, input.patch)?;
+            let input: PatchEntitiesInput =
+                serde_json::from_value(args).map_err(|e| format!("Invalid args: {e}"))?;
+            let result = state
+                .engine
+                .patch_media_entities(input.target, input.patch)?;
             return to_json(&result);
         }
         "apply_entity_tags" => {
-            let input: ApplyTagsInput = serde_json::from_value(args)
-                .map_err(|e| format!("Invalid args: {e}"))?;
+            let input: ApplyTagsInput =
+                serde_json::from_value(args).map_err(|e| format!("Invalid args: {e}"))?;
             let provenance_mask = input
                 .provenance_mask
                 .as_deref()
                 .map(crate::db::types::parse_mask_decimal)
                 .transpose()?;
-            let result = state
-                .engine
-                .apply_entity_tags(input.target, input.operation, &input.tags, provenance_mask)?;
+            let result = state.engine.apply_entity_tags(
+                input.target,
+                input.operation,
+                &input.tags,
+                provenance_mask,
+            )?;
             return to_json(&result);
         }
         "set_tag_site_mask" => {
-            let input: SetTagSiteMaskInput = serde_json::from_value(args)
-                .map_err(|e| format!("Invalid args: {e}"))?;
+            let input: SetTagSiteMaskInput =
+                serde_json::from_value(args).map_err(|e| format!("Invalid args: {e}"))?;
             let site_mask = crate::db::types::parse_mask_decimal(&input.site_mask)?;
             state.engine.set_tag_site_mask(input.tag_id, site_mask)?;
             return ok_null();
         }
         "update_folder_membership" => {
-            let input: FolderMembershipInput = serde_json::from_value(args)
-                .map_err(|e| format!("Invalid args: {e}"))?;
-            let result = state.engine.update_folder_membership(input.target, input.folder_id, input.operation)?;
+            let input: FolderMembershipInput =
+                serde_json::from_value(args).map_err(|e| format!("Invalid args: {e}"))?;
+            let result = state.engine.update_folder_membership(
+                input.target,
+                input.folder_id,
+                input.operation,
+            )?;
             return to_json(&result);
         }
         "resolve_entity_asset" => {
-            let input: ResolveAssetInput = serde_json::from_value(args)
-                .map_err(|e| format!("Invalid args: {e}"))?;
-            let result = state.engine.resolve_entity_asset(&input.entity_hash, input.role)?;
+            let input: ResolveAssetInput =
+                serde_json::from_value(args).map_err(|e| format!("Invalid args: {e}"))?;
+            let result = state
+                .engine
+                .resolve_entity_asset(&input.entity_hash, input.role)?;
             return to_json(&result);
         }
         "get_deferred_work_summary" => {
@@ -276,52 +282,42 @@ async fn dispatch_inner(command: &str, args: serde_json::Value) -> Result<String
             return to_json(&result);
         }
         "list_deferred_work_items" => {
-            let input: DeferredWorkItemsInput = serde_json::from_value(args)
-                .map_err(|e| format!("Invalid args: {e}"))?;
+            let input: DeferredWorkItemsInput =
+                serde_json::from_value(args).map_err(|e| format!("Invalid args: {e}"))?;
             let result = state
                 .engine
                 .list_deferred_work_items(input.filter.unwrap_or_default())?;
             return to_json(&result);
         }
         "retry_deferred_work" => {
-            let input: GetHashInput = serde_json::from_value(args)
-                .map_err(|e| format!("Invalid args: {e}"))?;
+            let input: GetHashInput =
+                serde_json::from_value(args).map_err(|e| format!("Invalid args: {e}"))?;
             state.engine.retry_deferred_work(&input.entity_hash)?;
             return ok_null();
         }
         "set_entity_status" => {
-            let input: SetStatusInput = serde_json::from_value(args)
-                .map_err(|e| format!("Invalid args: {e}"))?;
+            let input: SetStatusInput =
+                serde_json::from_value(args).map_err(|e| format!("Invalid args: {e}"))?;
             let result = state.engine.set_entity_status(input.target, input.status)?;
             return to_json(&result);
         }
         "delete_entities" => {
-            let input: DeleteEntitiesInput = serde_json::from_value(args)
-                .map_err(|e| format!("Invalid args: {e}"))?;
+            let input: DeleteEntitiesInput =
+                serde_json::from_value(args).map_err(|e| format!("Invalid args: {e}"))?;
             let result = state.engine.delete_entities(input.target)?;
             return to_json(&result);
         }
         "get_selection_summary" => {
-            let input: SelectionSummaryInput = serde_json::from_value(args)
-                .map_err(|e| format!("Invalid args: {e}"))?;
-            let result = state.engine.get_selection_summary(input.target)?;
+            let input: SelectionSummaryInput =
+                serde_json::from_value(args).map_err(|e| format!("Invalid args: {e}"))?;
+            let result = state.engine.get_selection_summary(input.target).await?;
             return to_json(&result);
         }
         _ => {}
     }
 
-    // ── Legacy dispatch (old command names → old handlers) ──
+    // ── Legacy dispatch (isolated compatibility surface) ──
     match command {
-        // ── Grid ──────────────────────────────────────────────
-        "get_grid_page_slim" => call!(typed::grid::get_grid_page_slim, &state, args),
-        "get_grid_outline" => call!(typed::grid::get_grid_outline, &state, args),
-        "get_entity_details" => call!(typed::grid::get_entity_details, &state, args),
-        "get_entity_grid_item" => call!(typed::grid::get_entity_grid_item, &state, args),
-        "get_entity_grid_items" => call!(typed::grid::get_entity_grid_items, &state, args),
-        "get_entities_metadata_batch" => {
-            call!(typed::grid::get_entities_metadata_batch, &state, args)
-        }
-
         // ── Tags ──────────────────────────────────────────────
         "search_tags" => call!(typed::tags::search_tags, &state, args),
         "get_all_tags_with_counts" => call!(typed::tags::get_all_tags_with_counts, &state, args),
@@ -342,17 +338,6 @@ async fn dispatch_inner(command: &str, args: serde_json::Value) -> Result<String
         }
         "companion_get_files_by_tag" => {
             call!(typed::tags::companion_get_files_by_tag, &state, args)
-        }
-
-        // ── Selection ─────────────────────────────────────────
-        "add_tags_selection" => call!(typed::selection::add_tags_selection, &state, args),
-        "remove_tags_selection" => call!(typed::selection::remove_tags_selection, &state, args),
-        "get_selection_summary" => call!(typed::selection::get_selection_summary, &state, args),
-        "resolve_selection_entity_hashes" => {
-            call!(typed::selection::resolve_selection_entity_hashes, &state, args)
-        }
-        "update_selection_metadata" => {
-            call!(typed::selection::update_selection_metadata, &state, args)
         }
 
         // ── Duplicates ────────────────────────────────────────
@@ -378,11 +363,6 @@ async fn dispatch_inner(command: &str, args: serde_json::Value) -> Result<String
         // ── Media Metadata ────────────────────────────────────
         "get_media_entity_metadata" => call!(
             typed::media_metadata::get_media_entity_metadata,
-            &state,
-            args
-        ),
-        "update_media_entity_metadata" => call!(
-            typed::media_metadata::update_media_entity_metadata,
             &state,
             args
         ),
@@ -458,8 +438,6 @@ async fn dispatch_inner(command: &str, args: serde_json::Value) -> Result<String
         // ── Media Lifecycle ───────────────────────────────────
         "import_files" => call!(typed::media_lifecycle::import_files, &state, args),
         "import_folder" => call!(typed::media_lifecycle::import_folder, &state, args),
-        "set_entity_status" => call!(typed::media_lifecycle::set_entity_status, &state, args),
-        "delete_entities" => call!(typed::media_lifecycle::delete_entities, &state, args),
         "wipe_image_data" => call!(typed::media_lifecycle::wipe_image_data, &state, args),
 
         // ── Subscriptions ─────────────────────────────────────
@@ -524,19 +502,31 @@ async fn dispatch_inner(command: &str, args: serde_json::Value) -> Result<String
             call!(typed::subscriptions::stop_subscription_query, &state, args)
         }
         "retry_subscription_failed_post" => {
-            call!(typed::subscriptions::retry_subscription_failed_post, &state, args)
+            call!(
+                typed::subscriptions::retry_subscription_failed_post,
+                &state,
+                args
+            )
         }
         "list_subscription_runs" => {
             call!(typed::subscriptions::list_subscription_runs, &state, args)
         }
         "list_subscription_query_runs" => {
-            call!(typed::subscriptions::list_subscription_query_runs, &state, args)
+            call!(
+                typed::subscriptions::list_subscription_query_runs,
+                &state,
+                args
+            )
         }
         "list_subscription_issues" => {
             call!(typed::subscriptions::list_subscription_issues, &state, args)
         }
         "list_subscription_download_attempts" => {
-            call!(typed::subscriptions::list_subscription_download_attempts, &state, args)
+            call!(
+                typed::subscriptions::list_subscription_download_attempts,
+                &state,
+                args
+            )
         }
         "list_credentials" => call!(typed::subscriptions::list_credentials, &state, args),
         "list_credential_health" => {

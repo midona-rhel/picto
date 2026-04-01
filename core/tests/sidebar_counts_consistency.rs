@@ -88,7 +88,10 @@ async fn sidebar_counts_stay_consistent_across_state_changes() {
     let all_before = get_count(&harness.db, "system:active").await;
     let trash_before = get_count(&harness.db, "system:trash").await;
     harness.db.update_file_status("sc_a3", 2).await.unwrap();
-    assert_eq!(get_count(&harness.db, "system:active").await, all_before - 1);
+    assert_eq!(
+        get_count(&harness.db, "system:active").await,
+        all_before - 1
+    );
     assert_eq!(
         get_count(&harness.db, "system:trash").await,
         trash_before + 1

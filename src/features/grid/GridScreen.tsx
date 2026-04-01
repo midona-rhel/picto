@@ -3,10 +3,11 @@
  */
 
 import { useEffect, useRef, useState, useCallback } from 'react';
-import { useAtomValue, useSetAtom } from 'jotai';
+import { useAtomValue, useSetAtom, getDefaultStore } from 'jotai';
 import { IconPhoto, IconUpload, IconFolderPlus } from '@tabler/icons-react';
 import * as entityMutations from '../../controllers/entityMutations';
-import { activeNodeIdAtom, subscriptionsWorkspaceTabAtom } from '../../state/navigation';
+import { getShortcut, matchesShortcutDef } from '../../shared/lib/shortcuts';
+import { activeNodeIdAtom, parentNodeIdAtom, collectionNameAtom, skipFadeOutAtom } from '../../state/navigation';
 import {
   gridItemsAtom,
   gridLoadingAtom,
@@ -49,15 +50,46 @@ import { CanvasGrid } from './canvas/CanvasGrid';
 import { ContextMenu, useContextMenu } from '../../shared/ui/ContextMenu';
 import { buildTileContextMenu, buildEmptyContextMenu } from './gridContextMenu';
 import type { BaseScope } from '../../shared/types/canonical';
-import { saveScrollPosition, getScrollPosition } from '../../state/navigationHistory';
+import { saveScrollPosition, getScrollPosition, pushHistory } from '../../state/navigationHistory';
 import { promptForFolderId } from '../../shared/lib/selectFolderPrompt';
-import { resolveFilePath, shellOpenPath, shellShowInFolder, clipboardWriteText, clipboardCopyFile } from '../../platform/api';
+import { resolveFilePath, shellOpenPath, shellShowInFolder, clipboardWriteText, clipboardCopyFile, createCollection, addCollectionMembers, removeCollectionMembers, deleteCollection, listCollectionMemberHashes } from '../../platform/api';
 import { viewerSessionAtom, quickLookSessionAtom, createViewerSession, navigateViewerSession } from '../../state/viewer';
+import { tagSelectOpenAtom, folderPickerOpenAtom, aiTaggerOpenAtom, batchRenameOpenAtom } from '../../state/portals';
 import { MediaView } from '../viewer/MediaView';
 import { SubscriptionsScreen } from '../subscriptions/SubscriptionsScreen';
-import { AuthWorkspace } from '../auth/AuthWorkspace';
 import { QuickLook } from '../viewer/QuickLook';
+import { TagSelectPanel } from '../tags/TagSelectPanel';
+import { FolderPickerPanel } from '../folders/FolderPickerPanel';
+import { AiTaggerPanel } from '../ai-tagger/AiTaggerPanel';
+import { BatchRenamePanel } from '../batch-rename/BatchRenamePanel';
 import styles from './GridScreen.module.css';
+
+// ── Smart collection naming (ported from legacy) ──
+
+const GENERATED_NAME_RE = /^(?:[a-f0-9]{24,}|image[_-]?\d+|img[_-]?\d+|file[_-]?\d+)$/i;
+
+function normalizeNameBase(name: string): string {
+  return name.trim()
+    .replace(/\.[a-z0-9]{2,5}$/i, '')
+    .replace(/(?:[\s._-]|\s*\(\s*)\d+\s*\)?$/g, '')
+    .trim()
+    .toLowerCase();
+}
+
+function inferCollectionName(memberNames: string[]): string {
+  const now = new Date();
+  const fallback = `Collection ${now.toLocaleDateString()} ${now.toLocaleTimeString()}`;
+  const names = memberNames.map((n) => n.trim()).filter(Boolean);
+  if (names.length === 0) return fallback;
+  const allGenerated = names.every((n) => GENERATED_NAME_RE.test(n));
+  const bases = names.map(normalizeNameBase).filter(Boolean);
+  const uniqueBases = new Set(bases);
+  if (uniqueBases.size === 1 && bases.length > 0) {
+    return names.find((n) => normalizeNameBase(n) === bases[0]) ?? fallback;
+  }
+  if (!allGenerated) return names[0];
+  return fallback;
+}
 
 const GRID_SYSTEM_SCOPES: Record<string, string> = {
   'system:active': 'all',
@@ -68,7 +100,8 @@ const GRID_SYSTEM_SCOPES: Record<string, string> = {
 };
 
 const NON_GRID_NODES = new Set(['system:duplicates', 'system:recent_viewed', 'system:subscriptions']);
-const SCOPE_TRANSITION_MS = 250;
+const store = getDefaultStore();
+const SCOPE_TRANSITION_MS = 170;
 const STATUS_ACTIVE = 1;
 const STATUS_TRASH = 2;
 
@@ -81,6 +114,10 @@ function nodeIdToScope(nodeId: string): BaseScope | null {
     const id = parseInt(nodeId.slice(6), 10);
     return { kind: 'smart_folder', id: isNaN(id) ? 0 : id };
   }
+  if (nodeId.startsWith('collection:')) {
+    const id = parseInt(nodeId.slice(11), 10);
+    return { kind: 'collection', id: isNaN(id) ? 0 : id };
+  }
   if (NON_GRID_NODES.has(nodeId)) return null;
   const scopeKey = GRID_SYSTEM_SCOPES[nodeId];
   if (scopeKey) return { kind: 'system', key: scopeKey };
@@ -89,7 +126,10 @@ function nodeIdToScope(nodeId: string): BaseScope | null {
 
 export function GridScreen() {
   const activeNodeId = useAtomValue(activeNodeIdAtom);
-  const subscriptionsWorkspaceTab = useAtomValue(subscriptionsWorkspaceTabAtom);
+  const setActiveNodeId = useSetAtom(activeNodeIdAtom);
+  const parentNodeId = useAtomValue(parentNodeIdAtom);
+  const setParentNodeId = useSetAtom(parentNodeIdAtom);
+  const setCollectionName = useSetAtom(collectionNameAtom);
   const items = useAtomValue(gridItemsAtom);
   const loading = useAtomValue(gridLoadingAtom);
   const error = useAtomValue(gridErrorAtom);
@@ -121,6 +161,10 @@ export function GridScreen() {
   const setViewerSession = useSetAtom(viewerSessionAtom);
   const quickLookSession = useAtomValue(quickLookSessionAtom);
   const setQuickLookSession = useSetAtom(quickLookSessionAtom);
+  const setTagSelectOpen = useSetAtom(tagSelectOpenAtom);
+  const setFolderPickerOpen = useSetAtom(folderPickerOpenAtom);
+  const setAiTaggerOpen = useSetAtom(aiTaggerOpenAtom);
+  const setBatchRenameOpen = useSetAtom(batchRenameOpenAtom);
   const contextMenu = useContextMenu();
 
   // Reset range anchor when items change (scope nav, sort, search, reload)
@@ -132,15 +176,18 @@ export function GridScreen() {
   const setInspectorError = useSetAtom(inspectorErrorAtom);
   const liveTarget = useAtomValue(liveInspectorTargetAtom);
 
-  const [transitionPhase, setTransitionPhaseRaw] = useState<'idle' | 'fading_out' | 'waiting' | 'fading_in'>('idle');
-  const setGridTransitionPhase = useSetAtom(gridTransitionPhaseAtom);
-  const setTransitionPhase = useCallback((phase: 'idle' | 'fading_out' | 'waiting' | 'fading_in' | ((prev: 'idle' | 'fading_out' | 'waiting' | 'fading_in') => 'idle' | 'fading_out' | 'waiting' | 'fading_in')) => {
-    setTransitionPhaseRaw((prev) => {
-      const next = typeof phase === 'function' ? phase(prev) : phase;
-      if (next !== prev) setGridTransitionPhase(next);
-      return next;
-    });
-  }, [setGridTransitionPhase]);
+  type TransitionPhase = 'idle' | 'fading_out' | 'waiting' | 'fading_in';
+  const [transitionPhase, setTransitionPhaseRaw] = useState<TransitionPhase>('idle');
+  const transitionPhaseRef = useRef<TransitionPhase>('idle');
+  const setTransitionPhase = useCallback((phase: TransitionPhase | ((prev: TransitionPhase) => TransitionPhase)) => {
+    const resolved = typeof phase === 'function' ? phase(transitionPhaseRef.current) : phase;
+    if (resolved === transitionPhaseRef.current) return;
+    transitionPhaseRef.current = resolved;
+    // Synchronous atom update — gridSettle reads this immediately via store.get()
+    store.set(gridTransitionPhaseAtom, resolved);
+    // React state for component re-renders
+    setTransitionPhaseRaw(resolved);
+  }, []);
   const lastScrollTopRef = useRef(0);
   const previousNodeIdRef = useRef(activeNodeId);
   const transitionTimerRef = useRef<number | null>(null);
@@ -211,8 +258,20 @@ export function GridScreen() {
     }
 
     if (previousScope) {
-      // Grid-to-grid: fade out old → wait → load new → fade in
       saveScrollPosition(previousNodeIdRef.current, lastScrollTopRef.current);
+
+      // Skip fade-out when requested (e.g. after manual fade-out for collection creation)
+      const skip = store.get(skipFadeOutAtom);
+      if (skip) {
+        store.set(skipFadeOutAtom, false);
+        restoredScrollTopRef.current = getScrollPosition(activeNodeId);
+        setTransitionPhase('waiting');
+        void gridController.navigateTo(nodeIdToScope(activeNodeId)!);
+        previousNodeIdRef.current = activeNodeId;
+        return;
+      }
+
+      // Grid-to-grid: fade out old → wait → load new → fade in
       setTransitionPhase('fading_out');
       transitionTimerRef.current = window.setTimeout(() => {
         transitionTimerRef.current = null;
@@ -332,44 +391,7 @@ export function GridScreen() {
     transitionPhase,
   ]); // eslint-disable-line react-hooks/exhaustive-deps -- sidebarNodes intentionally excluded: snapshot freezes node at commit time
 
-  // ── Grid keyboard shortcuts ──
-  useEffect(() => {
-    function handleKeyDown(e: KeyboardEvent) {
-      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
 
-      if ((e.metaKey || e.ctrlKey) && e.key === 'a') {
-        e.preventDefault();
-        selectAllResults();
-      }
-
-      // Escape: clear selection
-      if (e.key === 'Escape' && selectionCount > 0) {
-        clearSelection();
-      }
-
-      // Enter: open viewer for single selected entity
-      if (e.key === 'Enter' && selectionCount === 1 && !viewerSession && !quickLookSession) {
-        const hash = [...selectedHashes][0];
-        if (hash) {
-          e.preventDefault();
-          setViewerSession(createViewerSession(items, hash));
-        }
-      }
-
-      // Space: toggle QuickLook for single selected entity
-      if (e.key === ' ' && !viewerSession) {
-        e.preventDefault();
-        if (quickLookSession) {
-          setQuickLookSession(null);
-        } else if (selectionCount === 1) {
-          const hash = [...selectedHashes][0];
-          if (hash) setQuickLookSession(createViewerSession(items, hash));
-        }
-      }
-    }
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [clearSelection, selectAllResults, selectionCount, selectedHashes, items, viewerSession, setViewerSession, quickLookSession, setQuickLookSession]);
 
   const addSelectionToFolder = useCallback(async () => {
     if (!selectionTarget) return;
@@ -395,6 +417,140 @@ export function GridScreen() {
     clearSelection();
   }, [selectionTarget, clearSelection]);
 
+  // ── Detail window communication ──
+  // When a detail window opens, it sends 'detail-window-ready' with { hash }.
+  // We respond with ONLY the selected images (not the entire grid).
+  // Single selection → one image, no navigation in detail window.
+  // Multi selection → those images as a navigable set.
+  const detailWindowSelectionRef = useRef(new Map<string, string[]>());
+  useEffect(() => {
+    const picto = (window as any).picto;
+    if (!picto?.events?.on) return;
+    let cancelled = false;
+    const p = picto.events.on('detail-window-ready', (payload: any) => {
+      if (cancelled) return;
+      const readyHash = payload?.hash;
+      if (!readyHash) return;
+      const label = `detail-${readyHash.slice(0, 12)}`;
+      // Look up what we stored when Cmd+O was pressed
+      const selectedHashes = detailWindowSelectionRef.current.get(label);
+      if (!selectedHashes) return;
+      const curItems = itemsRef.current;
+      const lightImages = selectedHashes
+        .map((h: string) => curItems.find((i: any) => i.entity_hash === h))
+        .filter(Boolean)
+        .map((i: any) => ({
+          hash: i.entity_hash,
+          name: i.name,
+          mime: i.mime_type,
+          width: i.pixel_width,
+          height: i.pixel_height,
+        }));
+      picto.events.emitTo(label, 'detail-images', {
+        images: lightImages,
+        totalCount: lightImages.length,
+      });
+    });
+    return () => { cancelled = true; p.then((fn: any) => fn?.()).catch(() => {}); };
+  }, []);
+
+  // ── Grid keyboard shortcuts ──
+  // Refs for values that change frequently — avoids re-registering the listener.
+  const selectionCountRef = useRef(selectionCount);
+  selectionCountRef.current = selectionCount;
+  const selectedHashesRef = useRef(selectedHashes);
+  selectedHashesRef.current = selectedHashes;
+  const itemsRef = useRef(items);
+  itemsRef.current = items;
+  const viewerSessionRef = useRef(viewerSession);
+  viewerSessionRef.current = viewerSession;
+  const quickLookSessionRef = useRef(quickLookSession);
+  quickLookSessionRef.current = quickLookSession;
+  const gridScopeRef = useRef(gridScope);
+  gridScopeRef.current = gridScope;
+
+  useEffect(() => {
+    const defs = {
+      selectAll:       getShortcut('edit.selectAll')!,
+      deselectAll:     getShortcut('edit.deselectAll')!,
+      detailView:      getShortcut('view.detailView')!,
+      quicklook:       getShortcut('view.quicklook')!,
+      delete_:         getShortcut('file.delete')!,
+      restore:         getShortcut('file.restore')!,
+      addToFolder:     getShortcut('file.addToFolder')!,
+      removeFromFolder: getShortcut('file.removeFromFolder')!,
+      openDefault:     getShortcut('file.openDefaultApp')!,
+      revealInFolder:  getShortcut('file.revealInFolder')!,
+      openNewWindow:   getShortcut('file.openNewWindow')!,
+    };
+
+    function handleKeyDown(e: KeyboardEvent) {
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+      const count = selectionCountRef.current;
+      const hashes = selectedHashesRef.current;
+      const curItems = itemsRef.current;
+      const scope = gridScopeRef.current;
+      const isTrash = scope.kind === 'system' && scope.key === 'trash';
+      const singleHash = count === 1 ? [...hashes][0] : null;
+
+      if (matchesShortcutDef(e, defs.selectAll)) { e.preventDefault(); selectAllResults(); return; }
+      if (matchesShortcutDef(e, defs.deselectAll) && count > 0) { clearSelection(); return; }
+
+      if (matchesShortcutDef(e, defs.detailView) && singleHash && !viewerSessionRef.current && !quickLookSessionRef.current) {
+        e.preventDefault(); setViewerSession(createViewerSession(curItems, singleHash)); return;
+      }
+      if (matchesShortcutDef(e, defs.quicklook) && !viewerSessionRef.current) {
+        e.preventDefault();
+        if (quickLookSessionRef.current) setQuickLookSession(null);
+        else if (singleHash) setQuickLookSession(createViewerSession(curItems, singleHash));
+        return;
+      }
+
+      if (matchesShortcutDef(e, defs.openDefault) && singleHash) {
+        e.preventDefault(); void resolveFilePath(singleHash).then((p) => { if (p) shellOpenPath(p); }); return;
+      }
+      if (matchesShortcutDef(e, defs.revealInFolder) && singleHash) {
+        e.preventDefault(); void resolveFilePath(singleHash).then((p) => { if (p) shellShowInFolder(p); }); return;
+      }
+      if (matchesShortcutDef(e, defs.openNewWindow) && count > 0) {
+        e.preventDefault();
+        // Use first selected hash as the window identity
+        const selectedArr = [...hashes];
+        const primaryHash = singleHash ?? selectedArr[0];
+        const item = curItems.find((i) => i.entity_hash === primaryHash);
+        const label = `detail-${primaryHash.slice(0, 12)}`;
+        detailWindowSelectionRef.current.set(label, selectedArr);
+        void (window as any).picto.api.invoke('open_in_new_window', {
+          hash: primaryHash,
+          width: item?.pixel_width ?? null,
+          height: item?.pixel_height ?? null,
+        });
+        return;
+      }
+
+      // Mod+Backspace: context-dependent destructive action
+      if (matchesShortcutDef(e, defs.delete_) && count > 0) {
+        e.preventDefault();
+        if (isTrash) void permanentlyDeleteSelection();
+        else void setSelectionStatus(STATUS_TRASH);
+        return;
+      }
+      // Mod+Shift+Backspace: context-dependent reverse action
+      if (matchesShortcutDef(e, defs.restore) && count > 0) {
+        e.preventDefault();
+        if (isTrash) void setSelectionStatus(STATUS_ACTIVE);
+        else if (scope.kind === 'folder') void removeSelectionFromCurrentFolder();
+        return;
+      }
+
+      if (matchesShortcutDef(e, defs.addToFolder) && count > 0) {
+        e.preventDefault(); void addSelectionToFolder(); return;
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [clearSelection, selectAllResults, setViewerSession, setQuickLookSession, setSelectionStatus, permanentlyDeleteSelection, addSelectionToFolder, removeSelectionFromCurrentFolder]);
+
   const incomingHidden = transitionPhase === 'waiting';
   const incomingFadingOut = transitionPhase === 'fading_out';
   const incomingFadingIn = transitionPhase === 'fading_in';
@@ -403,7 +559,7 @@ export function GridScreen() {
   const renderIncomingSurface = () => {
     if (!isGridScope) {
       if (activeNodeId === 'system:subscriptions') {
-        return subscriptionsWorkspaceTab === 'auth' ? <AuthWorkspace /> : <SubscriptionsScreen />;
+        return <SubscriptionsScreen />;
       }
       return <div className={styles.nonGridPlaceholder}>This view is not available yet</div>;
     }
@@ -514,7 +670,15 @@ export function GridScreen() {
           }
         }}
         onTileDoubleClick={(_index, item) => {
-          setViewerSession(createViewerSession(items, item.entity_hash));
+          if (item.entity_kind === 'collection') {
+            const collNodeId = `collection:${item.entity_id}`;
+            setParentNodeId(activeNodeId);
+            setCollectionName(item.name);
+            pushHistory(collNodeId);
+            setActiveNodeId(collNodeId);
+          } else {
+            setViewerSession(createViewerSession(items, item.entity_hash));
+          }
         }}
         onEmptyClick={() => clearSelection()}
         onSelectionChange={setSelectedHashes}
@@ -540,6 +704,7 @@ export function GridScreen() {
           const scopeKind = gridScope.kind === 'system' ? 'system'
             : gridScope.kind === 'folder' ? 'folder'
             : gridScope.kind === 'smart_folder' ? 'smart_folder'
+            : gridScope.kind === 'collection' ? 'collection'
             : null;
           const statusFilter = gridScope.kind === 'system'
             ? (gridScope.key === 'inbox' ? 'inbox' : gridScope.key === 'trash' ? 'trash' : gridScope.key === 'all' ? 'active' : null)
@@ -553,20 +718,87 @@ export function GridScreen() {
             singleKind: singleItem?.entity_kind ?? null,
             hasCollections: selectedItems.some((it) => it.entity_kind === 'collection'),
             scopeKind,
+            collectionId: gridScope.kind === 'collection' ? gridScope.id : null,
             statusFilter,
             loadedCount: items.length,
             onSelectAll: () => selectAllResults(),
             onDeselectAll: () => clearSelection(),
             onOpen: singleItem ? () => setViewerSession(createViewerSession(items, singleItem.entity_hash)) : undefined,
+            onOpenNewWindow: (hash) => {
+              const it = items.find((i) => i.entity_hash === hash);
+              const selectedArr = [...effectiveHashes];
+              const label = `detail-${hash.slice(0, 12)}`;
+              detailWindowSelectionRef.current.set(label, selectedArr);
+              void (window as any).picto.api.invoke('open_in_new_window', {
+                hash, width: it?.pixel_width ?? null, height: it?.pixel_height ?? null,
+              });
+            },
             onOpenDefault: (hash) => { void resolveFilePath(hash).then((p) => { if (p) shellOpenPath(p); }); },
             onRevealInFolder: (hash) => { void resolveFilePath(hash).then((p) => { if (p) shellShowInFolder(p); }); },
             onCopyFilePath: (hash) => { void resolveFilePath(hash).then((p) => { if (p) clipboardWriteText(p); }); },
             onCopyFile: (hash) => { void resolveFilePath(hash).then((p) => { if (p) clipboardCopyFile(p); }); },
-            onAddToFolder: () => { void addSelectionToFolder(); },
+            onAddToFolder: () => { setFolderPickerOpen(true); },
             onRemoveFromFolder: () => { void removeSelectionFromCurrentFolder(); },
+            onOpenTagSelect: () => { setTagSelectOpen(true); },
+            onOpenAiTagger: () => { setAiTaggerOpen(true); },
+            onOpenBatchRename: () => { setBatchRenameOpen(true); },
+            onCreateCollection: () => {
+              const hashes = [...effectiveHashes];
+              const selectedItems = items.filter((i) => effectiveHashes.has(i.entity_hash));
+              const name = inferCollectionName(selectedItems.map((i) => i.name ?? ''));
+              setTransitionPhase('fading_out');
+              // Do backend work + navigate after fade-out completes
+              const backendWork = (async () => {
+                const id = await createCollection(name);
+                await addCollectionMembers(id, hashes);
+                return id;
+              })();
+              setTimeout(async () => {
+                const id = await backendWork;
+                const collNodeId = `collection:${id}`;
+                setParentNodeId(activeNodeId);
+                setCollectionName(name);
+                pushHistory(collNodeId);
+                store.set(skipFadeOutAtom, true);
+                setActiveNodeId(collNodeId);
+              }, SCOPE_TRANSITION_MS);
+            },
+            onRemoveFromCollection: gridScope.kind === 'collection' && gridScope.id != null
+              ? () => { void removeCollectionMembers(gridScope.id!, [...effectiveHashes]); }
+              : undefined,
+            onSplitCollection: (() => {
+              // Inside collection view — split and navigate back instantly
+              if (gridScope.kind === 'collection' && gridScope.id != null) {
+                return () => {
+                  void (async () => {
+                    const memberHashes = await listCollectionMemberHashes(gridScope.id!);
+                    await deleteCollection(gridScope.id!);
+                    const target = parentNodeId ?? 'system:active';
+                    setParentNodeId(null);
+                    setCollectionName(null);
+                    store.set(skipFadeOutAtom, true);
+                    setActiveNodeId(target);
+                    setTimeout(() => setSelectedHashes(new Set(memberHashes)), 100);
+                  })();
+                };
+              }
+              // Single collection tile selected in normal grid — split and select freed members
+              if (singleItem?.entity_kind === 'collection') {
+                return () => {
+                  void (async () => {
+                    const memberHashes = await listCollectionMemberHashes(singleItem.entity_id);
+                    await deleteCollection(singleItem.entity_id);
+                    setTimeout(() => setSelectedHashes(new Set(memberHashes)), 100);
+                  })();
+                };
+              }
+              return undefined;
+            })(),
             onMoveToTrash: () => { void setSelectionStatus(STATUS_TRASH); },
             onRestore: () => { void setSelectionStatus(STATUS_ACTIVE); },
             onPermanentDelete: () => { void permanentlyDeleteSelection(); },
+            onAccept: () => { void setSelectionStatus(STATUS_ACTIVE); },
+            onReject: () => { void setSelectionStatus(STATUS_TRASH); },
           });
           contextMenu.openAt(pos, entries);
         }}
@@ -643,6 +875,11 @@ export function GridScreen() {
           onClose={contextMenu.close}
         />
       )}
+
+      <TagSelectPanel />
+      <FolderPickerPanel />
+      <AiTaggerPanel />
+      <BatchRenamePanel />
     </div>
   );
 }

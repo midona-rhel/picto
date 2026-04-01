@@ -26,7 +26,17 @@ function emptyManualForm(entry: AuthSiteSnapshot | null): AuthManualFormState {
   };
 }
 
-export function AuthWorkspace() {
+export function AuthWorkspace({
+  hideSidebar = false,
+  onSitesLoaded,
+  externalSelectedSiteId,
+  onSelectSite,
+}: {
+  hideSidebar?: boolean;
+  onSitesLoaded?: (sites: AuthSiteSnapshot[]) => void;
+  externalSelectedSiteId?: string | null;
+  onSelectSite?: (siteId: string) => void;
+} = {}) {
   const [snapshot, setSnapshot] = useState<AuthWorkspaceSnapshot | null>(null);
   const [selectedSiteId, setSelectedSiteId] = useState<string | null>(null);
   const [session, setSession] = useState<AuthSessionState>(IDLE_SESSION);
@@ -35,9 +45,15 @@ export function AuthWorkspace() {
   const [pixivVerifier, setPixivVerifier] = useState<string | null>(null);
   const [manualForm, setManualForm] = useState<AuthManualFormState>(emptyManualForm(null));
 
+  // Sync external selection when provided
+  useEffect(() => {
+    if (externalSelectedSiteId != null) setSelectedSiteId(externalSelectedSiteId);
+  }, [externalSelectedSiteId]);
+
   async function refresh(preserveSelection = true) {
     const next = await authController.loadWorkspaceSnapshot();
     setSnapshot(next);
+    onSitesLoaded?.(next.sites);
     setSelectedSiteId((current) => {
       if (preserveSelection && current && next.sites.some((site) => site.site.id === current)) return current;
       return next.sites[0]?.site.id ?? null;
@@ -277,19 +293,24 @@ export function AuthWorkspace() {
     }
   }
 
+  const handleSelectSite = (siteId: string) => {
+    if (session.status !== 'idle' && session.site_category && session.site_category !== siteId) {
+      void authController.cancelSession();
+      setSession(IDLE_SESSION);
+    }
+    setSelectedSiteId(siteId);
+    onSelectSite?.(siteId);
+  };
+
   return (
     <div className={styles.root}>
-      <AuthSitesSidebar
-        sites={snapshot?.sites ?? []}
-        selectedSiteId={selectedSiteId}
-        onSelect={(siteId) => {
-          if (session.status !== 'idle' && session.site_category && session.site_category !== siteId) {
-            void authController.cancelSession();
-            setSession(IDLE_SESSION);
-          }
-          setSelectedSiteId(siteId);
-        }}
-      />
+      {!hideSidebar && (
+        <AuthSitesSidebar
+          sites={snapshot?.sites ?? []}
+          selectedSiteId={selectedSiteId}
+          onSelect={handleSelectSite}
+        />
+      )}
       <AuthSiteDetail
         entry={selectedEntry}
         session={session}

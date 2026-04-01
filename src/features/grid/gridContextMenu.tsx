@@ -1,8 +1,10 @@
 /**
  * Grid context menu — context-aware entry builder for right-click on grid tiles.
  *
- * Icons follow platform conventions (Finder/Explorer), actions are wired where
- * backend support exists, disabled items have TODO comments.
+ * Rules:
+ *   - Only "Delete Permanently" is ever danger (red). Everything else is normal.
+ *   - Reject and Move to Trash use the trash icon, never custom icons.
+ *   - Accept/Reject appear at the top in inbox scope.
  */
 
 import {
@@ -11,6 +13,7 @@ import {
   IconCopy, IconClipboardCopy, IconBookmark, IconBookmarks,
   IconRefresh, IconTrash, IconArrowBackUp,
   IconSelectAll, IconDeselect,
+  IconStack2, IconStackPop,
 } from '@tabler/icons-react';
 import type { MenuItem, MenuSeparator, MenuEntry } from '../../shared/ui/ContextMenu/ContextMenu';
 import { IconRename } from '../../shared/ui/icons/sidebar-menu-icons';
@@ -19,7 +22,6 @@ import { getShortcut, formatKeysDisplay } from '../../shared/lib/shortcuts';
 
 const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform);
 
-/** Format a shortcut id to its display string, or return undefined if not found. */
 function kbd(id: string): string | undefined {
   const def = getShortcut(id);
   return def ? formatKeysDisplay(def.keys) : undefined;
@@ -32,7 +34,8 @@ interface GridMenuContext {
   singleHash: string | null;
   singleKind: string | null;
   hasCollections: boolean;
-  scopeKind: 'system' | 'folder' | 'smart_folder' | null;
+  scopeKind: 'system' | 'folder' | 'smart_folder' | 'collection' | null;
+  collectionId?: number | null;
   statusFilter: string | null;
   loadedCount: number;
   onSelectAll: () => void;
@@ -46,8 +49,17 @@ interface GridMenuContext {
   onMoveToTrash?: () => void;
   onRestore?: () => void;
   onPermanentDelete?: () => void;
+  onOpenNewWindow?: (hash: string) => void;
   onAddToFolder?: () => void;
   onRemoveFromFolder?: () => void;
+  onCreateCollection?: () => void;
+  onRemoveFromCollection?: () => void;
+  onSplitCollection?: () => void;
+  onOpenTagSelect?: () => void;
+  onOpenAiTagger?: () => void;
+  onOpenBatchRename?: () => void;
+  onAccept?: () => void;
+  onReject?: () => void;
 }
 
 function sep(): MenuSeparator {
@@ -80,6 +92,15 @@ export function buildTileContextMenu(ctx: GridMenuContext): MenuEntry[] {
   const hasSelection = selectionCount > 0;
   const entries: MenuEntry[] = [];
 
+  // ── Inbox accept/reject — top of menu ──
+  if (statusFilter === 'inbox' && hasSelection) {
+    const acceptLabel = selectionCount > 1 ? `Accept ${selectionCount} Items` : 'Accept';
+    entries.push(item(acceptLabel, { icon: <IconArrowBackUp size={15} />, action: ctx.onAccept }));
+    const rejectLabel = selectionCount > 1 ? `Reject ${selectionCount} Items` : 'Reject';
+    entries.push(item(rejectLabel, { icon: <IconTrash size={15} />, action: ctx.onReject }));
+    entries.push(sep());
+  }
+
   // ── Open actions ──
   if (singleSelected) {
     entries.push(item('Open', { icon: <IconArrowsMaximize size={15} />, shortcut: kbd('view.detailView'), action: ctx.onOpen }));
@@ -93,15 +114,17 @@ export function buildTileContextMenu(ctx: GridMenuContext): MenuEntry[] {
       shortcut: kbd('file.revealInFolder'),
       action: singleHash && ctx.onRevealInFolder ? () => ctx.onRevealInFolder!(singleHash!) : undefined,
     }));
-    entries.push(item('Open in New Window', { icon: <IconAppWindow size={15} />, shortcut: kbd('file.openNewWindow'), disabled: true })); // TODO: detail window
+    entries.push(item('Open in New Window', {
+      icon: <IconAppWindow size={15} />,
+      shortcut: kbd('file.openNewWindow'),
+      action: singleHash && ctx.onOpenNewWindow ? () => ctx.onOpenNewWindow!(singleHash!) : undefined,
+    }));
     entries.push(sep());
   }
 
-  // ── View options — layout/sort inline, display toggles as custom panel ──
+  // ── View options ──
   const viewEntries = buildContextMenuViewEntries();
-  for (const entry of viewEntries) {
-    entries.push(entry);
-  }
+  for (const entry of viewEntries) entries.push(entry);
   entries.push(sep());
 
   // ── Organization ──
@@ -111,12 +134,38 @@ export function buildTileContextMenu(ctx: GridMenuContext): MenuEntry[] {
       shortcut: kbd('file.addToFolder'),
       action: ctx.onAddToFolder,
     }));
+    if (selectionCount > 1 && ctx.scopeKind !== 'collection') {
+      entries.push(item('Create Collection', {
+        icon: <IconStack2 size={15} />,
+        action: ctx.onCreateCollection,
+      }));
+    }
+    if (ctx.scopeKind === 'collection') {
+      const removeLabel = selectionCount > 1 ? `Remove ${selectionCount} from Collection` : 'Remove from Collection';
+      entries.push(item(removeLabel, {
+        icon: <IconStackPop size={15} />,
+        action: ctx.onRemoveFromCollection,
+      }));
+    }
+    entries.push(sep());
+  }
+  // ── Split collection — available inside collection view OR when a single collection tile is selected ──
+  if (ctx.scopeKind === 'collection' || (singleSelected && ctx.singleKind === 'collection')) {
+    entries.push(item('Split Collection', {
+      icon: <IconStackPop size={15} />,
+      action: ctx.onSplitCollection,
+    }));
     entries.push(sep());
   }
 
   // ── Rename ──
   if (singleSelected) {
-    entries.push(item('Rename', { icon: <IconRename size={15} />, shortcut: kbd('edit.rename'), disabled: true })); // TODO: inline rename
+    entries.push(item('Rename', { icon: <IconRename size={15} />, shortcut: kbd('edit.rename'), disabled: true }));
+  }
+  if (hasSelection && selectionCount > 1) {
+    entries.push(item('Batch Rename', { icon: <IconRename size={15} />, action: ctx.onOpenBatchRename }));
+  }
+  if (singleSelected || (hasSelection && selectionCount > 1)) {
     entries.push(sep());
   }
 
@@ -137,15 +186,17 @@ export function buildTileContextMenu(ctx: GridMenuContext): MenuEntry[] {
 
   // ── Tags ──
   if (hasSelection) {
-    entries.push(item('Copy Tags', { icon: <IconBookmark size={15} />, shortcut: kbd('edit.copyTags'), disabled: true })); // TODO
-    entries.push(item('Paste Tags', { icon: <IconBookmarks size={15} style={{ transform: 'scaleX(-1)' }} />, shortcut: kbd('edit.pasteTags'), disabled: true })); // TODO
+    entries.push(item('Add Tags', { icon: <IconBookmark size={15} />, action: ctx.onOpenTagSelect }));
+    entries.push(item('AI Tagger', { icon: <IconBookmarks size={15} />, action: ctx.onOpenAiTagger }));
+    entries.push(item('Copy Tags', { icon: <IconBookmark size={15} />, shortcut: kbd('edit.copyTags'), disabled: true }));
+    entries.push(item('Paste Tags', { icon: <IconBookmarks size={15} style={{ transform: 'scaleX(-1)' }} />, shortcut: kbd('edit.pasteTags'), disabled: true }));
     entries.push(sep());
   }
 
   // ── Thumbnails ──
   if (hasSelection) {
     const thumbLabel = selectionCount > 1 ? `Regenerate ${selectionCount} Thumbnails` : 'Regenerate Thumbnail';
-    entries.push(item(thumbLabel, { icon: <IconRefresh size={15} />, shortcut: kbd('file.regenerateThumbnail'), disabled: true })); // TODO
+    entries.push(item(thumbLabel, { icon: <IconRefresh size={15} />, shortcut: kbd('file.regenerateThumbnail'), disabled: true }));
     entries.push(sep());
   }
 
@@ -156,7 +207,7 @@ export function buildTileContextMenu(ctx: GridMenuContext): MenuEntry[] {
   }
   entries.push(sep());
 
-  // ── Folder-specific removal ──
+  // ── Folder removal ──
   if (scopeKind === 'folder' && hasSelection) {
     const removeLabel = selectionCount > 1 ? `Remove ${selectionCount} from Folder` : 'Remove from Folder';
     entries.push(item(removeLabel, {
@@ -167,19 +218,19 @@ export function buildTileContextMenu(ctx: GridMenuContext): MenuEntry[] {
     entries.push(sep());
   }
 
-  // ── Destructive ──
+  // ── Trash / Delete ──
+  // ONLY "Delete Permanently" gets danger:true. Move to Trash is normal.
   if (hasSelection) {
     if (statusFilter === 'trash') {
       const restoreLabel = selectionCount > 1 ? `Restore ${selectionCount} Items` : 'Restore';
       entries.push(item(restoreLabel, { icon: <IconArrowBackUp size={15} />, shortcut: kbd('file.restore'), action: ctx.onRestore }));
       const deleteLabel = selectionCount > 1 ? `Delete ${selectionCount} Permanently` : 'Delete Permanently';
-      entries.push(item(deleteLabel, { icon: <IconTrash size={15} />, shortcut: kbd('file.permanentDelete'), danger: true, action: ctx.onPermanentDelete }));
+      entries.push(item(deleteLabel, { icon: <IconTrash size={15} />, shortcut: kbd('file.delete'), danger: true, action: ctx.onPermanentDelete }));
     } else {
       const trashLabel = selectionCount > 1 ? `Move ${selectionCount} to Trash` : 'Move to Trash';
       entries.push(item(trashLabel, {
         icon: <IconTrash size={15} />,
         shortcut: kbd('file.delete'),
-        danger: true,
         action: ctx.onMoveToTrash,
       }));
     }
@@ -193,9 +244,7 @@ export function buildEmptyContextMenu(ctx: GridMenuContext): MenuEntry[] {
   const entries: MenuEntry[] = [];
 
   const viewEntries = buildContextMenuViewEntries();
-  for (const entry of viewEntries) {
-    entries.push(entry);
-  }
+  for (const entry of viewEntries) entries.push(entry);
   entries.push(sep());
 
   entries.push(item('Select All', { icon: <IconSelectAll size={15} />, shortcut: kbd('edit.selectAll'), action: ctx.onSelectAll }));

@@ -49,6 +49,10 @@ pub struct AppSettings {
     #[serde(default = "default_true")]
     pub duplicate_auto_merge_enabled: bool,
 
+    // Sidebar
+    #[serde(default = "default_true")]
+    pub show_tree_guides: bool,
+
     // Subscription / gallery-dl settings
     /// gallery-dl `-A` value: abort after N consecutive skipped files.
     #[serde(default = "default_sub_abort_threshold")]
@@ -184,6 +188,7 @@ impl Default for AppSettings {
             duplicate_auto_merge_require_matching_dimensions: false,
             duplicate_auto_merge_subscriptions_only: true,
             duplicate_auto_merge_enabled: true,
+            show_tree_guides: true,
             sub_abort_threshold: default_sub_abort_threshold(),
             sub_inbox_pause_limit: default_sub_inbox_pause_limit(),
             sub_rate_limit_secs: default_sub_rate_limit_secs(),

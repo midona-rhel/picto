@@ -4,7 +4,8 @@
 //! transport event.
 
 use crate::runtime_contract::state_change::{
-    Domain, MediaDerivativeField, MediaMetadataField, SidebarCounts, SidebarNodePatch, TagChangeDetails,
+    Domain, MediaDerivativeField, MediaMetadataField, SidebarCounts, SidebarNodePatch,
+    TagChangeDetails,
 };
 
 #[derive(Debug, Clone, Default)]
@@ -104,7 +105,9 @@ impl ChangeImpact {
     pub fn group_ids(mut self, ids: Vec<i64>) -> Self {
         let merged = self.group_ids.get_or_insert_with(Vec::new);
         for id in ids {
-            if !merged.contains(&id) { merged.push(id); }
+            if !merged.contains(&id) {
+                merged.push(id);
+            }
         }
         self
     }
@@ -112,7 +115,9 @@ impl ChangeImpact {
     pub fn subscription_ids(mut self, ids: Vec<i64>) -> Self {
         let merged = self.subscription_ids.get_or_insert_with(Vec::new);
         for id in ids {
-            if !merged.contains(&id) { merged.push(id); }
+            if !merged.contains(&id) {
+                merged.push(id);
+            }
         }
         self
     }
@@ -120,7 +125,9 @@ impl ChangeImpact {
     pub fn query_ids(mut self, ids: Vec<i64>) -> Self {
         let merged = self.query_ids.get_or_insert_with(Vec::new);
         for id in ids {
-            if !merged.contains(&id) { merged.push(id); }
+            if !merged.contains(&id) {
+                merged.push(id);
+            }
         }
         self
     }
@@ -128,7 +135,9 @@ impl ChangeImpact {
     pub fn credential_categories(mut self, cats: Vec<String>) -> Self {
         let merged = self.credential_categories.get_or_insert_with(Vec::new);
         for cat in cats {
-            if !merged.contains(&cat) { merged.push(cat); }
+            if !merged.contains(&cat) {
+                merged.push(cat);
+            }
         }
         self
     }
@@ -154,7 +163,9 @@ impl ChangeImpact {
     }
 
     pub fn sidebar_node_patch(mut self, patch: SidebarNodePatch) -> Self {
-        self.sidebar_node_patches.get_or_insert_with(Vec::new).push(patch);
+        self.sidebar_node_patches
+            .get_or_insert_with(Vec::new)
+            .push(patch);
         self
     }
 
@@ -441,7 +452,9 @@ impl ChangeImpact {
     }
 
     pub fn file_metadata(hash: String) -> Self {
-        Self::new().entity_hashes(vec![hash]).media_metadata_changed()
+        Self::new()
+            .entity_hashes(vec![hash])
+            .media_metadata_changed()
     }
 
     pub fn file_tags(hash: String) -> Self {
@@ -478,7 +491,6 @@ impl ChangeImpact {
             .folder_ids(vec![folder_id])
     }
 
-
     pub fn collection_update(collection_id: i64) -> Self {
         Self::new().extra_grid_scopes(vec![
             format!("collection:{collection_id}"),
@@ -486,13 +498,16 @@ impl ChangeImpact {
         ])
     }
 
-    pub fn collection_membership_change(collection_id: i64) -> Self {
+    /// Scopes: `collection:{id}` + exact parent `folder:{id}` scopes.
+    /// System scopes (e.g. `system:active`) are the caller's responsibility.
+    pub fn collection_membership_change(collection_id: i64, folder_ids: &[i64]) -> Self {
+        let mut scopes = vec![format!("collection:{collection_id}")];
+        for fid in folder_ids {
+            scopes.push(format!("folder:{fid}"));
+        }
         Self::new()
-            .folder_membership_changed(vec![collection_id])
-            .extra_grid_scopes(vec![
-                format!("collection:{collection_id}"),
-                "folder:all".into(),
-            ])
+            .folder_membership_changed(folder_ids.to_vec())
+            .extra_grid_scopes(scopes)
     }
 
     pub fn collection_delete(collection_id: i64, folder_ids: Vec<i64>) -> Self {
@@ -550,7 +565,10 @@ pub fn sidebar_counts_from_bitmaps(db: &crate::sqlite::SqliteDatabase) -> Sideba
     let untagged = active.saturating_sub(tagged);
 
     SidebarCounts {
-        active, inbox, trash, untagged,
+        active,
+        inbox,
+        trash,
+        untagged,
         uncategorized: -1, // -1 = unknown, frontend should keep existing value
         duplicates: -1,    // -1 = unknown
     }

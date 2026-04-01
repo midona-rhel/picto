@@ -193,27 +193,38 @@ CREATE TABLE IF NOT EXISTS subscription_post_collection (
     PRIMARY KEY (subscription_id, site_id, post_id)
 );
 
-CREATE TABLE IF NOT EXISTS download_queue (
+CREATE TABLE IF NOT EXISTS ingest_queue (
     queue_id        INTEGER PRIMARY KEY,
-    subscription_id INTEGER NOT NULL REFERENCES subscription(subscription_id) ON DELETE CASCADE,
-    query_id        INTEGER NOT NULL REFERENCES subscription_query(query_id) ON DELETE CASCADE,
-    post_id         TEXT    NOT NULL,
-    category        TEXT    NOT NULL DEFAULT '',
-    preferred_name  TEXT    NOT NULL DEFAULT '',
-    expected_count  INTEGER NOT NULL DEFAULT 1,
+    queue_kind      TEXT    NOT NULL,
+    source_kind     TEXT    NOT NULL,
+    subscription_id INTEGER REFERENCES subscription(subscription_id) ON DELETE CASCADE,
+    query_id        INTEGER REFERENCES subscription_query(query_id) ON DELETE CASCADE,
+    query_run_id    INTEGER,
+    cleanup_root    TEXT,
+    post_id         TEXT,
+    category        TEXT,
+    preferred_name  TEXT,
+    expected_count  INTEGER,
     status          TEXT    NOT NULL DEFAULT 'pending',
+    last_error      TEXT,
     date_added      TEXT    NOT NULL,
     date_modified   TEXT    NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS download_queue_item (
-    item_id    INTEGER PRIMARY KEY,
-    queue_id   INTEGER NOT NULL REFERENCES download_queue(queue_id) ON DELETE CASCADE,
-    blob_hash  TEXT,
-    page_num   INTEGER NOT NULL DEFAULT 0,
-    metadata   TEXT,
-    status     TEXT    NOT NULL DEFAULT 'pending',
-    date_added TEXT    NOT NULL
+CREATE TABLE IF NOT EXISTS ingest_queue_item (
+    item_id              INTEGER PRIMARY KEY,
+    queue_id             INTEGER NOT NULL REFERENCES ingest_queue(queue_id) ON DELETE CASCADE,
+    source_path          TEXT    NOT NULL,
+    page_num             INTEGER NOT NULL DEFAULT 0,
+    payload_json         TEXT    NOT NULL,
+    delete_after_ingest  INTEGER NOT NULL DEFAULT 0,
+    status               TEXT    NOT NULL DEFAULT 'pending',
+    result_kind          TEXT,
+    resolved_entity_hash TEXT,
+    resolved_file_hash   TEXT,
+    last_error           TEXT,
+    date_added           TEXT    NOT NULL,
+    date_modified        TEXT    NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS deferred_work_item (

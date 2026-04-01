@@ -548,13 +548,19 @@ pub fn get_tags_paginated(
     Ok(rows)
 }
 
-/// Returns (namespace, tag_count) for all namespaces with active tags.
-pub fn get_namespace_summary(conn: &Connection) -> rusqlite::Result<Vec<(String, i64)>> {
+/// Returns namespace summaries — count is the number of tags in each namespace.
+pub fn get_namespace_summary(
+    conn: &Connection,
+) -> rusqlite::Result<Vec<crate::db::types::NamespaceSummary>> {
+    use crate::db::types::NamespaceSummary;
     let mut stmt = conn.prepare(
-        "SELECT namespace, COUNT(*) as cnt FROM tag WHERE file_count > 0 GROUP BY namespace ORDER BY cnt DESC"
+        "SELECT namespace, COUNT(*) as cnt FROM tag GROUP BY namespace ORDER BY cnt DESC",
     )?;
     let rows = stmt.query_map([], |row| {
-        Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+        Ok(NamespaceSummary {
+            namespace: row.get(0)?,
+            count: row.get(1)?,
+        })
     })?;
     rows.collect()
 }
@@ -1017,7 +1023,9 @@ impl SqliteDatabase {
         .await
     }
 
-    pub async fn get_namespace_summary(&self) -> Result<Vec<(String, i64)>, String> {
+    pub async fn get_namespace_summary(
+        &self,
+    ) -> Result<Vec<crate::db::types::NamespaceSummary>, String> {
         self.with_read_conn(get_namespace_summary).await
     }
 

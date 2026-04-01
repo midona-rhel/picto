@@ -62,9 +62,9 @@ fn pixiv_metadata_schema() -> SiteMetadataSchema {
 
 fn gelbooru_metadata_schema() -> SiteMetadataSchema {
     let namespace_mapping = std::collections::HashMap::from([
-        ("tag_string_artist".to_string(), "artist".to_string()),
+        ("tag_string_artist".to_string(), "creator".to_string()),
         ("tag_string_character".to_string(), "character".to_string()),
-        ("tag_string_copyright".to_string(), "copyright".to_string()),
+        ("tag_string_copyright".to_string(), "series".to_string()),
         ("tag_string_general".to_string(), "".to_string()),
         ("tag_string_meta".to_string(), "meta".to_string()),
         ("tag_string".to_string(), "".to_string()),
@@ -94,14 +94,14 @@ fn gelbooru_metadata_schema() -> SiteMetadataSchema {
 
 fn danbooru_metadata_schema() -> SiteMetadataSchema {
     let namespace_mapping = std::collections::HashMap::from([
-        ("tags_artist".to_string(), "artist".to_string()),
+        ("tags_artist".to_string(), "creator".to_string()),
         ("tags_character".to_string(), "character".to_string()),
-        ("tags_copyright".to_string(), "copyright".to_string()),
+        ("tags_copyright".to_string(), "series".to_string()),
         ("tags_general".to_string(), "".to_string()),
         ("tags_meta".to_string(), "meta".to_string()),
-        ("tag_string_artist".to_string(), "artist".to_string()),
+        ("tag_string_artist".to_string(), "creator".to_string()),
         ("tag_string_character".to_string(), "character".to_string()),
-        ("tag_string_copyright".to_string(), "copyright".to_string()),
+        ("tag_string_copyright".to_string(), "series".to_string()),
         ("tag_string_general".to_string(), "".to_string()),
         ("tag_string_meta".to_string(), "meta".to_string()),
         (
@@ -205,10 +205,9 @@ fn metadata_tags_preview(parsed: &ParsedMetadata) -> Vec<String> {
 }
 
 fn creator_from_parsed_tags(parsed: &ParsedMetadata) -> Option<String> {
-    parsed
-        .tags
-        .iter()
-        .find_map(|(ns, tag)| ((ns == "creator" || ns == "artist") && !tag.trim().is_empty()).then(|| tag.clone()))
+    parsed.tags.iter().find_map(|(ns, tag)| {
+        ((ns == "creator" || ns == "artist") && !tag.trim().is_empty()).then(|| tag.clone())
+    })
 }
 
 fn rating_from_raw(raw: &serde_json::Value) -> Option<String> {
@@ -573,7 +572,9 @@ fn validate_danbooru_site_metadata(
     let creator_tags = parsed
         .tags
         .iter()
-        .filter_map(|(ns, tag)| ((ns == "creator" || ns == "artist") && !tag.trim().is_empty()).then(|| tag.clone()))
+        .filter_map(|(ns, tag)| {
+            ((ns == "creator" || ns == "artist") && !tag.trim().is_empty()).then(|| tag.clone())
+        })
         .collect::<Vec<_>>();
     let rating = parsed.rating.clone().or_else(|| rating_from_raw(raw));
     let preview = serde_json::json!({

@@ -167,8 +167,7 @@ async fn folder_sidebar_preset_emits_sidebar_state_change() {
     let harness = common::TestHarness::new().await;
     harness.drain_events();
 
-    let impact = ChangeImpact::new()
-        .add_domains(&[Domain::Folders, Domain::Sidebar]);
+    let impact = ChangeImpact::new().add_domains(&[Domain::Folders, Domain::Sidebar]);
     events::emit_state_changed("test_folder_sidebar", impact);
 
     let evts = harness.find_events("runtime/state_changed");
@@ -385,9 +384,7 @@ async fn folder_watch_style_delta_includes_both_file_and_membership_changes() {
 
     let impact = ChangeImpact::file_lifecycle(&harness.db)
         .entity_hashes(vec!["imported_hash".into()])
-        .merge(
-            ChangeImpact::folder_file_change(17).entity_hashes(vec!["skipped_hash".into()]),
-        );
+        .merge(ChangeImpact::folder_file_change(17).entity_hashes(vec!["skipped_hash".into()]));
     events::emit_state_changed("watch_folder_import", impact);
 
     let evts = harness.find_events("runtime/state_changed");
@@ -482,12 +479,16 @@ async fn folder_move_emits_parent_and_order_changes() {
     assert_eq!(evts.len(), 1);
     let payload: serde_json::Value = serde_json::from_str(&evts[0].1).unwrap();
 
-    let parent_changes = payload["changes"]["folder_parent_changes"].as_array().unwrap();
+    let parent_changes = payload["changes"]["folder_parent_changes"]
+        .as_array()
+        .unwrap();
     assert_eq!(parent_changes.len(), 1);
     assert_eq!(parent_changes[0][0], 10);
     assert_eq!(parent_changes[0][1], 5);
 
-    let order_changes = payload["changes"]["folder_order_changes"].as_array().unwrap();
+    let order_changes = payload["changes"]["folder_order_changes"]
+        .as_array()
+        .unwrap();
     assert_eq!(order_changes.len(), 3);
     assert_eq!(order_changes[0][0], 10);
     assert_eq!(order_changes[0][1], 0);
@@ -508,12 +509,16 @@ async fn smart_folder_move_emits_parent_and_order_changes() {
     assert_eq!(evts.len(), 1);
     let payload: serde_json::Value = serde_json::from_str(&evts[0].1).unwrap();
 
-    let parent_changes = payload["changes"]["smart_folder_parent_changes"].as_array().unwrap();
+    let parent_changes = payload["changes"]["smart_folder_parent_changes"]
+        .as_array()
+        .unwrap();
     assert_eq!(parent_changes.len(), 1);
     assert_eq!(parent_changes[0][0], 20);
     assert!(parent_changes[0][1].is_null());
 
-    let order_changes = payload["changes"]["smart_folder_order_changes"].as_array().unwrap();
+    let order_changes = payload["changes"]["smart_folder_order_changes"]
+        .as_array()
+        .unwrap();
     assert_eq!(order_changes.len(), 2);
     assert_eq!(order_changes[1][0], 21);
     assert_eq!(order_changes[1][1], 1);
@@ -534,7 +539,9 @@ async fn folder_reorder_emits_order_changes_without_parent() {
     let payload: serde_json::Value = serde_json::from_str(&evts[0].1).unwrap();
 
     assert!(payload["changes"]["folder_parent_changes"].is_null());
-    let order_changes = payload["changes"]["folder_order_changes"].as_array().unwrap();
+    let order_changes = payload["changes"]["folder_order_changes"]
+        .as_array()
+        .unwrap();
     assert_eq!(order_changes.len(), 3);
 }
 

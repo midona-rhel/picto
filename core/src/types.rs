@@ -237,6 +237,32 @@ impl From<crate::sqlite::files::FileRecord> for EntityGridItem {
     }
 }
 
+impl From<crate::db::types::EntityGridItem> for EntityGridItem {
+    fn from(item: crate::db::types::EntityGridItem) -> Self {
+        Self {
+            entity_id: item.entity_id,
+            kind: item.entity_kind.as_str().to_string(),
+            hash: item.entity_hash,
+            thumbnail_hash: item.thumbnail_hash,
+            member_count: item.member_count,
+            name: item.name,
+            size: item.size_bytes,
+            mime: item.mime_type,
+            width: item.pixel_width,
+            height: item.pixel_height,
+            duration_ms: item.duration_ms,
+            num_frames: item.frame_count,
+            has_audio: item.has_audio,
+            status: status_to_string(item.status).to_string(),
+            rating: item.rating,
+            view_count: 0,
+            imported_at: item.date_added,
+            has_thumbnail: item.has_thumbnail,
+            dominant_color_hex: item.dominant_color_hex,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export_to = "../../src/shared/types/generated/commands/")]
 #[serde(rename_all = "snake_case")]
@@ -328,81 +354,6 @@ pub struct GridSortSpec {
     pub random_seed: Option<i64>,
 }
 
-#[derive(Debug, Deserialize, TS)]
-#[ts(export_to = "../../src/shared/types/generated/commands/")]
-pub struct GridPageSlimQuery {
-    pub limit: Option<usize>,
-    pub cursor: Option<String>,
-    pub scope: GridScopeSpec,
-    #[serde(default)]
-    pub filters: GridFilterSpec,
-    #[serde(default)]
-    pub sort: GridSortSpec,
-}
-
-#[derive(Debug, Serialize)]
-pub struct GridPageSlimResponse {
-    pub items: Vec<EntityGridItem>,
-    pub next_cursor: Option<String>,
-    pub has_more: bool,
-    /// Total count of items matching the current filter (for scroll height estimation).
-    /// Populated from bitmap length (free) or COUNT query. None when unavailable.
-    pub total_count: Option<i64>,
-}
-
-#[cfg(test)]
-mod grid_query_tests {
-    use super::GridPageSlimQuery;
-
-    #[test]
-    fn grid_query_deserializes_camel_case_fields() {
-        let raw = serde_json::json!({
-            "limit": 100,
-            "cursor": null,
-            "scope": {
-                "kind": "collection",
-                "collectionEntityId": 7
-            },
-            "filters": {
-                "searchTags": ["series:test"],
-                "searchExcludedTags": ["artist:foo"],
-                "tagMatchMode": "any",
-                "folderIds": [42],
-                "excludedFolderIds": [99],
-                "folderMatchMode": "all",
-                "ratingMin": 3,
-                "mimePrefixes": ["image/"],
-                "colorHex": "#ffffff",
-                "colorAccuracy": 12.0,
-                "searchText": "cat"
-            },
-            "sort": {
-                "field": "date_added",
-                "order": "desc"
-            }
-        });
-        let parsed: GridPageSlimQuery =
-            serde_json::from_value(raw).expect("query should deserialize");
-        assert_eq!(parsed.sort.field.as_deref(), Some("date_added"));
-        assert_eq!(parsed.sort.order.as_deref(), Some("desc"));
-        assert_eq!(parsed.filters.folder_ids, Some(vec![42]));
-        assert_eq!(parsed.filters.excluded_folder_ids, Some(vec![99]));
-        assert_eq!(parsed.filters.folder_match_mode.as_deref(), Some("all"));
-        assert_eq!(parsed.scope.collection_entity_id, Some(7));
-        assert_eq!(parsed.scope.kind, super::GridScopeKind::Collection,);
-        assert_eq!(
-            parsed.filters.search_tags,
-            Some(vec!["series:test".to_string()])
-        );
-        assert_eq!(
-            parsed.filters.search_excluded_tags,
-            Some(vec!["artist:foo".to_string()])
-        );
-        assert_eq!(parsed.filters.tag_match_mode.as_deref(), Some("any"));
-        assert_eq!(parsed.filters.search_text.as_deref(), Some("cat"));
-    }
-}
-
 #[derive(Debug, Serialize)]
 pub struct TagInfo {
     pub tag_id: i64,
@@ -428,13 +379,6 @@ pub struct EntityAllMetadata {
     pub entity: EntityDetails,
     pub tags: Vec<ResolvedTagInfo>,
     pub parent_tags: Vec<TagInfo>,
-}
-
-#[derive(Debug, Serialize)]
-pub struct EntityMetadataBatchResponse {
-    pub items: HashMap<String, EntityAllMetadata>,
-    pub missing: Vec<String>,
-    pub generated_at: String,
 }
 
 pub type EntityInfo = EntityDetails;

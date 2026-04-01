@@ -572,8 +572,7 @@ fn entity_sort_expr(sort_field: &str) -> &'static str {
 /// Shared SELECT column list for entity-aware grid queries.
 /// Returns both singles and collections with unified column shape.
 pub(crate) const ENTITY_SLIM_SELECT_PUB: &str = ENTITY_SLIM_SELECT;
-const ENTITY_SLIM_SELECT: &str =
-    "me.entity_id,
+const ENTITY_SLIM_SELECT: &str = "me.entity_id,
      me.kind AS kind,
      CASE WHEN me.kind = 'collection' THEN me.cached_item_count ELSE NULL END AS member_count,
      CASE
@@ -822,10 +821,7 @@ pub fn get_entity_grid_items_by_hashes(
             WHEN me.kind = 'collection' THEN me.hash IN ({})
             ELSE f.hash IN ({})
          END",
-        ENTITY_SLIM_SELECT,
-        ENTITY_SLIM_FROM,
-        placeholders,
-        placeholders,
+        ENTITY_SLIM_SELECT, ENTITY_SLIM_FROM, placeholders, placeholders,
     );
     let params: Vec<&dyn rusqlite::types::ToSql> = hashes
         .iter()
@@ -1447,7 +1443,8 @@ impl SqliteDatabase {
                             duration_ms: None,
                             num_frames: None,
                             has_audio: false,
-                            status: crate::types::status_to_string(row.get::<_, i64>(10)?).to_string(),
+                            status: crate::types::status_to_string(row.get::<_, i64>(10)?)
+                                .to_string(),
                             rating: row.get(11)?,
                             view_count: 0,
                             source_urls: None,

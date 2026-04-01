@@ -18,7 +18,6 @@ fn smart_folder_meta_json_canonical(row: &crate::db::query::folders::SmartFolder
     .to_string()
 }
 
-
 // ─── Input structs ─────────────────────────────────────────────────────────
 
 #[derive(Debug, Deserialize, TS)]
@@ -90,7 +89,9 @@ pub async fn create_smart_folder(
         sf.color.as_deref(),
         sf.notes.as_deref(),
     )?;
-    let row = state.engine.get_smart_folder(sf_id)?
+    let row = state
+        .engine
+        .get_smart_folder(sf_id)?
         .ok_or_else(|| format!("Smart folder {sf_id} not found after create"))?;
     let meta = smart_folder_meta_json_canonical(&row);
     let upsert = crate::runtime_contract::state_change::SidebarNodePatch {
@@ -98,7 +99,11 @@ pub async fn create_smart_folder(
         removed: None,
         upsert: Some(true),
         kind: Some("smart_folder".into()),
-        parent_id: Some(row.parent_id.map(|pid| format!("smart:{pid}")).or(Some("section:smart_folders".into()))),
+        parent_id: Some(
+            row.parent_id
+                .map(|pid| format!("smart:{pid}"))
+                .or(Some("section:smart_folders".into())),
+        ),
         name: Some(row.name.clone()),
         icon: Some(row.icon.clone()),
         color: Some(row.color.clone()),
@@ -108,15 +113,20 @@ pub async fn create_smart_folder(
         freshness: Some("stale".into()),
         meta_json: Some(Some(meta)),
     };
-    state.engine.run_compiler(crate::db::projection::compiler::CompilerPlan {
-        rebuild_sidebar: true,
-        dirty_smart_folder_ids: vec![sf_id],
-        ..Default::default()
-    });
+    state
+        .engine
+        .run_compiler(crate::db::projection::compiler::CompilerPlan {
+            rebuild_sidebar: true,
+            dirty_smart_folder_ids: vec![sf_id],
+            ..Default::default()
+        });
     crate::events::emit_state_changed(
         "create_smart_folder",
         crate::runtime_contract::change_builder::ChangeImpact::new()
-            .add_domains(&[crate::runtime_contract::state_change::Domain::SmartFolders, crate::runtime_contract::state_change::Domain::Sidebar])
+            .add_domains(&[
+                crate::runtime_contract::state_change::Domain::SmartFolders,
+                crate::runtime_contract::state_change::Domain::Sidebar,
+            ])
             .smart_folder_ids(vec![sf_id])
             .sidebar_node_patch(upsert),
     );
@@ -141,7 +151,9 @@ pub async fn update_smart_folder(
         }
     }
     // Read old predicate to detect changes
-    let old_predicate = state.engine.get_smart_folder(sf_id)?
+    let old_predicate = state
+        .engine
+        .get_smart_folder(sf_id)?
         .map(|r| r.predicate_json.clone())
         .unwrap_or_default();
 
@@ -156,27 +168,44 @@ pub async fn update_smart_folder(
         sf.sort_field.as_deref(),
         sf.sort_order.as_deref(),
     )?;
-    let row = state.engine.get_smart_folder(sf_id)?
+    let row = state
+        .engine
+        .get_smart_folder(sf_id)?
         .ok_or_else(|| format!("Smart folder {sf_id} not found after update"))?;
     let predicate_changed = row.predicate_json != old_predicate;
 
     let meta = smart_folder_meta_json_canonical(&row);
     let patch = crate::runtime_contract::state_change::SidebarNodePatch {
         node_id: format!("smart:{sf_id}"),
-        removed: None, upsert: None, kind: None, parent_id: None,
+        removed: None,
+        upsert: None,
+        kind: None,
+        parent_id: None,
         name: Some(row.name.clone()),
         icon: Some(row.icon.clone()),
         color: Some(row.color.clone()),
-        sort_order: Some(row.display_order), count: None, selectable: None, freshness: None,
+        sort_order: Some(row.display_order),
+        count: None,
+        selectable: None,
+        freshness: None,
         meta_json: Some(Some(meta)),
     };
-    state.engine.run_compiler(crate::db::projection::compiler::CompilerPlan {
-        rebuild_sidebar: true,
-        dirty_smart_folder_ids: if predicate_changed { vec![sf_id] } else { vec![] },
-        ..Default::default()
-    });
+    state
+        .engine
+        .run_compiler(crate::db::projection::compiler::CompilerPlan {
+            rebuild_sidebar: true,
+            dirty_smart_folder_ids: if predicate_changed {
+                vec![sf_id]
+            } else {
+                vec![]
+            },
+            ..Default::default()
+        });
     let mut impact = crate::runtime_contract::change_builder::ChangeImpact::new()
-        .add_domains(&[crate::runtime_contract::state_change::Domain::SmartFolders, crate::runtime_contract::state_change::Domain::Sidebar])
+        .add_domains(&[
+            crate::runtime_contract::state_change::Domain::SmartFolders,
+            crate::runtime_contract::state_change::Domain::Sidebar,
+        ])
         .smart_folder_ids(vec![sf_id])
         .sidebar_node_patch(patch);
     if predicate_changed {
@@ -194,21 +223,33 @@ pub async fn move_smart_folder(
         return Err("A smart folder cannot be its own parent".to_string());
     }
     if let Some(new_parent_id) = input.new_parent_id {
-        let descendants = state.engine.collect_descendant_smart_folder_ids(input.smart_folder_id)?;
+        let descendants = state
+            .engine
+            .collect_descendant_smart_folder_ids(input.smart_folder_id)?;
         if descendants.iter().any(|&id| id == new_parent_id) {
             return Err("A smart folder cannot be moved under one of its descendants".to_string());
         }
     }
     let sibling_order = input.sibling_order;
-    state.engine.move_smart_folder(input.smart_folder_id, input.new_parent_id)?;
+    state
+        .engine
+        .move_smart_folder(input.smart_folder_id, input.new_parent_id)?;
     if !sibling_order.is_empty() {
         state.engine.reorder_smart_folders(&sibling_order)?;
     }
-    state.engine.run_compiler(crate::db::projection::compiler::CompilerPlan { rebuild_sidebar: true, ..Default::default() });
+    state
+        .engine
+        .run_compiler(crate::db::projection::compiler::CompilerPlan {
+            rebuild_sidebar: true,
+            ..Default::default()
+        });
     crate::events::emit_state_changed(
         "move_smart_folder",
         crate::runtime_contract::change_builder::ChangeImpact::new()
-            .add_domains(&[crate::runtime_contract::state_change::Domain::SmartFolders, crate::runtime_contract::state_change::Domain::Sidebar])
+            .add_domains(&[
+                crate::runtime_contract::state_change::Domain::SmartFolders,
+                crate::runtime_contract::state_change::Domain::Sidebar,
+            ])
             .smart_folder_ids(vec![input.smart_folder_id])
             .smart_folder_parent_changes(vec![(input.smart_folder_id, input.new_parent_id)])
             .smart_folder_order_changes(sibling_order),
@@ -229,9 +270,17 @@ pub async fn delete_smart_folder(
     let mut patches = vec![crate::runtime_contract::state_change::SidebarNodePatch {
         node_id: format!("smart:{sf_id}"),
         removed: Some(true),
-        upsert: None, kind: None, parent_id: None, name: None,
-        icon: None, color: None, sort_order: None, count: None,
-        selectable: None, freshness: None, meta_json: None,
+        upsert: None,
+        kind: None,
+        parent_id: None,
+        name: None,
+        icon: None,
+        color: None,
+        sort_order: None,
+        count: None,
+        selectable: None,
+        freshness: None,
+        meta_json: None,
     }];
     let new_parent = deleted_parent_id
         .map(|pid| format!("smart:{pid}"))
@@ -239,21 +288,37 @@ pub async fn delete_smart_folder(
     for child_id in &promoted_ids {
         patches.push(crate::runtime_contract::state_change::SidebarNodePatch {
             node_id: format!("smart:{child_id}"),
-            removed: None, upsert: None, kind: None,
+            removed: None,
+            upsert: None,
+            kind: None,
             parent_id: Some(Some(new_parent.clone())),
-            name: None, icon: None, color: None, sort_order: None,
-            count: None, selectable: None, freshness: None, meta_json: None,
+            name: None,
+            icon: None,
+            color: None,
+            sort_order: None,
+            count: None,
+            selectable: None,
+            freshness: None,
+            meta_json: None,
         });
     }
 
     let mut all_sf_ids = vec![sf_id];
     all_sf_ids.extend(&promoted_ids);
 
-    state.engine.run_compiler(crate::db::projection::compiler::CompilerPlan { rebuild_sidebar: true, ..Default::default() });
+    state
+        .engine
+        .run_compiler(crate::db::projection::compiler::CompilerPlan {
+            rebuild_sidebar: true,
+            ..Default::default()
+        });
     crate::events::emit_state_changed(
         "delete_smart_folder",
         crate::runtime_contract::change_builder::ChangeImpact::new()
-            .add_domains(&[crate::runtime_contract::state_change::Domain::SmartFolders, crate::runtime_contract::state_change::Domain::Sidebar])
+            .add_domains(&[
+                crate::runtime_contract::state_change::Domain::SmartFolders,
+                crate::runtime_contract::state_change::Domain::Sidebar,
+            ])
             .smart_folder_ids(all_sf_ids)
             .extra_grid_scopes(vec![format!("smart:{sf_id}")])
             .sidebar_node_patches(patches),
@@ -282,11 +347,19 @@ pub async fn reorder_smart_folders(
     let sfids: Vec<i64> = input.moves.iter().map(|(id, _)| *id).collect();
     let order_changes = input.moves.clone();
     state.engine.reorder_smart_folders(&input.moves)?;
-    state.engine.run_compiler(crate::db::projection::compiler::CompilerPlan { rebuild_sidebar: true, ..Default::default() });
+    state
+        .engine
+        .run_compiler(crate::db::projection::compiler::CompilerPlan {
+            rebuild_sidebar: true,
+            ..Default::default()
+        });
     crate::events::emit_state_changed(
         "reorder_smart_folders",
         crate::runtime_contract::change_builder::ChangeImpact::new()
-            .add_domains(&[crate::runtime_contract::state_change::Domain::SmartFolders, crate::runtime_contract::state_change::Domain::Sidebar])
+            .add_domains(&[
+                crate::runtime_contract::state_change::Domain::SmartFolders,
+                crate::runtime_contract::state_change::Domain::Sidebar,
+            ])
             .smart_folder_ids(sfids)
             .smart_folder_order_changes(order_changes),
     );

@@ -6,11 +6,9 @@
 pub mod ai_tagger;
 pub mod duplicates;
 pub mod folders;
-pub mod grid;
 pub mod media_io;
 pub mod media_lifecycle;
 pub mod media_metadata;
-pub mod selection;
 pub mod smart_folders;
 pub mod subscriptions;
 pub mod system;

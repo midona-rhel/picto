@@ -30,7 +30,7 @@ interface Props {
 }
 
 export function TagChip({ namespace, subtag, icon, colorRgb, onRemove, onClick }: Props) {
-  const [r, g, b] = colorRgb ?? NS_COLORS[namespace.toLowerCase()] ?? NS_COLORS.default;
+  const [r, g, b] = colorRgb ?? NS_COLORS[(namespace ?? '').toLowerCase()] ?? NS_COLORS.default;
   const chipStyle = {
     '--chip-bg': `rgba(${r}, ${g}, ${b}, 0.10)`,
     '--chip-border': `rgba(${r}, ${g}, ${b}, 0.25)`,
@@ -38,7 +38,7 @@ export function TagChip({ namespace, subtag, icon, colorRgb, onRemove, onClick }
     '--chip-hover-border': `rgba(${r}, ${g}, ${b}, 0.50)`,
   } as React.CSSProperties;
 
-  const showNamespace = namespace !== 'default' && namespace !== '';
+  const showNamespace = namespace !== 'default' && namespace !== '' && namespace !== 'general';
 
   return (
     <span

@@ -1,8 +1,8 @@
 //! Entity read surface.
 
 use crate::db::types::{
-    EntityDetails, EntityGridItem, EntityViewPage, EntityViewQuery,
-    EntityViewReconcileRequest, EntityViewReconcileResult,
+    EntityDetails, EntityGridItem, EntityViewPage, EntityViewQuery, EntityViewReconcileRequest,
+    EntityViewReconcileResult,
 };
 
 use super::ApplicationEngine;
@@ -14,10 +14,7 @@ impl ApplicationEngine {
     }
 
     /// Single entity detail read (inspector/detail panel).
-    pub fn get_entity_details(
-        &self,
-        entity_hash: &str,
-    ) -> Result<Option<EntityDetails>, String> {
+    pub fn get_entity_details(&self, entity_hash: &str) -> Result<Option<EntityDetails>, String> {
         self.db.get_entity_details(entity_hash)
     }
 
@@ -49,7 +46,9 @@ impl ApplicationEngine {
             if current_items.len() != req.visible_hashes.len() {
                 return Ok(EntityViewReconcileResult::FullRefreshRequired);
             }
-            return Ok(EntityViewReconcileResult::PatchRows { items: current_items });
+            return Ok(EntityViewReconcileResult::PatchRows {
+                items: current_items,
+            });
         }
 
         // Membership may have changed. Rerun the query for the current loaded

@@ -2,11 +2,14 @@
  * Inspector controller — handles async entity data loading.
  *
  * Scope transitions are committed by GridScreen directly (atomic with snapshot).
- * This controller only handles entity selection: fetching details + preloading images.
+ * This controller handles:
+ *   1. Entity selection: fetching details + preloading images
+ *   2. State change events: re-fetching when tags/folders/status change for the displayed entity
  */
 
 import { getDefaultStore } from 'jotai';
 import * as api from '../platform/api';
+import { listen } from '../platform/ipc';
 import {
   displayedInspectorEntityDataAtom,
   displayedInspectorTargetAtom,
@@ -19,7 +22,7 @@ import {
 const store = getDefaultStore();
 
 let loadVersion = 0;
-let subscribed = false;
+
 
 function preloadImage(src: string): Promise<void> {
   return new Promise((resolve) => {
@@ -52,13 +55,13 @@ export async function loadInspectorData(entityHash: string | null) {
   }
 }
 
-/** Start watching live selection for entity data loading. */
-export function startInspectorSync() {
-  if (subscribed) return;
-  subscribed = true;
-
+/** Start watching live selection for entity data loading.
+ *  Returns a cleanup function (HMR safety). */
+export function startInspectorSync(): () => void {
+  let cancelled = false;
   let lastEntityHash = '';
-  store.sub(liveInspectorTargetAtom, () => {
+  const unsubTarget = store.sub(liveInspectorTargetAtom, () => {
+    if (cancelled) return;
     // When pinned, ignore all selection changes
     if (store.get(inspectorPinnedAtom)) return;
 
@@ -86,4 +89,30 @@ export function startInspectorSync() {
       store.set(inspectorErrorAtom, null);
     }
   });
+
+  // Re-fetch displayed entity when backend reports relevant changes.
+  const unlistenPromise = listen<{ changes: Record<string, unknown>; seq?: number }>('runtime/state_changed', (event) => {
+    if (cancelled) return;
+
+    const changes = event.payload.changes;
+    const relevant = changes.tags_changed
+      || changes.status_changed
+      || changes.folder_membership_changed
+      || changes.media_metadata_changed;
+    if (!relevant) return;
+
+    const data = store.get(displayedInspectorEntityDataAtom);
+    if (!data) return;
+
+    const hashes = changes.entity_hashes as string[] | undefined;
+    if (hashes?.length && !hashes.includes(data.entity_hash)) return;
+
+    void loadInspectorData(data.entity_hash);
+  });
+
+  return () => {
+    cancelled = true;
+    unsubTarget();
+    unlistenPromise.then((fn) => fn()).catch(() => {});
+  };
 }

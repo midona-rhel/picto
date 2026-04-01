@@ -9,7 +9,7 @@ use super::SubscriptionSyncEngine;
 #[derive(Debug, Clone)]
 pub(super) struct ImportOutcome {
     pub entity_hash: String,
-    pub imported_new: bool,
+    pub imported: bool,
 }
 
 impl<'a> SubscriptionSyncEngine<'a> {
@@ -62,24 +62,25 @@ impl<'a> SubscriptionSyncEngine<'a> {
         if !is_collection_member {
             let mut summary = crate::ingest::IngestBatchSummary::default();
             summary.flags.merge(&outcome.flags);
-            if outcome.imported_new {
+            if outcome.disposition.is_imported() {
                 summary.imported_hashes.push(outcome.entity_hash.clone());
             } else {
                 summary.skipped_hashes.push(outcome.entity_hash.clone());
             }
-            crate::ingest::apply_compiler_plan(state.engine.db(), &summary.flags, &summary.folder_ids);
+            crate::ingest::apply_compiler_plan(
+                state.engine.db(),
+                &summary.flags,
+                &summary.folder_ids,
+            );
             crate::events::emit_state_changed(
                 "subscription_import",
-                crate::ingest::build_ingest_change_impact(
-                    &summary,
-                    vec!["system:inbox".into()],
-                ),
+                crate::ingest::build_ingest_change_impact(&summary, vec!["system:inbox".into()]),
             );
         }
 
         Ok(ImportOutcome {
             entity_hash: outcome.entity_hash,
-            imported_new: outcome.imported_new,
+            imported: outcome.disposition.is_imported(),
         })
     }
 
@@ -131,11 +132,13 @@ impl<'a> SubscriptionSyncEngine<'a> {
             .members
             .iter()
             .enumerate()
-            .map(|(index, member)| crate::ingest::SubscriptionCollectionMember {
-                path: member.file_path.clone(),
-                metadata: member.metadata.clone(),
-                skip_thumbnail: index > 0,
-            })
+            .map(
+                |(index, member)| crate::ingest::SubscriptionCollectionMember {
+                    path: member.file_path.clone(),
+                    metadata: member.metadata.clone(),
+                    skip_thumbnail: index > 0,
+                },
+            )
             .collect();
         let existing_collection_id = self
             .db
@@ -160,7 +163,8 @@ impl<'a> SubscriptionSyncEngine<'a> {
             existing_collection_id,
             force_collection,
         )
-        .await {
+        .await
+        {
             Ok(result) => {
                 crate::ingest::apply_compiler_plan(state.engine.db(), &result.flags, &[]);
                 if let Some(collection_id) = result.collection_id {
@@ -213,9 +217,6 @@ impl<'a> SubscriptionSyncEngine<'a> {
                     )
                     .await;
                 }
-                if let Some(qid) = pc.queue_id {
-                    let _ = self.db.mark_queue_complete(qid).await;
-                }
                 if let Some(collection_hash) = result.collection_hash {
                     let mut summary = crate::ingest::IngestBatchSummary::default();
                     summary.flags.merge(&result.flags);
@@ -230,7 +231,9 @@ impl<'a> SubscriptionSyncEngine<'a> {
                 } else if !result.imported_hashes.is_empty() {
                     let mut summary = crate::ingest::IngestBatchSummary::default();
                     summary.flags.merge(&result.flags);
-                    summary.imported_hashes.extend(result.imported_hashes.clone());
+                    summary
+                        .imported_hashes
+                        .extend(result.imported_hashes.clone());
                     crate::events::emit_state_changed(
                         "subscription_collection_import",
                         crate::ingest::build_ingest_change_impact(

@@ -29,13 +29,25 @@ pub fn compile_sidebar(conn: &Connection) {
     // System scope nodes (children of system:library)
     //                       (id,                    name,              icon,                sort, selectable)
     let system_nodes: &[(&str, &str, &str, i64, bool)] = &[
-        ("system:active",        "All Active",        "IconPhoto",          1, true),
-        ("system:inbox",         "Inbox",             "IconInbox",          2, true),
-        ("system:uncategorized", "Uncategorized",     "IconFolderQuestion", 3, true),
-        ("system:untagged",      "Untagged",          "IconTagOff",         4, true),
-        ("system:recent_viewed", "Recently Viewed",   "IconEye",            5, true),
-        ("system:duplicates",    "Duplicates",        "IconCopy",           6, true),
-        ("system:trash",         "Trash",             "IconTrash",          7, true),
+        ("system:active", "All Active", "IconPhoto", 1, true),
+        ("system:inbox", "Inbox", "IconInbox", 2, true),
+        (
+            "system:uncategorized",
+            "Uncategorized",
+            "IconFolderQuestion",
+            3,
+            true,
+        ),
+        ("system:untagged", "Untagged", "IconTagOff", 4, true),
+        (
+            "system:recent_viewed",
+            "Recently Viewed",
+            "IconEye",
+            5,
+            true,
+        ),
+        ("system:duplicates", "Duplicates", "IconCopy", 6, true),
+        ("system:trash", "Trash", "IconTrash", 7, true),
     ];
 
     for (id, name, icon, sort_order, selectable) in system_nodes {
@@ -47,7 +59,11 @@ pub fn compile_sidebar(conn: &Connection) {
     }
 
     // System scope counts (top-level only, excludes collection members)
-    for (node_id, status) in [("system:active", 1i64), ("system:inbox", 0), ("system:trash", 2)] {
+    for (node_id, status) in [
+        ("system:active", 1i64),
+        ("system:inbox", 0),
+        ("system:trash", 2),
+    ] {
         let count: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM media_entity WHERE status = ?1 AND parent_collection_entity_id IS NULL",
@@ -76,7 +92,10 @@ pub fn compile_sidebar(conn: &Connection) {
             |row| row.get(0),
         )
         .unwrap_or(0);
-    let _ = conn.execute("UPDATE sidebar_node SET count = ?1 WHERE node_id = 'system:uncategorized'", [uncategorized]);
+    let _ = conn.execute(
+        "UPDATE sidebar_node SET count = ?1 WHERE node_id = 'system:uncategorized'",
+        [uncategorized],
+    );
 
     // Untagged count
     let untagged: i64 = conn
@@ -93,7 +112,10 @@ pub fn compile_sidebar(conn: &Connection) {
             |row| row.get(0),
         )
         .unwrap_or(0);
-    let _ = conn.execute("UPDATE sidebar_node SET count = ?1 WHERE node_id = 'system:untagged'", [untagged]);
+    let _ = conn.execute(
+        "UPDATE sidebar_node SET count = ?1 WHERE node_id = 'system:untagged'",
+        [untagged],
+    );
 
     // Duplicates count
     let duplicates: i64 = conn
@@ -103,7 +125,10 @@ pub fn compile_sidebar(conn: &Connection) {
             |row| row.get(0),
         )
         .unwrap_or(0);
-    let _ = conn.execute("UPDATE sidebar_node SET count = ?1 WHERE node_id = 'system:duplicates'", [duplicates]);
+    let _ = conn.execute(
+        "UPDATE sidebar_node SET count = ?1 WHERE node_id = 'system:duplicates'",
+        [duplicates],
+    );
 
     // Folder nodes (children of section:folders)
     let folders: Vec<(
@@ -146,7 +171,21 @@ pub fn compile_sidebar(conn: &Connection) {
         })
         .unwrap_or_default();
 
-    for (fid, name, parent_id, icon, color, notes, sort_order, auto_tags_raw, watch_path, watch_enabled, watch_subfolders, watch_import_status_mode) in &folders {
+    for (
+        fid,
+        name,
+        parent_id,
+        icon,
+        color,
+        notes,
+        sort_order,
+        auto_tags_raw,
+        watch_path,
+        watch_enabled,
+        watch_subfolders,
+        watch_import_status_mode,
+    ) in &folders
+    {
         let node_id = format!("folder:{fid}");
         let parent = parent_id
             .map(|pid| format!("folder:{pid}"))
@@ -189,7 +228,19 @@ pub fn compile_sidebar(conn: &Connection) {
         })
         .unwrap_or_default();
 
-    for (sfid, name, parent_id, icon, color, notes, display_order, predicate_json, sort_field, sort_order) in &smart_folders {
+    for (
+        sfid,
+        name,
+        parent_id,
+        icon,
+        color,
+        notes,
+        display_order,
+        predicate_json,
+        sort_field,
+        sort_order,
+    ) in &smart_folders
+    {
         let node_id = format!("smart:{sfid}");
         let parent = parent_id
             .map(|pid| format!("smart:{pid}"))
