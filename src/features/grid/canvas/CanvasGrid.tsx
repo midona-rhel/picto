@@ -8,14 +8,16 @@
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { CanonicalEntityGridItem } from '../../../shared/types/canonical';
-import type { GridViewMode } from '../layout/types';
+import type { GridViewMode, LayoutResult } from '../layout/types';
 import { computeLayout, safeAspectRatio } from '../layout/layoutMath';
 import { HoverPreviewPortal } from './HoverPreviewPortal';
 import { drawCanvasBaseLayer, type DrawContext } from './drawBase';
 
 import { ThumbnailPipeline } from './thumbnailPipeline';
 import { adaptGridItem } from './renderItemAdapter';
-import { hitTestTile } from './hitTesting';
+import { startDrag, moveDrag, endDrag, cancelDrag, setDropTarget, getDragState, isDragActive, startNativeDrag } from '../dragState';
+import { hitTestTile, computeReorderTarget } from './hitTesting';
+import { DragGhost } from '../DragGhost';
 import {
   type CanvasScrollState,
   createIdleCanvasScrollState,
@@ -60,6 +62,14 @@ export interface CanvasGridProps {
   initialScrollTop?: number | null;
   selectedEntityHashes?: Set<string>;
   onSelectionChange?: (hashes: Set<string>) => void;
+  /** DOM content rendered above the canvas inside the scroll container (e.g. SubfolderGrid). */
+  headerContent?: React.ReactNode;
+  /** Current scope for drag-and-drop context. */
+  dragSourceScope?: { kind: string; id?: number | null; key?: string | null } | null;
+  /** Expose the scroll container ref to parent. */
+  onContainerRef?: (el: HTMLDivElement | null) => void;
+  /** Notify parent when layout changes (for scroll-to-item). */
+  onLayoutChange?: (layout: LayoutResult) => void;
 }
 
 export function CanvasGrid({
@@ -85,8 +95,17 @@ export function CanvasGrid({
   suppressTileReveal = false,
   initialScrollTop = null,
   selectedEntityHashes = EMPTY_HASH_SET,
+  headerContent,
+  dragSourceScope = null,
+  onContainerRef,
+  onLayoutChange,
 }: CanvasGridProps) {
   const containerRef = useRef<HTMLDivElement>(null);
+  const containerCallbackRef = useCallback((el: HTMLDivElement | null) => {
+    (containerRef as React.MutableRefObject<HTMLDivElement | null>).current = el;
+    onContainerRef?.(el);
+  }, [onContainerRef]);
+  const headerRef = useRef<HTMLDivElement>(null);
   const baseCanvasRef = useRef<HTMLCanvasElement>(null);
   const overlayCanvasRef = useRef<HTMLCanvasElement>(null);
   const pipelineRef = useRef<ThumbnailPipeline | null>(null);
@@ -104,11 +123,15 @@ export function CanvasGrid({
   const marqueeRectRef = useRef<{ left: number; top: number; width: number; height: number } | null>(null);
   const marqueeBaseSelectionRef = useRef<Set<string>>(new Set());
   const dragJustEndedRef = useRef(false);
+  const tileDragRef = useRef<{ tileIdx: number; startClientX: number; startClientY: number } | null>(null);
+  const reorderDropRef = useRef<{ dropIndex: number; dropSide: 'left' | 'right' } | null>(null);
   const autoScrollRef = useRef<number | null>(null);
   const autoScrollSpeedRef = useRef(0);
   const hoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const hoverHideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [hoverPreview, setHoverPreview] = useState<{ hash: string; mime: string } | null>(null);
+  const [marqueeVisual, setMarqueeVisual] = useState<{ left: number; top: number; width: number; height: number } | null>(null);
+  const [dragGhost, setDragGhost] = useState<{ x: number; y: number; count: number; thumbnailHashes: string[] } | null>(null);
   const firstPaintRef = useRef(false);
   const onLoadMoreRef = useRef(onLoadMore);
   const onScrollTopChangeRef = useRef(onScrollTopChange);
@@ -119,6 +142,7 @@ export function CanvasGrid({
   const [containerWidth, setContainerWidth] = useState(0);
   const [containerHeight, setContainerHeight] = useState(0);
   const [scrollbarWidth, setScrollbarWidth] = useState(0);
+  const [headerHeight, setHeaderHeight] = useState(0);
   const resizeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const effectiveViewMode = viewMode;
@@ -142,6 +166,10 @@ export function CanvasGrid({
     () => computeLayout(aspectRatios, containerWidth, targetSize, GAP, effectiveViewMode, textHeight, 0, scrollbarWidth),
     [aspectRatios, containerWidth, targetSize, GAP, effectiveViewMode, textHeight, scrollbarWidth],
   );
+
+  const onLayoutChangeRef = useRef(onLayoutChange);
+  onLayoutChangeRef.current = onLayoutChange;
+  useEffect(() => { onLayoutChangeRef.current?.(layout); }, [layout]);
 
   // ── Scroll anchor on resize / zoom / viewMode / display toggle ──
   // Anchor on the TOP EDGE of the topmost visible tile. The image top
@@ -220,10 +248,11 @@ export function CanvasGrid({
   const estimatedTotalHeight = useMemo(() => {
     const loadedCount = items.length;
     const total = totalCount ?? loadedCount;
-    if (total <= loadedCount || loadedCount === 0) return layout.totalHeight;
-    const avgPerItem = layout.totalHeight / loadedCount;
-    return Math.round(avgPerItem * total);
-  }, [items.length, totalCount, layout.totalHeight]);
+    const mediaHeight = (total <= loadedCount || loadedCount === 0)
+      ? layout.totalHeight
+      : Math.round((layout.totalHeight / loadedCount) * total);
+    return mediaHeight + headerHeight;
+  }, [items.length, totalCount, layout.totalHeight, headerHeight]);
 
   // ── Thumbnail pipeline lifecycle ──
   useEffect(() => {
@@ -274,7 +303,9 @@ export function CanvasGrid({
 
     ensureCanvasSize(canvas, vp.containerWidth, vp.viewportHeight, vp.dpr);
 
-    const scrollTop = interactive ? vp.scrollTop : frozenScrollTop;
+    const rawScrollTop = interactive ? vp.scrollTop : frozenScrollTop;
+    // Offset by header height — tile positions start at Y=0 but the header pushes canvas content down
+    const scrollTop = Math.max(0, rawScrollTop - headerHeight);
     const now = performance.now();
 
     ctx.save();
@@ -291,7 +322,7 @@ export function CanvasGrid({
 
     // Full scan — masonry positions are NOT Y-sorted (tiles placed in shortest column).
     const visibleHashes = new Set<string>();
-    const planHashes: string[] = [];
+    const planTiles: Array<{ hash: string; mime: string; w: number; h: number }> = [];
     for (let i = 0; i < layout.positions.length; i++) {
       const pos = layout.positions[i];
       if (!pos) continue;
@@ -304,11 +335,12 @@ export function CanvasGrid({
       if (!item) continue;
 
       visibleHashes.add(item.thumbnailHash);
-      planHashes.push(item.thumbnailHash);
+      planTiles.push({ hash: item.thumbnailHash, mime: item.mime, w: pos.w, h: pos.h });
     }
 
     // Send plan to worker — it handles loading, caching, staggered reveals.
-    pipeline.updatePlan(planHashes);
+    // Tiles exceeding the quality threshold get full-res URLs automatically.
+    pipeline.updatePlan(planTiles);
 
     const drawCtx: DrawContext = {
       scrollTop,
@@ -330,6 +362,7 @@ export function CanvasGrid({
         borderRadius: 4,
         textPrimary: 'rgba(255, 255, 255, 0.92)',
         textTertiary: 'rgba(255, 255, 255, 0.36)',
+        tileBoundary: 'rgba(255, 255, 255, 0.12)',
       },
       viewMode: effectiveViewMode,
       fitThumbnails,
@@ -355,7 +388,7 @@ export function CanvasGrid({
       firstPaintRef.current = true;
       onFirstPaint?.();
     }
-  }, [layout, renderItems, effectiveViewMode, fitThumbnails, showName, showExtension, showResolution, suppressTileReveal, textHeight, interactive, frozenScrollTop]);
+  }, [layout, renderItems, effectiveViewMode, fitThumbnails, showName, showExtension, showResolution, suppressTileReveal, textHeight, interactive, frozenScrollTop, headerHeight]);
 
   const drawOverlay = useCallback(() => {
     const container = containerRef.current;
@@ -371,7 +404,7 @@ export function CanvasGrid({
 
     ctx.save();
     ctx.scale(vp.dpr, vp.dpr);
-    const scrollTop = interactive ? vp.scrollTop : frozenScrollTop;
+    const scrollTop = Math.max(0, (interactive ? vp.scrollTop : frozenScrollTop) - headerHeight);
 
     // Draw selection borders on all selected tiles
     if (selectedEntityHashes.size > 0) {
@@ -438,20 +471,41 @@ export function CanvasGrid({
       }
     }
 
-    // Draw marquee rectangle
-    const mRect = marqueeRectRef.current;
-    if (mRect) {
-      const mx = mRect.left;
-      const my = mRect.top - scrollTop;
-      ctx.fillStyle = 'rgba(51, 154, 240, 0.12)';
-      ctx.fillRect(mx, my, mRect.width, mRect.height);
-      ctx.strokeStyle = 'rgba(51, 154, 240, 0.5)';
-      ctx.lineWidth = 1;
-      ctx.strokeRect(mx + 0.5, my + 0.5, mRect.width - 1, mRect.height - 1);
+    // Marquee is rendered as a DOM overlay (covers both header and canvas)
+
+    // Draw reorder drop indicator (blue vertical line + triangle)
+    const rd = reorderDropRef.current;
+    if (rd) {
+      const rdPos = layout.positions[rd.dropIndex];
+      if (rdPos) {
+        const rdDrawY = rdPos.y - scrollTop;
+        const rdImgH = rdPos.h - textHeight;
+        const gap = 16;
+        const indicatorX = rd.dropSide === 'left'
+          ? rdPos.x - gap / 2
+          : rdPos.x + rdPos.w + gap / 2;
+
+        // Vertical line
+        ctx.strokeStyle = '#228be6';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(indicatorX, rdDrawY);
+        ctx.lineTo(indicatorX, rdDrawY + rdImgH);
+        ctx.stroke();
+
+        // Triangle arrow at top
+        ctx.fillStyle = '#228be6';
+        ctx.beginPath();
+        ctx.moveTo(indicatorX - 5, rdDrawY);
+        ctx.lineTo(indicatorX + 5, rdDrawY);
+        ctx.lineTo(indicatorX, rdDrawY + 7);
+        ctx.closePath();
+        ctx.fill();
+      }
     }
 
     ctx.restore();
-  }, [layout, items, selectedEntityHashes, textHeight, interactive, frozenScrollTop]);
+  }, [layout, items, selectedEntityHashes, textHeight, interactive, frozenScrollTop, headerHeight]);
 
   // ── RAF scheduler (legacy pattern) ──
   const frozenRef = useRef(!interactive);
@@ -495,10 +549,103 @@ export function CanvasGrid({
     };
   }, []);
 
+  // ── Header height observer ──
+  useEffect(() => {
+    const el = headerRef.current;
+    if (!el) { setHeaderHeight(0); return; }
+    const measure = () => setHeaderHeight(el.offsetHeight);
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [headerContent]);
+
   // ── Redraw on layout/prop changes ──
   useEffect(() => { markDirty('both'); }, [layout, markDirty]);
   useEffect(() => { markDirty('base'); }, [showName, showExtension, showResolution, effectiveViewMode, fitThumbnails, suppressTileReveal, markDirty]);
   useEffect(() => { markDirty('overlay'); }, [selectedEntityHashes, markDirty]);
+  useEffect(() => { markDirty('both'); }, [headerHeight, markDirty]);
+
+  // ── Global pointer tracking during drag ──
+  // Uses refs to avoid effect re-runs on every ghost position update.
+  const itemsRef = useRef(items);
+  itemsRef.current = items;
+  const layoutPosRef = useRef(layout.positions);
+  layoutPosRef.current = layout.positions;
+  const textHeightRef = useRef(textHeight);
+  textHeightRef.current = textHeight;
+  const headerHeightRef = useRef(headerHeight);
+  headerHeightRef.current = headerHeight;
+  const markDirtyRef = useRef(markDirty);
+  markDirtyRef.current = markDirty;
+  const onSelectionChangeRef = useRef(onSelectionChange);
+  onSelectionChangeRef.current = onSelectionChange;
+
+  useEffect(() => {
+    const onMove = (e: MouseEvent) => {
+      if (!isDragActive()) return;
+      moveDrag(e.clientX, e.clientY);
+      setDragGhost((prev) => prev ? { ...prev, x: e.clientX, y: e.clientY } : null);
+      const scope = getDragState().sourceScope;
+      if (scope && scope.kind === 'folder') {
+        const ctr = containerRef.current;
+        if (ctr) {
+          const rct = ctr.getBoundingClientRect();
+          const cx = e.clientX - rct.left;
+          const cy = e.clientY - rct.top + ctr.scrollTop - headerHeightRef.current;
+          // Build skip set from dragged item indices
+          const draggedHashes = new Set(getDragState().hashes);
+          const skipIdx = new Set<number>();
+          const curItems = itemsRef.current;
+          for (let i = 0; i < curItems.length; i++) {
+            if (draggedHashes.has(curItems[i].entity_hash)) skipIdx.add(i);
+          }
+          const tgt = computeReorderTarget(layoutPosRef.current, cx, cy, textHeightRef.current, skipIdx);
+          reorderDropRef.current = tgt ? { dropIndex: tgt.index, dropSide: tgt.side } : null;
+          markDirtyRef.current('overlay');
+        }
+      }
+    };
+    const onUp = () => {
+      if (isDragActive()) {
+        const rd = reorderDropRef.current;
+        const existingTarget = getDragState().dropTarget;
+        if (rd && !existingTarget) {
+          const curItems = itemsRef.current;
+          const draggedSet = new Set(getDragState().hashes);
+          const targetIdx = rd.dropSide === 'right' ? rd.dropIndex + 1 : rd.dropIndex;
+          let offset = 0;
+          for (let i = 0; i < targetIdx && i < curItems.length; i++) {
+            if (draggedSet.has(curItems[i].entity_hash)) offset++;
+          }
+          const insertAt = targetIdx - offset;
+          const dragged = curItems.filter((it) => draggedSet.has(it.entity_hash));
+          const remaining = curItems.filter((it) => !draggedSet.has(it.entity_hash));
+          const reordered = [...remaining.slice(0, insertAt), ...dragged, ...remaining.slice(insertAt)];
+          const orderedEntityIds: [number, number][] = reordered.map((it, i) => [it.entity_id, i]);
+          if (orderedEntityIds.length > 0) {
+            setDropTarget({ kind: 'reorder', orderedEntityIds });
+          }
+        }
+        reorderDropRef.current = null;
+        // Preserve selection: re-select the dragged hashes after drop
+        const draggedHashes = new Set(getDragState().hashes);
+        endDrag();
+        dragJustEndedRef.current = true; // suppress the click that follows mouseup
+        onSelectionChangeRef.current?.(draggedHashes);
+        markDirtyRef.current('overlay');
+      }
+      setDragGhost(null);
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+    return () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+      reorderDropRef.current = null;
+      if (isDragActive()) cancelDrag();
+    };
+  }, []); // stable — never re-runs, uses refs for all mutable data
 
 
   // ── Scroll handler ──
@@ -557,18 +704,33 @@ export function CanvasGrid({
   }, [frozenScrollTop, interactive, markDirty]);
 
   // ── Click handler ──
+  const isInHeader = useCallback((target: EventTarget) => {
+    return headerRef.current?.contains(target as Node) ?? false;
+  }, []);
+
+  /** Check if the event target is on an interactive element inside the header (folder tile, button, etc.) */
+  const isOnHeaderInteractive = useCallback((target: EventTarget) => {
+    const el = target as HTMLElement;
+    if (!headerRef.current?.contains(el)) return false;
+    // Check if the click is on a folder tile or its children
+    return !!el.closest('[data-folder-hash]') || !!el.closest('button');
+  }, []);
+
   const handleClick = useCallback((e: React.MouseEvent) => {
     // Suppress click that fires after a marquee drag ends
     if (dragJustEndedRef.current) {
       dragJustEndedRef.current = false;
       return;
     }
+    // Folder tiles handle their own clicks; empty header space clears selection
+    if (isOnHeaderInteractive(e.target)) return;
+
     const container = containerRef.current;
     if (!container) return;
 
     const rect = container.getBoundingClientRect();
     const x = e.clientX - rect.left;
-    const y = e.clientY - rect.top + container.scrollTop;
+    const y = e.clientY - rect.top + container.scrollTop - headerHeight;
 
     const idx = hitTestTile(layout.positions, x, y, textHeight, 0, layout.positions.length);
     if (idx != null && items[idx]) {
@@ -576,21 +738,22 @@ export function CanvasGrid({
     } else {
       onEmptyClick?.();
     }
-  }, [items, layout.positions, onTileClick, onEmptyClick, textHeight]);
+  }, [items, layout.positions, onTileClick, onEmptyClick, textHeight, isInHeader, headerHeight]);
 
   // ── Double-click handler ──
   const handleDoubleClick = useCallback((e: React.MouseEvent) => {
+    if (isOnHeaderInteractive(e.target)) return;
     if (!onTileDoubleClick) return;
     const container = containerRef.current;
     if (!container) return;
     const rect = container.getBoundingClientRect();
     const x = e.clientX - rect.left;
-    const y = e.clientY - rect.top + container.scrollTop;
+    const y = e.clientY - rect.top + container.scrollTop - headerHeight;
     const idx = hitTestTile(layout.positions, x, y, textHeight, 0, layout.positions.length);
     if (idx != null && items[idx]) {
       onTileDoubleClick(idx, items[idx]);
     }
-  }, [items, layout.positions, onTileDoubleClick, textHeight]);
+  }, [items, layout.positions, onTileDoubleClick, textHeight, isInHeader, headerHeight]);
 
   // ── Zoom button hit test (bottom-right corner of tile image area) ──
   const isZoomButtonHit = useCallback((clientX: number, clientY: number, tileIdx: number): boolean => {
@@ -598,7 +761,7 @@ export function CanvasGrid({
     if (!container) return false;
     const rect = container.getBoundingClientRect();
     const mx = clientX - rect.left;
-    const my = clientY - rect.top + container.scrollTop;
+    const my = clientY - rect.top + container.scrollTop - headerHeight;
     const pos = layout.positions[tileIdx];
     if (!pos) return false;
     const imgH = pos.h - textHeight;
@@ -607,7 +770,7 @@ export function CanvasGrid({
     const zx = pos.x + pos.w - bgW;
     const zy = pos.y + imgH - bgH;
     return mx >= zx && mx < zx + bgW && my >= zy && my < zy + bgH;
-  }, [layout.positions, textHeight]);
+  }, [layout.positions, textHeight, headerHeight]);
 
   // ── Clear hover timers helper ──
   const clearHoverTimers = useCallback(() => {
@@ -622,7 +785,7 @@ export function CanvasGrid({
     if (!container) return;
     const rect = container.getBoundingClientRect();
     const x = e.clientX - rect.left;
-    const y = e.clientY - rect.top + container.scrollTop;
+    const y = e.clientY - rect.top + container.scrollTop - headerHeight;
     const idx = hitTestTile(layout.positions, x, y, textHeight, 0, layout.positions.length);
 
     if (idx !== hoveredTileRef.current) {
@@ -665,9 +828,11 @@ export function CanvasGrid({
         }, HOVER_HIDE_DELAY_MS);
       }
     }
-  }, [layout.positions, textHeight, items, isZoomButtonHit, hoverPreview, markDirty]);
+  }, [layout.positions, textHeight, items, isZoomButtonHit, hoverPreview, markDirty, headerHeight]);
 
   const handleMouseLeave = useCallback(() => {
+    // Don't cancel drag when cursor moves to sidebar — ghost follows globally
+    if (isDragActive()) return;
     if (hoveredTileRef.current != null) {
       hoveredTileRef.current = null;
       markDirty('overlay');
@@ -683,13 +848,14 @@ export function CanvasGrid({
 
   // ── Context menu handler ──
   const handleContextMenu = useCallback((e: React.MouseEvent) => {
+    if (isInHeader(e.target)) return; // header handles its own context menu
     e.preventDefault();
     const container = containerRef.current;
     if (!container) return;
 
     const rect = container.getBoundingClientRect();
     const x = e.clientX - rect.left;
-    const y = e.clientY - rect.top + container.scrollTop;
+    const y = e.clientY - rect.top + container.scrollTop - headerHeight;
     const pos = { x: e.clientX, y: e.clientY };
 
     const idx = hitTestTile(layout.positions, x, y, textHeight, 0, layout.positions.length);
@@ -698,21 +864,48 @@ export function CanvasGrid({
     } else {
       onEmptyContextMenu?.(pos);
     }
-  }, [items, layout.positions, onTileContextMenu, onEmptyContextMenu, textHeight]);
+  }, [items, layout.positions, onTileContextMenu, onEmptyContextMenu, textHeight, headerHeight]);
+
+  // ── Folder tile marquee hit-testing ──
+  const hitTestFolderTiles = useCallback((left: number, top: number, width: number, height: number, hitSet: Set<string>) => {
+    const header = headerRef.current;
+    if (!header) return;
+    const tiles = header.querySelectorAll<HTMLElement>('[data-folder-hash]');
+    const container = containerRef.current;
+    if (!container) return;
+    for (const tile of tiles) {
+      const hash = tile.dataset.folderHash;
+      if (!hash) continue;
+      // Tile offset in scroll-space → convert to content-space by subtracting headerHeight
+      const tileTop = tile.offsetTop - headerHeight;
+      const tileLeft = tile.offsetLeft;
+      const tileW = tile.offsetWidth;
+      const tileH = tile.offsetHeight;
+      if (tileLeft + tileW > left && tileLeft < left + width &&
+          tileTop + tileH > top && tileTop < top + height) {
+        hitSet.add(hash);
+      }
+    }
+  }, [headerHeight]);
 
   // ── Marquee drag handlers ──
   const handlePointerDown = useCallback((e: React.PointerEvent) => {
     if (e.button !== 0) return; // left button only
+    if (isOnHeaderInteractive(e.target)) return; // folder tiles handle their own clicks
     const container = containerRef.current;
     if (!container) return;
 
     const rect = container.getBoundingClientRect();
     const x = e.clientX - rect.left;
-    const y = e.clientY - rect.top + container.scrollTop;
+    const y = e.clientY - rect.top + container.scrollTop - headerHeight;
 
-    // Only start marquee if clicking empty space (not on a tile)
+    // If clicking on a tile, set up potential tile drag (not marquee)
     const idx = hitTestTile(layout.positions, x, y, textHeight, 0, layout.positions.length);
-    if (idx != null) return;
+    if (idx != null) {
+      tileDragRef.current = { tileIdx: idx, startClientX: e.clientX, startClientY: e.clientY };
+      return;
+    }
+    tileDragRef.current = null;
 
     marqueeRef.current = { startX: x, startY: y, active: true, shiftKey: e.shiftKey, lastClientX: x, lastClientY: e.clientY - container.getBoundingClientRect().top };
     marqueeBaseSelectionRef.current = e.shiftKey || e.metaKey || e.ctrlKey
@@ -731,7 +924,7 @@ export function CanvasGrid({
           c.scrollTop += autoScrollSpeedRef.current;
           // Update marquee rect using stored cursor position + new scroll
           const { startX: sx, startY: sy, lastClientX: lcx, lastClientY: lcy } = marqueeRef.current;
-          const curY = lcy + c.scrollTop;
+          const curY = lcy + c.scrollTop - headerHeight;
           const curX = lcx;
           const l = Math.min(sx, curX);
           const t = Math.min(sy, curY);
@@ -739,6 +932,7 @@ export function CanvasGrid({
           const h = Math.abs(curY - sy);
           if (w >= 5 || h >= 5) {
             marqueeRectRef.current = { left: l, top: t, width: w, height: h };
+            setMarqueeVisual({ left: l, top: t + headerHeight, width: w, height: h });
             // Re-hit-test tiles
             const hitH = new Set(marqueeBaseSelectionRef.current);
             const positions = layout.positions;
@@ -750,6 +944,7 @@ export function CanvasGrid({
                 hitH.add(items[i].entity_hash);
               }
             }
+            hitTestFolderTiles(l, t, w, h, hitH);
             onSelectionChange?.(hitH);
           }
           markDirty('both');
@@ -758,9 +953,36 @@ export function CanvasGrid({
       };
       autoScrollRef.current = requestAnimationFrame(tick);
     }
-  }, [layout.positions, textHeight, selectedEntityHashes]);
+  }, [layout.positions, textHeight, selectedEntityHashes, headerHeight]);
 
   const handlePointerMove = useCallback((e: React.PointerEvent) => {
+    // Check for tile drag initiation (5px threshold)
+    if (tileDragRef.current && !isDragActive()) {
+      const dx = e.clientX - tileDragRef.current.startClientX;
+      const dy = e.clientY - tileDragRef.current.startClientY;
+      if (Math.abs(dx) > 5 || Math.abs(dy) > 5) {
+        const tileIdx = tileDragRef.current.tileIdx;
+        const item = items[tileIdx];
+        if (item) {
+          const hash = item.entity_hash;
+          const currentSelection = selectedHashesRef.current;
+          const hashes = currentSelection.has(hash)
+            ? [...currentSelection]
+            : [hash];
+          const thumbHashes = hashes.slice(0, 3).map((h) => {
+            const it = items.find((i) => i.entity_hash === h);
+            return it?.thumbnail_hash ?? h;
+          });
+          startDrag(hashes, e.clientX, e.clientY, dragSourceScope);
+          setDragGhost({ x: e.clientX, y: e.clientY, count: hashes.length, thumbnailHashes: thumbHashes });
+          reorderDropRef.current = null;
+          tileDragRef.current = null;
+        }
+      }
+      return;
+    }
+    // Active tile drag — global onMove handler computes reorder target + ghost position
+    if (isDragActive()) return;
     if (!marqueeRef.current.active) return;
     const container = containerRef.current;
     if (!container) return;
@@ -768,7 +990,7 @@ export function CanvasGrid({
     const rect = container.getBoundingClientRect();
     const clientY = e.clientY - rect.top;
     const x = e.clientX - rect.left;
-    const y = clientY + container.scrollTop;
+    const y = clientY + container.scrollTop - headerHeight;
     marqueeRef.current.lastClientX = e.clientX - rect.left;
     marqueeRef.current.lastClientY = clientY;
     const { startX, startY } = marqueeRef.current;
@@ -793,8 +1015,10 @@ export function CanvasGrid({
     if (width < 5 && height < 5) return;
 
     marqueeRectRef.current = { left, top, width, height };
+    // Visual marquee in scroll-space (add headerHeight back for DOM overlay)
+    setMarqueeVisual({ left, top: top + headerHeight, width, height });
 
-    // Compute intersecting tiles
+    // Compute intersecting tiles (canvas + folder DOM)
     const hitHashes = new Set(marqueeBaseSelectionRef.current);
     for (let i = 0; i < layout.positions.length; i++) {
       const pos = layout.positions[i];
@@ -805,15 +1029,20 @@ export function CanvasGrid({
         hitHashes.add(items[i].entity_hash);
       }
     }
+    hitTestFolderTiles(left, top, width, height, hitHashes);
     onSelectionChange?.(hitHashes);
     markDirty('overlay');
-  }, [items, layout.positions, textHeight, onSelectionChange, markDirty]);
+  }, [items, layout.positions, textHeight, onSelectionChange, markDirty, hitTestFolderTiles, headerHeight]);
 
   const handlePointerUp = useCallback((e: React.PointerEvent) => {
+    tileDragRef.current = null;
+    // Tile drag end is handled by the global window mouseup listener — don't interfere here
+    if (isDragActive()) return;
     if (!marqueeRef.current.active) return;
     const hadVisibleMarquee = marqueeRectRef.current != null;
     marqueeRef.current.active = false;
     marqueeRectRef.current = null;
+    setMarqueeVisual(null);
     autoScrollSpeedRef.current = 0;
     if (autoScrollRef.current != null) {
       cancelAnimationFrame(autoScrollRef.current);
@@ -829,7 +1058,7 @@ export function CanvasGrid({
   return (
     <div className={styles.root}>
       <div
-        ref={containerRef}
+        ref={containerCallbackRef}
         className={`${styles.container} ${interactive ? '' : styles.containerFrozen}`}
         onScroll={handleScroll}
         onClick={handleClick}
@@ -841,13 +1070,27 @@ export function CanvasGrid({
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
       >
+        {headerContent && <div ref={headerRef}>{headerContent}</div>}
+        {marqueeVisual && (
+          <div style={{
+            position: 'absolute',
+            left: marqueeVisual.left,
+            top: marqueeVisual.top,
+            width: marqueeVisual.width,
+            height: marqueeVisual.height,
+            background: 'rgba(51, 154, 240, 0.12)',
+            border: '1px solid rgba(51, 154, 240, 0.5)',
+            pointerEvents: 'none',
+            zIndex: 100,
+          }} />
+        )}
         <div
           className={styles.canvasWrap}
-          style={{ height: `${estimatedTotalHeight}px` }}
+          style={{ height: `${estimatedTotalHeight - headerHeight}px` }}
         >
           <div
             className={styles.viewportLayer}
-            style={{ height: `${containerHeight}px` }}
+            style={{ height: `${Math.min(containerHeight, estimatedTotalHeight - headerHeight)}px` }}
           >
             <canvas
               ref={baseCanvasRef}
@@ -867,6 +1110,14 @@ export function CanvasGrid({
         </div>
       </div>
       {hoverPreview && <HoverPreviewPortal hash={hoverPreview.hash} mime={hoverPreview.mime} />}
+      {dragGhost && (
+        <DragGhost
+          x={dragGhost.x}
+          y={dragGhost.y}
+          thumbnailHashes={dragGhost.thumbnailHashes}
+          count={dragGhost.count}
+        />
+      )}
     </div>
   );
 }

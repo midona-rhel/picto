@@ -6,6 +6,7 @@
  */
 
 import { useCallback, useEffect, useRef } from 'react';
+import { isNativeDragPending as isNativeDragPendingFn, isDragActive as isDragActiveFn, getDragState, startNativeDrag as startNativeDragFn, cancelDrag } from '../features/grid/dragState';
 import { useAtomValue, useSetAtom } from 'jotai';
 import { IconLayoutSidebar, IconSettings, IconChevronLeft, IconChevronRight, IconPin, IconPinFilled } from '@tabler/icons-react';
 import { getSettings } from '../platform/api';
@@ -268,6 +269,41 @@ export function AppShell() {
     };
   }, [setActiveNodeId]);
 
+  // ── Native drag-out — start OS file drag when cursor leaves the window during a grid drag ──
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (!isDragActiveFn()) return;
+      // Check if cursor actually left the window
+      if (e.clientX <= 0 || e.clientY <= 0 || e.clientX >= window.innerWidth || e.clientY >= window.innerHeight) {
+        const state = getDragState();
+        const firstHash = state.hashes[0];
+        const thumbnailUrl = firstHash ? `media://localhost/thumb/${firstHash}.jpg` : '';
+        startNativeDragFn(state.hashes, thumbnailUrl);
+      }
+    };
+    document.addEventListener('mouseleave', handler);
+    return () => document.removeEventListener('mouseleave', handler);
+  }, []);
+
+  // ── Re-import guard — prevent dropping files back into the app during a native drag ──
+  useEffect(() => {
+    const handler = (e: DragEvent) => {
+      if (isNativeDragPendingFn()) {
+        e.preventDefault();
+        e.stopPropagation();
+        if (e.dataTransfer) e.dataTransfer.dropEffect = 'none';
+      }
+    };
+    window.addEventListener('dragenter', handler, true);
+    window.addEventListener('dragover', handler, true);
+    window.addEventListener('drop', handler, true);
+    return () => {
+      window.removeEventListener('dragenter', handler, true);
+      window.removeEventListener('dragover', handler, true);
+      window.removeEventListener('drop', handler, true);
+    };
+  }, []);
+
   // App-wide keyboard shortcuts — uses registry defs so keys2 (EU alternatives) work
   useEffect(() => {
     const defs = {
@@ -280,6 +316,8 @@ export function AppShell() {
     };
 
     function handleKeyDown(e: KeyboardEvent) {
+      // Suppress Tab navigation — app uses custom keyboard handling, not browser focus
+      if (e.key === 'Tab') { e.preventDefault(); return; }
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
 
       if (matchesShortcutDef(e, defs.sidebar))   { e.preventDefault(); toggleSidebar(); return; }

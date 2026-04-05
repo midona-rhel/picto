@@ -37,6 +37,11 @@ export const detailsRichImage: CanonicalEntityDetails = {
   date_added: '2026-03-20T14:30:00Z',
   date_modified: '2026-03-22T11:00:00Z',
   dominant_color_hex: '#e8731a',
+  dominant_colors: [
+    { hex: '#e8731a', l: 62.1, a: 31.2, b: 58.4 },
+    { hex: '#2f5f87', l: 41.8, a: -3.1, b: -24.6 },
+    { hex: '#f4d9b6', l: 88.5, a: 4.2, b: 22.8 },
+  ],
   perceptual_hash: 'AQAAAA==',
   tags: [
     { tag_id: 1, namespace: '', subtag: 'landscape', site_mask: '0', provenance_mask: '1', source: 'local' },
@@ -74,6 +79,7 @@ export const detailsSparseImage: CanonicalEntityDetails = {
   date_added: '2026-03-24T08:00:00Z',
   date_modified: '2026-03-24T08:00:00Z',
   dominant_color_hex: '#888888',
+  dominant_colors: [{ hex: '#888888', l: 57.0, a: 0.0, b: 0.0 }],
   perceptual_hash: null,
   tags: [],
   folders: [],
@@ -102,6 +108,7 @@ export const detailsVideo: CanonicalEntityDetails = {
   date_added: '2026-03-19T08:00:00Z',
   date_modified: '2026-03-19T08:00:00Z',
   dominant_color_hex: '#81d4fa',
+  dominant_colors: null,
   perceptual_hash: 'BQAAAA==',
   tags: [
     { tag_id: 5, namespace: '', subtag: 'timelapse', site_mask: '0', provenance_mask: '1', source: 'local' },
@@ -133,6 +140,7 @@ export const detailsCollection: CanonicalEntityDetails = {
   date_added: '2026-03-20T14:30:00Z',
   date_modified: '2026-03-20T14:35:00Z',
   dominant_color_hex: '#e8731a',
+  dominant_colors: null,
   perceptual_hash: null,
   tags: [
     { tag_id: 3, namespace: '', subtag: 'beach', site_mask: '0', provenance_mask: '1', source: 'local' },
@@ -166,6 +174,7 @@ export const detailsInboxItem: CanonicalEntityDetails = {
   date_added: '2026-03-23T16:00:00Z',
   date_modified: '2026-03-23T16:00:00Z',
   dominant_color_hex: null,
+  dominant_colors: null,
   perceptual_hash: null,
   tags: [],
   folders: [],

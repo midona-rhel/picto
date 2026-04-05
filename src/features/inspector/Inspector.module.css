@@ -102,6 +102,7 @@
   max-width: 200px;
   aspect-ratio: 4 / 3;
   box-sizing: border-box;
+  margin: 0 auto;
 }
 
 .pic1,

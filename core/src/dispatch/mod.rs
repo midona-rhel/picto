@@ -115,6 +115,7 @@ const WRITE_COMMANDS: &[&str] = &[
     "remove_entities_from_folder",
     "reorder_folders",
     "reorder_folder_items",
+    "reorder_folder_members",
     "set_folder_watch_config",
     "clear_folder_watch_config",
     "create_collection",
@@ -402,6 +403,7 @@ async fn dispatch_inner(command: &str, args: serde_json::Value) -> Result<String
         }
         "reorder_folders" => call!(typed::folders::reorder_folders, &state, args),
         "reorder_folder_items" => call!(typed::folders::reorder_folder_items, &state, args),
+        "reorder_folder_members" => call!(typed::folders::reorder_folder_members, &state, args),
         "get_collections" => call!(typed::folders::get_collections, &state, args),
         "get_collection_summary" => call!(typed::folders::get_collection_summary, &state, args),
         "create_collection" => call!(typed::folders::create_collection, &state, args),

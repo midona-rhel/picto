@@ -58,7 +58,6 @@ pub async fn import_files(
     let result = state
         .engine
         .import_files(
-            &state.legacy_db,
             &state.blob_store,
             input.paths,
             input.tag_strings,
@@ -92,7 +91,6 @@ pub async fn import_folder(
     let result = state
         .engine
         .import_folder(
-            &state.legacy_db,
             &state.blob_store,
             input.path,
             input.preserve_structure,
@@ -111,11 +109,24 @@ pub async fn import_folder(
 /// Wipe all image data — catastrophic full reset.
 /// Uses file_lifecycle without specific hashes because ALL files are removed.
 pub async fn wipe_image_data(state: &AppState, _input: serde_json::Value) -> Result<(), String> {
-    state.legacy_db.wipe_all_files().await?;
+    let root_hashes = state.engine.db().with_read(|conn| {
+        let mut stmt = conn.prepare(
+            "SELECT entity_hash
+             FROM media_entity
+             WHERE parent_collection_entity_id IS NULL
+             ORDER BY entity_id",
+        )?;
+        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+    })?;
+    if !root_hashes.is_empty() {
+        state.engine.delete_entities(crate::db::types::EntityTarget {
+            kind: crate::db::types::EntityTargetKind::EntityHashes,
+            entity_hashes: Some(root_hashes),
+            query: None,
+            excluded_entity_hashes: None,
+        })?;
+    }
     state.blob_store.wipe().map_err(|e| e.to_string())?;
-    crate::events::emit_state_changed(
-        "wipe_image_data",
-        crate::runtime_contract::change_builder::ChangeImpact::file_lifecycle(&state.legacy_db),
-    );
     Ok(())
 }

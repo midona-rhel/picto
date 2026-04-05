@@ -25,6 +25,8 @@ import {
   gridScopeAtom,
   gridTransitionPhaseAtom,
   gridSoftTransitionActionAtom,
+  gridShowSubfoldersAtom,
+  gridChildFoldersAtom,
 } from '../../state/grid';
 import { gridController } from '../../controllers/gridController';
 import {
@@ -44,14 +46,16 @@ import {
   inspectorLoadingAtom,
   inspectorErrorAtom,
   liveInspectorTargetAtom,
+  subfolderPreviewAtom,
 } from '../../state/inspector';
 import { sidebarNodesAtom } from '../../state/sidebar';
 import { CanvasGrid } from './canvas/CanvasGrid';
+import { SubfolderGrid } from './SubfolderGrid';
 import { ContextMenu, useContextMenu } from '../../shared/ui/ContextMenu';
 import { buildTileContextMenu, buildEmptyContextMenu } from './gridContextMenu';
 import type { BaseScope } from '../../shared/types/canonical';
 import { saveScrollPosition, getScrollPosition, pushHistory } from '../../state/navigationHistory';
-import { resolveFilePath, shellOpenPath, shellShowInFolder, clipboardWriteText, clipboardCopyFile, createCollection, addCollectionMembers, removeCollectionMembers, deleteCollection, listCollectionMemberHashes, importFiles, importFolder } from '../../platform/api';
+import { resolveFilePath, shellOpenPath, shellShowInFolder, clipboardWriteText, clipboardCopyFile, createCollection, addCollectionMembers, removeCollectionMembers, deleteCollection, listCollectionMemberHashes, importFiles, importFolder, queryEntityView } from '../../platform/api';
 import { viewerSessionAtom, quickLookSessionAtom, createViewerSession, navigateViewerSession } from '../../state/viewer';
 import { tagSelectOpenAtom, folderPickerOpenAtom, aiTaggerOpenAtom, batchRenameOpenAtom } from '../../state/portals';
 import { confirmModalAtom } from '../../state/modals';
@@ -62,6 +66,8 @@ import { TagSelectPanel } from '../tags/TagSelectPanel';
 import { FolderPickerPanel } from '../folders/FolderPickerPanel';
 import { AiTaggerPanel } from '../ai-tagger/AiTaggerPanel';
 import { BatchRenamePanel } from '../batch-rename/BatchRenamePanel';
+import { useGridArrowNav } from './hooks/useGridArrowNav';
+import type { LayoutResult } from './layout/types';
 import styles from './GridScreen.module.css';
 
 // ── Smart collection naming (ported from legacy) ──
@@ -165,7 +171,67 @@ export function GridScreen() {
   const setFolderPickerOpen = useSetAtom(folderPickerOpenAtom);
   const setAiTaggerOpen = useSetAtom(aiTaggerOpenAtom);
   const setBatchRenameOpen = useSetAtom(batchRenameOpenAtom);
+  const gridContainerRef = useRef<HTMLDivElement | null>(null);
+  const gridLayoutRef = useRef<LayoutResult | null>(null);
+
+  const scrollToItem = useCallback((index: number) => {
+    const layout = gridLayoutRef.current;
+    const container = gridContainerRef.current;
+    if (!layout || !container || index < 0 || index >= layout.positions.length) return;
+    const pos = layout.positions[index];
+    if (!pos) return;
+    const scrollTop = container.scrollTop;
+    const viewportH = container.clientHeight;
+    if (pos.y < scrollTop + 16) {
+      container.scrollTop = pos.y - 16;
+    } else if (pos.y + pos.h > scrollTop + viewportH - 16) {
+      container.scrollTop = pos.y + pos.h - viewportH + 16;
+    }
+  }, []);
+
+  useGridArrowNav({
+    items,
+    layoutRef: gridLayoutRef,
+    containerRef: gridContainerRef,
+    selectedHashes,
+    setSelectedHashes,
+    lastClickedIndexRef,
+    viewerOpen: !!(viewerSession || quickLookSession),
+    containerWidth: gridContainerRef.current?.clientWidth ?? 0,
+    targetSize,
+  });
+
+  const showSubfolders = useAtomValue(gridShowSubfoldersAtom);
+  const childFolders = useAtomValue(gridChildFoldersAtom);
+  const setSubfolderPreview = useSetAtom(subfolderPreviewAtom);
   const contextMenu = useContextMenu();
+
+  // Fetch preview data when a subfolder tile is selected
+  useEffect(() => {
+    // Find the single selected folder hash
+    const hashes = [...selectedHashes];
+    const folderHash = hashes.length === 1 && hashes[0].startsWith('folder:') ? hashes[0] : null;
+    if (!folderHash) {
+      setSubfolderPreview(null);
+      return;
+    }
+    const folderId = parseInt(folderHash.replace('folder:', ''), 10);
+    if (isNaN(folderId)) return;
+    let cancelled = false;
+    void queryEntityView({
+      base_scope: { kind: 'folder', id: folderId },
+      page: { limit: 4 },
+    }).then((page) => {
+      if (cancelled) return;
+      setSubfolderPreview({
+        nodeId: folderHash,
+        items: page.items.slice(0, 4),
+        totalCount: page.total_count,
+        totalSizeBytes: page.total_size_bytes ?? null,
+      });
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [selectedHashes, setSubfolderPreview]);
 
   // Reset range anchor when items change (scope nav, sort, search, reload)
   useEffect(() => { lastClickedIndexRef.current = null; }, [items]);
@@ -364,7 +430,10 @@ export function GridScreen() {
         searchText: searchText.trim(),
         sidebarNode: sidebarNodes.find((n) => n.id === activeNodeId) ?? null,
       });
-      if (transitionPhase === 'fading_in' || liveTarget.kind === 'scope' || liveTarget.kind === 'none') {
+      // Don't overwrite inspector target when a subfolder tile is selected
+      // (liveTarget points to the subfolder, not the current scope)
+      const isSubfolderSelected = liveTarget.kind === 'scope' && 'nodeId' in liveTarget && liveTarget.nodeId !== activeNodeId;
+      if (!isSubfolderSelected && (transitionPhase === 'fading_in' || liveTarget.kind === 'scope' || liveTarget.kind === 'none')) {
         setDisplayedInspectorTarget(
           liveTarget.kind === 'none'
             ? { kind: 'none' }
@@ -492,6 +561,12 @@ export function GridScreen() {
 
     function handleKeyDown(e: KeyboardEvent) {
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+      // Don't handle grid shortcuts while a viewer is open — the viewer handles its own keys.
+      // Exception: detailView/quicklook shortcuts to open viewers are checked below with their own guards.
+      if (viewerSessionRef.current || quickLookSessionRef.current) {
+        // Only allow viewer-opening shortcuts through (they have their own viewer-state guards)
+        if (!matchesShortcutDef(e, defs.detailView) && !matchesShortcutDef(e, defs.quicklook)) return;
+      }
       const count = selectionCountRef.current;
       const hashes = selectedHashesRef.current;
       const curItems = itemsRef.current;
@@ -665,9 +740,68 @@ export function GridScreen() {
       );
     }
 
+    const hasSubfolders = showSubfolders && childFolders.length > 0 && gridScope.kind === 'folder';
+
+    const subfolderHeader = hasSubfolders ? (
+      <SubfolderGrid
+        childFolders={childFolders}
+        targetSize={targetSize}
+        totalImageCount={items.length}
+        selectedHashes={selectedHashes}
+        onOpenFolder={(nodeId) => {
+          setParentNodeId(activeNodeId);
+          pushHistory(nodeId);
+          setActiveNodeId(nodeId);
+        }}
+        onSelectFolder={(nodeId, event) => {
+          if (event.metaKey || event.ctrlKey) {
+            setSelectedHashes((prev) => {
+              const next = new Set(prev);
+              if (next.has(nodeId)) next.delete(nodeId); else next.add(nodeId);
+              return next;
+            });
+          } else {
+            setSelectedHashes(new Set([nodeId]));
+          }
+        }}
+        onFolderContextMenu={(nodeId, folder, pos) => {
+          // Select the folder if not already selected
+          if (!selectedHashes.has(nodeId)) {
+            setSelectedHashes(new Set([nodeId]));
+          }
+          const folderId = parseInt(nodeId.replace('folder:', ''), 10);
+          if (isNaN(folderId)) return;
+          const entries = buildTileContextMenu({
+            selectionCount: 1,
+            querySelectionActive: false,
+            singleSelected: true,
+            singleHash: nodeId,
+            singleKind: 'folder',
+            hasCollections: false,
+            hasFolders: true,
+            isMixed: false,
+            isFoldersOnly: true,
+            scopeKind: 'folder',
+            statusFilter: null,
+            loadedCount: items.length,
+            onSelectAll: () => selectAllResults(),
+            onDeselectAll: () => clearSelection(),
+            onOpen: () => {
+              setParentNodeId(activeNodeId);
+              pushHistory(nodeId);
+              setActiveNodeId(nodeId);
+            },
+          });
+          contextMenu.openAt(pos, entries);
+        }}
+      />
+    ) : undefined;
+
     return (
       <CanvasGrid
         items={items}
+        headerContent={subfolderHeader}
+        dragSourceScope={gridScope}
         viewMode={viewMode}
         targetSize={targetSize}
         showName={showName}
@@ -678,13 +812,13 @@ export function GridScreen() {
         suppressTileReveal={transitionPhase === 'fading_out' || transitionPhase === 'waiting'}
         selectedEntityHashes={selectedHashes}
         initialScrollTop={restoredScrollTopRef.current}
+        onContainerRef={(el) => { gridContainerRef.current = el; }}
+        onLayoutChange={(l) => { gridLayoutRef.current = l; }}
         onFirstPaint={() => { restoredScrollTopRef.current = null; beginFadeIn(); }}
         onScrollTopChange={(scrollTop) => { lastScrollTopRef.current = scrollTop; }}
         onTileClick={(index, item, event) => {
           const hash = item.entity_hash;
           if (event?.shiftKey && lastClickedIndexRef.current != null) {
-            // Shift+click: range select. Intentionally exits query_results mode
-            // because range selection defines an explicit set of items.
             const from = Math.min(lastClickedIndexRef.current, index);
             const to = Math.max(lastClickedIndexRef.current, index);
             const base = (event.metaKey || event.ctrlKey)
@@ -707,7 +841,6 @@ export function GridScreen() {
             }
             lastClickedIndexRef.current = index;
           } else {
-            // Plain click: single select (intentionally exits query_results mode)
             setSelectedHashes(new Set([hash]));
             lastClickedIndexRef.current = index;
           }
@@ -892,7 +1025,15 @@ export function GridScreen() {
             const next = navigateViewerSession(viewerSession, items, delta);
             if (next) setViewerSession(next);
           }}
-          onClose={() => setViewerSession(null)}
+          onClose={(exitHash) => {
+            setViewerSession(null);
+            if (exitHash) {
+              setSelectedHashes(new Set([exitHash]));
+              const idx = items.findIndex((i) => i.entity_hash === exitHash);
+              if (idx >= 0) lastClickedIndexRef.current = idx;
+              scrollToItem(idx);
+            }
+          }}
           onLoadMore={cursor ? () => gridController.loadNextPage() : undefined}
         />
       )}
@@ -906,7 +1047,15 @@ export function GridScreen() {
             const next = navigateViewerSession(quickLookSession, items, delta);
             if (next) setQuickLookSession(next);
           }}
-          onClose={() => setQuickLookSession(null)}
+          onClose={(exitHash) => {
+            setQuickLookSession(null);
+            if (exitHash) {
+              setSelectedHashes(new Set([exitHash]));
+              const idx = items.findIndex((i) => i.entity_hash === exitHash);
+              if (idx >= 0) lastClickedIndexRef.current = idx;
+              scrollToItem(idx);
+            }
+          }}
           onLoadMore={cursor ? () => gridController.loadNextPage() : undefined}
         />
       )}

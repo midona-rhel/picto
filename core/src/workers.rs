@@ -13,7 +13,6 @@ use crate::blob_store::BlobStore;
 use crate::db::LibraryDatabase;
 use crate::folders::watch::FolderWatchCommand;
 use crate::rate_limiter::RateLimiter;
-use crate::sqlite::SqliteDatabase;
 use crate::types::{RunningSubscriptions, SubTerminalStatuses};
 
 /// Shutdown timeout for joining background workers.
@@ -24,7 +23,6 @@ const SHUTDOWN_JOIN_TIMEOUT: std::time::Duration = std::time::Duration::from_sec
 /// Returns a vector of named join handles that should be stored in `AppState.worker_handles`
 /// and passed to `stop_workers()` on shutdown.
 pub async fn start_workers(
-    db: &Arc<SqliteDatabase>,
     canonical_db: &Arc<LibraryDatabase>,
     blob_store: &Arc<BlobStore>,
     rate_limiter: &RateLimiter,
@@ -35,56 +33,9 @@ pub async fn start_workers(
 ) -> Vec<(&'static str, tokio::task::JoinHandle<()>)> {
     let mut handles: Vec<(&'static str, tokio::task::JoinHandle<()>)> = Vec::new();
 
-    // ── Compiler loop ──────────────────────────────────
-    {
-        let compiler_db = db.clone();
-        if let Some(rx) = compiler_db.take_read_model_rx().await {
-            let handle = tokio::spawn(crate::sqlite::compilers::start_compiler_loop(
-                compiler_db.clone(),
-                rx,
-                |result| {
-                    crate::events::emit("runtime/read_model_published", &result.published);
-                    crate::events::emit_state_changed(
-                        "compiler_batch_done",
-                        crate::runtime_contract::change_builder::ChangeImpact::compiler_publish(
-                            result.smart_folders_rebuilt,
-                            result.smart_folder_counts,
-                        ),
-                    );
-                },
-            ));
-            handles.push(("compiler_loop", handle));
-        }
-
-        compiler_db.emit_read_model_event(crate::sqlite::ReadModelEvent::RebuildAll);
-    }
-
-    // ── Bitmap flush worker ────────────────────────────
-    {
-        let flush_db = db.clone();
-        let flush_cancel = cancel.clone();
-        let handle = tokio::spawn(async move {
-            loop {
-                tokio::select! {
-                    _ = tokio::time::sleep(std::time::Duration::from_secs(30)) => {}
-                    _ = flush_cancel.cancelled() => {
-                        tracing::info!("Bitmap flush loop cancelled");
-                        // Final flush before exiting
-                        let _ = flush_db.flush().await;
-                        return;
-                    }
-                }
-                if let Err(e) = flush_db.flush().await {
-                    tracing::warn!(error = %e, "Periodic bitmap flush failed");
-                }
-            }
-        });
-        handles.push(("bitmap_flush", handle));
-    }
-
     // ── Group scheduler ────────────────────────────────
     {
-        let sched_db = db.clone();
+        let sched_db = canonical_db.clone();
         let sched_blob = blob_store.clone();
         let sched_rl = rate_limiter.clone();
         let sched_running = running_subscriptions.clone();
@@ -111,6 +62,7 @@ pub async fn start_workers(
                 if let Ok(state) = crate::state::get_state() {
                     crate::scheduler::check_scheduled_groups(
                         &sched_db,
+                        &state.library_root,
                         &sched_blob,
                         &sched_rl,
                         &sched_running,
@@ -126,7 +78,7 @@ pub async fn start_workers(
 
     // ── Ingest queue cleanup + worker ──────────────────
     {
-        let cleanup_db = db.clone();
+        let cleanup_db = canonical_db.clone();
         tokio::spawn(async move {
             if let Err(e) = cleanup_db.cleanup_ingest_queue().await {
                 tracing::warn!(error = %e, "Ingest queue cleanup failed");
@@ -135,13 +87,11 @@ pub async fn start_workers(
             }
         });
 
-        let ingest_db = db.clone();
-        let ingest_canonical_db = canonical_db.clone();
+        let ingest_db = canonical_db.clone();
         let ingest_blob = blob_store.clone();
         let ingest_cancel = cancel.clone();
         let handle = tokio::spawn(crate::ingest_queue::start_worker_loop(
             ingest_db,
-            ingest_canonical_db,
             ingest_blob,
             ingest_cancel,
         ));
@@ -163,12 +113,10 @@ pub async fn start_workers(
 
     // ── Folder watch worker ────────────────────────────
     {
-        let watch_db = db.clone();
         let watch_canonical_db = canonical_db.clone();
         let watch_blob = blob_store.clone();
         let watch_cancel = cancel.clone();
         let handle = crate::folders::watch::spawn_worker(
-            watch_db,
             watch_canonical_db,
             watch_blob,
             folder_watch_rx,

@@ -8,9 +8,9 @@ use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use crate::blob_store::BlobStore;
+use crate::db::LibraryDatabase;
 use crate::rate_limiter::RateLimiter;
 use crate::settings::store::SettingsStore;
-use crate::sqlite::SqliteDatabase;
 use crate::types::{RunningSubscriptions, SubTerminalStatuses};
 
 const SCHEDULER_WARN_WINDOW: Duration = Duration::from_secs(300);
@@ -70,14 +70,19 @@ fn warn_scheduler_failure(kind: &'static str, message: String) {
 
 /// Check all subscription groups for overdue scheduled runs and trigger them.
 pub async fn check_scheduled_groups(
-    db: &Arc<SqliteDatabase>,
+    db: &Arc<LibraryDatabase>,
+    library_root: &std::path::Path,
     blob_store: &Arc<BlobStore>,
     rate_limiter: &RateLimiter,
     running_subs: &RunningSubscriptions,
     sub_terminal_statuses: &SubTerminalStatuses,
     settings: &SettingsStore,
 ) {
-    let groups = match db.list_groups().await {
+    let runtime = crate::subscriptions::runtime_service::SubscriptionRuntimeService::new(
+        db.as_ref(),
+        library_root,
+    );
+    let groups = match runtime.get_groups().await {
         Ok(f) => f,
         Err(e) => {
             warn_scheduler_failure(
@@ -100,10 +105,7 @@ pub async fn check_scheduled_groups(
             _ => continue,
         };
 
-        let subs = match db.list_subscriptions_for_group(group.group_id).await {
-            Ok(s) => s,
-            Err(_) => continue,
-        };
+        let subs = group.subscriptions;
 
         if subs.is_empty() {
             continue;
@@ -112,11 +114,7 @@ pub async fn check_scheduled_groups(
         let mut latest_check: Option<chrono::DateTime<chrono::Utc>> = None;
         let mut has_any_queries = false;
         for sub in &subs {
-            let queries = match db.get_subscription_queries(sub.subscription_id).await {
-                Ok(q) => q,
-                Err(_) => continue,
-            };
-            for q in &queries {
+            for q in &sub.queries {
                 has_any_queries = true;
                 if let Some(ref t) = q.last_check_time {
                     if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(t) {
@@ -141,9 +139,9 @@ pub async fn check_scheduled_groups(
         };
 
         if is_overdue {
-            let group_id_str = group.group_id.to_string();
+            let group_id_str = group.id.clone();
             tracing::info!(
-                group_id = group.group_id,
+                group_id = %group.id,
                 name = %group.name,
                 schedule = %group.schedule,
                 "Scheduler: running overdue group"
@@ -151,6 +149,7 @@ pub async fn check_scheduled_groups(
             if let Err(e) =
                 crate::subscriptions::group_orchestrator::SubscriptionGroupOrchestrator::run_group(
                     db,
+                    library_root,
                     blob_store,
                     rate_limiter,
                     running_subs,
@@ -162,7 +161,7 @@ pub async fn check_scheduled_groups(
             {
                 warn_scheduler_failure(
                     "run_group",
-                    format!("Scheduler: failed to start group {}: {}", group.group_id, e),
+                    format!("Scheduler: failed to start group {}: {}", group.id, e),
                 );
             }
         }

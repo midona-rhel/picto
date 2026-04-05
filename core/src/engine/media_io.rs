@@ -52,6 +52,10 @@ impl ApplicationEngine {
         blob_store: &Arc<BlobStore>,
         entity_hash: &str,
     ) -> Result<String, String> {
+        let _ = crate::background_work::ensure_missing_color_analysis_jobs(
+            &self.db,
+            &[entity_hash.to_string()],
+        );
         let target = self
             .db
             .get_derivative_target_by_entity_hash(entity_hash)?
@@ -75,6 +79,7 @@ impl ApplicationEngine {
         target: EntityTarget,
     ) -> Result<Vec<String>, String> {
         let hashes = self.resolve_target_hashes(target)?;
+        let _ = crate::background_work::ensure_missing_color_analysis_jobs(&self.db, &hashes);
         let mut paths = Vec::with_capacity(hashes.len());
         for hash in hashes {
             if let Ok(path) = self.resolve_file_path(blob_store, &hash).await {

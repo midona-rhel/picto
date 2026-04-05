@@ -87,6 +87,9 @@ pub struct DeferredWorkSummary {
     pub pending_count: i64,
     pub running_count: i64,
     pub failed_count: i64,
+    pub dominant_colors_pending_count: i64,
+    pub dominant_colors_running_count: i64,
+    pub dominant_colors_failed_count: i64,
 }
 
 pub use crate::media_analysis::{EnsureThumbnailResult, ReanalyzeFileColorsResult};
@@ -113,6 +116,13 @@ pub async fn enqueue_missing_derivative_jobs(
     entity_hashes: &[String],
 ) {
     crate::media_analysis::enqueue_missing_derivative_jobs(db, blob_store, entity_hashes).await;
+}
+
+pub fn ensure_missing_color_analysis_jobs(
+    db: &LibraryDatabase,
+    entity_hashes: &[String],
+) -> Result<(), String> {
+    crate::media_analysis::ensure_missing_color_analysis_jobs(db, entity_hashes)
 }
 
 pub async fn ensure_thumbnail_now(

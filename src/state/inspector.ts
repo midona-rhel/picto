@@ -48,7 +48,11 @@ export const liveInspectorTargetAtom = atom<InspectorTarget>((get) => {
     return { kind: 'multi', count: selectionCount, selectionMode };
   }
   const selectedHash = get(selectedEntityHashAtom);
-  if (selectedHash) return { kind: 'entity', entityHash: selectedHash };
+  if (selectedHash) {
+    // Folder tile selected — show as scope, not entity
+    if (selectedHash.startsWith('folder:')) return { kind: 'scope', nodeId: selectedHash };
+    return { kind: 'entity', entityHash: selectedHash };
+  }
   const activeNodeId = get(activeNodeIdAtom);
   return activeNodeId ? { kind: 'scope', nodeId: activeNodeId } : { kind: 'none' };
 });
@@ -71,6 +75,14 @@ export const displayedScopeLabelAtom = atom((get) => {
 });
 
 export const displayedInspectorTargetAtom = atom<InspectorTarget>({ kind: 'none' });
+
+/** Preview data for a selected subfolder tile (populated by GridScreen effect). */
+export const subfolderPreviewAtom = atom<{
+  nodeId: string;
+  items: CanonicalEntityGridItem[];
+  totalCount: number | null;
+  totalSizeBytes: number | null;
+} | null>(null);
 export const displayedInspectorEntityDataAtom = atom<CanonicalEntityDetails | null>(null);
 export const inspectorLoadingAtom = atom(false);
 export const inspectorErrorAtom = atom<string | null>(null);
@@ -119,15 +131,22 @@ const SYSTEM_SCOPE_DESCRIPTIONS: Record<string, string> = {
 export const displayedSidebarNodeAtom = atom<SidebarNodeDto | null>((get) => {
   const snapshot = get(displayedGridSnapshotAtom);
   if (!snapshot) return null;
+  // If a subfolder tile is selected, show that folder's node instead of the scope
+  const target = get(displayedInspectorTargetAtom);
+  const nodeId = (target.kind === 'scope' && target.nodeId !== snapshot.nodeId)
+    ? target.nodeId
+    : snapshot.nodeId;
   // Read LIVE sidebar node by ID — not the frozen snapshot copy.
   // The frozen copy goes stale after rename/color/meta updates.
-  return get(sidebarNodesAtom).find((n) => n.id === snapshot.nodeId) ?? snapshot.sidebarNode ?? null;
+  return get(sidebarNodesAtom).find((n) => n.id === nodeId) ?? snapshot.sidebarNode ?? null;
 });
 
 export const scopeInspectorViewModelAtom = atom((get) => {
   const snapshot = get(displayedGridSnapshotAtom);
   const node = get(displayedSidebarNodeAtom);
   if (!snapshot || !node || !get(gridActiveAtom)) return null;
+  // When showing a selected subfolder (node differs from snapshot scope), use the node's own data
+  const isSubfolderSelection = node.id !== snapshot.nodeId;
 
   const parentName: string | null = null; // Parent lookup removed (no live sidebar read)
 
@@ -144,10 +163,16 @@ export const scopeInspectorViewModelAtom = atom((get) => {
       parentName !== 'Library'
         ? parentName
         : null,
-    totalCount: snapshot.totalCount ?? node.count ?? 0,
-    totalSizeBytes: snapshot.totalSizeBytes,
-    searchText: snapshot.searchText,
-    previewItems: snapshot.previewItems,
+    totalCount: isSubfolderSelection
+      ? (get(subfolderPreviewAtom)?.nodeId === node.id ? (get(subfolderPreviewAtom)?.totalCount ?? node.count ?? 0) : (node.count ?? 0))
+      : (snapshot.totalCount ?? node.count ?? 0),
+    totalSizeBytes: isSubfolderSelection
+      ? (get(subfolderPreviewAtom)?.nodeId === node.id ? get(subfolderPreviewAtom)?.totalSizeBytes ?? null : null)
+      : snapshot.totalSizeBytes,
+    searchText: isSubfolderSelection ? '' : snapshot.searchText,
+    previewItems: isSubfolderSelection
+      ? (get(subfolderPreviewAtom)?.nodeId === node.id ? get(subfolderPreviewAtom)?.items ?? [] : [])
+      : snapshot.previewItems,
     description: node.kind === 'system' ? SYSTEM_SCOPE_DESCRIPTIONS[node.id] ?? null : null,
     folder:
       node.kind === 'folder'

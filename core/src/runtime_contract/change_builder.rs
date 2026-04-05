@@ -489,6 +489,8 @@ impl ChangeImpact {
         Self::new()
             .add_domain(Domain::Folders)
             .folder_ids(vec![folder_id])
+            .folder_membership_changed(vec![folder_id])
+            .extra_grid_scopes(vec![format!("folder:{folder_id}")])
     }
 
     pub fn collection_update(collection_id: i64) -> Self {

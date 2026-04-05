@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -289,7 +290,62 @@ pub fn enqueue_derivative_jobs(
     needs_thumbnail: bool,
 ) -> Result<(), String> {
     let work_types = derivative_work_types_for_target(mime, frame_count, needs_thumbnail);
-    db.enqueue_deferred_jobs(entity_hash, &work_types)
+    db.ensure_deferred_jobs_present(entity_hash, &work_types)
+}
+
+fn unique_entity_hashes(entity_hashes: &[String]) -> Vec<String> {
+    let mut seen = HashSet::new();
+    let mut unique = Vec::new();
+    for entity_hash in entity_hashes {
+        if seen.insert(entity_hash.as_str()) {
+            unique.push(entity_hash.clone());
+        }
+    }
+    unique
+}
+
+fn missing_nonstorage_work_types_for_target(
+    target: &DerivativeTarget,
+) -> Vec<DeferredWorkType> {
+    let caps = capabilities_for_stored_media(&target.mime_type, target.frame_count);
+    let mut work_types = Vec::new();
+    if caps.can_dominant_colors
+        && (target.color_analysis_version < TARGET_COLOR_ANALYSIS_VERSION
+            || !target.has_dominant_palette_blob)
+    {
+        work_types.push(DeferredWorkType::DominantColors);
+    }
+    if caps.can_perceptual_hash && target.perceptual_hash.is_none() {
+        work_types.push(DeferredWorkType::PerceptualHash);
+    }
+    work_types
+}
+
+pub fn ensure_missing_color_analysis_jobs(
+    db: &LibraryDatabase,
+    entity_hashes: &[String],
+) -> Result<(), String> {
+    let unique_hashes = unique_entity_hashes(entity_hashes);
+    if unique_hashes.is_empty() {
+        return Ok(());
+    }
+
+    let targets = db.get_derivative_targets_by_entity_hashes(&unique_hashes)?;
+    let items = targets
+        .into_iter()
+        .filter_map(|target| {
+            let work_types = missing_nonstorage_work_types_for_target(&target)
+                .into_iter()
+                .filter(|work_type| matches!(work_type, DeferredWorkType::DominantColors))
+                .collect::<Vec<_>>();
+            (!work_types.is_empty()).then_some((target.entity_hash, work_types))
+        })
+        .collect::<Vec<_>>();
+
+    if items.is_empty() {
+        return Ok(());
+    }
+    db.ensure_deferred_jobs_present_batch(items)
 }
 
 pub async fn enqueue_missing_derivative_jobs(
@@ -297,11 +353,17 @@ pub async fn enqueue_missing_derivative_jobs(
     blob_store: &Arc<BlobStore>,
     entity_hashes: &[String],
 ) {
-    for entity_hash in entity_hashes {
-        let target = match db.get_derivative_target_by_entity_hash(entity_hash) {
-            Ok(Some(target)) => target,
-            _ => continue,
-        };
+    let unique_hashes = unique_entity_hashes(entity_hashes);
+    if unique_hashes.is_empty() {
+        return;
+    }
+
+    let targets = match db.get_derivative_targets_by_entity_hashes(&unique_hashes) {
+        Ok(targets) => targets,
+        Err(_) => return,
+    };
+    let mut items = Vec::new();
+    for target in targets {
         let caps = capabilities_for_stored_media(&target.mime_type, target.frame_count);
         let thumb_missing = blob_store
             .find_thumbnail_path(&target.file_hash)
@@ -324,8 +386,11 @@ pub async fn enqueue_missing_derivative_jobs(
         }
 
         if !work_types.is_empty() {
-            let _ = db.enqueue_deferred_jobs(entity_hash, &work_types);
+            items.push((target.entity_hash, work_types));
         }
+    }
+    if !items.is_empty() {
+        let _ = db.ensure_deferred_jobs_present_batch(items);
     }
 }
 

@@ -263,6 +263,12 @@ export function Sidebar() {
         {/* System scopes — fixed order */}
         {orderedSystemNodes.map((node) => {
           const ScopeIcon = SYSTEM_ICONS[node.id];
+          const statusDropMap: Record<string, string> = {
+            'system:active': '1',
+            'system:inbox': '0',
+            'system:trash': '2',
+          };
+          const statusDrop = statusDropMap[node.id];
           return (
             <SidebarRow
               key={node.id}
@@ -271,6 +277,7 @@ export function Sidebar() {
               count={node.count}
               active={activeNodeId === node.id}
               onClick={() => node.selectable && navigate(node.id)}
+              dropDataAttr={statusDrop ? { key: 'status-drop', value: statusDrop } : undefined}
             />
           );
         })}
@@ -295,6 +302,7 @@ export function Sidebar() {
             onToggleExpand={() => toggleCollapse(node.id)}
             onClick={() => navigate(node.id)}
             onContextMenu={(e) => openFolderMenu(e, node)}
+            dropDataAttr={{ key: 'folder-drop-id', value: String(parseFolderId(node.id) ?? '') }}
           >
             {folderRename.renamingId === node.id ? (
               <input

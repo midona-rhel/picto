@@ -225,8 +225,8 @@ pub fn migrate(conn: &Connection) -> Result<MigrationResult, String> {
         [],
     );
     let _ = conn.execute(
-        "INSERT OR IGNORE INTO subscription_query (query_id, subscription_id, query_text, display_name, paused, last_check_time, files_found, posts_found, completed_initial_run, resume_cursor, resume_strategy)
-         SELECT query_id, subscription_id, query_text, display_name, paused, last_check_time, files_found, COALESCE(posts_found, files_found), completed_initial_run, resume_cursor, resume_strategy
+        "INSERT OR IGNORE INTO subscription_query (query_id, subscription_id, site_id, query_text, display_name, paused, last_check_time, files_found, posts_found, completed_initial_run, resume_cursor, resume_strategy)
+         SELECT query_id, subscription_id, site_id, query_text, display_name, paused, last_check_time, files_found, COALESCE(posts_found, files_found), completed_initial_run, resume_cursor, resume_strategy
          FROM _old_subscription_query",
         [],
     );
@@ -472,7 +472,7 @@ pub fn migrate_from_attached(conn: &Connection) -> Result<MigrationResult, Strin
     // Step 9: subscriptions
     let _ = conn.execute("INSERT OR IGNORE INTO subscription_group (group_id, name, schedule, date_added) SELECT group_id, name, schedule, COALESCE(created_at, datetime('now')) FROM old_db.subscription_group", []);
     let _ = conn.execute("INSERT OR IGNORE INTO subscription (subscription_id, name, site_id, paused, group_id, initial_post_limit, periodic_post_limit, auto_collections, date_added) SELECT subscription_id, name, site_id, paused, group_id, initial_post_limit, periodic_post_limit, COALESCE(auto_collections, 1), COALESCE(created_at, datetime('now')) FROM old_db.subscription", []);
-    let _ = conn.execute("INSERT OR IGNORE INTO subscription_query (query_id, subscription_id, query_text, display_name, paused, last_check_time, files_found, posts_found, completed_initial_run, resume_cursor, resume_strategy) SELECT query_id, subscription_id, query_text, display_name, paused, last_check_time, files_found, COALESCE(posts_found, files_found), completed_initial_run, resume_cursor, resume_strategy FROM old_db.subscription_query", []);
+    let _ = conn.execute("INSERT OR IGNORE INTO subscription_query (query_id, subscription_id, site_id, query_text, display_name, paused, last_check_time, files_found, posts_found, completed_initial_run, resume_cursor, resume_strategy) SELECT query_id, subscription_id, site_id, query_text, display_name, paused, last_check_time, files_found, COALESCE(posts_found, files_found), completed_initial_run, resume_cursor, resume_strategy FROM old_db.subscription_query", []);
     let _ = conn.execute("INSERT OR IGNORE INTO subscription_entity (subscription_id, entity_id) SELECT subscription_id, entity_id FROM old_db.subscription_entity", []);
     let _ = conn.execute("INSERT OR IGNORE INTO subscription_post_collection (subscription_id, site_id, post_id, collection_entity_id, date_added, date_modified) SELECT subscription_id, site_id, post_id, collection_entity_id, COALESCE(created_at, datetime('now')), COALESCE(updated_at, datetime('now')) FROM old_db.subscription_post_collection", []);
 

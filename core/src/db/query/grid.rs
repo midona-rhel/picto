@@ -82,7 +82,13 @@ pub fn query_entity_view(
     preresolved_ids: Option<&[i64]>,
 ) -> rusqlite::Result<EntityViewPage> {
     let limit = q.page.limit;
-    let order = validated_sort(&q.sort.field, &q.sort.direction);
+    // Folder scopes always sort by position_rank (custom manual order)
+    let is_folder_scope = matches!(q.base_scope.kind, ScopeKind::Folder);
+    let order = if is_folder_scope {
+        "fm_sort.position_rank ASC".to_string()
+    } else {
+        validated_sort(&q.sort.field, &q.sort.direction)
+    };
 
     // Collect all WHERE fragments and their bound parameter values
     let mut where_parts: Vec<String> = vec!["1=1".into()];
@@ -107,24 +113,35 @@ pub fn query_entity_view(
 
     // Cursor: opaque value encoding (sort_field_value|entity_hash)
     // parse_cursor resolves entity_hash → entity_id for stable tie-breaking
-    let cursor_parsed = q.page.cursor.as_deref().and_then(|c| parse_cursor(conn, c));
-
-    if let Some((ref cursor_val, cursor_id)) = cursor_parsed {
-        let dir_op = if q.sort.direction == "asc" { ">" } else { "<" };
-        let p_idx = bound.len() + 1;
-        let p_idx2 = p_idx + 1;
-        where_parts.push(format!(
-            "({} {dir_op} ?{p_idx} OR ({} = ?{p_idx} AND me.entity_id > ?{p_idx2}))",
-            sort_column(&q.sort.field),
-            sort_column(&q.sort.field),
-        ));
-        bound.push(Box::new(cursor_val.clone()));
-        bound.push(Box::new(cursor_id));
+    // Folder scopes use position_rank ordering — cursor not supported (folder views are bounded)
+    if !is_folder_scope {
+        let cursor_parsed = q.page.cursor.as_deref().and_then(|c| parse_cursor(conn, c));
+        if let Some((ref cursor_val, cursor_id)) = cursor_parsed {
+            let dir_op = if q.sort.direction == "asc" { ">" } else { "<" };
+            let p_idx = bound.len() + 1;
+            let p_idx2 = p_idx + 1;
+            where_parts.push(format!(
+                "({} {dir_op} ?{p_idx} OR ({} = ?{p_idx} AND me.entity_id > ?{p_idx2}))",
+                sort_column(&q.sort.field),
+                sort_column(&q.sort.field),
+            ));
+            bound.push(Box::new(cursor_val.clone()));
+            bound.push(Box::new(cursor_id));
+        }
     }
 
     let where_clause = where_parts.join(" AND ");
 
-    // Limit param
+    // Folder sort join param (must be before limit)
+    let folder_sort_join = if is_folder_scope {
+        let fid_idx = bound.len() + 1;
+        bound.push(Box::new(q.base_scope.id.unwrap_or(0)));
+        format!(" LEFT JOIN folder_member fm_sort ON fm_sort.entity_id = me.entity_id AND fm_sort.folder_id = ?{fid_idx}")
+    } else {
+        String::new()
+    };
+
+    // Limit param (always last)
     let limit_idx = bound.len() + 1;
     bound.push(Box::new(limit));
 
@@ -164,7 +181,7 @@ pub fn query_entity_view(
 
     // Data query — reads both EntityGridItem and entity_id per row
     let data_sql = format!(
-        "{GRID_SELECT} WHERE {where_clause} ORDER BY {order}, me.entity_id ASC LIMIT ?{limit_idx}"
+        "{GRID_SELECT}{folder_sort_join} WHERE {where_clause} ORDER BY {order}, me.entity_id ASC LIMIT ?{limit_idx}"
     );
     let refs: Vec<&dyn ToSql> = bound.iter().map(|b| b.as_ref()).collect();
     let mut stmt = conn.prepare(&data_sql)?;

@@ -435,6 +435,7 @@ pub struct EntityDetails {
     pub date_added: String,
     pub date_modified: String,
     pub dominant_color_hex: Option<String>,
+    pub dominant_colors: Option<Vec<crate::types::DominantColorDto>>,
     pub perceptual_hash: Option<String>,
     pub tags: Vec<TagInfo>,
     pub folders: Vec<FolderInfo>,

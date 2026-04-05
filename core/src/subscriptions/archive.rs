@@ -3,25 +3,23 @@
 //! Reset behavior is domain policy, not controller glue. Keeping it isolated
 //! makes reset semantics testable without dragging run orchestration with it.
 
+use std::path::Path;
+
 use crate::sqlite::SqliteDatabase;
 
 pub fn subscription_query_archive_prefix(subscription_id: i64, query_id: i64) -> String {
     format!("picto_s{subscription_id}_q{query_id}_")
 }
 
-pub async fn clear_subscription_archive_entries(
-    db: &SqliteDatabase,
+pub async fn clear_subscription_archive_entries_at_root(
+    library_root: &Path,
     archive_prefixes: &[String],
 ) -> Result<(), String> {
     if archive_prefixes.is_empty() {
         return Ok(());
     }
 
-    let archive_path = db
-        .db_dir()
-        .parent()
-        .map(|r| r.join("gdl-archive.sqlite3"))
-        .unwrap_or_else(|| std::path::PathBuf::from("gdl-archive.sqlite3"));
+    let archive_path = library_root.join("gdl-archive.sqlite3");
     if !archive_path.exists() {
         return Ok(());
     }
@@ -98,4 +96,16 @@ pub async fn clear_subscription_archive_entries(
     }
 
     Ok(())
+}
+
+pub async fn clear_subscription_archive_entries(
+    db: &SqliteDatabase,
+    archive_prefixes: &[String],
+) -> Result<(), String> {
+    let library_root = db
+        .db_dir()
+        .parent()
+        .map(|r| r.to_path_buf())
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
+    clear_subscription_archive_entries_at_root(&library_root, archive_prefixes).await
 }

@@ -10,6 +10,8 @@
 html, body, #root {
   height: 100%;
   overflow: hidden;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 body {
@@ -19,6 +21,29 @@ body {
   background: var(--color-bg-app);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+
+/* Disable tab focus outlines on all elements — app uses custom keyboard handling */
+*:focus {
+  outline: none;
+}
+
+/* Allow text selection only in explicit input fields */
+input, textarea, [contenteditable="true"] {
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+/* Prevent tab focusing on buttons and interactive elements */
+button, a, [role="button"] {
+  -webkit-user-select: none;
+}
+
+/* Drag-and-drop target highlight */
+[data-drop-highlighted="true"] {
+  background: var(--color-surface-drop, var(--color-primary-30)) !important;
+  border-radius: 4px;
+  transition: background 100ms ease;
 }
 
 ::selection {

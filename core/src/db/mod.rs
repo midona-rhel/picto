@@ -64,6 +64,119 @@ fn reconcile_open_schema(conn: &Connection) -> Result<(), String> {
             format!("Failed to add media_file.color_analysis_version to canonical db: {e}")
         })?;
     }
+    if has_column(conn, "subscription_query", "notes").map_err(|e| e.to_string())? == false {
+        conn.execute_batch("ALTER TABLE subscription_query ADD COLUMN notes TEXT")
+            .map_err(|e| format!("Failed to add subscription_query.notes: {e}"))?;
+    }
+    if has_column(conn, "subscription_query", "site_id").map_err(|e| e.to_string())? == false {
+        conn.execute_batch(
+            "ALTER TABLE subscription_query ADD COLUMN site_id TEXT NOT NULL DEFAULT ''",
+        )
+        .map_err(|e| format!("Failed to add subscription_query.site_id: {e}"))?;
+        conn.execute(
+            "UPDATE subscription_query
+             SET site_id = COALESCE((
+                 SELECT NULLIF(subscription.site_id, '')
+                 FROM subscription
+                 WHERE subscription.subscription_id = subscription_query.subscription_id
+             ), site_id)
+             WHERE site_id = ''",
+            [],
+        )
+        .map_err(|e| format!("Failed to backfill subscription_query.site_id: {e}"))?;
+    }
+    for column in [
+        "last_success_at",
+        "last_failure_at",
+        "last_failure_kind",
+        "last_failure_message",
+    ] {
+        if has_column(conn, "subscription_query", column).map_err(|e| e.to_string())? == false {
+            conn.execute_batch(&format!(
+                "ALTER TABLE subscription_query ADD COLUMN {column} TEXT"
+            ))
+            .map_err(|e| format!("Failed to add subscription_query.{column}: {e}"))?;
+        }
+    }
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS subscription_run (
+            run_id INTEGER PRIMARY KEY,
+            subscription_id INTEGER NOT NULL REFERENCES subscription(subscription_id) ON DELETE CASCADE,
+            started_at TEXT NOT NULL,
+            finished_at TEXT,
+            status TEXT NOT NULL DEFAULT 'running',
+            failure_kind TEXT,
+            error_message TEXT,
+            files_downloaded INTEGER NOT NULL DEFAULT 0,
+            files_skipped INTEGER NOT NULL DEFAULT 0,
+            metadata_validated INTEGER NOT NULL DEFAULT 0,
+            metadata_invalid INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE TABLE IF NOT EXISTS subscription_query_run (
+            query_run_id INTEGER PRIMARY KEY,
+            run_id INTEGER REFERENCES subscription_run(run_id) ON DELETE SET NULL,
+            subscription_id INTEGER NOT NULL REFERENCES subscription(subscription_id) ON DELETE CASCADE,
+            query_id INTEGER NOT NULL REFERENCES subscription_query(query_id) ON DELETE CASCADE,
+            started_at TEXT NOT NULL,
+            finished_at TEXT,
+            status TEXT NOT NULL DEFAULT 'running',
+            failure_kind TEXT,
+            error_message TEXT,
+            posts_processed INTEGER NOT NULL DEFAULT 0,
+            files_downloaded INTEGER NOT NULL DEFAULT 0,
+            files_skipped INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE TABLE IF NOT EXISTS subscription_issue (
+            issue_id INTEGER PRIMARY KEY,
+            subscription_id INTEGER NOT NULL REFERENCES subscription(subscription_id) ON DELETE CASCADE,
+            query_id INTEGER REFERENCES subscription_query(query_id) ON DELETE CASCADE,
+            issue_kind TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'open',
+            message TEXT NOT NULL,
+            detail TEXT,
+            first_seen_at TEXT NOT NULL,
+            last_seen_at TEXT NOT NULL,
+            resolved_at TEXT,
+            UNIQUE (subscription_id, query_id, issue_kind, message)
+        );
+        CREATE TABLE IF NOT EXISTS subscription_download_attempt (
+            attempt_id INTEGER PRIMARY KEY,
+            subscription_id INTEGER NOT NULL REFERENCES subscription(subscription_id) ON DELETE CASCADE,
+            query_id INTEGER REFERENCES subscription_query(query_id) ON DELETE CASCADE,
+            query_run_id INTEGER REFERENCES subscription_query_run(query_run_id) ON DELETE SET NULL,
+            item_key TEXT NOT NULL,
+            site_category TEXT,
+            post_id TEXT,
+            page_num INTEGER,
+            canonical_post_url TEXT,
+            media_url TEXT,
+            retry_url TEXT,
+            retry_count INTEGER NOT NULL DEFAULT 0,
+            status TEXT NOT NULL DEFAULT 'pending',
+            failure_kind TEXT,
+            last_error TEXT,
+            next_retry_at TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            resolved_at TEXT,
+            UNIQUE (subscription_id, query_id, item_key)
+        );
+        CREATE TABLE IF NOT EXISTS subscription_post_member (
+            subscription_id INTEGER NOT NULL REFERENCES subscription(subscription_id) ON DELETE CASCADE,
+            site_id TEXT NOT NULL,
+            post_id TEXT NOT NULL,
+            item_key TEXT NOT NULL,
+            page_num INTEGER,
+            canonical_post_url TEXT,
+            media_url TEXT,
+            entity_hash TEXT,
+            status TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY (subscription_id, site_id, post_id, item_key)
+        );",
+    )
+    .map_err(|e| format!("Failed to create canonical subscription runtime tables: {e}"))?;
     conn.execute_batch(
         "DROP TABLE IF EXISTS rejected_fingerprint;
          DROP TABLE IF EXISTS rejected_media;",
@@ -208,7 +321,7 @@ impl LibraryDatabase {
     // ── Internal connection access (crate-private) ─────────────────
 
     /// Execute a write operation. Only accessible within db/.
-    fn with_write<F, R>(&self, f: F) -> Result<R, String>
+    pub(crate) fn with_write<F, R>(&self, f: F) -> Result<R, String>
     where
         F: FnOnce(&Connection) -> rusqlite::Result<R>,
     {
@@ -217,7 +330,7 @@ impl LibraryDatabase {
     }
 
     /// Execute a read operation. Only accessible within db/.
-    fn with_read<F, R>(&self, f: F) -> Result<R, String>
+    pub(crate) fn with_read<F, R>(&self, f: F) -> Result<R, String>
     where
         F: FnOnce(&Connection) -> rusqlite::Result<R>,
     {
@@ -337,6 +450,14 @@ impl LibraryDatabase {
     ) -> Result<Option<query::ingest::DerivativeTarget>, String> {
         let hash = entity_hash.to_string();
         self.with_read(|conn| query::ingest::get_derivative_target_by_entity_hash(conn, &hash))
+    }
+
+    pub fn get_derivative_targets_by_entity_hashes(
+        &self,
+        entity_hashes: &[String],
+    ) -> Result<Vec<query::ingest::DerivativeTarget>, String> {
+        let hashes = entity_hashes.to_vec();
+        self.with_read(|conn| query::ingest::get_derivative_targets_by_entity_hashes(conn, &hashes))
     }
 
     pub fn find_perceptual_hash_candidates(
@@ -1281,10 +1402,31 @@ impl LibraryDatabase {
                 [],
                 |r| r.get(0),
             )?;
+            let dominant_pending: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM deferred_work_item
+                 WHERE work_type = 'dominant_colors' AND status = 'pending' AND attempt_count = 0",
+                [],
+                |r| r.get(0),
+            )?;
+            let dominant_running: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM deferred_work_item
+                 WHERE work_type = 'dominant_colors' AND status = 'running'",
+                [],
+                |r| r.get(0),
+            )?;
+            let dominant_failed: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM deferred_work_item
+                 WHERE work_type = 'dominant_colors' AND status = 'pending' AND attempt_count > 0",
+                [],
+                |r| r.get(0),
+            )?;
             Ok(crate::engine::deferred::DeferredWorkSummary {
                 pending_count: pending,
                 running_count: running,
                 failed_count: failed,
+                dominant_colors_pending_count: dominant_pending,
+                dominant_colors_running_count: dominant_running,
+                dominant_colors_failed_count: dominant_failed,
             })
         })
     }
@@ -1332,6 +1474,39 @@ impl LibraryDatabase {
             )?;
             for work_type in &work_types {
                 stmt.execute(rusqlite::params![hash, work_type, now])?;
+            }
+            Ok(())
+        })
+    }
+
+    pub fn ensure_deferred_jobs_present(
+        &self,
+        entity_hash: &str,
+        work_types: &[crate::background_work::DeferredWorkType],
+    ) -> Result<(), String> {
+        self.ensure_deferred_jobs_present_batch(vec![(
+            entity_hash.to_string(),
+            work_types.to_vec(),
+        )])
+    }
+
+    pub fn ensure_deferred_jobs_present_batch(
+        &self,
+        items: Vec<(String, Vec<crate::background_work::DeferredWorkType>)>,
+    ) -> Result<(), String> {
+        self.with_write(move |conn| {
+            let now = chrono::Utc::now().to_rfc3339();
+            let mut stmt = conn.prepare(
+                "INSERT INTO deferred_work_item
+                     (entity_hash, work_type, status, attempt_count, available_at, queued_at)
+                 VALUES
+                     (?1, ?2, 'pending', 0, ?3, ?3)
+                 ON CONFLICT(entity_hash, work_type) DO NOTHING",
+            )?;
+            for (entity_hash, work_types) in &items {
+                for work_type in work_types {
+                    stmt.execute(rusqlite::params![entity_hash, work_type.as_db_str(), now])?;
+                }
             }
             Ok(())
         })
@@ -1709,7 +1884,7 @@ impl LibraryDatabase {
 
         let count = items.len();
         if count > 0 {
-            self.enqueue_deferred_jobs_batch(items)?;
+            self.ensure_deferred_jobs_present_batch(items)?;
         }
         Ok(count)
     }
@@ -1758,7 +1933,23 @@ impl LibraryDatabase {
         &self,
         entity_hash: &str,
     ) -> Result<Option<types::EntityDetails>, String> {
-        self.with_read(|conn| query::details::get_entity_details(conn, entity_hash))
+        let Some(mut details) =
+            self.with_read(|conn| query::details::get_entity_details(conn, entity_hash))?
+        else {
+            return Ok(None);
+        };
+
+        let colors = self.get_file_colors_for_entity_hash(entity_hash)?;
+        if !colors.is_empty() {
+            details.dominant_colors = Some(
+                colors
+                    .into_iter()
+                    .map(|(hex, l, a, b)| crate::types::DominantColorDto { hex, l, a, b })
+                    .collect(),
+            );
+        }
+
+        Ok(Some(details))
     }
 
     pub fn get_sidebar_tree(&self) -> Result<Vec<query::sidebar::SidebarNode>, String> {
@@ -2743,6 +2934,7 @@ mod tests {
     use super::LibraryDatabase;
     use crate::background_work::{DeferredWorkFilter, DeferredWorkType};
     use crate::db::core::schema::LIBRARY_DDL;
+    use crate::media_analysis::ensure_missing_color_analysis_jobs;
     use crate::media_analysis::TARGET_COLOR_ANALYSIS_VERSION;
     use crate::media_processing::colors::{serialize_dominant_palette_blob, DominantColor};
     use tempfile::TempDir;
@@ -2871,5 +3063,120 @@ mod tests {
         assert_eq!(jobs.len(), 1);
         assert_eq!(jobs[0].entity_hash, "stale_image");
         assert_eq!(jobs[0].work_type, DeferredWorkType::DominantColors);
+    }
+
+    #[test]
+    fn ensure_deferred_jobs_present_does_not_reset_existing_running_job() {
+        let db = open_test_db();
+        db.with_write(|conn| {
+            conn.execute_batch(LIBRARY_DDL)?;
+            conn.execute(
+                "INSERT INTO deferred_work_item (
+                    entity_hash, work_type, status, attempt_count, available_at, queued_at, started_at
+                 ) VALUES (?1, 'dominant_colors', 'running', 3, '2026-04-01', '2026-04-01', '2026-04-01T00:00:01Z')",
+                ["hash_a"],
+            )?;
+            Ok(())
+        })
+        .expect("seed deferred work");
+
+        db.ensure_deferred_jobs_present("hash_a", &[DeferredWorkType::DominantColors])
+            .expect("ensure deferred work");
+
+        let jobs = db
+            .list_deferred_work_items(DeferredWorkFilter::default())
+            .expect("list jobs");
+        assert_eq!(jobs.len(), 1);
+        assert_eq!(jobs[0].entity_hash, "hash_a");
+        assert_eq!(jobs[0].work_type, DeferredWorkType::DominantColors);
+        assert_eq!(jobs[0].status, crate::background_work::DeferredWorkStatus::Running);
+        assert_eq!(jobs[0].attempt_count, 3);
+        assert_eq!(jobs[0].started_at.as_deref(), Some("2026-04-01T00:00:01Z"));
+    }
+
+    #[test]
+    fn ensure_missing_color_analysis_jobs_only_queues_missing_colors_once() {
+        let db = open_test_db();
+        db.with_write(|conn| {
+            conn.execute_batch(LIBRARY_DDL)?;
+            conn.execute(
+                "INSERT INTO media_entity (
+                    entity_id, entity_hash, entity_kind, status, name, date_created, date_added, date_modified
+                 ) VALUES
+                    (1, 'stale_image', 'single', 1, 'Stale', '2026-04-01', '2026-04-01', '2026-04-01'),
+                    (2, 'fresh_image', 'single', 1, 'Fresh', '2026-04-01', '2026-04-01', '2026-04-01')",
+                [],
+            )?;
+            let blob = serialize_dominant_palette_blob(&[DominantColor {
+                hex: "#010203".into(),
+                l: 1.0,
+                a: 2.0,
+                b: 3.0,
+            }])
+            .expect("serialize");
+            conn.execute(
+                "INSERT INTO media_file (
+                    file_id, file_hash, mime_type, size_bytes, has_audio, color_analysis_version, date_added
+                 ) VALUES (1, 'stale_file', 'image/png', 1, 0, 0, '2026-04-01')",
+                [],
+            )?;
+            conn.execute(
+                "INSERT INTO media_file (
+                    file_id, file_hash, mime_type, size_bytes, has_audio, dominant_palette_blob,
+                    color_analysis_version, date_added
+                 ) VALUES (2, 'fresh_file', 'image/png', 1, 0, ?1, ?2, '2026-04-01')",
+                rusqlite::params![blob, TARGET_COLOR_ANALYSIS_VERSION],
+            )?;
+            conn.execute("INSERT INTO single_media_entity (entity_id, file_id) VALUES (1, 1)", [])?;
+            conn.execute("INSERT INTO single_media_entity (entity_id, file_id) VALUES (2, 2)", [])?;
+            Ok(())
+        })
+        .expect("seed db");
+
+        let hashes = vec![
+            "stale_image".to_string(),
+            "fresh_image".to_string(),
+            "stale_image".to_string(),
+        ];
+        ensure_missing_color_analysis_jobs(&db, &hashes).expect("first ensure");
+        ensure_missing_color_analysis_jobs(&db, &hashes).expect("second ensure");
+
+        let jobs = db
+            .list_deferred_work_items(DeferredWorkFilter::default())
+            .expect("list jobs");
+        assert_eq!(jobs.len(), 1);
+        assert_eq!(jobs[0].entity_hash, "stale_image");
+        assert_eq!(jobs[0].work_type, DeferredWorkType::DominantColors);
+    }
+
+    #[test]
+    fn deferred_work_summary_reports_dominant_color_backlog_counts() {
+        let db = open_test_db();
+        db.with_write(|conn| {
+            conn.execute_batch(LIBRARY_DDL)?;
+            conn.execute(
+                "INSERT INTO deferred_work_item (
+                    entity_hash, work_type, status, attempt_count, available_at, queued_at
+                 ) VALUES
+                    ('pending_color', 'dominant_colors', 'pending', 0, '2026-04-01', '2026-04-01'),
+                    ('failed_color', 'dominant_colors', 'pending', 2, '2026-04-01', '2026-04-01'),
+                    ('running_color', 'dominant_colors', 'running', 0, '2026-04-01', '2026-04-01'),
+                    ('thumb_job', 'thumbnail', 'pending', 0, '2026-04-01', '2026-04-01')",
+                [],
+            )?;
+            Ok(())
+        })
+        .expect("seed deferred summary");
+
+        let summary = db
+            .get_deferred_work_summary()
+            .expect("get deferred summary");
+
+        assert_eq!(summary.pending_count, 3);
+        assert_eq!(summary.running_count, 1);
+        assert_eq!(summary.failed_count, 1);
+        assert_eq!(summary.dominant_colors_pending_count, 1);
+        assert_eq!(summary.dominant_colors_running_count, 1);
+        assert_eq!(summary.dominant_colors_failed_count, 1);
     }
 }

@@ -18,10 +18,14 @@ import {
   setThumbnailErrorCallback,
   terminateThumbnailWorker,
 } from './thumbnailDecodeClient';
+import { mediaFileUrl } from '../../../shared/lib/mediaUrl';
 import type { ThumbnailPipelineEntry } from './thumbnailPipelineTypes';
 
 export const THUMBNAIL_PIPELINE_REVEAL_MS = 250;
 export type { ThumbnailPipelineEntry } from './thumbnailPipelineTypes';
+
+/** If a tile exceeds this size in either axis, load the full original instead of the 512px thumb. */
+const FULL_QUALITY_THRESHOLD_PX = 752;
 
 function mediaThumbnailUrl(hash: string): string {
   return `media://localhost/thumb/${hash}.jpg`;
@@ -46,11 +50,16 @@ export class ThumbnailPipeline {
   /**
    * Send the current set of visible tiles to the worker.
    * Call once per frame with all hashes in the activation zone.
-   * The worker diffs against its previous plan and starts/cancels loads.
+   * Tiles whose rendered size exceeds the threshold get the full original URL.
    */
-  updatePlan(hashes: string[]): void {
+  updatePlan(tiles: Array<{ hash: string; mime: string; w: number; h: number }>): void {
     if (this.destroyed) return;
-    sendThumbnailPlan(hashes.map(h => ({ hash: h, url: mediaThumbnailUrl(h) })));
+    const entries = tiles.map(t => {
+      const isImage = t.mime.startsWith('image/') && t.mime !== 'image/gif';
+      const needsFull = isImage && (t.w > FULL_QUALITY_THRESHOLD_PX || t.h > FULL_QUALITY_THRESHOLD_PX);
+      return { hash: t.hash, url: needsFull ? mediaFileUrl(t.hash, t.mime) : mediaThumbnailUrl(t.hash) };
+    });
+    sendThumbnailPlan(entries);
   }
 
   /** Get a cached entry for drawing. Returns null if no bitmap received yet. */

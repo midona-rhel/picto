@@ -79,6 +79,13 @@ export interface CanonicalFolderInfo {
   name: string;
 }
 
+export interface CanonicalDominantColor {
+  hex: string;
+  l: number;
+  a: number;
+  b: number;
+}
+
 
 export interface CanonicalEntityDetails {
   entity_hash: string;
@@ -100,6 +107,7 @@ export interface CanonicalEntityDetails {
   date_added: string;
   date_modified: string;
   dominant_color_hex: string | null;
+  dominant_colors: CanonicalDominantColor[] | null;
   perceptual_hash: string | null;
   tags: CanonicalTagInfo[];
   folders: CanonicalFolderInfo[];

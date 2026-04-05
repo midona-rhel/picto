@@ -164,6 +164,7 @@ pub fn get_entity_details(
         date_added,
         date_modified,
         dominant_color_hex,
+        dominant_colors: None,
         perceptual_hash,
         tags,
         folders,

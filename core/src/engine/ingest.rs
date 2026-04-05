@@ -1,5 +1,4 @@
 use crate::blob_store::BlobStore;
-use crate::sqlite::SqliteDatabase;
 use crate::types::ImportBatchResult;
 
 use super::ApplicationEngine;
@@ -7,7 +6,6 @@ use super::ApplicationEngine;
 impl ApplicationEngine {
     pub async fn import_files(
         &self,
-        legacy_db: &SqliteDatabase,
         _blob_store: &BlobStore,
         paths: Vec<String>,
         tag_strings: Option<Vec<String>>,
@@ -16,7 +14,7 @@ impl ApplicationEngine {
         library_root: Option<&std::path::Path>,
     ) -> Result<ImportBatchResult, String> {
         crate::ingest_queue::enqueue_manual_files(
-            legacy_db,
+            self.db(),
             paths,
             tag_strings,
             source_urls,
@@ -28,7 +26,6 @@ impl ApplicationEngine {
 
     pub async fn import_folder(
         &self,
-        legacy_db: &SqliteDatabase,
         _blob_store: &BlobStore,
         path: String,
         preserve_structure: bool,
@@ -37,7 +34,6 @@ impl ApplicationEngine {
     ) -> Result<ImportBatchResult, String> {
         crate::ingest_queue::enqueue_folder_import(
             self.db(),
-            legacy_db,
             path,
             preserve_structure,
             parent_folder_id,

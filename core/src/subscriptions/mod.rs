@@ -9,6 +9,7 @@ pub mod pixiv_oauth;
 pub mod policy;
 pub mod progress;
 pub mod run_orchestrator;
+pub mod runtime_service;
 pub mod runtime_tasks;
 pub mod service;
 pub mod subscription_groups_db;

@@ -87,12 +87,30 @@ function highlightMatch(text: string, q: string): ReactNode {
 export interface FolderTreeProps {
   nodes: SidebarNodeDto[];
   selected: Set<number>;
-  onToggle: (folderId: number) => void;
+  onToggle: (folderId: number, event: React.MouseEvent) => void;
   search?: string;
   /** Show checkboxes. Default true. */
   checkable?: boolean;
   /** Folder IDs the entity is already a member of — shown as non-toggleable context. */
   memberOf?: Set<number>;
+}
+
+/** Flatten visible tree into ordered folder IDs (respects expand/collapse + search). */
+export function flattenVisibleIds(
+  tree: TreeNode[],
+  expanded: Set<string>,
+  searchLower: string,
+): number[] {
+  const ids: number[] = [];
+  function walk(nodes: TreeNode[]) {
+    for (const n of nodes) {
+      if (searchLower && !matchesSearch(n, searchLower)) continue;
+      ids.push(n.folderId);
+      if (expanded.has(n.node.id)) walk(n.children);
+    }
+  }
+  walk(tree);
+  return ids;
 }
 
 export function FolderTree({ nodes, selected, onToggle, search = '', checkable = true, memberOf }: FolderTreeProps) {
@@ -129,7 +147,7 @@ export function FolderTree({ nodes, selected, onToggle, search = '', checkable =
         key={node.id}
         className={`${styles.row} ${isMember ? styles.rowMember : ''}`}
         style={{ paddingLeft: 6 + depth * 20 }}
-        onClick={isMember ? undefined : () => onToggle(folderId)}
+        onClick={isMember ? undefined : (e) => onToggle(folderId, e)}
       >
         {hasChildren ? (
           <div

@@ -31,6 +31,7 @@ interface ThemeLike {
   borderRadius: number;
   textPrimary: string;
   textTertiary: string;
+  tileBoundary: string;
 }
 
 export interface DrawContext {
@@ -196,6 +197,29 @@ export function drawCanvasBaseLayer({
     }
   }
   ctx.stroke();
+
+  // ── Pass 2b: Contain-mode tile boundary outline ──
+  // When tiles use letterbox (contain), the image doesn't fill the tile.
+  // Draw the full tile square outline so the click area is visible.
+  if (effectiveFit === 'contain') {
+    ctx.strokeStyle = theme.tileBoundary;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    for (const i of activeTiles) {
+      const pos = positions[i];
+      const item = items[i];
+      if (!pos || !item || !item.aspectRatio) continue;
+      const drawY = pos.y - scrollTop;
+      const imageHeight = pos.h - th;
+      if (drawY + pos.h < 0 || drawY > cssH) continue;
+      const rect = getContainRect(item.aspectRatio, pos.x, drawY, pos.w, imageHeight);
+      // Only draw if the image doesn't fill the tile (actual letterboxing)
+      if (rect.w < pos.w - 2 || rect.h < imageHeight - 2) {
+        ctx.roundRect(pos.x + 0.5, drawY + 0.5, pos.w - 1, imageHeight - 1, br);
+      }
+    }
+    ctx.stroke();
+  }
 
   // ── Pass 3: Badges (extension, duration, collection count) ──
   const isContain = effectiveFit === 'contain';

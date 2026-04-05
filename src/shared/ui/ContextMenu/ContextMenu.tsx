@@ -198,7 +198,7 @@ export function ContextMenu({ entries, position, onClose, searchable = true, wid
       />
       <div
         ref={menuRef}
-        className={styles.menu}
+        className={`${styles.menu} ${closing ? styles.menuClosing : ''}`}
         style={{ left: pos.x, top: pos.y, width: width ?? undefined, transformOrigin: origin }}
         onPointerDown={(e) => e.stopPropagation()}
         onContextMenu={(e) => e.preventDefault()}
@@ -213,7 +213,7 @@ export function ContextMenu({ entries, position, onClose, searchable = true, wid
                 value={search}
                 onChange={(e) => { setSearch(e.target.value); setFocusIdx(-1); }}
                 placeholder="Search..."
-                onKeyDown={(e) => { if (e.key === 'Escape') { e.stopPropagation(); onClose(); } }}
+                onKeyDown={(e) => { if (e.key === 'Escape') { e.stopPropagation(); startClose(); } }}
               />
             </div>
           </div>
@@ -252,7 +252,7 @@ export function ContextMenu({ entries, position, onClose, searchable = true, wid
                       items={entry.children}
                       parentRef={menuRef}
                       itemIdx={i}
-                      onClose={onClose}
+                      onClose={startClose}
                       onMouseEnter={cancelSubmenuTimer}
                     />
                   )}
@@ -271,7 +271,7 @@ export function ContextMenu({ entries, position, onClose, searchable = true, wid
               <div
                 key={i}
                 className={cls}
-                onClick={() => { if (entry.disabled) return; entry.action(); onClose(); }}
+                onClick={() => { if (entry.disabled) return; entry.action(); startClose(); }}
                 onMouseEnter={() => { setFocusIdx(i); handleSubmenuIntent(null); }}
                 onMouseLeave={() => setFocusIdx(-1)}
               >

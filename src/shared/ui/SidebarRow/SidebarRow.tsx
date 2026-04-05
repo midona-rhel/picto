@@ -62,6 +62,8 @@ interface RowProps {
   onToggleExpand?: () => void;
   onClick?: () => void;
   onContextMenu?: (e: React.MouseEvent) => void;
+  /** Data attribute for drag-and-drop targeting (e.g. folder ID or status code). */
+  dropDataAttr?: { key: string; value: string };
   children?: ReactNode;
 }
 
@@ -81,6 +83,7 @@ function StandardRow({
   onToggleExpand,
   onClick,
   onContextMenu,
+  dropDataAttr,
   children,
 }: RowProps) {
   const cls = [
@@ -104,6 +107,7 @@ function StandardRow({
       style={rowStyle}
       onClick={onClick}
       onContextMenu={onContextMenu}
+      {...(dropDataAttr ? { [`data-${dropDataAttr.key}`]: dropDataAttr.value } : {})}
     >
       {/* Tree guide lines — continuation at column (d-1) for siblings at indent d.
           Skip d=0: root-level items don't get tree connectors. */}

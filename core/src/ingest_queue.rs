@@ -18,8 +18,8 @@ use crate::ingest::{
     SingleIngestDisposition, SingleIngestOutcome, SingleIngestRequest,
     SubscriptionCollectionMember,
 };
-use crate::sqlite::SqliteDatabase;
 use crate::subscriptions::gallery_dl_runner::ParsedMetadata;
+use crate::subscriptions::runtime_service::SubscriptionRuntimeService;
 use crate::tags::logging::{preview_tag_strings, summarize_tag_strings};
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -518,7 +518,7 @@ fn mark_all_pending_ingest_stale_for_subscription(
     Ok(())
 }
 
-impl SqliteDatabase {
+impl LibraryDatabase {
     pub async fn enqueue_ingest_queue(
         &self,
         queue_kind: IngestQueueKind,
@@ -538,7 +538,7 @@ impl SqliteDatabase {
         let post_id = post_id.map(ToOwned::to_owned);
         let category = category.map(ToOwned::to_owned);
         let preferred_name = preferred_name.map(ToOwned::to_owned);
-        self.with_conn(move |conn| {
+        self.with_write(move |conn| {
             let tx = conn.unchecked_transaction()?;
             let queue_id = create_ingest_queue_entry(
                 &tx,
@@ -569,26 +569,32 @@ impl SqliteDatabase {
             tx.commit()?;
             Ok(queue_id)
         })
-        .await
+    }
+
+    pub async fn mark_all_pending_ingest_stale_for_subscription(
+        &self,
+        subscription_id: i64,
+    ) -> Result<(), String> {
+        self.with_write(move |conn| {
+            mark_all_pending_ingest_stale_for_subscription(conn, subscription_id)
+        })
     }
 
     pub async fn lease_next_ingest_queue(&self) -> Result<Option<IngestQueueEntry>, String> {
-        self.with_conn(lease_next_ingest_queue).await
+        self.with_write(lease_next_ingest_queue)
     }
 
     pub async fn list_ingest_queue_items(
         &self,
         queue_id: i64,
     ) -> Result<Vec<IngestQueueItem>, String> {
-        self.with_read_conn(move |conn| list_ingest_queue_items(conn, queue_id))
-            .await
+        self.with_read(move |conn| list_ingest_queue_items(conn, queue_id))
     }
 
     pub async fn mark_ingest_queue_item_running(&self, item_id: i64) -> Result<(), String> {
-        self.with_conn(move |conn| {
+        self.with_write(move |conn| {
             mark_ingest_queue_item_status(conn, item_id, "running", None, None, None, None)
         })
-        .await
     }
 
     pub async fn mark_ingest_queue_item_complete(
@@ -598,7 +604,7 @@ impl SqliteDatabase {
         resolved_entity_hash: Option<String>,
         resolved_file_hash: Option<String>,
     ) -> Result<(), String> {
-        self.with_conn(move |conn| {
+        self.with_write(move |conn| {
             mark_ingest_queue_item_status(
                 conn,
                 item_id,
@@ -609,7 +615,6 @@ impl SqliteDatabase {
                 None,
             )
         })
-        .await
     }
 
     pub async fn mark_ingest_queue_item_failed(
@@ -618,7 +623,7 @@ impl SqliteDatabase {
         last_error: &str,
     ) -> Result<(), String> {
         let last_error = last_error.to_string();
-        self.with_conn(move |conn| {
+        self.with_write(move |conn| {
             mark_ingest_queue_item_status(
                 conn,
                 item_id,
@@ -629,12 +634,10 @@ impl SqliteDatabase {
                 Some(&last_error),
             )
         })
-        .await
     }
 
     pub async fn mark_ingest_queue_complete(&self, queue_id: i64) -> Result<(), String> {
-        self.with_conn(move |conn| mark_ingest_queue_status(conn, queue_id, "complete", None))
-            .await
+        self.with_write(move |conn| mark_ingest_queue_status(conn, queue_id, "complete", None))
     }
 
     pub async fn mark_ingest_queue_failed(
@@ -645,45 +648,31 @@ impl SqliteDatabase {
     ) -> Result<(), String> {
         let status = status.to_string();
         let last_error = last_error.map(ToOwned::to_owned);
-        self.with_conn(move |conn| {
+        self.with_write(move |conn| {
             mark_ingest_queue_status(conn, queue_id, &status, last_error.as_deref())
         })
-        .await
-    }
-
-    pub async fn mark_all_pending_ingest_stale_for_subscription(
-        &self,
-        subscription_id: i64,
-    ) -> Result<(), String> {
-        self.with_conn(move |conn| {
-            mark_all_pending_ingest_stale_for_subscription(conn, subscription_id)
-        })
-        .await
     }
 
     pub async fn cleanup_ingest_queue(&self) -> Result<(), String> {
-        self.with_conn(move |conn| {
+        self.with_write(move |conn| {
             mark_running_ingest_stale(conn)?;
             delete_completed_ingest_queues(conn)?;
             delete_stale_ingest_queues_older_than(conn, 7)?;
             Ok(())
         })
-        .await
     }
 
     pub async fn count_subscription_ingest_queue(
         &self,
         subscription_id: i64,
     ) -> Result<IngestQueueCounts, String> {
-        self.with_read_conn(move |conn| count_ingest_queue_by_subscription(conn, subscription_id))
-            .await
+        self.with_read(move |conn| count_ingest_queue_by_subscription(conn, subscription_id))
     }
 
     pub async fn list_duplicate_failed_single_queue_candidates(
         &self,
     ) -> Result<Vec<(i64, i64, String)>, String> {
-        self.with_read_conn(list_duplicate_failed_single_queue_candidates)
-            .await
+        self.with_read(list_duplicate_failed_single_queue_candidates)
     }
 
     pub async fn reset_ingest_queue_item_for_retry(
@@ -691,8 +680,7 @@ impl SqliteDatabase {
         queue_id: i64,
         item_id: i64,
     ) -> Result<(), String> {
-        self.with_conn(move |conn| reset_ingest_queue_item_for_retry(conn, queue_id, item_id))
-            .await
+        self.with_write(move |conn| reset_ingest_queue_item_for_retry(conn, queue_id, item_id))
     }
 
     pub async fn has_retained_ingest_sources_for_root(
@@ -700,15 +688,12 @@ impl SqliteDatabase {
         cleanup_root: &Path,
     ) -> Result<bool, String> {
         let cleanup_root = cleanup_root.display().to_string();
-        self.with_read_conn(move |conn| {
-            Ok(count_retained_sources_under_root(conn, &cleanup_root)? > 0)
-        })
-        .await
+        self.with_read(move |conn| Ok(count_retained_sources_under_root(conn, &cleanup_root)? > 0))
     }
 }
 
 pub async fn enqueue_single_ingest_request(
-    db: &SqliteDatabase,
+    db: &LibraryDatabase,
     source_kind: IngestSourceKind,
     query_id: Option<i64>,
     query_run_id: Option<i64>,
@@ -763,7 +748,7 @@ pub async fn enqueue_single_ingest_request(
 }
 
 pub async fn enqueue_manual_files(
-    db: &SqliteDatabase,
+    db: &LibraryDatabase,
     paths: Vec<String>,
     tag_strings: Option<Vec<String>>,
     source_urls: Option<Vec<String>>,
@@ -825,8 +810,7 @@ pub async fn enqueue_manual_files(
 }
 
 pub async fn enqueue_folder_import(
-    canonical_db: &LibraryDatabase,
-    db: &SqliteDatabase,
+    db: &LibraryDatabase,
     path: String,
     preserve_structure: bool,
     parent_folder_id: Option<i64>,
@@ -850,7 +834,7 @@ pub async fn enqueue_folder_import(
             .unwrap_or("Imported Folder")
             .to_string();
         let root_folder_id =
-            canonical_db.create_folder(&root_name, parent_folder_id, None, None)?;
+            db.create_folder(&root_name, parent_folder_id, None, None)?;
         folder_cache.insert(PathBuf::new(), root_folder_id);
 
         for directory in directories {
@@ -868,7 +852,7 @@ pub async fn enqueue_folder_import(
                 .filter(|entry| !entry.is_empty())
                 .unwrap_or("Imported Folder")
                 .to_string();
-            let folder_id = canonical_db.create_folder(&name, Some(parent_id), None, None)?;
+            let folder_id = db.create_folder(&name, Some(parent_id), None, None)?;
             folder_cache.insert(relative, folder_id);
         }
     }
@@ -921,8 +905,7 @@ pub async fn enqueue_folder_import(
 }
 
 pub async fn enqueue_watch_path(
-    canonical_db: &LibraryDatabase,
-    db: &SqliteDatabase,
+    db: &LibraryDatabase,
     folder_id: i64,
     root_path: &Path,
     watch_subfolders: bool,
@@ -949,9 +932,9 @@ pub async fn enqueue_watch_path(
             let Some(name) = name.to_str() else {
                 continue;
             };
-            let child_id = match canonical_db.find_child_folder_id(current_folder_id, name)? {
+            let child_id = match db.find_child_folder_id(current_folder_id, name)? {
                 Some(folder_id) => folder_id,
-                None => canonical_db.create_folder(name, Some(current_folder_id), None, None)?,
+                None => db.create_folder(name, Some(current_folder_id), None, None)?,
             };
             current_folder_id = child_id;
         }
@@ -1008,12 +991,16 @@ fn subscription_item_key(metadata: &ParsedMetadata) -> Option<String> {
 }
 
 async fn persist_subscription_post_member(
-    db: &SqliteDatabase,
+    canonical_db: &LibraryDatabase,
     subscription_id: i64,
     metadata: &ParsedMetadata,
     entity_hash: Option<&str>,
     status: &str,
 ) {
+    let Ok(state) = crate::state::get_state() else {
+        return;
+    };
+    let runtime = SubscriptionRuntimeService::new(canonical_db, &state.library_root);
     let Some(post_id) = metadata
         .post_id
         .as_deref()
@@ -1030,7 +1017,7 @@ async fn persist_subscription_post_member(
         .unwrap_or("unknown");
     let item_key = subscription_item_key(metadata)
         .unwrap_or_else(|| format!("{site_id}:{post_id}:{}", metadata.page_num.unwrap_or(0)));
-    let _ = db
+    let _ = runtime
         .upsert_subscription_post_member(
             crate::subscriptions::db::OwnedSubscriptionPostMemberUpsert {
                 subscription_id,
@@ -1048,14 +1035,17 @@ async fn persist_subscription_post_member(
 }
 
 async fn reconcile_subscription_collection_order(
-    db: &SqliteDatabase,
     canonical_db: &LibraryDatabase,
     subscription_id: i64,
     site_id: &str,
     post_id: &str,
     collection_id: i64,
 ) {
-    let Ok(members) = db
+    let Ok(state) = crate::state::get_state() else {
+        return;
+    };
+    let runtime = SubscriptionRuntimeService::new(canonical_db, &state.library_root);
+    let Ok(members) = runtime
         .list_subscription_post_members(subscription_id, site_id, post_id)
         .await
     else {
@@ -1080,7 +1070,7 @@ async fn delete_source_file_if_owned(path: &str) {
     }
 }
 
-async fn maybe_cleanup_root(db: &SqliteDatabase, cleanup_root: Option<&str>) {
+async fn maybe_cleanup_root(db: &LibraryDatabase, cleanup_root: Option<&str>) {
     let Some(cleanup_root) = cleanup_root else {
         return;
     };
@@ -1112,8 +1102,7 @@ fn unique_entity_hashes<'a>(entity_hashes: impl IntoIterator<Item = &'a str>) ->
 }
 
 async fn process_single_queue(
-    db: &Arc<SqliteDatabase>,
-    canonical_db: &Arc<LibraryDatabase>,
+    db: &Arc<LibraryDatabase>,
     blob_store: &Arc<BlobStore>,
     queue: &IngestQueueEntry,
     item: &IngestQueueItem,
@@ -1144,14 +1133,14 @@ async fn process_single_queue(
     }
 
     let outcome: SingleIngestOutcome =
-        ingest_single_path(canonical_db, Some(db), blob_store, &payload.request).await?;
+        ingest_single_path(db, blob_store, &payload.request).await?;
 
     let mut summary = IngestBatchSummary::default();
     summary.flags.merge(&outcome.flags);
     if let Some(folder_id) = payload.target_folder_id {
-        let ids = canonical_db.resolve_entity_hashes(&[outcome.entity_hash.clone()])?;
+        let ids = db.resolve_entity_hashes(&[outcome.entity_hash.clone()])?;
         if !ids.is_empty() {
-            canonical_db.add_folder_members(
+            db.add_folder_members(
                 folder_id,
                 &ids,
                 crate::db::types::ExpansionMode::EntityOnly,
@@ -1170,9 +1159,14 @@ async fn process_single_queue(
         payload.subscription_metadata.as_ref(),
     ) {
         if let Some(item_key) = subscription_item_key(metadata) {
-            let _ = db
-                .resolve_subscription_download_attempt(subscription_id, queue.query_id, &item_key)
-                .await;
+            let runtime = crate::state::get_state()
+                .ok()
+                .map(|state| SubscriptionRuntimeService::new(db, &state.library_root));
+            if let Some(runtime) = runtime {
+                let _ = runtime
+                    .resolve_subscription_download_attempt(subscription_id, queue.query_id, &item_key)
+                    .await;
+            }
         }
         persist_subscription_post_member(
             db,
@@ -1190,7 +1184,7 @@ async fn process_single_queue(
         || summary.flags.tags_changed
         || summary.flags.metadata_changed;
     if should_emit {
-        apply_compiler_plan(canonical_db, &summary.flags, &summary.folder_ids);
+        apply_compiler_plan(db, &summary.flags, &summary.folder_ids);
         let extra_grid_scopes = if queue.source_kind == "subscription" {
             vec!["system:inbox".into()]
         } else {
@@ -1214,7 +1208,7 @@ async fn process_single_queue(
     )
     .await?;
     crate::background_work::enqueue_missing_derivative_jobs(
-        canonical_db,
+        db,
         blob_store,
         std::slice::from_ref(&outcome.entity_hash),
     )
@@ -1226,8 +1220,7 @@ async fn process_single_queue(
 }
 
 async fn process_collection_queue(
-    db: &Arc<SqliteDatabase>,
-    canonical_db: &Arc<LibraryDatabase>,
+    db: &Arc<LibraryDatabase>,
     blob_store: &Arc<BlobStore>,
     queue: &IngestQueueEntry,
     items: &[IngestQueueItem],
@@ -1300,17 +1293,21 @@ async fn process_collection_queue(
         member.skip_thumbnail = index > 0;
     }
 
-    let existing_collection_id = db
-        .get_subscription_post_collection(subscription_id, category, post_id)
-        .await
-        .ok()
-        .flatten();
+    let existing_collection_id = if let Ok(state) = crate::state::get_state() {
+        let runtime = SubscriptionRuntimeService::new(db, &state.library_root);
+        runtime
+            .get_subscription_post_collection(subscription_id, category, post_id)
+            .await
+            .ok()
+            .flatten()
+    } else {
+        None
+    };
     let expected_count = queue.expected_count.unwrap_or(0);
     let force_collection =
         existing_collection_id.is_some() || expected_count > 1 || members.len() > 1;
 
     let result = materialize_subscription_collection(
-        canonical_db,
         db,
         blob_store,
         subscription_id,
@@ -1323,12 +1320,15 @@ async fn process_collection_queue(
     )
     .await?;
 
-    apply_compiler_plan(canonical_db, &result.flags, &[]);
+    apply_compiler_plan(db, &result.flags, &[]);
     for member in &result.resolved_members {
         if let Some(item_key) = member.item_key.as_deref() {
-            let _ = db
-                .resolve_subscription_download_attempt(subscription_id, queue.query_id, item_key)
-                .await;
+            if let Ok(state) = crate::state::get_state() {
+                let runtime = SubscriptionRuntimeService::new(db, &state.library_root);
+                let _ = runtime
+                    .resolve_subscription_download_attempt(subscription_id, queue.query_id, item_key)
+                    .await;
+            }
         }
         persist_subscription_post_member(
             db,
@@ -1350,7 +1350,6 @@ async fn process_collection_queue(
     if let Some(collection_id) = result.collection_id.or(existing_collection_id) {
         reconcile_subscription_collection_order(
             db,
-            canonical_db,
             subscription_id,
             category,
             post_id,
@@ -1373,7 +1372,7 @@ async fn process_collection_queue(
         build_ingest_change_impact(&summary, vec!["system:inbox".into()])
     };
     if let Some(collection_id) = result.collection_id.or(existing_collection_id) {
-        let folder_ids = canonical_db
+        let folder_ids = db
             .get_collection_folder_ids(collection_id)
             .unwrap_or_default();
         impact = impact.merge(
@@ -1407,7 +1406,7 @@ async fn process_collection_queue(
     let derivative_entity_hashes =
         unique_entity_hashes(result.resolved_members.iter().map(|member| member.entity_hash.as_str()));
     crate::background_work::enqueue_missing_derivative_jobs(
-        canonical_db,
+        db,
         blob_store,
         &derivative_entity_hashes,
     )
@@ -1416,8 +1415,7 @@ async fn process_collection_queue(
 }
 
 async fn repair_duplicate_failed_single_queues(
-    db: &Arc<SqliteDatabase>,
-    canonical_db: &Arc<LibraryDatabase>,
+    db: &Arc<LibraryDatabase>,
 ) -> Result<(), String> {
     let candidates = db.list_duplicate_failed_single_queue_candidates().await?;
     for (queue_id, item_id, source_path) in candidates {
@@ -1433,7 +1431,7 @@ async fn repair_duplicate_failed_single_queues(
             }
         };
         let file_hash = hex::encode(crate::media_processing::get_hash_from_bytes(&bytes));
-        if canonical_db
+        if db
             .get_existing_import_target_by_file_hash_write(&file_hash)?
             .is_some()
         {
@@ -1449,8 +1447,7 @@ async fn repair_duplicate_failed_single_queues(
 }
 
 async fn process_queue_entry(
-    db: &Arc<SqliteDatabase>,
-    canonical_db: &Arc<LibraryDatabase>,
+    db: &Arc<LibraryDatabase>,
     blob_store: &Arc<BlobStore>,
     queue: IngestQueueEntry,
 ) -> Result<(), String> {
@@ -1463,10 +1460,10 @@ async fn process_queue_entry(
 
     let result = match queue.queue_kind {
         IngestQueueKind::Single => {
-            process_single_queue(db, canonical_db, blob_store, &queue, &items[0]).await
+            process_single_queue(db, blob_store, &queue, &items[0]).await
         }
         IngestQueueKind::Collection => {
-            process_collection_queue(db, canonical_db, blob_store, &queue, &items).await
+            process_collection_queue(db, blob_store, &queue, &items).await
         }
     };
 
@@ -1489,12 +1486,11 @@ async fn process_queue_entry(
 }
 
 pub async fn start_worker_loop(
-    db: Arc<SqliteDatabase>,
-    canonical_db: Arc<LibraryDatabase>,
+    db: Arc<LibraryDatabase>,
     blob_store: Arc<BlobStore>,
     cancel: CancellationToken,
 ) {
-    if let Err(error) = repair_duplicate_failed_single_queues(&db, &canonical_db).await {
+    if let Err(error) = repair_duplicate_failed_single_queues(&db).await {
         warn!(error = %error, "Failed to repair duplicate-failed ingest queue rows");
     }
 
@@ -1518,9 +1514,7 @@ pub async fn start_worker_loop(
             continue;
         };
 
-        if let Err(error) =
-            process_queue_entry(&db, &canonical_db, &blob_store, queue.clone()).await
-        {
+        if let Err(error) = process_queue_entry(&db, &blob_store, queue.clone()).await {
             warn!(queue_id = queue.queue_id, error = %error, "Ingest queue entry failed");
         }
     }

@@ -14,6 +14,7 @@ import {
   IconRefresh, IconTrash, IconArrowBackUp,
   IconSelectAll, IconDeselect,
   IconStack2, IconStackPop,
+  IconFolder,
 } from '@tabler/icons-react';
 import type { MenuItem, MenuSeparator, MenuEntry } from '../../shared/ui/ContextMenu/ContextMenu';
 import { IconRename } from '../../shared/ui/icons/sidebar-menu-icons';
@@ -34,6 +35,9 @@ interface GridMenuContext {
   singleHash: string | null;
   singleKind: string | null;
   hasCollections: boolean;
+  hasFolders?: boolean;
+  isMixed?: boolean;
+  isFoldersOnly?: boolean;
   scopeKind: 'system' | 'folder' | 'smart_folder' | 'collection' | null;
   collectionId?: number | null;
   statusFilter: string | null;
@@ -91,6 +95,26 @@ export function buildTileContextMenu(ctx: GridMenuContext): MenuEntry[] {
   const { selectionCount, singleSelected, singleHash, statusFilter, scopeKind } = ctx;
   const hasSelection = selectionCount > 0;
   const entries: MenuEntry[] = [];
+
+  // ── Mixed selection (folders + entities) or folders-only: limited menu ──
+  if (ctx.isMixed) {
+    entries.push(item('Select All', { shortcut: kbd('edit.selectAll'), action: ctx.onSelectAll }));
+    entries.push(item('Deselect All', { action: ctx.onDeselectAll }));
+    if (ctx.onMoveToTrash) {
+      entries.push(sep());
+      entries.push(item('Move to Trash', { icon: <IconTrash size={15} />, danger: true, action: ctx.onMoveToTrash }));
+    }
+    return entries;
+  }
+  if (ctx.isFoldersOnly) {
+    if (singleSelected && singleHash?.startsWith('folder:')) {
+      entries.push(item('Open Folder', { icon: <IconFolder size={15} />, action: ctx.onOpen }));
+      entries.push(sep());
+    }
+    entries.push(item('Select All', { shortcut: kbd('edit.selectAll'), action: ctx.onSelectAll }));
+    entries.push(item('Deselect All', { action: ctx.onDeselectAll }));
+    return entries;
+  }
 
   // ── Inbox accept/reject — top of menu ──
   if (statusFilter === 'inbox' && hasSelection) {

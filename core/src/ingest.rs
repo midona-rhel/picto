@@ -15,7 +15,6 @@ use crate::db::LibraryDatabase;
 use crate::import::pipeline::{ImportOptions, ImportPipeline};
 use crate::media_analysis;
 use crate::media_capabilities::capabilities_for_stored_media;
-use crate::sqlite::SqliteDatabase;
 use crate::subscriptions::gallery_dl_runner::ParsedMetadata;
 use crate::tags::normalize;
 use crate::types::{ImportBatchResult, ImportResult};
@@ -436,9 +435,44 @@ pub fn build_ingest_change_impact(
     impact
 }
 
+async fn add_subscription_entity_association(
+    canonical_db: &LibraryDatabase,
+    subscription_id: i64,
+    entity_hash: &str,
+) {
+    let Ok(state) = crate::state::get_state() else {
+        return;
+    };
+    let service = crate::subscriptions::runtime_service::SubscriptionRuntimeService::new(
+        canonical_db,
+        &state.library_root,
+    );
+    let _ = service
+        .add_subscription_entity(subscription_id, entity_hash)
+        .await;
+}
+
+async fn upsert_subscription_post_collection_association(
+    canonical_db: &LibraryDatabase,
+    subscription_id: i64,
+    site_category: &str,
+    post_id: &str,
+    collection_id: i64,
+) {
+    let Ok(state) = crate::state::get_state() else {
+        return;
+    };
+    let service = crate::subscriptions::runtime_service::SubscriptionRuntimeService::new(
+        canonical_db,
+        &state.library_root,
+    );
+    let _ = service
+        .upsert_subscription_post_collection(subscription_id, site_category, post_id, collection_id)
+        .await;
+}
+
 async fn merge_existing_import_target(
     canonical_db: &LibraryDatabase,
-    legacy_db: Option<&SqliteDatabase>,
     existing: &crate::db::query::ingest::ExistingImportTarget,
     request: &SingleIngestRequest,
 ) -> Result<SingleIngestOutcome, String> {
@@ -530,11 +564,8 @@ async fn merge_existing_import_target(
     }
 
     if let Some(subscription_id) = request.subscription_id {
-        if let Some(legacy_db) = legacy_db {
-            let _ = legacy_db
-                .add_subscription_entity(subscription_id, &existing.entity_hash)
-                .await;
-        }
+        add_subscription_entity_association(canonical_db, subscription_id, &existing.entity_hash)
+            .await;
     }
 
     Ok(SingleIngestOutcome {
@@ -555,7 +586,6 @@ async fn merge_existing_import_target(
 
 pub async fn ingest_single_path(
     canonical_db: &LibraryDatabase,
-    legacy_db: Option<&SqliteDatabase>,
     blob_store: &BlobStore,
     request: &SingleIngestRequest,
 ) -> Result<SingleIngestOutcome, String> {
@@ -567,7 +597,7 @@ pub async fn ingest_single_path(
     if let Some(existing) =
         canonical_db.get_existing_import_target_by_file_hash_write(&prepared_blob.hex_hash)?
     {
-        return merge_existing_import_target(canonical_db, legacy_db, &existing, request).await;
+        return merge_existing_import_target(canonical_db, &existing, request).await;
     }
 
     let mut prepared_single = prepared_from_blob_import(prepared_blob.clone(), request);
@@ -605,7 +635,6 @@ pub async fn ingest_single_path(
                 crate::duplicates::quality::ImageQualityDecision::LeftBetter => {
                     return merge_existing_import_target(
                         canonical_db,
-                        legacy_db,
                         &existing,
                         request,
                     )
@@ -623,8 +652,7 @@ pub async fn ingest_single_path(
             if let Some(existing) = canonical_db
                 .get_existing_import_target_by_file_hash_write(&prepared_single.entity_hash)?
             {
-                return merge_existing_import_target(canonical_db, legacy_db, &existing, request)
-                    .await;
+                return merge_existing_import_target(canonical_db, &existing, request).await;
             }
             return Err(error);
         }
@@ -640,7 +668,7 @@ pub async fn ingest_single_path(
         prepared_single.perceptual_hash.is_some(),
     );
     if !work_types.is_empty() {
-        canonical_db.enqueue_deferred_jobs(&prepared_single.entity_hash, &work_types)?;
+        canonical_db.ensure_deferred_jobs_present(&prepared_single.entity_hash, &work_types)?;
     }
 
     let mut final_entity_hash = prepared_single.entity_hash.clone();
@@ -731,7 +759,6 @@ pub async fn ingest_single_path(
 
 pub async fn import_files(
     canonical_db: &LibraryDatabase,
-    legacy_db: Option<&SqliteDatabase>,
     blob_store: &BlobStore,
     paths: Vec<String>,
     tag_strings: Option<Vec<String>>,
@@ -780,8 +807,9 @@ pub async fn import_files(
             tag_provenance_mask: TAG_PROVENANCE_MANUAL,
             subscription_id: None,
         };
-        match ingest_single_path(canonical_db, legacy_db, blob_store, &request).await {
+        match ingest_single_path(canonical_db, blob_store, &request).await {
             Ok(outcome) => {
+                let entity_hash = outcome.entity_hash.clone();
                 summary.flags.merge(&outcome.flags);
                 summary.scheduled_work += outcome.scheduled_work;
                 let mut item_summary = IngestBatchSummary::default();
@@ -813,6 +841,10 @@ pub async fn import_files(
                         vec!["system:active".into(), "system:inbox".into()],
                     ),
                 );
+                let _ = crate::background_work::ensure_missing_color_analysis_jobs(
+                    canonical_db,
+                    &[entity_hash],
+                );
             }
             Err(error) => batch.errors.push(error),
         }
@@ -823,7 +855,6 @@ pub async fn import_files(
 
 pub async fn import_folder(
     canonical_db: &LibraryDatabase,
-    legacy_db: Option<&SqliteDatabase>,
     blob_store: &BlobStore,
     path: String,
     preserve_structure: bool,
@@ -906,8 +937,9 @@ pub async fn import_folder(
             tag_provenance_mask: TAG_PROVENANCE_MANUAL,
             subscription_id: None,
         };
-        match ingest_single_path(canonical_db, legacy_db, blob_store, &request).await {
+        match ingest_single_path(canonical_db, blob_store, &request).await {
             Ok(outcome) => {
+                let entity_hash = outcome.entity_hash.clone();
                 summary.flags.merge(&outcome.flags);
                 summary.scheduled_work += outcome.scheduled_work;
                 let mut item_summary = IngestBatchSummary::default();
@@ -953,6 +985,10 @@ pub async fn import_folder(
                         vec!["system:active".into(), "system:inbox".into()],
                     ),
                 );
+                let _ = crate::background_work::ensure_missing_color_analysis_jobs(
+                    canonical_db,
+                    &[entity_hash],
+                );
             }
             Err(error) => batch.errors.push(error),
         }
@@ -965,7 +1001,6 @@ pub async fn import_folder(
 
 pub async fn import_watch_path(
     canonical_db: &LibraryDatabase,
-    legacy_db: Option<&SqliteDatabase>,
     blob_store: &BlobStore,
     root_folder_id: i64,
     root_path: &Path,
@@ -1031,7 +1066,7 @@ pub async fn import_watch_path(
         tag_provenance_mask: TAG_PROVENANCE_UNKNOWN,
         subscription_id: None,
     };
-    let outcome = ingest_single_path(canonical_db, legacy_db, blob_store, &request).await?;
+    let outcome = ingest_single_path(canonical_db, blob_store, &request).await?;
     let mut summary = IngestBatchSummary::default();
     summary.flags.merge(&outcome.flags);
     summary.scheduled_work += outcome.scheduled_work;
@@ -1049,12 +1084,20 @@ pub async fn import_watch_path(
     } else {
         summary.skipped_hashes.push(outcome.entity_hash);
     }
+    let _ = crate::background_work::ensure_missing_color_analysis_jobs(
+        canonical_db,
+        &summary
+            .imported_hashes
+            .iter()
+            .chain(summary.skipped_hashes.iter())
+            .cloned()
+            .collect::<Vec<_>>(),
+    );
     Ok(summary)
 }
 
 pub async fn ingest_subscription_item(
     canonical_db: &LibraryDatabase,
-    legacy_db: &SqliteDatabase,
     blob_store: &BlobStore,
     file_path: &Path,
     metadata: &ParsedMetadata,
@@ -1075,12 +1118,11 @@ pub async fn ingest_subscription_item(
         tag_provenance_mask: TAG_PROVENANCE_UNKNOWN,
         subscription_id: Some(subscription_id),
     };
-    ingest_single_path(canonical_db, Some(legacy_db), blob_store, &request).await
+    ingest_single_path(canonical_db, blob_store, &request).await
 }
 
 pub async fn materialize_subscription_collection(
     canonical_db: &LibraryDatabase,
-    legacy_db: &SqliteDatabase,
     blob_store: &BlobStore,
     subscription_id: i64,
     site_category: &str,
@@ -1122,9 +1164,7 @@ pub async fn materialize_subscription_collection(
         if let Some(existing) =
             canonical_db.get_existing_import_target_by_file_hash_write(&prepared_blob.hex_hash)?
         {
-            let merge =
-                merge_existing_import_target(canonical_db, Some(legacy_db), &existing, &request)
-                    .await?;
+            let merge = merge_existing_import_target(canonical_db, &existing, &request).await?;
             flags.merge(&merge.flags);
             existing_member_ids.push(existing.entity_id);
             resolved_members.push(ResolvedSubscriptionCollectionMember {
@@ -1173,7 +1213,6 @@ pub async fn materialize_subscription_collection(
                     crate::duplicates::quality::ImageQualityDecision::LeftBetter => {
                         let merge = merge_existing_import_target(
                             canonical_db,
-                            Some(legacy_db),
                             &existing,
                             &request,
                         )
@@ -1266,11 +1305,18 @@ pub async fn materialize_subscription_collection(
                     member.perceptual_hash.is_some(),
                 );
                 if !work_types.is_empty() {
-                    canonical_db.enqueue_deferred_jobs(&member.entity_hash, &work_types)?;
+                    canonical_db.ensure_deferred_jobs_present(&member.entity_hash, &work_types)?;
                 }
             }
             resolved_members.push(identity);
         }
+        let _ = crate::background_work::ensure_missing_color_analysis_jobs(
+            canonical_db,
+            &resolved_members
+                .iter()
+                .map(|member| member.entity_hash.clone())
+                .collect::<Vec<_>>(),
+        );
         return Ok(SubscriptionCollectionOutcome {
             collection_id: None,
             collection_hash: None,
@@ -1315,12 +1361,17 @@ pub async fn materialize_subscription_collection(
         .filter(|(_, work_types)| !work_types.is_empty())
         .collect();
     if !batch.is_empty() {
-        canonical_db.enqueue_deferred_jobs_batch(batch)?;
+        canonical_db.ensure_deferred_jobs_present_batch(batch)?;
     }
 
-    let _ = legacy_db
-        .upsert_subscription_post_collection(subscription_id, site_category, post_id, collection_id)
-        .await;
+    upsert_subscription_post_collection_association(
+        canonical_db,
+        subscription_id,
+        site_category,
+        post_id,
+        collection_id,
+    )
+    .await;
 
     for (new_hash, candidates) in &pending_review_pairs {
         let Some(new_target) = canonical_db.get_existing_import_target_by_entity_hash(new_hash)?
@@ -1357,6 +1408,13 @@ pub async fn materialize_subscription_collection(
     imported_hashes.extend(new_hashes);
     resolved_members.extend(new_member_results);
     flags.status_changed = true;
+    let _ = crate::background_work::ensure_missing_color_analysis_jobs(
+        canonical_db,
+        &resolved_members
+            .iter()
+            .map(|member| member.entity_hash.clone())
+            .collect::<Vec<_>>(),
+    );
     Ok(SubscriptionCollectionOutcome {
         collection_id: Some(collection_id),
         collection_hash: Some(collection_hash),

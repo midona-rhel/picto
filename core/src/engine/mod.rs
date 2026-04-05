@@ -48,6 +48,10 @@ impl ApplicationEngine {
         &self.db
     }
 
+    pub(crate) fn db_arc(&self) -> Arc<LibraryDatabase> {
+        self.db.clone()
+    }
+
     /// Commit a write result: emit a state-change event and schedule projection work.
     /// Every engine write method calls this after the db write succeeds.
     fn commit_write(&self, change: &WriteChange) {

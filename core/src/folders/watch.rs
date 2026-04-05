@@ -11,7 +11,6 @@ use tokio_util::sync::CancellationToken;
 use crate::blob_store::BlobStore;
 use crate::db::LibraryDatabase;
 use crate::events::{self, ManualImportProgressEvent};
-use crate::sqlite::SqliteDatabase;
 
 const WATCH_DEBOUNCE: Duration = Duration::from_millis(700);
 const WATCH_SWEEP_INTERVAL: Duration = Duration::from_millis(250);
@@ -52,7 +51,6 @@ pub fn channel() -> (
 }
 
 pub fn spawn_worker(
-    db: Arc<SqliteDatabase>,
     canonical_db: Arc<LibraryDatabase>,
     blob_store: Arc<BlobStore>,
     mut command_rx: UnboundedReceiver<FolderWatchCommand>,
@@ -60,7 +58,7 @@ pub fn spawn_worker(
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel::<RawWatchEvent>();
-        let mut runtime = FolderWatchRuntime::new(db, canonical_db, blob_store, event_tx);
+        let mut runtime = FolderWatchRuntime::new(canonical_db, blob_store, event_tx);
         runtime.reload().await;
         let mut sweep = tokio::time::interval(WATCH_SWEEP_INTERVAL);
 
@@ -87,7 +85,6 @@ pub fn spawn_worker(
 }
 
 pub async fn import_existing_for_folder_watch(
-    db: &SqliteDatabase,
     canonical_db: &LibraryDatabase,
     blob_store: &BlobStore,
     folder_id: i64,
@@ -107,7 +104,6 @@ pub async fn import_existing_for_folder_watch(
 
     for (index, path) in file_paths.iter().enumerate() {
         process_import_path(
-            db,
             canonical_db,
             blob_store,
             folder_id,
@@ -132,7 +128,6 @@ pub async fn import_existing_for_folder_watch(
 }
 
 struct FolderWatchRuntime {
-    db: Arc<SqliteDatabase>,
     canonical_db: Arc<LibraryDatabase>,
     blob_store: Arc<BlobStore>,
     event_tx: UnboundedSender<RawWatchEvent>,
@@ -143,13 +138,11 @@ struct FolderWatchRuntime {
 
 impl FolderWatchRuntime {
     fn new(
-        db: Arc<SqliteDatabase>,
         canonical_db: Arc<LibraryDatabase>,
         blob_store: Arc<BlobStore>,
         event_tx: UnboundedSender<RawWatchEvent>,
     ) -> Self {
         Self {
-            db,
             canonical_db,
             blob_store,
             event_tx,
@@ -273,7 +266,6 @@ impl FolderWatchRuntime {
                 continue;
             }
             match process_import_path(
-                &self.db,
                 &self.canonical_db,
                 &self.blob_store,
                 config.folder_id,
@@ -385,7 +377,6 @@ fn collect_existing_paths(root_path: &Path, recursive: bool) -> Result<Vec<PathB
 }
 
 async fn process_import_path(
-    db: &SqliteDatabase,
     canonical_db: &LibraryDatabase,
     blob_store: &BlobStore,
     folder_id: i64,
@@ -404,10 +395,8 @@ async fn process_import_path(
     }
 
     let _ = blob_store;
-    let _ = canonical_db;
     crate::ingest_queue::enqueue_watch_path(
         canonical_db,
-        db,
         folder_id,
         root_path,
         watch_subfolders,

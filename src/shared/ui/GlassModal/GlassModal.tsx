@@ -5,7 +5,7 @@
  * centered modal for forms and confirmations.
  */
 
-import { useEffect, type ReactNode } from 'react';
+import { useEffect, useState, useCallback, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { IconX } from '@tabler/icons-react';
 import styles from './GlassModal.module.css';
@@ -22,29 +22,49 @@ export interface GlassModalProps {
   children: ReactNode;
 }
 
+const EXIT_MS = 120;
+
 export function GlassModal({ open, onClose, title, size = 'md', flush = false, footer, children }: GlassModalProps) {
+  const [visible, setVisible] = useState(false);
+  const [closing, setClosing] = useState(false);
+
+  // Open: mount immediately
   useEffect(() => {
-    if (!open) return;
+    if (open) { setVisible(true); setClosing(false); }
+  }, [open]);
+
+  const startClose = useCallback(() => {
+    if (closing) return;
+    setClosing(true);
+    setTimeout(() => { setVisible(false); setClosing(false); onClose(); }, EXIT_MS);
+  }, [closing, onClose]);
+
+  // Escape to close
+  useEffect(() => {
+    if (!visible) return;
     const handler = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') { e.stopPropagation(); onClose(); }
+      if (e.key === 'Escape') { e.stopPropagation(); startClose(); }
     };
     window.addEventListener('keydown', handler, true);
     return () => window.removeEventListener('keydown', handler, true);
-  }, [open, onClose]);
+  }, [visible, startClose]);
 
-  if (!open) return null;
+  if (!visible) return null;
 
   const sizeClass = size === 'sm' ? styles.sm : size === 'lg' ? styles.lg : styles.md;
 
   return createPortal(
-    <div className={styles.backdrop} onClick={onClose}>
+    <div
+      className={`${styles.backdrop} ${closing ? styles.backdropClosing : ''}`}
+      onClick={startClose}
+    >
       <div
-        className={`${styles.panel} ${sizeClass}`}
+        className={`${styles.panel} ${sizeClass} ${closing ? styles.panelClosing : ''}`}
         onClick={(e) => e.stopPropagation()}
       >
         <div className={styles.header}>
           <span className={styles.title}>{title}</span>
-          <button className={styles.closeBtn} onClick={onClose} type="button" title="Close">
+          <button className={styles.closeBtn} onClick={startClose} type="button" title="Close">
             <IconX size={14} />
           </button>
         </div>

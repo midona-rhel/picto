@@ -46,6 +46,9 @@ export function computeLayout(
     return { positions: [], totalHeight: 0 };
   }
 
+  // Snap target size to 50px increments for consistent column counts.
+  const snappedSize = Math.max(50, Math.round(targetSize / 50) * 50);
+
   // The containerWidth is clientWidth (excludes scrollbar). But visually
   // the scrollbar sits between the grid and the window edge. To make the
   // visual left margin equal the visual right margin (gap to window edge),
@@ -53,7 +56,7 @@ export function computeLayout(
   // grid within that, then clamp to containerWidth.
   const fullWidth = containerWidth + scrollbarWidth;
   const minInnerWidth = fullWidth - 2 * gap;
-  const columnCount = Math.max(1, Math.round((minInnerWidth + gap) / (targetSize + gap)));
+  const columnCount = Math.max(1, Math.round((minInnerWidth + gap) / (snappedSize + gap)));
   const colWidth = Math.floor((minInnerWidth - (columnCount - 1) * gap) / columnCount);
   const usedWidth = columnCount * colWidth + (columnCount - 1) * gap;
   const offsetX = Math.floor((fullWidth - usedWidth) / 2);
@@ -62,7 +65,7 @@ export function computeLayout(
   if (viewMode === 'grid') {
     result = layoutGrid(aspectRatios.length, colWidth, columnCount, gap, textHeight);
   } else if (viewMode === 'justified') {
-    result = layoutJustified(aspectRatios, usedWidth, targetSize, gap, textHeight);
+    result = layoutJustified(aspectRatios, usedWidth, snappedSize, gap, textHeight);
   } else {
     result = layoutWaterfall(aspectRatios, colWidth, columnCount, gap, textHeight);
   }
@@ -183,8 +186,15 @@ function layoutJustified(
 
     let x = 0;
     for (let i = rowStart; i < rowEnd; i++) {
-      const w = finalHeight * safeAspectRatio(aspectRatios[i]);
-      positions[i] = { x, y, w, h: cellH };
+      const ar = safeAspectRatio(aspectRatios[i]);
+      let w = finalHeight * ar;
+      let h = cellH;
+      // Wide panoramas: cap width to container, shrink height to preserve aspect ratio.
+      if (w > containerWidth) {
+        w = containerWidth;
+        h = w / ar + textHeight;
+      }
+      positions[i] = { x, y, w, h };
       x += w + gap;
     }
 

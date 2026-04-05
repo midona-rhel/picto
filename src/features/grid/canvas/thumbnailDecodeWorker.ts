@@ -58,8 +58,12 @@ function handlePlan(entries: PlanEntry[]): void {
   }
 
   // Forget revealed hashes that left the plan (so they re-decode on re-entry)
+  // Also re-fetch if the URL changed (quality upgrade/downgrade)
   for (const hash of revealed) {
-    if (!next.has(hash)) revealed.delete(hash);
+    if (!next.has(hash)) { revealed.delete(hash); continue; }
+    const oldUrl = currentPlan.get(hash);
+    const newUrl = next.get(hash);
+    if (oldUrl && newUrl && oldUrl !== newUrl) revealed.delete(hash);
   }
 
   currentPlan.clear();

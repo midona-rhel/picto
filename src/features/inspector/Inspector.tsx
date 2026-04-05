@@ -1,19 +1,14 @@
 /**
- * Inspector panel — persistent right-hand context surface for grid view.
+ * Inspector panel — shows info about what's currently in focus.
  *
- * Entity mode renders a committed displayed entity snapshot.
- * Scope mode renders a committed displayed grid snapshot.
+ * - Nothing selected → current scope (folder / system view)
+ * - One item selected → that item's full details
+ * - Multiple items selected → shared tags/folders from backend
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useAtomValue, getDefaultStore } from 'jotai';
-
-const store = getDefaultStore();
-import {
-  IconAlertCircle,
-  IconFolder,
-  IconPlus,
-} from '@tabler/icons-react';
+import { IconAlertCircle, IconFolder, IconPlus } from '@tabler/icons-react';
 import { ColorPalette } from '../../shared/ui/ColorPalette';
 import * as api from '../../platform/api';
 import * as entityMutations from '../../controllers/entityMutations';
@@ -22,6 +17,7 @@ import { InspectorSection } from '../../shared/ui/InspectorSection/InspectorSect
 import { StarRating } from '../../shared/ui/StarRating/StarRating';
 import { InspectorField, InspectorSourceField } from '../../shared/ui/InspectorField/InspectorField';
 import { TagChip } from '../../shared/ui/TagChip/TagChip';
+import type { SelectionSummary } from '../../shared/types/canonical';
 import {
   displayedInspectorEntityDataAtom,
   displayedInspectorTargetAtom,
@@ -35,602 +31,369 @@ import { sidebarNodesAtom } from '../../state/sidebar';
 import { tagSelectPortalAtom, folderPickerPortalAtom } from '../../state/portals';
 import styles from './Inspector.module.css';
 
-function formatFileSize(bytes: number): string {
+const store = getDefaultStore();
+
+// ── Formatters ──────────────────────────────────────────────────
+
+function fmtSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-  return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+  if (bytes < 1048576) return `${(bytes / 1024).toFixed(1)} KB`;
+  if (bytes < 1073741824) return `${(bytes / 1048576).toFixed(1)} MB`;
+  return `${(bytes / 1073741824).toFixed(2)} GB`;
 }
 
-function formatDateTime(iso: string | null | undefined): string | null {
+function fmtDate(iso: string | null | undefined): string | null {
   if (!iso) return null;
-  try {
-    return new Date(iso).toLocaleDateString(undefined, {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric',
-    });
-  } catch {
-    return iso;
-  }
+  try { return new Date(iso).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' }); }
+  catch { return iso; }
 }
 
-function formatDuration(ms: number): string {
+function fmtDuration(ms: number): string {
   const s = Math.floor(ms / 1000);
   const m = Math.floor(s / 60);
   const sec = s % 60;
-  if (m >= 60) {
-    const h = Math.floor(m / 60);
-    return `${h}:${String(m % 60).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
-  }
+  if (m >= 60) return `${Math.floor(m / 60)}:${String(m % 60).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
   return `${m}:${String(sec).padStart(2, '0')}`;
 }
 
-const MIME_EXT_MAP: Record<string, string> = {
+const EXT: Record<string, string> = {
   jpeg: 'JPG', png: 'PNG', gif: 'GIF', webp: 'WEBP', 'svg+xml': 'SVG',
   bmp: 'BMP', tiff: 'TIFF', avif: 'AVIF', heic: 'HEIC', heif: 'HEIF',
   mp4: 'MP4', webm: 'WEBM', quicktime: 'MOV', 'x-matroska': 'MKV',
-  'x-msvideo': 'AVI', 'x-flv': 'FLV',
   pdf: 'PDF', 'epub+zip': 'EPUB',
 };
+function fmtExt(mime: string) { const s = mime.split('/')[1] ?? ''; return EXT[s] ?? s.replace(/^x-/, '').toUpperCase(); }
 
-function getFileExt(mime: string): string {
-  const sub = mime.split('/')[1] ?? '';
-  return MIME_EXT_MAP[sub] ?? sub.replace(/^x-/, '').toUpperCase();
-}
-
-const NS_ORDER: Record<string, number> = {
-  creator: 0, studio: 1, series: 2, character: 3, person: 4,
-  species: 5, meta: 6, system: 7, '': 8, default: 8,
-};
-
-
-function tagSortKey(ns: string, sub: string): string {
-  return `${(NS_ORDER[ns.toLowerCase()] ?? 7).toString().padStart(2, '0')}:${sub.toLowerCase()}`;
-}
-
-function formatLabel(value: string): string {
-  return value.replace(/_/g, ' ').replace(/\b\w/g, (match) => match.toUpperCase());
-}
+const NS_ORDER: Record<string, number> = { creator: 0, studio: 1, series: 2, character: 3, person: 4, species: 5, meta: 6, system: 7, '': 8, default: 8 };
+function tagKey(ns: string, sub: string) { return `${(NS_ORDER[ns.toLowerCase()] ?? 7).toString().padStart(2, '0')}:${sub.toLowerCase()}`; }
 
 function hexToRgb(hex: string | null | undefined): [number, number, number] {
-  if (!hex) return [134, 142, 150]; // default gray
+  if (!hex) return [134, 142, 150];
   const h = hex.replace('#', '');
-  return [
-    parseInt(h.substring(0, 2), 16),
-    parseInt(h.substring(2, 4), 16),
-    parseInt(h.substring(4, 6), 16),
-  ];
+  return [parseInt(h.substring(0, 2), 16), parseInt(h.substring(2, 4), 16), parseInt(h.substring(4, 6), 16)];
 }
 
-
-function ScopePreview({ items }: { items: Array<{ thumbnail_hash: string; entity_hash: string }> }) {
-  const thumbs = items.slice(0, 4);
-  const hasImages = thumbs.length > 0;
-
-  return (
-    <div className={styles.thumbnail}>
-      <div className={styles.pic3} />
-      <div className={styles.pic2} />
-      <div className={styles.pic1}>
-        {hasImages ? (
-          <div className={styles.collage}>
-            {[0, 1, 2, 3].map((i) => {
-              const item = thumbs[i];
-              return (
-                <div key={i} className={styles.collageCell}>
-                  {item && <img src={`media://localhost/thumb/${item.thumbnail_hash}.jpg`} alt="" draggable={false} />}
-                </div>
-              );
-            })}
-          </div>
-        ) : (
-          <div className={styles.folderPlaceholder}>
-            <IconFolder size={32} stroke={1} />
-          </div>
-        )}
-      </div>
-    </div>
-  );
+function parseTag(t: string) {
+  const i = t.indexOf(':');
+  return i > 0 ? { ns: t.slice(0, i), sub: t.slice(i + 1), raw: t } : { ns: '', sub: t, raw: t };
 }
 
+// ── Portal opener ───────────────────────────────────────────────
 
-function TagInput({ onAdd }: { onAdd: (tag: string) => void }) {
-  const [value, setValue] = useState('');
-  const [open, setOpen] = useState(false);
-  const inputRef = useRef<HTMLInputElement>(null);
-
-  const commit = useCallback(() => {
-    const trimmed = value.trim();
-    if (trimmed) {
-      onAdd(trimmed);
-      setValue('');
-    }
-    setOpen(false);
-  }, [value, onAdd]);
-
-  if (!open) {
-    return (
-      <button
-        className={styles.tagAddBtn}
-        onClick={() => { setOpen(true); setTimeout(() => inputRef.current?.focus(), 0); }}
-        type="button"
-        title="Add tag"
-      >
-        <IconPlus size={14} stroke={1.5} />
-      </button>
-    );
-  }
-
-  return (
-    <input
-      ref={inputRef}
-      className={styles.tagInput}
-      value={value}
-      placeholder="tag"
-      onChange={(e) => setValue(e.target.value)}
-      onKeyDown={(e) => {
-        if (e.key === 'Enter') commit();
-        if (e.key === 'Escape') { setValue(''); setOpen(false); }
-      }}
-      onBlur={commit}
-    />
-  );
+function openPortal(e: React.MouseEvent, atom: typeof tagSelectPortalAtom) {
+  const btn = e.currentTarget.getBoundingClientRect();
+  const panel = e.currentTarget.closest('[class*="inspector"]') as HTMLElement | null;
+  const x = panel ? panel.getBoundingClientRect().left : btn.left;
+  store.set(atom, { open: true, anchor: { x, y: btn.top } });
 }
 
-function EntityInspector() {
-  const data = useAtomValue(displayedInspectorEntityDataAtom);
-  const loading = useAtomValue(inspectorLoadingAtom);
-  const error = useAtomValue(inspectorErrorAtom);
-  const sidebarNodes = useAtomValue(sidebarNodesAtom);
+// ── Preview components ──────────────────────────────────────────
 
-  if (loading && !data) {
+function Preview({ hashes, type }: { hashes: string[]; type: 'single' | 'collage' | 'stacked' }) {
+  if (type === 'single' && hashes[0]) {
     return (
-      <div className={styles.empty}>
-        <span className={styles.emptyText}>Loading…</span>
-      </div>
-    );
-  }
-
-  if (error && !data) {
-    return (
-      <div className={styles.empty}>
-        <IconAlertCircle size={20} stroke={1.5} className={styles.errorIcon} />
-        <span className={styles.errorText}>{error}</span>
-      </div>
-    );
-  }
-
-  if (!data) return null;
-
-  const isCollection = data.entity_kind === 'collection';
-  const ext = getFileExt(data.mime_type);
-  const dims =
-    data.pixel_width && data.pixel_height
-      ? `${data.pixel_width} × ${data.pixel_height}`
-      : null;
-  const sortedTags = [...(data.tags ?? [])].sort((a, b) =>
-    tagSortKey(a.namespace, a.subtag).localeCompare(tagSortKey(b.namespace, b.subtag)),
-  );
-  const sourceUrls = data.source_urls ?? [];
-  const folders = data.folders ?? [];
-
-  return (
-    <div className={styles.contentStack}>
       <div className={styles.preview}>
         <div className={styles.previewFrame}>
-          <img
-            src={`media://localhost/thumb/${data.thumbnail_hash}.jpg`}
-            alt={data.name ?? ''}
-            className={styles.previewImage}
-            draggable={false}
-          />
+          <img src={`media://localhost/thumb/${hashes[0]}.jpg`} alt="" className={styles.previewImage} draggable={false} />
           <div className={styles.previewGlass} />
         </div>
       </div>
+    );
+  }
 
-      <ColorPalette colors={data.dominant_color_hex ? [data.dominant_color_hex] : []} />
-
-      <div className={styles.fieldStack}>
-        <InspectorField
-          value={data.name ?? ''}
-          placeholder="Name"
-          onCommit={(name) => { void entityMutations.setEntityName(data.entity_hash, name); }}
-        />
-        <InspectorField
-          value={typeof data.notes === 'string' ? data.notes : ''}
-          placeholder="Notes"
-
-          onCommit={(text) => { void entityMutations.setEntityNotes(data.entity_hash, text); }}
-        />
-        <InspectorSourceField
-          urls={sourceUrls}
-          onChange={(urls) => { void entityMutations.setEntitySourceUrls(data.entity_hash, urls); }}
-        />
+  if (type === 'collage') {
+    return (
+      <div className={styles.thumbnail}>
+        <div className={styles.pic3} />
+        <div className={styles.pic2} />
+        <div className={styles.pic1}>
+          {hashes.length > 0 ? (
+            <div className={styles.collage}>
+              {[0, 1, 2, 3].map((i) => (
+                <div key={i} className={styles.collageCell}>
+                  {hashes[i] && <img src={`media://localhost/thumb/${hashes[i]}.jpg`} alt="" draggable={false} />}
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className={styles.folderPlaceholder}><IconFolder size={32} stroke={1} /></div>
+          )}
+        </div>
       </div>
+    );
+  }
 
-      <InspectorSection title="Tags" count={sortedTags.length}>
-        <div className={styles.tagsWrap}>
-          {sortedTags.map((tag) => {
-            const rawTag = tag.namespace && tag.namespace !== 'default' ? `${tag.namespace}:${tag.subtag}` : tag.subtag;
-            return (
-              <TagChip
-                key={rawTag}
-                namespace={tag.namespace}
-                subtag={tag.subtag}
-                onRemove={() => { void entityMutations.removeEntityTags(data.entity_hash, [rawTag]); }}
-              />
-            );
-          })}
-          <button className={styles.tagAddBtn} onClick={(e) => { const btn = e.currentTarget.getBoundingClientRect(); const panel = e.currentTarget.closest('[class*="inspector"]') as HTMLElement | null; const x = panel ? panel.getBoundingClientRect().left : btn.left; store.set(tagSelectPortalAtom, { open: true, anchor: { x, y: btn.top } }); }} type="button" title="Add tag"><IconPlus size={14} stroke={1.5} /></button>
-        </div>
-      </InspectorSection>
-
-      <InspectorSection title="Folders" count={folders.length}>
-        <div className={styles.foldersWrap}>
-          {folders.map((folder) => {
-            const node = sidebarNodes.find((n) => n.id === `folder:${folder.folder_id}`);
-            return (
-              <TagChip
-                key={folder.folder_id}
-                namespace=""
-                subtag={node?.name ?? folder.name}
-                colorRgb={hexToRgb(node?.color)}
-                onRemove={() => { void entityMutations.removeEntityFromFolder(data.entity_hash, folder.folder_id); }}
-              />
-            );
-          })}
-          <button
-            className={styles.tagAddBtn}
-            onClick={(e) => {
-              const btn = e.currentTarget.getBoundingClientRect(); const panel = e.currentTarget.closest('[class*="inspector"]') as HTMLElement | null; const x = panel ? panel.getBoundingClientRect().left : btn.left; store.set(folderPickerPortalAtom, { open: true, anchor: { x, y: btn.top } });
-            }}
-            type="button"
-            title="Add to folder"
-          >
-            <IconPlus size={14} stroke={1.5} />
-          </button>
-        </div>
-      </InspectorSection>
-
-      <InspectorSection title="Properties">
-        <div className={styles.propsStack}>
-          <StarRating
-            value={data.rating ?? 0}
-            onChange={(rating) => { void entityMutations.setEntityRating(data.entity_hash, rating); }}
-          />
-
-          {!isCollection && (
-            <>
-              <PropertyRow label="Dimensions" value={dims} mono />
-              <PropertyRow label="Size" value={formatFileSize(data.size_bytes)} mono />
-              <PropertyRow label="Type" value={ext} title={data.mime_type} />
-              {data.duration_ms != null && data.duration_ms > 0 && (
-                <PropertyRow label="Duration" value={formatDuration(data.duration_ms)} mono />
-              )}
-            </>
-          )}
-
-          {isCollection && (
-            <>
-              <PropertyRow label="Items" value={data.member_count?.toLocaleString() ?? '0'} mono />
-              <PropertyRow
-                label="Total size"
-                value={data.total_size_bytes != null ? formatFileSize(data.total_size_bytes) : '—'}
-                mono
-              />
-            </>
-          )}
-
-          <PropertyRow label="Date added" value={formatDateTime(data.date_added)} mono />
-          <PropertyRow label="Date created" value={formatDateTime(data.date_created)} mono />
-          <PropertyRow label="Date modified" value={formatDateTime(data.date_modified)} mono />
-        </div>
-      </InspectorSection>
-    </div>
-  );
-}
-
-function ScopeInspector() {
-  const vm = useAtomValue(scopeInspectorViewModelAtom);
-  if (!vm) return null;
-
-  const isSystem = vm.node.kind === 'system';
-  const isFolder = vm.node.kind === 'folder';
-  const isSmartFolder = vm.node.kind === 'smart_folder';
-  const canEditFields = !isSystem;
-
-  const notesValue =
-    isSystem
-      ? vm.description
-      : vm.folder?.notes ?? vm.smartFolder?.notes ?? null;
-
-  const saveName = async (nextValue: string) => {
-    if (vm.folder?.folderId != null) {
-      await api.renameFolder(vm.folder.folderId, nextValue);
-      return;
-    }
-    if (vm.smartFolder?.smartFolderId != null) {
-      await api.updateSmartFolder({
-        id: String(vm.smartFolder.smartFolderId),
-        folder: {
-          smart_folder_id: vm.smartFolder.smartFolderId,
-          name: nextValue,
-          parent_id: vm.smartFolder.parentId ?? null,
-          icon: vm.node.icon ?? null,
-          color: vm.node.color ?? null,
-          notes: vm.smartFolder.notes ?? null,
-          predicate_json: JSON.stringify(vm.smartFolder.predicate ?? { groups: [] }),
-          sort_field: vm.smartFolder.sortField ?? null,
-          sort_order: vm.smartFolder.sortOrder ?? null,
-          display_order: vm.node.sort_order ?? null,
-          created_at: null,
-          updated_at: null,
-        },
-      });
-    }
-  };
-
-  const saveNotes = async (nextValue: string) => {
-    if (vm.folder?.folderId != null) {
-      await api.updateFolder(vm.folder.folderId, { notes: nextValue || null });
-      return;
-    }
-    if (vm.smartFolder?.smartFolderId != null) {
-      await api.updateSmartFolder({
-        id: String(vm.smartFolder.smartFolderId),
-        folder: {
-          smart_folder_id: vm.smartFolder.smartFolderId,
-          name: vm.node.name,
-          parent_id: vm.smartFolder.parentId ?? null,
-          icon: vm.node.icon ?? null,
-          color: vm.node.color ?? null,
-          notes: nextValue || null,
-          predicate_json: JSON.stringify(vm.smartFolder.predicate ?? { groups: [] }),
-          sort_field: vm.smartFolder.sortField ?? null,
-          sort_order: vm.smartFolder.sortOrder ?? null,
-          display_order: vm.node.sort_order ?? null,
-          created_at: null,
-          updated_at: null,
-        },
-      });
-    }
-  };
-
-  const sizeDisplay = vm.totalSizeBytes != null && vm.totalSizeBytes > 0
-    ? formatFileSize(vm.totalSizeBytes)
-    : vm.totalSizeBytes === 0 ? '0' : null;
-
-  return (
-    <div className={styles.contentStack}>
-      <div className={styles.preview}>
-        <ScopePreview items={vm.previewItems} />
-      </div>
-
-      <ColorPalette colors={[]} />
-
-      <div className={styles.fieldStack}>
-        <InspectorField
-          value={vm.node.name}
-          placeholder="Name"
-          readOnly={isSystem}
-          onCommit={canEditFields ? (name) => { void saveName(name); } : undefined}
-        />
-        <InspectorField
-          value={notesValue ?? ''}
-          placeholder="Notes"
-
-          readOnly={isSystem}
-          onCommit={canEditFields ? (text) => { void saveNotes(text); } : undefined}
-        />
-      </div>
-
-      <InspectorSection title="Properties">
-        <div className={styles.propsStack}>
-          <PropertyRow label="Items" value={vm.totalCount.toLocaleString()} mono />
-          <PropertyRow label="Size" value={sizeDisplay} mono />
-          {vm.searchText && <PropertyRow label="Search" value={vm.searchText} />}
-          {isFolder && (
-            <>
-              <PropertyRow label="Auto tags" value={vm.folder!.autoTags.length > 0 ? 'Yes' : 'No'} />
-              <PropertyRow label="Watch" value={vm.folder!.watchEnabled ? 'Yes' : 'No'} />
-            </>
-          )}
-          {isSmartFolder && (
-            <PropertyRow
-              label="Sort"
-              value={
-                vm.smartFolder?.sortField
-                  ? `${formatLabel(vm.smartFolder.sortField)}${
-                      vm.smartFolder.sortOrder ? ` ${vm.smartFolder.sortOrder.toUpperCase()}` : ''
-                    }`
-                  : null
-              }
-            />
-          )}
-        </div>
-      </InspectorSection>
-    </div>
-  );
-}
-
-function StackedPreview({ hashes }: { hashes: string[] }) {
+  // Stacked
   const items = useAtomValue(gridItemsAtom);
-  const previewItems = hashes
-    .slice(0, 3)
-    .map((h) => items.find((it) => it.entity_hash === h))
-    .filter(Boolean) as typeof items;
-
-  if (previewItems.length === 0) return null;
-
-  const rotations = [-4, 2, 0];
-  const offsets = [{ x: -8, y: 4 }, { x: 6, y: -3 }, { x: 0, y: 0 }];
-  const startIdx = 3 - previewItems.length;
-
+  const previews = hashes.slice(0, 3).map((h) => items.find((it) => it.entity_hash === h)).filter(Boolean);
+  if (previews.length === 0) return null;
+  const rots = [-4, 2, 0];
+  const offs = [{ x: -8, y: 4 }, { x: 6, y: -3 }, { x: 0, y: 0 }];
+  const start = 3 - previews.length;
   return (
     <div className={styles.preview}>
       <div className={styles.stackContainer}>
-        {previewItems.map((item, i) => {
-          const idx = startIdx + i;
-          const isTop = i === previewItems.length - 1;
-          const thumbHash = item.thumbnail_hash ?? item.entity_hash;
-          return (
-            <div
-              key={item.entity_hash}
-              className={styles.stackItem}
-              style={{
-                transform: `rotate(${rotations[idx]}deg) translate(${offsets[idx].x}px, ${offsets[idx].y}px)`,
-                zIndex: i,
-                filter: isTop ? undefined : 'brightness(0.7)',
-              }}
-            >
-              <div className={styles.previewFrame}>
-                <img
-                  src={`media://localhost/thumb/${thumbHash}.jpg`}
-                  alt=""
-                  className={styles.previewImage}
-                  draggable={false}
-                />
-                <div className={styles.previewGlass} />
-              </div>
+        {previews.map((item, i) => (
+          <div key={item!.entity_hash} className={styles.stackItem} style={{
+            transform: `rotate(${rots[start + i]}deg) translate(${offs[start + i].x}px, ${offs[start + i].y}px)`,
+            zIndex: i, filter: i === previews.length - 1 ? undefined : 'brightness(0.7)',
+          }}>
+            <div className={styles.previewFrame}>
+              <img src={`media://localhost/thumb/${(item!.thumbnail_hash ?? item!.entity_hash)}.jpg`} alt="" className={styles.previewImage} draggable={false} />
+              <div className={styles.previewGlass} />
             </div>
-          );
-        })}
+          </div>
+        ))}
       </div>
     </div>
   );
 }
 
-function MultiSelectInspector({
-  count,
-  selectionMode,
-}: {
-  count: number;
-  selectionMode: 'explicit' | 'query_results';
-}) {
+// ── Multi-select summary hook ───────────────────────────────────
+
+function useSelectionSummary() {
   const target = useAtomValue(selectionTargetAtom);
-  const sidebarNodes = useAtomValue(sidebarNodesAtom);
   const selectedHashes = useAtomValue(selectedEntityHashesAtom);
-  const [summary, setSummary] = useState<import('../../shared/types/canonical').SelectionSummary | null>(null);
+  const [summary, setSummary] = useState<SelectionSummary | null>(null);
+  const [ready, setReady] = useState(false);
 
-  // Fetch selection summary whenever target changes
+  const fingerprint = [...selectedHashes].sort().join(',');
+
   useEffect(() => {
-    if (!target) { setSummary(null); return; }
+    if (!target || selectedHashes.size < 2) {
+      setSummary(null);
+      setReady(true); // nothing to wait for
+      return;
+    }
     let stale = false;
+    // Don't clear summary — keep old data visible until new arrives
+    setReady(false);
     void entityMutations.getTargetSelectionSummary(target).then((s) => {
-      if (!stale) setSummary(s);
-    }).catch(() => {});
+      if (!stale) { setSummary(s); setReady(true); }
+    }).catch(() => { if (!stale) setReady(true); });
     return () => { stale = true; };
-  }, [target]);
+  }, [fingerprint]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  if (!target) return null;
+  return { target, selectedHashes, summary, ready };
+}
 
-  const isVirtualAll = selectionMode === 'query_results';
-  const sharedRating = summary?.stats?.rating_stats?.shared ?? null;
-  const totalSize = summary?.stats?.total_size_bytes;
-  const sharedTags = summary?.shared_tags ?? [];
-  const topTags = summary?.top_tags ?? [];
-  const sharedFolders = summary?.shared_folders ?? [];
-  const previewHashes = summary?.sample_hashes ?? [...selectedHashes].slice(0, 3);
+// ── Main component ──────────────────────────────────────────────
+
+export function Inspector() {
+  const inspectorTarget = useAtomValue(displayedInspectorTargetAtom);
+  const loading = useAtomValue(inspectorLoadingAtom);
+  const error = useAtomValue(inspectorErrorAtom);
+  const entityData = useAtomValue(displayedInspectorEntityDataAtom);
+  const scopeVM = useAtomValue(scopeInspectorViewModelAtom);
+  const sidebarNodes = useAtomValue(sidebarNodesAtom);
+  const { target: selTarget, selectedHashes, summary, ready: multiReady } = useSelectionSummary();
+
+  if (inspectorTarget.kind === 'none') return null;
+
+  // ── Single entity ─────────────────────────────────────────────
+  if (inspectorTarget.kind === 'entity') {
+    if (loading && !entityData) return <Shell><div className={styles.empty}><span className={styles.emptyText}>Loading...</span></div></Shell>;
+    if (error && !entityData) return <Shell><div className={styles.empty}><IconAlertCircle size={20} stroke={1.5} className={styles.errorIcon} /><span className={styles.errorText}>{error}</span></div></Shell>;
+    if (!entityData) return null;
+
+    const d = entityData;
+    const isCollection = d.entity_kind === 'collection';
+    const tags = [...(d.tags ?? [])].sort((a, b) => tagKey(a.namespace, a.subtag).localeCompare(tagKey(b.namespace, b.subtag)));
+    const folders = (d.folders ?? []).map((f) => {
+      const n = sidebarNodes.find((s) => s.id === `folder:${f.folder_id}`);
+      return { id: f.folder_id, name: n?.name ?? f.name, color: n?.color ?? null };
+    });
+    const palette = (d.dominant_colors ?? []).map((c) => c.hex).filter((h): h is string => !!h && h.length > 0);
+
+    return (
+      <Shell>
+        <Preview hashes={[d.thumbnail_hash]} type="single" />
+        <ColorPalette colors={palette.length > 0 ? palette : d.dominant_color_hex ? [d.dominant_color_hex] : []} />
+
+        <div className={styles.fieldStack}>
+          <InspectorField value={d.name ?? ''} placeholder="Name" onCommit={(v) => { void entityMutations.setEntityName(d.entity_hash, v); }} />
+          <InspectorField value={typeof d.notes === 'string' ? d.notes : ''} placeholder="Notes" onCommit={(v) => { void entityMutations.setEntityNotes(d.entity_hash, v); }} />
+          <InspectorSourceField urls={d.source_urls ?? []} onChange={(urls) => { void entityMutations.setEntitySourceUrls(d.entity_hash, urls); }} />
+        </div>
+
+        <TagsSection
+          tags={tags.map((t) => ({ ns: t.namespace, sub: t.subtag, raw: t.namespace && t.namespace !== 'default' ? `${t.namespace}:${t.subtag}` : t.subtag }))}
+          onRemove={(raw) => { void entityMutations.removeEntityTags(d.entity_hash, [raw]); }}
+        />
+
+        <FoldersSection
+          folders={folders}
+          onRemove={(fid) => { void entityMutations.removeEntityFromFolder(d.entity_hash, fid); }}
+        />
+
+        <InspectorSection title="Properties">
+          <div className={styles.propsStack}>
+            <StarRating value={d.rating ?? 0} onChange={(r) => { void entityMutations.setEntityRating(d.entity_hash, r); }} />
+            {!isCollection && d.pixel_width && d.pixel_height && <PropertyRow label="Dimensions" value={`${d.pixel_width} × ${d.pixel_height}`} mono />}
+            {!isCollection && <PropertyRow label="Size" value={fmtSize(d.size_bytes)} mono />}
+            {!isCollection && <PropertyRow label="Type" value={fmtExt(d.mime_type)} title={d.mime_type} />}
+            {!isCollection && d.duration_ms != null && d.duration_ms > 0 && <PropertyRow label="Duration" value={fmtDuration(d.duration_ms)} mono />}
+            {isCollection && <PropertyRow label="Items" value={d.member_count?.toLocaleString() ?? '0'} mono />}
+            {isCollection && d.total_size_bytes != null && <PropertyRow label="Total size" value={fmtSize(d.total_size_bytes)} mono />}
+            <PropertyRow label="Date added" value={fmtDate(d.date_added)} mono />
+            <PropertyRow label="Date created" value={fmtDate(d.date_created)} mono />
+            <PropertyRow label="Date modified" value={fmtDate(d.date_modified)} mono />
+          </div>
+        </InspectorSection>
+      </Shell>
+    );
+  }
+
+  // ── Multi-select ──────────────────────────────────────────────
+  if (inspectorTarget.kind === 'multi') {
+    // Use backend count when available — it's in sync with the tags/folders data
+    const count = summary?.selected_count ?? inspectorTarget.count;
+    const tags = (summary?.shared_tags ?? []).map((t) => parseTag(t.tag));
+    const folders = (summary?.shared_folders ?? []).map((f) => {
+      const n = sidebarNodes.find((s) => s.id === `folder:${f.folder_id}`);
+      return { id: f.folder_id, name: n?.name ?? f.name, color: n?.color ?? null };
+    });
+    const previewHashes = summary?.sample_hashes ?? [...selectedHashes].slice(0, 3);
+
+    return (
+      <Shell>
+        <Preview hashes={previewHashes} type="stacked" />
+        <ColorPalette colors={[]} />
+
+        <div className={styles.fieldStack}>
+          <InspectorField value={`${count.toLocaleString()} items selected`} placeholder="Name" readOnly />
+          <InspectorField value="" placeholder="Notes" onCommit={selTarget ? (v) => { void entityMutations.setTargetNotes(selTarget, v); } : undefined} />
+        </div>
+
+        <TagsSection
+          tags={tags}
+          onRemove={selTarget ? (raw) => { void entityMutations.removeTargetTags(selTarget, [raw]); } : undefined}
+        />
+
+        <FoldersSection
+          folders={folders}
+          onRemove={selTarget ? (fid) => { void entityMutations.updateTargetFolderMembership(selTarget, fid, 'remove'); } : undefined}
+        />
+
+        <InspectorSection title="Properties">
+          <div className={styles.propsStack}>
+            <StarRating
+              value={summary?.stats?.rating_stats?.shared ?? 0}
+              onChange={selTarget ? (r) => { void entityMutations.setTargetRating(selTarget, r); } : undefined}
+            />
+            <PropertyRow label="Total size" value={summary?.stats?.total_size_bytes != null ? fmtSize(summary.stats.total_size_bytes) : '—'} mono />
+          </div>
+        </InspectorSection>
+      </Shell>
+    );
+  }
+
+  // ── Scope (nothing selected — show current view) ──────────────
+  if (!scopeVM) return null;
+  const node = scopeVM.node;
+  const isSystem = node.kind === 'system';
+  const canEdit = !isSystem;
+
+  const saveName = async (v: string) => {
+    if (scopeVM.folder?.folderId != null) { await api.renameFolder(scopeVM.folder.folderId, v); return; }
+    if (scopeVM.smartFolder?.smartFolderId != null) {
+      await api.updateSmartFolder({ id: String(scopeVM.smartFolder.smartFolderId), folder: buildSmartFolderPayload(scopeVM, { name: v }) });
+    }
+  };
+  const saveNotes = async (v: string) => {
+    if (scopeVM.folder?.folderId != null) { await api.updateFolder(scopeVM.folder.folderId, { notes: v || null }); return; }
+    if (scopeVM.smartFolder?.smartFolderId != null) {
+      await api.updateSmartFolder({ id: String(scopeVM.smartFolder.smartFolderId), folder: buildSmartFolderPayload(scopeVM, { notes: v || null }) });
+    }
+  };
+
+  const scopeSize = scopeVM.totalSizeBytes != null && scopeVM.totalSizeBytes > 0 ? fmtSize(scopeVM.totalSizeBytes) : null;
 
   return (
-    <div className={styles.contentStack}>
-      <StackedPreview hashes={previewHashes} />
-
+    <Shell>
+      <Preview hashes={scopeVM.previewItems.map((i) => i.thumbnail_hash)} type="collage" />
       <ColorPalette colors={[]} />
 
       <div className={styles.fieldStack}>
+        <InspectorField value={node.name} placeholder="Name" readOnly={isSystem} onCommit={canEdit ? (v) => { void saveName(v); } : undefined} />
         <InspectorField
-          value={isVirtualAll
-            ? `All ${count.toLocaleString()} items selected`
-            : `${count.toLocaleString()} items selected`}
-          placeholder="Name"
-          readOnly
-        />
-        <InspectorField
-          value=""
-          placeholder="Notes"
-          onCommit={(text) => { void entityMutations.setTargetNotes(target, text); }}
+          value={(isSystem ? scopeVM.description : scopeVM.folder?.notes ?? scopeVM.smartFolder?.notes) ?? ''}
+          placeholder="Notes" readOnly={isSystem}
+          onCommit={canEdit ? (v) => { void saveNotes(v); } : undefined}
         />
       </div>
 
-      <InspectorSection title="Tags" count={sharedTags.length}>
-        <div className={styles.tagsWrap}>
-          {sharedTags.map((t) => (
-            <TagChip
-              key={t.tag}
-              namespace={t.tag.includes(':') ? t.tag.split(':')[0] : ''}
-              subtag={t.tag.includes(':') ? t.tag.split(':').slice(1).join(':') : t.tag}
-              onRemove={() => { void entityMutations.removeTargetTags(target, [t.tag]); }}
-            />
-          ))}
-          {topTags.filter((t) => !sharedTags.some((s) => s.tag === t.tag)).slice(0, 10).map((t) => (
-            <TagChip
-              key={`top:${t.tag}`}
-              namespace={t.tag.includes(':') ? t.tag.split(':')[0] : ''}
-              subtag={t.tag.includes(':') ? t.tag.split(':').slice(1).join(':') : t.tag}
-            />
-          ))}
-          <button className={styles.tagAddBtn} onClick={(e) => { const btn = e.currentTarget.getBoundingClientRect(); const panel = e.currentTarget.closest('[class*="inspector"]') as HTMLElement | null; const x = panel ? panel.getBoundingClientRect().left : btn.left; store.set(tagSelectPortalAtom, { open: true, anchor: { x, y: btn.top } }); }} type="button" title="Add tag"><IconPlus size={14} stroke={1.5} /></button>
-        </div>
-      </InspectorSection>
-
-      <InspectorSection title="Folders" count={sharedFolders.length}>
-        <div className={styles.foldersWrap}>
-          {sharedFolders.map((folder) => {
-            const node = sidebarNodes.find((n) => n.id === `folder:${folder.folder_id}`);
-            return (
-              <TagChip
-                key={folder.folder_id}
-                namespace=""
-                subtag={node?.name ?? folder.name}
-                colorRgb={hexToRgb(node?.color)}
-                onRemove={() => { void entityMutations.updateTargetFolderMembership(target, folder.folder_id, 'remove'); }}
-              />
-            );
-          })}
-          <button
-            className={styles.tagAddBtn}
-            onClick={(e) => {
-              const btn = e.currentTarget.getBoundingClientRect(); const panel = e.currentTarget.closest('[class*="inspector"]') as HTMLElement | null; const x = panel ? panel.getBoundingClientRect().left : btn.left; store.set(folderPickerPortalAtom, { open: true, anchor: { x, y: btn.top } });
-            }}
-            type="button"
-            title="Add to folder"
-          >
-            <IconPlus size={14} stroke={1.5} />
-          </button>
-        </div>
-      </InspectorSection>
-
       <InspectorSection title="Properties">
         <div className={styles.propsStack}>
-          <StarRating
-            value={sharedRating ?? 0}
-            onChange={(rating) => { void entityMutations.setTargetRating(target, rating); }}
-          />
-          <PropertyRow label="Total size" value={totalSize != null ? formatFileSize(totalSize) : '—'} mono />
+          <PropertyRow label="Items" value={scopeVM.totalCount.toLocaleString()} mono />
+          {scopeSize && <PropertyRow label="Size" value={scopeSize} mono />}
+          {scopeVM.searchText && <PropertyRow label="Search" value={scopeVM.searchText} />}
+          {node.kind === 'folder' && <PropertyRow label="Auto tags" value={scopeVM.folder!.autoTags.length > 0 ? 'Yes' : 'No'} />}
+          {node.kind === 'folder' && <PropertyRow label="Watch" value={scopeVM.folder!.watchEnabled ? 'Yes' : 'No'} />}
+          {node.kind === 'smart_folder' && scopeVM.smartFolder?.sortField && (
+            <PropertyRow label="Sort" value={`${scopeVM.smartFolder.sortField.replace(/_/g, ' ')}${scopeVM.smartFolder.sortOrder ? ` ${scopeVM.smartFolder.sortOrder.toUpperCase()}` : ''}`} />
+          )}
         </div>
       </InspectorSection>
+    </Shell>
+  );
+}
+
+// ── Shared sub-components ───────────────────────────────────────
+
+function Shell({ children }: { children: React.ReactNode }) {
+  return (
+    <div className={styles.panel}>
+      <div className={styles.scrollContent}>
+        <div className={styles.contentStack}>{children}</div>
+      </div>
     </div>
   );
 }
 
-export function Inspector() {
-  const target = useAtomValue(displayedInspectorTargetAtom);
-
-  if (target.kind === 'none') return null;
-
+function TagsSection({ tags, onRemove }: { tags: Array<{ ns: string; sub: string; raw: string }>; onRemove?: (raw: string) => void }) {
   return (
-    <div className={styles.panel}>
-      <div className={styles.scrollContent}>
-        {target.kind === 'entity' ? (
-          <EntityInspector />
-        ) : target.kind === 'multi' ? (
-          <MultiSelectInspector count={target.count} selectionMode={target.selectionMode} />
-        ) : (
-          <ScopeInspector />
-        )}
+    <InspectorSection title="Tags" count={tags.length}>
+      <div className={styles.tagsWrap}>
+        {tags.map((t) => (
+          <TagChip key={t.raw} namespace={t.ns} subtag={t.sub} onRemove={onRemove ? () => onRemove(t.raw) : undefined} />
+        ))}
+        <button className={styles.tagAddBtn} onClick={(e) => openPortal(e, tagSelectPortalAtom)} type="button" title="Add tag">
+          <IconPlus size={14} stroke={1.5} />
+        </button>
       </div>
-    </div>
+    </InspectorSection>
   );
+}
+
+function FoldersSection({ folders, onRemove }: { folders: Array<{ id: number; name: string; color: string | null }>; onRemove?: (fid: number) => void }) {
+  return (
+    <InspectorSection title="Folders" count={folders.length}>
+      <div className={styles.foldersWrap}>
+        {folders.map((f) => (
+          <TagChip key={f.id} namespace="" subtag={f.name} colorRgb={hexToRgb(f.color)} onRemove={onRemove ? () => onRemove(f.id) : undefined} />
+        ))}
+        <button className={styles.tagAddBtn} onClick={(e) => openPortal(e, folderPickerPortalAtom)} type="button" title="Add to folder">
+          <IconPlus size={14} stroke={1.5} />
+        </button>
+      </div>
+    </InspectorSection>
+  );
+}
+
+// ── Smart folder update helper ──────────────────────────────────
+
+function buildSmartFolderPayload(
+  scopeVM: NonNullable<ReturnType<typeof scopeInspectorViewModelAtom['read']>>,
+  overrides: { name?: string; notes?: string | null },
+) {
+  const sf = scopeVM.smartFolder!;
+  return {
+    smart_folder_id: sf.smartFolderId!, name: overrides.name ?? scopeVM.node.name,
+    parent_id: sf.parentId ?? null, icon: scopeVM.node.icon ?? null,
+    color: scopeVM.node.color ?? null, notes: overrides.notes !== undefined ? overrides.notes : sf.notes ?? null,
+    predicate_json: JSON.stringify(sf.predicate ?? { groups: [] }),
+    sort_field: sf.sortField ?? null, sort_order: sf.sortOrder ?? null,
+    display_order: scopeVM.node.sort_order ?? null, created_at: null, updated_at: null,
+  };
 }

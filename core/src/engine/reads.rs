@@ -10,12 +10,26 @@ use super::ApplicationEngine;
 impl ApplicationEngine {
     /// Primary grid query — one typed query, one result page.
     pub fn query_entity_view(&self, query: EntityViewQuery) -> Result<EntityViewPage, String> {
-        self.db.query_entity_view(&query)
+        let page = self.db.query_entity_view(&query)?;
+        let entity_hashes = page
+            .items
+            .iter()
+            .map(|item| item.entity_hash.clone())
+            .collect::<Vec<_>>();
+        let _ = crate::background_work::ensure_missing_color_analysis_jobs(&self.db, &entity_hashes);
+        Ok(page)
     }
 
     /// Single entity detail read (inspector/detail panel).
     pub fn get_entity_details(&self, entity_hash: &str) -> Result<Option<EntityDetails>, String> {
-        self.db.get_entity_details(entity_hash)
+        let details = self.db.get_entity_details(entity_hash)?;
+        if details.is_some() {
+            let _ = crate::background_work::ensure_missing_color_analysis_jobs(
+                &self.db,
+                &[entity_hash.to_string()],
+            );
+        }
+        Ok(details)
     }
 
     pub fn get_entity_all_metadata(
@@ -30,7 +44,14 @@ impl ApplicationEngine {
         &self,
         entity_hashes: &[String],
     ) -> Result<Vec<EntityGridItem>, String> {
-        self.db.get_entity_grid_items(entity_hashes)
+        let items = self.db.get_entity_grid_items(entity_hashes)?;
+        let present_hashes = items
+            .iter()
+            .map(|item| item.entity_hash.clone())
+            .collect::<Vec<_>>();
+        let _ =
+            crate::background_work::ensure_missing_color_analysis_jobs(&self.db, &present_hashes);
+        Ok(items)
     }
 
     /// Reconcile the current grid view after a state change.

@@ -60,7 +60,7 @@ pub struct ImportBatchResult {
     pub errors: Vec<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct DominantColorDto {
     pub hex: String,
     pub l: f64,

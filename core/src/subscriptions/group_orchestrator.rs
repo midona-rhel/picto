@@ -3,9 +3,9 @@
 use std::sync::Arc;
 
 use crate::blob_store::BlobStore;
+use crate::db::LibraryDatabase;
 use crate::rate_limiter::RateLimiter;
 use crate::settings::store::SettingsStore;
-use crate::sqlite::SqliteDatabase;
 use crate::subscriptions::run_orchestrator::SubscriptionRunOrchestrator;
 use crate::subscriptions::runtime_tasks::{
     publish_cancelling, publish_group_failed, publish_group_finished, publish_group_progress,
@@ -17,7 +17,8 @@ pub struct SubscriptionGroupOrchestrator;
 
 impl SubscriptionGroupOrchestrator {
     pub async fn run_group(
-        db: &Arc<SqliteDatabase>,
+        db: &Arc<LibraryDatabase>,
+        library_root: &std::path::Path,
         blob_store: &Arc<BlobStore>,
         rate_limiter: &RateLimiter,
         running_subs: &RunningSubscriptions,
@@ -29,7 +30,11 @@ impl SubscriptionGroupOrchestrator {
             .parse()
             .map_err(|_| format!("Invalid group id: {}", id))?;
 
-        let subs = db.list_subscriptions_for_group(group_id).await?;
+        let runtime = crate::subscriptions::runtime_service::SubscriptionRuntimeService::new(
+            db.as_ref(),
+            library_root,
+        );
+        let subs = runtime.list_subscriptions_for_group(group_id).await?;
         if subs.is_empty() {
             return Err("Group has no subscriptions".to_string());
         }
@@ -58,6 +63,7 @@ impl SubscriptionGroupOrchestrator {
             }
             match SubscriptionRunOrchestrator::run_subscription(
                 db,
+                library_root,
                 blob_store,
                 rate_limiter,
                 running_subs,
@@ -134,7 +140,8 @@ impl SubscriptionGroupOrchestrator {
     }
 
     pub async fn stop_group(
-        db: &SqliteDatabase,
+        db: &LibraryDatabase,
+        library_root: &std::path::Path,
         running_subs: &RunningSubscriptions,
         id: String,
     ) -> Result<(), String> {
@@ -142,13 +149,15 @@ impl SubscriptionGroupOrchestrator {
             .parse()
             .map_err(|_| format!("Invalid group id: {}", id))?;
 
-        let subscriptions = db.list_subscriptions_for_group(group_id).await?;
+        let runtime =
+            crate::subscriptions::runtime_service::SubscriptionRuntimeService::new(db, library_root);
+        let subscriptions = runtime.list_subscriptions_for_group(group_id).await?;
         let mut names_by_id = std::collections::HashMap::new();
         for sub in &subscriptions {
             names_by_id.insert(sub.subscription_id.to_string(), sub.name.clone());
         }
 
-        let sub_ids = db.get_group_subscription_ids(group_id).await?;
+        let sub_ids: Vec<i64> = subscriptions.iter().map(|sub| sub.subscription_id).collect();
         let map = running_subs.lock().await;
         let mut cancelled_ids = Vec::new();
         for sub_id in sub_ids {

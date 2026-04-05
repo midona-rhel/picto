@@ -105,6 +105,7 @@ export function QuickLook({
   // Keyboard — registry defs for EU alternative keys
   useEffect(() => {
     const closeDef = getShortcut('view.closeDetail')!;
+    const detailDef = getShortcut('view.detailView')!;
     const quicklookDef = getShortcut('view.quicklook')!;
     const prevDef = getShortcut('view.prevImage')!;
     const nextDef = getShortcut('view.nextImage')!;
@@ -116,8 +117,8 @@ export function QuickLook({
     const handleKey = (e: KeyboardEvent) => {
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
 
-      // Space or Escape close QuickLook
-      if (matchesShortcutDef(e, quicklookDef) || matchesShortcutDef(e, closeDef)) { e.preventDefault(); onClose(currentHash); return; }
+      // Escape, Space (quicklook toggle), or Enter (detail toggle) all close
+      if (matchesShortcutDef(e, closeDef) || matchesShortcutDef(e, quicklookDef) || matchesShortcutDef(e, detailDef)) { e.preventDefault(); onClose(currentHash); return; }
       if (matchesShortcutDef(e, prevDef)) { e.preventDefault(); navigate(-1); return; }
       if (matchesShortcutDef(e, nextDef)) { e.preventDefault(); navigate(1); return; }
       if (matchesShortcutDef(e, fitDef)) { e.preventDefault(); zoom.fitToWindow(); return; }

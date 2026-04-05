@@ -52,6 +52,12 @@
   gap: 4px;
 }
 
+.customOrderLabel {
+  font-size: 12px;
+  color: var(--color-text-tertiary);
+  font-style: italic;
+}
+
 .sep {
   height: 1px;
   background: var(--color-border-secondary);

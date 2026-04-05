@@ -8,10 +8,9 @@ use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 
 use crate::blob_store::BlobStore;
+use crate::db::LibraryDatabase;
 use crate::rate_limiter::RateLimiter;
 use crate::settings::store::SettingsStore;
-use crate::sqlite::SqliteDatabase;
-use crate::subscriptions::db::{get_subscription, get_subscription_query};
 use crate::subscriptions::policy::{
     effective_query_post_limit, resolve_finished_status_text, resolve_query_name,
 };
@@ -27,12 +26,16 @@ pub struct SubscriptionRunOrchestrator;
 
 impl SubscriptionRunOrchestrator {
     pub async fn stop_subscription(
-        db: &SqliteDatabase,
+        db: &LibraryDatabase,
+        library_root: &std::path::Path,
         running_subs: &tokio::sync::Mutex<std::collections::HashMap<String, CancellationToken>>,
         id: String,
     ) -> Result<(), String> {
+        let runtime =
+            crate::subscriptions::runtime_service::SubscriptionRuntimeService::new(db, library_root);
         let resolved_name = if let Ok(sub_id) = id.parse::<i64>() {
-            db.with_read_conn(move |conn| get_subscription(conn, sub_id))
+            runtime
+                .get_subscription(sub_id)
                 .await
                 .ok()
                 .flatten()
@@ -65,7 +68,8 @@ impl SubscriptionRunOrchestrator {
     }
 
     pub async fn stop_subscription_query(
-        db: &SqliteDatabase,
+        db: &LibraryDatabase,
+        library_root: &std::path::Path,
         running_subs: &tokio::sync::Mutex<std::collections::HashMap<String, CancellationToken>>,
         subscription_id: String,
         query_id: String,
@@ -81,11 +85,12 @@ impl SubscriptionRunOrchestrator {
                 query_id
             ));
         }
-        Self::stop_subscription(db, running_subs, subscription_id).await
+        Self::stop_subscription(db, library_root, running_subs, subscription_id).await
     }
 
     pub async fn run_subscription(
-        db: &Arc<SqliteDatabase>,
+        db: &Arc<LibraryDatabase>,
+        library_root: &std::path::Path,
         blob_store: &Arc<BlobStore>,
         rate_limiter: &RateLimiter,
         running_subs: &RunningSubscriptions,
@@ -104,16 +109,21 @@ impl SubscriptionRunOrchestrator {
             }
         }
 
-        let sub = db
-            .with_read_conn(move |conn| get_subscription(conn, sub_id))
+        let runtime = crate::subscriptions::runtime_service::SubscriptionRuntimeService::new(
+            db.as_ref(),
+            library_root,
+        );
+        let bundle = runtime
+            .get_runnable_subscription(sub_id)
             .await?
             .ok_or_else(|| format!("Subscription {} not found", id))?;
+        let sub = bundle.subscription;
 
         if sub.paused {
             return Err(format!("Subscription {} is paused", id));
         }
 
-        let queries = db.get_subscription_queries(sub_id).await?;
+        let queries = bundle.queries;
         if queries.is_empty() {
             return Err("Subscription has no queries".to_string());
         }
@@ -139,12 +149,9 @@ impl SubscriptionRunOrchestrator {
         let db = db.clone();
         let blob_store = blob_store.clone();
         let running_subs = running_subs.clone();
+        let library_root = library_root.to_path_buf();
         let sub_name = sub.name.clone();
-        let group_name = if let Some(gid) = sub.group_id {
-            db.get_group(gid).await.ok().flatten().map(|g| g.name)
-        } else {
-            None
-        };
+        let group_name = bundle.group_name;
         let sub_id_str = id.clone();
         let terminal_statuses = sub_terminal_statuses;
         let rate_limiter = rate_limiter.clone();
@@ -186,8 +193,13 @@ impl SubscriptionRunOrchestrator {
                 let mut total_metadata_invalid = 0usize;
                 let mut last_metadata_error: Option<String> = None;
 
-                let engine_result = SubscriptionSyncEngine::new(&db, &blob_store, &app_settings);
-                let subscription_run_id = db.create_subscription_run(sub_id).await.ok();
+                let runtime = crate::subscriptions::runtime_service::SubscriptionRuntimeService::new(
+                    db.as_ref(),
+                    &library_root,
+                );
+                let engine_result =
+                    SubscriptionSyncEngine::new(&db, &blob_store, &app_settings, &library_root);
+                let subscription_run_id = runtime.create_subscription_run(sub_id).await.ok();
                 tracing::info!(
                     elapsed_ms = run_clock.elapsed().as_millis(),
                     "orchestrator: engine created"
@@ -222,7 +234,7 @@ impl SubscriptionRunOrchestrator {
                             // re-running the query with the updated cursor until done.
                             let mut chunk_index = 0u32;
                             loop {
-                                let current_query = db
+                                let current_query = runtime
                                     .get_subscription_query(query.query_id)
                                     .await
                                     .ok()
@@ -286,7 +298,7 @@ impl SubscriptionRunOrchestrator {
                                 }
 
                                 // Check if this query needs another pagination chunk
-                                let refreshed = db
+                                let refreshed = runtime
                                     .get_subscription_query(query.query_id)
                                     .await
                                     .ok()
@@ -338,7 +350,7 @@ impl SubscriptionRunOrchestrator {
                     "succeeded"
                 };
                 if let Some(subscription_run_id) = subscription_run_id {
-                    let _ = db
+                    let _ = runtime
                         .finish_subscription_run(
                             subscription_run_id,
                             status,
@@ -415,7 +427,8 @@ impl SubscriptionRunOrchestrator {
     }
 
     pub async fn run_subscription_query(
-        db: &Arc<SqliteDatabase>,
+        db: &Arc<LibraryDatabase>,
+        library_root: &std::path::Path,
         blob_store: &Arc<BlobStore>,
         rate_limiter: &RateLimiter,
         running_subs: &RunningSubscriptions,
@@ -440,15 +453,16 @@ impl SubscriptionRunOrchestrator {
             }
         }
 
-        let sub = db
-            .with_read_conn(move |conn| get_subscription(conn, sub_id))
-            .await?
-            .ok_or_else(|| format!("Subscription {} not found", subscription_id))?;
-
-        let query = db
-            .with_read_conn(move |conn| get_subscription_query(conn, qid))
+        let runtime = crate::subscriptions::runtime_service::SubscriptionRuntimeService::new(
+            db.as_ref(),
+            library_root,
+        );
+        let bundle = runtime
+            .get_runnable_query(sub_id, qid)
             .await?
             .ok_or_else(|| format!("Query {} not found", query_id))?;
+        let sub = bundle.subscription;
+        let query = bundle.query;
         let query_name = resolve_query_name(
             query.query_id,
             &query.query_text,
@@ -483,12 +497,9 @@ impl SubscriptionRunOrchestrator {
         let db = db.clone();
         let blob_store = blob_store.clone();
         let running_subs = running_subs.clone();
+        let library_root = library_root.to_path_buf();
         let sub_name = sub.name.clone();
-        let group_name_q = if let Some(gid) = sub.group_id {
-            db.get_group(gid).await.ok().flatten().map(|g| g.name)
-        } else {
-            None
-        };
+        let group_name_q = bundle.group_name;
         let sub_id_str = subscription_id.clone();
         let query_id_str = query_id.clone();
         let query_name_str = query_name.clone();
@@ -527,8 +538,17 @@ impl SubscriptionRunOrchestrator {
                     metadata_invalid,
                     last_metadata_error,
                 ) = {
-                    let engine_result =
-                        SubscriptionSyncEngine::new(&db, &blob_store, &app_settings);
+                    let runtime =
+                        crate::subscriptions::runtime_service::SubscriptionRuntimeService::new(
+                            db.as_ref(),
+                            &library_root,
+                        );
+                    let engine_result = SubscriptionSyncEngine::new(
+                        &db,
+                        &blob_store,
+                        &app_settings,
+                        &library_root,
+                    );
                     match engine_result {
                         Ok(engine) => {
                             let mut engine = engine
@@ -555,7 +575,7 @@ impl SubscriptionRunOrchestrator {
                             // Continuation loop for initial pagination
                             loop {
                                 let current_query =
-                                    db.get_subscription_query(qid).await.ok().flatten();
+                                    runtime.get_subscription_query(qid).await.ok().flatten();
                                 let cq = match current_query {
                                     Some(q) => q,
                                     None => break,
@@ -607,7 +627,8 @@ impl SubscriptionRunOrchestrator {
                                 }
 
                                 // Check if query needs another pagination chunk
-                                let refreshed = db.get_subscription_query(qid).await.ok().flatten();
+                                let refreshed =
+                                    runtime.get_subscription_query(qid).await.ok().flatten();
                                 let needs_continuation = refreshed.as_ref().is_some_and(|q| {
                                     !q.completed_initial_run
                                         && q.resume_cursor.as_ref().is_some_and(|c| !c.is_empty())
@@ -706,7 +727,8 @@ impl SubscriptionRunOrchestrator {
     }
 
     pub async fn retry_failed_post(
-        db: &Arc<SqliteDatabase>,
+        db: &Arc<LibraryDatabase>,
+        library_root: &std::path::Path,
         blob_store: &Arc<BlobStore>,
         rate_limiter: &RateLimiter,
         running_subs: &RunningSubscriptions,
@@ -733,12 +755,16 @@ impl SubscriptionRunOrchestrator {
             }
         }
 
-        let sub = db
-            .with_read_conn(move |conn| get_subscription(conn, sub_id))
+        let runtime = crate::subscriptions::runtime_service::SubscriptionRuntimeService::new(
+            db.as_ref(),
+            library_root,
+        );
+        let sub = runtime
+            .get_subscription(sub_id)
             .await?
             .ok_or_else(|| format!("Subscription {} not found", subscription_id))?;
-        let query = db
-            .with_read_conn(move |conn| get_subscription_query(conn, qid))
+        let query = runtime
+            .get_subscription_query(qid)
             .await?
             .ok_or_else(|| format!("Query {} not found", query_id))?;
 
@@ -750,7 +776,7 @@ impl SubscriptionRunOrchestrator {
             return Err("retry site_id does not match the query site".to_string());
         }
 
-        let attempts = db
+        let attempts = runtime
             .list_subscription_download_attempts(sub_id, Some(qid), 500)
             .await?;
         let matching: Vec<_> = attempts
@@ -777,7 +803,7 @@ impl SubscriptionRunOrchestrator {
             })
             .ok_or_else(|| format!("No retry URL recorded for post {post_id}"))?;
         for attempt in &matching {
-            let _ = db
+            let _ = runtime
                 .mark_subscription_download_attempt_retrying(attempt.attempt_id)
                 .await;
         }
@@ -800,13 +826,13 @@ impl SubscriptionRunOrchestrator {
         let db = db.clone();
         let blob_store = blob_store.clone();
         let running_subs = running_subs.clone();
+        let library_root = library_root.to_path_buf();
         let rate_limiter = rate_limiter.clone();
         let app_settings = settings.get();
         let sub_name = sub.name.clone();
-        let group_name = if let Some(gid) = sub.group_id {
-            db.get_group(gid).await.ok().flatten().map(|g| g.name)
-        } else {
-            None
+        let group_name = match sub.group_id {
+            Some(gid) => runtime.get_group(gid).await.ok().flatten().map(|g| g.name),
+            None => None,
         };
         let sub_id_str = subscription_id.clone();
         let query_id_str = query_id.clone();
@@ -832,7 +858,12 @@ impl SubscriptionRunOrchestrator {
 
         tokio::spawn(async move {
             let inner = tokio::spawn(async move {
-                let result = match SubscriptionSyncEngine::new(&db, &blob_store, &app_settings) {
+                let result = match SubscriptionSyncEngine::new(
+                    &db,
+                    &blob_store,
+                    &app_settings,
+                    &library_root,
+                ) {
                     Ok(engine) => {
                         let mut engine = engine
                             .with_name(sub_name.clone())

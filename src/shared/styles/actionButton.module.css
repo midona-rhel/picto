@@ -1,50 +1,62 @@
-/* Shared action button — used in modals, portals, and forms. */
+/* Shared action button — used in modals, portals, settings, and forms.
+ * Matches the legacy textBtn / settings footerBtn / subscriptions button style:
+ * 32px height, subtle border, transparent bg. */
 
 .btn {
-  height: 28px;
-  padding: 0 12px;
-  border: none;
-  border-radius: var(--radius-sm);
-  background: var(--color-hover-overlay);
-  color: var(--color-text-secondary);
-  font-size: var(--font-size-sm);
+  height: 32px;
+  display: inline-flex;
+  justify-content: center;
+  align-items: center;
+  gap: 6px;
+  padding: 0 16px;
+  font-size: var(--font-size-md);
+  font-weight: 400;
   font-family: var(--font-family);
+  color: var(--color-text-primary);
+  border: 1px solid var(--color-border-primary);
+  background: var(--color-surface-hover);
+  border-radius: var(--radius-md);
   cursor: pointer;
   white-space: nowrap;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  transition: background 80ms ease, color 80ms ease;
+  outline: none;
+  appearance: none;
+  transition: background 150ms ease;
 }
 
 .btn:hover {
-  background: var(--color-active-overlay);
-  color: var(--color-text-primary);
+  background: var(--color-subtle-overlay);
+}
+
+.btn:focus-visible {
+  outline: 2px solid var(--color-primary-60);
+  outline-offset: 1px;
 }
 
 .btn:disabled {
-  opacity: 0.4;
+  opacity: 0.35;
   cursor: default;
   pointer-events: none;
 }
 
 .btnPrimary {
   background: var(--color-primary);
+  border-color: var(--color-primary);
   color: white;
 }
 
 .btnPrimary:hover {
   background: var(--color-primary-60);
+  border-color: var(--color-primary-60);
 }
 
 .btnDanger {
-  background: var(--color-negative);
-  color: white;
+  color: #ff9aa4;
+  border-color: rgba(255, 71, 87, 0.35);
+  background: rgba(255, 71, 87, 0.08);
 }
 
 .btnDanger:hover {
-  background: color-mix(in srgb, var(--color-negative) 80%, black);
+  background: rgba(255, 71, 87, 0.15);
 }
 
 .btnGroup {

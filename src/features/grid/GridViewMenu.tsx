@@ -13,7 +13,7 @@ import {
   gridViewModeAtom, gridSortFieldAtom, gridSortDirectionAtom,
   gridShowNameAtom, gridShowExtensionAtom, gridShowResolutionAtom,
   gridShowExtensionLabelAtom, gridFitThumbnailsAtom,
-  gridSoftTransitionActionAtom,
+  gridSoftTransitionActionAtom, gridScopeAtom,
   type SortField, type SortDirection, type GridViewMode,
 } from '../../state/grid';
 import { sidebarCollapsedAtom } from '../../state/navigation';
@@ -56,6 +56,8 @@ function ViewPanel() {
   const sortField = useAtomValue(gridSortFieldAtom);
   const sortDir = useAtomValue(gridSortDirectionAtom);
   const setSoftAction = useSetAtom(gridSoftTransitionActionAtom);
+  const scope = useAtomValue(gridScopeAtom);
+  const isManualOrder = scope.kind === 'folder' || scope.kind === 'collection';
 
   const setSort = (f: SortField, d: SortDirection) => { void gridController.setSort(f, d); };
 
@@ -74,25 +76,27 @@ function ViewPanel() {
         />
       </div>
 
-      <div className={s.headerRow}>
-        <span className={s.headerLabel}>Sort by</span>
-        <div className={s.sortControls}>
-          <CmSelect
-            value={sortField}
-            options={SORT_OPTIONS}
-            onChange={(v) => setSort(v as SortField, sortDir)}
-            width={130}
-          />
-          <div className={s.dirPill}>
-            <button className={`${s.dirBtn} ${sortDir === 'asc' ? s.dirBtnActive : ''}`} onClick={() => setSort(sortField, 'asc')} type="button">
-              <IconSortAscending size={14} />
-            </button>
-            <button className={`${s.dirBtn} ${sortDir === 'desc' ? s.dirBtnActive : ''}`} onClick={() => setSort(sortField, 'desc')} type="button">
-              <IconSortDescending size={14} />
-            </button>
+      {!isManualOrder && (
+        <div className={s.headerRow}>
+          <span className={s.headerLabel}>Sort by</span>
+          <div className={s.sortControls}>
+            <CmSelect
+              value={sortField}
+              options={SORT_OPTIONS}
+              onChange={(v) => setSort(v as SortField, sortDir)}
+              width={130}
+            />
+            <div className={s.dirPill}>
+              <button className={`${s.dirBtn} ${sortDir === 'asc' ? s.dirBtnActive : ''}`} onClick={() => setSort(sortField, 'asc')} type="button">
+                <IconSortAscending size={14} />
+              </button>
+              <button className={`${s.dirBtn} ${sortDir === 'desc' ? s.dirBtnActive : ''}`} onClick={() => setSort(sortField, 'desc')} type="button">
+                <IconSortDescending size={14} />
+              </button>
+            </div>
           </div>
         </div>
-      </div>
+      )}
     </div>
   );
 }

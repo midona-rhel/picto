@@ -14,14 +14,10 @@ use crate::blob_store::BlobStore;
 use crate::folders::watch::FolderWatchCommand;
 use crate::rate_limiter::RateLimiter;
 use crate::settings::store::SettingsStore;
-use crate::sqlite::SqliteDatabase;
 use crate::types::{RunningSubscriptions, SubTerminalStatuses};
 
 /// Shared application state, accessible to all command handlers.
 pub struct AppState {
-    /// Legacy write-side database boundary.
-    /// Active read-model code must go through `engine`/`LibraryDatabase`.
-    pub legacy_db: Arc<SqliteDatabase>,
     pub blob_store: Arc<BlobStore>,
     /// The new application engine boundary. All new code should call
     /// `engine` methods instead of going through `db` directly.
@@ -75,29 +71,6 @@ pub async fn open_library(library_root: PathBuf) -> Result<Arc<AppState>, String
     std::fs::create_dir_all(&library_root)
         .map_err(|e| format!("Failed to create library directory: {}", e))?;
 
-    let library_db: Arc<SqliteDatabase> = SqliteDatabase::open(&library_root)
-        .await
-        .map_err(|e| format!("Failed to open library database: {}", e))?;
-
-    tracing::info!(
-        epoch = library_db.manifest.published_epoch(),
-        path = %library_root.display(),
-        "Library database initialized"
-    );
-
-    // Reconcile tag file_counts from entity_tag_raw (fixes stale counts from
-    // older versions that didn't decrement on file deletion).
-    match library_db.rebuild_tag_counts().await {
-        Ok(()) => tracing::info!("Tag counts reconciled"),
-        Err(e) => tracing::warn!(error = %e, "Tag count reconciliation failed (non-fatal)"),
-    }
-
-    // Pre-warm hash index so the first grid page has zero cache misses.
-    match library_db.warm_hash_index().await {
-        Ok(count) => tracing::info!(count, "Hash index pre-warmed"),
-        Err(e) => tracing::warn!(error = %e, "Hash index pre-warm failed (non-fatal)"),
-    }
-
     let settings = SettingsStore::load(&library_root);
 
     let blob_store: Arc<BlobStore> = Arc::new(
@@ -127,7 +100,6 @@ pub async fn open_library(library_root: PathBuf) -> Result<Arc<AppState>, String
     }
 
     let worker_handles = crate::workers::start_workers(
-        &library_db,
         &new_db,
         &blob_store,
         &rate_limiter,
@@ -137,14 +109,9 @@ pub async fn open_library(library_root: PathBuf) -> Result<Arc<AppState>, String
         &cancel,
     )
     .await;
-
-    // Keep the legacy database around only for write-side domains that have not
-    // yet been cut over (import, ingest queue, subscriptions, watch folders).
-    // All active read-model behavior should go through engine/LibraryDatabase.
     let engine = Arc::new(crate::engine::ApplicationEngine::new(new_db));
 
     let state = Arc::new(AppState {
-        legacy_db: library_db,
         blob_store,
         engine,
         settings,
@@ -207,10 +174,6 @@ async fn close_library_inner() {
             std::mem::take(&mut *guard)
         };
         crate::workers::stop_workers(handles).await;
-
-        if let Err(e) = state.legacy_db.flush().await {
-            tracing::warn!("Final flush on close failed: {e}");
-        }
 
         tracing::info!("Library closed");
     }

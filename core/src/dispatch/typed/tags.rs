@@ -3,22 +3,12 @@
 use serde::Deserialize;
 use ts_rs::TS;
 
-use crate::sqlite::EntityExpansionMode;
+use crate::db::types::{
+    BaseScope, EntityTarget, EntityTargetKind, EntityViewQuery, QueryFilters, QueryPage,
+    QuerySort, ScopeKind, TagFilter, TagMatchMode,
+};
+use crate::engine::tags::TagOperation;
 use crate::state::AppState;
-
-fn descendant_hashes(
-    top_level_hashes: &[String],
-    effective_hashes: &[(String, i64)],
-) -> Vec<String> {
-    let top_level: std::collections::HashSet<&str> =
-        top_level_hashes.iter().map(String::as_str).collect();
-    effective_hashes
-        .iter()
-        .map(|(hash, _)| hash)
-        .filter(|hash| !top_level.contains(hash.as_str()))
-        .cloned()
-        .collect()
-}
 
 fn tag_display_key(namespace: &str, subtag: &str) -> String {
     if namespace.is_empty() {
@@ -30,6 +20,68 @@ fn tag_display_key(namespace: &str, subtag: &str) -> String {
 
 fn resolve_tag_id_or_create(state: &AppState, tag: &str) -> Result<i64, String> {
     state.engine.ensure_tag(tag)
+}
+
+fn entity_hash_target(hashes: Vec<String>) -> EntityTarget {
+    EntityTarget {
+        kind: EntityTargetKind::EntityHashes,
+        entity_hashes: Some(hashes),
+        query: None,
+        excluded_entity_hashes: None,
+    }
+}
+
+fn find_files_by_tags_canonical(
+    state: &AppState,
+    tag_strings: Vec<String>,
+    limit: Option<usize>,
+    offset: Option<usize>,
+) -> Result<Vec<crate::types::FileGridInfo>, String> {
+    if tag_strings.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let limit = limit.unwrap_or(500);
+    let offset = offset.unwrap_or(0);
+    let query = EntityViewQuery {
+        base_scope: BaseScope {
+            kind: ScopeKind::System,
+            key: Some("all".to_string()),
+            id: None,
+        },
+        filters: QueryFilters {
+            tags: Some(
+                tag_strings
+                    .into_iter()
+                    .map(|tag| TagFilter {
+                        tag,
+                        match_mode: TagMatchMode::Include,
+                    })
+                    .collect(),
+            ),
+            ..Default::default()
+        },
+        sort: QuerySort::default(),
+        page: QueryPage {
+            limit: (limit + offset) as i64,
+            cursor: None,
+        },
+    };
+
+    let mut items: Vec<crate::types::FileGridInfo> = state
+        .engine
+        .query_entity_view(query)?
+        .items
+        .into_iter()
+        .map(crate::types::FileGridInfo::from)
+        .collect();
+    if offset > 0 {
+        items = items.into_iter().skip(offset).collect();
+    }
+    if items.len() > limit {
+        items.truncate(limit);
+    }
+    Ok(items)
 }
 
 // ─── Input structs ─────────────────────────────────────────────────────────
@@ -210,25 +262,12 @@ pub async fn add_tags(state: &AppState, input: AddTagsInput) -> Result<(), Strin
     if input.tag_strings.is_empty() || input.hashes.is_empty() {
         return Ok(());
     }
-    let resolved = state
-        .legacy_db
-        .resolve_entity_hashes_with_expansion(
-            &input.hashes,
-            EntityExpansionMode::EntityAndDescendants,
-        )
-        .await?;
-    let entity_ids: Vec<i64> = resolved.iter().map(|(_, id)| *id).collect();
-    state
-        .legacy_db
-        .add_tags_batch_by_entity_ids(entity_ids, input.tag_strings.clone(), "local".to_string())
-        .await?;
-    crate::events::emit_state_changed(
-        "add_tags",
-        crate::runtime_contract::change_builder::ChangeImpact::batch_tags()
-            .entity_hashes(input.hashes.clone())
-            .member_hashes(descendant_hashes(&input.hashes, &resolved))
-            .tags_added(input.tag_strings),
-    );
+    state.engine.apply_entity_tags(
+        entity_hash_target(input.hashes),
+        TagOperation::Add,
+        &input.tag_strings,
+        None,
+    )?;
     Ok(())
 }
 
@@ -237,25 +276,12 @@ pub async fn remove_tags(state: &AppState, input: RemoveTagsInput) -> Result<(),
     if input.tag_strings.is_empty() || input.hashes.is_empty() {
         return Ok(());
     }
-    let resolved = state
-        .legacy_db
-        .resolve_entity_hashes_with_expansion(
-            &input.hashes,
-            EntityExpansionMode::EntityAndDescendants,
-        )
-        .await?;
-    let entity_ids: Vec<i64> = resolved.iter().map(|(_, id)| *id).collect();
-    state
-        .legacy_db
-        .remove_tags_batch_by_entity_ids(entity_ids, input.tag_strings.clone())
-        .await?;
-    crate::events::emit_state_changed(
-        "remove_tags",
-        crate::runtime_contract::change_builder::ChangeImpact::batch_tags()
-            .entity_hashes(input.hashes.clone())
-            .member_hashes(descendant_hashes(&input.hashes, &resolved))
-            .tags_removed(input.tag_strings),
-    );
+    state.engine.apply_entity_tags(
+        entity_hash_target(input.hashes),
+        TagOperation::Remove,
+        &input.tag_strings,
+        None,
+    )?;
     Ok(())
 }
 
@@ -263,13 +289,7 @@ pub async fn find_files_by_tags(
     state: &AppState,
     input: FindFilesByTagsInput,
 ) -> Result<serde_json::Value, String> {
-    let result = crate::tags::service::find_files_by_tags(
-        &state.legacy_db,
-        input.tag_strings,
-        input.limit,
-        input.offset,
-    )
-    .await?;
+    let result = find_files_by_tags_canonical(state, input.tag_strings, input.limit, input.offset)?;
     serde_json::to_value(&result).map_err(|e| e.to_string())
 }
 
@@ -369,29 +389,19 @@ pub async fn companion_get_namespace_values(
     state: &AppState,
     input: CompanionGetNamespaceValuesInput,
 ) -> Result<serde_json::Value, String> {
-    let values = state
-        .legacy_db
-        .with_read_conn(move |conn| {
-            let mut stmt = conn.prepare(
-                "SELECT subtag, file_count FROM tag
-             WHERE namespace = ?1 AND file_count > 0
-             ORDER BY file_count DESC",
-            )?;
-            let rows = stmt.query_map([&input.namespace], |row| {
-                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
-            })?;
-            let mut result = Vec::new();
-            for row in rows {
-                let (subtag, count) = row?;
-                result.push(serde_json::json!({
-                    "value": subtag,
-                    "count": count,
-                    "thumbnail_hash": null,
-                }));
-            }
-            Ok(result)
+    let values: Vec<serde_json::Value> = state
+        .engine
+        .get_all_tags_with_counts()?
+        .into_iter()
+        .filter(|row| row.namespace == input.namespace && row.file_count > 0)
+        .map(|row| {
+            serde_json::json!({
+                "value": row.subtag,
+                "count": row.file_count,
+                "thumbnail_hash": null,
+            })
         })
-        .await?;
+        .collect();
     serde_json::to_value(&values).map_err(|e| e.to_string())
 }
 
@@ -399,8 +409,6 @@ pub async fn companion_get_files_by_tag(
     state: &AppState,
     input: CompanionGetFilesByTagInput,
 ) -> Result<serde_json::Value, String> {
-    let result =
-        crate::tags::service::find_files_by_tags(&state.legacy_db, vec![input.tag], None, None)
-            .await?;
+    let result = find_files_by_tags_canonical(state, vec![input.tag], None, None)?;
     serde_json::to_value(&result).map_err(|e| e.to_string())
 }

@@ -148,6 +148,8 @@ export function MediaView({
   // ── Keyboard — uses registry defs so EU keys2 alternatives work ──
   useEffect(() => {
     const closeDef = getShortcut('view.closeDetail')!;
+    const detailDef = getShortcut('view.detailView')!;
+    const quicklookDef = getShortcut('view.quicklook')!;
     const prevDef = getShortcut('view.prevImage')!;
     const nextDef = getShortcut('view.nextImage')!;
     const fitDef = getShortcut('view.fitWindow')!;
@@ -158,7 +160,7 @@ export function MediaView({
     const handleKey = (e: KeyboardEvent) => {
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
 
-      if (matchesShortcutDef(e, closeDef)) { e.preventDefault(); onClose(currentHash); return; }
+      if (matchesShortcutDef(e, closeDef) || matchesShortcutDef(e, detailDef) || matchesShortcutDef(e, quicklookDef)) { e.preventDefault(); onClose(currentHash); return; }
       if (matchesShortcutDef(e, prevDef)) { e.preventDefault(); navigate(-1); return; }
       if (matchesShortcutDef(e, nextDef)) { e.preventDefault(); navigate(1); return; }
       if (matchesShortcutDef(e, fitDef)) { e.preventDefault(); zoom.fitToWindow(); return; }

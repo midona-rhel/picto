@@ -98,6 +98,11 @@ impl ApplicationEngine {
         let mut top = Vec::new();
         let mut shared = Vec::new();
 
+        tracing::debug!(
+            "[selection_summary] selected_count={}, total_tags_to_check={}",
+            selected_count, all_counts.len()
+        );
+
         for tag in all_counts {
             let mut bitmap =
                 self.db
@@ -127,9 +132,14 @@ impl ApplicationEngine {
         }
 
         top.sort_by(|a, b| b.count.cmp(&a.count).then_with(|| a.tag.cmp(&b.tag)));
-        top.truncate(30);
-        shared.sort_by(|a, b| b.count.cmp(&a.count).then_with(|| a.tag.cmp(&b.tag)));
-        shared.truncate(30);
+        shared.sort_by(|a, b| a.tag.cmp(&b.tag));
+
+        tracing::debug!(
+            "[selection_summary] result: shared_tags={}, top_tags={}",
+            shared.len(), top.len()
+        );
+
+        // No truncation on shared — the intersection naturally shrinks as more items are selected
         Ok((shared, top))
     }
 

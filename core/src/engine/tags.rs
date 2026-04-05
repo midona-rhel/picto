@@ -48,7 +48,9 @@ impl ApplicationEngine {
                 }
             },
         };
-        self.commit_write(&WriteChange::from_tag(&change));
+        let mut write = WriteChange::from_tag(&change);
+        write.entity_hashes = self.resolve_entity_hashes(&change.entity_ids);
+        self.commit_write(&write);
         Ok(change)
     }
 

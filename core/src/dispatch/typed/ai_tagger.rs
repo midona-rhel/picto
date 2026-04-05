@@ -5,6 +5,8 @@ use ts_rs::TS;
 
 use crate::ai_tagger::inference::{TagPrediction, Thresholds};
 use crate::ai_tagger::models::ModelInfo;
+use crate::db::types::{EntityTarget, EntityTargetKind, TAG_PROVENANCE_AI};
+use crate::engine::tags::TagOperation;
 use crate::state::AppState;
 
 // ─── Constants ──────────────────────────────────────────────────────────────
@@ -291,74 +293,45 @@ pub async fn ai_tag_apply(state: &AppState, input: AiTagApplyInput) -> Result<us
         return Ok(0);
     }
 
-    let mut count = 0usize;
-    for hash in &input.hashes {
-        for tag_str in &input.tags {
-            if let Some((ns, st)) = crate::tags::normalize::parse_tag(tag_str) {
-                match state.legacy_db.tag_entity(hash, &ns, &st, "ai").await {
-                    Ok(_) => count += 1,
-                    Err(e) => {
-                        tracing::warn!(hash, tag = tag_str, error = %e, "ai_tag_apply: failed")
-                    }
-                }
-            }
-        }
+    let normalized_tags: Vec<String> = input
+        .tags
+        .iter()
+        .filter_map(|tag_str| {
+            crate::tags::normalize::parse_tag(tag_str)
+                .map(|(ns, st)| crate::tags::normalize::combine_tag(&ns, &st))
+        })
+        .collect();
+    if normalized_tags.is_empty() {
+        return Ok(0);
     }
 
-    if count > 0 {
-        // Sync parent collection metadata for any tagged files that are collection members
-        let hashes = input.hashes.clone();
-        state.legacy_db.with_conn(move |conn| {
-            let mut synced = std::collections::HashSet::new();
-            for hash in &hashes {
-                let file_id: Option<i64> = conn.query_row(
-                    "SELECT file_id FROM file WHERE hash = ?1", [hash], |r| r.get(0),
-                ).ok();
-                if let Some(fid) = file_id {
-                    let parent: Option<i64> = conn.query_row(
-                        "SELECT parent_collection_id FROM media_entity WHERE entity_id = ?1",
-                        [fid], |r| r.get(0),
-                    ).ok().flatten();
-                    if let Some(cid) = parent {
-                        if synced.insert(cid) {
-                            let _ = crate::folders::collections_db::sync_collection_aggregate_metadata(conn, cid);
-                        }
-                    }
-                }
-            }
-            Ok(())
-        }).await?;
+    state.engine.apply_entity_tags(
+        EntityTarget {
+            kind: EntityTargetKind::EntityHashes,
+            entity_hashes: Some(input.hashes.clone()),
+            query: None,
+            excluded_entity_hashes: None,
+        },
+        TagOperation::Add,
+        &normalized_tags,
+        Some(TAG_PROVENANCE_AI),
+    )?;
 
-        crate::events::emit_state_changed(
-            "ai_tag_apply",
-            crate::runtime_contract::change_builder::ChangeImpact::new()
-                .tags_changed()
-                .all_smart_folder_scopes_changed()
-                .entity_hashes(input.hashes),
-        );
-    }
-
-    Ok(count)
+    Ok(input.hashes.len() * normalized_tags.len())
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────
 
 /// Read the original image bytes for a hash from the blob store.
 async fn read_original_image(state: &AppState, hash: &str) -> Result<Vec<u8>, String> {
-    let file = state
-        .legacy_db
-        .get_file_by_hash(hash)
-        .await?
-        .ok_or_else(|| format!("File not found: {hash}"))?;
-    let ext = crate::blob_store::mime_to_extension(&file.mime).to_string();
-    let bs = state.blob_store.clone();
-    let h = hash.to_string();
-    tokio::task::spawn_blocking(move || {
-        bs.read_original(&h, Some(&ext))
-            .map_err(|e| format!("Failed to read original file: {e}"))
-    })
-    .await
-    .map_err(|e| format!("Spawn error: {e}"))?
+    let path = state
+        .engine
+        .resolve_file_path(&state.blob_store, hash)
+        .await
+        .map_err(|e| format!("File not found: {e}"))?;
+    tokio::fs::read(path)
+        .await
+        .map_err(|e| format!("Failed to read original file: {e}"))
 }
 
 fn models_root_for(state: &AppState) -> std::path::PathBuf {
@@ -478,16 +451,31 @@ pub async fn auto_tag_imported(state: &AppState, hashes: &[String]) {
         all_tags.dedup_by(|a, b| a.namespace == b.namespace && a.tag == b.tag);
 
         // Apply tags
-        for pred in &all_tags {
-            let tag_str = if pred.namespace.is_empty() {
-                pred.tag.clone()
-            } else {
-                format!("{}:{}", pred.namespace, pred.tag)
-            };
-            if let Some((ns, st)) = crate::tags::normalize::parse_tag(&tag_str) {
-                if let Err(e) = state.legacy_db.tag_entity(hash, &ns, &st, "ai").await {
-                    tracing::warn!(hash, tag = tag_str, error = %e, "auto_tag_imported: tag failed");
+        let tag_strings: Vec<String> = all_tags
+            .iter()
+            .map(|pred| {
+                if pred.namespace.is_empty() {
+                    pred.tag.clone()
+                } else {
+                    format!("{}:{}", pred.namespace, pred.tag)
                 }
+            })
+            .collect();
+        if !tag_strings.is_empty() {
+            let target = EntityTarget {
+                kind: EntityTargetKind::EntityHashes,
+                entity_hashes: Some(vec![hash.clone()]),
+                query: None,
+                excluded_entity_hashes: None,
+            };
+            if let Err(e) = state.engine.apply_entity_tags(
+                target,
+                TagOperation::Add,
+                &tag_strings,
+                Some(TAG_PROVENANCE_AI),
+            ) {
+                tracing::warn!(hash, error = %e, "auto_tag_imported: tag apply failed");
+                continue;
             }
         }
 

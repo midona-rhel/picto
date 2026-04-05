@@ -49,7 +49,6 @@ impl<'a> SubscriptionSyncEngine<'a> {
         let state = crate::state::get_state()?;
         let outcome = crate::ingest::ingest_subscription_item(
             state.engine.db(),
-            self.db,
             self.blob_store,
             file_path,
             metadata,
@@ -141,7 +140,7 @@ impl<'a> SubscriptionSyncEngine<'a> {
             )
             .collect();
         let existing_collection_id = self
-            .db
+            .runtime_service()
             .get_subscription_post_collection(subscription_id, &pc.category, &pc.post_id)
             .await
             .ok()
@@ -153,7 +152,6 @@ impl<'a> SubscriptionSyncEngine<'a> {
 
         match crate::ingest::materialize_subscription_collection(
             state.engine.db(),
-            self.db,
             self.blob_store,
             subscription_id,
             &pc.category,
@@ -173,7 +171,7 @@ impl<'a> SubscriptionSyncEngine<'a> {
                 for member in &result.resolved_members {
                     if let Some(item_key) = member.item_key.as_deref() {
                         let _ = self
-                            .db
+                            .runtime_service()
                             .resolve_subscription_download_attempt(
                                 subscription_id,
                                 self.current_query_id,

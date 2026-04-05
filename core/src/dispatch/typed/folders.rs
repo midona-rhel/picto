@@ -1,5 +1,6 @@
 //! Handler functions for folder and collection operations.
 
+use rusqlite::{params, OptionalExtension};
 use serde::Deserialize;
 use ts_rs::TS;
 
@@ -16,6 +17,398 @@ fn folder_meta_json_canonical(folder: &crate::db::query::folders::FolderRow) -> 
         "watch_import_status_mode": folder.watch_import_status_mode,
     })
     .to_string()
+}
+
+const FOLDER_RANK_GAP: i64 = 1 << 20;
+
+fn get_folder_member_ids(conn: &rusqlite::Connection, folder_id: i64) -> rusqlite::Result<Vec<i64>> {
+    let mut stmt = conn.prepare_cached(
+        "SELECT entity_id
+         FROM folder_member
+         WHERE folder_id = ?1
+         ORDER BY COALESCE(position_rank, 0), entity_id",
+    )?;
+    let rows = stmt.query_map([folder_id], |row| row.get(0))?;
+    rows.collect()
+}
+
+fn get_folder_member_rank(
+    conn: &rusqlite::Connection,
+    folder_id: i64,
+    entity_id: i64,
+) -> rusqlite::Result<Option<i64>> {
+    conn.query_row(
+        "SELECT position_rank
+         FROM folder_member
+         WHERE folder_id = ?1 AND entity_id = ?2",
+        params![folder_id, entity_id],
+        |row| row.get(0),
+    )
+    .optional()
+}
+
+fn get_next_folder_member_rank(
+    conn: &rusqlite::Connection,
+    folder_id: i64,
+    anchor_rank: i64,
+    anchor_entity_id: i64,
+    exclude_entity_id: i64,
+) -> rusqlite::Result<Option<i64>> {
+    conn.query_row(
+        "SELECT position_rank
+         FROM folder_member
+         WHERE folder_id = ?1
+           AND entity_id != ?4
+           AND entity_id != ?5
+           AND (COALESCE(position_rank, 0) > ?2 OR (COALESCE(position_rank, 0) = ?2 AND entity_id > ?3))
+         ORDER BY COALESCE(position_rank, 0) ASC, entity_id ASC
+         LIMIT 1",
+        params![folder_id, anchor_rank, anchor_entity_id, exclude_entity_id, anchor_entity_id],
+        |row| row.get(0),
+    )
+    .optional()
+}
+
+fn get_prev_folder_member_rank(
+    conn: &rusqlite::Connection,
+    folder_id: i64,
+    anchor_rank: i64,
+    anchor_entity_id: i64,
+    exclude_entity_id: i64,
+) -> rusqlite::Result<Option<i64>> {
+    conn.query_row(
+        "SELECT position_rank
+         FROM folder_member
+         WHERE folder_id = ?1
+           AND entity_id != ?4
+           AND entity_id != ?5
+           AND (COALESCE(position_rank, 0) < ?2 OR (COALESCE(position_rank, 0) = ?2 AND entity_id < ?3))
+         ORDER BY COALESCE(position_rank, 0) DESC, entity_id DESC
+         LIMIT 1",
+        params![folder_id, anchor_rank, anchor_entity_id, exclude_entity_id, anchor_entity_id],
+        |row| row.get(0),
+    )
+    .optional()
+}
+
+fn redistribute_folder_member_ranks(
+    conn: &rusqlite::Connection,
+    folder_id: i64,
+) -> rusqlite::Result<()> {
+    let entity_ids = get_folder_member_ids(conn, folder_id)?;
+    let mut stmt = conn.prepare_cached(
+        "UPDATE folder_member
+         SET position_rank = ?1
+         WHERE folder_id = ?2 AND entity_id = ?3",
+    )?;
+    for (index, entity_id) in entity_ids.iter().enumerate() {
+        stmt.execute(params![(index as i64 + 1) * FOLDER_RANK_GAP, folder_id, entity_id])?;
+    }
+    Ok(())
+}
+
+fn reorder_folder_member(
+    conn: &rusqlite::Connection,
+    folder_id: i64,
+    entity_id: i64,
+    prev_rank: Option<i64>,
+    next_rank: Option<i64>,
+    after_entity_id: Option<i64>,
+    before_entity_id: Option<i64>,
+) -> rusqlite::Result<()> {
+    let (prev_rank, next_rank) = match (prev_rank, next_rank) {
+        (Some(previous), Some(next)) if next - previous <= 1 => {
+            redistribute_folder_member_ranks(conn, folder_id)?;
+            let refreshed_previous = after_entity_id
+                .and_then(|id| get_folder_member_rank(conn, folder_id, id).ok().flatten());
+            let refreshed_next = before_entity_id
+                .and_then(|id| get_folder_member_rank(conn, folder_id, id).ok().flatten());
+            (refreshed_previous.or(Some(previous)), refreshed_next.or(Some(next)))
+        }
+        other => other,
+    };
+    let new_rank = match (prev_rank, next_rank) {
+        (Some(previous), Some(next)) => (previous + next) / 2,
+        (Some(previous), None) => previous + FOLDER_RANK_GAP,
+        (None, Some(next)) => next / 2,
+        (None, None) => FOLDER_RANK_GAP,
+    };
+    conn.execute(
+        "INSERT OR IGNORE INTO folder_member (folder_id, entity_id, position_rank)
+         VALUES (?1, ?2, ?3)",
+        params![folder_id, entity_id, new_rank],
+    )?;
+    conn.execute(
+        "UPDATE folder_member
+         SET position_rank = ?1
+         WHERE folder_id = ?2 AND entity_id = ?3",
+        params![new_rank, folder_id, entity_id],
+    )?;
+    Ok(())
+}
+
+fn reorder_folder_items_canonical(
+    db: &crate::db::LibraryDatabase,
+    folder_id: i64,
+    moves: Vec<crate::types::FolderReorderMove>,
+) -> Result<(), String> {
+    if moves.is_empty() {
+        return Ok(());
+    }
+    let mut all_hashes = Vec::<String>::new();
+    for movement in &moves {
+        all_hashes.push(movement.hash.clone());
+        if let Some(hash) = movement.after_hash.as_ref() {
+            all_hashes.push(hash.clone());
+        }
+        if let Some(hash) = movement.before_hash.as_ref() {
+            all_hashes.push(hash.clone());
+        }
+    }
+    let resolved_ids = db.resolve_entity_hashes(&all_hashes)?;
+    let hash_to_id: std::collections::HashMap<String, i64> =
+        all_hashes.into_iter().zip(resolved_ids).collect();
+
+    struct ResolvedMove {
+        entity_id: i64,
+        after_entity_id: Option<i64>,
+        before_entity_id: Option<i64>,
+    }
+
+    let mut resolved_moves = Vec::<ResolvedMove>::with_capacity(moves.len());
+    for movement in moves {
+        let entity_id = *hash_to_id
+            .get(&movement.hash)
+            .ok_or_else(|| format!("Hash not found: {}", movement.hash))?;
+        let after_entity_id = movement
+            .after_hash
+            .as_ref()
+            .map(|hash| {
+                hash_to_id
+                    .get(hash)
+                    .copied()
+                    .ok_or_else(|| format!("Hash not found: {hash}"))
+            })
+            .transpose()?;
+        let before_entity_id = movement
+            .before_hash
+            .as_ref()
+            .map(|hash| {
+                hash_to_id
+                    .get(hash)
+                    .copied()
+                    .ok_or_else(|| format!("Hash not found: {hash}"))
+            })
+            .transpose()?;
+        resolved_moves.push(ResolvedMove {
+            entity_id,
+            after_entity_id,
+            before_entity_id,
+        });
+    }
+
+    db.with_write(move |conn| {
+        for movement in &resolved_moves {
+            let previous_rank = match movement.after_entity_id {
+                Some(entity_id) => get_folder_member_rank(conn, folder_id, entity_id)?,
+                None => None,
+            };
+            let next_rank = match movement.before_entity_id {
+                Some(entity_id) => get_folder_member_rank(conn, folder_id, entity_id)?,
+                None => None,
+            };
+            let (previous_rank, next_rank) = match (previous_rank, next_rank) {
+                (Some(previous), None) => (
+                    Some(previous),
+                    get_next_folder_member_rank(
+                        conn,
+                        folder_id,
+                        previous,
+                        movement.after_entity_id.unwrap(),
+                        movement.entity_id,
+                    )?,
+                ),
+                (None, Some(next)) => (
+                    get_prev_folder_member_rank(
+                        conn,
+                        folder_id,
+                        next,
+                        movement.before_entity_id.unwrap(),
+                        movement.entity_id,
+                    )?,
+                    Some(next),
+                ),
+                other => other,
+            };
+            reorder_folder_member(
+                conn,
+                folder_id,
+                movement.entity_id,
+                previous_rank,
+                next_rank,
+                movement.after_entity_id,
+                movement.before_entity_id,
+            )?;
+        }
+        Ok(())
+    })
+}
+
+fn sort_folder_items_canonical(
+    db: &crate::db::LibraryDatabase,
+    folder_id: i64,
+    sort_by: &str,
+    direction: &str,
+    hashes: Option<Vec<String>>,
+) -> Result<(), String> {
+    let sort_column = match sort_by {
+        "name" => "me.name COLLATE NOCASE",
+        "imported_at" => "me.date_added",
+        "size" => "COALESCE(me.total_size_bytes, mf.size_bytes, 0)",
+        "rating" => "me.rating",
+        "mime" => "mf.mime_type",
+        other => return Err(format!("Invalid sort column: {other}")),
+    };
+    let direction_sql = if direction == "asc" { "ASC" } else { "DESC" };
+    let entity_ids = hashes
+        .as_ref()
+        .map(|hashes| db.resolve_entity_hashes(hashes))
+        .transpose()?;
+
+    db.with_write(move |conn| {
+        if let Some(subset_ids) = entity_ids.as_deref() {
+            if subset_ids.is_empty() {
+                return Ok(());
+            }
+            let placeholders = subset_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+            let ranks_sql = format!(
+                "SELECT entity_id, COALESCE(position_rank, 0)
+                 FROM folder_member
+                 WHERE folder_id = ?1 AND entity_id IN ({placeholders})
+                 ORDER BY COALESCE(position_rank, 0) ASC, entity_id ASC"
+            );
+            let mut rank_stmt = conn.prepare(&ranks_sql)?;
+            let mut rank_values: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(folder_id)];
+            for entity_id in subset_ids {
+                rank_values.push(Box::new(*entity_id));
+            }
+            let rank_refs: Vec<&dyn rusqlite::ToSql> =
+                rank_values.iter().map(|value| value.as_ref()).collect();
+            let rank_rows: Vec<(i64, i64)> = rank_stmt
+                .query_map(rank_refs.as_slice(), |row| Ok((row.get(0)?, row.get(1)?)))?
+                .collect::<Result<Vec<_>, _>>()?;
+            let ranks: Vec<i64> = rank_rows.iter().map(|row| row.1).collect();
+
+            let sorted_sql = format!(
+                "SELECT fm.entity_id
+                 FROM folder_member fm
+                 JOIN media_entity me ON me.entity_id = fm.entity_id
+                 LEFT JOIN single_media_entity sme ON sme.entity_id = me.entity_id
+                 LEFT JOIN media_file mf ON mf.file_id = sme.file_id
+                 WHERE fm.folder_id = ?1 AND fm.entity_id IN ({placeholders})
+                 ORDER BY {sort_column} {direction_sql}"
+            );
+            let mut sorted_stmt = conn.prepare(&sorted_sql)?;
+            let sorted_ids: Vec<i64> = sorted_stmt
+                .query_map(rank_refs.as_slice(), |row| row.get(0))?
+                .collect::<Result<Vec<_>, _>>()?;
+
+            let mut update_stmt = conn.prepare_cached(
+                "UPDATE folder_member
+                 SET position_rank = ?1
+                 WHERE folder_id = ?2 AND entity_id = ?3",
+            )?;
+            for (index, entity_id) in sorted_ids.iter().enumerate() {
+                if index < ranks.len() {
+                    update_stmt.execute(params![ranks[index], folder_id, entity_id])?;
+                }
+            }
+            return Ok(());
+        }
+
+        let sorted_sql = format!(
+            "SELECT fm.entity_id
+             FROM folder_member fm
+             JOIN media_entity me ON me.entity_id = fm.entity_id
+             LEFT JOIN single_media_entity sme ON sme.entity_id = me.entity_id
+             LEFT JOIN media_file mf ON mf.file_id = sme.file_id
+             WHERE fm.folder_id = ?1
+             ORDER BY {sort_column} {direction_sql}"
+        );
+        let mut sorted_stmt = conn.prepare(&sorted_sql)?;
+        let sorted_ids: Vec<i64> = sorted_stmt
+            .query_map([folder_id], |row| row.get(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut update_stmt = conn.prepare_cached(
+            "UPDATE folder_member
+             SET position_rank = ?1
+             WHERE folder_id = ?2 AND entity_id = ?3",
+        )?;
+        for (index, entity_id) in sorted_ids.iter().enumerate() {
+            update_stmt.execute(params![(index as i64 + 1) * FOLDER_RANK_GAP, folder_id, entity_id])?;
+        }
+        Ok(())
+    })
+}
+
+fn reverse_folder_items_canonical(
+    db: &crate::db::LibraryDatabase,
+    folder_id: i64,
+    hashes: Option<Vec<String>>,
+) -> Result<(), String> {
+    let entity_ids = hashes
+        .as_ref()
+        .map(|hashes| db.resolve_entity_hashes(hashes))
+        .transpose()?;
+    db.with_write(move |conn| {
+        if let Some(subset_ids) = entity_ids.as_deref() {
+            if subset_ids.len() < 2 {
+                return Ok(());
+            }
+            let placeholders = subset_ids.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+            let sql = format!(
+                "SELECT entity_id, COALESCE(position_rank, 0)
+                 FROM folder_member
+                 WHERE folder_id = ?1 AND entity_id IN ({placeholders})
+                 ORDER BY COALESCE(position_rank, 0) ASC, entity_id ASC"
+            );
+            let mut stmt = conn.prepare(&sql)?;
+            let mut values: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(folder_id)];
+            for entity_id in subset_ids {
+                values.push(Box::new(*entity_id));
+            }
+            let refs: Vec<&dyn rusqlite::ToSql> =
+                values.iter().map(|value| value.as_ref()).collect();
+            let rows: Vec<(i64, i64)> = stmt
+                .query_map(refs.as_slice(), |row| Ok((row.get(0)?, row.get(1)?)))?
+                .collect::<Result<Vec<_>, _>>()?;
+            let ranks: Vec<i64> = rows.iter().map(|row| row.1).collect();
+            let ordered_entity_ids: Vec<i64> = rows.iter().map(|row| row.0).collect();
+            let mut update_stmt = conn.prepare_cached(
+                "UPDATE folder_member
+                 SET position_rank = ?1
+                 WHERE folder_id = ?2 AND entity_id = ?3",
+            )?;
+            let len = ordered_entity_ids.len();
+            for index in 0..len {
+                update_stmt.execute(params![ranks[len - 1 - index], folder_id, ordered_entity_ids[index]])?;
+            }
+            return Ok(());
+        }
+
+        let ordered_entity_ids = get_folder_member_ids(conn, folder_id)?;
+        let len = ordered_entity_ids.len();
+        let mut update_stmt = conn.prepare_cached(
+            "UPDATE folder_member
+             SET position_rank = ?1
+             WHERE folder_id = ?2 AND entity_id = ?3",
+        )?;
+        for (index, entity_id) in ordered_entity_ids.iter().rev().enumerate() {
+            update_stmt.execute(params![(index as i64 + 1) * FOLDER_RANK_GAP, folder_id, entity_id])?;
+        }
+        let _ = len;
+        Ok(())
+    })
 }
 
 // ─── Input structs ─────────────────────────────────────────────────────────
@@ -448,7 +841,6 @@ pub async fn set_folder_watch_config(
         // that includes both the imported files and folder membership changes.
         // No separate watch-config emission needed — one combined action.
         crate::folders::watch::import_existing_for_folder_watch(
-            &state.legacy_db,
             state.engine.db(),
             &state.blob_store,
             input.folder_id,
@@ -669,32 +1061,41 @@ pub async fn reorder_folders(state: &AppState, input: ReorderFoldersInput) -> Re
     Ok(())
 }
 
-// Legacy-only: reorder_folder_items uses old DB for hash-to-position resolution.
-// Not called by the rebuilt frontend.
 pub async fn reorder_folder_items(
     state: &AppState,
     input: ReorderFolderItemsInput,
 ) -> Result<(), String> {
     if let Some(moves) = input.moves {
-        // Fenced legacy: relative reorder (before/after hash) uses old DB which resolves hashes to positions
-        crate::folders::service::reorder_folder_items(&state.legacy_db, input.folder_id, moves)
-            .await?;
+        reorder_folder_items_canonical(state.engine.db(), input.folder_id, moves)?;
     } else if let Some(sort_by) = input.sort_by {
         let direction = input.direction.unwrap_or_else(|| "asc".to_string());
-        state
-            .legacy_db
-            .sort_folder_items(input.folder_id, sort_by, direction, input.hashes)
-            .await?;
+        sort_folder_items_canonical(state.engine.db(), input.folder_id, &sort_by, &direction, input.hashes)?;
     } else if input.reverse == Some(true) {
-        state
-            .legacy_db
-            .reverse_folder_items(input.folder_id, input.hashes)
-            .await?;
+        reverse_folder_items_canonical(state.engine.db(), input.folder_id, input.hashes)?;
     } else {
         return Err("No reorder operation specified".to_string());
     }
     crate::events::emit_state_changed(
         "reorder_folder_items",
+        crate::runtime_contract::change_builder::ChangeImpact::folder_item_reorder(input.folder_id),
+    );
+    Ok(())
+}
+
+// New engine: reorder folder items by entity_id + position_rank.
+#[derive(Debug, Deserialize)]
+pub struct ReorderFolderMembersInput {
+    pub folder_id: i64,
+    pub moves: Vec<(i64, i64)>, // (entity_id, position_rank)
+}
+
+pub async fn reorder_folder_members(
+    state: &AppState,
+    input: ReorderFolderMembersInput,
+) -> Result<(), String> {
+    state.engine.reorder_folder_items(input.folder_id, &input.moves)?;
+    crate::events::emit_state_changed(
+        "reorder_folder_members",
         crate::runtime_contract::change_builder::ChangeImpact::folder_item_reorder(input.folder_id),
     );
     Ok(())

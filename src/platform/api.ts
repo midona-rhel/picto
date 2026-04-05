@@ -516,6 +516,12 @@ export function pixivOAuthExchange(
   });
 }
 
+// ── Folder cover ────────────────────────────────────────────────
+
+export function getFolderCoverHash(folderId: number): Promise<string | null> {
+  return invoke<string | null>('get_folder_cover_hash', { folder_id: folderId });
+}
+
 // ── Import / Export ─────────────────────────────────────────────
 
 export function importFiles(paths: string[], params?: {
@@ -556,8 +562,15 @@ export function exportMedia(target: EntityTarget, config: {
 export function reorderFolderItems(folderId: number, params: {
   sort_by?: string;
   direction?: string;
+  moves?: Array<{ hash: string; before_hash?: string | null; after_hash?: string | null }>;
+  hashes?: string[];
 }): Promise<void> {
-  return invoke<void>('reorder_folder_items', { folder_id: folderId, ...params });
+  return invoke<void>('reorder_folder_items', { folder_id: folderId, ...params } as unknown as Record<string, unknown>);
+}
+
+/** New engine: reorder folder members by entity_id + position_rank. */
+export function reorderFolderMembers(folderId: number, moves: [number, number][]): Promise<void> {
+  return invoke<void>('reorder_folder_members', { folder_id: folderId, moves });
 }
 
 // ── AI Tagger ───────────────────────────────────────────────────
@@ -667,6 +680,7 @@ export interface ViewPrefsPatch {
   show_extension?: boolean | null;
   show_label?: boolean | null;
   thumbnail_fit?: string | null;
+  show_subfolders?: boolean | null;
 }
 
 export function setZoomFactor(factor: number): Promise<void> {

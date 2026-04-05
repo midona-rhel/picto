@@ -141,6 +141,53 @@ pub fn get_derivative_target_by_entity_hash(
     .optional()
 }
 
+pub fn get_derivative_targets_by_entity_hashes(
+    conn: &Connection,
+    entity_hashes: &[String],
+) -> rusqlite::Result<Vec<DerivativeTarget>> {
+    if entity_hashes.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let placeholders = std::iter::repeat_n("?", entity_hashes.len())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let sql = format!(
+        "SELECT
+             mf.file_id,
+             me.entity_hash,
+             mf.file_hash,
+             mf.mime_type,
+             mf.duration_ms,
+             mf.frame_count,
+             mf.dominant_color_hex,
+             mf.dominant_palette_blob IS NOT NULL,
+             mf.color_analysis_version,
+             mf.perceptual_hash
+         FROM media_entity me
+         JOIN single_media_entity sme ON sme.entity_id = me.entity_id
+         JOIN media_file mf ON mf.file_id = sme.file_id
+         WHERE me.entity_hash IN ({placeholders})"
+    );
+
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map(rusqlite::params_from_iter(entity_hashes.iter()), |row| {
+        Ok(DerivativeTarget {
+            file_id: row.get(0)?,
+            entity_hash: row.get(1)?,
+            file_hash: row.get(2)?,
+            mime_type: row.get(3)?,
+            duration_ms: row.get(4)?,
+            frame_count: row.get(5)?,
+            dominant_color_hex: row.get(6)?,
+            has_dominant_palette_blob: row.get::<_, i64>(7)? != 0,
+            color_analysis_version: row.get(8)?,
+            perceptual_hash: row.get(9)?,
+        })
+    })?;
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+}
+
 pub fn find_child_folder_id(
     conn: &Connection,
     parent_id: i64,

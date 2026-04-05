@@ -6,7 +6,7 @@ import { atom } from 'jotai';
 import type { CanonicalEntityGridItem, BaseScope, EntityViewQuery } from '../shared/types/canonical';
 import type { GridViewMode } from '../features/grid/layout/types';
 import { activeNodeIdAtom, collectionNameAtom } from './navigation';
-import { sidebarNodesAtom } from './sidebar';
+import { sidebarNodesAtom, folderNodesAtom } from './sidebar';
 
 // ── Query inputs ─────────────────────────────────────────────────
 
@@ -40,6 +40,7 @@ export const gridShowExtensionAtom = atom(false);
 export const gridShowResolutionAtom = atom(false);
 export const gridShowExtensionLabelAtom = atom(false);
 export const gridFitThumbnailsAtom = atom(false);
+export const gridShowSubfoldersAtom = atom(true);
 
 // ── Results ──────────────────────────────────────────────────────
 
@@ -84,6 +85,17 @@ export const gridScopeLabelAtom = atom((get) => {
     'system:untagged': 'Untagged',
   };
   return fallbacks[nodeId] ?? '';
+});
+
+// ── Child folders for subfolder grid tiles ──────────────────────
+
+export const gridChildFoldersAtom = atom((get) => {
+  const scope = get(gridScopeAtom);
+  if (scope.kind !== 'folder' || scope.id == null) return [];
+  const parentId = `folder:${scope.id}`;
+  return get(folderNodesAtom)
+    .filter((n) => n.parent_id === parentId)
+    .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0) || a.name.localeCompare(b.name));
 });
 
 // Re-export types for convenience

@@ -13,16 +13,16 @@ mod importing;
 mod progress;
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use chrono::{Duration, Utc};
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 
 use crate::blob_store::BlobStore;
+use crate::db::LibraryDatabase;
 use crate::rate_limiter::RateLimiter;
 use crate::settings::store::AppSettings;
-use crate::sqlite::SqliteDatabase;
 use crate::subscriptions::archive::subscription_query_archive_prefix;
 use crate::subscriptions::db::OwnedSubscriptionDownloadAttemptUpsert;
 use crate::subscriptions::gallery_dl_runner::{self, FailureKind, GalleryDlRunner, RunOptions};
@@ -54,8 +54,9 @@ pub struct SyncProgress {
 }
 
 pub struct SubscriptionSyncEngine<'a> {
-    db: &'a SqliteDatabase,
+    db: &'a LibraryDatabase,
     blob_store: &'a BlobStore,
+    library_root: PathBuf,
     rate_limiter: Option<RateLimiter>,
     runner: GalleryDlRunner,
     settings: AppSettings,
@@ -112,12 +113,12 @@ impl<'a> SubscriptionSyncEngine<'a> {
         progress.resume_cursor = cursor.clone();
         if !completed_initial_run {
             let _ = self
-                .db
+                .runtime_service()
                 .set_query_resume_state(query_id, cursor, resume_strategy.clone())
                 .await;
         }
         let _ = self
-            .db
+            .runtime_service()
             .update_query_progress(
                 query_id,
                 &Utc::now().to_rfc3339(),
@@ -258,9 +259,10 @@ impl<'a> SubscriptionSyncEngine<'a> {
     }
 
     pub fn new(
-        db: &'a SqliteDatabase,
+        db: &'a LibraryDatabase,
         blob_store: &'a BlobStore,
         settings: &AppSettings,
+        library_root: &Path,
     ) -> Result<Self, String> {
         let binary_path = crate::media_processing::gallery_dl_path::gallery_dl_path()?.clone();
         let runner = GalleryDlRunner::new(binary_path);
@@ -268,6 +270,7 @@ impl<'a> SubscriptionSyncEngine<'a> {
         Ok(Self {
             db,
             blob_store,
+            library_root: library_root.to_path_buf(),
             rate_limiter: None,
             runner,
             settings: settings.clone(),
@@ -282,6 +285,15 @@ impl<'a> SubscriptionSyncEngine<'a> {
             auto_merge_require_matching_dimensions: false,
             auto_collections: true,
         })
+    }
+
+    pub(super) fn runtime_service(
+        &self,
+    ) -> crate::subscriptions::runtime_service::SubscriptionRuntimeService<'_> {
+        crate::subscriptions::runtime_service::SubscriptionRuntimeService::new(
+            self.db,
+            self.library_root.as_path(),
+        )
     }
 
     pub fn with_name(mut self, name: String) -> Self {
@@ -339,7 +351,7 @@ impl<'a> SubscriptionSyncEngine<'a> {
 
         // Record last_check_time at start; load existing counters so we accumulate across runs
         let (prior_files, prior_posts) = {
-            let q = self.db.get_subscription_query(query_id).await;
+            let q = self.runtime_service().get_subscription_query(query_id).await;
             match q {
                 Ok(Some(q)) => (q.files_found as usize, q.posts_found as usize),
                 _ => (0, 0),
@@ -350,7 +362,7 @@ impl<'a> SubscriptionSyncEngine<'a> {
         {
             let now = Utc::now().to_rfc3339();
             let _ = self
-                .db
+                .runtime_service()
                 .update_query_progress(query_id, &now, prior_files as i64, prior_posts as i64)
                 .await;
         }
@@ -358,8 +370,9 @@ impl<'a> SubscriptionSyncEngine<'a> {
 
         let inbox_count = self
             .db
-            .bitmaps
-            .len(&crate::sqlite::bitmaps::BitmapKey::Status(0));
+            .get_scope_counts()
+            .map(|counts| counts.inbox.max(0) as u64)
+            .unwrap_or(0);
         if inbox_count >= inbox_limit as u64 {
             progress.failure_kind = Some("inbox_full".to_string());
             self.emit_progress(
@@ -423,12 +436,7 @@ impl<'a> SubscriptionSyncEngine<'a> {
             "sync_query: credential loaded"
         );
 
-        let archive_path = self
-            .db
-            .db_dir()
-            .parent()
-            .map(|r| r.join("gdl-archive.sqlite3"))
-            .unwrap_or_else(|| PathBuf::from("gdl-archive.sqlite3"));
+        let archive_path = self.library_root.join("gdl-archive.sqlite3");
         let archive_prefix = subscription_query_archive_prefix(subscription_id, query_id);
 
         let abort_threshold = if completed_initial_run {
@@ -449,7 +457,7 @@ impl<'a> SubscriptionSyncEngine<'a> {
             "sync_query: pre-spawn ready"
         );
         let query_run_id = self
-            .db
+            .runtime_service()
             .create_subscription_query_run(subscription_run_id, subscription_id, query_id)
             .await
             .ok();
@@ -526,8 +534,9 @@ impl<'a> SubscriptionSyncEngine<'a> {
             }
             let inbox_count = self
                 .db
-                .bitmaps
-                .len(&crate::sqlite::bitmaps::BitmapKey::Status(0));
+                .get_scope_counts()
+                .map(|counts| counts.inbox.max(0) as u64)
+                .unwrap_or(0);
             if inbox_count >= inbox_limit as u64 {
                 info!(
                     query_id,
@@ -749,7 +758,7 @@ impl<'a> SubscriptionSyncEngine<'a> {
                 self.note_runtime_error(site_id, has_credential, Some(&e))
                     .await;
                 let _ = self
-                    .db
+                    .runtime_service()
                     .set_query_terminal_state(
                         query_id,
                         None,
@@ -765,7 +774,7 @@ impl<'a> SubscriptionSyncEngine<'a> {
                     .await;
                 if let Some(query_run_id) = query_run_id {
                     let _ = self
-                        .db
+                        .runtime_service()
                         .finish_subscription_query_run(
                             query_run_id,
                             "failed",
@@ -785,7 +794,7 @@ impl<'a> SubscriptionSyncEngine<'a> {
                     .push(format!("gallery-dl task panicked: {e}"));
                 progress.failure_kind = Some("unknown".to_string());
                 let _ = self
-                    .db
+                    .runtime_service()
                     .set_query_terminal_state(
                         query_id,
                         None,
@@ -800,7 +809,7 @@ impl<'a> SubscriptionSyncEngine<'a> {
                     .await;
                 if let Some(query_run_id) = query_run_id {
                     let _ = self
-                        .db
+                        .runtime_service()
                         .finish_subscription_query_run(
                             query_run_id,
                             "failed",
@@ -910,19 +919,19 @@ impl<'a> SubscriptionSyncEngine<'a> {
             self.note_run_success(subscription_id, query_id, site_id, has_credential)
                 .await;
             let _ = self
-                .db
+                .runtime_service()
                 .resolve_subscription_issues(subscription_id, Some(query_id), "unauthorized")
                 .await;
             let _ = self
-                .db
+                .runtime_service()
                 .resolve_subscription_issues(subscription_id, Some(query_id), "expired")
                 .await;
             let _ = self
-                .db
+                .runtime_service()
                 .resolve_subscription_issues(subscription_id, Some(query_id), "rate_limited")
                 .await;
             let _ = self
-                .db
+                .runtime_service()
                 .resolve_subscription_issues(subscription_id, Some(query_id), "network")
                 .await;
         }
@@ -1050,7 +1059,7 @@ impl<'a> SubscriptionSyncEngine<'a> {
                     .or_else(|| resume_cursor.map(|s| s.to_string()))
             };
             let _ = self
-                .db
+                .runtime_service()
                 .set_query_resume_state(query_id, persisted_cursor, resume_strategy.clone())
                 .await;
         }
@@ -1058,7 +1067,7 @@ impl<'a> SubscriptionSyncEngine<'a> {
         if completed_cleanly {
             let now = Utc::now().to_rfc3339();
             let _ = self
-                .db
+                .runtime_service()
                 .update_query_progress(
                     query_id,
                     &now,
@@ -1082,10 +1091,13 @@ impl<'a> SubscriptionSyncEngine<'a> {
         if !completed_initial_run && completed_cleanly && !continue_initial_pagination {
             info!(query_id, "sync_query: marking initial run as complete");
             let _ = self
-                .db
+                .runtime_service()
                 .set_query_completed_initial_run(query_id, true)
                 .await;
-            let _ = self.db.set_query_resume_state(query_id, None, None).await;
+            let _ = self
+                .runtime_service()
+                .set_query_resume_state(query_id, None, None)
+                .await;
         } else if continue_initial_pagination {
             info!(query_id, next_resume_cursor = ?next_resume_cursor, fetched_items = total_items,
                 post_limit = ?post_limit, "sync_query: initial run continues; resuming next chunk");
@@ -1111,7 +1123,7 @@ impl<'a> SubscriptionSyncEngine<'a> {
                 "failed"
             };
             let _ = self
-                .db
+                .runtime_service()
                 .finish_subscription_query_run(
                     query_run_id,
                     status,
@@ -1126,12 +1138,12 @@ impl<'a> SubscriptionSyncEngine<'a> {
 
         if progress.errors.is_empty() && !progress.cancelled {
             let _ = self
-                .db
+                .runtime_service()
                 .set_query_terminal_state(query_id, Some(Utc::now().to_rfc3339()), None, None, None)
                 .await;
         } else if !progress.cancelled {
             let _ = self
-                .db
+                .runtime_service()
                 .set_query_terminal_state(
                     query_id,
                     None,
@@ -1178,7 +1190,7 @@ impl<'a> SubscriptionSyncEngine<'a> {
         }
 
         let query_run_id = self
-            .db
+            .runtime_service()
             .create_subscription_query_run(None, subscription_id, query_id)
             .await
             .ok();
@@ -1284,7 +1296,7 @@ impl<'a> SubscriptionSyncEngine<'a> {
                 Ok(outcome) => {
                     if let Some(item_key) = metadata_item_key(&item.metadata) {
                         let _ = self
-                            .db
+                            .runtime_service()
                             .resolve_subscription_download_attempt(
                                 subscription_id,
                                 Some(query_id),
@@ -1402,7 +1414,7 @@ impl<'a> SubscriptionSyncEngine<'a> {
         gallery_dl_runner::cleanup_temp_dir(&run_summary.temp_dir).await;
         if run_summary.failed_items.is_empty() {
             let _ = self
-                .db
+                .runtime_service()
                 .resolve_subscription_issues(subscription_id, Some(query_id), "download_failure")
                 .await;
         }
@@ -1415,7 +1427,7 @@ impl<'a> SubscriptionSyncEngine<'a> {
                 "failed"
             };
             let _ = self
-                .db
+                .runtime_service()
                 .finish_subscription_query_run(
                     query_run_id,
                     status,
@@ -1455,7 +1467,7 @@ impl<'a> SubscriptionSyncEngine<'a> {
         let item_key = metadata_item_key(metadata)
             .unwrap_or_else(|| format!("{category}:{post_id}:{}", metadata.page_num.unwrap_or(0)));
         let _ = self
-            .db
+            .runtime_service()
             .upsert_subscription_post_member(
                 crate::subscriptions::db::OwnedSubscriptionPostMemberUpsert {
                     subscription_id,
@@ -1480,7 +1492,7 @@ impl<'a> SubscriptionSyncEngine<'a> {
         collection_id: i64,
     ) {
         let members = match self
-            .db
+            .runtime_service()
             .list_subscription_post_members(subscription_id, site_id, post_id)
             .await
         {
@@ -1512,7 +1524,7 @@ impl<'a> SubscriptionSyncEngine<'a> {
         detail: Option<&str>,
     ) {
         let _ = self
-            .db
+            .runtime_service()
             .upsert_subscription_issue(subscription_id, query_id, issue_kind, message, detail)
             .await;
     }
@@ -1529,7 +1541,7 @@ impl<'a> SubscriptionSyncEngine<'a> {
         let item_key = metadata_item_key(metadata)
             .unwrap_or_else(|| format!("unknown:{}:{}", query_id, Utc::now().timestamp_millis()));
         let _ = self
-            .db
+            .runtime_service()
             .upsert_subscription_download_attempt(OwnedSubscriptionDownloadAttemptUpsert {
                 subscription_id,
                 query_id: Some(query_id),
@@ -1628,7 +1640,7 @@ fn detect_gallery_dl_root(path: &std::path::Path) -> Option<PathBuf> {
     })
 }
 
-async fn maybe_cleanup_subscription_temp_root(db: &SqliteDatabase, temp_root: &std::path::Path) {
+async fn maybe_cleanup_subscription_temp_root(db: &LibraryDatabase, temp_root: &std::path::Path) {
     match db.has_retained_ingest_sources_for_root(temp_root).await {
         Ok(true) => {}
         Ok(false) => gallery_dl_runner::cleanup_temp_dir(temp_root).await,

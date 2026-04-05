@@ -167,15 +167,21 @@ CREATE TABLE IF NOT EXISTS subscription (
 CREATE TABLE IF NOT EXISTS subscription_query (
     query_id            INTEGER PRIMARY KEY,
     subscription_id     INTEGER NOT NULL REFERENCES subscription(subscription_id) ON DELETE CASCADE,
+    site_id             TEXT    NOT NULL,
     query_text          TEXT    NOT NULL,
     display_name        TEXT,
+    notes               TEXT,
     paused              INTEGER NOT NULL DEFAULT 0,
     last_check_time     TEXT,
     files_found         INTEGER NOT NULL DEFAULT 0,
     posts_found         INTEGER NOT NULL DEFAULT 0,
     completed_initial_run INTEGER NOT NULL DEFAULT 0,
     resume_cursor       TEXT,
-    resume_strategy     TEXT
+    resume_strategy     TEXT,
+    last_success_at     TEXT,
+    last_failure_at     TEXT,
+    last_failure_kind   TEXT,
+    last_failure_message TEXT
 );
 
 CREATE TABLE IF NOT EXISTS subscription_entity (
@@ -226,6 +232,87 @@ CREATE TABLE IF NOT EXISTS ingest_queue_item (
     last_error           TEXT,
     date_added           TEXT    NOT NULL,
     date_modified        TEXT    NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS subscription_run (
+    run_id               INTEGER PRIMARY KEY,
+    subscription_id      INTEGER NOT NULL REFERENCES subscription(subscription_id) ON DELETE CASCADE,
+    started_at           TEXT    NOT NULL,
+    finished_at          TEXT,
+    status               TEXT    NOT NULL DEFAULT 'running',
+    failure_kind         TEXT,
+    error_message        TEXT,
+    files_downloaded     INTEGER NOT NULL DEFAULT 0,
+    files_skipped        INTEGER NOT NULL DEFAULT 0,
+    metadata_validated   INTEGER NOT NULL DEFAULT 0,
+    metadata_invalid     INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS subscription_query_run (
+    query_run_id         INTEGER PRIMARY KEY,
+    run_id               INTEGER REFERENCES subscription_run(run_id) ON DELETE SET NULL,
+    subscription_id      INTEGER NOT NULL REFERENCES subscription(subscription_id) ON DELETE CASCADE,
+    query_id             INTEGER NOT NULL REFERENCES subscription_query(query_id) ON DELETE CASCADE,
+    started_at           TEXT    NOT NULL,
+    finished_at          TEXT,
+    status               TEXT    NOT NULL DEFAULT 'running',
+    failure_kind         TEXT,
+    error_message        TEXT,
+    posts_processed      INTEGER NOT NULL DEFAULT 0,
+    files_downloaded     INTEGER NOT NULL DEFAULT 0,
+    files_skipped        INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS subscription_issue (
+    issue_id             INTEGER PRIMARY KEY,
+    subscription_id      INTEGER NOT NULL REFERENCES subscription(subscription_id) ON DELETE CASCADE,
+    query_id             INTEGER REFERENCES subscription_query(query_id) ON DELETE CASCADE,
+    issue_kind           TEXT    NOT NULL,
+    status               TEXT    NOT NULL DEFAULT 'open',
+    message              TEXT    NOT NULL,
+    detail               TEXT,
+    first_seen_at        TEXT    NOT NULL,
+    last_seen_at         TEXT    NOT NULL,
+    resolved_at          TEXT,
+    UNIQUE (subscription_id, query_id, issue_kind, message)
+);
+
+CREATE TABLE IF NOT EXISTS subscription_download_attempt (
+    attempt_id           INTEGER PRIMARY KEY,
+    subscription_id      INTEGER NOT NULL REFERENCES subscription(subscription_id) ON DELETE CASCADE,
+    query_id             INTEGER REFERENCES subscription_query(query_id) ON DELETE CASCADE,
+    query_run_id         INTEGER REFERENCES subscription_query_run(query_run_id) ON DELETE SET NULL,
+    item_key             TEXT    NOT NULL,
+    site_category        TEXT,
+    post_id              TEXT,
+    page_num             INTEGER,
+    canonical_post_url   TEXT,
+    media_url            TEXT,
+    retry_url            TEXT,
+    retry_count          INTEGER NOT NULL DEFAULT 0,
+    status               TEXT    NOT NULL DEFAULT 'pending',
+    failure_kind         TEXT,
+    last_error           TEXT,
+    next_retry_at        TEXT,
+    created_at           TEXT    NOT NULL,
+    updated_at           TEXT    NOT NULL,
+    resolved_at          TEXT,
+    UNIQUE (subscription_id, query_id, item_key)
+);
+
+CREATE TABLE IF NOT EXISTS subscription_post_member (
+    subscription_id      INTEGER NOT NULL REFERENCES subscription(subscription_id) ON DELETE CASCADE,
+    site_id              TEXT    NOT NULL,
+    post_id              TEXT    NOT NULL,
+    item_key             TEXT    NOT NULL,
+    page_num             INTEGER,
+    canonical_post_url   TEXT,
+    media_url            TEXT,
+    entity_hash          TEXT,
+    status               TEXT    NOT NULL,
+    created_at           TEXT    NOT NULL,
+    updated_at           TEXT    NOT NULL,
+    PRIMARY KEY (subscription_id, site_id, post_id, item_key)
 );
 
 CREATE TABLE IF NOT EXISTS deferred_work_item (
