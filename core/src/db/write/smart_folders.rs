@@ -33,45 +33,29 @@ pub fn update_smart_folder(
     sort_order: Option<&str>,
     now: &str,
 ) -> rusqlite::Result<()> {
-    if let Some(n) = name {
-        conn.execute(
-            "UPDATE smart_folder SET name = ?1, date_modified = ?2 WHERE smart_folder_id = ?3",
-            params![n, now, smart_folder_id],
-        )?;
-    }
-    if let Some(p) = predicate_json {
-        conn.execute("UPDATE smart_folder SET predicate_json = ?1, date_modified = ?2 WHERE smart_folder_id = ?3", params![p, now, smart_folder_id])?;
-    }
-    if let Some(i) = icon {
-        conn.execute(
-            "UPDATE smart_folder SET icon = ?1, date_modified = ?2 WHERE smart_folder_id = ?3",
-            params![i, now, smart_folder_id],
-        )?;
-    }
-    if let Some(c) = color {
-        conn.execute(
-            "UPDATE smart_folder SET color = ?1, date_modified = ?2 WHERE smart_folder_id = ?3",
-            params![c, now, smart_folder_id],
-        )?;
-    }
-    if let Some(n) = notes {
-        conn.execute(
-            "UPDATE smart_folder SET notes = ?1, date_modified = ?2 WHERE smart_folder_id = ?3",
-            params![n, now, smart_folder_id],
-        )?;
-    }
-    if let Some(sf) = sort_field {
-        conn.execute(
-            "UPDATE smart_folder SET sort_field = ?1 WHERE smart_folder_id = ?2",
-            params![sf, smart_folder_id],
-        )?;
-    }
-    if let Some(so) = sort_order {
-        conn.execute(
-            "UPDATE smart_folder SET sort_order = ?1 WHERE smart_folder_id = ?2",
-            params![so, smart_folder_id],
-        )?;
-    }
+    conn.execute(
+        "UPDATE smart_folder
+         SET name = ?1,
+             predicate_json = ?2,
+             icon = ?3,
+             color = ?4,
+             notes = ?5,
+             sort_field = ?6,
+             sort_order = ?7,
+             date_modified = ?8
+         WHERE smart_folder_id = ?9",
+        params![
+            name,
+            predicate_json,
+            icon,
+            color,
+            notes,
+            sort_field,
+            sort_order,
+            now,
+            smart_folder_id
+        ],
+    )?;
     Ok(())
 }
 

@@ -27,9 +27,10 @@ interface Props {
   colorRgb?: [number, number, number];
   onRemove?: () => void;
   onClick?: () => void;
+  onContextMenu?: (e: React.MouseEvent) => void;
 }
 
-export function TagChip({ namespace, subtag, icon, colorRgb, onRemove, onClick }: Props) {
+export function TagChip({ namespace, subtag, icon, colorRgb, onRemove, onClick, onContextMenu }: Props) {
   const [r, g, b] = colorRgb ?? NS_COLORS[(namespace ?? '').toLowerCase()] ?? NS_COLORS.default;
   const chipStyle = {
     '--chip-bg': `rgba(${r}, ${g}, ${b}, 0.10)`,
@@ -45,6 +46,7 @@ export function TagChip({ namespace, subtag, icon, colorRgb, onRemove, onClick }
       className={styles.chip}
       style={chipStyle}
       onClick={onClick}
+      onContextMenu={onContextMenu}
     >
       {icon && <span className={styles.iconSlot}>{icon}</span>}
       {showNamespace && <span className={styles.namespace}>{namespace}:</span>}

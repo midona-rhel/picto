@@ -214,8 +214,8 @@ CREATE TABLE IF NOT EXISTS ingest_queue (
     expected_count  INTEGER,
     status          TEXT    NOT NULL DEFAULT 'pending',
     last_error      TEXT,
-    date_added      TEXT    NOT NULL,
-    date_modified   TEXT    NOT NULL
+    created_at      TEXT    NOT NULL,
+    updated_at      TEXT    NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS ingest_queue_item (
@@ -230,9 +230,18 @@ CREATE TABLE IF NOT EXISTS ingest_queue_item (
     resolved_entity_hash TEXT,
     resolved_file_hash   TEXT,
     last_error           TEXT,
-    date_added           TEXT    NOT NULL,
-    date_modified        TEXT    NOT NULL
+    created_at           TEXT    NOT NULL,
+    updated_at           TEXT    NOT NULL
 );
+
+CREATE INDEX IF NOT EXISTS idx_ingest_queue_ready
+    ON ingest_queue(status, created_at, queue_id);
+
+CREATE INDEX IF NOT EXISTS idx_ingest_queue_subscription
+    ON ingest_queue(subscription_id, status, queue_id);
+
+CREATE INDEX IF NOT EXISTS idx_ingest_queue_item_queue
+    ON ingest_queue_item(queue_id, status, page_num, item_id);
 
 CREATE TABLE IF NOT EXISTS subscription_run (
     run_id               INTEGER PRIMARY KEY,

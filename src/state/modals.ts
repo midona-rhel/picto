@@ -32,7 +32,18 @@ export function openConfirm(
 export interface SmartFolderModalState {
   open: boolean;
   mode: 'create' | 'edit';
-  initial?: { name?: string; icon?: string | null; color?: string | null; id?: number };
+  initial?: {
+    id?: number;
+    name?: string;
+    parent_id?: number | null;
+    icon?: string | null;
+    color?: string | null;
+    notes?: string | null;
+    predicate?: import('../shared/types/canonical').SmartFolderPredicate;
+    sort_field?: string | null;
+    sort_order?: string | null;
+    display_order?: number | null;
+  };
 }
 
 export const smartFolderModalAtom = atom<SmartFolderModalState>({ open: false, mode: 'create' });

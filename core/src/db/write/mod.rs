@@ -2,6 +2,7 @@
 
 pub mod bulk;
 pub mod collections;
+pub mod duplicates;
 pub mod entities;
 pub mod files;
 pub mod folders;

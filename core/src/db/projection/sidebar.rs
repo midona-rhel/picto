@@ -4,8 +4,10 @@
 
 use rusqlite::{params, Connection};
 
+use super::bitmaps::{BitmapKey, BitmapStore};
+
 /// Rebuild the entire sidebar projection from authoritative tables.
-pub fn compile_sidebar(conn: &Connection) {
+pub fn compile_sidebar(conn: &Connection, bitmaps: &BitmapStore) {
     // Clear existing sidebar nodes
     let _ = conn.execute("DELETE FROM sidebar_node", []);
 
@@ -253,10 +255,11 @@ pub fn compile_sidebar(conn: &Connection) {
             "sort_field": sort_field,
             "sort_order": sort_order,
         });
+        let count = bitmaps.len(&BitmapKey::SmartFolder(*sfid)) as i64;
         let _ = conn.execute(
             "INSERT OR REPLACE INTO sidebar_node (node_id, kind, parent_id, name, icon, color, sort_order, count, selectable, freshness, epoch, meta_json, date_modified)
-             VALUES (?1, 'smart_folder', ?2, ?3, ?4, ?5, ?6, 0, 1, 'stale', 1, ?7, ?8)",
-            params![node_id, parent, name, icon, color, display_order, meta.to_string(), now],
+             VALUES (?1, 'smart_folder', ?2, ?3, ?4, ?5, ?6, ?7, 1, 'fresh', 1, ?8, ?9)",
+            params![node_id, parent, name, icon, color, display_order, count, meta.to_string(), now],
         );
     }
 }

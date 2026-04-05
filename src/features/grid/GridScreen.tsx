@@ -29,6 +29,7 @@ import {
   gridChildFoldersAtom,
 } from '../../state/grid';
 import { gridController } from '../../controllers/gridController';
+import { foldersController } from '../../controllers/foldersController';
 import {
   clearSelectionAtom,
   querySelectionActiveAtom,
@@ -173,6 +174,7 @@ export function GridScreen() {
   const setBatchRenameOpen = useSetAtom(batchRenameOpenAtom);
   const gridContainerRef = useRef<HTMLDivElement | null>(null);
   const gridLayoutRef = useRef<LayoutResult | null>(null);
+  const [renamingIndex, setRenamingIndex] = useState<number | null>(null);
 
   const scrollToItem = useCallback((index: number) => {
     const layout = gridLayoutRef.current;
@@ -814,6 +816,13 @@ export function GridScreen() {
         initialScrollTop={restoredScrollTopRef.current}
         onContainerRef={(el) => { gridContainerRef.current = el; }}
         onLayoutChange={(l) => { gridLayoutRef.current = l; }}
+        renamingIndex={renamingIndex}
+        onRenameCommit={(idx, name) => {
+          setRenamingIndex(null);
+          const item = items[idx];
+          if (item && name) void entityMutations.setEntityName(item.entity_hash, name);
+        }}
+        onRenameCancel={() => setRenamingIndex(null)}
         onFirstPaint={() => { restoredScrollTopRef.current = null; beginFadeIn(); }}
         onScrollTopChange={(scrollTop) => { lastScrollTopRef.current = scrollTop; }}
         onTileClick={(index, item, event) => {
@@ -913,7 +922,85 @@ export function GridScreen() {
             onRevealInFolder: (hash) => { void resolveFilePath(hash).then((p) => { if (p) shellShowInFolder(p); }); },
             onCopyFilePath: (hash) => { void resolveFilePath(hash).then((p) => { if (p) clipboardWriteText(p); }); },
             onCopyFile: (hash) => { void resolveFilePath(hash).then((p) => { if (p) clipboardCopyFile(p); }); },
+            onCopyName: (name) => { clipboardWriteText(name); },
+            singleName: singleItem?.name ?? null,
+            singleMime: singleItem?.mime_type ?? null,
+            onCopyLink: (hash, mime) => {
+              const ext: Record<string, string> = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/gif': 'gif', 'image/webp': 'webp', 'video/mp4': 'mp4', 'video/webm': 'webm' };
+              clipboardWriteText(`media://localhost/file/${hash}.${ext[mime] ?? 'bin'}`);
+            },
+            onRename: singleItem ? () => {
+              const idx = items.findIndex((i) => i.entity_hash === singleItem.entity_hash);
+              if (idx >= 0) setRenamingIndex(idx);
+            } : undefined,
+            onRegenerateThumbnails: () => {
+              const hashes = [...effectiveHashes];
+              void import('../../platform/api').then((api) => api.regenerateThumbnailsBatch(hashes));
+            },
+            onCopyTags: () => {
+              if (!singleItem) return;
+              void import('../../platform/api').then((api) =>
+                api.getEntityDetails(singleItem.entity_hash).then((d) => {
+                  if (!d?.tags) return;
+                  const tagStrings = d.tags.map((t) =>
+                    t.namespace && t.namespace !== 'default' ? `${t.namespace}:${t.subtag}` : t.subtag,
+                  );
+                  clipboardWriteText(JSON.stringify(tagStrings));
+                  (window as any).__pictoClipboardTags = tagStrings;
+                }),
+              );
+            },
+            onPasteTags: () => {
+              const tags = (window as any).__pictoClipboardTags as string[] | undefined;
+              if (!tags?.length) return;
+              void entityMutations.addTargetTags(selectionTarget!, tags);
+            },
+            hasClipboardTags: !!((window as any).__pictoClipboardTags as string[] | undefined)?.length,
             onAddToFolder: () => { setFolderPickerOpen(true); },
+            onNewFolderWithSelection: selectionTarget ? () => {
+              void (async () => {
+                const name = 'New Folder';
+                const nodeId = await foldersController.create(name);
+                if (!nodeId) return;
+                const folderId = parseInt(nodeId.replace('folder:', ''), 10);
+                if (isNaN(folderId)) return;
+                for (const hash of effectiveHashes) {
+                  void entityMutations.updateTargetFolderMembership(
+                    { kind: 'entity_hashes', entity_hashes: [hash] }, folderId, 'add',
+                  );
+                }
+              })();
+            } : undefined,
+            onMergeIntoCollection: (() => {
+              // Show "Merge into Collection" when selection has exactly 1 collection + other items
+              if (selCount < 2) return undefined;
+              const collections = selectedItems.filter((i) => i.entity_kind === 'collection');
+              const nonCollections = selectedItems.filter((i) => i.entity_kind !== 'collection');
+              if (collections.length !== 1 || nonCollections.length === 0) return undefined;
+              const collHash = collections[0].entity_hash;
+              return () => {
+                void (async () => {
+                  const summary = await import('../../platform/api').then((a) => a.getEntityDetails(collHash));
+                  if (!summary) return;
+                  // entity_id is the collection ID
+                  const collId = summary.entity_id;
+                  if (collId == null) return;
+                  await addCollectionMembers(collId, nonCollections.map((i) => i.entity_hash));
+                })();
+              };
+            })(),
+            onSearchByImage: (engine, hash) => {
+              const urls: Record<string, string> = {
+                tineye: `https://tineye.com/search/?url=`,
+                saucenao: `https://saucenao.com/search.php?url=`,
+                yandex: `https://yandex.com/images/search?rpt=imageview&url=`,
+                bing: `https://www.bing.com/images/search?view=detailv2&iss=sbi&form=SBIVSP&sbisrc=UrlPaste&q=imgurl:`,
+              };
+              // Use the thumbnail URL as the search source
+              const thumbUrl = `media://localhost/thumb/${hash}.jpg`;
+              const url = urls[engine];
+              if (url) void (window as any).picto?.shell?.openExternal(url + encodeURIComponent(thumbUrl));
+            },
             onRemoveFromFolder: () => { void removeSelectionFromCurrentFolder(); },
             onOpenTagSelect: () => { setTagSelectOpen(true); },
             onOpenAiTagger: () => { setAiTaggerOpen(true); },

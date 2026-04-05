@@ -101,6 +101,9 @@ pub struct PreparedBlobImport {
     pub created_at: Option<String>,
     pub tag_tuples: Vec<(String, String)>,
     pub tags_applied: Vec<String>,
+    /// Cached file bytes from the initial read, available for downstream use
+    /// (e.g. perceptual hashing) to avoid re-reading from disk.
+    pub file_bytes: Vec<u8>,
 }
 
 pub struct ImportPipeline<'a> {
@@ -210,6 +213,7 @@ impl<'a> ImportPipeline<'a> {
             created_at,
             tag_tuples,
             tags_applied,
+            file_bytes: file_data,
         })
     }
 

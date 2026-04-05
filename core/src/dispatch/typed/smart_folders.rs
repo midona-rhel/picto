@@ -42,8 +42,22 @@ pub struct MoveSmartFolderInput {
 #[derive(Debug, Deserialize, TS)]
 #[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct CreateSmartFolderInput {
+    #[serde(default)]
     #[ts(type = "Record<string, unknown>")]
-    pub folder: crate::smart_folders::db::SmartFolder,
+    pub folder: Option<crate::smart_folders::db::SmartFolder>,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    #[ts(type = "number | null")]
+    pub parent_id: Option<i64>,
+    #[serde(default)]
+    pub icon: Option<String>,
+    #[serde(default)]
+    pub color: Option<String>,
+    #[serde(default)]
+    pub notes: Option<String>,
+    #[serde(default)]
+    pub predicate_json: Option<String>,
 }
 
 #[derive(Debug, Deserialize, TS)]
@@ -80,7 +94,22 @@ pub async fn create_smart_folder(
     state: &AppState,
     input: CreateSmartFolderInput,
 ) -> Result<serde_json::Value, String> {
-    let sf = &input.folder;
+    let default_predicate = || serde_json::json!({ "groups": [] }).to_string();
+    let folder = input.folder.unwrap_or_else(|| crate::smart_folders::db::SmartFolder {
+        smart_folder_id: 0,
+        name: input.name.unwrap_or_else(|| "New Smart Folder".to_string()),
+        parent_id: input.parent_id,
+        icon: input.icon,
+        color: input.color,
+        notes: input.notes,
+        predicate_json: input.predicate_json.unwrap_or_else(default_predicate),
+        sort_field: None,
+        sort_order: None,
+        display_order: None,
+        created_at: None,
+        updated_at: None,
+    });
+    let sf = &folder;
     let sf_id = state.engine.create_smart_folder(
         &sf.name,
         sf.parent_id,

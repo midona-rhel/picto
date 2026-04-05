@@ -50,11 +50,11 @@ export function ModalLayer() {
       <SmartFolderModal
         open={smartFolder.open}
         onClose={() => setSmartFolder({ ...smartFolder, open: false })}
-        onSave={(data) => {
+        onSave={(folder) => {
           if (smartFolder.mode === 'edit' && smartFolder.initial?.id) {
-            void smartFoldersController.update(smartFolder.initial.id, data.name, data.icon, data.color);
+            void smartFoldersController.update(smartFolder.initial.id, folder);
           } else {
-            void smartFoldersController.create(data.name, data.icon, data.color);
+            void smartFoldersController.create(folder);
           }
           setSmartFolder({ ...smartFolder, open: false });
         }}

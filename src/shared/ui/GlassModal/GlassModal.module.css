@@ -38,9 +38,9 @@
   box-shadow: var(--shadow-panel);
 }
 
-.sm { width: 360px; max-height: 80vh; }
-.md { width: 480px; max-height: 80vh; }
-.lg { width: 600px; max-height: 85vh; }
+.sm { width: 440px; max-height: 80vh; }
+.md { width: 560px; max-height: 80vh; }
+.lg { width: 680px; max-height: 85vh; }
 
 /* ── Header ── */
 

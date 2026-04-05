@@ -14,7 +14,7 @@ pub mod write;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{Connection, OptionalExtension};
 
 use self::projection::bitmaps::BitmapStore;
 use self::types::*;
@@ -28,6 +28,99 @@ fn has_column(conn: &Connection, table: &str, column: &str) -> rusqlite::Result<
         }
     }
     Ok(false)
+}
+
+fn table_exists(conn: &Connection, table: &str) -> rusqlite::Result<bool> {
+    conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1)",
+        [table],
+        |row| row.get::<_, i64>(0),
+    )
+    .map(|exists| exists != 0)
+}
+
+fn reconcile_ingest_queue_schema(conn: &Connection) -> Result<(), String> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS ingest_queue (
+            queue_id        INTEGER PRIMARY KEY,
+            queue_kind      TEXT    NOT NULL,
+            source_kind     TEXT    NOT NULL,
+            subscription_id INTEGER REFERENCES subscription(subscription_id) ON DELETE CASCADE,
+            query_id        INTEGER REFERENCES subscription_query(query_id) ON DELETE CASCADE,
+            query_run_id    INTEGER,
+            cleanup_root    TEXT,
+            post_id         TEXT,
+            category        TEXT,
+            preferred_name  TEXT,
+            expected_count  INTEGER,
+            status          TEXT    NOT NULL DEFAULT 'pending',
+            last_error      TEXT,
+            created_at      TEXT    NOT NULL,
+            updated_at      TEXT    NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS ingest_queue_item (
+            item_id              INTEGER PRIMARY KEY,
+            queue_id             INTEGER NOT NULL REFERENCES ingest_queue(queue_id) ON DELETE CASCADE,
+            source_path          TEXT    NOT NULL,
+            page_num             INTEGER NOT NULL DEFAULT 0,
+            payload_json         TEXT    NOT NULL,
+            delete_after_ingest  INTEGER NOT NULL DEFAULT 0,
+            status               TEXT    NOT NULL DEFAULT 'pending',
+            result_kind          TEXT,
+            resolved_entity_hash TEXT,
+            resolved_file_hash   TEXT,
+            last_error           TEXT,
+            created_at           TEXT    NOT NULL,
+            updated_at           TEXT    NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_ingest_queue_ready
+            ON ingest_queue(status, created_at, queue_id);
+        CREATE INDEX IF NOT EXISTS idx_ingest_queue_subscription
+            ON ingest_queue(subscription_id, status, queue_id);
+        CREATE INDEX IF NOT EXISTS idx_ingest_queue_item_queue
+            ON ingest_queue_item(queue_id, status, page_num, item_id);",
+    )
+    .map_err(|e| format!("Failed to reconcile ingest queue tables: {e}"))?;
+
+    if table_exists(conn, "ingest_queue").map_err(|e| e.to_string())? {
+        if !has_column(conn, "ingest_queue", "created_at").map_err(|e| e.to_string())? {
+            conn.execute_batch(
+                "ALTER TABLE ingest_queue ADD COLUMN created_at TEXT NOT NULL DEFAULT '';
+                 ALTER TABLE ingest_queue ADD COLUMN updated_at TEXT NOT NULL DEFAULT '';",
+            )
+            .map_err(|e| format!("Failed to add ingest_queue created/updated columns: {e}"))?;
+            conn.execute(
+                "UPDATE ingest_queue
+                 SET created_at = COALESCE(NULLIF(date_added, ''), datetime('now')),
+                     updated_at = COALESCE(NULLIF(date_modified, ''), COALESCE(NULLIF(date_added, ''), datetime('now')))
+                 WHERE created_at = '' OR updated_at = ''",
+                [],
+            )
+            .map_err(|e| format!("Failed to backfill ingest_queue timestamps: {e}"))?;
+        }
+    }
+
+    if table_exists(conn, "ingest_queue_item").map_err(|e| e.to_string())? {
+        if !has_column(conn, "ingest_queue_item", "created_at").map_err(|e| e.to_string())? {
+            conn.execute_batch(
+                "ALTER TABLE ingest_queue_item ADD COLUMN created_at TEXT NOT NULL DEFAULT '';
+                 ALTER TABLE ingest_queue_item ADD COLUMN updated_at TEXT NOT NULL DEFAULT '';",
+            )
+            .map_err(|e| {
+                format!("Failed to add ingest_queue_item created/updated columns: {e}")
+            })?;
+            conn.execute(
+                "UPDATE ingest_queue_item
+                 SET created_at = COALESCE(NULLIF(date_added, ''), datetime('now')),
+                     updated_at = COALESCE(NULLIF(date_modified, ''), COALESCE(NULLIF(date_added, ''), datetime('now')))
+                 WHERE created_at = '' OR updated_at = ''",
+                [],
+            )
+            .map_err(|e| format!("Failed to backfill ingest_queue_item timestamps: {e}"))?;
+        }
+    }
+
+    Ok(())
 }
 
 fn reconcile_open_schema(conn: &Connection) -> Result<(), String> {
@@ -182,6 +275,7 @@ fn reconcile_open_schema(conn: &Connection) -> Result<(), String> {
          DROP TABLE IF EXISTS rejected_media;",
     )
     .map_err(|e| format!("Failed to remove rejected-media schema: {e}"))?;
+    reconcile_ingest_queue_schema(conn)?;
     Ok(())
 }
 
@@ -474,55 +568,12 @@ impl LibraryDatabase {
                 Err(_) => return Ok(Vec::new()),
             };
 
-            let mut stmt = conn.prepare(
-                "SELECT
-                     mf.file_id,
-                     me.entity_id,
-                     me.entity_hash,
-                     mf.file_hash,
-                     mf.mime_type,
-                     mf.size_bytes,
-                     mf.pixel_width,
-                     mf.pixel_height,
-                     mf.frame_count,
-                     mf.perceptual_hash
-                 FROM media_entity me
-                 JOIN single_media_entity sme ON sme.entity_id = me.entity_id
-                 JOIN media_file mf ON mf.file_id = sme.file_id
-                 WHERE mf.perceptual_hash IS NOT NULL",
-            )?;
-            let rows = stmt.query_map([], |row| {
-                Ok((
-                    row.get::<_, i64>(0)?,
-                    row.get::<_, i64>(1)?,
-                    row.get::<_, String>(2)?,
-                    row.get::<_, String>(3)?,
-                    row.get::<_, String>(4)?,
-                    row.get::<_, i64>(5)?,
-                    row.get::<_, Option<i64>>(6)?,
-                    row.get::<_, Option<i64>>(7)?,
-                    row.get::<_, Option<i64>>(8)?,
-                    row.get::<_, String>(9)?,
-                ))
-            })?;
-
             let mut candidates = Vec::new();
-            for row in rows {
-                let (
-                    file_id,
-                    entity_id,
-                    entity_hash,
-                    file_hash,
-                    mime_type,
-                    size_bytes,
-                    pixel_width,
-                    pixel_height,
-                    frame_count,
-                    candidate_phash,
-                ) = row?;
+            for row in query::duplicates::list_perceptual_hash_sources(conn, None)? {
+                let candidate_phash = row.perceptual_hash;
                 if !crate::media_capabilities::capabilities_for_stored_media(
-                    &mime_type,
-                    frame_count,
+                    &row.mime_type,
+                    row.frame_count,
                 )
                 .can_perceptual_hash
                 {
@@ -534,15 +585,15 @@ impl LibraryDatabase {
                 let distance = source.dist(&candidate_hash);
                 if distance <= threshold {
                     candidates.push(types::PerceptualHashCandidate {
-                        file_id,
-                        entity_id,
-                        entity_hash,
-                        file_hash,
-                        mime_type,
-                        size_bytes,
-                        pixel_width,
-                        pixel_height,
-                        frame_count,
+                        file_id: row.file_id,
+                        entity_id: row.entity_id,
+                        entity_hash: row.entity_hash,
+                        file_hash: row.file_hash,
+                        mime_type: row.mime_type,
+                        size_bytes: row.size_bytes,
+                        pixel_width: row.pixel_width,
+                        pixel_height: row.pixel_height,
+                        frame_count: row.frame_count,
                         perceptual_hash: candidate_phash,
                         distance,
                     });
@@ -558,32 +609,112 @@ impl LibraryDatabase {
         })
     }
 
+    pub fn plan_ingest_duplicate_review(
+        &self,
+        prepared: &types::IngestPreparedSingle,
+        threshold: u32,
+    ) -> Result<types::IngestDuplicatePlan, String> {
+        let Some(perceptual_hash) = prepared.perceptual_hash.as_deref() else {
+            return Ok(types::IngestDuplicatePlan::default());
+        };
+
+        let candidates = self.find_perceptual_hash_candidates(perceptual_hash, threshold)?;
+        let exact_matches: Vec<types::PerceptualHashCandidate> = candidates
+            .iter()
+            .filter(|candidate| candidate.distance == 0)
+            .cloned()
+            .collect();
+        let near_matches: Vec<types::PerceptualHashCandidate> = candidates
+            .iter()
+            .filter(|candidate| candidate.distance > 0)
+            .cloned()
+            .collect();
+
+        let mut plan = types::IngestDuplicatePlan::default();
+        let mut review_candidates = Vec::<types::PerceptualHashCandidate>::new();
+        let mut seen_review_files = std::collections::HashSet::<i64>::new();
+        let mut push_review_candidate = |candidate: types::PerceptualHashCandidate| {
+            if seen_review_files.insert(candidate.file_id) {
+                review_candidates.push(candidate);
+            }
+        };
+
+        if exact_matches.len() == 1 {
+            let candidate = &exact_matches[0];
+            if let Some(existing) = self.get_existing_import_target_by_file_hash(&candidate.file_hash)? {
+                let quality = crate::duplicates::quality::compare_static_image_quality(
+                    &crate::duplicates::quality::ComparableImageCandidate {
+                        mime_type: &existing.mime_type,
+                        size_bytes: existing.size_bytes,
+                        pixel_width: existing.pixel_width,
+                        pixel_height: existing.pixel_height,
+                        frame_count: existing.frame_count,
+                    },
+                    &crate::duplicates::quality::ComparableImageCandidate {
+                        mime_type: &prepared.mime_type,
+                        size_bytes: prepared.size_bytes,
+                        pixel_width: prepared.pixel_width,
+                        pixel_height: prepared.pixel_height,
+                        frame_count: prepared.frame_count,
+                    },
+                );
+                plan.action = match quality {
+                    crate::duplicates::quality::ImageQualityDecision::LeftBetter => {
+                        types::IngestDuplicateAction::ReuseExisting {
+                            entity_hash: existing.entity_hash,
+                        }
+                    }
+                    crate::duplicates::quality::ImageQualityDecision::RightBetter => {
+                        types::IngestDuplicateAction::PreferNewOverExisting {
+                            existing_entity_hash: existing.entity_hash,
+                        }
+                    }
+                    crate::duplicates::quality::ImageQualityDecision::Ambiguous => {
+                        push_review_candidate(candidate.clone());
+                        types::IngestDuplicateAction::None
+                    }
+                };
+            }
+        } else {
+            for candidate in exact_matches {
+                push_review_candidate(candidate);
+            }
+        }
+
+        for candidate in near_matches {
+            push_review_candidate(candidate);
+        }
+
+        plan.review_candidates = review_candidates;
+        Ok(plan)
+    }
+
     pub fn upsert_duplicate_pair_for_review(
         &self,
         file_id_a: i64,
         file_id_b: i64,
         distance: u32,
     ) -> Result<(), String> {
-        let (file_id_a, file_id_b) = if file_id_a < file_id_b {
-            (file_id_a, file_id_b)
-        } else {
-            (file_id_b, file_id_a)
-        };
         self.with_write(move |conn| {
-            conn.execute(
-                "INSERT INTO duplicate (
-                     file_id_a, file_id_b, distance, status, decision_at, decision_source, decision_reason, winner_file_id, loser_file_id
-                 ) VALUES (?1, ?2, ?3, 'detected', NULL, NULL, NULL, NULL, NULL)
-                 ON CONFLICT(file_id_a, file_id_b) DO UPDATE SET
-                     distance = excluded.distance,
-                     status = 'detected',
-                     decision_at = NULL,
-                     decision_source = NULL,
-                     decision_reason = NULL,
-                     winner_file_id = NULL,
-                     loser_file_id = NULL",
-                params![file_id_a, file_id_b, distance as i64],
-            )?;
+            write::duplicates::upsert_duplicate_pair_for_review(conn, file_id_a, file_id_b, distance)
+        })
+    }
+
+    pub fn record_duplicate_review_candidates(
+        &self,
+        imported_file_id: i64,
+        candidates: &[types::PerceptualHashCandidate],
+    ) -> Result<(), String> {
+        let review_candidates = candidates.to_vec();
+        self.with_write(move |conn| {
+            for candidate in &review_candidates {
+                write::duplicates::upsert_duplicate_pair_for_review(
+                    conn,
+                    imported_file_id,
+                    candidate.file_id,
+                    candidate.distance,
+                )?;
+            }
             Ok(())
         })
     }
@@ -2157,25 +2288,16 @@ impl LibraryDatabase {
     ) -> Result<crate::types::FindSimilarResponse, String> {
         let source_hash = source_hash.to_string();
         let source = self.with_read(|conn| {
-            conn.query_row(
-                "SELECT mf.perceptual_hash, mf.mime_type, mf.frame_count
-                 FROM media_entity me
-                 JOIN single_media_entity sme ON sme.entity_id = me.entity_id
-                 JOIN media_file mf ON mf.file_id = sme.file_id
-                 WHERE me.entity_hash = ?1",
-                [source_hash.as_str()],
-                |row| {
-                    Ok((
-                        row.get::<_, Option<String>>(0)?,
-                        row.get::<_, String>(1)?,
-                        row.get::<_, Option<i64>>(2)?,
-                    ))
-                },
-            )
-            .optional()
+            query::duplicates::get_duplicate_find_source(conn, &source_hash)
         })?;
 
-        let Some((Some(source_phash), source_mime, source_frame_count)) = source else {
+        let Some(source) = source else {
+            return Ok(crate::types::FindSimilarResponse {
+                source_hash,
+                items: Vec::new(),
+            });
+        };
+        let Some(source_phash) = source.perceptual_hash else {
             return Ok(crate::types::FindSimilarResponse {
                 source_hash,
                 items: Vec::new(),
@@ -2183,8 +2305,8 @@ impl LibraryDatabase {
         };
 
         if !crate::media_capabilities::capabilities_for_stored_media(
-            &source_mime,
-            source_frame_count,
+            &source.mime_type,
+            source.frame_count,
         )
         .can_perceptual_hash
         {
@@ -2194,24 +2316,8 @@ impl LibraryDatabase {
             });
         }
 
-        let candidates: Vec<(String, String, String, Option<i64>)> = self.with_read(|conn| {
-            let mut stmt = conn.prepare(
-                "SELECT me.entity_hash, mf.perceptual_hash, mf.mime_type, mf.frame_count
-                 FROM media_entity me
-                 JOIN single_media_entity sme ON sme.entity_id = me.entity_id
-                 JOIN media_file mf ON mf.file_id = sme.file_id
-                  WHERE mf.perceptual_hash IS NOT NULL
-                   AND me.entity_hash != ?1",
-            )?;
-            let rows = stmt.query_map([source_hash.as_str()], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
-                    row.get::<_, Option<i64>>(3)?,
-                ))
-            })?;
-            rows.collect()
+        let candidates = self.with_read(|conn| {
+            query::duplicates::list_perceptual_hash_sources(conn, Some(&source_hash))
         })?;
 
         use img_hash::ImageHash;
@@ -2225,19 +2331,20 @@ impl LibraryDatabase {
 
         let mut items: Vec<crate::types::SimilarItem> = candidates
             .into_iter()
-            .filter_map(|(hash, phash_b64, mime_type, frame_count)| {
+            .filter_map(|candidate| {
                 if !crate::media_capabilities::capabilities_for_stored_media(
-                    &mime_type,
-                    frame_count,
+                    &candidate.mime_type,
+                    candidate.frame_count,
                 )
                 .can_perceptual_hash
                 {
                     return None;
                 }
-                let candidate = ImageHash::<Vec<u8>>::from_base64(&phash_b64).ok()?;
+                let candidate_hash =
+                    ImageHash::<Vec<u8>>::from_base64(&candidate.perceptual_hash).ok()?;
                 Some(crate::types::SimilarItem {
-                    hash,
-                    distance: source_hash_image.dist(&candidate),
+                    hash: candidate.entity_hash,
+                    distance: source_hash_image.dist(&candidate_hash),
                 })
             })
             .collect();
@@ -2253,42 +2360,24 @@ impl LibraryDatabase {
     ) -> Result<types::DuplicateScanSummary, String> {
         let threshold = threshold.unwrap_or(crate::duplicates::phash::DEFAULT_DISTANCE_THRESHOLD);
         let review_threshold = review_threshold.unwrap_or(threshold);
-        let files: Vec<(i64, String, String, String, Option<i64>)> = self.with_read(|conn| {
-            let mut stmt = conn.prepare(
-                "SELECT mf.file_id, me.entity_hash, mf.perceptual_hash, mf.mime_type, mf.frame_count
-                 FROM media_entity me
-                 JOIN single_media_entity sme ON sme.entity_id = me.entity_id
-                 JOIN media_file mf ON mf.file_id = sme.file_id
-                 WHERE mf.perceptual_hash IS NOT NULL",
-            )?;
-            let rows = stmt.query_map([], |row| {
-                Ok((
-                    row.get::<_, i64>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
-                    row.get::<_, String>(3)?,
-                    row.get::<_, Option<i64>>(4)?,
-                ))
-            })?;
-            rows.collect()
-        })?;
+        let files = self.with_read(query::duplicates::list_duplicate_scan_sources)?;
 
         use img_hash::ImageHash;
         let parsed: Vec<(i64, String, ImageHash<Vec<u8>>)> = files
             .iter()
-            .filter_map(|(file_id, entity_hash, phash, mime_type, frame_count)| {
+            .filter_map(|row| {
                 if !crate::media_capabilities::capabilities_for_stored_media(
-                    mime_type,
-                    *frame_count,
+                    &row.mime_type,
+                    row.frame_count,
                 )
                 .can_perceptual_hash
                 {
                     return None;
                 }
                 Some((
-                    *file_id,
-                    entity_hash.clone(),
-                    ImageHash::<Vec<u8>>::from_base64(phash).ok()?,
+                    row.file_id,
+                    row.entity_hash.clone(),
+                    ImageHash::<Vec<u8>>::from_base64(&row.perceptual_hash).ok()?,
                 ))
             })
             .collect();
@@ -2310,29 +2399,14 @@ impl LibraryDatabase {
         }
 
         let pairs_inserted = self.with_write(|conn| {
-            let tx = conn.unchecked_transaction()?;
-            let mut inserted = 0usize;
-            for (file_id_a, file_id_b, distance) in &candidate_pairs {
-                let (a, b) = if file_id_a < file_id_b {
-                    (*file_id_a, *file_id_b)
-                } else {
-                    (*file_id_b, *file_id_a)
-                };
-                inserted += tx.execute(
-                    "INSERT OR IGNORE INTO duplicate (file_id_a, file_id_b, distance)
-                     VALUES (?1, ?2, ?3)",
-                    params![a, b, *distance as i64],
-                )? as usize;
-            }
-            tx.commit()?;
-            Ok(inserted)
+            write::duplicates::insert_duplicate_pairs_for_scan(conn, &candidate_pairs)
         })?;
 
         let reviewable_detected_total = self.with_read(|conn| {
-            conn.query_row(
-                "SELECT COUNT(*) FROM duplicate WHERE status = 'detected' AND distance <= ?1",
-                [review_threshold as i64],
-                |row| row.get::<_, i64>(0),
+            query::duplicates::count_duplicate_pairs_with_max_distance(
+                conn,
+                "detected",
+                review_threshold as i64,
             )
         })? as usize;
 
@@ -2363,112 +2437,19 @@ impl LibraryDatabase {
     ) -> Result<types::DuplicatePairPage, String> {
         let status_filter = status.unwrap_or_else(|| "detected".to_string());
         let limit = limit.clamp(1, 200);
-        let cursor = cursor.clone();
         self.with_read(move |conn| {
-            let total: i64 = if let Some(max_distance) = max_distance {
-                conn.query_row(
-                    "SELECT COUNT(*) FROM duplicate WHERE status = ?1 AND distance <= ?2",
-                    params![status_filter, max_distance as i64],
-                    |row| row.get(0),
-                )?
-            } else {
-                conn.query_row(
-                    "SELECT COUNT(*) FROM duplicate WHERE status = ?1",
-                    [status_filter.as_str()],
-                    |row| row.get(0),
-                )?
-            };
-
-            let mut params_vec: Vec<rusqlite::types::Value> = vec![status_filter.clone().into()];
-            let cursor_clause = if let Some(cursor) = cursor.as_deref() {
-                let parts: Vec<&str> = cursor.split(',').collect();
-                if parts.len() == 3 {
-                    let distance = parts[0].parse::<i64>().unwrap_or(0);
-                    let file_id_a = parts[1].parse::<i64>().unwrap_or(0);
-                    let file_id_b = parts[2].parse::<i64>().unwrap_or(0);
-                    params_vec.push(distance.into());
-                    params_vec.push(file_id_a.into());
-                    params_vec.push(file_id_b.into());
-                    " AND (d.distance > ?2 OR (d.distance = ?2 AND d.file_id_a > ?3) OR (d.distance = ?2 AND d.file_id_a = ?3 AND d.file_id_b > ?4))"
-                } else {
-                    ""
-                }
-            } else {
-                ""
-            };
-
-            let distance_clause = if let Some(max_distance) = max_distance {
-                if cursor_clause.is_empty() {
-                    params_vec.push((max_distance as i64).into());
-                    " AND d.distance <= ?2"
-                } else {
-                    params_vec.push((max_distance as i64).into());
-                    " AND d.distance <= ?5"
-                }
-            } else {
-                ""
-            };
-
-            params_vec.push((limit as i64).into());
-            let limit_param = format!("?{}", params_vec.len());
-            let sql = format!(
-                "SELECT
-                     me_a.entity_hash,
-                     me_b.entity_hash,
-                     d.distance,
-                     d.status,
-                     d.file_id_a,
-                     d.file_id_b
-                 FROM duplicate d
-                 JOIN single_media_entity sme_a ON sme_a.file_id = d.file_id_a
-                 JOIN media_entity me_a ON me_a.entity_id = sme_a.entity_id
-                 JOIN single_media_entity sme_b ON sme_b.file_id = d.file_id_b
-                 JOIN media_entity me_b ON me_b.entity_id = sme_b.entity_id
-                 WHERE d.status = ?1{cursor_clause}{distance_clause}
-                 ORDER BY d.distance ASC, d.file_id_a ASC, d.file_id_b ASC
-                 LIMIT {limit_param}"
-            );
-            let mut stmt = conn.prepare(&sql)?;
-            let rows = stmt.query_map(rusqlite::params_from_iter(params_vec.iter()), |row| {
-                let distance: i64 = row.get(2)?;
-                Ok((
-                    types::DuplicatePairRecord {
-                        hash_a: row.get(0)?,
-                        hash_b: row.get(1)?,
-                        distance: distance as f64,
-                        similarity_pct: ((1.0 - distance as f64 / 64.0) * 100.0).round(),
-                        status: row.get(3)?,
-                    },
-                    row.get::<_, i64>(4)?,
-                    row.get::<_, i64>(5)?,
-                    distance,
-                ))
-            })?;
-            let rows: Vec<_> = rows.collect::<rusqlite::Result<Vec<_>>>()?;
-            let next_cursor = if rows.len() == limit {
-                rows.last()
-                    .map(|(_, file_id_a, file_id_b, distance)| format!("{distance},{file_id_a},{file_id_b}"))
-            } else {
-                None
-            };
-            let has_more = next_cursor.is_some();
-            Ok(types::DuplicatePairPage {
-                items: rows.into_iter().map(|(row, _, _, _)| row).collect(),
-                next_cursor,
-                has_more,
-                total,
-            })
+            query::duplicates::get_duplicate_pairs_paginated(
+                conn,
+                cursor.as_deref(),
+                limit,
+                &status_filter,
+                max_distance,
+            )
         })
     }
 
     pub fn get_duplicate_count(&self) -> Result<i64, String> {
-        self.with_read(|conn| {
-            conn.query_row(
-                "SELECT COUNT(*) FROM duplicate WHERE status = 'detected'",
-                [],
-                |row| row.get(0),
-            )
-        })
+        self.with_read(|conn| query::duplicates::count_duplicate_pairs(conn, "detected"))
     }
 
     pub fn resolve_duplicate_pair(
@@ -2478,402 +2459,19 @@ impl LibraryDatabase {
         hash_b: &str,
         preferred_collection_id: Option<i64>,
     ) -> Result<types::DuplicateResolutionResult, String> {
-        #[derive(Clone)]
-        struct SingleRef {
-            entity_id: i64,
-            file_id: i64,
-            entity_hash: String,
-            status: i64,
-            mime_type: String,
-            size_bytes: i64,
-            pixel_width: Option<i64>,
-            pixel_height: Option<i64>,
-            frame_count: Option<i64>,
-            notes: Option<String>,
-            source_urls_json: Option<String>,
-            rating: Option<i64>,
-            date_created: String,
-            parent_collection_entity_id: Option<i64>,
-            collection_ordinal: Option<i64>,
-        }
-
-        fn merged_status(left: i64, right: i64) -> i64 {
-            if left == 1 || right == 1 {
-                1
-            } else if left == 0 || right == 0 {
-                0
-            } else {
-                left
-            }
-        }
-
-        fn merge_notes(existing: Option<&str>, incoming: Option<&str>) -> Option<String> {
-            let existing = existing.unwrap_or("").trim();
-            let incoming = incoming.unwrap_or("").trim();
-            match (existing.is_empty(), incoming.is_empty()) {
-                (true, true) => None,
-                (true, false) => Some(incoming.to_string()),
-                (false, true) => Some(existing.to_string()),
-                (false, false) if existing.contains(incoming) => Some(existing.to_string()),
-                (false, false) => Some(format!("{existing}\n\n{incoming}")),
-            }
-        }
-
-        fn merge_source_urls(existing: Option<&str>, incoming: Option<&str>) -> Option<String> {
-            let mut merged = Vec::<String>::new();
-            let mut seen = std::collections::HashSet::<String>::new();
-            for raw in [existing, incoming].into_iter().flatten() {
-                let urls: Vec<String> = serde_json::from_str(raw).unwrap_or_default();
-                for url in urls {
-                    if !url.trim().is_empty() && seen.insert(url.clone()) {
-                        merged.push(url);
-                    }
-                }
-            }
-            if merged.is_empty() {
-                None
-            } else {
-                serde_json::to_string(&merged).ok()
-            }
-        }
-
         let action = action.to_string();
         let hash_a = hash_a.to_string();
         let hash_b = hash_b.to_string();
         self.with_write(move |conn| {
-            let tx = conn.unchecked_transaction()?;
-            let load_single = |entity_hash: &str| -> rusqlite::Result<SingleRef> {
-                tx.query_row(
-                    "SELECT
-                         me.entity_id,
-                         sme.file_id,
-                         me.entity_hash,
-                         me.status,
-                         mf.mime_type,
-                         mf.size_bytes,
-                         mf.pixel_width,
-                         mf.pixel_height,
-                         mf.frame_count,
-                         me.notes,
-                         me.source_urls_json,
-                         me.rating,
-                         me.date_created,
-                         me.parent_collection_entity_id,
-                         me.collection_ordinal
-                     FROM media_entity me
-                     JOIN single_media_entity sme ON sme.entity_id = me.entity_id
-                     JOIN media_file mf ON mf.file_id = sme.file_id
-                     WHERE me.entity_hash = ?1",
-                    [entity_hash],
-                    |row| {
-                        Ok(SingleRef {
-                            entity_id: row.get(0)?,
-                            file_id: row.get(1)?,
-                            entity_hash: row.get(2)?,
-                            status: row.get(3)?,
-                            mime_type: row.get(4)?,
-                            size_bytes: row.get(5)?,
-                            pixel_width: row.get(6)?,
-                            pixel_height: row.get(7)?,
-                            frame_count: row.get(8)?,
-                            notes: row.get(9)?,
-                            source_urls_json: row.get(10)?,
-                            rating: row.get(11)?,
-                            date_created: row.get(12)?,
-                            parent_collection_entity_id: row.get(13)?,
-                            collection_ordinal: row.get(14)?,
-                        })
-                    },
-                )
-            };
-
-            let left = load_single(&hash_a)?;
-            let right = load_single(&hash_b)?;
-
-            if action == "not_duplicate" {
-                tx.execute(
-                    "UPDATE duplicate
-                     SET status = 'ignored_false_positive',
-                         decision_at = datetime('now'),
-                         decision_source = 'manual',
-                         decision_reason = 'User marked as not duplicate'
-                     WHERE (file_id_a = ?1 AND file_id_b = ?2) OR (file_id_a = ?2 AND file_id_b = ?1)",
-                    params![left.file_id, right.file_id],
-                )?;
-                tx.commit()?;
-                return Ok(types::DuplicateResolutionResult {
-                    status: types::DuplicateResolveStatus::Resolved,
-                    winner_hash: None,
-                    loser_hash: None,
-                    action,
-                    affected_folder_ids: Vec::new(),
-                    affected_collection_ids: Vec::new(),
-                    tags_merged: 0,
-                    conflict: None,
-                });
-            }
-
-            if action == "keep_both" {
-                tx.execute(
-                    "UPDATE duplicate
-                     SET status = 'dismissed_keep_both',
-                         decision_at = datetime('now'),
-                         decision_source = 'manual',
-                         decision_reason = 'User chose to keep both'
-                     WHERE (file_id_a = ?1 AND file_id_b = ?2) OR (file_id_a = ?2 AND file_id_b = ?1)",
-                    params![left.file_id, right.file_id],
-                )?;
-                tx.commit()?;
-                return Ok(types::DuplicateResolutionResult {
-                    status: types::DuplicateResolveStatus::Resolved,
-                    winner_hash: None,
-                    loser_hash: None,
-                    action,
-                    affected_folder_ids: Vec::new(),
-                    affected_collection_ids: Vec::new(),
-                    tags_merged: 0,
-                    conflict: None,
-                });
-            }
-
-            let (winner, loser) = match action.as_str() {
-                "keep_left" => (left.clone(), right.clone()),
-                "keep_right" => (right.clone(), left.clone()),
-                "smart_merge" => {
-                    let decision = crate::duplicates::quality::compare_static_image_quality(
-                        &crate::duplicates::quality::ComparableImageCandidate {
-                            mime_type: &left.mime_type,
-                            size_bytes: left.size_bytes,
-                            pixel_width: left.pixel_width,
-                            pixel_height: left.pixel_height,
-                            frame_count: left.frame_count,
-                        },
-                        &crate::duplicates::quality::ComparableImageCandidate {
-                            mime_type: &right.mime_type,
-                            size_bytes: right.size_bytes,
-                            pixel_width: right.pixel_width,
-                            pixel_height: right.pixel_height,
-                            frame_count: right.frame_count,
-                        },
-                    );
-                    match decision {
-                        crate::duplicates::quality::ImageQualityDecision::LeftBetter => {
-                            (left.clone(), right.clone())
-                        }
-                        crate::duplicates::quality::ImageQualityDecision::RightBetter => {
-                            (right.clone(), left.clone())
-                        }
-                        crate::duplicates::quality::ImageQualityDecision::Ambiguous => {
-                            if left.entity_hash <= right.entity_hash {
-                                (left.clone(), right.clone())
-                            } else {
-                                (right.clone(), left.clone())
-                            }
-                        }
-                    }
-                }
-                other => {
-                    return Err(rusqlite::Error::InvalidParameterName(format!(
-                        "Invalid duplicate action: {other}"
-                    )))
-                }
-            };
-
-            if winner.parent_collection_entity_id.is_some()
-                && loser.parent_collection_entity_id.is_some()
-                && winner.parent_collection_entity_id != loser.parent_collection_entity_id
-                && preferred_collection_id.is_none()
-            {
-                return Ok(types::DuplicateResolutionResult {
-                    status: types::DuplicateResolveStatus::Conflict,
-                    winner_hash: Some(winner.entity_hash.clone()),
-                    loser_hash: Some(loser.entity_hash.clone()),
-                    action,
-                    affected_folder_ids: Vec::new(),
-                    affected_collection_ids: Vec::new(),
-                    tags_merged: 0,
-                    conflict: Some(types::DuplicateCollectionConflict {
-                        winner_hash: winner.entity_hash.clone(),
-                        loser_hash: loser.entity_hash.clone(),
-                        winner_collection_id: winner.parent_collection_entity_id,
-                        loser_collection_id: loser.parent_collection_entity_id,
-                    }),
-                });
-            }
-
-            if let Some(chosen_collection_id) = preferred_collection_id {
-                let valid = [winner.parent_collection_entity_id, loser.parent_collection_entity_id]
-                    .into_iter()
-                    .flatten()
-                    .any(|value| value == chosen_collection_id);
-                if !valid {
-                    return Err(rusqlite::Error::InvalidParameterName(
-                        "preferred_collection_id must match one of the duplicate owners".into(),
-                    ));
-                }
-            }
-
-            let final_collection_id = preferred_collection_id
-                .or(winner.parent_collection_entity_id)
-                .or(loser.parent_collection_entity_id);
-
-            let tags_merged: usize = tx
-                .query_row(
-                    "SELECT COUNT(*) FROM entity_tag et
-                     WHERE et.entity_id = ?1
-                       AND NOT EXISTS (
-                           SELECT 1 FROM entity_tag existing
-                           WHERE existing.entity_id = ?2
-                             AND existing.tag_id = et.tag_id
-                       )",
-                    params![loser.entity_id, winner.entity_id],
-                    |row| row.get::<_, i64>(0),
-                )
-                .unwrap_or(0) as usize;
-
-            tx.execute(
-                "INSERT INTO entity_tag (entity_id, tag_id, provenance_mask, source)
-                 SELECT ?1, et.tag_id, et.provenance_mask, et.source
-                 FROM entity_tag et
-                 WHERE et.entity_id = ?2
-                 ON CONFLICT(entity_id, tag_id, source)
-                 DO UPDATE SET provenance_mask = entity_tag.provenance_mask | excluded.provenance_mask",
-                params![winner.entity_id, loser.entity_id],
-            )?;
-
-            let merged_notes = merge_notes(winner.notes.as_deref(), loser.notes.as_deref());
-            let merged_urls = merge_source_urls(
-                winner.source_urls_json.as_deref(),
-                loser.source_urls_json.as_deref(),
-            );
-            let merged_rating = match (winner.rating, loser.rating) {
-                (Some(left), Some(right)) => Some(left.max(right)),
-                (Some(value), None) | (None, Some(value)) => Some(value),
-                (None, None) => None,
-            };
-            let merged_created_at = winner.date_created.min(loser.date_created);
-            let merged_status = merged_status(winner.status, loser.status);
-            tx.execute(
-                "UPDATE media_entity
-                 SET status = ?1,
-                     notes = ?2,
-                     source_urls_json = ?3,
-                     rating = ?4,
-                     date_created = ?5,
-                     date_modified = ?6
-                 WHERE entity_id = ?7",
-                params![
-                    merged_status,
-                    merged_notes.as_deref(),
-                    merged_urls.as_deref(),
-                    merged_rating,
-                    merged_created_at,
-                    chrono::Utc::now().to_rfc3339(),
-                    winner.entity_id
-                ],
-            )?;
-
-            let affected_folder_ids = {
-                let mut stmt = tx.prepare(
-                    "SELECT folder_id FROM folder_member WHERE entity_id = ?1 ORDER BY folder_id",
-                )?;
-                let ids = stmt
-                    .query_map([loser.entity_id], |row| row.get::<_, i64>(0))?
-                    .collect::<rusqlite::Result<Vec<_>>>()?;
-                tx.execute(
-                    "INSERT OR IGNORE INTO folder_member (folder_id, entity_id, position_rank)
-                     SELECT folder_id, ?1, position_rank
-                     FROM folder_member
-                     WHERE entity_id = ?2",
-                    params![winner.entity_id, loser.entity_id],
-                )?;
-                tx.execute("DELETE FROM folder_member WHERE entity_id = ?1", [loser.entity_id])?;
-                ids
-            };
-
-            tx.execute(
-                "INSERT OR IGNORE INTO subscription_entity (subscription_id, entity_id)
-                 SELECT subscription_id, ?1
-                 FROM subscription_entity
-                 WHERE entity_id = ?2",
-                params![winner.entity_id, loser.entity_id],
-            )?;
-            tx.execute(
-                "DELETE FROM subscription_entity WHERE entity_id = ?1",
-                [loser.entity_id],
-            )?;
-
-            let mut affected_collection_ids = Vec::<i64>::new();
-            for collection_id in [winner.parent_collection_entity_id, loser.parent_collection_entity_id, final_collection_id]
-                .into_iter()
-                .flatten()
-            {
-                if !affected_collection_ids.contains(&collection_id) {
-                    affected_collection_ids.push(collection_id);
-                }
-            }
-
-            match final_collection_id {
-                Some(collection_id) => {
-                    let ordinal = if loser.parent_collection_entity_id == Some(collection_id) {
-                        loser.collection_ordinal.unwrap_or(1)
-                    } else if winner.parent_collection_entity_id == Some(collection_id) {
-                        winner.collection_ordinal.unwrap_or(1)
-                    } else {
-                        tx.query_row(
-                            "SELECT COALESCE(MAX(collection_ordinal), 0) + 1
-                             FROM media_entity
-                             WHERE parent_collection_entity_id = ?1",
-                            [collection_id],
-                            |row| row.get::<_, i64>(0),
-                        )?
-                    };
-                    tx.execute(
-                        "UPDATE media_entity
-                         SET parent_collection_entity_id = ?1,
-                             collection_ordinal = ?2
-                         WHERE entity_id = ?3",
-                        params![collection_id, ordinal, winner.entity_id],
-                    )?;
-                }
-                None => {
-                    tx.execute(
-                        "UPDATE media_entity
-                         SET parent_collection_entity_id = NULL,
-                             collection_ordinal = NULL
-                         WHERE entity_id = ?1",
-                        [winner.entity_id],
-                    )?;
-                }
-            }
-
-            tx.execute(
-                "DELETE FROM duplicate WHERE file_id_a = ?1 OR file_id_b = ?1",
-                [loser.file_id],
-            )?;
-            tx.execute(
-                "DELETE FROM single_media_entity WHERE entity_id = ?1",
-                [loser.entity_id],
-            )?;
-            tx.execute("DELETE FROM entity_tag WHERE entity_id = ?1", [loser.entity_id])?;
-            tx.execute("DELETE FROM media_entity WHERE entity_id = ?1", [loser.entity_id])?;
-            tx.execute("DELETE FROM media_file WHERE file_id = ?1", [loser.file_id])?;
-
-            for collection_id in &affected_collection_ids {
-                write::collections::sync_aggregates(&tx, *collection_id)?;
-            }
-
-            tx.commit()?;
-            Ok(types::DuplicateResolutionResult {
-                status: types::DuplicateResolveStatus::Resolved,
-                winner_hash: Some(winner.entity_hash),
-                loser_hash: Some(loser.entity_hash),
-                action,
-                affected_folder_ids,
-                affected_collection_ids,
-                tags_merged,
-                conflict: None,
-            })
+            let left = query::duplicates::get_duplicate_single_ref_by_hash(conn, &hash_a)?;
+            let right = query::duplicates::get_duplicate_single_ref_by_hash(conn, &hash_b)?;
+            write::duplicates::resolve_duplicate_pair(
+                conn,
+                &action,
+                left,
+                right,
+                preferred_collection_id,
+            )
         })
     }
 
@@ -2934,9 +2532,11 @@ mod tests {
     use super::LibraryDatabase;
     use crate::background_work::{DeferredWorkFilter, DeferredWorkType};
     use crate::db::core::schema::LIBRARY_DDL;
+    use crate::db::types::{BaseScope, DuplicateResolveStatus, EntityViewQuery, QueryFilters, QueryPage, QuerySort, ScopeKind};
     use crate::media_analysis::ensure_missing_color_analysis_jobs;
     use crate::media_analysis::TARGET_COLOR_ANALYSIS_VERSION;
     use crate::media_processing::colors::{serialize_dominant_palette_blob, DominantColor};
+    use rusqlite::params;
     use tempfile::TempDir;
 
     fn open_test_db() -> LibraryDatabase {
@@ -3005,6 +2605,195 @@ mod tests {
 
         assert_eq!(blob_colors[0].0, "#abcdef");
         assert_eq!(fallback_colors[0].0, "#fedcba");
+    }
+
+    #[test]
+    fn open_repairs_missing_ingest_queue_tables_for_existing_canonical_db() {
+        let tmp = TempDir::new().expect("tempdir");
+        let db_path = tmp.path().join("library.db");
+        let conn = rusqlite::Connection::open(&db_path).expect("open raw db");
+        conn.execute_batch(LIBRARY_DDL).expect("create schema");
+        conn.execute_batch(
+            "DROP INDEX IF EXISTS idx_ingest_queue_ready;
+             DROP INDEX IF EXISTS idx_ingest_queue_subscription;
+             DROP INDEX IF EXISTS idx_ingest_queue_item_queue;
+             DROP TABLE IF EXISTS ingest_queue_item;
+             DROP TABLE IF EXISTS ingest_queue;",
+        )
+        .expect("drop queue tables");
+        drop(conn);
+
+        let db = LibraryDatabase::open(tmp.path()).expect("repair schema");
+        db.with_read(|conn| {
+            let queue_exists: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'ingest_queue'",
+                [],
+                |row| row.get(0),
+            )?;
+            let item_exists: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'ingest_queue_item'",
+                [],
+                |row| row.get(0),
+            )?;
+            let ready_index_exists: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = 'idx_ingest_queue_ready'",
+                [],
+                |row| row.get(0),
+            )?;
+            assert_eq!(queue_exists, 1);
+            assert_eq!(item_exists, 1);
+            assert_eq!(ready_index_exists, 1);
+            Ok(())
+        })
+        .expect("inspect repaired schema");
+    }
+
+    #[test]
+    fn smart_folder_scope_query_matches_runtime_compiled_bitmap_and_sidebar_count() {
+        let db = open_test_db();
+        db.with_write(|conn| {
+            conn.execute(
+                "INSERT INTO media_entity (
+                    entity_id, entity_hash, entity_kind, status, name, rating, date_created, date_added, date_modified
+                 ) VALUES
+                    (1, 'entity_1', 'single', 1, 'Landscape', 5, '2026-04-01', '2026-04-01', '2026-04-01'),
+                    (2, 'entity_2', 'single', 1, 'Portrait', 2, '2026-04-02', '2026-04-02', '2026-04-02')",
+                [],
+            )?;
+            conn.execute(
+                "INSERT INTO media_file (
+                    file_id, file_hash, mime_type, size_bytes, pixel_width, pixel_height, has_audio, date_added
+                 ) VALUES
+                    (1, 'file_1', 'image/png', 100, 1000, 500, 0, '2026-04-01'),
+                    (2, 'file_2', 'image/jpeg', 100, 500, 1000, 0, '2026-04-02')",
+                [],
+            )?;
+            conn.execute(
+                "INSERT INTO single_media_entity (entity_id, file_id) VALUES (1, 1), (2, 2)",
+                [],
+            )?;
+            conn.execute(
+                "INSERT INTO tag (tag_id, namespace, subtag, file_count) VALUES (1, 'general', 'landscape', 1)",
+                [],
+            )?;
+            conn.execute(
+                "INSERT INTO entity_tag (entity_id, tag_id, provenance_mask, source) VALUES (1, 1, 1, 'local')",
+                [],
+            )?;
+            conn.execute(
+                "INSERT INTO file_color (file_id, hex, l, a, b) VALUES (1, '#ff0000', 50.0, 60.0, 70.0)",
+                [],
+            )?;
+            conn.execute(
+                "INSERT INTO smart_folder (
+                    smart_folder_id, name, predicate_json, date_added, date_modified
+                 ) VALUES (?1, ?2, ?3, ?4, ?4)",
+                params![
+                    7_i64,
+                    "Smart Landscape",
+                    serde_json::json!({
+                        "groups": [{
+                            "match_mode": "all",
+                            "negate": false,
+                            "rules": [
+                                { "field": "tags", "op": "include_all", "values": ["landscape"] },
+                                { "field": "color", "op": "contains", "values": ["#ff0000"] },
+                                { "field": "rating", "op": "gte", "value": 4 }
+                            ]
+                        }]
+                    }).to_string(),
+                    "2026-04-01T00:00:00Z",
+                ],
+            )?;
+            Ok(())
+        })
+        .expect("seed smart folder data");
+
+        db.full_rebuild();
+
+        let page = db
+            .query_entity_view(&EntityViewQuery {
+                base_scope: BaseScope {
+                    kind: ScopeKind::SmartFolder,
+                    key: None,
+                    id: Some(7),
+                },
+                filters: QueryFilters::default(),
+                sort: QuerySort::default(),
+                page: QueryPage::default(),
+            })
+            .expect("query smart folder scope");
+
+        assert_eq!(page.items.len(), 1);
+        assert_eq!(page.items[0].entity_hash, "entity_1");
+        assert_eq!(
+            db.bitmap_len(&crate::db::projection::bitmaps::BitmapKey::SmartFolder(7)),
+            1
+        );
+        db.with_read(|conn| {
+            let count: i64 = conn.query_row(
+                "SELECT count FROM sidebar_node WHERE node_id = 'smart:7'",
+                [],
+                |row| row.get(0),
+            )?;
+            assert_eq!(count, 1);
+            Ok(())
+        })
+        .expect("read sidebar count");
+    }
+
+    #[test]
+    fn resolve_duplicate_pair_requires_explicit_collection_choice_for_cross_collection_members() {
+        let db = open_test_db();
+        db.with_write(|conn| {
+            conn.execute_batch(LIBRARY_DDL)?;
+            conn.execute(
+                "INSERT INTO media_entity (
+                    entity_id, entity_hash, entity_kind, status, name, date_created, date_added, date_modified
+                 ) VALUES
+                    (1, 'collection_left', 'collection', 1, 'Left Collection', '2026-04-01', '2026-04-01', '2026-04-01'),
+                    (2, 'collection_right', 'collection', 1, 'Right Collection', '2026-04-01', '2026-04-01', '2026-04-01'),
+                    (3, 'left_single', 'single', 1, 'Left Single', '2026-04-01', '2026-04-01', '2026-04-01'),
+                    (4, 'right_single', 'single', 1, 'Right Single', '2026-04-01', '2026-04-01', '2026-04-01')",
+                [],
+            )?;
+            conn.execute(
+                "UPDATE media_entity
+                 SET parent_collection_entity_id = 1, collection_ordinal = 1
+                 WHERE entity_id = 3",
+                [],
+            )?;
+            conn.execute(
+                "UPDATE media_entity
+                 SET parent_collection_entity_id = 2, collection_ordinal = 1
+                 WHERE entity_id = 4",
+                [],
+            )?;
+            conn.execute(
+                "INSERT INTO media_file (
+                    file_id, file_hash, mime_type, size_bytes, pixel_width, pixel_height, has_audio,
+                    perceptual_hash, date_added
+                 ) VALUES
+                    (1, 'file_left', 'image/png', 1, 100, 100, 0, 'hash_left', '2026-04-01'),
+                    (2, 'file_right', 'image/png', 1, 100, 100, 0, 'hash_right', '2026-04-01')",
+                [],
+            )?;
+            conn.execute(
+                "INSERT INTO single_media_entity (entity_id, file_id) VALUES (3, 1), (4, 2)",
+                [],
+            )?;
+            Ok(())
+        })
+        .expect("seed duplicate conflict data");
+
+        let result = db
+            .resolve_duplicate_pair("keep_left", "left_single", "right_single", None)
+            .expect("resolve duplicate conflict");
+
+        assert!(matches!(result.status, DuplicateResolveStatus::Conflict));
+        let conflict = result.conflict.expect("conflict payload");
+        assert_eq!(conflict.winner_collection_id, Some(1));
+        assert_eq!(conflict.loser_collection_id, Some(2));
     }
 
     #[test]

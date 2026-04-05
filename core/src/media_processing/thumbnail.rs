@@ -115,17 +115,23 @@ fn fast_resize(img: &image::DynamicImage, tw: u32, th: u32) -> FileResult<image:
     Ok(image::DynamicImage::ImageRgba8(result))
 }
 
-pub fn encode_thumbnail_jpeg(img: &image::DynamicImage) -> FileResult<Vec<u8>> {
-    let rgba = img.to_rgba8();
+/// Encode an RgbaImage as JPEG by compositing alpha onto a white background.
+fn encode_rgba_as_jpeg(rgba: &image::RgbaImage) -> FileResult<Vec<u8>> {
     let (w, h) = rgba.dimensions();
     let mut flattened = image::RgbaImage::from_pixel(w, h, image::Rgba([255, 255, 255, 255]));
-    image::imageops::overlay(&mut flattened, &rgba, 0, 0);
+    image::imageops::overlay(&mut flattened, rgba, 0, 0);
     let rgb = image::DynamicImage::ImageRgba8(flattened).to_rgb8();
 
     let mut out = Vec::new();
     let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 82);
     encoder.encode_image(&image::DynamicImage::ImageRgb8(rgb))?;
     Ok(out)
+}
+
+/// Backward-compatible entry point that converts to RGBA internally.
+pub fn encode_thumbnail_jpeg(img: &image::DynamicImage) -> FileResult<Vec<u8>> {
+    let rgba = img.to_rgba8();
+    encode_rgba_as_jpeg(&rgba)
 }
 
 fn has_meaningful_alpha(rgba: &image::RgbaImage) -> bool {
@@ -146,7 +152,7 @@ pub fn encode_thumbnail(img: &image::DynamicImage) -> FileResult<(Vec<u8>, &'sta
         )?;
         Ok((out, "png"))
     } else {
-        encode_thumbnail_jpeg(img).map(|bytes| (bytes, "jpg"))
+        encode_rgba_as_jpeg(&rgba).map(|bytes| (bytes, "jpg"))
     }
 }
 

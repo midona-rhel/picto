@@ -40,20 +40,23 @@ pub struct ChangeImpact {
     pub smart_folder_counts: Option<Vec<(i64, i64)>>,
 }
 
+/// Merge items into an `Option<Vec<T>>` with dedup.
+fn merge_dedup<T: PartialEq>(target: &mut Option<Vec<T>>, items: Vec<T>) {
+    let merged = target.get_or_insert_with(Vec::new);
+    for item in items {
+        if !merged.contains(&item) {
+            merged.push(item);
+        }
+    }
+}
+
 impl ChangeImpact {
     pub fn new() -> Self {
         Self::default()
     }
 
-    pub fn domains(mut self, domains: &[Domain]) -> Self {
-        let mut unique = Vec::with_capacity(domains.len());
-        for domain in domains {
-            if !unique.contains(domain) {
-                unique.push(domain.clone());
-            }
-        }
-        self.domains = unique;
-        self
+    pub fn domains(self, domains: &[Domain]) -> Self {
+        self.add_domains(domains)
     }
 
     pub fn add_domain(mut self, domain: Domain) -> Self {
@@ -83,62 +86,32 @@ impl ChangeImpact {
     }
 
     pub fn folder_ids(mut self, ids: Vec<i64>) -> Self {
-        let merged = self.folder_ids.get_or_insert_with(Vec::new);
-        for id in ids {
-            if !merged.contains(&id) {
-                merged.push(id);
-            }
-        }
+        merge_dedup(&mut self.folder_ids, ids);
         self
     }
 
     pub fn smart_folder_ids(mut self, ids: Vec<i64>) -> Self {
-        let merged = self.smart_folder_ids.get_or_insert_with(Vec::new);
-        for id in ids {
-            if !merged.contains(&id) {
-                merged.push(id);
-            }
-        }
+        merge_dedup(&mut self.smart_folder_ids, ids);
         self
     }
 
     pub fn group_ids(mut self, ids: Vec<i64>) -> Self {
-        let merged = self.group_ids.get_or_insert_with(Vec::new);
-        for id in ids {
-            if !merged.contains(&id) {
-                merged.push(id);
-            }
-        }
+        merge_dedup(&mut self.group_ids, ids);
         self
     }
 
     pub fn subscription_ids(mut self, ids: Vec<i64>) -> Self {
-        let merged = self.subscription_ids.get_or_insert_with(Vec::new);
-        for id in ids {
-            if !merged.contains(&id) {
-                merged.push(id);
-            }
-        }
+        merge_dedup(&mut self.subscription_ids, ids);
         self
     }
 
     pub fn query_ids(mut self, ids: Vec<i64>) -> Self {
-        let merged = self.query_ids.get_or_insert_with(Vec::new);
-        for id in ids {
-            if !merged.contains(&id) {
-                merged.push(id);
-            }
-        }
+        merge_dedup(&mut self.query_ids, ids);
         self
     }
 
     pub fn credential_categories(mut self, cats: Vec<String>) -> Self {
-        let merged = self.credential_categories.get_or_insert_with(Vec::new);
-        for cat in cats {
-            if !merged.contains(&cat) {
-                merged.push(cat);
-            }
-        }
+        merge_dedup(&mut self.credential_categories, cats);
         self
     }
 
@@ -179,29 +152,19 @@ impl ChangeImpact {
         self = self.add_domains(&other.domains);
 
         if let Some(hashes) = other.entity_hashes {
-            let merged = self.entity_hashes.get_or_insert_with(Vec::new);
-            for hash in hashes {
-                if !merged.contains(&hash) {
-                    merged.push(hash);
-                }
-            }
+            merge_dedup(&mut self.entity_hashes, hashes);
         }
 
         if let Some(hashes) = other.member_hashes {
-            let merged = self.member_hashes.get_or_insert_with(Vec::new);
-            for hash in hashes {
-                if !merged.contains(&hash) {
-                    merged.push(hash);
-                }
-            }
+            merge_dedup(&mut self.member_hashes, hashes);
         }
 
         if let Some(ids) = other.folder_ids {
-            self = self.folder_ids(ids);
+            merge_dedup(&mut self.folder_ids, ids);
         }
 
         if let Some(ids) = other.smart_folder_ids {
-            self = self.smart_folder_ids(ids);
+            merge_dedup(&mut self.smart_folder_ids, ids);
         }
 
         if other.compiler_batch_done == Some(true) {
@@ -230,12 +193,7 @@ impl ChangeImpact {
         }
 
         if let Some(ids) = other.folder_membership_changed {
-            let merged = self.folder_membership_changed.get_or_insert_with(Vec::new);
-            for id in ids {
-                if !merged.contains(&id) {
-                    merged.push(id);
-                }
-            }
+            merge_dedup(&mut self.folder_membership_changed, ids);
         }
 
         if other.view_prefs_changed == Some(true) {

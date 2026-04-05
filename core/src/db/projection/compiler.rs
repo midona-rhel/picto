@@ -63,7 +63,7 @@ pub fn execute_plan(conn: &Connection, bitmaps: &BitmapStore, plan: &CompilerPla
     }
 
     if plan.rebuild_all || plan.rebuild_sidebar {
-        super::sidebar::compile_sidebar(conn);
+        super::sidebar::compile_sidebar(conn, bitmaps);
     }
 }
 

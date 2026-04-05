@@ -29,6 +29,7 @@ import {
   IconCrown, IconBolt, IconTarget, IconPuzzle, IconDice, IconChess,
   IconAward, IconCoffee, IconPizza, IconApple,
 } from '@tabler/icons-react';
+import { IconPersonSimple, IconPersonMale, IconPersonFemale } from './customIcons';
 
 export interface CuratedIcon {
   name: string;
@@ -152,6 +153,9 @@ export const CURATED_ICONS: CuratedIcon[] = [
   { name: 'IconCoffee', label: 'Coffee', component: IconCoffee },
   { name: 'IconPizza', label: 'Pizza', component: IconPizza },
   { name: 'IconApple', label: 'Apple', component: IconApple },
+  { name: 'IconPersonSimple', label: 'Person', component: IconPersonSimple as unknown as TablerIcon },
+  { name: 'IconPersonMale', label: 'Male', component: IconPersonMale as unknown as TablerIcon },
+  { name: 'IconPersonFemale', label: 'Female', component: IconPersonFemale as unknown as TablerIcon },
 ];
 
 export const ICON_MAP = new Map(CURATED_ICONS.map((i) => [i.name, i.component]));

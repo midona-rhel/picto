@@ -70,6 +70,11 @@ export interface CanvasGridProps {
   onContainerRef?: (el: HTMLDivElement | null) => void;
   /** Notify parent when layout changes (for scroll-to-item). */
   onLayoutChange?: (layout: LayoutResult) => void;
+  /** Index of tile currently being renamed (inline edit overlay). */
+  renamingIndex?: number | null;
+  /** Called when inline rename commits or cancels. */
+  onRenameCommit?: (index: number, newName: string) => void;
+  onRenameCancel?: () => void;
 }
 
 export function CanvasGrid({
@@ -99,6 +104,9 @@ export function CanvasGrid({
   dragSourceScope = null,
   onContainerRef,
   onLayoutChange,
+  renamingIndex = null,
+  onRenameCommit,
+  onRenameCancel,
 }: CanvasGridProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const containerCallbackRef = useCallback((el: HTMLDivElement | null) => {
@@ -357,13 +365,17 @@ export function CanvasGrid({
       now,
       activeTiles,
       draw: drawCtx,
-      theme: {
-        placeholderBg: 'rgba(255, 255, 255, 0.04)',
-        borderRadius: 4,
-        textPrimary: 'rgba(255, 255, 255, 0.92)',
-        textTertiary: 'rgba(255, 255, 255, 0.36)',
-        tileBoundary: 'rgba(255, 255, 255, 0.12)',
-      },
+      theme: (() => {
+        const s = getComputedStyle(container);
+        return {
+          placeholderBg: s.getPropertyValue('--color-surface-2').trim() || 'rgba(255,255,255,0.04)',
+          borderRadius: 4,
+          textPrimary: s.getPropertyValue('--color-text-primary').trim() || 'rgba(255,255,255,0.92)',
+          textTertiary: s.getPropertyValue('--color-text-tertiary').trim() || 'rgba(255,255,255,0.36)',
+          glassBorder: s.getPropertyValue('--color-border-primary').trim() || 'rgba(255,255,255,0.14)',
+          tileBoundary: s.getPropertyValue('--color-border-secondary').trim() || 'rgba(255,255,255,0.12)',
+        };
+      })(),
       viewMode: effectiveViewMode,
       fitThumbnails,
       showTileName: showName,
@@ -543,8 +555,15 @@ export function CanvasGrid({
       }, 16);
     });
     observer.observe(container);
+
+    // Re-measure when page zoom changes (Cmd+/Cmd-) — DPR changes with zoom
+    const dprQuery = window.matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`);
+    const handleDprChange = () => measure();
+    dprQuery.addEventListener('change', handleDprChange);
+
     return () => {
       observer.disconnect();
+      dprQuery.removeEventListener('change', handleDprChange);
       if (resizeTimerRef.current) clearTimeout(resizeTimerRef.current);
     };
   }, []);
@@ -565,6 +584,16 @@ export function CanvasGrid({
   useEffect(() => { markDirty('base'); }, [showName, showExtension, showResolution, effectiveViewMode, fitThumbnails, suppressTileReveal, markDirty]);
   useEffect(() => { markDirty('overlay'); }, [selectedEntityHashes, markDirty]);
   useEffect(() => { markDirty('both'); }, [headerHeight, markDirty]);
+
+  // ── Redraw on theme change (canvas reads CSS variables, not reactive to theme) ──
+  useEffect(() => {
+    const observer = new MutationObserver(() => markDirty('both'));
+    observer.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ['data-theme', 'data-mantine-color-scheme', 'style'],
+    });
+    return () => observer.disconnect();
+  }, [markDirty]);
 
   // ── Global pointer tracking during drag ──
   // Uses refs to avoid effect re-runs on every ghost position update.
@@ -1084,6 +1113,54 @@ export function CanvasGrid({
             zIndex: 100,
           }} />
         )}
+        {renamingIndex != null && (() => {
+          const pos = layout.positions[renamingIndex];
+          const item = items[renamingIndex];
+          if (!pos || !item) return null;
+          const imageH = pos.h - textHeight;
+          return (
+            <input
+              key={`rename-${renamingIndex}`}
+              autoFocus
+              defaultValue={item.name ?? ''}
+              style={{
+                position: 'absolute',
+                left: pos.x,
+                top: pos.y + imageH + headerHeight,
+                width: pos.w,
+                height: textHeight,
+                zIndex: 200,
+                background: 'var(--color-surface-1)',
+                border: '1px solid var(--color-primary)',
+                borderRadius: 4,
+                color: 'var(--color-text-primary)',
+                fontSize: 13,
+                fontFamily: 'var(--font-family)',
+                textAlign: 'center',
+                outline: 'none',
+                padding: '0 4px',
+                boxSizing: 'border-box',
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  onRenameCommit?.(renamingIndex!, (e.target as HTMLInputElement).value.trim());
+                } else if (e.key === 'Escape') {
+                  e.preventDefault();
+                  onRenameCancel?.();
+                }
+              }}
+              onBlur={(e) => {
+                const val = e.target.value.trim();
+                if (val && val !== (item.name ?? '')) {
+                  onRenameCommit?.(renamingIndex!, val);
+                } else {
+                  onRenameCancel?.();
+                }
+              }}
+            />
+          );
+        })()}
         <div
           className={styles.canvasWrap}
           style={{ height: `${estimatedTotalHeight - headerHeight}px` }}

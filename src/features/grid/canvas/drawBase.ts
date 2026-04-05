@@ -24,13 +24,13 @@ import {
   formatDuration,
 } from './primitives';
 
-const GLASS_BORDER_COLOR = 'rgba(255, 255, 255, 0.2)';
 
 interface ThemeLike {
   placeholderBg: string;
   borderRadius: number;
   textPrimary: string;
   textTertiary: string;
+  glassBorder: string;
   tileBoundary: string;
 }
 
@@ -179,7 +179,7 @@ export function drawCanvasBaseLayer({
   }
 
   // ── Pass 2: Glass border ring ──
-  ctx.strokeStyle = GLASS_BORDER_COLOR;
+  ctx.strokeStyle = theme.glassBorder;
   ctx.lineWidth = 1;
   ctx.beginPath();
   for (const i of activeTiles) {

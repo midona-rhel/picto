@@ -87,7 +87,7 @@ interface ContextMenuProps {
 export function ContextMenu({ entries, position, onClose, searchable = true, width }: ContextMenuProps) {
   const menuRef = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
-  const [pos, setPos] = useState(position);
+  const [pos, setPos] = useState<{ x: number; y: number } | null>(null);
   const [origin, setOrigin] = useState('top left');
   const [search, setSearch] = useState('');
   const [focusIdx, setFocusIdx] = useState(-1);
@@ -133,18 +133,30 @@ export function ContextMenu({ entries, position, onClose, searchable = true, wid
     .map((e, i) => (!isSeparator(e) && !isCustom(e) ? i : -1))
     .filter((i) => i >= 0);
 
-  // Viewport clamping + transform origin for scale animation
+  // Viewport clamping
   useLayoutEffect(() => {
     const el = menuRef.current;
     if (!el) return;
-    const rect = el.getBoundingClientRect();
+
+    // Measure true content height without CSS max-height cap
+    const prevMaxH = el.style.maxHeight;
+    el.style.maxHeight = 'none';
+    const w = el.offsetWidth;
+    const h = el.offsetHeight;
+    el.style.maxHeight = prevMaxH;
+
+    const margin = 12;
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
     let { x, y } = position;
     let ox = 'left';
     let oy = 'top';
-    if (x + rect.width > window.innerWidth - 8) { x = window.innerWidth - rect.width - 8; ox = 'right'; }
-    if (y + rect.height > window.innerHeight - 8) { y = window.innerHeight - rect.height - 8; oy = 'bottom'; }
-    if (x < 8) x = 8;
-    if (y < 8) y = 8;
+
+    if (x + w > vw - margin) { x = vw - w - margin; ox = 'right'; }
+    if (y + h > vh - margin) { y = vh - h - margin; oy = 'bottom'; }
+    if (x < margin) x = margin;
+    if (y < margin) y = margin;
+
     setPos({ x, y });
     setOrigin(`${oy} ${ox}`);
   }, [position, cleaned.length]);
@@ -199,7 +211,10 @@ export function ContextMenu({ entries, position, onClose, searchable = true, wid
       <div
         ref={menuRef}
         className={`${styles.menu} ${closing ? styles.menuClosing : ''}`}
-        style={{ left: pos.x, top: pos.y, width: width ?? undefined, transformOrigin: origin }}
+        style={pos
+          ? { left: pos.x, top: pos.y, width: width ?? undefined, transformOrigin: origin }
+          : { left: -9999, top: -9999, width: width ?? undefined, visibility: 'hidden' as const }
+        }
         onPointerDown={(e) => e.stopPropagation()}
         onContextMenu={(e) => e.preventDefault()}
       >
@@ -330,7 +345,7 @@ function SubmenuPanel({
     <div
       ref={ref}
       className={styles.menu}
-      style={{ left: pos.left, top: pos.top, transformOrigin: subOrigin }}
+      style={{ left: pos.left, top: pos.top, width: 'auto', transformOrigin: subOrigin }}
       onPointerDown={(e) => e.stopPropagation()}
       onContextMenu={(e) => e.preventDefault()}
       onMouseEnter={onMouseEnter}

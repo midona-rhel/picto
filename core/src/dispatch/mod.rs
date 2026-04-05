@@ -361,14 +361,6 @@ async fn dispatch_inner(command: &str, args: serde_json::Value) -> Result<String
         "move_smart_folder" => call!(typed::smart_folders::move_smart_folder, &state, args),
         "reorder_smart_folders" => call!(typed::smart_folders::reorder_smart_folders, &state, args),
 
-        // ── Media Metadata ────────────────────────────────────
-        "get_media_entity_metadata" => call!(
-            typed::media_metadata::get_media_entity_metadata,
-            &state,
-            args
-        ),
-        "get_storage_stats" => call!(typed::media_metadata::get_storage_stats, &state, args),
-
         // ── System ────────────────────────────────────────────
         "get_settings" => call!(typed::system::get_settings, &state, args),
         "save_settings" => call!(typed::system::save_settings, &state, args),
@@ -382,7 +374,11 @@ async fn dispatch_inner(command: &str, args: serde_json::Value) -> Result<String
         "set_view_prefs" => call!(typed::system::set_view_prefs, &state, args),
         "set_zoom_factor" => call!(typed::system::set_zoom_factor, &state, args),
         "get_zoom_factor" => call!(typed::system::get_zoom_factor, &state, args),
-        // ── Folders & Collections ─────────────────────────────
+        "get_media_entity_metadata" => {
+            call!(typed::system::get_media_entity_metadata, &state, args)
+        }
+        "get_storage_stats" => call!(typed::system::get_storage_stats, &state, args),
+        // ── Folders ──────────────────────────────────────────
         "list_folders" => call!(typed::folders::list_folders, &state, args),
         "get_folder_files" => call!(typed::folders::get_folder_files, &state, args),
         "get_folder_cover_hash" => call!(typed::folders::get_folder_cover_hash, &state, args),
@@ -404,20 +400,26 @@ async fn dispatch_inner(command: &str, args: serde_json::Value) -> Result<String
         "reorder_folders" => call!(typed::folders::reorder_folders, &state, args),
         "reorder_folder_items" => call!(typed::folders::reorder_folder_items, &state, args),
         "reorder_folder_members" => call!(typed::folders::reorder_folder_members, &state, args),
-        "get_collections" => call!(typed::folders::get_collections, &state, args),
-        "get_collection_summary" => call!(typed::folders::get_collection_summary, &state, args),
-        "create_collection" => call!(typed::folders::create_collection, &state, args),
-        "update_collection" => call!(typed::folders::update_collection, &state, args),
+
+        // ── Collections ──────────────────────────────────────
+        "get_collections" => call!(typed::collections::get_collections, &state, args),
+        "get_collection_summary" => {
+            call!(typed::collections::get_collection_summary, &state, args)
+        }
+        "create_collection" => call!(typed::collections::create_collection, &state, args),
+        "update_collection" => call!(typed::collections::update_collection, &state, args),
         "reorder_collection_members" => {
-            call!(typed::folders::reorder_collection_members, &state, args)
+            call!(typed::collections::reorder_collection_members, &state, args)
         }
-        "add_collection_members" => call!(typed::folders::add_collection_members, &state, args),
+        "add_collection_members" => {
+            call!(typed::collections::add_collection_members, &state, args)
+        }
         "remove_collection_members" => {
-            call!(typed::folders::remove_collection_members, &state, args)
+            call!(typed::collections::remove_collection_members, &state, args)
         }
-        "delete_collection" => call!(typed::folders::delete_collection, &state, args),
+        "delete_collection" => call!(typed::collections::delete_collection, &state, args),
         "list_collection_member_hashes" => {
-            call!(typed::folders::list_collection_member_hashes, &state, args)
+            call!(typed::collections::list_collection_member_hashes, &state, args)
         }
 
         // ── Media I/O ─────────────────────────────────────────

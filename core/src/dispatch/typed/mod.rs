@@ -4,11 +4,11 @@
 //! and handler functions called from the flat dispatch match in `dispatch/mod.rs`.
 
 pub mod ai_tagger;
+pub mod collections;
 pub mod duplicates;
 pub mod folders;
 pub mod media_io;
 pub mod media_lifecycle;
-pub mod media_metadata;
 pub mod smart_folders;
 pub mod subscriptions;
 pub mod system;

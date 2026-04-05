@@ -213,6 +213,43 @@ export interface SidebarTreeResponse {
   generated_at: string;
 }
 
+// ── Smart folder types ───────────────────────────────────────────
+
+export type SmartFolderMatchMode = 'all' | 'any';
+
+export interface SmartFolderPredicateRule {
+  field: string;
+  op: string;
+  value?: unknown;
+  value2?: unknown;
+  values?: string[] | null;
+}
+
+export interface SmartFolderPredicateGroup {
+  match_mode: SmartFolderMatchMode;
+  negate?: boolean;
+  rules: SmartFolderPredicateRule[];
+}
+
+export interface SmartFolderPredicate {
+  groups: SmartFolderPredicateGroup[];
+}
+
+export interface SmartFolderCommandPayload {
+  smart_folder_id: number;
+  name: string;
+  parent_id: number | null;
+  icon: string | null;
+  color: string | null;
+  notes: string | null;
+  predicate_json: string;
+  sort_field: string | null;
+  sort_order: string | null;
+  display_order: number | null;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
 // ── Selection types ──────────────────────────────────────────────
 
 export interface SelectionTagCount {

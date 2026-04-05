@@ -9,6 +9,7 @@ import type {
   CanonicalEntityGridItem, CanonicalEntityDetails,
   EntityTarget, MediaEntityPatch, CanonicalTagRecord,
   CanonicalTagRelation, CanonicalNamespaceSummary, SelectionSummary,
+  SmartFolderCommandPayload,
 } from '../shared/types/canonical';
 import type {
   AuthSessionBounds,
@@ -260,12 +261,9 @@ export function clearFolderWatchConfig(folderId: number): Promise<void> {
 // ── Smart folders ────────────────────────────────────────────────
 
 export function createSmartFolder(params: {
-  name: string;
-  icon?: string | null;
-  color?: string | null;
-  parent_id?: number | null;
-}): Promise<number> {
-  return invoke<number>('create_smart_folder', params as unknown as Record<string, unknown>);
+  folder: SmartFolderCommandPayload;
+}): Promise<unknown> {
+  return invoke('create_smart_folder', params as unknown as Record<string, unknown>);
 }
 
 export function deleteSmartFolder(id: string): Promise<void> {
@@ -277,20 +275,7 @@ export function deleteSmartFolder(id: string): Promise<void> {
 
 export function updateSmartFolder(params: {
   id: string;
-  folder: {
-    smart_folder_id: number;
-    name: string;
-    parent_id: number | null;
-    icon: string | null;
-    color: string | null;
-    notes: string | null;
-    predicate_json: string;
-    sort_field: string | null;
-    sort_order: string | null;
-    display_order: number | null;
-    created_at: string | null;
-    updated_at: string | null;
-  };
+  folder: SmartFolderCommandPayload;
 }): Promise<void> {
   return invoke<void>('update_smart_folder', params);
 }
@@ -653,6 +638,10 @@ export function clipboardWriteText(text: string): void {
 
 export function clipboardCopyFile(path: string): void {
   (window as any).picto?.clipboard?.copyFile(path);
+}
+
+export function regenerateThumbnailsBatch(hashes: string[]): Promise<{ total: number; regenerated: number; errors: number }> {
+  return invoke('regenerate_thumbnails_batch', { hashes } as unknown as Record<string, unknown>);
 }
 
 // ── View preferences ────────────────────────────────────────────

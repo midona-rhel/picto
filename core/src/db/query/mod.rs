@@ -2,6 +2,7 @@
 
 pub mod collections;
 pub mod details;
+pub mod duplicates;
 pub mod folders;
 pub mod grid;
 pub mod ingest;

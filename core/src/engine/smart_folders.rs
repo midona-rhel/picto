@@ -70,12 +70,9 @@ impl ApplicationEngine {
         predicate: &SmartFolderPredicate,
     ) -> Result<i64, String> {
         let json = serde_json::to_string(predicate).map_err(|e| e.to_string())?;
-        let bitmap =
-            crate::db::projection::smart_folders::evaluate_predicate(&self.db.bitmaps, &json);
-        let active = self
-            .db
-            .bitmaps
-            .get(&crate::db::projection::bitmaps::BitmapKey::Status(1));
-        Ok((&bitmap & &active).len() as i64)
+        self.db.with_read(|conn| {
+            crate::db::projection::smart_folders::evaluate_predicate(conn, &self.db.bitmaps, &json)
+                .map(|bitmap| bitmap.len() as i64)
+        })
     }
 }

@@ -28,10 +28,16 @@ export function GlassModal({ open, onClose, title, size = 'md', flush = false, f
   const [visible, setVisible] = useState(false);
   const [closing, setClosing] = useState(false);
 
-  // Open: mount immediately
+  // Sync visibility with open prop
   useEffect(() => {
-    if (open) { setVisible(true); setClosing(false); }
-  }, [open]);
+    if (open) {
+      setVisible(true);
+      setClosing(false);
+    } else if (visible && !closing) {
+      // Parent closed us externally (e.g. Cancel button set atom to open:false)
+      setVisible(false);
+    }
+  }, [open]); // eslint-disable-line react-hooks/exhaustive-deps -- visible/closing are checked, not deps
 
   const startClose = useCallback(() => {
     if (closing) return;

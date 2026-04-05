@@ -10,11 +10,11 @@
 import {
   IconArrowsMaximize, IconExternalLink, IconFolderSearch, IconBrandFinder, IconAppWindow,
   IconFolderMinus, IconFolderPlus,
-  IconCopy, IconClipboardCopy, IconBookmark, IconBookmarks,
+  IconCopy, IconClipboardCopy, IconLink, IconBookmark, IconBookmarks,
   IconRefresh, IconTrash, IconArrowBackUp,
   IconSelectAll, IconDeselect,
-  IconStack2, IconStackPop,
-  IconFolder,
+  IconStack2, IconStackPop, IconSearch,
+  IconFolder, IconFolderCheck,
 } from '@tabler/icons-react';
 import type { MenuItem, MenuSeparator, MenuEntry } from '../../shared/ui/ContextMenu/ContextMenu';
 import { IconRename } from '../../shared/ui/icons/sidebar-menu-icons';
@@ -64,6 +64,17 @@ interface GridMenuContext {
   onOpenBatchRename?: () => void;
   onAccept?: () => void;
   onReject?: () => void;
+  onRename?: () => void;
+  onRegenerateThumbnails?: () => void;
+  onCopyTags?: () => void;
+  onPasteTags?: () => void;
+  hasClipboardTags?: boolean;
+  singleName?: string | null;
+  singleMime?: string | null;
+  onCopyLink?: (hash: string, mime: string) => void;
+  onNewFolderWithSelection?: () => void;
+  onMergeIntoCollection?: () => void;
+  onSearchByImage?: (engine: string, hash: string) => void;
 }
 
 function sep(): MenuSeparator {
@@ -158,10 +169,22 @@ export function buildTileContextMenu(ctx: GridMenuContext): MenuEntry[] {
       shortcut: kbd('file.addToFolder'),
       action: ctx.onAddToFolder,
     }));
+    if (ctx.onNewFolderWithSelection) {
+      entries.push(item('New Folder with Selection', {
+        icon: <IconFolderCheck size={15} />,
+        action: ctx.onNewFolderWithSelection,
+      }));
+    }
     if (selectionCount > 1 && ctx.scopeKind !== 'collection') {
       entries.push(item('Create Collection', {
         icon: <IconStack2 size={15} />,
         action: ctx.onCreateCollection,
+      }));
+    }
+    if (ctx.onMergeIntoCollection) {
+      entries.push(item('Merge into Collection', {
+        icon: <IconStack2 size={15} />,
+        action: ctx.onMergeIntoCollection,
       }));
     }
     if (ctx.scopeKind === 'collection') {
@@ -184,7 +207,7 @@ export function buildTileContextMenu(ctx: GridMenuContext): MenuEntry[] {
 
   // ── Rename ──
   if (singleSelected) {
-    entries.push(item('Rename', { icon: <IconRename size={15} />, shortcut: kbd('edit.rename'), disabled: true }));
+    entries.push(item('Rename', { icon: <IconRename size={15} />, shortcut: kbd('edit.rename'), action: ctx.onRename }));
   }
   if (hasSelection && selectionCount > 1) {
     entries.push(item('Batch Rename', { icon: <IconRename size={15} />, action: ctx.onOpenBatchRename }));
@@ -205,6 +228,18 @@ export function buildTileContextMenu(ctx: GridMenuContext): MenuEntry[] {
       shortcut: kbd('edit.copyFilePath'),
       action: ctx.onCopyFilePath ? () => ctx.onCopyFilePath!(singleHash!) : undefined,
     }));
+    if (ctx.singleName) {
+      entries.push(item('Copy Name', {
+        icon: <IconClipboardCopy size={15} />,
+        action: ctx.onCopyName ? () => ctx.onCopyName!(ctx.singleName!) : undefined,
+      }));
+    }
+    if (ctx.singleMime && ctx.onCopyLink) {
+      entries.push(item('Copy as Link', {
+        icon: <IconLink size={15} />,
+        action: () => ctx.onCopyLink!(singleHash!, ctx.singleMime!),
+      }));
+    }
     entries.push(sep());
   }
 
@@ -212,15 +247,35 @@ export function buildTileContextMenu(ctx: GridMenuContext): MenuEntry[] {
   if (hasSelection) {
     entries.push(item('Add Tags', { icon: <IconBookmark size={15} />, action: ctx.onOpenTagSelect }));
     entries.push(item('AI Tagger', { icon: <IconBookmarks size={15} />, action: ctx.onOpenAiTagger }));
-    entries.push(item('Copy Tags', { icon: <IconBookmark size={15} />, shortcut: kbd('edit.copyTags'), disabled: true }));
-    entries.push(item('Paste Tags', { icon: <IconBookmarks size={15} style={{ transform: 'scaleX(-1)' }} />, shortcut: kbd('edit.pasteTags'), disabled: true }));
+    entries.push(item('Copy Tags', { icon: <IconBookmark size={15} />, shortcut: kbd('edit.copyTags'), action: ctx.onCopyTags }));
+    entries.push(item('Paste Tags', { icon: <IconBookmarks size={15} style={{ transform: 'scaleX(-1)' }} />, shortcut: kbd('edit.pasteTags'), action: ctx.onPasteTags, disabled: !ctx.hasClipboardTags }));
+    entries.push(sep());
+  }
+
+  // ── Search by Image ──
+  if (singleSelected && singleHash && ctx.onSearchByImage) {
+    const engines = [
+      { key: 'tineye', label: 'TinEye' },
+      { key: 'saucenao', label: 'SauceNAO' },
+      { key: 'yandex', label: 'Yandex Images' },
+      { key: 'bing', label: 'Bing Visual Search' },
+    ];
+    entries.push({
+      submenu: true,
+      label: 'Search by Image',
+      icon: <IconSearch size={15} />,
+      children: engines.map((eng) => ({
+        label: eng.label,
+        action: () => ctx.onSearchByImage!(eng.key, singleHash!),
+      })),
+    });
     entries.push(sep());
   }
 
   // ── Thumbnails ──
   if (hasSelection) {
     const thumbLabel = selectionCount > 1 ? `Regenerate ${selectionCount} Thumbnails` : 'Regenerate Thumbnail';
-    entries.push(item(thumbLabel, { icon: <IconRefresh size={15} />, shortcut: kbd('file.regenerateThumbnail'), disabled: true }));
+    entries.push(item(thumbLabel, { icon: <IconRefresh size={15} />, shortcut: kbd('file.regenerateThumbnail'), action: ctx.onRegenerateThumbnails }));
     entries.push(sep());
   }
 

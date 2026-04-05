@@ -9,6 +9,7 @@
 import { useEffect, useState } from 'react';
 import { useAtomValue, getDefaultStore } from 'jotai';
 import { IconAlertCircle, IconFolder, IconPlus } from '@tabler/icons-react';
+import { ContextMenu, useContextMenu } from '../../shared/ui/ContextMenu';
 import { ColorPalette } from '../../shared/ui/ColorPalette';
 import * as api from '../../platform/api';
 import * as entityMutations from '../../controllers/entityMutations';
@@ -29,6 +30,8 @@ import { gridItemsAtom } from '../../state/grid';
 import { selectionTargetAtom, selectedEntityHashesAtom } from '../../state/selection';
 import { sidebarNodesAtom } from '../../state/sidebar';
 import { tagSelectPortalAtom, folderPickerPortalAtom } from '../../state/portals';
+import { activeNodeIdAtom } from '../../state/navigation';
+import { pushHistory } from '../../state/navigationHistory';
 import styles from './Inspector.module.css';
 
 const store = getDefaultStore();
@@ -224,6 +227,7 @@ export function Inspector() {
         <FoldersSection
           folders={folders}
           onRemove={(fid) => { void entityMutations.removeEntityFromFolder(d.entity_hash, fid); }}
+          onNavigate={(fid) => { const nodeId = `folder:${fid}`; store.set(activeNodeIdAtom, nodeId); pushHistory(nodeId); }}
         />
 
         <InspectorSection title="Properties">
@@ -273,6 +277,7 @@ export function Inspector() {
         <FoldersSection
           folders={folders}
           onRemove={selTarget ? (fid) => { void entityMutations.updateTargetFolderMembership(selTarget, fid, 'remove'); } : undefined}
+          onNavigate={(fid) => { const nodeId = `folder:${fid}`; store.set(activeNodeIdAtom, nodeId); pushHistory(nodeId); }}
         />
 
         <InspectorSection title="Properties">
@@ -351,32 +356,65 @@ function Shell({ children }: { children: React.ReactNode }) {
   );
 }
 
-function TagsSection({ tags, onRemove }: { tags: Array<{ ns: string; sub: string; raw: string }>; onRemove?: (raw: string) => void }) {
+function TagsSection({ tags, onRemove, onNavigate }: {
+  tags: Array<{ ns: string; sub: string; raw: string }>;
+  onRemove?: (raw: string) => void;
+  onNavigate?: (tag: string) => void;
+}) {
+  const chipMenu = useContextMenu();
   return (
     <InspectorSection title="Tags" count={tags.length}>
       <div className={styles.tagsWrap}>
         {tags.map((t) => (
-          <TagChip key={t.raw} namespace={t.ns} subtag={t.sub} onRemove={onRemove ? () => onRemove(t.raw) : undefined} />
+          <TagChip
+            key={t.raw} namespace={t.ns} subtag={t.sub}
+            onRemove={onRemove ? () => onRemove(t.raw) : undefined}
+            onContextMenu={(e) => {
+              e.preventDefault();
+              chipMenu.openAt({ x: e.clientX, y: e.clientY }, [
+                ...(onNavigate ? [{ label: 'Show Items', action: () => onNavigate(t.raw) }] : []),
+                { label: 'Copy', action: () => { (window as any).picto?.clipboard?.writeText(t.raw) ?? navigator.clipboard.writeText(t.raw); } },
+                ...(onRemove ? [{ label: 'Remove', action: () => onRemove(t.raw), danger: true }] : []),
+              ]);
+            }}
+          />
         ))}
         <button className={styles.tagAddBtn} onClick={(e) => openPortal(e, tagSelectPortalAtom)} type="button" title="Add tag">
           <IconPlus size={14} stroke={1.5} />
         </button>
       </div>
+      {chipMenu.state && <ContextMenu entries={chipMenu.state.entries} position={chipMenu.state.position} onClose={chipMenu.close} searchable={false} />}
     </InspectorSection>
   );
 }
 
-function FoldersSection({ folders, onRemove }: { folders: Array<{ id: number; name: string; color: string | null }>; onRemove?: (fid: number) => void }) {
+function FoldersSection({ folders, onRemove, onNavigate }: {
+  folders: Array<{ id: number; name: string; color: string | null }>;
+  onRemove?: (fid: number) => void;
+  onNavigate?: (folderId: number) => void;
+}) {
+  const chipMenu = useContextMenu();
   return (
     <InspectorSection title="Folders" count={folders.length}>
       <div className={styles.foldersWrap}>
         {folders.map((f) => (
-          <TagChip key={f.id} namespace="" subtag={f.name} colorRgb={hexToRgb(f.color)} onRemove={onRemove ? () => onRemove(f.id) : undefined} />
+          <TagChip
+            key={f.id} namespace="" subtag={f.name} colorRgb={hexToRgb(f.color)}
+            onRemove={onRemove ? () => onRemove(f.id) : undefined}
+            onContextMenu={(e) => {
+              e.preventDefault();
+              chipMenu.openAt({ x: e.clientX, y: e.clientY }, [
+                ...(onNavigate ? [{ label: 'Open Folder', action: () => onNavigate(f.id) }] : []),
+                ...(onRemove ? [{ label: 'Remove', action: () => onRemove(f.id), danger: true }] : []),
+              ]);
+            }}
+          />
         ))}
         <button className={styles.tagAddBtn} onClick={(e) => openPortal(e, folderPickerPortalAtom)} type="button" title="Add to folder">
           <IconPlus size={14} stroke={1.5} />
         </button>
       </div>
+      {chipMenu.state && <ContextMenu entries={chipMenu.state.entries} position={chipMenu.state.position} onClose={chipMenu.close} searchable={false} />}
     </InspectorSection>
   );
 }

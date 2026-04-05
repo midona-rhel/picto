@@ -306,7 +306,7 @@ fn duplicate_review_distance_threshold() -> u32 {
 }
 
 fn compute_comparable_image_phash(
-    path: &Path,
+    file_bytes: &[u8],
     mime_type: &str,
     frame_count: Option<i64>,
 ) -> Result<Option<String>, String> {
@@ -314,20 +314,9 @@ fn compute_comparable_image_phash(
     if !capabilities.can_perceptual_hash {
         return Ok(None);
     }
-    let bytes = std::fs::read(path).map_err(|err| {
-        format!(
-            "Failed to read {} for perceptual hash: {err}",
-            path.display()
-        )
-    })?;
-    crate::duplicates::phash::compute_phash_base64(&bytes)
+    crate::duplicates::phash::compute_phash_base64(file_bytes)
         .map(Some)
-        .map_err(|err| {
-            format!(
-                "Failed to compute perceptual hash for {}: {err}",
-                path.display()
-            )
-        })
+        .map_err(|err| format!("Failed to compute perceptual hash: {err}"))
 }
 
 fn work_types_for_new_ingest(
@@ -342,43 +331,6 @@ fn work_types_for_new_ingest(
         work_types.retain(|work| *work != DeferredWorkType::PerceptualHash);
     }
     work_types
-}
-
-fn compare_import_quality(
-    existing: &crate::db::query::ingest::ExistingImportTarget,
-    new_single: &IngestPreparedSingle,
-) -> crate::duplicates::quality::ImageQualityDecision {
-    crate::duplicates::quality::compare_static_image_quality(
-        &crate::duplicates::quality::ComparableImageCandidate {
-            mime_type: &existing.mime_type,
-            size_bytes: existing.size_bytes,
-            pixel_width: existing.pixel_width,
-            pixel_height: existing.pixel_height,
-            frame_count: existing.frame_count,
-        },
-        &crate::duplicates::quality::ComparableImageCandidate {
-            mime_type: &new_single.mime_type,
-            size_bytes: new_single.size_bytes,
-            pixel_width: new_single.pixel_width,
-            pixel_height: new_single.pixel_height,
-            frame_count: new_single.frame_count,
-        },
-    )
-}
-
-fn upsert_duplicate_pairs_for_candidates(
-    canonical_db: &LibraryDatabase,
-    imported_file_id: i64,
-    candidates: &[PerceptualHashCandidate],
-) -> Result<(), String> {
-    for candidate in candidates {
-        canonical_db.upsert_duplicate_pair_for_review(
-            imported_file_id,
-            candidate.file_id,
-            candidate.distance,
-        )?;
-    }
-    Ok(())
 }
 
 pub fn apply_compiler_plan(db: &LibraryDatabase, flags: &IngestFlags, folder_ids: &[i64]) {
@@ -602,47 +554,20 @@ pub async fn ingest_single_path(
 
     let mut prepared_single = prepared_from_blob_import(prepared_blob.clone(), request);
     let imported_phash = compute_comparable_image_phash(
-        &request.path,
+        &prepared_blob.file_bytes,
         &prepared_blob.mime,
         prepared_blob.num_frames,
     )?;
     prepared_single.perceptual_hash = imported_phash.clone();
 
     let threshold = duplicate_review_distance_threshold();
-    let candidates = if let Some(phash) = imported_phash.as_deref() {
-        canonical_db.find_perceptual_hash_candidates(phash, threshold)?
-    } else {
-        Vec::new()
-    };
+    let duplicate_plan = canonical_db.plan_ingest_duplicate_review(&prepared_single, threshold)?;
 
-    let exact_matches: Vec<PerceptualHashCandidate> = candidates
-        .iter()
-        .filter(|candidate| candidate.distance == 0)
-        .cloned()
-        .collect();
-    let near_matches: Vec<PerceptualHashCandidate> = candidates
-        .iter()
-        .filter(|candidate| candidate.distance > 0)
-        .cloned()
-        .collect();
-
-    if exact_matches.len() == 1 {
-        let candidate = &exact_matches[0];
-        if let Some(existing) =
-            canonical_db.get_existing_import_target_by_file_hash(&candidate.file_hash)?
-        {
-            match compare_import_quality(&existing, &prepared_single) {
-                crate::duplicates::quality::ImageQualityDecision::LeftBetter => {
-                    return merge_existing_import_target(
-                        canonical_db,
-                        &existing,
-                        request,
-                    )
-                    .await;
-                }
-                crate::duplicates::quality::ImageQualityDecision::RightBetter => {}
-                crate::duplicates::quality::ImageQualityDecision::Ambiguous => {}
-            }
+    if let crate::db::types::IngestDuplicateAction::ReuseExisting { entity_hash } =
+        &duplicate_plan.action
+    {
+        if let Some(existing) = canonical_db.get_existing_import_target_by_entity_hash(entity_hash)? {
+            return merge_existing_import_target(canonical_db, &existing, request).await;
         }
     }
 
@@ -676,60 +601,36 @@ pub async fn ingest_single_path(
     let mut final_file_id = imported_target.file_id;
     let mut disposition = SingleIngestDisposition::Imported;
 
-    if exact_matches.len() == 1 {
-        let candidate = &exact_matches[0];
-        if let Some(existing) =
-            canonical_db.get_existing_import_target_by_file_hash(&candidate.file_hash)?
-        {
-            match compare_import_quality(&existing, &prepared_single) {
-                crate::duplicates::quality::ImageQualityDecision::RightBetter => {
-                    let resolution = canonical_db.resolve_duplicate_pair(
-                        "smart_merge",
-                        &existing.entity_hash,
-                        &prepared_single.entity_hash,
-                        None,
-                    )?;
-                    if let Some(loser_hash) = resolution.loser_hash.as_deref() {
-                        let _ = blob_store.delete(loser_hash);
-                    }
-                    if let Some(winner_hash) = resolution.winner_hash {
-                        final_entity_hash = winner_hash.clone();
-                        if let Some(winner) =
-                            canonical_db.get_existing_import_target_by_entity_hash(&winner_hash)?
-                        {
-                            final_entity_id = winner.entity_id;
-                            final_file_id = winner.file_id;
-                        }
-                    }
-                }
-                crate::duplicates::quality::ImageQualityDecision::Ambiguous => {
-                    upsert_duplicate_pairs_for_candidates(
-                        canonical_db,
-                        imported_target.file_id,
-                        &exact_matches,
-                    )?;
-                }
-                crate::duplicates::quality::ImageQualityDecision::LeftBetter => {
-                    disposition = SingleIngestDisposition::Reused;
+    match &duplicate_plan.action {
+        crate::db::types::IngestDuplicateAction::PreferNewOverExisting { existing_entity_hash } => {
+            let resolution = canonical_db.resolve_duplicate_pair(
+                "smart_merge",
+                existing_entity_hash,
+                &prepared_single.entity_hash,
+                None,
+            )?;
+            if let Some(loser_hash) = resolution.loser_hash.as_deref() {
+                let _ = blob_store.delete(loser_hash);
+            }
+            if let Some(winner_hash) = resolution.winner_hash {
+                final_entity_hash = winner_hash.clone();
+                if let Some(winner) =
+                    canonical_db.get_existing_import_target_by_entity_hash(&winner_hash)?
+                {
+                    final_entity_id = winner.entity_id;
+                    final_file_id = winner.file_id;
                 }
             }
         }
-    } else {
-        if !exact_matches.is_empty() {
-            upsert_duplicate_pairs_for_candidates(
-                canonical_db,
-                imported_target.file_id,
-                &exact_matches,
-            )?;
+        crate::db::types::IngestDuplicateAction::ReuseExisting { .. } => {
+            disposition = SingleIngestDisposition::Reused;
         }
+        crate::db::types::IngestDuplicateAction::None => {}
     }
 
-    if !near_matches.is_empty() {
-        upsert_duplicate_pairs_for_candidates(
-            canonical_db,
-            imported_target.file_id,
-            &near_matches,
-        )?;
+    if !duplicate_plan.review_candidates.is_empty() {
+        canonical_db
+            .record_duplicate_review_candidates(imported_target.file_id, &duplicate_plan.review_candidates)?;
     }
 
     Ok(SingleIngestOutcome {
@@ -1181,73 +1082,52 @@ pub async fn materialize_subscription_collection(
 
         let mut prepared_single = prepared_from_blob_import(prepared_blob.clone(), &request);
         let imported_phash = compute_comparable_image_phash(
-            &request.path,
+            &prepared_blob.file_bytes,
             &prepared_blob.mime,
             prepared_blob.num_frames,
         )?;
         prepared_single.perceptual_hash = imported_phash.clone();
 
         let threshold = duplicate_review_distance_threshold();
-        let candidates = if let Some(phash) = imported_phash.as_deref() {
-            canonical_db.find_perceptual_hash_candidates(phash, threshold)?
-        } else {
-            Vec::new()
-        };
-        let exact_matches: Vec<PerceptualHashCandidate> = candidates
-            .iter()
-            .filter(|candidate| candidate.distance == 0)
-            .cloned()
-            .collect();
-        let near_matches: Vec<PerceptualHashCandidate> = candidates
-            .iter()
-            .filter(|candidate| candidate.distance > 0)
-            .cloned()
-            .collect();
+        let duplicate_plan = canonical_db.plan_ingest_duplicate_review(&prepared_single, threshold)?;
 
-        if exact_matches.len() == 1 {
-            let candidate = &exact_matches[0];
+        if let crate::db::types::IngestDuplicateAction::ReuseExisting { entity_hash } =
+            &duplicate_plan.action
+        {
             if let Some(existing) =
-                canonical_db.get_existing_import_target_by_file_hash(&candidate.file_hash)?
+                canonical_db.get_existing_import_target_by_entity_hash(entity_hash)?
             {
-                match compare_import_quality(&existing, &prepared_single) {
-                    crate::duplicates::quality::ImageQualityDecision::LeftBetter => {
-                        let merge = merge_existing_import_target(
-                            canonical_db,
-                            &existing,
-                            &request,
-                        )
-                        .await?;
-                        flags.merge(&merge.flags);
-                        existing_member_ids.push(existing.entity_id);
-                        resolved_members.push(ResolvedSubscriptionCollectionMember {
-                            item_key: member.metadata.item_key.clone(),
-                            page_num: member.metadata.page_num,
-                            canonical_post_url: member.metadata.canonical_post_url.clone(),
-                            media_url: member.metadata.media_url.clone(),
-                            entity_hash: existing.entity_hash.clone(),
-                            file_hash: existing.file_hash.clone(),
-                            disposition: SingleIngestDisposition::Reused,
-                        });
-                        continue;
-                    }
-                    crate::duplicates::quality::ImageQualityDecision::RightBetter => {
-                        pending_exact_upgrades.push((
-                            existing.entity_hash.clone(),
-                            prepared_single.entity_hash.clone(),
-                        ));
-                    }
-                    crate::duplicates::quality::ImageQualityDecision::Ambiguous => {
-                        pending_review_pairs
-                            .push((prepared_single.entity_hash.clone(), exact_matches.clone()));
-                    }
-                }
+                let merge = merge_existing_import_target(canonical_db, &existing, &request).await?;
+                flags.merge(&merge.flags);
+                existing_member_ids.push(existing.entity_id);
+                resolved_members.push(ResolvedSubscriptionCollectionMember {
+                    item_key: member.metadata.item_key.clone(),
+                    page_num: member.metadata.page_num,
+                    canonical_post_url: member.metadata.canonical_post_url.clone(),
+                    media_url: member.metadata.media_url.clone(),
+                    entity_hash: existing.entity_hash.clone(),
+                    file_hash: existing.file_hash.clone(),
+                    disposition: SingleIngestDisposition::Reused,
+                });
+                continue;
             }
-        } else if !exact_matches.is_empty() {
-            pending_review_pairs.push((prepared_single.entity_hash.clone(), exact_matches));
         }
 
-        if !near_matches.is_empty() {
-            pending_review_pairs.push((prepared_single.entity_hash.clone(), near_matches));
+        if let crate::db::types::IngestDuplicateAction::PreferNewOverExisting {
+            existing_entity_hash,
+        } = &duplicate_plan.action
+        {
+            pending_exact_upgrades.push((
+                existing_entity_hash.clone(),
+                prepared_single.entity_hash.clone(),
+            ));
+        }
+
+        if !duplicate_plan.review_candidates.is_empty() {
+            pending_review_pairs.push((
+                prepared_single.entity_hash.clone(),
+                duplicate_plan.review_candidates.clone(),
+            ));
         }
 
         imported_hashes.push(prepared_single.entity_hash.clone());
@@ -1378,7 +1258,7 @@ pub async fn materialize_subscription_collection(
         else {
             continue;
         };
-        upsert_duplicate_pairs_for_candidates(canonical_db, new_target.file_id, candidates)?;
+        canonical_db.record_duplicate_review_candidates(new_target.file_id, candidates)?;
     }
 
     for (existing_hash, new_hash) in &pending_exact_upgrades {
@@ -1427,8 +1307,17 @@ pub async fn materialize_subscription_collection(
 
 #[cfg(test)]
 mod tests {
-    use super::normalize_subscription_tags;
+    use super::{ingest_single_path, normalize_subscription_tags, IngestSourceKind, SingleIngestDisposition, SingleIngestRequest};
+    use crate::blob_store::BlobStore;
+    use crate::db::LibraryDatabase;
+    use crate::duplicates::phash::{compute_phash_base64, DEFAULT_DISTANCE_THRESHOLD};
     use crate::subscriptions::gallery_dl_runner::ParsedMetadata;
+    use img_hash::ImageHash;
+    use image::{DynamicImage, ImageBuffer, ImageFormat, Rgba};
+    use std::fs;
+    use std::io::Cursor;
+    use std::path::{Path, PathBuf};
+    use tempfile::TempDir;
 
     #[test]
     fn normalize_subscription_tags_preserves_literal_colons() {
@@ -1445,5 +1334,310 @@ mod tests {
         assert!(normalized.iter().any(|tag| tag == ":http://example.com"));
         assert!(normalized.iter().any(|tag| tag == ":dragon:quest"));
         assert!(normalized.iter().any(|tag| tag == "creator:foo_artist"));
+    }
+
+    fn open_test_library() -> (TempDir, LibraryDatabase, BlobStore, PathBuf) {
+        let tmp = TempDir::new().expect("tempdir");
+        let library_root = tmp.path().join("library");
+        fs::create_dir_all(&library_root).expect("create library root");
+        let source_root = tmp.path().join("source");
+        fs::create_dir_all(&source_root).expect("create source root");
+        let db = LibraryDatabase::open(&library_root).expect("open library db");
+        let blob_store = BlobStore::open(&library_root).expect("open blob store");
+        (tmp, db, blob_store, source_root)
+    }
+
+    fn request_for_path(path: &Path) -> SingleIngestRequest {
+        SingleIngestRequest {
+            source_kind: IngestSourceKind::Manual,
+            path: path.to_path_buf(),
+            tag_strings: Vec::new(),
+            source_urls: Vec::new(),
+            name: None,
+            notes: None,
+            created_at: None,
+            initial_status: 1,
+            skip_thumbnail: false,
+            tag_provenance_mask: 0,
+            subscription_id: None,
+        }
+    }
+
+    fn encode_image(image: &DynamicImage, format: ImageFormat) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        image.write_to(&mut Cursor::new(&mut bytes), format).expect("encode image");
+        bytes
+    }
+
+    fn write_image(path: &Path, image: &DynamicImage, format: ImageFormat) {
+        fs::write(path, encode_image(image, format)).expect("write image");
+    }
+
+    fn solid_image(width: u32, height: u32, value: u8) -> DynamicImage {
+        DynamicImage::ImageRgba8(ImageBuffer::from_pixel(
+            width,
+            height,
+            Rgba([value, value, value, 255]),
+        ))
+    }
+
+    fn patterned_image(width: u32, height: u32) -> DynamicImage {
+        let mut buffer = ImageBuffer::new(width, height);
+        for (x, y, pixel) in buffer.enumerate_pixels_mut() {
+            let checker = ((x / 8) + (y / 8)) % 2 == 0;
+            let base: u8 = if checker { 220 } else { 40 };
+            let tint = ((x + y) % 17) as u8;
+            *pixel = Rgba([base, base.saturating_sub(tint / 2), base.saturating_add(tint / 3), 255]);
+        }
+        DynamicImage::ImageRgba8(buffer)
+    }
+
+    fn build_near_duplicate_variant(base: &DynamicImage) -> DynamicImage {
+        let base_rgba = base.to_rgba8();
+        let base_hash = ImageHash::<Vec<u8>>::from_base64(
+            &compute_phash_base64(&encode_image(base, ImageFormat::Png)).expect("base phash"),
+        )
+        .expect("parse base hash");
+
+        let mut variants = Vec::new();
+        for shift in [1_u32, 2, 3, 4] {
+            let mut shifted = ImageBuffer::new(base_rgba.width(), base_rgba.height());
+            for x in 0..base_rgba.width() {
+                for y in 0..base_rgba.height() {
+                    let src_x = (x + shift) % base_rgba.width();
+                    let src_y = (y + shift) % base_rgba.height();
+                    *shifted.get_pixel_mut(x, y) = *base_rgba.get_pixel(src_x, src_y);
+                }
+            }
+            variants.push(DynamicImage::ImageRgba8(shifted));
+        }
+
+        let anchor_points = [
+            (0_u32, 0_u32),
+            (base_rgba.width() / 4, base_rgba.height() / 4),
+            (base_rgba.width() / 2, base_rgba.height() / 2),
+            (
+                base_rgba.width().saturating_sub(base_rgba.width() / 3),
+                base_rgba.height() / 3,
+            ),
+        ];
+        let deltas = [
+            (-40_i16, 20_i16, -15_i16),
+            (35_i16, -10_i16, 15_i16),
+            (-25_i16, -25_i16, 30_i16),
+        ];
+        for block in [6_u32, 10, 14, 18, 24, 32, 40] {
+            for &(x0, y0) in &anchor_points {
+                for &(dr, dg, db) in &deltas {
+                    let mut candidate = base_rgba.clone();
+                    let x_end = (x0 + block).min(candidate.width());
+                    let y_end = (y0 + block).min(candidate.height());
+                    for x in x0..x_end {
+                        for y in y0..y_end {
+                            let pixel = candidate.get_pixel_mut(x, y);
+                            let [r, g, b, a] = pixel.0;
+                            *pixel = Rgba([
+                                (r as i16 + dr).clamp(0, 255) as u8,
+                                (g as i16 + dg).clamp(0, 255) as u8,
+                                (b as i16 + db).clamp(0, 255) as u8,
+                                a,
+                            ]);
+                        }
+                    }
+                    variants.push(DynamicImage::ImageRgba8(candidate));
+                }
+            }
+        }
+
+        for band in [8_u32, 12, 16, 24, 32] {
+            let mut horizontal = base_rgba.clone();
+            for y in 0..band.min(horizontal.height()) {
+                for x in 0..horizontal.width() {
+                    let pixel = horizontal.get_pixel_mut(x, y);
+                    let [r, g, b, a] = pixel.0;
+                    *pixel = Rgba([r.saturating_sub(45), g.saturating_add(10), b, a]);
+                }
+            }
+            variants.push(DynamicImage::ImageRgba8(horizontal));
+
+            let mut vertical = base_rgba.clone();
+            for x in 0..band.min(vertical.width()) {
+                for y in 0..vertical.height() {
+                    let pixel = vertical.get_pixel_mut(x, y);
+                    let [r, g, b, a] = pixel.0;
+                    *pixel = Rgba([r, g.saturating_sub(35), b.saturating_add(20), a]);
+                }
+            }
+            variants.push(DynamicImage::ImageRgba8(vertical));
+        }
+
+        for candidate_image in variants {
+            let candidate_hash = ImageHash::<Vec<u8>>::from_base64(
+                &compute_phash_base64(&encode_image(&candidate_image, ImageFormat::Png))
+                    .expect("candidate phash"),
+            )
+            .expect("parse candidate hash");
+            let distance = base_hash.dist(&candidate_hash);
+            if distance > 0 && distance <= DEFAULT_DISTANCE_THRESHOLD {
+                return candidate_image;
+            }
+        }
+        panic!("failed to produce deterministic near-duplicate variant");
+    }
+
+    #[tokio::test]
+    async fn ingest_single_reuses_existing_entity_for_exact_file_hash() {
+        let (_tmp, db, blob_store, source_root) = open_test_library();
+        let source_path = source_root.join("exact.png");
+        write_image(&source_path, &patterned_image(96, 96), ImageFormat::Png);
+
+        let first = ingest_single_path(&db, &blob_store, &request_for_path(&source_path))
+            .await
+            .expect("first ingest");
+        let second = ingest_single_path(&db, &blob_store, &request_for_path(&source_path))
+            .await
+            .expect("second ingest");
+
+        assert!(first.disposition.is_imported());
+        assert!(matches!(second.disposition, SingleIngestDisposition::Reused));
+        assert_eq!(first.entity_hash, second.entity_hash);
+        db.with_read(|conn| {
+            let entity_count: i64 =
+                conn.query_row("SELECT COUNT(*) FROM media_entity", [], |row| row.get(0))?;
+            let file_count: i64 =
+                conn.query_row("SELECT COUNT(*) FROM media_file", [], |row| row.get(0))?;
+            assert_eq!(entity_count, 1);
+            assert_eq!(file_count, 1);
+            Ok(())
+        })
+        .expect("inspect exact hash reuse");
+    }
+
+    #[tokio::test]
+    async fn ingest_single_auto_resolves_exact_phash_when_new_image_is_clearly_better() {
+        let (_tmp, db, blob_store, source_root) = open_test_library();
+        let image = patterned_image(96, 96);
+        let jpeg_path = source_root.join("existing.jpg");
+        let png_path = source_root.join("better.png");
+        write_image(&jpeg_path, &image, ImageFormat::Jpeg);
+        write_image(&png_path, &image, ImageFormat::Png);
+
+        let jpeg_bytes = fs::read(&jpeg_path).expect("read jpeg");
+        let png_bytes = fs::read(&png_path).expect("read png");
+        let jpeg_phash = compute_phash_base64(&jpeg_bytes).expect("jpeg phash");
+        let png_phash = compute_phash_base64(&png_bytes).expect("png phash");
+        assert_eq!(jpeg_phash, png_phash);
+
+        let first = ingest_single_path(&db, &blob_store, &request_for_path(&jpeg_path))
+            .await
+            .expect("ingest jpeg");
+        let second = ingest_single_path(&db, &blob_store, &request_for_path(&png_path))
+            .await
+            .expect("ingest png");
+
+        assert!(first.disposition.is_imported());
+        assert!(second.disposition.is_imported());
+        assert_eq!(db.get_duplicate_count().expect("duplicate count"), 0);
+        assert!(
+            db.get_existing_import_target_by_file_hash(&first.file_hash)
+                .expect("old target")
+                .is_none()
+        );
+        assert!(
+            db.get_existing_import_target_by_file_hash(&second.file_hash)
+                .expect("new target")
+                .is_some()
+        );
+        db.with_read(|conn| {
+            let entity_count: i64 =
+                conn.query_row("SELECT COUNT(*) FROM media_entity", [], |row| row.get(0))?;
+            let file_count: i64 =
+                conn.query_row("SELECT COUNT(*) FROM media_file", [], |row| row.get(0))?;
+            assert_eq!(entity_count, 1);
+            assert_eq!(file_count, 1);
+            Ok(())
+        })
+        .expect("inspect exact phash auto-resolution");
+    }
+
+    #[tokio::test]
+    async fn ingest_single_exact_phash_ambiguous_creates_duplicate_review_pair() {
+        let (_tmp, db, blob_store, source_root) = open_test_library();
+        let first_image = solid_image(100, 100, 180);
+        let second_image = solid_image(105, 105, 180);
+        let first_path = source_root.join("ambiguous_a.png");
+        let second_path = source_root.join("ambiguous_b.png");
+        write_image(&first_path, &first_image, ImageFormat::Png);
+        write_image(&second_path, &second_image, ImageFormat::Png);
+
+        let first_phash =
+            compute_phash_base64(&fs::read(&first_path).expect("read first")).expect("first phash");
+        let second_phash =
+            compute_phash_base64(&fs::read(&second_path).expect("read second")).expect("second phash");
+        assert_eq!(first_phash, second_phash);
+
+        let first = ingest_single_path(&db, &blob_store, &request_for_path(&first_path))
+            .await
+            .expect("ingest first ambiguous image");
+        let second = ingest_single_path(&db, &blob_store, &request_for_path(&second_path))
+            .await
+            .expect("ingest second ambiguous image");
+
+        assert!(first.disposition.is_imported());
+        assert!(second.disposition.is_imported());
+        db.with_read(|conn| {
+            let count: i64 =
+                conn.query_row("SELECT COUNT(*) FROM duplicate WHERE status = 'detected'", [], |row| {
+                    row.get(0)
+                })?;
+            let entity_count: i64 =
+                conn.query_row("SELECT COUNT(*) FROM media_entity", [], |row| row.get(0))?;
+            assert_eq!(count, 1);
+            assert_eq!(entity_count, 2);
+            Ok(())
+        })
+        .expect("inspect ambiguous exact phash review");
+    }
+
+    #[tokio::test]
+    async fn ingest_single_near_phash_creates_duplicate_review_pair() {
+        let (_tmp, db, blob_store, source_root) = open_test_library();
+        let base = patterned_image(96, 96);
+        let near = build_near_duplicate_variant(&base);
+        let first_path = source_root.join("near_a.png");
+        let second_path = source_root.join("near_b.png");
+        write_image(&first_path, &base, ImageFormat::Png);
+        write_image(&second_path, &near, ImageFormat::Png);
+
+        let first_hash = ImageHash::<Vec<u8>>::from_base64(
+            &compute_phash_base64(&fs::read(&first_path).expect("read first")).expect("first phash"),
+        )
+        .expect("parse first phash");
+        let second_hash = ImageHash::<Vec<u8>>::from_base64(
+            &compute_phash_base64(&fs::read(&second_path).expect("read second")).expect("second phash"),
+        )
+        .expect("parse second phash");
+        let distance = first_hash.dist(&second_hash);
+        assert!(distance > 0);
+        assert!(distance <= DEFAULT_DISTANCE_THRESHOLD);
+
+        let first = ingest_single_path(&db, &blob_store, &request_for_path(&first_path))
+            .await
+            .expect("ingest first near image");
+        let second = ingest_single_path(&db, &blob_store, &request_for_path(&second_path))
+            .await
+            .expect("ingest second near image");
+
+        assert!(first.disposition.is_imported());
+        assert!(second.disposition.is_imported());
+        db.with_read(|conn| {
+            let count: i64 =
+                conn.query_row("SELECT COUNT(*) FROM duplicate WHERE status = 'detected'", [], |row| {
+                    row.get(0)
+                })?;
+            assert_eq!(count, 1);
+            Ok(())
+        })
+        .expect("inspect near phash review");
     }
 }

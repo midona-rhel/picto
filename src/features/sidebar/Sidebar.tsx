@@ -7,7 +7,7 @@
 
 import { useEffect, useMemo, useCallback, useRef } from 'react';
 import { useAtomValue, useSetAtom, getDefaultStore } from 'jotai';
-import { folderWatchModalAtom, confirmModalAtom, exportModalAtom } from '../../state/modals';
+import { folderWatchModalAtom, confirmModalAtom, exportModalAtom, smartFolderModalAtom } from '../../state/modals';
 import {
   IconFolder, IconFolderOpen, IconFolderPlus, IconFolderSymlink,
   IconCopy, IconUpload, IconDownload,
@@ -33,10 +33,11 @@ import { smartFoldersController } from '../../controllers/smartFoldersController
 import { SidebarRow } from '../../shared/ui/SidebarRow';
 import { ContextMenu, useContextMenu, type MenuEntry } from '../../shared/ui/ContextMenu';
 import { ColorPicker } from '../../shared/ui/ColorPicker';
+import { IconPicker } from '../../shared/ui/IconPicker';
 import { DynamicIcon } from '../../shared/ui/DynamicIcon';
 import { useInlineRename } from '../../shared/hooks/useInlineRename';
 import { usePersistedSet } from '../../shared/hooks/usePersistedSet';
-import type { SidebarNodeDto } from '../../shared/types/canonical';
+import type { SidebarNodeDto, SmartFolderCommandPayload, SmartFolderPredicate } from '../../shared/types/canonical';
 import styles from './Sidebar.module.css';
 
 const IC = 19;
@@ -81,6 +82,7 @@ export function Sidebar() {
   const loading = useAtomValue(sidebarLoadingAtom);
   const activeNodeId = useAtomValue(activeNodeIdAtom);
   const setActiveNodeId = useSetAtom(activeNodeIdAtom);
+  const setSmartFolderModal = useSetAtom(smartFolderModalAtom);
 
   const [collapsed, toggleCollapse] = usePersistedSet('picto-sidebar-collapsed');
   const contextMenu = useContextMenu();
@@ -89,7 +91,12 @@ export function Sidebar() {
     onCommit: (id, name) => {
       const fid = parseFolderId(id);
       if (fid != null) { foldersController.rename(fid, name); return; }
-      // TODO: smart folder rename — backend requires full SmartFolder struct for update_smart_folder
+      const node = smartFolderNodes.find((entry) => entry.id === id);
+      const payload = node ? buildSmartFolderPayloadFromNode(node, { name }) : null;
+      const smartFolderId = node ? parseSmartFolderIdNum(node.id) : null;
+      if (smartFolderId != null && payload) {
+        void smartFoldersController.update(smartFolderId, payload);
+      }
     },
   });
 
@@ -116,6 +123,21 @@ export function Sidebar() {
       pendingRenameRef.current = nodeId;
     }
   }, []);
+
+  const openSmartFolderModal = useCallback((mode: 'create' | 'edit', initial?: {
+    id?: number;
+    name?: string;
+    parent_id?: number | null;
+    icon?: string | null;
+    color?: string | null;
+    notes?: string | null;
+    predicate?: SmartFolderPredicate;
+    sort_field?: string | null;
+    sort_order?: string | null;
+    display_order?: number | null;
+  }) => {
+    setSmartFolderModal({ open: true, mode, initial });
+  }, [setSmartFolderModal]);
 
   const navigate = useCallback((id: string) => {
     setActiveNodeId(id);
@@ -192,6 +214,16 @@ export function Sidebar() {
       { label: 'Attach Watched Folder...', icon: <IconWatchFolder size={14} />, action: () => {
         store.set(folderWatchModalAtom, { open: true, folderId, initial: {} });
       } },
+      ...((node.meta as Record<string, unknown> | null)?.watch_enabled ? [{
+        label: 'Remove Watched Folder', icon: <IconWatchFolder size={14} />, danger: true,
+        action: () => {
+          store.set(confirmModalAtom, {
+            open: true, title: 'Remove Watch', danger: true, confirmLabel: 'Remove',
+            message: `Stop watching the folder for "${node.name}"?`,
+            onConfirm: () => { void api.clearFolderWatchConfig(folderId); },
+          });
+        },
+      } as MenuEntry] : []),
       { separator: true },
       { label: 'Sort by Name', icon: <IconSort size={14} />, action: () => { void api.reorderFolderItems(folderId, { sort_by: 'name', direction: 'asc' }); } },
       { label: isExpanded ? 'Collapse Folder' : 'Expand Folder', icon: isExpanded ? <IconCollapse size={14} /> : <IconExpand size={14} />,
@@ -199,7 +231,11 @@ export function Sidebar() {
         disabled: !hasChildren },
       { label: 'Expand/Collapse All', icon: <IconExpandAll size={14} />, action: () => toggleCollapseAll() },
       { separator: true },
-      { label: 'Change Icon...', icon: <IconChangeIcon size={14} />, action: () => { /* TODO: needs icon picker submenu — update_folder supports icon param */ } },
+      { submenu: true, label: 'Change Icon', icon: <IconChangeIcon size={14} />, children: [
+        { custom: true, key: 'folder-icon', render: () => (
+          <IconPicker value={node.icon ?? null} onChange={(icon) => { void api.updateFolder(folderId, { icon }); }} />
+        ) },
+      ] },
       { custom: true, key: 'folder-color', render: () => (
         <ColorPicker value={node.color ?? null} onChange={(hex) => foldersController.applyColor(folderId, hex)} />
       ) },
@@ -226,17 +262,41 @@ export function Sidebar() {
 
   const openSmartFolderMenu = useCallback((e: React.MouseEvent, node: SidebarNodeDto) => {
     const sfId = parseSmartFolderId(node.id);
+    const sfIdNum = parseSmartFolderIdNum(node.id);
     if (sfId == null) return;
+    const currentPayload = buildSmartFolderPayloadFromNode(node);
     const entries: MenuEntry[] = [
-      { label: 'Edit Smart Folder...', icon: <IconFolderOpen size={14} />, action: () => { /* TODO: needs smart folder edit modal */ } },
-      { label: 'New Child Smart Folder', icon: <IconFolderPlus size={14} />, action: () => { /* TODO: needs smart folder create modal */ } },
+      {
+        label: 'Edit Smart Folder...',
+        icon: <IconFolderOpen size={14} />,
+        action: () => openSmartFolderModal('edit', smartFolderInitialFromNode(node)),
+      },
+      {
+        label: 'New Child Smart Folder',
+        icon: <IconFolderPlus size={14} />,
+        action: () => openSmartFolderModal('create', {
+          name: 'New Smart Folder',
+          parent_id: sfIdNum,
+          predicate: { groups: [] },
+        }),
+      },
       { separator: true },
       { label: 'Rename', icon: <IconRename size={14} />, action: () => folderRename.startRename(node.id, node.name) },
       { separator: true },
-      { label: 'Change Icon...', icon: <IconChangeIcon size={14} />, action: () => { /* TODO: needs icon picker submenu */ } },
+      { submenu: true, label: 'Change Icon', icon: <IconChangeIcon size={14} />, children: [
+        { custom: true, key: 'sf-icon', render: () => (
+          <IconPicker value={node.icon ?? null} onChange={(icon) => {
+            if (sfIdNum != null) {
+              void smartFoldersController.update(sfIdNum, { ...currentPayload, icon });
+            }
+          }} />
+        ) },
+      ] },
       { custom: true, key: 'sf-color', render: () => (
-        <ColorPicker value={node.color ?? null} onChange={(_hex) => {
-          // TODO: smart folder color — backend requires full SmartFolder struct for update_smart_folder
+        <ColorPicker value={node.color ?? null} onChange={(hex) => {
+          if (sfIdNum != null) {
+            void smartFoldersController.update(sfIdNum, { ...currentPayload, color: hex });
+          }
         }} />
       ) },
       { separator: true },
@@ -251,7 +311,7 @@ export function Sidebar() {
       } },
     ];
     contextMenu.open(e, entries);
-  }, [contextMenu, folderRename]);
+  }, [contextMenu, folderRename, openSmartFolderModal]);
 
   return (
     <div className={styles.root}>
@@ -323,7 +383,7 @@ export function Sidebar() {
           variant="section" label="Smart Folders"
           expanded={!collapsed.has('smart_folders')}
           onToggle={() => toggleCollapse('smart_folders')}
-          onAdd={() => { void api.createSmartFolder({ name: 'New Smart Folder' }); }}
+          onAdd={() => openSmartFolderModal('create', { name: 'New Smart Folder', predicate: { groups: [] } })}
         />
         {!collapsed.has('smart_folders') && smartList.map(({ node, indent, hasChildren, treeLines, isLastChild }) => (
           <SidebarRow
@@ -375,13 +435,66 @@ function parseSmartFolderId(nodeId: string): string | null {
   return nodeId.slice(6);
 }
 
-// TODO: restore parseSmartFolderIdNum when smart folder partial update is available
-// function parseSmartFolderIdNum(nodeId: string): number | null {
-//   const s = parseSmartFolderId(nodeId);
-//   if (s == null) return null;
-//   const n = parseInt(s, 10);
-//   return isNaN(n) ? null : n;
-// }
+function parseSmartFolderIdNum(nodeId: string): number | null {
+  const s = parseSmartFolderId(nodeId);
+  if (s == null) return null;
+  const n = parseInt(s, 10);
+  return isNaN(n) ? null : n;
+}
+
+function parseSmartFolderPredicate(node: SidebarNodeDto): SmartFolderPredicate {
+  const predicate = (node.meta as Record<string, unknown> | null | undefined)?.predicate;
+  if (
+    predicate &&
+    typeof predicate === 'object' &&
+    Array.isArray((predicate as { groups?: unknown }).groups)
+  ) {
+    return predicate as SmartFolderPredicate;
+  }
+  return { groups: [] };
+}
+
+function smartFolderInitialFromNode(node: SidebarNodeDto) {
+  const meta = node.meta as Record<string, unknown> | null | undefined;
+  return {
+    id: parseSmartFolderIdNum(node.id) ?? undefined,
+    name: node.name,
+    parent_id: typeof meta?.parent_id === 'number' || meta?.parent_id === null ? (meta?.parent_id as number | null) : null,
+    icon: node.icon ?? null,
+    color: node.color ?? null,
+    notes: typeof meta?.notes === 'string' ? meta.notes : null,
+    predicate: parseSmartFolderPredicate(node),
+    sort_field: typeof meta?.sort_field === 'string' ? meta.sort_field : null,
+    sort_order: typeof meta?.sort_order === 'string' ? meta.sort_order : null,
+    display_order: node.sort_order ?? null,
+  };
+}
+
+function buildSmartFolderPayloadFromNode(
+  node: SidebarNodeDto,
+  patch: Partial<SmartFolderCommandPayload> = {},
+): SmartFolderCommandPayload {
+  const initial = smartFolderInitialFromNode(node);
+  const pick = <T,>(key: keyof SmartFolderCommandPayload, fallback: T): T => (
+    Object.prototype.hasOwnProperty.call(patch, key)
+      ? patch[key] as T
+      : fallback
+  );
+  return {
+    smart_folder_id: pick('smart_folder_id', initial.id ?? 0),
+    name: pick('name', initial.name ?? node.name),
+    parent_id: pick('parent_id', initial.parent_id ?? null),
+    icon: pick('icon', initial.icon ?? null),
+    color: pick('color', initial.color ?? null),
+    notes: pick('notes', initial.notes ?? null),
+    predicate_json: pick('predicate_json', JSON.stringify(initial.predicate ?? { groups: [] })),
+    sort_field: pick('sort_field', initial.sort_field ?? null),
+    sort_order: pick('sort_order', initial.sort_order ?? null),
+    display_order: pick('display_order', initial.display_order ?? null),
+    created_at: pick('created_at', null),
+    updated_at: pick('updated_at', null),
+  };
+}
 
 interface TreeRenderNode {
   node: SidebarNodeDto;
