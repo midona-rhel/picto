@@ -24,7 +24,7 @@ use crate::db::LibraryDatabase;
 use crate::rate_limiter::RateLimiter;
 use crate::settings::store::AppSettings;
 use crate::subscriptions::archive::subscription_query_archive_prefix;
-use crate::subscriptions::db::OwnedSubscriptionDownloadAttemptUpsert;
+use crate::subscriptions::types::OwnedSubscriptionDownloadAttemptUpsert;
 use crate::subscriptions::gallery_dl_runner::{self, FailureKind, GalleryDlRunner, RunOptions};
 use crate::subscriptions::import_policy::{
     collection_group_parts, preferred_import_name, validate_metadata_for_site,
@@ -1469,7 +1469,7 @@ impl<'a> SubscriptionSyncEngine<'a> {
         let _ = self
             .runtime_service()
             .upsert_subscription_post_member(
-                crate::subscriptions::db::OwnedSubscriptionPostMemberUpsert {
+                crate::subscriptions::types::OwnedSubscriptionPostMemberUpsert {
                     subscription_id,
                     site_id: category.to_string(),
                     post_id: post_id.to_string(),

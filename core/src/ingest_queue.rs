@@ -1019,7 +1019,7 @@ async fn persist_subscription_post_member(
         .unwrap_or_else(|| format!("{site_id}:{post_id}:{}", metadata.page_num.unwrap_or(0)));
     let _ = runtime
         .upsert_subscription_post_member(
-            crate::subscriptions::db::OwnedSubscriptionPostMemberUpsert {
+            crate::subscriptions::types::OwnedSubscriptionPostMemberUpsert {
                 subscription_id,
                 site_id: site_id.to_string(),
                 post_id: post_id.to_string(),

@@ -61,6 +61,12 @@ pub struct FolderMembershipChange {
     pub entity_ids: Vec<i64>,
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct FolderMembership {
+    pub folder_id: i64,
+    pub folder_name: String,
+}
+
 #[derive(Debug, Default, Serialize)]
 pub struct CollectionMembershipChange {
     pub collection_id: i64,
@@ -87,6 +93,27 @@ pub struct DuplicateScanSummary {
     pub files_with_phash: usize,
     pub files_scanned: usize,
     pub closest_distance: Option<u32>,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct FileStats {
+    pub total: i64,
+    pub inbox: i64,
+    pub active: i64,
+    pub trash: i64,
+    pub total_size: i64,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct MediaTypeBreakdown {
+    pub images: i64,
+    pub images_size: i64,
+    pub videos: i64,
+    pub videos_size: i64,
+    pub audio: i64,
+    pub audio_size: i64,
+    pub other: i64,
+    pub other_size: i64,
 }
 
 #[derive(Debug, Clone, Serialize)]

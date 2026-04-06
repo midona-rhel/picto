@@ -9,8 +9,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use ts_rs::TS;
 
-use crate::smart_folders::db::SmartFolderPredicate;
-use crate::sqlite::files::{FileMetadataSlim, FileRecord};
+use crate::smart_folders::types::SmartFolderPredicate;
 
 pub fn parse_file_status(status: &str) -> Result<i64, String> {
     match status {
@@ -104,47 +103,6 @@ pub struct EntityDetails {
     pub updated_at: Option<String>,
 }
 
-impl From<FileRecord> for EntityDetails {
-    fn from(f: FileRecord) -> Self {
-        let has_thumbnail = f.mime.starts_with("image/") || f.mime.starts_with("video/");
-        let source_urls: Option<JsonValue> = f
-            .source_urls_json
-            .as_deref()
-            .and_then(|s| serde_json::from_str(s).ok());
-        let notes: Option<JsonValue> = f
-            .notes
-            .as_deref()
-            .and_then(|s| serde_json::from_str(s).ok());
-        let hash = f.hash.clone();
-        Self {
-            entity_id: f.file_id,
-            kind: "single".to_string(),
-            hash,
-            thumbnail_hash: f.hash,
-            member_count: None,
-            name: f.name,
-            size: f.size,
-            mime: f.mime,
-            width: f.width,
-            height: f.height,
-            duration_ms: f.duration_ms,
-            num_frames: f.num_frames,
-            has_audio: f.has_audio,
-            status: status_to_string(f.status).to_string(),
-            rating: f.rating,
-            view_count: f.view_count,
-            source_urls,
-            imported_at: f.imported_at,
-            has_thumbnail,
-            dominant_color_hex: f.dominant_color_hex,
-            dominant_colors: None,
-            notes,
-            created_at: None,
-            updated_at: None,
-        }
-    }
-}
-
 /// Slim entity info for grid display — omits heavy fields.
 #[derive(Debug, Serialize)]
 pub struct EntityGridItem {
@@ -171,70 +129,6 @@ pub struct EntityGridItem {
     pub has_thumbnail: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dominant_color_hex: Option<String>,
-}
-
-impl From<FileMetadataSlim> for EntityGridItem {
-    fn from(f: FileMetadataSlim) -> Self {
-        let is_collection = f.kind == "collection";
-        let has_thumbnail = if is_collection {
-            // Collection has thumbnail if a cover hash was resolved (non-empty)
-            !f.hash.is_empty()
-        } else {
-            f.mime.starts_with("image/") || f.mime.starts_with("video/")
-        };
-        Self {
-            entity_id: if f.entity_id > 0 {
-                f.entity_id
-            } else {
-                f.file_id
-            },
-            kind: f.kind,
-            hash: f.hash,
-            thumbnail_hash: f.thumbnail_hash,
-            member_count: f.member_count,
-            name: f.name,
-            size: f.size,
-            mime: f.mime,
-            width: f.width,
-            height: f.height,
-            duration_ms: f.duration_ms,
-            num_frames: f.num_frames,
-            has_audio: f.has_audio,
-            status: status_to_string(f.status as i64).to_string(),
-            rating: f.rating,
-            view_count: f.view_count,
-            imported_at: f.imported_at,
-            has_thumbnail,
-            dominant_color_hex: f.dominant_color_hex,
-        }
-    }
-}
-
-impl From<crate::sqlite::files::FileRecord> for EntityGridItem {
-    fn from(f: crate::sqlite::files::FileRecord) -> Self {
-        let has_thumbnail = f.mime.starts_with("image/") || f.mime.starts_with("video/");
-        Self {
-            entity_id: f.file_id,
-            kind: "single".to_string(),
-            thumbnail_hash: f.hash.clone(),
-            hash: f.hash,
-            member_count: None,
-            name: f.name,
-            size: f.size,
-            mime: f.mime,
-            width: f.width,
-            height: f.height,
-            duration_ms: f.duration_ms,
-            num_frames: f.num_frames,
-            has_audio: f.has_audio,
-            status: status_to_string(f.status).to_string(),
-            rating: f.rating,
-            view_count: f.view_count,
-            imported_at: f.imported_at,
-            has_thumbnail,
-            dominant_color_hex: f.dominant_color_hex,
-        }
-    }
 }
 
 impl From<crate::db::types::EntityGridItem> for EntityGridItem {

@@ -116,10 +116,10 @@ fn export_all_bindings() {
     picto_core::runtime_contract::task::TaskRemovedEvent::export().unwrap();
 
     // smart_folders
-    picto_core::smart_folders::db::SmartFolderPredicate::export().unwrap();
-    picto_core::smart_folders::db::SmartRuleGroup::export().unwrap();
-    picto_core::smart_folders::db::MatchMode::export().unwrap();
-    picto_core::smart_folders::db::PredicateRule::export().unwrap();
+    picto_core::smart_folders::types::SmartFolderPredicate::export().unwrap();
+    picto_core::smart_folders::types::SmartRuleGroup::export().unwrap();
+    picto_core::smart_folders::types::MatchMode::export().unwrap();
+    picto_core::smart_folders::types::PredicateRule::export().unwrap();
 
     // types
     picto_core::types::ImportResult::export().unwrap();

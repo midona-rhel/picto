@@ -14,10 +14,11 @@ import {
   IconRefresh, IconTrash, IconArrowBackUp,
   IconSelectAll, IconDeselect,
   IconStack2, IconStackPop, IconSearch,
-  IconFolder, IconFolderCheck,
+  IconFolder,
 } from '@tabler/icons-react';
 import type { MenuItem, MenuSeparator, MenuEntry } from '../../shared/ui/ContextMenu/ContextMenu';
 import { IconRename } from '../../shared/ui/icons/sidebar-menu-icons';
+import { IconFolderNewSelection } from '../../shared/ui/IconPicker/customIcons';
 import { buildContextMenuViewEntries } from './GridViewMenu';
 import { getShortcut, formatKeysDisplay } from '../../shared/lib/shortcuts';
 
@@ -171,7 +172,7 @@ export function buildTileContextMenu(ctx: GridMenuContext): MenuEntry[] {
     }));
     if (ctx.onNewFolderWithSelection) {
       entries.push(item('New Folder with Selection', {
-        icon: <IconFolderCheck size={15} />,
+        icon: <IconFolderNewSelection size={15} />,
         action: ctx.onNewFolderWithSelection,
       }));
     }

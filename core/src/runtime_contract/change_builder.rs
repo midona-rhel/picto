@@ -257,8 +257,8 @@ impl ChangeImpact {
         }
     }
 
-    pub fn sidebar_counts_from(mut self, db: &crate::sqlite::SqliteDatabase) -> Self {
-        self.sidebar_counts = Some(sidebar_counts_from_bitmaps(db));
+    pub fn sidebar_counts(mut self, counts: SidebarCounts) -> Self {
+        self.sidebar_counts = Some(counts);
         self
     }
 
@@ -402,11 +402,10 @@ impl ChangeImpact {
         self
     }
 
-    pub fn file_lifecycle(db: &crate::sqlite::SqliteDatabase) -> Self {
+    pub fn file_lifecycle() -> Self {
         Self::new()
             .status_changed()
             .status_sensitive_grid_scopes_changed()
-            .sidebar_counts_from(db)
     }
 
     pub fn file_metadata(hash: String) -> Self {
@@ -506,30 +505,5 @@ impl ChangeImpact {
             impact = impact.smart_folder_counts(sf_counts);
         }
         impact
-    }
-}
-
-/// Compute sidebar counts from bitmap catalog.
-///
-/// active/inbox/trash/untagged are O(1) bitmap reads.
-/// uncategorized/duplicates are set to -1 (unknown) here because they
-/// require SQL queries that need an async connection. The compiler
-/// publish path or explicit sidebar refresh provides those.
-pub fn sidebar_counts_from_bitmaps(db: &crate::sqlite::SqliteDatabase) -> SidebarCounts {
-    use crate::sqlite::bitmaps::BitmapKey;
-
-    let active = db.bitmaps.len(&BitmapKey::Status(1)) as i64;
-    let inbox = db.bitmaps.len(&BitmapKey::Status(0)) as i64;
-    let trash = db.bitmaps.len(&BitmapKey::Status(2)) as i64;
-    let tagged = db.bitmaps.len(&BitmapKey::Tagged) as i64;
-    let untagged = active.saturating_sub(tagged);
-
-    SidebarCounts {
-        active,
-        inbox,
-        trash,
-        untagged,
-        uncategorized: -1, // -1 = unknown, frontend should keep existing value
-        duplicates: -1,    // -1 = unknown
     }
 }

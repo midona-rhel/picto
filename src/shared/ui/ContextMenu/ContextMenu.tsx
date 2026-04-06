@@ -5,6 +5,7 @@
 import { type ReactNode, useEffect, useLayoutEffect, useRef, useState, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { IconSearch, IconChevronRight } from '@tabler/icons-react';
+import { getZoomFactor, getViewportCSS } from '../../lib/zoomCompensation';
 import styles from './ContextMenu.module.css';
 
 // ── Types ──
@@ -138,22 +139,22 @@ export function ContextMenu({ entries, position, onClose, searchable = true, wid
     const el = menuRef.current;
     if (!el) return;
 
-    // Measure true content height without CSS max-height cap
     const prevMaxH = el.style.maxHeight;
     el.style.maxHeight = 'none';
     const w = el.offsetWidth;
     const h = el.offsetHeight;
     el.style.maxHeight = prevMaxH;
 
+    const zoom = getZoomFactor();
+    const { width: adjVw, height: adjVh } = getViewportCSS(zoom);
     const margin = 12;
-    const vw = window.innerWidth;
-    const vh = window.innerHeight;
-    let { x, y } = position;
+    let x = position.x / zoom;
+    let y = position.y / zoom;
     let ox = 'left';
     let oy = 'top';
 
-    if (x + w > vw - margin) { x = vw - w - margin; ox = 'right'; }
-    if (y + h > vh - margin) { y = vh - h - margin; oy = 'bottom'; }
+    if (x + w > adjVw - margin) { x = adjVw - w - margin; ox = 'right'; }
+    if (y + h > adjVh - margin) { y = adjVh - h - margin; oy = 'bottom'; }
     if (x < margin) x = margin;
     if (y < margin) y = margin;
 
@@ -324,17 +325,20 @@ function SubmenuPanel({
     const parent = parentRef.current;
     const el = ref.current;
     if (!parent || !el) return;
+
+    const zoom = getZoomFactor();
+    const { width: adjVw, height: adjVh } = getViewportCSS(zoom);
     const parentRect = parent.getBoundingClientRect();
     const triggerEl = parent.querySelector(`[data-menu-idx="${itemIdx}"]`);
     const itemRect = triggerEl?.getBoundingClientRect() ?? parentRect;
+    const margin = 12;
 
-    let left = parentRect.right + 4;
-    let top = itemRect.top - 3;
+    let left = parentRect.right / zoom + 4;
+    let top = itemRect.top / zoom - 3;
     let ox = 'left';
-    const elRect = el.getBoundingClientRect();
-    if (left + elRect.width > window.innerWidth - 8) { left = parentRect.left - elRect.width - 4; ox = 'right'; }
-    if (top + elRect.height > window.innerHeight - 8) top = window.innerHeight - elRect.height - 8;
-    if (top < 8) top = 8;
+    if (left + el.offsetWidth > adjVw - margin) { left = parentRect.left / zoom - el.offsetWidth - 4; ox = 'right'; }
+    if (top + el.offsetHeight > adjVh - margin) top = adjVh - el.offsetHeight - margin;
+    if (top < margin) top = margin;
     setPos({ left, top });
     setSubOrigin(`top ${ox}`);
   }, [parentRef, itemIdx]);

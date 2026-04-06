@@ -1416,7 +1416,42 @@ impl SqliteDatabase {
     ) -> Result<Option<crate::types::EntityDetails>, String> {
         // Try file table first (singles)
         if let Some(record) = self.get_file_by_hash(hash).await? {
-            return Ok(Some(crate::types::EntityDetails::from(record)));
+            let has_thumbnail =
+                record.mime.starts_with("image/") || record.mime.starts_with("video/");
+            let source_urls = record
+                .source_urls_json
+                .as_deref()
+                .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok());
+            let notes = record
+                .notes
+                .as_deref()
+                .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok());
+            return Ok(Some(crate::types::EntityDetails {
+                entity_id: record.file_id,
+                kind: "single".to_string(),
+                hash: record.hash.clone(),
+                thumbnail_hash: record.hash,
+                member_count: None,
+                name: record.name,
+                size: record.size,
+                mime: record.mime,
+                width: record.width,
+                height: record.height,
+                duration_ms: record.duration_ms,
+                num_frames: record.num_frames,
+                has_audio: record.has_audio,
+                status: crate::types::status_to_string(record.status).to_string(),
+                rating: record.rating,
+                view_count: record.view_count,
+                source_urls,
+                imported_at: record.imported_at,
+                has_thumbnail,
+                dominant_color_hex: record.dominant_color_hex,
+                dominant_colors: None,
+                notes,
+                created_at: None,
+                updated_at: None,
+            }));
         }
         // Fall back to media_entity.hash (collections)
         let h = hash.to_string();

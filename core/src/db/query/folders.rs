@@ -199,7 +199,7 @@ pub fn get_folder_cover_hash(
 pub fn get_entity_folder_memberships(
     conn: &Connection,
     entity_id: i64,
-) -> rusqlite::Result<Vec<crate::folders::db::FolderMembership>> {
+) -> rusqlite::Result<Vec<crate::db::types::FolderMembership>> {
     let target_entity_id: Option<i64> = conn
         .query_row(
             "SELECT COALESCE(parent_collection_entity_id, entity_id)
@@ -223,7 +223,7 @@ pub fn get_entity_folder_memberships(
          ORDER BY f.name ASC, f.folder_id ASC",
     )?;
     let memberships = stmt.query_map([target_entity_id], |row| {
-        Ok(crate::folders::db::FolderMembership {
+        Ok(crate::db::types::FolderMembership {
             folder_id: row.get(0)?,
             folder_name: row.get(1)?,
         })

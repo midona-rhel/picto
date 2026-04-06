@@ -5,7 +5,7 @@
  * Manager surfaces (Tags, Random) are out of scope — see PBI-595, PBI-596.
  */
 
-import { useEffect, useMemo, useCallback, useRef } from 'react';
+import { useEffect, useMemo, useCallback, useRef, useState } from 'react';
 import { useAtomValue, useSetAtom, getDefaultStore } from 'jotai';
 import { folderWatchModalAtom, confirmModalAtom, exportModalAtom, smartFolderModalAtom } from '../../state/modals';
 import {
@@ -86,6 +86,124 @@ export function Sidebar() {
 
   const [collapsed, toggleCollapse] = usePersistedSet('picto-sidebar-collapsed');
   const contextMenu = useContextMenu();
+
+  // ── Context menu highlight ──
+  const [contextMenuNodeId, setContextMenuNodeId] = useState<string | null>(null);
+  // Clear highlight when menu closes
+  useEffect(() => {
+    if (!contextMenu.state && contextMenuNodeId) setContextMenuNodeId(null);
+  }, [contextMenu.state, contextMenuNodeId]);
+
+  // ── Folder drag reorder ──
+  const folderDragRef = useRef<{ nodeId: string; startY: number } | null>(null);
+  const [folderDragState, setFolderDragState] = useState<{
+    active: boolean;
+    draggedNodeId: string;
+    dropTargetId: string | null;
+    dropPosition: 'before' | 'inside' | 'after' | null;
+    ghostX: number;
+    ghostY: number;
+    ghostLabel: string;
+  } | null>(null);
+
+  // Global pointer listeners for folder drag
+  useEffect(() => {
+    const onMove = (e: MouseEvent) => {
+      const drag = folderDragRef.current;
+      if (!drag) return;
+      const dy = e.clientY - drag.startY;
+      if (!folderDragState?.active && Math.abs(dy) < 5) return;
+
+      // Activate drag
+      const node = folderNodes.find((n) => n.id === drag.nodeId);
+      if (!folderDragState?.active) {
+        setFolderDragState({
+          active: true,
+          draggedNodeId: drag.nodeId,
+          dropTargetId: null,
+          dropPosition: null,
+          ghostX: e.clientX,
+          ghostY: e.clientY,
+          ghostLabel: node?.name ?? 'Folder',
+        });
+        document.body.style.cursor = 'grabbing';
+      } else {
+        // Find drop target via elementFromPoint
+        const el = document.elementFromPoint(e.clientX, e.clientY) as HTMLElement | null;
+        const targetRow = el?.closest('[data-folder-drop-id]') as HTMLElement | null;
+        let dropTargetId: string | null = null;
+        let dropPosition: 'before' | 'inside' | 'after' | null = null;
+
+        if (targetRow) {
+          const fid = targetRow.dataset.folderDropId;
+          const targetNodeId = fid ? `folder:${fid}` : null;
+          // Prevent dropping onto self or any descendant (would create a cycle)
+          if (targetNodeId && targetNodeId !== drag.nodeId && !isDescendantOf(targetNodeId, drag.nodeId, folderNodes)) {
+            dropTargetId = targetNodeId;
+            const rect = targetRow.getBoundingClientRect();
+            const ratio = (e.clientY - rect.top) / rect.height;
+            if (ratio < 0.25) dropPosition = 'before';
+            else if (ratio > 0.75) dropPosition = 'after';
+            else dropPosition = 'inside';
+          }
+        }
+
+        setFolderDragState((prev) => prev ? {
+          ...prev,
+          ghostX: e.clientX,
+          ghostY: e.clientY,
+          dropTargetId,
+          dropPosition,
+        } : null);
+      }
+    };
+
+    const onUp = () => {
+      const drag = folderDragRef.current;
+      folderDragRef.current = null;
+      document.body.style.cursor = '';
+
+      if (folderDragState?.active && drag) {
+        const { dropTargetId, dropPosition } = folderDragState;
+        if (dropTargetId && dropPosition) {
+          const draggedFolderId = parseFolderId(drag.nodeId);
+          const targetFolderId = parseFolderId(dropTargetId);
+          if (draggedFolderId != null && targetFolderId != null) {
+            const targetNode = folderNodes.find((n) => n.id === dropTargetId);
+            if (dropPosition === 'inside') {
+              // Reparent into target
+              void api.moveFolder(draggedFolderId, targetFolderId, []);
+            } else {
+              // Reorder: same parent, build sibling order
+              const targetParentId = targetNode?.parent_id ?? null;
+              const parentFolderId = targetParentId ? parseFolderId(targetParentId) : null;
+              const siblings = folderNodes
+                .filter((n) => n.parent_id === targetParentId)
+                .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0));
+              // Remove dragged, insert at target position
+              const without = siblings.filter((s) => s.id !== drag.nodeId);
+              const targetIdx = without.findIndex((s) => s.id === dropTargetId);
+              const insertAt = dropPosition === 'after' ? targetIdx + 1 : targetIdx;
+              const draggedNode = siblings.find((s) => s.id === drag.nodeId);
+              if (draggedNode) {
+                without.splice(insertAt, 0, draggedNode);
+              }
+              const moves: [number, number][] = without.map((s, i) => [parseFolderId(s.id)!, i]);
+              void api.moveFolder(draggedFolderId, parentFolderId, moves);
+            }
+          }
+        }
+      }
+      setFolderDragState(null);
+    };
+
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+    return () => {
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+  }, [folderDragState, folderNodes]);
 
   const folderRename = useInlineRename({
     onCommit: (id, name) => {
@@ -181,6 +299,7 @@ export function Sidebar() {
   // ── Context menu builders ──────────────────────────────────────
 
   const openFolderMenu = useCallback((e: React.MouseEvent, node: SidebarNodeDto) => {
+    setContextMenuNodeId(node.id);
     const folderId = parseFolderId(node.id);
     if (folderId == null) return;
     const isExpanded = !collapsed.has(node.id);
@@ -261,6 +380,7 @@ export function Sidebar() {
   }, [contextMenu, folderRename, collapsed, toggleCollapse]);
 
   const openSmartFolderMenu = useCallback((e: React.MouseEvent, node: SidebarNodeDto) => {
+    setContextMenuNodeId(node.id);
     const sfId = parseSmartFolderId(node.id);
     const sfIdNum = parseSmartFolderIdNum(node.id);
     if (sfId == null) return;
@@ -359,9 +479,15 @@ export function Sidebar() {
             active={activeNodeId === node.id} indent={indent}
             hasChildren={hasChildren} expanded={!collapsed.has(node.id)}
             treeLines={treeLines} isLastChild={isLastChild}
+            contextHighlight={contextMenuNodeId === node.id}
+            dropPosition={folderDragState?.dropTargetId === node.id ? folderDragState.dropPosition ?? undefined : undefined}
             onToggleExpand={() => toggleCollapse(node.id)}
             onClick={() => navigate(node.id)}
             onContextMenu={(e) => openFolderMenu(e, node)}
+            onPointerDown={(e) => {
+              if (e.button !== 0) return;
+              folderDragRef.current = { nodeId: node.id, startY: e.clientY };
+            }}
             dropDataAttr={{ key: 'folder-drop-id', value: String(parseFolderId(node.id) ?? '') }}
           >
             {folderRename.renamingId === node.id ? (
@@ -394,6 +520,7 @@ export function Sidebar() {
             active={activeNodeId === node.id} indent={indent}
             hasChildren={hasChildren} expanded={!collapsed.has(node.id)}
             treeLines={treeLines} isLastChild={isLastChild}
+            contextHighlight={contextMenuNodeId === node.id}
             onToggleExpand={() => toggleCollapse(node.id)}
             onClick={() => navigate(node.id)}
             onContextMenu={(e) => openSmartFolderMenu(e, node)}
@@ -409,6 +536,28 @@ export function Sidebar() {
           onClose={contextMenu.close}
         />
       )}
+
+      {/* Folder drag ghost */}
+      {folderDragState?.active && (
+        <div style={{
+          position: 'fixed',
+          left: folderDragState.ghostX + 14,
+          top: folderDragState.ghostY + 10,
+          padding: '3px 8px',
+          borderRadius: 4,
+          background: 'var(--glass-bg, rgba(24, 25, 28, 0.92))',
+          backdropFilter: 'blur(12px)',
+          border: '1px solid var(--color-border-secondary)',
+          color: 'var(--color-text-primary)',
+          fontSize: 12,
+          fontWeight: 500,
+          pointerEvents: 'none',
+          zIndex: 10000,
+          whiteSpace: 'nowrap',
+        }}>
+          {folderDragState.ghostLabel}
+        </div>
+      )}
     </div>
   );
 }
@@ -422,6 +571,20 @@ function NodeIcon({ node, expanded }: { node: SidebarNodeDto; expanded: boolean 
   const color = node.color ?? undefined;
   const Icon = expanded ? IconFolderOpen : IconFolder;
   return <Icon size={IC} color={color} stroke={1.2} fill={color ?? 'currentColor'} fillOpacity={0.15} />;
+}
+
+/** Check if `nodeId` is a descendant of `ancestorId` in the folder tree. */
+function isDescendantOf(nodeId: string, ancestorId: string, nodes: SidebarNodeDto[]): boolean {
+  const byId = new Map(nodes.map((n) => [n.id, n]));
+  let current = byId.get(nodeId);
+  const visited = new Set<string>();
+  while (current?.parent_id) {
+    if (visited.has(current.id)) return false; // cycle guard
+    visited.add(current.id);
+    if (current.parent_id === ancestorId) return true;
+    current = byId.get(current.parent_id);
+  }
+  return false;
 }
 
 function parseFolderId(nodeId: string): number | null {

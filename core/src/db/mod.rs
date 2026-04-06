@@ -2099,13 +2099,11 @@ impl LibraryDatabase {
         self.with_read(query::stats::count_media_files)
     }
 
-    pub fn aggregate_file_stats(&self) -> Result<crate::sqlite::files::FileStats, String> {
+    pub fn aggregate_file_stats(&self) -> Result<types::FileStats, String> {
         self.with_read(query::stats::aggregate_file_stats)
     }
 
-    pub fn aggregate_media_type_breakdown(
-        &self,
-    ) -> Result<crate::sqlite::files::MediaTypeBreakdown, String> {
+    pub fn aggregate_media_type_breakdown(&self) -> Result<types::MediaTypeBreakdown, String> {
         self.with_read(query::stats::aggregate_media_type_breakdown)
     }
 
@@ -2209,11 +2207,11 @@ impl LibraryDatabase {
     pub fn get_view_pref(
         &self,
         scope: &str,
-    ) -> Result<Option<crate::settings::db::ViewPref>, String> {
+    ) -> Result<Option<crate::settings::types::ViewPref>, String> {
         self.with_read(|conn| query::settings::get_view_pref_with_fallback(conn, scope))
     }
 
-    pub fn set_view_pref(&self, pref: crate::settings::db::ViewPref) -> Result<(), String> {
+    pub fn set_view_pref(&self, pref: crate::settings::types::ViewPref) -> Result<(), String> {
         self.with_write(|conn| query::settings::set_view_pref(conn, &pref))
     }
 
@@ -2228,7 +2226,7 @@ impl LibraryDatabase {
     pub fn get_entity_folder_memberships(
         &self,
         entity_hash: &str,
-    ) -> Result<Vec<crate::folders::db::FolderMembership>, String> {
+    ) -> Result<Vec<types::FolderMembership>, String> {
         let hash = entity_hash.to_string();
         self.with_read(|conn| {
             let entity_id: Option<i64> = conn
@@ -2248,7 +2246,7 @@ impl LibraryDatabase {
     pub fn get_entity_folder_memberships_by_entity_id(
         &self,
         entity_id: i64,
-    ) -> Result<Vec<crate::folders::db::FolderMembership>, String> {
+    ) -> Result<Vec<types::FolderMembership>, String> {
         self.with_read(|conn| query::folders::get_entity_folder_memberships(conn, entity_id))
     }
 

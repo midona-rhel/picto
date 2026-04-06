@@ -5,7 +5,6 @@
 
 use std::path::Path;
 
-use crate::sqlite::SqliteDatabase;
 
 pub fn subscription_query_archive_prefix(subscription_id: i64, query_id: i64) -> String {
     format!("picto_s{subscription_id}_q{query_id}_")
@@ -96,16 +95,4 @@ pub async fn clear_subscription_archive_entries_at_root(
     }
 
     Ok(())
-}
-
-pub async fn clear_subscription_archive_entries(
-    db: &SqliteDatabase,
-    archive_prefixes: &[String],
-) -> Result<(), String> {
-    let library_root = db
-        .db_dir()
-        .parent()
-        .map(|r| r.to_path_buf())
-        .unwrap_or_else(|| std::path::PathBuf::from("."));
-    clear_subscription_archive_entries_at_root(&library_root, archive_prefixes).await
 }

@@ -1,42 +1,15 @@
 //! Folder CRUD + manual ordering with gap-based ranking.
 
 use rusqlite::{params, Connection, OptionalExtension};
-use serde::{Deserialize, Serialize};
 use serde_json::json;
 
 use crate::sqlite::bitmaps::BitmapKey;
 use crate::sqlite::ReadModelEvent;
 use crate::sqlite::SqliteDatabase;
+pub use super::types::{Folder, FolderMembership, NewFolder};
 
 /// Gap between position_rank values for folder file ordering.
 const RANK_GAP: i64 = 1 << 20; // ~1M
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Folder {
-    pub folder_id: i64,
-    pub name: String,
-    pub parent_id: Option<i64>,
-    pub icon: Option<String>,
-    pub color: Option<String>,
-    pub notes: Option<String>,
-    pub auto_tags: Vec<String>,
-    pub watch_path: Option<String>,
-    pub watch_enabled: bool,
-    pub watch_subfolders: bool,
-    pub watch_import_status_mode: String,
-    pub sort_order: Option<i64>,
-    pub created_at: Option<String>,
-    pub updated_at: Option<String>,
-}
-
-pub struct NewFolder {
-    pub name: String,
-    pub parent_id: Option<i64>,
-    pub icon: Option<String>,
-    pub color: Option<String>,
-    pub notes: Option<String>,
-    pub auto_tags: Vec<String>,
-}
 
 fn decode_auto_tags(raw: Option<String>) -> Vec<String> {
     raw.and_then(|value| serde_json::from_str::<Vec<String>>(&value).ok())
@@ -445,13 +418,6 @@ fn reorder_entity(
         params![new_rank, folder_id, entity_id],
     )?;
     Ok(())
-}
-
-/// A folder membership entry (for "which folders does this entity belong to?").
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FolderMembership {
-    pub folder_id: i64,
-    pub folder_name: String,
 }
 
 /// Get all folders that an entity belongs to.

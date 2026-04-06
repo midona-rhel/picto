@@ -237,7 +237,6 @@ pub fn normalize_subscription_tags(metadata: &ParsedMetadata) -> Vec<String> {
 
 fn build_import_options(request: &SingleIngestRequest) -> ImportOptions {
     let mut options = ImportOptions {
-        initial_status: request.initial_status,
         name: request.name.clone(),
         created_at: request.created_at.clone(),
         skip_thumbnail: request.skip_thumbnail,

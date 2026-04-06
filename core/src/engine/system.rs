@@ -73,7 +73,7 @@ impl ApplicationEngine {
         patch: crate::types::ViewPrefsPatch,
     ) -> Result<crate::types::ViewPrefsDto, String> {
         let current = self.db.get_view_pref(scope_key)?;
-        let merged = crate::settings::db::ViewPref {
+        let merged = crate::settings::types::ViewPref {
             scope: scope_key.to_string(),
             sort_field: patch
                 .sort_field
@@ -120,13 +120,7 @@ impl ApplicationEngine {
 
     pub fn get_storage_stats(
         &self,
-    ) -> Result<
-        (
-            crate::sqlite::files::FileStats,
-            crate::sqlite::files::MediaTypeBreakdown,
-        ),
-        String,
-    > {
+    ) -> Result<(crate::db::types::FileStats, crate::db::types::MediaTypeBreakdown), String> {
         Ok((
             self.db.aggregate_file_stats()?,
             self.db.aggregate_media_type_breakdown()?,

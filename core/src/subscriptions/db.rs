@@ -1,44 +1,15 @@
 //! Subscription + query + file + credential-domain CRUD.
 
 use rusqlite::{params, Connection, OptionalExtension};
-use serde::{Deserialize, Serialize};
 
 use crate::sqlite::SqliteDatabase;
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Subscription {
-    pub subscription_id: i64,
-    pub name: String,
-    pub paused: bool,
-    pub group_id: Option<i64>,
-    pub initial_post_limit: i64,
-    pub periodic_post_limit: i64,
-    pub auto_collections: bool,
-    pub created_at: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SubscriptionQuery {
-    pub query_id: i64,
-    pub subscription_id: i64,
-    pub site_id: String,
-    pub query_text: String,
-    pub display_name: Option<String>,
-    pub notes: Option<String>,
-    pub paused: bool,
-    pub last_check_time: Option<String>,
-    pub files_found: i64,
-    pub posts_found: i64,
-    pub completed_initial_run: bool,
-    pub resume_cursor: Option<String>,
-    pub resume_strategy: Option<String>,
-    pub last_success_at: Option<String>,
-    pub last_failure_at: Option<String>,
-    pub last_failure_kind: Option<String>,
-    pub last_failure_message: Option<String>,
-}
+pub use super::types::{
+    CredentialDomain, CredentialHealth, OwnedSubscriptionDownloadAttemptUpsert,
+    OwnedSubscriptionPostMemberUpsert, Subscription, SubscriptionDownloadAttemptRecord,
+    SubscriptionDownloadAttemptUpsert, SubscriptionIssueRecord, SubscriptionPostMemberRecord,
+    SubscriptionPostMemberUpsert, SubscriptionQuery, SubscriptionQueryRunRecord,
+    SubscriptionRunRecord,
+};
 
 fn map_subscription_row(row: &rusqlite::Row) -> rusqlite::Result<Subscription> {
     Ok(Subscription {
@@ -538,94 +509,6 @@ pub fn list_subscription_queries_for_group(
     rows.collect()
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SubscriptionRunRecord {
-    pub run_id: i64,
-    pub subscription_id: i64,
-    pub started_at: String,
-    pub finished_at: Option<String>,
-    pub status: String,
-    pub failure_kind: Option<String>,
-    pub error_message: Option<String>,
-    pub files_downloaded: i64,
-    pub files_skipped: i64,
-    pub metadata_validated: i64,
-    pub metadata_invalid: i64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SubscriptionQueryRunRecord {
-    pub query_run_id: i64,
-    pub run_id: Option<i64>,
-    pub subscription_id: i64,
-    pub query_id: i64,
-    pub started_at: String,
-    pub finished_at: Option<String>,
-    pub status: String,
-    pub failure_kind: Option<String>,
-    pub error_message: Option<String>,
-    pub posts_processed: i64,
-    pub files_downloaded: i64,
-    pub files_skipped: i64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SubscriptionIssueRecord {
-    pub issue_id: i64,
-    pub subscription_id: i64,
-    pub query_id: Option<i64>,
-    pub issue_kind: String,
-    pub status: String,
-    pub message: String,
-    pub detail: Option<String>,
-    pub first_seen_at: String,
-    pub last_seen_at: String,
-    pub resolved_at: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SubscriptionDownloadAttemptRecord {
-    pub attempt_id: i64,
-    pub subscription_id: i64,
-    pub query_id: Option<i64>,
-    pub query_run_id: Option<i64>,
-    pub item_key: String,
-    pub site_category: Option<String>,
-    pub post_id: Option<String>,
-    pub page_num: Option<i64>,
-    pub canonical_post_url: Option<String>,
-    pub media_url: Option<String>,
-    pub retry_url: Option<String>,
-    pub retry_count: i64,
-    pub status: String,
-    pub failure_kind: Option<String>,
-    pub last_error: Option<String>,
-    pub next_retry_at: Option<String>,
-    pub created_at: String,
-    pub updated_at: String,
-    pub resolved_at: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SubscriptionPostMemberRecord {
-    pub subscription_id: i64,
-    pub site_id: String,
-    pub post_id: String,
-    pub item_key: String,
-    pub page_num: Option<i64>,
-    pub canonical_post_url: Option<String>,
-    pub media_url: Option<String>,
-    pub entity_hash: Option<String>,
-    pub status: String,
-    pub created_at: String,
-    pub updated_at: String,
-}
-
 fn map_subscription_run_row(row: &rusqlite::Row) -> rusqlite::Result<SubscriptionRunRecord> {
     Ok(SubscriptionRunRecord {
         run_id: row.get(0)?,
@@ -927,64 +810,6 @@ pub fn list_subscription_issues(
     rows.collect()
 }
 
-pub struct SubscriptionDownloadAttemptUpsert<'a> {
-    pub subscription_id: i64,
-    pub query_id: Option<i64>,
-    pub query_run_id: Option<i64>,
-    pub item_key: &'a str,
-    pub site_category: Option<&'a str>,
-    pub post_id: Option<&'a str>,
-    pub page_num: Option<i64>,
-    pub canonical_post_url: Option<&'a str>,
-    pub media_url: Option<&'a str>,
-    pub retry_url: Option<&'a str>,
-    pub failure_kind: Option<&'a str>,
-    pub last_error: Option<&'a str>,
-    pub next_retry_at: Option<&'a str>,
-}
-
-pub struct SubscriptionPostMemberUpsert<'a> {
-    pub subscription_id: i64,
-    pub site_id: &'a str,
-    pub post_id: &'a str,
-    pub item_key: &'a str,
-    pub page_num: Option<i64>,
-    pub canonical_post_url: Option<&'a str>,
-    pub media_url: Option<&'a str>,
-    pub entity_hash: Option<&'a str>,
-    pub status: &'a str,
-}
-
-#[derive(Debug, Clone)]
-pub struct OwnedSubscriptionPostMemberUpsert {
-    pub subscription_id: i64,
-    pub site_id: String,
-    pub post_id: String,
-    pub item_key: String,
-    pub page_num: Option<i64>,
-    pub canonical_post_url: Option<String>,
-    pub media_url: Option<String>,
-    pub entity_hash: Option<String>,
-    pub status: String,
-}
-
-#[derive(Debug, Clone)]
-pub struct OwnedSubscriptionDownloadAttemptUpsert {
-    pub subscription_id: i64,
-    pub query_id: Option<i64>,
-    pub query_run_id: Option<i64>,
-    pub item_key: String,
-    pub site_category: Option<String>,
-    pub post_id: Option<String>,
-    pub page_num: Option<i64>,
-    pub canonical_post_url: Option<String>,
-    pub media_url: Option<String>,
-    pub retry_url: Option<String>,
-    pub failure_kind: Option<String>,
-    pub last_error: Option<String>,
-    pub next_retry_at: Option<String>,
-}
-
 pub fn upsert_subscription_download_attempt(
     conn: &Connection,
     input: SubscriptionDownloadAttemptUpsert<'_>,
@@ -1194,22 +1019,6 @@ pub fn list_subscription_post_members(
         map_subscription_post_member_row,
     )?;
     rows.collect()
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CredentialDomain {
-    pub site_category: String,
-    pub credential_type: String,
-    pub display_name: Option<String>,
-    pub created_at: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CredentialHealth {
-    pub site_category: String,
-    pub health_status: String,
-    pub last_checked_at: String,
-    pub last_error: Option<String>,
 }
 
 pub fn upsert_credential_domain(

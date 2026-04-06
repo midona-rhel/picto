@@ -590,14 +590,14 @@ pub async fn get_folder_cover_hash(
 pub async fn get_file_folders(
     state: &AppState,
     input: GetFileFoldersInput,
-) -> Result<Vec<crate::folders::db::FolderMembership>, String> {
+) -> Result<Vec<crate::db::types::FolderMembership>, String> {
     state.engine.get_entity_folder_memberships(&input.hash)
 }
 
 pub async fn get_entity_folders(
     state: &AppState,
     input: GetEntityFoldersInput,
-) -> Result<Vec<crate::folders::db::FolderMembership>, String> {
+) -> Result<Vec<crate::db::types::FolderMembership>, String> {
     state.engine.get_entity_folder_memberships_by_entity_id(input.entity_id)
 }
 
@@ -1030,4 +1030,3 @@ pub async fn reorder_folder_members(
     );
     Ok(())
 }
-

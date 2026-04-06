@@ -1,4 +1,6 @@
-pub mod collections_db;
-pub mod db;
+pub(crate) mod collections_db;
+pub(crate) mod db;
+#[doc(hidden)]
 pub mod service;
+pub mod types;
 pub mod watch;

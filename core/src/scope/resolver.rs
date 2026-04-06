@@ -1,27 +1,17 @@
-//! Scope resolver — the canonical implementation of scope semantics.
+//! Scope resolver — canonical scope semantics over `LibraryDatabase`.
 //!
-//! Converts a `ScopeFilter` into a `RoaringBitmap` of matching file IDs.
-//! Both `grid::controller` and `selection::helpers` call `resolve_scope`.
-//! Sidebar counts use `scope_count` to stay in sync.
+//! Converts a `ScopeFilter` into a `RoaringBitmap` of matching top-level entity IDs.
 
 use roaring::RoaringBitmap;
-use rusqlite::Connection;
+use rusqlite::OptionalExtension;
 
-use crate::folders::db::{count_uncategorized_entities, list_uncategorized_entity_ids};
-use crate::smart_folders::db as smart_folders_db;
-use crate::sqlite::bitmaps::{BitmapKey, BitmapStore};
-use crate::sqlite::SqliteDatabase;
-use crate::tags::db::find_tag as sql_find_tag;
+use crate::db::projection::bitmaps::BitmapKey;
+use crate::db::LibraryDatabase;
 use crate::tags::normalize;
 use crate::types::{GridFilterSpec, GridScopeKind, GridScopeSpec, GridSystemScopeKey};
 
 use super::{parse_include_match_mode, IncludeMatchMode};
 
-/// Common scope fields shared between grid queries and selection queries.
-///
-/// Represents the user's view intent: "which subset of the library am I looking at?"
-/// Does NOT include pagination, sorting, grid-specific filters (color, FTS, rating),
-/// or selection-specific concerns (excluded_hashes).
 #[derive(Debug, Clone, Default)]
 pub struct ScopeFilter {
     pub scope: GridScopeSpec,
@@ -109,59 +99,64 @@ impl From<&crate::types::SelectionQuerySpec> for ScopeFilter {
     }
 }
 
-/// Resolve a scope filter to a `RoaringBitmap` of matching file IDs.
-///
-/// Resolution cascade:
-/// 1. Collection scope → collection members
-/// 2. Smart folder scope → `compile_predicate`
-/// 3. Tag search → EffectiveTag bitmap ops (AND/OR), intersect active (status=1)
-/// 4. Folder scope/filter → Folder bitmap ops (AND/OR), intersect active (status=1)
-/// 5. System fallback: inbox, trash, untagged, uncategorized, default
 pub async fn resolve_scope(
-    db: &SqliteDatabase,
+    db: &LibraryDatabase,
     filter: &ScopeFilter,
 ) -> Result<RoaringBitmap, String> {
     if filter.has_collection() {
-        resolve_collection(db, filter).await
+        resolve_collection(db, filter)
     } else if filter.has_smart_folder() {
-        resolve_smart_folder(db, filter).await
+        resolve_smart_folder(db, filter)
     } else if filter.has_search_tags() {
-        resolve_tag_search(db, filter).await
+        resolve_tag_search(db, filter)
     } else if filter.has_folder() {
         resolve_folder(db, filter)
     } else {
-        resolve_status(db, filter).await
+        resolve_status(db, filter)
     }
 }
 
-async fn resolve_collection(
-    db: &SqliteDatabase,
-    filter: &ScopeFilter,
-) -> Result<RoaringBitmap, String> {
+pub fn scope_count(db: &LibraryDatabase, scope_key: &str) -> Result<i64, String> {
+    let counts = db.get_scope_counts()?;
+    Ok(match scope_key {
+        "system:active" | "system:active_files" => counts.active,
+        "system:inbox" => counts.inbox,
+        "system:trash" => counts.trash,
+        "system:untagged" => counts.untagged,
+        "system:uncategorized" => counts.uncategorized,
+        _ => 0,
+    })
+}
+
+fn resolve_collection(db: &LibraryDatabase, filter: &ScopeFilter) -> Result<RoaringBitmap, String> {
     let collection_id = filter
         .scope
         .collection_entity_id
         .expect("collection id required");
-    let file_ids = db.list_collection_member_file_ids(collection_id).await?;
-    Ok(RoaringBitmap::from_iter(
-        file_ids.into_iter().map(|id| id as u32),
-    ))
+
+    db.with_read(|conn| {
+        let mut stmt = conn.prepare(
+            "SELECT entity_id
+             FROM media_entity
+             WHERE parent_collection_entity_id = ?1
+             ORDER BY entity_id ASC",
+        )?;
+        let ids = stmt
+            .query_map([collection_id], |row| row.get::<_, i64>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(RoaringBitmap::from_iter(ids.into_iter().map(|id| id as u32)))
+    })
 }
 
-async fn resolve_smart_folder(
-    db: &SqliteDatabase,
+fn resolve_smart_folder(
+    db: &LibraryDatabase,
     filter: &ScopeFilter,
 ) -> Result<RoaringBitmap, String> {
     let pred = filter.scope.smart_folder_predicate.clone().unwrap();
-    let bitmaps = db.bitmaps.clone();
-    db.with_read_conn(move |conn| smart_folders_db::compile_predicate(conn, &pred, &bitmaps))
-        .await
+    db.with_read(|conn| crate::db::projection::smart_folders::compile_predicate(conn, &pred, &db.bitmaps))
 }
 
-async fn resolve_tag_search(
-    db: &SqliteDatabase,
-    filter: &ScopeFilter,
-) -> Result<RoaringBitmap, String> {
+fn resolve_tag_search(db: &LibraryDatabase, filter: &ScopeFilter) -> Result<RoaringBitmap, String> {
     let include_tags = filter.filters.search_tags.clone().unwrap_or_default();
     let exclude_tags = filter
         .filters
@@ -172,19 +167,27 @@ async fn resolve_tag_search(
         filter.filters.tag_match_mode.as_deref(),
         IncludeMatchMode::All,
     );
-    let bitmaps = db.bitmaps.clone();
 
-    db.with_read_conn(move |conn| {
+    db.with_read(|conn| {
         let resolve_ids =
             |tag_list: &[String], strict_missing: bool| -> rusqlite::Result<Vec<i64>> {
                 let mut out = Vec::new();
                 for tag in tag_list {
-                    if let Some((ns, st)) = normalize::parse_tag(tag) {
-                        if let Some(tag_id) = sql_find_tag(conn, &ns, &st)? {
+                    if let Some((namespace, subtag)) = normalize::parse_tag(tag) {
+                        let maybe_tag_id = conn
+                            .query_row(
+                                "SELECT tag_id FROM tag WHERE namespace = ?1 AND subtag = ?2",
+                                rusqlite::params![namespace, subtag],
+                                |row| row.get::<_, i64>(0),
+                            )
+                            .optional()?;
+                        if let Some(tag_id) = maybe_tag_id {
                             out.push(tag_id);
                         } else if strict_missing {
                             return Ok(Vec::new());
                         }
+                    } else if strict_missing {
+                        return Ok(Vec::new());
                     }
                 }
                 Ok(out)
@@ -192,7 +195,7 @@ async fn resolve_tag_search(
 
         let include_ids = resolve_ids(&include_tags, match_mode != IncludeMatchMode::Any)?;
         let exclude_ids = resolve_ids(&exclude_tags, false)?;
-        let active = bitmaps.get(&BitmapKey::Status(1));
+        let active = active_top_level_bitmap(conn)?;
 
         if !include_tags.is_empty() && include_ids.is_empty() {
             return Ok(RoaringBitmap::new());
@@ -203,15 +206,15 @@ async fn resolve_tag_search(
         } else if match_mode == IncludeMatchMode::Any {
             let mut union = RoaringBitmap::new();
             for tid in &include_ids {
-                union |= &bitmaps.get(&BitmapKey::EffectiveTag(*tid));
+                union |= &db.bitmaps.get(&BitmapKey::EffectiveTag(*tid));
             }
             union
         } else {
             let mut iter = include_ids.iter();
             let first = *iter.next().expect("include_ids not empty");
-            let mut intersect = bitmaps.get(&BitmapKey::EffectiveTag(first));
+            let mut intersect = db.bitmaps.get(&BitmapKey::EffectiveTag(first));
             for tid in iter {
-                intersect &= &bitmaps.get(&BitmapKey::EffectiveTag(*tid));
+                intersect &= &db.bitmaps.get(&BitmapKey::EffectiveTag(*tid));
             }
             intersect
         };
@@ -219,98 +222,157 @@ async fn resolve_tag_search(
         if !exclude_ids.is_empty() {
             let mut excluded = RoaringBitmap::new();
             for tid in &exclude_ids {
-                excluded |= &bitmaps.get(&BitmapKey::EffectiveTag(*tid));
+                excluded |= &db.bitmaps.get(&BitmapKey::EffectiveTag(*tid));
             }
             result -= &excluded;
         }
+
         result &= &active;
         Ok(result)
     })
-    .await
 }
 
-fn resolve_folder(db: &SqliteDatabase, filter: &ScopeFilter) -> Result<RoaringBitmap, String> {
+fn resolve_folder(db: &LibraryDatabase, filter: &ScopeFilter) -> Result<RoaringBitmap, String> {
     let include_folders = filter.folder_ids().unwrap_or_default();
     let exclude_folders = filter.excluded_folder_ids().unwrap_or_default();
     let match_mode =
         parse_include_match_mode(filter.folder_match_mode().as_deref(), IncludeMatchMode::Any);
-    let active = db.bitmaps.get(&BitmapKey::Status(1));
 
-    let mut result = if include_folders.is_empty() {
-        active.clone()
-    } else if match_mode == IncludeMatchMode::Any {
-        let mut union = RoaringBitmap::new();
-        for fid in &include_folders {
-            union |= &db.bitmaps.get(&BitmapKey::Folder(*fid));
+    db.with_read(|conn| {
+        let mut result = if include_folders.is_empty() {
+            active_top_level_bitmap(conn)?
+        } else {
+            folder_membership_bitmap(conn, &include_folders, match_mode)?
+        };
+
+        if !exclude_folders.is_empty() {
+            let excluded = folder_membership_bitmap(conn, &exclude_folders, IncludeMatchMode::Any)?;
+            result -= &excluded;
         }
-        union
+
+        result &= &active_top_level_bitmap(conn)?;
+        Ok(result)
+    })
+}
+
+fn resolve_status(db: &LibraryDatabase, filter: &ScopeFilter) -> Result<RoaringBitmap, String> {
+    db.with_read(|conn| match filter.system_key() {
+        Some(GridSystemScopeKey::Inbox) => top_level_status_bitmap(conn, 0),
+        Some(GridSystemScopeKey::Trash) => top_level_status_bitmap(conn, 2),
+        Some(GridSystemScopeKey::Untagged) => untagged_top_level_bitmap(conn),
+        Some(GridSystemScopeKey::Uncategorized) => uncategorized_top_level_bitmap(conn),
+        _ => top_level_status_bitmap(conn, 1),
+    })
+}
+
+fn top_level_status_bitmap(conn: &rusqlite::Connection, status: i64) -> rusqlite::Result<RoaringBitmap> {
+    let mut stmt = conn.prepare(
+        "SELECT entity_id
+         FROM media_entity
+         WHERE status = ?1 AND parent_collection_entity_id IS NULL
+         ORDER BY entity_id ASC",
+    )?;
+    let ids = stmt
+        .query_map([status], |row| row.get::<_, i64>(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(RoaringBitmap::from_iter(ids.into_iter().map(|id| id as u32)))
+}
+
+fn active_top_level_bitmap(conn: &rusqlite::Connection) -> rusqlite::Result<RoaringBitmap> {
+    top_level_status_bitmap(conn, 1)
+}
+
+fn untagged_top_level_bitmap(conn: &rusqlite::Connection) -> rusqlite::Result<RoaringBitmap> {
+    let mut stmt = conn.prepare(
+        "SELECT me.entity_id
+         FROM media_entity me
+         WHERE me.status = 1
+           AND me.parent_collection_entity_id IS NULL
+           AND NOT EXISTS (SELECT 1 FROM entity_tag et WHERE et.entity_id = me.entity_id)
+           AND NOT EXISTS (
+               SELECT 1 FROM media_entity child
+               WHERE child.parent_collection_entity_id = me.entity_id
+                 AND EXISTS (SELECT 1 FROM entity_tag et WHERE et.entity_id = child.entity_id)
+           )
+         ORDER BY me.entity_id ASC",
+    )?;
+    let ids = stmt
+        .query_map([], |row| row.get::<_, i64>(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(RoaringBitmap::from_iter(ids.into_iter().map(|id| id as u32)))
+}
+
+fn uncategorized_top_level_bitmap(
+    conn: &rusqlite::Connection,
+) -> rusqlite::Result<RoaringBitmap> {
+    let mut stmt = conn.prepare(
+        "SELECT me.entity_id
+         FROM media_entity me
+         WHERE me.status = 1
+           AND me.parent_collection_entity_id IS NULL
+           AND NOT EXISTS (SELECT 1 FROM folder_member fm WHERE fm.entity_id = me.entity_id)
+           AND NOT EXISTS (
+               SELECT 1 FROM media_entity child
+               WHERE child.parent_collection_entity_id = me.entity_id
+                 AND EXISTS (SELECT 1 FROM folder_member fm WHERE fm.entity_id = child.entity_id)
+           )
+         ORDER BY me.entity_id ASC",
+    )?;
+    let ids = stmt
+        .query_map([], |row| row.get::<_, i64>(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(RoaringBitmap::from_iter(ids.into_iter().map(|id| id as u32)))
+}
+
+fn folder_membership_bitmap(
+    conn: &rusqlite::Connection,
+    folder_ids: &[i64],
+    match_mode: IncludeMatchMode,
+) -> rusqlite::Result<RoaringBitmap> {
+    if folder_ids.is_empty() {
+        return Ok(RoaringBitmap::new());
+    }
+
+    let placeholders = std::iter::repeat_n("?", folder_ids.len())
+        .collect::<Vec<_>>()
+        .join(", ");
+    let sql = if match_mode == IncludeMatchMode::Any {
+        format!(
+            "SELECT DISTINCT COALESCE(child.parent_collection_entity_id, child.entity_id) AS top_entity_id
+             FROM folder_member fm
+             JOIN media_entity child ON child.entity_id = fm.entity_id
+             WHERE fm.folder_id IN ({placeholders})
+             ORDER BY top_entity_id ASC"
+        )
     } else {
-        let mut iter = include_folders.iter();
-        let first = *iter.next().expect("include_folders not empty");
-        let mut intersect = db.bitmaps.get(&BitmapKey::Folder(first));
-        for fid in iter {
-            intersect &= &db.bitmaps.get(&BitmapKey::Folder(*fid));
-        }
-        intersect
+        format!(
+            "SELECT top_entity_id
+             FROM (
+                 SELECT COALESCE(child.parent_collection_entity_id, child.entity_id) AS top_entity_id,
+                        COUNT(DISTINCT fm.folder_id) AS match_count
+                 FROM folder_member fm
+                 JOIN media_entity child ON child.entity_id = fm.entity_id
+                 WHERE fm.folder_id IN ({placeholders})
+                 GROUP BY top_entity_id
+             )
+             WHERE match_count = ?{}
+             ORDER BY top_entity_id ASC",
+            folder_ids.len() + 1
+        )
     };
 
-    if !exclude_folders.is_empty() {
-        let mut excluded = RoaringBitmap::new();
-        for fid in &exclude_folders {
-            excluded |= &db.bitmaps.get(&BitmapKey::Folder(*fid));
-        }
-        result -= &excluded;
+    let mut params: Vec<&dyn rusqlite::ToSql> = folder_ids
+        .iter()
+        .map(|folder_id| folder_id as &dyn rusqlite::ToSql)
+        .collect();
+    let all_count = folder_ids.len() as i64;
+    if match_mode != IncludeMatchMode::Any {
+        params.push(&all_count);
     }
-    result &= &active;
-    Ok(result)
-}
 
-async fn resolve_status(
-    db: &SqliteDatabase,
-    filter: &ScopeFilter,
-) -> Result<RoaringBitmap, String> {
-    match filter.system_key() {
-        Some(GridSystemScopeKey::Inbox) => Ok(db.bitmaps.get(&BitmapKey::Status(0))),
-        Some(GridSystemScopeKey::Trash) => Ok(db.bitmaps.get(&BitmapKey::Status(2))),
-        Some(GridSystemScopeKey::Untagged) => {
-            let active = db.bitmaps.get(&BitmapKey::Status(1));
-            let tagged = db.bitmaps.get(&BitmapKey::Tagged);
-            Ok(&active - &tagged)
-        }
-        Some(GridSystemScopeKey::Uncategorized) => {
-            let uncategorized_ids = db.with_read_conn(list_uncategorized_entity_ids).await?;
-            Ok(RoaringBitmap::from_iter(
-                uncategorized_ids.into_iter().map(|id| id as u32),
-            ))
-        }
-        _ => Ok(db.bitmaps.get(&BitmapKey::Status(1))),
-    }
-}
-
-/// Canonical count for a system scope — synchronous, used by sidebar compiler.
-///
-/// Encodes the same business rules as `resolve_scope` / `resolve_status`:
-/// - `system:active` = active (status=1)
-/// - `system:active_files` = active (status=1) legacy alias
-/// - `system:inbox` = inbox (status=0)
-/// - `system:trash` = trash (status=2)
-/// - `system:untagged` = active (status=1) minus Tagged
-/// - `system:uncategorized` = active singles not in any folder
-pub fn scope_count(
-    conn: &Connection,
-    bitmaps: &BitmapStore,
-    scope_key: &str,
-) -> rusqlite::Result<i64> {
-    match scope_key {
-        "system:active" | "system:active_files" => Ok(bitmaps.len(&BitmapKey::Status(1)) as i64),
-        "system:inbox" => Ok(bitmaps.len(&BitmapKey::Status(0)) as i64),
-        "system:trash" => Ok(bitmaps.len(&BitmapKey::Status(2)) as i64),
-        "system:untagged" => {
-            let active = bitmaps.len(&BitmapKey::Status(1));
-            let tagged = bitmaps.len(&BitmapKey::Tagged);
-            Ok(active.saturating_sub(tagged) as i64)
-        }
-        "system:uncategorized" => count_uncategorized_entities(conn),
-        _ => Ok(0),
-    }
+    let mut stmt = conn.prepare(&sql)?;
+    let ids = stmt
+        .query_map(rusqlite::params_from_iter(params), |row| row.get::<_, i64>(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(RoaringBitmap::from_iter(ids.into_iter().map(|id| id as u32)))
 }

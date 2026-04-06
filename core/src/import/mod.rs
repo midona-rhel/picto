@@ -1,2 +1,1 @@
-pub mod db;
-pub mod pipeline;
+pub(crate) mod pipeline;

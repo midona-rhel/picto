@@ -1,6 +1,5 @@
 use std::sync::Arc;
 
-use crate::scope::resolver::scope_count;
 use crate::sqlite::bitmaps::BitmapKey;
 use crate::sqlite::SqliteDatabase;
 
@@ -25,7 +24,30 @@ pub(crate) async fn compile_sidebar(db: &Arc<SqliteDatabase>) -> Result<(), Stri
             "system:uncategorized",
             "system:recent_viewed",
         ] {
-            let count = scope_count(conn, &bitmaps, key)?;
+            let count = match *key {
+                "system:active" | "system:active_files" => bitmaps.len(&BitmapKey::Status(1)) as i64,
+                "system:inbox" => bitmaps.len(&BitmapKey::Status(0)) as i64,
+                "system:trash" => bitmaps.len(&BitmapKey::Status(2)) as i64,
+                "system:untagged" => {
+                    let active = bitmaps.len(&BitmapKey::Status(1));
+                    let tagged = bitmaps.len(&BitmapKey::Tagged);
+                    active.saturating_sub(tagged) as i64
+                }
+                "system:uncategorized" => conn.query_row(
+                    "SELECT COUNT(*) FROM media_entity me
+                     WHERE me.status = 1
+                       AND me.parent_collection_entity_id IS NULL
+                       AND NOT EXISTS (SELECT 1 FROM folder_member fm WHERE fm.entity_id = me.entity_id)
+                       AND NOT EXISTS (
+                           SELECT 1 FROM media_entity child
+                           WHERE child.parent_collection_entity_id = me.entity_id
+                             AND EXISTS (SELECT 1 FROM folder_member fm WHERE fm.entity_id = child.entity_id)
+                       )",
+                    [],
+                    |row| row.get(0),
+                )?,
+                _ => 0,
+            };
             update_sidebar_count(conn, key, count, epoch as i64)?;
         }
 

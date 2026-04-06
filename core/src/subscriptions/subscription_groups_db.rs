@@ -1,17 +1,9 @@
 //! Subscription group CRUD — parent entity that groups subscriptions with a shared schedule.
 
 use rusqlite::{params, Connection, OptionalExtension};
-use serde::{Deserialize, Serialize};
 
 use crate::sqlite::SqliteDatabase;
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SubscriptionGroup {
-    pub group_id: i64,
-    pub name: String,
-    pub schedule: String,
-    pub created_at: String,
-}
+pub use super::types::SubscriptionGroup;
 
 pub fn create_group(conn: &Connection, name: &str) -> rusqlite::Result<i64> {
     let now = chrono::Utc::now().to_rfc3339();

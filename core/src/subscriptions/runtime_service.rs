@@ -19,12 +19,13 @@ use super::db::{
     update_query_progress, upsert_subscription_download_attempt, upsert_subscription_issue,
     upsert_subscription_post_collection, upsert_subscription_post_member,
     add_subscription_entity, get_subscription_post_collection,
-    OwnedSubscriptionDownloadAttemptUpsert,
-    OwnedSubscriptionPostMemberUpsert, Subscription, SubscriptionDownloadAttemptRecord,
-    SubscriptionIssueRecord, SubscriptionPostMemberRecord, SubscriptionQuery,
-    SubscriptionQueryRunRecord, SubscriptionRunRecord,
 };
-use super::subscription_groups_db::SubscriptionGroup;
+use super::types::{
+    OwnedSubscriptionDownloadAttemptUpsert, OwnedSubscriptionPostMemberUpsert, Subscription,
+    SubscriptionDownloadAttemptRecord, SubscriptionGroup, SubscriptionIssueRecord,
+    SubscriptionPostMemberRecord, SubscriptionQuery, SubscriptionQueryRunRecord,
+    SubscriptionRunRecord,
+};
 
 #[derive(Debug, Clone)]
 struct CanonicalSubscriptionRow {

@@ -1,6 +1,6 @@
 //! Smart folder CRUD.
 
-use crate::smart_folders::db::SmartFolderPredicate;
+use crate::smart_folders::types::SmartFolderPredicate;
 
 use super::ApplicationEngine;
 

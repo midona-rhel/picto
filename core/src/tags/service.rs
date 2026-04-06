@@ -103,7 +103,38 @@ pub async fn find_files_by_tags(
     }
 
     let files = db.batch_get_metadata_slim(page_hashes).await?;
-    Ok(files.into_iter().map(FileGridInfo::from).collect())
+    Ok(files
+        .into_iter()
+        .map(|f| {
+            let is_collection = f.kind == "collection";
+            let has_thumbnail = if is_collection {
+                !f.hash.is_empty()
+            } else {
+                f.mime.starts_with("image/") || f.mime.starts_with("video/")
+            };
+            FileGridInfo {
+                entity_id: if f.entity_id > 0 { f.entity_id } else { f.file_id },
+                kind: f.kind,
+                hash: f.hash,
+                thumbnail_hash: f.thumbnail_hash,
+                member_count: f.member_count,
+                name: f.name,
+                size: f.size,
+                mime: f.mime,
+                width: f.width,
+                height: f.height,
+                duration_ms: f.duration_ms,
+                num_frames: f.num_frames,
+                has_audio: f.has_audio,
+                status: crate::types::status_to_string(f.status as i64).to_string(),
+                rating: f.rating,
+                view_count: f.view_count,
+                imported_at: f.imported_at,
+                has_thumbnail,
+                dominant_color_hex: f.dominant_color_hex,
+            }
+        })
+        .collect())
 }
 
 pub async fn add_tags(

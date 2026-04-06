@@ -126,14 +126,14 @@ impl ApplicationEngine {
     pub fn get_entity_folder_memberships(
         &self,
         entity_hash: &str,
-    ) -> Result<Vec<crate::folders::db::FolderMembership>, String> {
+    ) -> Result<Vec<crate::db::types::FolderMembership>, String> {
         self.db.get_entity_folder_memberships(entity_hash)
     }
 
     pub fn get_entity_folder_memberships_by_entity_id(
         &self,
         entity_id: i64,
-    ) -> Result<Vec<crate::folders::db::FolderMembership>, String> {
+    ) -> Result<Vec<crate::db::types::FolderMembership>, String> {
         self.db.get_entity_folder_memberships_by_entity_id(entity_id)
     }
 

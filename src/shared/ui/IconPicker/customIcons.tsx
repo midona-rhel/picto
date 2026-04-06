@@ -81,3 +81,25 @@ export const IconPersonFemale = forwardRef<IconRef, IconExtraProps>(
   ),
 );
 IconPersonFemale.displayName = 'IconPersonFemale';
+
+/** Folder with a + badge in the bottom-right corner (rounded square around the +).
+ *  Folder's bottom and right strokes are shortened to avoid intersecting the badge. */
+export const IconFolderNewSelection = forwardRef<IconRef, IconExtraProps>(
+  ({ size = 24, stroke: strokeWidth = 2, color = 'currentColor', className, ...rest }, ref) => (
+    <svg ref={ref} xmlns="http://www.w3.org/2000/svg" width={size} height={size}
+      viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth={strokeWidth}
+      strokeLinecap="round" strokeLinejoin="round" className={className} {...rest}>
+      {/* Folder body — bottom shortened 3 units, right shortened 2 units */}
+      {/* Top edge with tab + right edge (stops 2 units before badge) */}
+      <path d="M2 6 L2 4 C2 3.45 2.45 3 3 3 L9 3 L11 6 L21 6 C21.55 6 22 6.45 22 7 L22 10" />
+      {/* Left edge + bottom (stops 3 units before badge) */}
+      <path d="M2 6 L2 18 C2 18.55 2.45 19 3 19 L9 19" />
+      {/* Badge: rounded square in bottom-right — slightly bigger */}
+      <rect x="13" y="13" width="10" height="10" rx="2.5" ry="2.5" />
+      {/* Plus inside badge — centered in the 10x10 rect */}
+      <line x1="18" y1="15.5" x2="18" y2="20.5" />
+      <line x1="15.5" y1="18" x2="20.5" y2="18" />
+    </svg>
+  ),
+);
+IconFolderNewSelection.displayName = 'IconFolderNewSelection';

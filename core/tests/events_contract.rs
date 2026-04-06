@@ -5,7 +5,18 @@ mod common;
 
 use picto_core::events;
 use picto_core::runtime_contract::change_builder::ChangeImpact;
-use picto_core::runtime_contract::state_change::Domain;
+use picto_core::runtime_contract::state_change::{Domain, SidebarCounts};
+
+fn test_sidebar_counts() -> SidebarCounts {
+    SidebarCounts {
+        active: 3,
+        inbox: 1,
+        trash: 0,
+        uncategorized: 1,
+        untagged: 2,
+        duplicates: -1,
+    }
+}
 
 #[tokio::test]
 async fn state_changed_event_emits_sequence_numbers() {
@@ -121,6 +132,8 @@ fn state_changed_event_contract() {
             folder_order_changes: None,
             smart_folder_parent_changes: None,
             smart_folder_order_changes: None,
+            sidebar_node_patches: None,
+            smart_folder_counts: None,
         },
         sidebar_counts: None,
     };
@@ -143,7 +156,7 @@ async fn file_lifecycle_preset_emits_state_changed_event() {
     let harness = common::TestHarness::new().await;
     harness.drain_events();
 
-    let impact = ChangeImpact::file_lifecycle(&harness.db);
+    let impact = ChangeImpact::file_lifecycle().sidebar_counts(test_sidebar_counts());
     events::emit_state_changed("test_file_lifecycle", impact);
 
     let evts = harness.find_events("runtime/state_changed");
@@ -265,7 +278,7 @@ async fn collection_membership_preset_refreshes_collection_and_system_scopes() {
     let harness = common::TestHarness::new().await;
     harness.drain_events();
 
-    let impact = ChangeImpact::collection_membership_change(42);
+    let impact = ChangeImpact::collection_membership_change(42, &[]);
     events::emit_state_changed("test_collection_membership", impact);
 
     let evts = harness.find_events("runtime/state_changed");
@@ -317,7 +330,8 @@ async fn merged_change_impact_emits_one_combined_delta() {
     let harness = common::TestHarness::new().await;
     harness.drain_events();
 
-    let impact = ChangeImpact::file_lifecycle(&harness.db)
+    let impact = ChangeImpact::file_lifecycle()
+        .sidebar_counts(test_sidebar_counts())
         .entity_hashes(vec!["hash_a".into()])
         .merge(
             ChangeImpact::folder_file_change(9)
@@ -382,7 +396,8 @@ async fn folder_watch_style_delta_includes_both_file_and_membership_changes() {
     let harness = common::TestHarness::new().await;
     harness.drain_events();
 
-    let impact = ChangeImpact::file_lifecycle(&harness.db)
+    let impact = ChangeImpact::file_lifecycle()
+        .sidebar_counts(test_sidebar_counts())
         .entity_hashes(vec!["imported_hash".into()])
         .merge(ChangeImpact::folder_file_change(17).entity_hashes(vec!["skipped_hash".into()]));
     events::emit_state_changed("watch_folder_import", impact);
@@ -432,10 +447,11 @@ async fn subscription_batch_delta_merges_collection_and_file_changes() {
     let harness = common::TestHarness::new().await;
     harness.drain_events();
 
-    let impact = ChangeImpact::collection_membership_change(42)
+    let impact = ChangeImpact::collection_membership_change(42, &[])
         .extra_grid_scopes(vec!["system:inbox".into()])
         .merge(
-            ChangeImpact::file_lifecycle(&harness.db)
+            ChangeImpact::file_lifecycle()
+                .sidebar_counts(test_sidebar_counts())
                 .extra_grid_scopes(vec!["system:inbox".into()]),
         );
     events::emit_state_changed("subscription_import", impact);

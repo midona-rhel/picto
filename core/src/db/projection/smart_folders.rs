@@ -7,7 +7,7 @@ use roaring::RoaringBitmap;
 use rusqlite::{params, Connection};
 
 use super::bitmaps::{BitmapKey, BitmapStore};
-use crate::smart_folders::db::{MatchMode, PredicateRule, SmartFolderPredicate, SmartRuleGroup};
+use crate::smart_folders::types::{MatchMode, PredicateRule, SmartFolderPredicate, SmartRuleGroup};
 
 const ENTITY_BASE_SQL: &str = "SELECT me.entity_id
     FROM media_entity me
@@ -592,7 +592,7 @@ mod tests {
     use super::{compile_predicate, evaluate_predicate};
     use crate::db::core::schema::LIBRARY_DDL;
     use crate::db::projection::bitmaps::{BitmapKey, BitmapStore};
-    use crate::smart_folders::db::{MatchMode, PredicateRule, SmartFolderPredicate, SmartRuleGroup};
+    use crate::smart_folders::types::{MatchMode, PredicateRule, SmartFolderPredicate, SmartRuleGroup};
     use roaring::RoaringBitmap;
     use rusqlite::params;
 

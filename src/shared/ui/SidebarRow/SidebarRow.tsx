@@ -62,8 +62,13 @@ interface RowProps {
   onToggleExpand?: () => void;
   onClick?: () => void;
   onContextMenu?: (e: React.MouseEvent) => void;
+  onPointerDown?: (e: React.PointerEvent) => void;
   /** Data attribute for drag-and-drop targeting (e.g. folder ID or status code). */
   dropDataAttr?: { key: string; value: string };
+  /** Highlight when this row's context menu is open (but row isn't active). */
+  contextHighlight?: boolean;
+  /** Drop position indicator for folder drag reorder. */
+  dropPosition?: 'before' | 'inside' | 'after';
   children?: ReactNode;
 }
 
@@ -83,13 +88,20 @@ function StandardRow({
   onToggleExpand,
   onClick,
   onContextMenu,
+  onPointerDown,
   dropDataAttr,
+  contextHighlight,
+  dropPosition,
   children,
 }: RowProps) {
   const cls = [
     styles.row,
     active ? styles.active : '',
     dropTarget ? styles.dropTarget : '',
+    contextHighlight && !active ? styles.contextHighlight : '',
+    dropPosition === 'before' ? styles.dropBefore : '',
+    dropPosition === 'inside' ? styles.dropInside : '',
+    dropPosition === 'after' ? styles.dropAfter : '',
   ].filter(Boolean).join(' ');
 
   const showGuides = useAtomValue(showTreeGuidesAtom);
@@ -107,6 +119,7 @@ function StandardRow({
       style={rowStyle}
       onClick={onClick}
       onContextMenu={onContextMenu}
+      onPointerDown={onPointerDown}
       {...(dropDataAttr ? { [`data-${dropDataAttr.key}`]: dropDataAttr.value } : {})}
     >
       {/* Tree guide lines — continuation at column (d-1) for siblings at indent d.

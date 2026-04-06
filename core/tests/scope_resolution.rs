@@ -4,9 +4,9 @@
 //! asserting intended business rules for system scopes, tag search,
 //! folder search, and select-all parity.
 
-mod common;
+mod common_canonical;
 
-use picto_core::folders::db::NewFolder;
+use picto_core::db::types::ExpansionMode;
 use picto_core::scope::resolver::{resolve_scope, scope_count, ScopeFilter};
 use picto_core::types::*;
 
@@ -14,7 +14,7 @@ use picto_core::types::*;
 /// Inbox and trash are excluded.
 #[tokio::test]
 async fn scope_contract_system_all_excludes_inbox_and_trash() {
-    let harness = common::TestHarness::new().await;
+    let harness = common_canonical::TestHarness::new().await;
     let f_active = harness.insert_test_file("sc_a", "a.png", 1).await;
     let f_inbox = harness.insert_test_file("sc_b", "b.png", 0).await;
     let f_trash = harness.insert_test_file("sc_c", "c.png", 2).await;
@@ -43,7 +43,7 @@ async fn scope_contract_system_all_excludes_inbox_and_trash() {
 /// Business rule: `system:inbox` = inbox only (status=0).
 #[tokio::test]
 async fn scope_contract_inbox_only_inbox() {
-    let harness = common::TestHarness::new().await;
+    let harness = common_canonical::TestHarness::new().await;
     let f_active = harness.insert_test_file("si_a", "a.png", 1).await;
     let f_inbox = harness.insert_test_file("si_b", "b.png", 0).await;
     let f_trash = harness.insert_test_file("si_c", "c.png", 2).await;
@@ -68,7 +68,7 @@ async fn scope_contract_inbox_only_inbox() {
 /// Business rule: `system:trash` = trash only (status=2).
 #[tokio::test]
 async fn scope_contract_trash_only_trash() {
-    let harness = common::TestHarness::new().await;
+    let harness = common_canonical::TestHarness::new().await;
     let f_active = harness.insert_test_file("st_a", "a.png", 1).await;
     let f_inbox = harness.insert_test_file("st_b", "b.png", 0).await;
     let f_trash = harness.insert_test_file("st_c", "c.png", 2).await;
@@ -94,7 +94,7 @@ async fn scope_contract_trash_only_trash() {
 /// Inbox items without tags are NOT included (untagged is active-scoped).
 #[tokio::test]
 async fn scope_contract_untagged_means_active_without_tags() {
-    let harness = common::TestHarness::new().await;
+    let harness = common_canonical::TestHarness::new().await;
     let f1 = harness.insert_test_file("ut_1", "1.png", 1).await;
     let f2 = harness.insert_test_file("ut_2", "2.png", 1).await;
     let f3 = harness.insert_test_file("ut_3", "3.png", 1).await;
@@ -103,6 +103,8 @@ async fn scope_contract_untagged_means_active_without_tags() {
     harness.bitmaps_mark_active(f2);
     harness.bitmaps_mark_active(f3);
     harness.bitmaps_mark_inbox(f4);
+    let red = harness.insert_test_tag("", "red").await;
+    harness.tag_entity(f1, red).await;
     harness.bitmaps_mark_tagged(f1);
 
     let filter = ScopeFilter {
@@ -132,7 +134,7 @@ async fn scope_contract_untagged_means_active_without_tags() {
 /// Inbox items without folders are NOT included.
 #[tokio::test]
 async fn scope_contract_uncategorized_means_active_without_folder() {
-    let harness = common::TestHarness::new().await;
+    let harness = common_canonical::TestHarness::new().await;
     let f1 = harness.insert_test_file("uc_1", "1.png", 1).await;
     let f2 = harness.insert_test_file("uc_2", "2.png", 1).await;
     let f3 = harness.insert_test_file("uc_3", "3.png", 1).await;
@@ -144,19 +146,11 @@ async fn scope_contract_uncategorized_means_active_without_folder() {
 
     let folder = harness
         .db
-        .create_folder(NewFolder {
-            name: "Bucket".to_string(),
-            parent_id: None,
-            icon: None,
-            color: None,
-            auto_tags: vec![],
-        })
-        .await
+        .create_folder("Bucket", None, None, None)
         .expect("create folder");
     harness
         .db
-        .add_entities_to_folder_batch(folder.folder_id, &["uc_1".to_string()])
-        .await
+        .add_folder_members(folder, &[f1], ExpansionMode::EntityOnly)
         .expect("add to folder");
 
     let filter = ScopeFilter {
@@ -182,7 +176,7 @@ async fn scope_contract_uncategorized_means_active_without_folder() {
 /// Business rule: tag search default match mode = intersection ("all").
 #[tokio::test]
 async fn scope_contract_tag_search_default_intersection() {
-    let harness = common::TestHarness::new().await;
+    let harness = common_canonical::TestHarness::new().await;
     let f1 = harness.insert_test_file("ti_1", "1.png", 1).await;
     let f2 = harness.insert_test_file("ti_2", "2.png", 1).await;
     let f3 = harness.insert_test_file("ti_3", "3.png", 1).await;
@@ -217,7 +211,7 @@ async fn scope_contract_tag_search_default_intersection() {
 /// Business rule: tag search "any" = union.
 #[tokio::test]
 async fn scope_contract_tag_search_union() {
-    let harness = common::TestHarness::new().await;
+    let harness = common_canonical::TestHarness::new().await;
     let f1 = harness.insert_test_file("tu_1", "1.png", 1).await;
     let f2 = harness.insert_test_file("tu_2", "2.png", 1).await;
     let f3 = harness.insert_test_file("tu_3", "3.png", 1).await;
@@ -254,7 +248,7 @@ async fn scope_contract_tag_search_union() {
 /// Business rule: excluded tags are subtracted from results.
 #[tokio::test]
 async fn scope_contract_tag_search_exclusion() {
-    let harness = common::TestHarness::new().await;
+    let harness = common_canonical::TestHarness::new().await;
     let f1 = harness.insert_test_file("te_1", "1.png", 1).await;
     let f2 = harness.insert_test_file("te_2", "2.png", 1).await;
     let f3 = harness.insert_test_file("te_3", "3.png", 1).await;
@@ -289,50 +283,28 @@ async fn scope_contract_tag_search_exclusion() {
 /// Business rule: folder default match mode = union ("any").
 #[tokio::test]
 async fn scope_contract_folder_default_union() {
-    let harness = common::TestHarness::new().await;
+    let harness = common_canonical::TestHarness::new().await;
     let f1 = harness.insert_test_file("fu_1", "1.png", 1).await;
     let f2 = harness.insert_test_file("fu_2", "2.png", 1).await;
     let f3 = harness.insert_test_file("fu_3", "3.png", 1).await;
     harness.bitmaps_mark_active(f1);
     harness.bitmaps_mark_active(f2);
     harness.bitmaps_mark_active(f3);
-    let fa = harness
+    let fa = harness.db.create_folder("A", None, None, None).unwrap();
+    let fb = harness.db.create_folder("B", None, None, None).unwrap();
+    harness
         .db
-        .create_folder(NewFolder {
-            name: "A".into(),
-            parent_id: None,
-            icon: None,
-            color: None,
-            auto_tags: vec![],
-        })
-        .await
-        .unwrap();
-    let fb = harness
-        .db
-        .create_folder(NewFolder {
-            name: "B".into(),
-            parent_id: None,
-            icon: None,
-            color: None,
-            auto_tags: vec![],
-        })
-        .await
+        .add_folder_members(fa, &[f1, f3], ExpansionMode::EntityOnly)
         .unwrap();
     harness
         .db
-        .add_entities_to_folder_batch(fa.folder_id, &["fu_1".to_string(), "fu_3".to_string()])
-        .await
-        .unwrap();
-    harness
-        .db
-        .add_entities_to_folder_batch(fb.folder_id, &["fu_2".to_string(), "fu_3".to_string()])
-        .await
+        .add_folder_members(fb, &[f2, f3], ExpansionMode::EntityOnly)
         .unwrap();
 
     let filter = ScopeFilter {
         scope: GridScopeSpec::default(),
         filters: GridFilterSpec {
-            folder_ids: Some(vec![fa.folder_id, fb.folder_id]),
+            folder_ids: Some(vec![fa, fb]),
             folder_match_mode: None,
             ..Default::default()
         },
@@ -348,50 +320,28 @@ async fn scope_contract_folder_default_union() {
 /// Business rule: folder match mode "all" = intersection.
 #[tokio::test]
 async fn scope_contract_folder_intersection() {
-    let harness = common::TestHarness::new().await;
+    let harness = common_canonical::TestHarness::new().await;
     let f1 = harness.insert_test_file("fint_1", "1.png", 1).await;
     let f2 = harness.insert_test_file("fint_2", "2.png", 1).await;
     let f3 = harness.insert_test_file("fint_3", "3.png", 1).await;
     harness.bitmaps_mark_active(f1);
     harness.bitmaps_mark_active(f2);
     harness.bitmaps_mark_active(f3);
-    let fa = harness
+    let fa = harness.db.create_folder("A", None, None, None).unwrap();
+    let fb = harness.db.create_folder("B", None, None, None).unwrap();
+    harness
         .db
-        .create_folder(NewFolder {
-            name: "A".into(),
-            parent_id: None,
-            icon: None,
-            color: None,
-            auto_tags: vec![],
-        })
-        .await
-        .unwrap();
-    let fb = harness
-        .db
-        .create_folder(NewFolder {
-            name: "B".into(),
-            parent_id: None,
-            icon: None,
-            color: None,
-            auto_tags: vec![],
-        })
-        .await
+        .add_folder_members(fa, &[f1, f3], ExpansionMode::EntityOnly)
         .unwrap();
     harness
         .db
-        .add_entities_to_folder_batch(fa.folder_id, &["fint_1".to_string(), "fint_3".to_string()])
-        .await
-        .unwrap();
-    harness
-        .db
-        .add_entities_to_folder_batch(fb.folder_id, &["fint_2".to_string(), "fint_3".to_string()])
-        .await
+        .add_folder_members(fb, &[f2, f3], ExpansionMode::EntityOnly)
         .unwrap();
 
     let filter = ScopeFilter {
         scope: GridScopeSpec::default(),
         filters: GridFilterSpec {
-            folder_ids: Some(vec![fa.folder_id, fb.folder_id]),
+            folder_ids: Some(vec![fa, fb]),
             folder_match_mode: Some("all".to_string()),
             ..Default::default()
         },
@@ -405,51 +355,29 @@ async fn scope_contract_folder_intersection() {
 /// Business rule: excluded folders are subtracted from results.
 #[tokio::test]
 async fn scope_contract_folder_exclusion() {
-    let harness = common::TestHarness::new().await;
+    let harness = common_canonical::TestHarness::new().await;
     let f1 = harness.insert_test_file("fex_1", "1.png", 1).await;
     let f2 = harness.insert_test_file("fex_2", "2.png", 1).await;
     let f3 = harness.insert_test_file("fex_3", "3.png", 1).await;
     harness.bitmaps_mark_active(f1);
     harness.bitmaps_mark_active(f2);
     harness.bitmaps_mark_active(f3);
-    let fa = harness
+    let fa = harness.db.create_folder("A", None, None, None).unwrap();
+    let fb = harness.db.create_folder("B", None, None, None).unwrap();
+    harness
         .db
-        .create_folder(NewFolder {
-            name: "A".into(),
-            parent_id: None,
-            icon: None,
-            color: None,
-            auto_tags: vec![],
-        })
-        .await
-        .unwrap();
-    let fb = harness
-        .db
-        .create_folder(NewFolder {
-            name: "B".into(),
-            parent_id: None,
-            icon: None,
-            color: None,
-            auto_tags: vec![],
-        })
-        .await
+        .add_folder_members(fa, &[f1, f3], ExpansionMode::EntityOnly)
         .unwrap();
     harness
         .db
-        .add_entities_to_folder_batch(fa.folder_id, &["fex_1".to_string(), "fex_3".to_string()])
-        .await
-        .unwrap();
-    harness
-        .db
-        .add_entities_to_folder_batch(fb.folder_id, &["fex_2".to_string(), "fex_3".to_string()])
-        .await
+        .add_folder_members(fb, &[f2, f3], ExpansionMode::EntityOnly)
         .unwrap();
 
     let filter = ScopeFilter {
         scope: GridScopeSpec::default(),
         filters: GridFilterSpec {
-            folder_ids: Some(vec![fa.folder_id]),
-            excluded_folder_ids: Some(vec![fb.folder_id]),
+            folder_ids: Some(vec![fa]),
+            excluded_folder_ids: Some(vec![fb]),
             ..Default::default()
         },
     };
@@ -462,7 +390,7 @@ async fn scope_contract_folder_exclusion() {
 /// Business rule: select-all resolves to the same scope as the grid.
 #[tokio::test]
 async fn scope_contract_grid_and_selection_same_scope() {
-    let harness = common::TestHarness::new().await;
+    let harness = common_canonical::TestHarness::new().await;
     let f1 = harness.insert_test_file("gs_1", "1.png", 1).await;
     let f2 = harness.insert_test_file("gs_2", "2.png", 1).await;
     let f3 = harness.insert_test_file("gs_3", "3.png", 1).await;
@@ -511,7 +439,7 @@ async fn scope_contract_grid_and_selection_same_scope() {
 /// Business rule: scope_count agrees with resolve_scope.len() for all system scopes.
 #[tokio::test]
 async fn scope_contract_scope_count_agrees_with_resolve_scope() {
-    let harness = common::TestHarness::new().await;
+    let harness = common_canonical::TestHarness::new().await;
     let f1 = harness.insert_test_file("cnt_1", "1.png", 1).await;
     let f2 = harness.insert_test_file("cnt_2", "2.png", 1).await;
     let f3 = harness.insert_test_file("cnt_3", "3.png", 0).await;
@@ -522,21 +450,10 @@ async fn scope_contract_scope_count_agrees_with_resolve_scope() {
     harness.bitmaps_mark_trash(f4);
     harness.bitmaps_mark_tagged(f2);
 
-    let folder = harness
-        .db
-        .create_folder(NewFolder {
-            name: "F".into(),
-            parent_id: None,
-            icon: None,
-            color: None,
-            auto_tags: vec![],
-        })
-        .await
-        .unwrap();
+    let folder = harness.db.create_folder("F", None, None, None).unwrap();
     harness
         .db
-        .add_entities_to_folder_batch(folder.folder_id, &["cnt_2".to_string()])
-        .await
+        .add_folder_members(folder, &[f2], ExpansionMode::EntityOnly)
         .unwrap();
 
     let cases: Vec<(&str, ScopeFilter)> = vec![
@@ -591,15 +508,7 @@ async fn scope_contract_scope_count_agrees_with_resolve_scope() {
     for (scope_key, filter) in cases {
         let bm = resolve_scope(&harness.db, &filter).await.unwrap();
         let bitmap_count = bm.len() as i64;
-        let sidebar_count = harness
-            .db
-            .with_read_conn({
-                let bitmaps = harness.db.bitmaps.clone();
-                let key = scope_key.to_string();
-                move |conn| Ok(scope_count(conn, &bitmaps, &key)?)
-            })
-            .await
-            .unwrap();
+        let sidebar_count = scope_count(&harness.db, scope_key).unwrap();
         assert_eq!(
             sidebar_count, bitmap_count,
             "scope_count({}) = {} but resolve_scope.len() = {}",

@@ -1,3 +1,5 @@
+import { getZoomFactor, rectToCSS, getViewportCSS } from '../../lib/zoomCompensation';
+
 /**
  * CmSelect — custom dropdown select for use anywhere (portals, scroll containers).
  * No MantineProvider dependency. Dropdown renders via portal to document.body
@@ -50,22 +52,26 @@ export function CmSelect({ value, options, onChange, width }: Props) {
 
   useLayoutEffect(() => {
     if (!open || !btnRef.current) return;
-    const rect = btnRef.current.getBoundingClientRect();
+    const zoom = getZoomFactor();
+    const cssRect = rectToCSS(btnRef.current.getBoundingClientRect(), zoom);
+    const { height: vh } = getViewportCSS(zoom);
     const dropH = Math.min(options.length * 26 + 8, 164);
-    const spaceBelow = window.innerHeight - rect.bottom - 8;
-    const flipUp = dropH > spaceBelow && rect.top > spaceBelow;
-    setPos({ top: flipUp ? rect.top : rect.bottom + 4, left: rect.left, width: rect.width, flipUp });
+    const spaceBelow = vh - cssRect.bottom - 8;
+    const flipUp = dropH > spaceBelow && cssRect.top > spaceBelow;
+    setPos({ top: flipUp ? cssRect.top : cssRect.bottom + 4, left: cssRect.left, width: cssRect.width, flipUp });
   }, [open, options.length]);
 
   useEffect(() => {
     if (!open) return;
     const handler = () => {
       if (!btnRef.current) return;
-      const rect = btnRef.current.getBoundingClientRect();
+      const zoom = getZoomFactor();
+      const cssRect = rectToCSS(btnRef.current.getBoundingClientRect(), zoom);
+      const { height: vh } = getViewportCSS(zoom);
       const dropH = Math.min(options.length * 26 + 8, 164);
-      const spaceBelow = window.innerHeight - rect.bottom - 8;
-      const flipUp = dropH > spaceBelow && rect.top > spaceBelow;
-      setPos({ top: flipUp ? rect.top : rect.bottom + 4, left: rect.left, width: rect.width, flipUp });
+      const spaceBelow = vh - cssRect.bottom - 8;
+      const flipUp = dropH > spaceBelow && cssRect.top > spaceBelow;
+      setPos({ top: flipUp ? cssRect.top : cssRect.bottom + 4, left: cssRect.left, width: cssRect.width, flipUp });
     };
     window.addEventListener('scroll', handler, true);
     return () => window.removeEventListener('scroll', handler, true);
@@ -98,7 +104,7 @@ export function CmSelect({ value, options, onChange, width }: Props) {
             position: 'fixed',
             left: pos.left,
             top: pos.flipUp ? undefined : pos.top,
-            bottom: pos.flipUp ? (window.innerHeight - pos.top + 4) : undefined,
+            bottom: pos.flipUp ? (getViewportCSS().height - pos.top + 4) : undefined,
             width: pos.width,
           }}
         >

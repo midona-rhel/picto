@@ -1,5 +1,5 @@
-pub mod compiler;
-pub mod db;
+pub(crate) mod compiler;
+pub(crate) mod db;
 pub mod logging;
 pub mod normalize;
-pub mod service;
+pub(crate) mod service;

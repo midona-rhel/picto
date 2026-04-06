@@ -48,6 +48,18 @@ Picto is an Electron desktop app with:
 4. `features/grid/`:
    - grid UI, selection, query broker, MediaView, InspectorPanel
 
+## Zoom Compensation Rule
+
+Browser zoom (Cmd+/-, Ctrl+/-, or app zoom setting) causes coordinate space mismatches in Chromium/Electron. All `position: fixed` positioning MUST use `src/shared/lib/zoomCompensation.ts`:
+
+- `clientX/clientY` → divide by `getZoomFactor()` before using as fixed `left`/`top`
+- `getBoundingClientRect()` → use `rectToCSS()` before using values for fixed positioning or clamping
+- Viewport clamping → use `getViewportCSS()` instead of raw `window.innerWidth/innerHeight`
+- `offsetWidth/offsetHeight` are already CSS pixels — use directly for element sizes
+- Canvas hit testing → divide `(clientX - rect.left)` by zoom (see `toLayoutCoords` in CanvasGrid)
+
+This applies to Mac, Windows, and Linux. At 100% zoom the factor is 1.0 (no-op).
+
 ## Data Model Conventions
 
 1. Status model:

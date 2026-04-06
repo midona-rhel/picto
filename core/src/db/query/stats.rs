@@ -78,7 +78,7 @@ pub fn count_media_files(conn: &Connection) -> rusqlite::Result<i64> {
 
 pub fn aggregate_file_stats(
     conn: &Connection,
-) -> rusqlite::Result<crate::sqlite::files::FileStats> {
+) -> rusqlite::Result<crate::db::types::FileStats> {
     let mut inbox: i64 = 0;
     let mut active: i64 = 0;
     let mut trash: i64 = 0;
@@ -115,7 +115,7 @@ pub fn aggregate_file_stats(
         }
     }
 
-    Ok(crate::sqlite::files::FileStats {
+    Ok(crate::db::types::FileStats {
         total: inbox + active,
         inbox,
         active,
@@ -126,7 +126,7 @@ pub fn aggregate_file_stats(
 
 pub fn aggregate_media_type_breakdown(
     conn: &Connection,
-) -> rusqlite::Result<crate::sqlite::files::MediaTypeBreakdown> {
+) -> rusqlite::Result<crate::db::types::MediaTypeBreakdown> {
     let mut stmt = conn.prepare(
         "SELECT
             CASE
@@ -151,7 +151,7 @@ pub fn aggregate_media_type_breakdown(
         ))
     })?;
 
-    let mut breakdown = crate::sqlite::files::MediaTypeBreakdown {
+    let mut breakdown = crate::db::types::MediaTypeBreakdown {
         images: 0,
         images_size: 0,
         videos: 0,

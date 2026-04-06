@@ -2,7 +2,7 @@
 
 use rusqlite::{params, Connection, OptionalExtension};
 
-use crate::settings::db::ViewPref;
+use crate::settings::types::ViewPref;
 
 pub fn get_view_pref(conn: &Connection, scope: &str) -> rusqlite::Result<Option<ViewPref>> {
     conn.query_row(

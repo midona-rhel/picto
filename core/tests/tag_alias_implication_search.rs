@@ -1,13 +1,13 @@
 //! Workflow test: add tag → alias → implication → search agrees.
 
-mod common;
+mod common_canonical;
 
 use picto_core::scope::resolver::{resolve_scope, ScopeFilter};
 use picto_core::types::*;
 
 #[tokio::test]
 async fn tag_search_direct_then_alias_then_implication() {
-    let harness = common::TestHarness::new().await;
+    let harness = common_canonical::TestHarness::new().await;
 
     // Insert 3 active files
     let f1 = harness.insert_test_file("ta_1", "f1.png", 1).await;

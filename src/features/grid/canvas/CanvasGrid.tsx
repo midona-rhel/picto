@@ -32,6 +32,20 @@ import styles from './CanvasGrid.module.css';
 const GAP = 16;
 const TEXT_NAME_ROW_H = 20;
 const EMPTY_HASH_SET = new Set<string>();
+
+/** Convert viewport (visual) coordinates to CSS layout coordinates.
+ *  Uses shared zoom compensation for browser zoom support. */
+function toLayoutCoords(clientX: number, clientY: number, container: HTMLDivElement, headerHeight: number) {
+  const rect = container.getBoundingClientRect();
+  const zoomX = rect.width / (container.offsetWidth || 1);
+  const zoomY = rect.height / (container.offsetHeight || 1);
+  return {
+    x: (clientX - rect.left) / zoomX,
+    y: (clientY - rect.top) / zoomY + container.scrollTop - headerHeight,
+    rect,
+    zoom: zoomX,
+  };
+}
 const LOAD_MORE_THRESHOLD_PX = 400;
 const ZOOM_BTN_SIZE = 24;
 const HOVER_PREVIEW_DELAY_MS = 200;
@@ -619,9 +633,7 @@ export function CanvasGrid({
       if (scope && scope.kind === 'folder') {
         const ctr = containerRef.current;
         if (ctr) {
-          const rct = ctr.getBoundingClientRect();
-          const cx = e.clientX - rct.left;
-          const cy = e.clientY - rct.top + ctr.scrollTop - headerHeightRef.current;
+          const { x: cx, y: cy } = toLayoutCoords(e.clientX, e.clientY, ctr, headerHeightRef.current);
           // Build skip set from dragged item indices
           const draggedHashes = new Set(getDragState().hashes);
           const skipIdx = new Set<number>();
@@ -757,11 +769,9 @@ export function CanvasGrid({
     const container = containerRef.current;
     if (!container) return;
 
-    const rect = container.getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const y = e.clientY - rect.top + container.scrollTop - headerHeight;
-
+    const { x, y, zoom } = toLayoutCoords(e.clientX, e.clientY, container, headerHeight);
     const idx = hitTestTile(layout.positions, x, y, textHeight, 0, layout.positions.length);
+
     if (idx != null && items[idx]) {
       onTileClick?.(idx, items[idx], e);
     } else {
@@ -775,9 +785,7 @@ export function CanvasGrid({
     if (!onTileDoubleClick) return;
     const container = containerRef.current;
     if (!container) return;
-    const rect = container.getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const y = e.clientY - rect.top + container.scrollTop - headerHeight;
+    const { x, y } = toLayoutCoords(e.clientX, e.clientY, container, headerHeight);
     const idx = hitTestTile(layout.positions, x, y, textHeight, 0, layout.positions.length);
     if (idx != null && items[idx]) {
       onTileDoubleClick(idx, items[idx]);
@@ -788,9 +796,7 @@ export function CanvasGrid({
   const isZoomButtonHit = useCallback((clientX: number, clientY: number, tileIdx: number): boolean => {
     const container = containerRef.current;
     if (!container) return false;
-    const rect = container.getBoundingClientRect();
-    const mx = clientX - rect.left;
-    const my = clientY - rect.top + container.scrollTop - headerHeight;
+    const { x: mx, y: my } = toLayoutCoords(clientX, clientY, container, headerHeight);
     const pos = layout.positions[tileIdx];
     if (!pos) return false;
     const imgH = pos.h - textHeight;
@@ -812,9 +818,7 @@ export function CanvasGrid({
     if (marqueeRef.current.active) return;
     const container = containerRef.current;
     if (!container) return;
-    const rect = container.getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const y = e.clientY - rect.top + container.scrollTop - headerHeight;
+    const { x, y } = toLayoutCoords(e.clientX, e.clientY, container, headerHeight);
     const idx = hitTestTile(layout.positions, x, y, textHeight, 0, layout.positions.length);
 
     if (idx !== hoveredTileRef.current) {
@@ -882,9 +886,7 @@ export function CanvasGrid({
     const container = containerRef.current;
     if (!container) return;
 
-    const rect = container.getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const y = e.clientY - rect.top + container.scrollTop - headerHeight;
+    const { x, y } = toLayoutCoords(e.clientX, e.clientY, container, headerHeight);
     const pos = { x: e.clientX, y: e.clientY };
 
     const idx = hitTestTile(layout.positions, x, y, textHeight, 0, layout.positions.length);
@@ -924,9 +926,7 @@ export function CanvasGrid({
     const container = containerRef.current;
     if (!container) return;
 
-    const rect = container.getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const y = e.clientY - rect.top + container.scrollTop - headerHeight;
+    const { x, y } = toLayoutCoords(e.clientX, e.clientY, container, headerHeight);
 
     // If clicking on a tile, set up potential tile drag (not marquee)
     const idx = hitTestTile(layout.positions, x, y, textHeight, 0, layout.positions.length);
@@ -936,7 +936,9 @@ export function CanvasGrid({
     }
     tileDragRef.current = null;
 
-    marqueeRef.current = { startX: x, startY: y, active: true, shiftKey: e.shiftKey, lastClientX: x, lastClientY: e.clientY - container.getBoundingClientRect().top };
+    const mRect = container.getBoundingClientRect();
+    const mZoomY = mRect.height / (container.offsetHeight || 1);
+    marqueeRef.current = { startX: x, startY: y, active: true, shiftKey: e.shiftKey, lastClientX: x, lastClientY: (e.clientY - mRect.top) / mZoomY };
     marqueeBaseSelectionRef.current = e.shiftKey || e.metaKey || e.ctrlKey
       ? new Set(selectedEntityHashes)
       : new Set();
@@ -1017,10 +1019,12 @@ export function CanvasGrid({
     if (!container) return;
 
     const rect = container.getBoundingClientRect();
-    const clientY = e.clientY - rect.top;
-    const x = e.clientX - rect.left;
+    const zoomX = rect.width / (container.offsetWidth || 1);
+    const zoomY = rect.height / (container.offsetHeight || 1);
+    const clientY = (e.clientY - rect.top) / zoomY;
+    const x = (e.clientX - rect.left) / zoomX;
     const y = clientY + container.scrollTop - headerHeight;
-    marqueeRef.current.lastClientX = e.clientX - rect.left;
+    marqueeRef.current.lastClientX = x;
     marqueeRef.current.lastClientY = clientY;
     const { startX, startY } = marqueeRef.current;
 

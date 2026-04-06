@@ -203,6 +203,39 @@ export function GridScreen() {
     targetSize,
   });
 
+  // ── External file drop (drag from OS into app) ──
+  const [fileDragOver, setFileDragOver] = useState(false);
+  const gridScopeRef2 = useRef(gridScope);
+  gridScopeRef2.current = gridScope;
+
+  useEffect(() => {
+    const webview = (window as any).picto?.webview;
+    if (!webview?.onDragDropEvent) return;
+
+    const promise = webview.onDragDropEvent((event: { payload: { type: string; paths?: string[] } }) => {
+      const { type, paths } = event.payload;
+      if (type === 'enter') { setFileDragOver(true); return; }
+      if (type === 'leave') { setFileDragOver(false); return; }
+      if (type !== 'drop' || !paths?.length) return;
+      setFileDragOver(false);
+
+      const scope = gridScopeRef2.current;
+      const folderId = scope.kind === 'folder' ? scope.id : null;
+
+      // Detect folder drop (single path without media extension)
+      const mediaExt = /\.(jpe?g|png|gif|webp|bmp|tiff?|svg|mp4|mkv|webm|avi|mov|wmv|flv|m4v|avif|jxl|ico|pdf)$/i;
+      if (paths.length === 1 && !mediaExt.test(paths[0])) {
+        // Folder import
+        void importFolder(paths[0], { parent_folder_id: folderId, preserve_structure: true });
+      } else {
+        // File import
+        void importFiles(paths, folderId != null ? { parent_folder_id: folderId } : {});
+      }
+    });
+
+    return () => { promise.then((fn: () => void) => fn()); };
+  }, []);
+
   const showSubfolders = useAtomValue(gridShowSubfoldersAtom);
   const childFolders = useAtomValue(gridChildFoldersAtom);
   const setSubfolderPreview = useSetAtom(subfolderPreviewAtom);
@@ -1102,6 +1135,15 @@ export function GridScreen() {
       >
         {renderIncomingSurface()}
       </div>
+
+      {fileDragOver && (
+        <div className={styles.dropOverlay}>
+          <div className={styles.dropOverlayBadge}>
+            Drop files to import
+            {gridScope.kind === 'folder' && <span className={styles.dropOverlaySub}>into current folder</span>}
+          </div>
+        </div>
+      )}
 
       {viewerSession && (
         <MediaView

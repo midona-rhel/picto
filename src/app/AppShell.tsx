@@ -156,6 +156,7 @@ export function AppShell() {
   const toggleBothPanels = () => { toggleSidebar(); toggleInspector(); };
   const isSubscriptionsWorkspace = activeNodeId === 'system:subscriptions';
 
+
   // ── Inspector resize drag ──
   const inspectorDragRef = useRef({ dragging: false, startX: 0, startWidth: 0 });
   const inspectorElRef = useRef<HTMLDivElement>(null);

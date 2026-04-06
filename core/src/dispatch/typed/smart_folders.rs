@@ -44,7 +44,7 @@ pub struct MoveSmartFolderInput {
 pub struct CreateSmartFolderInput {
     #[serde(default)]
     #[ts(type = "Record<string, unknown>")]
-    pub folder: Option<crate::smart_folders::db::SmartFolder>,
+    pub folder: Option<crate::smart_folders::types::SmartFolder>,
     #[serde(default)]
     pub name: Option<String>,
     #[serde(default)]
@@ -65,7 +65,7 @@ pub struct CreateSmartFolderInput {
 pub struct UpdateSmartFolderInput {
     pub id: String,
     #[ts(type = "Record<string, unknown>")]
-    pub folder: crate::smart_folders::db::SmartFolder,
+    pub folder: crate::smart_folders::types::SmartFolder,
 }
 
 #[derive(Debug, Deserialize, TS)]
@@ -77,7 +77,7 @@ pub struct DeleteSmartFolderInput {
 #[derive(Debug, Deserialize, TS)]
 #[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct CountSmartFolderInput {
-    pub predicate: crate::smart_folders::db::SmartFolderPredicate,
+    pub predicate: crate::smart_folders::types::SmartFolderPredicate,
 }
 
 // ─── Handlers ──────────────────────────────────────────────────────────────
@@ -95,7 +95,7 @@ pub async fn create_smart_folder(
     input: CreateSmartFolderInput,
 ) -> Result<serde_json::Value, String> {
     let default_predicate = || serde_json::json!({ "groups": [] }).to_string();
-    let folder = input.folder.unwrap_or_else(|| crate::smart_folders::db::SmartFolder {
+    let folder = input.folder.unwrap_or_else(|| crate::smart_folders::types::SmartFolder {
         smart_folder_id: 0,
         name: input.name.unwrap_or_else(|| "New Smart Folder".to_string()),
         parent_id: input.parent_id,

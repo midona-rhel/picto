@@ -1,16 +1,16 @@
 //! Workflow test: smart folder create/edit → count/membership update.
 
-mod common;
+mod common_canonical;
 
 use picto_core::scope::resolver::{resolve_scope, ScopeFilter};
-use picto_core::smart_folders::db::{
+use picto_core::smart_folders::types::{
     MatchMode, PredicateRule, SmartFolderPredicate, SmartRuleGroup,
 };
 use picto_core::types::*;
 
 #[tokio::test]
 async fn smart_folder_predicate_changes_update_membership() {
-    let harness = common::TestHarness::new().await;
+    let harness = common_canonical::TestHarness::new().await;
 
     // Insert 5 files with different tag combos
     let f1 = harness.insert_test_file("sf_1", "landscape1.png", 1).await;

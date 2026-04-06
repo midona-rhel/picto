@@ -5,9 +5,8 @@ use tracing::warn;
 
 use crate::db::LibraryDatabase;
 use crate::credential_store::{CredentialType, SiteCredential};
-use crate::sqlite::SqliteDatabase;
-use crate::subscriptions::db::{CredentialDomain, CredentialHealth};
 use crate::subscriptions::gallery_dl_runner;
+use crate::subscriptions::types::{CredentialDomain, CredentialHealth};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CredentialHealthStatus {
@@ -98,26 +97,14 @@ impl CredentialStoreBackend for SystemCredentialStore {
 }
 
 pub struct SubscriptionCredentialService<'a, B = SystemCredentialStore> {
-    db: CredentialDb<'a>,
+    db: &'a LibraryDatabase,
     store: B,
-}
-
-enum CredentialDb<'a> {
-    Legacy(&'a SqliteDatabase),
-    Canonical(&'a LibraryDatabase),
 }
 
 impl<'a> SubscriptionCredentialService<'a, SystemCredentialStore> {
     pub fn new(db: &'a LibraryDatabase) -> Self {
         Self {
-            db: CredentialDb::Canonical(db),
-            store: SystemCredentialStore,
-        }
-    }
-
-    pub fn new_legacy(db: &'a SqliteDatabase) -> Self {
-        Self {
-            db: CredentialDb::Legacy(db),
+            db,
             store: SystemCredentialStore,
         }
     }
@@ -125,52 +112,43 @@ impl<'a> SubscriptionCredentialService<'a, SystemCredentialStore> {
 
 impl<'a, B: CredentialStoreBackend> SubscriptionCredentialService<'a, B> {
     pub fn with_store(db: &'a LibraryDatabase, store: B) -> Self {
-        Self {
-            db: CredentialDb::Canonical(db),
-            store,
-        }
+        Self { db, store }
     }
 
     pub async fn list_credentials(&self) -> Result<Vec<CredentialDomain>, String> {
-        match self.db {
-            CredentialDb::Legacy(db) => db.list_credential_domains().await,
-            CredentialDb::Canonical(db) => db.with_read(|conn| {
-                let mut stmt = conn.prepare_cached(
-                    "SELECT site_category, credential_type, display_name, date_added
-                     FROM credential_domain ORDER BY site_category",
-                )?;
-                let rows = stmt.query_map([], |row| {
-                    Ok(CredentialDomain {
-                        site_category: row.get(0)?,
-                        credential_type: row.get(1)?,
-                        display_name: row.get(2)?,
-                        created_at: row.get(3)?,
-                    })
-                })?;
-                rows.collect()
-            }),
-        }
+        self.db.with_read(|conn| {
+            let mut stmt = conn.prepare_cached(
+                "SELECT site_category, credential_type, display_name, date_added
+                 FROM credential_domain ORDER BY site_category",
+            )?;
+            let rows = stmt.query_map([], |row| {
+                Ok(CredentialDomain {
+                    site_category: row.get(0)?,
+                    credential_type: row.get(1)?,
+                    display_name: row.get(2)?,
+                    created_at: row.get(3)?,
+                })
+            })?;
+            rows.collect()
+        })
     }
 
     pub async fn list_credential_health(&self) -> Result<Vec<CredentialHealth>, String> {
-        match self.db {
-            CredentialDb::Legacy(db) => db.list_credential_health().await,
-            CredentialDb::Canonical(db) => db.with_read(|conn| {
-                let mut stmt = conn.prepare_cached(
-                    "SELECT site_category, health_status, last_checked_at, last_error
-                     FROM credential_health ORDER BY site_category",
-                )?;
-                let rows = stmt.query_map([], |row| {
-                    Ok(CredentialHealth {
-                        site_category: row.get(0)?,
-                        health_status: row.get(1)?,
-                        last_checked_at: row.get(2)?,
-                        last_error: row.get(3)?,
-                    })
-                })?;
-                rows.collect()
-            }),
-        }
+        self.db.with_read(|conn| {
+            let mut stmt = conn.prepare_cached(
+                "SELECT site_category, health_status, last_checked_at, last_error
+                 FROM credential_health ORDER BY site_category",
+            )?;
+            let rows = stmt.query_map([], |row| {
+                Ok(CredentialHealth {
+                    site_category: row.get(0)?,
+                    health_status: row.get(1)?,
+                    last_checked_at: row.get(2)?,
+                    last_error: row.get(3)?,
+                })
+            })?;
+            rows.collect()
+        })
     }
 
     pub async fn set_manual_credential(
@@ -427,41 +405,32 @@ impl<'a, B: CredentialStoreBackend> SubscriptionCredentialService<'a, B> {
         credential_type: &str,
         display_name: Option<&str>,
     ) -> Result<(), String> {
-        match self.db {
-            CredentialDb::Legacy(db) => {
-                db.upsert_credential_domain(site_category, credential_type, display_name)
-                    .await
-            }
-            CredentialDb::Canonical(db) => db.with_write(|conn| {
-                conn.execute(
-                    "INSERT INTO credential_domain (site_category, credential_type, display_name, date_added)
-                     VALUES (?1, ?2, ?3, ?4)
-                     ON CONFLICT(site_category) DO UPDATE
-                     SET credential_type = excluded.credential_type,
-                         display_name = excluded.display_name",
-                    rusqlite::params![
-                        site_category,
-                        credential_type,
-                        display_name,
-                        chrono::Utc::now().to_rfc3339()
-                    ],
-                )?;
-                Ok(())
-            }),
-        }
+        self.db.with_write(|conn| {
+            conn.execute(
+                "INSERT INTO credential_domain (site_category, credential_type, display_name, date_added)
+                 VALUES (?1, ?2, ?3, ?4)
+                 ON CONFLICT(site_category) DO UPDATE
+                 SET credential_type = excluded.credential_type,
+                     display_name = excluded.display_name",
+                rusqlite::params![
+                    site_category,
+                    credential_type,
+                    display_name,
+                    chrono::Utc::now().to_rfc3339()
+                ],
+            )?;
+            Ok(())
+        })
     }
 
     async fn delete_credential_domain(&self, site_category: &str) -> Result<(), String> {
-        match self.db {
-            CredentialDb::Legacy(db) => db.delete_credential_domain(site_category).await,
-            CredentialDb::Canonical(db) => db.with_write(|conn| {
-                conn.execute(
-                    "DELETE FROM credential_domain WHERE site_category = ?1",
-                    [site_category],
-                )?;
-                Ok(())
-            }),
-        }
+        self.db.with_write(|conn| {
+            conn.execute(
+                "DELETE FROM credential_domain WHERE site_category = ?1",
+                [site_category],
+            )?;
+            Ok(())
+        })
     }
 
     async fn upsert_credential_health(
@@ -470,42 +439,33 @@ impl<'a, B: CredentialStoreBackend> SubscriptionCredentialService<'a, B> {
         health_status: &str,
         detail: Option<&str>,
     ) -> Result<(), String> {
-        match self.db {
-            CredentialDb::Legacy(db) => {
-                db.upsert_credential_health(site_category, health_status, detail)
-                    .await
-            }
-            CredentialDb::Canonical(db) => db.with_write(|conn| {
-                conn.execute(
-                    "INSERT INTO credential_health (site_category, health_status, last_checked_at, last_error)
-                     VALUES (?1, ?2, ?3, ?4)
-                     ON CONFLICT(site_category) DO UPDATE
-                     SET health_status = excluded.health_status,
-                         last_checked_at = excluded.last_checked_at,
-                         last_error = excluded.last_error",
-                    rusqlite::params![
-                        site_category,
-                        health_status,
-                        chrono::Utc::now().to_rfc3339(),
-                        detail
-                    ],
-                )?;
-                Ok(())
-            }),
-        }
+        self.db.with_write(|conn| {
+            conn.execute(
+                "INSERT INTO credential_health (site_category, health_status, last_checked_at, last_error)
+                 VALUES (?1, ?2, ?3, ?4)
+                 ON CONFLICT(site_category) DO UPDATE
+                 SET health_status = excluded.health_status,
+                     last_checked_at = excluded.last_checked_at,
+                     last_error = excluded.last_error",
+                rusqlite::params![
+                    site_category,
+                    health_status,
+                    chrono::Utc::now().to_rfc3339(),
+                    detail
+                ],
+            )?;
+            Ok(())
+        })
     }
 
     async fn delete_credential_health(&self, site_category: &str) -> Result<(), String> {
-        match self.db {
-            CredentialDb::Legacy(db) => db.delete_credential_health(site_category).await,
-            CredentialDb::Canonical(db) => db.with_write(|conn| {
-                conn.execute(
-                    "DELETE FROM credential_health WHERE site_category = ?1",
-                    [site_category],
-                )?;
-                Ok(())
-            }),
-        }
+        self.db.with_write(|conn| {
+            conn.execute(
+                "DELETE FROM credential_health WHERE site_category = ?1",
+                [site_category],
+            )?;
+            Ok(())
+        })
     }
 
     async fn upsert_issue_db(
@@ -516,28 +476,21 @@ impl<'a, B: CredentialStoreBackend> SubscriptionCredentialService<'a, B> {
         message: &str,
         detail: Option<&str>,
     ) -> Result<(), String> {
-        match self.db {
-            CredentialDb::Legacy(db) => {
-                db.upsert_subscription_issue(subscription_id, query_id, issue_kind, message, detail)
-                    .await
-                    .map(|_| ())
-            }
-            CredentialDb::Canonical(db) => db.with_write(|conn| {
-                let now = chrono::Utc::now().to_rfc3339();
-                conn.execute(
-                    "INSERT INTO subscription_issue (
-                         subscription_id, query_id, issue_kind, status, message, detail, first_seen_at, last_seen_at
-                     ) VALUES (?1, ?2, ?3, 'open', ?4, ?5, ?6, ?6)
-                     ON CONFLICT(subscription_id, query_id, issue_kind, message)
-                     DO UPDATE SET status = 'open',
-                                   detail = excluded.detail,
-                                   last_seen_at = excluded.last_seen_at,
-                                   resolved_at = NULL",
-                    rusqlite::params![subscription_id, query_id, issue_kind, message, detail, now],
-                )?;
-                Ok(())
-            }),
-        }
+        self.db.with_write(|conn| {
+            let now = chrono::Utc::now().to_rfc3339();
+            conn.execute(
+                "INSERT INTO subscription_issue (
+                     subscription_id, query_id, issue_kind, status, message, detail, first_seen_at, last_seen_at
+                 ) VALUES (?1, ?2, ?3, 'open', ?4, ?5, ?6, ?6)
+                 ON CONFLICT(subscription_id, query_id, issue_kind, message)
+                 DO UPDATE SET status = 'open',
+                               detail = excluded.detail,
+                               last_seen_at = excluded.last_seen_at,
+                               resolved_at = NULL",
+                rusqlite::params![subscription_id, query_id, issue_kind, message, detail, now],
+            )?;
+            Ok(())
+        })
     }
 
     async fn resolve_issue_db(
@@ -546,29 +499,23 @@ impl<'a, B: CredentialStoreBackend> SubscriptionCredentialService<'a, B> {
         query_id: Option<i64>,
         issue_kind: &str,
     ) -> Result<(), String> {
-        match self.db {
-            CredentialDb::Legacy(db) => {
-                db.resolve_subscription_issues(subscription_id, query_id, issue_kind)
-                    .await
-            }
-            CredentialDb::Canonical(db) => db.with_write(|conn| {
-                conn.execute(
-                    "UPDATE subscription_issue
-                     SET status = 'resolved', resolved_at = COALESCE(resolved_at, ?4), last_seen_at = ?4
-                     WHERE subscription_id = ?1
-                       AND ((query_id = ?2) OR (query_id IS NULL AND ?2 IS NULL))
-                       AND issue_kind = ?3
-                       AND status != 'resolved'",
-                    rusqlite::params![
-                        subscription_id,
-                        query_id,
-                        issue_kind,
-                        chrono::Utc::now().to_rfc3339()
-                    ],
-                )?;
-                Ok(())
-            }),
-        }
+        self.db.with_write(|conn| {
+            conn.execute(
+                "UPDATE subscription_issue
+                 SET status = 'resolved', resolved_at = COALESCE(resolved_at, ?4), last_seen_at = ?4
+                 WHERE subscription_id = ?1
+                   AND ((query_id = ?2) OR (query_id IS NULL AND ?2 IS NULL))
+                   AND issue_kind = ?3
+                   AND status != 'resolved'",
+                rusqlite::params![
+                    subscription_id,
+                    query_id,
+                    issue_kind,
+                    chrono::Utc::now().to_rfc3339()
+                ],
+            )?;
+            Ok(())
+        })
     }
 }
 

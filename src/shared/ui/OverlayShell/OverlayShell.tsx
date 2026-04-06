@@ -14,6 +14,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { IconPin, IconPinFilled } from '@tabler/icons-react';
+import { getZoomFactor, getViewportCSS } from '../../lib/zoomCompensation';
 import styles from './OverlayShell.module.css';
 
 export interface OverlayShellProps {
@@ -57,19 +58,23 @@ export function OverlayShell({
   // When centered: pos.x = distance from LEFT edge (CSS `left`)
   useEffect(() => {
     if (!open) return;
+    const zoom = getZoomFactor();
+    const { width: vw, height: vh } = getViewportCSS(zoom);
     if (anchorPosition) {
-      // Right-anchored: panel's right edge at inspector's left edge
-      let r = window.innerWidth - anchorPosition.x + MARGIN;
-      let y = anchorPosition.y;
+      // anchorPosition comes from getBoundingClientRect (visual pixels) — convert to CSS
+      const ax = anchorPosition.x / zoom;
+      const ay = anchorPosition.y / zoom;
+      let r = vw - ax + MARGIN;
+      let y = ay;
       if (r < MARGIN) r = MARGIN;
-      if (window.innerWidth - r - width < MARGIN) r = window.innerWidth - width - MARGIN;
-      if (y + height > window.innerHeight - MARGIN) y = window.innerHeight - height - MARGIN;
+      if (vw - r - width < MARGIN) r = vw - width - MARGIN;
+      if (y + height > vh - MARGIN) y = vh - height - MARGIN;
       if (y < MARGIN) y = MARGIN;
       setPos({ x: Math.round(r), y: Math.round(y) });
     } else {
       setPos({
-        x: Math.round((window.innerWidth - width) / 2),
-        y: Math.round((window.innerHeight - height) / 2),
+        x: Math.round((vw - width) / 2),
+        y: Math.round((vh - height) / 2),
       });
     }
   }, [open]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -101,8 +106,9 @@ export function OverlayShell({
       const dy = ev.clientY - d.startY;
       if (!d.active && Math.abs(dx) < DRAG_THRESHOLD && Math.abs(dy) < DRAG_THRESHOLD) return;
       d.active = true;
-      const maxX = window.innerWidth - width - MARGIN;
-      const maxY = window.innerHeight - height - MARGIN;
+      const { width: dvw, height: dvh } = getViewportCSS();
+      const maxX = dvw - width - MARGIN;
+      const maxY = dvh - height - MARGIN;
       setPos({
         // Right-anchored: drag left = increase right distance
         x: Math.max(MARGIN, Math.min(maxX, isRightAnchored ? d.origX - dx : d.origX + dx)),
