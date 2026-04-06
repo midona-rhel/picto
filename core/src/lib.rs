@@ -21,11 +21,9 @@ pub mod media_capabilities;
 pub mod media_delivery;
 #[doc(hidden)]
 pub mod media_derivatives;
-pub mod metadata;
 pub mod scope;
 pub mod selection;
 pub mod settings;
-pub mod sidebar;
 pub mod smart_folders;
 pub mod subscriptions;
 pub mod tags;
@@ -44,9 +42,6 @@ pub mod rate_limiter;
 pub mod runtime_contract;
 pub mod runtime_state;
 pub mod scheduler;
-/// Legacy sqlite layer kept only for migration/import and fenced tests.
-#[doc(hidden)]
-pub mod sqlite;
 pub mod state;
 pub mod types;
 pub mod workers;

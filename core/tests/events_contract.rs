@@ -1,11 +1,55 @@
 //! Event contract tests — verify state-changed event shapes, sequence numbering,
 //! domain/scope propagation, and change-impact presets.
 
-mod common;
-
 use picto_core::events;
 use picto_core::runtime_contract::change_builder::ChangeImpact;
 use picto_core::runtime_contract::state_change::{Domain, SidebarCounts};
+use std::sync::{Arc, Mutex, OnceLock};
+
+struct EventHarness {
+    events: Arc<Mutex<Vec<(String, String)>>>,
+    _event_callback_guard: std::sync::MutexGuard<'static, ()>,
+}
+
+static EVENT_CALLBACK_TEST_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+fn event_callback_test_lock() -> &'static Mutex<()> {
+    EVENT_CALLBACK_TEST_LOCK.get_or_init(|| Mutex::new(()))
+}
+
+impl EventHarness {
+    fn new() -> Self {
+        let event_callback_guard = event_callback_test_lock()
+            .lock()
+            .expect("lock event callback test mutex");
+        let collected = Arc::new(Mutex::new(Vec::<(String, String)>::new()));
+        let collected_clone = collected.clone();
+        events::set_event_callback(move |name: &str, payload: &str| {
+            collected_clone
+                .lock()
+                .unwrap()
+                .push((name.to_string(), payload.to_string()));
+        });
+        Self {
+            events: collected,
+            _event_callback_guard: event_callback_guard,
+        }
+    }
+
+    fn drain_events(&self) -> Vec<(String, String)> {
+        std::mem::take(&mut *self.events.lock().unwrap())
+    }
+
+    fn find_events(&self, name: &str) -> Vec<(String, String)> {
+        self.events
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(n, _)| n == name)
+            .cloned()
+            .collect()
+    }
+}
 
 fn test_sidebar_counts() -> SidebarCounts {
     SidebarCounts {
@@ -20,7 +64,7 @@ fn test_sidebar_counts() -> SidebarCounts {
 
 #[tokio::test]
 async fn state_changed_event_emits_sequence_numbers() {
-    let harness = common::TestHarness::new().await;
+    let harness = EventHarness::new();
     harness.drain_events();
 
     events::emit_state_changed(
@@ -53,7 +97,7 @@ async fn state_changed_event_emits_sequence_numbers() {
 
 #[tokio::test]
 async fn state_changed_event_includes_sidebar_tree_changes() {
-    let harness = common::TestHarness::new().await;
+    let harness = EventHarness::new();
     harness.drain_events();
 
     events::emit_state_changed(
@@ -76,7 +120,7 @@ async fn state_changed_event_includes_sidebar_tree_changes() {
 
 #[tokio::test]
 async fn state_changed_event_includes_grid_scopes() {
-    let harness = common::TestHarness::new().await;
+    let harness = EventHarness::new();
     harness.drain_events();
 
     events::emit_state_changed(
@@ -153,7 +197,7 @@ fn state_changed_event_contract() {
 
 #[tokio::test]
 async fn file_lifecycle_preset_emits_state_changed_event() {
-    let harness = common::TestHarness::new().await;
+    let harness = EventHarness::new();
     harness.drain_events();
 
     let impact = ChangeImpact::file_lifecycle().sidebar_counts(test_sidebar_counts());
@@ -177,7 +221,7 @@ async fn file_lifecycle_preset_emits_state_changed_event() {
 
 #[tokio::test]
 async fn folder_sidebar_preset_emits_sidebar_state_change() {
-    let harness = common::TestHarness::new().await;
+    let harness = EventHarness::new();
     harness.drain_events();
 
     let impact = ChangeImpact::new().add_domains(&[Domain::Folders, Domain::Sidebar]);
@@ -203,7 +247,7 @@ async fn folder_sidebar_preset_emits_sidebar_state_change() {
 
 #[tokio::test]
 async fn batch_tags_preset_emits_single_state_change() {
-    let harness = common::TestHarness::new().await;
+    let harness = EventHarness::new();
     harness.drain_events();
 
     let impact = ChangeImpact::batch_tags();
@@ -243,7 +287,7 @@ async fn batch_tags_preset_emits_single_state_change() {
 
 #[tokio::test]
 async fn metadata_fields_that_drive_smart_folders_emit_smart_scope_changes() {
-    let harness = common::TestHarness::new().await;
+    let harness = EventHarness::new();
     harness.drain_events();
 
     let impact = ChangeImpact::file_metadata("abc123".into())
@@ -275,7 +319,7 @@ async fn metadata_fields_that_drive_smart_folders_emit_smart_scope_changes() {
 
 #[tokio::test]
 async fn collection_membership_preset_refreshes_collection_and_system_scopes() {
-    let harness = common::TestHarness::new().await;
+    let harness = EventHarness::new();
     harness.drain_events();
 
     let impact = ChangeImpact::collection_membership_change(42, &[]);
@@ -297,7 +341,7 @@ async fn collection_membership_preset_refreshes_collection_and_system_scopes() {
 
 #[tokio::test]
 async fn collection_delete_preset_marks_affected_folder_membership() {
-    let harness = common::TestHarness::new().await;
+    let harness = EventHarness::new();
     harness.drain_events();
 
     let impact = ChangeImpact::collection_delete(42, vec![5, 9]);
@@ -327,7 +371,7 @@ async fn collection_delete_preset_marks_affected_folder_membership() {
 
 #[tokio::test]
 async fn merged_change_impact_emits_one_combined_delta() {
-    let harness = common::TestHarness::new().await;
+    let harness = EventHarness::new();
     harness.drain_events();
 
     let impact = ChangeImpact::file_lifecycle()
@@ -393,7 +437,7 @@ async fn merged_change_impact_emits_one_combined_delta() {
 
 #[tokio::test]
 async fn folder_watch_style_delta_includes_both_file_and_membership_changes() {
-    let harness = common::TestHarness::new().await;
+    let harness = EventHarness::new();
     harness.drain_events();
 
     let impact = ChangeImpact::file_lifecycle()
@@ -444,7 +488,7 @@ async fn folder_watch_style_delta_includes_both_file_and_membership_changes() {
 
 #[tokio::test]
 async fn subscription_batch_delta_merges_collection_and_file_changes() {
-    let harness = common::TestHarness::new().await;
+    let harness = EventHarness::new();
     harness.drain_events();
 
     let impact = ChangeImpact::collection_membership_change(42, &[])
@@ -482,7 +526,7 @@ async fn subscription_batch_delta_merges_collection_and_file_changes() {
 
 #[tokio::test]
 async fn folder_move_emits_parent_and_order_changes() {
-    let harness = common::TestHarness::new().await;
+    let harness = EventHarness::new();
 
     let impact = ChangeImpact::new()
         .add_domains(&[Domain::Folders, Domain::Sidebar])
@@ -512,7 +556,7 @@ async fn folder_move_emits_parent_and_order_changes() {
 
 #[tokio::test]
 async fn smart_folder_move_emits_parent_and_order_changes() {
-    let harness = common::TestHarness::new().await;
+    let harness = EventHarness::new();
 
     let impact = ChangeImpact::new()
         .add_domains(&[Domain::SmartFolders, Domain::Sidebar])
@@ -542,7 +586,7 @@ async fn smart_folder_move_emits_parent_and_order_changes() {
 
 #[tokio::test]
 async fn folder_reorder_emits_order_changes_without_parent() {
-    let harness = common::TestHarness::new().await;
+    let harness = EventHarness::new();
 
     let impact = ChangeImpact::new()
         .add_domains(&[Domain::Folders, Domain::Sidebar])
@@ -563,7 +607,7 @@ async fn folder_reorder_emits_order_changes_without_parent() {
 
 #[tokio::test]
 async fn merge_tags_emission_includes_entity_hashes_and_tag_details() {
-    let harness = common::TestHarness::new().await;
+    let harness = EventHarness::new();
     harness.drain_events();
 
     // Simulate what merge_tags now emits: tag_structure_change + entity_hashes + tags_added/removed
@@ -614,7 +658,7 @@ async fn merge_tags_emission_includes_entity_hashes_and_tag_details() {
 async fn backfill_deferred_emits_only_actually_changed_derivative_fields() {
     use picto_core::runtime_contract::state_change::MediaDerivativeField;
 
-    let harness = common::TestHarness::new().await;
+    let harness = EventHarness::new();
     harness.drain_events();
 
     // Simulate backfill that only changed thumbnails and phash (no color extraction)
@@ -652,7 +696,7 @@ async fn backfill_deferred_emits_only_actually_changed_derivative_fields() {
 
 #[tokio::test]
 async fn delete_tag_emission_includes_entity_hashes_and_tags_removed() {
-    let harness = common::TestHarness::new().await;
+    let harness = EventHarness::new();
     harness.drain_events();
 
     // Simulate what delete_tag now emits: tag_structure_change + entity_hashes + tags_removed
@@ -689,7 +733,7 @@ async fn delete_tag_emission_includes_entity_hashes_and_tags_removed() {
 
 #[tokio::test]
 async fn rename_tag_emission_includes_entity_hashes_and_tag_names() {
-    let harness = common::TestHarness::new().await;
+    let harness = EventHarness::new();
     harness.drain_events();
 
     // Simulate what rename_tag now emits: tag_structure_change + entity_hashes + old/new tag names

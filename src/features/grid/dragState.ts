@@ -5,15 +5,14 @@
  * SubfolderGrid (drop targets), and AppShell (re-import guard).
  */
 
-import * as api from '../../platform/api';
-import type { EntityTarget } from '../../shared/types/canonical';
+import { dragController } from '../../controllers/dragController';
 
 // ── Types ──
 
 export type DropTarget =
   | { kind: 'folder'; folderId: number; nodeId: string }
   | { kind: 'status'; status: number }
-  | { kind: 'reorder'; orderedEntityIds: [number, number][] };
+  | { kind: 'reorder'; orderedEntityIds: [number, number][]; orderedHashes?: string[] };
 
 export interface GridDragState {
   active: boolean;
@@ -149,7 +148,7 @@ export function endDrag() {
   notifyChange();
   for (const h of dragEndHandlers) h(hashes, dropTarget);
   if (dropTarget) {
-    void executeDrop(hashes, dropTarget, sourceScope).catch((err) => console.error('[drag] drop failed:', err));
+    void dragController.executeDrop(hashes, dropTarget, sourceScope).catch((err) => console.error('[drag] drop failed:', err));
   }
 }
 
@@ -177,52 +176,54 @@ export function onDragChange(handler: DragChangeHandler): () => void {
   };
 }
 
+// ── Internal drag origin tracking (prevents import overlay during app-originated drags) ──
+
+let internalDragOrigin = false;
+export function setInternalDragOrigin(v: boolean) { internalDragOrigin = v; }
+export function isInternalDragOrigin() { return internalDragOrigin; }
+
+// Saved drag data for restoring internal drag when cursor re-enters
+let savedDragHashes: string[] = [];
+let savedDragScope: { kind: string; id?: number | null; key?: string | null } | null = null;
+
+export function getSavedDragHashes() { return savedDragHashes; }
+export function getSavedDragScope() { return savedDragScope; }
+
 // ── Native drag-out ──
 
 export function startNativeDrag(hashes: string[], iconDataUrl: string) {
+  // Save drag data before cancelling so we can restore on re-entry
+  savedDragHashes = state.hashes.length > 0 ? [...state.hashes] : [...hashes];
+  savedDragScope = state.sourceScope;
+
   nativeDragPending = true;
+  internalDragOrigin = true;
   if (nativeDragTimer) clearTimeout(nativeDragTimer);
   nativeDragTimer = setTimeout(() => {
     nativeDragPending = false;
+    internalDragOrigin = false;
+    savedDragHashes = [];
+    savedDragScope = null;
     nativeDragTimer = null;
-  }, 30_000);
-  void (window as any).picto?.webview?.startNativeDrag?.(hashes, iconDataUrl)?.catch?.(() => {});
+  }, 3_000);
+  (window as any).picto?.webview?.startNativeDrag?.(hashes, iconDataUrl);
   cancelDrag();
+}
+
+/** Restore internal drag from a native drag that re-entered the app window. */
+export function restoreInternalDrag(x: number, y: number) {
+  if (savedDragHashes.length === 0) return false;
+  nativeDragPending = false;
+  internalDragOrigin = false;
+  if (nativeDragTimer) { clearTimeout(nativeDragTimer); nativeDragTimer = null; }
+  startDrag(savedDragHashes, x, y, savedDragScope);
+  savedDragHashes = [];
+  savedDragScope = null;
+  return true;
 }
 
 export function clearNativeDragPending() {
   nativeDragPending = false;
+  internalDragOrigin = false;
   if (nativeDragTimer) { clearTimeout(nativeDragTimer); nativeDragTimer = null; }
-}
-
-// ── Drop execution ──
-
-export async function executeDrop(
-  hashes: string[],
-  target: DropTarget,
-  sourceScope: GridDragState['sourceScope'],
-): Promise<void> {
-  const entityTarget: EntityTarget = {
-    kind: 'entity_hashes',
-    entity_hashes: hashes.filter((h) => !h.startsWith('folder:')),
-  };
-  const entityHashes = entityTarget.entity_hashes ?? [];
-  if (entityHashes.length === 0) return;
-
-  if (target.kind === 'folder') {
-    await api.updateFolderMembership(entityTarget, target.folderId, 'add');
-    // If source is inbox or trash, also set to active
-    if (sourceScope?.key === 'inbox' || sourceScope?.key === 'trash') {
-      await api.setEntityStatus(entityTarget, 1);
-    }
-  } else if (target.kind === 'status') {
-    await api.setEntityStatus(entityTarget, target.status);
-  } else if (target.kind === 'reorder') {
-    if (sourceScope?.kind === 'folder' && sourceScope.id != null) {
-      await api.reorderFolderMembers(sourceScope.id, target.orderedEntityIds);
-    } else if (sourceScope?.kind === 'collection' && sourceScope.id != null) {
-      // Collections use full ordered hash list
-      // TODO: wire when collection reorder is needed
-    }
-  }
 }

@@ -9,7 +9,7 @@
  */
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { useSetAtom } from 'jotai';
+import { useSetAtom, useAtomValue } from 'jotai';
 import type { CanonicalEntityGridItem } from '../../shared/types/canonical';
 import { mediaThumbnailUrl, mediaFileUrl } from '../../shared/lib/mediaUrl';
 import { getShortcut, matchesShortcutDef } from '../../shared/lib/shortcuts';
@@ -20,6 +20,9 @@ import { useViewerMediaPipeline } from './hooks/useViewerMediaPipeline';
 import { useNavigatorRenderer } from './hooks/useNavigatorRenderer';
 import { useNavigatorDrag } from './hooks/useNavigatorDrag';
 import { VideoPlayer } from './video/VideoPlayer';
+import { StripView } from './StripView';
+import { queryEntityView } from '../../platform/entityApi';
+import { stripFitModeAtom } from '../../state/grid';
 import styles from './MediaView.module.css';
 
 export interface MediaViewProps {
@@ -40,8 +43,27 @@ export function MediaView({
   const currentHash = currentItem?.entity_hash ?? '';
   const currentMime = currentItem?.mime_type ?? '';
   const isVideo = currentMime.startsWith('video/');
+  const isCollection = currentItem?.entity_kind === 'collection';
   const total = totalCount ?? items.length;
   const thumbHash = currentItem?.thumbnail_hash ?? currentItem?.entity_hash ?? '';
+
+  // Collection strip view state
+  const stripFitMode = useAtomValue(stripFitModeAtom);
+  const [collectionMembers, setCollectionMembers] = useState<CanonicalEntityGridItem[]>([]);
+  const collectionIdRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (!isCollection || !currentItem) { setCollectionMembers([]); return; }
+    const id = currentItem.entity_id;
+    if (id === collectionIdRef.current && collectionMembers.length > 0) return;
+    collectionIdRef.current = id;
+    void queryEntityView({
+      base_scope: { kind: 'collection', id },
+      page: { limit: 500 },
+    }).then((page) => {
+      if (collectionIdRef.current === id) setCollectionMembers(page.items);
+    }).catch(() => {});
+  }, [isCollection, currentItem?.entity_id]);
 
   const setDisplayState = useSetAtom(viewerDisplayStateAtom);
   const setDisplayControls = useSetAtom(viewerDisplayControlsAtom);
@@ -186,7 +208,13 @@ export function MediaView({
 
   return (
     <div className={styles.mediaView}>
-      {isVideo ? (
+      {isCollection ? (
+        <StripView
+          items={collectionMembers}
+          fitMode={stripFitMode}
+          onItemClick={() => {}}
+        />
+      ) : isVideo ? (
         <VideoPlayer key={currentHash} src={mediaFileUrl(thumbHash, currentMime)} />
       ) : (
         <div ref={containerRef} className={`${styles.zoomContainer} ${zoom.isDragging ? styles.dragging : ''}`}

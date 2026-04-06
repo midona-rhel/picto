@@ -82,7 +82,7 @@ export function FolderWatchModal({
         </>
       }
     >
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      <div className={modalStyles.stack}>
         <div className={modalStyles.field}>
           <label className={modalStyles.fieldLabel}>Watch Folder</label>
           <div className={modalStyles.fieldRow}>
@@ -91,12 +91,12 @@ export function FolderWatchModal({
           </div>
         </div>
 
-        <div className={modalStyles.fieldRow} style={{ justifyContent: 'space-between' }}>
+        <div className={modalStyles.rowSpread}>
           <span className={modalStyles.fieldLabel}>Enable Watch</span>
           <ToggleSwitch on={enabled} onChange={() => setEnabled(!enabled)} />
         </div>
 
-        <div className={modalStyles.fieldRow} style={{ justifyContent: 'space-between' }}>
+        <div className={modalStyles.rowSpread}>
           <span className={modalStyles.fieldLabel}>Watch Subfolders</span>
           <ToggleSwitch on={subfolders} onChange={() => setSubfolders(!subfolders)} />
         </div>

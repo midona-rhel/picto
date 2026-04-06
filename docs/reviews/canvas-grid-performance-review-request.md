@@ -144,7 +144,6 @@ This changeset covers the canvas grid renderer performance optimization, archite
 | `AppShell.module.css` | — | Sidebar background, border consistency |
 | `shared/types/canonical.ts` | — | Added `thumbnail_hash` field |
 | `platform/api.ts` | — | Map `thumbnail_hash` from legacy response |
-| `test-harness/fixtures/grid.ts` | — | Added `thumbnail_hash` to fixtures |
 
 ## Known Issues / Cleanup Needed
 

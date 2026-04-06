@@ -24,7 +24,9 @@ import { useViewerMediaPipeline } from './hooks/useViewerMediaPipeline';
 import { useNavigatorRenderer } from './hooks/useNavigatorRenderer';
 import { useNavigatorDrag } from './hooks/useNavigatorDrag';
 import { VideoPlayer } from './video/VideoPlayer';
-import { getEntityDetails, resolveFilePath } from '../../platform/api';
+import { filesController } from '../../controllers/filesController';
+import { viewerController } from '../../controllers/viewerController';
+import { windowController } from '../../controllers/windowController';
 import styles from './DetailWindow.module.css';
 import viewerStyles from './MediaView.module.css';
 
@@ -76,7 +78,7 @@ export function DetailWindow({ hash }: DetailWindowProps) {
   // ── Initial entity fetch ──
   const [initialImage, setInitialImage] = useState<LightImage | null>(null);
   useEffect(() => {
-    getEntityDetails(hash).then((d) => {
+    viewerController.getEntityDetails(hash).then((d) => {
       if (!d) return;
       setInitialImage({
         hash: d.entity_hash,
@@ -275,14 +277,14 @@ export function DetailWindow({ hash }: DetailWindowProps) {
   const toggleAlwaysOnTop = useCallback(() => {
     const next = !alwaysOnTop;
     setAlwaysOnTop(next);
-    (window as any).picto.api.window.call('setAlwaysOnTop', { value: next }).catch(() => setAlwaysOnTop(!next));
+    windowController.setCurrentWindowAlwaysOnTop(next).catch(() => setAlwaysOnTop(!next));
   }, [alwaysOnTop]);
 
   // ── Copy path ──
   const handleCopyPath = useCallback(async () => {
     if (!currentImage) return;
     try {
-      const path = await resolveFilePath(currentImage.hash);
+      const path = await filesController.resolveFilePath(currentImage.hash);
       if (!path) return;
       await window.picto.clipboard.writeText(path);
     } catch {}
@@ -303,7 +305,7 @@ export function DetailWindow({ hash }: DetailWindowProps) {
       // Close window
       if (e.key === 'Escape') {
         e.preventDefault();
-        (window as any).picto.api.window.call('close');
+        void windowController.closeCurrentWindow();
         return;
       }
 
@@ -390,7 +392,7 @@ export function DetailWindow({ hash }: DetailWindowProps) {
 
             <button
               className={styles.icBtn}
-              onClick={() => (window as any).picto.api.window.call('close')}
+              onClick={() => void windowController.closeCurrentWindow()}
               title="Close (Escape)"
             >
               <IconX size={16} />

@@ -13,7 +13,8 @@ import { getKeyboardPreset, setKeyboardPreset, type KeyboardPreset } from '../..
 import { CmSelect } from '../../shared/ui/CmSelect/CmSelect';
 import { ToggleSwitch } from '../../shared/ui/ToggleSwitch/ToggleSwitch';
 import { ShortcutsPanel } from './ShortcutsPanel';
-import * as api from '../../platform/api';
+import { appController } from '../../controllers/appController';
+import { settingsController, type AppSettings, type ViewPrefsDto, type ViewPrefsPatch } from '../../controllers/settingsController';
 import styles from './Settings.module.css';
 
 // ── Settings row definition ──
@@ -148,10 +149,10 @@ const SORT_DIR_OPTIONS = [
 
 function AppearancePanel({ onDirty, appSettings, setAppSettings, prefs, setPrefs }: {
   onDirty: () => void;
-  appSettings: api.AppSettings | null;
-  setAppSettings: React.Dispatch<React.SetStateAction<api.AppSettings | null>>;
-  prefs: api.ViewPrefsDto | null;
-  setPrefs: React.Dispatch<React.SetStateAction<api.ViewPrefsDto | null>>;
+  appSettings: AppSettings | null;
+  setAppSettings: React.Dispatch<React.SetStateAction<AppSettings | null>>;
+  prefs: ViewPrefsDto | null;
+  setPrefs: React.Dispatch<React.SetStateAction<ViewPrefsDto | null>>;
 }) {
   const [activeTheme, setActiveTheme] = useState(() => {
     const saved = localStorage.getItem('picto-theme') ?? 'dark';
@@ -168,10 +169,10 @@ function AppearancePanel({ onDirty, appSettings, setAppSettings, prefs, setPrefs
   const [zoom, setZoom] = useState('100');
   const previousThemeRef = useRef(activeTheme);
 
-  const updateAppSetting = (patch: Partial<api.AppSettings>) => {
+  const updateAppSetting = (patch: Partial<AppSettings>) => {
     setAppSettings((cur) => cur ? { ...cur, ...patch } : null);
     // Apply immediately for live preview in the main window
-    void api.saveSettings(patch).catch(() => {});
+    void settingsController.saveSettings(patch).catch(() => {});
     onDirty();
   };
 
@@ -193,7 +194,7 @@ function AppearancePanel({ onDirty, appSettings, setAppSettings, prefs, setPrefs
     setActiveTheme(css);
     updateAppSetting({ colorScheme: css });
     if (willRestart) {
-      void (window as any).picto?.api?.restartMainWindow?.()?.catch?.(() => {});
+      void appController.restartMainWindow().catch(() => {});
     }
     previousThemeRef.current = css;
   };
@@ -202,14 +203,14 @@ function AppearancePanel({ onDirty, appSettings, setAppSettings, prefs, setPrefs
     setZoom(value);
     // Zoom preview is applied immediately
     const factor = Number(value) / 100;
-    void api.setZoomFactor(factor).catch(() => {});
+    void settingsController.setZoomFactor(factor).catch(() => {});
     updateAppSetting({ zoomFactor: Number(value) / 100 });
   };
 
-  const updateViewPref = (patch: api.ViewPrefsPatch) => {
-    setPrefs((cur) => cur ? { ...cur, ...patch } as api.ViewPrefsDto : null);
+  const updateViewPref = (patch: ViewPrefsPatch) => {
+    setPrefs((cur) => cur ? { ...cur, ...patch } as ViewPrefsDto : null);
     // Apply immediately for live preview
-    void api.setViewPrefs('', patch).catch(() => {});
+    void settingsController.setViewPrefs('', patch).catch(() => {});
     onDirty();
   };
 
@@ -324,11 +325,11 @@ const ALL_SETTINGS: SettingRow[] = [
 // ── Component ──
 
 // Default app settings (used by Reset)
-const DEFAULT_APP_SETTINGS: Partial<api.AppSettings> = {
+const DEFAULT_APP_SETTINGS: Partial<AppSettings> = {
   showTreeGuides: true,
   colorScheme: 'dark',
 };
-const DEFAULT_VIEW_PREFS: api.ViewPrefsPatch = {
+const DEFAULT_VIEW_PREFS: ViewPrefsPatch = {
   view_mode: 'waterfall',
   target_size: 220,
   sort_field: 'date_added',
@@ -360,17 +361,17 @@ export function Settings() {
   // Working state — applied to backend immediately for live preview.
   // On Save: becomes the new saved baseline.
   // On close without save: reverted to savedSnapshot.
-  const [pendingAppSettings, setPendingAppSettings] = useState<api.AppSettings | null>(null);
-  const [pendingViewPrefs, setPendingViewPrefs] = useState<api.ViewPrefsDto | null>(null);
-  const savedSnapshotRef = useRef<{ app: api.AppSettings | null; prefs: api.ViewPrefsDto | null }>({ app: null, prefs: null });
+  const [pendingAppSettings, setPendingAppSettings] = useState<AppSettings | null>(null);
+  const [pendingViewPrefs, setPendingViewPrefs] = useState<ViewPrefsDto | null>(null);
+  const savedSnapshotRef = useRef<{ app: AppSettings | null; prefs: ViewPrefsDto | null }>({ app: null, prefs: null });
 
   // Load from backend on mount + snapshot the saved state
   useEffect(() => {
-    void api.getSettings().then((s) => {
+    void settingsController.getSettings().then((s) => {
       setPendingAppSettings(s);
       savedSnapshotRef.current.app = structuredClone(s);
     }).catch(() => {});
-    void api.getViewPrefs('').then((p) => {
+    void settingsController.getViewPrefs('').then((p) => {
       setPendingViewPrefs(p);
       savedSnapshotRef.current.prefs = structuredClone(p);
     }).catch(() => {});
@@ -421,8 +422,8 @@ export function Settings() {
     if (!isDirty) return;
     const handler = () => {
       const snap = savedSnapshotRef.current;
-      if (snap.app) void api.saveSettings(snap.app).catch(() => {});
-      if (snap.prefs) void api.setViewPrefs('', snap.prefs as api.ViewPrefsPatch).catch(() => {});
+      if (snap.app) void settingsController.saveSettings(snap.app).catch(() => {});
+      if (snap.prefs) void settingsController.setViewPrefs('', snap.prefs as ViewPrefsPatch).catch(() => {});
     };
     window.addEventListener('beforeunload', handler);
     return () => window.removeEventListener('beforeunload', handler);
@@ -432,8 +433,8 @@ export function Settings() {
     if (isDirty) {
       // Revert to saved snapshot
       const snap = savedSnapshotRef.current;
-      if (snap.app) void api.saveSettings(snap.app).catch(() => {});
-      if (snap.prefs) void api.setViewPrefs('', snap.prefs as api.ViewPrefsPatch).catch(() => {});
+      if (snap.app) void settingsController.saveSettings(snap.app).catch(() => {});
+      if (snap.prefs) void settingsController.setViewPrefs('', snap.prefs as ViewPrefsPatch).catch(() => {});
     }
     window.close();
   };
@@ -441,11 +442,11 @@ export function Settings() {
   const handleSave = () => {
     // Persist pending state to backend — this is now the saved baseline
     if (pendingAppSettings) {
-      void api.saveSettings(pendingAppSettings).catch(() => {});
+      void settingsController.saveSettings(pendingAppSettings).catch(() => {});
       savedSnapshotRef.current.app = structuredClone(pendingAppSettings);
     }
     if (pendingViewPrefs) {
-      void api.setViewPrefs('', pendingViewPrefs as api.ViewPrefsPatch).catch(() => {});
+      void settingsController.setViewPrefs('', pendingViewPrefs as ViewPrefsPatch).catch(() => {});
       savedSnapshotRef.current.prefs = structuredClone(pendingViewPrefs);
     }
     setIsDirty(false);
@@ -455,7 +456,7 @@ export function Settings() {
     if (!window.confirm('Reset all settings to defaults?')) return;
     setKeyboardPreset('us');
     setPendingAppSettings((cur) => cur ? { ...cur, ...DEFAULT_APP_SETTINGS } : null);
-    setPendingViewPrefs((cur) => cur ? { ...cur, ...DEFAULT_VIEW_PREFS } as api.ViewPrefsDto : null);
+    setPendingViewPrefs((cur) => cur ? { ...cur, ...DEFAULT_VIEW_PREFS } as ViewPrefsDto : null);
     setIsDirty(true);
   };
 

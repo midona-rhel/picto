@@ -15,9 +15,10 @@
 
 import { getDefaultStore } from 'jotai';
 import { listen } from '../platform/ipc';
-import { gridScopeAtom, gridActiveAtom, gridItemsAtom, gridTransitionPhaseAtom } from '../state/grid';
+import { gridActiveAtom, gridReconcileContextAtom, gridTransitionPhaseAtom } from '../state/grid';
 import { gridController } from '../controllers/gridController';
 import type { BaseScope } from '../shared/types/canonical';
+import { scopeToGridNodeId } from '../shared/lib/gridScope';
 
 const store = getDefaultStore();
 
@@ -34,31 +35,33 @@ interface StateChanges {
   media_derivatives_changed?: boolean;
   derivative_fields_changed?: string[];
   extra_grid_scopes?: string[];
+  grid_reorder?: boolean;
 }
 
 function scopeToKey(scope: BaseScope): string | null {
-  switch (scope.kind) {
-    case 'system': return `system:${scope.key === 'all' ? 'active' : scope.key}`;
-    case 'folder': return scope.id != null ? `folder:${scope.id}` : null;
-    case 'smart_folder': return scope.id != null ? `smart:${scope.id}` : null;
-    case 'collection': return scope.id != null ? `collection:${scope.id}` : null;
-    default: return null;
-  }
+  return scopeToGridNodeId(scope);
 }
 
 type GridAction =
   | 'ignore'
   | 'reconcile_metadata'
   | 'reconcile_membership'
+  | 'reorder'
   | 'refresh';
 
-function classifyGridAction(changes: StateChanges, scope: BaseScope): GridAction {
+export function classifyGridAction(
+  changes: StateChanges,
+  scope: BaseScope,
+  visibleEntityHashes: string[],
+): GridAction {
   if (changes.extra_grid_scopes?.length) {
     const currentKey = scopeToKey(scope);
     if (currentKey && changes.extra_grid_scopes.includes(currentKey)) {
+      if (changes.grid_reorder) return 'reorder';
       const membershipChanged = !!(changes.status_changed
         || changes.folder_membership_changed?.length
-        || changes.tags_changed);
+        || changes.tags_changed
+        || changes.smart_folder_ids?.length);
       return membershipChanged ? 'reconcile_membership' : 'reconcile_metadata';
     }
     return 'ignore';
@@ -66,7 +69,7 @@ function classifyGridAction(changes: StateChanges, scope: BaseScope): GridAction
 
   if (changes.entity_hashes?.length && !changes.status_changed
       && !changes.folder_membership_changed?.length && !changes.tags_changed) {
-    const visible = new Set(store.get(gridItemsAtom).map((i) => i.entity_hash));
+    const visible = new Set(visibleEntityHashes);
     if (changes.entity_hashes.some((h) => visible.has(h))) {
       return 'reconcile_metadata';
     }
@@ -112,8 +115,8 @@ function classifyGridAction(changes: StateChanges, scope: BaseScope): GridAction
 }
 
 function processStateChange(changes: StateChanges) {
-  const scope = store.get(gridScopeAtom);
-  const action = classifyGridAction(changes, scope);
+  const { scope, visibleEntityHashes } = store.get(gridReconcileContextAtom);
+  const action = classifyGridAction(changes, scope, visibleEntityHashes);
 
   switch (action) {
     case 'ignore':
@@ -124,7 +127,7 @@ function processStateChange(changes: StateChanges) {
     case 'reconcile_membership': {
       const hashes = changes.entity_hashes;
       if (hashes?.length) {
-        const visible = new Set(store.get(gridItemsAtom).map((i) => i.entity_hash));
+        const visible = new Set(visibleEntityHashes);
         const newHashes = hashes.filter((h) => !visible.has(h));
         const existingHashes = hashes.filter((h) => visible.has(h));
 
@@ -148,6 +151,9 @@ function processStateChange(changes: StateChanges) {
       gridController.reconcile(false);
       break;
     }
+    case 'reorder':
+      gridController.reconcile(false);
+      break;
     case 'refresh':
       gridController.loadFirstPage({ preserveItems: true });
       break;

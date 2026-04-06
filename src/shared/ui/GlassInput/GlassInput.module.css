@@ -33,6 +33,33 @@
   opacity: 0.8;
 }
 
+/* ── Textarea variant ── */
+
+.textarea {
+  padding: 8px 10px;
+  border: 1px solid var(--color-border-primary);
+  border-radius: var(--radius-sm);
+  background: var(--color-black-20);
+  color: var(--color-text-primary);
+  font-size: var(--font-size-md);
+  font-family: var(--font-family);
+  outline: none;
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  min-height: 60px;
+  line-height: 1.4;
+  transition: border-color 120ms ease;
+}
+
+.textarea:focus {
+  border-color: var(--color-primary-50);
+}
+
+.textarea::placeholder {
+  color: var(--color-text-tertiary);
+}
+
 /* ── Search variant (icon + input) ── */
 
 .searchWrap {

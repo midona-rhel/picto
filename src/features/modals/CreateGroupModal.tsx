@@ -53,7 +53,7 @@ export function CreateGroupModal({ open, onClose, onCreate }: CreateGroupModalPr
         </>
       }
     >
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      <div className={modalStyles.stack}>
         <div className={modalStyles.field}>
           <label className={modalStyles.fieldLabel}>Group Name</label>
           <GlassInput

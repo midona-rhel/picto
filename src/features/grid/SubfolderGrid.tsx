@@ -8,7 +8,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { IconChevronRight, IconFolder } from '@tabler/icons-react';
 import { DynamicIcon } from '../../shared/ui/DynamicIcon';
-import { getFolderCoverHash } from '../../platform/api';
+import { foldersController } from '../../controllers/foldersController';
 import type { SidebarNodeDto } from '../../shared/types/canonical';
 import styles from './SubfolderGrid.module.css';
 
@@ -19,13 +19,13 @@ interface SubfolderGridProps {
   onOpenFolder: (nodeId: string) => void;
   onSelectFolder?: (nodeId: string, event: React.MouseEvent) => void;
   onFolderContextMenu?: (nodeId: string, folder: SidebarNodeDto, position: { x: number; y: number }) => void;
-  selectedHashes?: Set<string>;
+  selectedNodeIds?: Set<string>;
 }
 
 export function SubfolderGrid({
   childFolders, targetSize, totalImageCount,
   onOpenFolder, onSelectFolder, onFolderContextMenu,
-  selectedHashes,
+  selectedNodeIds,
 }: SubfolderGridProps) {
   const [expanded, setExpanded] = useState(true);
   const [coverHashes, setCoverHashes] = useState<Map<number, string | null>>(new Map());
@@ -40,7 +40,7 @@ export function SubfolderGrid({
     if (toFetch.length === 0) return;
     void Promise.all(toFetch.map(async (f) => {
       const id = parseFolderId(f.id)!;
-      const hash = await getFolderCoverHash(id).catch(() => null);
+      const hash = await foldersController.getCoverHash(id).catch(() => null);
       return [id, hash] as [number, string | null];
     })).then((results) => {
       if (cancelled) return;
@@ -94,7 +94,7 @@ export function SubfolderGrid({
             return (
               <div
                 key={folder.id}
-                className={`${styles.tile} ${selectedHashes?.has(folder.id) ? styles.tileSelected : ''}`}
+                className={`${styles.tile} ${selectedNodeIds?.has(folder.id) ? styles.tileSelected : ''}`}
                 data-folder-hash={folder.id}
                 onClick={(e) => handleClick(e, folder.id)}
                 onDoubleClick={(e) => handleDoubleClick(e, folder.id)}
@@ -123,9 +123,9 @@ export function SubfolderGrid({
                 {/* Name row */}
                 <div className={styles.nameRow}>
                   {folder.icon ? (
-                    <DynamicIcon name={folder.icon} size={14} color={folder.color ?? undefined} filled />
+                    <DynamicIcon name={folder.icon} size={19} color={folder.color ?? undefined} />
                   ) : (
-                    <IconFolder size={14} color={folder.color ?? 'var(--color-text-tertiary)'} stroke={1.2} fill={folder.color ?? 'currentColor'} fillOpacity={0.15} />
+                    <IconFolder size={19} color={folder.color ?? 'var(--color-text-tertiary)'} stroke={1.5} />
                   )}
                   <div className={styles.name}>{folder.name}</div>
                 </div>

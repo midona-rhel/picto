@@ -15,7 +15,7 @@ import { drawCanvasBaseLayer, type DrawContext } from './drawBase';
 
 import { ThumbnailPipeline } from './thumbnailPipeline';
 import { adaptGridItem } from './renderItemAdapter';
-import { startDrag, moveDrag, endDrag, cancelDrag, setDropTarget, getDragState, isDragActive } from '../dragState';
+import { startDrag, moveDrag, endDrag, cancelDrag, setDropTarget, getDragState, isDragActive, startNativeDrag as startNativeDragFn, setInternalDragOrigin } from '../dragState';
 import { hitTestTile, computeReorderTarget } from './hitTesting';
 import { DragGhost } from '../DragGhost';
 import {
@@ -627,10 +627,67 @@ export function CanvasGrid({
   useEffect(() => {
     const onMove = (e: MouseEvent) => {
       if (!isDragActive()) return;
+
+      // If cursor exits the window during drag, initiate native OS file drag
+      if (e.clientX <= 0 || e.clientY <= 0 || e.clientX >= window.innerWidth || e.clientY >= window.innerHeight) {
+        const state = getDragState();
+        reorderDropRef.current = null;
+        setDragGhost(null);
+
+        // Generate stacked icon matching DragGhost style
+        let iconUrl = '';
+        try {
+          const thumbSize = 44;
+          const so = 3;
+          const curItems = itemsRef.current;
+          const ths = state.hashes.slice(0, 3).map((h) => {
+            const it = curItems.find((x) => x.entity_hash === h);
+            return it?.thumbnail_hash ?? h;
+          });
+          const sc = ths.length;
+          const tw = thumbSize + (sc - 1) * so + 14;
+          const th = thumbSize + (sc - 1) * so + 8;
+          const cv = document.createElement('canvas');
+          cv.width = tw; cv.height = th;
+          const cx = cv.getContext('2d');
+          if (cx) {
+            for (let i = 0; i < sc; i++) {
+              const en = pipelineRef.current?.get(ths[i]);
+              if (en?.thumb) {
+                const ox = i * so, oy = i * so + 6;
+                cx.save();
+                cx.beginPath(); cx.roundRect(ox, oy, thumbSize, thumbSize, 4); cx.clip();
+                cx.drawImage(en.thumb, ox, oy, thumbSize, thumbSize);
+                cx.restore();
+                cx.strokeStyle = 'rgba(255,255,255,0.25)'; cx.lineWidth = 1;
+                cx.beginPath(); cx.roundRect(ox + 0.5, oy + 0.5, thumbSize - 1, thumbSize - 1, 4); cx.stroke();
+              }
+            }
+            if (state.hashes.length > 1) {
+              const lb = state.hashes.length > 999 ? '999+' : String(state.hashes.length);
+              cx.font = 'bold 10px -apple-system, BlinkMacSystemFont, sans-serif';
+              const mw = cx.measureText(lb).width;
+              const bw = Math.max(20, mw + 10);
+              cx.fillStyle = '#3297FF';
+              cx.beginPath(); cx.roundRect(tw - bw, 0, bw, 18, 9); cx.fill();
+              cx.fillStyle = 'white'; cx.textAlign = 'center'; cx.textBaseline = 'middle';
+              cx.fillText(lb, tw - bw / 2, 9);
+            }
+            iconUrl = cv.toDataURL('image/png');
+          }
+        } catch { /* fallback */ }
+
+        setInternalDragOrigin(true);
+        startNativeDragFn(state.hashes, iconUrl);
+        dragJustEndedRef.current = true;
+        markDirtyRef.current('overlay');
+        return;
+      }
+
       moveDrag(e.clientX, e.clientY);
       setDragGhost((prev) => prev ? { ...prev, x: e.clientX, y: e.clientY } : null);
       const scope = getDragState().sourceScope;
-      if (scope && scope.kind === 'folder') {
+      if (scope && (scope.kind === 'folder' || scope.kind === 'collection')) {
         const ctr = containerRef.current;
         if (ctr) {
           const { x: cx, y: cy } = toLayoutCoords(e.clientX, e.clientY, ctr, headerHeightRef.current);
@@ -647,8 +704,12 @@ export function CanvasGrid({
         }
       }
     };
-    const onUp = () => {
+    const onUp = (e: MouseEvent) => {
       if (isDragActive()) {
+        // If cursor is outside the window, the onMove handler already triggered native drag
+        if (e.clientX <= 0 || e.clientY <= 0 || e.clientX >= window.innerWidth || e.clientY >= window.innerHeight) {
+          return;
+        }
         const rd = reorderDropRef.current;
         const existingTarget = getDragState().dropTarget;
         if (rd && !existingTarget) {
@@ -664,8 +725,9 @@ export function CanvasGrid({
           const remaining = curItems.filter((it) => !draggedSet.has(it.entity_hash));
           const reordered = [...remaining.slice(0, insertAt), ...dragged, ...remaining.slice(insertAt)];
           const orderedEntityIds: [number, number][] = reordered.map((it, i) => [it.entity_id, i]);
+          const orderedHashes = reordered.map((it) => it.entity_hash);
           if (orderedEntityIds.length > 0) {
-            setDropTarget({ kind: 'reorder', orderedEntityIds });
+            setDropTarget({ kind: 'reorder', orderedEntityIds, orderedHashes });
           }
         }
         reorderDropRef.current = null;
@@ -929,6 +991,7 @@ export function CanvasGrid({
     const { x, y } = toLayoutCoords(e.clientX, e.clientY, container, headerHeight);
 
     // If clicking on a tile, set up potential tile drag (not marquee)
+    // Also position the invisible drag helper over this tile for HTML5 native drag-out
     const idx = hitTestTile(layout.positions, x, y, textHeight, 0, layout.positions.length);
     if (idx != null) {
       tileDragRef.current = { tileIdx: idx, startClientX: e.clientX, startClientY: e.clientY };

@@ -14,6 +14,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { IconPin, IconPinFilled } from '@tabler/icons-react';
+import { KbdTooltip } from '../KbdTooltip';
 import { getZoomFactor, getViewportCSS } from '../../lib/zoomCompensation';
 import styles from './OverlayShell.module.css';
 
@@ -144,14 +145,15 @@ export function OverlayShell({
         <div className={styles.header} onMouseDown={onDragStart}>
           {header}
           {onPinnedChange && (
-            <button
-              className={`${styles.pinBtn} ${pinned ? styles.pinBtnActive : ''}`}
-              onClick={() => onPinnedChange(!pinned)}
-              type="button"
-              title={pinned ? 'Unpin' : 'Pin (keep open)'}
-            >
-              {pinned ? <IconPinFilled size={14} /> : <IconPin size={14} />}
-            </button>
+            <KbdTooltip label={pinned ? 'Unpin' : 'Pin (keep open)'}>
+              <button
+                className={`${styles.pinBtn} ${pinned ? styles.pinBtnActive : ''}`}
+                onClick={() => onPinnedChange(!pinned)}
+                type="button"
+              >
+                {pinned ? <IconPinFilled size={14} /> : <IconPin size={14} />}
+              </button>
+            </KbdTooltip>
           )}
         </div>
         <div className={styles.body}>

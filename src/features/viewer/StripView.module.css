@@ -1,0 +1,116 @@
+/* StripView — full-quality collection member browsing */
+
+.root {
+  height: 100%;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 12px;
+  background: var(--color-bg-app);
+}
+
+/* ── Horizontal mode: single column, full width ── */
+
+.horizontalStack {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-width: 100%;
+}
+
+/* ── Vertical mode: viewport-height rows, horizontal packing ── */
+
+.verticalRows {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.verticalRow {
+  display: flex;
+  gap: 12px;
+  justify-content: center;
+  align-items: center;
+}
+
+/* ── Shared image wrapper ── */
+
+.imageWrap {
+  position: relative;
+  border-radius: 6px;
+  overflow: hidden;
+  cursor: pointer;
+  flex-shrink: 0;
+  /* Glass border matching legacy */
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  border-left: 1px solid rgba(255, 255, 255, 0.06);
+  border-right: 1px solid rgba(255, 255, 255, 0.06);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+  transition: box-shadow 150ms ease;
+}
+
+:global([data-mantine-color-scheme="light"]) .imageWrap {
+  border-top: 1px solid rgba(0, 0, 0, 0.08);
+  border-left: 1px solid rgba(0, 0, 0, 0.06);
+  border-right: 1px solid rgba(0, 0, 0, 0.06);
+  border-bottom: 1px solid rgba(0, 0, 0, 0.03);
+}
+
+.imageWrapSelected {
+  box-shadow: 0 0 0 2px var(--color-primary);
+}
+
+.imageWrap img {
+  display: block;
+  border-radius: 5px;
+}
+
+/* Horizontal mode: images span full width */
+.horizontalStack .imageWrap img {
+  width: 100%;
+  height: auto;
+}
+
+/* Vertical mode: images fill row height */
+.verticalRow .imageWrap img {
+  height: 100%;
+  width: auto;
+}
+
+/* ── Video overlays ── */
+
+.playBadge {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  color: white;
+  font-size: 18px;
+}
+
+.durationBadge {
+  position: absolute;
+  bottom: 8px;
+  right: 8px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.6);
+  color: white;
+  font-size: 11px;
+  font-weight: 500;
+  font-family: var(--font-family-mono);
+  pointer-events: none;
+}
+
+/* ── Load more sentinel ── */
+
+.sentinel {
+  height: 1px;
+}

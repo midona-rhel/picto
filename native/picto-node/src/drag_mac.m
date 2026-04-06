@@ -12,11 +12,6 @@
     return NSDragOperationCopy;
 }
 
-// Required for the legacy dragImage:at:offset:event:pasteboard:source:slideBack: API
-- (NSDragOperation)draggingSourceOperationMaskForLocal:(BOOL)flag {
-    return NSDragOperationCopy;
-}
-
 @end
 
 // ── Public C entry point ─────────────────────────────────────────────────
@@ -34,7 +29,7 @@ void picto_start_file_drag(
     NSView *view = (__bridge NSView *)ns_view_ptr;
     if (!view.window) return;
 
-    // ── Build composite icon from RGBA buffer ────────────────────────────
+    // ── Build composite icon from RGBA buffer ──────────────────────────
     NSImage *compositeIcon = nil;
     if (rgba_data && icon_width > 0 && icon_height > 0) {
         NSBitmapImageRep *rep = [[NSBitmapImageRep alloc]
@@ -53,28 +48,53 @@ void picto_start_file_drag(
         [compositeIcon addRepresentation:rep];
     }
 
-    // Fallback icon if RGBA decode failed
     if (!compositeIcon) {
         compositeIcon = [[NSImage alloc] initWithSize:NSMakeSize(64, 64)];
     }
 
-    // ── Collect file paths ───────────────────────────────────────────────
-    NSMutableArray<NSString *> *filePathStrings = [NSMutableArray arrayWithCapacity:path_count];
+    // ── Collect file URLs ──────────────────────────────────────────────
+    NSMutableArray<NSURL *> *fileURLs = [NSMutableArray arrayWithCapacity:path_count];
     for (int i = 0; i < path_count; i++) {
-        [filePathStrings addObject:[NSString stringWithUTF8String:paths[i]]];
+        [fileURLs addObject:[NSURL fileURLWithPath:[NSString stringWithUTF8String:paths[i]]]];
     }
 
-    // ── Cursor position ──────────────────────────────────────────────────
+    // ── Create ONE pasteboard item with all file URLs ──────────────────
+    // Using NSPasteboardItem so there's only ONE NSDraggingItem = ONE icon.
+    NSPasteboardItem *pbItem = [[NSPasteboardItem alloc] init];
+
+    // Write file URLs as a newline-separated string for NSPasteboardTypeFileURL
+    NSMutableString *urlList = [NSMutableString string];
+    for (NSURL *url in fileURLs) {
+        if (urlList.length > 0) [urlList appendString:@"\n"];
+        [urlList appendString:url.absoluteString];
+    }
+    [pbItem setString:urlList forType:NSPasteboardTypeFileURL];
+
+    // Also write as legacy NSFilenamesPboardType for older apps
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+    NSMutableArray<NSString *> *pathStrings = [NSMutableArray arrayWithCapacity:path_count];
+    for (int i = 0; i < path_count; i++) {
+        [pathStrings addObject:[NSString stringWithUTF8String:paths[i]]];
+    }
+    [pbItem setPropertyList:pathStrings forType:NSFilenamesPboardType];
+#pragma clang diagnostic pop
+
+    // ── Create ONE dragging item with our composite icon ───────────────
+    NSDraggingItem *dragItem = [[NSDraggingItem alloc] initWithPasteboardWriter:pbItem];
+
     NSPoint windowPos = [view.window mouseLocationOutsideOfEventStream];
     NSPoint viewPos = [view convertPoint:windowPos fromView:nil];
-
-    // Position the drag image centered on cursor
     NSSize imgSize = compositeIcon.size;
-    NSPoint dragPos = NSMakePoint(
+    NSRect dragFrame = NSMakeRect(
         viewPos.x - imgSize.width / 2,
-        viewPos.y - imgSize.height / 2);
+        viewPos.y - imgSize.height / 2,
+        imgSize.width,
+        imgSize.height);
 
-    // ── Synthetic mouse event ────────────────────────────────────────────
+    [dragItem setDraggingFrame:dragFrame contents:compositeIcon];
+
+    // ── Synthetic mouse event ──────────────────────────────────────────
     NSEvent *dragEvent = [NSEvent
         mouseEventWithType:NSEventTypeLeftMouseDragged
         location:windowPos
@@ -86,26 +106,10 @@ void picto_start_file_drag(
         clickCount:1
         pressure:1.0];
 
-    // ── Write ALL file paths to the drag pasteboard ──────────────────────
-    // Using the legacy pasteboard-level API: one pasteboard with an array
-    // of paths, one drag image. Finder reads NSFilenamesPboardType and
-    // receives all files. No per-item NSDraggingItem stacking.
-#pragma clang diagnostic push
-#pragma clang diagnostic ignored "-Wdeprecated-declarations"
-
-    NSPasteboard *pboard = [NSPasteboard pasteboardWithName:NSDragPboard];
-    [pboard declareTypes:@[NSFilenamesPboardType] owner:nil];
-    [pboard setPropertyList:filePathStrings forType:NSFilenamesPboardType];
-
+    // ── Begin drag session with ONE item ────────────────────────────────
     PictoDragSource *source = [[PictoDragSource alloc] init];
-
-    [view dragImage:compositeIcon
-                 at:dragPos
-             offset:NSZeroSize
-              event:dragEvent
-         pasteboard:pboard
-             source:source
-          slideBack:YES];
-
-#pragma clang diagnostic pop
+    NSDraggingSession *session = [view beginDraggingSessionWithItems:@[dragItem]
+                                                              event:dragEvent
+                                                             source:source];
+    session.animatesToStartingPositionsOnCancelOrFail = YES;
 }

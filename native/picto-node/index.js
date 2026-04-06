@@ -310,8 +310,10 @@ if (!nativeBinding) {
   throw new Error(`Failed to load native binding`)
 }
 
-const { healthcheck, openLibrary, initialize, closeLibrary, invoke, registerEventCallback, emitTestEvent } = nativeBinding
+const { startNativeDrag, initRuntime, healthcheck, openLibrary, initialize, closeLibrary, invoke, registerEventCallback, emitTestEvent } = nativeBinding
 
+module.exports.startNativeDrag = startNativeDrag
+module.exports.initRuntime = initRuntime
 module.exports.healthcheck = healthcheck
 module.exports.openLibrary = openLibrary
 module.exports.initialize = initialize

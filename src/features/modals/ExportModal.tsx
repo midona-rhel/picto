@@ -83,7 +83,7 @@ export function ExportModal({ open, onClose, onExport, fileCount }: ExportModalP
         </>
       }
     >
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+      <div className={modalStyles.stack}>
         <div className={modalStyles.field}>
           <label className={modalStyles.fieldLabel}>Destination</label>
           <div className={modalStyles.fieldRow}>
@@ -103,7 +103,7 @@ export function ExportModal({ open, onClose, onExport, fileCount }: ExportModalP
             <input
               type="range" min={1} max={100} value={quality}
               onChange={(e) => setQuality(parseInt(e.target.value, 10))}
-              style={{ width: '100%', accentColor: 'var(--color-primary)' }}
+              className={modalStyles.rangeInput}
             />
           </div>
         )}
@@ -120,7 +120,7 @@ export function ExportModal({ open, onClose, onExport, fileCount }: ExportModalP
                   placeholder="Width"
                   style={{ width: 100 }}
                 />
-                <span style={{ color: 'var(--color-text-tertiary)', fontSize: 13 }}>×</span>
+                <span className={modalStyles.inlineLabel}>×</span>
                 <GlassInput
                   value={height}
                   onChange={(e) => setHeight(e.target.value.replace(/\D/g, ''))}
@@ -130,7 +130,7 @@ export function ExportModal({ open, onClose, onExport, fileCount }: ExportModalP
               </div>
             </div>
 
-            <div className={modalStyles.fieldRow} style={{ justifyContent: 'space-between' }}>
+            <div className={modalStyles.rowSpread}>
               <span className={modalStyles.fieldLabel}>Keep Aspect Ratio</span>
               <ToggleSwitch on={keepAspectRatio} onChange={() => setKeepAspectRatio(!keepAspectRatio)} />
             </div>

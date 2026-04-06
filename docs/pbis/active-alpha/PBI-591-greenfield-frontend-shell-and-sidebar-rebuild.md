@@ -8,13 +8,12 @@ This document is about the first rebuilt live surface: app shell and sidebar. It
 
 ## Lifecycle
 - `Implemented` when the rebuilt shell and sidebar exist in the new `src/**` tree with their own state, controller, and runtime boundaries.
-- `Activatable` when parity fixtures exist and the rebuilt shell/sidebar no longer depend on legacy frontend runtime/store/controller code.
+- `Activatable` when the rebuilt shell/sidebar no longer depend on legacy frontend runtime/store/controller code and the live path is review-clean.
 - `Activated` when the app uses the rebuilt shell/sidebar by default.
 - `Legacy removed` when the matching legacy shell/sidebar slice is deleted.
 
 Activation depends on:
 - [PBI-589-greenfield-frontend-legacy-quarantine-and-workspace-reset.md](./docs/pbis/active-alpha/PBI-589-greenfield-frontend-legacy-quarantine-and-workspace-reset.md)
-- [PBI-590-greenfield-frontend-reference-fixtures-and-parity-harness.md](./docs/pbis/active-alpha/PBI-590-greenfield-frontend-reference-fixtures-and-parity-harness.md)
 - [PBI-594-greenfield-frontend-css-architecture-contract.md](./docs/pbis/active-alpha/PBI-594-greenfield-frontend-css-architecture-contract.md)
 - [PBI-581-greenfield-frontend-api-layer-reset.md](./docs/pbis/active-alpha/PBI-581-greenfield-frontend-api-layer-reset.md)
 - [PBI-582-greenfield-frontend-controller-boundary-reset.md](./docs/pbis/active-alpha/PBI-582-greenfield-frontend-controller-boundary-reset.md)
@@ -59,7 +58,6 @@ Follow-up work that should not be treated as hidden scope here:
 
 ## Start gate
 This PBI may start only when:
-- [PBI-590-greenfield-frontend-reference-fixtures-and-parity-harness.md](./docs/pbis/active-alpha/PBI-590-greenfield-frontend-reference-fixtures-and-parity-harness.md) is review-clean
 - [PBI-594-greenfield-frontend-css-architecture-contract.md](./docs/pbis/active-alpha/PBI-594-greenfield-frontend-css-architecture-contract.md) is `Implemented`
 - [PBI-581-greenfield-frontend-api-layer-reset.md](./docs/pbis/active-alpha/PBI-581-greenfield-frontend-api-layer-reset.md), [PBI-582-greenfield-frontend-controller-boundary-reset.md](./docs/pbis/active-alpha/PBI-582-greenfield-frontend-controller-boundary-reset.md), and [PBI-587-greenfield-frontend-state-ownership-reset.md](./docs/pbis/active-alpha/PBI-587-greenfield-frontend-state-ownership-reset.md) are `Implemented` enough for the shell/sidebar slice
 - the rebuilt shell/sidebar path does not require imports from legacy runtime/store/controller code
@@ -70,7 +68,7 @@ Do not start [PBI-592-greenfield-frontend-grid-screen-rebuild.md](./docs/pbis/ac
 ## Acceptance criteria
 - the rebuilt shell/sidebar runs as the active path
 - the rebuilt shell/sidebar does not import legacy runtime/store/controller modules
-- parity is confirmed against the reference harness
+- the live shell/sidebar path is review-clean
 - the rebuilt shell/sidebar keeps current visuals and interaction behavior closely enough for product continuity
 - repeated sidebar UI parts are merged into one canonical row family where behavior is materially the same
 - sidebar settlement is targeted by default instead of relying on full-tree refetch as normal behavior
@@ -78,9 +76,8 @@ Do not start [PBI-592-greenfield-frontend-grid-screen-rebuild.md](./docs/pbis/ac
 - temporary TODOs are allowed only for cross-PBI boundaries already named in the dependency list; they do not allow the next Track A PBI to start early
 
 ## Tests
-- shell/sidebar fixture rendering tests
 - sidebar interaction tests
-- parity checklist and visual confirmation notes
+- live-path verification notes
 
 This PBI must follow the cross-layer naming contract in [PBI-572-cross-layer-naming-contract.md](./docs/pbis/active-alpha/PBI-572-cross-layer-naming-contract.md).
 This PBI must follow the cross-layer testing rules in [PBI-579-cross-layer-testing-rules.md](./docs/pbis/active-alpha/PBI-579-cross-layer-testing-rules.md).

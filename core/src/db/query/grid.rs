@@ -82,10 +82,13 @@ pub fn query_entity_view(
     preresolved_ids: Option<&[i64]>,
 ) -> rusqlite::Result<EntityViewPage> {
     let limit = q.page.limit;
-    // Folder scopes always sort by position_rank (custom manual order)
+    // Folder and collection scopes use custom manual order instead of the user's sort preference
     let is_folder_scope = matches!(q.base_scope.kind, ScopeKind::Folder);
+    let is_collection_scope = matches!(q.base_scope.kind, ScopeKind::Collection);
     let order = if is_folder_scope {
         "fm_sort.position_rank ASC".to_string()
+    } else if is_collection_scope {
+        "COALESCE(me.collection_ordinal, 9223372036854775807) ASC, me.entity_id ASC".to_string()
     } else {
         validated_sort(&q.sort.field, &q.sort.direction)
     };
@@ -113,8 +116,8 @@ pub fn query_entity_view(
 
     // Cursor: opaque value encoding (sort_field_value|entity_hash)
     // parse_cursor resolves entity_hash → entity_id for stable tie-breaking
-    // Folder scopes use position_rank ordering — cursor not supported (folder views are bounded)
-    if !is_folder_scope {
+    // Folder/collection scopes use custom ordering — cursor not supported (views are bounded)
+    if !is_folder_scope && !is_collection_scope {
         let cursor_parsed = q.page.cursor.as_deref().and_then(|c| parse_cursor(conn, c));
         if let Some((ref cursor_val, cursor_id)) = cursor_parsed {
             let dir_op = if q.sort.direction == "asc" { ">" } else { "<" };

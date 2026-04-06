@@ -17,6 +17,7 @@ import { activeNodeIdAtom } from './navigation';
 import {
   selectedEntityHashAtom,
   selectionCountAtom,
+  selectedSubfolderNodeIdAtom,
   selectionModeAtom,
 } from './selection';
 import { sidebarNodesAtom } from './sidebar';
@@ -47,10 +48,12 @@ export const liveInspectorTargetAtom = atom<InspectorTarget>((get) => {
   if (selectionCount > 1) {
     return { kind: 'multi', count: selectionCount, selectionMode };
   }
+  const selectedSubfolderNodeId = get(selectedSubfolderNodeIdAtom);
+  if (selectedSubfolderNodeId) {
+    return { kind: 'scope', nodeId: selectedSubfolderNodeId };
+  }
   const selectedHash = get(selectedEntityHashAtom);
   if (selectedHash) {
-    // Folder tile selected — show as scope, not entity
-    if (selectedHash.startsWith('folder:')) return { kind: 'scope', nodeId: selectedHash };
     return { kind: 'entity', entityHash: selectedHash };
   }
   const activeNodeId = get(activeNodeIdAtom);
@@ -168,7 +171,7 @@ export const scopeInspectorViewModelAtom = atom((get) => {
       : (snapshot.totalCount ?? node.count ?? 0),
     totalSizeBytes: isSubfolderSelection
       ? (get(subfolderPreviewAtom)?.nodeId === node.id ? get(subfolderPreviewAtom)?.totalSizeBytes ?? null : null)
-      : snapshot.totalSizeBytes,
+      : (snapshot.totalSizeBytes ?? ((meta as Record<string, unknown>)?.total_size_bytes as number | undefined) ?? null),
     searchText: isSubfolderSelection ? '' : snapshot.searchText,
     previewItems: isSubfolderSelection
       ? (get(subfolderPreviewAtom)?.nodeId === node.id ? get(subfolderPreviewAtom)?.items ?? [] : [])

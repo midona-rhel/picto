@@ -14,8 +14,8 @@ import { OverlayShell } from '../../shared/ui/OverlayShell';
 import { tagSelectPortalAtom } from '../../state/portals';
 import { selectionTargetAtom } from '../../state/selection';
 import { displayedInspectorEntityDataAtom } from '../../state/inspector';
-import * as api from '../../platform/api';
 import * as entityMutations from '../../controllers/entityMutations';
+import { tagsController } from '../../controllers/tagsController';
 import type { CanonicalTagRecord, CanonicalNamespaceSummary } from '../../shared/types/canonical';
 import shellStyles from '../../shared/ui/OverlayShell/OverlayShell.module.css';
 import btnStyles from '../../shared/styles/actionButton.module.css';
@@ -79,12 +79,12 @@ export function TagSelectPanel() {
 
   // Load initial tags + namespaces
   const loadTags = useCallback((search: string, ns?: string | null) => {
-    const params: Parameters<typeof api.getTagsPaginated>[0] = {
+    const params: Parameters<typeof tagsController.getPaginated>[0] = {
       limit: PAGE_SIZE,
       search: search.trim() || null,
       namespace: ns ?? null,
     };
-    void api.getTagsPaginated(params).then((result) => {
+    void tagsController.getPaginated(params).then((result) => {
       setTags(result ?? []);
       // If we got a full page, there might be more
       setCursor(result?.length === PAGE_SIZE ? 'next' : null);
@@ -98,7 +98,7 @@ export function TagSelectPanel() {
     const lastTag = tags[tags.length - 1];
     const cursorStr = `${lastTag.file_count}:${lastTag.tag_id}`;
     const ns = sidebarMode === 'namespace' ? activeNamespace : null;
-    void api.getTagsPaginated({
+    void tagsController.getPaginated({
       limit: PAGE_SIZE,
       search: query.trim() || null,
       namespace: ns,
@@ -117,7 +117,7 @@ export function TagSelectPanel() {
   // Load namespaces on open
   useEffect(() => {
     if (!open) return;
-    void api.getNamespaceSummary().then((ns) => setNamespaces(ns ?? [])).catch(() => {});
+    void tagsController.getNamespaceSummary().then((ns) => setNamespaces(ns ?? [])).catch(() => {});
   }, [open]);
 
   // Search with debounce — reload tags

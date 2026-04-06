@@ -8,12 +8,11 @@ This document is about rebuilding the grid screen as a clean surface in the new 
 
 ## Lifecycle
 - `Implemented` when the rebuilt grid screen exists as a clean feature root in the new `src/**` tree.
-- `Activatable` when canonical query/selection contracts are locked and parity fixtures exist.
+- `Activatable` when canonical query/selection contracts are locked and the live path is review-clean.
 - `Activated` when the rebuilt grid screen is the live path.
 - `Legacy removed` when the legacy grid-screen path is deleted.
 
 Activation depends on:
-- [PBI-590-greenfield-frontend-reference-fixtures-and-parity-harness.md](./docs/pbis/active-alpha/PBI-590-greenfield-frontend-reference-fixtures-and-parity-harness.md)
 - [PBI-584-greenfield-frontend-grid-query-and-selection-reset.md](./docs/pbis/active-alpha/PBI-584-greenfield-frontend-grid-query-and-selection-reset.md)
 - [PBI-587-greenfield-frontend-state-ownership-reset.md](./docs/pbis/active-alpha/PBI-587-greenfield-frontend-state-ownership-reset.md)
 - [PBI-583-greenfield-frontend-runtime-reconciliation-reset.md](./docs/pbis/active-alpha/PBI-583-greenfield-frontend-runtime-reconciliation-reset.md)
@@ -59,7 +58,7 @@ The rebuilt grid screen should not depend on:
 This PBI may start only when:
 - [PBI-591-greenfield-frontend-shell-and-sidebar-rebuild.md](./docs/pbis/active-alpha/PBI-591-greenfield-frontend-shell-and-sidebar-rebuild.md) is `Activated`
 - [PBI-584-greenfield-frontend-grid-query-and-selection-reset.md](./docs/pbis/active-alpha/PBI-584-greenfield-frontend-grid-query-and-selection-reset.md), [PBI-583-greenfield-frontend-runtime-reconciliation-reset.md](./docs/pbis/active-alpha/PBI-583-greenfield-frontend-runtime-reconciliation-reset.md), and [PBI-587-greenfield-frontend-state-ownership-reset.md](./docs/pbis/active-alpha/PBI-587-greenfield-frontend-state-ownership-reset.md) are `Implemented` and review-clean for the grid path
-- grid parity fixtures are complete enough to compare real grid states
+- grid live-path verification is complete enough to compare real grid states
 
 ## Next rule
 Do not start [PBI-593-greenfield-frontend-inspector-and-selection-surface-rebuild.md](./docs/pbis/active-alpha/PBI-593-greenfield-frontend-inspector-and-selection-surface-rebuild.md) until this PBI is `Activated`.
@@ -69,7 +68,7 @@ Do not start [PBI-593-greenfield-frontend-inspector-and-selection-surface-rebuil
 - canonical query/selection semantics are used by default
 - selection-driven actions target what the user actually selected
 - the activated grid screen includes a stable right-hand inspector/context rail
-- parity is confirmed against the reference harness
+- the live grid path is review-clean
 - the rebuilt grid no longer depends on the legacy `ImageGrid.tsx` architecture
 - tile/chrome primitives that are visually/functionally equivalent to inspector or preview surfaces are shared instead of re-implemented
 - grid runtime settle is query-aware and does not rely on broad refetch as the normal correctness path
@@ -77,10 +76,9 @@ Do not start [PBI-593-greenfield-frontend-inspector-and-selection-surface-rebuil
 - temporary TODOs are allowed only for cross-PBI boundaries already named in the dependency list; they do not allow the next Track A PBI to start early
 
 ## Tests
-- fixture rendering tests for grid states
 - query construction tests
 - selection-target translation tests
-- parity checklist and visual confirmation notes
+- live-path verification notes
 
 This PBI must follow the cross-layer naming contract in [PBI-572-cross-layer-naming-contract.md](./docs/pbis/active-alpha/PBI-572-cross-layer-naming-contract.md).
 This PBI must follow the cross-layer testing rules in [PBI-579-cross-layer-testing-rules.md](./docs/pbis/active-alpha/PBI-579-cross-layer-testing-rules.md).

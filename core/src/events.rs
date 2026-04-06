@@ -102,6 +102,7 @@ pub fn emit_state_changed(origin: &str, impact: ChangeImpact) {
         smart_folder_order_changes: impact.smart_folder_order_changes,
         sidebar_node_patches: impact.sidebar_node_patches,
         smart_folder_counts: impact.smart_folder_counts,
+        grid_reorder: impact.grid_reorder,
     };
 
     let event = StateChangedEvent {

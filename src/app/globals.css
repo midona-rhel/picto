@@ -46,6 +46,12 @@ button, a, [role="button"] {
   transition: background 100ms ease;
 }
 
+/* Smart folder tag input: compact chips */
+.smartfolder-tag-input [class*="chip"] {
+  height: 22px;
+  font-size: 11px;
+}
+
 ::selection {
   background: var(--color-primary-30);
 }

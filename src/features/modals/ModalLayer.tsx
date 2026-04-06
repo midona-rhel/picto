@@ -3,6 +3,8 @@
  */
 
 import { useAtomValue, useSetAtom } from 'jotai';
+import { modalStyles } from '../../shared/ui/GlassModal';
+import { ToggleSwitch } from '../../shared/ui/ToggleSwitch/ToggleSwitch';
 import {
   confirmModalAtom,
   smartFolderModalAtom,
@@ -19,7 +21,7 @@ import { CreateGroupModal } from './CreateGroupModal';
 import { smartFoldersController } from '../../controllers/smartFoldersController';
 import { foldersController } from '../../controllers/foldersController';
 import { subscriptionsController } from '../../controllers/subscriptionsController';
-import * as api from '../../platform/api';
+import { filesController } from '../../controllers/filesController';
 
 export function ModalLayer() {
   const confirm = useAtomValue(confirmModalAtom);
@@ -93,7 +95,7 @@ export function ModalLayer() {
         onClose={() => setExport({ open: false, fileCount: 0 })}
         onExport={(config) => {
           if (exportState.target) {
-            void api.exportMedia(exportState.target, {
+            void filesController.exportMedia(exportState.target, {
               output_dir: config.outputDir,
               format: config.format === 'original' ? null : config.format,
               quality: config.quality,
@@ -120,7 +122,7 @@ export function ModalLayer() {
         open={folderImport.open}
         onClose={() => setFolderImport({ ...folderImport, open: false })}
         onConfirm={() => {
-          void api.importFolder(folderImport.path, {
+          void filesController.importFolder(folderImport.path, {
             preserve_structure: folderImport.preserveStructure,
             parent_folder_id: folderImport.targetFolderId,
           });
@@ -130,18 +132,17 @@ export function ModalLayer() {
         confirmLabel="Import"
         message=""
       >
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-          <p style={{ margin: 0 }}>
+        <div className={modalStyles.stackSm}>
+          <p className={modalStyles.helpText} style={{ fontSize: 13 }}>
             Import <strong>{folderImport.path.split(/[\\/]/).filter(Boolean).pop() ?? 'folder'}</strong>
           </p>
-          <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: 'var(--color-text-secondary)' }}>
-            <input
-              type="checkbox"
-              checked={folderImport.preserveStructure}
-              onChange={(e) => setFolderImport({ ...folderImport, preserveStructure: e.currentTarget.checked })}
+          <div className={modalStyles.rowSpread}>
+            <span className={modalStyles.fieldLabel}>Keep folder structure</span>
+            <ToggleSwitch
+              on={folderImport.preserveStructure}
+              onChange={() => setFolderImport({ ...folderImport, preserveStructure: !folderImport.preserveStructure })}
             />
-            Keep folder structure
-          </label>
+          </div>
         </div>
       </ConfirmModal>
     </>

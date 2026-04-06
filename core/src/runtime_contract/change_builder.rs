@@ -38,6 +38,7 @@ pub struct ChangeImpact {
     pub smart_folder_order_changes: Option<Vec<(i64, i64)>>,
     pub sidebar_node_patches: Option<Vec<SidebarNodePatch>>,
     pub smart_folder_counts: Option<Vec<(i64, i64)>>,
+    pub grid_reorder: Option<bool>,
 }
 
 /// Merge items into an `Option<Vec<T>>` with dedup.
@@ -365,6 +366,11 @@ impl ChangeImpact {
         self
     }
 
+    pub fn grid_reorder(mut self) -> Self {
+        self.grid_reorder = Some(true);
+        self
+    }
+
     pub fn all_smart_folder_scopes_changed(mut self) -> Self {
         self = self.add_domains(&[Domain::SmartFolders, Domain::Sidebar]);
         self.merge_extra_grid_scopes(vec!["smart:all".into()]);
@@ -448,6 +454,13 @@ impl ChangeImpact {
             .folder_ids(vec![folder_id])
             .folder_membership_changed(vec![folder_id])
             .extra_grid_scopes(vec![format!("folder:{folder_id}")])
+            .grid_reorder()
+    }
+
+    pub fn collection_item_reorder(collection_id: i64) -> Self {
+        Self::new()
+            .extra_grid_scopes(vec![format!("collection:{collection_id}")])
+            .grid_reorder()
     }
 
     pub fn collection_update(collection_id: i64) -> Self {

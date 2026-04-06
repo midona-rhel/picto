@@ -9,7 +9,6 @@ import { useCallback, useEffect, useRef } from 'react';
 import { isNativeDragPending as isNativeDragPendingFn, isDragActive as isDragActiveFn, getDragState, startNativeDrag as startNativeDragFn } from '../features/grid/dragState';
 import { useAtomValue, useSetAtom } from 'jotai';
 import { IconLayoutSidebar, IconSettings, IconChevronLeft, IconChevronRight, IconPin, IconPinFilled } from '@tabler/icons-react';
-import { getSettings } from '../platform/api';
 import { Sidebar } from '../features/sidebar/Sidebar';
 import { GridScreen } from '../features/grid/GridScreen';
 import { GridToolbar, ViewerToolbar } from '../features/grid/GridToolbar';
@@ -28,6 +27,7 @@ import { gridActiveAtom, gridScopeLabelAtom } from '../state/grid';
 import { displayedScopeLabelAtom, displayedGridSnapshotAtom, inspectorPinnedAtom } from '../state/inspector';
 import { viewerSessionAtom } from '../state/viewer';
 import { startAppRuntime } from '../runtime/appRuntime';
+import { registerAppSettingsReload } from '../runtime/appSettingsSettle';
 import { zoomController } from '../controllers/zoomController';
 import { canGoBackAtom, canGoForwardAtom, goBack, goForward, pushHistory } from '../state/navigationHistory';
 import { getShortcut, matchesShortcutDef } from '../shared/lib/shortcuts';
@@ -35,6 +35,7 @@ import { KbdTooltip } from '../shared/ui/KbdTooltip';
 import { WindowControls } from '../shared/ui/WindowControls';
 import { listen } from '../platform/ipc';
 import { appController } from '../controllers/appController';
+import { settingsController } from '../controllers/settingsController';
 import styles from './AppShell.module.css';
 
 function InspectorTitlebarActions() {
@@ -138,7 +139,6 @@ export function AppShell() {
   const toggleSidebar = useSetAtom(toggleSidebarAtom);
   const toggleInspector = useSetAtom(toggleInspectorAtom);
   const setActiveNodeId = useSetAtom(activeNodeIdAtom);
-
   const toggleBothPanels = () => { toggleSidebar(); toggleInspector(); };
   const isSubscriptionsWorkspace = activeNodeId === 'system:subscriptions';
 
@@ -192,7 +192,7 @@ export function AppShell() {
     };
 
     const loadAppSettings = () => {
-      getSettings().then((s) => {
+      settingsController.getSettings().then((s) => {
         setShowTreeGuides(s.showTreeGuides ?? true);
         if (s.colorScheme) applyTheme(s.colorScheme);
       }).catch(() => {});
@@ -200,14 +200,9 @@ export function AppShell() {
 
     loadAppSettings();
 
-    // Reload settings when backend emits view_prefs_changed (e.g. settings window saved)
-    let unlistenSettings: (() => void) | undefined;
+    const unregisterSettingsReload = registerAppSettingsReload(loadAppSettings);
     let unlistenOsTheme: (() => void) | undefined;
     void import('../platform/ipc').then(({ listen }) => {
-      listen<{ changes?: { view_prefs_changed?: boolean } }>('runtime/state_changed', (event) => {
-        if (event.payload.changes?.view_prefs_changed) loadAppSettings();
-      }).then((fn) => { unlistenSettings = fn; });
-
       // Auto theme: OS dark/light mode changed
       listen<{ isDark: boolean }>('picto:os-theme-changed', (event) => {
         const currentTheme = localStorage.getItem('picto-theme');
@@ -219,7 +214,11 @@ export function AppShell() {
         document.documentElement.style.colorScheme = lightThemes.has(resolved) ? 'light' : 'dark';
       }).then((fn) => { unlistenOsTheme = fn; });
     });
-    return () => { stopRuntime(); unlistenSettings?.(); unlistenOsTheme?.(); };
+    return () => {
+      stopRuntime();
+      unregisterSettingsReload();
+      unlistenOsTheme?.();
+    };
   }, []);
 
   useEffect(() => {
@@ -257,18 +256,13 @@ export function AppShell() {
   }, [setActiveNodeId]);
 
   // ── Native drag-out — start OS file drag when cursor leaves the window during a grid drag ──
+  // Fallback: if pointer drag is active and cursor exits window, start native OS drag
   useEffect(() => {
-    const handler = async (e: MouseEvent) => {
+    const handler = (e: MouseEvent) => {
       if (!isDragActiveFn()) return;
       if (e.clientX <= 0 || e.clientY <= 0 || e.clientX >= window.innerWidth || e.clientY >= window.innerHeight) {
         const state = getDragState();
-        const firstHash = state.hashes[0];
-        const count = state.hashes.length;
-        // Generate icon with count badge for multi-file drags
-        const { createDragIcon } = await import('../shared/lib/dragIcon');
-        const thumbnailUrl = firstHash ? `media://localhost/thumb/${firstHash}.jpg` : '';
-        const iconDataUrl = await createDragIcon(thumbnailUrl, count);
-        startNativeDragFn(state.hashes, iconDataUrl);
+        startNativeDragFn(state.hashes, '');
       }
     };
     document.addEventListener('mouseleave', handler);
@@ -357,12 +351,16 @@ export function AppShell() {
             <ViewerToolbar />
           ) : (
             <>
-              <button className={`${styles.navBtn} ${!canBack ? styles.navBtnDisabled : ''}`} onClick={canBack ? goBack : undefined} title="Back (⌘[)">
-                <IconChevronLeft size={16} stroke={1.5} />
-              </button>
-              <button className={`${styles.navBtn} ${!canForward ? styles.navBtnDisabled : ''}`} onClick={canForward ? goForward : undefined} title="Forward (⌘])">
-                <IconChevronRight size={16} stroke={1.5} />
-              </button>
+              <KbdTooltip label="Back" shortcut="Mod+[">
+                <button className={`${styles.navBtn} ${!canBack ? styles.navBtnDisabled : ''}`} onClick={canBack ? goBack : undefined}>
+                  <IconChevronLeft size={16} stroke={1.5} />
+                </button>
+              </KbdTooltip>
+              <KbdTooltip label="Forward" shortcut="Mod+]">
+                <button className={`${styles.navBtn} ${!canForward ? styles.navBtnDisabled : ''}`} onClick={canForward ? goForward : undefined}>
+                  <IconChevronRight size={16} stroke={1.5} />
+                </button>
+              </KbdTooltip>
               <ScopeTitle />
               {gridActive && !isSubscriptionsWorkspace ? (
                 <GridToolbar />

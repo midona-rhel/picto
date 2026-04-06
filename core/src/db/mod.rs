@@ -276,6 +276,14 @@ fn reconcile_open_schema(conn: &Connection) -> Result<(), String> {
     )
     .map_err(|e| format!("Failed to remove rejected-media schema: {e}"))?;
     reconcile_ingest_queue_schema(conn)?;
+    if has_column(conn, "folder", "total_size_bytes").map_err(|e| e.to_string())? == false {
+        conn.execute_batch("ALTER TABLE folder ADD COLUMN total_size_bytes INTEGER NOT NULL DEFAULT 0")
+            .map_err(|e| format!("Failed to add folder.total_size_bytes: {e}"))?;
+    }
+    if has_column(conn, "smart_folder", "total_size_bytes").map_err(|e| e.to_string())? == false {
+        conn.execute_batch("ALTER TABLE smart_folder ADD COLUMN total_size_bytes INTEGER NOT NULL DEFAULT 0")
+            .map_err(|e| format!("Failed to add smart_folder.total_size_bytes: {e}"))?;
+    }
     Ok(())
 }
 

@@ -1,7 +1,11 @@
-import * as api from '../platform/api';
+import { openSettingsWindow } from '../platform/shellApi';
 
 export const appController = {
   openSettingsWindow(): Promise<void> {
-    return api.openSettingsWindow();
+    return openSettingsWindow();
+  },
+
+  restartMainWindow(): Promise<void> {
+    return (window as any).picto?.api?.restartMainWindow?.() ?? Promise.resolve();
   },
 };

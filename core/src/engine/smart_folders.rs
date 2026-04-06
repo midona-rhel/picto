@@ -75,4 +75,9 @@ impl ApplicationEngine {
                 .map(|bitmap| bitmap.len() as i64)
         })
     }
+
+    /// Get the current bitmap length for a smart folder (after compiler has run).
+    pub fn smart_folder_bitmap_len(&self, smart_folder_id: i64) -> i64 {
+        self.db.bitmap_len(&crate::db::projection::bitmaps::BitmapKey::SmartFolder(smart_folder_id)) as i64
+    }
 }

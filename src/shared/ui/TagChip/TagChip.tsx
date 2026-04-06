@@ -43,7 +43,7 @@ export function TagChip({ namespace, subtag, icon, colorRgb, onRemove, onClick, 
 
   return (
     <span
-      className={styles.chip}
+      className={`${styles.chip} ${onRemove ? styles.chipWithRemove : ''}`}
       style={chipStyle}
       onClick={onClick}
       onContextMenu={onContextMenu}

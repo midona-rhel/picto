@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { listen } from '../../platform/ipc';
 import { authController, type AuthSiteSnapshot, type AuthWorkspaceSnapshot } from '../../controllers/authController';
+import { registerAuthWorkspaceRefresh } from '../../runtime/subscriptionsSettle';
 import type { AuthSessionState } from '../../shared/types/subscriptions';
 import { AuthSiteDetail, type AuthManualFormState } from './components/AuthSiteDetail';
 import { AuthSitesSidebar } from './components/AuthSitesSidebar';
@@ -50,7 +51,7 @@ export function AuthWorkspace({
     if (externalSelectedSiteId != null) setSelectedSiteId(externalSelectedSiteId);
   }, [externalSelectedSiteId]);
 
-  async function refresh(preserveSelection = true) {
+  const refresh = useCallback(async (preserveSelection = true) => {
     const next = await authController.loadWorkspaceSnapshot();
     setSnapshot(next);
     onSitesLoaded?.(next.sites);
@@ -58,7 +59,7 @@ export function AuthWorkspace({
       if (preserveSelection && current && next.sites.some((site) => site.site.id === current)) return current;
       return next.sites[0]?.site.id ?? null;
     });
-  }
+  }, [onSitesLoaded]);
 
   useEffect(() => {
     void refresh();
@@ -113,29 +114,7 @@ export function AuthWorkspace({
     };
   }, []);
 
-  useEffect(() => {
-    let cancelled = false;
-    let unlisten: (() => void) | undefined;
-    void listen<{ changes?: { domains?: string[] } }>('runtime/state_changed', ({ payload }) => {
-      if (cancelled) return;
-      if ((payload.changes?.domains ?? []).includes('subscriptions')) {
-        void refresh();
-      }
-    }).then((dispose) => {
-      if (cancelled) {
-        dispose();
-        return;
-      }
-      unlisten = dispose;
-    }).catch((err) => {
-      console.error('Failed to subscribe to auth state changes', err);
-    });
-
-    return () => {
-      cancelled = true;
-      if (unlisten) unlisten();
-    };
-  }, []);
+  useEffect(() => registerAuthWorkspaceRefresh(() => { void refresh(); }), [refresh]);
 
   useEffect(() => {
     if (session.status !== 'completed' || !session.credential) return;

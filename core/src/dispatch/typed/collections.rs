@@ -125,7 +125,12 @@ pub async fn reorder_collection_members(
 ) -> Result<(), String> {
     state
         .engine
-        .reorder_collection_members_by_hashes(input.id, &input.hashes)
+        .reorder_collection_members_by_hashes(input.id, &input.hashes)?;
+    crate::events::emit_state_changed(
+        "reorder_collection_members",
+        crate::runtime_contract::change_builder::ChangeImpact::collection_item_reorder(input.id),
+    );
+    Ok(())
 }
 
 pub async fn add_collection_members(

@@ -67,11 +67,9 @@ const updater = {
 };
 
 const webview = {
-  startNativeDrag: (hashes, iconDataUrl) => ipcRenderer.invoke('picto:drag:start', { hashes, iconDataUrl }),
+  startNativeDrag: (hashes, iconDataUrl) => ipcRenderer.send('ondragstart', { hashes, iconDataUrl }),
   onDragDropEvent: (handler) => {
     // Counter tracks nested dragenter/dragleave from child elements.
-    // Without this, dragleave fires when moving between children and
-    // the drop overlay disappears prematurely.
     let dragCounter = 0;
 
     const dragEnter = (e) => {

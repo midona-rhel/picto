@@ -8,7 +8,7 @@ import { IconRotate2 } from '@tabler/icons-react';
 import { CURATED_ICONS } from './iconRegistry';
 import styles from './IconPicker.module.css';
 
-const ICON_SIZE = 16;
+const ICON_SIZE = 19;
 
 interface IconPickerProps {
   value: string | null;

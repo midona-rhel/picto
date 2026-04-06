@@ -45,7 +45,7 @@ export function ConfirmModal({
       }
     >
       {children ?? (
-        <p style={{ margin: 0, color: 'var(--color-text-secondary)', fontSize: 13, lineHeight: 1.5 }}>
+        <p className={modalStyles.helpText} style={{ fontSize: 13, lineHeight: 1.5 }}>
           {message}
         </p>
       )}

@@ -230,12 +230,15 @@ pub async fn update_smart_folder(
             },
             ..Default::default()
         });
+    // Read the updated bitmap count after compiler ran
+    let sf_count = state.engine.smart_folder_bitmap_len(sf_id);
     let mut impact = crate::runtime_contract::change_builder::ChangeImpact::new()
         .add_domains(&[
             crate::runtime_contract::state_change::Domain::SmartFolders,
             crate::runtime_contract::state_change::Domain::Sidebar,
         ])
         .smart_folder_ids(vec![sf_id])
+        .smart_folder_counts(vec![(sf_id, sf_count)])
         .sidebar_node_patch(patch);
     if predicate_changed {
         impact = impact.extra_grid_scopes(vec![format!("smart:{sf_id}")]);

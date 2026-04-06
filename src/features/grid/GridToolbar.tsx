@@ -50,14 +50,11 @@ function ZoomControls() {
 
   return (
     <div className={styles.sliderSection}>
-      <button
-        className={styles.icBtn}
-        onClick={zoomOut}
-        disabled={targetSize <= ZOOM_MIN}
-        title="Zoom out (-)"
-      >
-        <IconMinus size={16} />
-      </button>
+      <KbdTooltip label="Zoom out" shortcut="-">
+        <button className={styles.icBtn} onClick={zoomOut} disabled={targetSize <= ZOOM_MIN}>
+          <IconMinus size={16} />
+        </button>
+      </KbdTooltip>
       <input
         type="range"
         min={ZOOM_MIN}
@@ -67,14 +64,11 @@ function ZoomControls() {
         onChange={(e) => setAndSave(Number(e.target.value))}
         className={styles.zoomSlider}
       />
-      <button
-        className={styles.icBtn}
-        onClick={zoomIn}
-        disabled={targetSize >= ZOOM_MAX}
-        title="Zoom in (+)"
-      >
-        <IconPlus size={16} />
-      </button>
+      <KbdTooltip label="Zoom in" shortcut="+">
+        <button className={styles.icBtn} onClick={zoomIn} disabled={targetSize >= ZOOM_MAX}>
+          <IconPlus size={16} />
+        </button>
+      </KbdTooltip>
     </div>
   );
 }
@@ -262,12 +256,11 @@ export function GridToolbar() {
           ref={viewBtnRef}
           className={`${styles.icBtn} ${viewMenu.state ? styles.icBtnActive : ''}`}
           onClick={openViewMenu}
-          title="View"
         >
           <IconAdjustments size={14} style={{ transform: 'rotate(90deg)' }} />
         </button>
 
-        <button className={styles.icBtn} title="Filter">
+        <button className={styles.icBtn}>
           <IconFilter size={14} />
         </button>
 

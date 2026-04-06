@@ -1,7 +1,6 @@
 .root {
-  width: 202px;
+  width: 100%;
   padding: 2px 0;
-  margin: 0 -2px;
 }
 
 .searchRow {
@@ -60,7 +59,7 @@
 
 .grid {
   display: grid;
-  grid-template-columns: repeat(7, 26px);
+  grid-template-columns: repeat(auto-fill, 30px);
   gap: 2px;
   max-height: 200px;
   overflow-y: auto;
@@ -70,8 +69,8 @@
 .iconBtn {
   appearance: none;
   border: none;
-  width: 26px;
-  height: 26px;
+  width: 30px;
+  height: 30px;
   display: flex;
   align-items: center;
   justify-content: center;

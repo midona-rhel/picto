@@ -10,7 +10,7 @@
 
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { IconDots, IconLink, IconPlus, IconX, IconExternalLink } from '@tabler/icons-react';
-import { openExternalUrl } from '../../../platform/api';
+import { shellController } from '../../../controllers/shellController';
 import styles from './InspectorField.module.css';
 
 // ── InspectorField (name, notes, any text) ───────────────────────
@@ -232,7 +232,7 @@ export function InspectorSourceField({ urls, onChange, readOnly = false }: Sourc
                 key={i}
                 className={styles.popoverLink}
                 href={url}
-                onClick={(e) => { e.preventDefault(); void openExternalUrl(url); }}
+                onClick={(e) => { e.preventDefault(); void shellController.openExternalUrl(url); }}
               >
                 {url}
               </a>
@@ -273,7 +273,7 @@ export function InspectorSourceField({ urls, onChange, readOnly = false }: Sourc
               {url.trim() && editIdx !== idx && (
                 <button
                   className={styles.urlActionBtn}
-                  onClick={() => { void openExternalUrl(url); }}
+                  onClick={() => { void shellController.openExternalUrl(url); }}
                   type="button" title="Open link"
                 >
                   <IconExternalLink size={13} stroke={1.5} />

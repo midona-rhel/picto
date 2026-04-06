@@ -8,23 +8,23 @@ use crate::ingest_queue::IngestQueueCounts;
 use crate::types::{RunningSubscriptions, SubscriptionGroupInfo, SubscriptionInfo, SubscriptionQueryInfo};
 
 use super::archive::{clear_subscription_archive_entries_at_root, subscription_query_archive_prefix};
-use super::db::{
-    create_subscription_query_run, create_subscription_run, finish_subscription_query_run,
-    finish_subscription_run, list_retryable_subscription_download_attempts,
-    list_subscription_download_attempts, list_subscription_issues, list_subscription_query_runs,
-    list_subscription_runs, mark_subscription_download_attempt_retrying,
-    reset_subscription_query_state, reset_subscription_state,
-    resolve_subscription_download_attempt, resolve_subscription_issues,
+use super::runtime_db::{
+    add_subscription_entity, create_subscription_query_run, create_subscription_run,
+    finish_subscription_query_run, finish_subscription_run,
+    get_subscription_post_collection, list_retryable_subscription_download_attempts,
+    list_subscription_download_attempts, list_subscription_issues,
+    list_subscription_post_members, list_subscription_query_runs, list_subscription_runs,
+    mark_subscription_download_attempt_retrying, reset_subscription_query_state,
+    reset_subscription_state, resolve_subscription_download_attempt, resolve_subscription_issues,
     set_query_completed_initial_run, set_query_resume_state, set_query_terminal_state,
     update_query_progress, upsert_subscription_download_attempt, upsert_subscription_issue,
     upsert_subscription_post_collection, upsert_subscription_post_member,
-    add_subscription_entity, get_subscription_post_collection,
 };
 use super::types::{
     OwnedSubscriptionDownloadAttemptUpsert, OwnedSubscriptionPostMemberUpsert, Subscription,
-    SubscriptionDownloadAttemptRecord, SubscriptionGroup, SubscriptionIssueRecord,
-    SubscriptionPostMemberRecord, SubscriptionQuery, SubscriptionQueryRunRecord,
-    SubscriptionRunRecord,
+    SubscriptionDownloadAttemptRecord, SubscriptionDownloadAttemptUpsert, SubscriptionGroup,
+    SubscriptionIssueRecord, SubscriptionPostMemberRecord, SubscriptionPostMemberUpsert,
+    SubscriptionQuery, SubscriptionQueryRunRecord, SubscriptionRunRecord,
 };
 
 #[derive(Debug, Clone)]
@@ -741,7 +741,7 @@ impl<'a> SubscriptionRuntimeService<'a> {
         self.db.with_write(move |conn| {
             upsert_subscription_download_attempt(
                 conn,
-                super::db::SubscriptionDownloadAttemptUpsert {
+                SubscriptionDownloadAttemptUpsert {
                     subscription_id: input.subscription_id,
                     query_id: input.query_id,
                     query_run_id: input.query_run_id,
@@ -797,7 +797,7 @@ impl<'a> SubscriptionRuntimeService<'a> {
         self.db.with_write(move |conn| {
             upsert_subscription_post_member(
                 conn,
-                super::db::SubscriptionPostMemberUpsert {
+                SubscriptionPostMemberUpsert {
                     subscription_id: input.subscription_id,
                     site_id: &input.site_id,
                     post_id: &input.post_id,
@@ -856,9 +856,8 @@ impl<'a> SubscriptionRuntimeService<'a> {
     ) -> Result<Vec<SubscriptionPostMemberRecord>, String> {
         let site_id = site_id.to_string();
         let post_id = post_id.to_string();
-        self.db.with_read(move |conn| {
-            super::db::list_subscription_post_members(conn, subscription_id, &site_id, &post_id)
-        })
+        self.db
+            .with_read(move |conn| list_subscription_post_members(conn, subscription_id, &site_id, &post_id))
     }
 
     pub async fn get_subscription_post_collection(

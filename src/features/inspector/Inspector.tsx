@@ -10,9 +10,11 @@ import { useEffect, useState } from 'react';
 import { useAtomValue, getDefaultStore } from 'jotai';
 import { IconAlertCircle, IconFolder, IconPlus } from '@tabler/icons-react';
 import { ContextMenu, useContextMenu } from '../../shared/ui/ContextMenu';
+import { KbdTooltip } from '../../shared/ui/KbdTooltip';
 import { ColorPalette } from '../../shared/ui/ColorPalette';
-import * as api from '../../platform/api';
 import * as entityMutations from '../../controllers/entityMutations';
+import { foldersController } from '../../controllers/foldersController';
+import { smartFoldersController } from '../../controllers/smartFoldersController';
 import { PropertyRow } from '../../shared/ui/PropertyRow/PropertyRow';
 import { InspectorSection } from '../../shared/ui/InspectorSection/InspectorSection';
 import { StarRating } from '../../shared/ui/StarRating/StarRating';
@@ -27,7 +29,12 @@ import {
   scopeInspectorViewModelAtom,
 } from '../../state/inspector';
 import { gridItemsAtom } from '../../state/grid';
-import { selectionTargetAtom, selectedEntityHashesAtom } from '../../state/selection';
+import {
+  selectionCountAtom,
+  selectionFingerprintAtom,
+  selectionTargetAtom,
+  selectedEntityHashesAtom,
+} from '../../state/selection';
 import { sidebarNodesAtom } from '../../state/sidebar';
 import { tagSelectPortalAtom, folderPickerPortalAtom } from '../../state/portals';
 import { activeNodeIdAtom } from '../../state/navigation';
@@ -106,6 +113,7 @@ function Preview({ hashes, type }: { hashes: string[]; type: 'single' | 'collage
 
   if (type === 'collage') {
     return (
+      <div className={styles.preview}>
       <div className={styles.thumbnail}>
         <div className={styles.pic3} />
         <div className={styles.pic2} />
@@ -122,6 +130,7 @@ function Preview({ hashes, type }: { hashes: string[]; type: 'single' | 'collage
             <div className={styles.folderPlaceholder}><IconFolder size={32} stroke={1} /></div>
           )}
         </div>
+      </div>
       </div>
     );
   }
@@ -157,13 +166,13 @@ function Preview({ hashes, type }: { hashes: string[]; type: 'single' | 'collage
 function useSelectionSummary() {
   const target = useAtomValue(selectionTargetAtom);
   const selectedHashes = useAtomValue(selectedEntityHashesAtom);
+  const selectionCount = useAtomValue(selectionCountAtom);
+  const selectionFingerprint = useAtomValue(selectionFingerprintAtom);
   const [summary, setSummary] = useState<SelectionSummary | null>(null);
   const [ready, setReady] = useState(false);
 
-  const fingerprint = [...selectedHashes].sort().join(',');
-
   useEffect(() => {
-    if (!target || selectedHashes.size < 2) {
+    if (!target || selectionCount < 2) {
       setSummary(null);
       setReady(true); // nothing to wait for
       return;
@@ -175,7 +184,7 @@ function useSelectionSummary() {
       if (!stale) { setSummary(s); setReady(true); }
     }).catch(() => { if (!stale) setReady(true); });
     return () => { stale = true; };
-  }, [fingerprint]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [selectionCount, selectionFingerprint, target]);
 
   return { target, selectedHashes, summary, ready };
 }
@@ -300,19 +309,19 @@ export function Inspector() {
   const canEdit = !isSystem;
 
   const saveName = async (v: string) => {
-    if (scopeVM.folder?.folderId != null) { await api.renameFolder(scopeVM.folder.folderId, v); return; }
+    if (scopeVM.folder?.folderId != null) { await foldersController.rename(scopeVM.folder.folderId, v); return; }
     if (scopeVM.smartFolder?.smartFolderId != null) {
-      await api.updateSmartFolder({ id: String(scopeVM.smartFolder.smartFolderId), folder: buildSmartFolderPayload(scopeVM, { name: v }) });
+      await smartFoldersController.update(scopeVM.smartFolder.smartFolderId, buildSmartFolderPayload(scopeVM, { name: v }));
     }
   };
   const saveNotes = async (v: string) => {
-    if (scopeVM.folder?.folderId != null) { await api.updateFolder(scopeVM.folder.folderId, { notes: v || null }); return; }
+    if (scopeVM.folder?.folderId != null) { await foldersController.applyNotes(scopeVM.folder.folderId, v || null); return; }
     if (scopeVM.smartFolder?.smartFolderId != null) {
-      await api.updateSmartFolder({ id: String(scopeVM.smartFolder.smartFolderId), folder: buildSmartFolderPayload(scopeVM, { notes: v || null }) });
+      await smartFoldersController.update(scopeVM.smartFolder.smartFolderId, buildSmartFolderPayload(scopeVM, { notes: v || null }));
     }
   };
 
-  const scopeSize = scopeVM.totalSizeBytes != null && scopeVM.totalSizeBytes > 0 ? fmtSize(scopeVM.totalSizeBytes) : null;
+  const scopeSize = scopeVM.totalSizeBytes != null ? fmtSize(scopeVM.totalSizeBytes) : null;
 
   return (
     <Shell>
@@ -331,7 +340,7 @@ export function Inspector() {
       <InspectorSection title="Properties">
         <div className={styles.propsStack}>
           <PropertyRow label="Items" value={scopeVM.totalCount.toLocaleString()} mono />
-          {scopeSize && <PropertyRow label="Size" value={scopeSize} mono />}
+          {scopeSize != null && <PropertyRow label="Size" value={scopeSize} mono />}
           {scopeVM.searchText && <PropertyRow label="Search" value={scopeVM.searchText} />}
           {node.kind === 'folder' && <PropertyRow label="Auto tags" value={scopeVM.folder!.autoTags.length > 0 ? 'Yes' : 'No'} />}
           {node.kind === 'folder' && <PropertyRow label="Watch" value={scopeVM.folder!.watchEnabled ? 'Yes' : 'No'} />}
@@ -379,9 +388,11 @@ function TagsSection({ tags, onRemove, onNavigate }: {
             }}
           />
         ))}
-        <button className={styles.tagAddBtn} onClick={(e) => openPortal(e, tagSelectPortalAtom)} type="button" title="Add tag">
-          <IconPlus size={14} stroke={1.5} />
-        </button>
+        <KbdTooltip label="Add Tags" shortcut="T">
+          <button className={styles.tagAddBtn} onClick={(e) => openPortal(e, tagSelectPortalAtom)} type="button">
+            <IconPlus size={14} stroke={1.5} />
+          </button>
+        </KbdTooltip>
       </div>
       {chipMenu.state && <ContextMenu entries={chipMenu.state.entries} position={chipMenu.state.position} onClose={chipMenu.close} searchable={false} />}
     </InspectorSection>
@@ -410,9 +421,11 @@ function FoldersSection({ folders, onRemove, onNavigate }: {
             }}
           />
         ))}
-        <button className={styles.tagAddBtn} onClick={(e) => openPortal(e, folderPickerPortalAtom)} type="button" title="Add to folder">
-          <IconPlus size={14} stroke={1.5} />
-        </button>
+        <KbdTooltip label="Add to Folder" shortcut="Shift+F">
+          <button className={styles.tagAddBtn} onClick={(e) => openPortal(e, folderPickerPortalAtom)} type="button">
+            <IconPlus size={14} stroke={1.5} />
+          </button>
+        </KbdTooltip>
       </div>
       {chipMenu.state && <ContextMenu entries={chipMenu.state.entries} position={chipMenu.state.position} onClose={chipMenu.close} searchable={false} />}
     </InspectorSection>

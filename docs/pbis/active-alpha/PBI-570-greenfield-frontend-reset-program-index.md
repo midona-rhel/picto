@@ -26,7 +26,7 @@ Current code facts:
 - `ImageGrid.tsx` is still an 889-line architecture choke point
 - `InspectorPanel.tsx` is still about 800 lines
 - `FilterBar.tsx` is still about 454 lines
-- `src/platform/api.ts` is still about 670 lines
+- `src/platform/api.ts` still exists as a compatibility facade while some controllers finish moving to smaller platform modules
 - legacy stores, new Jotai slices, controllers, runtime reducers, and large feature components are all interleaved in the same active tree
 
 That means the current “migrate slice by slice inside `src/**`” approach keeps producing churn:
@@ -94,21 +94,20 @@ This program is executed through these child PBIs:
 1. [PBI-588-greenfield-frontend-architecture-contract-reset.md](./docs/pbis/active-alpha/PBI-588-greenfield-frontend-architecture-contract-reset.md)
 2. [PBI-594-greenfield-frontend-css-architecture-contract.md](./docs/pbis/active-alpha/PBI-594-greenfield-frontend-css-architecture-contract.md)
 3. [PBI-589-greenfield-frontend-legacy-quarantine-and-workspace-reset.md](./docs/pbis/active-alpha/PBI-589-greenfield-frontend-legacy-quarantine-and-workspace-reset.md)
-4. [PBI-590-greenfield-frontend-reference-fixtures-and-parity-harness.md](./docs/pbis/active-alpha/PBI-590-greenfield-frontend-reference-fixtures-and-parity-harness.md)
-5. [PBI-581-greenfield-frontend-api-layer-reset.md](./docs/pbis/active-alpha/PBI-581-greenfield-frontend-api-layer-reset.md)
-6. [PBI-582-greenfield-frontend-controller-boundary-reset.md](./docs/pbis/active-alpha/PBI-582-greenfield-frontend-controller-boundary-reset.md)
-7. [PBI-587-greenfield-frontend-state-ownership-reset.md](./docs/pbis/active-alpha/PBI-587-greenfield-frontend-state-ownership-reset.md)
-8. [PBI-583-greenfield-frontend-runtime-reconciliation-reset.md](./docs/pbis/active-alpha/PBI-583-greenfield-frontend-runtime-reconciliation-reset.md)
-9. [PBI-597-greenfield-entity-view-reconciliation-and-sidebar-delta-contract.md](./docs/pbis/active-alpha/PBI-597-greenfield-entity-view-reconciliation-and-sidebar-delta-contract.md)
-10. [PBI-591-greenfield-frontend-shell-and-sidebar-rebuild.md](./docs/pbis/active-alpha/PBI-591-greenfield-frontend-shell-and-sidebar-rebuild.md)
-11. [PBI-584-greenfield-frontend-grid-query-and-selection-reset.md](./docs/pbis/active-alpha/PBI-584-greenfield-frontend-grid-query-and-selection-reset.md)
-12. [PBI-592-greenfield-frontend-grid-screen-rebuild.md](./docs/pbis/active-alpha/PBI-592-greenfield-frontend-grid-screen-rebuild.md)
-13. [PBI-593-greenfield-frontend-inspector-and-selection-surface-rebuild.md](./docs/pbis/active-alpha/PBI-593-greenfield-frontend-inspector-and-selection-surface-rebuild.md)
-14. [PBI-585-greenfield-frontend-media-consumption-reset.md](./docs/pbis/active-alpha/PBI-585-greenfield-frontend-media-consumption-reset.md)
-15. [PBI-586-greenfield-frontend-feature-module-architecture-reset.md](./docs/pbis/active-alpha/PBI-586-greenfield-frontend-feature-module-architecture-reset.md)
-16. [PBI-595-greenfield-frontend-manager-navigation-and-surface-reset.md](./docs/pbis/active-alpha/PBI-595-greenfield-frontend-manager-navigation-and-surface-reset.md)
-17. [PBI-596-greenfield-random-active-image-view-contract.md](./docs/pbis/active-alpha/PBI-596-greenfield-random-active-image-view-contract.md)
-18. [PBI-571-frontend-shared-component-and-styling-system-reset.md](./docs/pbis/active-alpha/PBI-571-frontend-shared-component-and-styling-system-reset.md)
+4. [PBI-581-greenfield-frontend-api-layer-reset.md](./docs/pbis/active-alpha/PBI-581-greenfield-frontend-api-layer-reset.md)
+5. [PBI-582-greenfield-frontend-controller-boundary-reset.md](./docs/pbis/active-alpha/PBI-582-greenfield-frontend-controller-boundary-reset.md)
+6. [PBI-587-greenfield-frontend-state-ownership-reset.md](./docs/pbis/active-alpha/PBI-587-greenfield-frontend-state-ownership-reset.md)
+7. [PBI-583-greenfield-frontend-runtime-reconciliation-reset.md](./docs/pbis/active-alpha/PBI-583-greenfield-frontend-runtime-reconciliation-reset.md)
+8. [PBI-597-greenfield-entity-view-reconciliation-and-sidebar-delta-contract.md](./docs/pbis/active-alpha/PBI-597-greenfield-entity-view-reconciliation-and-sidebar-delta-contract.md)
+9. [PBI-591-greenfield-frontend-shell-and-sidebar-rebuild.md](./docs/pbis/active-alpha/PBI-591-greenfield-frontend-shell-and-sidebar-rebuild.md)
+10. [PBI-584-greenfield-frontend-grid-query-and-selection-reset.md](./docs/pbis/active-alpha/PBI-584-greenfield-frontend-grid-query-and-selection-reset.md)
+11. [PBI-592-greenfield-frontend-grid-screen-rebuild.md](./docs/pbis/active-alpha/PBI-592-greenfield-frontend-grid-screen-rebuild.md)
+12. [PBI-593-greenfield-frontend-inspector-and-selection-surface-rebuild.md](./docs/pbis/active-alpha/PBI-593-greenfield-frontend-inspector-and-selection-surface-rebuild.md)
+13. [PBI-585-greenfield-frontend-media-consumption-reset.md](./docs/pbis/active-alpha/PBI-585-greenfield-frontend-media-consumption-reset.md)
+14. [PBI-586-greenfield-frontend-feature-module-architecture-reset.md](./docs/pbis/active-alpha/PBI-586-greenfield-frontend-feature-module-architecture-reset.md)
+15. [PBI-595-greenfield-frontend-manager-navigation-and-surface-reset.md](./docs/pbis/active-alpha/PBI-595-greenfield-frontend-manager-navigation-and-surface-reset.md)
+16. [PBI-596-greenfield-random-active-image-view-contract.md](./docs/pbis/active-alpha/PBI-596-greenfield-random-active-image-view-contract.md)
+17. [PBI-571-frontend-shared-component-and-styling-system-reset.md](./docs/pbis/active-alpha/PBI-571-frontend-shared-component-and-styling-system-reset.md)
 
 ## Two tracks
 Run the frontend reset in two parallel tracks:
@@ -131,7 +130,7 @@ Track B owns:
 - controller/state/runtime rules for the rebuilt slices
 - query and selection semantics
 - media delivery contract stabilization
-- visual reference fixtures and parity harnesses
+- lightweight verification notes for rebuilt slices
 
 Track B exists so Track A can rebuild against stable rules and stable checkpoints instead of inventing architecture while coding.
 
@@ -176,10 +175,7 @@ Use this order for the frontend program:
 2. Quarantine the old frontend out of `src/**`:
 - `PBI-589`
 
-3. Build the parity/reference harness:
-- `PBI-590`
-
-4. Stabilize the new frontend contract surface:
+3. Stabilize the new frontend contract surface:
 - `PBI-581`
 - `PBI-582`
 - `PBI-587`
@@ -187,34 +183,34 @@ Use this order for the frontend program:
 - `PBI-584`
 - `PBI-597`
 
-5. Rebuild the first live product slice:
+4. Rebuild the first live product slice:
 - `PBI-591` app shell and sidebar
 
-6. Rebuild the main image flow:
+5. Rebuild the main image flow:
 - `PBI-592` grid screen
 - `PBI-593` inspector and selection surface
 - `PBI-585` media consumption
 
-7. Rebuild the remaining frontend module structure:
+6. Rebuild the remaining frontend module structure:
 - `PBI-586`
 
-8. Rebuild manager navigation and manager-style tool surfaces:
+7. Rebuild manager navigation and manager-style tool surfaces:
 - `PBI-595`
 
-9. Add the random active-image view once the rebuilt grid/query path is stable:
+8. Add the random active-image view once the rebuilt grid/query path is stable:
 - `PBI-596`
 
-10. Consolidate shared UI and styling only after the rebuilt surfaces are stable:
+9. Consolidate shared UI and styling only after the rebuilt surfaces are stable:
 - `PBI-571`
 
 Contract and verification work may overlap as part of Track B.
 Rebuilt live product slices in Track A should follow this order strictly.
 
 ## Alignment gates
-- `Gate 1`: the new shell/sidebar slice may activate only when `PBI-591` has parity confirmation against `PBI-590` fixtures and does not depend on legacy runtime/store modules
-- `Gate 2`: the new grid slice may activate only when `PBI-584` query/selection semantics are locked, `PBI-597` query reconciliation/sidebar delta rules are implemented enough for the live path, and `PBI-592` has parity confirmation against `PBI-590` fixtures
-- `Gate 3`: the new inspector/media slice may activate only when `PBI-593` and `PBI-585` have parity confirmation and the media contract from `PBI-569` is stable
-- `Gate 4`: legacy cleanup for a slice may happen only when the rebuilt slice is live, parity-checked, and no longer depends on legacy transport or state paths
+- `Gate 1`: the new shell/sidebar slice may activate only when `PBI-591` is review-clean and does not depend on legacy runtime/store modules
+- `Gate 2`: the new grid slice may activate only when `PBI-584` query/selection semantics are locked, `PBI-597` query reconciliation/sidebar delta rules are implemented enough for the live path, and `PBI-592` is review-clean on the live path
+- `Gate 3`: the new inspector/media slice may activate only when `PBI-593` and `PBI-585` are review-clean and the media contract from `PBI-569` is stable
+- `Gate 4`: legacy cleanup for a slice may happen only when the rebuilt slice is live, validated on the live path, and no longer depends on legacy transport or state paths
 
 ## Relationship to other reset PBIs
 - `PBI-567` defines the library storage boundary
@@ -224,7 +220,6 @@ Rebuilt live product slices in Track A should follow this order strictly.
 - `PBI-570` defines the frontend rebuild program and child-PBI order
 - `PBI-588` locks the frontend rebuild contract
 - `PBI-589` moves the legacy frontend out of the active source tree
-- `PBI-590` defines how rebuilt slices are checked against legacy visuals and behavior
 - `PBI-571`, `PBI-581` through `PBI-597` execute the frontend rebuild in slices
 
 This PBI must follow the cross-layer naming contract in [PBI-572-cross-layer-naming-contract.md](./docs/pbis/active-alpha/PBI-572-cross-layer-naming-contract.md).
@@ -237,7 +232,7 @@ This program index is complete only when:
 - the legacy frontend and the rebuilt frontend have separate ownership boundaries
 - each major frontend rebuild problem has its own executable child PBI
 - equivalent UI parts are allowed and expected to be merged instead of being preserved as separate legacy-shaped components
-- parity/reference checkpoints are explicit
+- validation checkpoints are explicit
 - the activation order is explicit
 - dependencies on backend and media delivery are explicit
 - query reconciliation and sidebar delta rules are explicit

@@ -9,6 +9,7 @@
 import type { ReactNode } from 'react';
 import { useAtomValue } from 'jotai';
 import { IconChevronRight, IconPlus } from '@tabler/icons-react';
+import { KbdTooltip } from '../KbdTooltip';
 import { showTreeGuidesAtom } from '../../../state/navigation';
 import styles from './SidebarRow.module.css';
 
@@ -20,9 +21,11 @@ interface SectionProps {
   expanded: boolean;
   onToggle: () => void;
   onAdd?: () => void;
+  addTooltip?: string;
+  addShortcut?: string;
 }
 
-function SectionRow({ label, expanded, onToggle, onAdd }: SectionProps) {
+function SectionRow({ label, expanded, onToggle, onAdd, addTooltip, addShortcut }: SectionProps) {
   return (
     <div className={styles.section} onClick={onToggle}>
       <div className={styles.sectionTitleRow}>
@@ -32,12 +35,14 @@ function SectionRow({ label, expanded, onToggle, onAdd }: SectionProps) {
         </span>
       </div>
       {onAdd && (
-        <button
-          className={styles.sectionAddBtn}
-          onClick={(e) => { e.stopPropagation(); onAdd(); }}
-        >
-          <IconPlus size={14} />
-        </button>
+        <KbdTooltip label={addTooltip ?? 'Add'} shortcut={addShortcut}>
+          <button
+            className={styles.sectionAddBtn}
+            onClick={(e) => { e.stopPropagation(); onAdd(); }}
+          >
+            <IconPlus size={14} />
+          </button>
+        </KbdTooltip>
       )}
     </div>
   );

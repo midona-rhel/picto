@@ -1,9 +1,9 @@
 /**
- * Selection state — explicit hash selection or full query-results selection.
+ * Selection state — explicit entity selection, virtual query-results selection,
+ * and separate subfolder-tile selection for the header strip.
  *
- * This keeps one canonical frontend target model aligned with the backend:
- * - explicit entity hashes
- * - current query results plus excluded hashes
+ * Entity actions always operate on canonical EntityTarget values.
+ * Subfolder tile selection is scope-only UI state and never becomes an EntityTarget.
  */
 
 import { atom } from 'jotai';
@@ -15,16 +15,42 @@ export type SelectionMode = 'explicit' | 'query_results';
 const selectionModeStateAtom = atom<SelectionMode>('explicit');
 const explicitSelectionHashesAtom = atom<Set<string>>(new Set<string>());
 const querySelectionExcludedHashesAtom = atom<Set<string>>(new Set<string>());
+const subfolderSelectionNodeIdsStateAtom = atom<Set<string>>(new Set<string>());
 
 export const selectionModeAtom = atom((get) => get(selectionModeStateAtom));
 export const querySelectionActiveAtom = atom((get) => get(selectionModeStateAtom) === 'query_results');
 export const querySelectionExcludedEntityHashesAtom = atom((get) => get(querySelectionExcludedHashesAtom));
 
+export const selectedSubfolderNodeIdsAtom = atom<
+  Set<string>,
+  [Set<string> | ((prev: Set<string>) => Set<string>)],
+  void
+>(
+  (get) => get(subfolderSelectionNodeIdsStateAtom),
+  (get, set, update) => {
+    const prev = get(subfolderSelectionNodeIdsStateAtom);
+    const next = typeof update === 'function' ? update(new Set(prev)) : new Set(update);
+    set(selectionModeStateAtom, 'explicit');
+    set(explicitSelectionHashesAtom, new Set<string>());
+    set(querySelectionExcludedHashesAtom, new Set<string>());
+    set(subfolderSelectionNodeIdsStateAtom, next);
+  },
+);
+
+export const selectedSubfolderNodeIdAtom = atom((get) => {
+  const selected = get(subfolderSelectionNodeIdsStateAtom);
+  return selected.size === 1 ? selected.values().next().value ?? null : null;
+});
+
 /**
- * The visible selected hashes in the current loaded grid window.
- * For query-results selection, this means "all loaded items except exclusions".
+ * The visible selected entity hashes in the loaded grid window.
+ * For query-results selection, this means all loaded items except exclusions.
  */
-export const selectedEntityHashesAtom = atom(
+export const selectedEntityHashesAtom = atom<
+  Set<string>,
+  [Set<string> | ((prev: Set<string>) => Set<string>)],
+  void
+>(
   (get) => {
     if (get(selectionModeStateAtom) === 'query_results') {
       const excluded = get(querySelectionExcludedHashesAtom);
@@ -38,11 +64,12 @@ export const selectedEntityHashesAtom = atom(
     }
     return get(explicitSelectionHashesAtom);
   },
-  (get, set, update: Set<string> | ((prev: Set<string>) => Set<string>)) => {
+  (get, set, update) => {
     const prev = get(explicitSelectionHashesAtom);
     const next = typeof update === 'function' ? update(new Set(prev)) : new Set(update);
     set(selectionModeStateAtom, 'explicit');
     set(querySelectionExcludedHashesAtom, new Set<string>());
+    set(subfolderSelectionNodeIdsStateAtom, new Set<string>());
     set(explicitSelectionHashesAtom, next);
   },
 );
@@ -51,6 +78,7 @@ export const clearSelectionAtom = atom(null, (_get, set) => {
   set(selectionModeStateAtom, 'explicit');
   set(explicitSelectionHashesAtom, new Set<string>());
   set(querySelectionExcludedHashesAtom, new Set<string>());
+  set(subfolderSelectionNodeIdsStateAtom, new Set<string>());
 });
 
 export const selectAllResultsAtom = atom(null, (get, set) => {
@@ -62,6 +90,7 @@ export const selectAllResultsAtom = atom(null, (get, set) => {
   set(selectionModeStateAtom, 'query_results');
   set(explicitSelectionHashesAtom, new Set<string>());
   set(querySelectionExcludedHashesAtom, new Set<string>());
+  set(subfolderSelectionNodeIdsStateAtom, new Set<string>());
 });
 
 export const toggleQuerySelectionHashAtom = atom(null, (get, set, entityHash: string) => {
@@ -96,8 +125,8 @@ export const hasSelectionAtom = atom((get) => get(selectionCountAtom) > 0);
 /** Single selected hash only exists for explicit single selection. */
 export const selectedEntityHashAtom = atom((get) => {
   if (get(selectionModeStateAtom) !== 'explicit') return null;
-  const set = get(explicitSelectionHashesAtom);
-  if (set.size === 1) return set.values().next().value as string;
+  const selected = get(explicitSelectionHashesAtom);
+  if (selected.size === 1) return selected.values().next().value as string;
   return null;
 });
 
@@ -115,4 +144,22 @@ export const selectionTargetAtom = atom<EntityTarget | null>((get) => {
     kind: 'entity_hashes',
     entity_hashes: Array.from(get(explicitSelectionHashesAtom)),
   };
+});
+
+export const selectionFingerprintAtom = atom((get) => {
+  const target = get(selectionTargetAtom);
+  const subfolderNodeId = get(selectedSubfolderNodeIdAtom);
+  if (subfolderNodeId) return `subfolder:${subfolderNodeId}`;
+  if (!target) return 'none';
+  if (target.kind === 'query_results') {
+    return JSON.stringify({
+      kind: target.kind,
+      query: target.query,
+      excluded: [...get(querySelectionExcludedHashesAtom)].sort(),
+    });
+  }
+  return JSON.stringify({
+    kind: target.kind,
+    hashes: [...get(explicitSelectionHashesAtom)].sort(),
+  });
 });

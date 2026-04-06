@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useAtom, useAtomValue, useSetAtom } from 'jotai';
 import { subscriptionsWorkspaceTabAtom } from '../../state/navigation';
 import { AuthWorkspace } from '../auth/AuthWorkspace';
@@ -10,8 +10,8 @@ import {
   IconRotate2,
   IconTrash,
 } from '@tabler/icons-react';
-import { listen } from '../../platform/ipc';
 import { subscriptionsController } from '../../controllers/subscriptionsController';
+import { registerSubscriptionsWorkspaceRefresh } from '../../runtime/subscriptionsSettle';
 import type {
   SubscriptionInfo,
 } from '../../shared/types/subscriptions';
@@ -47,12 +47,6 @@ import styles from './SubscriptionsScreen.module.css';
 
 type TabKey = 'queries' | 'failed' | 'runs';
 
-type StateChangedPayload = {
-  changes?: {
-    domains?: string[];
-  };
-};
-
 function parseLimit(value: string): number | null {
   const parsed = Number.parseInt(value, 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
@@ -80,7 +74,7 @@ export function SubscriptionsScreen() {
   const progressBySubscriptionId = useAtomValue(subscriptionsProgressBySubscriptionIdAtom);
   const selectedProgress = useAtomValue(subscriptionsSelectedProgressAtom);
 
-  async function refreshWorkspace(options?: { preserveSelection?: boolean }) {
+  const refreshWorkspace = useCallback(async (options?: { preserveSelection?: boolean }) => {
     setError(null);
     if (!snapshot) setLoading(true);
     try {
@@ -102,9 +96,9 @@ export function SubscriptionsScreen() {
     } finally {
       setLoading(false);
     }
-  }
+  }, [setError, snapshot, setLoading, setSnapshot, setCreateForm, setQuerySiteId, setSelectedSubscriptionId]);
 
-  async function refreshDetail(subscription: SubscriptionInfo) {
+  const refreshDetail = useCallback(async (subscription: SubscriptionInfo) => {
     setDetail((current) => ({ ...current, loading: true, error: null, subscriptionId: subscription.id }));
     try {
       const [runs, issues, failedPosts] = await Promise.all([
@@ -130,7 +124,7 @@ export function SubscriptionsScreen() {
         failedPosts: [],
       });
     }
-  }
+  }, [setDetail]);
 
   useEffect(() => {
     void refreshWorkspace({ preserveSelection: true });
@@ -175,28 +169,16 @@ export function SubscriptionsScreen() {
 
   useEffect(() => {
     let cancelled = false;
-    let unlisten: (() => void) | undefined;
-    void listen<StateChangedPayload>('runtime/state_changed', (event) => {
+    const unregister = registerSubscriptionsWorkspaceRefresh(() => {
       if (cancelled) return;
-      const domains = event.payload.changes?.domains ?? [];
-      if (domains.includes('subscriptions')) {
-        void refreshWorkspace({ preserveSelection: true });
-      }
-    }).then((dispose) => {
-      if (cancelled) {
-        dispose();
-        return;
-      }
-      unlisten = dispose;
-    }).catch((err) => {
-      console.error('Failed to subscribe to subscription state changes', err);
+      void refreshWorkspace({ preserveSelection: true });
     });
 
     return () => {
       cancelled = true;
-      if (unlisten) unlisten();
+      unregister();
     };
-  }, []);
+  }, [refreshWorkspace]);
 
   async function withBusy(key: string, action: () => Promise<void>) {
     setBusyKey(key);

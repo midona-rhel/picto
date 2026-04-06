@@ -135,7 +135,7 @@ pub fn migrate(conn: &Connection) -> Result<MigrationResult, String> {
     // ── Step 4: tag ← _old_tag, entity_tag ← entity_tag_raw ────────
     let _ = conn.execute(
         "INSERT OR IGNORE INTO tag (tag_id, namespace, subtag, site_mask, file_count)
-         SELECT tag_id, namespace, subtag, 0, file_count FROM _old_tag",
+         SELECT tag_id, CASE WHEN namespace = '' THEN 'general' ELSE namespace END, subtag, 0, file_count FROM _old_tag",
         [],
     );
     let tags = conn
@@ -414,10 +414,10 @@ pub fn migrate_from_attached(conn: &Connection) -> Result<MigrationResult, Strin
         )
         .map_err(|e| format!("Failed to import single_media_entity: {e}"))?;
 
-    // Step 4: tags
+    // Step 4: tags (normalize empty namespace to 'general')
     let _ = conn.execute(
         "INSERT OR IGNORE INTO tag (tag_id, namespace, subtag, site_mask, file_count)
-         SELECT tag_id, namespace, subtag, 0, file_count FROM old_db.tag",
+         SELECT tag_id, CASE WHEN namespace = '' THEN 'general' ELSE namespace END, subtag, 0, file_count FROM old_db.tag",
         [],
     );
     result.tags_migrated = conn

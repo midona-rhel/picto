@@ -144,7 +144,6 @@ Use this as the main activation path for the reset set:
 4. Lock the frontend rebuild boundary and quarantine the old frontend:
 - `PBI-588`
 - `PBI-589`
-- `PBI-590`
 
 5. Rebuild the core entity flow in two aligned tracks:
 - Track A: `PBI-591`, `PBI-592`, `PBI-593`

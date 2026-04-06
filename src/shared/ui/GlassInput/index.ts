@@ -1,2 +1,2 @@
-export { GlassInput } from './GlassInput';
-export type { GlassInputProps } from './GlassInput';
+export { GlassInput, GlassTextarea } from './GlassInput';
+export type { GlassInputProps, GlassTextareaProps } from './GlassInput';

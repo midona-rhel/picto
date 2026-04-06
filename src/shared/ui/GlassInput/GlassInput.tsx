@@ -3,7 +3,7 @@
  * Two variants: standard text input and search input with icon.
  */
 
-import { forwardRef, type InputHTMLAttributes } from 'react';
+import { forwardRef, type InputHTMLAttributes, type TextareaHTMLAttributes } from 'react';
 import { IconSearch } from '@tabler/icons-react';
 import styles from './GlassInput.module.css';
 
@@ -33,3 +33,12 @@ export const GlassInput = forwardRef<HTMLInputElement, GlassInputProps>(
   },
 );
 GlassInput.displayName = 'GlassInput';
+
+export interface GlassTextareaProps extends Omit<TextareaHTMLAttributes<HTMLTextAreaElement>, 'className'> {}
+
+export const GlassTextarea = forwardRef<HTMLTextAreaElement, GlassTextareaProps>(
+  (props, ref) => (
+    <textarea ref={ref} className={styles.textarea} {...props} />
+  ),
+);
+GlassTextarea.displayName = 'GlassTextarea';

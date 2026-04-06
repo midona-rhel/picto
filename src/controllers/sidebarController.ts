@@ -6,7 +6,7 @@
  */
 
 import { getDefaultStore } from 'jotai';
-import * as api from '../platform/api';
+import { getSidebarTree, reorderSidebarNodes } from '../platform/sidebarApi';
 import { setSidebarTreeAtom, sidebarLoadingAtom } from '../state/sidebar';
 
 const store = getDefaultStore();
@@ -19,7 +19,7 @@ export const sidebarController = {
   async fetchTree() {
     store.set(sidebarLoadingAtom, true);
     try {
-      const response = await api.getSidebarTree();
+      const response = await getSidebarTree();
       store.set(setSidebarTreeAtom, {
         nodes: response.nodes,
         epoch: response.tree_epoch,
@@ -42,6 +42,6 @@ export const sidebarController = {
 
   /** Reorder sidebar nodes. */
   async reorderNodes(moves: [string, number][]) {
-    await api.reorderSidebarNodes(moves);
+    await reorderSidebarNodes(moves);
   },
 };

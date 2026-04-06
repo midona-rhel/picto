@@ -1,4 +1,4 @@
-import * as api from '../platform/api';
+import { openDetailWindow } from '../platform/shellApi';
 
 export const windowController = {
   openDetailWindow(input: {
@@ -6,6 +6,14 @@ export const windowController = {
     width?: number | null;
     height?: number | null;
   }): Promise<void> {
-    return api.openDetailWindow(input);
+    return openDetailWindow(input);
+  },
+
+  closeCurrentWindow(): Promise<void> {
+    return (window as any).picto.api.window.call('close');
+  },
+
+  setCurrentWindowAlwaysOnTop(value: boolean): Promise<void> {
+    return (window as any).picto.api.window.call('setAlwaysOnTop', { value });
   },
 };

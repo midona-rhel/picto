@@ -5,8 +5,17 @@
  */
 
 import { getDefaultStore } from 'jotai';
-import * as api from '../platform/api';
+import {
+  getEntityGridItems,
+  queryEntityView,
+  reconcileEntityView,
+} from '../platform/entityApi';
 import type { BaseScope, EntityViewQuery, CanonicalEntityGridItem } from '../shared/types/canonical';
+import {
+  getViewPrefs,
+  setViewPrefs,
+} from '../platform/settingsApi';
+import type { ViewPrefsDto, ViewPrefsPatch } from '../platform/settingsApi';
 import type { SortField, SortDirection } from '../state/grid';
 import {
   gridScopeAtom, gridActiveAtom, gridItemsAtom, gridCursorAtom,
@@ -19,8 +28,7 @@ import {
   gridSoftTransitionActionAtom,
 } from '../state/grid';
 import type { GridViewMode } from '../features/grid/layout/types';
-import { selectedEntityHashesAtom } from '../state/selection';
-import type { ViewPrefsPatch } from '../platform/api';
+import { clearSelectionAtom } from '../state/selection';
 
 const store = getDefaultStore();
 
@@ -119,7 +127,7 @@ export const gridController = {
   async navigateTo(scope: BaseScope) {
     store.set(gridScopeAtom, scope);
     store.set(gridSearchTextAtom, '');
-    store.set(selectedEntityHashesAtom, new Set());
+    store.set(clearSelectionAtom);
     store.set(gridActiveAtom, true);
     if (searchDebounceTimer) { clearTimeout(searchDebounceTimer); searchDebounceTimer = null; }
 
@@ -129,13 +137,13 @@ export const gridController = {
     const key = scopeToKey(scope);
     currentScopeKey = key;
     // Load per-scope prefs, then global defaults for any missing fields.
-    let prefs: api.ViewPrefsDto | null = null;
-    let globals: api.ViewPrefsDto | null = null;
+    let prefs: ViewPrefsDto | null = null;
+    let globals: ViewPrefsDto | null = null;
     if (key) {
-      try { prefs = await api.getViewPrefs(key); } catch { /* no saved prefs */ }
+      try { prefs = await getViewPrefs(key); } catch { /* no saved prefs */ }
     }
-    try { globals = await api.getViewPrefs(''); } catch { /* no global prefs */ }
-    const p = (field: keyof api.ViewPrefsDto) => prefs?.[field] ?? globals?.[field] ?? null;
+    try { globals = await getViewPrefs(''); } catch { /* no global prefs */ }
+    const p = (field: keyof ViewPrefsDto) => prefs?.[field] ?? globals?.[field] ?? null;
     store.set(gridSortFieldAtom, (p('sort_field') as SortField) || 'date_added');
     store.set(gridSortDirectionAtom, (p('sort_order') as SortDirection) || 'desc');
     store.set(gridViewModeAtom, (p('view_mode') as GridViewMode) || 'waterfall');
@@ -153,7 +161,7 @@ export const gridController = {
     gridVersion++;
     paginationInFlight = null;
     if (searchDebounceTimer) { clearTimeout(searchDebounceTimer); searchDebounceTimer = null; }
-    store.set(selectedEntityHashesAtom, new Set());
+    store.set(clearSelectionAtom);
     store.set(gridActiveAtom, false);
   },
 
@@ -184,7 +192,7 @@ export const gridController = {
     if (viewPrefsSaveTimer) clearTimeout(viewPrefsSaveTimer);
     viewPrefsSaveTimer = setTimeout(() => {
       viewPrefsSaveTimer = null;
-      void api.setViewPrefs(key, patch).catch(() => {});
+      void setViewPrefs(key, patch).catch(() => {});
     }, VIEW_PREFS_SAVE_DEBOUNCE_MS);
   },
 
@@ -197,10 +205,10 @@ export const gridController = {
       store.set(gridItemsAtom, []);
       store.set(gridCursorAtom, null);
       store.set(gridTotalCountAtom, null);
-      store.set(gridTotalSizeBytesAtom, null);
+      // Don't clear totalSizeBytes — keep previous value visible until new query returns
     }
     try {
-      const result = await api.queryEntityView(currentQuery(PREFETCH_BATCH_SIZE));
+      const result = await queryEntityView(currentQuery(PREFETCH_BATCH_SIZE));
       if (v !== gridVersion) return;
       store.set(gridItemsAtom, result.items);
       store.set(gridCursorAtom, result.next_cursor);
@@ -226,7 +234,7 @@ export const gridController = {
     try {
       const query = currentQuery(PREFETCH_BATCH_SIZE);
       query.page = { limit: PREFETCH_BATCH_SIZE, cursor };
-      const result = await api.queryEntityView(query);
+      const result = await queryEntityView(query);
       if (v !== gridVersion || paginationInFlight !== cursor) return;
       paginationInFlight = null;
       store.set(gridItemsAtom, [...store.get(gridItemsAtom), ...result.items]);
@@ -267,7 +275,7 @@ export const gridController = {
       try {
         const query = currentQuery(PREFETCH_BATCH_SIZE);
         query.page = { limit: PREFETCH_BATCH_SIZE, cursor };
-        const result = await api.queryEntityView(query);
+        const result = await queryEntityView(query);
         if (v !== gridVersion || paginationInFlight !== cursor) return;
         paginationInFlight = null;
         store.set(gridItemsAtom, [...store.get(gridItemsAtom), ...result.items]);
@@ -302,7 +310,7 @@ export const gridController = {
     if (newHashes.length === 0) return;
 
     try {
-      const fetchedItems = await api.getEntityGridItems(newHashes);
+      const fetchedItems = await getEntityGridItems(newHashes);
       const newItems = uniqueEntityGridItems(fetchedItems);
       if (newItems.length === 0) return;
 
@@ -325,14 +333,16 @@ export const gridController = {
 
   async reconcile(metadataOnly: boolean): Promise<boolean> {
     const items = store.get(gridItemsAtom);
-    if (items.length === 0) return false;
+    if (items.length === 0) {
+      await this.loadFirstPage({ preserveItems: false });
+      return true;
+    }
 
     const v = ++gridVersion;
     const query = currentQuery(items.length);
     const visibleHashes = items.map((i) => i.entity_hash);
-
     try {
-      const result = await api.reconcileEntityView(query, visibleHashes, metadataOnly);
+      const result = await reconcileEntityView(query, visibleHashes, metadataOnly);
       if (v !== gridVersion) return false;
 
       switch (result.kind) {
@@ -362,5 +372,12 @@ export const gridController = {
       await this.loadFirstPage({ preserveItems: true });
       return true;
     }
+  },
+
+  async loadSubfolderPreview(folderId: number, limit = 4) {
+    return queryEntityView({
+      base_scope: { kind: 'folder', id: folderId },
+      page: { limit },
+    });
   },
 };

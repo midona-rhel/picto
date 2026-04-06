@@ -146,9 +146,10 @@ pub fn compile_sidebar(conn: &Connection, bitmaps: &BitmapStore) {
         bool,
         bool,
         String,
+        i64,
     )> = conn
         .prepare(
-            "SELECT folder_id, name, parent_id, icon, color, notes, sort_order, auto_tags, watch_path, watch_enabled, watch_subfolders, watch_import_status_mode
+            "SELECT folder_id, name, parent_id, icon, color, notes, sort_order, auto_tags, watch_path, watch_enabled, watch_subfolders, watch_import_status_mode, total_size_bytes
              FROM folder
              ORDER BY sort_order, name",
         )
@@ -167,6 +168,7 @@ pub fn compile_sidebar(conn: &Connection, bitmaps: &BitmapStore) {
                     row.get::<_, Option<i64>>(9)?.unwrap_or(0) != 0,
                     row.get::<_, Option<i64>>(10)?.unwrap_or(0) != 0,
                     row.get::<_, Option<String>>(11)?.unwrap_or_else(|| "inherit".into()),
+                    row.get::<_, i64>(12)?,
                 ))
             })
                 .map(|rows| rows.flatten().collect())
@@ -186,6 +188,7 @@ pub fn compile_sidebar(conn: &Connection, bitmaps: &BitmapStore) {
         watch_enabled,
         watch_subfolders,
         watch_import_status_mode,
+        total_size_bytes,
     ) in &folders
     {
         let node_id = format!("folder:{fid}");
@@ -213,6 +216,7 @@ pub fn compile_sidebar(conn: &Connection, bitmaps: &BitmapStore) {
             "watch_enabled": watch_enabled,
             "watch_subfolders": watch_subfolders,
             "watch_import_status_mode": watch_import_status_mode,
+            "total_size_bytes": total_size_bytes,
         });
         let _ = conn.execute(
             "INSERT OR REPLACE INTO sidebar_node (node_id, kind, parent_id, name, icon, color, sort_order, count, selectable, freshness, epoch, meta_json, date_modified)
@@ -222,10 +226,10 @@ pub fn compile_sidebar(conn: &Connection, bitmaps: &BitmapStore) {
     }
 
     // Smart folder nodes (children of section:smart_folders)
-    let smart_folders: Vec<(i64, String, Option<i64>, Option<String>, Option<String>, Option<String>, Option<i64>, String, Option<String>, Option<String>)> = conn
-        .prepare("SELECT smart_folder_id, name, parent_id, icon, color, notes, display_order, predicate_json, sort_field, sort_order FROM smart_folder ORDER BY display_order, name")
+    let smart_folders: Vec<(i64, String, Option<i64>, Option<String>, Option<String>, Option<String>, Option<i64>, String, Option<String>, Option<String>, i64)> = conn
+        .prepare("SELECT smart_folder_id, name, parent_id, icon, color, notes, display_order, predicate_json, sort_field, sort_order, total_size_bytes FROM smart_folder ORDER BY display_order, name")
         .and_then(|mut stmt| {
-            stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?, row.get(7)?, row.get(8)?, row.get(9)?)))
+            stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?, row.get(6)?, row.get(7)?, row.get(8)?, row.get(9)?, row.get::<_, i64>(10)?)))
                 .map(|rows| rows.flatten().collect())
         })
         .unwrap_or_default();
@@ -241,6 +245,7 @@ pub fn compile_sidebar(conn: &Connection, bitmaps: &BitmapStore) {
         predicate_json,
         sort_field,
         sort_order,
+        total_size_bytes,
     ) in &smart_folders
     {
         let node_id = format!("smart:{sfid}");
@@ -254,6 +259,7 @@ pub fn compile_sidebar(conn: &Connection, bitmaps: &BitmapStore) {
             "predicate": serde_json::from_str::<serde_json::Value>(predicate_json).unwrap_or_default(),
             "sort_field": sort_field,
             "sort_order": sort_order,
+            "total_size_bytes": total_size_bytes,
         });
         let count = bitmaps.len(&BitmapKey::SmartFolder(*sfid)) as i64;
         let _ = conn.execute(

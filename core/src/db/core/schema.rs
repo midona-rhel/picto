@@ -56,7 +56,7 @@ CREATE TABLE IF NOT EXISTS single_media_entity (
 
 CREATE TABLE IF NOT EXISTS tag (
     tag_id     INTEGER PRIMARY KEY,
-    namespace  TEXT    NOT NULL DEFAULT '',
+    namespace  TEXT    NOT NULL DEFAULT 'general',
     subtag     TEXT    NOT NULL,
     site_mask  INTEGER NOT NULL DEFAULT 0,
     file_count INTEGER NOT NULL DEFAULT 0,
@@ -119,6 +119,7 @@ CREATE TABLE IF NOT EXISTS folder (
     watch_enabled              INTEGER DEFAULT 0,
     watch_subfolders           INTEGER DEFAULT 0,
     watch_import_status_mode   TEXT    DEFAULT 'inherit',
+    total_size_bytes           INTEGER NOT NULL DEFAULT 0,
     date_added                 TEXT    NOT NULL,
     date_modified              TEXT    NOT NULL
 );
@@ -141,6 +142,7 @@ CREATE TABLE IF NOT EXISTS smart_folder (
     sort_field        TEXT,
     sort_order        TEXT,
     display_order    INTEGER,
+    total_size_bytes INTEGER NOT NULL DEFAULT 0,
     date_added       TEXT    NOT NULL,
     date_modified    TEXT    NOT NULL
 );

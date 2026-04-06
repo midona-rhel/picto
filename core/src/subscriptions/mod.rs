@@ -1,6 +1,5 @@
 pub(crate) mod archive;
 pub mod credential_service;
-pub(crate) mod db;
 pub mod gallery_dl_runner;
 pub mod group_orchestrator;
 pub mod import_policy;
@@ -8,8 +7,8 @@ pub mod pixiv_oauth;
 pub mod policy;
 pub mod progress;
 pub mod run_orchestrator;
+pub(crate) mod runtime_db;
 pub mod runtime_service;
 pub mod runtime_tasks;
-pub(crate) mod subscription_groups_db;
 pub mod sync_engine;
 pub mod types;

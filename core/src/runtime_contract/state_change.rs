@@ -147,6 +147,10 @@ pub struct StateChanges {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional, type = "Array<[number, number]>")]
     pub smart_folder_counts: Option<Vec<(i64, i64)>>,
+    /// Grid items were reordered (not added/removed — just order changed).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub grid_reorder: Option<bool>,
 }
 
 /// Sidebar node patch — carries partial updates, removals, or rendering-sufficient

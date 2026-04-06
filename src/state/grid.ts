@@ -7,10 +7,16 @@ import type { CanonicalEntityGridItem, BaseScope, EntityViewQuery } from '../sha
 import type { GridViewMode } from '../features/grid/layout/types';
 import { activeNodeIdAtom, collectionNameAtom } from './navigation';
 import { sidebarNodesAtom, folderNodesAtom } from './sidebar';
+import { nodeIdToGridScope } from '../shared/lib/gridScope';
 
 // ── Query inputs ─────────────────────────────────────────────────
 
 export const gridScopeAtom = atom<BaseScope>({ kind: 'system', key: 'all' });
+export const activeGridScopeAtom = atom((get) => nodeIdToGridScope(get(activeNodeIdAtom)));
+export const activeGridNodeIdAtom = atom((get) => {
+  const nodeId = get(activeNodeIdAtom);
+  return nodeIdToGridScope(nodeId) ? nodeId : null;
+});
 
 export type SortField = 'date_added' | 'date_created' | 'date_modified' | 'rating' | 'name' | 'size_bytes' | 'duration';
 export type SortDirection = 'asc' | 'desc';
@@ -39,6 +45,7 @@ export const gridShowNameAtom = atom(true);
 export const gridShowExtensionAtom = atom(false);
 export const gridShowResolutionAtom = atom(false);
 export const gridShowExtensionLabelAtom = atom(false);
+export const stripFitModeAtom = atom<'horizontal' | 'vertical'>('horizontal');
 export const gridFitThumbnailsAtom = atom(false);
 export const gridShowSubfoldersAtom = atom(true);
 
@@ -50,6 +57,12 @@ export const gridTotalCountAtom = atom<number | null>(null);
 export const gridTotalSizeBytesAtom = atom<number | null>(null);
 export const gridLoadingAtom = atom(false);
 export const gridErrorAtom = atom<string | null>(null);
+export const gridVisibleEntityHashesAtom = atom((get) => get(gridItemsAtom).map((item) => item.entity_hash));
+export const gridReconcileContextAtom = atom((get) => ({
+  scope: get(gridScopeAtom),
+  query: get(currentGridQueryAtom),
+  visibleEntityHashes: get(gridVisibleEntityHashesAtom),
+}));
 
 /** Whether the grid is the active surface. */
 export const gridActiveAtom = atom(true);

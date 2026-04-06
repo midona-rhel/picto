@@ -20,7 +20,7 @@ Activation depends on:
 The frontend API layer is still too close to raw transport and old command shapes.
 
 Current problems:
-- `src/platform/api.ts` is too broad and mixes multiple generations of backend contract
+- the old `src/platform/api.ts` compatibility facade still exists and some controllers still rely on it instead of the smaller platform modules
 - old and new command names live side by side without one stable frontend API model
 - target conversion and selection conversion are not cleanly owned
 - typed command maps still expose legacy names and shapes next to new ones
@@ -45,7 +45,7 @@ The frontend API layer should:
 - query reconciliation calls and typed settle response decoding live here, not in runtime or features
 
 ## Implementation changes
-- reduce `src/platform/api.ts` into clearer submodules if needed
+- keep `src/platform/api.ts` as a temporary compatibility facade only while moving callers onto clearer submodules
 - separate canonical API methods from legacy compatibility methods
 - centralize `EntityTarget`/query conversion in one owned place
 - add typed API methods for query reconciliation and any sidebar-delta support that is not fully event-carried

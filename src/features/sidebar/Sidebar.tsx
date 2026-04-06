@@ -26,7 +26,6 @@ import {
 } from '../../state/sidebar';
 import { activeNodeIdAtom } from '../../state/navigation';
 import { pushHistory } from '../../state/navigationHistory';
-import * as api from '../../platform/api';
 import { sidebarController } from '../../controllers/sidebarController';
 import { foldersController } from '../../controllers/foldersController';
 import { smartFoldersController } from '../../controllers/smartFoldersController';
@@ -172,7 +171,7 @@ export function Sidebar() {
             const targetNode = folderNodes.find((n) => n.id === dropTargetId);
             if (dropPosition === 'inside') {
               // Reparent into target
-              void api.moveFolder(draggedFolderId, targetFolderId, []);
+              void foldersController.move(draggedFolderId, targetFolderId, []);
             } else {
               // Reorder: same parent, build sibling order
               const targetParentId = targetNode?.parent_id ?? null;
@@ -189,7 +188,7 @@ export function Sidebar() {
                 without.splice(insertAt, 0, draggedNode);
               }
               const moves: [number, number][] = without.map((s, i) => [parseFolderId(s.id)!, i]);
-              void api.moveFolder(draggedFolderId, parentFolderId, moves);
+              void foldersController.move(draggedFolderId, parentFolderId, moves);
             }
           }
         }
@@ -322,7 +321,7 @@ export function Sidebar() {
             if (result) {
               const folderPath = typeof result === 'string' ? result : result[0];
               console.log('[sidebar] importing folder:', folderPath, '→ parent:', folderId);
-              await api.importFolder(folderPath, { parent_folder_id: folderId, preserve_structure: true });
+              await foldersController.importFolder(folderPath, folderId);
               console.log('[sidebar] import_folder dispatched');
             }
           } catch (err) {
@@ -339,12 +338,12 @@ export function Sidebar() {
           store.set(confirmModalAtom, {
             open: true, title: 'Remove Watch', danger: true, confirmLabel: 'Remove',
             message: `Stop watching the folder for "${node.name}"?`,
-            onConfirm: () => { void api.clearFolderWatchConfig(folderId); },
+            onConfirm: () => { void foldersController.clearWatchConfig(folderId); },
           });
         },
       } as MenuEntry] : []),
       { separator: true },
-      { label: 'Sort by Name', icon: <IconSort size={14} />, action: () => { void api.reorderFolderItems(folderId, { sort_by: 'name', direction: 'asc' }); } },
+      { label: 'Sort by Name', icon: <IconSort size={14} />, action: () => { void foldersController.sortByName(folderId); } },
       { label: isExpanded ? 'Collapse Folder' : 'Expand Folder', icon: isExpanded ? <IconCollapse size={14} /> : <IconExpand size={14} />,
         action: () => { if (hasChildren) toggleCollapse(node.id); },
         disabled: !hasChildren },
@@ -352,7 +351,7 @@ export function Sidebar() {
       { separator: true },
       { submenu: true, label: 'Change Icon', icon: <IconChangeIcon size={14} />, children: [
         { custom: true, key: 'folder-icon', render: () => (
-          <IconPicker value={node.icon ?? null} onChange={(icon) => { void api.updateFolder(folderId, { icon }); }} />
+          <IconPicker value={node.icon ?? null} onChange={(icon) => { void foldersController.applyIcon(folderId, icon); }} />
         ) },
       ] },
       { custom: true, key: 'folder-color', render: () => (
@@ -468,6 +467,7 @@ export function Sidebar() {
           expanded={!collapsed.has('folders')}
           onToggle={() => toggleCollapse('folders')}
           onAdd={() => { void createFolderAndRename(); }}
+          addTooltip="New Folder" addShortcut="Mod+Shift+N"
         />
         {!collapsed.has('folders') && folderList.map(({ node, indent, hasChildren, treeLines, isLastChild }) => (
           <SidebarRow
@@ -510,6 +510,7 @@ export function Sidebar() {
           expanded={!collapsed.has('smart_folders')}
           onToggle={() => toggleCollapse('smart_folders')}
           onAdd={() => openSmartFolderModal('create', { name: 'New Smart Folder', predicate: { groups: [] } })}
+          addTooltip="New Smart Folder"
         />
         {!collapsed.has('smart_folders') && smartList.map(({ node, indent, hasChildren, treeLines, isLastChild }) => (
           <SidebarRow
@@ -526,6 +527,7 @@ export function Sidebar() {
             onContextMenu={(e) => openSmartFolderMenu(e, node)}
           />
         ))}
+
       </div>
 
       {/* Context menu portal */}

@@ -4,7 +4,11 @@
  */
 
 import { getDefaultStore } from 'jotai';
-import * as api from '../platform/api';
+import {
+  createSmartFolder,
+  deleteSmartFolder,
+  updateSmartFolder,
+} from '../platform/smartFolderApi';
 import type { SmartFolderCommandPayload, SmartFolderPredicate } from '../shared/types/canonical';
 import { removeSmartFolderNodeAtom } from '../state/sidebar';
 
@@ -32,15 +36,15 @@ export const smartFoldersController = {
   async delete(id: string) {
     const numId = parseInt(id, 10);
     if (!isNaN(numId)) store.set(removeSmartFolderNodeAtom, numId);
-    await api.deleteSmartFolder(id);
+    await deleteSmartFolder(id);
   },
 
   async create(folder: SmartFolderCommandPayload) {
-    await api.createSmartFolder({ folder });
+    await createSmartFolder({ folder });
     // Sidebar will refresh via state_changed event
   },
 
   async update(id: number, folder: SmartFolderCommandPayload) {
-    await api.updateSmartFolder({ id: String(id), folder });
+    await updateSmartFolder({ id: String(id), folder });
   },
 };

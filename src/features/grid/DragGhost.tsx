@@ -20,8 +20,8 @@ export function DragGhost({ x, y, thumbnailHashes, count }: DragGhostProps) {
   return createPortal(
     <div style={{
       position: 'fixed',
-      left: x + 14,
-      top: y + 14,
+      left: x - 24,
+      top: y - 24,
       zIndex: 10000,
       pointerEvents: 'none',
       opacity: 0.85,

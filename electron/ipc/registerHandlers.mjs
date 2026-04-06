@@ -349,45 +349,41 @@ export function registerIpcHandlers({
     return runReverseImageSearch({ BrowserWindow, filePath, engine });
   });
 
-  ipcMain.handle('picto:drag:start', async (event, { hashes, iconDataUrl }) => {
-    if (!hashes?.length) return null;
+  ipcMain.on('ondragstart', async (event, { hashes, iconDataUrl }) => {
+    console.log('[drag:start] received', hashes?.length, 'hashes');
+    if (!hashes?.length) return;
+
 
     // Batch-resolve all hashes to filesystem paths in one round-trip
     let filePaths;
     try {
-      filePaths = await invoke('resolve_file_paths_batch', { hashes });
-    } catch {
+      filePaths = await invoke('resolve_file_paths_batch', { target: { kind: 'entity_hashes', entity_hashes: hashes } });
+    } catch (err) {
+      console.error('[drag:start] resolve failed:', err);
       filePaths = [];
     }
-    if (!filePaths?.length) return null;
+    console.log('[drag:start] resolved', filePaths?.length, 'paths:', filePaths);
+    if (!filePaths?.length) return;
 
-    // Decode the renderer-generated badge icon (thumbnail + count pill)
+    // Icon: prefer renderer-generated base64 (has count badge), fall back to disk thumbnail
     let icon = null;
     if (iconDataUrl) {
       try {
         icon = nativeImage.createFromDataURL(iconDataUrl);
         if (icon.isEmpty()) icon = null;
-      } catch {
-        icon = null;
-      }
+      } catch { icon = null; }
     }
-    // Fallback: load first resolved file's thumbnail from disk
-    // Use the basename of the first file path (which is the file hash) for thumbnail lookup
     if (!icon) {
       const firstPath = filePaths[0] || '';
       const firstHash = firstPath.split('/').pop()?.replace(/\.[^.]+$/, '') || hashes[0];
       const thumbPath = buildBlobPath('thumb', firstHash, 'jpg');
       try {
         icon = nativeImage.createFromPath(thumbPath);
-        if (!icon.isEmpty()) {
-          icon = icon.resize({ width: 64 });
-        } else {
-          icon = null;
-        }
-      } catch {
-        icon = null;
-      }
+        if (!icon.isEmpty()) icon = icon.resize({ width: 64 });
+        else icon = null;
+      } catch { icon = null; }
     }
+    console.log('[drag:start] icon:', icon ? `${icon.getSize().width}x${icon.getSize().height}` : 'none');
 
     if (process.platform === 'darwin' && startNativeDrag) {
       // macOS: bypass Electron's startDrag to avoid icon-per-NSDraggingItem stacking.
@@ -396,11 +392,18 @@ export function registerIpcHandlers({
       if (win && icon) {
         const handle = win.getNativeWindowHandle();
         const { width, height } = icon.getSize();
-        const rgba = icon.toBitmap(); // RGBA pixel buffer
+        const rgba = Buffer.from(icon.toBitmap()); // RGBA pixel buffer
+        // Swap R↔B for macOS native addon (expects BGRA)
+        for (let i = 0; i < rgba.length; i += 4) {
+          const r = rgba[i];
+          rgba[i] = rgba[i + 2];
+          rgba[i + 2] = r;
+        }
         try {
+          console.log('[drag:start] using native addon, files:', filePaths.length, 'icon:', width, 'x', height);
           startNativeDrag(handle, filePaths, rgba, width, height);
         } catch (err) {
-          // Fallback to Electron's startDrag if native addon fails
+          console.error('[drag:start] native addon failed:', err);
           event.sender.startDrag({ files: filePaths, icon });
         }
       } else {
@@ -417,7 +420,6 @@ export function registerIpcHandlers({
       });
     }
 
-    return { ok: true };
   });
 
   ipcMain.handle('picto:popup-menu', (event) => {

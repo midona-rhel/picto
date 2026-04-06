@@ -131,9 +131,9 @@ export function buildTileContextMenu(ctx: GridMenuContext): MenuEntry[] {
   // ── Inbox accept/reject — top of menu ──
   if (statusFilter === 'inbox' && hasSelection) {
     const acceptLabel = selectionCount > 1 ? `Accept ${selectionCount} Items` : 'Accept';
-    entries.push(item(acceptLabel, { icon: <IconArrowBackUp size={15} />, action: ctx.onAccept }));
+    entries.push(item(acceptLabel, { icon: <IconArrowBackUp size={15} />, shortcut: kbd('inbox.accept'), action: ctx.onAccept }));
     const rejectLabel = selectionCount > 1 ? `Reject ${selectionCount} Items` : 'Reject';
-    entries.push(item(rejectLabel, { icon: <IconTrash size={15} />, action: ctx.onReject }));
+    entries.push(item(rejectLabel, { icon: <IconTrash size={15} />, shortcut: kbd('inbox.reject'), action: ctx.onReject }));
     entries.push(sep());
   }
 
@@ -155,6 +155,12 @@ export function buildTileContextMenu(ctx: GridMenuContext): MenuEntry[] {
       shortcut: kbd('file.openNewWindow'),
       action: singleHash && ctx.onOpenNewWindow ? () => ctx.onOpenNewWindow!(singleHash!) : undefined,
     }));
+    if (ctx.singleKind === 'collection') {
+      entries.push(item('Edit Collection', {
+        icon: <IconStack2 size={15} />,
+        action: ctx.onOpen,
+      }));
+    }
     entries.push(sep());
   }
 
@@ -177,16 +183,18 @@ export function buildTileContextMenu(ctx: GridMenuContext): MenuEntry[] {
       }));
     }
     if (selectionCount > 1 && ctx.scopeKind !== 'collection') {
-      entries.push(item('Create Collection', {
-        icon: <IconStack2 size={15} />,
-        action: ctx.onCreateCollection,
-      }));
-    }
-    if (ctx.onMergeIntoCollection) {
-      entries.push(item('Merge into Collection', {
-        icon: <IconStack2 size={15} />,
-        action: ctx.onMergeIntoCollection,
-      }));
+      if (ctx.hasCollections && ctx.onMergeIntoCollection) {
+        // Selection includes a collection — offer merge instead of create
+        entries.push(item('Merge into Collection', {
+          icon: <IconStack2 size={15} />,
+          action: ctx.onMergeIntoCollection,
+        }));
+      } else {
+        entries.push(item('Create Collection', {
+          icon: <IconStack2 size={15} />,
+          action: ctx.onCreateCollection,
+        }));
+      }
     }
     if (ctx.scopeKind === 'collection') {
       const removeLabel = selectionCount > 1 ? `Remove ${selectionCount} from Collection` : 'Remove from Collection';
@@ -211,7 +219,7 @@ export function buildTileContextMenu(ctx: GridMenuContext): MenuEntry[] {
     entries.push(item('Rename', { icon: <IconRename size={15} />, shortcut: kbd('edit.rename'), action: ctx.onRename }));
   }
   if (hasSelection && selectionCount > 1) {
-    entries.push(item('Batch Rename', { icon: <IconRename size={15} />, action: ctx.onOpenBatchRename }));
+    entries.push(item('Batch Rename', { icon: <IconRename size={15} />, shortcut: kbd('edit.batchRename'), action: ctx.onOpenBatchRename }));
   }
   if (singleSelected || (hasSelection && selectionCount > 1)) {
     entries.push(sep());
@@ -246,8 +254,8 @@ export function buildTileContextMenu(ctx: GridMenuContext): MenuEntry[] {
 
   // ── Tags ──
   if (hasSelection) {
-    entries.push(item('Add Tags', { icon: <IconBookmark size={15} />, action: ctx.onOpenTagSelect }));
-    entries.push(item('AI Tagger', { icon: <IconBookmarks size={15} />, action: ctx.onOpenAiTagger }));
+    entries.push(item('Add Tags', { icon: <IconBookmark size={15} />, shortcut: kbd('organize.addTag'), action: ctx.onOpenTagSelect }));
+    entries.push(item('AI Tagger', { icon: <IconBookmarks size={15} />, shortcut: kbd('organize.autoTag'), action: ctx.onOpenAiTagger }));
     entries.push(item('Copy Tags', { icon: <IconBookmark size={15} />, shortcut: kbd('edit.copyTags'), action: ctx.onCopyTags }));
     entries.push(item('Paste Tags', { icon: <IconBookmarks size={15} style={{ transform: 'scaleX(-1)' }} />, shortcut: kbd('edit.pasteTags'), action: ctx.onPasteTags, disabled: !ctx.hasClipboardTags }));
     entries.push(sep());

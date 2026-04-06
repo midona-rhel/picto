@@ -8,12 +8,11 @@ This document is about rebuilding the persistent inspector/context side surface 
 
 ## Lifecycle
 - `Implemented` when the rebuilt inspector and selection surface exist in the new `src/**` tree.
-- `Activatable` when the rebuilt grid/selection path and fixture parity harness are ready.
+- `Activatable` when the rebuilt grid/selection path is ready and the live path is review-clean.
 - `Activated` when the rebuilt inspector is the live path.
 - `Legacy removed` when the matching legacy inspector path is deleted.
 
 Activation depends on:
-- [PBI-590-greenfield-frontend-reference-fixtures-and-parity-harness.md](./docs/pbis/active-alpha/PBI-590-greenfield-frontend-reference-fixtures-and-parity-harness.md)
 - [PBI-592-greenfield-frontend-grid-screen-rebuild.md](./docs/pbis/active-alpha/PBI-592-greenfield-frontend-grid-screen-rebuild.md)
 - [PBI-582-greenfield-frontend-controller-boundary-reset.md](./docs/pbis/active-alpha/PBI-582-greenfield-frontend-controller-boundary-reset.md)
 - [PBI-587-greenfield-frontend-state-ownership-reset.md](./docs/pbis/active-alpha/PBI-587-greenfield-frontend-state-ownership-reset.md)
@@ -67,17 +66,16 @@ Do not start [PBI-585-greenfield-frontend-media-consumption-reset.md](./docs/pbi
 - metadata and selection summary behavior are stable
 - tag/folder/notes/rating/source-url actions remain correct
 - multi-select summary remains truthful for explicit selection and query-results select-all
-- parity is confirmed against the reference harness
+- the live inspector path is review-clean
 - the rebuilt inspector no longer depends on the legacy inspector architecture
 - preview and row primitives that are equivalent to rebuilt grid/sidebar/UI primitives are shared instead of rebuilt separately
 - finishing this PBI means the rebuilt inspector slice becomes the active default path before the next rebuilt live slice starts
 - temporary TODOs are allowed only for cross-PBI boundaries already named in the dependency list; they do not allow the next Track A PBI to start early
 
 ## Tests
-- fixture rendering tests for single-item, multi-item, collection, and virtual-selection states
 - interaction tests for the main inspector actions
 - multi-select tests for shared tags, shared folders, and mixed/shared rating state
-- parity checklist and visual confirmation notes
+- live-path verification notes
 
 This PBI must follow the cross-layer naming contract in [PBI-572-cross-layer-naming-contract.md](./docs/pbis/active-alpha/PBI-572-cross-layer-naming-contract.md).
 This PBI must follow the cross-layer testing rules in [PBI-579-cross-layer-testing-rules.md](./docs/pbis/active-alpha/PBI-579-cross-layer-testing-rules.md).
