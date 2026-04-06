@@ -24,7 +24,7 @@ import { useViewerMediaPipeline } from './hooks/useViewerMediaPipeline';
 import { useNavigatorRenderer } from './hooks/useNavigatorRenderer';
 import { useNavigatorDrag } from './hooks/useNavigatorDrag';
 import { VideoPlayer } from './video/VideoPlayer';
-import { resolveFilePath } from '../../platform/api';
+import { getEntityDetails, resolveFilePath } from '../../platform/api';
 import styles from './DetailWindow.module.css';
 import viewerStyles from './MediaView.module.css';
 
@@ -76,15 +76,14 @@ export function DetailWindow({ hash }: DetailWindowProps) {
   // ── Initial entity fetch ──
   const [initialImage, setInitialImage] = useState<LightImage | null>(null);
   useEffect(() => {
-    window.picto.api.invoke('get_entity_details', { entity_hash: hash }).then((raw: unknown) => {
-      if (!raw || typeof raw !== 'object') return;
-      const d = raw as Record<string, unknown>;
+    getEntityDetails(hash).then((d) => {
+      if (!d) return;
       setInitialImage({
-        hash: d.entity_hash as string,
-        name: (d.name as string) ?? null,
-        mime: d.mime_type as string,
-        width: (d.pixel_width as number) ?? null,
-        height: (d.pixel_height as number) ?? null,
+        hash: d.entity_hash,
+        name: d.name ?? null,
+        mime: d.mime_type,
+        width: d.pixel_width ?? null,
+        height: d.pixel_height ?? null,
       });
     }).catch(() => {});
   }, [hash]);

@@ -162,6 +162,73 @@
   line-height: 1.4;
 }
 
+/* ── Layout primitives ── */
+
+.stack { display: flex; flex-direction: column; gap: 16px; }
+.stackSm { display: flex; flex-direction: column; gap: 8px; }
+.stackXs { display: flex; flex-direction: column; gap: 4px; }
+
+.row { display: flex; align-items: center; gap: 8px; }
+.rowSm { display: flex; align-items: center; gap: 4px; }
+.rowSpread { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+
+.section { display: flex; flex-direction: column; gap: 8px; }
+.sectionLabel {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--color-text-tertiary);
+}
+
+/* Bordered group container (rule groups, card-style sections) */
+.group {
+  border: 1px solid var(--color-border-secondary);
+  border-radius: 6px;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.groupNegated {
+  border-color: var(--color-negative);
+  background: rgba(255, 71, 87, 0.04);
+}
+
+/* Small action icon button (24x24, for +/- in rule editors) */
+.actionBtn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+  padding: 0;
+  flex-shrink: 0;
+  transition: color 100ms ease, background 100ms ease;
+}
+.actionBtn:hover {
+  color: var(--color-text-primary);
+  background: var(--color-surface-hover);
+}
+.actionBtnDanger:hover {
+  color: var(--color-negative);
+}
+
+/* Sentence-style inline text between controls */
+.inlineLabel {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
 .separator {
   height: 1px;
   background: var(--color-border-secondary);

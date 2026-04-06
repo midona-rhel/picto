@@ -64,6 +64,17 @@ export function getEntityDetails(entityHash: string): Promise<CanonicalEntityDet
   return invoke<CanonicalEntityDetails | null>('get_entity_details', { entity_hash: entityHash });
 }
 
+export interface CollectionSummary {
+  id: number;
+  name: string;
+  image_count: number;
+  total_size_bytes: number;
+}
+
+export function getCollectionSummary(collectionId: number): Promise<CollectionSummary> {
+  return invoke<CollectionSummary>('get_collection_summary', { id: collectionId });
+}
+
 // ── Entity mutations ─────────────────────────────────────────────
 
 export function patchMediaEntities(target: EntityTarget, patch: MediaEntityPatch): Promise<unknown> {
@@ -185,6 +196,10 @@ export function openExternalUrl(url: string): Promise<void> {
   return invoke<void>('open_external_url', { url });
 }
 
+export function openSettingsWindow(): Promise<void> {
+  return invoke<void>('open_settings_window');
+}
+
 export function reorderSidebarNodes(moves: [string, number][]): Promise<void> {
   return invoke<void>('reorder_sidebar_nodes', { moves });
 }
@@ -300,6 +315,13 @@ export function getSubscriptionSites(): Promise<SubscriptionSiteInfo[]> {
 
 export function getSubscriptions(): Promise<SubscriptionInfo[]> {
   return invoke<SubscriptionInfo[]>('get_subscriptions');
+}
+
+export function createGroup(name: string, schedule?: string | null): Promise<unknown> {
+  return invoke('create_group', {
+    name,
+    schedule: schedule ?? null,
+  } as unknown as Record<string, unknown>);
 }
 
 export function createSubscription(params: {
@@ -622,6 +644,14 @@ export function resolveEntityAsset(hash: string, role: string): Promise<EntityAs
 
 export function resolveFilePath(hash: string): Promise<string | null> {
   return invoke<string | null>('resolve_file_path', { hash });
+}
+
+export function openDetailWindow(input: {
+  hash: string;
+  width?: number | null;
+  height?: number | null;
+}): Promise<void> {
+  return invoke<void>('open_in_new_window', input as unknown as Record<string, unknown>);
 }
 
 export function shellShowInFolder(path: string): void {

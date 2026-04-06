@@ -28,13 +28,13 @@ fn export_all_bindings() {
     picto_core::dispatch::typed::folders::RemoveFilesFromFolderInput::export().unwrap();
     picto_core::dispatch::typed::folders::ReorderFoldersInput::export().unwrap();
     picto_core::dispatch::typed::folders::ReorderFolderItemsInput::export().unwrap();
-    picto_core::dispatch::typed::folders::GetCollectionSummaryInput::export().unwrap();
-    picto_core::dispatch::typed::folders::CreateCollectionInput::export().unwrap();
-    picto_core::dispatch::typed::folders::UpdateCollectionInput::export().unwrap();
-    picto_core::dispatch::typed::folders::ReorderCollectionMembersInput::export().unwrap();
-    picto_core::dispatch::typed::folders::AddCollectionMembersInput::export().unwrap();
-    picto_core::dispatch::typed::folders::RemoveCollectionMembersInput::export().unwrap();
-    picto_core::dispatch::typed::folders::DeleteCollectionInput::export().unwrap();
+    picto_core::dispatch::typed::collections::GetCollectionSummaryInput::export().unwrap();
+    picto_core::dispatch::typed::collections::CreateCollectionInput::export().unwrap();
+    picto_core::dispatch::typed::collections::UpdateCollectionInput::export().unwrap();
+    picto_core::dispatch::typed::collections::ReorderCollectionMembersInput::export().unwrap();
+    picto_core::dispatch::typed::collections::AddCollectionMembersInput::export().unwrap();
+    picto_core::dispatch::typed::collections::RemoveCollectionMembersInput::export().unwrap();
+    picto_core::dispatch::typed::collections::DeleteCollectionInput::export().unwrap();
 
     picto_core::dispatch::typed::media_io::ResolveFilePathInput::export().unwrap();
     picto_core::dispatch::typed::media_io::OpenFileDefaultInput::export().unwrap();
@@ -47,7 +47,7 @@ fn export_all_bindings() {
     picto_core::dispatch::typed::media_io::ReanalyzeFileColorsInput::export().unwrap();
 
     picto_core::dispatch::typed::media_lifecycle::ImportFilesInput::export().unwrap();
-    picto_core::dispatch::typed::media_metadata::GetMediaEntityMetadataInput::export().unwrap();
+    picto_core::dispatch::typed::system::GetMediaEntityMetadataInput::export().unwrap();
 
     picto_core::dispatch::typed::smart_folders::ReorderSmartFoldersInput::export().unwrap();
     picto_core::dispatch::typed::smart_folders::CreateSmartFolderInput::export().unwrap();
@@ -129,8 +129,6 @@ fn export_all_bindings() {
     picto_core::types::GridScopeSpec::export().unwrap();
     picto_core::types::GridFilterSpec::export().unwrap();
     picto_core::types::GridSortSpec::export().unwrap();
-    picto_core::types::SelectionMode::export().unwrap();
-    picto_core::types::SelectionQuerySpec::export().unwrap();
     picto_core::types::ViewPrefsPatch::export().unwrap();
     picto_core::types::FolderReorderMove::export().unwrap();
 }

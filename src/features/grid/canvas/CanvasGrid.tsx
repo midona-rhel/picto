@@ -15,7 +15,7 @@ import { drawCanvasBaseLayer, type DrawContext } from './drawBase';
 
 import { ThumbnailPipeline } from './thumbnailPipeline';
 import { adaptGridItem } from './renderItemAdapter';
-import { startDrag, moveDrag, endDrag, cancelDrag, setDropTarget, getDragState, isDragActive, startNativeDrag } from '../dragState';
+import { startDrag, moveDrag, endDrag, cancelDrag, setDropTarget, getDragState, isDragActive } from '../dragState';
 import { hitTestTile, computeReorderTarget } from './hitTesting';
 import { DragGhost } from '../DragGhost';
 import {
@@ -769,7 +769,7 @@ export function CanvasGrid({
     const container = containerRef.current;
     if (!container) return;
 
-    const { x, y, zoom } = toLayoutCoords(e.clientX, e.clientY, container, headerHeight);
+    const { x, y } = toLayoutCoords(e.clientX, e.clientY, container, headerHeight);
     const idx = hitTestTile(layout.positions, x, y, textHeight, 0, layout.positions.length);
 
     if (idx != null && items[idx]) {

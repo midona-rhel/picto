@@ -189,7 +189,7 @@ export function Inspector() {
   const entityData = useAtomValue(displayedInspectorEntityDataAtom);
   const scopeVM = useAtomValue(scopeInspectorViewModelAtom);
   const sidebarNodes = useAtomValue(sidebarNodesAtom);
-  const { target: selTarget, selectedHashes, summary, ready: multiReady } = useSelectionSummary();
+  const { target: selTarget, selectedHashes, summary } = useSelectionSummary();
 
   if (inspectorTarget.kind === 'none') return null;
 

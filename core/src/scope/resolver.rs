@@ -90,15 +90,6 @@ impl ScopeFilter {
     }
 }
 
-impl From<&crate::types::SelectionQuerySpec> for ScopeFilter {
-    fn from(s: &crate::types::SelectionQuerySpec) -> Self {
-        ScopeFilter {
-            scope: s.scope.clone(),
-            filters: s.filters.clone(),
-        }
-    }
-}
-
 pub async fn resolve_scope(
     db: &LibraryDatabase,
     filter: &ScopeFilter,

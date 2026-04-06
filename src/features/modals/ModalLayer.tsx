@@ -9,6 +9,7 @@ import {
   folderWatchModalAtom,
   exportModalAtom,
   createGroupModalAtom,
+  folderImportModalAtom,
 } from '../../state/modals';
 import { ConfirmModal } from './ConfirmModal';
 import { SmartFolderModal } from './SmartFolderModal';
@@ -17,6 +18,7 @@ import { ExportModal } from './ExportModal';
 import { CreateGroupModal } from './CreateGroupModal';
 import { smartFoldersController } from '../../controllers/smartFoldersController';
 import { foldersController } from '../../controllers/foldersController';
+import { subscriptionsController } from '../../controllers/subscriptionsController';
 import * as api from '../../platform/api';
 
 export function ModalLayer() {
@@ -34,6 +36,9 @@ export function ModalLayer() {
 
   const createGroup = useAtomValue(createGroupModalAtom);
   const setCreateGroup = useSetAtom(createGroupModalAtom);
+
+  const folderImport = useAtomValue(folderImportModalAtom);
+  const setFolderImport = useSetAtom(folderImportModalAtom);
 
   return (
     <>
@@ -106,10 +111,39 @@ export function ModalLayer() {
         open={createGroup.open}
         onClose={() => setCreateGroup({ open: false })}
         onCreate={(name, schedule) => {
-          void (window as any).picto.api.invoke('create_group', { name, schedule });
+          void subscriptionsController.createGroup(name, schedule);
           setCreateGroup({ open: false });
         }}
       />
+
+      <ConfirmModal
+        open={folderImport.open}
+        onClose={() => setFolderImport({ ...folderImport, open: false })}
+        onConfirm={() => {
+          void api.importFolder(folderImport.path, {
+            preserve_structure: folderImport.preserveStructure,
+            parent_folder_id: folderImport.targetFolderId,
+          });
+          setFolderImport({ ...folderImport, open: false });
+        }}
+        title="Import Folder"
+        confirmLabel="Import"
+        message=""
+      >
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <p style={{ margin: 0 }}>
+            Import <strong>{folderImport.path.split(/[\\/]/).filter(Boolean).pop() ?? 'folder'}</strong>
+          </p>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: 'var(--color-text-secondary)' }}>
+            <input
+              type="checkbox"
+              checked={folderImport.preserveStructure}
+              onChange={(e) => setFolderImport({ ...folderImport, preserveStructure: e.currentTarget.checked })}
+            />
+            Keep folder structure
+          </label>
+        </div>
+      </ConfirmModal>
     </>
   );
 }

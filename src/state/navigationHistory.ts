@@ -6,6 +6,7 @@
  */
 
 import { atom, getDefaultStore } from 'jotai';
+import { collectionsController } from '../controllers/collectionsController';
 import { activeNodeIdAtom, parentNodeIdAtom, collectionNameAtom } from './navigation';
 
 interface HistoryEntry {
@@ -48,14 +49,7 @@ async function isValidNodeId(nodeId: string): Promise<boolean> {
   if (!nodeId.startsWith('collection:')) return true;
   const id = parseInt(nodeId.slice(11), 10);
   if (isNaN(id)) return false;
-  try {
-    const picto = (window as any).picto;
-    if (!picto?.api?.invoke) return true;
-    await picto.api.invoke('get_collection_summary', { id });
-    return true;
-  } catch {
-    return false;
-  }
+  return collectionsController.exists(id);
 }
 
 /** Push a new node onto the history stack (called on direct scope navigation, NOT back/forward). */

@@ -1123,8 +1123,19 @@ impl LibraryDatabase {
     }
 
     pub fn move_folder(&self, folder_id: i64, new_parent_id: Option<i64>) -> Result<(), String> {
+        if new_parent_id == Some(folder_id) {
+            return Err("Cannot move a folder into itself".into());
+        }
         let now = chrono::Utc::now().to_rfc3339();
         self.with_write(move |conn| {
+            // Prevent cycles: check if new_parent_id is a descendant of folder_id
+            if let Some(target) = new_parent_id {
+                if write::folders::is_ancestor_of(conn, target, folder_id)? {
+                    return Err(rusqlite::Error::InvalidParameterName(
+                        "Cannot move a folder into one of its descendants".into(),
+                    ));
+                }
+            }
             write::folders::move_folder(conn, folder_id, new_parent_id, &now)
         })
     }

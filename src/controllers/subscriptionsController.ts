@@ -120,6 +120,10 @@ export const subscriptionsController = {
     return api.createSubscription(input);
   },
 
+  createGroup(name: string, schedule?: string | null): Promise<unknown> {
+    return api.createGroup(name, schedule);
+  },
+
   rename(id: string, name: string): Promise<void> {
     return api.renameSubscription(id, name);
   },

@@ -6,7 +6,7 @@
  */
 
 import { useCallback, useEffect, useRef } from 'react';
-import { isNativeDragPending as isNativeDragPendingFn, isDragActive as isDragActiveFn, getDragState, startNativeDrag as startNativeDragFn, cancelDrag } from '../features/grid/dragState';
+import { isNativeDragPending as isNativeDragPendingFn, isDragActive as isDragActiveFn, getDragState, startNativeDrag as startNativeDragFn } from '../features/grid/dragState';
 import { useAtomValue, useSetAtom } from 'jotai';
 import { IconLayoutSidebar, IconSettings, IconChevronLeft, IconChevronRight, IconPin, IconPinFilled } from '@tabler/icons-react';
 import { getSettings } from '../platform/api';
@@ -27,27 +27,15 @@ import { sidebarNodesAtom } from '../state/sidebar';
 import { gridActiveAtom, gridScopeLabelAtom } from '../state/grid';
 import { displayedScopeLabelAtom, displayedGridSnapshotAtom, inspectorPinnedAtom } from '../state/inspector';
 import { viewerSessionAtom } from '../state/viewer';
-import { startSidebarSettle } from '../runtime/sidebarSettle';
-import { startGridSettle } from '../runtime/gridSettle';
-import { startInspectorSync } from '../controllers/inspectorController';
+import { startAppRuntime } from '../runtime/appRuntime';
 import { zoomController } from '../controllers/zoomController';
 import { canGoBackAtom, canGoForwardAtom, goBack, goForward, pushHistory } from '../state/navigationHistory';
 import { getShortcut, matchesShortcutDef } from '../shared/lib/shortcuts';
 import { KbdTooltip } from '../shared/ui/KbdTooltip';
 import { WindowControls } from '../shared/ui/WindowControls';
 import { listen } from '../platform/ipc';
+import { appController } from '../controllers/appController';
 import styles from './AppShell.module.css';
-
-let cleanupFns: (() => void)[] = [];
-function ensureSettle() {
-  // Clean up previous listeners (HMR safety — old listeners are cancelled)
-  for (const fn of cleanupFns) fn();
-  cleanupFns = [
-    startSidebarSettle(),
-    startGridSettle(),
-    startInspectorSync(),
-  ];
-}
 
 function InspectorTitlebarActions() {
   const isPinned = useAtomValue(inspectorPinnedAtom);
@@ -66,7 +54,7 @@ function InspectorTitlebarActions() {
 }
 
 function openSettings() {
-  (window as any).picto?.api?.invoke('open_settings_window')?.catch(() => {});
+  void appController.openSettingsWindow().catch(() => {});
 }
 
 /** Build the full ancestor path for a sidebar node (folder or smart folder). */
@@ -92,8 +80,6 @@ function ScopeTitle() {
   const snapshot = useAtomValue(displayedGridSnapshotAtom);
   const parentNodeId = useAtomValue(parentNodeIdAtom);
   const nodes = useAtomValue(sidebarNodesAtom);
-  const setActiveNodeId = useSetAtom(activeNodeIdAtom);
-  const setParentNodeId = useSetAtom(parentNodeIdAtom);
 
   if (!label) return null;
 
@@ -192,7 +178,7 @@ export function AppShell() {
   const setShowTreeGuides = useSetAtom(showTreeGuidesAtom);
 
   useEffect(() => {
-    ensureSettle();
+    const stopRuntime = startAppRuntime();
 
     const applyTheme = (theme: string) => {
       const lightThemes = new Set(['light', 'lightgray']);
@@ -233,7 +219,7 @@ export function AppShell() {
         document.documentElement.style.colorScheme = lightThemes.has(resolved) ? 'light' : 'dark';
       }).then((fn) => { unlistenOsTheme = fn; });
     });
-    return () => { unlistenSettings?.(); unlistenOsTheme?.(); };
+    return () => { stopRuntime(); unlistenSettings?.(); unlistenOsTheme?.(); };
   }, []);
 
   useEffect(() => {
@@ -272,14 +258,17 @@ export function AppShell() {
 
   // ── Native drag-out — start OS file drag when cursor leaves the window during a grid drag ──
   useEffect(() => {
-    const handler = (e: MouseEvent) => {
+    const handler = async (e: MouseEvent) => {
       if (!isDragActiveFn()) return;
-      // Check if cursor actually left the window
       if (e.clientX <= 0 || e.clientY <= 0 || e.clientX >= window.innerWidth || e.clientY >= window.innerHeight) {
         const state = getDragState();
         const firstHash = state.hashes[0];
+        const count = state.hashes.length;
+        // Generate icon with count badge for multi-file drags
+        const { createDragIcon } = await import('../shared/lib/dragIcon');
         const thumbnailUrl = firstHash ? `media://localhost/thumb/${firstHash}.jpg` : '';
-        startNativeDragFn(state.hashes, thumbnailUrl);
+        const iconDataUrl = await createDragIcon(thumbnailUrl, count);
+        startNativeDragFn(state.hashes, iconDataUrl);
       }
     };
     document.addEventListener('mouseleave', handler);

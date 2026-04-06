@@ -281,28 +281,6 @@ pub type FileAllMetadata = EntityAllMetadata;
 pub type FileInfo = EntityInfo;
 pub type FileGridInfo = EntityGridInfo;
 
-#[derive(Debug, Clone, Deserialize, TS)]
-#[ts(export_to = "../../src/shared/types/generated/commands/")]
-#[serde(rename_all = "snake_case")]
-pub enum SelectionMode {
-    ExplicitHashes,
-    AllResults,
-}
-
-#[derive(Debug, Clone, Deserialize, TS)]
-#[ts(export_to = "../../src/shared/types/generated/commands/")]
-pub struct SelectionQuerySpec {
-    pub mode: SelectionMode,
-    pub hashes: Option<Vec<String>>,
-    pub scope: GridScopeSpec,
-    #[serde(default)]
-    pub filters: GridFilterSpec,
-    #[serde(default)]
-    pub sort: GridSortSpec,
-    pub excluded_hashes: Option<Vec<String>>,
-    pub included_hashes: Option<Vec<String>>,
-}
-
 #[derive(Debug, Serialize)]
 pub struct SelectionTagCount {
     pub tag: String,

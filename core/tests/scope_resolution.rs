@@ -387,7 +387,7 @@ async fn scope_contract_folder_exclusion() {
     assert!(bm.contains(f1 as u32));
 }
 
-/// Business rule: select-all resolves to the same scope as the grid.
+/// Business rule: query-results selection uses the same scope/filter contract as the grid.
 #[tokio::test]
 async fn scope_contract_grid_and_selection_same_scope() {
     let harness = common_canonical::TestHarness::new().await;
@@ -403,19 +403,6 @@ async fn scope_contract_grid_and_selection_same_scope() {
     harness.bitmaps_insert_effective_tag(red, f1);
     harness.bitmaps_insert_effective_tag(red, f3);
 
-    let selection_query = SelectionQuerySpec {
-        mode: SelectionMode::AllResults,
-        hashes: None,
-        scope: GridScopeSpec::default(),
-        filters: GridFilterSpec {
-            search_tags: Some(vec!["red".to_string()]),
-            ..Default::default()
-        },
-        sort: GridSortSpec::default(),
-        excluded_hashes: None,
-        included_hashes: None,
-    };
-
     let grid_filter = ScopeFilter {
         scope: GridScopeSpec::default(),
         filters: GridFilterSpec {
@@ -423,12 +410,18 @@ async fn scope_contract_grid_and_selection_same_scope() {
             ..Default::default()
         },
     };
-    let sel_filter = ScopeFilter::from(&selection_query);
+    let selection_filter = ScopeFilter {
+        scope: GridScopeSpec::default(),
+        filters: GridFilterSpec {
+            search_tags: Some(vec!["red".to_string()]),
+            ..Default::default()
+        },
+    };
     let grid_bm = resolve_scope(&harness.db, &grid_filter).await.unwrap();
-    let sel_bm = resolve_scope(&harness.db, &sel_filter).await.unwrap();
+    let selection_bm = resolve_scope(&harness.db, &selection_filter).await.unwrap();
 
     assert_eq!(
-        grid_bm, sel_bm,
+        grid_bm, selection_bm,
         "grid and selection must resolve identical bitmaps"
     );
     assert_eq!(grid_bm.len(), 2);

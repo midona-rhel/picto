@@ -14,12 +14,13 @@ export interface ConfirmModalProps {
   cancelLabel?: string;
   danger?: boolean;
   loading?: boolean;
+  children?: React.ReactNode;
 }
 
 export function ConfirmModal({
   open, onClose, onConfirm, title, message,
   confirmLabel = 'Confirm', cancelLabel = 'Cancel',
-  danger = false, loading = false,
+  danger = false, loading = false, children,
 }: ConfirmModalProps) {
   return (
     <GlassModal
@@ -43,9 +44,11 @@ export function ConfirmModal({
         </>
       }
     >
-      <p style={{ margin: 0, color: 'var(--color-text-secondary)', fontSize: 13, lineHeight: 1.5 }}>
-        {message}
-      </p>
+      {children ?? (
+        <p style={{ margin: 0, color: 'var(--color-text-secondary)', fontSize: 13, lineHeight: 1.5 }}>
+          {message}
+        </p>
+      )}
     </GlassModal>
   );
 }

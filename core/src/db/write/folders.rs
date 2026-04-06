@@ -1,7 +1,7 @@
 //! Folder write operations — CRUD, membership, reorder.
 //! Folder membership (folder_member) stores single entity IDs only.
 
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 
 use crate::db::types::{ExpansionMode, FolderMembershipChange, FolderPatch};
 
@@ -170,6 +170,28 @@ pub fn move_folder(
         params![new_parent_id, now, folder_id],
     )?;
     Ok(())
+}
+
+/// Walk up the parent chain from `start_id`. Returns true if `ancestor_id` is found.
+pub fn is_ancestor_of(conn: &Connection, start_id: i64, ancestor_id: i64) -> rusqlite::Result<bool> {
+    let mut current = start_id;
+    for _ in 0..200 {
+        let parent: Option<Option<i64>> = conn
+            .query_row(
+                "SELECT parent_id FROM folder WHERE folder_id = ?1",
+                [current],
+                |row| row.get(0),
+            )
+            .optional()?;
+        match parent {
+            Some(Some(pid)) => {
+                if pid == ancestor_id { return Ok(true); }
+                current = pid;
+            }
+            _ => return Ok(false),
+        }
+    }
+    Ok(false)
 }
 
 /// Reorder folders (sibling sort order).

@@ -59,7 +59,7 @@ import { saveScrollPosition, getScrollPosition, pushHistory } from '../../state/
 import { resolveFilePath, shellOpenPath, shellShowInFolder, clipboardWriteText, clipboardCopyFile, createCollection, addCollectionMembers, removeCollectionMembers, deleteCollection, listCollectionMemberHashes, importFiles, importFolder, queryEntityView } from '../../platform/api';
 import { viewerSessionAtom, quickLookSessionAtom, createViewerSession, navigateViewerSession } from '../../state/viewer';
 import { tagSelectOpenAtom, folderPickerOpenAtom, aiTaggerOpenAtom, batchRenameOpenAtom } from '../../state/portals';
-import { confirmModalAtom } from '../../state/modals';
+import { confirmModalAtom, folderImportModalAtom } from '../../state/modals';
 import { MediaView } from '../viewer/MediaView';
 import { SubscriptionsScreen } from '../subscriptions/SubscriptionsScreen';
 import { QuickLook } from '../viewer/QuickLook';
@@ -69,6 +69,7 @@ import { AiTaggerPanel } from '../ai-tagger/AiTaggerPanel';
 import { BatchRenamePanel } from '../batch-rename/BatchRenamePanel';
 import { useGridArrowNav } from './hooks/useGridArrowNav';
 import type { LayoutResult } from './layout/types';
+import { windowController } from '../../controllers/windowController';
 import styles from './GridScreen.module.css';
 
 // ── Smart collection naming (ported from legacy) ──
@@ -225,10 +226,15 @@ export function GridScreen() {
       // Detect folder drop (single path without media extension)
       const mediaExt = /\.(jpe?g|png|gif|webp|bmp|tiff?|svg|mp4|mkv|webm|avi|mov|wmv|flv|m4v|avif|jxl|ico|pdf)$/i;
       if (paths.length === 1 && !mediaExt.test(paths[0])) {
-        // Folder import
-        void importFolder(paths[0], { parent_folder_id: folderId, preserve_structure: true });
+        // Show import modal for folder drops
+        store.set(folderImportModalAtom, {
+          open: true,
+          path: paths[0],
+          preserveStructure: true,
+          targetFolderId: folderId ?? null,
+        });
       } else {
-        // File import
+        // File import — direct
         void importFiles(paths, folderId != null ? { parent_folder_id: folderId } : {});
       }
     });
@@ -636,7 +642,7 @@ export function GridScreen() {
         const item = curItems.find((i) => i.entity_hash === primaryHash);
         const label = `detail-${primaryHash.slice(0, 12)}`;
         detailWindowSelectionRef.current.set(label, selectedArr);
-        void (window as any).picto.api.invoke('open_in_new_window', {
+        void windowController.openDetailWindow({
           hash: primaryHash,
           width: item?.pixel_width ?? null,
           height: item?.pixel_height ?? null,
@@ -799,7 +805,7 @@ export function GridScreen() {
             setSelectedHashes(new Set([nodeId]));
           }
         }}
-        onFolderContextMenu={(nodeId, folder, pos) => {
+        onFolderContextMenu={(nodeId, _folder, pos) => {
           // Select the folder if not already selected
           if (!selectedHashes.has(nodeId)) {
             setSelectedHashes(new Set([nodeId]));
@@ -947,8 +953,10 @@ export function GridScreen() {
               const selectedArr = [...effectiveHashes];
               const label = `detail-${hash.slice(0, 12)}`;
               detailWindowSelectionRef.current.set(label, selectedArr);
-              void (window as any).picto.api.invoke('open_in_new_window', {
-                hash, width: it?.pixel_width ?? null, height: it?.pixel_height ?? null,
+              void windowController.openDetailWindow({
+                hash,
+                width: it?.pixel_width ?? null,
+                height: it?.pixel_height ?? null,
               });
             },
             onOpenDefault: (hash) => { void resolveFilePath(hash).then((p) => { if (p) shellOpenPath(p); }); },
@@ -1010,14 +1018,9 @@ export function GridScreen() {
               const collections = selectedItems.filter((i) => i.entity_kind === 'collection');
               const nonCollections = selectedItems.filter((i) => i.entity_kind !== 'collection');
               if (collections.length !== 1 || nonCollections.length === 0) return undefined;
-              const collHash = collections[0].entity_hash;
+              const collId = collections[0].entity_id;
               return () => {
                 void (async () => {
-                  const summary = await import('../../platform/api').then((a) => a.getEntityDetails(collHash));
-                  if (!summary) return;
-                  // entity_id is the collection ID
-                  const collId = summary.entity_id;
-                  if (collId == null) return;
                   await addCollectionMembers(collId, nonCollections.map((i) => i.entity_hash));
                 })();
               };
