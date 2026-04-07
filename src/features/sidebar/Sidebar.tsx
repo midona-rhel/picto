@@ -12,7 +12,7 @@ import {
   IconFolder, IconFolderOpen, IconFolderPlus, IconFolderSymlink,
   IconCopy, IconUpload, IconDownload,
   IconPhoto, IconInbox, IconTrash,
-  IconClock, IconBookmark,
+  IconClock, IconBookmark, IconPin, IconPinFilled,
 } from '@tabler/icons-react';
 import type { Icon as TablerIcon } from '@tabler/icons-react';
 import {
@@ -29,6 +29,7 @@ import { pushHistory } from '../../state/navigationHistory';
 import { sidebarController } from '../../controllers/sidebarController';
 import { foldersController } from '../../controllers/foldersController';
 import { smartFoldersController } from '../../controllers/smartFoldersController';
+import { pinSidebarItem, unpinSidebarItem, reorderPinnedItems } from '../../platform/sidebarApi';
 import { SidebarRow } from '../../shared/ui/SidebarRow';
 import { ContextMenu, useContextMenu, type MenuEntry } from '../../shared/ui/ContextMenu';
 import { ColorPicker } from '../../shared/ui/ColorPicker';
@@ -352,6 +353,18 @@ export function Sidebar() {
     [smartFolderNodes, collapsed],
   );
 
+  // Pinned items — flat list from both folders and smart folders
+  const pinnedNodes = useMemo(() => {
+    const allNodes = [...folderNodes, ...smartFolderNodes];
+    return allNodes
+      .filter((n) => (n.meta as Record<string, unknown> | null)?.pinned === true)
+      .sort((a, b) => {
+        const ao = ((a.meta as Record<string, unknown> | null)?.pin_order as number) ?? 0;
+        const bo = ((b.meta as Record<string, unknown> | null)?.pin_order as number) ?? 0;
+        return ao - bo;
+      });
+  }, [folderNodes, smartFolderNodes]);
+
   /** Multi-select-aware click handler for folder / smart folder rows. */
   const handleRowClick = useCallback((id: string, e: React.MouseEvent) => {
     const isMod = e.metaKey || e.ctrlKey;
@@ -466,6 +479,10 @@ export function Sidebar() {
       } },
       { label: 'Move', icon: <IconFolderSymlink size={14} />, action: () => { /* TODO: needs folder destination picker */ } },
       { separator: true },
+      (node.meta as Record<string, unknown> | null)?.pinned
+        ? { label: 'Unpin', icon: <IconPinFilled size={14} />, action: () => { void unpinSidebarItem(node.id); } }
+        : { label: 'Pin to Sidebar', icon: <IconPin size={14} />, action: () => { void pinSidebarItem(node.id); } },
+      { separator: true },
       { label: 'Delete', icon: <IconTrash size={14} />, danger: true, action: () => {
         store.set(confirmModalAtom, {
           open: true, title: 'Delete Folder', danger: true, confirmLabel: 'Delete',
@@ -519,6 +536,10 @@ export function Sidebar() {
       ) },
       { separator: true },
       { label: 'Duplicate', icon: <IconCopy size={14} />, disabled: true, action: () => {} },
+      { separator: true },
+      (node.meta as Record<string, unknown> | null)?.pinned
+        ? { label: 'Unpin', icon: <IconPinFilled size={14} />, action: () => { void unpinSidebarItem(node.id); } }
+        : { label: 'Pin to Sidebar', icon: <IconPin size={14} />, action: () => { void pinSidebarItem(node.id); } },
       { separator: true },
       { label: 'Delete', icon: <IconTrash size={14} />, danger: true, action: () => {
         store.set(confirmModalAtom, {
@@ -640,6 +661,37 @@ export function Sidebar() {
             />
           );
         })}
+
+        {/* Pinned items — flat list */}
+        {pinnedNodes.length > 0 && (
+          <>
+            <SidebarRow
+              variant="section" label="Pinned"
+              expanded={!collapsed.has('pinned')}
+              onToggle={() => toggleCollapse('pinned')}
+            />
+            {!collapsed.has('pinned') && pinnedNodes.map((node) => {
+              const isFolder = node.kind === 'folder';
+              return (
+                <SidebarRow
+                  key={`pin-${node.id}`}
+                  variant={isFolder ? 'folder' : 'smart_folder'}
+                  icon={<NodeIcon node={node} expanded={false} />}
+                  label={node.name}
+                  count={node.count}
+                  active={activeNodeId === node.id}
+                  selected={sidebarSelection.has(node.id)}
+                  contextHighlight={contextMenuNodeId === node.id}
+                  onClick={(e) => handleRowClick(node.id, e)}
+                  onContextMenu={(e) => {
+                    if (isFolder) openFolderMenu(e, node);
+                    else openSmartFolderMenu(e, node);
+                  }}
+                />
+              );
+            })}
+          </>
+        )}
 
         {/* Folders */}
         <SidebarRow

@@ -49,6 +49,52 @@ impl ApplicationEngine {
         Ok(())
     }
 
+    pub fn pin_sidebar_item(&self, node_id: &str) -> Result<(), String> {
+        if let Some(raw) = node_id.strip_prefix("folder:") {
+            let id: i64 = raw.parse().map_err(|_| "Invalid folder id".to_string())?;
+            self.db.set_folder_pinned(id, true)?;
+        } else if let Some(raw) = node_id.strip_prefix("smart:") {
+            let id: i64 = raw.parse().map_err(|_| "Invalid smart folder id".to_string())?;
+            self.db.set_smart_folder_pinned(id, true)?;
+        } else {
+            return Err(format!("Unsupported node_id prefix: {node_id}"));
+        }
+        self.db
+            .run_compiler(crate::db::projection::compiler::CompilerPlan {
+                rebuild_sidebar: true,
+                ..Default::default()
+            });
+        Ok(())
+    }
+
+    pub fn unpin_sidebar_item(&self, node_id: &str) -> Result<(), String> {
+        if let Some(raw) = node_id.strip_prefix("folder:") {
+            let id: i64 = raw.parse().map_err(|_| "Invalid folder id".to_string())?;
+            self.db.set_folder_pinned(id, false)?;
+        } else if let Some(raw) = node_id.strip_prefix("smart:") {
+            let id: i64 = raw.parse().map_err(|_| "Invalid smart folder id".to_string())?;
+            self.db.set_smart_folder_pinned(id, false)?;
+        } else {
+            return Err(format!("Unsupported node_id prefix: {node_id}"));
+        }
+        self.db
+            .run_compiler(crate::db::projection::compiler::CompilerPlan {
+                rebuild_sidebar: true,
+                ..Default::default()
+            });
+        Ok(())
+    }
+
+    pub fn reorder_pinned_items(&self, moves: &[(String, i64)]) -> Result<(), String> {
+        self.db.reorder_pinned_items(moves)?;
+        self.db
+            .run_compiler(crate::db::projection::compiler::CompilerPlan {
+                rebuild_sidebar: true,
+                ..Default::default()
+            });
+        Ok(())
+    }
+
     pub fn get_view_prefs(
         &self,
         scope_key: &str,

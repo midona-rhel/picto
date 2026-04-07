@@ -60,7 +60,7 @@ import { buildTileContextMenu, buildEmptyContextMenu } from './gridContextMenu';
 import { saveScrollPosition, getScrollPosition, pushHistory } from '../../state/navigationHistory';
 import { viewerSessionAtom, quickLookSessionAtom, createViewerSession, navigateViewerSession } from '../../state/viewer';
 import { tagSelectOpenAtom, folderPickerOpenAtom, aiTaggerOpenAtom, batchRenameOpenAtom } from '../../state/portals';
-import { confirmModalAtom, folderImportModalAtom } from '../../state/modals';
+import { confirmModalAtom, folderImportModalAtom, exportModalAtom } from '../../state/modals';
 import { MediaView } from '../viewer/MediaView';
 import { SubscriptionsScreen } from '../subscriptions/SubscriptionsScreen';
 import { QuickLook } from '../viewer/QuickLook';
@@ -1001,6 +1001,19 @@ export function GridScreen() {
               const thumbUrl = `media://localhost/thumb/${hash}.jpg`;
               const url = urls[engine];
               if (url) void (window as any).picto?.shell?.openExternal(url + encodeURIComponent(thumbUrl));
+            },
+            onSetRating: (rating) => {
+              void entityMutations.setTargetRating(
+                { kind: 'entity_hashes', entity_hashes: [...effectiveHashes] },
+                rating,
+              );
+            },
+            onExport: () => {
+              store.set(exportModalAtom, {
+                open: true,
+                fileCount: effectiveHashes.size,
+                target: { kind: 'entity_hashes', entity_hashes: [...effectiveHashes] },
+              });
             },
             onRemoveFromFolder: () => { void removeSelectionFromCurrentFolder(); },
             onOpenTagSelect: () => { setTagSelectOpen(true); },

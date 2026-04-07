@@ -32,6 +32,25 @@ pub struct ReorderSidebarNodesInput {
 
 #[derive(Debug, Deserialize, TS)]
 #[ts(export_to = "../../src/shared/types/generated/commands/")]
+pub struct PinSidebarItemInput {
+    pub node_id: String,
+}
+
+#[derive(Debug, Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
+pub struct UnpinSidebarItemInput {
+    pub node_id: String,
+}
+
+#[derive(Debug, Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
+pub struct ReorderPinnedItemsInput {
+    #[ts(type = "[string, number][]")]
+    pub moves: Vec<(String, i64)>,
+}
+
+#[derive(Debug, Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct GetViewPrefsInput {
     #[serde(default)]
     pub scope_key: Option<String>,
@@ -270,4 +289,45 @@ pub async fn get_storage_stats(
         serde_json::Value::Number(thumbnails_disk.into()),
     );
     Ok(result)
+}
+
+// ── Sidebar Pinning ──────────────────────────────────────────────────
+
+pub async fn pin_sidebar_item(
+    state: &AppState,
+    input: PinSidebarItemInput,
+) -> Result<(), String> {
+    state.engine.pin_sidebar_item(&input.node_id)?;
+    crate::events::emit_state_changed(
+        "pin_sidebar_item",
+        crate::runtime_contract::change_builder::ChangeImpact::new()
+            .add_domain(crate::runtime_contract::state_change::Domain::Sidebar),
+    );
+    Ok(())
+}
+
+pub async fn unpin_sidebar_item(
+    state: &AppState,
+    input: UnpinSidebarItemInput,
+) -> Result<(), String> {
+    state.engine.unpin_sidebar_item(&input.node_id)?;
+    crate::events::emit_state_changed(
+        "unpin_sidebar_item",
+        crate::runtime_contract::change_builder::ChangeImpact::new()
+            .add_domain(crate::runtime_contract::state_change::Domain::Sidebar),
+    );
+    Ok(())
+}
+
+pub async fn reorder_pinned_items(
+    state: &AppState,
+    input: ReorderPinnedItemsInput,
+) -> Result<(), String> {
+    state.engine.reorder_pinned_items(&input.moves)?;
+    crate::events::emit_state_changed(
+        "reorder_pinned_items",
+        crate::runtime_contract::change_builder::ChangeImpact::new()
+            .add_domain(crate::runtime_contract::state_change::Domain::Sidebar),
+    );
+    Ok(())
 }

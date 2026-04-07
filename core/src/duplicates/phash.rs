@@ -2,14 +2,11 @@
 //!
 //! Raw pHash computation lives in `media_processing::phash`.
 
-use img_hash::{HasherConfig, ImageHash};
+use img_hash::ImageHash;
 
 /// Default Hamming distance threshold for "likely duplicate" (0 = identical, lower = more similar).
 /// 32 at 16x16 (256-bit hash) is proportional to the old 8 at 8x8 (64-bit hash).
 pub const DEFAULT_DISTANCE_THRESHOLD: u32 = 32;
-
-/// Hash size per dimension (16x16 = 256-bit hash).
-const HASH_SIZE: u32 = 16;
 
 // --- BK-tree for Hamming distance ---
 
@@ -104,6 +101,10 @@ impl BkTree {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use img_hash::HasherConfig;
+
+    /// Hash size per dimension (16x16 = 256-bit hash).
+    const HASH_SIZE: u32 = 16;
 
     fn make_hash(pixel: [u8; 4]) -> ImageHash<Vec<u8>> {
         let hasher = HasherConfig::new()

@@ -1,102 +1,14 @@
-# Active PBIs
+# PBIs
 
-- PBI-201-site-metadata-validation-3dbooru.md
-- PBI-202-site-metadata-validation-artstation.md
-- PBI-203-site-metadata-validation-sankaku.md
-- PBI-204-site-metadata-validation-idolcomplex.md
-- PBI-206-site-metadata-validation-deviantart.md
-- PBI-207-site-metadata-validation-patreon.md
-- PBI-208-site-metadata-validation-nijie.md
-- PBI-209-site-metadata-validation-tumblr.md
-- PBI-210-site-metadata-validation-fantia.md
-- PBI-211-site-metadata-validation-fanbox.md
-- PBI-212-site-metadata-validation-webtoons.md
-- PBI-213-site-metadata-validation-kemono-party.md
-- PBI-214-site-metadata-validation-coomer-party.md
-- PBI-215-site-metadata-validation-seiso-party.md
-- PBI-216-site-metadata-validation-baraag.md
-- PBI-217-site-metadata-validation-pawoo.md
-- PBI-218-site-metadata-validation-hentaifoundry.md
-- PBI-219-site-metadata-validation-yandere.md
-- PBI-222-site-metadata-validation-furaffinity.md
-- PBI-223-site-metadata-validation-instagram.md
-- PBI-224-site-metadata-validation-framework-and-api-contract.md
-- PBI-227-first-run-onboarding-and-library-creation-guidance.md
-- PBI-231-windows-collection-and-reorder-fixes.md
-- PBI-252-subscription-setup-help-text-and-query-guidance.md
-- PBI-254-user-guide-in-readme-or-docs.md
-- PBI-517-frontend-render-optimization-react-memo-audit.md
-- PBI-518-shared-zoomable-image-component-extraction.md
-- PBI-519-frontend-and-ipc-test-coverage-expansion.md
-- PBI-520-smart-folder-compiler-selective-rebuild.md
-- PBI-521-frontend-large-component-decomposition.md
-- PBI-523-collection-view-context-preservation.md
-- PBI-524-independent-category-versioned-flush.md
-- PBI-525-structured-error-types-dispatch-boundary.md
-- PBI-526-poison-recovery-alerting-self-healing.md
-- PBI-527-write-connection-contention-monitoring.md
-- PBI-528-bitmap-flush-crash-recovery-verification.md
-- PBI-529-frontend-error-feedback-system.md
-- PBI-530-baseline-accessibility-interactive-elements.md
-- PBI-533-async-event-serialization-bulk-operations.md
-- PBI-534-tracing-subscriber-initialization-placement.md
-- PBI-535-slow-query-observability-suppression-gap.md
-- PBI-536-main-view-model-dependency-decomposition.md
-- PBI-537-grid-metadata-store-lru-eviction.md
-- PBI-538-event-driven-watchdog-refresh.md
-- PBI-541-complete-undo-redo-coverage.md
-- PBI-541-date-field-naming-consistency.md
-- PBI-542-windows-platform-bugs.md
-- PBI-543-subscription-stop-reset-post-limit.md
-- PBI-544-collection-bugs.md
-- PBI-545-deferred-work-queue.md
-- PBI-546-delete-performance.md
-- PBI-547-strip-view-and-settings-bugs.md
-- PBI-548-orphaned-media-entities.md
-- PBI-549-controller-and-state-change-program-index.md
+The old frontend reset program is no longer the active repo narrative.
 
-- Reset-program prerequisite:
-- PBI-572-cross-layer-naming-contract.md
-- PBI-579-cross-layer-testing-rules.md
-- PBI-580-cross-layer-comment-rules.md
+Current repo truth:
+- the frontend was cleaned up in place
+- the core controller/state/runtime/API reset work is largely done
+- the main remaining frontend work is visible-behavior follow-up, not another greenfield rebuild plan
 
-- Reset activation order:
-- 1. Activate prerequisites: PBI-572, PBI-579, PBI-580
-- 2. Implement foundations: PBI-567, PBI-568, PBI-578
-- 3. Lock frontend architecture and styling contracts: PBI-588, PBI-594
-- 4. Quarantine the old frontend: PBI-589
-- 5. Run Track A and Track B in parallel for the rebuilt core entity flow: Track A = PBI-591, PBI-592, PBI-593; Track B = PBI-581, PBI-582, PBI-587, PBI-583, PBI-584, PBI-597 plus matching backend contract work in PBI-568/PBI-578
-- 6. Activate rebuilt core entity flow only when shell/grid/inspector contract gates and backend contract gates align
-- 7. Activate media/platform layers: PBI-569, PBI-585, PBI-576
-- 8. Activate downstream subsystems: PBI-573, PBI-574, PBI-575, PBI-577
-- 9. Activate manager navigation and random view follow-ups: PBI-595, PBI-596
-- 10. Activate frontend structural cleanup: PBI-586, then PBI-571
+Use these indexes:
+- [active-alpha/README.md](./docs/pbis/active-alpha/README.md) for active work
+- [archive/README.md](./docs/pbis/archive/README.md) for historical PBIs
 
-- Reset program:
-- PBI-567-greenfield-library-database-reset.md
-- PBI-568-greenfield-backend-engine-boundary-reset.md
-- PBI-569-greenfield-media-delivery-service.md
-- PBI-570-greenfield-frontend-reset-program-index.md
-- PBI-571-frontend-shared-component-and-styling-system-reset.md
-- PBI-573-greenfield-import-and-ingest-reset.md
-- PBI-574-greenfield-export-job-reset.md
-- PBI-575-greenfield-subscriptions-engine-and-recovery-reset.md
-- PBI-576-greenfield-deferred-work-and-background-processing-reset.md
-- PBI-577-greenfield-duplicates-and-rejected-media-reset.md
-- PBI-578-bulk-entity-target-and-selection-reset.md
-- PBI-581-greenfield-frontend-api-layer-reset.md
-- PBI-582-greenfield-frontend-controller-boundary-reset.md
-- PBI-583-greenfield-frontend-runtime-reconciliation-reset.md
-- PBI-584-greenfield-frontend-grid-query-and-selection-reset.md
-- PBI-585-greenfield-frontend-media-consumption-reset.md
-- PBI-586-greenfield-frontend-feature-module-architecture-reset.md
-- PBI-587-greenfield-frontend-state-ownership-reset.md
-- PBI-588-greenfield-frontend-architecture-contract-reset.md
-- PBI-594-greenfield-frontend-css-architecture-contract.md
-- PBI-589-greenfield-frontend-legacy-quarantine-and-workspace-reset.md
-- PBI-591-greenfield-frontend-shell-and-sidebar-rebuild.md
-- PBI-592-greenfield-frontend-grid-screen-rebuild.md
-- PBI-593-greenfield-frontend-inspector-and-selection-surface-rebuild.md
-- PBI-595-greenfield-frontend-manager-navigation-and-surface-reset.md
-- PBI-596-greenfield-random-active-image-view-contract.md
-- PBI-597-greenfield-entity-view-reconciliation-and-sidebar-delta-contract.md
+Treat the greenfield frontend reset PBIs as historical implementation notes unless a file explicitly says it is still open.

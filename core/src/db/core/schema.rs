@@ -120,6 +120,8 @@ CREATE TABLE IF NOT EXISTS folder (
     watch_subfolders           INTEGER DEFAULT 0,
     watch_import_status_mode   TEXT    DEFAULT 'inherit',
     total_size_bytes           INTEGER NOT NULL DEFAULT 0,
+    pinned                     INTEGER NOT NULL DEFAULT 0,
+    pin_order                  INTEGER NOT NULL DEFAULT 0,
     date_added                 TEXT    NOT NULL,
     date_modified              TEXT    NOT NULL
 );
@@ -143,6 +145,8 @@ CREATE TABLE IF NOT EXISTS smart_folder (
     sort_order        TEXT,
     display_order    INTEGER,
     total_size_bytes INTEGER NOT NULL DEFAULT 0,
+    pinned           INTEGER NOT NULL DEFAULT 0,
+    pin_order        INTEGER NOT NULL DEFAULT 0,
     date_added       TEXT    NOT NULL,
     date_modified    TEXT    NOT NULL
 );

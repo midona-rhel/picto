@@ -14,7 +14,7 @@ import {
   IconRefresh, IconTrash, IconArrowBackUp,
   IconSelectAll, IconDeselect,
   IconStack2, IconStackPop, IconSearch,
-  IconFolder,
+  IconFolder, IconStar, IconUpload,
 } from '@tabler/icons-react';
 import type { MenuItem, MenuSeparator, MenuEntry } from '../../shared/ui/ContextMenu/ContextMenu';
 import { IconRename } from '../../shared/ui/icons/sidebar-menu-icons';
@@ -77,6 +77,8 @@ interface GridMenuContext {
   onNewFolderWithSelection?: () => void;
   onMergeIntoCollection?: () => void;
   onSearchByImage?: (engine: string, hash: string) => void;
+  onSetRating?: (rating: number) => void;
+  onExport?: () => void;
 }
 
 function sep(): MenuSeparator {
@@ -259,6 +261,25 @@ export function buildTileContextMenu(ctx: GridMenuContext): MenuEntry[] {
     entries.push(item('AI Tagger', { icon: <IconBookmarks size={15} />, shortcut: kbd('organize.autoTag'), action: ctx.onOpenAiTagger }));
     entries.push(item('Copy Tags', { icon: <IconBookmark size={15} />, shortcut: kbd('edit.copyTags'), action: ctx.onCopyTags }));
     entries.push(item('Paste Tags', { icon: <IconBookmarks size={15} style={{ transform: 'scaleX(-1)' }} />, shortcut: kbd('edit.pasteTags'), action: ctx.onPasteTags, disabled: !ctx.hasClipboardTags }));
+    entries.push(sep());
+  }
+
+  // ── Rating ──
+  if (hasSelection && ctx.onSetRating) {
+    entries.push({
+      submenu: true,
+      label: 'Set Rating',
+      icon: <IconStar size={15} />,
+      children: [0, 1, 2, 3, 4, 5].map((r) => ({
+        label: r === 0 ? 'No Rating' : '★'.repeat(r),
+        action: () => ctx.onSetRating!(r),
+      })),
+    });
+  }
+
+  // ── Export ──
+  if (hasSelection && ctx.onExport) {
+    entries.push(item('Export...', { icon: <IconUpload size={15} />, action: ctx.onExport }));
     entries.push(sep());
   }
 

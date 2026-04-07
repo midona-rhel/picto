@@ -284,6 +284,14 @@ fn reconcile_open_schema(conn: &Connection) -> Result<(), String> {
         conn.execute_batch("ALTER TABLE smart_folder ADD COLUMN total_size_bytes INTEGER NOT NULL DEFAULT 0")
             .map_err(|e| format!("Failed to add smart_folder.total_size_bytes: {e}"))?;
     }
+    if has_column(conn, "folder", "pinned").map_err(|e| e.to_string())? == false {
+        conn.execute_batch("ALTER TABLE folder ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0; ALTER TABLE folder ADD COLUMN pin_order INTEGER NOT NULL DEFAULT 0")
+            .map_err(|e| format!("Failed to add folder pinning columns: {e}"))?;
+    }
+    if has_column(conn, "smart_folder", "pinned").map_err(|e| e.to_string())? == false {
+        conn.execute_batch("ALTER TABLE smart_folder ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0; ALTER TABLE smart_folder ADD COLUMN pin_order INTEGER NOT NULL DEFAULT 0")
+            .map_err(|e| format!("Failed to add smart_folder pinning columns: {e}"))?;
+    }
     Ok(())
 }
 
@@ -1151,6 +1159,50 @@ impl LibraryDatabase {
     pub fn reorder_folders(&self, moves: &[(i64, i64)]) -> Result<(), String> {
         let m = moves.to_vec();
         self.with_write(move |conn| write::folders::reorder_folders(conn, &m))
+    }
+
+    pub fn set_folder_pinned(&self, folder_id: i64, pinned: bool) -> Result<(), String> {
+        self.with_write(move |conn| {
+            conn.execute(
+                "UPDATE folder SET pinned = ?1 WHERE folder_id = ?2",
+                rusqlite::params![pinned as i64, folder_id],
+            )?;
+            Ok(())
+        })
+    }
+
+    pub fn set_smart_folder_pinned(&self, smart_folder_id: i64, pinned: bool) -> Result<(), String> {
+        self.with_write(move |conn| {
+            conn.execute(
+                "UPDATE smart_folder SET pinned = ?1 WHERE smart_folder_id = ?2",
+                rusqlite::params![pinned as i64, smart_folder_id],
+            )?;
+            Ok(())
+        })
+    }
+
+    pub fn reorder_pinned_items(&self, moves: &[(String, i64)]) -> Result<(), String> {
+        let moves = moves.to_vec();
+        self.with_write(move |conn| {
+            for (node_id, pin_order) in &moves {
+                if let Some(raw) = node_id.strip_prefix("folder:") {
+                    if let Ok(folder_id) = raw.parse::<i64>() {
+                        conn.execute(
+                            "UPDATE folder SET pin_order = ?1 WHERE folder_id = ?2",
+                            rusqlite::params![pin_order, folder_id],
+                        )?;
+                    }
+                } else if let Some(raw) = node_id.strip_prefix("smart:") {
+                    if let Ok(smart_folder_id) = raw.parse::<i64>() {
+                        conn.execute(
+                            "UPDATE smart_folder SET pin_order = ?1 WHERE smart_folder_id = ?2",
+                            rusqlite::params![pin_order, smart_folder_id],
+                        )?;
+                    }
+                }
+            }
+            Ok(())
+        })
     }
 
     pub fn reorder_folder_items(&self, folder_id: i64, moves: &[(i64, i64)]) -> Result<(), String> {

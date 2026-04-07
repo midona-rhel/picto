@@ -19,8 +19,6 @@ pub enum ImportError {
     Image(#[from] image::ImageError),
     #[error("File processing error: {0}")]
     FileProcessing(#[from] media_processing::FileError),
-    #[error("Zero-size file: {0}")]
-    ZeroSizeFile(String),
     #[error("Unsupported file type: {0}")]
     UnsupportedFile(String),
 }
