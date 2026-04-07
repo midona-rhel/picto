@@ -712,17 +712,13 @@ export function GridScreen() {
               <button className={styles.emptyBtn} type="button" onClick={() => {
                 void (async () => {
                   try {
-                    console.log('[grid] opening file picker for import');
                     const result = await (window as any).picto.dialog.open({
                       properties: ['openFile'], multiple: true, title: 'Import files',
                       filters: [{ name: 'Media', extensions: ['png','jpg','jpeg','gif','webp','bmp','mp4','webm','mkv','mov','avi'] }],
                     });
-                    console.log('[grid] file picker result:', result);
                     if (result) {
                       const paths = Array.isArray(result) ? result : [result];
-                      console.log('[grid] importing files:', paths.length);
                       await filesController.importFiles(paths);
-                      console.log('[grid] import_files dispatched');
                     }
                   } catch (err) {
                     console.error('[grid] import files failed:', err);
@@ -735,16 +731,12 @@ export function GridScreen() {
               <button className={styles.emptyBtn} type="button" onClick={() => {
                 void (async () => {
                   try {
-                    console.log('[grid] opening directory picker for import');
                     const result = await (window as any).picto.dialog.open({
                       properties: ['openDirectory'], multiple: false, title: 'Import folder',
                     });
-                    console.log('[grid] directory picker result:', result);
                     if (result) {
                       const folderPath = typeof result === 'string' ? result : result[0];
-                      console.log('[grid] importing folder:', folderPath);
                       await filesController.importFolder(folderPath);
-                      console.log('[grid] import_folder dispatched');
                     }
                   } catch (err) {
                     console.error('[grid] import folder failed:', err);
@@ -873,15 +865,8 @@ export function GridScreen() {
           }
         }}
         onTileDoubleClick={(_index, item) => {
-          if (item.entity_kind === 'collection') {
-            const collNodeId = `collection:${item.entity_id}`;
-            setParentNodeId(activeNodeId);
-            setCollectionName(item.name);
-            pushHistory(collNodeId);
-            setActiveNodeId(collNodeId);
-          } else {
-            setViewerSession(createViewerSession(items, item.entity_hash));
-          }
+          // Both singles and collections open in MediaView (collections show StripView)
+          setViewerSession(createViewerSession(items, item.entity_hash));
         }}
         onEmptyClick={() => clearSelection()}
         onSelectionChange={setSelectedHashes}
@@ -1045,6 +1030,13 @@ export function GridScreen() {
             onRemoveFromCollection: gridScope.kind === 'collection' && gridScope.id != null
               ? () => { void collectionsController.removeMembers(gridScope.id!, [...effectiveHashes]); }
               : undefined,
+            onEditCollection: singleItem?.entity_kind === 'collection' ? () => {
+              const collNodeId = `collection:${singleItem.entity_id}`;
+              setParentNodeId(activeNodeId);
+              setCollectionName(singleItem.name);
+              pushHistory(collNodeId);
+              setActiveNodeId(collNodeId);
+            } : undefined,
             onSplitCollection: (() => {
               // Inside collection view — split and navigate back instantly
               if (gridScope.kind === 'collection' && gridScope.id != null) {

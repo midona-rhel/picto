@@ -1,26 +1,24 @@
-import * as api from '../platform/api';
+import {
+  cancelAuthSession,
+  deleteCredential,
+  getSubscriptionSites,
+  getSubscriptions,
+  listCredentialHealth,
+  listCredentials,
+  listSubscriptionIssues,
+  pixivOAuthExchange,
+  pixivOAuthStart,
+  setAuthSessionBounds,
+  setCredential,
+  startAuthSession,
+} from '../platform/subscriptionApi';
+import { listen } from '../platform/ipc';
 import type {
   AuthSessionBounds,
   AuthSessionState,
-  CredentialDomain,
-  CredentialHealth,
-  SubscriptionInfo,
   SubscriptionIssueRecord,
-  SubscriptionSiteInfo,
 } from '../shared/types/subscriptions';
-
-export interface AuthSiteSnapshot {
-  site: SubscriptionSiteInfo;
-  subscriptions: SubscriptionInfo[];
-  queryCount: number;
-  credential: CredentialDomain | null;
-  health: CredentialHealth | null;
-  issues: SubscriptionIssueRecord[];
-}
-
-export interface AuthWorkspaceSnapshot {
-  sites: AuthSiteSnapshot[];
-}
+import type { AuthSiteSnapshot, AuthWorkspaceSnapshot } from '../shared/types/subscriptionsWorkspace';
 
 const AUTH_ISSUE_KINDS = new Set([
   'unauthorized',
@@ -50,10 +48,10 @@ function healthRank(site: AuthSiteSnapshot): number {
 export const authController = {
   async loadWorkspaceSnapshot(): Promise<AuthWorkspaceSnapshot> {
     const [sites, subscriptions, credentials, healthEntries] = await Promise.all([
-      api.getSubscriptionSites(),
-      api.getSubscriptions(),
-      api.listCredentials(),
-      api.listCredentialHealth(),
+      getSubscriptionSites(),
+      getSubscriptions(),
+      listCredentials(),
+      listCredentialHealth(),
     ]);
 
     const authSites = sites.filter((site) => site.auth_supported);
@@ -61,7 +59,7 @@ export const authController = {
 
     await Promise.all(
       subscriptions.map(async (subscription) => {
-        const issues = await api.listSubscriptionIssues(subscription.id, null, 100);
+        const issues = await listSubscriptionIssues(subscription.id, null, 100);
         const authIssues = issues.filter(isAuthIssue);
         if (!authIssues.length) return;
         const siteKeys = new Set(
@@ -110,19 +108,25 @@ export const authController = {
   },
 
   startSession(siteCategory: string, startUrl?: string | null): Promise<AuthSessionState> {
-    return api.startAuthSession(siteCategory, startUrl);
+    return startAuthSession(siteCategory, startUrl);
   },
 
   setSessionBounds(bounds: AuthSessionBounds): Promise<void> {
-    return api.setAuthSessionBounds(bounds);
+    return setAuthSessionBounds(bounds);
   },
 
   cancelSession(): Promise<void> {
-    return api.cancelAuthSession();
+    return cancelAuthSession();
   },
 
-  setCredential: api.setCredential,
-  deleteCredential: api.deleteCredential,
-  pixivOAuthStart: api.pixivOAuthStart,
-  pixivOAuthExchange: api.pixivOAuthExchange,
+  subscribeSessionState(onState: (session: AuthSessionState) => void): Promise<() => void> {
+    return listen<AuthSessionState>('auth:session-state', ({ payload }) => {
+      onState(payload);
+    });
+  },
+
+  setCredential,
+  deleteCredential,
+  pixivOAuthStart,
+  pixivOAuthExchange,
 };

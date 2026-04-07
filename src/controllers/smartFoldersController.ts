@@ -7,6 +7,7 @@ import { getDefaultStore } from 'jotai';
 import {
   createSmartFolder,
   deleteSmartFolder,
+  moveSmartFolder,
   updateSmartFolder,
 } from '../platform/smartFolderApi';
 import type { SmartFolderCommandPayload, SmartFolderPredicate } from '../shared/types/canonical';
@@ -46,5 +47,9 @@ export const smartFoldersController = {
 
   async update(id: number, folder: SmartFolderCommandPayload) {
     await updateSmartFolder({ id: String(id), folder });
+  },
+
+  async move(smartFolderId: number, newParentId: number | null, siblingOrder: [number, number][]) {
+    await moveSmartFolder(smartFolderId, newParentId, siblingOrder);
   },
 };

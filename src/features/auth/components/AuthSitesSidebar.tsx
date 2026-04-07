@@ -1,4 +1,4 @@
-import type { AuthSiteSnapshot } from '../../../controllers/authController';
+import type { AuthSiteSnapshot } from '../../../shared/types/subscriptionsWorkspace';
 import { authStatusLabel, authTone, formatRelativeTime } from '../authUtils';
 import styles from '../AuthWorkspace.module.css';
 

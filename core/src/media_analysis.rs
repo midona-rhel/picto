@@ -1,15 +1,11 @@
 use std::collections::HashSet;
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::background_work::DeferredWorkType;
 use crate::blob_store::{mime_to_extension, BlobStore};
 use crate::db::{query::ingest::DerivativeTarget, LibraryDatabase};
-use crate::media_capabilities::{capabilities_for_stored_media, ThumbnailBackend};
-use crate::media_processing::{
-    self, encode_thumbnail, get_thumbnail_resolution, ThumbnailScaleType,
-    DEFAULT_THUMBNAIL_DIMENSIONS,
-};
+use crate::media_capabilities::capabilities_for_stored_media;
+use crate::media_processing::{self, PreparedMediaSource, DEFAULT_THUMBNAIL_DIMENSIONS};
 use crate::runtime_contract::change_builder::ChangeImpact;
 use crate::runtime_contract::state_change::MediaDerivativeField;
 
@@ -37,17 +33,10 @@ pub struct DerivativeBatchOutcome {
 }
 
 #[derive(Debug)]
-struct LoadedRasterSource {
-    decoded: image::DynamicImage,
-}
-
-#[derive(Debug)]
 struct AnalysisContext {
     target: DerivativeTarget,
-    original_path: PathBuf,
-    caps: crate::media_capabilities::MediaCapabilities,
+    prepared_source: PreparedMediaSource,
     thumbnail_exists: bool,
-    raster_source: Option<LoadedRasterSource>,
 }
 
 fn load_original_path(
@@ -60,29 +49,6 @@ fn load_original_path(
         .map_err(|e| format!("Blob error: {e}"))?
         .map(|(path, _)| path)
         .ok_or_else(|| format!("Original file not found for hash {}", target.file_hash))
-}
-
-fn load_raster_source(original_path: &std::path::Path) -> Result<LoadedRasterSource, String> {
-    let bytes =
-        std::fs::read(original_path).map_err(|e| format!("Failed to read original file: {e}"))?;
-    let decoded =
-        image::load_from_memory(&bytes).map_err(|e| format!("Image decode failed: {e}"))?;
-    Ok(LoadedRasterSource { decoded })
-}
-
-fn render_thumbnail_from_decoded_image(
-    decoded: &image::DynamicImage,
-) -> Result<(Vec<u8>, String), String> {
-    let (tw, th) = get_thumbnail_resolution(
-        (decoded.width(), decoded.height()),
-        DEFAULT_THUMBNAIL_DIMENSIONS,
-        ThumbnailScaleType::ScaleDownOnly,
-        100,
-    );
-    let resized = decoded.resize_exact(tw, th, image::imageops::FilterType::Lanczos3);
-    let (bytes, ext) =
-        encode_thumbnail(&resized).map_err(|e| format!("Thumbnail encode failed: {e}"))?;
-    Ok((bytes, ext.to_string()))
 }
 
 fn emit_derivative_state_change(entity_hash: &str, fields: &[MediaDerivativeField]) {
@@ -108,7 +74,13 @@ fn build_context(
     let Some(target) = db.get_derivative_target_by_entity_hash(entity_hash)? else {
         return Ok(None);
     };
-    let caps = capabilities_for_stored_media(&target.mime_type, target.frame_count);
+    let prepared_source = PreparedMediaSource::from_stored_metadata(
+        load_original_path(blob_store, &target)?,
+        &target.mime_type,
+        target.duration_ms,
+        target.frame_count,
+    );
+    let caps = prepared_source.caps;
     let wants_any = work_types.iter().any(|work_type| match work_type {
         DeferredWorkType::Thumbnail => caps.can_thumbnail(),
         DeferredWorkType::DominantColors => caps.can_dominant_colors,
@@ -118,67 +90,24 @@ fn build_context(
         return Ok(None);
     }
 
-    let original_path = load_original_path(blob_store, &target)?;
     let thumbnail_exists = blob_store
         .find_thumbnail_path(&target.file_hash)
         .map_err(|e| format!("Thumbnail lookup failed: {e}"))?
         .is_some();
-    let raster_source = if matches!(caps.thumbnail_backend, Some(ThumbnailBackend::Inline))
-        && work_types.iter().any(|work_type| {
-            matches!(
-                work_type,
-                DeferredWorkType::Thumbnail
-                    | DeferredWorkType::DominantColors
-                    | DeferredWorkType::PerceptualHash
-            )
-        }) {
-        Some(load_raster_source(&original_path)?)
-    } else {
-        None
-    };
 
     Ok(Some(AnalysisContext {
         target,
-        original_path,
-        caps,
+        prepared_source,
         thumbnail_exists,
-        raster_source,
     }))
 }
 
-async fn render_thumbnail(context: &AnalysisContext) -> Result<(Vec<u8>, String), String> {
-    if let Some(source) = &context.raster_source {
-        return render_thumbnail_from_decoded_image(&source.decoded);
-    }
-    if matches!(
-        context.caps.thumbnail_backend,
-        Some(ThumbnailBackend::Ffmpeg)
-    ) && context.target.mime_type.starts_with("video/")
-    {
-        let bytes = media_processing::ffmpeg::render_video_thumbnail(
-            &context.original_path,
-            DEFAULT_THUMBNAIL_DIMENSIONS,
-            35,
-            context.target.duration_ms.map(|ms| ms as u64),
-        )
+async fn render_thumbnail(context: &mut AnalysisContext) -> Result<(Vec<u8>, String), String> {
+    context
+        .prepared_source
+        .render_thumbnail_bytes(DEFAULT_THUMBNAIL_DIMENSIONS, 35)
         .await
-        .map_err(|e| format!("Video thumbnail generation failed: {e}"))?;
-        return Ok((bytes, "jpg".to_string()));
-    }
-
-    let info = media_processing::get_file_info(&context.original_path, None)
-        .await
-        .map_err(|e| format!("File info failed: {e}"))?;
-    media_processing::generate_thumbnail_bytes(
-        &context.original_path,
-        DEFAULT_THUMBNAIL_DIMENSIONS,
-        info.mime,
-        info.duration_ms,
-        info.num_frames,
-        35,
-    )
-    .await
-    .map_err(|e| format!("Thumbnail generation failed: {e}"))
+        .map_err(|e| format!("Thumbnail generation failed: {e}"))
 }
 
 async fn analyze_batch(
@@ -190,16 +119,19 @@ async fn analyze_batch(
     force_colors: bool,
     force_phash: bool,
 ) -> Result<(DerivativeBatchOutcome, Vec<MediaDerivativeField>), String> {
-    let Some(context) = build_context(db, blob_store, entity_hash, work_types)? else {
+    let Some(mut context) = build_context(db, blob_store, entity_hash, work_types)? else {
         return Ok((DerivativeBatchOutcome::default(), Vec::new()));
     };
 
     let want_thumbnail =
-        work_types.contains(&DeferredWorkType::Thumbnail) && context.caps.can_thumbnail();
+        work_types.contains(&DeferredWorkType::Thumbnail)
+            && context.prepared_source.caps.can_thumbnail();
     let want_colors =
-        work_types.contains(&DeferredWorkType::DominantColors) && context.caps.can_dominant_colors;
+        work_types.contains(&DeferredWorkType::DominantColors)
+            && context.prepared_source.caps.can_dominant_colors;
     let want_phash =
-        work_types.contains(&DeferredWorkType::PerceptualHash) && context.caps.can_perceptual_hash;
+        work_types.contains(&DeferredWorkType::PerceptualHash)
+            && context.prepared_source.caps.can_perceptual_hash;
 
     let mut outcome = DerivativeBatchOutcome {
         has_thumbnail: context.thumbnail_exists,
@@ -208,7 +140,7 @@ async fn analyze_batch(
     let mut changed_fields = Vec::new();
 
     if want_thumbnail && (force_thumbnail || !context.thumbnail_exists) {
-        let (thumb_bytes, thumb_ext) = render_thumbnail(&context).await?;
+        let (thumb_bytes, thumb_ext) = render_thumbnail(&mut context).await?;
         if force_thumbnail {
             let _ = blob_store.delete_thumbnail(&context.target.file_hash);
         }
@@ -225,10 +157,13 @@ async fn analyze_batch(
             || context.target.color_analysis_version < TARGET_COLOR_ANALYSIS_VERSION
             || !context.target.has_dominant_palette_blob)
     {
-        let Some(source) = &context.raster_source else {
-            return Err("Dominant color analysis requires decoded image".to_string());
+        let palette = {
+            let decoded = context
+                .prepared_source
+                .require_decoded_raster()
+                .map_err(|e| format!("Dominant color analysis requires decoded image: {e}"))?;
+            media_processing::colors::extract_dominant_colors(decoded, 10)
         };
-        let palette = media_processing::colors::extract_dominant_colors(&source.decoded, 10);
         let colors: Vec<(String, f32, f32, f32)> = palette
             .iter()
             .map(|c| (c.hex.clone(), c.l as f32, c.a as f32, c.b as f32))
@@ -250,11 +185,11 @@ async fn analyze_batch(
     }
 
     if want_phash && (force_phash || context.target.perceptual_hash.is_none()) {
-        let Some(source) = &context.raster_source else {
-            return Err("Perceptual hash analysis requires decoded image".to_string());
-        };
-        let phash_b64 = crate::duplicates::phash::compute_phash_base64_from_image(&source.decoded)
-            .map_err(|e| format!("{e}"))?;
+        let phash_b64 = context
+            .prepared_source
+            .compute_phash_base64()
+            .map_err(|e| format!("Perceptual hash analysis failed: {e}"))?
+            .ok_or_else(|| "Perceptual hash analysis requires decoded image".to_string())?;
         db.replace_file_phash(context.target.file_id, Some(&phash_b64))?;
         outcome.phash_changed = true;
         changed_fields.push(MediaDerivativeField::Phash);

@@ -1,11 +1,8 @@
-//! Duplicate file detection using perceptual hashing.
+//! Duplicate file detection using perceptual-hash BK-tree search.
 //!
-//! Uses the `img_hash` crate for perceptual hashing (DCT-based).
-//! Duplicate relationships are stored in SQLite (see sqlite/duplicates.rs).
+//! Raw pHash computation lives in `media_processing::phash`.
 
 use img_hash::{HasherConfig, ImageHash};
-
-// --- Perceptual hash ---
 
 /// Default Hamming distance threshold for "likely duplicate" (0 = identical, lower = more similar).
 /// 32 at 16x16 (256-bit hash) is proportional to the old 8 at 8x8 (64-bit hash).
@@ -13,41 +10,6 @@ pub const DEFAULT_DISTANCE_THRESHOLD: u32 = 32;
 
 /// Hash size per dimension (16x16 = 256-bit hash).
 const HASH_SIZE: u32 = 16;
-
-/// Generate a perceptual hash for an image from raw bytes (decodes internally).
-pub fn compute_phash(image_data: &[u8]) -> Result<ImageHash, image::ImageError> {
-    let img = image::load_from_memory(image_data)?;
-    compute_phash_from_image(&img)
-}
-
-/// Generate a perceptual hash from a pre-decoded image (avoids redundant decode).
-pub fn compute_phash_from_image(img: &image::DynamicImage) -> Result<ImageHash, image::ImageError> {
-    let rgba = img.to_rgba8();
-    let (w, h) = (rgba.width(), rgba.height());
-
-    let hasher = HasherConfig::new()
-        .hash_size(HASH_SIZE, HASH_SIZE)
-        .to_hasher();
-
-    Ok(hasher.hash_image(
-        &img_hash::image::RgbaImage::from_raw(w, h, rgba.into_raw())
-            .expect("Failed to create image for hashing"),
-    ))
-}
-
-/// Compute phash and return as base64 string for DB storage.
-pub fn compute_phash_base64(image_data: &[u8]) -> Result<String, image::ImageError> {
-    let hash = compute_phash(image_data)?;
-    Ok(hash.to_base64())
-}
-
-/// Compute phash from a pre-decoded image and return as base64 string.
-pub fn compute_phash_base64_from_image(
-    img: &image::DynamicImage,
-) -> Result<String, image::ImageError> {
-    let hash = compute_phash_from_image(img)?;
-    Ok(hash.to_base64())
-}
 
 // --- BK-tree for Hamming distance ---
 

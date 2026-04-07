@@ -33,7 +33,6 @@ import { canGoBackAtom, canGoForwardAtom, goBack, goForward, pushHistory } from 
 import { getShortcut, matchesShortcutDef } from '../shared/lib/shortcuts';
 import { KbdTooltip } from '../shared/ui/KbdTooltip';
 import { WindowControls } from '../shared/ui/WindowControls';
-import { listen } from '../platform/ipc';
 import { appController } from '../controllers/appController';
 import { settingsController } from '../controllers/settingsController';
 import styles from './AppShell.module.css';
@@ -202,18 +201,15 @@ export function AppShell() {
 
     const unregisterSettingsReload = registerAppSettingsReload(loadAppSettings);
     let unlistenOsTheme: (() => void) | undefined;
-    void import('../platform/ipc').then(({ listen }) => {
-      // Auto theme: OS dark/light mode changed
-      listen<{ isDark: boolean }>('picto:os-theme-changed', (event) => {
-        const currentTheme = localStorage.getItem('picto-theme');
-        if (currentTheme !== 'auto') return;
-        const resolved = event.payload.isDark ? 'dark' : 'light';
-        const lightThemes = new Set(['light', 'lightgray']);
-        document.documentElement.dataset.theme = '';
-        document.documentElement.dataset.mantineColorScheme = lightThemes.has(resolved) ? 'light' : 'dark';
-        document.documentElement.style.colorScheme = lightThemes.has(resolved) ? 'light' : 'dark';
-      }).then((fn) => { unlistenOsTheme = fn; });
-    });
+    void appController.subscribeOsThemeChanged(({ isDark }) => {
+      const currentTheme = localStorage.getItem('picto-theme');
+      if (currentTheme !== 'auto') return;
+      const resolved = isDark ? 'dark' : 'light';
+      const lightThemes = new Set(['light', 'lightgray']);
+      document.documentElement.dataset.theme = '';
+      document.documentElement.dataset.mantineColorScheme = lightThemes.has(resolved) ? 'light' : 'dark';
+      document.documentElement.style.colorScheme = lightThemes.has(resolved) ? 'light' : 'dark';
+    }).then((fn) => { unlistenOsTheme = fn; });
     return () => {
       stopRuntime();
       unregisterSettingsReload();
@@ -233,9 +229,9 @@ export function AppShell() {
       subscriptions: 'system:subscriptions',
     };
 
-    void listen<string>('menu:navigate', (event) => {
+    void appController.subscribeMenuNavigate((destination) => {
       if (cancelled) return;
-      const nextNodeId = scopeMap[event.payload];
+      const nextNodeId = scopeMap[destination];
       if (!nextNodeId) return;
       setActiveNodeId(nextNodeId);
       pushHistory(nextNodeId);
@@ -300,8 +296,8 @@ export function AppShell() {
     };
 
     function handleKeyDown(e: KeyboardEvent) {
-      // Suppress Tab navigation — app uses custom keyboard handling, not browser focus
-      if (e.key === 'Tab') { e.preventDefault(); return; }
+      // Suppress browser Tab focus navigation (but let it fall through to shortcut matching)
+      if (e.key === 'Tab') e.preventDefault();
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
 
       if (matchesShortcutDef(e, defs.sidebar))   { e.preventDefault(); toggleSidebar(); return; }

@@ -19,7 +19,7 @@ const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigat
 
 export const SHORTCUT_DEFS: ShortcutDef[] = [
   // ── Navigation ──
-  { id: 'nav.allActive', label: 'All Active',    group: 'Navigation', keys: 'Mod+1' },
+  { id: 'nav.allActive', label: 'All',            group: 'Navigation', keys: 'Mod+1' },
   { id: 'nav.inbox',     label: 'Inbox',         group: 'Navigation', keys: 'Mod+2' },
   { id: 'nav.untagged',  label: 'Untagged',      group: 'Navigation', keys: 'Mod+3' },
   { id: 'nav.trash',     label: 'Trash',         group: 'Navigation', keys: 'Mod+4' },

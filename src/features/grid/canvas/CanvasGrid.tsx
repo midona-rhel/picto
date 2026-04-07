@@ -131,6 +131,30 @@ export function CanvasGrid({
   const baseCanvasRef = useRef<HTMLCanvasElement>(null);
   const overlayCanvasRef = useRef<HTMLCanvasElement>(null);
   const pipelineRef = useRef<ThumbnailPipeline | null>(null);
+
+  // Cache theme CSS values — avoids getComputedStyle() on every draw frame
+  const cachedThemeRef = useRef({
+    placeholderBg: 'rgba(255,255,255,0.04)',
+    borderRadius: 4,
+    textPrimary: 'rgba(255,255,255,0.92)',
+    textTertiary: 'rgba(255,255,255,0.36)',
+    glassBorder: 'rgba(255,255,255,0.14)',
+    tileBoundary: 'rgba(255,255,255,0.12)',
+  });
+  // Refresh theme cache when container mounts or theme changes
+  const refreshTheme = useCallback(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const s = getComputedStyle(el);
+    cachedThemeRef.current = {
+      placeholderBg: s.getPropertyValue('--color-surface-2').trim() || 'rgba(255,255,255,0.04)',
+      borderRadius: 4,
+      textPrimary: s.getPropertyValue('--color-text-primary').trim() || 'rgba(255,255,255,0.92)',
+      textTertiary: s.getPropertyValue('--color-text-tertiary').trim() || 'rgba(255,255,255,0.36)',
+      glassBorder: s.getPropertyValue('--color-border-primary').trim() || 'rgba(255,255,255,0.14)',
+      tileBoundary: s.getPropertyValue('--color-border-secondary').trim() || 'rgba(255,255,255,0.12)',
+    };
+  }, []);
   const scrollStateRef = useRef<CanvasScrollState>(createIdleCanvasScrollState());
   const lastScrollTopRef = useRef(0);
   const lastScrollTimeRef = useRef(0);
@@ -282,9 +306,14 @@ export function CanvasGrid({
       markDirty('base');
     });
     pipelineRef.current = pipeline;
+    // Cache theme values on mount and observe theme attribute changes
+    refreshTheme();
+    const observer = new MutationObserver(() => refreshTheme());
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme', 'data-mantine-color-scheme'] });
     return () => {
       pipeline.clear();
       pipelineRef.current = null;
+      observer.disconnect();
       if (idleTimerRef.current) { clearTimeout(idleTimerRef.current); idleTimerRef.current = null; }
     };
   }, []);
@@ -313,6 +342,21 @@ export function CanvasGrid({
   }, [items]); // eslint-disable-line react-hooks/exhaustive-deps -- initialScrollTop read once per items change
 
   // ── Draw functions ──
+  // Suppress thumbnail fade animation during grid transitions.
+  // Thumbnails loaded during fade-out/fade-in appear instantly.
+  const prevSuppressRef = useRef(suppressTileReveal);
+  useEffect(() => {
+    const pipeline = pipelineRef.current;
+    if (!pipeline) return;
+    pipeline.suppressAnimation = suppressTileReveal;
+    // When transition ends (suppress goes false), keep suppressing for 500ms
+    // to cover thumbnails still in flight from the transition period.
+    if (prevSuppressRef.current && !suppressTileReveal) {
+      pipeline.suppressAnimationFor(500);
+    }
+    prevSuppressRef.current = suppressTileReveal;
+  }, [suppressTileReveal]);
+
   const drawBase = useCallback(() => {
     const container = containerRef.current;
     const canvas = baseCanvasRef.current;
@@ -379,17 +423,7 @@ export function CanvasGrid({
       now,
       activeTiles,
       draw: drawCtx,
-      theme: (() => {
-        const s = getComputedStyle(container);
-        return {
-          placeholderBg: s.getPropertyValue('--color-surface-2').trim() || 'rgba(255,255,255,0.04)',
-          borderRadius: 4,
-          textPrimary: s.getPropertyValue('--color-text-primary').trim() || 'rgba(255,255,255,0.92)',
-          textTertiary: s.getPropertyValue('--color-text-tertiary').trim() || 'rgba(255,255,255,0.36)',
-          glassBorder: s.getPropertyValue('--color-border-primary').trim() || 'rgba(255,255,255,0.14)',
-          tileBoundary: s.getPropertyValue('--color-border-secondary').trim() || 'rgba(255,255,255,0.12)',
-        };
-      })(),
+      theme: cachedThemeRef.current,
       viewMode: effectiveViewMode,
       fitThumbnails,
       showTileName: showName,
@@ -778,7 +812,9 @@ export function CanvasGrid({
       hoveredTileRef.current = null;
     }
     if (hoverTimerRef.current) { clearTimeout(hoverTimerRef.current); hoverTimerRef.current = null; }
-    if (hoverPreview) setHoverPreview(null);
+    if (hoverHideTimerRef.current) { clearTimeout(hoverHideTimerRef.current); hoverHideTimerRef.current = null; }
+    // Always clear preview on scroll — the tile moved away from cursor
+    setHoverPreview(null);
 
     onScrollTopChangeRef.current?.(scrollTop);
     markDirty('both');

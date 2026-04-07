@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { listen } from '../../platform/ipc';
-import { authController, type AuthSiteSnapshot, type AuthWorkspaceSnapshot } from '../../controllers/authController';
+import { authController } from '../../controllers/authController';
 import { registerAuthWorkspaceRefresh } from '../../runtime/subscriptionsSettle';
 import type { AuthSessionState } from '../../shared/types/subscriptions';
+import type { AuthSiteSnapshot, AuthWorkspaceSnapshot } from '../../shared/types/subscriptionsWorkspace';
 import { AuthSiteDetail, type AuthManualFormState } from './components/AuthSiteDetail';
 import { AuthSitesSidebar } from './components/AuthSitesSidebar';
 import { parseBooruApiCredential, parseCookies } from './authUtils';
@@ -94,7 +94,7 @@ export function AuthWorkspace({
   useEffect(() => {
     let cancelled = false;
     let unlisten: (() => void) | undefined;
-    void listen<AuthSessionState>('auth:session-state', ({ payload }) => {
+    void authController.subscribeSessionState((payload) => {
       if (cancelled) return;
       setSession(payload);
     }).then((dispose) => {

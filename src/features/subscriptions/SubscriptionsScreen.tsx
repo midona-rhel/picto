@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { useAtom, useAtomValue, useSetAtom } from 'jotai';
 import { subscriptionsWorkspaceTabAtom } from '../../state/navigation';
 import { AuthWorkspace } from '../auth/AuthWorkspace';
-import type { AuthSiteSnapshot } from '../../controllers/authController';
+import type { AuthSiteSnapshot } from '../../shared/types/subscriptionsWorkspace';
 import {
   IconPlayerPause,
   IconPlayerPlay,

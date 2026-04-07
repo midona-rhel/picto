@@ -16,6 +16,7 @@ import {
   setViewPrefs,
 } from '../platform/settingsApi';
 import type { ViewPrefsDto, ViewPrefsPatch } from '../platform/settingsApi';
+import type { GridViewMode } from '../shared/types/grid';
 import type { SortField, SortDirection } from '../state/grid';
 import {
   gridScopeAtom, gridActiveAtom, gridItemsAtom, gridCursorAtom,
@@ -27,7 +28,6 @@ import {
   currentGridQueryAtom,
   gridSoftTransitionActionAtom,
 } from '../state/grid';
-import type { GridViewMode } from '../features/grid/layout/types';
 import { clearSelectionAtom } from '../state/selection';
 
 const store = getDefaultStore();

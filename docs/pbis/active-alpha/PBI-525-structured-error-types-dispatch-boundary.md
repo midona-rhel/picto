@@ -25,7 +25,7 @@ Consequences:
 - `core/src/dispatch/common.rs` — `to_json()` and error conversion helpers
 - `native/picto-node/src/lib.rs` — N-API error marshaling
 - `electron/nativeClient.mjs` — error parsing at the bridge
-- `src/platform/api.ts` — frontend error handling
+- `src/platform/**` — frontend error handling
 
 ## Implementation
 1. **Define `DispatchError` enum** in `core/src/dispatch/common.rs`:

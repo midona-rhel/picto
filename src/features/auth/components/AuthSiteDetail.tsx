@@ -1,5 +1,5 @@
-import type { AuthSiteSnapshot } from '../../../controllers/authController';
 import type { AuthSessionState } from '../../../shared/types/subscriptions';
+import type { AuthSiteSnapshot } from '../../../shared/types/subscriptionsWorkspace';
 import { authStatusLabel, authTone, formatRelativeTime, parseBooruApiCredential, parseCookies, supportsInlineAuth } from '../authUtils';
 import styles from '../AuthWorkspace.module.css';
 

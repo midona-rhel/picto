@@ -313,7 +313,7 @@ fn compute_comparable_image_phash(
     if !capabilities.can_perceptual_hash {
         return Ok(None);
     }
-    crate::duplicates::phash::compute_phash_base64(file_bytes)
+    crate::media_processing::compute_phash_base64(file_bytes)
         .map(Some)
         .map_err(|err| format!("Failed to compute perceptual hash: {err}"))
 }
@@ -1309,7 +1309,8 @@ mod tests {
     use super::{ingest_single_path, normalize_subscription_tags, IngestSourceKind, SingleIngestDisposition, SingleIngestRequest};
     use crate::blob_store::BlobStore;
     use crate::db::LibraryDatabase;
-    use crate::duplicates::phash::{compute_phash_base64, DEFAULT_DISTANCE_THRESHOLD};
+    use crate::duplicates::phash::DEFAULT_DISTANCE_THRESHOLD;
+    use crate::media_processing::compute_phash_base64;
     use crate::subscriptions::gallery_dl_runner::ParsedMetadata;
     use img_hash::ImageHash;
     use image::{DynamicImage, ImageBuffer, ImageFormat, Rgba};

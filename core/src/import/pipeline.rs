@@ -6,8 +6,7 @@
 use std::path::Path;
 
 use crate::blob_store::BlobStore;
-use crate::media_capabilities::capabilities_for_detected_mime;
-use crate::media_processing;
+use crate::media_processing::{self, PreparedMediaSource};
 use crate::tags::normalize as tags;
 
 #[derive(thiserror::Error, Debug)]
@@ -83,51 +82,31 @@ impl ImportPipeline {
         path: &Path,
         options: &ImportOptions,
     ) -> ImportResult<PreparedBlobImport> {
-        let file_data = tokio::fs::read(path).await?;
-        if file_data.is_empty() {
-            return Err(ImportError::ZeroSizeFile(path.display().to_string()));
-        }
-        let file_size = file_data.len() as u64;
+        let mut source = PreparedMediaSource::prepare_ingest(path).await?;
+        let file_data = source.file_bytes.take().expect("ingest source bytes");
+        let file_size = source.size_bytes.expect("ingest source size");
 
         let hash = media_processing::get_hash_from_bytes(&file_data);
         let hex_hash = hex::encode(&hash);
 
-        let file_info = media_processing::get_file_info(path, None).await?;
-        let mime_string = file_info.mime.mime_string().to_string();
-        let caps = capabilities_for_detected_mime(file_info.mime);
-
-        if !caps.ingest_supported {
+        if !source.caps.ingest_supported {
             return Err(ImportError::UnsupportedFile(format!(
                 "Unsupported file type: {}",
                 path.display()
             )));
         }
 
-        if media_processing::is_image(file_info.mime) {
-            if let Ok(true) = media_processing::is_decompression_bomb(path) {
-                return Err(ImportError::UnsupportedFile(
-                    "Decompression bomb".to_string(),
-                ));
-            }
-        }
-
         let thumbnail_result =
-            if options.skip_thumbnail || !caps.should_inline_thumbnail_on_ingest() {
+            if options.skip_thumbnail || !source.caps.should_inline_thumbnail_on_ingest() {
                 None
             } else {
-                media_processing::generate_thumbnail_bytes(
-                    path,
-                    options.thumbnail_dimensions,
-                    file_info.mime,
-                    file_info.duration_ms,
-                    file_info.num_frames,
-                    35,
-                )
-                .await
-                .ok()
+                source
+                    .render_thumbnail_bytes(options.thumbnail_dimensions, 35)
+                    .await
+                    .ok()
             };
 
-        let blob_ext = crate::blob_store::mime_to_extension(&mime_string);
+        let blob_ext = crate::blob_store::mime_to_extension(&source.mime_type);
         blob_store.write_original(&hex_hash, &file_data, Some(blob_ext))?;
         if let Some((ref thumb_bytes, ref thumb_ext)) = thumbnail_result {
             blob_store.write_thumbnail(&hex_hash, thumb_bytes, thumb_ext)?;
@@ -156,13 +135,13 @@ impl ImportPipeline {
 
         Ok(PreparedBlobImport {
             hex_hash,
-            mime: mime_string,
+            mime: source.mime_type,
             size: file_size,
-            pixel_width: file_info.width.map(|w| w as i64),
-            pixel_height: file_info.height.map(|h| h as i64),
-            duration_ms: file_info.duration_ms.map(|d| d as i64),
-            num_frames: file_info.num_frames.map(|n| n as i64),
-            has_audio: file_info.has_audio,
+            pixel_width: source.pixel_width.map(|w| w as i64),
+            pixel_height: source.pixel_height.map(|h| h as i64),
+            duration_ms: source.duration_ms.map(|d| d as i64),
+            num_frames: source.num_frames.map(|n| n as i64),
+            has_audio: source.has_audio,
             has_thumbnail: thumbnail_result.is_some(),
             name,
             created_at,

@@ -36,6 +36,10 @@ export class ThumbnailPipeline {
   private onDirty: () => void;
   private destroyed = false;
   private totalBytes = 0;
+  /** When true, new thumbnails appear instantly without fade animation. */
+  suppressAnimation = false;
+  /** Timestamp until which animation is suppressed (handles async thumbnail arrival after transition). */
+  private suppressUntil = 0;
 
   constructor(onDirty: () => void = () => {}) {
     this.onDirty = onDirty;
@@ -45,6 +49,11 @@ export class ThumbnailPipeline {
 
   setOnDirty(onDirty: () => void): void {
     this.onDirty = onDirty;
+  }
+
+  /** Suppress fade animation for the next N milliseconds (covers async arrivals after transition). */
+  suppressAnimationFor(ms: number): void {
+    this.suppressUntil = performance.now() + ms;
   }
 
   /**
@@ -120,7 +129,7 @@ export class ThumbnailPipeline {
     this.totalBytes += entry.bytes;
     entry.state = 'shown';
 
-    if (isUpgrade) {
+    if (isUpgrade || this.suppressAnimation || performance.now() < this.suppressUntil) {
       entry.animateIn = false;
     } else {
       entry.animateIn = true;

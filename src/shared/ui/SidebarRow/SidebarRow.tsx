@@ -56,6 +56,7 @@ interface RowProps {
   label?: string;
   count?: number | null;
   active?: boolean;
+  selected?: boolean;
   dropTarget?: boolean;
   indent?: number;
   hasChildren?: boolean;
@@ -65,7 +66,7 @@ interface RowProps {
   /** True if this is the last child of its parent. */
   isLastChild?: boolean;
   onToggleExpand?: () => void;
-  onClick?: () => void;
+  onClick?: (e: React.MouseEvent) => void;
   onContextMenu?: (e: React.MouseEvent) => void;
   onPointerDown?: (e: React.PointerEvent) => void;
   /** Data attribute for drag-and-drop targeting (e.g. folder ID or status code). */
@@ -84,6 +85,7 @@ function StandardRow({
   label,
   count,
   active,
+  selected,
   dropTarget,
   indent = 0,
   hasChildren,
@@ -102,6 +104,7 @@ function StandardRow({
   const cls = [
     styles.row,
     active ? styles.active : '',
+    selected && !active ? styles.selected : '',
     dropTarget ? styles.dropTarget : '',
     contextHighlight && !active ? styles.contextHighlight : '',
     dropPosition === 'before' ? styles.dropBefore : '',
@@ -141,7 +144,7 @@ function StandardRow({
           <line x1="3.5" y1="0" x2="3.5" y2="26" stroke="var(--color-text-tertiary)" strokeWidth="1" vectorEffect="non-scaling-stroke" />
         </svg>
       ) : null)}
-      {/* Branch connector — T (not last) or L (last child with no continuation) */}
+      {/* Branch connector — T (not last) or L (last child). With arrow cutout when hasChildren. */}
       {showGuides && indent > 0 && (
         <svg
           className={styles.treeBranch}
@@ -150,13 +153,32 @@ function StandardRow({
           preserveAspectRatio="none"
           fill="none"
         >
-          {useLShape ? (
-            <path d="M3.5 0 V9.5 A3.5 3.5 0 0 0 7 13 H15" stroke="var(--color-text-tertiary)" strokeWidth="1" fill="none" vectorEffect="non-scaling-stroke" />
+          {hasChildren ? (
+            /* Arrow cutout variants — vertical line has gap Y=9..17, short horizontal arm */
+            useLShape ? (
+              /* L with cutout: top segment to Y=9, horizontal arm X=8..15 at Y=13 */
+              <>
+                <line x1="3.5" y1="0" x2="3.5" y2="9" stroke="var(--color-text-tertiary)" strokeWidth="1" vectorEffect="non-scaling-stroke" />
+                <line x1="8" y1="13" x2="15" y2="13" stroke="var(--color-text-tertiary)" strokeWidth="1" vectorEffect="non-scaling-stroke" />
+              </>
+            ) : (
+              /* T with cutout: top to Y=9, bottom from Y=17, horizontal arm X=8..15 */
+              <>
+                <line x1="3.5" y1="0" x2="3.5" y2="9" stroke="var(--color-text-tertiary)" strokeWidth="1" vectorEffect="non-scaling-stroke" />
+                <line x1="3.5" y1="17" x2="3.5" y2="26" stroke="var(--color-text-tertiary)" strokeWidth="1" vectorEffect="non-scaling-stroke" />
+                <line x1="8" y1="13" x2="15" y2="13" stroke="var(--color-text-tertiary)" strokeWidth="1" vectorEffect="non-scaling-stroke" />
+              </>
+            )
           ) : (
-            <>
-              <line x1="3.5" y1="0" x2="3.5" y2="26" stroke="var(--color-text-tertiary)" strokeWidth="1" vectorEffect="non-scaling-stroke" />
-              <line x1="4" y1="13" x2="15" y2="13" stroke="var(--color-text-tertiary)" strokeWidth="1" vectorEffect="non-scaling-stroke" />
-            </>
+            /* No arrow — standard L/T shapes */
+            useLShape ? (
+              <path d="M3.5 0 V9.5 A3.5 3.5 0 0 0 7 13 H15" stroke="var(--color-text-tertiary)" strokeWidth="1" fill="none" vectorEffect="non-scaling-stroke" />
+            ) : (
+              <>
+                <line x1="3.5" y1="0" x2="3.5" y2="26" stroke="var(--color-text-tertiary)" strokeWidth="1" vectorEffect="non-scaling-stroke" />
+                <line x1="4" y1="13" x2="15" y2="13" stroke="var(--color-text-tertiary)" strokeWidth="1" vectorEffect="non-scaling-stroke" />
+              </>
+            )
           )}
         </svg>
       )}

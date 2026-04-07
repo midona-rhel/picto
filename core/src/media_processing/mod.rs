@@ -5,6 +5,8 @@ mod adapters;
 mod analysis;
 mod detection;
 mod hashing;
+mod phash;
+mod source;
 mod thumbnail;
 
 pub mod archive;
@@ -22,9 +24,13 @@ use std::path::Path;
 pub use analysis::get_file_info;
 pub use detection::{get_mime, has_supported_extension, is_allowed_mime, is_image};
 pub use hashing::get_hash_from_bytes;
+pub use phash::{
+    compute_phash, compute_phash_base64, compute_phash_base64_from_image, compute_phash_from_image,
+};
+pub use source::PreparedMediaSource;
 pub use thumbnail::{
-    encode_thumbnail, encode_thumbnail_jpeg, generate_thumbnail_bytes, get_thumbnail_resolution,
-    ThumbnailScaleType,
+    encode_thumbnail, encode_thumbnail_jpeg, generate_thumbnail_bytes,
+    generate_thumbnail_from_decoded_image, get_thumbnail_resolution, ThumbnailScaleType,
 };
 
 use crate::constants::MimeType;

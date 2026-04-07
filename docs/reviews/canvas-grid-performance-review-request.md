@@ -143,7 +143,7 @@ This changeset covers the canvas grid renderer performance optimization, archite
 | `GridScreen.tsx` | — | Transition fade fix (itemsLengthRef), reveal suppress fix |
 | `AppShell.module.css` | — | Sidebar background, border consistency |
 | `shared/types/canonical.ts` | — | Added `thumbnail_hash` field |
-| `platform/api.ts` | — | Map `thumbnail_hash` from legacy response |
+| `platform/entityApi.ts` | — | Map `thumbnail_hash` from canonical entity response |
 
 ## Known Issues / Cleanup Needed
 

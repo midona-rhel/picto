@@ -31,7 +31,7 @@ pub fn compile_sidebar(conn: &Connection, bitmaps: &BitmapStore) {
     // System scope nodes (children of system:library)
     //                       (id,                    name,              icon,                sort, selectable)
     let system_nodes: &[(&str, &str, &str, i64, bool)] = &[
-        ("system:active", "All Active", "IconPhoto", 1, true),
+        ("system:active", "All", "IconPhoto", 1, true),
         ("system:inbox", "Inbox", "IconInbox", 2, true),
         (
             "system:uncategorized",

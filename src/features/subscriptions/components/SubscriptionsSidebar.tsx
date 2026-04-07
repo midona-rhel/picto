@@ -1,8 +1,7 @@
 import { useAtomValue, useSetAtom } from 'jotai';
 import { IconAntennaBars5, IconPlus, IconShieldLock } from '@tabler/icons-react';
 import type { SubscriptionProgressEvent } from '../../../shared/types/subscriptions';
-import type { SubscriptionWorkspaceSnapshot } from '../../../controllers/subscriptionsController';
-import type { AuthSiteSnapshot } from '../../../controllers/authController';
+import type { AuthSiteSnapshot, SubscriptionWorkspaceSnapshot } from '../../../shared/types/subscriptionsWorkspace';
 import type { SubscriptionCreateFormState } from '../../../state/subscriptionsWorkspace';
 import { subscriptionsWorkspaceTabAtom, setSubscriptionsWorkspaceTabAtom } from '../../../state/navigation';
 import { WorkspaceSwitcher } from '../../../shared/ui/WorkspaceSwitcher';

@@ -350,7 +350,6 @@ export function registerIpcHandlers({
   });
 
   ipcMain.on('ondragstart', async (event, { hashes, iconDataUrl }) => {
-    console.log('[drag:start] received', hashes?.length, 'hashes');
     if (!hashes?.length) return;
 
 
@@ -362,7 +361,6 @@ export function registerIpcHandlers({
       console.error('[drag:start] resolve failed:', err);
       filePaths = [];
     }
-    console.log('[drag:start] resolved', filePaths?.length, 'paths:', filePaths);
     if (!filePaths?.length) return;
 
     // Icon: prefer renderer-generated base64 (has count badge), fall back to disk thumbnail
@@ -383,7 +381,6 @@ export function registerIpcHandlers({
         else icon = null;
       } catch { icon = null; }
     }
-    console.log('[drag:start] icon:', icon ? `${icon.getSize().width}x${icon.getSize().height}` : 'none');
 
     if (process.platform === 'darwin' && startNativeDrag) {
       // macOS: bypass Electron's startDrag to avoid icon-per-NSDraggingItem stacking.
@@ -400,7 +397,6 @@ export function registerIpcHandlers({
           rgba[i + 2] = r;
         }
         try {
-          console.log('[drag:start] using native addon, files:', filePaths.length, 'icon:', width, 'x', height);
           startNativeDrag(handle, filePaths, rgba, width, height);
         } catch (err) {
           console.error('[drag:start] native addon failed:', err);

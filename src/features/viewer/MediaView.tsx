@@ -21,7 +21,7 @@ import { useNavigatorRenderer } from './hooks/useNavigatorRenderer';
 import { useNavigatorDrag } from './hooks/useNavigatorDrag';
 import { VideoPlayer } from './video/VideoPlayer';
 import { StripView } from './StripView';
-import { queryEntityView } from '../../platform/entityApi';
+import { viewerController } from '../../controllers/viewerController';
 import { stripFitModeAtom } from '../../state/grid';
 import styles from './MediaView.module.css';
 
@@ -57,7 +57,7 @@ export function MediaView({
     const id = currentItem.entity_id;
     if (id === collectionIdRef.current && collectionMembers.length > 0) return;
     collectionIdRef.current = id;
-    void queryEntityView({
+    void viewerController.queryEntityView({
       base_scope: { kind: 'collection', id },
       page: { limit: 500 },
     }).then((page) => {

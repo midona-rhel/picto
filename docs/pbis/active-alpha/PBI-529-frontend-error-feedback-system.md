@@ -17,7 +17,7 @@ When backend operations fail (import error, disk full, permission denied, corrup
 This creates a confusing experience: the user clicks "import" and nothing happens, or tags a file and the tag doesn't appear, with no indication of why.
 
 ## Scope
-- `src/platform/api.ts` — API call error handling
+- `src/platform/**` — API call error handling
 - `src/state/domainStore.ts` — stuck-fetch timeout
 - `src/state/runtimeSyncStore.ts` — event handling errors
 - New: toast/notification UI component

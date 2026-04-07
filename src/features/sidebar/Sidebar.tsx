@@ -86,6 +86,10 @@ export function Sidebar() {
   const [collapsed, toggleCollapse] = usePersistedSet('picto-sidebar-collapsed');
   const contextMenu = useContextMenu();
 
+  // ── Multi-select state ──
+  const [sidebarSelection, setSidebarSelection] = useState<Set<string>>(new Set());
+  const lastClickedRef = useRef<string | null>(null);
+
   // ── Context menu highlight ──
   const [contextMenuNodeId, setContextMenuNodeId] = useState<string | null>(null);
   // Clear highlight when menu closes
@@ -103,9 +107,11 @@ export function Sidebar() {
     ghostX: number;
     ghostY: number;
     ghostLabel: string;
+    ghostIcon: string | null;
+    ghostColor: string | null;
   } | null>(null);
 
-  // Global pointer listeners for folder drag
+  // Global pointer listeners for folder/smart folder drag
   useEffect(() => {
     const onMove = (e: MouseEvent) => {
       const drag = folderDragRef.current;
@@ -113,8 +119,11 @@ export function Sidebar() {
       const dy = e.clientY - drag.startY;
       if (!folderDragState?.active && Math.abs(dy) < 5) return;
 
+      const isSmartDrag = drag.nodeId.startsWith('smart:');
+      const nodePool = isSmartDrag ? smartFolderNodes : folderNodes;
+
       // Activate drag
-      const node = folderNodes.find((n) => n.id === drag.nodeId);
+      const node = nodePool.find((n) => n.id === drag.nodeId);
       if (!folderDragState?.active) {
         setFolderDragState({
           active: true,
@@ -123,26 +132,35 @@ export function Sidebar() {
           dropPosition: null,
           ghostX: e.clientX,
           ghostY: e.clientY,
-          ghostLabel: node?.name ?? 'Folder',
+          ghostLabel: sidebarSelection.has(drag.nodeId) && sidebarSelection.size > 1
+            ? `${sidebarSelection.size} items`
+            : (node?.name ?? (isSmartDrag ? 'Smart Folder' : 'Folder')),
+          ghostIcon: node?.icon ?? null,
+          ghostColor: node?.color ?? null,
         });
         document.body.style.cursor = 'grabbing';
       } else {
         // Find drop target via elementFromPoint
         const el = document.elementFromPoint(e.clientX, e.clientY) as HTMLElement | null;
-        const targetRow = el?.closest('[data-folder-drop-id]') as HTMLElement | null;
+        // Detect folder or smart folder drop targets depending on drag type
+        const dropAttr = isSmartDrag ? 'data-smart-drop-id' : 'data-folder-drop-id';
+        const targetRow = el?.closest(`[${dropAttr}]`) as HTMLElement | null;
         let dropTargetId: string | null = null;
         let dropPosition: 'before' | 'inside' | 'after' | null = null;
 
         if (targetRow) {
-          const fid = targetRow.dataset.folderDropId;
-          const targetNodeId = fid ? `folder:${fid}` : null;
+          const rawId = isSmartDrag
+            ? targetRow.dataset.smartDropId
+            : targetRow.dataset.folderDropId;
+          const prefix = isSmartDrag ? 'smart:' : 'folder:';
+          const targetNodeId = rawId ? `${prefix}${rawId}` : null;
           // Prevent dropping onto self or any descendant (would create a cycle)
-          if (targetNodeId && targetNodeId !== drag.nodeId && !isDescendantOf(targetNodeId, drag.nodeId, folderNodes)) {
+          if (targetNodeId && targetNodeId !== drag.nodeId && !isDescendantOf(targetNodeId, drag.nodeId, nodePool)) {
             dropTargetId = targetNodeId;
             const rect = targetRow.getBoundingClientRect();
             const ratio = (e.clientY - rect.top) / rect.height;
-            if (ratio < 0.25) dropPosition = 'before';
-            else if (ratio > 0.75) dropPosition = 'after';
+            if (ratio < 0.3) dropPosition = 'before';
+            else if (ratio > 0.7) dropPosition = 'after';
             else dropPosition = 'inside';
           }
         }
@@ -164,31 +182,70 @@ export function Sidebar() {
 
       if (folderDragState?.active && drag) {
         const { dropTargetId, dropPosition } = folderDragState;
+        const isSmartDrag = drag.nodeId.startsWith('smart:');
+
         if (dropTargetId && dropPosition) {
-          const draggedFolderId = parseFolderId(drag.nodeId);
-          const targetFolderId = parseFolderId(dropTargetId);
-          if (draggedFolderId != null && targetFolderId != null) {
-            const targetNode = folderNodes.find((n) => n.id === dropTargetId);
-            if (dropPosition === 'inside') {
-              // Reparent into target
-              void foldersController.move(draggedFolderId, targetFolderId, []);
-            } else {
-              // Reorder: same parent, build sibling order
-              const targetParentId = targetNode?.parent_id ?? null;
-              const parentFolderId = targetParentId ? parseFolderId(targetParentId) : null;
-              const siblings = folderNodes
-                .filter((n) => n.parent_id === targetParentId)
-                .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0));
-              // Remove dragged, insert at target position
-              const without = siblings.filter((s) => s.id !== drag.nodeId);
-              const targetIdx = without.findIndex((s) => s.id === dropTargetId);
-              const insertAt = dropPosition === 'after' ? targetIdx + 1 : targetIdx;
-              const draggedNode = siblings.find((s) => s.id === drag.nodeId);
-              if (draggedNode) {
-                without.splice(insertAt, 0, draggedNode);
+          if (isSmartDrag) {
+            // Smart folder drag-drop — multi-select aware
+            const draggedId = parseSmartFolderIdNum(drag.nodeId);
+            const targetId = parseSmartFolderIdNum(dropTargetId);
+            if (draggedId != null && targetId != null) {
+              const targetNode = smartFolderNodes.find((n) => n.id === dropTargetId);
+              const movingIds = sidebarSelection.has(drag.nodeId) && sidebarSelection.size > 1
+                ? [...sidebarSelection].filter((id) => id.startsWith('smart:'))
+                : [drag.nodeId];
+              const movingSet = new Set(movingIds);
+
+              if (dropPosition === 'inside') {
+                for (const id of movingIds) {
+                  const sfId = parseSmartFolderIdNum(id);
+                  if (sfId != null) void smartFoldersController.move(sfId, targetId, []);
+                }
+              } else {
+                const targetParentId = targetNode?.parent_id ?? null;
+                const parentSmartId = targetParentId ? parseSmartFolderIdNum(targetParentId) : null;
+                const siblings = smartFolderNodes
+                  .filter((n) => n.parent_id === targetParentId)
+                  .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0));
+                const movingNodes = siblings.filter((s) => movingSet.has(s.id));
+                const without = siblings.filter((s) => !movingSet.has(s.id));
+                const targetIdx = without.findIndex((s) => s.id === dropTargetId);
+                const insertAt = dropPosition === 'after' ? targetIdx + 1 : targetIdx;
+                without.splice(insertAt, 0, ...movingNodes);
+                const moves: [number, number][] = without.map((s, i) => [parseSmartFolderIdNum(s.id)!, i]);
+                void smartFoldersController.move(draggedId, parentSmartId, moves);
               }
-              const moves: [number, number][] = without.map((s, i) => [parseFolderId(s.id)!, i]);
-              void foldersController.move(draggedFolderId, parentFolderId, moves);
+            }
+          } else {
+            // Folder drag-drop — multi-select aware
+            const draggedFolderId = parseFolderId(drag.nodeId);
+            const targetFolderId = parseFolderId(dropTargetId);
+            if (draggedFolderId != null && targetFolderId != null) {
+              const targetNode = folderNodes.find((n) => n.id === dropTargetId);
+              const movingIds = sidebarSelection.has(drag.nodeId) && sidebarSelection.size > 1
+                ? [...sidebarSelection].filter((id) => id.startsWith('folder:'))
+                : [drag.nodeId];
+              const movingSet = new Set(movingIds);
+
+              if (dropPosition === 'inside') {
+                for (const id of movingIds) {
+                  const fid = parseFolderId(id);
+                  if (fid != null) void foldersController.move(fid, targetFolderId, []);
+                }
+              } else {
+                const targetParentId = targetNode?.parent_id ?? null;
+                const parentFolderId = targetParentId ? parseFolderId(targetParentId) : null;
+                const siblings = folderNodes
+                  .filter((n) => n.parent_id === targetParentId)
+                  .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0));
+                const movingNodes = siblings.filter((s) => movingSet.has(s.id));
+                const without = siblings.filter((s) => !movingSet.has(s.id));
+                const targetIdx = without.findIndex((s) => s.id === dropTargetId);
+                const insertAt = dropPosition === 'after' ? targetIdx + 1 : targetIdx;
+                without.splice(insertAt, 0, ...movingNodes);
+                const moves: [number, number][] = without.map((s, i) => [parseFolderId(s.id)!, i]);
+                void foldersController.move(draggedFolderId, parentFolderId, moves);
+              }
             }
           }
         }
@@ -202,7 +259,7 @@ export function Sidebar() {
       window.removeEventListener('mousemove', onMove);
       window.removeEventListener('mouseup', onUp);
     };
-  }, [folderDragState, folderNodes]);
+  }, [folderDragState, folderNodes, smartFolderNodes]);
 
   const folderRename = useInlineRename({
     onCommit: (id, name) => {
@@ -295,6 +352,52 @@ export function Sidebar() {
     [smartFolderNodes, collapsed],
   );
 
+  /** Multi-select-aware click handler for folder / smart folder rows. */
+  const handleRowClick = useCallback((id: string, e: React.MouseEvent) => {
+    const isMod = e.metaKey || e.ctrlKey;
+    const isShift = e.shiftKey;
+
+    if (isMod) {
+      // Toggle in selection
+      setSidebarSelection((prev) => {
+        const next = new Set(prev);
+        if (next.has(id)) next.delete(id); else next.add(id);
+        return next;
+      });
+      lastClickedRef.current = id;
+      return; // don't navigate
+    }
+
+    if (isShift && lastClickedRef.current) {
+      // Range select within same section
+      const sameSection = id.startsWith('folder:') && lastClickedRef.current.startsWith('folder:')
+        ? folderList
+        : id.startsWith('smart:') && lastClickedRef.current.startsWith('smart:')
+          ? smartList
+          : null;
+      if (sameSection) {
+        const ids = sameSection.map((entry) => entry.node.id);
+        const fromIdx = ids.indexOf(lastClickedRef.current);
+        const toIdx = ids.indexOf(id);
+        if (fromIdx >= 0 && toIdx >= 0) {
+          const lo = Math.min(fromIdx, toIdx);
+          const hi = Math.max(fromIdx, toIdx);
+          setSidebarSelection((prev) => {
+            const next = new Set(prev);
+            for (let i = lo; i <= hi; i++) next.add(ids[i]);
+            return next;
+          });
+          return; // don't navigate
+        }
+      }
+    }
+
+    // Plain click — navigate and clear selection
+    setSidebarSelection(new Set());
+    lastClickedRef.current = id;
+    navigate(id);
+  }, [navigate, folderList, smartList]);
+
   // ── Context menu builders ──────────────────────────────────────
 
   const openFolderMenu = useCallback((e: React.MouseEvent, node: SidebarNodeDto) => {
@@ -313,16 +416,12 @@ export function Sidebar() {
       { label: 'Import Folder Here...', icon: <IconFolderPlus size={14} />, action: () => {
         void (async () => {
           try {
-            console.log('[sidebar] opening directory picker for import into folder', folderId);
             const result = await (window as any).picto.dialog.open({
               properties: ['openDirectory'], multiple: false, title: 'Import folder into ' + node.name,
             });
-            console.log('[sidebar] dialog result:', result);
             if (result) {
               const folderPath = typeof result === 'string' ? result : result[0];
-              console.log('[sidebar] importing folder:', folderPath, '→ parent:', folderId);
               await foldersController.importFolder(folderPath, folderId);
-              console.log('[sidebar] import_folder dispatched');
             }
           } catch (err) {
             console.error('[sidebar] import folder failed:', err);
@@ -432,6 +531,87 @@ export function Sidebar() {
     contextMenu.open(e, entries);
   }, [contextMenu, folderRename, openSmartFolderModal]);
 
+  // ── Bulk context menu ──────────────────────────────────────────
+
+  const openBulkMenu = useCallback((e: React.MouseEvent) => {
+    const sel = sidebarSelection;
+    const folderIds = [...sel].filter((id) => id.startsWith('folder:'));
+    const smartIds = [...sel].filter((id) => id.startsWith('smart:'));
+    const allFolders = smartIds.length === 0;
+    const allSmart = folderIds.length === 0;
+
+    const entries: MenuEntry[] = [];
+
+    // Change Color — only when all same type
+    if (allFolders || allSmart) {
+      entries.push({
+        custom: true, key: 'bulk-color', render: () => (
+          <ColorPicker value={null} onChange={(hex) => {
+            for (const id of folderIds) {
+              const fid = parseFolderId(id);
+              if (fid != null) void foldersController.applyColor(fid, hex);
+            }
+            for (const id of smartIds) {
+              const sfIdNum = parseSmartFolderIdNum(id);
+              const node = smartFolderNodes.find((n) => n.id === id);
+              if (sfIdNum != null && node) {
+                const payload = buildSmartFolderPayloadFromNode(node, { color: hex });
+                void smartFoldersController.update(sfIdNum, payload);
+              }
+            }
+          }} />
+        ),
+      });
+      entries.push({ separator: true });
+    }
+
+    // Delete — always available
+    const totalCount = sel.size;
+    entries.push({
+      label: `Delete ${totalCount} items`, icon: <IconTrash size={14} />, danger: true,
+      action: () => {
+        store.set(confirmModalAtom, {
+          open: true, title: 'Delete Selected', danger: true, confirmLabel: 'Delete',
+          message: `Delete ${totalCount} selected item${totalCount > 1 ? 's' : ''}? Files inside folders will not be deleted.`,
+          onConfirm: () => {
+            for (const id of folderIds) {
+              const fid = parseFolderId(id);
+              if (fid != null) void foldersController.delete(fid);
+            }
+            for (const id of smartIds) {
+              const sfId = parseSmartFolderId(id);
+              if (sfId != null) void smartFoldersController.delete(sfId);
+            }
+            setSidebarSelection(new Set());
+          },
+        });
+      },
+    });
+
+    setContextMenuNodeId(null);
+    contextMenu.open(e, entries);
+  }, [contextMenu, sidebarSelection, smartFolderNodes]);
+
+  /** Unified context menu handler — dispatches to bulk or single. */
+  const handleFolderContextMenu = useCallback((e: React.MouseEvent, node: SidebarNodeDto) => {
+    if (sidebarSelection.size > 1 && sidebarSelection.has(node.id)) {
+      openBulkMenu(e);
+    } else {
+      // Clear selection, show single-item menu
+      setSidebarSelection(new Set());
+      openFolderMenu(e, node);
+    }
+  }, [sidebarSelection, openBulkMenu, openFolderMenu]);
+
+  const handleSmartFolderContextMenu = useCallback((e: React.MouseEvent, node: SidebarNodeDto) => {
+    if (sidebarSelection.size > 1 && sidebarSelection.has(node.id)) {
+      openBulkMenu(e);
+    } else {
+      setSidebarSelection(new Set());
+      openSmartFolderMenu(e, node);
+    }
+  }, [sidebarSelection, openBulkMenu, openSmartFolderMenu]);
+
   return (
     <div className={styles.root}>
       <div className={styles.scroll}>
@@ -455,7 +635,7 @@ export function Sidebar() {
               label={LABEL_OVERRIDES[node.id] ?? node.name}
               count={node.count}
               active={activeNodeId === node.id}
-              onClick={() => node.selectable && navigate(node.id)}
+              onClick={() => { if (node.selectable) { setSidebarSelection(new Set()); navigate(node.id); } }}
               dropDataAttr={statusDrop ? { key: 'status-drop', value: statusDrop } : undefined}
             />
           );
@@ -477,13 +657,14 @@ export function Sidebar() {
             count={folderRename.renamingId === node.id ? undefined : node.count}
 
             active={activeNodeId === node.id} indent={indent}
+            selected={sidebarSelection.has(node.id)}
             hasChildren={hasChildren} expanded={!collapsed.has(node.id)}
             treeLines={treeLines} isLastChild={isLastChild}
             contextHighlight={contextMenuNodeId === node.id}
             dropPosition={folderDragState?.dropTargetId === node.id ? folderDragState.dropPosition ?? undefined : undefined}
             onToggleExpand={() => toggleCollapse(node.id)}
-            onClick={() => navigate(node.id)}
-            onContextMenu={(e) => openFolderMenu(e, node)}
+            onClick={(e) => handleRowClick(node.id, e)}
+            onContextMenu={(e) => handleFolderContextMenu(e, node)}
             onPointerDown={(e) => {
               if (e.button !== 0) return;
               folderDragRef.current = { nodeId: node.id, startY: e.clientY };
@@ -516,16 +697,36 @@ export function Sidebar() {
           <SidebarRow
             key={node.id} variant="smart_folder"
             icon={<NodeIcon node={node} expanded={!collapsed.has(node.id) && hasChildren} />}
-            label={node.name} count={node.count}
+            label={folderRename.renamingId === node.id ? undefined : node.name}
+            count={folderRename.renamingId === node.id ? undefined : node.count}
 
             active={activeNodeId === node.id} indent={indent}
+            selected={sidebarSelection.has(node.id)}
             hasChildren={hasChildren} expanded={!collapsed.has(node.id)}
             treeLines={treeLines} isLastChild={isLastChild}
             contextHighlight={contextMenuNodeId === node.id}
+            dropPosition={folderDragState?.dropTargetId === node.id ? folderDragState.dropPosition ?? undefined : undefined}
             onToggleExpand={() => toggleCollapse(node.id)}
-            onClick={() => navigate(node.id)}
-            onContextMenu={(e) => openSmartFolderMenu(e, node)}
-          />
+            onClick={(e) => handleRowClick(node.id, e)}
+            onContextMenu={(e) => handleSmartFolderContextMenu(e, node)}
+            onPointerDown={(e) => {
+              if (e.button !== 0) return;
+              folderDragRef.current = { nodeId: node.id, startY: e.clientY };
+            }}
+            dropDataAttr={{ key: 'smart-drop-id', value: String(parseSmartFolderIdNum(node.id) ?? '') }}
+          >
+            {folderRename.renamingId === node.id ? (
+              <input
+                ref={folderRename.inputRef}
+                className={styles.renameInput}
+                value={folderRename.renameValue}
+                onChange={(e) => folderRename.setRenameValue(e.target.value)}
+                onKeyDown={folderRename.handleKeyDown}
+                onBlur={folderRename.commitRename}
+                onContextMenu={(e) => { e.preventDefault(); folderRename.commitRename(); }}
+              />
+            ) : undefined}
+          </SidebarRow>
         ))}
 
       </div>
@@ -539,27 +740,42 @@ export function Sidebar() {
         />
       )}
 
-      {/* Folder drag ghost */}
-      {folderDragState?.active && (
-        <div style={{
-          position: 'fixed',
-          left: folderDragState.ghostX + 14,
-          top: folderDragState.ghostY + 10,
-          padding: '3px 8px',
-          borderRadius: 4,
-          background: 'var(--glass-bg, rgba(24, 25, 28, 0.92))',
-          backdropFilter: 'blur(12px)',
-          border: '1px solid var(--color-border-secondary)',
-          color: 'var(--color-text-primary)',
-          fontSize: 12,
-          fontWeight: 500,
-          pointerEvents: 'none',
-          zIndex: 10000,
-          whiteSpace: 'nowrap',
-        }}>
-          {folderDragState.ghostLabel}
-        </div>
-      )}
+      {/* Drag ghost — looks like a highlighted sidebar row */}
+      {folderDragState?.active && (() => {
+        const isSmartGhost = folderDragState.draggedNodeId.startsWith('smart:');
+        const DefaultIcon = isSmartGhost ? IconBookmark : IconFolder;
+        return (
+          <div style={{
+            position: 'fixed',
+            left: folderDragState.ghostX - 20,
+            top: folderDragState.ghostY - 13,
+            width: 200,
+            height: 'var(--sidebar-row-height, 26px)',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 6,
+            padding: '0 8px',
+            borderRadius: 5,
+            background: 'var(--color-surface-active, rgba(248, 249, 251, 0.10))',
+            border: '1px solid var(--color-border-primary)',
+            color: 'var(--color-text-primary)',
+            fontSize: 'var(--font-size-md, 13px)',
+            pointerEvents: 'none',
+            zIndex: 10000,
+            whiteSpace: 'nowrap',
+            overflow: 'hidden',
+            opacity: 0.9,
+            boxShadow: '0 2px 8px rgba(0, 0, 0, 0.2)',
+          }}>
+            {folderDragState.ghostIcon ? (
+              <DynamicIcon name={folderDragState.ghostIcon} size={IC} color={folderDragState.ghostColor ?? undefined} filled />
+            ) : (
+              <DefaultIcon size={IC} color={folderDragState.ghostColor ?? 'var(--color-text-tertiary)'} stroke={1.2} fill={folderDragState.ghostColor ?? 'currentColor'} fillOpacity={0.15} />
+            )}
+            <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{folderDragState.ghostLabel}</span>
+          </div>
+        );
+      })()}
     </div>
   );
 }

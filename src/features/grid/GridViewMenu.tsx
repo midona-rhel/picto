@@ -17,6 +17,8 @@ import {
   type SortField, type SortDirection, type GridViewMode,
 } from '../../state/grid';
 import { sidebarCollapsedAtom } from '../../state/navigation';
+import { inspectorCollapsedAtom } from '../../state/navigation';
+import { gridShowSubfoldersAtom } from '../../state/grid';
 import { gridController } from '../../controllers/gridController';
 import { ToggleSwitch } from '../../shared/ui/ToggleSwitch/ToggleSwitch';
 import { CmSelect } from '../../shared/ui/CmSelect/CmSelect';
@@ -116,6 +118,10 @@ function DisplayPanel() {
   const setFitThumbs = useSetAtom(gridFitThumbnailsAtom);
   const sidebarCollapsed = useAtomValue(sidebarCollapsedAtom);
   const setSidebarCollapsed = useSetAtom(sidebarCollapsedAtom);
+  const inspectorCollapsed = useAtomValue(inspectorCollapsedAtom);
+  const setInspectorCollapsed = useSetAtom(inspectorCollapsedAtom);
+  const showSubfolders = useAtomValue(gridShowSubfoldersAtom);
+  const setShowSubfolders = useSetAtom(gridShowSubfoldersAtom);
 
   const toggle = (label: string, on: boolean, flip: () => void, disabled = false) => (
     <div className={`${s.toggleRow} ${disabled ? s.toggleRowDisabled : ''}`} onClick={disabled ? undefined : flip}>
@@ -131,12 +137,12 @@ function DisplayPanel() {
       {toggle('Show Extension', showExt, () => { setShowExt(!showExt); gridController.saveViewPref({ show_extension: !showExt }); })}
       {toggle('Show Label', showExtLabel, () => { setShowExtLabel(!showExtLabel); gridController.saveViewPref({ show_label: !showExtLabel }); })}
       {toggle('Fit Thumbnails', fitThumbs, () => { setFitThumbs(!fitThumbs); gridController.saveViewPref({ thumbnail_fit: !fitThumbs ? 'cover' : 'contain' }); }, viewMode !== 'grid')}
-      {toggle('Show Subfolders', false, () => { /* TODO */ })}
+      {toggle('Show Subfolders', showSubfolders, () => setShowSubfolders(!showSubfolders))}
 
       <div className={s.sep} />
 
       {toggle('Show Sidebar', !sidebarCollapsed, () => setSidebarCollapsed(!sidebarCollapsed))}
-      {toggle('Show Inspector', true, () => { /* TODO */ })}
+      {toggle('Show Inspector', !inspectorCollapsed, () => setInspectorCollapsed(!inspectorCollapsed))}
     </div>
   );
 }

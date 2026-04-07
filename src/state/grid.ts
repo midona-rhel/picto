@@ -4,7 +4,7 @@
 
 import { atom } from 'jotai';
 import type { CanonicalEntityGridItem, BaseScope, EntityViewQuery } from '../shared/types/canonical';
-import type { GridViewMode } from '../features/grid/layout/types';
+import type { GridViewMode } from '../shared/types/grid';
 import { activeNodeIdAtom, collectionNameAtom } from './navigation';
 import { sidebarNodesAtom, folderNodesAtom } from './sidebar';
 import { nodeIdToGridScope } from '../shared/lib/gridScope';
@@ -87,16 +87,19 @@ export const gridScopeLabelAtom = atom((get) => {
   if (nodeId.startsWith('collection:')) {
     return get(collectionNameAtom) ?? 'Collection';
   }
-  const nodes = get(sidebarNodesAtom);
-  const node = nodes.find((n) => n.id === nodeId);
-  if (node) return node.name;
-  const fallbacks: Record<string, string> = {
+  const SYSTEM_LABELS: Record<string, string> = {
     'system:active': 'All',
     'system:inbox': 'Inbox',
     'system:trash': 'Trash',
     'system:uncategorized': 'Uncategorized',
     'system:untagged': 'Untagged',
   };
+  // System scopes: always use our label, not the backend's name
+  if (SYSTEM_LABELS[nodeId]) return SYSTEM_LABELS[nodeId];
+  const nodes = get(sidebarNodesAtom);
+  const node = nodes.find((n) => n.id === nodeId);
+  if (node) return node.name;
+  const fallbacks = SYSTEM_LABELS;
   return fallbacks[nodeId] ?? '';
 });
 

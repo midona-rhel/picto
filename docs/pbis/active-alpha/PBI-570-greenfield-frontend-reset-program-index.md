@@ -26,7 +26,7 @@ Current code facts:
 - `ImageGrid.tsx` is still an 889-line architecture choke point
 - `InspectorPanel.tsx` is still about 800 lines
 - `FilterBar.tsx` is still about 454 lines
-- `src/platform/api.ts` still exists as a compatibility facade while some controllers finish moving to smaller platform modules
+- `src/platform/**` has been split into smaller transport modules owned by domain
 - legacy stores, new Jotai slices, controllers, runtime reducers, and large feature components are all interleaved in the same active tree
 
 That means the current “migrate slice by slice inside `src/**`” approach keeps producing churn:

@@ -124,7 +124,7 @@ function asStringArray(value: unknown): string[] {
 }
 
 const SYSTEM_SCOPE_DESCRIPTIONS: Record<string, string> = {
-  'system:active': 'All active media in the current library.',
+  'system:active': 'All images not in Inbox or Trash.',
   'system:inbox': 'New or unreviewed media waiting to be processed.',
   'system:trash': 'Media currently marked for removal.',
   'system:uncategorized': 'Active media that is not assigned to any folder.',

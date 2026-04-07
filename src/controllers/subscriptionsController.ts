@@ -1,4 +1,36 @@
-import * as api from '../platform/api';
+import { openExternalUrl } from '../platform/shellApi';
+import {
+  addSubscriptionQuery,
+  createGroup,
+  createSubscription,
+  deleteCredential,
+  deleteSubscription,
+  deleteSubscriptionQuery,
+  editSubscriptionQuery,
+  getRunningSubscriptionProgress,
+  getRunningSubscriptions,
+  getSubscriptionSites,
+  getSubscriptions,
+  listCredentialHealth,
+  listCredentials,
+  listSubscriptionDownloadAttempts,
+  listSubscriptionIssues,
+  listSubscriptionRuns,
+  pauseSubscription,
+  pauseSubscriptionQuery,
+  pixivOAuthExchange,
+  pixivOAuthStart,
+  renameSubscription,
+  resetSubscription,
+  resetSubscriptionQuery,
+  retrySubscriptionFailedPost,
+  runSubscription,
+  runSubscriptionQuery,
+  setCredential,
+  setSubscriptionAutoCollections,
+  stopSubscription,
+  stopSubscriptionQuery,
+} from '../platform/subscriptionApi';
 import type {
   CredentialDomain,
   CredentialHealth,
@@ -12,23 +44,8 @@ import type {
   SubscriptionRunRecord,
   SubscriptionSiteInfo,
 } from '../shared/types/subscriptions';
-import { groupFailedPostAttempts } from '../features/subscriptions/subscriptionUtils';
-
-export interface SubscriptionListMetrics {
-  failedPostCount: number;
-  openIssueCount: number;
-  lastActivityAt: string | null;
-}
-
-export interface SubscriptionWorkspaceSnapshot {
-  subscriptions: SubscriptionInfo[];
-  sites: SubscriptionSiteInfo[];
-  credentials: CredentialDomain[];
-  credentialHealth: CredentialHealth[];
-  runningSubscriptionIds: string[];
-  runningProgress: SubscriptionProgressEvent[];
-  listMetrics: Record<string, SubscriptionListMetrics>;
-}
+import { groupFailedPostAttempts } from '../shared/lib/subscriptionHelpers';
+import type { SubscriptionWorkspaceSnapshot } from '../shared/types/subscriptionsWorkspace';
 
 function deriveLastActivityAt(subscription: SubscriptionInfo): string | null {
   let latest: string | null = null;
@@ -42,19 +59,19 @@ function deriveLastActivityAt(subscription: SubscriptionInfo): string | null {
 export const subscriptionsController = {
   async loadWorkspaceSnapshot(): Promise<SubscriptionWorkspaceSnapshot> {
     const [subscriptions, sites, credentials, credentialHealth, runningSubscriptionIds, runningProgress] = await Promise.all([
-      api.getSubscriptions(),
-      api.getSubscriptionSites(),
-      api.listCredentials(),
-      api.listCredentialHealth(),
-      api.getRunningSubscriptions(),
-      api.getRunningSubscriptionProgress(),
+      getSubscriptions(),
+      getSubscriptionSites(),
+      listCredentials(),
+      listCredentialHealth(),
+      getRunningSubscriptions(),
+      getRunningSubscriptionProgress(),
     ]);
 
     const metricsEntries = await Promise.all(
       subscriptions.map(async (subscription) => {
         const [issues, attempts] = await Promise.all([
-          api.listSubscriptionIssues(subscription.id, null, 100),
-          api.listSubscriptionDownloadAttempts(subscription.id, null, 100),
+          listSubscriptionIssues(subscription.id, null, 100),
+          listSubscriptionDownloadAttempts(subscription.id, null, 100),
         ]);
         const failedPosts = groupFailedPostAttempts(attempts, subscription.queries);
         const openIssueCount = issues.filter((issue) => issue.status !== 'resolved').length;
@@ -85,31 +102,31 @@ export const subscriptionsController = {
     runningProgress: SubscriptionProgressEvent[];
   }> {
     const [runningSubscriptionIds, runningProgress] = await Promise.all([
-      api.getRunningSubscriptions(),
-      api.getRunningSubscriptionProgress(),
+      getRunningSubscriptions(),
+      getRunningSubscriptionProgress(),
     ]);
     return { runningSubscriptionIds, runningProgress };
   },
 
   async listRuns(subscriptionId: string): Promise<SubscriptionRunRecord[]> {
-    return api.listSubscriptionRuns(subscriptionId, 20);
+    return listSubscriptionRuns(subscriptionId, 20);
   },
 
   async listIssues(subscriptionId: string): Promise<SubscriptionIssueRecord[]> {
-    return api.listSubscriptionIssues(subscriptionId, null, 50);
+    return listSubscriptionIssues(subscriptionId, null, 50);
   },
 
   async listFailedPosts(subscription: SubscriptionInfo): Promise<FailedPostGroup[]> {
-    const attempts = await api.listSubscriptionDownloadAttempts(subscription.id, null, 100);
+    const attempts = await listSubscriptionDownloadAttempts(subscription.id, null, 100);
     return groupFailedPostAttempts(attempts, subscription.queries);
   },
 
   getSites(): Promise<SubscriptionSiteInfo[]> {
-    return api.getSubscriptionSites();
+    return getSubscriptionSites();
   },
 
   getSubscriptions(): Promise<SubscriptionInfo[]> {
-    return api.getSubscriptions();
+    return getSubscriptions();
   },
 
   create(input: {
@@ -117,39 +134,39 @@ export const subscriptionsController = {
     initial_post_limit?: number | null;
     periodic_post_limit?: number | null;
   }): Promise<SubscriptionInfo> {
-    return api.createSubscription(input);
+    return createSubscription(input);
   },
 
   createGroup(name: string, schedule?: string | null): Promise<unknown> {
-    return api.createGroup(name, schedule);
+    return createGroup(name, schedule);
   },
 
   rename(id: string, name: string): Promise<void> {
-    return api.renameSubscription(id, name);
+    return renameSubscription(id, name);
   },
 
   delete(id: string): Promise<void> {
-    return api.deleteSubscription(id);
+    return deleteSubscription(id);
   },
 
   pause(id: string, paused: boolean): Promise<void> {
-    return api.pauseSubscription(id, paused);
+    return pauseSubscription(id, paused);
   },
 
   reset(id: string): Promise<void> {
-    return api.resetSubscription(id);
+    return resetSubscription(id);
   },
 
   run(id: string): Promise<void> {
-    return api.runSubscription(id);
+    return runSubscription(id);
   },
 
   stop(id: string): Promise<void> {
-    return api.stopSubscription(id);
+    return stopSubscription(id);
   },
 
   setAutoCollections(id: string, autoCollections: boolean): Promise<void> {
-    return api.setSubscriptionAutoCollections(id, autoCollections);
+    return setSubscriptionAutoCollections(id, autoCollections);
   },
 
   addQuery(
@@ -158,7 +175,7 @@ export const subscriptionsController = {
     queryText: string,
     notes?: string | null,
   ): Promise<SubscriptionInfo['queries'][number]> {
-    return api.addSubscriptionQuery(subscriptionId, siteId, queryText, notes);
+    return addSubscriptionQuery(subscriptionId, siteId, queryText, notes);
   },
 
   editQuery(
@@ -168,27 +185,27 @@ export const subscriptionsController = {
     displayName?: string | null,
     notes?: string | null,
   ): Promise<void> {
-    return api.editSubscriptionQuery(id, siteId, queryText, displayName, notes);
+    return editSubscriptionQuery(id, siteId, queryText, displayName, notes);
   },
 
   deleteQuery(id: string): Promise<void> {
-    return api.deleteSubscriptionQuery(id);
+    return deleteSubscriptionQuery(id);
   },
 
   pauseQuery(id: string, paused: boolean): Promise<void> {
-    return api.pauseSubscriptionQuery(id, paused);
+    return pauseSubscriptionQuery(id, paused);
   },
 
   resetQuery(id: string): Promise<void> {
-    return api.resetSubscriptionQuery(id);
+    return resetSubscriptionQuery(id);
   },
 
   runQuery(subscriptionId: string, queryId: string): Promise<void> {
-    return api.runSubscriptionQuery(subscriptionId, queryId);
+    return runSubscriptionQuery(subscriptionId, queryId);
   },
 
   stopQuery(subscriptionId: string, queryId: string): Promise<void> {
-    return api.stopSubscriptionQuery(subscriptionId, queryId);
+    return stopSubscriptionQuery(subscriptionId, queryId);
   },
 
   retryFailedPost(input: {
@@ -197,15 +214,15 @@ export const subscriptionsController = {
     site_id: string;
     post_id: string;
   }): Promise<void> {
-    return api.retrySubscriptionFailedPost(input);
+    return retrySubscriptionFailedPost(input);
   },
 
   listCredentials(): Promise<CredentialDomain[]> {
-    return api.listCredentials();
+    return listCredentials();
   },
 
   listCredentialHealth(): Promise<CredentialHealth[]> {
-    return api.listCredentialHealth();
+    return listCredentialHealth();
   },
 
   setCredential(input: {
@@ -217,22 +234,22 @@ export const subscriptionsController = {
     cookies?: Record<string, string> | null;
     oauth_token?: string | null;
   }): Promise<void> {
-    return api.setCredential(input);
+    return setCredential(input);
   },
 
   deleteCredential(siteCategory: string): Promise<void> {
-    return api.deleteCredential(siteCategory);
+    return deleteCredential(siteCategory);
   },
 
   pixivOAuthStart(): Promise<PixivOAuthStartResult> {
-    return api.pixivOAuthStart();
+    return pixivOAuthStart();
   },
 
   pixivOAuthExchange(code: string, codeVerifier: string, phpsessid?: string | null): Promise<PixivOAuthExchangeResult> {
-    return api.pixivOAuthExchange(code, codeVerifier, phpsessid);
+    return pixivOAuthExchange(code, codeVerifier, phpsessid);
   },
 
   openExternalUrl(url: string): Promise<void> {
-    return api.openExternalUrl(url);
+    return openExternalUrl(url);
   },
 };

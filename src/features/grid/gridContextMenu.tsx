@@ -60,6 +60,7 @@ interface GridMenuContext {
   onCreateCollection?: () => void;
   onRemoveFromCollection?: () => void;
   onSplitCollection?: () => void;
+  onEditCollection?: () => void;
   onOpenTagSelect?: () => void;
   onOpenAiTagger?: () => void;
   onOpenBatchRename?: () => void;
@@ -155,12 +156,6 @@ export function buildTileContextMenu(ctx: GridMenuContext): MenuEntry[] {
       shortcut: kbd('file.openNewWindow'),
       action: singleHash && ctx.onOpenNewWindow ? () => ctx.onOpenNewWindow!(singleHash!) : undefined,
     }));
-    if (ctx.singleKind === 'collection') {
-      entries.push(item('Edit Collection', {
-        icon: <IconStack2 size={15} />,
-        action: ctx.onOpen,
-      }));
-    }
     entries.push(sep());
   }
 
@@ -205,7 +200,13 @@ export function buildTileContextMenu(ctx: GridMenuContext): MenuEntry[] {
     }
     entries.push(sep());
   }
-  // ── Split collection — available inside collection view OR when a single collection tile is selected ──
+  // ── Collection actions ──
+  if (ctx.hasCollections || ctx.scopeKind === 'collection') {
+    entries.push(item('Edit Collection', {
+      icon: <IconStack2 size={15} />,
+      action: ctx.onEditCollection,
+    }));
+  }
   if (ctx.scopeKind === 'collection' || (singleSelected && ctx.singleKind === 'collection')) {
     entries.push(item('Split Collection', {
       icon: <IconStackPop size={15} />,

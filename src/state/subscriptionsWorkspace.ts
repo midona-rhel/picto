@@ -1,12 +1,12 @@
 import { atom } from 'jotai';
-import type { SubscriptionWorkspaceSnapshot } from '../controllers/subscriptionsController';
+import type { SubscriptionWorkspaceSnapshot } from '../shared/types/subscriptionsWorkspace';
 import type {
   FailedPostGroup,
   SubscriptionIssueRecord,
   SubscriptionProgressEvent,
   SubscriptionRunRecord,
 } from '../shared/types/subscriptions';
-import { getProgressBySubscriptionId } from '../features/subscriptions/subscriptionUtils';
+import { getProgressBySubscriptionId } from '../shared/lib/subscriptionHelpers';
 
 export type SubscriptionCreateFormState = {
   name: string;

@@ -89,6 +89,20 @@ pub async fn generate_thumbnail_bytes(
     .await
 }
 
+pub fn generate_thumbnail_from_decoded_image(
+    decoded: &image::DynamicImage,
+    target_resolution: (u32, u32),
+) -> FileResult<(Vec<u8>, &'static str)> {
+    let (tw, th) = get_thumbnail_resolution(
+        (decoded.width(), decoded.height()),
+        target_resolution,
+        ThumbnailScaleType::ScaleDownOnly,
+        100,
+    );
+    let resized = decoded.resize_exact(tw, th, image::imageops::FilterType::Lanczos3);
+    encode_thumbnail(&resized)
+}
+
 fn fast_resize(img: &image::DynamicImage, tw: u32, th: u32) -> FileResult<image::DynamicImage> {
     use fast_image_resize as fr;
 
