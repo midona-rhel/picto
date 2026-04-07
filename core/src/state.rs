@@ -101,8 +101,10 @@ pub async fn open_library(library_root: PathBuf) -> Result<Arc<AppState>, String
 
     let worker_handles = crate::workers::start_workers(
         &new_db,
+        &library_root,
         &blob_store,
         &rate_limiter,
+        &settings,
         &running_subscriptions,
         &sub_terminal_statuses,
         folder_watch_rx,

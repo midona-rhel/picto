@@ -152,6 +152,7 @@ pub struct PauseSubscriptionInput {
 pub struct AddSubscriptionQueryInput {
     pub subscription_id: String,
     pub site_id: String,
+    pub query_kind: Option<String>,
     pub query_text: String,
     pub notes: Option<String>,
 }
@@ -487,6 +488,7 @@ pub async fn add_subscription_query(
         .add_subscription_query(
             input.subscription_id,
             input.site_id,
+            input.query_kind,
             input.query_text,
             input.notes,
         )
@@ -523,6 +525,7 @@ pub async fn delete_subscription_query(
 pub struct EditSubscriptionQueryInput {
     pub id: i64,
     pub site_id: String,
+    pub query_kind: Option<String>,
     pub query_text: String,
     pub display_name: Option<String>,
     pub notes: Option<String>,
@@ -536,6 +539,7 @@ pub async fn edit_subscription_query(
         .edit_subscription_query(
             input.id,
             input.site_id,
+            input.query_kind,
             input.query_text,
             input.display_name,
             input.notes,

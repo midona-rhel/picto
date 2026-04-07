@@ -24,8 +24,10 @@ const SHUTDOWN_JOIN_TIMEOUT: std::time::Duration = std::time::Duration::from_sec
 /// and passed to `stop_workers()` on shutdown.
 pub async fn start_workers(
     canonical_db: &Arc<LibraryDatabase>,
+    library_root: &std::path::Path,
     blob_store: &Arc<BlobStore>,
     rate_limiter: &RateLimiter,
+    settings: &crate::settings::store::SettingsStore,
     running_subscriptions: &RunningSubscriptions,
     sub_terminal_statuses: &SubTerminalStatuses,
     folder_watch_rx: tokio::sync::mpsc::UnboundedReceiver<FolderWatchCommand>,
@@ -36,8 +38,10 @@ pub async fn start_workers(
     // ── Group scheduler ────────────────────────────────
     {
         let sched_db = canonical_db.clone();
+        let sched_root = library_root.to_path_buf();
         let sched_blob = blob_store.clone();
         let sched_rl = rate_limiter.clone();
+        let sched_settings = settings.clone();
         let sched_running = running_subscriptions.clone();
         let sched_terminal = sub_terminal_statuses.clone();
         let sched_cancel = cancel.clone();
@@ -62,18 +66,49 @@ pub async fn start_workers(
                 if let Ok(state) = crate::state::get_state() {
                     crate::scheduler::check_scheduled_groups(
                         &sched_db,
-                        &state.library_root,
+                        &sched_root,
                         &sched_blob,
                         &sched_rl,
                         &sched_running,
                         &sched_terminal,
-                        &state.settings,
+                        &sched_settings,
                     )
                     .await;
+                } else {
+                    crate::scheduler::check_scheduled_groups(
+                        &sched_db,
+                        &sched_root,
+                        &sched_blob,
+                        &sched_rl,
+                        &sched_running,
+                        &sched_terminal,
+                        &sched_settings,
+                    ).await;
                 }
             }
         });
         handles.push(("group_scheduler", handle));
+    }
+
+    // ── Subscription site runner ──────────────────────
+    {
+        let sub_db = canonical_db.clone();
+        let sub_root = library_root.to_path_buf();
+        let sub_blob = blob_store.clone();
+        let sub_rl = rate_limiter.clone();
+        let sub_running = running_subscriptions.clone();
+        let sub_terminal = sub_terminal_statuses.clone();
+        let sub_cancel = cancel.clone();
+        let handle = tokio::spawn(crate::subscriptions::site_runner::start_worker_loop(
+            sub_db,
+            sub_root,
+            sub_blob,
+            sub_rl,
+            sub_running,
+            sub_terminal,
+            sub_cancel,
+        ));
+        handles.push(("subscription_site_runner", handle));
     }
 
     // ── Ingest queue cleanup + worker ──────────────────

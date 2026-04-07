@@ -12,7 +12,7 @@ import {
   IconFolder, IconFolderOpen, IconFolderPlus, IconFolderSymlink,
   IconCopy, IconUpload, IconDownload,
   IconPhoto, IconInbox, IconTrash,
-  IconClock, IconBookmark, IconPin, IconPinFilled,
+  IconClock, IconBookmark, IconPin, IconPinnedOff,
 } from '@tabler/icons-react';
 import type { Icon as TablerIcon } from '@tabler/icons-react';
 import {
@@ -98,13 +98,26 @@ export function Sidebar() {
     if (!contextMenu.state && contextMenuNodeId) setContextMenuNodeId(null);
   }, [contextMenu.state, contextMenuNodeId]);
 
+  // Pinned items — flat list from both folders and smart folders (must be before drag useEffect)
+  const pinnedNodes = useMemo(() => {
+    const allNodes = [...folderNodes, ...smartFolderNodes];
+    return allNodes
+      .filter((n) => (n.meta as Record<string, unknown> | null)?.pinned === true)
+      .sort((a, b) => {
+        const ao = ((a.meta as Record<string, unknown> | null)?.pin_order as number) ?? 0;
+        const bo = ((b.meta as Record<string, unknown> | null)?.pin_order as number) ?? 0;
+        return ao - bo;
+      });
+  }, [folderNodes, smartFolderNodes]);
+
   // ── Folder drag reorder ──
-  const folderDragRef = useRef<{ nodeId: string; startY: number } | null>(null);
+  const folderDragRef = useRef<{ nodeId: string; startY: number; fromPinned?: boolean } | null>(null);
   const [folderDragState, setFolderDragState] = useState<{
     active: boolean;
     draggedNodeId: string;
     dropTargetId: string | null;
     dropPosition: 'before' | 'inside' | 'after' | null;
+    isPinnedReorder?: boolean;
     ghostX: number;
     ghostY: number;
     ghostLabel: string;
@@ -124,7 +137,7 @@ export function Sidebar() {
       const nodePool = isSmartDrag ? smartFolderNodes : folderNodes;
 
       // Activate drag
-      const node = nodePool.find((n) => n.id === drag.nodeId);
+      const node = [...folderNodes, ...smartFolderNodes].find((n) => n.id === drag.nodeId);
       if (!folderDragState?.active) {
         setFolderDragState({
           active: true,
@@ -143,26 +156,65 @@ export function Sidebar() {
       } else {
         // Find drop target via elementFromPoint
         const el = document.elementFromPoint(e.clientX, e.clientY) as HTMLElement | null;
-        // Detect folder or smart folder drop targets depending on drag type
-        const dropAttr = isSmartDrag ? 'data-smart-drop-id' : 'data-folder-drop-id';
-        const targetRow = el?.closest(`[${dropAttr}]`) as HTMLElement | null;
         let dropTargetId: string | null = null;
         let dropPosition: 'before' | 'inside' | 'after' | null = null;
+        let isPinnedReorder = false;
 
-        if (targetRow) {
-          const rawId = isSmartDrag
-            ? targetRow.dataset.smartDropId
-            : targetRow.dataset.folderDropId;
-          const prefix = isSmartDrag ? 'smart:' : 'folder:';
-          const targetNodeId = rawId ? `${prefix}${rawId}` : null;
-          // Prevent dropping onto self or any descendant (would create a cycle)
-          if (targetNodeId && targetNodeId !== drag.nodeId && !isDescendantOf(targetNodeId, drag.nodeId, nodePool)) {
-            dropTargetId = targetNodeId;
-            const rect = targetRow.getBoundingClientRect();
-            const ratio = (e.clientY - rect.top) / rect.height;
-            if (ratio < 0.3) dropPosition = 'before';
-            else if (ratio > 0.7) dropPosition = 'after';
-            else dropPosition = 'inside';
+        if (drag.fromPinned) {
+          // Pinned drag — look for BOTH folder and smart folder targets
+          const folderTarget = el?.closest('[data-folder-drop-id]') as HTMLElement | null;
+          const smartTarget = el?.closest('[data-smart-drop-id]') as HTMLElement | null;
+          let targetRow: HTMLElement | null = null;
+          let targetNodeId: string | null = null;
+          if (folderTarget) {
+            targetRow = folderTarget;
+            targetNodeId = `folder:${folderTarget.dataset.folderDropId}`;
+          } else if (smartTarget) {
+            targetRow = smartTarget;
+            targetNodeId = `smart:${smartTarget.dataset.smartDropId}`;
+          }
+          if (targetRow && targetNodeId && targetNodeId !== drag.nodeId) {
+            // Check if target is also pinned → pinned reorder
+            const targetIsPinned = pinnedNodes.some((n) => n.id === targetNodeId);
+            if (targetIsPinned) {
+              isPinnedReorder = true;
+              dropTargetId = targetNodeId;
+              const rect = targetRow.getBoundingClientRect();
+              const ratio = (e.clientY - rect.top) / rect.height;
+              dropPosition = ratio < 0.5 ? 'before' : 'after';
+            } else {
+              // Dropping from pinned onto non-pinned: normal move (only same-type)
+              const sameType = (isSmartDrag && targetNodeId.startsWith('smart:')) ||
+                (!isSmartDrag && targetNodeId.startsWith('folder:'));
+              if (sameType && !isDescendantOf(targetNodeId, drag.nodeId, nodePool)) {
+                dropTargetId = targetNodeId;
+                const rect = targetRow.getBoundingClientRect();
+                const ratio = (e.clientY - rect.top) / rect.height;
+                if (ratio < 0.3) dropPosition = 'before';
+                else if (ratio > 0.7) dropPosition = 'after';
+                else dropPosition = 'inside';
+              }
+            }
+          }
+        } else {
+          // Normal drag — detect same-type targets only
+          const dropAttr = isSmartDrag ? 'data-smart-drop-id' : 'data-folder-drop-id';
+          const targetRow = el?.closest(`[${dropAttr}]`) as HTMLElement | null;
+          if (targetRow) {
+            const rawId = isSmartDrag
+              ? targetRow.dataset.smartDropId
+              : targetRow.dataset.folderDropId;
+            const prefix = isSmartDrag ? 'smart:' : 'folder:';
+            const targetNodeId = rawId ? `${prefix}${rawId}` : null;
+            // Prevent dropping onto self or any descendant (would create a cycle)
+            if (targetNodeId && targetNodeId !== drag.nodeId && !isDescendantOf(targetNodeId, drag.nodeId, nodePool)) {
+              dropTargetId = targetNodeId;
+              const rect = targetRow.getBoundingClientRect();
+              const ratio = (e.clientY - rect.top) / rect.height;
+              if (ratio < 0.3) dropPosition = 'before';
+              else if (ratio > 0.7) dropPosition = 'after';
+              else dropPosition = 'inside';
+            }
           }
         }
 
@@ -172,6 +224,7 @@ export function Sidebar() {
           ghostY: e.clientY,
           dropTargetId,
           dropPosition,
+          isPinnedReorder,
         } : null);
       }
     };
@@ -182,19 +235,33 @@ export function Sidebar() {
       document.body.style.cursor = '';
 
       if (folderDragState?.active && drag) {
-        const { dropTargetId, dropPosition } = folderDragState;
+        const { dropTargetId, dropPosition, isPinnedReorder } = folderDragState;
         const isSmartDrag = drag.nodeId.startsWith('smart:');
 
-        if (dropTargetId && dropPosition) {
+        if (dropTargetId && dropPosition && isPinnedReorder) {
+          // Pinned section reorder — compute new pin_order for all pinned items
+          const draggedIds = sidebarSelection.has(drag.nodeId) && sidebarSelection.size > 1
+            ? [...sidebarSelection].filter((id) => pinnedNodes.some((n) => n.id === id))
+            : [drag.nodeId];
+          const movingSet = new Set(draggedIds);
+          const movingNodes = pinnedNodes.filter((n) => movingSet.has(n.id));
+          const without = pinnedNodes.filter((n) => !movingSet.has(n.id));
+          const targetIdx = without.findIndex((n) => n.id === dropTargetId);
+          const insertAt = dropPosition === 'after' ? targetIdx + 1 : targetIdx;
+          without.splice(insertAt, 0, ...movingNodes);
+          const moves: [string, number][] = without.map((n, i) => [n.id, i]);
+          void reorderPinnedItems(moves);
+        } else if (dropTargetId && dropPosition) {
           if (isSmartDrag) {
             // Smart folder drag-drop — multi-select aware
             const draggedId = parseSmartFolderIdNum(drag.nodeId);
             const targetId = parseSmartFolderIdNum(dropTargetId);
             if (draggedId != null && targetId != null) {
               const targetNode = smartFolderNodes.find((n) => n.id === dropTargetId);
-              const movingIds = sidebarSelection.has(drag.nodeId) && sidebarSelection.size > 1
+              const rawIds = sidebarSelection.has(drag.nodeId) && sidebarSelection.size > 1
                 ? [...sidebarSelection].filter((id) => id.startsWith('smart:'))
                 : [drag.nodeId];
+              const movingIds = deduplicateParentChild(rawIds, smartFolderNodes);
               const movingSet = new Set(movingIds);
 
               if (dropPosition === 'inside') {
@@ -223,9 +290,10 @@ export function Sidebar() {
             const targetFolderId = parseFolderId(dropTargetId);
             if (draggedFolderId != null && targetFolderId != null) {
               const targetNode = folderNodes.find((n) => n.id === dropTargetId);
-              const movingIds = sidebarSelection.has(drag.nodeId) && sidebarSelection.size > 1
+              const rawFolderIds = sidebarSelection.has(drag.nodeId) && sidebarSelection.size > 1
                 ? [...sidebarSelection].filter((id) => id.startsWith('folder:'))
                 : [drag.nodeId];
+              const movingIds = deduplicateParentChild(rawFolderIds, folderNodes);
               const movingSet = new Set(movingIds);
 
               if (dropPosition === 'inside') {
@@ -260,7 +328,7 @@ export function Sidebar() {
       window.removeEventListener('mousemove', onMove);
       window.removeEventListener('mouseup', onUp);
     };
-  }, [folderDragState, folderNodes, smartFolderNodes]);
+  }, [folderDragState, folderNodes, smartFolderNodes, pinnedNodes, sidebarSelection]);
 
   const folderRename = useInlineRename({
     onCommit: (id, name) => {
@@ -352,18 +420,6 @@ export function Sidebar() {
     () => buildTreeRenderList(smartFolderNodes, 'section:smart_folders', collapsed),
     [smartFolderNodes, collapsed],
   );
-
-  // Pinned items — flat list from both folders and smart folders
-  const pinnedNodes = useMemo(() => {
-    const allNodes = [...folderNodes, ...smartFolderNodes];
-    return allNodes
-      .filter((n) => (n.meta as Record<string, unknown> | null)?.pinned === true)
-      .sort((a, b) => {
-        const ao = ((a.meta as Record<string, unknown> | null)?.pin_order as number) ?? 0;
-        const bo = ((b.meta as Record<string, unknown> | null)?.pin_order as number) ?? 0;
-        return ao - bo;
-      });
-  }, [folderNodes, smartFolderNodes]);
 
   /** Multi-select-aware click handler for folder / smart folder rows. */
   const handleRowClick = useCallback((id: string, e: React.MouseEvent) => {
@@ -480,7 +536,7 @@ export function Sidebar() {
       { label: 'Move', icon: <IconFolderSymlink size={14} />, action: () => { /* TODO: needs folder destination picker */ } },
       { separator: true },
       (node.meta as Record<string, unknown> | null)?.pinned
-        ? { label: 'Unpin', icon: <IconPinFilled size={14} />, action: () => { void unpinSidebarItem(node.id); } }
+        ? { label: 'Unpin', icon: <IconPinnedOff size={14} />, action: () => { void unpinSidebarItem(node.id); } }
         : { label: 'Pin to Sidebar', icon: <IconPin size={14} />, action: () => { void pinSidebarItem(node.id); } },
       { separator: true },
       { label: 'Delete', icon: <IconTrash size={14} />, danger: true, action: () => {
@@ -536,9 +592,17 @@ export function Sidebar() {
       ) },
       { separator: true },
       { label: 'Duplicate', icon: <IconCopy size={14} />, disabled: true, action: () => {} },
+      { label: 'Export...', icon: <IconUpload size={14} />, action: () => {
+        if (sfIdNum != null) {
+          store.set(exportModalAtom, {
+            open: true, fileCount: node.count ?? 0,
+            target: { kind: 'query_results', query: { base_scope: { kind: 'smart_folder', id: sfIdNum } } },
+          });
+        }
+      } },
       { separator: true },
       (node.meta as Record<string, unknown> | null)?.pinned
-        ? { label: 'Unpin', icon: <IconPinFilled size={14} />, action: () => { void unpinSidebarItem(node.id); } }
+        ? { label: 'Unpin', icon: <IconPinnedOff size={14} />, action: () => { void unpinSidebarItem(node.id); } }
         : { label: 'Pin to Sidebar', icon: <IconPin size={14} />, action: () => { void pinSidebarItem(node.id); } },
       { separator: true },
       { label: 'Delete', icon: <IconTrash size={14} />, danger: true, action: () => {
@@ -583,6 +647,52 @@ export function Sidebar() {
           }} />
         ),
       });
+      entries.push({ separator: true });
+    }
+
+    // Pin/Unpin all
+    const anyPinned = [...sel].some((id) => {
+      const node = [...folderNodes, ...smartFolderNodes].find((n) => n.id === id);
+      return (node?.meta as Record<string, unknown> | null)?.pinned === true;
+    });
+    const anyUnpinned = [...sel].some((id) => {
+      const node = [...folderNodes, ...smartFolderNodes].find((n) => n.id === id);
+      return (node?.meta as Record<string, unknown> | null)?.pinned !== true;
+    });
+    if (anyUnpinned) {
+      entries.push({ label: 'Pin All', icon: <IconPin size={14} />, action: () => {
+        for (const id of sel) void pinSidebarItem(id);
+      } });
+    }
+    if (anyPinned) {
+      entries.push({ label: 'Unpin All', icon: <IconPinnedOff size={14} />, action: () => {
+        for (const id of sel) void unpinSidebarItem(id);
+      } });
+    }
+    entries.push({ separator: true });
+
+    // Export — first selected folder or smart folder
+    if (folderIds.length > 0 || smartIds.length > 0) {
+      entries.push({ label: 'Export All...', icon: <IconUpload size={14} />, action: () => {
+        // Export the first selected item (bulk export of multiple scopes isn't supported)
+        if (folderIds.length > 0) {
+          const fid = parseFolderId(folderIds[0]);
+          if (fid != null) {
+            store.set(exportModalAtom, {
+              open: true, fileCount: 0,
+              target: { kind: 'query_results', query: { base_scope: { kind: 'folder', id: fid } } },
+            });
+          }
+        } else {
+          const sfid = parseSmartFolderIdNum(smartIds[0]);
+          if (sfid != null) {
+            store.set(exportModalAtom, {
+              open: true, fileCount: 0,
+              target: { kind: 'query_results', query: { base_scope: { kind: 'smart_folder', id: sfid } } },
+            });
+          }
+        }
+      } });
       entries.push({ separator: true });
     }
 
@@ -682,11 +792,20 @@ export function Sidebar() {
                   active={activeNodeId === node.id}
                   selected={sidebarSelection.has(node.id)}
                   contextHighlight={contextMenuNodeId === node.id}
+                  dropPosition={folderDragState?.isPinnedReorder && folderDragState?.dropTargetId === node.id ? folderDragState.dropPosition ?? undefined : undefined}
                   onClick={(e) => handleRowClick(node.id, e)}
+                  onPointerDown={(e) => {
+                    if (e.button !== 0) return;
+                    folderDragRef.current = { nodeId: node.id, startY: e.clientY, fromPinned: true };
+                  }}
                   onContextMenu={(e) => {
                     if (isFolder) openFolderMenu(e, node);
                     else openSmartFolderMenu(e, node);
                   }}
+                  dropDataAttr={isFolder
+                    ? { key: 'folder-drop-id', value: String(parseFolderId(node.id) ?? '') }
+                    : { key: 'smart-drop-id', value: String(parseSmartFolderIdNum(node.id) ?? '') }
+                  }
                 />
               );
             })}
@@ -713,7 +832,7 @@ export function Sidebar() {
             hasChildren={hasChildren} expanded={!collapsed.has(node.id)}
             treeLines={treeLines} isLastChild={isLastChild}
             contextHighlight={contextMenuNodeId === node.id}
-            dropPosition={folderDragState?.dropTargetId === node.id ? folderDragState.dropPosition ?? undefined : undefined}
+            dropPosition={!folderDragState?.isPinnedReorder && folderDragState?.dropTargetId === node.id ? folderDragState.dropPosition ?? undefined : undefined}
             onToggleExpand={() => toggleCollapse(node.id)}
             onClick={(e) => handleRowClick(node.id, e)}
             onContextMenu={(e) => handleFolderContextMenu(e, node)}
@@ -757,7 +876,7 @@ export function Sidebar() {
             hasChildren={hasChildren} expanded={!collapsed.has(node.id)}
             treeLines={treeLines} isLastChild={isLastChild}
             contextHighlight={contextMenuNodeId === node.id}
-            dropPosition={folderDragState?.dropTargetId === node.id ? folderDragState.dropPosition ?? undefined : undefined}
+            dropPosition={!folderDragState?.isPinnedReorder && folderDragState?.dropTargetId === node.id ? folderDragState.dropPosition ?? undefined : undefined}
             onToggleExpand={() => toggleCollapse(node.id)}
             onClick={(e) => handleRowClick(node.id, e)}
             onContextMenu={(e) => handleSmartFolderContextMenu(e, node)}
@@ -855,6 +974,11 @@ function isDescendantOf(nodeId: string, ancestorId: string, nodes: SidebarNodeDt
     current = byId.get(current.parent_id);
   }
   return false;
+}
+
+/** Filter a set of selected IDs to only top-level parents — remove any child whose ancestor is also selected. */
+function deduplicateParentChild(ids: string[], nodes: SidebarNodeDto[]): string[] {
+  return ids.filter((id) => !ids.some((other) => other !== id && isDescendantOf(id, other, nodes)));
 }
 
 function parseFolderId(nodeId: string): number | null {

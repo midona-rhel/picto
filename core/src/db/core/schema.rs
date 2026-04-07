@@ -174,6 +174,7 @@ CREATE TABLE IF NOT EXISTS subscription_query (
     query_id            INTEGER PRIMARY KEY,
     subscription_id     INTEGER NOT NULL REFERENCES subscription(subscription_id) ON DELETE CASCADE,
     site_id             TEXT    NOT NULL,
+    query_kind          TEXT    NOT NULL DEFAULT '',
     query_text          TEXT    NOT NULL,
     display_name        TEXT,
     notes               TEXT,
@@ -277,6 +278,29 @@ CREATE TABLE IF NOT EXISTS subscription_query_run (
     files_downloaded     INTEGER NOT NULL DEFAULT 0,
     files_skipped        INTEGER NOT NULL DEFAULT 0
 );
+
+CREATE TABLE IF NOT EXISTS subscription_query_job (
+    job_id               INTEGER PRIMARY KEY,
+    run_id               INTEGER REFERENCES subscription_run(run_id) ON DELETE SET NULL,
+    subscription_id      INTEGER NOT NULL REFERENCES subscription(subscription_id) ON DELETE CASCADE,
+    query_id             INTEGER NOT NULL REFERENCES subscription_query(query_id) ON DELETE CASCADE,
+    site_id              TEXT    NOT NULL,
+    status               TEXT    NOT NULL DEFAULT 'queued',
+    job_kind             TEXT    NOT NULL DEFAULT 'query_sync',
+    requested_by         TEXT    NOT NULL DEFAULT 'subscription',
+    post_id              TEXT,
+    queued_at            TEXT    NOT NULL,
+    started_at           TEXT,
+    finished_at          TEXT,
+    failure_kind         TEXT,
+    error_message        TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_subscription_query_job_ready
+    ON subscription_query_job(status, queued_at, job_id);
+
+CREATE INDEX IF NOT EXISTS idx_subscription_query_job_subscription
+    ON subscription_query_job(subscription_id, status, queued_at, job_id);
 
 CREATE TABLE IF NOT EXISTS subscription_issue (
     issue_id             INTEGER PRIMARY KEY,

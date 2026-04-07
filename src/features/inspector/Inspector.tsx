@@ -421,7 +421,7 @@ function FoldersSection({ folders, onRemove, onNavigate }: {
             }}
           />
         ))}
-        <KbdTooltip label="Add to Folder" shortcut="Shift+F">
+        <KbdTooltip label="Add to Folder" shortcut="F">
           <button className={styles.tagAddBtn} onClick={(e) => openPortal(e, folderPickerPortalAtom)} type="button">
             <IconPlus size={14} stroke={1.5} />
           </button>

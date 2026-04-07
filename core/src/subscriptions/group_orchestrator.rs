@@ -158,16 +158,21 @@ impl SubscriptionGroupOrchestrator {
         }
 
         let sub_ids: Vec<i64> = subscriptions.iter().map(|sub| sub.subscription_id).collect();
-        let map = running_subs.lock().await;
         let mut cancelled_ids = Vec::new();
         for sub_id in sub_ids {
             let sub_id_str = sub_id.to_string();
-            if let Some(token) = map.get(&sub_id_str) {
-                token.cancel();
+            if crate::subscriptions::run_orchestrator::SubscriptionRunOrchestrator::stop_subscription(
+                db,
+                library_root,
+                running_subs,
+                sub_id_str.clone(),
+            )
+            .await
+            .is_ok()
+            {
                 cancelled_ids.push(sub_id_str);
             }
         }
-        drop(map);
 
         for sub_id in cancelled_ids {
             let sub_name = names_by_id

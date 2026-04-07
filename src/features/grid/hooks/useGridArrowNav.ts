@@ -1,8 +1,10 @@
 /**
- * useGridArrowNav — arrow key navigation for the image grid.
+ * useGridArrowNav — arrow key + WASD + Home/End/PageUp/PageDown navigation for the image grid.
  *
- * Left/Right = ±1, Up/Down = ±columnCount.
- * Shift+Arrow extends range selection from anchor.
+ * ArrowLeft/A = −1, ArrowRight/D = +1, ArrowUp/W = −columnCount, ArrowDown/S = +columnCount.
+ * Home = first image, End = last image.
+ * PageUp/PageDown = ±visible rows.
+ * Shift+key extends range selection from anchor.
  * Scrolls the target item into view.
  */
 
@@ -11,6 +13,19 @@ import type { CanonicalEntityGridItem } from '../../../shared/types/canonical';
 import type { LayoutResult } from '../layout/types';
 
 const GAP = 16;
+
+/** Map WASD to arrow equivalents so both sets work. */
+const WASD_MAP: Record<string, string> = {
+  w: 'ArrowUp', a: 'ArrowLeft', s: 'ArrowDown', d: 'ArrowRight',
+  W: 'ArrowUp', A: 'ArrowLeft', S: 'ArrowDown', D: 'ArrowRight',
+};
+
+type NavAction = 'left' | 'right' | 'up' | 'down' | 'first' | 'last' | 'pageUp' | 'pageDown';
+
+const KEY_TO_ACTION: Record<string, NavAction> = {
+  ArrowLeft: 'left', ArrowRight: 'right', ArrowUp: 'up', ArrowDown: 'down',
+  Home: 'first', End: 'last', PageUp: 'pageUp', PageDown: 'pageDown',
+};
 
 export function useGridArrowNav(opts: {
   items: CanonicalEntityGridItem[];
@@ -37,8 +52,10 @@ export function useGridArrowNav(opts: {
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
       if (e.metaKey || e.ctrlKey || e.altKey) return;
 
-      const key = e.key;
-      if (key !== 'ArrowLeft' && key !== 'ArrowRight' && key !== 'ArrowUp' && key !== 'ArrowDown') return;
+      // Map WASD to arrow equivalents, then look up action
+      const mappedKey = WASD_MAP[e.key] ?? e.key;
+      const action = KEY_TO_ACTION[mappedKey];
+      if (!action) return;
 
       e.preventDefault();
 
@@ -54,19 +71,26 @@ export function useGridArrowNav(opts: {
       // Find current position
       let current = lastClickedIndexRef.current;
       if (current == null || current < 0 || current >= items.length) {
-        // Fall back to first selected item's index
         for (let i = 0; i < items.length; i++) {
           if (selectedHashes.has(items[i].entity_hash)) { current = i; break; }
         }
         if (current == null) current = 0;
       }
 
+      // Compute visible rows for page up/down
+      const container = containerRef.current;
+      const visibleRows = container ? Math.max(1, Math.floor(container.clientHeight / (snappedSize + GAP))) : 5;
+
       let target: number;
-      switch (key) {
-        case 'ArrowLeft':  target = Math.max(0, current - 1); break;
-        case 'ArrowRight': target = Math.min(items.length - 1, current + 1); break;
-        case 'ArrowUp':    target = Math.max(0, current - columnCount); break;
-        case 'ArrowDown':  target = Math.min(items.length - 1, current + columnCount); break;
+      switch (action) {
+        case 'left':     target = Math.max(0, current - 1); break;
+        case 'right':    target = Math.min(items.length - 1, current + 1); break;
+        case 'up':       target = Math.max(0, current - columnCount); break;
+        case 'down':     target = Math.min(items.length - 1, current + columnCount); break;
+        case 'first':    target = 0; break;
+        case 'last':     target = items.length - 1; break;
+        case 'pageUp':   target = Math.max(0, current - columnCount * visibleRows); break;
+        case 'pageDown': target = Math.min(items.length - 1, current + columnCount * visibleRows); break;
         default: return;
       }
 
@@ -90,7 +114,6 @@ export function useGridArrowNav(opts: {
 
       // Scroll target into view
       const pos = layout.positions[target];
-      const container = containerRef.current;
       if (pos && container) {
         const scrollTop = container.scrollTop;
         const viewportH = container.clientHeight;

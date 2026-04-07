@@ -347,12 +347,12 @@ export function AppShell() {
             <ViewerToolbar />
           ) : (
             <>
-              <KbdTooltip label="Back" shortcut="Mod+[">
+              <KbdTooltip label="Back" shortcut="Alt+ArrowLeft">
                 <button className={`${styles.navBtn} ${!canBack ? styles.navBtnDisabled : ''}`} onClick={canBack ? goBack : undefined}>
                   <IconChevronLeft size={16} stroke={1.5} />
                 </button>
               </KbdTooltip>
-              <KbdTooltip label="Forward" shortcut="Mod+]">
+              <KbdTooltip label="Forward" shortcut="Alt+ArrowRight">
                 <button className={`${styles.navBtn} ${!canForward ? styles.navBtnDisabled : ''}`} onClick={canForward ? goForward : undefined}>
                   <IconChevronRight size={16} stroke={1.5} />
                 </button>

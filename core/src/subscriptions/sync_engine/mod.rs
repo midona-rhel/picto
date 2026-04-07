@@ -61,6 +61,7 @@ pub struct SubscriptionSyncEngine<'a> {
     runner: GalleryDlRunner,
     settings: AppSettings,
     subscription_name: String,
+    progress_mode: String,
     group_name: Option<String>,
     current_query_id: Option<i64>,
     current_query_name: Option<String>,
@@ -275,6 +276,7 @@ impl<'a> SubscriptionSyncEngine<'a> {
             runner,
             settings: settings.clone(),
             subscription_name: String::new(),
+            progress_mode: "subscription".to_string(),
             group_name: None,
             current_query_id: None,
             current_query_name: None,
@@ -298,6 +300,11 @@ impl<'a> SubscriptionSyncEngine<'a> {
 
     pub fn with_name(mut self, name: String) -> Self {
         self.subscription_name = name;
+        self
+    }
+
+    pub fn with_progress_mode(mut self, mode: &str) -> Self {
+        self.progress_mode = mode.to_string();
         self
     }
 

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { KbdTooltip } from '../../../shared/ui/KbdTooltip';
 import { PLAYBACK_RATES } from './videoConstants';
 import styles from './VideoPlayer.module.css';
 
@@ -17,9 +18,11 @@ export function PlaybackRateMenu({ rate, onRateChange }: Props) {
 
   return (
     <div ref={ref} className={styles.rateMenuContainer}>
-      <button className={`${styles.icBtn} ${styles.rateButton}`} onClick={(e) => { e.stopPropagation(); setOpen(p => !p); }} title="Playback speed">
-        {rate === 1 ? '1x' : `${rate}x`}
-      </button>
+      <KbdTooltip label="Playback speed">
+        <button className={`${styles.icBtn} ${styles.rateButton}`} onClick={(e) => { e.stopPropagation(); setOpen(p => !p); }}>
+          {rate === 1 ? '1x' : `${rate}x`}
+        </button>
+      </KbdTooltip>
       {open && (
         <div className={styles.rateMenu}>
           {PLAYBACK_RATES.map(r => (

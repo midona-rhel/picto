@@ -9,22 +9,27 @@ use crate::types::{RunningSubscriptions, SubscriptionGroupInfo, SubscriptionInfo
 
 use super::archive::{clear_subscription_archive_entries_at_root, subscription_query_archive_prefix};
 use super::runtime_db::{
-    add_subscription_entity, create_subscription_query_run, create_subscription_run,
-    finish_subscription_query_run, finish_subscription_run,
-    get_subscription_post_collection, list_retryable_subscription_download_attempts,
-    list_subscription_download_attempts, list_subscription_issues,
-    list_subscription_post_members, list_subscription_query_runs, list_subscription_runs,
+    add_subscription_entity, cancel_pending_subscription_jobs_for_subscription,
+    count_active_subscription_query_jobs, create_subscription_query_run, create_subscription_run,
+    enqueue_subscription_query_job, finalize_subscription_run_status,
+    finish_subscription_query_job, finish_subscription_query_run, finish_subscription_run,
+    lease_subscription_query_job, list_queued_subscription_query_jobs,
+    list_subscription_query_jobs_for_run, get_subscription_post_collection,
+    list_retryable_subscription_download_attempts, list_subscription_download_attempts,
+    list_subscription_issues, list_subscription_post_members, list_subscription_query_runs,
+    list_subscription_runs,
     mark_subscription_download_attempt_retrying, reset_subscription_query_state,
     reset_subscription_state, resolve_subscription_download_attempt, resolve_subscription_issues,
     set_query_completed_initial_run, set_query_resume_state, set_query_terminal_state,
     update_query_progress, upsert_subscription_download_attempt, upsert_subscription_issue,
     upsert_subscription_post_collection, upsert_subscription_post_member,
+    accumulate_subscription_run_counters,
 };
 use super::types::{
     OwnedSubscriptionDownloadAttemptUpsert, OwnedSubscriptionPostMemberUpsert, Subscription,
     SubscriptionDownloadAttemptRecord, SubscriptionDownloadAttemptUpsert, SubscriptionGroup,
     SubscriptionIssueRecord, SubscriptionPostMemberRecord, SubscriptionPostMemberUpsert,
-    SubscriptionQuery, SubscriptionQueryRunRecord, SubscriptionRunRecord,
+    SubscriptionQuery, SubscriptionQueryJob, SubscriptionQueryRunRecord, SubscriptionRunRecord,
 };
 
 #[derive(Debug, Clone)]
@@ -52,6 +57,7 @@ struct CanonicalQueryRow {
     query_id: i64,
     subscription_id: i64,
     site_id: String,
+    query_kind: String,
     query_text: String,
     display_name: Option<String>,
     notes: Option<String>,
@@ -329,6 +335,7 @@ impl<'a> SubscriptionRuntimeService<'a> {
         &self,
         subscription_id: String,
         site_id: String,
+        query_kind: Option<String>,
         query_text: String,
         notes: Option<String>,
     ) -> Result<SubscriptionQueryInfo, String> {
@@ -340,13 +347,17 @@ impl<'a> SubscriptionRuntimeService<'a> {
         }
         let canonical_site_id =
             crate::subscriptions::gallery_dl_runner::canonical_site_id(&site_id).to_string();
+        let resolved_query_kind =
+            crate::subscriptions::source_adapter::resolve_query_kind(&site_id, query_kind.as_deref());
+        crate::subscriptions::source_adapter::validate_query_kind(&site_id, &resolved_query_kind)?;
         let query_id = self.db.with_write(|conn| {
             conn.execute(
-                "INSERT INTO subscription_query (subscription_id, site_id, query_text, display_name, notes)
-                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                "INSERT INTO subscription_query (subscription_id, site_id, query_kind, query_text, display_name, notes)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                 params![
                     subscription_id,
                     canonical_site_id,
+                    resolved_query_kind,
                     query_text.trim(),
                     query_text.trim(),
                     notes
@@ -358,6 +369,7 @@ impl<'a> SubscriptionRuntimeService<'a> {
         Ok(SubscriptionQueryInfo {
             id: query_id.to_string(),
             site_id: canonical_site_id,
+            query_kind: resolved_query_kind,
             query_text: query_text.trim().to_string(),
             display_name: Some(query_text.trim().to_string()),
             notes,
@@ -379,6 +391,7 @@ impl<'a> SubscriptionRuntimeService<'a> {
         &self,
         id: i64,
         site_id: String,
+        query_kind: Option<String>,
         query_text: String,
         display_name: Option<String>,
         notes: Option<String>,
@@ -388,12 +401,15 @@ impl<'a> SubscriptionRuntimeService<'a> {
         }
         let canonical_site_id =
             crate::subscriptions::gallery_dl_runner::canonical_site_id(&site_id).to_string();
+        let resolved_query_kind =
+            crate::subscriptions::source_adapter::resolve_query_kind(&site_id, query_kind.as_deref());
+        crate::subscriptions::source_adapter::validate_query_kind(&site_id, &resolved_query_kind)?;
         self.db.with_write(|conn| {
             conn.execute(
                 "UPDATE subscription_query
-                 SET site_id = ?1, query_text = ?2, display_name = ?3, notes = ?4
-                 WHERE query_id = ?5",
-                params![canonical_site_id, query_text, display_name, notes, id],
+                 SET site_id = ?1, query_kind = ?2, query_text = ?3, display_name = ?4, notes = ?5
+                 WHERE query_id = ?6",
+                params![canonical_site_id, resolved_query_kind, query_text, display_name, notes, id],
             )?;
             Ok(())
         })
@@ -606,6 +622,45 @@ impl<'a> SubscriptionRuntimeService<'a> {
         })
     }
 
+    pub async fn finalize_subscription_run_status(
+        &self,
+        run_id: i64,
+        status: &str,
+        failure_kind: Option<String>,
+        error_message: Option<String>,
+    ) -> Result<(), String> {
+        let status = status.to_string();
+        self.db.with_write(move |conn| {
+            finalize_subscription_run_status(
+                conn,
+                run_id,
+                &status,
+                failure_kind.as_deref(),
+                error_message.as_deref(),
+            )
+        })
+    }
+
+    pub async fn accumulate_subscription_run_counters(
+        &self,
+        run_id: i64,
+        files_downloaded_delta: i64,
+        files_skipped_delta: i64,
+        metadata_validated_delta: i64,
+        metadata_invalid_delta: i64,
+    ) -> Result<(), String> {
+        self.db.with_write(move |conn| {
+            accumulate_subscription_run_counters(
+                conn,
+                run_id,
+                files_downloaded_delta,
+                files_skipped_delta,
+                metadata_validated_delta,
+                metadata_invalid_delta,
+            )
+        })
+    }
+
     pub async fn create_subscription_query_run(
         &self,
         run_id: Option<i64>,
@@ -669,6 +724,94 @@ impl<'a> SubscriptionRuntimeService<'a> {
                 resume_strategy.as_deref(),
             )
         })
+    }
+
+    pub async fn enqueue_subscription_query_job(
+        &self,
+        run_id: Option<i64>,
+        subscription_id: i64,
+        query_id: i64,
+        site_id: &str,
+        job_kind: &str,
+        requested_by: &str,
+        post_id: Option<&str>,
+    ) -> Result<i64, String> {
+        let site_id = site_id.to_string();
+        let job_kind = job_kind.to_string();
+        let requested_by = requested_by.to_string();
+        let post_id = post_id.map(str::to_string);
+        self.db.with_write(move |conn| {
+            enqueue_subscription_query_job(
+                conn,
+                run_id,
+                subscription_id,
+                query_id,
+                &site_id,
+                &job_kind,
+                &requested_by,
+                post_id.as_deref(),
+            )
+        })
+    }
+
+    pub async fn list_queued_subscription_query_jobs(
+        &self,
+        limit: i64,
+    ) -> Result<Vec<SubscriptionQueryJob>, String> {
+        self.db
+            .with_read(move |conn| list_queued_subscription_query_jobs(conn, limit))
+    }
+
+    pub async fn list_subscription_query_jobs_for_run(
+        &self,
+        run_id: i64,
+    ) -> Result<Vec<SubscriptionQueryJob>, String> {
+        self.db
+            .with_read(move |conn| list_subscription_query_jobs_for_run(conn, run_id))
+    }
+
+    pub async fn lease_subscription_query_job(
+        &self,
+        job_id: i64,
+    ) -> Result<Option<SubscriptionQueryJob>, String> {
+        self.db
+            .with_write(move |conn| lease_subscription_query_job(conn, job_id))
+    }
+
+    pub async fn finish_subscription_query_job(
+        &self,
+        job_id: i64,
+        status: &str,
+        failure_kind: Option<String>,
+        error_message: Option<String>,
+    ) -> Result<(), String> {
+        let status = status.to_string();
+        self.db.with_write(move |conn| {
+            finish_subscription_query_job(
+                conn,
+                job_id,
+                &status,
+                failure_kind.as_deref(),
+                error_message.as_deref(),
+            )
+        })
+    }
+
+    pub async fn cancel_pending_subscription_jobs_for_subscription(
+        &self,
+        subscription_id: i64,
+    ) -> Result<usize, String> {
+        self.db.with_write(move |conn| {
+            cancel_pending_subscription_jobs_for_subscription(conn, subscription_id)
+        })
+    }
+
+    pub async fn count_active_subscription_query_jobs(
+        &self,
+        subscription_id: i64,
+    ) -> Result<i64, String> {
+        self.db
+            .with_read(move |conn| count_active_subscription_query_jobs(conn, subscription_id))
     }
 
     pub async fn set_query_completed_initial_run(
@@ -978,6 +1121,7 @@ fn query_info_from_row(query: CanonicalQueryRow) -> SubscriptionQueryInfo {
         id: query.query_id.to_string(),
         site_id: crate::subscriptions::gallery_dl_runner::canonical_site_id(&query.site_id)
             .to_string(),
+        query_kind: query.query_kind,
         query_text: query.query_text.clone(),
         display_name: query.display_name.or(Some(query.query_text)),
         notes: query.notes,
@@ -1001,6 +1145,7 @@ fn query_from_row(query: CanonicalQueryRow) -> SubscriptionQuery {
         subscription_id: query.subscription_id,
         site_id: crate::subscriptions::gallery_dl_runner::canonical_site_id(&query.site_id)
             .to_string(),
+        query_kind: query.query_kind,
         query_text: query.query_text.clone(),
         display_name: query.display_name.or(Some(query.query_text)),
         notes: query.notes,
@@ -1177,6 +1322,7 @@ fn list_all_queries_canonical(conn: &Connection) -> rusqlite::Result<Vec<Canonic
              query_id,
              subscription_id,
              site_id,
+             query_kind,
              query_text,
              display_name,
              notes,
@@ -1207,6 +1353,7 @@ fn list_subscription_queries_canonical(
              query_id,
              subscription_id,
              site_id,
+             query_kind,
              query_text,
              display_name,
              notes,
@@ -1238,6 +1385,7 @@ fn get_subscription_query_canonical(
              query_id,
              subscription_id,
              site_id,
+             query_kind,
              query_text,
              display_name,
              notes,
@@ -1265,20 +1413,21 @@ fn map_query_row_canonical(row: &rusqlite::Row) -> rusqlite::Result<CanonicalQue
         query_id: row.get(0)?,
         subscription_id: row.get(1)?,
         site_id: row.get(2)?,
-        query_text: row.get(3)?,
-        display_name: row.get(4)?,
-        notes: row.get(5)?,
-        paused: row.get::<_, i64>(6)? != 0,
-        last_check_time: row.get(7)?,
-        files_found: row.get(8)?,
-        posts_found: row.get(9)?,
-        completed_initial_run: row.get::<_, i64>(10)? != 0,
-        resume_cursor: row.get(11)?,
-        resume_strategy: row.get(12)?,
-        last_success_at: row.get(13)?,
-        last_failure_at: row.get(14)?,
-        last_failure_kind: row.get(15)?,
-        last_failure_message: row.get(16)?,
+        query_kind: row.get(3)?,
+        query_text: row.get(4)?,
+        display_name: row.get(5)?,
+        notes: row.get(6)?,
+        paused: row.get::<_, i64>(7)? != 0,
+        last_check_time: row.get(8)?,
+        files_found: row.get(9)?,
+        posts_found: row.get(10)?,
+        completed_initial_run: row.get::<_, i64>(11)? != 0,
+        resume_cursor: row.get(12)?,
+        resume_strategy: row.get(13)?,
+        last_success_at: row.get(14)?,
+        last_failure_at: row.get(15)?,
+        last_failure_kind: row.get(16)?,
+        last_failure_message: row.get(17)?,
     })
 }
 

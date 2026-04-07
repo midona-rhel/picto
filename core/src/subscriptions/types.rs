@@ -19,6 +19,7 @@ pub struct SubscriptionQuery {
     pub query_id: i64,
     pub subscription_id: i64,
     pub site_id: String,
+    pub query_kind: String,
     pub query_text: String,
     pub display_name: Option<String>,
     pub notes: Option<String>,
@@ -72,6 +73,25 @@ pub struct SubscriptionQueryRunRecord {
     pub posts_processed: i64,
     pub files_downloaded: i64,
     pub files_skipped: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SubscriptionQueryJob {
+    pub job_id: i64,
+    pub run_id: Option<i64>,
+    pub subscription_id: i64,
+    pub query_id: i64,
+    pub site_id: String,
+    pub status: String,
+    pub job_kind: String,
+    pub requested_by: String,
+    pub post_id: Option<String>,
+    pub queued_at: String,
+    pub started_at: Option<String>,
+    pub finished_at: Option<String>,
+    pub failure_kind: Option<String>,
+    pub error_message: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

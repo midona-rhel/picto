@@ -451,6 +451,7 @@ pub struct SubscriptionInfo {
 pub struct SubscriptionQueryInfo {
     pub id: String,
     pub site_id: String,
+    pub query_kind: String,
     pub query_text: String,
     pub display_name: Option<String>,
     pub notes: Option<String>,

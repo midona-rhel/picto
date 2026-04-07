@@ -701,6 +701,7 @@ mod tests {
             .add_subscription_query(
                 subscription.id.clone(),
                 site_id.to_string(),
+                None,
                 "query".to_string(),
                 None,
             )

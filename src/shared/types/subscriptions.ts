@@ -15,6 +15,7 @@ export interface SubscriptionSiteInfo {
 export interface SubscriptionQueryInfo {
   id: string;
   site_id: string;
+  query_kind: string;
   query_text: string;
   display_name: string | null;
   notes: string | null;

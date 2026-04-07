@@ -2,8 +2,8 @@ use rusqlite::{params, Connection, OptionalExtension};
 
 use super::types::{
     SubscriptionDownloadAttemptRecord, SubscriptionDownloadAttemptUpsert, SubscriptionIssueRecord,
-    SubscriptionPostMemberRecord, SubscriptionPostMemberUpsert, SubscriptionQueryRunRecord,
-    SubscriptionRunRecord,
+    SubscriptionPostMemberRecord, SubscriptionPostMemberUpsert, SubscriptionQueryJob,
+    SubscriptionQueryRunRecord, SubscriptionRunRecord,
 };
 
 fn map_subscription_run_row(row: &rusqlite::Row) -> rusqlite::Result<SubscriptionRunRecord> {
@@ -38,6 +38,25 @@ fn map_subscription_query_run_row(
         posts_processed: row.get(9)?,
         files_downloaded: row.get(10)?,
         files_skipped: row.get(11)?,
+    })
+}
+
+fn map_subscription_query_job_row(row: &rusqlite::Row) -> rusqlite::Result<SubscriptionQueryJob> {
+    Ok(SubscriptionQueryJob {
+        job_id: row.get(0)?,
+        run_id: row.get(1)?,
+        subscription_id: row.get(2)?,
+        query_id: row.get(3)?,
+        site_id: row.get(4)?,
+        status: row.get(5)?,
+        job_kind: row.get(6)?,
+        requested_by: row.get(7)?,
+        post_id: row.get(8)?,
+        queued_at: row.get(9)?,
+        started_at: row.get(10)?,
+        finished_at: row.get(11)?,
+        failure_kind: row.get(12)?,
+        error_message: row.get(13)?,
     })
 }
 
@@ -148,6 +167,52 @@ pub fn finish_subscription_run(
     Ok(())
 }
 
+pub fn finalize_subscription_run_status(
+    conn: &Connection,
+    run_id: i64,
+    status: &str,
+    failure_kind: Option<&str>,
+    error_message: Option<&str>,
+) -> rusqlite::Result<()> {
+    let now = chrono::Utc::now().to_rfc3339();
+    conn.execute(
+        "UPDATE subscription_run
+         SET finished_at = ?1,
+             status = ?2,
+             failure_kind = ?3,
+             error_message = ?4
+         WHERE run_id = ?5",
+        params![now, status, failure_kind, error_message, run_id],
+    )?;
+    Ok(())
+}
+
+pub fn accumulate_subscription_run_counters(
+    conn: &Connection,
+    run_id: i64,
+    files_downloaded_delta: i64,
+    files_skipped_delta: i64,
+    metadata_validated_delta: i64,
+    metadata_invalid_delta: i64,
+) -> rusqlite::Result<()> {
+    conn.execute(
+        "UPDATE subscription_run
+         SET files_downloaded = files_downloaded + ?1,
+             files_skipped = files_skipped + ?2,
+             metadata_validated = metadata_validated + ?3,
+             metadata_invalid = metadata_invalid + ?4
+         WHERE run_id = ?5",
+        params![
+            files_downloaded_delta,
+            files_skipped_delta,
+            metadata_validated_delta,
+            metadata_invalid_delta,
+            run_id
+        ],
+    )?;
+    Ok(())
+}
+
 pub fn list_subscription_runs(
     conn: &Connection,
     subscription_id: i64,
@@ -232,6 +297,160 @@ pub fn list_subscription_query_runs(
     )?;
     let rows = stmt.query_map(params![query_id, limit], map_subscription_query_run_row)?;
     rows.collect()
+}
+
+pub fn enqueue_subscription_query_job(
+    conn: &Connection,
+    run_id: Option<i64>,
+    subscription_id: i64,
+    query_id: i64,
+    site_id: &str,
+    job_kind: &str,
+    requested_by: &str,
+    post_id: Option<&str>,
+) -> rusqlite::Result<i64> {
+    let existing: Option<i64> = conn
+        .query_row(
+            "SELECT job_id
+             FROM subscription_query_job
+             WHERE subscription_id = ?1
+               AND query_id = ?2
+               AND job_kind = ?3
+               AND status IN ('queued', 'running')
+               AND ((post_id IS NULL AND ?4 IS NULL) OR post_id = ?4)
+             ORDER BY job_id DESC
+             LIMIT 1",
+            params![subscription_id, query_id, job_kind, post_id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    if let Some(job_id) = existing {
+        return Ok(job_id);
+    }
+
+    let now = chrono::Utc::now().to_rfc3339();
+    conn.execute(
+        "INSERT INTO subscription_query_job (
+             run_id, subscription_id, query_id, site_id, status, job_kind, requested_by, post_id, queued_at
+         ) VALUES (?1, ?2, ?3, ?4, 'queued', ?5, ?6, ?7, ?8)",
+        params![
+            run_id,
+            subscription_id,
+            query_id,
+            site_id,
+            job_kind,
+            requested_by,
+            post_id,
+            now
+        ],
+    )?;
+    Ok(conn.last_insert_rowid())
+}
+
+pub fn list_queued_subscription_query_jobs(
+    conn: &Connection,
+    limit: i64,
+) -> rusqlite::Result<Vec<SubscriptionQueryJob>> {
+    let mut stmt = conn.prepare_cached(
+        "SELECT job_id, run_id, subscription_id, query_id, site_id, status, job_kind,
+                requested_by, post_id, queued_at, started_at, finished_at, failure_kind, error_message
+         FROM subscription_query_job
+         WHERE status = 'queued'
+         ORDER BY queued_at ASC, job_id ASC
+         LIMIT ?1",
+    )?;
+    let rows = stmt.query_map([limit], map_subscription_query_job_row)?;
+    rows.collect()
+}
+
+pub fn list_subscription_query_jobs_for_run(
+    conn: &Connection,
+    run_id: i64,
+) -> rusqlite::Result<Vec<SubscriptionQueryJob>> {
+    let mut stmt = conn.prepare_cached(
+        "SELECT job_id, run_id, subscription_id, query_id, site_id, status, job_kind,
+                requested_by, post_id, queued_at, started_at, finished_at, failure_kind, error_message
+         FROM subscription_query_job
+         WHERE run_id = ?1
+         ORDER BY job_id ASC",
+    )?;
+    let rows = stmt.query_map([run_id], map_subscription_query_job_row)?;
+    rows.collect()
+}
+
+pub fn lease_subscription_query_job(
+    conn: &Connection,
+    job_id: i64,
+) -> rusqlite::Result<Option<SubscriptionQueryJob>> {
+    let now = chrono::Utc::now().to_rfc3339();
+    let changed = conn.execute(
+        "UPDATE subscription_query_job
+         SET status = 'running', started_at = COALESCE(started_at, ?1), failure_kind = NULL, error_message = NULL
+         WHERE job_id = ?2 AND status = 'queued'",
+        params![now, job_id],
+    )?;
+    if changed == 0 {
+        return Ok(None);
+    }
+    conn.query_row(
+        "SELECT job_id, run_id, subscription_id, query_id, site_id, status, job_kind,
+                requested_by, post_id, queued_at, started_at, finished_at, failure_kind, error_message
+         FROM subscription_query_job
+         WHERE job_id = ?1",
+        [job_id],
+        map_subscription_query_job_row,
+    )
+    .optional()
+}
+
+pub fn finish_subscription_query_job(
+    conn: &Connection,
+    job_id: i64,
+    status: &str,
+    failure_kind: Option<&str>,
+    error_message: Option<&str>,
+) -> rusqlite::Result<()> {
+    let now = chrono::Utc::now().to_rfc3339();
+    conn.execute(
+        "UPDATE subscription_query_job
+         SET status = ?1,
+             finished_at = ?2,
+             failure_kind = ?3,
+             error_message = ?4
+         WHERE job_id = ?5",
+        params![status, now, failure_kind, error_message, job_id],
+    )?;
+    Ok(())
+}
+
+pub fn cancel_pending_subscription_jobs_for_subscription(
+    conn: &Connection,
+    subscription_id: i64,
+) -> rusqlite::Result<usize> {
+    let now = chrono::Utc::now().to_rfc3339();
+    conn.execute(
+        "UPDATE subscription_query_job
+         SET status = 'cancelled',
+             finished_at = ?1,
+             error_message = COALESCE(error_message, 'Cancelled before execution')
+         WHERE subscription_id = ?2
+           AND status = 'queued'",
+        params![now, subscription_id],
+    )
+}
+
+pub fn count_active_subscription_query_jobs(
+    conn: &Connection,
+    subscription_id: i64,
+) -> rusqlite::Result<i64> {
+    conn.query_row(
+        "SELECT COUNT(*)
+         FROM subscription_query_job
+         WHERE subscription_id = ?1
+           AND status IN ('queued', 'running')",
+        [subscription_id],
+        |row| row.get(0),
+    )
 }
 
 pub fn update_query_progress(

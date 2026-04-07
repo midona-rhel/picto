@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { IconVolume, IconVolume2, IconVolumeOff } from '@tabler/icons-react';
+import { KbdTooltip } from '../../../shared/ui/KbdTooltip';
 import styles from './VideoPlayer.module.css';
 
 const clamp = (v: number, min: number, max: number) => Math.min(max, Math.max(min, v));
@@ -44,9 +45,11 @@ export function VolumePanel({ volume, muted, onVolumeChange, onMuteToggle }: Pro
           </div>
         </div>
       )}
-      <button className={styles.icBtn} onClick={(e) => { e.stopPropagation(); onMuteToggle(); }} title={muted ? 'Unmute' : 'Mute'}>
-        <Icon size={16} />
-      </button>
+      <KbdTooltip label={muted ? 'Unmute' : 'Mute'} shortcut="M">
+        <button className={styles.icBtn} onClick={(e) => { e.stopPropagation(); onMuteToggle(); }}>
+          <Icon size={16} />
+        </button>
+      </KbdTooltip>
     </div>
   );
 }

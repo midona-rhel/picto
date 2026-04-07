@@ -564,6 +564,12 @@ export function GridScreen() {
   const gridScopeRef = useRef(gridScope);
   gridScopeRef.current = gridScope;
 
+  // Refs for setters used in the keydown handler (avoid re-registering on every render)
+  const setTagSelectOpenRef = useRef(setTagSelectOpen);
+  setTagSelectOpenRef.current = setTagSelectOpen;
+  const setFolderPickerOpenRef = useRef(setFolderPickerOpen);
+  setFolderPickerOpenRef.current = setFolderPickerOpen;
+
   useEffect(() => {
     const defs = {
       selectAll:       getShortcut('edit.selectAll')!,
@@ -577,6 +583,8 @@ export function GridScreen() {
       openDefault:     getShortcut('file.openDefaultApp')!,
       revealInFolder:  getShortcut('file.revealInFolder')!,
       openNewWindow:   getShortcut('file.openNewWindow')!,
+      addTag:          getShortcut('organize.addTag')!,
+      addToFolders:    getShortcut('organize.addFolder')!,
     };
 
     function handleKeyDown(e: KeyboardEvent) {
@@ -646,6 +654,27 @@ export function GridScreen() {
 
       if (matchesShortcutDef(e, defs.addToFolder) && count > 0) {
         e.preventDefault(); void addSelectionToFolder(); return;
+      }
+
+      // T — open tag select, F — open folder picker
+      if (matchesShortcutDef(e, defs.addTag) && count > 0) {
+        e.preventDefault(); setTagSelectOpenRef.current(true); return;
+      }
+      if (matchesShortcutDef(e, defs.addToFolders) && count > 0) {
+        e.preventDefault(); setFolderPickerOpenRef.current(true); return;
+      }
+
+      // Rating keys 0-5 (plain digits, no modifiers)
+      if (!e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey && count > 0) {
+        const digit = parseInt(e.key, 10);
+        if (digit >= 0 && digit <= 5) {
+          e.preventDefault();
+          void entityMutations.setTargetRating(
+            { kind: 'entity_hashes', entity_hashes: [...hashes] },
+            digit,
+          );
+          return;
+        }
       }
     }
     window.addEventListener('keydown', handleKeyDown);

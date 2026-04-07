@@ -19,6 +19,7 @@ import {
 } from '@tabler/icons-react';
 import { mediaThumbnailUrl, mediaFileUrl } from '../../shared/lib/mediaUrl';
 import { getShortcut, matchesShortcutDef } from '../../shared/lib/shortcuts';
+import { KbdTooltip } from '../../shared/ui/KbdTooltip';
 import { useImageZoom, type ImageSize, type ZoomState } from './hooks/useImageZoom';
 import { useViewerMediaPipeline } from './hooks/useViewerMediaPipeline';
 import { useNavigatorRenderer } from './hooks/useNavigatorRenderer';
@@ -322,12 +323,11 @@ export function DetailWindow({ hash }: DetailWindowProps) {
       }
 
       // Always on top
-      if (e.key === 't' || e.key === 'T') {
-        if (!e.metaKey && !e.ctrlKey && !e.altKey) {
-          e.preventDefault();
-          toggleAlwaysOnTop();
-          return;
-        }
+      const aotDef = getShortcut('view.alwaysOnTop');
+      if (aotDef && matchesShortcutDef(e, aotDef)) {
+        e.preventDefault();
+        toggleAlwaysOnTop();
+        return;
       }
 
       // Copy path
@@ -373,30 +373,36 @@ export function DetailWindow({ hash }: DetailWindowProps) {
             {!isVideo && pipeline.thumbLoaded && (
               <>
                 <span className={styles.zoomRatio}>{zoomPercent}%</span>
-                <button className={styles.icBtn} onClick={() => zoom.fitActual()} title="Actual size (Cmd+0)">
-                  <IconArrowsMaximize size={16} />
-                </button>
-                <button className={styles.icBtn} onClick={() => zoom.fitToWindow()} title="Fit to window">
-                  <IconAspectRatio size={16} />
-                </button>
+                <KbdTooltip label="Actual size" shortcut="Mod+0">
+                  <button className={styles.icBtn} onClick={() => zoom.fitActual()}>
+                    <IconArrowsMaximize size={16} />
+                  </button>
+                </KbdTooltip>
+                <KbdTooltip label="Fit to window" shortcut="`">
+                  <button className={styles.icBtn} onClick={() => zoom.fitToWindow()}>
+                    <IconAspectRatio size={16} />
+                  </button>
+                </KbdTooltip>
               </>
             )}
 
-            <button
-              className={`${styles.icBtn} ${alwaysOnTop ? styles.icBtnActive : ''}`}
-              onClick={toggleAlwaysOnTop}
-              title={alwaysOnTop ? 'Unpin (T)' : 'Always on top (T)'}
-            >
-              {alwaysOnTop ? <IconPinFilled size={16} /> : <IconPin size={16} />}
-            </button>
+            <KbdTooltip label={alwaysOnTop ? 'Unpin' : 'Always on top'} shortcut="Shift+T">
+              <button
+                className={`${styles.icBtn} ${alwaysOnTop ? styles.icBtnActive : ''}`}
+                onClick={toggleAlwaysOnTop}
+              >
+                {alwaysOnTop ? <IconPinFilled size={16} /> : <IconPin size={16} />}
+              </button>
+            </KbdTooltip>
 
-            <button
-              className={styles.icBtn}
-              onClick={() => void windowController.closeCurrentWindow()}
-              title="Close (Escape)"
-            >
-              <IconX size={16} />
-            </button>
+            <KbdTooltip label="Close" shortcut="Escape">
+              <button
+                className={styles.icBtn}
+                onClick={() => void windowController.closeCurrentWindow()}
+              >
+                <IconX size={16} />
+              </button>
+            </KbdTooltip>
           </div>
         </div>
       )}

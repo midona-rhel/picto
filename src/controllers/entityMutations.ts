@@ -14,6 +14,7 @@ import {
 } from '../platform/entityApi';
 import { removeEntitiesFromFolder, updateFolderMembership } from '../platform/folderApi';
 import { loadInspectorData } from './inspectorController';
+import { recordRecentItems } from '../shared/hooks/useRecentItems';
 import type { EntityTarget, SelectionSummary } from '../shared/types/canonical';
 
 function singleTarget(entityHash: string): EntityTarget {
@@ -45,6 +46,7 @@ export async function setTargetNotes(target: EntityTarget, notes: string): Promi
 export async function addTargetTags(target: EntityTarget, tags: string[]): Promise<void> {
   if (tags.length === 0) return;
   await applyEntityTags(target, 'add', tags);
+  recordRecentItems('picto-recent-tags', tags);
   maybeReloadSingleEntity(target);
 }
 
@@ -69,6 +71,7 @@ export async function updateTargetFolderMembership(
   operation: 'add' | 'remove',
 ): Promise<void> {
   await updateFolderMembership(target, folderId, operation);
+  if (operation === 'add') recordRecentItems('picto-recent-folders', [String(folderId)]);
   maybeReloadSingleEntity(target);
 }
 
