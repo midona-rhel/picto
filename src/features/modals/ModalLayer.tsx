@@ -18,6 +18,8 @@ import { SmartFolderModal } from './SmartFolderModal';
 import { FolderWatchModal } from './FolderWatchModal';
 import { ExportModal } from './ExportModal';
 import { CreateGroupModal } from './CreateGroupModal';
+import { TagSelectModal } from './TagSelectModal';
+import { FolderPickerModal } from './FolderPickerModal';
 import { smartFoldersController } from '../../controllers/smartFoldersController';
 import { foldersController } from '../../controllers/foldersController';
 import { subscriptionsController } from '../../controllers/subscriptionsController';
@@ -145,6 +147,9 @@ export function ModalLayer() {
           </div>
         </div>
       </ConfirmModal>
+
+      <TagSelectModal />
+      <FolderPickerModal />
     </>
   );
 }

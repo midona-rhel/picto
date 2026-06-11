@@ -18,7 +18,7 @@ use crate::ingest::{
     SingleIngestDisposition, SingleIngestOutcome, SingleIngestRequest,
     SubscriptionCollectionMember,
 };
-use crate::subscriptions::gallery_dl_runner::ParsedMetadata;
+use crate::subscriptions::source_adapter::ParsedMetadata;
 use crate::subscriptions::runtime_service::SubscriptionRuntimeService;
 use crate::tags::logging::{preview_tag_strings, summarize_tag_strings};
 

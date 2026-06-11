@@ -1,6 +1,6 @@
 //! Subscription import and metadata policy helpers.
 
-use crate::subscriptions::gallery_dl_runner::ParsedMetadata;
+use crate::subscriptions::source_adapter::ParsedMetadata;
 
 pub fn normalized_title(metadata: &ParsedMetadata) -> Option<String> {
     metadata

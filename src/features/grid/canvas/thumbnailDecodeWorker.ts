@@ -24,21 +24,27 @@ const inFlight = new Map<string, AbortController>();
 const decoded = new Map<string, ImageBitmap>();          // decoded, waiting to reveal
 const revealed = new Set<string>();                      // already transferred to main
 const failCounts = new Map<string, number>();
-const revealQueue: string[] = [];
+let revealQueue: string[] = [];
 let drainTimer: ReturnType<typeof setTimeout> | null = null;
 
-const MAX_CONCURRENT = 4;
-const STAGGER_MS = 30;
+const MAX_CONCURRENT = 6;
+const STAGGER_MS = 16;
 const MAX_FAILURES = 2;
 
 // ── Plan ────────────────────────────────────────────────────────
 
 function handlePlan(entries: PlanEntry[]): void {
-  const next = new Map(entries.map(e => [e.hash, e.url]));
+  // Build next plan as a set for O(1) lookups
+  const nextHashes = new Set<string>();
+  const nextUrls = new Map<string, string>();
+  for (let i = 0; i < entries.length; i++) {
+    nextHashes.add(entries[i].hash);
+    nextUrls.set(entries[i].hash, entries[i].url);
+  }
 
   // Cancel loads no longer in plan
   for (const [hash, controller] of inFlight) {
-    if (!next.has(hash)) {
+    if (!nextHashes.has(hash)) {
       controller.abort();
       inFlight.delete(hash);
     }
@@ -46,28 +52,28 @@ function handlePlan(entries: PlanEntry[]): void {
 
   // Drop decoded bitmaps no longer in plan
   for (const [hash, bitmap] of decoded) {
-    if (!next.has(hash)) {
+    if (!nextHashes.has(hash)) {
       bitmap.close();
       decoded.delete(hash);
     }
   }
 
-  // Prune reveal queue
-  for (let i = revealQueue.length - 1; i >= 0; i--) {
-    if (!next.has(revealQueue[i])) revealQueue.splice(i, 1);
+  // Prune reveal queue — filter instead of splice-in-loop
+  if (revealQueue.length > 0) {
+    revealQueue = revealQueue.filter(h => nextHashes.has(h));
   }
 
   // Forget revealed hashes that left the plan (so they re-decode on re-entry)
   // Also re-fetch if the URL changed (quality upgrade/downgrade)
   for (const hash of revealed) {
-    if (!next.has(hash)) { revealed.delete(hash); continue; }
+    if (!nextHashes.has(hash)) { revealed.delete(hash); continue; }
     const oldUrl = currentPlan.get(hash);
-    const newUrl = next.get(hash);
+    const newUrl = nextUrls.get(hash);
     if (oldUrl && newUrl && oldUrl !== newUrl) revealed.delete(hash);
   }
 
   currentPlan.clear();
-  for (const [h, u] of next) currentPlan.set(h, u);
+  for (const [h, u] of nextUrls) currentPlan.set(h, u);
 
   pumpLoads();
 }

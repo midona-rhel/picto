@@ -104,7 +104,6 @@ pub async fn open_library(library_root: PathBuf) -> Result<Arc<AppState>, String
         &library_root,
         &blob_store,
         &rate_limiter,
-        &settings,
         &running_subscriptions,
         &sub_terminal_statuses,
         folder_watch_rx,

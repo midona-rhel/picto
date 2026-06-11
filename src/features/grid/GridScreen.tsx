@@ -60,7 +60,7 @@ import { buildTileContextMenu, buildEmptyContextMenu } from './gridContextMenu';
 import { saveScrollPosition, getScrollPosition, pushHistory } from '../../state/navigationHistory';
 import { viewerSessionAtom, quickLookSessionAtom, createViewerSession, navigateViewerSession } from '../../state/viewer';
 import { tagSelectOpenAtom, folderPickerOpenAtom, aiTaggerOpenAtom, batchRenameOpenAtom } from '../../state/portals';
-import { confirmModalAtom, folderImportModalAtom, exportModalAtom } from '../../state/modals';
+import { confirmModalAtom, folderImportModalAtom, exportModalAtom, tagSelectModalAtom, folderPickerModalAtom } from '../../state/modals';
 import { MediaView } from '../viewer/MediaView';
 import { SubscriptionsScreen } from '../subscriptions/SubscriptionsScreen';
 import { QuickLook } from '../viewer/QuickLook';
@@ -153,6 +153,8 @@ export function GridScreen() {
   const setFolderPickerOpen = useSetAtom(folderPickerOpenAtom);
   const setAiTaggerOpen = useSetAtom(aiTaggerOpenAtom);
   const setBatchRenameOpen = useSetAtom(batchRenameOpenAtom);
+  const setTagSelectModal = useSetAtom(tagSelectModalAtom);
+  const setFolderPickerModal = useSetAtom(folderPickerModalAtom);
   const gridContainerRef = useRef<HTMLDivElement | null>(null);
   const gridLayoutRef = useRef<LayoutResult | null>(null);
   const [renamingIndex, setRenamingIndex] = useState<number | null>(null);
@@ -484,8 +486,8 @@ export function GridScreen() {
 
   const addSelectionToFolder = useCallback(() => {
     if (!selectionTarget) return;
-    setFolderPickerOpen(true);
-  }, [selectionTarget, setFolderPickerOpen]);
+    setFolderPickerModal({ open: true });
+  }, [selectionTarget, setFolderPickerModal]);
 
   const removeSelectionFromCurrentFolder = useCallback(async () => {
     if (!selectionTarget || gridScope.kind !== 'folder' || gridScope.id == null) return;
@@ -569,6 +571,10 @@ export function GridScreen() {
   setTagSelectOpenRef.current = setTagSelectOpen;
   const setFolderPickerOpenRef = useRef(setFolderPickerOpen);
   setFolderPickerOpenRef.current = setFolderPickerOpen;
+  const setTagSelectModalRef = useRef(setTagSelectModal);
+  setTagSelectModalRef.current = setTagSelectModal;
+  const setFolderPickerModalRef = useRef(setFolderPickerModal);
+  setFolderPickerModalRef.current = setFolderPickerModal;
 
   useEffect(() => {
     const defs = {
@@ -656,12 +662,12 @@ export function GridScreen() {
         e.preventDefault(); void addSelectionToFolder(); return;
       }
 
-      // T — open tag select, F — open folder picker
+      // T — open tag select modal, F — open folder picker modal
       if (matchesShortcutDef(e, defs.addTag) && count > 0) {
-        e.preventDefault(); setTagSelectOpenRef.current(true); return;
+        e.preventDefault(); setTagSelectModalRef.current({ open: true }); return;
       }
       if (matchesShortcutDef(e, defs.addToFolders) && count > 0) {
-        e.preventDefault(); setFolderPickerOpenRef.current(true); return;
+        e.preventDefault(); setFolderPickerModalRef.current({ open: true }); return;
       }
 
       // Rating keys 0-5 (plain digits, no modifiers)
@@ -988,7 +994,7 @@ export function GridScreen() {
               void entityMutations.addTargetTags(selectionTarget!, tags);
             },
             hasClipboardTags: !!((window as any).__pictoClipboardTags as string[] | undefined)?.length,
-            onAddToFolder: () => { setFolderPickerOpen(true); },
+            onAddToFolder: () => { setFolderPickerModal({ open: true }); },
             onNewFolderWithSelection: selectionTarget ? () => {
               void (async () => {
                 const name = 'New Folder';
@@ -1045,7 +1051,7 @@ export function GridScreen() {
               });
             },
             onRemoveFromFolder: () => { void removeSelectionFromCurrentFolder(); },
-            onOpenTagSelect: () => { setTagSelectOpen(true); },
+            onOpenTagSelect: () => { setTagSelectModal({ open: true }); },
             onOpenAiTagger: () => { setAiTaggerOpen(true); },
             onOpenBatchRename: () => { setBatchRenameOpen(true); },
             onCreateCollection: () => {

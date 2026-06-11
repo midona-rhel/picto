@@ -25,11 +25,14 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::process::Stdio;
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
 use crate::subscriptions::credential_service::GalleryDlAuthConfig;
+use crate::subscriptions::source_adapter::{
+    DownloadedItem, FailedDownloadedItem, ParsedMetadata,
+};
 use crate::tags::logging::summarize_tag_pairs;
 
 use self::config::build_config;
@@ -84,42 +87,6 @@ pub struct RunSummary {
     pub discovered_items: usize,
     pub discovered_post_ids: Vec<String>,
     pub skipped_archive_items: usize,
-}
-
-/// A single file downloaded by gallery-dl, paired with its parsed metadata.
-pub struct DownloadedItem {
-    pub file_path: PathBuf,
-    pub metadata: ParsedMetadata,
-}
-
-#[derive(Debug, Clone)]
-pub struct FailedDownloadedItem {
-    pub metadata: ParsedMetadata,
-    pub error_message: String,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub struct ParsedMetadata {
-    /// Tags as (namespace, subtag) pairs.
-    pub tags: Vec<(String, String)>,
-    pub description: Option<String>,
-    pub source_url: Option<String>,
-    pub source_urls: Vec<String>,
-    pub media_url: Option<String>,
-    pub rating: Option<String>,
-    pub title: Option<String>,
-    pub post_id: Option<String>,
-    pub created_at: Option<String>,
-    /// Gallery-dl extractor category (e.g. "danbooru", "pixiv").
-    pub category: Option<String>,
-    /// 0-based page index within a multi-image post (gallery-dl `num` field).
-    pub page_num: Option<u32>,
-    /// Total pages in the post (gallery-dl `count` field). >1 means multi-image.
-    pub page_count: Option<u32>,
-    pub canonical_post_url: Option<String>,
-    pub item_key: Option<String>,
-    #[serde(default)]
-    pub raw_metadata: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Deserialize)]

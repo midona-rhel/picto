@@ -1,5 +1,5 @@
 use super::adapters::adapter_for_json;
-use super::ParsedMetadata;
+use crate::subscriptions::source_adapter::ParsedMetadata;
 use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
 
 fn normalize_created_at(raw: &str) -> Option<String> {

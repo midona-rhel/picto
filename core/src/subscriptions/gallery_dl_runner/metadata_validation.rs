@@ -1,7 +1,8 @@
 use serde::{Deserialize, Serialize};
 
 use super::sites::canonical_site_id;
-use super::{extract_creator_identifier, parse_metadata, ParsedMetadata};
+use super::{extract_creator_identifier, parse_metadata};
+use crate::subscriptions::source_adapter::ParsedMetadata;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SiteMetadataSchema {

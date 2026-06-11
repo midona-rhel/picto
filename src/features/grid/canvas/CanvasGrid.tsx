@@ -132,6 +132,11 @@ export function CanvasGrid({
   const overlayCanvasRef = useRef<HTMLCanvasElement>(null);
   const pipelineRef = useRef<ThumbnailPipeline | null>(null);
 
+  // Reusable per-frame buffers — avoids allocating new arrays/sets every draw call.
+  const activeTilesRef = useRef<number[]>([]);
+  const visibleHashesRef = useRef(new Set<string>());
+  const planTilesRef = useRef<Array<{ hash: string; mime: string; w: number; h: number }>>([]);
+
   // Cache theme CSS values — avoids getComputedStyle() on every draw frame
   const cachedThemeRef = useRef({
     placeholderBg: 'rgba(255,255,255,0.04)',
@@ -384,11 +389,16 @@ export function CanvasGrid({
     const ACTIVATION_MARGIN = 100;
     const zoneTop = scrollTop - ACTIVATION_MARGIN;
     const zoneBottom = scrollTop + vp.viewportHeight + ACTIVATION_MARGIN;
-    const activeTiles: number[] = [];
+
+    // Reuse arrays/sets across frames to avoid per-frame GC pressure.
+    const activeTiles = activeTilesRef.current;
+    activeTiles.length = 0;
+    const visibleHashes = visibleHashesRef.current;
+    visibleHashes.clear();
+    const planTiles = planTilesRef.current;
+    let planCount = 0;
 
     // Full scan — masonry positions are NOT Y-sorted (tiles placed in shortest column).
-    const visibleHashes = new Set<string>();
-    const planTiles: Array<{ hash: string; mime: string; w: number; h: number }> = [];
     for (let i = 0; i < layout.positions.length; i++) {
       const pos = layout.positions[i];
       if (!pos) continue;
@@ -401,11 +411,19 @@ export function CanvasGrid({
       if (!item) continue;
 
       visibleHashes.add(item.thumbnailHash);
-      planTiles.push({ hash: item.thumbnailHash, mime: item.mime, w: pos.w, h: pos.h });
+      if (planTiles[planCount]) {
+        planTiles[planCount].hash = item.thumbnailHash;
+        planTiles[planCount].mime = item.mime;
+        planTiles[planCount].w = pos.w;
+        planTiles[planCount].h = pos.h;
+      } else {
+        planTiles[planCount] = { hash: item.thumbnailHash, mime: item.mime, w: pos.w, h: pos.h };
+      }
+      planCount++;
     }
+    planTiles.length = planCount;
 
-    // Send plan to worker — it handles loading, caching, staggered reveals.
-    // Tiles exceeding the quality threshold get full-res URLs automatically.
+    // Send plan to worker — deduplicates internally, only posts when visible set changes.
     pipeline.updatePlan(planTiles);
 
     const drawCtx: DrawContext = {

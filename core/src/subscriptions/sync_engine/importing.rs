@@ -2,7 +2,7 @@ use std::path::Path;
 
 use tracing::info;
 
-use crate::subscriptions::gallery_dl_runner::ParsedMetadata;
+use crate::subscriptions::source_adapter::ParsedMetadata;
 
 use super::SubscriptionSyncEngine;
 

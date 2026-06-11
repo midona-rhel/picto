@@ -79,3 +79,9 @@ export interface FolderImportModalState {
 export const folderImportModalAtom = atom<FolderImportModalState>({
   open: false, path: '', preserveStructure: true, targetFolderId: null,
 });
+
+// ── Tag select modal (wider modal version, opened from context menu / keyboard) ──
+export const tagSelectModalAtom = atom({ open: false });
+
+// ── Folder picker modal (wider modal version, opened from context menu / keyboard) ──
+export const folderPickerModalAtom = atom({ open: false });

@@ -41,6 +41,12 @@ export class ThumbnailPipeline {
   /** Timestamp until which animation is suppressed (handles async thumbnail arrival after transition). */
   private suppressUntil = 0;
 
+  // ── Plan deduplication ──
+  // Only send plan to worker when the visible hash set actually changes.
+  private lastPlanFingerprint = '';
+  // Reusable array for building plan entries — avoids per-frame allocation.
+  private planBuffer: Array<{ hash: string; url: string }> = [];
+
   constructor(onDirty: () => void = () => {}) {
     this.onDirty = onDirty;
     setThumbnailRevealCallback((hash, bitmap) => this.handleReveal(hash, bitmap));
@@ -59,16 +65,48 @@ export class ThumbnailPipeline {
   /**
    * Send the current set of visible tiles to the worker.
    * Call once per frame with all hashes in the activation zone.
-   * Tiles whose rendered size exceeds the threshold get the full original URL.
+   * Deduplicates — only posts to the worker when the set actually changes.
    */
   updatePlan(tiles: Array<{ hash: string; mime: string; w: number; h: number }>): void {
     if (this.destroyed) return;
-    const entries = tiles.map(t => {
+
+    // Build a fingerprint from the visible hashes to detect changes.
+    // We use a sorted join of hashes so order differences from different
+    // scroll positions with the same tile set don't cause false positives.
+    // For large sets, comparing hash count + first/last is a fast approximation.
+    let fingerprint: string;
+    if (tiles.length <= 60) {
+      // Small set — exact fingerprint (join of hashes)
+      fingerprint = '';
+      for (let i = 0; i < tiles.length; i++) {
+        fingerprint += tiles[i].hash;
+        fingerprint += tiles[i].w > FULL_QUALITY_THRESHOLD_PX || tiles[i].h > FULL_QUALITY_THRESHOLD_PX ? 'F' : 'T';
+      }
+    } else {
+      // Large set — approximate fingerprint (count + first + last + middle)
+      const mid = tiles.length >>> 1;
+      fingerprint = `${tiles.length}:${tiles[0].hash}:${tiles[mid].hash}:${tiles[tiles.length - 1].hash}`;
+    }
+
+    if (fingerprint === this.lastPlanFingerprint) return;
+    this.lastPlanFingerprint = fingerprint;
+
+    // Build entries, reusing buffer
+    const buf = this.planBuffer;
+    buf.length = tiles.length;
+    for (let i = 0; i < tiles.length; i++) {
+      const t = tiles[i];
       const isImage = t.mime.startsWith('image/') && t.mime !== 'image/gif';
       const needsFull = isImage && (t.w > FULL_QUALITY_THRESHOLD_PX || t.h > FULL_QUALITY_THRESHOLD_PX);
-      return { hash: t.hash, url: needsFull ? mediaFileUrl(t.hash, t.mime) : mediaThumbnailUrl(t.hash) };
-    });
-    sendThumbnailPlan(entries);
+      const url = needsFull ? mediaFileUrl(t.hash, t.mime) : mediaThumbnailUrl(t.hash);
+      if (buf[i]) {
+        buf[i].hash = t.hash;
+        buf[i].url = url;
+      } else {
+        buf[i] = { hash: t.hash, url };
+      }
+    }
+    sendThumbnailPlan(buf);
   }
 
   /** Get a cached entry for drawing. Returns null if no bitmap received yet. */
@@ -95,6 +133,7 @@ export class ThumbnailPipeline {
   /** Tear down — scope change or unmount. */
   clear(): void {
     this.destroyed = true;
+    this.lastPlanFingerprint = '';
     clearThumbnailWorker();
     for (const entry of this.cache.values()) entry.thumb?.close();
     this.cache.clear();

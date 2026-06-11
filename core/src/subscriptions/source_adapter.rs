@@ -1,6 +1,15 @@
+mod gallery_dl;
+mod types;
+
 use serde::Serialize;
 
 use crate::subscriptions::gallery_dl_runner::{canonical_site_id, site_by_id, SiteEntry};
+
+pub use gallery_dl::{GalleryDlSourceAdapter, SubscriptionSourceAdapter};
+pub use types::{
+    AssetMetadata, DownloadedItem, FailedDownloadedItem, ParsedMetadata, PostMetadata,
+    SourceRunEvent,
+};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct SiteQueryKind {
@@ -101,5 +110,34 @@ fn query_kinds_for_site(site: &SiteEntry) -> Vec<SiteQueryKind> {
             id: "search",
             label: "Search",
         }],
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{describe_site, infer_query_kind, resolve_query_kind, validate_query_kind};
+
+    #[test]
+    fn resolve_query_kind_uses_site_default_when_missing() {
+        assert_eq!(resolve_query_kind("pixivuser", None), "user");
+        assert_eq!(resolve_query_kind("patreon", Some("   ")), "creator");
+        assert_eq!(resolve_query_kind("gelbooru", None), "search");
+    }
+
+    #[test]
+    fn validate_query_kind_matches_site_descriptor() {
+        let pixiv = describe_site("pixiv").expect("pixiv descriptor");
+        assert!(pixiv.query_kinds.iter().any(|kind| kind.id == "search"));
+        assert!(pixiv.query_kinds.iter().any(|kind| kind.id == "user"));
+        assert!(validate_query_kind("pixiv", "search").is_ok());
+        assert!(validate_query_kind("pixiv", "user").is_ok());
+        assert!(validate_query_kind("pixiv", "creator").is_err());
+    }
+
+    #[test]
+    fn infer_query_kind_keeps_existing_site_defaults() {
+        assert_eq!(infer_query_kind("furaffinity"), "user");
+        assert_eq!(infer_query_kind("fanbox"), "creator");
+        assert_eq!(infer_query_kind("tumblr"), "blog");
     }
 }

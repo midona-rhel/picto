@@ -15,7 +15,7 @@ use crate::db::LibraryDatabase;
 use crate::import::pipeline::{ImportOptions, ImportPipeline};
 use crate::media_analysis;
 use crate::media_capabilities::capabilities_for_stored_media;
-use crate::subscriptions::gallery_dl_runner::ParsedMetadata;
+use crate::subscriptions::source_adapter::ParsedMetadata;
 use crate::tags::normalize;
 use crate::types::{ImportBatchResult, ImportResult};
 
@@ -1311,7 +1311,7 @@ mod tests {
     use crate::db::LibraryDatabase;
     use crate::duplicates::phash::DEFAULT_DISTANCE_THRESHOLD;
     use crate::media_processing::compute_phash_base64;
-    use crate::subscriptions::gallery_dl_runner::ParsedMetadata;
+    use crate::subscriptions::source_adapter::ParsedMetadata;
     use img_hash::ImageHash;
     use image::{DynamicImage, ImageBuffer, ImageFormat, Rgba};
     use std::fs;

@@ -96,8 +96,10 @@ export function TagSelectPanel() {
     if (!cursor || loadingMore || tags.length === 0) return;
     setLoadingMore(true);
     const lastTag = tags[tags.length - 1];
-    const cursorStr = `${lastTag.file_count}:${lastTag.tag_id}`;
     const ns = sidebarMode === 'namespace' ? activeNamespace : null;
+    const cursorStr = ns != null
+      ? `${lastTag.subtag}\0${lastTag.tag_id}`
+      : `${nsOrder((lastTag.namespace ?? '').toLowerCase())}\0${lastTag.subtag}\0${lastTag.tag_id}`;
     void tagsController.getPaginated({
       limit: PAGE_SIZE,
       search: query.trim() || null,

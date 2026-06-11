@@ -1,0 +1,138 @@
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
+
+use tracing::{info, warn};
+
+use crate::db::LibraryDatabase;
+use crate::subscriptions::import_policy::preferred_import_name;
+use crate::subscriptions::source_adapter::ParsedMetadata;
+use crate::tags::logging::{preview_tag_strings, summarize_tag_strings};
+
+pub(super) fn metadata_item_key(metadata: &ParsedMetadata) -> Option<String> {
+    metadata.item_key.clone().or_else(|| {
+        let category = metadata.category.as_deref()?;
+        let target = metadata
+            .post_id
+            .as_deref()
+            .or(metadata.canonical_post_url.as_deref())
+            .or(metadata.media_url.as_deref())?;
+        Some(format!(
+            "{category}:{target}:{}",
+            metadata.page_num.unwrap_or(0)
+        ))
+    })
+}
+
+pub(super) fn build_subscription_ingest_request(
+    subscription_id: i64,
+    file_path: &Path,
+    metadata: &ParsedMetadata,
+    skip_thumbnail: bool,
+    initial_status: i64,
+) -> crate::ingest::SingleIngestRequest {
+    crate::ingest::SingleIngestRequest {
+        source_kind: crate::ingest::IngestSourceKind::Subscription,
+        path: file_path.to_path_buf(),
+        tag_strings: crate::ingest::normalize_subscription_tags(metadata),
+        source_urls: crate::ingest::dedupe_urls(metadata.source_urls.clone()),
+        name: preferred_import_name(metadata),
+        notes: crate::ingest::metadata_notes_text(metadata),
+        created_at: metadata.created_at.clone(),
+        initial_status,
+        skip_thumbnail,
+        tag_provenance_mask: crate::db::types::TAG_PROVENANCE_UNKNOWN,
+        subscription_id: Some(subscription_id),
+    }
+}
+
+pub(super) fn log_subscription_ingest_request_shape(
+    query_id: i64,
+    subscription_id: i64,
+    metadata: &ParsedMetadata,
+    tag_strings: &[String],
+) {
+    let summary = summarize_tag_strings(tag_strings);
+    info!(
+        query_id,
+        subscription_id,
+        post_id = metadata.post_id.as_deref().unwrap_or("?"),
+        category = metadata.category.as_deref().unwrap_or("?"),
+        item_key = metadata.item_key.as_deref().unwrap_or("?"),
+        request_tag_count = summary.total,
+        request_creator_tag_count = summary.creator,
+        request_character_tag_count = summary.character,
+        request_series_tag_count = summary.series,
+        request_general_tag_count = summary.general,
+        request_meta_tag_count = summary.meta,
+        request_other_namespaced_tag_count = summary.other_namespaced,
+        request_tag_preview = ?preview_tag_strings(tag_strings, 5),
+        "subscription ingest request built"
+    );
+}
+
+pub(super) fn detect_gallery_dl_root(path: &Path) -> Option<PathBuf> {
+    path.ancestors().find_map(|ancestor| {
+        let name = ancestor.file_name()?.to_str()?;
+        if name.starts_with("picto_gdl_") {
+            Some(ancestor.to_path_buf())
+        } else {
+            None
+        }
+    })
+}
+
+pub(super) async fn maybe_cleanup_subscription_temp_root(
+    db: &LibraryDatabase,
+    temp_root: &Path,
+) {
+    match db.has_retained_ingest_sources_for_root(temp_root).await {
+        Ok(true) => {}
+        Ok(false) => crate::subscriptions::gallery_dl_runner::cleanup_temp_dir(temp_root).await,
+        Err(error) => {
+            warn!(path = %temp_root.display(), error = %error, "Failed to inspect temp-root ingest ownership")
+        }
+    }
+}
+
+pub(super) fn compute_incremental_cursor(
+    resume_strategy: Option<&str>,
+    range_start: u32,
+    posts_this_run: usize,
+    all_post_ids: &HashSet<String>,
+) -> Option<String> {
+    if posts_this_run == 0 {
+        return None;
+    }
+    match resume_strategy {
+        Some("range_offset") => Some((range_start as usize + posts_this_run - 1).to_string()),
+        Some("tag_id_lt") => {
+            let mut min_id: Option<u64> = None;
+            for pid in all_post_ids {
+                if let Ok(n) = pid.parse::<u64>() {
+                    min_id = Some(min_id.map_or(n, |cur| cur.min(n)));
+                }
+            }
+            min_id.map(|id| id.to_string())
+        }
+        _ => None,
+    }
+}
+
+pub(super) fn should_continue_initial_pagination(
+    completed_initial_run: bool,
+    completed_cleanly: bool,
+    post_limit: Option<u32>,
+    fetched_items: usize,
+    next_resume_cursor: Option<&str>,
+) -> bool {
+    if completed_initial_run || !completed_cleanly {
+        return false;
+    }
+    let Some(limit) = post_limit else {
+        return false;
+    };
+    if limit == 0 || fetched_items < limit as usize {
+        return false;
+    }
+    next_resume_cursor.is_some_and(|cursor| !cursor.trim().is_empty())
+}

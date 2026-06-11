@@ -2,7 +2,8 @@ use std::path::Path;
 
 use tracing::{debug, warn};
 
-use super::{parse_metadata, ParsedMetadata};
+use super::parse_metadata;
+use crate::subscriptions::source_adapter::ParsedMetadata;
 
 /// Parse the sidecar JSON for a single file path (streaming import).
 /// Gallery-dl writes `{filename}.{ext}.json` — e.g., `image.jpg` → `image.jpg.json`.

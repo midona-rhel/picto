@@ -83,7 +83,7 @@ pub fn apply_resume_to_query(
 }
 
 pub fn derive_resume_cursor(
-    items: &[crate::subscriptions::gallery_dl_runner::DownloadedItem],
+    items: &[crate::subscriptions::source_adapter::DownloadedItem],
     strategy: &str,
     range_end: Option<u32>,
 ) -> Option<String> {
@@ -174,16 +174,16 @@ mod tests {
     #[test]
     fn derive_resume_cursor_uses_min_numeric_post_id() {
         let items = vec![
-            crate::subscriptions::gallery_dl_runner::DownloadedItem {
+            crate::subscriptions::source_adapter::DownloadedItem {
                 file_path: std::path::PathBuf::from("/tmp/a"),
-                metadata: crate::subscriptions::gallery_dl_runner::ParsedMetadata {
+                metadata: crate::subscriptions::source_adapter::ParsedMetadata {
                     post_id: Some("100".to_string()),
                     ..Default::default()
                 },
             },
-            crate::subscriptions::gallery_dl_runner::DownloadedItem {
+            crate::subscriptions::source_adapter::DownloadedItem {
                 file_path: std::path::PathBuf::from("/tmp/b"),
-                metadata: crate::subscriptions::gallery_dl_runner::ParsedMetadata {
+                metadata: crate::subscriptions::source_adapter::ParsedMetadata {
                     post_id: Some("93".to_string()),
                     ..Default::default()
                 },

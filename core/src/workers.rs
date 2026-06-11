@@ -27,7 +27,6 @@ pub async fn start_workers(
     library_root: &std::path::Path,
     blob_store: &Arc<BlobStore>,
     rate_limiter: &RateLimiter,
-    settings: &crate::settings::store::SettingsStore,
     running_subscriptions: &RunningSubscriptions,
     sub_terminal_statuses: &SubTerminalStatuses,
     folder_watch_rx: tokio::sync::mpsc::UnboundedReceiver<FolderWatchCommand>,
@@ -41,7 +40,6 @@ pub async fn start_workers(
         let sched_root = library_root.to_path_buf();
         let sched_blob = blob_store.clone();
         let sched_rl = rate_limiter.clone();
-        let sched_settings = settings.clone();
         let sched_running = running_subscriptions.clone();
         let sched_terminal = sub_terminal_statuses.clone();
         let sched_cancel = cancel.clone();
@@ -71,19 +69,9 @@ pub async fn start_workers(
                         &sched_rl,
                         &sched_running,
                         &sched_terminal,
-                        &sched_settings,
+                        &state.settings,
                     )
                     .await;
-                } else {
-                    crate::scheduler::check_scheduled_groups(
-                        &sched_db,
-                        &sched_root,
-                        &sched_blob,
-                        &sched_rl,
-                        &sched_running,
-                        &sched_terminal,
-                        &sched_settings,
-                    ).await;
                 }
             }
         });

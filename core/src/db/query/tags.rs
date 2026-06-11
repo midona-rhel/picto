@@ -143,6 +143,22 @@ pub fn get_tags_paginated(
     cursor: Option<&str>,
     limit: i64,
 ) -> rusqlite::Result<Vec<TagRecord>> {
+    // Namespace sort priority — matches the Hydrus-compatible ordering used throughout the app
+    const NS_ORDER_EXPR: &str = "CASE LOWER(t.namespace)
+        WHEN 'creator'   THEN 0
+        WHEN 'studio'    THEN 1
+        WHEN 'series'    THEN 2
+        WHEN 'character'  THEN 3
+        WHEN 'person'    THEN 4
+        WHEN 'species'   THEN 5
+        WHEN 'photoset'  THEN 6
+        WHEN 'rating'    THEN 7
+        WHEN 'meta'      THEN 8
+        WHEN 'system'    THEN 9
+        WHEN 'general'   THEN 10
+        WHEN ''          THEN 10
+        ELSE 11 END";
+
     if let Some(query) = search {
         if !query.is_empty() {
             let fts_query = format!("{}*", query.replace('"', ""));
@@ -153,20 +169,23 @@ pub fn get_tags_paginated(
                      JOIN tag t ON t.tag_id = fts.rowid
                      WHERE tag_fts MATCH ?1 AND t.namespace = ?2
                      ORDER BY t.subtag ASC, t.tag_id ASC
-                     LIMIT ?3",
+                     LIMIT ?3"
+                        .to_string(),
                     true,
                 ),
                 None => (
-                    "SELECT t.tag_id, t.namespace, t.subtag, t.file_count, t.site_mask
-                     FROM tag_fts fts
-                     JOIN tag t ON t.tag_id = fts.rowid
-                     WHERE tag_fts MATCH ?1
-                     ORDER BY t.subtag ASC, t.tag_id ASC
-                     LIMIT ?2",
+                    format!(
+                        "SELECT t.tag_id, t.namespace, t.subtag, t.file_count, t.site_mask
+                         FROM tag_fts fts
+                         JOIN tag t ON t.tag_id = fts.rowid
+                         WHERE tag_fts MATCH ?1
+                         ORDER BY {NS_ORDER_EXPR} ASC, t.subtag ASC, t.tag_id ASC
+                         LIMIT ?2"
+                    ),
                     false,
                 ),
             };
-            let mut stmt = conn.prepare(sql)?;
+            let mut stmt = conn.prepare(&sql)?;
             return if use_ns {
                 stmt.query_map(
                     params![fts_query, namespace.unwrap(), limit],
@@ -192,54 +211,108 @@ pub fn get_tags_paginated(
         (None, None)
     };
 
-    let has_cursor = cursor_subtag.is_some();
+    // Namespace sort priority for direct table queries (no alias prefix)
+    const NS_ORDER_BARE: &str = "CASE LOWER(namespace)
+        WHEN 'creator'   THEN 0
+        WHEN 'studio'    THEN 1
+        WHEN 'series'    THEN 2
+        WHEN 'character'  THEN 3
+        WHEN 'person'    THEN 4
+        WHEN 'species'   THEN 5
+        WHEN 'photoset'  THEN 6
+        WHEN 'rating'    THEN 7
+        WHEN 'meta'      THEN 8
+        WHEN 'system'    THEN 9
+        WHEN 'general'   THEN 10
+        WHEN ''          THEN 10
+        ELSE 11 END";
+
     let has_namespace = namespace.is_some();
 
-    let sql = match (has_namespace, has_cursor) {
-        (false, false) => {
-            "SELECT tag_id, namespace, subtag, file_count, site_mask FROM tag
-             ORDER BY subtag ASC, tag_id ASC LIMIT ?1"
+    // When a specific namespace is selected, no namespace ordering needed — just subtag ASC.
+    // When showing all, sort by namespace priority, then subtag, then tag_id.
+    // Cursor-based pagination uses (ns_order, subtag, tag_id) tuple comparison.
+    if has_namespace {
+        // Single-namespace view — simple subtag sort, cursor on (subtag, tag_id)
+        let has_cursor = cursor_subtag.is_some();
+        let sql = match has_cursor {
+            false => format!(
+                "SELECT tag_id, namespace, subtag, file_count, site_mask FROM tag
+                 WHERE namespace = ?1
+                 ORDER BY subtag ASC, tag_id ASC LIMIT ?2"
+            ),
+            true => format!(
+                "SELECT tag_id, namespace, subtag, file_count, site_mask FROM tag
+                 WHERE namespace = ?1 AND (subtag, tag_id) > (?2, ?3)
+                 ORDER BY subtag ASC, tag_id ASC LIMIT ?4"
+            ),
+        };
+        let mut stmt = conn.prepare(&sql)?;
+        return match has_cursor {
+            false => stmt
+                .query_map(params![namespace.unwrap(), limit], map_tag_record)?
+                .collect(),
+            true => stmt
+                .query_map(
+                    params![
+                        namespace.unwrap(),
+                        cursor_subtag.as_deref().unwrap(),
+                        cursor_id.unwrap(),
+                        limit
+                    ],
+                    map_tag_record,
+                )?
+                .collect(),
+        };
+    }
+
+    // All namespaces — sort by namespace priority, then subtag, then tag_id.
+    // Cursor is (ns_order, subtag, tag_id) for stable pagination.
+    let (cursor_ns_order, cursor_subtag_val, cursor_tid) = if let Some(c) = cursor {
+        // Cursor format: "ns_order\0subtag\0tag_id"
+        let parts: Vec<&str> = c.splitn(3, '\0').collect();
+        if parts.len() == 3 {
+            let ns_ord: i64 = parts[0].parse().unwrap_or(0);
+            let sub = parts[1].to_string();
+            let tid: i64 = parts[2].parse().unwrap_or(0);
+            (Some(ns_ord), Some(sub), Some(tid))
+        } else {
+            (None, None, None)
         }
-        (false, true) => {
+    } else {
+        (None, None, None)
+    };
+    let has_cursor = cursor_ns_order.is_some();
+
+    let sql = if has_cursor {
+        format!(
             "SELECT tag_id, namespace, subtag, file_count, site_mask FROM tag
-             WHERE (subtag, tag_id) > (?1, ?2)
-             ORDER BY subtag ASC, tag_id ASC LIMIT ?3"
-        }
-        (true, false) => {
+             WHERE ({ns_order}, subtag, tag_id) > (?1, ?2, ?3)
+             ORDER BY {ns_order} ASC, subtag ASC, tag_id ASC LIMIT ?4",
+            ns_order = NS_ORDER_BARE
+        )
+    } else {
+        format!(
             "SELECT tag_id, namespace, subtag, file_count, site_mask FROM tag
-             WHERE namespace = ?1
-             ORDER BY subtag ASC, tag_id ASC LIMIT ?2"
-        }
-        (true, true) => {
-            "SELECT tag_id, namespace, subtag, file_count, site_mask FROM tag
-             WHERE namespace = ?1 AND (subtag, tag_id) > (?2, ?3)
-             ORDER BY subtag ASC, tag_id ASC LIMIT ?4"
-        }
+             ORDER BY {ns_order} ASC, subtag ASC, tag_id ASC LIMIT ?1",
+            ns_order = NS_ORDER_BARE
+        )
     };
 
-    let mut stmt = conn.prepare(sql)?;
-    match (has_namespace, has_cursor) {
-        (false, false) => stmt.query_map(params![limit], map_tag_record)?.collect(),
-        (false, true) => stmt
-            .query_map(
-                params![cursor_subtag.as_deref().unwrap(), cursor_id.unwrap(), limit],
-                map_tag_record,
-            )?
-            .collect(),
-        (true, false) => stmt
-            .query_map(params![namespace.unwrap(), limit], map_tag_record)?
-            .collect(),
-        (true, true) => stmt
-            .query_map(
-                params![
-                    namespace.unwrap(),
-                    cursor_subtag.as_deref().unwrap(),
-                    cursor_id.unwrap(),
-                    limit
-                ],
-                map_tag_record,
-            )?
-            .collect(),
+    let mut stmt = conn.prepare(&sql)?;
+    if has_cursor {
+        stmt.query_map(
+            params![
+                cursor_ns_order.unwrap(),
+                cursor_subtag_val.as_deref().unwrap(),
+                cursor_tid.unwrap(),
+                limit
+            ],
+            map_tag_record,
+        )?
+        .collect()
+    } else {
+        stmt.query_map(params![limit], map_tag_record)?.collect()
     }
 }
 
