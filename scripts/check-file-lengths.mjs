@@ -37,7 +37,7 @@ const EXCEPTION_BUDGETS = {
   'src/features/grid/imageAtlas.ts': { limit: 900, phase: 'P1', reason: 'legacy hotspot' },
   'src/features/tags/components/TagSelectPanel.tsx': { limit: 900, phase: 'P1', reason: 'legacy hotspot' },
   'src/features/grid/ImageGrid.tsx': { limit: 2400, phase: 'P1', reason: 'legacy hotspot' },
-  'src/features/grid/CanvasGrid.tsx': { limit: 2100, phase: 'P1', reason: 'legacy hotspot' },
+  'src/features/grid/canvas/CanvasGrid.tsx': { limit: 2100, phase: 'P1', reason: 'legacy hotspot' },
   'src/features/grid/VirtualGrid.tsx': { limit: 1200, phase: 'P1', reason: 'legacy hotspot' },
   'electron/main.mjs': { limit: 1600, phase: 'P1', reason: 'legacy hotspot' },
 };

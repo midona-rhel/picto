@@ -29,6 +29,7 @@ import {
   gridSoftTransitionActionAtom,
 } from '../state/grid';
 import { clearSelectionAtom } from '../state/selection';
+import { sortedMergeGridItems } from './gridItemMerge';
 
 const store = getDefaultStore();
 
@@ -59,57 +60,6 @@ function scopeToKey(scope: BaseScope): string {
 function currentQuery(limit: number): EntityViewQuery {
   const q = store.get(currentGridQueryAtom);
   return { ...q, page: { limit } };
-}
-
-/** Build a comparator for grid items based on the current sort field/direction. */
-function gridItemComparator(field: SortField, dir: SortDirection): (a: CanonicalEntityGridItem, b: CanonicalEntityGridItem) => number {
-  const sign = dir === 'asc' ? 1 : -1;
-  return (a, b) => {
-    let av: string | number | null;
-    let bv: string | number | null;
-    switch (field) {
-      case 'date_added': av = a.date_added; bv = b.date_added; break;
-      case 'date_created': av = a.date_created; bv = b.date_created; break;
-      case 'date_modified': av = a.date_modified; bv = b.date_modified; break;
-      case 'name': av = a.name; bv = b.name; break;
-      case 'rating': av = a.rating; bv = b.rating; break;
-      case 'duration': av = a.duration_ms; bv = b.duration_ms; break;
-      default: return 0; // size_bytes not on grid item — can't sort
-    }
-    if (av == null && bv == null) return 0;
-    if (av == null) return sign;
-    if (bv == null) return -sign;
-    if (av < bv) return -sign;
-    if (av > bv) return sign;
-    return 0;
-  };
-}
-
-/** Merge new items into an already-sorted array at their correct positions. */
-function sortedMerge(
-  existing: CanonicalEntityGridItem[],
-  newItems: CanonicalEntityGridItem[],
-  field: SortField,
-  dir: SortDirection,
-): CanonicalEntityGridItem[] {
-  if (field === 'size_bytes') {
-    // size_bytes not available on grid item — append at end
-    return [...existing, ...newItems];
-  }
-  const cmp = gridItemComparator(field, dir);
-  const merged = [...existing];
-  for (const item of newItems) {
-    // Binary search for insertion point
-    let lo = 0;
-    let hi = merged.length;
-    while (lo < hi) {
-      const mid = (lo + hi) >>> 1;
-      if (cmp(merged[mid], item) <= 0) lo = mid + 1;
-      else hi = mid;
-    }
-    merged.splice(lo, 0, item);
-  }
-  return merged;
 }
 
 function uniqueEntityGridItems(items: CanonicalEntityGridItem[]): CanonicalEntityGridItem[] {
@@ -317,7 +267,7 @@ export const gridController = {
       const sortField = store.get(gridSortFieldAtom);
       const sortDir = store.get(gridSortDirectionAtom);
       const merged = uniqueEntityGridItems(
-        sortedMerge(store.get(gridItemsAtom), newItems, sortField, sortDir),
+        sortedMergeGridItems(store.get(gridItemsAtom), newItems, sortField, sortDir),
       );
 
       store.set(gridItemsAtom, merged);

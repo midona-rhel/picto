@@ -20,6 +20,13 @@ import {
 } from './thumbnailDecodeClient';
 import { mediaFileUrl } from '../../../shared/lib/mediaUrl';
 import type { ThumbnailPipelineEntry } from './thumbnailPipelineTypes';
+import {
+  computePlanFingerprint,
+  sortPlanTilesByViewportDistance,
+  type PlanTile,
+} from './thumbnailPlan';
+
+export type { PlanTile } from './thumbnailPlan';
 
 export const THUMBNAIL_PIPELINE_REVEAL_MS = 250;
 export type { ThumbnailPipelineEntry } from './thumbnailPipelineTypes';
@@ -43,7 +50,8 @@ export class ThumbnailPipeline {
 
   // ── Plan deduplication ──
   // Only send plan to worker when the visible hash set actually changes.
-  private lastPlanFingerprint = '';
+  // -1 = never computed; computePlanFingerprint always returns >= 0.
+  private lastPlanFingerprint = -1;
   // Reusable array for building plan entries — avoids per-frame allocation.
   private planBuffer: Array<{ hash: string; url: string }> = [];
 
@@ -67,29 +75,22 @@ export class ThumbnailPipeline {
    * Call once per frame with all hashes in the activation zone.
    * Deduplicates — only posts to the worker when the set actually changes.
    */
-  updatePlan(tiles: Array<{ hash: string; mime: string; w: number; h: number }>): void {
+  updatePlan(tiles: PlanTile[], viewportCenterY: number): void {
     if (this.destroyed) return;
 
-    // Build a fingerprint from the visible hashes to detect changes.
-    // We use a sorted join of hashes so order differences from different
-    // scroll positions with the same tile set don't cause false positives.
-    // For large sets, comparing hash count + first/last is a fast approximation.
-    let fingerprint: string;
-    if (tiles.length <= 60) {
-      // Small set — exact fingerprint (join of hashes)
-      fingerprint = '';
-      for (let i = 0; i < tiles.length; i++) {
-        fingerprint += tiles[i].hash;
-        fingerprint += tiles[i].w > FULL_QUALITY_THRESHOLD_PX || tiles[i].h > FULL_QUALITY_THRESHOLD_PX ? 'F' : 'T';
-      }
-    } else {
-      // Large set — approximate fingerprint (count + first + last + middle)
-      const mid = tiles.length >>> 1;
-      fingerprint = `${tiles.length}:${tiles[0].hash}:${tiles[mid].hash}:${tiles[tiles.length - 1].hash}`;
-    }
-
+    // Fingerprint over the incoming layout order — deterministic per tile
+    // set, unlike the viewport-distance order below which shifts with every
+    // scroll pixel and would defeat deduplication.
+    const fingerprint = computePlanFingerprint(tiles, FULL_QUALITY_THRESHOLD_PX);
     if (fingerprint === this.lastPlanFingerprint) return;
     this.lastPlanFingerprint = fingerprint;
+
+    // Plan-entry order is the worker's fetch priority — load tiles nearest
+    // the viewport center first. In-place sort of the caller's reusable
+    // buffer is safe: drawBase rewrites every slot next frame. Already
+    // in-flight fetches are not cancelled on reprioritization — cancelling
+    // would thrash on scroll direction reversals.
+    sortPlanTilesByViewportDistance(tiles, viewportCenterY);
 
     // Build entries, reusing buffer
     const buf = this.planBuffer;
@@ -133,7 +134,7 @@ export class ThumbnailPipeline {
   /** Tear down — scope change or unmount. */
   clear(): void {
     this.destroyed = true;
-    this.lastPlanFingerprint = '';
+    this.lastPlanFingerprint = -1;
     clearThumbnailWorker();
     for (const entry of this.cache.values()) entry.thumb?.close();
     this.cache.clear();
