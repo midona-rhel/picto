@@ -1,5 +1,16 @@
 # Picto Project Instructions (Current)
 
+## UI Work — Visual Verification Is Mandatory
+
+Any change that affects rendered UI MUST be verified by looking at the running app, not just by compiling. The dev app exposes CDP on port 9222 (dev mode only).
+
+1. Run the dev stack (`npm run dev:electron`) if not already running.
+2. After each UI change (Vite hot-reloads automatically), capture and LOOK at a screenshot:
+   - Preferred: the `electron-mcp` MCP tools (screenshot, click, eval) when available.
+   - Always available: `node scripts/dev-cdp.mjs shot /tmp/picto.png` then Read the PNG, and `node scripts/dev-cdp.mjs eval "<js>"` to navigate/click/inspect.
+3. Critique the screenshot like a designer before declaring done: visual hierarchy (does the page have a title-weight anchor?), spacing rhythm, alignment, dead space, hover affordances, and consistency with the rest of the app (compare against the main grid/sidebar). Iterate until it genuinely looks good — "compiles and renders" is not the bar.
+4. Check at least one non-default theme and a narrow window width for layout breaks.
+
 ## Runtime Architecture
 
 Picto is an Electron desktop app with:

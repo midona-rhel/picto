@@ -43,6 +43,19 @@ pub struct GalleryDlAuthConfig {
     pub fragment: Value,
 }
 
+/// Outcome of the pre-run credential gate.
+#[derive(Debug, Clone, PartialEq)]
+pub enum CredentialPreflight {
+    /// Run can proceed (credential present and not known-bad, or not needed).
+    Ready,
+    /// Auth improves results but isn't mandatory — run with a warning.
+    MissingOptional,
+    /// Site is unusable without auth and none is stored — block the run.
+    MissingRequired,
+    /// A stored credential is known expired/unauthorized — block the run.
+    Blocked { status: String },
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct ResolvedRunCredential {
     pub canonical_site_category: String,
@@ -224,13 +237,64 @@ impl<'a, B: CredentialStoreBackend> SubscriptionCredentialService<'a, B> {
         Ok(canonical_site_category)
     }
 
-    pub async fn resolve_for_run(
+    /// Pre-run credential gate. Blocks runs that would predictably fail:
+    /// a strictly-auth-gated site with no credential, or a stored credential
+    /// already known to be expired/unauthorized. Read-only.
+    pub async fn preflight_for_run(&self, site_id: &str, url: &str) -> CredentialPreflight {
+        let resolved = self.resolve_credential(site_id, url);
+        let strictly_required = gallery_dl_runner::site_by_id(site_id)
+            .is_some_and(|site| site.auth_strictly_required);
+
+        if resolved.gallery_dl_auth.is_some() {
+            // Credential present — but block when its health is known-bad.
+            let category = resolved.canonical_site_category.clone();
+            if let Ok(rows) = self.list_credential_health().await {
+                if let Some(row) = rows.iter().find(|h| h.site_category == category) {
+                    if row.health_status == "expired" || row.health_status == "unauthorized" {
+                        return CredentialPreflight::Blocked {
+                            status: row.health_status.clone(),
+                        };
+                    }
+                }
+            }
+            return CredentialPreflight::Ready;
+        }
+
+        if !resolved.auth_supported {
+            return CredentialPreflight::Ready;
+        }
+        if strictly_required {
+            return CredentialPreflight::MissingRequired;
+        }
+        if resolved.auth_required_for_full_access {
+            return CredentialPreflight::MissingOptional;
+        }
+        CredentialPreflight::Ready
+    }
+
+    /// Record a pre-flight block as a visible subscription issue.
+    pub async fn note_preflight_block(
         &self,
         subscription_id: i64,
         query_id: Option<i64>,
         site_id: &str,
-        url: &str,
-    ) -> ResolvedRunCredential {
+        message: &str,
+    ) {
+        let _ = site_id;
+        self.upsert_issue(
+            subscription_id,
+            query_id,
+            "credential_blocked",
+            message,
+            Some("Add or refresh the credential for this site, then run again."),
+        )
+        .await;
+    }
+
+    /// Credential lookup only — no health writes, no issue upserts.
+    /// Used by the run path (via `resolve_for_run`) and by read-only callers
+    /// like site verification that must not mutate subscription state.
+    pub fn resolve_credential(&self, site_id: &str, url: &str) -> ResolvedRunCredential {
         let canonical_site_category = canonical_credential_site_category(site_id);
         let site_entry = gallery_dl_runner::site_by_id(&canonical_site_category)
             .or_else(|| gallery_dl_runner::site_by_id(site_id));
@@ -259,6 +323,28 @@ impl<'a, B: CredentialStoreBackend> SubscriptionCredentialService<'a, B> {
             }
         }
 
+        ResolvedRunCredential {
+            canonical_site_category,
+            matched_lookup_key,
+            auth_supported,
+            auth_required_for_full_access: auth_required,
+            gallery_dl_auth,
+        }
+    }
+
+    pub async fn resolve_for_run(
+        &self,
+        subscription_id: i64,
+        query_id: Option<i64>,
+        site_id: &str,
+        url: &str,
+    ) -> ResolvedRunCredential {
+        let resolved = self.resolve_credential(site_id, url);
+        let canonical_site_category = resolved.canonical_site_category.clone();
+        let auth_supported = resolved.auth_supported;
+        let auth_required = resolved.auth_required_for_full_access;
+        let gallery_dl_auth = &resolved.gallery_dl_auth;
+
         if auth_supported && gallery_dl_auth.is_none() && auth_required {
             self.set_health(
                 &canonical_site_category,
@@ -279,13 +365,7 @@ impl<'a, B: CredentialStoreBackend> SubscriptionCredentialService<'a, B> {
                 .await;
         }
 
-        ResolvedRunCredential {
-            canonical_site_category,
-            matched_lookup_key,
-            auth_supported,
-            auth_required_for_full_access: auth_required,
-            gallery_dl_auth,
-        }
+        resolved
     }
 
     pub async fn note_run_auth_failure(

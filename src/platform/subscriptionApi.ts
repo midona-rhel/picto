@@ -7,6 +7,7 @@ import type {
   PixivOAuthExchangeResult,
   PixivOAuthStartResult,
   SubscriptionDownloadAttemptRecord,
+  SubscriptionGroupInfo,
   SubscriptionInfo,
   SubscriptionIssueRecord,
   SubscriptionProgressEvent,
@@ -18,15 +19,121 @@ export function getSubscriptionSites(): Promise<SubscriptionSiteInfo[]> {
   return invoke<SubscriptionSiteInfo[]>('get_sites');
 }
 
+export interface SiteVerificationItemReport {
+  post_id: string | null;
+  tag_count: number;
+  namespaced_tag_counts: Record<string, number>;
+  page_num: number | null;
+  page_count: number | null;
+  canonical_post_url: string | null;
+  created_at_present: boolean;
+  creator_present: boolean;
+  schema_validation: unknown | null;
+}
+
+export interface SiteVerificationReport {
+  site_id: string;
+  url: string;
+  credential_state: string;
+  exit_code: number | null;
+  failure_kind: string | null;
+  stderr_tail: string;
+  discovered: number;
+  downloaded: number;
+  skipped_archive: number;
+  items: SiteVerificationItemReport[];
+  passed: boolean;
+  failure_reasons: string[];
+}
+
+/** Move a subscription into a group, or out of every group with null. */
+export function setSubscriptionGroup(subscriptionId: string, groupId: number | null): Promise<void> {
+  return invoke<void>('set_subscription_group', {
+    subscription_id: subscriptionId,
+    group_id: groupId,
+  });
+}
+
+export interface SubscriptionCollectionRecord {
+  entity_hash: string;
+  name: string | null;
+  member_count: number | null;
+  site_id: string;
+  post_id: string;
+}
+
+/** Collections this subscription created from multi-image posts. */
+export function listSubscriptionCollections(subscriptionId: string): Promise<SubscriptionCollectionRecord[]> {
+  return invoke<SubscriptionCollectionRecord[]>('list_subscription_collections', {
+    subscription_id: subscriptionId,
+  });
+}
+
+export interface TagSuggestion {
+  name: string;
+  post_count: number | null;
+  category: string | null;
+}
+
+/** Booru tag autocomplete. Empty for unsupported sites or on any failure. */
+export function suggestSiteTags(
+  siteId: string,
+  prefix: string,
+  limit?: number,
+): Promise<TagSuggestion[]> {
+  return invoke<TagSuggestion[]>('suggest_site_tags', {
+    site_id: siteId,
+    prefix,
+    limit: limit ?? null,
+  });
+}
+
+/** Live end-to-end probe of one site (downloads 1-3 posts, never ingests). */
+export function verifySubscriptionSite(
+  siteId: string,
+  query?: string | null,
+  postLimit?: number | null,
+): Promise<SiteVerificationReport> {
+  return invoke<SiteVerificationReport>('verify_subscription_site', {
+    site_id: siteId,
+    query: query ?? null,
+    post_limit: postLimit ?? null,
+  });
+}
+
 export function getSubscriptions(): Promise<SubscriptionInfo[]> {
   return invoke<SubscriptionInfo[]>('get_subscriptions');
 }
 
-export function createGroup(name: string, schedule?: string | null): Promise<unknown> {
-  return invoke('create_group', {
+export function getGroups(): Promise<SubscriptionGroupInfo[]> {
+  return invoke<SubscriptionGroupInfo[]>('get_groups');
+}
+
+export function createGroup(name: string, schedule?: string | null): Promise<SubscriptionGroupInfo> {
+  return invoke<SubscriptionGroupInfo>('create_group', {
     name,
     schedule: schedule ?? null,
   } as unknown as Record<string, unknown>);
+}
+
+export function renameGroup(id: string, name: string): Promise<void> {
+  return invoke<void>('rename_group', { id, name });
+}
+
+export function deleteGroup(id: string): Promise<void> {
+  return invoke<void>('delete_group', { id });
+}
+
+export function setGroupSchedule(id: string, schedule: string): Promise<void> {
+  return invoke<void>('set_group_schedule', { id, schedule });
+}
+
+export function runGroup(id: string): Promise<void> {
+  return invoke<void>('run_group', { id });
+}
+
+export function stopGroup(id: string): Promise<void> {
+  return invoke<void>('stop_group', { id });
 }
 
 export function createSubscription(params: {

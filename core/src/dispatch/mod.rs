@@ -459,6 +459,16 @@ async fn dispatch_inner(command: &str, args: serde_json::Value) -> Result<String
         "run_group" => call!(typed::subscriptions::run_group, &state, args),
         "stop_group" => call!(typed::subscriptions::stop_group, &state, args),
         "get_sites" => call!(typed::subscriptions::get_sites, &state, args),
+        "verify_subscription_site" => {
+            call!(typed::subscriptions::verify_subscription_site, &state, args)
+        }
+        "suggest_site_tags" => call!(typed::subscriptions::suggest_site_tags, &state, args),
+        "set_subscription_group" => {
+            call!(typed::subscriptions::set_subscription_group, &state, args)
+        }
+        "list_subscription_collections" => {
+            call!(typed::subscriptions::list_subscription_collections, &state, args)
+        }
         "get_site_metadata_schema" => {
             call!(typed::subscriptions::get_site_metadata_schema, &state, args)
         }

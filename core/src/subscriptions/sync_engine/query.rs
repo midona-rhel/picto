@@ -557,13 +557,7 @@ impl<'a> SubscriptionSyncEngine<'a> {
             let failure_kind = crate::subscriptions::gallery_dl_runner::classify_failure(
                 &run_summary.stderr_output,
             );
-            let failure_kind_str = match failure_kind {
-                FailureKind::Unauthorized => "unauthorized",
-                FailureKind::Expired => "expired",
-                FailureKind::RateLimited => "rate_limited",
-                FailureKind::Network => "network",
-                FailureKind::Unknown => "unknown",
-            };
+            let failure_kind_str = failure_kind.as_str();
             progress.failure_kind = Some(failure_kind_str.to_string());
             let summary = format!(
                 "gallery-dl exited with code {} ({failure_kind_str})",

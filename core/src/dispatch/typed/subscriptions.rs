@@ -69,6 +69,35 @@ fn runtime_service(
 
 #[derive(Debug, Deserialize, TS)]
 #[ts(export_to = "../../src/shared/types/generated/commands/")]
+pub struct VerifySubscriptionSiteInput {
+    pub site_id: String,
+    pub query: Option<String>,
+    pub post_limit: Option<u32>,
+}
+
+#[derive(Debug, Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
+pub struct SuggestSiteTagsInput {
+    pub site_id: String,
+    pub prefix: String,
+    pub limit: Option<u32>,
+}
+
+#[derive(Debug, Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
+pub struct SetSubscriptionGroupInput {
+    pub subscription_id: String,
+    pub group_id: Option<i64>,
+}
+
+#[derive(Debug, Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
+pub struct ListSubscriptionCollectionsInput {
+    pub subscription_id: String,
+}
+
+#[derive(Debug, Deserialize, TS)]
+#[ts(export_to = "../../src/shared/types/generated/commands/")]
 pub struct CreateGroupInput {
     pub name: String,
     pub schedule: Option<String>,
@@ -388,6 +417,75 @@ pub async fn get_sites(
         serde_json::to_value(&crate::subscriptions::gallery_dl_runner::SITES)
             .map_err(|e| e.to_string())?,
     )
+}
+
+/// State-changed: moves a subscription into/out of a group → subscription_ids + group_ids.
+pub async fn set_subscription_group(
+    state: &AppState,
+    input: SetSubscriptionGroupInput,
+) -> Result<(), String> {
+    let sid: i64 = input
+        .subscription_id
+        .parse()
+        .map_err(|_| format!("Invalid subscription id: {}", input.subscription_id))?;
+    runtime_service(state)
+        .set_subscription_group(sid, input.group_id)
+        .await?;
+    let mut impact = crate::runtime_contract::change_builder::ChangeImpact::new()
+        .add_domains(&[
+            crate::runtime_contract::state_change::Domain::Subscriptions,
+            crate::runtime_contract::state_change::Domain::Sidebar,
+        ])
+        .subscription_ids(vec![sid]);
+    if let Some(gid) = input.group_id {
+        impact = impact.group_ids(vec![gid]);
+    }
+    crate::events::emit_state_changed("set_subscription_group", impact);
+    Ok(())
+}
+
+/// Read-only: collections this subscription created from multi-image posts.
+pub async fn list_subscription_collections(
+    state: &AppState,
+    input: ListSubscriptionCollectionsInput,
+) -> Result<serde_json::Value, String> {
+    let sid: i64 = input
+        .subscription_id
+        .parse()
+        .map_err(|_| format!("Invalid subscription id: {}", input.subscription_id))?;
+    let result = runtime_service(state).list_subscription_collections(sid).await?;
+    Ok(serde_json::to_value(&result).map_err(|e| e.to_string())?)
+}
+
+/// Read-only: booru tag autocomplete. Empty list for unsupported sites or
+/// on any network/parse failure — never an error.
+pub async fn suggest_site_tags(
+    _state: &AppState,
+    input: SuggestSiteTagsInput,
+) -> Result<serde_json::Value, String> {
+    let suggestions = crate::subscriptions::tag_autocomplete::suggest_tags(
+        &input.site_id,
+        &input.prefix,
+        input.limit,
+    )
+    .await;
+    Ok(serde_json::to_value(&suggestions).map_err(|e| e.to_string())?)
+}
+
+/// Read-only: live end-to-end probe of one site (downloads 1-3 posts to a
+/// temp dir, never ingests, never writes credential health or issues).
+pub async fn verify_subscription_site(
+    state: &AppState,
+    input: VerifySubscriptionSiteInput,
+) -> Result<serde_json::Value, String> {
+    let report = crate::subscriptions::site_verification::verify_site(
+        state,
+        &input.site_id,
+        input.query.as_deref(),
+        input.post_limit,
+    )
+    .await?;
+    Ok(serde_json::to_value(&report).map_err(|e| e.to_string())?)
 }
 
 pub async fn get_site_metadata_schema(

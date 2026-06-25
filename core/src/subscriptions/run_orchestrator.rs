@@ -129,6 +129,8 @@ impl SubscriptionRunOrchestrator {
             }
         }
 
+        check_credential_preflight(db, sub_id, &bundle.queries).await?;
+
         let _cancel = activate_subscription_guard(running_subs, &id).await?;
 
         publish_start(&id, &sub.name, "subscription", None, None);
@@ -184,6 +186,8 @@ impl SubscriptionRunOrchestrator {
         if crate::subscriptions::gallery_dl_runner::site_by_id(&query.site_id).is_none() {
             return Err(format!("Unknown site: {}", query.site_id));
         }
+
+        check_credential_preflight(db, sub_id, std::slice::from_ref(&query)).await?;
 
         let _cancel = activate_subscription_guard(running_subs, &subscription_id).await?;
 
@@ -287,4 +291,53 @@ impl SubscriptionRunOrchestrator {
         let _ = query;
         Ok(())
     }
+}
+
+/// Block a run up front when a query's site needs credentials that are
+/// missing or known-bad — an actionable error beats a mid-run failure.
+async fn check_credential_preflight(
+    db: &LibraryDatabase,
+    subscription_id: i64,
+    queries: &[crate::subscriptions::types::SubscriptionQuery],
+) -> Result<(), String> {
+    use crate::subscriptions::credential_service::{
+        CredentialPreflight, SubscriptionCredentialService,
+    };
+
+    let service = SubscriptionCredentialService::new(db);
+    for query in queries {
+        let Some(site) = crate::subscriptions::gallery_dl_runner::site_by_id(&query.site_id) else {
+            continue;
+        };
+        let url = crate::subscriptions::gallery_dl_runner::build_url(&query.site_id, &query.query_text)
+            .unwrap_or_default();
+        match service.preflight_for_run(&query.site_id, &url).await {
+            CredentialPreflight::Ready => {}
+            CredentialPreflight::MissingOptional => {
+                // Run proceeds — sync engine already warns and records the
+                // credential_missing issue for auth-recommended sites.
+            }
+            CredentialPreflight::MissingRequired => {
+                let message = format!(
+                    "{} requires a login before it can be used — add an account for {} and run again",
+                    site.name, site.domain
+                );
+                service
+                    .note_preflight_block(subscription_id, Some(query.query_id), &query.site_id, &message)
+                    .await;
+                return Err(message);
+            }
+            CredentialPreflight::Blocked { status } => {
+                let message = format!(
+                    "The stored credential for {} is {status} — re-authenticate and run again",
+                    site.name
+                );
+                service
+                    .note_preflight_block(subscription_id, Some(query.query_id), &query.site_id, &message)
+                    .await;
+                return Err(message);
+            }
+        }
+    }
+    Ok(())
 }

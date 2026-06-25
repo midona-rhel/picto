@@ -1306,7 +1306,11 @@ pub async fn materialize_subscription_collection(
 
 #[cfg(test)]
 mod tests {
-    use super::{ingest_single_path, normalize_subscription_tags, IngestSourceKind, SingleIngestDisposition, SingleIngestRequest};
+    use super::{
+        ingest_single_path, materialize_subscription_collection, normalize_subscription_tags,
+        IngestSourceKind, SingleIngestDisposition, SingleIngestRequest,
+        SubscriptionCollectionMember,
+    };
     use crate::blob_store::BlobStore;
     use crate::db::LibraryDatabase;
     use crate::duplicates::phash::DEFAULT_DISTANCE_THRESHOLD;
@@ -1331,8 +1335,8 @@ mod tests {
         };
 
         let normalized = normalize_subscription_tags(&metadata);
-        assert!(normalized.iter().any(|tag| tag == ":http://example.com"));
-        assert!(normalized.iter().any(|tag| tag == ":dragon:quest"));
+        assert!(normalized.iter().any(|tag| tag == "general:http://example.com"));
+        assert!(normalized.iter().any(|tag| tag == "general:dragon:quest"));
         assert!(normalized.iter().any(|tag| tag == "creator:foo_artist"));
     }
 
@@ -1639,5 +1643,78 @@ mod tests {
             Ok(())
         })
         .expect("inspect near phash review");
+    }
+
+    fn collection_member(path: &Path, page_num: u32) -> SubscriptionCollectionMember {
+        SubscriptionCollectionMember {
+            path: path.to_path_buf(),
+            metadata: ParsedMetadata {
+                post_id: Some("777".to_string()),
+                category: Some("danbooru".to_string()),
+                page_num: Some(page_num),
+                page_count: Some(3),
+                ..Default::default()
+            },
+            skip_thumbnail: true,
+        }
+    }
+
+    fn read_member_count(db: &LibraryDatabase, collection_id: i64) -> i64 {
+        db.with_read(move |conn| {
+            conn.query_row(
+                "SELECT member_count FROM media_entity WHERE entity_id = ?1",
+                [collection_id],
+                |row| row.get(0),
+            )
+        })
+        .expect("read member_count")
+    }
+
+    #[tokio::test]
+    async fn subscription_collection_member_count_tracks_incremental_appends() {
+        let (_tmp, db, blob_store, source_root) = open_test_library();
+
+        let first_path = source_root.join("p0.png");
+        let second_path = source_root.join("p1.png");
+        let third_path = source_root.join("p2.png");
+        write_image(&first_path, &patterned_image(96, 96), ImageFormat::Png);
+        write_image(&second_path, &solid_image(96, 96, 30), ImageFormat::Png);
+        write_image(&third_path, &solid_image(96, 96, 200), ImageFormat::Png);
+
+        let outcome = materialize_subscription_collection(
+            &db,
+            &blob_store,
+            1,
+            "danbooru",
+            "777",
+            "post 777",
+            &[collection_member(&first_path, 0), collection_member(&second_path, 1)],
+            None,
+            true,
+        )
+        .await
+        .expect("materialize initial collection");
+
+        let collection_id = outcome.collection_id.expect("collection created");
+        assert_eq!(read_member_count(&db, collection_id), 2);
+
+        // A later run discovers one more page of the same post — the member
+        // appends to the existing collection and the count follows.
+        let outcome2 = materialize_subscription_collection(
+            &db,
+            &blob_store,
+            1,
+            "danbooru",
+            "777",
+            "post 777",
+            &[collection_member(&third_path, 2)],
+            Some(collection_id),
+            true,
+        )
+        .await
+        .expect("append to existing collection");
+
+        assert_eq!(outcome2.collection_id, Some(collection_id));
+        assert_eq!(read_member_count(&db, collection_id), 3);
     }
 }

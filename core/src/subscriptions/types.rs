@@ -1,5 +1,15 @@
 use serde::{Deserialize, Serialize};
 
+/// A collection entity created by a subscription from a multi-image post.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SubscriptionCollectionRecord {
+    pub entity_hash: String,
+    pub name: Option<String>,
+    pub member_count: Option<i64>,
+    pub site_id: String,
+    pub post_id: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Subscription {

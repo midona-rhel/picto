@@ -34,6 +34,27 @@ impl SiteAdapter for E621Adapter {
 
     fn parse_tags(&self, json: &Value) -> Vec<(String, String)> {
         let mut tags = Vec::new();
+
+        // gallery-dl >= 1.32 flattens the categorized `tags` object into a
+        // plain list and exposes categories as danbooru-style `tags_<cat>`
+        // keys. Prefer those when present.
+        let mut found_categorized = false;
+        for (category, namespace) in NAMESPACE_MAP {
+            let key = format!("tags_{category}");
+            if let Some(arr) = json.get(&key).and_then(|v| v.as_array()) {
+                found_categorized = true;
+                for tag_val in arr {
+                    if let Some(tag) = tag_val.as_str().filter(|s| !s.is_empty()) {
+                        tags.push((namespace.to_string(), tag.to_string()));
+                    }
+                }
+            }
+        }
+        if found_categorized {
+            return tags;
+        }
+
+        // Legacy shape (gallery-dl < 1.32): `tags` is an object keyed by category.
         let Some(obj) = json.get("tags").and_then(|v| v.as_object()) else {
             return tags;
         };
@@ -66,5 +87,44 @@ impl SiteAdapter for E621Adapter {
         }
 
         tags
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn parses_modern_flattened_shape() {
+        // gallery-dl >= 1.32: tags_<category> arrays + flat tags list
+        let meta = json!({
+            "tags": ["canine", "dragon", "wlop"],
+            "tags_artist": ["wlop"],
+            "tags_species": ["canine", "dragon"],
+            "tags_general": ["solo"]
+        });
+        let tags = ADAPTER.parse_tags(&meta);
+        assert!(tags.contains(&("creator".to_string(), "wlop".to_string())));
+        assert!(tags.contains(&("species".to_string(), "canine".to_string())));
+        assert!(tags.contains(&(String::new(), "solo".to_string())));
+        // Flat list must NOT leak through as untagged duplicates
+        assert_eq!(tags.len(), 4);
+    }
+
+    #[test]
+    fn parses_legacy_object_shape() {
+        let meta = json!({
+            "tags": {
+                "artist": ["wlop"],
+                "species": ["dragon"],
+                "general": ["solo"],
+                "invalid": ["wat"]
+            }
+        });
+        let tags = ADAPTER.parse_tags(&meta);
+        assert!(tags.contains(&("creator".to_string(), "wlop".to_string())));
+        assert!(tags.contains(&("species".to_string(), "dragon".to_string())));
+        assert!(tags.contains(&("invalid".to_string(), "wat".to_string())));
     }
 }

@@ -97,14 +97,21 @@ pub fn compare_static_image_quality(
         .saturating_mul(1_000)
         .checked_div(right_pixels);
 
+    // A resolution win only counts while byte density holds up — when the
+    // larger image's bytes-per-pixel falls below 2/3 of the smaller one's,
+    // the extra pixels are likely recompression bloat, not detail.
     if left_pixels >= right_pixels.saturating_mul(2) {
-        if left_density.unwrap_or(0).saturating_mul(2) >= right_density.unwrap_or(0) {
+        if left_density.unwrap_or(0).saturating_mul(3)
+            >= right_density.unwrap_or(0).saturating_mul(2)
+        {
             return ImageQualityDecision::LeftBetter;
         }
     }
 
     if right_pixels >= left_pixels.saturating_mul(2) {
-        if right_density.unwrap_or(0).saturating_mul(2) >= left_density.unwrap_or(0) {
+        if right_density.unwrap_or(0).saturating_mul(3)
+            >= left_density.unwrap_or(0).saturating_mul(2)
+        {
             return ImageQualityDecision::RightBetter;
         }
     }

@@ -15,6 +15,7 @@ if (!gotLock) {
   app.quit();
 }
 import fs from 'node:fs/promises';
+import fsModule from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { initRuntime, initialize, invoke, onNativeEvent, openLibrary, closeLibrary, startNativeDrag } from './nativeClient.mjs';
@@ -39,6 +40,11 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const isDev = !app.isPackaged;
 const DEV_URL = process.env.VITE_DEV_SERVER_URL || 'http://127.0.0.1:8080';
+
+if (isDev) {
+  // CDP endpoint for dev tooling (electron-mcp-server, screenshots, eval).
+  app.commandLine.appendSwitch('remote-debugging-port', '9222');
+}
 
 app.setName('Picto');
 if (process.platform === 'win32') {
@@ -259,8 +265,34 @@ app.on('second-instance', () => {
   }
 });
 
+// Dev-only: capture the main window to a PNG when the trigger file is
+// touched (lets tooling screenshot the app without macOS screen-recording
+// permission). `touch /tmp/picto-capture-request` → /tmp/picto-capture.png
+function startDevCaptureWatcher() {
+  if (!isDev) return;
+  const fsSync = fsModule;
+  const trigger = '/tmp/picto-capture-request';
+  try {
+    fsSync.writeFileSync(trigger, '');
+    fsSync.watch(trigger, async () => {
+      try {
+        const win = windowManager.getWindow('main');
+        if (!win || win.isDestroyed()) return;
+        const image = await win.webContents.capturePage();
+        fsSync.writeFileSync('/tmp/picto-capture.png', image.toPNG());
+        console.info('[main] dev capture written to /tmp/picto-capture.png');
+      } catch (err) {
+        console.error('[main] dev capture failed:', err);
+      }
+    });
+  } catch {
+    // non-fatal dev helper
+  }
+}
+
 app.whenReady().then(async () => {
   await bootstrapApplication();
+  startDevCaptureWatcher();
 
   // Auto theme: broadcast OS dark/light mode changes to all windows
   nativeTheme.on('updated', () => {

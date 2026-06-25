@@ -4,15 +4,18 @@ import {
   createGroup,
   createSubscription,
   deleteCredential,
+  deleteGroup,
   deleteSubscription,
   deleteSubscriptionQuery,
   editSubscriptionQuery,
+  getGroups,
   getRunningSubscriptionProgress,
   getRunningSubscriptions,
   getSubscriptionSites,
   getSubscriptions,
   listCredentialHealth,
   listCredentials,
+  listSubscriptionCollections,
   listSubscriptionDownloadAttempts,
   listSubscriptionIssues,
   listSubscriptionRuns,
@@ -20,16 +23,28 @@ import {
   pauseSubscriptionQuery,
   pixivOAuthExchange,
   pixivOAuthStart,
+  renameGroup,
   renameSubscription,
   resetSubscription,
   resetSubscriptionQuery,
   retrySubscriptionFailedPost,
+  runGroup,
   runSubscription,
   runSubscriptionQuery,
   setCredential,
+  setGroupSchedule,
   setSubscriptionAutoCollections,
+  setSubscriptionGroup,
+  stopGroup,
   stopSubscription,
   stopSubscriptionQuery,
+  suggestSiteTags,
+  verifySubscriptionSite,
+} from '../platform/subscriptionApi';
+import type {
+  SiteVerificationReport,
+  SubscriptionCollectionRecord,
+  TagSuggestion,
 } from '../platform/subscriptionApi';
 import type {
   CredentialDomain,
@@ -38,6 +53,7 @@ import type {
   PixivOAuthExchangeResult,
   PixivOAuthStartResult,
   FailedPostGroup,
+  SubscriptionGroupInfo,
   SubscriptionInfo,
   SubscriptionIssueRecord,
   SubscriptionProgressEvent,
@@ -58,8 +74,9 @@ function deriveLastActivityAt(subscription: SubscriptionInfo): string | null {
 
 export const subscriptionsController = {
   async loadWorkspaceSnapshot(): Promise<SubscriptionWorkspaceSnapshot> {
-    const [subscriptions, sites, credentials, credentialHealth, runningSubscriptionIds, runningProgress] = await Promise.all([
+    const [subscriptions, groups, sites, credentials, credentialHealth, runningSubscriptionIds, runningProgress] = await Promise.all([
       getSubscriptions(),
+      getGroups(),
       getSubscriptionSites(),
       listCredentials(),
       listCredentialHealth(),
@@ -88,6 +105,7 @@ export const subscriptionsController = {
 
     return {
       subscriptions,
+      groups,
       sites,
       credentials,
       credentialHealth,
@@ -131,14 +149,72 @@ export const subscriptionsController = {
 
   create(input: {
     name: string;
+    group_id?: number | null;
     initial_post_limit?: number | null;
     periodic_post_limit?: number | null;
   }): Promise<SubscriptionInfo> {
     return createSubscription(input);
   },
 
-  createGroup(name: string, schedule?: string | null): Promise<unknown> {
+  getGroups(): Promise<SubscriptionGroupInfo[]> {
+    return getGroups();
+  },
+
+  createGroup(name: string, schedule?: string | null): Promise<SubscriptionGroupInfo> {
     return createGroup(name, schedule);
+  },
+
+  renameGroup(id: string, name: string): Promise<void> {
+    return renameGroup(id, name);
+  },
+
+  deleteGroup(id: string): Promise<void> {
+    return deleteGroup(id);
+  },
+
+  setGroupSchedule(id: string, schedule: string): Promise<void> {
+    return setGroupSchedule(id, schedule);
+  },
+
+  runGroup(id: string): Promise<void> {
+    return runGroup(id);
+  },
+
+  stopGroup(id: string): Promise<void> {
+    return stopGroup(id);
+  },
+
+  setSubscriptionGroup(subscriptionId: string, groupId: number | null): Promise<void> {
+    return setSubscriptionGroup(subscriptionId, groupId);
+  },
+
+  suggestSiteTags(siteId: string, prefix: string, limit?: number): Promise<TagSuggestion[]> {
+    return suggestSiteTags(siteId, prefix, limit);
+  },
+
+  verifySite(siteId: string, query?: string | null): Promise<SiteVerificationReport> {
+    return verifySubscriptionSite(siteId, query, 2);
+  },
+
+  listCollections(subscriptionId: string): Promise<SubscriptionCollectionRecord[]> {
+    return listSubscriptionCollections(subscriptionId);
+  },
+
+  /** Retry failed posts one at a time — the backend serializes per-site anyway. */
+  async retryFailedPosts(
+    posts: Array<{ subscription_id: string; query_id: string; site_id: string; post_id: string }>,
+  ): Promise<{ ok: number; failed: number }> {
+    let ok = 0;
+    let failed = 0;
+    for (const post of posts) {
+      try {
+        await retrySubscriptionFailedPost(post);
+        ok++;
+      } catch {
+        failed++;
+      }
+    }
+    return { ok, failed };
   },
 
   rename(id: string, name: string): Promise<void> {

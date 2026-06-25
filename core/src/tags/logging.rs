@@ -21,7 +21,7 @@ impl TagSummary {
     fn add_namespace(&mut self, namespace: &str) {
         self.total += 1;
         match namespace {
-            "" => self.general += 1,
+            "" | "general" => self.general += 1,
             "creator" => self.creator += 1,
             "character" => self.character += 1,
             "series" => self.series += 1,

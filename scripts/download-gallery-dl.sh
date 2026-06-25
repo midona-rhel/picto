@@ -12,9 +12,12 @@
 
 set -euo pipefail
 
-VERSION="1.31.10"
+VERSION="1.32.2"
 REPO="mikf/gallery-dl"
-BASE_URL="https://github.com/${REPO}/releases/download/v${VERSION}"
+# Release assets moved to Codeberg from v1.32.0 (GitHub is a source mirror only).
+BASE_URL="https://codeberg.org/mikf/gallery-dl/releases/download/v${VERSION}"
+# Wheels are also published to PyPI — used for the macOS wheel install.
+PYPI_JSON_URL="https://pypi.org/pypi/gallery-dl/${VERSION}/json"
 DEST_DIR="vendor/gallery-dl"
 
 # ── Detect platform ──────────────────────────────────────────────────────
@@ -83,8 +86,9 @@ case "$PLATFORM" in
     WHL_NAME="gallery_dl-${VERSION}-py3-none-any.whl"
     WHEEL_DIR="${DEST_DIR}/wheel"
 
-    echo "Downloading Python wheel..."
-    download "${BASE_URL}/${WHL_NAME}" "${DEST_DIR}/${WHL_NAME}"
+    echo "Downloading Python wheel (PyPI)..."
+    WHL_URL="$(curl -fsSL "$PYPI_JSON_URL" | python3 -c "import json,sys; print(next(u['url'] for u in json.load(sys.stdin)['urls'] if u['packagetype'] == 'bdist_wheel'))")"
+    download "$WHL_URL" "${DEST_DIR}/${WHL_NAME}"
 
     # Extract wheel (it's a zip file) into wheel/ directory
     if [ ! -d "${WHEEL_DIR}/gallery_dl" ]; then

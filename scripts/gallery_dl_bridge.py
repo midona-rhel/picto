@@ -158,6 +158,13 @@ def _collect_tags(category: str | None, meta: dict[str, Any]) -> list[list[str]]
             "species": "species",
             "lore": "lore",
         }
+        # gallery-dl >= 1.32 flattens the categorized tags object into a
+        # plain list and exposes categories as tags_<category> keys.
+        for key, namespace in namespace_map.items():
+            add_many(namespace, meta.get(f"tags_{key}"))
+        if tags:
+            return tags
+        # Legacy shape (< 1.32): tags is a dict keyed by category.
         raw_tags = meta.get("tags")
         if isinstance(raw_tags, dict):
             for key, value in raw_tags.items():
@@ -172,9 +179,15 @@ def _collect_tags(category: str | None, meta: dict[str, Any]) -> list[list[str]]
         return tags
 
     add_many("", meta.get("tags"))
-    for key in ("artist", "username", "user", "uploader", "blog_name"):
-        add("creator", meta.get(key))
-        if tags:
+    for key in ("artist", "username", "user", "uploader", "blog_name", "user_name", "author", "creator"):
+        value = meta.get(key)
+        if isinstance(value, dict):
+            value = value.get("username") or value.get("name") or value.get("nick")
+        added_creator = False
+        if isinstance(value, str) and value.strip():
+            add("creator", value)
+            added_creator = True
+        if added_creator:
             break
     return tags
 

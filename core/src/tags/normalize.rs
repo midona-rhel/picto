@@ -307,13 +307,15 @@ mod tests {
 
     #[test]
     fn test_parse_tag_ingest_unknown_namespace_is_literal() {
+        // Unknown namespaces fold into the literal tag text under the
+        // mandatory default namespace.
         assert_eq!(
             parse_tag_ingest("http://example.com"),
-            Some(("".into(), "http://example.com".into()))
+            Some(("general".into(), "http://example.com".into()))
         );
         assert_eq!(
             parse_tag_ingest("foo:bar"),
-            Some(("".into(), "foo:bar".into()))
+            Some(("general".into(), "foo:bar".into()))
         );
     }
 
@@ -323,9 +325,10 @@ mod tests {
             parse_tag_ingest("creator:foo"),
             Some(("creator".into(), "foo".into()))
         );
+        // Booru alias — artist canonicalizes to creator.
         assert_eq!(
             parse_tag_ingest("artist:foo"),
-            Some(("artist".into(), "foo".into()))
+            Some(("creator".into(), "foo".into()))
         );
         assert_eq!(
             parse_tag_ingest("character:samus"),
@@ -334,16 +337,21 @@ mod tests {
     }
 
     #[test]
-    fn test_combine_tag_escapes_literal_colons_for_empty_namespace() {
-        assert_eq!(combine_tag("", "http://example.com"), ":http://example.com");
+    fn test_combine_tag_defaults_empty_namespace_to_general() {
+        // Empty namespace combines under the mandatory default, and literal
+        // colons in the subtag survive the round trip.
         assert_eq!(
-            parse_tag_ingest(":http://example.com"),
-            Some(("".into(), "http://example.com".into()))
+            combine_tag("", "http://example.com"),
+            "general:http://example.com"
         );
-        assert_eq!(combine_tag("", "dragon:quest"), ":dragon:quest");
         assert_eq!(
-            parse_tag_ingest(":dragon:quest"),
-            Some(("".into(), "dragon:quest".into()))
+            parse_tag_ingest("general:http://example.com"),
+            Some(("general".into(), "http://example.com".into()))
+        );
+        assert_eq!(combine_tag("", "dragon:quest"), "general:dragon:quest");
+        assert_eq!(
+            parse_tag_ingest("general:dragon:quest"),
+            Some(("general".into(), "dragon:quest".into()))
         );
     }
 }

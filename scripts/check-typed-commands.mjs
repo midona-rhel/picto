@@ -6,7 +6,7 @@
  * 1. Every TypedCommand::NAME in Rust has a matching entry in TypedCommandMap in TS.
  * 2. No typed command still exists in a legacy handler's match block (no duplicates).
  * 3. Generated ts-rs files exist for every input/output struct.
- * 4. No typed command uses plain invoke() in api.ts (should use invokeTyped).
+ * 4. No typed command uses plain invoke() in src/platform/*.ts (should use invokeTyped).
  * 5. Runtime contract generated files exist (PBI-325).
  */
 import { promises as fs } from 'node:fs';
@@ -17,7 +17,7 @@ const TYPED_DIR = path.join(ROOT, 'core/src/dispatch/typed');
 const LEGACY_DIR = path.join(ROOT, 'core/src/dispatch');
 const TS_BARREL = path.join(ROOT, 'src/shared/types/generated/commands/index.ts');
 const GENERATED_DIR = path.join(ROOT, 'src/shared/types/generated/commands');
-const API_TS = path.join(ROOT, 'src/platform/api.ts');
+const PLATFORM_DIR = path.join(ROOT, 'src/platform');
 const RUNTIME_CONTRACT_DIR = path.join(ROOT, 'src/shared/types/generated/runtime-contract');
 
 // Extract TypedCommand NAME constants from Rust typed dispatch files.
@@ -55,8 +55,17 @@ async function extractLegacyCommands() {
   return commands;
 }
 
+// The TypedCommandMap barrel was retired with the legacy frontend — the
+// rebuilt frontend calls plain invoke() through per-domain src/platform/*.ts
+// files, validated by check-command-parity. Returns null when the barrel is
+// absent so barrel-dependent checks skip instead of failing on a dead system.
 async function extractTsTypedCommandMap() {
-  const content = await fs.readFile(TS_BARREL, 'utf8');
+  let content;
+  try {
+    content = await fs.readFile(TS_BARREL, 'utf8');
+  } catch {
+    return null;
+  }
   const commands = new Set();
   // Find TypedCommandMap interface, then extract entry keys line by line.
   // Handle nested braces by tracking brace depth.
@@ -84,19 +93,23 @@ async function extractTsTypedCommandMap() {
   return commands;
 }
 
-// Scan api.ts for plain invoke() calls that use a typed command name.
+// Scan src/platform/*.ts for plain invoke() calls that use a typed command name.
 // These should use invokeTyped() instead.
 const PLAIN_INVOKE_RE = /\binvoke\s*<[^>]*>\s*\(\s*'([a-z_]+)'/g;
 
 async function extractPlainInvokeCommands() {
-  const content = await fs.readFile(API_TS, 'utf8');
-  const commands = new Map(); // command → line number
-  const lines = content.split('\n');
-  for (let i = 0; i < lines.length; i++) {
-    PLAIN_INVOKE_RE.lastIndex = 0;
-    let m;
-    while ((m = PLAIN_INVOKE_RE.exec(lines[i])) !== null) {
-      commands.set(m[1], i + 1);
+  const commands = new Map(); // command → "file:line"
+  const entries = await fs.readdir(PLATFORM_DIR, { withFileTypes: true });
+  for (const entry of entries) {
+    if (!entry.isFile() || !entry.name.endsWith('.ts') || entry.name === 'ipc.ts') continue;
+    const content = await fs.readFile(path.join(PLATFORM_DIR, entry.name), 'utf8');
+    const lines = content.split('\n');
+    for (let i = 0; i < lines.length; i++) {
+      PLAIN_INVOKE_RE.lastIndex = 0;
+      let m;
+      while ((m = PLAIN_INVOKE_RE.exec(lines[i])) !== null) {
+        commands.set(m[1], `${entry.name}:${i + 1}`);
+      }
     }
   }
   return commands;
@@ -158,26 +171,32 @@ async function main() {
   ]);
 
   console.log(`Typed Rust commands: ${typedCmds.size}`);
-  console.log(`TypedCommandMap TS entries: ${tsMapCmds.size}`);
+  console.log(
+    tsMapCmds === null
+      ? 'TypedCommandMap barrel: absent (retired with legacy frontend — barrel checks skipped)'
+      : `TypedCommandMap TS entries: ${tsMapCmds.size}`,
+  );
 
   let hasErrors = false;
 
-  // 1. Every typed command must be in TypedCommandMap
-  const missingInTs = [...typedCmds].filter((c) => !tsMapCmds.has(c));
-  if (missingInTs.length > 0) {
-    console.error('\nTyped Rust commands missing from TypedCommandMap:');
-    for (const c of missingInTs.sort()) console.error(`  - ${c}`);
-    hasErrors = true;
-  }
-
-  // 2. Every TypedCommandMap entry must have a Rust TypedCommand
-  //    (Skip when TypedCommand pattern is not in use — all commands are in legacy dispatch)
-  if (typedCmds.size > 0) {
-    const extraInTs = [...tsMapCmds].filter((c) => !typedCmds.has(c));
-    if (extraInTs.length > 0) {
-      console.error('\nTypedCommandMap entries with no Rust TypedCommand:');
-      for (const c of extraInTs.sort()) console.error(`  - ${c}`);
+  if (tsMapCmds !== null) {
+    // 1. Every typed command must be in TypedCommandMap
+    const missingInTs = [...typedCmds].filter((c) => !tsMapCmds.has(c));
+    if (missingInTs.length > 0) {
+      console.error('\nTyped Rust commands missing from TypedCommandMap:');
+      for (const c of missingInTs.sort()) console.error(`  - ${c}`);
       hasErrors = true;
+    }
+
+    // 2. Every TypedCommandMap entry must have a Rust TypedCommand
+    //    (Skip when TypedCommand pattern is not in use — all commands are in legacy dispatch)
+    if (typedCmds.size > 0) {
+      const extraInTs = [...tsMapCmds].filter((c) => !typedCmds.has(c));
+      if (extraInTs.length > 0) {
+        console.error('\nTypedCommandMap entries with no Rust TypedCommand:');
+        for (const c of extraInTs.sort()) console.error(`  - ${c}`);
+        hasErrors = true;
+      }
     }
   }
 
@@ -195,15 +214,19 @@ async function main() {
     hasErrors = true;
   }
 
-  // 5. No typed command should use plain invoke() in api.ts (PBI-324)
-  const untypedFrontend = [...plainInvokeCmds.entries()]
-    .filter(([cmd]) => tsMapCmds.has(cmd));
-  if (untypedFrontend.length > 0) {
-    console.error('\nTyped commands using plain invoke() in api.ts (should use invokeTyped):');
-    for (const [cmd, line] of untypedFrontend.sort((a, b) => a[0].localeCompare(b[0]))) {
-      console.error(`  - ${cmd} (line ${line})`);
+  // 5. No typed command should use plain invoke() when the typed frontend
+  //    (TypedCommandMap barrel) is present. With the barrel retired, plain
+  //    invoke() through per-domain platform files IS the supported pattern.
+  if (tsMapCmds !== null) {
+    const untypedFrontend = [...plainInvokeCmds.entries()]
+      .filter(([cmd]) => tsMapCmds.has(cmd));
+    if (untypedFrontend.length > 0) {
+      console.error('\nTyped commands using plain invoke() (should use invokeTyped):');
+      for (const [cmd, line] of untypedFrontend.sort((a, b) => a[0].localeCompare(b[0]))) {
+        console.error(`  - ${cmd} (${line})`);
+      }
+      hasErrors = true;
     }
-    hasErrors = true;
   }
 
   // 6. Runtime contract generated files must exist (PBI-325)

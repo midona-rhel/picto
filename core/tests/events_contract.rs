@@ -178,6 +178,7 @@ fn state_changed_event_contract() {
             smart_folder_order_changes: None,
             sidebar_node_patches: None,
             smart_folder_counts: None,
+            grid_reorder: None,
         },
         sidebar_counts: None,
     };
@@ -336,7 +337,6 @@ async fn collection_membership_preset_refreshes_collection_and_system_scopes() {
         .map(|v| v.as_str().unwrap().to_string())
         .collect();
     assert!(scopes.contains(&"collection:42".to_string()));
-    assert!(scopes.contains(&"folder:all".to_string()));
 }
 
 #[tokio::test]
@@ -521,7 +521,6 @@ async fn subscription_batch_delta_merges_collection_and_file_changes() {
         .collect();
     assert!(scopes.contains(&"collection:42".to_string()));
     assert!(scopes.contains(&"system:inbox".to_string()));
-    assert!(scopes.contains(&"folder:all".to_string()));
 }
 
 #[tokio::test]

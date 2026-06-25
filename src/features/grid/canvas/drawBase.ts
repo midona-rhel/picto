@@ -11,7 +11,6 @@ import type { ThumbnailPipelineEntry } from './thumbnailPipeline';
 import { THUMBNAIL_PIPELINE_REVEAL_MS } from './thumbnailPipeline';
 import {
   BADGE_FONT,
-  BADGE_H,
   INFO_FONT,
   NAME_FONT,
   drawBadge,
@@ -22,6 +21,7 @@ import {
   mimeToExt,
   truncateText,
   formatDuration,
+  drawCountChip,
 } from './primitives';
 
 
@@ -260,10 +260,11 @@ export function drawCanvasBaseLayer({
       drawBadge(ctx, durText, bx + bw - durW - 5, by + 5);
     }
 
-    // Collection count badge — bottom-left
+    // Collection count chip — top-right (no collision: collections never
+    // carry the video/animated duration badge)
     if (isCollection) {
       const itemCount = Math.max(0, item.memberCount ?? 0);
-      drawBadge(ctx, `${itemCount.toLocaleString()} items`, bx + 5, by + imgH - BADGE_H - 5);
+      drawCountChip(ctx, itemCount, bx + bw - 5, by + 5);
     }
   }
 

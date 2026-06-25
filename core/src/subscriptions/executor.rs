@@ -462,8 +462,34 @@ async fn run_job_inner(
         } else {
             sub.initial_post_limit as u32
         };
+        // For the initial run the subscription limit is a TOTAL budget across
+        // continuation batches, not a per-batch size — "first sync: up to N
+        // posts" must stop at N, not crawl the site's entire history N at a
+        // time. Each batch requests only what's left of the budget.
+        let effective_limit = if current_query.completed_initial_run || subscription_limit == 0 {
+            subscription_limit
+        } else {
+            let already_fetched = current_query.posts_found.max(0) as u32;
+            let remaining = subscription_limit.saturating_sub(already_fetched);
+            if remaining == 0 {
+                tracing::info!(
+                    query_id = current_query.query_id,
+                    initial_post_limit = subscription_limit,
+                    posts_found = already_fetched,
+                    "initial post budget exhausted — marking initial run complete"
+                );
+                let _ = runtime
+                    .set_query_completed_initial_run(current_query.query_id, true)
+                    .await;
+                let _ = runtime
+                    .set_query_resume_state(current_query.query_id, None, None)
+                    .await;
+                break;
+            }
+            remaining
+        };
         let post_limit =
-            effective_query_post_limit(app_settings.sub_batch_size, subscription_limit);
+            effective_query_post_limit(app_settings.sub_batch_size, effective_limit);
         let progress: SyncProgress = engine
             .sync_query(
                 job.run_id,

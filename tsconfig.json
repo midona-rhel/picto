@@ -33,5 +33,6 @@
     "types": ["vitest/globals", "@testing-library/jest-dom"]
   },
   "include": ["src", "src/test/setup.ts", "electron"],
+  "exclude": ["src/shared/types/generated"],
   "references": [{ "path": "./tsconfig.node.json" }]
 }

@@ -61,12 +61,13 @@ class GelbooruNormalizationTests(unittest.TestCase):
             meta,
         )
 
-        self.assertIn(["artist", "foo_artist"], normalized["tags"])
+        # Booru categories map to canonical picto namespaces.
+        self.assertIn(["creator", "foo_artist"], normalized["tags"])
         self.assertIn(["character", "princess_peach"], normalized["tags"])
-        self.assertIn(["copyright", "mario_(series)"], normalized["tags"])
+        self.assertIn(["series", "mario_(series)"], normalized["tags"])
         self.assertIn(["meta", "highres"], normalized["tags"])
-        self.assertNotIn(["creator", "foo_artist"], normalized["tags"])
-        self.assertNotIn(["series", "mario_(series)"], normalized["tags"])
+        self.assertNotIn(["artist", "foo_artist"], normalized["tags"])
+        self.assertNotIn(["copyright", "mario_(series)"], normalized["tags"])
 
 
 if __name__ == "__main__":

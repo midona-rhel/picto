@@ -331,6 +331,59 @@ impl<'a> SubscriptionRuntimeService<'a> {
         })
     }
 
+    /// Move a subscription into a group (or out of every group with None).
+    pub async fn set_subscription_group(
+        &self,
+        subscription_id: i64,
+        group_id: Option<i64>,
+    ) -> Result<(), String> {
+        if let Some(gid) = group_id {
+            let exists: bool = self.db.with_read(move |conn| {
+                conn.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM subscription_group WHERE group_id = ?1)",
+                    params![gid],
+                    |row| row.get(0),
+                )
+            })?;
+            if !exists {
+                return Err(format!("Group {gid} not found"));
+            }
+        }
+        self.db.with_write(move |conn| {
+            conn.execute(
+                "UPDATE subscription SET group_id = ?1 WHERE subscription_id = ?2",
+                params![group_id, subscription_id],
+            )?;
+            Ok(())
+        })
+    }
+
+    /// Collections this subscription has created from multi-image posts.
+    pub async fn list_subscription_collections(
+        &self,
+        subscription_id: i64,
+    ) -> Result<Vec<crate::subscriptions::types::SubscriptionCollectionRecord>, String> {
+        self.db.with_read(move |conn| {
+            let mut stmt = conn.prepare_cached(
+                "SELECT me.entity_hash, me.name, me.member_count, spc.site_id, spc.post_id
+                 FROM subscription_post_collection spc
+                 JOIN media_entity me ON me.entity_id = spc.collection_entity_id
+                 WHERE spc.subscription_id = ?1
+                 ORDER BY spc.updated_at DESC",
+            )?;
+            let rows = stmt.query_map(params![subscription_id], |row| {
+                Ok(crate::subscriptions::types::SubscriptionCollectionRecord {
+                    entity_hash: row.get(0)?,
+                    name: row.get(1)?,
+                    member_count: row.get(2)?,
+                    site_id: row.get(3)?,
+                    post_id: row.get(4)?,
+                })
+            })?;
+            rows.collect()
+        })
+    }
+
     pub async fn add_subscription_query(
         &self,
         subscription_id: String,

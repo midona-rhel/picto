@@ -20,14 +20,6 @@ export const collectionNameAtom = atom<string | null>(null);
 /** When true, the next grid scope transition skips the fade-out phase. */
 export const skipFadeOutAtom = atom(false);
 
-export type SubscriptionsWorkspaceTab = 'subscriptions' | 'auth';
-const SUBSCRIPTIONS_TAB_STORAGE_KEY = 'picto-subscriptions-workspace-tab';
-const storedSubscriptionsTab = localStorage.getItem(SUBSCRIPTIONS_TAB_STORAGE_KEY);
-const initialSubscriptionsTab: SubscriptionsWorkspaceTab =
-  storedSubscriptionsTab === 'auth' ? 'auth' : 'subscriptions';
-
-export const subscriptionsWorkspaceTabAtom = atom<SubscriptionsWorkspaceTab>(initialSubscriptionsTab);
-
 /** Whether the sidebar is collapsed. Persisted to localStorage. */
 const STORAGE_KEY = 'picto-sidebar-collapsed-panel';
 const storedCollapsed = localStorage.getItem(STORAGE_KEY) === 'true';
@@ -75,7 +67,3 @@ export const setInspectorWidthAtom = atom(null, (_get, set, width: number) => {
   localStorage.setItem(INSPECTOR_WIDTH_STORAGE_KEY, String(clamped));
 });
 
-export const setSubscriptionsWorkspaceTabAtom = atom(null, (_get, set, tab: SubscriptionsWorkspaceTab) => {
-  set(subscriptionsWorkspaceTabAtom, tab);
-  localStorage.setItem(SUBSCRIPTIONS_TAB_STORAGE_KEY, tab);
-});

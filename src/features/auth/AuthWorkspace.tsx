@@ -76,22 +76,6 @@ export function AuthWorkspace({
   }, [selectedEntry?.site.id, selectedEntry?.credential?.site_category]);
 
   useEffect(() => {
-    const handleOpenAuthSite = (event: Event) => {
-      const detail = (event as CustomEvent<{ siteId?: string }>).detail;
-      if (!detail?.siteId) return;
-      if (session.status !== 'idle' && session.site_category && session.site_category !== detail.siteId) {
-        void authController.cancelSession();
-        setSession(IDLE_SESSION);
-      }
-      setSelectedSiteId(detail.siteId);
-    };
-    window.addEventListener('picto:open-auth-site', handleOpenAuthSite as EventListener);
-    return () => {
-      window.removeEventListener('picto:open-auth-site', handleOpenAuthSite as EventListener);
-    };
-  }, [session]);
-
-  useEffect(() => {
     let cancelled = false;
     let unlisten: (() => void) | undefined;
     void authController.subscribeSessionState((payload) => {

@@ -5,7 +5,7 @@
  *
  * Parses:
  * - core/src/dispatch/*.rs — match arm string literals ("command_name" =>)
- * - src/platform/api.ts — invoke('command_name', ...) calls
+ * - src/platform/*.ts — invoke('command_name', ...) calls (per-domain API files)
  *
  * Reports any drift between the two surfaces, minus an explicit allowlist.
  */
@@ -15,7 +15,7 @@ import { extractRustCommandsFromText, extractTsCommandsFromText } from './check-
 
 const ROOT = process.cwd();
 const DISPATCH_DIR = path.join(ROOT, 'core/src/dispatch');
-const API_FILE = path.join(ROOT, 'src/platform/api.ts');
+const PLATFORM_DIR = path.join(ROOT, 'src/platform');
 const ALLOWLIST_FILE = path.join(ROOT, 'scripts/command-parity-allowlist.json');
 
 async function extractRustCommands() {
@@ -53,8 +53,15 @@ async function extractRustCommands() {
 }
 
 async function extractTsCommands() {
-  const content = await fs.readFile(API_FILE, 'utf8');
-  return extractTsCommandsFromText(content, API_FILE);
+  const commands = new Set();
+  const entries = await fs.readdir(PLATFORM_DIR, { withFileTypes: true });
+  for (const entry of entries) {
+    if (!entry.isFile() || !entry.name.endsWith('.ts') || entry.name === 'ipc.ts') continue;
+    const fullPath = path.join(PLATFORM_DIR, entry.name);
+    const content = await fs.readFile(fullPath, 'utf8');
+    for (const cmd of extractTsCommandsFromText(content, fullPath)) commands.add(cmd);
+  }
+  return commands;
 }
 
 async function loadAllowlist() {

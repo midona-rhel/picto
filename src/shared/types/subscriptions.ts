@@ -10,6 +10,8 @@ export interface SubscriptionSiteInfo {
   supports_account: boolean;
   auth_supported: boolean;
   auth_required_for_full_access: boolean;
+  /** Site is unusable without credentials — runs are blocked, not just warned. */
+  auth_strictly_required: boolean;
 }
 
 export interface SubscriptionQueryInfo {
@@ -43,6 +45,17 @@ export interface SubscriptionInfo {
   created_at: string;
   total_files: number;
   queries: SubscriptionQueryInfo[];
+}
+
+export type GroupSchedule = 'manual' | 'daily' | 'weekly' | 'monthly';
+
+export interface SubscriptionGroupInfo {
+  id: string;
+  name: string;
+  schedule: GroupSchedule | string;
+  created_at: string;
+  total_files: number;
+  subscriptions: SubscriptionInfo[];
 }
 
 export interface SubscriptionProgressEvent {

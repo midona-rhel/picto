@@ -72,10 +72,11 @@ fn test_audio() -> &'static Path {
     })
 }
 
-#[test]
-fn test_video_properties() {
+#[tokio::test]
+async fn test_video_properties() {
     let video = test_video();
     let props = picto_core::media_processing::ffmpeg::get_video_properties(video)
+        .await
         .expect("get_video_properties failed");
 
     assert_eq!(props.width, 640);
@@ -89,10 +90,11 @@ fn test_video_properties() {
     assert!(!props.has_audio);
 }
 
-#[test]
-fn test_audio_duration() {
+#[tokio::test]
+async fn test_audio_duration() {
     let audio = test_audio();
     let dur = picto_core::media_processing::ffmpeg::get_audio_duration_ms(audio)
+        .await
         .expect("get_audio_duration_ms failed");
 
     assert!(
@@ -102,10 +104,10 @@ fn test_audio_duration() {
     );
 }
 
-#[test]
-fn test_mime_detection_video() {
+#[tokio::test]
+async fn test_mime_detection_video() {
     let video = test_video();
-    let mime = picto_core::media_processing::ffmpeg::get_mime(video).expect("get_mime failed");
+    let mime = picto_core::media_processing::ffmpeg::get_mime(video).await.expect("get_mime failed");
 
     assert_eq!(
         mime,
@@ -115,10 +117,10 @@ fn test_mime_detection_video() {
     );
 }
 
-#[test]
-fn test_mime_detection_audio() {
+#[tokio::test]
+async fn test_mime_detection_audio() {
     let audio = test_audio();
-    let mime = picto_core::media_processing::ffmpeg::get_mime(audio).expect("get_mime failed");
+    let mime = picto_core::media_processing::ffmpeg::get_mime(audio).await.expect("get_mime failed");
 
     assert_eq!(
         mime,
@@ -128,19 +130,20 @@ fn test_mime_detection_audio() {
     );
 }
 
-#[test]
-fn test_file_is_animated() {
+#[tokio::test]
+async fn test_file_is_animated() {
     let video = test_video();
-    assert!(picto_core::media_processing::ffmpeg::file_is_animated(
-        video
-    ));
+    assert!(
+        picto_core::media_processing::ffmpeg::file_is_animated(video).await
+    );
 }
 
-#[test]
-fn test_render_video_thumbnail() {
+#[tokio::test]
+async fn test_render_video_thumbnail() {
     let video = test_video();
 
     let props = picto_core::media_processing::ffmpeg::get_video_properties(video)
+        .await
         .expect("get_video_properties failed");
 
     let dur = if props.duration_ms > 0 {
@@ -154,6 +157,7 @@ fn test_render_video_thumbnail() {
         50, // 50% into the video
         dur,
     )
+    .await
     .expect("render_video_thumbnail failed");
 
     // Should be a valid JPEG (starts with FF D8)
@@ -170,8 +174,8 @@ fn test_render_video_thumbnail() {
     );
 }
 
-#[test]
-fn test_render_video_thumbnail_at_start() {
+#[tokio::test]
+async fn test_render_video_thumbnail_at_start() {
     let video = test_video();
 
     let bytes = picto_core::media_processing::ffmpeg::render_video_thumbnail(
@@ -180,6 +184,7 @@ fn test_render_video_thumbnail_at_start() {
         0,
         Some(2000),
     )
+    .await
     .expect("render_video_thumbnail at start failed");
 
     assert!(bytes.len() > 100);
@@ -187,13 +192,14 @@ fn test_render_video_thumbnail_at_start() {
     assert_eq!(bytes[1], 0xD8);
 }
 
-#[test]
-fn test_file_info_video() {
+#[tokio::test]
+async fn test_file_info_video() {
     let video = test_video();
     let info = picto_core::media_processing::get_file_info(
         video,
         Some(picto_core::constants::MimeType::VideoMp4),
     )
+    .await
     .expect("get_file_info failed");
 
     assert_eq!(info.width, Some(640));
@@ -203,13 +209,14 @@ fn test_file_info_video() {
     assert_eq!(info.num_frames.unwrap(), 60);
 }
 
-#[test]
-fn test_file_info_audio() {
+#[tokio::test]
+async fn test_file_info_audio() {
     let audio = test_audio();
     let info = picto_core::media_processing::get_file_info(
         audio,
         Some(picto_core::constants::MimeType::AudioMp3),
     )
+    .await
     .expect("get_file_info failed");
 
     assert!(info.duration_ms.is_some());
@@ -217,10 +224,10 @@ fn test_file_info_audio() {
     assert!(dur >= 2900 && dur <= 3100, "duration = {}", dur);
 }
 
-#[test]
-fn test_nonexistent_file_errors() {
+#[tokio::test]
+async fn test_nonexistent_file_errors() {
     let bad_path = Path::new("/tmp/does_not_exist_picto_test.mp4");
-    assert!(picto_core::media_processing::ffmpeg::get_video_properties(bad_path).is_err());
-    assert!(picto_core::media_processing::ffmpeg::get_audio_duration_ms(bad_path).is_err());
-    assert!(picto_core::media_processing::ffmpeg::get_mime(bad_path).is_err());
+    assert!(picto_core::media_processing::ffmpeg::get_video_properties(bad_path).await.is_err());
+    assert!(picto_core::media_processing::ffmpeg::get_audio_duration_ms(bad_path).await.is_err());
+    assert!(picto_core::media_processing::ffmpeg::get_mime(bad_path).await.is_err());
 }
