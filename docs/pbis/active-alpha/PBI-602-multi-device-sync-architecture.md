@@ -151,3 +151,13 @@ Remaining for Stage 1:
 - Subscription/group **config** ops (create/rename/delete/schedule/group-assignment/query edits) in `subscriptions/runtime_service.rs` — deferred while that file is under active parallel work.
 - Deliberately not emitted (device-local per decision 8): pins, reorders of folders/smart folders (`sort_order`/`display_order`), watch config, view prefs. `insert_single`/`insert_file` low-level entries (legacy-import materialization path) also do not emit.
 - Note: `db/write/subscriptions.rs` is dead code (dispatch routes through `runtime_service`) — delete rather than wire.
+
+### Stage 2 progress (2026-07-17)
+Replay engine landed, local-only, all test-covered:
+- `oplog/backend.rs`: the four-operation `SyncBackend` trait (put is **create-only** — immutability enforced at the trait contract) + `MemoryBackend` for tests.
+- `oplog/segment.rs`: binary segment format v1 (`PSEG` magic, per-record length + CRC32, whole-segment trailing CRC). Corruption, truncation, and unknown-format-version all detected and quarantined; segments use `.seg` extension (supersedes the `.jsonl` naming in decision 2's sketch).
+- `oplog/drain.rs`: outbox → numbered segments under `oplog/<device-id>/`. Ops are marked uploaded only after the backend accepts; a sequence collision (restore-from-backup regression) fails loudly against create-only put and never overwrites.
+- `oplog/replay.rs`: `TruthState` model — ops sorted into the `(hlc, device_id)` total order and applied sequentially, giving LWW per field; tombstones + add-wins resurrection per the locked decision; per-op version gating (unknown version parks the whole replay, nothing dropped). `digest()` = SHA256 of the canonical serialization, for convergence checks.
+- Tests: shuffled-arrival determinism property (50 shuffles ⇒ identical digest), LWW/rename-rewrite semantics, resurrection both directions, end-to-end `LibraryDatabase` mutations → drain → `MemoryBackend` → replay.
+
+Remaining for Stage 2/3 boundary: applying a replayed `TruthState` into a live `LibraryDatabase` (materialization), remote-op ingestion cursors (tracking which peer segments are consumed), and the first real backend (Drive or local-directory) behind the same trait.

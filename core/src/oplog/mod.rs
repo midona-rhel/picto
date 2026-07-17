@@ -12,8 +12,32 @@ use std::sync::OnceLock;
 
 use rusqlite::Connection;
 
+pub mod backend;
+pub mod drain;
+pub mod replay;
+pub mod segment;
+
 /// Version stamped on every op record. Readers park unknown versions.
 pub const OP_VERSION: i64 = 1;
+
+/// One truth mutation, as stored in the outbox and shipped in segments.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct OpRecord {
+    pub op_version: i64,
+    pub op_type: String,
+    pub entity_key: String,
+    pub payload: serde_json::Value,
+    pub hlc: String,
+    pub device_id: String,
+}
+
+impl OpRecord {
+    /// Total-order sort key: `(hlc, device_id)`. HLCs are strictly monotonic
+    /// per device, so this orders every op pair deterministically.
+    pub fn sort_key(&self) -> (&str, &str) {
+        (&self.hlc, &self.device_id)
+    }
+}
 
 /// Generate a stable random identity token (32 lowercase hex chars).
 pub fn new_uuid() -> String {

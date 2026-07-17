@@ -734,6 +734,65 @@ impl LibraryDatabase {
         Ok(result)
     }
 
+    // ── Sync op outbox ───────────────────────────────────────────
+
+    /// This installation's device identity (stamped on outbox ops).
+    pub fn device_id(&self) -> &str {
+        &self.device_id
+    }
+
+    /// Oldest not-yet-uploaded outbox ops, as `(op_id, record)`.
+    pub fn pending_ops(&self, limit: usize) -> Result<Vec<(i64, crate::oplog::OpRecord)>, String> {
+        self.with_read(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT op_id, op_version, op_type, entity_key, payload_json, hlc, device_id
+                 FROM op_outbox WHERE uploaded_seq IS NULL ORDER BY op_id LIMIT ?1",
+            )?;
+            let rows = stmt
+                .query_map([limit as i64], |row| {
+                    let payload_json: String = row.get(4)?;
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        crate::oplog::OpRecord {
+                            op_version: row.get(1)?,
+                            op_type: row.get(2)?,
+                            entity_key: row.get(3)?,
+                            payload: serde_json::from_str(&payload_json)
+                                .unwrap_or(serde_json::Value::Null),
+                            hlc: row.get(5)?,
+                            device_id: row.get(6)?,
+                        },
+                    ))
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(rows)
+        })
+    }
+
+    /// Next segment sequence number for this device's remote prefix.
+    pub fn next_segment_seq(&self) -> Result<i64, String> {
+        self.with_read(|conn| {
+            conn.query_row(
+                "SELECT COALESCE(MAX(uploaded_seq), 0) + 1 FROM op_outbox",
+                [],
+                |row| row.get(0),
+            )
+        })
+    }
+
+    /// Mark ops as shipped in the given segment.
+    pub fn mark_ops_uploaded(&self, op_ids: &[i64], segment_seq: i64) -> Result<(), String> {
+        let ids = op_ids.to_vec();
+        self.with_write(move |conn| {
+            let mut stmt =
+                conn.prepare("UPDATE op_outbox SET uploaded_seq = ?1 WHERE op_id = ?2")?;
+            for id in &ids {
+                stmt.execute(rusqlite::params![segment_seq, id])?;
+            }
+            Ok(())
+        })
+    }
+
     /// Fold the WAL back into the main database file. Called explicitly on
     /// library close; `Drop` re-runs it as a backstop for stray references.
     pub fn checkpoint(&self) {
