@@ -1,14 +1,14 @@
-//! Roaring bitmap store with delta log.
+//! In-memory roaring bitmap store.
 //!
-//! Bitmaps are derived artifacts, not authoritative data. They can be
-//! rebuilt from authoritative tables at any time. Runtime writes append
-//! deltas instead of rewriting snapshots eagerly.
+//! Bitmaps are derived artifacts, not authoritative data. They are rebuilt
+//! from authoritative tables on open and maintained incrementally by the
+//! compilers while running. Nothing here is persisted.
 
 use roaring::RoaringBitmap;
 use std::collections::HashMap;
 use std::sync::RwLock;
 
-/// Categories for independent snapshot/delta files.
+/// In-memory grouping of bitmap kinds (used to scope rebuilds).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum BitmapCategory {
     Status,
@@ -43,26 +43,16 @@ impl BitmapKey {
     }
 }
 
-/// A single delta entry: insert or remove an entity from a bitmap.
-#[derive(Debug, Clone)]
-pub struct BitmapDelta {
-    pub key: BitmapKey,
-    pub entity_id: u32,
-    pub insert: bool,
-}
-
-/// In-memory bitmap store. Snapshots are loaded on startup, deltas are
-/// applied in-memory and appended to the delta log for persistence.
+/// In-memory bitmap store. Fully derived: rebuilt from authoritative tables
+/// on open and maintained incrementally by the compilers while running.
 pub struct BitmapStore {
     bitmaps: RwLock<HashMap<BitmapKey, RoaringBitmap>>,
-    pending_deltas: RwLock<Vec<BitmapDelta>>,
 }
 
 impl BitmapStore {
     pub fn new() -> Self {
         Self {
             bitmaps: RwLock::new(HashMap::new()),
-            pending_deltas: RwLock::new(Vec::new()),
         }
     }
 
@@ -84,41 +74,21 @@ impl BitmapStore {
         bitmaps.insert(key, bitmap);
     }
 
-    /// Insert an entity_id into a bitmap and record the delta.
+    /// Insert an entity_id into a bitmap.
     pub fn insert(&self, key: &BitmapKey, entity_id: u32) {
-        {
-            let mut bitmaps = self.bitmaps.write().unwrap();
-            bitmaps
-                .entry(key.clone())
-                .or_insert_with(RoaringBitmap::new)
-                .insert(entity_id);
-        }
-        self.pending_deltas.write().unwrap().push(BitmapDelta {
-            key: key.clone(),
-            entity_id,
-            insert: true,
-        });
+        let mut bitmaps = self.bitmaps.write().unwrap();
+        bitmaps
+            .entry(key.clone())
+            .or_insert_with(RoaringBitmap::new)
+            .insert(entity_id);
     }
 
-    /// Remove an entity_id from a bitmap and record the delta.
+    /// Remove an entity_id from a bitmap.
     pub fn remove(&self, key: &BitmapKey, entity_id: u32) {
-        {
-            let mut bitmaps = self.bitmaps.write().unwrap();
-            if let Some(bm) = bitmaps.get_mut(key) {
-                bm.remove(entity_id);
-            }
+        let mut bitmaps = self.bitmaps.write().unwrap();
+        if let Some(bm) = bitmaps.get_mut(key) {
+            bm.remove(entity_id);
         }
-        self.pending_deltas.write().unwrap().push(BitmapDelta {
-            key: key.clone(),
-            entity_id,
-            insert: false,
-        });
-    }
-
-    /// Drain pending deltas (for persistence to delta log file).
-    pub fn drain_deltas(&self) -> Vec<BitmapDelta> {
-        let mut deltas = self.pending_deltas.write().unwrap();
-        std::mem::take(&mut *deltas)
     }
 
     /// Clear all bitmaps (for full rebuild).

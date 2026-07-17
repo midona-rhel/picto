@@ -13,3 +13,7 @@ Frontend follow-ups still worth treating as genuinely open:
 - [PBI-599-context-menu-action-parity.md](./docs/pbis/active-alpha/PBI-599-context-menu-action-parity.md)
 
 Backend/runtime and metadata PBIs in this folder remain active when they still describe current repo work. The old reset-program sequencing documents should be read as historical notes unless they have been explicitly refreshed.
+
+Persistence and sync track (2026-07-17 audit):
+- [PBI-601-local-persistence-crash-safety-hardening.md](./docs/pbis/active-alpha/PBI-601-local-persistence-crash-safety-hardening.md) — P1 prerequisite: atomic blob writes, transaction wraps, durability pragmas
+- [PBI-602-multi-device-sync-architecture.md](./docs/pbis/active-alpha/PBI-602-multi-device-sync-architecture.md) — append-only oplog over dumb object storage (Google Drive first)

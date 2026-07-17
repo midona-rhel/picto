@@ -272,8 +272,7 @@ fn add_ingest_queue_item(
 }
 
 fn lease_next_ingest_queue(conn: &Connection) -> rusqlite::Result<Option<IngestQueueEntry>> {
-    let tx = conn.unchecked_transaction()?;
-    let leased: Option<IngestQueueEntry> = tx
+    let leased: Option<IngestQueueEntry> = conn
         .query_row(
             "SELECT queue_id, queue_kind, source_kind, subscription_id, query_id, query_run_id,
                     cleanup_root, post_id, category, preferred_name, expected_count, status
@@ -311,12 +310,11 @@ fn lease_next_ingest_queue(conn: &Connection) -> rusqlite::Result<Option<IngestQ
         )
         .optional()?;
     if let Some(ref queue) = leased {
-        tx.execute(
+        conn.execute(
             "UPDATE ingest_queue SET status = 'running', updated_at = ?1 WHERE queue_id = ?2",
             params![now_rfc3339(), queue.queue_id],
         )?;
     }
-    tx.commit()?;
     Ok(leased)
 }
 
@@ -539,9 +537,8 @@ impl LibraryDatabase {
         let category = category.map(ToOwned::to_owned);
         let preferred_name = preferred_name.map(ToOwned::to_owned);
         self.with_write(move |conn| {
-            let tx = conn.unchecked_transaction()?;
             let queue_id = create_ingest_queue_entry(
-                &tx,
+                &conn,
                 queue_kind,
                 &source_kind,
                 subscription_id,
@@ -557,7 +554,7 @@ impl LibraryDatabase {
                 let payload_json = serde_json::to_string(&payload)
                     .map_err(|err| rusqlite::Error::ToSqlConversionFailure(Box::new(err)))?;
                 let item_id = add_ingest_queue_item(
-                    &tx,
+                    &conn,
                     queue_id,
                     &source_path.display().to_string(),
                     page_num,
@@ -566,7 +563,6 @@ impl LibraryDatabase {
                 )?;
                 log_ingest_queue_payload("enqueue", queue_id, item_id, &payload);
             }
-            tx.commit()?;
             Ok(queue_id)
         })
     }

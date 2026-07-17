@@ -472,9 +472,8 @@ pub fn reset_subscription_query_state(
     conn: &Connection,
     query_id: i64,
 ) -> rusqlite::Result<(usize, usize, usize, usize, usize)> {
-    let tx = conn.unchecked_transaction()?;
 
-    let query_reset = tx.execute(
+    let query_reset = conn.execute(
         "UPDATE subscription_query
          SET files_found = 0,
              posts_found = 0,
@@ -490,24 +489,23 @@ pub fn reset_subscription_query_state(
         [query_id],
     )?;
 
-    let query_runs_deleted = tx.execute(
+    let query_runs_deleted = conn.execute(
         "DELETE FROM subscription_query_run WHERE query_id = ?1",
         [query_id],
     )?;
 
-    let issues_deleted = tx.execute(
+    let issues_deleted = conn.execute(
         "DELETE FROM subscription_issue WHERE query_id = ?1",
         [query_id],
     )?;
 
-    let attempts_deleted = tx.execute(
+    let attempts_deleted = conn.execute(
         "DELETE FROM subscription_download_attempt WHERE query_id = ?1",
         [query_id],
     )?;
 
-    let queues_deleted = tx.execute("DELETE FROM ingest_queue WHERE query_id = ?1", [query_id])?;
+    let queues_deleted = conn.execute("DELETE FROM ingest_queue WHERE query_id = ?1", [query_id])?;
 
-    tx.commit()?;
     Ok((
         query_reset,
         query_runs_deleted,
@@ -521,9 +519,8 @@ pub fn reset_subscription_state(
     conn: &Connection,
     subscription_id: i64,
 ) -> rusqlite::Result<(usize, usize, usize)> {
-    let tx = conn.unchecked_transaction()?;
 
-    let queries_reset = tx.execute(
+    let queries_reset = conn.execute(
         "UPDATE subscription_query
          SET files_found = 0,
              posts_found = 0,
@@ -539,17 +536,16 @@ pub fn reset_subscription_state(
         [subscription_id],
     )?;
 
-    let entities_deleted = tx.execute(
+    let entities_deleted = conn.execute(
         "DELETE FROM subscription_entity WHERE subscription_id = ?1",
         [subscription_id],
     )?;
 
-    let post_maps_deleted = tx.execute(
+    let post_maps_deleted = conn.execute(
         "DELETE FROM subscription_post_collection WHERE subscription_id = ?1",
         [subscription_id],
     )?;
 
-    tx.commit()?;
     Ok((queries_reset, entities_deleted, post_maps_deleted))
 }
 

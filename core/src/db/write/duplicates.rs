@@ -35,7 +35,6 @@ pub fn insert_duplicate_pairs_for_scan(
     conn: &Connection,
     candidate_pairs: &[(i64, i64, u32)],
 ) -> rusqlite::Result<usize> {
-    let tx = conn.unchecked_transaction()?;
     let mut inserted = 0usize;
     for (file_id_a, file_id_b, distance) in candidate_pairs {
         let (a, b) = if file_id_a < file_id_b {
@@ -43,13 +42,12 @@ pub fn insert_duplicate_pairs_for_scan(
         } else {
             (*file_id_b, *file_id_a)
         };
-        inserted += tx.execute(
+        inserted += conn.execute(
             "INSERT OR IGNORE INTO duplicate (file_id_a, file_id_b, distance)
              VALUES (?1, ?2, ?3)",
             params![a, b, *distance as i64],
         )? as usize;
     }
-    tx.commit()?;
     Ok(inserted)
 }
 
@@ -147,10 +145,9 @@ pub fn resolve_duplicate_pair(
     right: DuplicateSingleRef,
     preferred_collection_id: Option<i64>,
 ) -> rusqlite::Result<DuplicateResolutionResult> {
-    let tx = conn.unchecked_transaction()?;
 
     if action == "not_duplicate" {
-        tx.execute(
+        conn.execute(
             "UPDATE duplicate
              SET status = 'ignored_false_positive',
                  decision_at = datetime('now'),
@@ -159,7 +156,6 @@ pub fn resolve_duplicate_pair(
              WHERE (file_id_a = ?1 AND file_id_b = ?2) OR (file_id_a = ?2 AND file_id_b = ?1)",
             params![left.file_id, right.file_id],
         )?;
-        tx.commit()?;
         return Ok(DuplicateResolutionResult {
             status: DuplicateResolveStatus::Resolved,
             winner_hash: None,
@@ -173,7 +169,7 @@ pub fn resolve_duplicate_pair(
     }
 
     if action == "keep_both" {
-        tx.execute(
+        conn.execute(
             "UPDATE duplicate
              SET status = 'dismissed_keep_both',
                  decision_at = datetime('now'),
@@ -182,7 +178,6 @@ pub fn resolve_duplicate_pair(
              WHERE (file_id_a = ?1 AND file_id_b = ?2) OR (file_id_a = ?2 AND file_id_b = ?1)",
             params![left.file_id, right.file_id],
         )?;
-        tx.commit()?;
         return Ok(DuplicateResolutionResult {
             status: DuplicateResolveStatus::Resolved,
             winner_hash: None,
@@ -235,7 +230,7 @@ pub fn resolve_duplicate_pair(
         .or(winner.parent_collection_entity_id)
         .or(loser.parent_collection_entity_id);
 
-    let tags_merged: usize = tx
+    let tags_merged: usize = conn
         .query_row(
             "SELECT COUNT(*) FROM entity_tag et
              WHERE et.entity_id = ?1
@@ -249,7 +244,7 @@ pub fn resolve_duplicate_pair(
         )
         .unwrap_or(0) as usize;
 
-    tx.execute(
+    conn.execute(
         "INSERT INTO entity_tag (entity_id, tag_id, provenance_mask, source)
          SELECT ?1, et.tag_id, et.provenance_mask, et.source
          FROM entity_tag et
@@ -271,7 +266,7 @@ pub fn resolve_duplicate_pair(
     };
     let merged_created_at = winner.date_created.min(loser.date_created);
     let merged_status = merged_status(winner.status, loser.status);
-    tx.execute(
+    conn.execute(
         "UPDATE media_entity
          SET status = ?1,
              notes = ?2,
@@ -292,31 +287,31 @@ pub fn resolve_duplicate_pair(
     )?;
 
     let affected_folder_ids = {
-        let mut stmt = tx.prepare(
+        let mut stmt = conn.prepare(
             "SELECT folder_id FROM folder_member WHERE entity_id = ?1 ORDER BY folder_id",
         )?;
         let ids = stmt
             .query_map([loser.entity_id], |row| row.get::<_, i64>(0))?
             .collect::<rusqlite::Result<Vec<_>>>()?;
-        tx.execute(
+        conn.execute(
             "INSERT OR IGNORE INTO folder_member (folder_id, entity_id, position_rank)
              SELECT folder_id, ?1, position_rank
              FROM folder_member
              WHERE entity_id = ?2",
             params![winner.entity_id, loser.entity_id],
         )?;
-        tx.execute("DELETE FROM folder_member WHERE entity_id = ?1", [loser.entity_id])?;
+        conn.execute("DELETE FROM folder_member WHERE entity_id = ?1", [loser.entity_id])?;
         ids
     };
 
-    tx.execute(
+    conn.execute(
         "INSERT OR IGNORE INTO subscription_entity (subscription_id, entity_id)
          SELECT subscription_id, ?1
          FROM subscription_entity
          WHERE entity_id = ?2",
         params![winner.entity_id, loser.entity_id],
     )?;
-    tx.execute(
+    conn.execute(
         "DELETE FROM subscription_entity WHERE entity_id = ?1",
         [loser.entity_id],
     )?;
@@ -342,7 +337,7 @@ pub fn resolve_duplicate_pair(
             } else if winner.parent_collection_entity_id == Some(collection_id) {
                 winner.collection_ordinal.unwrap_or(1)
             } else {
-                tx.query_row(
+                conn.query_row(
                     "SELECT COALESCE(MAX(collection_ordinal), 0) + 1
                      FROM media_entity
                      WHERE parent_collection_entity_id = ?1",
@@ -350,7 +345,7 @@ pub fn resolve_duplicate_pair(
                     |row| row.get::<_, i64>(0),
                 )?
             };
-            tx.execute(
+            conn.execute(
                 "UPDATE media_entity
                  SET parent_collection_entity_id = ?1,
                      collection_ordinal = ?2
@@ -359,7 +354,7 @@ pub fn resolve_duplicate_pair(
             )?;
         }
         None => {
-            tx.execute(
+            conn.execute(
                 "UPDATE media_entity
                  SET parent_collection_entity_id = NULL,
                      collection_ordinal = NULL
@@ -369,7 +364,7 @@ pub fn resolve_duplicate_pair(
         }
     }
 
-    tx.execute(
+    conn.execute(
         "UPDATE duplicate
          SET status = 'resolved',
              decision_at = datetime('now'),
@@ -386,23 +381,22 @@ pub fn resolve_duplicate_pair(
             loser.file_id
         ],
     )?;
-    tx.execute(
+    conn.execute(
         "DELETE FROM duplicate WHERE file_id_a = ?1 OR file_id_b = ?1",
         [loser.file_id],
     )?;
-    tx.execute(
+    conn.execute(
         "DELETE FROM single_media_entity WHERE entity_id = ?1",
         [loser.entity_id],
     )?;
-    tx.execute("DELETE FROM entity_tag WHERE entity_id = ?1", [loser.entity_id])?;
-    tx.execute("DELETE FROM media_entity WHERE entity_id = ?1", [loser.entity_id])?;
-    tx.execute("DELETE FROM media_file WHERE file_id = ?1", [loser.file_id])?;
+    conn.execute("DELETE FROM entity_tag WHERE entity_id = ?1", [loser.entity_id])?;
+    conn.execute("DELETE FROM media_entity WHERE entity_id = ?1", [loser.entity_id])?;
+    conn.execute("DELETE FROM media_file WHERE file_id = ?1", [loser.file_id])?;
 
     for collection_id in &affected_collection_ids {
-        crate::db::write::collections::sync_aggregates(&tx, *collection_id)?;
+        crate::db::write::collections::sync_aggregates(&conn, *collection_id)?;
     }
 
-    tx.commit()?;
     Ok(DuplicateResolutionResult {
         status: DuplicateResolveStatus::Resolved,
         winner_hash: Some(winner.entity_hash),

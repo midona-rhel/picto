@@ -570,7 +570,13 @@ pub async fn ingest_single_path(
         }
     }
 
-    let entity_id = match canonical_db.insert_ingested_single(&prepared_single) {
+    let work_types = work_types_for_new_ingest(
+        &prepared_single.mime_type,
+        prepared_single.frame_count,
+        !prepared_blob.has_thumbnail && !request.skip_thumbnail,
+        prepared_single.perceptual_hash.is_some(),
+    );
+    let entity_id = match canonical_db.insert_ingested_single(&prepared_single, &work_types) {
         Ok(entity_id) => entity_id,
         Err(error) => {
             if let Some(existing) = canonical_db
@@ -584,16 +590,6 @@ pub async fn ingest_single_path(
     let imported_target = canonical_db
         .get_existing_import_target_by_file_hash(&prepared_single.entity_hash)?
         .ok_or_else(|| "Inserted ingest target could not be reloaded".to_string())?;
-
-    let work_types = work_types_for_new_ingest(
-        &prepared_single.mime_type,
-        prepared_single.frame_count,
-        !prepared_blob.has_thumbnail && !request.skip_thumbnail,
-        prepared_single.perceptual_hash.is_some(),
-    );
-    if !work_types.is_empty() {
-        canonical_db.ensure_deferred_jobs_present(&prepared_single.entity_hash, &work_types)?;
-    }
 
     let mut final_entity_hash = prepared_single.entity_hash.clone();
     let mut final_entity_id = entity_id;
@@ -1165,7 +1161,13 @@ pub async fn materialize_subscription_collection(
 
     if existing_collection_id.is_none() && total_member_count < 2 && !force_collection {
         if let Some((member, mut identity)) = new_members.into_iter().next() {
-            if let Err(error) = canonical_db.insert_ingested_single(&member) {
+            let work_types = work_types_for_new_ingest(
+                &member.mime_type,
+                member.frame_count,
+                !member.has_thumbnail && !member.skip_thumbnail,
+                member.perceptual_hash.is_some(),
+            );
+            if let Err(error) = canonical_db.insert_ingested_single(&member, &work_types) {
                 if let Some(existing) = canonical_db
                     .get_existing_import_target_by_file_hash_write(&member.entity_hash)?
                 {
@@ -1174,17 +1176,6 @@ pub async fn materialize_subscription_collection(
                     identity.disposition = SingleIngestDisposition::Reused;
                 } else {
                     return Err(error);
-                }
-            }
-            if identity.disposition.is_imported() {
-                let work_types = work_types_for_new_ingest(
-                    &member.mime_type,
-                    member.frame_count,
-                    !member.has_thumbnail && !member.skip_thumbnail,
-                    member.perceptual_hash.is_some(),
-                );
-                if !work_types.is_empty() {
-                    canonical_db.ensure_deferred_jobs_present(&member.entity_hash, &work_types)?;
                 }
             }
             resolved_members.push(identity);

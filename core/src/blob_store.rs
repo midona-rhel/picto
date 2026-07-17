@@ -10,10 +10,13 @@
 //! - Two-level hex sharding: `hash[0..2]` / `hash[2..4]`
 //! - File extensions derived from MIME type; MIME derived from extension on read
 //! - Idempotent writes — if the file already exists, skip
-//! - The hash IS the filename, so no CRC32/checksums needed
+//! - Writes are atomic: staged in `blobs/tmp/`, then renamed onto the final
+//!   path. A file at a content-addressed path is therefore always complete —
+//!   which is what makes the existence-skip and hash-as-filename safe.
 
 use std::fs;
 use std::io;
+use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
 #[derive(thiserror::Error, Debug)]
@@ -87,14 +90,52 @@ pub fn extension_to_mime(ext: &str) -> &'static str {
 /// Manages reading and writing content-addressed blobs.
 pub struct BlobStore {
     root: PathBuf,
+    /// This instance's staging directory, `blobs/tmp/<pid>-<nonce>/`.
+    /// Unique per open, so a re-open never disturbs an in-flight writer
+    /// still holding the previous instance.
+    staging: PathBuf,
+}
+
+impl Drop for BlobStore {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.staging);
+    }
 }
 
 impl BlobStore {
     /// Open or create a blob store at `<library_root>/blobs/`.
+    ///
+    /// Sweeps staging leftovers from other (dead) processes. Same-pid entries
+    /// are left alone: they may belong to a still-live writer from an earlier
+    /// open of this library in this process.
     pub fn open(library_root: &Path) -> BlobResult<Self> {
         let root = library_root.join("blobs");
         fs::create_dir_all(&root)?;
-        Ok(Self { root })
+        let tmp_root = root.join("tmp");
+        fs::create_dir_all(&tmp_root)?;
+
+        let own_prefix = format!("{}-", std::process::id());
+        if let Ok(entries) = fs::read_dir(&tmp_root) {
+            for entry in entries.flatten() {
+                if entry.file_name().to_string_lossy().starts_with(&own_prefix) {
+                    continue;
+                }
+                let path = entry.path();
+                let _ = if path.is_dir() {
+                    fs::remove_dir_all(&path)
+                } else {
+                    fs::remove_file(&path)
+                };
+            }
+        }
+
+        let staging = tmp_root.join(format!(
+            "{}-{:08x}",
+            std::process::id(),
+            rand::random::<u32>()
+        ));
+        fs::create_dir_all(&staging)?;
+        Ok(Self { root, staging })
     }
 
     /// Write an original file with extension. Skips if already exists (idempotent).
@@ -104,10 +145,40 @@ impl BlobStore {
         if path.exists() {
             return Ok(());
         }
-        if let Some(parent) = path.parent() {
+        // Originals are irreplaceable — fsync before rename.
+        self.write_atomic(&path, data, true)
+    }
+
+    /// Stage `data` in this instance's staging dir and atomically rename onto
+    /// `final_path`, so a partial file can never exist at a content-addressed
+    /// path. `durable` additionally fsyncs the file (and its directory) so the
+    /// blob survives power loss once this returns. The temp file is cleaned
+    /// up on every error path (RAII via `NamedTempFile`).
+    fn write_atomic(&self, final_path: &Path, data: &[u8], durable: bool) -> BlobResult<()> {
+        let mut file = tempfile::NamedTempFile::new_in(&self.staging)?;
+        file.write_all(data)?;
+        if durable {
+            file.as_file().sync_all()?;
+        }
+
+        if let Some(parent) = final_path.parent() {
             fs::create_dir_all(parent)?;
         }
-        fs::write(&path, data)?;
+        if let Err(err) = file.persist(final_path) {
+            // A concurrent writer of the same hash landing first is success:
+            // content-addressed, so the bytes are identical.
+            if !final_path.exists() {
+                return Err(err.error.into());
+            }
+        }
+        if durable {
+            #[cfg(unix)]
+            if let Some(parent) = final_path.parent() {
+                if let Ok(dir) = fs::File::open(parent) {
+                    let _ = dir.sync_all();
+                }
+            }
+        }
         Ok(())
     }
 
@@ -143,11 +214,8 @@ impl BlobStore {
             return Ok(());
         }
         let path = self.thumbnail_path_with_ext(hex_hash, ext)?;
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        fs::write(&path, data)?;
-        Ok(())
+        // Thumbnails are regenerable — atomic rename without fsync.
+        self.write_atomic(&path, data, false)
     }
 
     /// Read a thumbnail, returning `Ok(None)` if missing.
@@ -301,5 +369,49 @@ mod tests {
         let store = BlobStore::open(dir.path()).unwrap();
 
         assert!(store.original_path_with_ext("ab", Some("jpg")).is_err()); // too short
+    }
+
+    #[test]
+    fn test_no_staging_leftovers_after_write() {
+        let dir = TempDir::new().unwrap();
+        let store = BlobStore::open(dir.path()).unwrap();
+        let hash = test_hash();
+
+        store.write_original(&hash, b"data", Some("png")).unwrap();
+        store.write_thumbnail(&hash, b"thumb", "jpg").unwrap();
+
+        assert_eq!(fs::read_dir(&store.staging).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn test_open_clears_dead_process_staging_only() {
+        let dir = TempDir::new().unwrap();
+        let tmp = dir.path().join("blobs").join("tmp");
+        fs::create_dir_all(&tmp).unwrap();
+        // Crash leftover from another (dead) process.
+        let dead = tmp.join("999999999-deadbeef");
+        fs::create_dir_all(&dead).unwrap();
+        fs::write(dead.join("partial.png"), b"partial").unwrap();
+        // In-flight staging dir from a still-live store in this process.
+        let live = tmp.join(format!("{}-cafebabe", std::process::id()));
+        fs::create_dir_all(&live).unwrap();
+        fs::write(live.join("inflight.png"), b"inflight").unwrap();
+
+        let _store = BlobStore::open(dir.path()).unwrap();
+        assert!(!dead.exists(), "dead-process leftover must be swept");
+        assert!(
+            live.join("inflight.png").exists(),
+            "same-process in-flight staging must survive a re-open"
+        );
+    }
+
+    #[test]
+    fn test_drop_removes_own_staging_dir() {
+        let dir = TempDir::new().unwrap();
+        let staging = {
+            let store = BlobStore::open(dir.path()).unwrap();
+            store.staging.clone()
+        };
+        assert!(!staging.exists());
     }
 }

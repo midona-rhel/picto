@@ -161,6 +161,16 @@ fn reconcile_open_schema(conn: &Connection) -> Result<(), String> {
         conn.execute_batch("ALTER TABLE subscription_query ADD COLUMN notes TEXT")
             .map_err(|e| format!("Failed to add subscription_query.notes: {e}"))?;
     }
+    if has_column(conn, "subscription_group", "paused").map_err(|e| e.to_string())? == false {
+        conn.execute_batch(
+            "ALTER TABLE subscription_group ADD COLUMN paused INTEGER NOT NULL DEFAULT 0",
+        )
+        .map_err(|e| format!("Failed to add subscription_group.paused: {e}"))?;
+    }
+    if has_column(conn, "credential_domain", "expires_at").map_err(|e| e.to_string())? == false {
+        conn.execute_batch("ALTER TABLE credential_domain ADD COLUMN expires_at TEXT")
+            .map_err(|e| format!("Failed to add credential_domain.expires_at: {e}"))?;
+    }
     if has_column(conn, "subscription_query", "site_id").map_err(|e| e.to_string())? == false {
         conn.execute_batch(
             "ALTER TABLE subscription_query ADD COLUMN site_id TEXT NOT NULL DEFAULT ''",
@@ -379,8 +389,14 @@ pub struct LibraryDatabase {
     read_conn: Mutex<Connection>,
     /// In-memory bitmap store (derived, rebuildable).
     pub bitmaps: Arc<BitmapStore>,
-    /// Library root path (for bitmap snapshot files).
-    library_root: std::path::PathBuf,
+}
+
+impl Drop for LibraryDatabase {
+    fn drop(&mut self) {
+        // Backstop only — close_library checkpoints explicitly, because a
+        // detached worker can hold an Arc past close and delay this drop.
+        self.checkpoint();
+    }
 }
 
 impl LibraryDatabase {
@@ -392,10 +408,11 @@ impl LibraryDatabase {
         let read_conn = Connection::open(&db_path)
             .map_err(|e| format!("Failed to open read connection: {e}"))?;
 
-        // Configure connections
+        // Configure connections. The write connection runs synchronous=FULL so
+        // an acknowledged commit survives power loss, not just process crash.
         write_conn
             .execute_batch(
-                "PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;",
+                "PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL; PRAGMA foreign_keys = ON; PRAGMA busy_timeout = 5000;",
             )
             .map_err(|e| format!("Failed to configure write connection: {e}"))?;
         read_conn
@@ -410,7 +427,6 @@ impl LibraryDatabase {
             write_conn: Mutex::new(write_conn),
             read_conn: Mutex::new(read_conn),
             bitmaps,
-            library_root: library_root.to_path_buf(),
         };
 
         // Bootstrap: migrate, import, or load existing schema
@@ -453,15 +469,11 @@ impl LibraryDatabase {
                     import_from_legacy_db(&conn, &old_db_path)?;
                     projection::compiler::full_rebuild(&conn, &db.bitmaps);
                 } else {
-                    // Normal startup — load bitmaps
-                    let delta_path = library_root.join("bitmaps.delta");
-                    let replayed =
-                        projection::bitmap_delta::replay_deltas(&delta_path, &db.bitmaps)
-                            .unwrap_or(0);
-                    if replayed == 0 {
-                        let conn_r = db.read_conn.lock().unwrap();
-                        projection::compiler::full_rebuild(&conn_r, &db.bitmaps);
-                    }
+                    // Normal startup — bitmaps are derived, rebuild from authoritative tables.
+                    let conn_r = db.read_conn.lock().unwrap();
+                    projection::compiler::full_rebuild(&conn_r, &db.bitmaps);
+                    // Remove the delta log left behind by older versions.
+                    let _ = std::fs::remove_file(library_root.join("bitmaps.delta"));
                 }
             }
 
@@ -475,12 +487,40 @@ impl LibraryDatabase {
     // ── Internal connection access (crate-private) ─────────────────
 
     /// Execute a write operation. Only accessible within db/.
+    ///
+    /// The closure runs inside a single transaction: an error rolls back every
+    /// statement it issued. Closures must not open their own transactions.
     pub(crate) fn with_write<F, R>(&self, f: F) -> Result<R, String>
     where
         F: FnOnce(&Connection) -> rusqlite::Result<R>,
     {
         let conn = self.write_conn.lock().unwrap();
-        f(&conn).map_err(|e| e.to_string())
+        debug_assert!(
+            conn.is_autocommit(),
+            "with_write entered with a transaction already open"
+        );
+        let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+        let result = f(&tx).map_err(|e| e.to_string())?;
+        debug_assert!(
+            !tx.is_autocommit(),
+            "with_write closure must not commit or roll back the outer transaction"
+        );
+        tx.commit().map_err(|e| e.to_string())?;
+        Ok(result)
+    }
+
+    /// Fold the WAL back into the main database file. Called explicitly on
+    /// library close; `Drop` re-runs it as a backstop for stray references.
+    pub fn checkpoint(&self) {
+        if let Ok(conn) = self.write_conn.lock() {
+            match conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |row| {
+                row.get::<_, i64>(0)
+            }) {
+                Ok(0) => {}
+                Ok(busy) => tracing::warn!(busy, "WAL checkpoint could not complete"),
+                Err(e) => tracing::warn!("WAL checkpoint failed: {e}"),
+            }
+        }
     }
 
     /// Execute a read operation. Only accessible within db/.
@@ -782,10 +822,11 @@ impl LibraryDatabase {
     pub fn insert_ingested_single(
         &self,
         prepared: &types::IngestPreparedSingle,
+        deferred_work_types: &[crate::background_work::DeferredWorkType],
     ) -> Result<i64, String> {
         let prepared = prepared.clone();
+        let deferred_work = deferred_work_types.to_vec();
         self.with_write(move |conn| {
-            let tx = conn.unchecked_transaction()?;
             let source_urls_json = if prepared.source_urls.is_empty() {
                 None
             } else {
@@ -793,13 +834,13 @@ impl LibraryDatabase {
             };
             // Clean up any orphan media_file left by a deleted entity before
             // inserting, so we don't hit a UNIQUE constraint on file_hash.
-            tx.execute(
+            conn.execute(
                 "DELETE FROM media_file WHERE file_hash = ?1
                  AND file_id NOT IN (SELECT file_id FROM single_media_entity)",
                 rusqlite::params![prepared.entity_hash],
             )?;
             let file_id = write::files::insert_file(
-                &tx,
+                &conn,
                 &prepared.entity_hash,
                 &prepared.mime_type,
                 prepared.size_bytes,
@@ -811,10 +852,10 @@ impl LibraryDatabase {
                 &prepared.date_added,
             )?;
             if let Some(phash) = prepared.perceptual_hash.as_deref() {
-                write::files::replace_file_phash(&tx, file_id, Some(phash))?;
+                write::files::replace_file_phash(&conn, file_id, Some(phash))?;
             }
             let entity_id = write::entities::insert_single(
-                &tx,
+                &conn,
                 &prepared.entity_hash,
                 file_id,
                 prepared.name.as_deref(),
@@ -824,7 +865,7 @@ impl LibraryDatabase {
             )?;
             if prepared.notes.is_some() || !prepared.source_urls.is_empty() {
                 write::entities::patch_entity_metadata(
-                    &tx,
+                    &conn,
                     &[entity_id],
                     None,
                     None,
@@ -836,14 +877,30 @@ impl LibraryDatabase {
             }
             if !prepared.tag_strings.is_empty() {
                 write::tags::add_tags(
-                    &tx,
+                    &conn,
                     &[entity_id],
                     &prepared.tag_strings,
                     prepared.tag_provenance_mask,
                     types::ExpansionMode::EntityOnly,
                 )?;
             }
-            tx.commit()?;
+            if !deferred_work.is_empty() {
+                let now = chrono::Utc::now().to_rfc3339();
+                let mut stmt = conn.prepare(
+                    "INSERT INTO deferred_work_item
+                         (entity_hash, work_type, status, attempt_count, available_at, queued_at)
+                     VALUES
+                         (?1, ?2, 'pending', 0, ?3, ?3)
+                     ON CONFLICT(entity_hash, work_type) DO NOTHING",
+                )?;
+                for work_type in &deferred_work {
+                    stmt.execute(rusqlite::params![
+                        prepared.entity_hash,
+                        work_type.as_db_str(),
+                        now
+                    ])?;
+                }
+            }
             Ok(entity_id)
         })
     }
@@ -860,7 +917,6 @@ impl LibraryDatabase {
         let prepared = new_members.to_vec();
         let existing_ids = existing_member_ids.to_vec();
         self.with_write(move |conn| {
-            let tx = conn.unchecked_transaction()?;
             let mut member_ids = existing_ids;
             let mut new_hashes = Vec::with_capacity(prepared.len());
 
@@ -872,13 +928,13 @@ impl LibraryDatabase {
                 };
                 // Clean up any orphan media_file left by a deleted entity before
                 // inserting, so we don't hit a UNIQUE constraint on file_hash.
-                tx.execute(
+                conn.execute(
                     "DELETE FROM media_file WHERE file_hash = ?1
                      AND file_id NOT IN (SELECT file_id FROM single_media_entity)",
                     rusqlite::params![member.entity_hash],
                 )?;
                 let file_id = write::files::insert_file(
-                    &tx,
+                    &conn,
                     &member.entity_hash,
                     &member.mime_type,
                     member.size_bytes,
@@ -890,7 +946,7 @@ impl LibraryDatabase {
                     &member.date_added,
                 )?;
                 let entity_id = write::entities::insert_single(
-                    &tx,
+                    &conn,
                     &member.entity_hash,
                     file_id,
                     member.name.as_deref(),
@@ -900,7 +956,7 @@ impl LibraryDatabase {
                 )?;
                 if member.notes.is_some() || !member.source_urls.is_empty() {
                     write::entities::patch_entity_metadata(
-                        &tx,
+                        &conn,
                         &[entity_id],
                         None,
                         None,
@@ -912,7 +968,7 @@ impl LibraryDatabase {
                 }
                 if !member.tag_strings.is_empty() {
                     write::tags::add_tags(
-                        &tx,
+                        &conn,
                         &[entity_id],
                         &member.tag_strings,
                         member.tag_provenance_mask,
@@ -929,22 +985,21 @@ impl LibraryDatabase {
 
             let collection_id = if let Some(collection_id) = existing_collection_id {
                 if !member_ids.is_empty() {
-                    write::collections::add_members(&tx, collection_id, &member_ids)?;
+                    write::collections::add_members(&conn, collection_id, &member_ids)?;
                 }
                 collection_id
             } else {
                 let now = chrono::Utc::now().to_rfc3339();
                 let collection_id =
-                    write::collections::create_collection(&tx, &collection_name, &now)?;
+                    write::collections::create_collection(&conn, &collection_name, &now)?;
                 if !member_ids.is_empty() {
-                    write::collections::add_members(&tx, collection_id, &member_ids)?;
+                    write::collections::add_members(&conn, collection_id, &member_ids)?;
                 }
                 collection_id
             };
 
-            let collection_hash = query::collections::get_collection_hash(&tx, collection_id)?
+            let collection_hash = query::collections::get_collection_hash(&conn, collection_id)?
                 .ok_or_else(|| rusqlite::Error::QueryReturnedNoRows)?;
-            tx.commit()?;
             Ok((collection_id, collection_hash, new_hashes))
         })
     }
@@ -1864,9 +1919,8 @@ impl LibraryDatabase {
         &self,
     ) -> Result<Vec<types::ClaimedDeferredWorkItem>, String> {
         self.with_write(|conn| {
-            let tx = conn.unchecked_transaction()?;
             let now = chrono::Utc::now().to_rfc3339();
-            let next_hash: Option<String> = tx
+            let next_hash: Option<String> = conn
                 .query_row(
                     "SELECT entity_hash
                      FROM deferred_work_item
@@ -1879,11 +1933,10 @@ impl LibraryDatabase {
                 .optional()?;
 
             let Some(next_hash) = next_hash else {
-                tx.commit()?;
                 return Ok(Vec::new());
             };
 
-            let mut stmt = tx.prepare(
+            let mut stmt = conn.prepare(
                 "SELECT work_id, entity_hash, work_type, attempt_count
                  FROM deferred_work_item
                  WHERE entity_hash = ?1 AND status = 'pending' AND available_at <= ?2
@@ -1902,7 +1955,7 @@ impl LibraryDatabase {
             drop(stmt);
 
             for row in &rows {
-                tx.execute(
+                conn.execute(
                     "UPDATE deferred_work_item
                      SET status = 'running',
                          started_at = ?2
@@ -1910,7 +1963,6 @@ impl LibraryDatabase {
                     rusqlite::params![row.work_id, now],
                 )?;
             }
-            tx.commit()?;
             Ok(rows)
         })
     }
@@ -2627,13 +2679,6 @@ impl LibraryDatabase {
         projection::compiler::full_rebuild(&conn, &self.bitmaps);
     }
 
-    /// Flush pending bitmap deltas to the delta log file.
-    pub fn flush_bitmap_deltas(&self) -> Result<usize, String> {
-        let delta_path = self.library_root.join("bitmaps.delta");
-        projection::bitmap_delta::flush_deltas(&delta_path, &self.bitmaps)
-            .map_err(|e| format!("Failed to flush bitmap deltas: {e}"))
-    }
-
     /// Get bitmap length for a key (used by sidebar counts).
     pub fn bitmap_len(&self, key: &projection::bitmaps::BitmapKey) -> u64 {
         self.bitmaps.len(key)
@@ -2657,6 +2702,54 @@ mod tests {
         let db = LibraryDatabase::open(tmp.path()).expect("open library db");
         std::mem::forget(tmp);
         db
+    }
+
+    #[test]
+    fn with_write_rolls_back_every_statement_on_error() {
+        let db = open_test_db();
+
+        let result: Result<(), String> = db.with_write(|conn| {
+            conn.execute(
+                "INSERT INTO tag (namespace, subtag) VALUES ('test', 'rollback_a')",
+                [],
+            )?;
+            conn.execute(
+                "INSERT INTO tag (namespace, subtag) VALUES ('test', 'rollback_b')",
+                [],
+            )?;
+            Err(rusqlite::Error::InvalidQuery)
+        });
+        assert!(result.is_err());
+
+        let count: i64 = db
+            .with_read(|conn| {
+                conn.query_row(
+                    "SELECT COUNT(*) FROM tag WHERE namespace = 'test'",
+                    [],
+                    |row| row.get(0),
+                )
+            })
+            .unwrap();
+        assert_eq!(count, 0, "failed write action must leave no partial rows");
+
+        db.with_write(|conn| {
+            conn.execute(
+                "INSERT INTO tag (namespace, subtag) VALUES ('test', 'commit_a')",
+                [],
+            )
+            .map(|_| ())
+        })
+        .unwrap();
+        let count: i64 = db
+            .with_read(|conn| {
+                conn.query_row(
+                    "SELECT COUNT(*) FROM tag WHERE namespace = 'test'",
+                    [],
+                    |row| row.get(0),
+                )
+            })
+            .unwrap();
+        assert_eq!(count, 1, "successful write action must commit");
     }
 
     #[test]

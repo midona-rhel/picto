@@ -176,6 +176,11 @@ async fn close_library_inner() {
         };
         crate::workers::stop_workers(handles).await;
 
+        // Checkpoint explicitly: a detached worker can hold an Arc to the
+        // database past this point, so Drop alone would run too late (or,
+        // on process exit, not at all).
+        state.engine.db().checkpoint();
+
         tracing::info!("Library closed");
     }
 }
