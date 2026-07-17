@@ -137,3 +137,12 @@ Decided 2026-07-17: remote objects are stored unencrypted. Encryption is a possi
 2. Stage 2 — replay engine + fake backend + determinism tests. Local-only.
 3. Stage 3 — Drive backend, single-writer multi-reader.
 4. Stage 4 — full multi-writer with convergence digests, scrub, GC.
+
+### Stage 1 progress (2026-07-17)
+Foundations landed:
+- `core/src/oplog.rs`: `new_uuid()` (32-hex identity), `next_hlc()` (monotonic hybrid logical clock), `device_id()` (stable per-install id under `~/.picto/device-id`, outside any library root; TODO: move to Electron app-data once the host passes it through initialize), `record_op()` (outbox insert), `OP_VERSION = 1`.
+- `op_outbox` table in the live schema + open-time reconcile. Op rows are written inside the same `with_write` transaction as the mutation they describe — the dual-write is atomic by construction (relies on PBI-601).
+- `uuid` columns with unique indexes on `folder`, `smart_folder`, `subscription`, `subscription_group`; generated on insert, backfilled for existing rows on open.
+- Reference emission pattern wired for the folder domain: `folder_created` / `folder_updated` (truth fields only — watch config is device-local) / `folder_moved` / `folder_deleted` (tombstone), keyed by folder uuid.
+
+Remaining for Stage 1: emission wiring for the other truth domains (entities/status/metadata, tags + tag graph, smart folders, collections, subscription/group config, duplicate decisions) following the folder pattern; entity/tag ops key on `entity_hash` / `(namespace, subtag)` and need no new identity. Note: `db/write/subscriptions.rs` is dead code (dispatch routes through `runtime_service`) — delete rather than wire.

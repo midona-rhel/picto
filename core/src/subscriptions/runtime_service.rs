@@ -161,8 +161,8 @@ impl<'a> SubscriptionRuntimeService<'a> {
         let now = chrono::Utc::now().to_rfc3339();
         let group_id = self.db.with_write(|conn| {
             conn.execute(
-                "INSERT INTO subscription_group (name, schedule, date_added) VALUES (?1, ?2, ?3)",
-                params![trimmed, schedule, now],
+                "INSERT INTO subscription_group (name, schedule, uuid, date_added) VALUES (?1, ?2, ?3, ?4)",
+                params![trimmed, schedule, crate::oplog::new_uuid(), now],
             )?;
             Ok(conn.last_insert_rowid())
         })?;
@@ -247,13 +247,14 @@ impl<'a> SubscriptionRuntimeService<'a> {
         let now = chrono::Utc::now().to_rfc3339();
         let subscription_id = self.db.with_write(|conn| {
             conn.execute(
-                "INSERT INTO subscription (name, site_id, paused, group_id, initial_post_limit, periodic_post_limit, auto_collections, date_added)
-                 VALUES (?1, '', 0, ?2, ?3, ?4, 1, ?5)",
+                "INSERT INTO subscription (name, site_id, paused, group_id, initial_post_limit, periodic_post_limit, auto_collections, uuid, date_added)
+                 VALUES (?1, '', 0, ?2, ?3, ?4, 1, ?5, ?6)",
                 params![
                     name,
                     group_id,
                     initial_post_limit.unwrap_or(100) as i64,
                     periodic_post_limit.unwrap_or(50) as i64,
+                    crate::oplog::new_uuid(),
                     now
                 ],
             )?;

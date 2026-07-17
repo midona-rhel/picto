@@ -36,6 +36,7 @@ pub mod credential_store;
 pub mod dispatch;
 pub mod events;
 pub mod media_processing;
+pub mod oplog;
 pub mod perf;
 pub mod poison;
 pub mod rate_limiter;

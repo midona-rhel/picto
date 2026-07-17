@@ -122,9 +122,11 @@ CREATE TABLE IF NOT EXISTS folder (
     total_size_bytes           INTEGER NOT NULL DEFAULT 0,
     pinned                     INTEGER NOT NULL DEFAULT 0,
     pin_order                  INTEGER NOT NULL DEFAULT 0,
+    uuid                       TEXT,
     date_added                 TEXT    NOT NULL,
     date_modified              TEXT    NOT NULL
 );
+CREATE UNIQUE INDEX IF NOT EXISTS idx_folder_uuid ON folder(uuid) WHERE uuid IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS folder_member (
     folder_id     INTEGER NOT NULL REFERENCES folder(folder_id) ON DELETE CASCADE,
@@ -147,16 +149,21 @@ CREATE TABLE IF NOT EXISTS smart_folder (
     total_size_bytes INTEGER NOT NULL DEFAULT 0,
     pinned           INTEGER NOT NULL DEFAULT 0,
     pin_order        INTEGER NOT NULL DEFAULT 0,
+    uuid             TEXT,
     date_added       TEXT    NOT NULL,
     date_modified    TEXT    NOT NULL
 );
+CREATE UNIQUE INDEX IF NOT EXISTS idx_smart_folder_uuid ON smart_folder(uuid) WHERE uuid IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS subscription_group (
     group_id   INTEGER PRIMARY KEY,
     name       TEXT    NOT NULL,
     schedule   TEXT    NOT NULL DEFAULT 'manual',
+    paused     INTEGER NOT NULL DEFAULT 0,
+    uuid       TEXT,
     date_added TEXT    NOT NULL
 );
+CREATE UNIQUE INDEX IF NOT EXISTS idx_subscription_group_uuid ON subscription_group(uuid) WHERE uuid IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS subscription (
     subscription_id    INTEGER PRIMARY KEY,
@@ -167,8 +174,10 @@ CREATE TABLE IF NOT EXISTS subscription (
     initial_post_limit INTEGER DEFAULT 100,
     periodic_post_limit INTEGER DEFAULT 100,
     auto_collections   INTEGER NOT NULL DEFAULT 1,
+    uuid               TEXT,
     date_added         TEXT    NOT NULL
 );
+CREATE UNIQUE INDEX IF NOT EXISTS idx_subscription_uuid ON subscription(uuid) WHERE uuid IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS subscription_query (
     query_id            INTEGER PRIMARY KEY,
@@ -450,6 +459,22 @@ CREATE TABLE IF NOT EXISTS manifest (
     key   TEXT PRIMARY KEY,
     epoch INTEGER NOT NULL DEFAULT 0
 );
+
+-- Durable sync op outbox: one row per truth mutation, written in the same
+-- transaction as the mutation. Device-local; drained into remote segments
+-- by the sync engine (uploaded_seq marks drained rows).
+CREATE TABLE IF NOT EXISTS op_outbox (
+    op_id        INTEGER PRIMARY KEY,
+    op_version   INTEGER NOT NULL,
+    op_type      TEXT    NOT NULL,
+    entity_key   TEXT    NOT NULL,
+    payload_json TEXT    NOT NULL,
+    hlc          TEXT    NOT NULL,
+    device_id    TEXT    NOT NULL,
+    created_at   TEXT    NOT NULL,
+    uploaded_seq INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_op_outbox_pending ON op_outbox(op_id) WHERE uploaded_seq IS NULL;
 
 CREATE TABLE IF NOT EXISTS schema_version (
     version INTEGER NOT NULL

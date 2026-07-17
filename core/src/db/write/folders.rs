@@ -16,8 +16,8 @@ pub fn create_folder(
     now: &str,
 ) -> rusqlite::Result<i64> {
     conn.execute(
-        "INSERT INTO folder (name, parent_id, icon, color, notes, date_added, date_modified) VALUES (?1, ?2, ?3, ?4, NULL, ?5, ?5)",
-        params![name, parent_id, icon, color, now],
+        "INSERT INTO folder (name, parent_id, icon, color, notes, uuid, date_added, date_modified) VALUES (?1, ?2, ?3, ?4, NULL, ?5, ?6, ?6)",
+        params![name, parent_id, icon, color, crate::oplog::new_uuid(), now],
     )?;
     Ok(conn.last_insert_rowid())
 }

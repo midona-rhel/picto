@@ -346,6 +346,72 @@ fn reconcile_open_schema(conn: &Connection) -> Result<(), String> {
         conn.execute_batch("ALTER TABLE smart_folder ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0; ALTER TABLE smart_folder ADD COLUMN pin_order INTEGER NOT NULL DEFAULT 0")
             .map_err(|e| format!("Failed to add smart_folder pinning columns: {e}"))?;
     }
+    reconcile_sync_identity_schema(conn)?;
+    Ok(())
+}
+
+fn folder_uuid(conn: &Connection, folder_id: i64) -> rusqlite::Result<Option<String>> {
+    conn.query_row(
+        "SELECT uuid FROM folder WHERE folder_id = ?1",
+        [folder_id],
+        |row| row.get(0),
+    )
+    .optional()
+}
+
+/// Stable sync identity (uuid columns) and the durable op outbox.
+/// Entities that only had local autoincrement ids get a uuid; existing rows
+/// are backfilled so every row has one before any op can reference it.
+fn reconcile_sync_identity_schema(conn: &Connection) -> Result<(), String> {
+    for (table, pk) in [
+        ("folder", "folder_id"),
+        ("smart_folder", "smart_folder_id"),
+        ("subscription_group", "group_id"),
+        ("subscription", "subscription_id"),
+    ] {
+        if has_column(conn, table, "uuid").map_err(|e| e.to_string())? == false {
+            conn.execute_batch(&format!("ALTER TABLE {table} ADD COLUMN uuid TEXT"))
+                .map_err(|e| format!("Failed to add {table}.uuid: {e}"))?;
+        }
+        let missing: Vec<i64> = {
+            let mut stmt = conn
+                .prepare(&format!("SELECT {pk} FROM {table} WHERE uuid IS NULL"))
+                .map_err(|e| e.to_string())?;
+            let rows = stmt
+                .query_map([], |row| row.get(0))
+                .map_err(|e| e.to_string())?
+                .collect::<rusqlite::Result<Vec<i64>>>()
+                .map_err(|e| e.to_string())?;
+            rows
+        };
+        for id in missing {
+            conn.execute(
+                &format!("UPDATE {table} SET uuid = ?1 WHERE {pk} = ?2"),
+                rusqlite::params![crate::oplog::new_uuid(), id],
+            )
+            .map_err(|e| format!("Failed to backfill {table}.uuid: {e}"))?;
+        }
+        conn.execute_batch(&format!(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_{table}_uuid ON {table}(uuid) WHERE uuid IS NOT NULL"
+        ))
+        .map_err(|e| format!("Failed to index {table}.uuid: {e}"))?;
+    }
+
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS op_outbox (
+            op_id        INTEGER PRIMARY KEY,
+            op_version   INTEGER NOT NULL,
+            op_type      TEXT    NOT NULL,
+            entity_key   TEXT    NOT NULL,
+            payload_json TEXT    NOT NULL,
+            hlc          TEXT    NOT NULL,
+            device_id    TEXT    NOT NULL,
+            created_at   TEXT    NOT NULL,
+            uploaded_seq INTEGER
+        );
+        CREATE INDEX IF NOT EXISTS idx_op_outbox_pending ON op_outbox(op_id) WHERE uploaded_seq IS NULL;",
+    )
+    .map_err(|e| format!("Failed to create op_outbox: {e}"))?;
     Ok(())
 }
 
@@ -389,6 +455,8 @@ pub struct LibraryDatabase {
     read_conn: Mutex<Connection>,
     /// In-memory bitmap store (derived, rebuildable).
     pub bitmaps: Arc<BitmapStore>,
+    /// This installation's stable device identity, stamped on outbox ops.
+    device_id: String,
 }
 
 impl Drop for LibraryDatabase {
@@ -427,6 +495,7 @@ impl LibraryDatabase {
             write_conn: Mutex::new(write_conn),
             read_conn: Mutex::new(read_conn),
             bitmaps,
+            device_id: crate::oplog::device_id(),
         };
 
         // Bootstrap: migrate, import, or load existing schema
@@ -1223,18 +1292,77 @@ impl LibraryDatabase {
     ) -> Result<i64, String> {
         let now = chrono::Utc::now().to_rfc3339();
         self.with_write(|conn| {
-            write::folders::create_folder(conn, name, parent_id, icon, color, &now)
+            let folder_id = write::folders::create_folder(conn, name, parent_id, icon, color, &now)?;
+            let uuid = folder_uuid(conn, folder_id)?.unwrap_or_default();
+            let parent_uuid = match parent_id {
+                Some(pid) => folder_uuid(conn, pid)?,
+                None => None,
+            };
+            crate::oplog::record_op(
+                conn,
+                &self.device_id,
+                "folder_created",
+                &uuid,
+                &serde_json::json!({
+                    "name": name,
+                    "parent": parent_uuid,
+                    "icon": icon,
+                    "color": color,
+                }),
+            )?;
+            Ok(folder_id)
         })
     }
 
     pub fn update_folder(&self, folder_id: i64, patch: &types::FolderPatch) -> Result<(), String> {
         let now = chrono::Utc::now().to_rfc3339();
         let p = patch.clone();
-        self.with_write(move |conn| write::folders::update_folder(conn, folder_id, &p, &now))
+        self.with_write(move |conn| {
+            write::folders::update_folder(conn, folder_id, &p, &now)?;
+            // Only truth fields sync; watch config is device-local.
+            let mut fields = serde_json::Map::new();
+            if let Some(v) = &p.name {
+                fields.insert("name".into(), v.clone().into());
+            }
+            if let Some(v) = &p.icon {
+                fields.insert("icon".into(), v.clone().into());
+            }
+            if let Some(v) = &p.color {
+                fields.insert("color".into(), v.clone().into());
+            }
+            if let Some(v) = &p.notes {
+                fields.insert("notes".into(), v.clone().into());
+            }
+            if !fields.is_empty() {
+                if let Some(uuid) = folder_uuid(conn, folder_id)? {
+                    crate::oplog::record_op(
+                        conn,
+                        &self.device_id,
+                        "folder_updated",
+                        &uuid,
+                        &serde_json::Value::Object(fields),
+                    )?;
+                }
+            }
+            Ok(())
+        })
     }
 
     pub fn delete_folder(&self, folder_id: i64) -> Result<(), String> {
-        self.with_write(|conn| write::folders::delete_folder(conn, folder_id))
+        self.with_write(|conn| {
+            let uuid = folder_uuid(conn, folder_id)?;
+            write::folders::delete_folder(conn, folder_id)?;
+            if let Some(uuid) = uuid {
+                crate::oplog::record_op(
+                    conn,
+                    &self.device_id,
+                    "folder_deleted",
+                    &uuid,
+                    &serde_json::json!({}),
+                )?;
+            }
+            Ok(())
+        })
     }
 
     pub fn move_folder(&self, folder_id: i64, new_parent_id: Option<i64>) -> Result<(), String> {
@@ -1251,7 +1379,21 @@ impl LibraryDatabase {
                     ));
                 }
             }
-            write::folders::move_folder(conn, folder_id, new_parent_id, &now)
+            write::folders::move_folder(conn, folder_id, new_parent_id, &now)?;
+            if let Some(uuid) = folder_uuid(conn, folder_id)? {
+                let parent_uuid = match new_parent_id {
+                    Some(pid) => folder_uuid(conn, pid)?,
+                    None => None,
+                };
+                crate::oplog::record_op(
+                    conn,
+                    &self.device_id,
+                    "folder_moved",
+                    &uuid,
+                    &serde_json::json!({ "parent": parent_uuid }),
+                )?;
+            }
+            Ok(())
         })
     }
 
@@ -2702,6 +2844,75 @@ mod tests {
         let db = LibraryDatabase::open(tmp.path()).expect("open library db");
         std::mem::forget(tmp);
         db
+    }
+
+    #[test]
+    fn folder_mutations_emit_outbox_ops_with_stable_uuid() {
+        let db = open_test_db();
+
+        let folder_id = db.create_folder("Art", None, None, None).unwrap();
+        db.update_folder(
+            folder_id,
+            &crate::db::types::FolderPatch {
+                name: Some("Artwork".to_string()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        db.delete_folder(folder_id).unwrap();
+
+        let ops: Vec<(String, String, String, String)> = db
+            .with_read(|conn| {
+                let mut stmt = conn.prepare(
+                    "SELECT op_type, entity_key, hlc, device_id FROM op_outbox ORDER BY op_id",
+                )?;
+                let rows = stmt
+                    .query_map([], |row| {
+                        Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+                    })?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                Ok(rows)
+            })
+            .unwrap();
+
+        assert_eq!(
+            ops.iter().map(|o| o.0.as_str()).collect::<Vec<_>>(),
+            vec!["folder_created", "folder_updated", "folder_deleted"]
+        );
+        let uuid = &ops[0].1;
+        assert_eq!(uuid.len(), 32, "entity key must be the folder uuid");
+        assert!(ops.iter().all(|o| &o.1 == uuid));
+        assert!(ops[0].2 < ops[1].2 && ops[1].2 < ops[2].2, "hlc must increase");
+        assert!(ops.iter().all(|o| !o.3.is_empty()));
+    }
+
+    #[test]
+    fn reopen_backfills_missing_uuids() {
+        let tmp = TempDir::new().expect("tempdir");
+        {
+            let db = LibraryDatabase::open(tmp.path()).expect("open");
+            db.with_write(|conn| {
+                conn.execute(
+                    "INSERT INTO folder (name, uuid, date_added, date_modified)
+                     VALUES ('legacy', NULL, 'now', 'now')",
+                    [],
+                )
+                .map(|_| ())
+            })
+            .unwrap();
+        }
+        let db = LibraryDatabase::open(tmp.path()).expect("reopen");
+        let uuid: Option<String> = db
+            .with_read(|conn| {
+                conn.query_row(
+                    "SELECT uuid FROM folder WHERE name = 'legacy'",
+                    [],
+                    |row| row.get(0),
+                )
+            })
+            .unwrap();
+        let uuid = uuid.expect("uuid must be backfilled on reopen");
+        assert_eq!(uuid.len(), 32);
     }
 
     #[test]
