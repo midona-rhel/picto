@@ -359,6 +359,153 @@ fn folder_uuid(conn: &Connection, folder_id: i64) -> rusqlite::Result<Option<Str
     .optional()
 }
 
+fn smart_folder_uuid(conn: &Connection, smart_folder_id: i64) -> rusqlite::Result<Option<String>> {
+    conn.query_row(
+        "SELECT uuid FROM smart_folder WHERE smart_folder_id = ?1",
+        [smart_folder_id],
+        |row| row.get(0),
+    )
+    .optional()
+}
+
+/// Canonical tag key for ops: `namespace:subtag` (namespace may be empty;
+/// replay splits at the first colon).
+fn tag_op_key(conn: &Connection, tag_id: i64) -> rusqlite::Result<Option<String>> {
+    conn.query_row(
+        "SELECT namespace || ':' || subtag FROM tag WHERE tag_id = ?1",
+        [tag_id],
+        |row| row.get(0),
+    )
+    .optional()
+}
+
+fn entity_hashes_for_ids(conn: &Connection, ids: &[i64]) -> rusqlite::Result<Vec<String>> {
+    let mut out = Vec::with_capacity(ids.len());
+    for id in ids {
+        let hash: Option<String> = conn
+            .query_row(
+                "SELECT entity_hash FROM media_entity WHERE entity_id = ?1",
+                [id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if let Some(hash) = hash {
+            out.push(hash);
+        }
+    }
+    Ok(out)
+}
+
+/// Everything replay needs to materialize an ingested single (the blob itself
+/// is fetched by hash). Derived fields (phash, colors) are excluded.
+fn ingest_entity_created_payload(prepared: &types::IngestPreparedSingle) -> serde_json::Value {
+    serde_json::json!({
+        "kind": "single",
+        "name": prepared.name,
+        "status": prepared.status,
+        "mime": prepared.mime_type,
+        "size": prepared.size_bytes,
+        "width": prepared.pixel_width,
+        "height": prepared.pixel_height,
+        "duration_ms": prepared.duration_ms,
+        "frame_count": prepared.frame_count,
+        "has_audio": prepared.has_audio,
+        "date_created": prepared.date_created,
+        "notes": prepared.notes,
+        "source_urls": prepared.source_urls,
+        "tags": prepared.tag_strings,
+    })
+}
+
+/// Sync-relevant fields of an entity metadata patch (absent = unchanged,
+/// null = cleared, mirroring the patch semantics).
+fn entity_patch_payload(patch: &types::MediaEntityPatch) -> serde_json::Value {
+    let mut fields = serde_json::Map::new();
+    if let Some(v) = &patch.name {
+        fields.insert("name".into(), v.clone().into());
+    }
+    if let Some(v) = patch.rating {
+        fields.insert("rating".into(), v.into());
+    }
+    if let Some(v) = &patch.notes {
+        fields.insert("notes".into(), serde_json::json!(v));
+    }
+    if let Some(v) = &patch.source_urls {
+        fields.insert("source_urls".into(), serde_json::json!(v));
+    }
+    serde_json::Value::Object(fields)
+}
+
+fn emit_folder_membership_op(
+    conn: &Connection,
+    device_id: &str,
+    op_type: &str,
+    folder_id: i64,
+    entity_ids: &[i64],
+) -> rusqlite::Result<()> {
+    if entity_ids.is_empty() {
+        return Ok(());
+    }
+    let Some(uuid) = folder_uuid(conn, folder_id)? else {
+        return Ok(());
+    };
+    let entities = entity_hashes_for_ids(conn, entity_ids)?;
+    crate::oplog::record_op(
+        conn,
+        device_id,
+        op_type,
+        &uuid,
+        &serde_json::json!({ "entities": entities }),
+    )
+}
+
+fn emit_collection_membership_op(
+    conn: &Connection,
+    device_id: &str,
+    collection_id: i64,
+    change: &types::CollectionMembershipChange,
+) -> rusqlite::Result<()> {
+    let Some(hash) = query::collections::get_collection_hash(conn, collection_id)? else {
+        return Ok(());
+    };
+    if !change.added.is_empty() {
+        let members = entity_hashes_for_ids(conn, &change.added)?;
+        crate::oplog::record_op(
+            conn,
+            device_id,
+            "collection_members_added",
+            &hash,
+            &serde_json::json!({ "members": members }),
+        )?;
+    }
+    if !change.removed.is_empty() {
+        let members = entity_hashes_for_ids(conn, &change.removed)?;
+        crate::oplog::record_op(
+            conn,
+            device_id,
+            "collection_members_removed",
+            &hash,
+            &serde_json::json!({ "members": members }),
+        )?;
+    }
+    Ok(())
+}
+
+/// Record the same op once per entity hash (per-entity keying keeps replay
+/// merge rules simple; a bulk action fans out to one op per entity).
+fn emit_per_entity(
+    conn: &Connection,
+    device_id: &str,
+    op_type: &str,
+    hashes: &[String],
+    payload: &serde_json::Value,
+) -> rusqlite::Result<()> {
+    for hash in hashes {
+        crate::oplog::record_op(conn, device_id, op_type, hash, payload)?;
+    }
+    Ok(())
+}
+
 /// Stable sync identity (uuid columns) and the durable op outbox.
 /// Entities that only had local autoincrement ids get a uuid; existing rows
 /// are backfilled so every row has one before any op can reference it.
@@ -503,6 +650,12 @@ impl LibraryDatabase {
             let conn = db.write_conn.lock().unwrap();
             let old_db_path = library_root.join("db").join("library.sqlite");
             let legacy_exists = old_db_path.exists();
+            // user_version marks a completed bootstrap (migration or import).
+            // Without it, an intentionally emptied library is indistinguishable
+            // from a failed import and would be silently re-imported on open.
+            let bootstrapped: i64 = conn
+                .query_row("PRAGMA user_version", [], |r| r.get(0))
+                .unwrap_or(0);
 
             if migration_legacy::needs_migration(&conn) {
                 // In-place migration (old tables exist in library.db itself)
@@ -529,9 +682,9 @@ impl LibraryDatabase {
                     .query_row("SELECT COUNT(*) FROM media_entity", [], |r| r.get(0))
                     .unwrap_or(0);
 
-                if canonical_count == 0 && legacy_exists {
-                    // New schema exists but is empty while legacy data exists.
-                    // This means a previous import failed or was skipped. Repair.
+                if canonical_count == 0 && legacy_exists && bootstrapped == 0 {
+                    // New schema exists but is empty, legacy data exists, and no
+                    // bootstrap ever completed: a previous import failed. Repair.
                     tracing::warn!(
                         "Canonical DB has new schema but 0 entities while legacy DB exists. Repairing..."
                     );
@@ -545,6 +698,9 @@ impl LibraryDatabase {
                     let _ = std::fs::remove_file(library_root.join("bitmaps.delta"));
                 }
             }
+
+            // Every path above leaves a valid, bootstrapped library behind.
+            let _ = conn.execute_batch("PRAGMA user_version = 1;");
 
             // Reconcile schema: add columns that may be missing from older schema versions
             reconcile_open_schema(&conn)?;
@@ -633,7 +789,16 @@ impl LibraryDatabase {
         date_added: &str,
     ) -> Result<i64, String> {
         self.with_write(|conn| {
-            write::entities::insert_collection(conn, entity_hash, name, date_created, date_added)
+            let id =
+                write::entities::insert_collection(conn, entity_hash, name, date_created, date_added)?;
+            crate::oplog::record_op(
+                conn,
+                &self.device_id,
+                "collection_created",
+                entity_hash,
+                &serde_json::json!({ "name": name, "date_created": date_created }),
+            )?;
+            Ok(id)
         })
     }
 
@@ -645,12 +810,31 @@ impl LibraryDatabase {
     ) -> Result<StatusChange, String> {
         let now = chrono::Utc::now().to_rfc3339();
         self.with_write(|conn| {
-            write::entities::set_entity_status(conn, entity_ids, status, expansion, &now)
+            let change =
+                write::entities::set_entity_status(conn, entity_ids, status, expansion, &now)?;
+            emit_per_entity(
+                conn,
+                &self.device_id,
+                "entity_status_changed",
+                &change.entity_hashes,
+                &serde_json::json!({ "status": status }),
+            )?;
+            Ok(change)
         })
     }
 
     pub fn delete_entities(&self, entity_ids: &[i64]) -> Result<EntityChange, String> {
-        self.with_write(|conn| write::entities::delete_entities(conn, entity_ids))
+        self.with_write(|conn| {
+            let change = write::entities::delete_entities(conn, entity_ids)?;
+            emit_per_entity(
+                conn,
+                &self.device_id,
+                "entity_deleted",
+                &change.entity_hashes,
+                &serde_json::json!({}),
+            )?;
+            Ok(change)
+        })
     }
 
     // ── File operations ──────────────────────────────────────────
@@ -970,6 +1154,13 @@ impl LibraryDatabase {
                     ])?;
                 }
             }
+            crate::oplog::record_op(
+                conn,
+                &self.device_id,
+                "entity_created",
+                &prepared.entity_hash,
+                &ingest_entity_created_payload(&prepared),
+            )?;
             Ok(entity_id)
         })
     }
@@ -1044,6 +1235,13 @@ impl LibraryDatabase {
                         types::ExpansionMode::EntityOnly,
                     )?;
                 }
+                crate::oplog::record_op(
+                    conn,
+                    &self.device_id,
+                    "entity_created",
+                    &member.entity_hash,
+                    &ingest_entity_created_payload(member),
+                )?;
                 member_ids.push(entity_id);
                 new_hashes.push(member.entity_hash.clone());
             }
@@ -1069,6 +1267,25 @@ impl LibraryDatabase {
 
             let collection_hash = query::collections::get_collection_hash(&conn, collection_id)?
                 .ok_or_else(|| rusqlite::Error::QueryReturnedNoRows)?;
+            if existing_collection_id.is_none() {
+                crate::oplog::record_op(
+                    conn,
+                    &self.device_id,
+                    "collection_created",
+                    &collection_hash,
+                    &serde_json::json!({ "name": collection_name }),
+                )?;
+            }
+            if !member_ids.is_empty() {
+                let members = entity_hashes_for_ids(conn, &member_ids)?;
+                crate::oplog::record_op(
+                    conn,
+                    &self.device_id,
+                    "collection_members_added",
+                    &collection_hash,
+                    &serde_json::json!({ "members": members }),
+                )?;
+            }
             Ok((collection_id, collection_hash, new_hashes))
         })
     }
@@ -1081,21 +1298,45 @@ impl LibraryDatabase {
         member_entity_ids: &[i64],
     ) -> Result<CollectionMembershipChange, String> {
         self.with_write(|conn| {
-            write::collections::add_members(conn, collection_id, member_entity_ids)
+            let change = write::collections::add_members(conn, collection_id, member_entity_ids)?;
+            emit_collection_membership_op(conn, &self.device_id, collection_id, &change)?;
+            Ok(change)
         })
     }
 
     pub fn create_collection(&self, name: &str) -> Result<i64, String> {
         let n = name.to_string();
         let now = chrono::Utc::now().to_rfc3339();
-        self.with_write(move |conn| write::collections::create_collection(conn, &n, &now))
+        self.with_write(move |conn| {
+            let collection_id = write::collections::create_collection(conn, &n, &now)?;
+            if let Some(hash) = query::collections::get_collection_hash(conn, collection_id)? {
+                crate::oplog::record_op(
+                    conn,
+                    &self.device_id,
+                    "collection_created",
+                    &hash,
+                    &serde_json::json!({ "name": n }),
+                )?;
+            }
+            Ok(collection_id)
+        })
     }
 
     pub fn update_collection_name(&self, collection_id: i64, name: &str) -> Result<(), String> {
         let n = name.to_string();
         let now = chrono::Utc::now().to_rfc3339();
         self.with_write(move |conn| {
-            write::collections::update_collection_name(conn, collection_id, &n, &now)
+            write::collections::update_collection_name(conn, collection_id, &n, &now)?;
+            if let Some(hash) = query::collections::get_collection_hash(conn, collection_id)? {
+                crate::oplog::record_op(
+                    conn,
+                    &self.device_id,
+                    "collection_renamed",
+                    &hash,
+                    &serde_json::json!({ "name": n }),
+                )?;
+            }
+            Ok(())
         })
     }
 
@@ -1105,7 +1346,10 @@ impl LibraryDatabase {
         member_entity_ids: &[i64],
     ) -> Result<CollectionMembershipChange, String> {
         self.with_write(|conn| {
-            write::collections::remove_members(conn, collection_id, member_entity_ids)
+            let change =
+                write::collections::remove_members(conn, collection_id, member_entity_ids)?;
+            emit_collection_membership_op(conn, &self.device_id, collection_id, &change)?;
+            Ok(change)
         })
     }
 
@@ -1115,7 +1359,20 @@ impl LibraryDatabase {
         ordered_entity_ids: &[i64],
     ) -> Result<(), String> {
         let ids = ordered_entity_ids.to_vec();
-        self.with_write(move |conn| write::collections::reorder_members(conn, collection_id, &ids))
+        self.with_write(move |conn| {
+            write::collections::reorder_members(conn, collection_id, &ids)?;
+            if let Some(hash) = query::collections::get_collection_hash(conn, collection_id)? {
+                let order = entity_hashes_for_ids(conn, &ids)?;
+                crate::oplog::record_op(
+                    conn,
+                    &self.device_id,
+                    "collection_members_reordered",
+                    &hash,
+                    &serde_json::json!({ "order": order }),
+                )?;
+            }
+            Ok(())
+        })
     }
 
     pub fn reorder_collection_members_by_hashes(
@@ -1151,7 +1408,18 @@ impl LibraryDatabase {
                 }
             }
 
-            write::collections::reorder_members(conn, collection_id, &final_order)
+            write::collections::reorder_members(conn, collection_id, &final_order)?;
+            if let Some(hash) = query::collections::get_collection_hash(conn, collection_id)? {
+                let order = entity_hashes_for_ids(conn, &final_order)?;
+                crate::oplog::record_op(
+                    conn,
+                    &self.device_id,
+                    "collection_members_reordered",
+                    &hash,
+                    &serde_json::json!({ "order": order }),
+                )?;
+            }
+            Ok(())
         })
     }
 
@@ -1174,11 +1442,38 @@ impl LibraryDatabase {
     }
 
     pub fn delete_collection(&self, collection_id: i64) -> Result<Vec<i64>, String> {
-        self.with_write(|conn| write::collections::delete_collection(conn, collection_id))
+        self.with_write(|conn| {
+            let hash = query::collections::get_collection_hash(conn, collection_id)?;
+            let result = write::collections::delete_collection(conn, collection_id)?;
+            if let Some(hash) = hash {
+                crate::oplog::record_op(
+                    conn,
+                    &self.device_id,
+                    "collection_deleted",
+                    &hash,
+                    &serde_json::json!({}),
+                )?;
+            }
+            Ok(result)
+        })
     }
 
     pub fn split_collection(&self, collection_id: i64) -> Result<Vec<i64>, String> {
-        self.with_write(|conn| write::collections::split_collection(conn, collection_id))
+        self.with_write(|conn| {
+            let hash = query::collections::get_collection_hash(conn, collection_id)?;
+            let result = write::collections::split_collection(conn, collection_id)?;
+            // Splitting dissolves the container; the member singles live on.
+            if let Some(hash) = hash {
+                crate::oplog::record_op(
+                    conn,
+                    &self.device_id,
+                    "collection_deleted",
+                    &hash,
+                    &serde_json::json!({ "split": true }),
+                )?;
+            }
+            Ok(result)
+        })
     }
 
     pub fn get_collections(&self) -> Result<Vec<CollectionRecord>, String> {
@@ -1229,7 +1524,19 @@ impl LibraryDatabase {
         expansion: ExpansionMode,
     ) -> Result<TagChange, String> {
         self.with_write(|conn| {
-            write::tags::add_tags(conn, entity_ids, tag_strings, provenance_mask, expansion)
+            let change =
+                write::tags::add_tags(conn, entity_ids, tag_strings, provenance_mask, expansion)?;
+            if !change.tags_added.is_empty() {
+                let hashes = entity_hashes_for_ids(conn, &change.entity_ids)?;
+                emit_per_entity(
+                    conn,
+                    &self.device_id,
+                    "entity_tags_added",
+                    &hashes,
+                    &serde_json::json!({ "tags": change.tags_added }),
+                )?;
+            }
+            Ok(change)
         })
     }
 
@@ -1239,15 +1546,68 @@ impl LibraryDatabase {
         tag_strings: &[String],
         expansion: ExpansionMode,
     ) -> Result<TagChange, String> {
-        self.with_write(|conn| write::tags::remove_tags(conn, entity_ids, tag_strings, expansion))
+        self.with_write(|conn| {
+            let change = write::tags::remove_tags(conn, entity_ids, tag_strings, expansion)?;
+            if !change.tags_removed.is_empty() {
+                let hashes = entity_hashes_for_ids(conn, &change.entity_ids)?;
+                emit_per_entity(
+                    conn,
+                    &self.device_id,
+                    "entity_tags_removed",
+                    &hashes,
+                    &serde_json::json!({ "tags": change.tags_removed }),
+                )?;
+            }
+            Ok(change)
+        })
     }
 
     pub fn rename_tag(&self, tag_id: i64, new_name: &str) -> Result<TagStructureChange, String> {
-        self.with_write(|conn| write::tags::rename_tag(conn, tag_id, new_name))
+        self.with_write(|conn| {
+            let old_key = tag_op_key(conn, tag_id)?;
+            let change = write::tags::rename_tag(conn, tag_id, new_name)?;
+            if let Some(old_key) = old_key {
+                match change.merged_into_tag_id {
+                    Some(target_id) => {
+                        let into = tag_op_key(conn, target_id)?;
+                        crate::oplog::record_op(
+                            conn,
+                            &self.device_id,
+                            "tag_merged",
+                            &old_key,
+                            &serde_json::json!({ "into": into }),
+                        )?;
+                    }
+                    None => {
+                        crate::oplog::record_op(
+                            conn,
+                            &self.device_id,
+                            "tag_renamed",
+                            &old_key,
+                            &serde_json::json!({ "to": new_name }),
+                        )?;
+                    }
+                }
+            }
+            Ok(change)
+        })
     }
 
     pub fn delete_tag(&self, tag_id: i64) -> Result<TagStructureChange, String> {
-        self.with_write(|conn| write::tags::delete_tag(conn, tag_id))
+        self.with_write(|conn| {
+            let key = tag_op_key(conn, tag_id)?;
+            let change = write::tags::delete_tag(conn, tag_id)?;
+            if let Some(key) = key {
+                crate::oplog::record_op(
+                    conn,
+                    &self.device_id,
+                    "tag_deleted",
+                    &key,
+                    &serde_json::json!({}),
+                )?;
+            }
+            Ok(change)
+        })
     }
 
     pub fn merge_tags(
@@ -1255,11 +1615,42 @@ impl LibraryDatabase {
         from_tag_id: i64,
         to_tag_id: i64,
     ) -> Result<TagStructureChange, String> {
-        self.with_write(|conn| write::tags::merge_tags(conn, from_tag_id, to_tag_id))
+        self.with_write(|conn| {
+            let from_key = tag_op_key(conn, from_tag_id)?;
+            let into = tag_op_key(conn, to_tag_id)?;
+            let change = write::tags::merge_tags(conn, from_tag_id, to_tag_id)?;
+            if let Some(from_key) = from_key {
+                crate::oplog::record_op(
+                    conn,
+                    &self.device_id,
+                    "tag_merged",
+                    &from_key,
+                    &serde_json::json!({ "into": into }),
+                )?;
+            }
+            Ok(change)
+        })
     }
 
     pub fn manage_tag_alias(&self, from_tag_id: i64, to_tag_id: Option<i64>) -> Result<(), String> {
-        self.with_write(|conn| write::tags::manage_alias(conn, from_tag_id, to_tag_id))
+        self.with_write(|conn| {
+            let from_key = tag_op_key(conn, from_tag_id)?;
+            let to_key = match to_tag_id {
+                Some(id) => tag_op_key(conn, id)?,
+                None => None,
+            };
+            write::tags::manage_alias(conn, from_tag_id, to_tag_id)?;
+            if let Some(from_key) = from_key {
+                crate::oplog::record_op(
+                    conn,
+                    &self.device_id,
+                    "tag_alias_set",
+                    &from_key,
+                    &serde_json::json!({ "to": to_key }),
+                )?;
+            }
+            Ok(())
+        })
     }
 
     pub fn manage_tag_implication(
@@ -1269,12 +1660,37 @@ impl LibraryDatabase {
         add: bool,
     ) -> Result<(), String> {
         self.with_write(|conn| {
-            write::tags::manage_implication(conn, child_tag_id, parent_tag_id, add)
+            let child_key = tag_op_key(conn, child_tag_id)?;
+            let parent_key = tag_op_key(conn, parent_tag_id)?;
+            write::tags::manage_implication(conn, child_tag_id, parent_tag_id, add)?;
+            if let Some(child_key) = child_key {
+                crate::oplog::record_op(
+                    conn,
+                    &self.device_id,
+                    "tag_implication_set",
+                    &child_key,
+                    &serde_json::json!({ "parent": parent_key, "add": add }),
+                )?;
+            }
+            Ok(())
         })
     }
 
     pub fn set_tag_site_mask(&self, tag_id: i64, site_mask: u64) -> Result<(), String> {
-        self.with_write(|conn| write::tags::set_tag_site_mask(conn, tag_id, site_mask))
+        self.with_write(|conn| {
+            write::tags::set_tag_site_mask(conn, tag_id, site_mask)?;
+            if let Some(key) = tag_op_key(conn, tag_id)? {
+                // Masks cross boundaries as decimal strings (PBI-598 rule).
+                crate::oplog::record_op(
+                    conn,
+                    &self.device_id,
+                    "tag_site_mask_set",
+                    &key,
+                    &serde_json::json!({ "site_mask": site_mask.to_string() }),
+                )?;
+            }
+            Ok(())
+        })
     }
 
     pub fn ensure_tag(&self, tag_str: &str) -> Result<i64, String> {
@@ -1489,7 +1905,17 @@ impl LibraryDatabase {
         entity_ids: &[i64],
         expansion: ExpansionMode,
     ) -> Result<FolderMembershipChange, String> {
-        self.with_write(|conn| write::folders::add_members(conn, folder_id, entity_ids, expansion))
+        self.with_write(|conn| {
+            let change = write::folders::add_members(conn, folder_id, entity_ids, expansion)?;
+            emit_folder_membership_op(
+                conn,
+                &self.device_id,
+                "folder_members_added",
+                folder_id,
+                &change.entity_ids,
+            )?;
+            Ok(change)
+        })
     }
 
     pub fn remove_folder_members(
@@ -1499,7 +1925,15 @@ impl LibraryDatabase {
         expansion: ExpansionMode,
     ) -> Result<FolderMembershipChange, String> {
         self.with_write(|conn| {
-            write::folders::remove_members(conn, folder_id, entity_ids, expansion)
+            let change = write::folders::remove_members(conn, folder_id, entity_ids, expansion)?;
+            emit_folder_membership_op(
+                conn,
+                &self.device_id,
+                "folder_members_removed",
+                folder_id,
+                &change.entity_ids,
+            )?;
+            Ok(change)
         })
     }
 
@@ -1516,7 +1950,7 @@ impl LibraryDatabase {
     ) -> Result<i64, String> {
         let now = chrono::Utc::now().to_rfc3339();
         self.with_write(|conn| {
-            write::smart_folders::create_smart_folder(
+            let smart_folder_id = write::smart_folders::create_smart_folder(
                 conn,
                 name,
                 parent_id,
@@ -1525,7 +1959,28 @@ impl LibraryDatabase {
                 color,
                 notes,
                 &now,
-            )
+            )?;
+            if let Some(uuid) = smart_folder_uuid(conn, smart_folder_id)? {
+                let parent_uuid = match parent_id {
+                    Some(pid) => smart_folder_uuid(conn, pid)?,
+                    None => None,
+                };
+                crate::oplog::record_op(
+                    conn,
+                    &self.device_id,
+                    "smart_folder_created",
+                    &uuid,
+                    &serde_json::json!({
+                        "name": name,
+                        "parent": parent_uuid,
+                        "predicate": predicate_json,
+                        "icon": icon,
+                        "color": color,
+                        "notes": notes,
+                    }),
+                )?;
+            }
+            Ok(smart_folder_id)
         })
     }
 
@@ -1560,7 +2015,41 @@ impl LibraryDatabase {
                 sf.as_deref(),
                 so.as_deref(),
                 &now,
-            )
+            )?;
+            let mut fields = serde_json::Map::new();
+            if let Some(v) = &n {
+                fields.insert("name".into(), v.clone().into());
+            }
+            if let Some(v) = &p {
+                fields.insert("predicate".into(), v.clone().into());
+            }
+            if let Some(v) = &i {
+                fields.insert("icon".into(), v.clone().into());
+            }
+            if let Some(v) = &c {
+                fields.insert("color".into(), v.clone().into());
+            }
+            if let Some(v) = &notes {
+                fields.insert("notes".into(), v.clone().into());
+            }
+            if let Some(v) = &sf {
+                fields.insert("sort_field".into(), v.clone().into());
+            }
+            if let Some(v) = &so {
+                fields.insert("sort_order".into(), v.clone().into());
+            }
+            if !fields.is_empty() {
+                if let Some(uuid) = smart_folder_uuid(conn, smart_folder_id)? {
+                    crate::oplog::record_op(
+                        conn,
+                        &self.device_id,
+                        "smart_folder_updated",
+                        &uuid,
+                        &serde_json::Value::Object(fields),
+                    )?;
+                }
+            }
+            Ok(())
         })
     }
 
@@ -1568,7 +2057,20 @@ impl LibraryDatabase {
         &self,
         smart_folder_id: i64,
     ) -> Result<(Vec<i64>, Option<i64>), String> {
-        self.with_write(|conn| write::smart_folders::delete_smart_folder(conn, smart_folder_id))
+        self.with_write(|conn| {
+            let uuid = smart_folder_uuid(conn, smart_folder_id)?;
+            let result = write::smart_folders::delete_smart_folder(conn, smart_folder_id)?;
+            if let Some(uuid) = uuid {
+                crate::oplog::record_op(
+                    conn,
+                    &self.device_id,
+                    "smart_folder_deleted",
+                    &uuid,
+                    &serde_json::json!({}),
+                )?;
+            }
+            Ok(result)
+        })
     }
 
     pub fn move_smart_folder(
@@ -1578,7 +2080,21 @@ impl LibraryDatabase {
     ) -> Result<(), String> {
         let now = chrono::Utc::now().to_rfc3339();
         self.with_write(move |conn| {
-            write::smart_folders::move_smart_folder(conn, smart_folder_id, new_parent_id, &now)
+            write::smart_folders::move_smart_folder(conn, smart_folder_id, new_parent_id, &now)?;
+            if let Some(uuid) = smart_folder_uuid(conn, smart_folder_id)? {
+                let parent_uuid = match new_parent_id {
+                    Some(pid) => smart_folder_uuid(conn, pid)?,
+                    None => None,
+                };
+                crate::oplog::record_op(
+                    conn,
+                    &self.device_id,
+                    "smart_folder_moved",
+                    &uuid,
+                    &serde_json::json!({ "parent": parent_uuid }),
+                )?;
+            }
+            Ok(())
         })
     }
 
@@ -1638,7 +2154,7 @@ impl LibraryDatabase {
     ) -> Result<types::EntityChange, String> {
         let now = chrono::Utc::now().to_rfc3339();
         self.with_write(|conn| {
-            write::entities::patch_entity_metadata(
+            let change = write::entities::patch_entity_metadata(
                 conn,
                 entity_ids,
                 patch.name.as_deref(),
@@ -1651,7 +2167,18 @@ impl LibraryDatabase {
                     .as_deref(),
                 &now,
                 types::ExpansionMode::EntityAndDescendants,
-            )
+            )?;
+            let payload = entity_patch_payload(patch);
+            if payload.as_object().is_some_and(|o| !o.is_empty()) {
+                emit_per_entity(
+                    conn,
+                    &self.device_id,
+                    "entity_updated",
+                    &change.entity_hashes,
+                    &payload,
+                )?;
+            }
+            Ok(change)
         })
     }
 
@@ -1669,7 +2196,15 @@ impl LibraryDatabase {
                 [&hash],
                 |row| row.get(0),
             )?;
-            write::entities::set_entity_date_created(conn, entity_id, &created, &now)
+            write::entities::set_entity_date_created(conn, entity_id, &created, &now)?;
+            crate::oplog::record_op(
+                conn,
+                &self.device_id,
+                "entity_updated",
+                &hash,
+                &serde_json::json!({ "date_created": created }),
+            )?;
+            Ok(())
         })
     }
 
@@ -1688,7 +2223,7 @@ impl LibraryDatabase {
             write::bulk::populate_bulk_target(conn, &q, &excl, &bm)?;
             write::bulk::expand_bulk_target(conn, types::ExpansionMode::EntityAndDescendants)?;
             let ids = write::bulk::collect_bulk_ids(conn)?;
-            write::entities::patch_entity_metadata(
+            let change = write::entities::patch_entity_metadata(
                 conn,
                 &ids,
                 p.name.as_deref(),
@@ -1700,7 +2235,18 @@ impl LibraryDatabase {
                     .as_deref(),
                 &now,
                 types::ExpansionMode::EntityOnly,
-            )
+            )?;
+            let payload = entity_patch_payload(&p);
+            if payload.as_object().is_some_and(|o| !o.is_empty()) {
+                emit_per_entity(
+                    conn,
+                    &self.device_id,
+                    "entity_updated",
+                    &change.entity_hashes,
+                    &payload,
+                )?;
+            }
+            Ok(change)
         })
     }
 
@@ -1718,13 +2264,21 @@ impl LibraryDatabase {
             write::bulk::populate_bulk_target(conn, &q, &excl, &bm)?;
             write::bulk::expand_bulk_target(conn, types::ExpansionMode::EntityAndDescendants)?;
             let ids = write::bulk::collect_bulk_ids(conn)?;
-            write::entities::set_entity_status(
+            let change = write::entities::set_entity_status(
                 conn,
                 &ids,
                 status,
                 types::ExpansionMode::EntityOnly,
                 &now,
-            )
+            )?;
+            emit_per_entity(
+                conn,
+                &self.device_id,
+                "entity_status_changed",
+                &change.entity_hashes,
+                &serde_json::json!({ "status": status }),
+            )?;
+            Ok(change)
         })
     }
 
@@ -1739,7 +2293,15 @@ impl LibraryDatabase {
         self.with_write(move |conn| {
             write::bulk::populate_bulk_target(conn, &q, &excl, &bm)?;
             let ids = write::bulk::collect_bulk_ids(conn)?;
-            write::entities::delete_entities(conn, &ids)
+            let change = write::entities::delete_entities(conn, &ids)?;
+            emit_per_entity(
+                conn,
+                &self.device_id,
+                "entity_deleted",
+                &change.entity_hashes,
+                &serde_json::json!({}),
+            )?;
+            Ok(change)
         })
     }
 
@@ -1759,13 +2321,24 @@ impl LibraryDatabase {
             write::bulk::populate_bulk_target(conn, &q, &excl, &bm)?;
             write::bulk::expand_bulk_target(conn, expansion)?;
             let ids = write::bulk::collect_bulk_ids(conn)?;
-            write::tags::add_tags(
+            let change = write::tags::add_tags(
                 conn,
                 &ids,
                 &t,
                 provenance_mask,
                 types::ExpansionMode::EntityOnly,
-            )
+            )?;
+            if !change.tags_added.is_empty() {
+                let hashes = entity_hashes_for_ids(conn, &change.entity_ids)?;
+                emit_per_entity(
+                    conn,
+                    &self.device_id,
+                    "entity_tags_added",
+                    &hashes,
+                    &serde_json::json!({ "tags": change.tags_added }),
+                )?;
+            }
+            Ok(change)
         })
     }
 
@@ -1784,7 +2357,18 @@ impl LibraryDatabase {
             write::bulk::populate_bulk_target(conn, &q, &excl, &bm)?;
             write::bulk::expand_bulk_target(conn, expansion)?;
             let ids = write::bulk::collect_bulk_ids(conn)?;
-            write::tags::remove_tags(conn, &ids, &t, types::ExpansionMode::EntityOnly)
+            let change = write::tags::remove_tags(conn, &ids, &t, types::ExpansionMode::EntityOnly)?;
+            if !change.tags_removed.is_empty() {
+                let hashes = entity_hashes_for_ids(conn, &change.entity_ids)?;
+                emit_per_entity(
+                    conn,
+                    &self.device_id,
+                    "entity_tags_removed",
+                    &hashes,
+                    &serde_json::json!({ "tags": change.tags_removed }),
+                )?;
+            }
+            Ok(change)
         })
     }
 
@@ -1802,7 +2386,16 @@ impl LibraryDatabase {
             write::bulk::populate_bulk_target(conn, &q, &excl, &bm)?;
             write::bulk::expand_bulk_target(conn, expansion)?;
             let ids = write::bulk::collect_bulk_ids(conn)?;
-            write::folders::add_members(conn, folder_id, &ids, types::ExpansionMode::EntityOnly)
+            let change =
+                write::folders::add_members(conn, folder_id, &ids, types::ExpansionMode::EntityOnly)?;
+            emit_folder_membership_op(
+                conn,
+                &self.device_id,
+                "folder_members_added",
+                folder_id,
+                &change.entity_ids,
+            )?;
+            Ok(change)
         })
     }
 
@@ -1820,7 +2413,20 @@ impl LibraryDatabase {
             write::bulk::populate_bulk_target(conn, &q, &excl, &bm)?;
             write::bulk::expand_bulk_target(conn, expansion)?;
             let ids = write::bulk::collect_bulk_ids(conn)?;
-            write::folders::remove_members(conn, folder_id, &ids, types::ExpansionMode::EntityOnly)
+            let change = write::folders::remove_members(
+                conn,
+                folder_id,
+                &ids,
+                types::ExpansionMode::EntityOnly,
+            )?;
+            emit_folder_membership_op(
+                conn,
+                &self.device_id,
+                "folder_members_removed",
+                folder_id,
+                &change.entity_ids,
+            )?;
+            Ok(change)
         })
     }
 
@@ -2772,13 +3378,33 @@ impl LibraryDatabase {
         self.with_write(move |conn| {
             let left = query::duplicates::get_duplicate_single_ref_by_hash(conn, &hash_a)?;
             let right = query::duplicates::get_duplicate_single_ref_by_hash(conn, &hash_b)?;
-            write::duplicates::resolve_duplicate_pair(
+            let result = write::duplicates::resolve_duplicate_pair(
                 conn,
                 &action,
                 left,
                 right,
                 preferred_collection_id,
-            )
+            )?;
+            if matches!(result.status, types::DuplicateResolveStatus::Resolved) {
+                // The detected pair is recomputable; the user's decision is truth.
+                let (a, b) = if hash_a <= hash_b {
+                    (&hash_a, &hash_b)
+                } else {
+                    (&hash_b, &hash_a)
+                };
+                crate::oplog::record_op(
+                    conn,
+                    &self.device_id,
+                    "duplicate_decided",
+                    &format!("{a}|{b}"),
+                    &serde_json::json!({
+                        "action": action,
+                        "winner": result.winner_hash,
+                        "loser": result.loser_hash,
+                    }),
+                )?;
+            }
+            Ok(result)
         })
     }
 
@@ -2884,6 +3510,64 @@ mod tests {
         assert!(ops.iter().all(|o| &o.1 == uuid));
         assert!(ops[0].2 < ops[1].2 && ops[1].2 < ops[2].2, "hlc must increase");
         assert!(ops.iter().all(|o| !o.3.is_empty()));
+    }
+
+    #[test]
+    fn entity_tag_and_collection_mutations_emit_ops() {
+        let db = open_test_db();
+        let file_id = db
+            .insert_file("hash_x", "image/png", 10, None, None, None, None, false, "2026-01-01")
+            .unwrap();
+        let entity_id = db
+            .insert_single("hash_x", file_id, Some("img"), 1, "2026-01-01", "2026-01-01")
+            .unwrap();
+
+        db.add_tags(
+            &[entity_id],
+            &["general:cat".to_string()],
+            1,
+            crate::db::types::ExpansionMode::EntityOnly,
+        )
+        .unwrap();
+        db.set_entity_status(&[entity_id], 2, crate::db::types::ExpansionMode::EntityOnly)
+            .unwrap();
+        let collection_id = db.create_collection("My set").unwrap();
+        db.update_collection_name(collection_id, "Renamed set").unwrap();
+        db.delete_collection(collection_id).unwrap();
+        db.delete_entities(&[entity_id]).unwrap();
+
+        let ops: Vec<(String, String)> = db
+            .with_read(|conn| {
+                let mut stmt =
+                    conn.prepare("SELECT op_type, entity_key FROM op_outbox ORDER BY op_id")?;
+                let rows = stmt
+                    .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                Ok(rows)
+            })
+            .unwrap();
+
+        let types: Vec<&str> = ops.iter().map(|o| o.0.as_str()).collect();
+        assert_eq!(
+            types,
+            vec![
+                "entity_tags_added",
+                "entity_status_changed",
+                "collection_created",
+                "collection_renamed",
+                "collection_deleted",
+                "entity_deleted",
+            ]
+        );
+        assert!(ops
+            .iter()
+            .filter(|o| o.0.starts_with("entity_"))
+            .all(|o| o.1 == "hash_x"));
+        // Collection ops key on the collection's entity_hash, not the member's.
+        assert!(ops
+            .iter()
+            .filter(|o| o.0.starts_with("collection_"))
+            .all(|o| o.1 != "hash_x" && !o.1.is_empty()));
     }
 
     #[test]
