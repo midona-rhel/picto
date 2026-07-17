@@ -161,3 +161,16 @@ Replay engine landed, local-only, all test-covered:
 - Tests: shuffled-arrival determinism property (50 shuffles ⇒ identical digest), LWW/rename-rewrite semantics, resurrection both directions, end-to-end `LibraryDatabase` mutations → drain → `MemoryBackend` → replay.
 
 Remaining for Stage 2/3 boundary: applying a replayed `TruthState` into a live `LibraryDatabase` (materialization), remote-op ingestion cursors (tracking which peer segments are consumed), and the first real backend (Drive or local-directory) behind the same trait.
+
+### Stage 3 progress (2026-07-17)
+Live two-device sync works locally, all test-covered:
+- `oplog/backend_fs.rs`: filesystem backend (stage-and-rename create-only put, traversal-safe keys). Pointing it at a Drive-for-Desktop/Dropbox-synced folder gives real transport with no provider API.
+- `sync_ingest_cursor` table: per-peer highest **contiguous** consumed segment. Ingestion stops at a sequence gap (transport lag) and never skips past it.
+- `LibraryDatabase::apply_remote_ops`: materializes the full op vocabulary through the low-level writers / direct SQL — **never** through the emitting entry points, so remote ops cannot echo back into the outbox. Application + cursor advancement commit in one transaction; every arm is idempotent so a crashed batch re-applies safely. Projections full-rebuild after application.
+- `oplog/sync.rs::sync_once`: drain outbox → pull new peer segments (contiguous per device) → version-gate → sort into total order → apply. Tests: two devices converging through a shared backend (same folder uuid on both, edits flowing both directions, steady-state no-op), and the gap test.
+
+Known limitations (tracked for Stage 4):
+- Ops referencing an entity/tag/folder that doesn't exist locally are skipped, not parked for retry. Safe for the normal flow (creation precedes reference in HLC order from the emitting paths), but non-emitting paths (`insert_single`/`insert_file` legacy materialization) produce entities peers never learn about, and a skipped reference is not retried. Fix direction: park unapplied ops or periodically reconcile from a full replay.
+- No blob transfer yet: peers materialize metadata; blobs arrive via file-sync of `blobs/` or the future fetch/refetch path (decision 7).
+- `sync_once` is not yet wired to a background worker / UI; no events are emitted to the frontend after remote application.
+- `duplicate_decided` applies only when the pair is detected locally (decision-side effects arrive via their own entity ops).

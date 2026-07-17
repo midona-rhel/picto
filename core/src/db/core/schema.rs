@@ -476,6 +476,12 @@ CREATE TABLE IF NOT EXISTS op_outbox (
 );
 CREATE INDEX IF NOT EXISTS idx_op_outbox_pending ON op_outbox(op_id) WHERE uploaded_seq IS NULL;
 
+-- Per-peer ingestion progress: highest contiguous remote segment applied.
+CREATE TABLE IF NOT EXISTS sync_ingest_cursor (
+    device_id    TEXT PRIMARY KEY,
+    consumed_seq INTEGER NOT NULL DEFAULT 0
+);
+
 CREATE TABLE IF NOT EXISTS schema_version (
     version INTEGER NOT NULL
 );
